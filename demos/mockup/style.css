@@ -1,0 +1,177 @@
+:root {
+  --fg: #1b1f23;
+  --fg-muted: #6e7781;
+  --bg: #f6f8fa;
+  --card: #ffffff;
+  --border: #d1d5da;
+  --accent: #2e7dd7;
+  --radius: 8px;
+  --shadow: 0 1px 2px rgba(27, 31, 35, 0.04), 0 6px 16px rgba(27, 31, 35, 0.06);
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif;
+  color: var(--fg);
+  background: var(--bg);
+  line-height: 1.45;
+}
+
+.topnav {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 14px 32px;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  box-shadow: var(--shadow);
+}
+.brand {
+  font-weight: 600;
+  font-size: 15px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.logo {
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 12px;
+}
+.topnav nav {
+  display: flex;
+  gap: 14px;
+  margin-left: 8px;
+  flex: 1;
+}
+.topnav nav a {
+  color: var(--fg-muted);
+  text-decoration: none;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 14px;
+}
+.topnav nav a.active, .topnav nav a:hover {
+  background: #eaf1fb;
+  color: var(--accent);
+}
+.actions { display: flex; gap: 8px; }
+button {
+  font: inherit;
+  cursor: pointer;
+  padding: 7px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--card);
+}
+button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+button.secondary { background: var(--card); }
+button.ghost { background: transparent; border: 0; text-align: left; padding: 8px 0; color: var(--fg); }
+button.ghost:hover { color: var(--accent); }
+button.ghost.danger { color: #d73a49; }
+
+main {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 28px 32px 80px;
+}
+.hero h1 { margin: 10px 0 6px; font-size: 26px; }
+.subtitle { color: var(--fg-muted); margin: 0 0 20px; }
+
+.columns {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr 1fr;
+  gap: 20px;
+}
+@media (max-width: 1000px) { .columns { grid-template-columns: 1fr; } }
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  box-shadow: var(--shadow);
+}
+.card-header {
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 14px;
+  color: var(--fg);
+}
+.card table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.card table td {
+  padding: 8px 0;
+  border-bottom: 1px dotted var(--border);
+}
+.card table tr.total td {
+  font-weight: 700;
+  border-bottom: 0;
+  padding-top: 14px;
+  font-size: 15px;
+}
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+#payment label {
+  display: block;
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+#payment input, #payment select {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font: inherit;
+  background: #fff;
+  color: var(--fg);
+  margin-top: 4px;
+}
+#payment .row {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+#payment .row .primary { flex: 1; }
+
+#next-steps ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+#next-steps li {
+  border-bottom: 1px dotted var(--border);
+  padding: 0 0;
+}
+#next-steps li:last-child { border-bottom: 0; }
+
+.notice {
+  margin-top: 28px;
+  padding: 14px 18px;
+  background: #fff8e5;
+  border: 1px solid #ffe29a;
+  border-radius: var(--radius);
+  color: #6f5500;
+  font-size: 13px;
+}
+
+footer {
+  padding: 24px 32px;
+  color: var(--fg-muted);
+  border-top: 1px solid var(--border);
+  background: var(--card);
+}
+footer a { color: var(--accent); }
