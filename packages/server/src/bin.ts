@@ -16,19 +16,37 @@ function arg(name: string, fallback?: string): string | undefined {
   return fallback;
 }
 
-const port = Number(arg('port', process.env.PORT ?? '8787'));
+const requestedPort = Number(arg('port', process.env.PORT ?? '8787'));
 const dataDir = arg('data-dir', join(repoRoot, 'data'));
 const widgetDist = pathOrNull(join(repoRoot, 'packages', 'widget', 'dist'));
 const markdownAppDist = pathOrNull(join(repoRoot, 'packages', 'markdown-app', 'dist'));
 const demosDir = pathOrNull(join(repoRoot, 'demos'));
 
-const handle = createServer({
-  port,
-  dataDir,
-  widgetDistDir: widgetDist,
-  markdownAppDistDir: markdownAppDist,
-  demosDir,
-});
+// Try the requested port first; if it's taken (e.g. another agent owns it),
+// walk up to the next 20 ports. This keeps `bun run dev` working without
+// conflicts when multiple agents are on the same machine.
+let port = requestedPort;
+let handle: ReturnType<typeof createServer> | null = null;
+let lastErr: unknown = null;
+for (let i = 0; i < 20 && !handle; i++) {
+  try {
+    handle = createServer({
+      port,
+      dataDir,
+      widgetDistDir: widgetDist,
+      markdownAppDistDir: markdownAppDist,
+      demosDir,
+    });
+  } catch (err) {
+    lastErr = err;
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code !== 'EADDRINUSE') throw err;
+    console.warn(`[feedback] port ${port} busy, trying ${port + 1}`);
+    port++;
+  }
+}
+if (!handle) throw lastErr ?? new Error('could not start server');
+port = handle.port;
 
 console.log(`[feedback] listening on http://localhost:${port}`);
 console.log(`[feedback]   - landing:     http://localhost:${port}/`);
