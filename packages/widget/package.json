@@ -1,0 +1,12 @@
+{
+  "name": "@feedback/widget",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/widget.ts",
+  "dependencies": {
+    "@feedback/core": "workspace:*",
+    "y-protocols": "^1.0.6",
+    "yjs": "^13.6.20"
+  }
+}

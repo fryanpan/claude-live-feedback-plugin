@@ -1,0 +1,13 @@
+{
+  "name": "@feedback/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "dependencies": {
+    "@feedback/core": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "y-protocols": "^1.0.6",
+    "yjs": "^13.6.20"
+  }
+}
