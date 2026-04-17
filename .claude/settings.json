@@ -1,0 +1,46 @@
+{
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
+  "enabledPlugins": {
+    "code-review@claude-plugins-official": true,
+    "superpowers@claude-plugins-official": true,
+    "commit-commands@claude-plugins-official": true,
+    "claude-md-management@claude-plugins-official": true,
+    "context7@claude-plugins-official": true
+  },
+  "permissions": {
+    "allow": [
+      "Edit",
+      "Write",
+      "Bash(*)",
+      "Grep",
+      "Glob",
+      "Read",
+      "TodoWrite",
+      "ToolSearch",
+      "Task",
+      "TaskCreate",
+      "TaskUpdate",
+      "TaskOutput",
+      "TaskList",
+      "Agent",
+      "SendMessage",
+      "TeamCreate",
+      "Skill",
+      "EnterPlanMode",
+      "ExitPlanMode",
+      "WebFetch",
+      "WebSearch",
+      "ReadMcpResourceTool"
+    ],
+    "deny": [
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git rebase:*)",
+      "Bash(git clean -f:*)",
+      "Bash(rm -rf:*)"
+    ]
+  }
+}
