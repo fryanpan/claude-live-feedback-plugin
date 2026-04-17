@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 import { statSync } from 'node:fs';
-import { gzipSync } from 'node:zlib';
-import { readFileSync, existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { gzipSync } from 'node:zlib';
 
 const BUDGET_BYTES = 40 * 1024;
 const WIDGET_IIFE = join(import.meta.dir, '..', 'packages', 'widget', 'dist', 'widget.iife.js');
@@ -17,7 +17,9 @@ const gz = gzipSync(raw, { level: 9 });
 const rawKb = (raw.length / 1024).toFixed(1);
 const gzKb = (gz.length / 1024).toFixed(1);
 
-console.log(`widget.iife.js: ${rawKb} KB raw, ${gzKb} KB gzipped (budget: ${BUDGET_BYTES / 1024} KB gz)`);
+console.log(
+  `widget.iife.js: ${rawKb} KB raw, ${gzKb} KB gzipped (budget: ${BUDGET_BYTES / 1024} KB gz)`,
+);
 
 if (gz.length > BUDGET_BYTES) {
   console.error(`❌ OVER BUDGET by ${((gz.length - BUDGET_BYTES) / 1024).toFixed(1)} KB gzipped`);

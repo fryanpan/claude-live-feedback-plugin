@@ -1,7 +1,7 @@
-import * as syncProtocol from 'y-protocols/sync';
-import * as awarenessProtocol from 'y-protocols/awareness';
-import * as encoding from 'lib0/encoding';
 import * as decoding from 'lib0/decoding';
+import * as encoding from 'lib0/encoding';
+import * as awarenessProtocol from 'y-protocols/awareness';
+import * as syncProtocol from 'y-protocols/sync';
 import type { DocRoom, FeedbackWs } from './rooms.ts';
 
 /**
@@ -32,10 +32,7 @@ export function onOpen(room: DocRoom, ws: FeedbackWs): void {
     encoding.writeVarUint(enc, MSG_AWARENESS);
     encoding.writeVarUint8Array(
       enc,
-      awarenessProtocol.encodeAwarenessUpdate(
-        room.awareness,
-        Array.from(states.keys()),
-      ),
+      awarenessProtocol.encodeAwarenessUpdate(room.awareness, Array.from(states.keys())),
     );
     ws.sendBinary(encoding.toUint8Array(enc));
   }
@@ -63,10 +60,7 @@ export function onOpen(room: DocRoom, ws: FeedbackWs): void {
     const ids = [...added, ...updated, ...removed];
     const enc = encoding.createEncoder();
     encoding.writeVarUint(enc, MSG_AWARENESS);
-    encoding.writeVarUint8Array(
-      enc,
-      awarenessProtocol.encodeAwarenessUpdate(room.awareness, ids),
-    );
+    encoding.writeVarUint8Array(enc, awarenessProtocol.encodeAwarenessUpdate(room.awareness, ids));
     for (const peer of room.conns) {
       if (peer === ws) continue;
       try {
@@ -107,11 +101,7 @@ export function onMessage(room: DocRoom, ws: FeedbackWs, data: Uint8Array): void
         return;
       }
       case MSG_AWARENESS: {
-        awarenessProtocol.applyAwarenessUpdate(
-          room.awareness,
-          decoding.readVarUint8Array(dec),
-          ws,
-        );
+        awarenessProtocol.applyAwarenessUpdate(room.awareness, decoding.readVarUint8Array(dec), ws);
         return;
       }
       default:

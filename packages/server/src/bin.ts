@@ -32,11 +32,13 @@ const handle = createServer({
 
 console.log(`[feedback] listening on http://localhost:${port}`);
 console.log(`[feedback]   - landing:     http://localhost:${port}/`);
-console.log(`[feedback]   - markdown app /review/<docId>`);
-console.log(`[feedback]   - widget       /widget.iife.js`);
-console.log(`[feedback]   - demos        /demos/mockup`);
-if (!widgetDist) console.log('[feedback] (widget bundle not built yet — run: bun run build:widget)');
-if (!markdownAppDist) console.log('[feedback] (markdown app not built yet — run: bun run build:markdown-app)');
+console.log('[feedback]   - markdown app /review/<docId>');
+console.log('[feedback]   - widget       /widget.iife.js');
+console.log('[feedback]   - demos        /demos/mockup');
+if (!widgetDist)
+  console.log('[feedback] (widget bundle not built yet — run: bun run build:widget)');
+if (!markdownAppDist)
+  console.log('[feedback] (markdown app not built yet — run: bun run build:markdown-app)');
 
 // Graceful shutdown
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {

@@ -2,10 +2,7 @@
   "name": "claude-live-feedback-plugin",
   "private": true,
   "version": "0.0.0",
-  "workspaces": [
-    "packages/*",
-    "demos/*"
-  ],
+  "workspaces": ["packages/*", "demos/*"],
   "scripts": {
     "dev": "bun run packages/server/src/bin.ts",
     "typecheck": "tsc --noEmit --project tsconfig.json",

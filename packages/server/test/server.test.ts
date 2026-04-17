@@ -2,8 +2,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createServer, type ServerHandle } from '../src/server.ts';
 import type { ElementAnchor, User } from '@feedback/core';
+import { type ServerHandle, createServer } from '../src/server.ts';
 
 const bryan: User = { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' };
 const agent: User = { id: 'known-agent', name: 'Agent', kind: 'known', color: '#e36f1e' };

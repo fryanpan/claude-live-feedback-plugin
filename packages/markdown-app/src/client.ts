@@ -1,8 +1,8 @@
-import * as Y from 'yjs';
-import * as syncProtocol from 'y-protocols/sync';
-import * as awarenessProtocol from 'y-protocols/awareness';
-import * as encoding from 'lib0/encoding';
 import * as decoding from 'lib0/decoding';
+import * as encoding from 'lib0/encoding';
+import * as awarenessProtocol from 'y-protocols/awareness';
+import * as syncProtocol from 'y-protocols/sync';
+import * as Y from 'yjs';
 
 /**
  * Browser-side y-websocket client for our minimal protocol.
@@ -91,7 +91,10 @@ export function connect(url: string): FeedbackClient {
         encoding.writeVarUint(enc, MSG_SYNC);
         const type = syncProtocol.readSyncMessage(dec, enc, ydoc, ws);
         if (encoding.length(enc) > 1) ws.send(encoding.toUint8Array(enc));
-        if (!gotInitialSync && (type === syncProtocol.messageYjsSyncStep2 || type === syncProtocol.messageYjsUpdate)) {
+        if (
+          !gotInitialSync &&
+          (type === syncProtocol.messageYjsSyncStep2 || type === syncProtocol.messageYjsUpdate)
+        ) {
           gotInitialSync = true;
           readyCbs.forEach((cb) => cb());
           readyCbs = [];
@@ -109,7 +112,9 @@ export function connect(url: string): FeedbackClient {
     });
 
     ws.addEventListener('error', () => {
-      try { ws.close(); } catch {}
+      try {
+        ws.close();
+      } catch {}
     });
   }
 
@@ -125,7 +130,9 @@ export function connect(url: string): FeedbackClient {
       closed = true;
       ydoc.off('update', docUpdateHandler);
       awareness.off('update', awarenessHandler);
-      try { ws.close(); } catch {}
+      try {
+        ws.close();
+      } catch {}
     },
     onReady(cb) {
       if (gotInitialSync) cb();

@@ -1,23 +1,23 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ServerWebSocket } from 'bun';
-import * as Y from 'yjs';
-import * as awarenessProtocol from 'y-protocols/awareness';
 import {
+  type Anchor,
   type DocMeta,
   type DocType,
   type Thread,
   type User,
-  type Anchor,
-  initDocMeta,
-  readDocMeta,
-  listThreads,
   createThread,
-  postReply as schemaPostReply,
-  setStatus as schemaSetStatus,
-  replaceAnchor as schemaReplaceAnchor,
   getContent,
+  initDocMeta,
+  listThreads,
+  readDocMeta,
+  postReply as schemaPostReply,
+  replaceAnchor as schemaReplaceAnchor,
+  setStatus as schemaSetStatus,
 } from '@feedback/core';
+import type { ServerWebSocket } from 'bun';
+import * as awarenessProtocol from 'y-protocols/awareness';
+import * as Y from 'yjs';
 
 import type { SseHub } from './sse.ts';
 import type { WebhookDispatcher } from './webhooks.ts';
@@ -69,20 +69,19 @@ export class Rooms {
     }
     const ydoc = new Y.Doc();
     this.loadFromDisk(docId, ydoc);
-    const meta: DocMeta =
-      (() => {
-        const current = readDocMeta(ydoc);
-        if (current.docId) return current;
-        const now: DocMeta = {
-          docId,
-          type: init?.type ?? 'markdown',
-          sourceUrl: init?.sourceUrl,
-          title: init?.title,
-          createdAt: Date.now(),
-        };
-        initDocMeta(ydoc, now);
-        return now;
-      })();
+    const meta: DocMeta = (() => {
+      const current = readDocMeta(ydoc);
+      if (current.docId) return current;
+      const now: DocMeta = {
+        docId,
+        type: init?.type ?? 'markdown',
+        sourceUrl: init?.sourceUrl,
+        title: init?.title,
+        createdAt: Date.now(),
+      };
+      initDocMeta(ydoc, now);
+      return now;
+    })();
     const room: DocRoom = {
       docId,
       ydoc,
@@ -188,11 +187,7 @@ export class Rooms {
 
   private fireEvent(
     room: DocRoom,
-    event:
-      | 'thread.created'
-      | 'thread.replied'
-      | 'thread.resolved'
-      | 'thread.reopened',
+    event: 'thread.created' | 'thread.replied' | 'thread.resolved' | 'thread.reopened',
     thread: Thread,
     comment?: { id: string; author: User; text: string; ts: number },
   ): void {

@@ -1,14 +1,14 @@
 import {
+  type Thread,
+  type User,
   anchors,
   getContent,
   listThreads,
   readDocMeta,
   resolveUser,
-  type Thread,
-  type User,
 } from '@feedback/core';
 import { connect } from './client.ts';
-import { createEditor, type EditorHandle, type ThreadRange } from './editor.ts';
+import { type EditorHandle, type ThreadRange, createEditor } from './editor.ts';
 import { renderMarkdown } from './preview.ts';
 import { ThreadPanel } from './threads.ts';
 
@@ -94,21 +94,30 @@ async function boot(): Promise<void> {
       editor.setActiveThread(id);
     },
     onReply: async (id, text) => {
-      await fetch(`/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/comments`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ author: user, text }),
-      });
+      await fetch(
+        `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/comments`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ author: user, text }),
+        },
+      );
     },
     onResolve: async (id) => {
-      await fetch(`/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/resolve`, {
-        method: 'POST',
-      });
+      await fetch(
+        `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/resolve`,
+        {
+          method: 'POST',
+        },
+      );
     },
     onReopen: async (id) => {
-      await fetch(`/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/reopen`, {
-        method: 'POST',
-      });
+      await fetch(
+        `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/reopen`,
+        {
+          method: 'POST',
+        },
+      );
     },
     onReanchor: (id) => {
       // For text-range orphans, prompt the user to select a new range and submit
@@ -118,11 +127,14 @@ async function boot(): Promise<void> {
         return;
       }
       const anchor = anchors.TextRange.createFromOffsets(ytext, sel.start, sel.end);
-      void fetch(`/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/reanchor`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ anchor }),
-      });
+      void fetch(
+        `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/reanchor`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ anchor }),
+        },
+      );
     },
   });
 

@@ -1,16 +1,22 @@
-import { EditorState, StateEffect, StateField, RangeSetBuilder, EditorSelection } from '@codemirror/state';
-import {
-  EditorView,
-  keymap,
-  lineNumbers,
-  highlightActiveLineGutter,
-  highlightActiveLine,
-  drawSelection,
-  Decoration,
-  type DecorationSet,
-} from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { markdown } from '@codemirror/lang-markdown';
+import {
+  EditorSelection,
+  EditorState,
+  RangeSetBuilder,
+  StateEffect,
+  StateField,
+} from '@codemirror/state';
+import {
+  Decoration,
+  type DecorationSet,
+  EditorView,
+  drawSelection,
+  highlightActiveLine,
+  highlightActiveLineGutter,
+  keymap,
+  lineNumbers,
+} from '@codemirror/view';
 import { yCollab } from 'y-codemirror.next';
 import type { Awareness } from 'y-protocols/awareness';
 import type * as Y from 'yjs';
@@ -46,7 +52,11 @@ const rangesField = StateField.define<{ ranges: ThreadRange[]; active: string | 
   },
 });
 
-function buildDecorations(ranges: ThreadRange[], active: string | null, docLength: number): DecorationSet {
+function buildDecorations(
+  ranges: ThreadRange[],
+  active: string | null,
+  docLength: number,
+): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
   const sorted = [...ranges].sort((a, b) => a.start - b.start);
   for (const r of sorted) {
@@ -61,18 +71,19 @@ function buildDecorations(ranges: ThreadRange[], active: string | null, docLengt
     ]
       .filter(Boolean)
       .join(' ');
-    builder.add(start, end, Decoration.mark({ class: classes, attributes: { 'data-thread-id': r.threadId } }));
+    builder.add(
+      start,
+      end,
+      Decoration.mark({ class: classes, attributes: { 'data-thread-id': r.threadId } }),
+    );
   }
   return builder.finish();
 }
 
-const threadHighlightPlugin = EditorView.decorations.compute(
-  [rangesField, 'doc'],
-  (state) => {
-    const { ranges, active } = state.field(rangesField);
-    return buildDecorations(ranges, active, state.doc.length);
-  },
-);
+const threadHighlightPlugin = EditorView.decorations.compute([rangesField, 'doc'], (state) => {
+  const { ranges, active } = state.field(rangesField);
+  return buildDecorations(ranges, active, state.doc.length);
+});
 
 export function createEditor(opts: {
   parent: HTMLElement;

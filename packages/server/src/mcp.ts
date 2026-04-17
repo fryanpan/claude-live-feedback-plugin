@@ -1,10 +1,7 @@
 #!/usr/bin/env bun
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from '@modelcontextprotocol/sdk/types.js';
+import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 
 /**
  * Thin MCP server that proxies tool calls to a running feedback server
@@ -19,16 +16,22 @@ import {
 const BASE_URL = process.env.FEEDBACK_BASE_URL ?? 'http://localhost:8787';
 const AUTHOR_ID = process.env.FEEDBACK_AUTHOR ?? 'agent';
 
-const KNOWN_USERS: Record<string, { name: string; color: string; id: string; kind: 'known' | 'anon' }> = {
+const KNOWN_USERS: Record<
+  string,
+  { name: string; color: string; id: string; kind: 'known' | 'anon' }
+> = {
   bryan: { name: 'Bryan', color: '#2e7dd7', id: 'known-bryan', kind: 'known' },
   agent: { name: 'Agent', color: '#e36f1e', id: 'known-agent', kind: 'known' },
 };
 
 const authorKey = AUTHOR_ID.toLowerCase();
-const AUTHOR =
-  KNOWN_USERS[authorKey] ??
-  KNOWN_USERS.agent ??
-  { name: 'Agent', color: '#e36f1e', id: 'known-agent', kind: 'known' as const };
+const AUTHOR = KNOWN_USERS[authorKey] ??
+  KNOWN_USERS.agent ?? {
+    name: 'Agent',
+    color: '#e36f1e',
+    id: 'known-agent',
+    kind: 'known' as const,
+  };
 
 const server = new Server(
   {
@@ -141,7 +144,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   try {
     switch (name) {
       case 'list_docs': {
-        const res = await http('GET', `/api/docs`);
+        const res = await http('GET', '/api/docs');
         return ok(res);
       }
       case 'list_threads': {
@@ -152,7 +155,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       }
       case 'get_thread': {
         const { docId, threadId } = a as { docId: string; threadId: string };
-        const res = await http('GET', `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}`);
+        const res = await http(
+          'GET',
+          `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}`,
+        );
         return ok(res);
       }
       case 'post_reply': {
@@ -166,12 +172,18 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       }
       case 'resolve_thread': {
         const { docId, threadId } = a as { docId: string; threadId: string };
-        const res = await http('POST', `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/resolve`);
+        const res = await http(
+          'POST',
+          `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/resolve`,
+        );
         return ok(res);
       }
       case 'reopen_thread': {
         const { docId, threadId } = a as { docId: string; threadId: string };
-        const res = await http('POST', `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/reopen`);
+        const res = await http(
+          'POST',
+          `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/reopen`,
+        );
         return ok(res);
       }
       case 'push_edit': {

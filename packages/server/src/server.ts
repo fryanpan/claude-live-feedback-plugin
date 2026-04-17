@@ -1,9 +1,9 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { join, extname } from 'node:path';
+import { extname, join } from 'node:path';
 import type { Anchor, DocType, User } from '@feedback/core';
-import { Rooms, type FeedbackWs } from './rooms.ts';
-import { openSseStream, SseHub } from './sse.ts';
-import { createWebhookDispatcher, type WebhookLogEntry } from './webhooks.ts';
+import { type FeedbackWs, Rooms } from './rooms.ts';
+import { SseHub, openSseStream } from './sse.ts';
+import { type WebhookLogEntry, createWebhookDispatcher } from './webhooks.ts';
 import { onClose, onMessage, onOpen } from './yjs-protocol.ts';
 
 const DEFAULT_PORT = Number(process.env.PORT ?? 8787);
@@ -163,7 +163,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             return j(400, { error: 'start/end required' });
           }
           const res = rooms.pushEdit(docId, start, end, replacement);
-          return res.ok ? j(200, { ok: true, content: res.content }) : j(400, { error: 'edit failed' });
+          return res.ok
+            ? j(200, { ok: true, content: res.content })
+            : j(400, { error: 'edit failed' });
         }
         if (rest === 'hooks/fire' && req.method === 'POST') {
           // debug-fires the last thread update again
@@ -195,7 +197,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         const resp = serveStatic(p);
         if (resp) return resp;
       }
-      if (widgetDist && (pathname === '/widget.js' || pathname === '/widget.iife.js' || pathname === '/widget.esm.js')) {
+      if (
+        widgetDist &&
+        (pathname === '/widget.js' ||
+          pathname === '/widget.iife.js' ||
+          pathname === '/widget.esm.js')
+      ) {
         const map: Record<string, string> = {
           '/widget.js': 'widget.esm.js',
           '/widget.esm.js': 'widget.esm.js',

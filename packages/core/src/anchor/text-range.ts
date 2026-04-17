@@ -4,11 +4,7 @@ import type { TextResolution, TextResolveEnv } from './index.ts';
 
 const SNIPPET_MAX = 80;
 
-export function createFromOffsets(
-  ytext: Y.Text,
-  start: number,
-  end: number,
-): TextRangeAnchor {
+export function createFromOffsets(ytext: Y.Text, start: number, end: number): TextRangeAnchor {
   const clamped = clamp(start, end, ytext.length);
   const startRel = Y.createRelativePositionFromTypeIndex(ytext, clamped.start);
   const endRel = Y.createRelativePositionFromTypeIndex(ytext, clamped.end);

@@ -32,7 +32,7 @@ export class SseHub {
       try {
         sink.write(payload.event, payload);
       } catch (err) {
-        console.error(`[sse] write failed:`, err);
+        console.error('[sse] write failed:', err);
       }
     }
   }
@@ -64,12 +64,12 @@ export function openSseStream(hub: SseHub, docId: string): Response {
         },
       };
       // initial comment so proxies flush headers
-      c.enqueue(encoder.encode(`:ok\n\n`));
+      c.enqueue(encoder.encode(':ok\n\n'));
       remove = hub.add(docId, sink);
       // periodic keepalive
       const keepalive = setInterval(() => {
         try {
-          c.enqueue(encoder.encode(`:ka\n\n`));
+          c.enqueue(encoder.encode(':ka\n\n'));
         } catch {
           clearInterval(keepalive);
         }

@@ -1,12 +1,12 @@
 import {
-  anchors,
-  listThreads,
-  resolveUser,
   type ElementAnchor,
   type Thread,
   type User,
+  anchors,
+  listThreads,
+  resolveUser,
 } from '@feedback/core';
-import { connect, type WidgetClient } from './client.ts';
+import { type WidgetClient, connect } from './client.ts';
 import { widgetStyles } from './styles.ts';
 
 /**
@@ -43,7 +43,10 @@ class FeedbackWidgetEl extends HTMLElement {
   private pinLayer: HTMLDivElement | null = null;
   private panelOpen = false;
   private activeThread: string | null = null;
-  private threadPositions = new Map<string, { el: HTMLElement; status: 'open' | 'resolved' | 'orphan' }>();
+  private threadPositions = new Map<
+    string,
+    { el: HTMLElement; status: 'open' | 'resolved' | 'orphan' }
+  >();
   private observer: MutationObserver | null = null;
   private statusEl: HTMLElement | null = null;
   private rafId: number | null = null;
@@ -59,8 +62,7 @@ class FeedbackWidgetEl extends HTMLElement {
     this.opts.docId = opts.docId;
     this.opts.user = opts.user ?? null;
     this.opts.serverUrl =
-      opts.serverUrl ??
-      `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`;
+      opts.serverUrl ?? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`;
     this.user = resolveUser(this.opts.user, {
       get: (k) => localStorage.getItem(`cfw:${k}`),
       set: (k, v) => localStorage.setItem(`cfw:${k}`, v),
@@ -71,18 +73,30 @@ class FeedbackWidgetEl extends HTMLElement {
   }
 
   disconnectedCallback(): void {
-    try { this.client?.close(); } catch {}
-    try { this.observer?.disconnect(); } catch {}
-    try { this.overlay?.remove(); } catch {}
+    try {
+      this.client?.close();
+    } catch {}
+    try {
+      this.observer?.disconnect();
+    } catch {}
+    try {
+      this.overlay?.remove();
+    } catch {}
     if (this.rafId != null) {
-      try { cancelAnimationFrame(this.rafId); } catch {}
+      try {
+        cancelAnimationFrame(this.rafId);
+      } catch {}
       this.rafId = null;
     }
     if (this.resizeHandler) {
-      try { window.removeEventListener('resize', this.resizeHandler); } catch {}
+      try {
+        window.removeEventListener('resize', this.resizeHandler);
+      } catch {}
     }
     if (this.scrollHandler) {
-      try { window.removeEventListener('scroll', this.scrollHandler); } catch {}
+      try {
+        window.removeEventListener('scroll', this.scrollHandler);
+      } catch {}
     }
   }
 
@@ -93,7 +107,8 @@ class FeedbackWidgetEl extends HTMLElement {
     this.client = connect(url);
     this.client.onStatus((s) => {
       if (this.statusEl) {
-        this.statusEl.textContent = s === 'open' ? 'online' : s === 'connecting' ? 'connecting…' : 'offline';
+        this.statusEl.textContent =
+          s === 'open' ? 'online' : s === 'connecting' ? 'connecting…' : 'offline';
         this.statusEl.className = `status status-${s}`;
       }
     });
@@ -158,8 +173,7 @@ class FeedbackWidgetEl extends HTMLElement {
     this.overlay = document.createElement('div');
     this.overlay.setAttribute(IGNORE_ATTR, '');
     this.overlay.className = 'cfw-overlay';
-    this.overlay.style.cssText =
-      'position:fixed;inset:0;pointer-events:none;z-index:2147483646;';
+    this.overlay.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483646;';
     document.body.appendChild(this.overlay);
 
     this.pinLayer = document.createElement('div');
@@ -315,10 +329,15 @@ class FeedbackWidgetEl extends HTMLElement {
     this.threadPositions.clear();
     const pinLayer = this.pinLayer!;
     pinLayer.innerHTML = '';
-    const annotated: { thread: Thread; status: 'open' | 'resolved' | 'orphan'; el: HTMLElement | null }[] = [];
+    const annotated: {
+      thread: Thread;
+      status: 'open' | 'resolved' | 'orphan';
+      el: HTMLElement | null;
+    }[] = [];
     for (const t of threads) {
       if (t.anchor.kind !== 'element' && t.anchor.kind !== 'orphan') continue;
-      const statusBase: 'open' | 'resolved' | 'orphan' = t.status === 'resolved' ? 'resolved' : 'open';
+      const statusBase: 'open' | 'resolved' | 'orphan' =
+        t.status === 'resolved' ? 'resolved' : 'open';
       if (t.anchor.kind === 'orphan') {
         annotated.push({ thread: t, status: 'orphan', el: null });
         continue;
@@ -412,7 +431,10 @@ class FeedbackWidgetEl extends HTMLElement {
     row.className = `thread status-${status}`;
     if (this.activeThread === t.id) row.classList.add('active');
 
-    const snippet = t.anchor.kind === 'orphan' ? t.anchor.original.snippet.text : (t.anchor as ElementAnchor).snippet.text;
+    const snippet =
+      t.anchor.kind === 'orphan'
+        ? t.anchor.original.snippet.text
+        : (t.anchor as ElementAnchor).snippet.text;
     const last = t.comments[t.comments.length - 1];
     row.innerHTML = `
       <div class="meta">
@@ -451,7 +473,10 @@ class FeedbackWidgetEl extends HTMLElement {
     pop.className = 'thread-popover';
     pop.style.left = `${Math.min(cx + 6, window.innerWidth - 340)}px`;
     pop.style.top = `${Math.min(cy + 6, window.innerHeight - 240)}px`;
-    const snippet = t.anchor.kind === 'orphan' ? t.anchor.original.snippet.text : (t.anchor as ElementAnchor).snippet.text;
+    const snippet =
+      t.anchor.kind === 'orphan'
+        ? t.anchor.original.snippet.text
+        : (t.anchor as ElementAnchor).snippet.text;
     const status = t.anchor.kind === 'orphan' ? 'orphan' : t.status;
     pop.innerHTML = `
       <header>

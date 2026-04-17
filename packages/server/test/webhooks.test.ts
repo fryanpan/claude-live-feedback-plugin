@@ -1,6 +1,6 @@
 import { describe, expect, it, mock } from 'bun:test';
-import { createWebhookDispatcher } from '../src/webhooks.ts';
 import type { WebhookPayload } from '@feedback/core';
+import { createWebhookDispatcher } from '../src/webhooks.ts';
 
 const samplePayload: WebhookPayload = {
   event: 'thread.created',
@@ -24,7 +24,9 @@ const samplePayload: WebhookPayload = {
     commentCount: 1,
     lastActivity: 1,
     createdBy: { id: 'u', name: 'U', kind: 'anon', color: '#000' },
-    comments: [{ id: 'c', author: { id: 'u', name: 'U', kind: 'anon', color: '#000' }, text: 'x', ts: 1 }],
+    comments: [
+      { id: 'c', author: { id: 'u', name: 'U', kind: 'anon', color: '#000' }, text: 'x', ts: 1 },
+    ],
   },
   doc: { docId: 'd1', type: 'markdown', createdAt: 1 },
   seq: 1,
@@ -49,14 +51,20 @@ describe('webhook dispatcher', () => {
       n++;
       return n < 2 ? new Response('err', { status: 503 }) : new Response('ok', { status: 200 });
     });
-    const d = createWebhookDispatcher({ fetchImpl: fetchMock as unknown as typeof fetch, retries: 2 });
+    const d = createWebhookDispatcher({
+      fetchImpl: fetchMock as unknown as typeof fetch,
+      retries: 2,
+    });
     await d.send('http://example/hook', samplePayload);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('does not retry on 4xx', async () => {
     const fetchMock = mock(async () => new Response('bad', { status: 400 }));
-    const d = createWebhookDispatcher({ fetchImpl: fetchMock as unknown as typeof fetch, retries: 2 });
+    const d = createWebhookDispatcher({
+      fetchImpl: fetchMock as unknown as typeof fetch,
+      retries: 2,
+    });
     await d.send('http://example/hook', samplePayload);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });

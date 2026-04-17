@@ -21,7 +21,8 @@ export class ThreadPanel {
     this.threads = threads;
     this.statusMap.clear();
     for (const t of threads) {
-      const s = t.anchor.kind === 'orphan' ? 'orphan' : t.status === 'resolved' ? 'resolved' : 'open';
+      const s =
+        t.anchor.kind === 'orphan' ? 'orphan' : t.status === 'resolved' ? 'resolved' : 'open';
       this.statusMap.set(t.id, s);
     }
     this.render();
@@ -145,7 +146,11 @@ export class ThreadPanel {
     el.appendChild(reply);
 
     el.addEventListener('click', (ev) => {
-      if ((ev.target as HTMLElement).tagName === 'TEXTAREA' || (ev.target as HTMLElement).tagName === 'BUTTON') return;
+      if (
+        (ev.target as HTMLElement).tagName === 'TEXTAREA' ||
+        (ev.target as HTMLElement).tagName === 'BUTTON'
+      )
+        return;
       this.opts.onThreadClick(t.id);
     });
 
@@ -182,7 +187,13 @@ function formatTime(ts: number): string {
 
 function escape(s: string): string {
   return s.replace(/[&<>"']/g, (c) => {
-    const map: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+    const map: Record<string, string> = {
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;',
+    };
     return map[c] ?? c;
   });
 }

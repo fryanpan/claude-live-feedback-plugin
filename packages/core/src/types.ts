@@ -97,11 +97,7 @@ export interface Thread extends ThreadSummary {
 
 /** Payload POSTed to a host integration webhook. */
 export interface WebhookPayload {
-  event:
-    | 'thread.created'
-    | 'thread.replied'
-    | 'thread.resolved'
-    | 'thread.reopened';
+  event: 'thread.created' | 'thread.replied' | 'thread.resolved' | 'thread.reopened';
   docId: string;
   threadId: string;
   thread: Thread;

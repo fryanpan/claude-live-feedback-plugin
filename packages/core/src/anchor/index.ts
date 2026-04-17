@@ -1,7 +1,7 @@
 import type * as Y from 'yjs';
 import type { Anchor, ElementAnchor, TextRangeAnchor } from '../types.ts';
-import * as TextRange from './text-range.ts';
 import * as Element from './element.ts';
+import * as TextRange from './text-range.ts';
 
 export { TextRange, Element };
 

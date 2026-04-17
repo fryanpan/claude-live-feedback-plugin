@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 /**
  * Vitest (happy-dom) tests for the widget. These don't spin up a real
@@ -13,8 +13,10 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 
 async function importWidget() {
   // Route fetch + WebSocket to silence connection errors — we only exercise DOM here
-  (globalThis as unknown as { fetch: typeof fetch }).fetch = async () =>
-    new Response(JSON.stringify({ ok: true }), { headers: { 'content-type': 'application/json' } });
+  (globalThis as unknown as { fetch: unknown }).fetch = (async () =>
+    new Response(JSON.stringify({ ok: true }), {
+      headers: { 'content-type': 'application/json' },
+    })) as unknown as typeof fetch;
   class FakeWS {
     static OPEN = 1;
     readyState = 1;
@@ -38,9 +40,7 @@ describe('widget', () => {
   afterEach(() => {
     // Proactively remove any widget host to avoid happy-dom teardown races
     document.querySelectorAll('claude-feedback-widget').forEach((el) => el.remove());
-    document
-      .querySelectorAll('.cfw-overlay, #cfw-light-styles')
-      .forEach((el) => el.remove());
+    document.querySelectorAll('.cfw-overlay, #cfw-light-styles').forEach((el) => el.remove());
   });
 
   it('registers the custom element on init', async () => {

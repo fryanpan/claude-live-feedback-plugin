@@ -1,8 +1,8 @@
-import * as Y from 'yjs';
-import * as syncProtocol from 'y-protocols/sync';
-import * as awarenessProtocol from 'y-protocols/awareness';
-import * as encoding from 'lib0/encoding';
 import * as decoding from 'lib0/decoding';
+import * as encoding from 'lib0/encoding';
+import * as awarenessProtocol from 'y-protocols/awareness';
+import * as syncProtocol from 'y-protocols/sync';
+import * as Y from 'yjs';
 
 /**
  * Minimal Yjs WS client for the widget.
@@ -83,7 +83,10 @@ export function connect(url: string): WidgetClient {
         encoding.writeVarUint(e, MSG_SYNC);
         const type = syncProtocol.readSyncMessage(d, e, ydoc, ws);
         if (encoding.length(e) > 1) ws.send(encoding.toUint8Array(e));
-        if (!gotInitialSync && (type === syncProtocol.messageYjsSyncStep2 || type === syncProtocol.messageYjsUpdate)) {
+        if (
+          !gotInitialSync &&
+          (type === syncProtocol.messageYjsSyncStep2 || type === syncProtocol.messageYjsUpdate)
+        ) {
           gotInitialSync = true;
           readyCbs.forEach((cb) => cb());
           readyCbs = [];
@@ -99,7 +102,9 @@ export function connect(url: string): WidgetClient {
       reconnectDelay = Math.min(reconnectDelay * 2, 10000);
     });
     ws.addEventListener('error', () => {
-      try { ws.close(); } catch {}
+      try {
+        ws.close();
+      } catch {}
     });
   }
 
@@ -108,17 +113,24 @@ export function connect(url: string): WidgetClient {
   return {
     ydoc,
     awareness,
-    get status() { return status; },
+    get status() {
+      return status;
+    },
     close() {
       closed = true;
       ydoc.off('update', docUpdate);
       awareness.off('update', awareUpdate);
-      try { ws.close(); } catch {}
+      try {
+        ws.close();
+      } catch {}
     },
     onReady(cb) {
       if (gotInitialSync) cb();
       else readyCbs.push(cb);
     },
-    onStatus(cb) { statusCbs.push(cb); cb(status); },
+    onStatus(cb) {
+      statusCbs.push(cb);
+      cb(status);
+    },
   };
 }

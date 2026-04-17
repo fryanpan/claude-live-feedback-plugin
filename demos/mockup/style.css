@@ -9,7 +9,9 @@
   --shadow: 0 1px 2px rgba(27, 31, 35, 0.04), 0 6px 16px rgba(27, 31, 35, 0.06);
 }
 
-* { box-sizing: border-box; }
+* {
+  box-sizing: border-box;
+}
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif;
@@ -59,11 +61,15 @@ body {
   border-radius: 6px;
   font-size: 14px;
 }
-.topnav nav a.active, .topnav nav a:hover {
+.topnav nav a.active,
+.topnav nav a:hover {
   background: #eaf1fb;
   color: var(--accent);
 }
-.actions { display: flex; gap: 8px; }
+.actions {
+  display: flex;
+  gap: 8px;
+}
 button {
   font: inherit;
   cursor: pointer;
@@ -72,26 +78,52 @@ button {
   border: 1px solid var(--border);
   background: var(--card);
 }
-button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
-button.secondary { background: var(--card); }
-button.ghost { background: transparent; border: 0; text-align: left; padding: 8px 0; color: var(--fg); }
-button.ghost:hover { color: var(--accent); }
-button.ghost.danger { color: #d73a49; }
+button.primary {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+button.secondary {
+  background: var(--card);
+}
+button.ghost {
+  background: transparent;
+  border: 0;
+  text-align: left;
+  padding: 8px 0;
+  color: var(--fg);
+}
+button.ghost:hover {
+  color: var(--accent);
+}
+button.ghost.danger {
+  color: #d73a49;
+}
 
 main {
   max-width: 1180px;
   margin: 0 auto;
   padding: 28px 32px 80px;
 }
-.hero h1 { margin: 10px 0 6px; font-size: 26px; }
-.subtitle { color: var(--fg-muted); margin: 0 0 20px; }
+.hero h1 {
+  margin: 10px 0 6px;
+  font-size: 26px;
+}
+.subtitle {
+  color: var(--fg-muted);
+  margin: 0 0 20px;
+}
 
 .columns {
   display: grid;
   grid-template-columns: 1.2fr 1fr 1fr;
   gap: 20px;
 }
-@media (max-width: 1000px) { .columns { grid-template-columns: 1fr; } }
+@media (max-width: 1000px) {
+  .columns {
+    grid-template-columns: 1fr;
+  }
+}
 
 .card {
   background: var(--card);
@@ -121,7 +153,10 @@ main {
   padding-top: 14px;
   font-size: 15px;
 }
-.num { text-align: right; font-variant-numeric: tabular-nums; }
+.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
 
 #payment label {
   display: block;
@@ -129,7 +164,8 @@ main {
   font-size: 13px;
   color: var(--fg-muted);
 }
-#payment input, #payment select {
+#payment input,
+#payment select {
   display: block;
   width: 100%;
   padding: 8px 10px;
@@ -145,7 +181,9 @@ main {
   gap: 8px;
   margin-top: 6px;
 }
-#payment .row .primary { flex: 1; }
+#payment .row .primary {
+  flex: 1;
+}
 
 #next-steps ul {
   list-style: none;
@@ -156,7 +194,9 @@ main {
   border-bottom: 1px dotted var(--border);
   padding: 0 0;
 }
-#next-steps li:last-child { border-bottom: 0; }
+#next-steps li:last-child {
+  border-bottom: 0;
+}
 
 .notice {
   margin-top: 28px;
@@ -174,4 +214,6 @@ footer {
   border-top: 1px solid var(--border);
   background: var(--card);
 }
-footer a { color: var(--accent); }
+footer a {
+  color: var(--accent);
+}

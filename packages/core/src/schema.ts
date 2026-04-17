@@ -1,12 +1,5 @@
 import * as Y from 'yjs';
-import type {
-  Anchor,
-  Comment,
-  DocMeta,
-  Thread,
-  ThreadStatus,
-  User,
-} from './types.ts';
+import type { Anchor, Comment, DocMeta, Thread, ThreadStatus, User } from './types.ts';
 
 /**
  * Yjs doc shape:
@@ -81,7 +74,8 @@ export function readThread(threadMap: Y.Map<unknown>, threadId: string): Thread 
     }
   }
 
-  const lastActivity = comments.length > 0 ? (comments[comments.length - 1]?.ts ?? createdAt) : createdAt;
+  const lastActivity =
+    comments.length > 0 ? (comments[comments.length - 1]?.ts ?? createdAt) : createdAt;
 
   return {
     id: threadId,

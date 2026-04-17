@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { createAnchor, createFingerprint, scoreMatch } from '../src/anchor/element.ts';
 import { resolve } from '../src/anchor/element.ts';
 
@@ -73,9 +73,7 @@ describe('element anchor', () => {
     );
     const el = document.getElementById('submit') as HTMLElement;
     const anchor = createAnchor(el);
-    setDom(
-      '<nav><section><button class="unrelated">Cancel</button></section></nav>',
-    );
+    setDom('<nav><section><button class="unrelated">Cancel</button></section></nav>');
     const r = resolve(anchor, { root: document });
     expect(r.ok).toBe(false);
   });

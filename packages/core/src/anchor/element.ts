@@ -52,7 +52,8 @@ export function resolve(anchor: ElementAnchor, env: ElementResolveEnv): ElementR
     if (!best || s > best.score) best = { el: c, score: s };
   }
   if (!best) return { ok: false, reason: 'not-found', score: 0 };
-  if (best.score < SCORE_THRESHOLD) return { ok: false, reason: 'low-confidence', score: best.score };
+  if (best.score < SCORE_THRESHOLD)
+    return { ok: false, reason: 'low-confidence', score: best.score };
   return { ok: true, element: best.el, score: best.score };
 }
 
@@ -81,7 +82,10 @@ export function scoreMatch(fp: ElementFingerprint, el: HTMLElement): number {
   }
   score += Math.min(attrHits * 5, 20);
 
-  if (fp.stableAttrs['data-testid'] && el.getAttribute('data-testid') === fp.stableAttrs['data-testid']) {
+  if (
+    fp.stableAttrs['data-testid'] &&
+    el.getAttribute('data-testid') === fp.stableAttrs['data-testid']
+  ) {
     score += 20;
   }
 
@@ -144,9 +148,7 @@ function computePath(el: HTMLElement): string {
     const parent: Element | null = cur.parentElement;
     let idx = 0;
     if (parent) {
-      const siblings = Array.from(parent.children).filter(
-        (c) => c.tagName === cur!.tagName,
-      );
+      const siblings = Array.from(parent.children).filter((c) => c.tagName === cur!.tagName);
       idx = siblings.indexOf(cur);
     }
     parts.push(`${cur.tagName.toUpperCase()}[${idx}]`);
