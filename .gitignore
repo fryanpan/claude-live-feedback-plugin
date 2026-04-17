@@ -10,3 +10,4 @@ build/
 .claude/discord/
 .envrc
 .worktrees/
+__pycache__/
