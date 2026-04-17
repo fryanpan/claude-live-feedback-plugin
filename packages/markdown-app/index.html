@@ -12,22 +12,34 @@
         <div class="brand">Live Feedback</div>
         <div class="doc-title" id="doc-title">—</div>
         <div class="toolbar">
-          <div class="mode-toggle" role="tablist" aria-label="Mode">
-            <button data-mode="split" class="active" type="button">Split</button>
-            <button data-mode="edit" type="button">Edit</button>
-            <button data-mode="preview" type="button">Preview</button>
-          </div>
           <button id="copy-bryan" type="button">Copy Bryan link</button>
           <button id="copy-agent" type="button">Copy Agent link</button>
           <div id="me" class="user-chip"></div>
         </div>
       </header>
-      <main id="main" class="mode-split">
+      <main id="main">
         <section id="editor-pane">
-          <div id="editor"></div>
-        </section>
-        <section id="preview-pane">
-          <article id="preview"></article>
+          <div id="format-bar" class="format-bar" role="toolbar" aria-label="Formatting">
+            <button type="button" data-cmd="bold" title="Bold (⌘B)"><b>B</b></button>
+            <button type="button" data-cmd="italic" title="Italic (⌘I)"><i>I</i></button>
+            <span class="sep"></span>
+            <button type="button" data-cmd="h1" title="Heading 1 (⌘⌥1)">H1</button>
+            <button type="button" data-cmd="h2" title="Heading 2 (⌘⌥2)">H2</button>
+            <button type="button" data-cmd="h3" title="Heading 3 (⌘⌥3)">H3</button>
+            <span class="sep"></span>
+            <button type="button" data-cmd="bulletList" title="Bulleted list">•&nbsp;List</button>
+            <button type="button" data-cmd="orderedList" title="Numbered list">1.&nbsp;List</button>
+            <button type="button" data-cmd="blockquote" title="Quote">❝</button>
+            <span class="sep"></span>
+            <button type="button" data-cmd="code" title="Inline code (⌘E)">&lt;&nbsp;&gt;</button>
+            <button type="button" data-cmd="codeBlock" title="Code block">{…}</button>
+            <button type="button" data-cmd="link" title="Link (⌘K)">🔗</button>
+            <span class="sep"></span>
+            <button type="button" data-cmd="hr" title="Horizontal rule">—</button>
+            <button type="button" data-cmd="undo" title="Undo (⌘Z)">↶</button>
+            <button type="button" data-cmd="redo" title="Redo (⌘⇧Z)">↷</button>
+          </div>
+          <div id="editor" class="prose"></div>
         </section>
         <aside id="threads-pane">
           <div class="threads-header">

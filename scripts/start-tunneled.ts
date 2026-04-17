@@ -111,9 +111,15 @@ let cleaningUp = false;
 function cleanup() {
   if (cleaningUp) return;
   cleaningUp = true;
-  try { tunnel?.kill('SIGTERM'); } catch {}
-  try { server.kill('SIGTERM'); } catch {}
-  try { unlinkSync(emptyConfigPath); } catch {}
+  try {
+    tunnel?.kill('SIGTERM');
+  } catch {}
+  try {
+    server.kill('SIGTERM');
+  } catch {}
+  try {
+    unlinkSync(emptyConfigPath);
+  } catch {}
   setTimeout(() => process.exit(0), 400);
 }
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {

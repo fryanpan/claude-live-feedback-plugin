@@ -1,28 +1,18 @@
-import {
-  type Thread,
-  type User,
-  anchors,
-  getContent,
-  listThreads,
-  readDocMeta,
-  resolveUser,
-} from '@feedback/core';
+import { type Thread, type User, readDocMeta, resolveUser } from '@feedback/core';
 import { connect } from './client.ts';
-import { type EditorHandle, type ThreadRange, createEditor } from './editor.ts';
-import { renderMarkdown } from './preview.ts';
+import { type EditorHandle, createEditor } from './editor.ts';
 import { ThreadPanel } from './threads.ts';
 
 const DEFAULT_WS_PATH = (docId: string) =>
-  `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/y/${encodeURIComponent(docId)}`;
+  `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/y/${encodeURIComponent(docId)}?type=markdown`;
 
 interface Selection {
-  start: number;
-  end: number;
+  start: Uint8Array;
+  end: Uint8Array;
   snippet: string;
 }
 
 function docIdFromPath(): string {
-  // /review/<docId>
   const m = location.pathname.match(/^\/review\/([^/?#]+)/);
   return m ? decodeURIComponent(m[1] ?? '') : 'default';
 }
@@ -39,11 +29,9 @@ async function boot(): Promise<void> {
 
   const client = connect(DEFAULT_WS_PATH(docId));
   const { ydoc, awareness } = client;
-  const ytext = getContent(ydoc);
   awareness.setLocalStateField('user', { name: user.name, color: user.color });
 
   const editorMount = document.getElementById('editor') as HTMLElement;
-  const preview = document.getElementById('preview') as HTMLElement;
   const threadsListEl = document.getElementById('threads-list') as HTMLElement;
   const docTitleEl = document.getElementById('doc-title') as HTMLElement;
   const composer = document.getElementById('composer') as HTMLElement;
@@ -53,30 +41,27 @@ async function boot(): Promise<void> {
   const editor: EditorHandle = createEditor({
     parent: editorMount,
     ydoc,
-    ytext,
     awareness,
     onSelectionChange: () => refreshComposerState(),
+    onUpdate: () => redrawThreads(),
+    user: { name: user.name, color: user.color },
+    seedMarkdown: `# ${docId}\n\nWelcome to live feedback. Select any text and click **Comment** to leave a note.\n\n- Edits sync live between everyone on this link.\n- Keyboard: **⌘B** bold · **⌘I** italic · **⌘⌥1-3** headings · **⌘K** link · **⌘E** inline code.\n- Lists: type \`- \` or \`1. \` and press Enter. Tab to indent.\n`,
   });
 
   let selection: Selection | null = null;
   function refreshComposerState(): void {
-    const sel = editor.getSelectionOffsets();
-    if (!sel) {
-      selection = null;
-      hideComposer();
-      return;
-    }
-    const snippet = editor.getText().slice(sel.start, sel.end);
-    selection = { start: sel.start, end: sel.end, snippet };
+    const sel = editor.getSelectionRel();
+    selection = sel;
+    if (!sel) hideComposer();
   }
 
   function showComposerForSelection(): void {
-    if (!selection || selection.start === selection.end) {
+    if (!selection) {
       showToast('Select some text first to leave a comment.');
       return;
     }
     composer.classList.remove('hidden');
-    composerSnippet.textContent = truncate(selection.snippet, 160);
+    composerSnippet.textContent = selection.snippet;
     composerText.value = '';
     setTimeout(() => composerText.focus(), 0);
   }
@@ -88,10 +73,9 @@ async function boot(): Promise<void> {
     container: threadsListEl,
     currentUser: user,
     onThreadClick: (id) => {
-      const offsets = resolveThreadOffsets(id);
-      if (offsets) editor.scrollToOffset(offsets.start);
+      const range = resolveThreadRange(id);
+      if (range) editor.scrollToPos(range.from);
       threadsPanel.setActive(id);
-      editor.setActiveThread(id);
     },
     onReply: async (id, text) => {
       await fetch(
@@ -106,135 +90,121 @@ async function boot(): Promise<void> {
     onResolve: async (id) => {
       await fetch(
         `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/resolve`,
-        {
-          method: 'POST',
-        },
+        { method: 'POST' },
       );
     },
     onReopen: async (id) => {
       await fetch(
         `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/reopen`,
-        {
-          method: 'POST',
-        },
+        { method: 'POST' },
       );
     },
     onReanchor: (id) => {
-      // For text-range orphans, prompt the user to select a new range and submit
-      const sel = editor.getSelectionOffsets();
+      const sel = editor.getSelectionRel();
       if (!sel) {
-        showToast('Select the new text, then click Re-anchor again.');
+        showToast('Select new text first, then click Re-anchor.');
         return;
       }
-      const anchor = anchors.TextRange.createFromOffsets(ytext, sel.start, sel.end);
       void fetch(
         `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/reanchor`,
         {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ anchor }),
+          body: JSON.stringify({
+            anchor: {
+              kind: 'text-range',
+              startRel: Array.from(sel.start),
+              endRel: Array.from(sel.end),
+              snippet: { text: sel.snippet },
+            },
+          }),
         },
       );
     },
   });
 
-  function resolveThreadOffsets(threadId: string): { start: number; end: number } | null {
-    const thread = listThreads(ydoc).find((t) => t.id === threadId);
-    if (!thread) return null;
-    if (thread.anchor.kind === 'text-range') {
-      const r = anchors.TextRange.resolve(thread.anchor, { doc: ydoc, ytext });
-      return r.ok ? { start: r.start, end: r.end } : null;
-    }
-    return null;
-  }
-
-  function computeRanges(): ThreadRange[] {
-    const all = listThreads(ydoc);
-    const out: ThreadRange[] = [];
-    for (const t of all) {
-      if (t.anchor.kind === 'text-range') {
-        const r = anchors.TextRange.resolve(t.anchor, { doc: ydoc, ytext });
-        if (r.ok) {
-          out.push({
-            threadId: t.id,
-            start: r.start,
-            end: r.end,
-            status: t.status,
-          });
+  function resolveThreadRange(threadId: string): { from: number; to: number } | null {
+    const doc = ydoc.getMap('threads').get(threadId) as import('yjs').Map<unknown> | undefined;
+    if (!doc) return null;
+    const anchor = doc.get('anchor') as
+      | {
+          kind: 'text-range';
+          startRel: Uint8Array | number[];
+          endRel: Uint8Array | number[];
         }
-      }
-    }
-    return out;
-  }
-
-  function orphanSweep(): Thread[] {
-    // If a text-range anchor's range is deleted, the server doesn't automatically
-    // mark it orphan (threads only fire on explicit writes). We compute the
-    // display-time status here and forward to the panel, but we also POST a
-    // reanchor to convert the stored anchor for next session.
-    const all = listThreads(ydoc);
-    const annotated: Thread[] = all.map((t) => {
-      if (t.anchor.kind === 'text-range') {
-        const r = anchors.TextRange.resolve(t.anchor, { doc: ydoc, ytext });
-        if (!r.ok) {
-          return { ...t, anchor: { kind: 'orphan', original: t.anchor, lastSeenAt: Date.now() } };
-        }
-      }
-      return t;
-    });
-    return annotated;
+      | { kind: 'element' | 'orphan' }
+      | undefined;
+    if (!anchor || anchor.kind !== 'text-range') return null;
+    const startRel =
+      anchor.startRel instanceof Uint8Array ? anchor.startRel : new Uint8Array(anchor.startRel);
+    const endRel =
+      anchor.endRel instanceof Uint8Array ? anchor.endRel : new Uint8Array(anchor.endRel);
+    return editor.resolveRel(startRel, endRel);
   }
 
   function redrawThreads(): void {
-    const all = orphanSweep();
+    const all = collectThreads();
     threadsPanel.setThreads(all);
-    editor.setThreadRanges(computeRanges());
   }
 
-  async function renderPreview(): Promise<void> {
-    const md = ytext.toString();
-    await renderMarkdown(md, preview);
+  function collectThreads(): Thread[] {
+    const threadsMap = ydoc.getMap('threads');
+    const out: Thread[] = [];
+    threadsMap.forEach((entry, id) => {
+      const threadMap = entry as import('yjs').Map<unknown>;
+      const anchorRaw = threadMap.get('anchor') as Thread['anchor'] | undefined;
+      const status = threadMap.get('status') as Thread['status'] | undefined;
+      const createdBy = threadMap.get('createdBy') as User | undefined;
+      const commentsArr = threadMap.get('comments') as
+        | import('yjs').Array<import('yjs').Map<unknown>>
+        | undefined;
+      if (!anchorRaw || !status || !createdBy) return;
+      const comments = [];
+      if (commentsArr) {
+        for (const c of commentsArr) {
+          const cid = c.get('id') as string | undefined;
+          const author = c.get('author') as User | undefined;
+          const text = c.get('text') as string | undefined;
+          const ts = c.get('ts') as number | undefined;
+          if (cid && author && text != null && ts != null)
+            comments.push({ id: cid, author, text, ts });
+        }
+      }
+      // For text-range anchors, compute display status: orphan if resolveRel fails
+      let displayAnchor: Thread['anchor'] = anchorRaw;
+      if (anchorRaw.kind === 'text-range') {
+        const r = resolveThreadRange(id);
+        if (!r) {
+          displayAnchor = { kind: 'orphan', original: anchorRaw, lastSeenAt: Date.now() };
+        }
+      }
+      out.push({
+        id,
+        status,
+        anchor: displayAnchor,
+        createdBy,
+        commentCount: comments.length,
+        lastActivity: comments.length > 0 ? (comments[comments.length - 1]?.ts ?? 0) : 0,
+        comments,
+      });
+    });
+    return out;
   }
 
-  // Hook Yjs updates — debounce the expensive paths
-  let previewTimer: ReturnType<typeof setTimeout> | null = null;
-  let threadsTimer: ReturnType<typeof setTimeout> | null = null;
-  ytext.observe(() => {
-    if (previewTimer) clearTimeout(previewTimer);
-    previewTimer = setTimeout(() => void renderPreview(), 150);
-    if (threadsTimer) clearTimeout(threadsTimer);
-    // Text-range anchors only shift under edits — we only need to refresh the
-    // thread panel when anchor resolution might have flipped, which is at most
-    // a couple of times per second of typing. setThreads() is now a no-op
-    // when the fingerprint hasn't changed, so this is safe to call often.
-    threadsTimer = setTimeout(() => redrawThreads(), 200);
-  });
-  ydoc.getMap('threads').observeDeep(() => {
-    // Thread map changes (new thread, reply, status) — render immediately.
-    redrawThreads();
-  });
+  ydoc.getMap('threads').observeDeep(() => redrawThreads());
   const meta = ydoc.getMap('meta');
   meta.observe(() => {
     const m = readDocMeta(ydoc);
     docTitleEl.textContent = m.title ?? m.docId;
   });
-
   client.onReady(() => {
     const m = readDocMeta(ydoc);
     docTitleEl.textContent = m.title ?? m.docId;
-    // If the doc is empty, seed with a helpful placeholder (once)
-    if (ytext.length === 0 && !meta.get('seeded')) {
-      ydoc.transact(() => {
-        ytext.insert(
-          0,
-          `# ${m.title ?? m.docId}\n\nWelcome. Select any text and click **Comment** to leave a note.\n\n- Edits sync live between everyone on this link.\n- The agent can also observe events and post via MCP.\n\n\`\`\`mermaid\nflowchart LR\n  Bryan -- clicks --> Text\n  Agent -- edits --> Text\n  Text -- syncs --> Both\n\`\`\`\n`,
-        );
-        meta.set('seeded', true);
-      });
-    }
-    void renderPreview();
     redrawThreads();
   });
+
+  // Formatting toolbar
+  wireFormatBar(editor);
 
   // Global hotkeys
   document.addEventListener('keydown', (ev) => {
@@ -247,25 +217,13 @@ async function boot(): Promise<void> {
     }
   });
 
-  // Toolbar — mode toggle
-  document.querySelectorAll<HTMLButtonElement>('.mode-toggle button').forEach((b) => {
-    b.addEventListener('click', () => {
-      const mode = b.getAttribute('data-mode') ?? 'split';
-      const main = document.getElementById('main') as HTMLElement;
-      main.className = `mode-${mode}`;
-      document
-        .querySelectorAll('.mode-toggle button')
-        .forEach((x) => x.classList.toggle('active', x === b));
-    });
-  });
-
   // Copy link buttons
   function copyLink(asName: string): void {
-    const url = new URL(location.href);
-    url.searchParams.set('as', asName);
-    navigator.clipboard.writeText(url.toString()).then(
+    const u = new URL(location.href);
+    u.searchParams.set('as', asName);
+    navigator.clipboard.writeText(u.toString()).then(
       () => showToast(`Link for ${asName} copied`),
-      () => showToast('Could not copy — here it is: ' + url.toString()),
+      () => showToast(`Could not copy — here it is: ${u.toString()}`),
     );
   }
   document.getElementById('copy-bryan')?.addEventListener('click', () => copyLink('bryan'));
@@ -276,11 +234,16 @@ async function boot(): Promise<void> {
   document.getElementById('composer-submit')?.addEventListener('click', async () => {
     const text = composerText.value.trim();
     if (!text) return;
-    if (!selection || selection.start === selection.end) {
+    if (!selection) {
       showToast('Lost the selection — try again.');
       return;
     }
-    const anchor = anchors.TextRange.createFromOffsets(ytext, selection.start, selection.end);
+    const anchor = {
+      kind: 'text-range' as const,
+      startRel: Array.from(selection.start),
+      endRel: Array.from(selection.end),
+      snippet: { text: selection.snippet },
+    };
     const res = await fetch(`/api/docs/${encodeURIComponent(docId)}/threads`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -294,51 +257,130 @@ async function boot(): Promise<void> {
     }
   });
 
-  // A floating "Comment" button appears whenever there's a selection
+  // Floating Comment button near selection
   const floatBtn = document.createElement('button');
   floatBtn.type = 'button';
   floatBtn.textContent = 'Comment';
-  floatBtn.className = 'primary';
-  floatBtn.style.cssText =
-    'position:fixed;z-index:900;padding:6px 12px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer;box-shadow:var(--shadow);font-size:13px;display:none;';
+  floatBtn.className = 'floating-comment';
+  floatBtn.style.display = 'none';
   document.body.appendChild(floatBtn);
   floatBtn.addEventListener('mousedown', (ev) => ev.preventDefault());
   floatBtn.addEventListener('click', () => showComposerForSelection());
 
   function positionFloatingButton(): void {
-    const sel = editor.getSelectionOffsets();
+    const sel = editor.getSelectionRel();
     if (!sel) {
       floatBtn.style.display = 'none';
       return;
     }
-    // anchor the button near the end of the selection using CodeMirror's coordsAtPos
-    const view = editor.view;
-    const coords = view.coordsAtPos(sel.end);
-    if (!coords) {
+    const pmSel = editor.editor.state.selection;
+    try {
+      const end = editor.editor.view.coordsAtPos(pmSel.to);
+      floatBtn.style.display = 'block';
+      floatBtn.style.left = `${Math.min(end.right + 6, window.innerWidth - 110)}px`;
+      floatBtn.style.top = `${Math.max(end.top - 4, 60)}px`;
+    } catch {
       floatBtn.style.display = 'none';
-      return;
     }
-    floatBtn.style.display = 'block';
-    floatBtn.style.left = `${Math.min(coords.right + 6, window.innerWidth - 110)}px`;
-    floatBtn.style.top = `${Math.max(coords.top - 4, 60)}px`;
   }
-  editor.view.dom.addEventListener('mouseup', () =>
+  editor.editor.view.dom.addEventListener('mouseup', () =>
     setTimeout(() => {
       refreshComposerState();
       positionFloatingButton();
     }, 0),
   );
-  editor.view.dom.addEventListener('keyup', () =>
+  editor.editor.view.dom.addEventListener('keyup', () =>
     setTimeout(() => {
       refreshComposerState();
       positionFloatingButton();
     }, 0),
   );
-
   document.addEventListener('selectionchange', () => positionFloatingButton());
 
-  // Ensure cleanup on unload
-  addEventListener('beforeunload', () => client.close());
+  addEventListener('beforeunload', () => {
+    client.close();
+    editor.destroy();
+  });
+}
+
+function wireFormatBar(editor: EditorHandle): void {
+  const bar = document.getElementById('format-bar');
+  if (!bar) return;
+  const chain = () => editor.editor.chain().focus();
+  const handlers: Record<string, () => void> = {
+    bold: () => chain().toggleBold().run(),
+    italic: () => chain().toggleItalic().run(),
+    h1: () => chain().toggleHeading({ level: 1 }).run(),
+    h2: () => chain().toggleHeading({ level: 2 }).run(),
+    h3: () => chain().toggleHeading({ level: 3 }).run(),
+    bulletList: () => chain().toggleBulletList().run(),
+    orderedList: () => chain().toggleOrderedList().run(),
+    blockquote: () => chain().toggleBlockquote().run(),
+    code: () => chain().toggleCode().run(),
+    codeBlock: () => chain().toggleCodeBlock().run(),
+    hr: () => chain().setHorizontalRule().run(),
+    undo: () => chain().undo().run(),
+    redo: () => chain().redo().run(),
+    link: () => {
+      const existing = editor.editor.getAttributes('link').href as string | undefined;
+      const href = prompt('Link URL', existing ?? 'https://');
+      if (href === null) return;
+      if (href === '') chain().unsetLink().run();
+      else chain().setLink({ href }).run();
+    },
+  };
+  bar.addEventListener('click', (ev) => {
+    const t = (ev.target as HTMLElement).closest('button');
+    if (!t) return;
+    const cmd = t.getAttribute('data-cmd');
+    if (cmd && handlers[cmd]) handlers[cmd]();
+  });
+
+  // Reflect active state in the toolbar
+  const refresh = () => {
+    for (const btn of Array.from(bar.querySelectorAll<HTMLButtonElement>('button'))) {
+      const cmd = btn.getAttribute('data-cmd');
+      let active = false;
+      switch (cmd) {
+        case 'bold':
+          active = editor.editor.isActive('bold');
+          break;
+        case 'italic':
+          active = editor.editor.isActive('italic');
+          break;
+        case 'h1':
+          active = editor.editor.isActive('heading', { level: 1 });
+          break;
+        case 'h2':
+          active = editor.editor.isActive('heading', { level: 2 });
+          break;
+        case 'h3':
+          active = editor.editor.isActive('heading', { level: 3 });
+          break;
+        case 'bulletList':
+          active = editor.editor.isActive('bulletList');
+          break;
+        case 'orderedList':
+          active = editor.editor.isActive('orderedList');
+          break;
+        case 'blockquote':
+          active = editor.editor.isActive('blockquote');
+          break;
+        case 'code':
+          active = editor.editor.isActive('code');
+          break;
+        case 'codeBlock':
+          active = editor.editor.isActive('codeBlock');
+          break;
+        case 'link':
+          active = editor.editor.isActive('link');
+          break;
+      }
+      btn.classList.toggle('active', active);
+    }
+  };
+  editor.editor.on('selectionUpdate', refresh);
+  editor.editor.on('transaction', refresh);
 }
 
 function renderMe(user: User): void {
@@ -355,10 +397,6 @@ function showToast(msg: string): void {
   t.classList.remove('hidden');
   if (toastTimer) clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.classList.add('hidden'), 2200);
-}
-
-function truncate(s: string, n: number): string {
-  return s.length > n ? `${s.slice(0, n - 1)}…` : s;
 }
 
 void boot();

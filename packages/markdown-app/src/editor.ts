@@ -1,144 +1,155 @@
-import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
-import { markdown } from '@codemirror/lang-markdown';
+import { Editor } from '@tiptap/core';
+import Collaboration from '@tiptap/extension-collaboration';
+import StarterKit from '@tiptap/starter-kit';
+import { Markdown } from 'tiptap-markdown';
 import {
-  EditorSelection,
-  EditorState,
-  RangeSetBuilder,
-  StateEffect,
-  StateField,
-} from '@codemirror/state';
-import {
-  Decoration,
-  type DecorationSet,
-  EditorView,
-  drawSelection,
-  highlightActiveLine,
-  highlightActiveLineGutter,
-  keymap,
-  lineNumbers,
-} from '@codemirror/view';
-import { yCollab } from 'y-codemirror.next';
+  absolutePositionToRelativePosition,
+  relativePositionToAbsolutePosition,
+  ySyncPluginKey,
+} from 'y-prosemirror';
 import type { Awareness } from 'y-protocols/awareness';
-import type * as Y from 'yjs';
+import * as Y from 'yjs';
+
+/**
+ * WYSIWYG markdown editor backed by Tiptap (ProseMirror) + Yjs collaboration.
+ * Storage: content lives in a Y.XmlFragment named `prose`. On first load, if
+ * that fragment is empty but the legacy Y.Text `content` has data, the
+ * content is migrated into the prose fragment so docs created with the old
+ * CodeMirror source editor keep their text.
+ */
 
 export interface EditorHandle {
-  view: EditorView;
-  setActiveThread: (threadId: string | null) => void;
-  setThreadRanges: (ranges: ThreadRange[]) => void;
-  getSelectionOffsets: () => { start: number; end: number } | null;
+  editor: Editor;
+  getSelectionRel: () => { start: Uint8Array; end: Uint8Array; snippet: string } | null;
+  resolveRel: (startRel: Uint8Array, endRel: Uint8Array) => { from: number; to: number } | null;
+  scrollToPos: (pos: number) => void;
   getText: () => string;
-  scrollToOffset: (offset: number) => void;
+  setMarkdown: (md: string) => void;
+  getMarkdown: () => string;
+  destroy: () => void;
 }
 
-export interface ThreadRange {
-  threadId: string;
-  start: number;
-  end: number;
-  status: 'open' | 'resolved';
-}
-
-const setRangesEffect = StateEffect.define<ThreadRange[]>();
-const setActiveEffect = StateEffect.define<string | null>();
-
-const rangesField = StateField.define<{ ranges: ThreadRange[]; active: string | null }>({
-  create: () => ({ ranges: [], active: null }),
-  update(value, tr) {
-    let next = value;
-    for (const e of tr.effects) {
-      if (e.is(setRangesEffect)) next = { ...next, ranges: e.value };
-      if (e.is(setActiveEffect)) next = { ...next, active: e.value };
-    }
-    return next;
-  },
-});
-
-function buildDecorations(
-  ranges: ThreadRange[],
-  active: string | null,
-  docLength: number,
-): DecorationSet {
-  const builder = new RangeSetBuilder<Decoration>();
-  const sorted = [...ranges].sort((a, b) => a.start - b.start);
-  for (const r of sorted) {
-    if (r.start >= r.end) continue;
-    const end = Math.min(r.end, docLength);
-    const start = Math.max(0, Math.min(r.start, end));
-    if (start === end) continue;
-    const classes = [
-      'cm-thread-anchor',
-      r.status === 'resolved' ? 'resolved' : '',
-      active === r.threadId ? 'active' : '',
-    ]
-      .filter(Boolean)
-      .join(' ');
-    builder.add(
-      start,
-      end,
-      Decoration.mark({ class: classes, attributes: { 'data-thread-id': r.threadId } }),
-    );
-  }
-  return builder.finish();
-}
-
-const threadHighlightPlugin = EditorView.decorations.compute([rangesField, 'doc'], (state) => {
-  const { ranges, active } = state.field(rangesField);
-  return buildDecorations(ranges, active, state.doc.length);
-});
-
-export function createEditor(opts: {
+export interface CreateEditorOpts {
   parent: HTMLElement;
   ydoc: Y.Doc;
-  ytext: Y.Text;
   awareness: Awareness;
-  onSelectionChange?: (start: number, end: number) => void;
-}): EditorHandle {
-  const state = EditorState.create({
-    doc: opts.ytext.toString(),
+  fragmentName?: string;
+  onSelectionChange?: () => void;
+  onUpdate?: () => void;
+  user?: { name: string; color: string };
+  seedMarkdown?: string;
+}
+
+export function createEditor(opts: CreateEditorOpts): EditorHandle {
+  // Intentionally unused for now — y-prosemirror awareness cursors are a
+  // follow-up once the Tiptap 3 cursor extension lands upstream.
+  void opts.awareness;
+  void opts.user;
+
+  const fragmentName = opts.fragmentName ?? 'prose';
+  const fragment = opts.ydoc.getXmlFragment(fragmentName);
+  const legacy = opts.ydoc.getText('content');
+
+  const editor = new Editor({
+    element: opts.parent,
     extensions: [
-      lineNumbers(),
-      highlightActiveLineGutter(),
-      highlightActiveLine(),
-      drawSelection(),
-      history(),
-      keymap.of([...defaultKeymap, ...historyKeymap]),
-      markdown(),
-      yCollab(opts.ytext, opts.awareness),
-      rangesField,
-      threadHighlightPlugin,
-      EditorView.lineWrapping,
-      EditorView.updateListener.of((u) => {
-        if (u.selectionSet) {
-          const { main } = u.state.selection;
-          opts.onSelectionChange?.(main.from, main.to);
-        }
+      StarterKit.configure({
+        undoRedo: false, // Yjs Collaboration plugin owns undo/redo
+        link: {
+          openOnClick: false,
+          autolink: true,
+          HTMLAttributes: { rel: 'noopener noreferrer', target: '_blank' },
+        },
+      }),
+      Markdown.configure({
+        html: false,
+        tightLists: true,
+        linkify: true,
+        breaks: false,
+        transformPastedText: true,
+      }),
+      Collaboration.configure({
+        document: opts.ydoc,
+        field: fragmentName,
       }),
     ],
+    onSelectionUpdate: () => opts.onSelectionChange?.(),
+    onUpdate: () => opts.onUpdate?.(),
   });
 
-  const view = new EditorView({ state, parent: opts.parent });
+  // Seed from legacy Y.Text or caller-provided markdown. Runs once per doc.
+  queueMicrotask(() => {
+    if (fragment.length !== 0) return;
+    const seed = legacy.length > 0 ? legacy.toString() : (opts.seedMarkdown ?? '');
+    if (!seed) return;
+    editor.commands.setContent(seed, { emitUpdate: true });
+    if (legacy.length > 0) {
+      opts.ydoc.transact(() => legacy.delete(0, legacy.length));
+    }
+  });
+
+  function syncState() {
+    return ySyncPluginKey.getState(editor.state);
+  }
 
   return {
-    view,
-    setActiveThread(id) {
-      view.dispatch({ effects: setActiveEffect.of(id) });
+    editor,
+    getSelectionRel() {
+      const { from, to, empty } = editor.state.selection;
+      if (empty) return null;
+      const sync = syncState();
+      if (!sync?.binding) return null;
+      const { mapping, type } = sync.binding;
+      const startRel = absolutePositionToRelativePosition(from, type, mapping);
+      const endRel = absolutePositionToRelativePosition(to, type, mapping);
+      const snippet = editor.state.doc.textBetween(from, to, ' ').slice(0, 80);
+      return {
+        start: Y.encodeRelativePosition(startRel),
+        end: Y.encodeRelativePosition(endRel),
+        snippet,
+      };
     },
-    setThreadRanges(ranges) {
-      view.dispatch({ effects: setRangesEffect.of(ranges) });
+    resolveRel(startRel, endRel) {
+      const sync = syncState();
+      if (!sync?.binding) return null;
+      const { mapping, type } = sync.binding;
+      const startAbs = relativePositionToAbsolutePosition(
+        opts.ydoc,
+        type,
+        Y.decodeRelativePosition(startRel),
+        mapping,
+      );
+      const endAbs = relativePositionToAbsolutePosition(
+        opts.ydoc,
+        type,
+        Y.decodeRelativePosition(endRel),
+        mapping,
+      );
+      if (startAbs == null || endAbs == null) return null;
+      const from = Math.min(startAbs, endAbs);
+      const to = Math.max(startAbs, endAbs);
+      if (from === to) return null;
+      return { from, to };
     },
-    getSelectionOffsets() {
-      const { main } = view.state.selection;
-      if (main.empty) return null;
-      return { start: main.from, end: main.to };
+    scrollToPos(pos) {
+      const clamped = Math.max(0, Math.min(pos, editor.state.doc.content.size));
+      editor.commands.setTextSelection(clamped);
+      editor.commands.scrollIntoView();
+      editor.commands.focus();
     },
     getText() {
-      return view.state.doc.toString();
+      return editor.state.doc.textBetween(0, editor.state.doc.content.size, '\n');
     },
-    scrollToOffset(offset) {
-      view.dispatch({
-        selection: EditorSelection.cursor(offset),
-        scrollIntoView: true,
-      });
-      view.focus();
+    setMarkdown(md) {
+      editor.commands.setContent(md, { emitUpdate: true });
+    },
+    getMarkdown() {
+      type MarkdownStorage = { getMarkdown: () => string };
+      const store = (editor.storage as unknown as { markdown?: MarkdownStorage }).markdown;
+      return store?.getMarkdown() ?? this.getText();
+    },
+    destroy() {
+      editor.destroy();
     },
   };
 }
