@@ -196,12 +196,21 @@ async function boot(): Promise<void> {
     await renderMarkdown(md, preview);
   }
 
-  // Hook Yjs updates
+  // Hook Yjs updates — debounce the expensive paths
+  let previewTimer: ReturnType<typeof setTimeout> | null = null;
+  let threadsTimer: ReturnType<typeof setTimeout> | null = null;
   ytext.observe(() => {
-    void renderPreview();
-    redrawThreads();
+    if (previewTimer) clearTimeout(previewTimer);
+    previewTimer = setTimeout(() => void renderPreview(), 150);
+    if (threadsTimer) clearTimeout(threadsTimer);
+    // Text-range anchors only shift under edits — we only need to refresh the
+    // thread panel when anchor resolution might have flipped, which is at most
+    // a couple of times per second of typing. setThreads() is now a no-op
+    // when the fingerprint hasn't changed, so this is safe to call often.
+    threadsTimer = setTimeout(() => redrawThreads(), 200);
   });
   ydoc.getMap('threads').observeDeep(() => {
+    // Thread map changes (new thread, reply, status) — render immediately.
     redrawThreads();
   });
   const meta = ydoc.getMap('meta');

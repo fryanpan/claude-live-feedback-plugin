@@ -14,6 +14,8 @@ export class ThreadPanel {
   private activeId: string | null = null;
   private threads: Thread[] = [];
   private statusMap = new Map<string, 'open' | 'resolved' | 'orphan'>();
+  /** Hash of what we last rendered. Skip re-render when nothing display-relevant changed. */
+  private lastRenderKey = '';
 
   constructor(private opts: ThreadPanelOpts) {}
 
@@ -29,6 +31,7 @@ export class ThreadPanel {
   }
 
   setActive(id: string | null): void {
+    if (this.activeId === id) return;
     this.activeId = id;
     this.render();
   }
@@ -37,8 +40,28 @@ export class ThreadPanel {
     return this.statusMap.get(threadId);
   }
 
+  /** Cheap fingerprint used to short-circuit renders when nothing user-visible changed. */
+  private computeKey(): string {
+    const parts: string[] = [];
+    for (const t of this.threads) {
+      parts.push(`${t.id}:${this.statusMap.get(t.id)}:${t.commentCount}:${t.lastActivity}`);
+    }
+    return `${this.activeId ?? ''}|${parts.join('|')}`;
+  }
+
   private render(): void {
     const c = this.opts.container;
+    const key = this.computeKey();
+    if (key === this.lastRenderKey) return;
+
+    // Preserve pending reply input so live edits elsewhere don't wipe it.
+    const pendingReplies = new Map<string, string>();
+    for (const existing of Array.from(c.querySelectorAll<HTMLElement>('.thread'))) {
+      const id = existing.getAttribute('data-thread-id');
+      const ta = existing.querySelector<HTMLTextAreaElement>('textarea');
+      if (id && ta && ta.value) pendingReplies.set(id, ta.value);
+    }
+
     c.innerHTML = '';
 
     const open = this.threads.filter((t) => this.statusMap.get(t.id) === 'open');
@@ -50,21 +73,23 @@ export class ThreadPanel {
       empty.className = 'section-heading';
       empty.textContent = 'No threads yet. Select text → leave a comment.';
       c.appendChild(empty);
+      this.lastRenderKey = key;
       return;
     }
 
     if (open.length > 0) {
       c.appendChild(this.heading(`Open (${open.length})`));
-      for (const t of open) c.appendChild(this.renderThread(t));
+      for (const t of open) c.appendChild(this.renderThread(t, pendingReplies.get(t.id)));
     }
     if (orphan.length > 0) {
       c.appendChild(this.heading(`Orphaned (${orphan.length})`));
-      for (const t of orphan) c.appendChild(this.renderThread(t));
+      for (const t of orphan) c.appendChild(this.renderThread(t, pendingReplies.get(t.id)));
     }
     if (resolved.length > 0) {
       c.appendChild(this.heading(`Resolved (${resolved.length})`));
-      for (const t of resolved) c.appendChild(this.renderThread(t));
+      for (const t of resolved) c.appendChild(this.renderThread(t, pendingReplies.get(t.id)));
     }
+    this.lastRenderKey = key;
   }
 
   private heading(label: string): HTMLElement {
@@ -74,7 +99,7 @@ export class ThreadPanel {
     return h;
   }
 
-  private renderThread(t: Thread): HTMLElement {
+  private renderThread(t: Thread, pendingReply?: string): HTMLElement {
     const status = this.statusMap.get(t.id) ?? 'open';
     const el = document.createElement('div');
     el.className = `thread status-${status}`;
@@ -124,6 +149,7 @@ export class ThreadPanel {
     const ta = document.createElement('textarea');
     ta.rows = 2;
     ta.placeholder = `Reply as ${this.opts.currentUser.name}…`;
+    if (pendingReply) ta.value = pendingReply;
     reply.appendChild(ta);
     const actions = document.createElement('div');
     actions.className = 'thread-actions';

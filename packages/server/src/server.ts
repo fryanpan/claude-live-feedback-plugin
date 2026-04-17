@@ -65,7 +65,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       if (pathname.startsWith('/y/')) {
         const docId = decodeURIComponent(pathname.slice(3));
         if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
-        rooms.getOrCreate(docId);
+        const type = url.searchParams.get('type') as DocType | null;
+        const sourceUrl = url.searchParams.get('sourceUrl') ?? undefined;
+        rooms.getOrCreate(docId, {
+          type: type && ['markdown', 'mockup', 'dev'].includes(type) ? type : undefined,
+          sourceUrl,
+        });
         const upgraded = server.upgrade(req, { data: { docId } });
         if (!upgraded) return new Response('upgrade required', { status: 426 });
         return undefined;
@@ -100,11 +105,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         const docId = decodeURIComponent(docMatch[1] ?? '');
         const rest = docMatch[2] ?? '';
         if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
-        // Auto-create the room on write paths so widget integrations work
-        // without a prior POST /api/docs (WS connect usually happens first,
-        // but REST can race ahead when the widget is the only client).
-        const isWrite = req.method !== 'GET';
-        const room = isWrite ? rooms.getOrCreate(docId) : rooms.get(docId);
+        // Auto-create ONLY for thread creation — the single path a widget/
+        // integration hits before anything else exists. Replies, edits,
+        // resolves etc. need a real prior doc; making them auto-create
+        // turns this endpoint into a trivial open-write target behind any
+        // tunnel. Thread creation itself is gated by the existence of a
+        // valid anchor further down.
+        const isThreadCreate = rest === 'threads' && req.method === 'POST';
+        const room = isThreadCreate ? rooms.getOrCreate(docId) : rooms.get(docId);
         if (!room) return j(404, { error: 'doc not found' });
         if (rest === '' && req.method === 'GET') {
           return j(200, { meta: room.meta });
@@ -291,6 +299,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
 }
 
 function isValidDocId(s: string): boolean {
+  // Allow a reasonable set of URL-safe chars. Disallow leading dot so IDs
+  // can't masquerade as hidden files on disk. Length cap protects the
+  // filename from being pathological.
+  if (!s || s.startsWith('.')) return false;
   return /^[a-zA-Z0-9_.:\-]{1,100}$/.test(s);
 }
 

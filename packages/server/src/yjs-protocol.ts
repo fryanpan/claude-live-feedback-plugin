@@ -14,7 +14,77 @@ import type { DocRoom, FeedbackWs } from './rooms.ts';
 export const MSG_SYNC = 0;
 export const MSG_AWARENESS = 1;
 
+/**
+ * Per-connection state attached to the WebSocket. We track the set of
+ * Yjs client IDs that have contributed awareness via this specific WS
+ * so we only remove those on disconnect — not every peer's awareness.
+ */
+type WsState = {
+  cleanup?: () => void;
+  /** clientIDs we've seen incoming awareness from on this ws. */
+  knownClientIds: Set<number>;
+};
+
+function state(ws: FeedbackWs): WsState {
+  const typed = ws as FeedbackWs & { _state?: WsState };
+  if (!typed._state) typed._state = { knownClientIds: new Set() };
+  return typed._state;
+}
+
+/**
+ * One broadcaster per room (not per connection). When the room's Y.Doc
+ * or Awareness emits an update, send it to every connection *except*
+ * the origin connection. Registering N handlers with per-ws closures
+ * (the previous approach) skipped the wrong peer on the broadcast loop —
+ * updates originating from peer B never reached peer A.
+ */
+const roomBroadcasters = new WeakMap<DocRoom, () => void>();
+
+function ensureBroadcaster(room: DocRoom): void {
+  if (roomBroadcasters.has(room)) return;
+  const onUpdate = (update: Uint8Array, origin: unknown) => {
+    const enc = encoding.createEncoder();
+    encoding.writeVarUint(enc, MSG_SYNC);
+    syncProtocol.writeUpdate(enc, update);
+    const payload = encoding.toUint8Array(enc);
+    for (const peer of room.conns) {
+      if (peer === origin) continue;
+      try {
+        peer.sendBinary(payload);
+      } catch (e) {
+        console.error('[ws] doc send failed', e);
+      }
+    }
+  };
+  const onAwareness = (
+    { added, updated, removed }: { added: number[]; updated: number[]; removed: number[] },
+    origin: unknown,
+  ) => {
+    const ids = [...added, ...updated, ...removed];
+    const enc = encoding.createEncoder();
+    encoding.writeVarUint(enc, MSG_AWARENESS);
+    encoding.writeVarUint8Array(enc, awarenessProtocol.encodeAwarenessUpdate(room.awareness, ids));
+    const payload = encoding.toUint8Array(enc);
+    for (const peer of room.conns) {
+      if (peer === origin) continue;
+      try {
+        peer.sendBinary(payload);
+      } catch (e) {
+        console.error('[ws] awareness send failed', e);
+      }
+    }
+  };
+  room.ydoc.on('update', onUpdate);
+  room.awareness.on('update', onAwareness);
+  // Keep the handlers alive for the life of the server; rooms are long-lived.
+  roomBroadcasters.set(room, () => {
+    room.ydoc.off('update', onUpdate);
+    room.awareness.off('update', onAwareness);
+  });
+}
+
 export function onOpen(room: DocRoom, ws: FeedbackWs): void {
+  ensureBroadcaster(room);
   room.conns.add(ws);
 
   // sync step 1 — ask the client for updates it has that we don't
@@ -37,51 +107,11 @@ export function onOpen(room: DocRoom, ws: FeedbackWs): void {
     ws.sendBinary(encoding.toUint8Array(enc));
   }
 
-  // broadcast doc updates originating from this connection to peers
-  const onUpdate = (update: Uint8Array, origin: unknown) => {
-    if (origin === ws) return; // already has its own update
-    for (const peer of room.conns) {
-      if (peer === ws) continue;
-      const enc = encoding.createEncoder();
-      encoding.writeVarUint(enc, MSG_SYNC);
-      syncProtocol.writeUpdate(enc, update);
-      try {
-        peer.sendBinary(encoding.toUint8Array(enc));
-      } catch (e) {
-        console.error('[ws] doc send failed', e);
-      }
+  state(ws).cleanup = () => {
+    const { knownClientIds } = state(ws);
+    if (knownClientIds.size > 0) {
+      awarenessProtocol.removeAwarenessStates(room.awareness, Array.from(knownClientIds), ws);
     }
-  };
-  const onAwareness = (
-    { added, updated, removed }: { added: number[]; updated: number[]; removed: number[] },
-    origin: unknown,
-  ) => {
-    if (origin === ws) return;
-    const ids = [...added, ...updated, ...removed];
-    const enc = encoding.createEncoder();
-    encoding.writeVarUint(enc, MSG_AWARENESS);
-    encoding.writeVarUint8Array(enc, awarenessProtocol.encodeAwarenessUpdate(room.awareness, ids));
-    for (const peer of room.conns) {
-      if (peer === ws) continue;
-      try {
-        peer.sendBinary(encoding.toUint8Array(enc));
-      } catch (e) {
-        console.error('[ws] awareness send failed', e);
-      }
-    }
-  };
-  room.ydoc.on('update', onUpdate);
-  room.awareness.on('update', onAwareness);
-  (ws as FeedbackWs & { _cleanup?: () => void })._cleanup = () => {
-    room.ydoc.off('update', onUpdate);
-    room.awareness.off('update', onAwareness);
-    awarenessProtocol.removeAwarenessStates(
-      room.awareness,
-      Array.from(room.awareness.getStates().keys()).filter(
-        (clientId) => clientId !== room.ydoc.clientID,
-      ),
-      ws,
-    );
     room.conns.delete(ws);
   };
 }
@@ -101,7 +131,16 @@ export function onMessage(room: DocRoom, ws: FeedbackWs, data: Uint8Array): void
         return;
       }
       case MSG_AWARENESS: {
-        awarenessProtocol.applyAwarenessUpdate(room.awareness, decoding.readVarUint8Array(dec), ws);
+        const payload = decoding.readVarUint8Array(dec);
+        // Track which client IDs this ws is contributing so disconnect only
+        // removes *their* awareness states, not every peer's.
+        const before = new Set(room.awareness.getStates().keys());
+        awarenessProtocol.applyAwarenessUpdate(room.awareness, payload, ws);
+        const after = room.awareness.getStates().keys();
+        const ws_state = state(ws);
+        for (const id of after) {
+          if (!before.has(id)) ws_state.knownClientIds.add(id);
+        }
         return;
       }
       default:
@@ -113,6 +152,5 @@ export function onMessage(room: DocRoom, ws: FeedbackWs, data: Uint8Array): void
 }
 
 export function onClose(ws: FeedbackWs): void {
-  const cleanup = (ws as FeedbackWs & { _cleanup?: () => void })._cleanup;
-  cleanup?.();
+  state(ws).cleanup?.();
 }

@@ -103,7 +103,14 @@ class FeedbackWidgetEl extends HTMLElement {
   // --- Connect ---
 
   private connect(): void {
-    const url = `${this.opts.serverUrl}/y/${encodeURIComponent(this.opts.docId)}`;
+    // The server seeds meta (type, sourceUrl) before the WS upgrade, so the
+    // widget never needs to write meta itself — avoids the multi-client race
+    // where two widgets both observe an empty meta and both transact.
+    const qs = new URLSearchParams({
+      type: 'mockup',
+      sourceUrl: location.href,
+    });
+    const url = `${this.opts.serverUrl}/y/${encodeURIComponent(this.opts.docId)}?${qs.toString()}`;
     this.client = connect(url);
     this.client.onStatus((s) => {
       if (this.statusEl) {
@@ -113,20 +120,8 @@ class FeedbackWidgetEl extends HTMLElement {
       }
     });
     const threadsMap = this.client.ydoc.getMap('threads');
-    threadsMap.observeDeep(() => this.renderThreads());
-    this.client.onReady(() => {
-      // ensure doc meta has 'mockup' / 'dev' type (the widget only lives here)
-      const meta = this.client!.ydoc.getMap('meta');
-      if (!meta.get('type')) {
-        this.client!.ydoc.transact(() => {
-          meta.set('docId', this.opts.docId);
-          meta.set('type', 'mockup');
-          meta.set('createdAt', Date.now());
-          meta.set('sourceUrl', location.href);
-        });
-      }
-      this.renderThreads();
-    });
+    threadsMap.observeDeep(() => this.scheduleRender());
+    this.client.onReady(() => this.scheduleRender());
   }
 
   // --- Shell UI (Shadow DOM) ---
@@ -343,7 +338,8 @@ class FeedbackWidgetEl extends HTMLElement {
     const threads = listThreads(this.client.ydoc);
     // pin layer
     this.threadPositions.clear();
-    const pinLayer = this.pinLayer!;
+    const pinLayer = this.pinLayer;
+    if (!pinLayer) return; // disconnectedCallback fired between schedule and render
     pinLayer.innerHTML = '';
     const annotated: {
       thread: Thread;
@@ -559,27 +555,71 @@ class FeedbackWidgetEl extends HTMLElement {
 
   // --- DOM observer to reposition / reresolve pins ---
 
-  private startObserver(): void {
-    this.observer = new MutationObserver(() => {
+  private pendingRender = false;
+
+  private scheduleRender(): void {
+    if (this.pendingRender) return;
+    this.pendingRender = true;
+    requestAnimationFrame(() => {
+      this.pendingRender = false;
       this.renderThreads();
+    });
+  }
+
+  private startObserver(): void {
+    this.observer = new MutationObserver((records) => {
+      // Skip records that originated inside our own chrome (overlay, pin layer,
+      // injected style tag, the host element itself). Otherwise the widget's
+      // own writes re-enter renderThreads → infinite loop on any host that
+      // also mutates the DOM (HMR, animations, etc).
+      for (const r of records) {
+        const target = r.target as Node;
+        if (!target) continue;
+        if (isInOwnChrome(target)) continue;
+        this.scheduleRender();
+        return;
+      }
     });
     this.observer.observe(document.body, {
       childList: true,
       subtree: true,
-      attributes: true,
+      // NOTE: attributes are deliberately OFF — class/style flips on the host
+      // page don't change anchor resolvability. Enable only if we find a real
+      // case where it matters.
+      attributes: false,
       characterData: false,
     });
     this.resizeHandler = () => this.positionPins();
     this.scrollHandler = () => this.positionPins();
     window.addEventListener('resize', this.resizeHandler);
-    window.addEventListener('scroll', this.scrollHandler, { passive: true });
-    // also run an animation frame loop to keep pins tracking during layout changes
+    window.addEventListener('scroll', this.scrollHandler, { passive: true, capture: true });
+    // A gentle rAF loop keeps pins attached during layout animations where
+    // MutationObserver doesn't fire (e.g. CSS transitions, scroll in
+    // overflow containers). Position-only, no render.
     const tick = () => {
       this.positionPins();
       this.rafId = requestAnimationFrame(tick);
     };
     this.rafId = requestAnimationFrame(tick);
   }
+}
+
+function isInOwnChrome(node: Node): boolean {
+  let el: Node | null = node;
+  while (el) {
+    if (el.nodeType === 1) {
+      const e = el as Element;
+      if (
+        e.hasAttribute?.(IGNORE_ATTR) ||
+        e.tagName === TAG.toUpperCase() ||
+        e.id === 'cfw-light-styles'
+      ) {
+        return true;
+      }
+    }
+    el = el.parentNode;
+  }
+  return false;
 }
 
 // --- Public FeedbackWidget global ---
