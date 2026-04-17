@@ -33,12 +33,13 @@ const samplePayload: WebhookPayload = {
 describe('webhook dispatcher', () => {
   it('posts the payload as JSON', async () => {
     const fetchMock = mock(async () => new Response('ok', { status: 200 }));
-    const d = createWebhookDispatcher({ fetchImpl: fetchMock as typeof fetch });
+    const d = createWebhookDispatcher({ fetchImpl: fetchMock as unknown as typeof fetch });
     await d.send('http://example/hook', samplePayload);
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [, init] = fetchMock.mock.calls[0] ?? [];
-    expect((init as RequestInit | undefined)?.method).toBe('POST');
-    const body = JSON.parse((init as RequestInit).body as string);
+    const call = fetchMock.mock.calls[0] as unknown as [string, RequestInit | undefined];
+    const init = call?.[1];
+    expect(init?.method).toBe('POST');
+    const body = JSON.parse(init?.body as string);
     expect(body.event).toBe('thread.created');
   });
 
@@ -48,14 +49,14 @@ describe('webhook dispatcher', () => {
       n++;
       return n < 2 ? new Response('err', { status: 503 }) : new Response('ok', { status: 200 });
     });
-    const d = createWebhookDispatcher({ fetchImpl: fetchMock as typeof fetch, retries: 2 });
+    const d = createWebhookDispatcher({ fetchImpl: fetchMock as unknown as typeof fetch, retries: 2 });
     await d.send('http://example/hook', samplePayload);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('does not retry on 4xx', async () => {
     const fetchMock = mock(async () => new Response('bad', { status: 400 }));
-    const d = createWebhookDispatcher({ fetchImpl: fetchMock as typeof fetch, retries: 2 });
+    const d = createWebhookDispatcher({ fetchImpl: fetchMock as unknown as typeof fetch, retries: 2 });
     await d.send('http://example/hook', samplePayload);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -66,7 +67,7 @@ describe('webhook dispatcher', () => {
       throw new Error('net fail');
     });
     const d = createWebhookDispatcher({
-      fetchImpl: fetchMock as typeof fetch,
+      fetchImpl: fetchMock as unknown as typeof fetch,
       retries: 0,
       onLog: (e) => logs.push(e),
     });

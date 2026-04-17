@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Live Feedback · Review</title>
+    <link rel="stylesheet" href="/app/styles.css" />
+  </head>
+  <body>
+    <div id="shell">
+      <header id="topbar">
+        <div class="brand">Live Feedback</div>
+        <div class="doc-title" id="doc-title">—</div>
+        <div class="toolbar">
+          <div class="mode-toggle" role="tablist" aria-label="Mode">
+            <button data-mode="split" class="active" type="button">Split</button>
+            <button data-mode="edit" type="button">Edit</button>
+            <button data-mode="preview" type="button">Preview</button>
+          </div>
+          <button id="copy-bryan" type="button">Copy Bryan link</button>
+          <button id="copy-agent" type="button">Copy Agent link</button>
+          <div id="me" class="user-chip"></div>
+        </div>
+      </header>
+      <main id="main" class="mode-split">
+        <section id="editor-pane">
+          <div id="editor"></div>
+        </section>
+        <section id="preview-pane">
+          <article id="preview"></article>
+        </section>
+        <aside id="threads-pane">
+          <div class="threads-header">
+            <h2>Threads</h2>
+            <div class="legend">
+              <span><i class="dot dot-open"></i>Open</span>
+              <span><i class="dot dot-resolved"></i>Resolved</span>
+              <span><i class="dot dot-orphan"></i>Orphaned</span>
+            </div>
+          </div>
+          <div id="threads-list"></div>
+        </aside>
+      </main>
+      <div id="composer" class="hidden">
+        <div class="composer-inner">
+          <div id="composer-snippet" class="snippet"></div>
+          <textarea
+            id="composer-text"
+            placeholder="Leave a comment about this text…"
+            rows="3"
+          ></textarea>
+          <div class="composer-actions">
+            <button id="composer-cancel" type="button">Cancel</button>
+            <button id="composer-submit" type="button" class="primary">Comment</button>
+          </div>
+        </div>
+      </div>
+      <div id="toast" class="hidden"></div>
+    </div>
+    <script type="module" src="/app/app.js"></script>
+  </body>
+</html>

@@ -10,6 +10,7 @@
     "@codemirror/state": "^6.4.1",
     "@codemirror/view": "^6.34.2",
     "@feedback/core": "workspace:*",
+    "lib0": "^0.2.117",
     "mermaid": "^11.4.1",
     "rehype-stringify": "^10.0.1",
     "remark-gfm": "^4.0.0",
