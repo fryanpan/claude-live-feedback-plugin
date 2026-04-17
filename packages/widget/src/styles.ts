@@ -257,6 +257,32 @@ export const widgetStyles = `
   flex-wrap: wrap;
   align-items: stretch;
 }
+.picker-banner {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2147483647;
+  background: #1b1f23;
+  color: #fff;
+  padding: 8px 14px;
+  border-radius: 99px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.25);
+}
+.picker-banner .picker-cancel {
+  background: transparent;
+  color: #fff;
+  border: 1px solid rgba(255,255,255,0.3);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
 .thread-popover .actions textarea {
   flex: 1 1 100%;
   min-width: 0;

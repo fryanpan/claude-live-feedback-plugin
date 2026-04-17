@@ -200,6 +200,17 @@ class FeedbackWidgetEl extends HTMLElement {
     if (this.pickerActive) return;
     this.pickerActive = true;
     document.body.style.cursor = 'crosshair';
+    this.togglePanel(false);
+
+    // Show a banner so the user knows picker mode is on and how to exit.
+    const banner = document.createElement('div');
+    banner.className = 'picker-banner';
+    banner.innerHTML = `
+      <span>Click any element to leave a comment.</span>
+      <button type="button" class="picker-cancel">Cancel (Esc)</button>
+    `;
+    this.shadow.appendChild(banner);
+
     const onMove = (ev: MouseEvent) => {
       const t = this.hitTest(ev);
       if (this.hoverEl && this.hoverEl !== t) this.unhighlight(this.hoverEl);
@@ -221,10 +232,15 @@ class FeedbackWidgetEl extends HTMLElement {
       document.body.style.cursor = '';
       if (this.hoverEl) this.unhighlight(this.hoverEl);
       this.hoverEl = null;
+      banner.remove();
       window.removeEventListener('mousemove', onMove, true);
       window.removeEventListener('click', onClick, true);
       window.removeEventListener('keydown', onKey, true);
     };
+    banner.querySelector('.picker-cancel')?.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      cleanup();
+    });
     window.addEventListener('mousemove', onMove, true);
     window.addEventListener('click', onClick, true);
     window.addEventListener('keydown', onKey, true);

@@ -100,7 +100,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         const docId = decodeURIComponent(docMatch[1] ?? '');
         const rest = docMatch[2] ?? '';
         if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
-        const room = rooms.get(docId);
+        // Auto-create the room on write paths so widget integrations work
+        // without a prior POST /api/docs (WS connect usually happens first,
+        // but REST can race ahead when the widget is the only client).
+        const isWrite = req.method !== 'GET';
+        const room = isWrite ? rooms.getOrCreate(docId) : rooms.get(docId);
         if (!room) return j(404, { error: 'doc not found' });
         if (rest === '' && req.method === 'GET') {
           return j(200, { meta: room.meta });
