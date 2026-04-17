@@ -8,7 +8,9 @@ See [docs/product/vision.md](docs/product/vision.md) for the full problem and th
 
 ## Status
 
-Pre-design. Vision and constraints are written down; framework choices for realtime collaboration and the widget injection model are still open.
+MVP build in progress (2026-04-17). Design spec at [docs/superpowers/specs/2026-04-17-live-feedback-design.md](docs/superpowers/specs/2026-04-17-live-feedback-design.md); plan at [docs/product/plans/mvp-plan.md](docs/product/plans/mvp-plan.md).
+
+Stack: TypeScript + Bun, Yjs over WebSocket, vanilla Custom Elements + Shadow DOM for the injectable widget, CodeMirror 6 for the markdown surface.
 
 ## License
 
