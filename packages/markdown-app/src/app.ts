@@ -83,8 +83,12 @@ async function boot(): Promise<void> {
     currentUser: user,
     onThreadClick: (id) => {
       const range = resolveThreadRange(id);
-      if (range) editor.scrollToPos(range.from);
+      if (range) {
+        editor.scrollToPos(range.from);
+        editor.pulseRange(range.from, range.to);
+      }
       threadsPanel.setActive(id);
+      refreshThreadDecorations(id);
     },
     onReply: async (id, text) => {
       await fetch(
@@ -151,9 +155,23 @@ async function boot(): Promise<void> {
     return editor.resolveRel(startRel, endRel);
   }
 
+  let activeThreadId: string | null = null;
   function redrawThreads(): void {
     const all = collectThreads();
     threadsPanel.setThreads(all);
+    refreshThreadDecorations(activeThreadId);
+  }
+  function refreshThreadDecorations(activeId: string | null): void {
+    activeThreadId = activeId;
+    const ranges = collectThreads()
+      .filter((t) => t.anchor.kind === 'text-range')
+      .map((t) => {
+        const r = resolveThreadRange(t.id);
+        if (!r) return null;
+        return { id: t.id, from: r.from, to: r.to, status: t.status };
+      })
+      .filter((x): x is NonNullable<typeof x> => x != null);
+    editor.setThreadRanges(ranges, activeId);
   }
 
   function collectThreads(): Thread[] {
@@ -244,6 +262,18 @@ async function boot(): Promise<void> {
 
   // Composer controls
   document.getElementById('composer-cancel')?.addEventListener('click', hideComposer);
+  // Enter submits, Shift+Enter = newline (Google Docs / Slack convention).
+  composerText.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) {
+      ev.preventDefault();
+      document
+        .getElementById('composer-submit')
+        ?.dispatchEvent(new Event('click', { bubbles: true }));
+    }
+    if (ev.key === 'Escape') {
+      hideComposer();
+    }
+  });
   document.getElementById('composer-submit')?.addEventListener('click', async () => {
     const text = composerText.value.trim();
     if (!text) return;
@@ -270,17 +300,27 @@ async function boot(): Promise<void> {
     }
   });
 
-  // Floating Comment button near selection
+  // Floating Comment button — appears AFTER the user has finished
+  // selecting (pointerup / keyup), never during drag. We track a
+  // "selectionSettled" flag so mid-drag selectionchange events don't
+  // cause it to pop up and steal the mouse.
   const floatBtn = document.createElement('button');
   floatBtn.type = 'button';
-  floatBtn.textContent = 'Comment';
   floatBtn.className = 'floating-comment';
+  floatBtn.innerHTML = '<span class="icon">💬</span> Comment';
   floatBtn.style.display = 'none';
   document.body.appendChild(floatBtn);
   floatBtn.addEventListener('mousedown', (ev) => ev.preventDefault());
   floatBtn.addEventListener('click', () => showComposerForSelection());
 
+  let isDragging = false;
+  let selectionSettled = false;
+
   function positionFloatingButton(): void {
+    if (!selectionSettled || isDragging) {
+      floatBtn.style.display = 'none';
+      return;
+    }
     const sel = editor.getSelectionRel();
     if (!sel) {
       floatBtn.style.display = 'none';
@@ -289,26 +329,55 @@ async function boot(): Promise<void> {
     const pmSel = editor.editor.state.selection;
     try {
       const end = editor.editor.view.coordsAtPos(pmSel.to);
-      floatBtn.style.display = 'block';
-      floatBtn.style.left = `${Math.min(end.right + 6, window.innerWidth - 110)}px`;
-      floatBtn.style.top = `${Math.max(end.top - 4, 60)}px`;
+      const btnHeight = 36;
+      const gap = 14; // keep clear of selection handles / cursor
+      floatBtn.style.display = 'flex';
+      // Place the pill below the selection's end-line baseline so it never
+      // overlaps the user's drag target. Fallback above if near viewport bottom.
+      const viewportH = window.innerHeight;
+      const spaceBelow = viewportH - end.bottom;
+      const top = spaceBelow > btnHeight + gap + 20 ? end.bottom + gap : end.top - btnHeight - gap;
+      floatBtn.style.left = `${Math.max(12, Math.min(end.right + 10, window.innerWidth - 150))}px`;
+      floatBtn.style.top = `${Math.max(8, top)}px`;
     } catch {
       floatBtn.style.display = 'none';
     }
   }
-  editor.editor.view.dom.addEventListener('mouseup', () =>
+  function onDragStart() {
+    isDragging = true;
+    selectionSettled = false;
+    floatBtn.style.display = 'none';
+  }
+  function onDragEnd() {
+    isDragging = false;
     setTimeout(() => {
+      selectionSettled = true;
       refreshComposerState();
       positionFloatingButton();
-    }, 0),
-  );
-  editor.editor.view.dom.addEventListener('keyup', () =>
-    setTimeout(() => {
+    }, 0);
+  }
+  editor.editor.view.dom.addEventListener('pointerdown', onDragStart);
+  window.addEventListener('pointerup', onDragEnd);
+  // Keyboard selection (shift+arrows etc.) — settle on keyup
+  editor.editor.view.dom.addEventListener('keyup', (ev) => {
+    if (ev.shiftKey || ev.key.startsWith('Arrow') || ev.key === 'Home' || ev.key === 'End') {
+      selectionSettled = true;
       refreshComposerState();
       positionFloatingButton();
-    }, 0),
-  );
-  document.addEventListener('selectionchange', () => positionFloatingButton());
+    }
+  });
+  // When the selection changes but drag is ongoing, just keep tracking —
+  // we don't reposition. When settled, selectionchange can adjust the pill.
+  document.addEventListener('selectionchange', () => {
+    if (!isDragging && selectionSettled) positionFloatingButton();
+  });
+  // If selection collapses to a caret (click elsewhere), reset settled flag
+  editor.editor.on('selectionUpdate', () => {
+    if (editor.editor.state.selection.empty) {
+      selectionSettled = false;
+      floatBtn.style.display = 'none';
+    }
+  });
 
   addEventListener('beforeunload', () => {
     client.close();

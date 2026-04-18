@@ -108,39 +108,50 @@ export class ThreadPanel {
     if (this.activeId === t.id) el.classList.add('active');
     el.setAttribute('data-thread-id', t.id);
 
-    const meta = document.createElement('div');
-    meta.className = 'meta';
-    const dot = document.createElement('span');
-    dot.className = 'status-dot';
-    meta.appendChild(dot);
-    const name = document.createElement('span');
-    name.textContent = `${t.createdBy.name} · ${formatTime(t.comments[0]?.ts ?? 0)}`;
-    meta.appendChild(name);
-    el.appendChild(meta);
-
+    // Anchor snippet ("what you commented on") — thread's quote line
     const snippet = document.createElement('div');
     snippet.className = 'snippet';
     snippet.textContent = snippetText(t);
     el.appendChild(snippet);
 
+    // Comments list. The first comment's author row doubles as the thread
+    // header: it owns the status dot so we don't repeat author/time
+    // twice (Google Docs / Notion convention).
     const comments = document.createElement('div');
     comments.className = 'comments';
-    for (const c of t.comments) {
+    t.comments.forEach((c, idx) => {
       const row = document.createElement('div');
       row.className = 'comment';
-      const author = document.createElement('span');
-      author.className = 'author';
-      author.innerHTML = `<span class="swatch" style="background:${escapeAttr(c.author.color)}"></span>${escape(c.author.name)}`;
+      if (idx === 0) row.classList.add('first');
+
+      const authorRow = document.createElement('div');
+      authorRow.className = 'author';
+      if (idx === 0) {
+        const dot = document.createElement('span');
+        dot.className = 'status-dot';
+        authorRow.appendChild(dot);
+      }
+      const swatch = document.createElement('span');
+      swatch.className = 'swatch';
+      swatch.style.background = c.author.color;
+      authorRow.appendChild(swatch);
+      const name = document.createElement('span');
+      name.className = 'name';
+      name.textContent = c.author.name;
+      authorRow.appendChild(name);
       const time = document.createElement('span');
       time.className = 'time';
       time.textContent = formatTime(c.ts);
+      authorRow.appendChild(time);
+
       const body = document.createElement('div');
+      body.className = 'body';
       body.textContent = c.text;
-      row.appendChild(author);
-      row.appendChild(time);
+
+      row.appendChild(authorRow);
       row.appendChild(body);
       comments.appendChild(row);
-    }
+    });
     el.appendChild(comments);
 
     // Reply area (shown when active)
@@ -150,16 +161,22 @@ export class ThreadPanel {
     ta.rows = 2;
     ta.placeholder = `Reply as ${this.opts.currentUser.name}…`;
     if (pendingReply) ta.value = pendingReply;
-    reply.appendChild(ta);
-    const actions = document.createElement('div');
-    actions.className = 'thread-actions';
-    const replyBtn = btn('Reply', 'primary', () => {
+    const submitReply = () => {
       const text = ta.value.trim();
       if (!text) return;
       this.opts.onReply(t.id, text);
       ta.value = '';
+    };
+    ta.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) {
+        ev.preventDefault();
+        submitReply();
+      }
     });
-    actions.appendChild(replyBtn);
+    reply.appendChild(ta);
+    const actions = document.createElement('div');
+    actions.className = 'thread-actions';
+    actions.appendChild(btn('Reply', 'primary', submitReply));
     if (status === 'resolved') {
       actions.appendChild(btn('Reopen', '', () => this.opts.onReopen(t.id)));
     } else {
@@ -172,11 +189,8 @@ export class ThreadPanel {
     el.appendChild(reply);
 
     el.addEventListener('click', (ev) => {
-      if (
-        (ev.target as HTMLElement).tagName === 'TEXTAREA' ||
-        (ev.target as HTMLElement).tagName === 'BUTTON'
-      )
-        return;
+      const tag = (ev.target as HTMLElement).tagName;
+      if (tag === 'TEXTAREA' || tag === 'BUTTON') return;
       this.opts.onThreadClick(t.id);
     });
 
@@ -209,20 +223,4 @@ function formatTime(ts: number): string {
   if (diff < 3600_000) return `${Math.floor(diff / 60_000)}m`;
   if (diff < 86400_000) return `${Math.floor(diff / 3600_000)}h`;
   return d.toLocaleString();
-}
-
-function escape(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => {
-    const map: Record<string, string> = {
-      '&': '&amp;',
-      '<': '&lt;',
-      '>': '&gt;',
-      '"': '&quot;',
-      "'": '&#39;',
-    };
-    return map[c] ?? c;
-  });
-}
-function escapeAttr(s: string): string {
-  return escape(s);
 }

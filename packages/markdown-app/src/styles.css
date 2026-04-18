@@ -69,6 +69,32 @@ button {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex: 0 0 auto;
+}
+
+@media (max-width: 1100px) {
+  /* Give the title room on narrower screens — copy links are rarely the
+     primary need and users still have the URL in the address bar. */
+  #copy-bryan,
+  #copy-agent {
+    display: none;
+  }
+}
+@media (max-width: 560px) {
+  .doc-title {
+    font-size: 13px;
+  }
+  #me {
+    padding: 3px 6px;
+    font-size: 11px;
+  }
+  .brand {
+    font-size: 12px;
+  }
+  #topbar {
+    gap: 10px;
+    padding: 0 10px;
+  }
 }
 .toolbar button {
   border: 1px solid var(--border);
@@ -120,22 +146,25 @@ button {
 .format-bar {
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding: 5px 12px;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 12px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-panel);
-  overflow-x: auto;
-  scrollbar-width: thin;
+  min-height: 44px;
 }
 .format-bar button {
   border: 1px solid transparent;
   background: transparent;
   border-radius: 6px;
-  padding: 4px 9px;
+  padding: 6px 10px;
   font-size: 13px;
+  line-height: 1;
   cursor: pointer;
   color: var(--fg);
-  min-width: 30px;
+  min-width: 34px;
+  min-height: 32px;
+  white-space: nowrap;
 }
 .format-bar button:hover {
   background: var(--bg-hover);
@@ -146,24 +175,39 @@ button {
   border-color: #cfe0f5;
 }
 .format-bar .sep {
+  flex: 0 0 1px;
   width: 1px;
-  height: 18px;
+  height: 20px;
   background: var(--border);
   margin: 0 4px;
+  display: inline-block;
 }
 .format-bar .spacer {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 4px;
 }
 .format-bar button.primary {
   background: var(--accent);
   color: #fff;
   border-color: var(--accent);
-  padding: 4px 12px;
+  padding: 6px 14px;
+  min-width: auto;
 }
 .format-bar button.primary:hover {
   background: var(--accent);
   filter: brightness(1.06);
+}
+
+@media (max-width: 900px) {
+  .format-bar button {
+    min-height: 36px;
+    min-width: 40px;
+    font-size: 14px;
+  }
+  .format-bar button.primary {
+    min-height: 40px;
+    padding: 8px 16px;
+  }
 }
 
 #editor {
@@ -260,14 +304,38 @@ button {
   height: 0;
 }
 
-/* Text-range thread highlight */
+/* Text-range thread highlight — every commented span gets a soft yellow
+   highlight like Google Docs / Notion; clicking a thread in the panel
+   briefly pulses a more saturated color to locate it. */
 #editor .ProseMirror .thread-range {
-  background: rgba(46, 125, 215, 0.12);
-  border-bottom: 2px solid rgba(46, 125, 215, 0.6);
+  background: rgba(255, 213, 79, 0.35);
+  border-bottom: 2px solid rgba(191, 135, 0, 0.55);
+  cursor: pointer;
+  transition: background 180ms ease;
+}
+#editor .ProseMirror .thread-range:hover {
+  background: rgba(255, 213, 79, 0.55);
 }
 #editor .ProseMirror .thread-range.resolved {
-  background: rgba(45, 164, 78, 0.08);
-  border-bottom-color: rgba(45, 164, 78, 0.55);
+  background: rgba(45, 164, 78, 0.12);
+  border-bottom-color: rgba(45, 164, 78, 0.45);
+}
+#editor .ProseMirror .thread-range.active {
+  background: rgba(46, 125, 215, 0.22);
+  border-bottom-color: rgba(46, 125, 215, 0.8);
+}
+#editor .ProseMirror .thread-range.pulse {
+  animation: thread-pulse 1.2s ease-out;
+}
+@keyframes thread-pulse {
+  0% {
+    background: rgba(46, 125, 215, 0.55);
+    box-shadow: 0 0 0 2px rgba(46, 125, 215, 0.45);
+  }
+  100% {
+    background: rgba(255, 213, 79, 0.35);
+    box-shadow: 0 0 0 0 transparent;
+  }
 }
 
 #threads-pane {
@@ -340,25 +408,18 @@ button {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px rgba(46, 125, 215, 0.2);
 }
-.thread .meta {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  color: var(--fg-muted);
-  margin-bottom: 6px;
-}
-.thread .meta .status-dot {
+.thread .status-dot {
   display: inline-block;
-  width: 7px;
-  height: 7px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: var(--accent);
+  flex: 0 0 auto;
 }
-.thread.resolved .meta .status-dot {
+.thread.resolved .status-dot {
   background: var(--green);
 }
-.thread.orphan .meta .status-dot {
+.thread.orphan .status-dot {
   background: var(--yellow);
 }
 .thread .snippet {
@@ -372,30 +433,41 @@ button {
   overflow: hidden;
 }
 .thread .comments {
-  margin-top: 6px;
+  margin-top: 2px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 10px;
 }
 .thread .comment {
   font-size: 13px;
   line-height: 1.45;
 }
 .thread .comment .author {
-  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 12px;
+  color: var(--fg);
+  margin-bottom: 2px;
 }
 .thread .comment .author .swatch {
   display: inline-block;
-  width: 8px;
-  height: 8px;
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
-  margin-right: 4px;
+  flex: 0 0 auto;
 }
-.thread .comment .time {
+.thread .comment .author .name {
+  font-weight: 600;
+}
+.thread .comment .author .time {
   color: var(--fg-muted);
   font-size: 11px;
-  margin-left: 6px;
+  margin-left: auto;
+  font-weight: 400;
+}
+.thread .comment .body {
+  color: var(--fg);
 }
 .thread-reply {
   display: none;
@@ -453,18 +525,26 @@ button {
   box-shadow: 0 4px 12px rgba(27, 31, 35, 0.2);
   font-size: 14px;
   font-weight: 500;
-  display: flex;
+  display: none; /* only flex-displayed after selection settles */
   align-items: center;
   gap: 6px;
 }
+.floating-comment .icon {
+  font-size: 15px;
+  line-height: 1;
+}
 @media (hover: none) {
-  /* Touch devices: make floating button thumb-friendly and dock near the
-     bottom of the viewport where it's actually reachable. The absolute
-     selection coordinates jitter under mobile Safari's selection UI. */
+  /* Touch devices: dock pill near the bottom-right where thumbs reach.
+     The end-of-selection coords jitter under mobile Safari's selection
+     UI, so fixed placement is more reliable. */
   .floating-comment {
     min-height: 44px;
     padding: 10px 18px;
     font-size: 15px;
+    left: auto !important;
+    right: 16px !important;
+    top: auto !important;
+    bottom: 24px !important;
   }
 }
 

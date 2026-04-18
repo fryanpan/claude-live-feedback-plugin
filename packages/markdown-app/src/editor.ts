@@ -14,6 +14,7 @@ import {
 import { Markdown } from 'tiptap-markdown';
 import type { Awareness } from 'y-protocols/awareness';
 import * as Y from 'yjs';
+import { ThreadDecorations, type ThreadRange, setThreadDecorations } from './thread-decorations.ts';
 
 /**
  * WYSIWYG markdown editor backed by Tiptap (ProseMirror) + Yjs collaboration.
@@ -33,6 +34,10 @@ export interface EditorHandle {
   getSelectionRel: () => { start: Uint8Array; end: Uint8Array; snippet: string } | null;
   resolveRel: (startRel: Uint8Array, endRel: Uint8Array) => { from: number; to: number } | null;
   scrollToPos: (pos: number) => void;
+  /** Brief highlight pulse on a text range — used when clicking a thread in the panel. */
+  pulseRange: (from: number, to: number) => void;
+  /** Update which thread anchors should be highlighted in the editor. */
+  setThreadRanges: (ranges: ThreadRange[], activeId: string | null) => void;
   getText: () => string;
   setMarkdown: (md: string) => void;
   getMarkdown: () => string;
@@ -82,6 +87,7 @@ export function createEditor(opts: CreateEditorOpts): EditorHandle {
         document: opts.ydoc,
         field: fragmentName,
       }),
+      ThreadDecorations,
     ],
     onSelectionUpdate: () => opts.onSelectionChange?.(),
     onUpdate: () => opts.onUpdate?.(),
@@ -165,6 +171,17 @@ export function createEditor(opts: CreateEditorOpts): EditorHandle {
       editor.commands.setTextSelection(clamped);
       editor.commands.scrollIntoView();
       editor.commands.focus();
+    },
+    pulseRange(from, to) {
+      // Pulse the range by emitting a pulseId meta; the extension adds a
+      // transient .pulse class. We pass a synthetic id (from-to) so repeated
+      // clicks on the same thread retrigger the animation.
+      const pulseId = `pulse-${from}-${to}-${Date.now()}`;
+      setThreadDecorations(editor.view, { pulseId });
+      setTimeout(() => setThreadDecorations(editor.view, { pulseId: null }), 1200);
+    },
+    setThreadRanges(ranges, activeId) {
+      setThreadDecorations(editor.view, { ranges, activeId });
     },
     getText() {
       return editor.state.doc.textBetween(0, editor.state.doc.content.size, '\n');
