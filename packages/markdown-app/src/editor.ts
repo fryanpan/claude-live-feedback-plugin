@@ -20,6 +20,11 @@ import * as Y from 'yjs';
 
 export interface EditorHandle {
   editor: Editor;
+  /** Seed the fragment with markdown if it's empty and not already seeded.
+   *  Call AFTER the initial Yjs sync (from client.onReady). */
+  seedIfEmpty: (markdown: string) => void;
+  /** Migrate legacy Y.Text 'content' into the fragment, once per doc. */
+  migrateLegacyIfNeeded: () => void;
   getSelectionRel: () => { start: Uint8Array; end: Uint8Array; snippet: string } | null;
   resolveRel: (startRel: Uint8Array, endRel: Uint8Array) => { from: number; to: number } | null;
   scrollToPos: (pos: number) => void;
@@ -77,16 +82,9 @@ export function createEditor(opts: CreateEditorOpts): EditorHandle {
     onUpdate: () => opts.onUpdate?.(),
   });
 
-  // Seed from legacy Y.Text or caller-provided markdown. Runs once per doc.
-  queueMicrotask(() => {
-    if (fragment.length !== 0) return;
-    const seed = legacy.length > 0 ? legacy.toString() : (opts.seedMarkdown ?? '');
-    if (!seed) return;
-    editor.commands.setContent(seed, { emitUpdate: true });
-    if (legacy.length > 0) {
-      opts.ydoc.transact(() => legacy.delete(0, legacy.length));
-    }
-  });
+  // NOTE: seeding is the caller's responsibility via `seedIfEmpty()` below.
+  // Seeding before the initial Yjs sync completes would duplicate content
+  // (local seed + server's content both land in the fragment).
 
   function syncState() {
     return ySyncPluginKey.getState(editor.state);
@@ -94,6 +92,32 @@ export function createEditor(opts: CreateEditorOpts): EditorHandle {
 
   return {
     editor,
+    seedIfEmpty(markdown: string): void {
+      // Must be called AFTER initial Yjs sync. Guards against double-seed
+      // across reloads / multi-client opens using a meta flag.
+      const meta = opts.ydoc.getMap('meta');
+      if (fragment.length > 0) return; // already has content
+      if (meta.get('seeded')) return; // another client beat us to it
+      opts.ydoc.transact(() => {
+        meta.set('seeded', true);
+        if (legacy.length > 0) legacy.delete(0, legacy.length);
+      });
+      editor.commands.setContent(markdown, { emitUpdate: true });
+    },
+    migrateLegacyIfNeeded(): void {
+      // Legacy Y.Text content from the old CodeMirror editor → migrate
+      // exactly once per doc (guarded by meta.seeded), after initial sync.
+      const meta = opts.ydoc.getMap('meta');
+      if (fragment.length > 0) return;
+      if (meta.get('seeded')) return;
+      if (legacy.length === 0) return;
+      const text = legacy.toString();
+      opts.ydoc.transact(() => {
+        meta.set('seeded', true);
+        legacy.delete(0, legacy.length);
+      });
+      editor.commands.setContent(text, { emitUpdate: true });
+    },
     getSelectionRel() {
       const { from, to, empty } = editor.state.selection;
       if (empty) return null;

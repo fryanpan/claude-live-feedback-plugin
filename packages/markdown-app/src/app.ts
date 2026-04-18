@@ -45,23 +45,32 @@ async function boot(): Promise<void> {
     onSelectionChange: () => refreshComposerState(),
     onUpdate: () => redrawThreads(),
     user: { name: user.name, color: user.color },
-    seedMarkdown: `# ${docId}\n\nWelcome to live feedback. Select any text and click **Comment** to leave a note.\n\n- Edits sync live between everyone on this link.\n- Keyboard: **⌘B** bold · **⌘I** italic · **⌘⌥1-3** headings · **⌘K** link · **⌘E** inline code.\n- Lists: type \`- \` or \`1. \` and press Enter. Tab to indent.\n`,
   });
+  const welcomeSeed = `# ${docId}\n\nWelcome to live feedback. Select any text and click **Comment** to leave a note.\n\n- Edits sync live between everyone on this link.\n- Keyboard: **⌘B** bold · **⌘I** italic · **⌘⌥1-3** headings · **⌘K** link · **⌘E** inline code.\n- Lists: type \`- \` or \`1. \` and press Enter. Tab to indent.\n`;
 
   let selection: Selection | null = null;
   function refreshComposerState(): void {
     const sel = editor.getSelectionRel();
-    selection = sel;
-    if (!sel) hideComposer();
+    // Only *update* from a non-null selection; keep the last non-empty
+    // selection around so the Comment toolbar button still has a valid
+    // snapshot even if a stray selection update fires between mouseup
+    // and click.
+    if (sel) selection = sel;
   }
 
   function showComposerForSelection(): void {
-    if (!selection) {
+    // Always re-read from the editor so we capture the latest selection,
+    // but fall back to the last remembered one if the current state lost
+    // the selection (e.g. toolbar click blurred it).
+    const current = editor.getSelectionRel();
+    const use = current ?? selection;
+    if (!use) {
       showToast('Select some text first to leave a comment.');
       return;
     }
+    selection = use;
     composer.classList.remove('hidden');
-    composerSnippet.textContent = selection.snippet;
+    composerSnippet.textContent = use.snippet;
     composerText.value = '';
     setTimeout(() => composerText.focus(), 0);
   }
@@ -200,6 +209,10 @@ async function boot(): Promise<void> {
   client.onReady(() => {
     const m = readDocMeta(ydoc);
     docTitleEl.textContent = m.title ?? m.docId;
+    // Order matters: migrate any legacy Y.Text content first, then seed a
+    // welcome message only if the doc is still empty.
+    editor.migrateLegacyIfNeeded();
+    editor.seedIfEmpty(welcomeSeed);
     redrawThreads();
   });
 
@@ -330,6 +343,13 @@ function wireFormatBar(editor: EditorHandle, onComment: () => void): void {
       else chain().setLink({ href }).run();
     },
   };
+  // preventDefault on mousedown so clicking a toolbar button doesn't
+  // blur the editor and collapse the selection. This is what made the
+  // Comment button think there was no selection on click.
+  bar.addEventListener('mousedown', (ev) => {
+    const t = (ev.target as HTMLElement).closest('button');
+    if (t) ev.preventDefault();
+  });
   bar.addEventListener('click', (ev) => {
     const t = (ev.target as HTMLElement).closest('button');
     if (!t) return;
