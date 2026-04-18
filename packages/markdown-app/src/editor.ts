@@ -1,12 +1,17 @@
 import { Editor } from '@tiptap/core';
 import Collaboration from '@tiptap/extension-collaboration';
 import StarterKit from '@tiptap/starter-kit';
-import { Markdown } from 'tiptap-markdown';
+// IMPORTANT: these must come from @tiptap/y-tiptap, not y-prosemirror.
+// Tiptap's Collaboration extension registers the sync plugin under its own
+// PluginKey instance re-exported from @tiptap/y-tiptap; importing from
+// y-prosemirror gets a *different* key and `getState()` always returns
+// undefined — which was the real cause of "no selection" errors.
 import {
   absolutePositionToRelativePosition,
   relativePositionToAbsolutePosition,
   ySyncPluginKey,
-} from 'y-prosemirror';
+} from '@tiptap/y-tiptap';
+import { Markdown } from 'tiptap-markdown';
 import type { Awareness } from 'y-protocols/awareness';
 import * as Y from 'yjs';
 
