@@ -204,7 +204,7 @@ async function boot(): Promise<void> {
   });
 
   // Formatting toolbar
-  wireFormatBar(editor);
+  wireFormatBar(editor, showComposerForSelection);
 
   // Global hotkeys
   document.addEventListener('keydown', (ev) => {
@@ -303,7 +303,7 @@ async function boot(): Promise<void> {
   });
 }
 
-function wireFormatBar(editor: EditorHandle): void {
+function wireFormatBar(editor: EditorHandle, onComment: () => void): void {
   const bar = document.getElementById('format-bar');
   if (!bar) return;
   const chain = () => editor.editor.chain().focus();
@@ -321,6 +321,7 @@ function wireFormatBar(editor: EditorHandle): void {
     hr: () => chain().setHorizontalRule().run(),
     undo: () => chain().undo().run(),
     redo: () => chain().redo().run(),
+    comment: onComment,
     link: () => {
       const existing = editor.editor.getAttributes('link').href as string | undefined;
       const href = prompt('Link URL', existing ?? 'https://');

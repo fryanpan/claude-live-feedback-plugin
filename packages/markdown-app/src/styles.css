@@ -151,6 +151,20 @@ button {
   background: var(--border);
   margin: 0 4px;
 }
+.format-bar .spacer {
+  flex: 1;
+  min-width: 4px;
+}
+.format-bar button.primary {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+  padding: 4px 12px;
+}
+.format-bar button.primary:hover {
+  background: var(--accent);
+  filter: brightness(1.06);
+}
 
 #editor {
   overflow-y: auto;
@@ -429,14 +443,29 @@ button {
 .floating-comment {
   position: fixed;
   z-index: 900;
-  padding: 6px 12px;
-  border-radius: 6px;
+  padding: 8px 14px;
+  min-height: 36px;
+  border-radius: 99px;
   border: 1px solid var(--accent);
   background: var(--accent);
   color: #fff;
   cursor: pointer;
-  box-shadow: var(--shadow);
-  font-size: 13px;
+  box-shadow: 0 4px 12px rgba(27, 31, 35, 0.2);
+  font-size: 14px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+@media (hover: none) {
+  /* Touch devices: make floating button thumb-friendly and dock near the
+     bottom of the viewport where it's actually reachable. The absolute
+     selection coordinates jitter under mobile Safari's selection UI. */
+  .floating-comment {
+    min-height: 44px;
+    padding: 10px 18px;
+    font-size: 15px;
+  }
 }
 
 #composer {
