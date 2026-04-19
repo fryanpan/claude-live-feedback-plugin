@@ -63,6 +63,11 @@ async function boot(): Promise<void> {
   const composerAvatar = el<HTMLElement>('composer-avatar');
   const composerScrim = el<HTMLElement>('composer-scrim');
   const commentPill = el<HTMLButtonElement>('comment-pill');
+  const threadView = el<HTMLElement>('thread-view');
+  const threadViewBody = el<HTMLElement>('thread-view-body');
+  const threadViewClose = el<HTMLButtonElement>('thread-view-close');
+  const threadViewReplyText = el<HTMLTextAreaElement>('thread-view-reply-text');
+  const threadViewReplySubmit = el<HTMLButtonElement>('thread-view-reply-submit');
   const formatBar = el<HTMLElement>('format-bar');
   const toggleFormat = el<HTMLButtonElement>('toggle-format');
   const toggleThreads = el<HTMLButtonElement>('toggle-threads');
@@ -323,8 +328,12 @@ async function boot(): Promise<void> {
       }
       threadsPanel.setActive(id);
       refreshThreadDecorations(id);
-      // On mobile, close drawer to return to the doc after tapping
-      if (!window.matchMedia('(min-width: 901px)').matches) closeDrawer();
+      // On mobile, swap the drawer for a full-screen thread view (Notion
+      // pattern) — gives the conversation room to breathe on a small screen.
+      if (isMobile()) {
+        closeDrawer();
+        openThreadView(id);
+      }
     },
     onReply: async (id, text) => {
       await fetch(
@@ -372,9 +381,10 @@ async function boot(): Promise<void> {
     },
   });
 
-  // Tap-on-highlight in the editor → open the associated thread in the drawer.
-  // ProseMirror handles the click itself (placing the cursor), so we attach a
-  // document-level listener that inspects the event target.
+  // Tap-on-highlight in the editor → focus the thread.
+  //   • Mobile: full-screen thread view (Notion pattern — gives the
+  //     conversation space without the doc competing for it).
+  //   • Desktop: open the side drawer and highlight the thread.
   editorMount.addEventListener('click', (ev) => {
     const t = (ev.target as HTMLElement).closest('.thread-range');
     if (!t) return;
@@ -382,11 +392,12 @@ async function boot(): Promise<void> {
     if (!threadId) return;
     ev.preventDefault();
     ev.stopPropagation();
-    openDrawer();
     threadsPanel.setActive(threadId);
     refreshThreadDecorations(threadId);
     const range = resolveThreadRange(threadId);
     if (range) editor.pulseRange(range.from, range.to);
+    if (isMobile()) openThreadView(threadId);
+    else openDrawer();
   });
 
   function resolveThreadRange(threadId: string): { from: number; to: number } | null {
@@ -474,7 +485,126 @@ async function boot(): Promise<void> {
     return out;
   }
 
-  ydoc.getMap('threads').observeDeep(() => redrawThreads());
+  // =========================================================================
+  // FULL-SCREEN THREAD VIEW — Notion-style focused conversation.
+  //   On mobile, tapping a highlight in the doc (or a thread in the drawer)
+  //   opens this sheet instead of the side drawer. All comments are laid
+  //   out in a tall scrollable column with a sticky reply composer at the
+  //   bottom. Desktop keeps the inline drawer.
+  // =========================================================================
+  let threadViewId: string | null = null;
+
+  function isMobile(): boolean {
+    return !window.matchMedia('(min-width: 901px)').matches;
+  }
+
+  function renderThreadView(id: string): void {
+    const t = collectThreads().find((x) => x.id === id);
+    if (!t) return;
+    const anchorText =
+      t.anchor.kind === 'orphan' ? t.anchor.original.snippet.text : t.anchor.snippet.text;
+    threadViewBody.innerHTML = '';
+    const anchor = document.createElement('div');
+    anchor.className = 'thread-anchor';
+    anchor.textContent = anchorText;
+    threadViewBody.appendChild(anchor);
+    for (const c of t.comments) {
+      const row = document.createElement('div');
+      row.className = 'comment';
+      const a = document.createElement('div');
+      a.className = 'author';
+      const sw = document.createElement('span');
+      sw.className = 'swatch';
+      sw.style.background = c.author.color;
+      const nm = document.createElement('span');
+      nm.className = 'name';
+      nm.textContent = c.author.name;
+      const tm = document.createElement('span');
+      tm.className = 'time';
+      tm.textContent = formatTs(c.ts);
+      a.append(sw, nm, tm);
+      const body = document.createElement('div');
+      body.className = 'body';
+      body.textContent = c.text;
+      row.append(a, body);
+      threadViewBody.appendChild(row);
+    }
+    const actions = document.createElement('div');
+    actions.className = 'thread-view-actions';
+    if (t.status === 'resolved') {
+      actions.appendChild(
+        makeBtn('Reopen', () => {
+          void fetch(
+            `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(t.id)}/reopen`,
+            { method: 'POST' },
+          );
+        }),
+      );
+    } else {
+      actions.appendChild(
+        makeBtn('Resolve', () => {
+          void fetch(
+            `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(t.id)}/resolve`,
+            { method: 'POST' },
+          );
+          closeThreadView();
+        }),
+      );
+    }
+    threadViewBody.appendChild(actions);
+  }
+
+  function openThreadView(id: string): void {
+    threadViewId = id;
+    threadsPanel.setActive(id);
+    refreshThreadDecorations(id);
+    renderThreadView(id);
+    hidePill();
+    threadView.classList.remove('hidden');
+    threadView.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('thread-view-open');
+    // Scroll the anchor into view behind the sheet for when the user closes it.
+    const range = resolveThreadRange(id);
+    if (range) editor.scrollToPos(range.from);
+  }
+
+  function closeThreadView(): void {
+    threadViewId = null;
+    threadView.classList.add('hidden');
+    threadView.setAttribute('aria-hidden', 'true');
+    document.body.classList.remove('thread-view-open');
+    threadViewReplyText.value = '';
+  }
+
+  threadViewClose.addEventListener('click', closeThreadView);
+
+  async function submitThreadReply(): Promise<void> {
+    if (!threadViewId) return;
+    const text = threadViewReplyText.value.trim();
+    if (!text) return;
+    const id = threadViewId;
+    threadViewReplyText.value = '';
+    await fetch(
+      `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/comments`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ author: user, text }),
+      },
+    );
+  }
+  threadViewReplySubmit.addEventListener('click', () => void submitThreadReply());
+  threadViewReplyText.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) {
+      ev.preventDefault();
+      void submitThreadReply();
+    }
+  });
+
+  ydoc.getMap('threads').observeDeep(() => {
+    redrawThreads();
+    if (threadViewId) renderThreadView(threadViewId);
+  });
   const meta = ydoc.getMap('meta');
   meta.observe(() => {
     const m = readDocMeta(ydoc);
@@ -511,6 +641,7 @@ async function boot(): Promise<void> {
     }
     if (ev.key === 'Escape') {
       if (!composer.classList.contains('hidden')) hideComposer();
+      else if (!threadView.classList.contains('hidden')) closeThreadView();
       else if (shell.classList.contains('threads-open')) closeDrawer();
     }
   });
@@ -677,6 +808,26 @@ function el<T extends HTMLElement>(id: string): T {
   const e = document.getElementById(id);
   if (!e) throw new Error(`missing element #${id}`);
   return e as T;
+}
+
+function formatTs(ts: number): string {
+  if (!ts) return '';
+  const d = new Date(ts);
+  const diff = Date.now() - ts;
+  if (diff < 60_000) return 'just now';
+  if (diff < 3600_000) return `${Math.floor(diff / 60_000)}m`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3600_000)}h`;
+  if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)}d`;
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function makeBtn(label: string, onClick: () => void, primary = false): HTMLButtonElement {
+  const b = document.createElement('button');
+  b.type = 'button';
+  if (primary) b.className = 'primary';
+  b.textContent = label;
+  b.addEventListener('click', onClick);
+  return b;
 }
 
 void boot();
