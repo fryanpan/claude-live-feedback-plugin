@@ -166,18 +166,24 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const t = await rooms.postComment(docId, null, user, text, anchor);
           return t ? j(200, { thread: t }) : j(500, { error: 'could not create thread' });
         }
-        if (rest === 'edit' && req.method === 'POST') {
+        if (rest === 'content' && req.method === 'GET') {
+          const doc = rooms.getDoc(docId);
+          if (!doc) return j(404, { error: 'doc not found' });
+          return j(200, doc);
+        }
+        if (rest === 'find_and_replace' && req.method === 'POST') {
           const body = await safeJson(req);
-          const start = Number(body?.start);
-          const end = Number(body?.end);
-          const replacement = String(body?.replacement ?? '');
-          if (!Number.isFinite(start) || !Number.isFinite(end)) {
-            return j(400, { error: 'start/end required' });
-          }
-          const res = rooms.pushEdit(docId, start, end, replacement);
-          return res.ok
-            ? j(200, { ok: true, content: res.content })
-            : j(400, { error: 'edit failed' });
+          const find = String(body?.find ?? '');
+          const replace = String(body?.replace ?? '');
+          if (find.length === 0) return j(400, { error: 'find is required' });
+          const res = rooms.findAndReplace(docId, {
+            find,
+            replace,
+            contextBefore: body?.contextBefore ? String(body.contextBefore) : undefined,
+            contextAfter: body?.contextAfter ? String(body.contextAfter) : undefined,
+            occurrence: typeof body?.occurrence === 'number' ? Number(body.occurrence) : undefined,
+          });
+          return res.ok ? j(200, res) : j(409, res);
         }
         if (rest === 'hooks/fire' && req.method === 'POST') {
           // debug-fires the last thread update again

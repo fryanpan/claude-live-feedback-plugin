@@ -7,9 +7,9 @@ import {
   type Thread,
   type User,
   createThread,
-  getContent,
   initDocMeta,
   listThreads,
+  prose,
   readDocMeta,
   postReply as schemaPostReply,
   replaceAnchor as schemaReplaceAnchor,
@@ -154,22 +154,75 @@ export class Rooms {
     return schemaReplaceAnchor(room.ydoc, threadId, anchor);
   }
 
-  pushEdit(
-    docId: string,
-    start: number,
-    end: number,
-    replacement: string,
-  ): { ok: boolean; content?: string } {
+  /**
+   * Return the current doc as a flat plain-text string plus a thread
+   * summary. Used by the MCP `get_doc` tool. The plain text is what
+   * `find_and_replace` matches against — markdown structure lives in
+   * the Y.XmlFragment tree and is visible via block hints but isn't
+   * the editable surface.
+   */
+  getDoc(docId: string): {
+    plainText: string;
+    blocks: Array<{
+      type: string | null;
+      headingLevel?: number;
+      text: string;
+      startOffset: number;
+      endOffset: number;
+    }>;
+    threads: Thread[];
+  } | null {
     const room = this.rooms.get(docId);
-    if (!room) return { ok: false };
-    const text = getContent(room.ydoc);
-    const length = text.length;
-    if (start < 0 || end < start || end > length) return { ok: false };
-    room.ydoc.transact(() => {
-      text.delete(start, end - start);
-      if (replacement.length > 0) text.insert(start, replacement);
-    });
-    return { ok: true, content: text.toString() };
+    if (!room) return null;
+    const fragment = prose.getProseFragment(room.ydoc);
+    const walk = prose.walkProse(fragment);
+
+    // Group segments into blocks for readable structure hints.
+    const blocks: Array<{
+      type: string | null;
+      headingLevel?: number;
+      text: string;
+      startOffset: number;
+      endOffset: number;
+    }> = [];
+    for (const s of walk.segments) {
+      const last = blocks[blocks.length - 1];
+      if (last && last.type === s.blockType && last.endOffset === s.docOffset) {
+        last.text += s.node.toString();
+        last.endOffset = s.docOffset + s.length;
+      } else {
+        const b = {
+          type: s.blockType,
+          text: s.node.toString(),
+          startOffset: s.docOffset,
+          endOffset: s.docOffset + s.length,
+          ...(s.headingLevel != null ? { headingLevel: s.headingLevel } : {}),
+        };
+        blocks.push(b);
+      }
+    }
+
+    return { plainText: walk.plainText, blocks, threads: listThreads(room.ydoc) };
+  }
+
+  /**
+   * Replace `find` with `replace` inside the doc. Optional context
+   * string around the match disambiguates repeated phrases; pass
+   * `occurrence` to pick by index when you know the match count.
+   */
+  findAndReplace(
+    docId: string,
+    opts: {
+      find: string;
+      replace: string;
+      contextBefore?: string;
+      contextAfter?: string;
+      occurrence?: number;
+    },
+  ): prose.ReplaceResult {
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'no-match' };
+    return prose.findAndReplace(room.ydoc, opts);
   }
 
   listThreads(docId: string, filter?: { status?: 'open' | 'resolved' }): Thread[] {

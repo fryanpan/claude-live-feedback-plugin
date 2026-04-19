@@ -112,18 +112,30 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
-      name: 'push_edit',
+      name: 'get_doc',
       description:
-        'Apply a text edit to a markdown doc by character offsets. Replaces [start,end) with the replacement string.',
+        'Read the current state of a review doc: plain-text body, block structure (heading/paragraph/list hints), and thread summary. The plain text is the target surface for find_and_replace and reflects concurrent user edits.',
+      inputSchema: {
+        type: 'object',
+        properties: { docId: { type: 'string' } },
+        required: ['docId'],
+      },
+    },
+    {
+      name: 'find_and_replace',
+      description:
+        "Replace a string of plain text in the doc with another string. `find` must match the doc's plain text content (no markdown syntax — marks like bold/italic are preserved automatically). Use `contextBefore` / `contextAfter` to disambiguate repeated phrases. If the match is still ambiguous the tool returns a list of candidates. Use `occurrence` (1-indexed) to pick one explicitly. Runs as a single Yjs transaction so it merges cleanly with concurrent user edits.",
       inputSchema: {
         type: 'object',
         properties: {
           docId: { type: 'string' },
-          start: { type: 'number' },
-          end: { type: 'number' },
-          replacement: { type: 'string' },
+          find: { type: 'string' },
+          replace: { type: 'string' },
+          contextBefore: { type: 'string' },
+          contextAfter: { type: 'string' },
+          occurrence: { type: 'number' },
         },
-        required: ['docId', 'start', 'end', 'replacement'],
+        required: ['docId', 'find', 'replace'],
       },
     },
     {
@@ -186,17 +198,26 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         );
         return ok(res);
       }
-      case 'push_edit': {
-        const { docId, start, end, replacement } = a as {
+      case 'get_doc': {
+        const { docId } = a as { docId: string };
+        const res = await http('GET', `/api/docs/${encodeURIComponent(docId)}/content`);
+        return ok(res);
+      }
+      case 'find_and_replace': {
+        const { docId, find, replace, contextBefore, contextAfter, occurrence } = a as {
           docId: string;
-          start: number;
-          end: number;
-          replacement: string;
+          find: string;
+          replace: string;
+          contextBefore?: string;
+          contextAfter?: string;
+          occurrence?: number;
         };
-        const res = await http('POST', `/api/docs/${encodeURIComponent(docId)}/edit`, {
-          start,
-          end,
-          replacement,
+        const res = await http('POST', `/api/docs/${encodeURIComponent(docId)}/find_and_replace`, {
+          find,
+          replace,
+          ...(contextBefore !== undefined ? { contextBefore } : {}),
+          ...(contextAfter !== undefined ? { contextAfter } : {}),
+          ...(occurrence !== undefined ? { occurrence } : {}),
         });
         return ok(res);
       }
