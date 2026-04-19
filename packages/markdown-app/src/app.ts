@@ -62,9 +62,7 @@ async function boot(): Promise<void> {
   const composerText = el<HTMLTextAreaElement>('composer-text');
   const composerAvatar = el<HTMLElement>('composer-avatar');
   const composerScrim = el<HTMLElement>('composer-scrim');
-  const selectionBar = el<HTMLElement>('selection-bar');
-  const selectionSnippet = el<HTMLElement>('selection-bar-snippet');
-  const selectionCommentBtn = el<HTMLButtonElement>('selection-comment');
+  const commentPill = el<HTMLButtonElement>('comment-pill');
   const formatBar = el<HTMLElement>('format-bar');
   const toggleFormat = el<HTMLButtonElement>('toggle-format');
   const toggleThreads = el<HTMLButtonElement>('toggle-threads');
@@ -85,83 +83,145 @@ async function boot(): Promise<void> {
   const welcomeSeed = `# ${docId}\n\nWelcome. Select any text to leave a comment — the bar slides up from the bottom. Tap the 💬 in the top bar to see all threads. Tap "Aa" to show formatting.\n`;
 
   // =========================================================================
-  // SELECTION → bottom action bar
-  //   iOS-friendly: the bar is docked at the bottom of the visual viewport,
-  //   which means it lands ABOVE Safari's chrome AND ABOVE the keyboard when
-  //   we later raise it on focus. No per-selection positioning maths.
+  // COMMENT PILL — small inline affordance
+  //   • Range selection → pill appears just past the end of the selection
+  //     (or below it if there's no room), so the user sees what they've
+  //     selected without the pill occluding the doc or competing with
+  //     iOS's native selection menu for screen space.
+  //   • Empty selection (caret after tap) → a lighter pill appears in the
+  //     right margin of the current line so the user can comment on a
+  //     paragraph by tap → pill → composer (Bryan: "tap then comment").
+  //     Tapping the pill expands selection to the tapped paragraph before
+  //     opening the composer.
   // =========================================================================
 
   let selection: Selection | null = null;
   let selectionSettled = false;
   let isDragging = false;
+  /** What the pill represents if clicked: a range selection, or expand
+   *  to the paragraph containing the caret. */
+  let pillMode: 'range' | 'caret' = 'range';
 
   function refreshSelectionState(): void {
     const sel = editor.getSelectionRel();
     if (sel) selection = sel;
-    if (!sel) {
-      selectionSettled = false;
-      hideSelectionBar();
+  }
+
+  function positionPill(): void {
+    if (isDragging) {
+      hidePill();
+      return;
+    }
+    const state = editor.editor.state;
+    const view = editor.editor.view;
+    const { from, to, empty } = state.selection;
+    try {
+      const pillW = 36;
+      const pillH = 36;
+      const gap = 8;
+      const viewportW = window.innerWidth;
+      const viewportH = window.visualViewport?.height ?? window.innerHeight;
+      const kbBottom = Number.parseFloat(
+        getComputedStyle(document.documentElement).getPropertyValue('--kb-bottom') || '0',
+      );
+      const availableBottom = viewportH - kbBottom - pillH - 8;
+
+      if (!empty) {
+        pillMode = 'range';
+        commentPill.classList.remove('caret');
+        // End-of-selection coords (bottom-right of last line)
+        const endCoords = view.coordsAtPos(to);
+        // Try placing JUST past the selection end, inline with last line
+        let left = endCoords.right + gap;
+        let top = Math.max(8, endCoords.top - 2);
+        // If that runs past the right edge, drop to the next line's start
+        if (left + pillW > viewportW - 8) {
+          left = Math.max(8, endCoords.left - pillW - gap);
+          top = endCoords.bottom + gap;
+        }
+        // Clamp to visible area (keep above keyboard)
+        top = Math.min(top, availableBottom);
+        commentPill.style.left = `${Math.max(8, left)}px`;
+        commentPill.style.top = `${top}px`;
+        commentPill.classList.remove('hidden');
+      } else if (selectionSettled) {
+        // Caret mode — anchor to the right margin of the current line
+        pillMode = 'caret';
+        commentPill.classList.add('caret');
+        const caret = view.coordsAtPos(from);
+        const editorRect = view.dom.getBoundingClientRect();
+        // Place to the right of the paragraph content edge
+        const right = Math.min(editorRect.right - 4, viewportW - pillW - 8);
+        const left = Math.max(8, right - pillW);
+        const top = Math.min(caret.top - 4, availableBottom);
+        commentPill.style.left = `${left}px`;
+        commentPill.style.top = `${Math.max(8, top)}px`;
+        commentPill.classList.remove('hidden');
+      } else {
+        hidePill();
+      }
+    } catch {
+      hidePill();
     }
   }
 
-  function showSelectionBar(snippet: string): void {
-    selectionSnippet.textContent = snippet;
-    selectionBar.classList.remove('hidden');
-  }
-  function hideSelectionBar(): void {
-    selectionBar.classList.add('hidden');
+  function hidePill(): void {
+    commentPill.classList.add('hidden');
   }
 
-  selectionCommentBtn.addEventListener('click', () => {
-    openComposerForSelection();
-  });
-  // preventDefault on touchstart/mousedown so tapping the bar doesn't blur
-  // the editor before the click handler fires — otherwise selection collapses.
-  for (const type of ['mousedown', 'touchstart']) {
-    selectionBar.addEventListener(type, (ev) => {
-      const t = (ev.target as HTMLElement).closest('button');
-      if (t) ev.preventDefault();
-    });
+  // Tap/mouse/pointer handling — preventDefault on pointerdown so the pill
+  // doesn't blur the editor before its click fires.
+  for (const type of ['mousedown', 'touchstart', 'pointerdown']) {
+    commentPill.addEventListener(type, (ev) => ev.preventDefault());
   }
+  commentPill.addEventListener('click', () => {
+    if (pillMode === 'caret') {
+      // Expand the selection to the current paragraph first, then open composer
+      const { from } = editor.editor.state.selection;
+      const $pos = editor.editor.state.doc.resolve(from);
+      // Find the parent textblock's range
+      const start = $pos.start($pos.depth);
+      const end = $pos.end($pos.depth);
+      editor.editor.commands.setTextSelection({ from: start, to: end });
+      setTimeout(() => {
+        const sel = editor.getSelectionRel();
+        if (sel) selection = sel;
+        openComposerForSelection();
+      }, 0);
+    } else {
+      openComposerForSelection();
+    }
+  });
 
   editor.editor.view.dom.addEventListener('pointerdown', () => {
     isDragging = true;
     selectionSettled = false;
-    hideSelectionBar();
+    hidePill();
   });
   window.addEventListener('pointerup', () => {
     isDragging = false;
-    // give the browser a tick to settle the selection (especially on iOS)
     setTimeout(() => {
       selectionSettled = true;
       const sel = editor.getSelectionRel();
-      if (sel && !editor.editor.state.selection.empty) {
-        selection = sel;
-        showSelectionBar(sel.snippet);
-      } else {
-        hideSelectionBar();
-      }
-    }, 30);
+      if (sel) selection = sel;
+      positionPill();
+    }, 50);
   });
   editor.editor.view.dom.addEventListener('keyup', (ev) => {
     if (ev.shiftKey || ev.key.startsWith('Arrow') || ev.key === 'Home' || ev.key === 'End') {
       selectionSettled = true;
       refreshSelectionState();
-      if (selection && !editor.editor.state.selection.empty) showSelectionBar(selection.snippet);
+      positionPill();
     }
   });
   editor.editor.on('selectionUpdate', () => {
-    if (editor.editor.state.selection.empty) {
-      selectionSettled = false;
-      hideSelectionBar();
-    } else if (selectionSettled && !isDragging) {
-      const sel = editor.getSelectionRel();
-      if (sel) {
-        selection = sel;
-        showSelectionBar(sel.snippet);
-      }
-    }
+    if (!isDragging && selectionSettled) positionPill();
   });
+  // Keep pill in sync if the keyboard appears/disappears (visualViewport
+  // resize changes --kb-bottom, which changes our clamp max).
+  window.visualViewport?.addEventListener('resize', () => positionPill());
+  window.addEventListener('scroll', () => positionPill(), { passive: true });
+  el<HTMLElement>('editor').addEventListener('scroll', () => positionPill(), { passive: true });
 
   // =========================================================================
   // COMPOSER (Notion-style slim sheet)
@@ -186,7 +246,7 @@ async function boot(): Promise<void> {
     composer.classList.remove('hidden');
     composerScrim.classList.remove('hidden');
     document.body.classList.add('composer-open');
-    hideSelectionBar();
+    hidePill();
     composerText.value = '';
     setTimeout(() => {
       composerText.focus();

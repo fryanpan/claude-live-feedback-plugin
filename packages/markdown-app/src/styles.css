@@ -355,59 +355,48 @@ button {
   }
 }
 
-/* ================= SELECTION BAR ================= */
-
-.selection-bar {
+/* ================= COMMENT PILL (inline, near selection/caret) =================
+   Small circular button anchored near the end of the selection (or the
+   caret when the selection is empty). Positioned absolutely inside the
+   viewport via JS using editor.coordsAtPos — never covers the selection
+   itself and never competes with iOS's system selection menu or the
+   keyboard for bottom-of-screen space. */
+.comment-pill {
   position: fixed;
-  left: 12px;
-  right: 12px;
-  /* --kb-bottom is the iOS on-screen-keyboard height (0 when the keyboard
-     is dismissed). Updated from JS via the visualViewport API so this bar
-     always sits ABOVE the keyboard instead of behind it. */
-  bottom: calc(var(--kb-bottom, 0px) + 16px + var(--safe-bottom));
   z-index: 800;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 0;
   background: var(--accent);
   color: #fff;
-  border-radius: 14px;
-  box-shadow: var(--shadow-lg);
-  padding: 10px 12px;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  transform: translateY(calc(100% + 20px));
-  transition: transform 180ms ease;
-  max-width: 560px;
-  margin: 0 auto;
-}
-.selection-bar:not(.hidden) {
-  transform: translateY(0);
-}
-.selection-bar .selection-snippet {
-  flex: 1 1 auto;
-  min-width: 0;
-  font-size: 13px;
-  line-height: 1.35;
-  color: rgba(255, 255, 255, 0.94);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-.selection-bar button.primary {
-  flex: 0 0 auto;
-  padding: 10px 16px;
-  min-height: 40px;
-  border-radius: 10px;
-  border: 0;
-  background: #fff;
-  color: var(--accent);
-  font-weight: 600;
-  font-size: 14px;
+  font-size: 16px;
+  line-height: 1;
   cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2), 0 0 0 1px rgba(0, 0, 0, 0.06);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: opacity 120ms ease, transform 120ms ease;
+  opacity: 1;
 }
-.selection-bar button.primary:active {
-  transform: scale(0.97);
+.comment-pill.hidden {
+  opacity: 0;
+  pointer-events: none;
+  transform: scale(0.9);
+  display: inline-flex !important;
+}
+.comment-pill:active {
+  transform: scale(0.94);
+}
+/* Slightly dimmer when the pill is offering a caret-only (tap-to-comment)
+   action — it's helpful but not the primary affordance. */
+.comment-pill.caret {
+  background: var(--bg);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
 }
 
 /* ================= THREADS PANE ================= */
@@ -653,9 +642,6 @@ button {
   .threads-open .scrim {
     opacity: 1;
     pointer-events: auto;
-  }
-  .selection-bar {
-    max-width: none;
   }
 }
 /* hide scrim on desktop */
@@ -955,7 +941,7 @@ body.composer-open #editor .ProseMirror ::selection {
 .hidden {
   display: none !important;
 }
-.selection-bar.hidden,
+.comment-pill.hidden,
 #composer.hidden,
 #toast.hidden,
 .thread-view.hidden {

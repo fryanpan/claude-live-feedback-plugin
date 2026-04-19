@@ -66,13 +66,19 @@
           <div id="editor" class="prose"></div>
         </section>
 
-        <!-- Bottom-docked selection bar: appears after the user has finished
-             selecting text, always above the keyboard / Safari chrome so it
-             never ends up under the thread drawer or OS selection UI. -->
-        <div id="selection-bar" class="selection-bar hidden" role="toolbar">
-          <div class="selection-snippet" id="selection-bar-snippet"></div>
-          <button id="selection-comment" type="button" class="primary">💬 Comment</button>
-        </div>
+        <!-- Small inline "comment" pill. Floats near the selection end
+             (or the cursor when there's no selection) so the user doesn't
+             lose sight of what they're commenting on and the iOS
+             keyboard/menu don't collide with it. -->
+        <button
+          id="comment-pill"
+          type="button"
+          class="comment-pill hidden"
+          aria-label="Add comment"
+          title="Add comment"
+        >
+          💬
+        </button>
 
         <aside id="threads-pane" aria-label="Threads" aria-hidden="true">
           <div class="threads-header">
