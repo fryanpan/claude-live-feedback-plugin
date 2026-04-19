@@ -249,6 +249,50 @@ export class Rooms {
     });
   }
 
+  /**
+   * Agent anchors — the agent can mint its own named pointers into the
+   * doc for batch edits. Stored separately from comment threads.
+   */
+  createAgentAnchor(
+    docId: string,
+    opts: {
+      find: string;
+      contextBefore?: string;
+      contextAfter?: string;
+      occurrence?: number;
+      label?: string;
+    },
+  ): prose.CreateAnchorResult {
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'no-match' };
+    return prose.createAgentAnchor(room.ydoc, opts);
+  }
+
+  editAtAgentAnchor(
+    docId: string,
+    anchorId: string,
+    op: { kind: 'replace'; text: string } | { kind: 'insert_after'; text: string },
+  ): prose.AnchoredEditResult {
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'anchor-not-found' };
+    const anchor = prose.readAgentAnchor(room.ydoc, anchorId);
+    if (!anchor) return { ok: false, error: 'anchor-not-found' };
+    if (op.kind === 'replace') {
+      return prose.rewriteRange(room.ydoc, {
+        startRel: anchor.startRel,
+        endRel: anchor.endRel,
+        replacement: op.text,
+      });
+    }
+    return prose.insertAfterRange(room.ydoc, { endRel: anchor.endRel, text: op.text });
+  }
+
+  deleteAgentAnchor(docId: string, anchorId: string): boolean {
+    const room = this.rooms.get(docId);
+    if (!room) return false;
+    return prose.deleteAgentAnchor(room.ydoc, anchorId);
+  }
+
   /** Append text at the END position of a thread's anchored range. */
   insertAfterThread(docId: string, threadId: string, text: string): prose.AnchoredEditResult {
     const room = this.rooms.get(docId);
