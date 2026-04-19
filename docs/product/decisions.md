@@ -13,7 +13,9 @@ Big decisions that future sessions should respect or revisit deliberately.
 
 ## 2026-04-17 — Server stack: TypeScript + Bun
 - Same pattern as notion-channel-mcp and github-claude-channel.
-- Cloudflare Tunnel for stable public URLs.
+- No public tunnel. The server binds to localhost; reviewers reach it
+  over the host's Tailscale or LAN hostname. See the 2026-04-19 entry
+  below.
 
 ## 2026-04-17 — Realtime collaboration framework: Yjs
 - Chosen over Liveblocks (SaaS lock-in), Automerge (weaker editor ecosystem), and building minimal (NIH).
@@ -40,8 +42,44 @@ Big decisions that future sessions should respect or revisit deliberately.
 ## 2026-04-17 — Identity model for MVP
 - `?as=bryan` and `?as=agent` query params pick a known identity.
 - No param → `Anon-<short-random>` stored in localStorage.
-- No real auth. Security boundary is the shared-link obscurity + (later) Cloudflare Access on the tunnel.
+- No real auth. Security boundary is Tailscale (only tailnet members
+  can reach the host) or the LAN (only same-wifi devices). Shared-link
+  obscurity within that boundary is fine.
 
 ## 2026-04-17 — Widget bundle budget: 40 KB gzipped
 - Enforced via `scripts/check-widget-size.js` in CI. Builds fail above the limit.
 - Yjs alone is ~40KB; we may need to split Yjs out as a CDN peer-dep if the budget breaks. Document the break rather than silently exceeding.
+
+## 2026-04-19 — Access model: Tailscale or LAN, no public tunnels
+- The feedback server binds to `localhost:<port>`. Reviewers reach it
+  via the host's Tailscale hostname (e.g. `mac-mini.<private-network>`)
+  or its `.local` / LAN IP on the same wifi.
+- `bun run scripts/serve.ts` prints all three URL forms on startup.
+- Rejected: Cloudflare Tunnel (added complexity — named tunnel,
+  DNS zone, cert, a local reverse-proxy router — for a private preview
+  use case that doesn't need public-internet reachability). The
+  trade-off is that reviewers must be on the tailnet or same LAN.
+- Team expansion path: add teammates to the same Tailscale tailnet.
+  No code changes needed; `serverUrl` is already a hostname the widget
+  uses as-is.
+- Public exposure remains an explicit user opt-in they can layer on
+  themselves (tunnel, reverse proxy, whatever) — outside this repo's
+  scope.
+
+## 2026-04-19 — Editor: Tiptap (ProseMirror) + y-prosemirror, not CodeMirror
+- Initial MVP used CodeMirror 6 + y-codemirror.next with a split raw /
+  rendered preview. Bryan asked for WYSIWYG markdown on the first
+  review pass — editing the rendered output directly, with standard
+  keyboard and toolbar interactions for headings/lists/etc.
+- Switched to Tiptap 3 with StarterKit (headings, lists, blockquote,
+  inline code, code blocks, link) + tiptap-markdown for import/export
+  + @tiptap/extension-collaboration for Yjs sync.
+- Content storage moved from `Y.Text content` to
+  `Y.XmlFragment prose`; legacy docs are migrated on first open via a
+  `meta.seeded` sentinel so we never double-seed across reloads.
+- `ySyncPluginKey` must be imported from `@tiptap/y-tiptap`, NOT from
+  `y-prosemirror` — Tiptap's Collaboration extension registers its
+  plugin under the @tiptap/y-tiptap key, and using y-prosemirror's
+  gets a different key instance, so getState() always returned
+  undefined and the Comment button always reported "no selection".
+  This footgun cost two debug sessions; noting for future sessions.

@@ -50,9 +50,10 @@
 ### Phase 2 — Surfaces (parallelizable)
 
 **2.1 Markdown app (`packages/markdown-app`)**
-- Install: `codemirror`, `@codemirror/lang-markdown`, `y-codemirror.next`, `unified`, `remark-parse`, `remark-gfm`, `remark-rehype`, `rehype-stringify`, `mermaid`.
+- Install: `@tiptap/core`, `@tiptap/starter-kit`, `@tiptap/extension-collaboration`, `@tiptap/y-tiptap`, `tiptap-markdown`, `@tiptap/pm`. (Original plan was CodeMirror 6 + remark preview; switched to a single WYSIWYG pane during review.)
 - `src/app.ts` — entry, mounts into `#app`.
-- `src/editor.ts` — CodeMirror 6 + Yjs binding.
+- `src/editor.ts` — Tiptap Editor + Collaboration extension (y-prosemirror under the hood).
+- `src/thread-decorations.ts` — ProseMirror Decoration plugin for thread-range highlights.
 - `src/preview.ts` — remark→HTML render side-by-side; mermaid pass.
 - `src/threads/panel.ts` — right-rail thread list (open + orphans).
 - `src/threads/pin.ts` — inline gutter pin on commented text.
@@ -125,7 +126,7 @@
 | Risk | Mitigation |
 |---|---|
 | Widget bundle > 40KB | First measure. If over: (a) mark Yjs as peer dep served from same origin, (b) tree-shake unused y-protocols, (c) if still over, document and propose next-session fix rather than hide it. |
-| `y-codemirror.next` vs `y-protocols` version mismatch | Pin exact versions up front; check compatibility table before installing. |
+| Tiptap collab ySyncPluginKey mismatch with y-prosemirror imports | Always import `ySyncPluginKey`, `absolutePositionToRelativePosition`, `relativePositionToAbsolutePosition` from `@tiptap/y-tiptap`, not `y-prosemirror`. Documented in decisions.md 2026-04-19. |
 | Bun + MCP SDK ABI issues | Fallback plan: run MCP server as a separate Node process that talks to Bun server over localhost WS. |
 | Mermaid SSR issues in Shadow DOM | N/A for MVP — mermaid only used in markdown app, which is NOT inside a Shadow DOM. |
 | Anchor fingerprint false positives | Score threshold 40 matches health-tool's tested value. Log all low-score resolves for inspection. |
