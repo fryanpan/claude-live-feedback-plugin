@@ -218,12 +218,12 @@ button {
    menu provides undo. The Comment button (primary) and core formatting
    (B, I, H1-H3, lists, blockquote) stay. */
 @media (max-width: 560px) {
-  .format-bar button[data-cmd='code'],
-  .format-bar button[data-cmd='codeBlock'],
-  .format-bar button[data-cmd='link'],
-  .format-bar button[data-cmd='hr'],
-  .format-bar button[data-cmd='undo'],
-  .format-bar button[data-cmd='redo'] {
+  .format-bar button[data-cmd="code"],
+  .format-bar button[data-cmd="codeBlock"],
+  .format-bar button[data-cmd="link"],
+  .format-bar button[data-cmd="hr"],
+  .format-bar button[data-cmd="undo"],
+  .format-bar button[data-cmd="redo"] {
     display: none;
   }
   /* The matching separators around those buttons become orphaned; hide

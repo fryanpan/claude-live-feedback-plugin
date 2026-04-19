@@ -1,5 +1,8 @@
 import { Extension } from '@tiptap/core';
+import type { Node as ProseNode } from '@tiptap/pm/model';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
+import type { EditorState, Transaction } from '@tiptap/pm/state';
+import type { EditorView } from '@tiptap/pm/view';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 
 /**
@@ -34,7 +37,7 @@ interface State {
 }
 
 function buildDecos(
-  doc: any,
+  doc: ProseNode,
   ranges: ThreadRange[],
   activeId: string | null,
   pulseId: string | null,
@@ -100,7 +103,7 @@ export const ThreadDecorations = Extension.create({
 });
 
 export function setThreadDecorations(
-  view: { state: any; dispatch: (tr: any) => void },
+  view: EditorView | { state: EditorState; dispatch: (tr: Transaction) => void },
   meta: Meta,
 ): void {
   const tr = view.state.tr;
