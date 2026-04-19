@@ -245,22 +245,82 @@ function preview(text: string, at: number, length: number): string {
  *  the flattened prose text. Returns null if the anchor no longer
  *  references a valid point in the doc. */
 export function resolveRelativePosition(doc: Y.Doc, encoded: Uint8Array): number | null {
-  const rel = Y.decodeRelativePosition(encoded);
-  // Note: y-prosemirror's absolutePositionToRelativePosition uses a
-  // ProseMirror-aware mapping; here we use Yjs' built-in resolution,
-  // which tracks the Y.XmlText that owned the position. For our
-  // find_and_replace + anchored edits we just need a position *inside*
-  // some Y.XmlText, not an absolute PM position. Caller maps it to the
-  // right segment via the walk above.
-  const abs = Y.createAbsolutePositionFromRelativePosition(rel, doc);
+  const abs = resolveRelativePositionRaw(doc, encoded);
   if (!abs) return null;
-  if (abs.type instanceof Y.XmlText) {
-    // Walk the fragment to find which segment contains this node at this offset.
-    const fragment = getProseFragment(doc);
-    const { segments } = walkProse(fragment);
-    for (const s of segments) {
-      if (s.node === abs.type) return s.docOffset + abs.index;
-    }
+  const fragment = getProseFragment(doc);
+  const { segments } = walkProse(fragment);
+  for (const s of segments) {
+    if (s.node === abs.node) return s.docOffset + abs.offset;
   }
   return null;
+}
+
+/** Same resolution, but returns the Y.XmlText + local offset so callers
+ *  that need to mutate (splice, insert) can operate directly on the node. */
+export function resolveRelativePositionRaw(
+  doc: Y.Doc,
+  encoded: Uint8Array,
+): { node: Y.XmlText; offset: number } | null {
+  const rel = Y.decodeRelativePosition(encoded);
+  const abs = Y.createAbsolutePositionFromRelativePosition(rel, doc);
+  if (!abs) return null;
+  if (!(abs.type instanceof Y.XmlText)) return null;
+  return { node: abs.type, offset: abs.index };
+}
+
+export interface AnchoredEditResult {
+  ok: boolean;
+  error?: 'anchor-not-found' | 'anchor-orphaned' | 'cross-node';
+}
+
+/**
+ * Replace the text spanned by two serialized Y.RelativePositions with a
+ * new string, inside a single Yjs transaction. Requires both anchors
+ * to resolve to the same Y.XmlText — cross-node ranges are rejected
+ * for MVP (they'd need to delete from end of one node, all of middle,
+ * start of another, which is more code than it's worth right now).
+ */
+export function rewriteRange(
+  doc: Y.Doc,
+  opts: {
+    startRel: Uint8Array;
+    endRel: Uint8Array;
+    replacement: string;
+    transactionOrigin?: unknown;
+  },
+): AnchoredEditResult {
+  const start = resolveRelativePositionRaw(doc, opts.startRel);
+  const end = resolveRelativePositionRaw(doc, opts.endRel);
+  if (!start || !end) return { ok: false, error: 'anchor-orphaned' };
+  if (start.node !== end.node) return { ok: false, error: 'cross-node' };
+  const from = Math.min(start.offset, end.offset);
+  const to = Math.max(start.offset, end.offset);
+  doc.transact(() => {
+    start.node.delete(from, to - from);
+    if (opts.replacement.length > 0) start.node.insert(from, opts.replacement);
+  }, opts.transactionOrigin ?? 'agent');
+  return { ok: true };
+}
+
+/**
+ * Append text at the end of the range described by a pair of
+ * Y.RelativePositions. Useful for "add a note after the sentence this
+ * thread is on." Operates in the SAME Y.XmlText as the end anchor, so
+ * any marks covering the end position carry to the new text.
+ */
+export function insertAfterRange(
+  doc: Y.Doc,
+  opts: {
+    endRel: Uint8Array;
+    text: string;
+    transactionOrigin?: unknown;
+  },
+): AnchoredEditResult {
+  const end = resolveRelativePositionRaw(doc, opts.endRel);
+  if (!end) return { ok: false, error: 'anchor-orphaned' };
+  if (opts.text.length === 0) return { ok: true };
+  doc.transact(() => {
+    end.node.insert(end.offset, opts.text);
+  }, opts.transactionOrigin ?? 'agent');
+  return { ok: true };
 }

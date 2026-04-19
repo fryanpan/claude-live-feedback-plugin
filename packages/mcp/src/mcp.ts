@@ -139,6 +139,34 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'rewrite_thread_region',
+      description:
+        'Rewrite the text a thread is anchored to. Primary path for comment-driven edits: the user commented, the agent fixes the exact range they commented on. Immune to concurrent user edits because the anchor is a Y.RelativePosition, resolved to current offsets at apply time. Returns `anchor-orphaned` if the user deleted the anchored text — fall back to find_and_replace in that case.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          docId: { type: 'string' },
+          threadId: { type: 'string' },
+          replacement: { type: 'string' },
+        },
+        required: ['docId', 'threadId', 'replacement'],
+      },
+    },
+    {
+      name: 'insert_after_thread',
+      description:
+        "Insert text at the END of a thread's anchored range. Useful for 'add a note right after this sentence' without modifying what the user wrote. Mark formatting at the end position carries onto the inserted text.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          docId: { type: 'string' },
+          threadId: { type: 'string' },
+          text: { type: 'string' },
+        },
+        required: ['docId', 'threadId', 'text'],
+      },
+    },
+    {
       name: 'observe_url',
       description:
         'Return the SSE URL that streams live thread events for a doc. Useful for long-running agents.',
@@ -219,6 +247,32 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...(contextAfter !== undefined ? { contextAfter } : {}),
           ...(occurrence !== undefined ? { occurrence } : {}),
         });
+        return ok(res);
+      }
+      case 'rewrite_thread_region': {
+        const { docId, threadId, replacement } = a as {
+          docId: string;
+          threadId: string;
+          replacement: string;
+        };
+        const res = await http(
+          'POST',
+          `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/rewrite_region`,
+          { replacement },
+        );
+        return ok(res);
+      }
+      case 'insert_after_thread': {
+        const { docId, threadId, text } = a as {
+          docId: string;
+          threadId: string;
+          text: string;
+        };
+        const res = await http(
+          'POST',
+          `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/insert_after`,
+          { text },
+        );
         return ok(res);
       }
       case 'observe_url': {

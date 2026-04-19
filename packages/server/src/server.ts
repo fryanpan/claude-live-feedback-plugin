@@ -154,6 +154,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             const t = rooms.reanchor(docId, threadId, anchor);
             return t ? j(200, { thread: t }) : j(404, { error: 'thread not found' });
           }
+          if (threadRest === '/rewrite_region' && req.method === 'POST') {
+            const body = await safeJson(req);
+            const replacement = String(body?.replacement ?? '');
+            const res = rooms.rewriteThreadRegion(docId, threadId, replacement);
+            return res.ok ? j(200, res) : j(409, res);
+          }
+          if (threadRest === '/insert_after' && req.method === 'POST') {
+            const body = await safeJson(req);
+            const text = String(body?.text ?? '');
+            const res = rooms.insertAfterThread(docId, threadId, text);
+            return res.ok ? j(200, res) : j(409, res);
+          }
         }
         if (rest === 'threads' && req.method === 'POST') {
           const body = await safeJson(req);

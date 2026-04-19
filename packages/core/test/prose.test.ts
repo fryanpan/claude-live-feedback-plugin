@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
-import { findAndReplace, getProseFragment, walkProse } from '../src/prose.ts';
+import {
+  findAndReplace,
+  getProseFragment,
+  insertAfterRange,
+  rewriteRange,
+  walkProse,
+} from '../src/prose.ts';
 
 /**
  * Build a minimal prosemirror-shaped Y.XmlFragment — paragraph + heading
@@ -117,5 +123,57 @@ describe('findAndReplace', () => {
     doc.on('afterTransaction', (tr) => origins.push(tr.origin));
     findAndReplace(doc, { find: 'hello', replace: 'world' });
     expect(origins).toContain('agent');
+  });
+});
+
+/** Build a text-range anchor on the FIRST text node covering [from, to). */
+function anchorIn(doc: Y.Doc, from: number, to: number) {
+  const frag = getProseFragment(doc);
+  const first = frag.toArray()[0] as Y.XmlElement;
+  const text = first.toArray()[0] as Y.XmlText;
+  const startRel = Y.createRelativePositionFromTypeIndex(text, from);
+  const endRel = Y.createRelativePositionFromTypeIndex(text, to);
+  return {
+    startRel: Y.encodeRelativePosition(startRel),
+    endRel: Y.encodeRelativePosition(endRel),
+  };
+}
+
+describe('rewriteRange', () => {
+  it('replaces the anchored range with a new string', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'The quick brown fox jumped.' }]);
+    const a = anchorIn(doc, 4, 15); // "quick brown"
+    const res = rewriteRange(doc, { ...a, replacement: 'lazy blue' });
+    expect(res.ok).toBe(true);
+    expect(walkProse(getProseFragment(doc)).plainText).toBe('The lazy blue fox jumped.');
+  });
+
+  it('survives an intervening user edit before the anchor', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'The quick brown fox.' }]);
+    const a = anchorIn(doc, 4, 15); // "quick brown"
+    // User prepends text BEFORE the anchor — absolute offset of "quick"
+    // changes from 4 to 13, but the relative position rebases.
+    doc.transact(() => {
+      const frag = getProseFragment(doc);
+      const first = frag.toArray()[0] as Y.XmlElement;
+      const text = first.toArray()[0] as Y.XmlText;
+      text.insert(0, 'ANYWAY, ');
+    });
+    const res = rewriteRange(doc, { ...a, replacement: 'lazy blue' });
+    expect(res.ok).toBe(true);
+    expect(walkProse(getProseFragment(doc)).plainText).toBe('ANYWAY, The lazy blue fox.');
+  });
+});
+
+describe('insertAfterRange', () => {
+  it('inserts text at the anchor end', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'Hello world.' }]);
+    const a = anchorIn(doc, 0, 5); // "Hello"
+    const res = insertAfterRange(doc, { endRel: a.endRel, text: ' there,' });
+    expect(res.ok).toBe(true);
+    expect(walkProse(getProseFragment(doc)).plainText).toBe('Hello there, world.');
   });
 });
