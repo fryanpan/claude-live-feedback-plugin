@@ -2,7 +2,10 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1"
+    />
     <title>Live Feedback · Review</title>
     <link rel="stylesheet" href="/app/styles.css" />
   </head>
@@ -12,20 +15,44 @@
         <div class="brand">Live Feedback</div>
         <div class="doc-title" id="doc-title">—</div>
         <div class="toolbar">
-          <button id="copy-bryan" type="button">Copy Bryan link</button>
-          <button id="copy-agent" type="button">Copy Agent link</button>
-          <div id="me" class="user-chip"></div>
+          <button
+            type="button"
+            id="toggle-format"
+            class="icon-btn"
+            title="Show formatting (⌘⇧F)"
+            aria-pressed="false"
+            aria-label="Toggle formatting"
+          >
+            Aa
+          </button>
+          <button
+            type="button"
+            id="toggle-threads"
+            class="icon-btn threads-toggle"
+            title="Show threads"
+            aria-pressed="false"
+            aria-label="Toggle threads"
+          >
+            💬
+            <span id="threads-count" class="badge">0</span>
+          </button>
+          <div id="me" class="user-chip" title="Current user"></div>
         </div>
       </header>
       <main id="main">
         <section id="editor-pane">
-          <div id="format-bar" class="format-bar" role="toolbar" aria-label="Formatting">
+          <div
+            id="format-bar"
+            class="format-bar is-collapsed"
+            role="toolbar"
+            aria-label="Formatting"
+          >
             <button type="button" data-cmd="bold" title="Bold (⌘B)"><b>B</b></button>
             <button type="button" data-cmd="italic" title="Italic (⌘I)"><i>I</i></button>
             <span class="sep"></span>
-            <button type="button" data-cmd="h1" title="Heading 1 (⌘⌥1)">H1</button>
-            <button type="button" data-cmd="h2" title="Heading 2 (⌘⌥2)">H2</button>
-            <button type="button" data-cmd="h3" title="Heading 3 (⌘⌥3)">H3</button>
+            <button type="button" data-cmd="h1" title="Heading 1">H1</button>
+            <button type="button" data-cmd="h2" title="Heading 2">H2</button>
+            <button type="button" data-cmd="h3" title="Heading 3">H3</button>
             <span class="sep"></span>
             <button type="button" data-cmd="bulletList" title="Bulleted list">•&nbsp;List</button>
             <button type="button" data-cmd="orderedList" title="Numbered list">1.&nbsp;List</button>
@@ -34,40 +61,55 @@
             <button type="button" data-cmd="code" title="Inline code (⌘E)">&lt;&nbsp;&gt;</button>
             <button type="button" data-cmd="codeBlock" title="Code block">{…}</button>
             <button type="button" data-cmd="link" title="Link (⌘K)">🔗</button>
-            <span class="sep"></span>
             <button type="button" data-cmd="hr" title="Horizontal rule">—</button>
-            <button type="button" data-cmd="undo" title="Undo (⌘Z)">↶</button>
-            <button type="button" data-cmd="redo" title="Redo (⌘⇧Z)">↷</button>
-            <span class="spacer"></span>
-            <button type="button" data-cmd="comment" class="primary" title="Comment on selection (⌘M)">
-              💬&nbsp;Comment
-            </button>
           </div>
           <div id="editor" class="prose"></div>
         </section>
-        <aside id="threads-pane">
+
+        <!-- Bottom-docked selection bar: appears after the user has finished
+             selecting text, always above the keyboard / Safari chrome so it
+             never ends up under the thread drawer or OS selection UI. -->
+        <div id="selection-bar" class="selection-bar hidden" role="toolbar">
+          <div class="selection-snippet" id="selection-bar-snippet"></div>
+          <button id="selection-comment" type="button" class="primary">💬 Comment</button>
+        </div>
+
+        <aside id="threads-pane" aria-label="Threads" aria-hidden="true">
           <div class="threads-header">
-            <h2>Threads</h2>
-            <div class="legend">
-              <span><i class="dot dot-open"></i>Open</span>
-              <span><i class="dot dot-resolved"></i>Resolved</span>
-              <span><i class="dot dot-orphan"></i>Orphaned</span>
+            <div class="threads-title-row">
+              <h2>Threads</h2>
+              <button
+                type="button"
+                id="close-threads"
+                class="icon-btn threads-close"
+                title="Close"
+                aria-label="Close threads"
+              >
+                ×
+              </button>
+            </div>
+            <div class="threads-tabs" role="tablist">
+              <button type="button" class="tab active" data-tab="open">Open</button>
+              <button type="button" class="tab" data-tab="resolved">Resolved</button>
+              <button type="button" class="tab" data-tab="all">All</button>
             </div>
           </div>
           <div id="threads-list"></div>
         </aside>
+        <div id="threads-scrim" class="scrim" aria-hidden="true"></div>
       </main>
-      <div id="composer" class="hidden">
+      <div id="composer" class="hidden" role="dialog" aria-label="Leave a comment">
         <div class="composer-inner">
-          <div id="composer-snippet" class="snippet"></div>
+          <div class="composer-context" id="composer-context"></div>
           <textarea
             id="composer-text"
-            placeholder="Leave a comment about this text…"
+            placeholder="Leave a comment…"
             rows="3"
+            autocapitalize="sentences"
           ></textarea>
           <div class="composer-actions">
             <button id="composer-cancel" type="button">Cancel</button>
-            <button id="composer-submit" type="button" class="primary">Comment</button>
+            <button id="composer-submit" type="button" class="primary">Post</button>
           </div>
         </div>
       </div>
