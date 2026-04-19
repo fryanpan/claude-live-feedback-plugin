@@ -45,11 +45,14 @@ function buildDecos(
   const decos: Decoration[] = [];
   const docSize = doc.content.size;
   for (const r of ranges) {
+    // Resolved threads disappear from the doc — the conversation is
+    // still reachable via the Resolved tab in the drawer, but the
+    // highlight no longer competes for the reader's attention.
+    if (r.status === 'resolved') continue;
     const from = Math.max(0, Math.min(r.from, docSize));
     const to = Math.max(0, Math.min(r.to, docSize));
     if (from >= to) continue;
     const classes = ['thread-range'];
-    if (r.status === 'resolved') classes.push('resolved');
     if (activeId === r.id) classes.push('active');
     if (pulseId === r.id) classes.push('pulse');
     decos.push(Decoration.inline(from, to, { class: classes.join(' '), 'data-thread-id': r.id }));
