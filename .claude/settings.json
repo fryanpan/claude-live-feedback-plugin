@@ -60,5 +60,18 @@
       "Bash(git clean -f:*)",
       "Bash(rm -rf:*)"
     ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "mcp__claude-in-chrome__navigate",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run $CLAUDE_PROJECT_DIR/.claude/hooks/auto-approve-preview-nav.ts"
+          }
+        ]
+      }
+    ]
   }
 }
