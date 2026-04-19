@@ -1,5 +1,5 @@
 {
-  "$comment": "MCP server registration that ships with the plugin. Points at the bundled stdio binary in packages/server/src/mcp.ts. When the plugin is enabled, Claude Code picks this up automatically.",
+  "$comment": "MCP server registration. Today the server lives alongside the plugin in the monorepo (`../server/src/mcp.ts`). That path resolves correctly when the marketplace is added as a local path (the plugin dir stays inside the repo). Remote / self-contained install is a TODO — see packages/plugin/README.md Roadmap.",
   "mcpServers": {
     "live-feedback": {
       "command": "bun",
