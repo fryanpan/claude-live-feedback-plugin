@@ -1,0 +1,13 @@
+{
+  "$comment": "MCP server registration that ships with the plugin. Points at the bundled stdio binary in packages/server/src/mcp.ts. When the plugin is enabled, Claude Code picks this up automatically.",
+  "mcpServers": {
+    "live-feedback": {
+      "command": "bun",
+      "args": ["run", "${CLAUDE_PLUGIN_ROOT}/../server/src/mcp.ts"],
+      "env": {
+        "FEEDBACK_BASE_URL": "http://localhost:8787",
+        "FEEDBACK_AUTHOR": "agent"
+      }
+    }
+  }
+}
