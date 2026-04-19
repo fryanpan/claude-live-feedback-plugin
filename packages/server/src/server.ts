@@ -231,6 +231,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         const docId = decodeURIComponent(pathname.slice('/review/'.length));
         if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
         rooms.getOrCreate(docId, { type: 'markdown' });
+        // Device-frame simulation: when ?mobile=<preset> is on the URL,
+        // return an HTML shell that hosts the real page in an iframe sized
+        // to the preset's viewport. Media queries inside the iframe see
+        // the small width correctly.
+        const mobilePreset = url.searchParams.get('mobile');
+        if (mobilePreset) {
+          return new Response(renderDeviceFrame(mobilePreset, url), {
+            headers: { 'content-type': 'text/html; charset=utf-8' },
+          });
+        }
         const p = join(markdownAppDist, 'index.html');
         const resp = serveStatic(p);
         if (resp) return resp;
@@ -343,6 +353,78 @@ small{color:#999;margin-left:8px}</style>
 <p>Open docs to review:</p>
 <ul>${rows || '<li><em>none yet — POST /api/docs to create one</em></li>'}</ul>
 <p><small>API: POST /api/docs &middot; widget: /widget.iife.js &middot; demo: /demos/mockup</small></p>`;
+}
+
+// Viewport presets for ?mobile=<preset>. CSS px sizes (logical).
+const DEVICE_PRESETS: Record<string, { w: number; h: number; label: string }> = {
+  iphone16pm: { w: 440, h: 956, label: 'iPhone 16 Pro Max' },
+  iphone16: { w: 393, h: 852, label: 'iPhone 16' },
+  iphone15: { w: 393, h: 852, label: 'iPhone 15' },
+  iphonese: { w: 375, h: 667, label: 'iPhone SE' },
+  pixel8: { w: 412, h: 915, label: 'Pixel 8' },
+};
+
+function renderDeviceFrame(presetName: string, url: URL): string {
+  const preset = DEVICE_PRESETS[presetName] ?? DEVICE_PRESETS.iphone16pm!;
+  // Build the inner URL with the mobile param stripped to avoid recursion
+  const innerParams = new URLSearchParams(url.searchParams);
+  innerParams.delete('mobile');
+  const innerQs = innerParams.toString();
+  const innerUrl = `${url.pathname}${innerQs ? `?${innerQs}` : ''}`;
+  return `<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8" />
+<title>${escape(preset.label)} · ${escape(url.pathname)}</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #1e2228; font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; color: #eee; }
+  body { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; box-sizing: border-box; overflow: auto; }
+  .bar { position: fixed; top: 10px; left: 10px; right: 10px; display: flex; gap: 12px; font-size: 12px; color: #cfd3d9; z-index: 2; align-items: center; }
+  .bar .label { background: rgba(0,0,0,0.5); padding: 4px 10px; border-radius: 99px; }
+  .bar a { color: #8fbfff; text-decoration: none; background: rgba(0,0,0,0.5); padding: 4px 10px; border-radius: 99px; }
+  .bar a:hover { background: rgba(0,0,0,0.75); }
+  .device-wrap { display: flex; align-items: center; justify-content: center; }
+  .device {
+    width: ${preset.w}px;
+    height: ${preset.h}px;
+    background: #000;
+    border-radius: 48px;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.55), 0 0 0 12px #1a1d22, 0 0 0 13px #2d3138;
+    position: relative;
+    overflow: hidden;
+  }
+  .device .notch {
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 120px;
+    height: 26px;
+    background: #000;
+    border-radius: 16px;
+    z-index: 2;
+    pointer-events: none;
+  }
+  .device iframe {
+    width: 100%;
+    height: 100%;
+    border: 0;
+    display: block;
+    background: #fff;
+  }
+  .hint { margin-top: 18px; font-size: 11px; color: #8b929c; }
+</style>
+</head><body>
+<div class="bar">
+  <span class="label">${escape(preset.label)} — ${preset.w}×${preset.h}</span>
+  <a href="?as=${escape(url.searchParams.get('as') ?? 'bryan')}">exit simulation</a>
+  <a href="?mobile=iphone16pm${url.searchParams.get('as') ? `&as=${escape(url.searchParams.get('as')!)}` : ''}">iPhone 16 Pro Max</a>
+  <a href="?mobile=iphone16${url.searchParams.get('as') ? `&as=${escape(url.searchParams.get('as')!)}` : ''}">iPhone 16</a>
+  <a href="?mobile=iphonese${url.searchParams.get('as') ? `&as=${escape(url.searchParams.get('as')!)}` : ''}">iPhone SE</a>
+  <a href="?mobile=pixel8${url.searchParams.get('as') ? `&as=${escape(url.searchParams.get('as')!)}` : ''}">Pixel 8</a>
+</div>
+<div class="device-wrap"><div class="device"><div class="notch"></div><iframe src="${escape(innerUrl)}" allow="clipboard-write"></iframe></div></div>
+<div class="hint">Media queries inside the iframe respond to ${preset.w}px width.</div>
+</body></html>`;
 }
 
 function escape(s: string): string {
