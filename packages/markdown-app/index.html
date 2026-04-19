@@ -98,19 +98,67 @@
         </aside>
         <div id="threads-scrim" class="scrim" aria-hidden="true"></div>
       </main>
-      <div id="composer" class="hidden" role="dialog" aria-label="Leave a comment">
-        <div class="composer-inner">
-          <div class="composer-context" id="composer-context"></div>
+      <!-- Full-screen focused thread view (tap a highlight → see the thread
+           like Notion's Diskussion sheet). -->
+      <div
+        id="thread-view"
+        class="thread-view hidden"
+        role="dialog"
+        aria-label="Thread"
+        aria-hidden="true"
+      >
+        <header class="thread-view-header">
+          <span class="drag-handle" aria-hidden="true"></span>
+          <h2 class="thread-view-title">Discussion</h2>
+          <button
+            id="thread-view-close"
+            type="button"
+            class="icon-btn thread-view-close"
+            title="Close"
+            aria-label="Close thread"
+          >
+            ×
+          </button>
+        </header>
+        <div id="thread-view-body" class="thread-view-body"></div>
+        <div class="thread-view-reply">
           <textarea
-            id="composer-text"
-            placeholder="Leave a comment…"
-            rows="3"
+            id="thread-view-reply-text"
+            placeholder="Add a comment…"
+            rows="1"
             autocapitalize="sentences"
           ></textarea>
-          <div class="composer-actions">
-            <button id="composer-cancel" type="button">Cancel</button>
-            <button id="composer-submit" type="button" class="primary">Post</button>
-          </div>
+          <button
+            id="thread-view-reply-submit"
+            type="button"
+            class="submit-arrow"
+            aria-label="Post reply"
+          >
+            ↑
+          </button>
+        </div>
+      </div>
+
+      <!-- Composer for creating a NEW thread on a selection. Dims the doc
+           behind it so the selection stays visible; no in-composer snippet. -->
+      <div id="composer-scrim" class="composer-scrim hidden" aria-hidden="true"></div>
+      <div id="composer" class="hidden" role="dialog" aria-label="Leave a comment">
+        <div class="composer-inner">
+          <div id="composer-avatar" class="composer-avatar"></div>
+          <textarea
+            id="composer-text"
+            placeholder="Add a comment…"
+            rows="1"
+            autocapitalize="sentences"
+          ></textarea>
+          <button
+            id="composer-submit"
+            type="button"
+            class="submit-arrow"
+            aria-label="Post comment"
+          >
+            ↑
+          </button>
         </div>
       </div>
       <div id="toast" class="hidden"></div>
