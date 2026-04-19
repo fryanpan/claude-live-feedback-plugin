@@ -146,9 +146,13 @@
       </div>
 
       <!-- Composer for creating a NEW thread on a selection. Dims the doc
-           behind it so the selection stays visible; no in-composer snippet. -->
+           behind it so the selection stays visible. Shows a small, muted
+           snippet of the anchored text so the user never loses sight of
+           what they're commenting on when the iOS keyboard pushes the
+           editor out of the viewport. -->
       <div id="composer-scrim" class="composer-scrim hidden" aria-hidden="true"></div>
       <div id="composer" class="hidden" role="dialog" aria-label="Leave a comment">
+        <div id="composer-quote" class="composer-quote" aria-hidden="true"></div>
         <div class="composer-inner">
           <div id="composer-avatar" class="composer-avatar"></div>
           <textarea
