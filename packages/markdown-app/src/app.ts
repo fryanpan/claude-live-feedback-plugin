@@ -771,6 +771,10 @@ async function boot(): Promise<void> {
       const body = (await res.json()) as { thread: { id: string } };
       const newId = body.thread.id;
       hideComposer();
+      // Drop focus so no caret blinks in the doc after posting — Bryan's
+      // done commenting, nothing to type, nothing to look at.
+      editor.editor.commands.blur();
+      (document.activeElement as HTMLElement | null)?.blur?.();
       showToast('✓ Comment posted');
       // Post-feedback: wait for the Yjs update to land the highlight, then
       // scroll it into view + pulse so the user can see where it landed.
