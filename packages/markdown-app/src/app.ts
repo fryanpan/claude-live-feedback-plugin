@@ -129,11 +129,17 @@ async function boot(): Promise<void> {
       const pillH = 36;
       const gap = 8;
       const viewportW = window.innerWidth;
-      const viewportH = window.visualViewport?.height ?? window.innerHeight;
-      const kbBottom = Number.parseFloat(
-        getComputedStyle(document.documentElement).getPropertyValue('--kb-bottom') || '0',
-      );
-      const availableBottom = viewportH - kbBottom - pillH - 8;
+      // On iOS, position:fixed and getBoundingClientRect are LAYOUT-viewport
+      // relative, but visualViewport.height already excludes the on-screen
+      // keyboard. We want the max-y the pill can use to stay above the
+      // keyboard, expressed in the same layout-viewport coords the browser
+      // gives us. That's vv.offsetTop + vv.height. Do NOT subtract
+      // --kb-bottom again here — that was the bug that pinned the pill
+      // to y=0 when the keyboard was open.
+      const vv = window.visualViewport;
+      const vvTop = vv?.offsetTop ?? 0;
+      const vvHeight = vv?.height ?? window.innerHeight;
+      const availableBottom = vvTop + vvHeight - pillH - 8;
 
       if (!empty) {
         pillMode = 'range';
