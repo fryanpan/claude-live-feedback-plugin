@@ -1,0 +1,30 @@
+{
+  "name": "@fryanpan/live-feedback-mcp",
+  "version": "0.0.1",
+  "description": "MCP stdio server for claude-live-feedback-plugin. Lets Claude Code agents observe and reply to review comments.",
+  "type": "module",
+  "bin": {
+    "live-feedback-mcp": "./dist/mcp.js"
+  },
+  "main": "./dist/mcp.js",
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "bun run scripts/build.ts",
+    "prepublishOnly": "bun run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": ["mcp", "claude", "claude-code", "feedback", "review"],
+  "author": "Bryan Chan",
+  "license": "MIT",
+  "homepage": "https://github.com/fryanpan/claude-live-feedback-plugin",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fryanpan/claude-live-feedback-plugin.git",
+    "directory": "packages/mcp"
+  }
+}

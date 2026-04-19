@@ -9,12 +9,14 @@ See [docs/product/vision.md](docs/product/vision.md) for the full problem and th
 ## Install
 
 ```bash
-git clone https://github.com/fryanpan/claude-live-feedback-plugin.git
-cd claude-live-feedback-plugin
-bun install
-claude plugin marketplace add .
+claude plugin marketplace add fryanpan/claude-live-feedback-plugin
 claude plugin install live-feedback@claude-live-feedback
 ```
+
+The MCP server is pulled from npm via `npx`, so no clone is required on
+the agent's machine. To host the browser review surfaces (markdown +
+widget), clone the repo on whichever machine will run the server and
+`bun run dev`.
 
 See [packages/plugin/README.md](packages/plugin/README.md) for the full
 install / update / uninstall flow and the one-off
