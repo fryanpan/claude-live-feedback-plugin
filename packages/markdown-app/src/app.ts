@@ -1,7 +1,7 @@
 import { type Thread, type User, readDocMeta, resolveUser } from '@feedback/core';
 import { connect } from './client.ts';
 import { type EditorHandle, createEditor } from './editor.ts';
-import { ThreadPanel } from './threads.ts';
+import { ThreadPanel, type ThreadTab } from './threads.ts';
 
 const DEFAULT_WS_PATH = (docId: string) =>
   `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/y/${encodeURIComponent(docId)}?type=markdown`;
@@ -31,52 +31,212 @@ async function boot(): Promise<void> {
   const { ydoc, awareness } = client;
   awareness.setLocalStateField('user', { name: user.name, color: user.color });
 
-  const editorMount = document.getElementById('editor') as HTMLElement;
-  const threadsListEl = document.getElementById('threads-list') as HTMLElement;
-  const docTitleEl = document.getElementById('doc-title') as HTMLElement;
-  const composer = document.getElementById('composer') as HTMLElement;
-  const composerText = document.getElementById('composer-text') as HTMLTextAreaElement;
-  const composerSnippet = document.getElementById('composer-snippet') as HTMLElement;
+  const editorMount = el<HTMLElement>('editor');
+  const threadsListEl = el<HTMLElement>('threads-list');
+  const docTitleEl = el<HTMLElement>('doc-title');
+  const composer = el<HTMLElement>('composer');
+  const composerText = el<HTMLTextAreaElement>('composer-text');
+  const composerContext = el<HTMLElement>('composer-context');
+  const selectionBar = el<HTMLElement>('selection-bar');
+  const selectionSnippet = el<HTMLElement>('selection-bar-snippet');
+  const selectionCommentBtn = el<HTMLButtonElement>('selection-comment');
+  const formatBar = el<HTMLElement>('format-bar');
+  const toggleFormat = el<HTMLButtonElement>('toggle-format');
+  const toggleThreads = el<HTMLButtonElement>('toggle-threads');
+  const threadsCount = el<HTMLElement>('threads-count');
+  const closeThreads = el<HTMLButtonElement>('close-threads');
+  const scrim = el<HTMLElement>('threads-scrim');
+  const shell = document.getElementById('shell') as HTMLElement;
 
   const editor: EditorHandle = createEditor({
     parent: editorMount,
     ydoc,
     awareness,
-    onSelectionChange: () => refreshComposerState(),
+    onSelectionChange: () => refreshSelectionState(),
     onUpdate: () => redrawThreads(),
     user: { name: user.name, color: user.color },
   });
-  const welcomeSeed = `# ${docId}\n\nWelcome to live feedback. Select any text and click **Comment** to leave a note.\n\n- Edits sync live between everyone on this link.\n- Keyboard: **⌘B** bold · **⌘I** italic · **⌘⌥1-3** headings · **⌘K** link · **⌘E** inline code.\n- Lists: type \`- \` or \`1. \` and press Enter. Tab to indent.\n`;
+
+  const welcomeSeed = `# ${docId}\n\nWelcome. Select any text to leave a comment — the bar slides up from the bottom. Tap the 💬 in the top bar to see all threads. Tap "Aa" to show formatting.\n`;
+
+  // =========================================================================
+  // SELECTION → bottom action bar
+  //   iOS-friendly: the bar is docked at the bottom of the visual viewport,
+  //   which means it lands ABOVE Safari's chrome AND ABOVE the keyboard when
+  //   we later raise it on focus. No per-selection positioning maths.
+  // =========================================================================
 
   let selection: Selection | null = null;
-  function refreshComposerState(): void {
+  let selectionSettled = false;
+  let isDragging = false;
+
+  function refreshSelectionState(): void {
     const sel = editor.getSelectionRel();
-    // Only *update* from a non-null selection; keep the last non-empty
-    // selection around so the Comment toolbar button still has a valid
-    // snapshot even if a stray selection update fires between mouseup
-    // and click.
     if (sel) selection = sel;
+    if (!sel) {
+      selectionSettled = false;
+      hideSelectionBar();
+    }
   }
 
-  function showComposerForSelection(): void {
-    // Always re-read from the editor so we capture the latest selection,
-    // but fall back to the last remembered one if the current state lost
-    // the selection (e.g. toolbar click blurred it).
+  function showSelectionBar(snippet: string): void {
+    selectionSnippet.textContent = snippet;
+    selectionBar.classList.remove('hidden');
+  }
+  function hideSelectionBar(): void {
+    selectionBar.classList.add('hidden');
+  }
+
+  selectionCommentBtn.addEventListener('click', () => {
+    openComposerForSelection();
+  });
+  // preventDefault on touchstart/mousedown so tapping the bar doesn't blur
+  // the editor before the click handler fires — otherwise selection collapses.
+  for (const type of ['mousedown', 'touchstart']) {
+    selectionBar.addEventListener(type, (ev) => {
+      const t = (ev.target as HTMLElement).closest('button');
+      if (t) ev.preventDefault();
+    });
+  }
+
+  editor.editor.view.dom.addEventListener('pointerdown', () => {
+    isDragging = true;
+    selectionSettled = false;
+    hideSelectionBar();
+  });
+  window.addEventListener('pointerup', () => {
+    isDragging = false;
+    // give the browser a tick to settle the selection (especially on iOS)
+    setTimeout(() => {
+      selectionSettled = true;
+      const sel = editor.getSelectionRel();
+      if (sel && !editor.editor.state.selection.empty) {
+        selection = sel;
+        showSelectionBar(sel.snippet);
+      } else {
+        hideSelectionBar();
+      }
+    }, 30);
+  });
+  editor.editor.view.dom.addEventListener('keyup', (ev) => {
+    if (ev.shiftKey || ev.key.startsWith('Arrow') || ev.key === 'Home' || ev.key === 'End') {
+      selectionSettled = true;
+      refreshSelectionState();
+      if (selection && !editor.editor.state.selection.empty) showSelectionBar(selection.snippet);
+    }
+  });
+  editor.editor.on('selectionUpdate', () => {
+    if (editor.editor.state.selection.empty) {
+      selectionSettled = false;
+      hideSelectionBar();
+    } else if (selectionSettled && !isDragging) {
+      const sel = editor.getSelectionRel();
+      if (sel) {
+        selection = sel;
+        showSelectionBar(sel.snippet);
+      }
+    }
+  });
+
+  // =========================================================================
+  // COMPOSER
+  //   Opens as a bottom sheet with snippet CONTEXT (a few chars before + the
+  //   selected text + a few chars after). When the textarea focuses, we scroll
+  //   the editor so the selection stays visible above the composer.
+  // =========================================================================
+
+  function openComposerForSelection(): void {
     const current = editor.getSelectionRel();
     const use = current ?? selection;
-    if (!use) {
+    if (!use || editor.editor.state.selection.empty) {
       showToast('Select some text first to leave a comment.');
       return;
     }
     selection = use;
+
+    // Build context: take ~40 chars before and ~40 after the selection
+    const { from, to } = editor.editor.state.selection;
+    const doc = editor.editor.state.doc;
+    const before = Math.max(0, from - 40);
+    const after = Math.min(doc.content.size, to + 40);
+    const prefix = doc.textBetween(before, from, ' ').replace(/\s+/g, ' ');
+    const selected = use.snippet;
+    const suffix = doc.textBetween(to, after, ' ').replace(/\s+/g, ' ');
+    composerContext.innerHTML = '';
+    if (before > 0) composerContext.appendChild(document.createTextNode('…' + prefix));
+    else if (prefix) composerContext.appendChild(document.createTextNode(prefix));
+    const sel = document.createElement('span');
+    sel.className = 'selected';
+    sel.textContent = selected;
+    composerContext.appendChild(sel);
+    if (after < doc.content.size)
+      composerContext.appendChild(document.createTextNode(suffix + '…'));
+    else if (suffix) composerContext.appendChild(document.createTextNode(suffix));
+
     composer.classList.remove('hidden');
-    composerSnippet.textContent = use.snippet;
+    hideSelectionBar();
     composerText.value = '';
-    setTimeout(() => composerText.focus(), 0);
+    // Focus + scroll selection into view above the composer.
+    setTimeout(() => {
+      composerText.focus();
+      ensureSelectionVisible();
+    }, 30);
   }
   function hideComposer(): void {
     composer.classList.add('hidden');
   }
+
+  function ensureSelectionVisible(): void {
+    // When the composer occupies the bottom ~200px of the viewport, we want
+    // the selection to sit comfortably above it. Compute the selection's
+    // screen rect and scroll the editor so it's roughly 35% from the top.
+    try {
+      const { from } = editor.editor.state.selection;
+      const coords = editor.editor.view.coordsAtPos(from);
+      const viewportH = window.visualViewport?.height ?? window.innerHeight;
+      const desiredTop = viewportH * 0.25;
+      const deltaY = coords.top - desiredTop;
+      const editorScroll = document.getElementById('editor');
+      if (editorScroll) editorScroll.scrollBy({ top: deltaY, behavior: 'smooth' });
+    } catch {}
+  }
+
+  // =========================================================================
+  // THREADS DRAWER
+  //   Hidden by default on mobile. Opened via the 💬 button in the top bar,
+  //   the tap-highlight handler, or automatically after posting a comment so
+  //   the user can see their new thread in context.
+  //   Tabs: Open (default) / Resolved / All.
+  // =========================================================================
+
+  function openDrawer(): void {
+    shell.classList.add('threads-open');
+    toggleThreads.setAttribute('aria-pressed', 'true');
+    document.getElementById('threads-pane')?.setAttribute('aria-hidden', 'false');
+  }
+  function closeDrawer(): void {
+    shell.classList.remove('threads-open');
+    toggleThreads.setAttribute('aria-pressed', 'false');
+    document.getElementById('threads-pane')?.setAttribute('aria-hidden', 'true');
+  }
+  function toggleDrawer(): void {
+    if (shell.classList.contains('threads-open')) closeDrawer();
+    else openDrawer();
+  }
+  toggleThreads.addEventListener('click', toggleDrawer);
+  closeThreads.addEventListener('click', closeDrawer);
+  scrim.addEventListener('click', closeDrawer);
+  // Desktop layout shows the drawer inline; open by default there
+  if (window.matchMedia('(min-width: 901px)').matches) openDrawer();
+
+  const tabButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('.threads-tabs .tab'));
+  tabButtons.forEach((b) => {
+    b.addEventListener('click', () => {
+      const tab = (b.getAttribute('data-tab') ?? 'open') as ThreadTab;
+      threadsPanel.setTab(tab);
+      for (const x of tabButtons) x.classList.toggle('active', x === b);
+    });
+  });
 
   const threadsPanel = new ThreadPanel({
     container: threadsListEl,
@@ -89,6 +249,8 @@ async function boot(): Promise<void> {
       }
       threadsPanel.setActive(id);
       refreshThreadDecorations(id);
+      // On mobile, close drawer to return to the doc after tapping
+      if (!window.matchMedia('(min-width: 901px)').matches) closeDrawer();
     },
     onReply: async (id, text) => {
       await fetch(
@@ -136,6 +298,23 @@ async function boot(): Promise<void> {
     },
   });
 
+  // Tap-on-highlight in the editor → open the associated thread in the drawer.
+  // ProseMirror handles the click itself (placing the cursor), so we attach a
+  // document-level listener that inspects the event target.
+  editorMount.addEventListener('click', (ev) => {
+    const t = (ev.target as HTMLElement).closest('.thread-range');
+    if (!t) return;
+    const threadId = t.getAttribute('data-thread-id');
+    if (!threadId) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    openDrawer();
+    threadsPanel.setActive(threadId);
+    refreshThreadDecorations(threadId);
+    const range = resolveThreadRange(threadId);
+    if (range) editor.pulseRange(range.from, range.to);
+  });
+
   function resolveThreadRange(threadId: string): { from: number; to: number } | null {
     const doc = ydoc.getMap('threads').get(threadId) as import('yjs').Map<unknown> | undefined;
     if (!doc) return null;
@@ -160,6 +339,10 @@ async function boot(): Promise<void> {
     const all = collectThreads();
     threadsPanel.setThreads(all);
     refreshThreadDecorations(activeThreadId);
+    const counts = threadsPanel.countByStatus();
+    const openCount = counts.open + counts.orphan;
+    threadsCount.textContent = String(openCount);
+    threadsCount.classList.toggle('has-count', openCount > 0);
   }
   function refreshThreadDecorations(activeId: string | null): void {
     activeThreadId = activeId;
@@ -197,7 +380,6 @@ async function boot(): Promise<void> {
             comments.push({ id: cid, author, text, ts });
         }
       }
-      // For text-range anchors, compute display status: orphan if resolveRel fails
       let displayAnchor: Thread['anchor'] = anchorRaw;
       if (anchorRaw.kind === 'text-range') {
         const r = resolveThreadRange(id);
@@ -227,54 +409,52 @@ async function boot(): Promise<void> {
   client.onReady(() => {
     const m = readDocMeta(ydoc);
     docTitleEl.textContent = m.title ?? m.docId;
-    // Order matters: migrate any legacy Y.Text content first, then seed a
-    // welcome message only if the doc is still empty.
     editor.migrateLegacyIfNeeded();
     editor.seedIfEmpty(welcomeSeed);
     redrawThreads();
   });
 
-  // Formatting toolbar
-  wireFormatBar(editor, showComposerForSelection);
+  // =========================================================================
+  // FORMATTING TOOLBAR — collapsed by default. Aa button toggles it.
+  // =========================================================================
+  toggleFormat.addEventListener('click', () => {
+    const collapsed = formatBar.classList.toggle('is-collapsed');
+    toggleFormat.setAttribute('aria-pressed', String(!collapsed));
+  });
+  wireFormatBar(editor);
 
-  // Global hotkeys
+  // =========================================================================
+  // HOTKEYS
+  // =========================================================================
   document.addEventListener('keydown', (ev) => {
     if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'm') {
       ev.preventDefault();
-      showComposerForSelection();
+      openComposerForSelection();
     }
-    if (ev.key === 'Escape' && !composer.classList.contains('hidden')) {
-      hideComposer();
+    if ((ev.metaKey || ev.ctrlKey) && ev.shiftKey && ev.key.toLowerCase() === 'f') {
+      ev.preventDefault();
+      toggleFormat.click();
+    }
+    if (ev.key === 'Escape') {
+      if (!composer.classList.contains('hidden')) hideComposer();
+      else if (shell.classList.contains('threads-open')) closeDrawer();
     }
   });
 
-  // Copy link buttons
-  function copyLink(asName: string): void {
-    const u = new URL(location.href);
-    u.searchParams.set('as', asName);
-    navigator.clipboard.writeText(u.toString()).then(
-      () => showToast(`Link for ${asName} copied`),
-      () => showToast(`Could not copy — here it is: ${u.toString()}`),
-    );
-  }
-  document.getElementById('copy-bryan')?.addEventListener('click', () => copyLink('bryan'));
-  document.getElementById('copy-agent')?.addEventListener('click', () => copyLink('agent'));
-
-  // Composer controls
-  document.getElementById('composer-cancel')?.addEventListener('click', hideComposer);
-  // Enter submits, Shift+Enter = newline (Google Docs / Slack convention).
+  // =========================================================================
+  // COMPOSER: submit / cancel, Enter-to-post, post-feedback pulse
+  // =========================================================================
+  el<HTMLButtonElement>('composer-cancel').addEventListener('click', hideComposer);
   composerText.addEventListener('keydown', (ev) => {
     if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) {
       ev.preventDefault();
-      document
-        .getElementById('composer-submit')
-        ?.dispatchEvent(new Event('click', { bubbles: true }));
+      void submitComposer();
     }
-    if (ev.key === 'Escape') {
-      hideComposer();
-    }
+    if (ev.key === 'Escape') hideComposer();
   });
-  document.getElementById('composer-submit')?.addEventListener('click', async () => {
+  el<HTMLButtonElement>('composer-submit').addEventListener('click', () => void submitComposer());
+
+  async function submitComposer(): Promise<void> {
     const text = composerText.value.trim();
     if (!text) return;
     if (!selection) {
@@ -287,97 +467,34 @@ async function boot(): Promise<void> {
       endRel: Array.from(selection.end),
       snippet: { text: selection.snippet },
     };
-    const res = await fetch(`/api/docs/${encodeURIComponent(docId)}/threads`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ author: user, text, anchor }),
-    });
-    if (res.ok) {
-      hideComposer();
-      showToast('Comment posted');
-    } else {
-      showToast('Failed to post comment');
-    }
-  });
-
-  // Floating Comment button — appears AFTER the user has finished
-  // selecting (pointerup / keyup), never during drag. We track a
-  // "selectionSettled" flag so mid-drag selectionchange events don't
-  // cause it to pop up and steal the mouse.
-  const floatBtn = document.createElement('button');
-  floatBtn.type = 'button';
-  floatBtn.className = 'floating-comment';
-  floatBtn.innerHTML = '<span class="icon">💬</span> Comment';
-  floatBtn.style.display = 'none';
-  document.body.appendChild(floatBtn);
-  floatBtn.addEventListener('mousedown', (ev) => ev.preventDefault());
-  floatBtn.addEventListener('click', () => showComposerForSelection());
-
-  let isDragging = false;
-  let selectionSettled = false;
-
-  function positionFloatingButton(): void {
-    if (!selectionSettled || isDragging) {
-      floatBtn.style.display = 'none';
-      return;
-    }
-    const sel = editor.getSelectionRel();
-    if (!sel) {
-      floatBtn.style.display = 'none';
-      return;
-    }
-    const pmSel = editor.editor.state.selection;
+    const submitBtn = el<HTMLButtonElement>('composer-submit');
+    submitBtn.disabled = true;
     try {
-      const end = editor.editor.view.coordsAtPos(pmSel.to);
-      const btnHeight = 36;
-      const gap = 14; // keep clear of selection handles / cursor
-      floatBtn.style.display = 'flex';
-      // Place the pill below the selection's end-line baseline so it never
-      // overlaps the user's drag target. Fallback above if near viewport bottom.
-      const viewportH = window.innerHeight;
-      const spaceBelow = viewportH - end.bottom;
-      const top = spaceBelow > btnHeight + gap + 20 ? end.bottom + gap : end.top - btnHeight - gap;
-      floatBtn.style.left = `${Math.max(12, Math.min(end.right + 10, window.innerWidth - 150))}px`;
-      floatBtn.style.top = `${Math.max(8, top)}px`;
+      const res = await fetch(`/api/docs/${encodeURIComponent(docId)}/threads`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ author: user, text, anchor }),
+      });
+      if (!res.ok) throw new Error('post failed');
+      const body = (await res.json()) as { thread: { id: string } };
+      const newId = body.thread.id;
+      hideComposer();
+      showToast('✓ Comment posted');
+      // Post-feedback: wait for the Yjs update to land the highlight, then
+      // scroll it into view + pulse so the user can see where it landed.
+      setTimeout(() => {
+        const r = resolveThreadRange(newId);
+        if (r) {
+          editor.scrollToPos(r.from);
+          editor.pulseRange(r.from, r.to);
+        }
+      }, 150);
     } catch {
-      floatBtn.style.display = 'none';
+      showToast('Failed to post comment');
+    } finally {
+      submitBtn.disabled = false;
     }
   }
-  function onDragStart() {
-    isDragging = true;
-    selectionSettled = false;
-    floatBtn.style.display = 'none';
-  }
-  function onDragEnd() {
-    isDragging = false;
-    setTimeout(() => {
-      selectionSettled = true;
-      refreshComposerState();
-      positionFloatingButton();
-    }, 0);
-  }
-  editor.editor.view.dom.addEventListener('pointerdown', onDragStart);
-  window.addEventListener('pointerup', onDragEnd);
-  // Keyboard selection (shift+arrows etc.) — settle on keyup
-  editor.editor.view.dom.addEventListener('keyup', (ev) => {
-    if (ev.shiftKey || ev.key.startsWith('Arrow') || ev.key === 'Home' || ev.key === 'End') {
-      selectionSettled = true;
-      refreshComposerState();
-      positionFloatingButton();
-    }
-  });
-  // When the selection changes but drag is ongoing, just keep tracking —
-  // we don't reposition. When settled, selectionchange can adjust the pill.
-  document.addEventListener('selectionchange', () => {
-    if (!isDragging && selectionSettled) positionFloatingButton();
-  });
-  // If selection collapses to a caret (click elsewhere), reset settled flag
-  editor.editor.on('selectionUpdate', () => {
-    if (editor.editor.state.selection.empty) {
-      selectionSettled = false;
-      floatBtn.style.display = 'none';
-    }
-  });
 
   addEventListener('beforeunload', () => {
     client.close();
@@ -385,7 +502,7 @@ async function boot(): Promise<void> {
   });
 }
 
-function wireFormatBar(editor: EditorHandle, onComment: () => void): void {
+function wireFormatBar(editor: EditorHandle): void {
   const bar = document.getElementById('format-bar');
   if (!bar) return;
   const chain = () => editor.editor.chain().focus();
@@ -401,9 +518,6 @@ function wireFormatBar(editor: EditorHandle, onComment: () => void): void {
     code: () => chain().toggleCode().run(),
     codeBlock: () => chain().toggleCodeBlock().run(),
     hr: () => chain().setHorizontalRule().run(),
-    undo: () => chain().undo().run(),
-    redo: () => chain().redo().run(),
-    comment: onComment,
     link: () => {
       const existing = editor.editor.getAttributes('link').href as string | undefined;
       const href = prompt('Link URL', existing ?? 'https://');
@@ -412,9 +526,6 @@ function wireFormatBar(editor: EditorHandle, onComment: () => void): void {
       else chain().setLink({ href }).run();
     },
   };
-  // preventDefault on mousedown so clicking a toolbar button doesn't
-  // blur the editor and collapse the selection. This is what made the
-  // Comment button think there was no selection on click.
   bar.addEventListener('mousedown', (ev) => {
     const t = (ev.target as HTMLElement).closest('button');
     if (t) ev.preventDefault();
@@ -426,7 +537,6 @@ function wireFormatBar(editor: EditorHandle, onComment: () => void): void {
     if (cmd && handlers[cmd]) handlers[cmd]();
   });
 
-  // Reflect active state in the toolbar
   const refresh = () => {
     for (const btn of Array.from(bar.querySelectorAll<HTMLButtonElement>('button'))) {
       const cmd = btn.getAttribute('data-cmd');
@@ -486,7 +596,13 @@ function showToast(msg: string): void {
   t.textContent = msg;
   t.classList.remove('hidden');
   if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.add('hidden'), 2200);
+  toastTimer = setTimeout(() => t.classList.add('hidden'), 2400);
+}
+
+function el<T extends HTMLElement>(id: string): T {
+  const e = document.getElementById(id);
+  if (!e) throw new Error(`missing element #${id}`);
+  return e as T;
 }
 
 void boot();

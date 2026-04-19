@@ -1,5 +1,7 @@
 import type { Thread, User } from '@feedback/core';
 
+export type ThreadTab = 'open' | 'resolved' | 'all';
+
 export interface ThreadPanelOpts {
   container: HTMLElement;
   currentUser: User;
@@ -14,6 +16,7 @@ export class ThreadPanel {
   private activeId: string | null = null;
   private threads: Thread[] = [];
   private statusMap = new Map<string, 'open' | 'resolved' | 'orphan'>();
+  private tab: ThreadTab = 'open';
   /** Hash of what we last rendered. Skip re-render when nothing display-relevant changed. */
   private lastRenderKey = '';
 
@@ -33,11 +36,32 @@ export class ThreadPanel {
   setActive(id: string | null): void {
     if (this.activeId === id) return;
     this.activeId = id;
+    // Force re-render regardless of fingerprint match
+    this.lastRenderKey = '';
+    this.render();
+  }
+
+  setTab(tab: ThreadTab): void {
+    if (this.tab === tab) return;
+    this.tab = tab;
+    this.lastRenderKey = '';
     this.render();
   }
 
   getStatus(threadId: string): 'open' | 'resolved' | 'orphan' | undefined {
     return this.statusMap.get(threadId);
+  }
+
+  countByStatus(): { open: number; resolved: number; orphan: number } {
+    let open = 0;
+    let resolved = 0;
+    let orphan = 0;
+    for (const s of this.statusMap.values()) {
+      if (s === 'open') open++;
+      else if (s === 'resolved') resolved++;
+      else if (s === 'orphan') orphan++;
+    }
+    return { open, resolved, orphan };
   }
 
   /** Cheap fingerprint used to short-circuit renders when nothing user-visible changed. */
@@ -46,7 +70,19 @@ export class ThreadPanel {
     for (const t of this.threads) {
       parts.push(`${t.id}:${this.statusMap.get(t.id)}:${t.commentCount}:${t.lastActivity}`);
     }
-    return `${this.activeId ?? ''}|${parts.join('|')}`;
+    return `${this.tab}|${this.activeId ?? ''}|${parts.join('|')}`;
+  }
+
+  private filtered(): Thread[] {
+    if (this.tab === 'open') {
+      return this.threads.filter(
+        (t) => this.statusMap.get(t.id) === 'open' || this.statusMap.get(t.id) === 'orphan',
+      );
+    }
+    if (this.tab === 'resolved') {
+      return this.threads.filter((t) => this.statusMap.get(t.id) === 'resolved');
+    }
+    return this.threads;
   }
 
   private render(): void {
@@ -63,31 +99,40 @@ export class ThreadPanel {
     }
 
     c.innerHTML = '';
-
-    const open = this.threads.filter((t) => this.statusMap.get(t.id) === 'open');
-    const resolved = this.threads.filter((t) => this.statusMap.get(t.id) === 'resolved');
-    const orphan = this.threads.filter((t) => this.statusMap.get(t.id) === 'orphan');
-
-    if (open.length === 0 && resolved.length === 0 && orphan.length === 0) {
+    const visible = this.filtered();
+    if (visible.length === 0) {
       const empty = document.createElement('div');
-      empty.className = 'section-heading';
-      empty.textContent = 'No threads yet. Select text → leave a comment.';
+      empty.className = 'threads-empty';
+      empty.textContent =
+        this.tab === 'open'
+          ? 'No open threads. Select text in the doc to leave a comment.'
+          : this.tab === 'resolved'
+            ? 'Nothing resolved yet.'
+            : 'No threads on this doc yet.';
       c.appendChild(empty);
       this.lastRenderKey = key;
       return;
     }
 
-    if (open.length > 0) {
-      c.appendChild(this.heading(`Open (${open.length})`));
-      for (const t of open) c.appendChild(this.renderThread(t, pendingReplies.get(t.id)));
-    }
-    if (orphan.length > 0) {
-      c.appendChild(this.heading(`Orphaned (${orphan.length})`));
-      for (const t of orphan) c.appendChild(this.renderThread(t, pendingReplies.get(t.id)));
-    }
-    if (resolved.length > 0) {
-      c.appendChild(this.heading(`Resolved (${resolved.length})`));
-      for (const t of resolved) c.appendChild(this.renderThread(t, pendingReplies.get(t.id)));
+    // For the Open tab, split Open vs Orphaned as two sub-sections so the
+    // user can see broken anchors distinctly. Otherwise flat list ordered
+    // by most-recent activity.
+    if (this.tab === 'open') {
+      const open = visible.filter((t) => this.statusMap.get(t.id) === 'open');
+      const orphan = visible.filter((t) => this.statusMap.get(t.id) === 'orphan');
+      if (open.length > 0) {
+        c.appendChild(this.heading(`Open (${open.length})`));
+        for (const t of sortByActivity(open))
+          c.appendChild(this.renderThread(t, pendingReplies.get(t.id)));
+      }
+      if (orphan.length > 0) {
+        c.appendChild(this.heading(`Orphaned (${orphan.length}) — re-anchor needed`));
+        for (const t of sortByActivity(orphan))
+          c.appendChild(this.renderThread(t, pendingReplies.get(t.id)));
+      }
+    } else {
+      for (const t of sortByActivity(visible))
+        c.appendChild(this.renderThread(t, pendingReplies.get(t.id)));
     }
     this.lastRenderKey = key;
   }
@@ -108,15 +153,11 @@ export class ThreadPanel {
     if (this.activeId === t.id) el.classList.add('active');
     el.setAttribute('data-thread-id', t.id);
 
-    // Anchor snippet ("what you commented on") — thread's quote line
     const snippet = document.createElement('div');
     snippet.className = 'snippet';
     snippet.textContent = snippetText(t);
     el.appendChild(snippet);
 
-    // Comments list. The first comment's author row doubles as the thread
-    // header: it owns the status dot so we don't repeat author/time
-    // twice (Google Docs / Notion convention).
     const comments = document.createElement('div');
     comments.className = 'comments';
     t.comments.forEach((c, idx) => {
@@ -154,7 +195,7 @@ export class ThreadPanel {
     });
     el.appendChild(comments);
 
-    // Reply area (shown when active)
+    // Reply area (shown only when this thread is active)
     const reply = document.createElement('div');
     reply.className = 'thread-reply';
     const ta = document.createElement('textarea');
@@ -214,6 +255,10 @@ function snippetText(t: Thread): string {
   return t.anchor.snippet.text;
 }
 
+function sortByActivity(ts: Thread[]): Thread[] {
+  return [...ts].sort((a, b) => b.lastActivity - a.lastActivity);
+}
+
 function formatTime(ts: number): string {
   if (!ts) return '';
   const d = new Date(ts);
@@ -223,7 +268,5 @@ function formatTime(ts: number): string {
   if (diff < 3600_000) return `${Math.floor(diff / 60_000)}m`;
   if (diff < 86400_000) return `${Math.floor(diff / 3600_000)}h`;
   if (diff < 7 * 86400_000) return `${Math.floor(diff / 86400_000)}d`;
-  // Older: short month+day like "Apr 18" instead of a full datetime, which
-  // is too noisy to squeeze next to an author name on mobile.
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
