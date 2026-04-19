@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import {
+  createAgentAnchor,
   findAndReplace,
   getProseFragment,
   insertAfterRange,
+  readAgentAnchor,
   rewriteRange,
   walkProse,
 } from '../src/prose.ts';
@@ -175,5 +177,44 @@ describe('insertAfterRange', () => {
     const res = insertAfterRange(doc, { endRel: a.endRel, text: ' there,' });
     expect(res.ok).toBe(true);
     expect(walkProse(getProseFragment(doc)).plainText).toBe('Hello there, world.');
+  });
+});
+
+describe('createAgentAnchor', () => {
+  it('mints an anchor for a unique match and persists it for retrieval', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'Foo bar baz.' }]);
+    const res = createAgentAnchor(doc, { find: 'bar' });
+    expect(res.ok).toBe(true);
+    expect(res.anchorId).toBeTruthy();
+    const read = readAgentAnchor(doc, res.anchorId!);
+    expect(read).not.toBeNull();
+    expect(read?.startRel).toBeInstanceOf(Uint8Array);
+  });
+
+  it('rebases across later user insertion, surviving shifted offsets', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'Foo bar baz.' }]);
+    const { anchorId } = createAgentAnchor(doc, { find: 'bar' });
+    expect(anchorId).toBeTruthy();
+    // Simulate a user inserting text BEFORE the anchor.
+    doc.transact(() => {
+      const first = getProseFragment(doc).toArray()[0] as Y.XmlElement;
+      const text = first.toArray()[0] as Y.XmlText;
+      text.insert(0, 'PRE-');
+    });
+    // Now rewrite via the anchor — should still hit the correct "bar".
+    const anchor = readAgentAnchor(doc, anchorId!)!;
+    rewriteRange(doc, { ...anchor, replacement: 'BAR' });
+    expect(walkProse(getProseFragment(doc)).plainText).toBe('PRE-Foo BAR baz.');
+  });
+
+  it('returns ambiguous with candidates when multiple matches exist', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'cat cat cat' }]);
+    const res = createAgentAnchor(doc, { find: 'cat' });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('ambiguous');
+    expect(res.candidates).toHaveLength(3);
   });
 });

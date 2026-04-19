@@ -183,6 +183,38 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!doc) return j(404, { error: 'doc not found' });
           return j(200, doc);
         }
+        if (rest === 'agent_anchors' && req.method === 'POST') {
+          const body = await safeJson(req);
+          const find = String(body?.find ?? '');
+          if (find.length === 0) return j(400, { error: 'find is required' });
+          const res = rooms.createAgentAnchor(docId, {
+            find,
+            contextBefore: body?.contextBefore ? String(body.contextBefore) : undefined,
+            contextAfter: body?.contextAfter ? String(body.contextAfter) : undefined,
+            occurrence: typeof body?.occurrence === 'number' ? body.occurrence : undefined,
+            label: body?.label ? String(body.label) : undefined,
+          });
+          return res.ok ? j(200, res) : j(409, res);
+        }
+        const anchorMatch = rest.match(/^agent_anchors\/([^/]+)(\/.*)?$/);
+        if (anchorMatch) {
+          const anchorId = decodeURIComponent(anchorMatch[1] ?? '');
+          const anchorRest = anchorMatch[2] ?? '';
+          if (anchorRest === '/edit' && req.method === 'POST') {
+            const body = await safeJson(req);
+            const kind = body?.kind as 'replace' | 'insert_after' | undefined;
+            const text = String(body?.text ?? '');
+            if (kind !== 'replace' && kind !== 'insert_after') {
+              return j(400, { error: 'kind must be replace or insert_after' });
+            }
+            const res = rooms.editAtAgentAnchor(docId, anchorId, { kind, text });
+            return res.ok ? j(200, res) : j(409, res);
+          }
+          if (anchorRest === '' && req.method === 'DELETE') {
+            const removed = rooms.deleteAgentAnchor(docId, anchorId);
+            return removed ? j(200, { ok: true }) : j(404, { error: 'anchor not found' });
+          }
+        }
         if (rest === 'find_and_replace' && req.method === 'POST') {
           const body = await safeJson(req);
           const find = String(body?.find ?? '');

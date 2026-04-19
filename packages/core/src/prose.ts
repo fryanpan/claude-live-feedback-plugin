@@ -324,3 +324,104 @@ export function insertAfterRange(
   }, opts.transactionOrigin ?? 'agent');
   return { ok: true };
 }
+
+/**
+ * Ephemeral anchors the AGENT mints for its own bookkeeping — same
+ * Y.RelativePosition tech as thread anchors, but stored separately so
+ * they never show up in the user's threads list. Useful for "anchor
+ * three spots, then rewrite each" patterns where the agent needs to
+ * survive its own intermediate edits shifting later positions.
+ *
+ * Stored in a Y.Map under the `agent_anchors` key. Each entry:
+ *   { startRel: Uint8Array, endRel: Uint8Array, label?: string, createdAt: number }
+ */
+export const AGENT_ANCHORS_KEY = 'agent_anchors';
+
+export function getAgentAnchorsMap(doc: Y.Doc): Y.Map<Y.Map<unknown>> {
+  return doc.getMap(AGENT_ANCHORS_KEY) as Y.Map<Y.Map<unknown>>;
+}
+
+export interface CreateAnchorResult {
+  ok: boolean;
+  anchorId?: string;
+  error?: 'no-match' | 'ambiguous' | 'cross-node';
+  candidates?: Array<{ docOffset: number; preview: string }>;
+}
+
+/**
+ * Find `text` in the doc (optionally disambiguated by context) and
+ * persist its start/end as a named anchor. Returns a short id the
+ * agent can pass to editAtAnchor later.
+ */
+export function createAgentAnchor(
+  doc: Y.Doc,
+  opts: {
+    find: string;
+    contextBefore?: string;
+    contextAfter?: string;
+    occurrence?: number;
+    label?: string;
+  },
+): CreateAnchorResult {
+  const fragment = getProseFragment(doc);
+  const { matches, crossNode } = locateMatches(fragment, opts);
+  if (matches.length === 0) {
+    if (crossNode > 0) return { ok: false, error: 'cross-node' };
+    return { ok: false, error: 'no-match' };
+  }
+  let chosen: LocatedMatch;
+  if (opts.occurrence != null) {
+    if (opts.occurrence < 1 || opts.occurrence > matches.length) {
+      return { ok: false, error: 'no-match' };
+    }
+    chosen = matches[opts.occurrence - 1]!;
+  } else if (matches.length > 1) {
+    const { plainText } = walkProse(fragment);
+    return {
+      ok: false,
+      error: 'ambiguous',
+      candidates: matches.map((m) => ({
+        docOffset: m.docOffset,
+        preview: preview(plainText, m.docOffset, m.length),
+      })),
+    };
+  } else {
+    chosen = matches[0]!;
+  }
+
+  const startRel = Y.createRelativePositionFromTypeIndex(chosen.segment.node, chosen.offsetInNode);
+  const endRel = Y.createRelativePositionFromTypeIndex(
+    chosen.segment.node,
+    chosen.offsetInNode + chosen.length,
+  );
+  const anchorId = `a-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const entry = new Y.Map<unknown>();
+  doc.transact(() => {
+    entry.set('startRel', Y.encodeRelativePosition(startRel));
+    entry.set('endRel', Y.encodeRelativePosition(endRel));
+    entry.set('createdAt', Date.now());
+    if (opts.label) entry.set('label', opts.label);
+    getAgentAnchorsMap(doc).set(anchorId, entry);
+  }, 'agent');
+  return { ok: true, anchorId };
+}
+
+export function readAgentAnchor(
+  doc: Y.Doc,
+  anchorId: string,
+): { startRel: Uint8Array; endRel: Uint8Array; label?: string } | null {
+  const entry = getAgentAnchorsMap(doc).get(anchorId);
+  if (!entry) return null;
+  const startRel = entry.get('startRel') as Uint8Array | undefined;
+  const endRel = entry.get('endRel') as Uint8Array | undefined;
+  if (!startRel || !endRel) return null;
+  const label = entry.get('label') as string | undefined;
+  return { startRel, endRel, ...(label ? { label } : {}) };
+}
+
+export function deleteAgentAnchor(doc: Y.Doc, anchorId: string): boolean {
+  const map = getAgentAnchorsMap(doc);
+  if (!map.has(anchorId)) return false;
+  doc.transact(() => map.delete(anchorId), 'agent');
+  return true;
+}

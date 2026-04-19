@@ -167,6 +167,53 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'create_anchor',
+      description:
+        'Mint a private agent-side anchor at a specific text location and get back an anchor id. The anchor survives concurrent user edits just like a thread anchor, so you can pin 3 spots now and rewrite each later without worrying about offsets shifting. Uses the same find/context/occurrence disambiguation as find_and_replace.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          docId: { type: 'string' },
+          find: { type: 'string' },
+          contextBefore: { type: 'string' },
+          contextAfter: { type: 'string' },
+          occurrence: { type: 'number' },
+          label: { type: 'string' },
+        },
+        required: ['docId', 'find'],
+      },
+    },
+    {
+      name: 'edit_at_anchor',
+      description:
+        "Apply an edit at a previously-created agent anchor. `op.kind` is 'replace' (rewrite the anchored range) or 'insert_after' (insert text right after the anchor's end). Runs as a Yjs transaction; merges cleanly with concurrent user edits.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          docId: { type: 'string' },
+          anchorId: { type: 'string' },
+          op: {
+            type: 'object',
+            properties: {
+              kind: { type: 'string', enum: ['replace', 'insert_after'] },
+              text: { type: 'string' },
+            },
+            required: ['kind', 'text'],
+          },
+        },
+        required: ['docId', 'anchorId', 'op'],
+      },
+    },
+    {
+      name: 'delete_anchor',
+      description: 'Remove a previously-created agent anchor. Useful for cleanup between tasks.',
+      inputSchema: {
+        type: 'object',
+        properties: { docId: { type: 'string' }, anchorId: { type: 'string' } },
+        required: ['docId', 'anchorId'],
+      },
+    },
+    {
       name: 'observe_url',
       description:
         'Return the SSE URL that streams live thread events for a doc. Useful for long-running agents.',
@@ -272,6 +319,45 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           'POST',
           `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/insert_after`,
           { text },
+        );
+        return ok(res);
+      }
+      case 'create_anchor': {
+        const { docId, find, contextBefore, contextAfter, occurrence, label } = a as {
+          docId: string;
+          find: string;
+          contextBefore?: string;
+          contextAfter?: string;
+          occurrence?: number;
+          label?: string;
+        };
+        const res = await http('POST', `/api/docs/${encodeURIComponent(docId)}/agent_anchors`, {
+          find,
+          ...(contextBefore !== undefined ? { contextBefore } : {}),
+          ...(contextAfter !== undefined ? { contextAfter } : {}),
+          ...(occurrence !== undefined ? { occurrence } : {}),
+          ...(label !== undefined ? { label } : {}),
+        });
+        return ok(res);
+      }
+      case 'edit_at_anchor': {
+        const { docId, anchorId, op } = a as {
+          docId: string;
+          anchorId: string;
+          op: { kind: 'replace' | 'insert_after'; text: string };
+        };
+        const res = await http(
+          'POST',
+          `/api/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}/edit`,
+          op,
+        );
+        return ok(res);
+      }
+      case 'delete_anchor': {
+        const { docId, anchorId } = a as { docId: string; anchorId: string };
+        const res = await http(
+          'DELETE',
+          `/api/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}`,
         );
         return ok(res);
       }
