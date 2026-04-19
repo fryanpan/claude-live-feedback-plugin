@@ -86,10 +86,22 @@ function lanHostnames(): string[] {
 }
 
 const port = await pickFreePort(requestedPort);
+// `bun run dev` supervises two processes so code is never stale:
+//   1. The HTTP/WS server via `bun --watch` — restarts on any imported
+//      TypeScript change under packages/**.
+//   2. The markdown-app bundler in --watch mode — rebuilds dist on any
+//      src/**/*.{ts,css} or index.html change. The server serves
+//      packages/markdown-app/dist straight from disk, so a rebuild is
+//      visible after a browser reload.
 const server = spawn(
   'bun',
-  ['run', join(repoRoot, 'packages', 'server', 'src', 'bin.ts'), '--port', String(port)],
-  { stdio: 'inherit' },
+  ['--watch', 'run', join(repoRoot, 'packages', 'server', 'src', 'bin.ts'), '--port', String(port)],
+  { stdio: 'inherit', env: { ...process.env, NODE_ENV: 'dev' } },
+);
+const mdApp = spawn(
+  'bun',
+  ['run', join(repoRoot, 'packages', 'markdown-app', 'scripts', 'build.ts'), '--watch'],
+  { stdio: 'inherit', env: { ...process.env, NODE_ENV: 'dev' } },
 );
 
 const ts = tailscaleHost();
@@ -113,10 +125,13 @@ let cleaningUp = false;
 function cleanup() {
   if (cleaningUp) return;
   cleaningUp = true;
-  try {
-    server.kill('SIGTERM');
-  } catch {}
+  for (const p of [server, mdApp]) {
+    try {
+      p.kill('SIGTERM');
+    } catch {}
+  }
   setTimeout(() => process.exit(0), 300);
 }
 server.on('exit', cleanup);
+mdApp.on('exit', cleanup);
 for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, cleanup);
