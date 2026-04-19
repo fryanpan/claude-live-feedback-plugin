@@ -273,14 +273,22 @@ async function boot(): Promise<void> {
       return;
     }
     selection = use;
+    // Show a muted quote of the anchored text so the user doesn't lose
+    // sight of what they're commenting on once iOS lifts the keyboard
+    // and potentially shifts the editor out of the visible viewport.
+    const quote = el<HTMLElement>('composer-quote');
+    quote.textContent = use.snippet;
     composer.classList.remove('hidden');
     composerScrim.classList.remove('hidden');
     document.body.classList.add('composer-open');
     hidePill();
     composerText.value = '';
+    // preventScroll: true stops iOS's auto-scroll-to-focus from yanking
+    // the whole page up when the textarea takes focus. The composer is
+    // already pinned above the keyboard via --kb-bottom, so no scroll
+    // is needed.
     setTimeout(() => {
-      composerText.focus();
-      ensureSelectionVisible();
+      composerText.focus({ preventScroll: true });
     }, 30);
   }
   function hideComposer(): void {
@@ -289,21 +297,6 @@ async function boot(): Promise<void> {
     document.body.classList.remove('composer-open');
   }
   composerScrim.addEventListener('click', hideComposer);
-
-  function ensureSelectionVisible(): void {
-    // When the composer occupies the bottom ~200px of the viewport, we want
-    // the selection to sit comfortably above it. Compute the selection's
-    // screen rect and scroll the editor so it's roughly 35% from the top.
-    try {
-      const { from } = editor.editor.state.selection;
-      const coords = editor.editor.view.coordsAtPos(from);
-      const viewportH = window.visualViewport?.height ?? window.innerHeight;
-      const desiredTop = viewportH * 0.25;
-      const deltaY = coords.top - desiredTop;
-      const editorScroll = document.getElementById('editor');
-      if (editorScroll) editorScroll.scrollBy({ top: deltaY, behavior: 'smooth' });
-    } catch {}
-  }
 
   // =========================================================================
   // THREADS DRAWER

@@ -693,6 +693,27 @@ button {
 #composer:not(.hidden) {
   transform: translateY(0);
 }
+.composer-quote {
+  padding: 10px 14px 0 14px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--fg-muted);
+  font-style: italic;
+  border-left: 3px solid rgba(255, 213, 79, 0.9);
+  margin: 10px 12px 0 12px;
+  max-height: 2.7em;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  background: rgba(255, 213, 79, 0.1);
+  border-radius: 2px 6px 6px 2px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+.composer-quote:empty {
+  display: none;
+}
 .composer-inner {
   padding: 8px 10px 8px 12px;
   display: flex;
