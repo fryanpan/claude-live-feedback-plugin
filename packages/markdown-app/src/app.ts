@@ -106,6 +106,10 @@ async function boot(): Promise<void> {
   /** What the pill represents if clicked: a range selection, or expand
    *  to the paragraph containing the caret. */
   let pillMode: 'range' | 'caret' = 'range';
+  /** Cached paragraph range for caret mode — captured when the pill is
+   *  shown so the click handler doesn't depend on the editor still having
+   *  the same selection (iOS blurs the editor when the pill is tapped). */
+  let caretParaRange: { from: number; to: number } | null = null;
 
   function refreshSelectionState(): void {
     const sel = editor.getSelectionRel();
@@ -133,6 +137,7 @@ async function boot(): Promise<void> {
 
       if (!empty) {
         pillMode = 'range';
+        caretParaRange = null;
         commentPill.classList.remove('caret');
         // End-of-selection coords (bottom-right of last line)
         const endCoords = view.coordsAtPos(to);
@@ -150,18 +155,23 @@ async function boot(): Promise<void> {
         commentPill.style.top = `${top}px`;
         commentPill.classList.remove('hidden');
       } else if (selectionSettled) {
-        // Caret mode — anchor to the right margin of the current line
+        // Caret mode — float the pill RIGHT next to the caret so the user
+        // sees it as attached to the spot they tapped. Cache the
+        // paragraph's prosemirror range so the click handler can commit
+        // even if iOS blurred the editor selection in the meantime.
         pillMode = 'caret';
         commentPill.classList.add('caret');
         const caret = view.coordsAtPos(from);
-        const editorRect = view.dom.getBoundingClientRect();
-        // Place to the right of the paragraph content edge
-        const right = Math.min(editorRect.right - 4, viewportW - pillW - 8);
-        const left = Math.max(8, right - pillW);
-        const top = Math.min(caret.top - 4, availableBottom);
-        commentPill.style.left = `${left}px`;
+        let left = caret.right + gap;
+        let top = Math.max(8, caret.top - 2);
+        // Clamp right edge
+        if (left + pillW > viewportW - 8) left = viewportW - pillW - 8;
+        top = Math.min(top, availableBottom);
+        commentPill.style.left = `${Math.max(8, left)}px`;
         commentPill.style.top = `${Math.max(8, top)}px`;
         commentPill.classList.remove('hidden');
+        const $pos = state.doc.resolve(from);
+        caretParaRange = { from: $pos.start($pos.depth), to: $pos.end($pos.depth) };
       } else {
         hidePill();
       }
@@ -172,27 +182,30 @@ async function boot(): Promise<void> {
 
   function hidePill(): void {
     commentPill.classList.add('hidden');
+    caretParaRange = null;
   }
 
-  // Tap/mouse/pointer handling — preventDefault on pointerdown so the pill
-  // doesn't blur the editor before its click fires.
-  for (const type of ['mousedown', 'touchstart', 'pointerdown']) {
-    commentPill.addEventListener(type, (ev) => ev.preventDefault());
-  }
+  // Prevent the pill from stealing focus on DESKTOP (mousedown causes blur
+  // before click). On iOS, preventDefault on touchstart/pointerdown
+  // cancels the synthetic click entirely — so only hook mousedown.
+  commentPill.addEventListener('mousedown', (ev) => ev.preventDefault());
   commentPill.addEventListener('click', () => {
     if (pillMode === 'caret') {
-      // Expand the selection to the current paragraph first, then open composer
-      const { from } = editor.editor.state.selection;
-      const $pos = editor.editor.state.doc.resolve(from);
-      // Find the parent textblock's range
-      const start = $pos.start($pos.depth);
-      const end = $pos.end($pos.depth);
-      editor.editor.commands.setTextSelection({ from: start, to: end });
-      setTimeout(() => {
-        const sel = editor.getSelectionRel();
-        if (sel) selection = sel;
-        openComposerForSelection();
-      }, 0);
+      // Use the cached paragraph range — the editor may have lost its
+      // selection when the pill was tapped (iOS blur), but we stashed
+      // the range when the pill appeared.
+      if (!caretParaRange) {
+        showToast('Tap again to place the caret, then the pill.');
+        return;
+      }
+      const { from, to } = caretParaRange;
+      if (from >= to) return;
+      editor.editor.commands.focus();
+      editor.editor.commands.setTextSelection({ from, to });
+      // setTextSelection is synchronous; read the rel positions now.
+      const sel = editor.getSelectionRel();
+      if (sel) selection = sel;
+      openComposerForSelection();
     } else {
       openComposerForSelection();
     }
