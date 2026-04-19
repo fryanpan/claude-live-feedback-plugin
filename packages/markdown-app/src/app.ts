@@ -137,6 +137,12 @@ async function boot(): Promise<void> {
       hidePill();
       return;
     }
+    // No focus = no active cursor = no pill. The pill only represents a
+    // commentable spot while the user is actively pointing at one.
+    if (!editor.editor.isFocused) {
+      hidePill();
+      return;
+    }
     const state = editor.editor.state;
     const view = editor.editor.view;
     const { from, to, empty } = state.selection;
@@ -279,6 +285,25 @@ async function boot(): Promise<void> {
   // pill auto-clears because a selection can't exist while typing.
   editor.editor.on('update', () => {
     if (pillMode === 'caret') hidePill();
+  });
+  // Editor loses focus (user tapped outside, keyboard dismissed, etc.)
+  // → no active cursor → no pill. Same for the underlying DOM element,
+  // since iOS can blur the input without firing Tiptap's blur event
+  // when the pill is tapped.
+  editor.editor.on('blur', () => {
+    selectionSettled = false;
+    hidePill();
+  });
+  editor.editor.view.dom.addEventListener('focusout', (ev) => {
+    // Ignore transient focus loss that immediately returns to the editor
+    // (e.g., toolbar button clicks that refocus).
+    setTimeout(() => {
+      if (!editor.editor.isFocused) {
+        selectionSettled = false;
+        hidePill();
+      }
+    }, 0);
+    void ev;
   });
   // Keep pill in sync if the keyboard appears/disappears (visualViewport
   // resize changes --kb-bottom, which changes our clamp max).
