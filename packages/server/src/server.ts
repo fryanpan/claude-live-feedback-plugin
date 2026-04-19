@@ -371,38 +371,28 @@ function renderDeviceFrame(presetName: string, url: URL): string {
   innerParams.delete('mobile');
   const innerQs = innerParams.toString();
   const innerUrl = `${url.pathname}${innerQs ? `?${innerQs}` : ''}`;
+  const asParam = url.searchParams.get('as') ?? 'bryan';
   return `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8" />
 <title>${escape(preset.label)} · ${escape(url.pathname)}</title>
 <style>
   html, body { margin: 0; height: 100%; background: #1e2228; font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; color: #eee; }
-  body { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; box-sizing: border-box; overflow: auto; }
-  .bar { position: fixed; top: 10px; left: 10px; right: 10px; display: flex; gap: 12px; font-size: 12px; color: #cfd3d9; z-index: 2; align-items: center; }
-  .bar .label { background: rgba(0,0,0,0.5); padding: 4px 10px; border-radius: 99px; }
-  .bar a { color: #8fbfff; text-decoration: none; background: rgba(0,0,0,0.5); padding: 4px 10px; border-radius: 99px; }
+  body { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 8px; box-sizing: border-box; overflow: auto; }
+  .bar { display: flex; flex-wrap: wrap; gap: 6px; font-size: 11px; color: #cfd3d9; }
+  .bar .label { background: rgba(0,0,0,0.5); padding: 3px 9px; border-radius: 99px; }
+  .bar a { color: #8fbfff; text-decoration: none; background: rgba(0,0,0,0.5); padding: 3px 9px; border-radius: 99px; }
   .bar a:hover { background: rgba(0,0,0,0.75); }
-  .device-wrap { display: flex; align-items: center; justify-content: center; }
+  .bar a.current { background: #8fbfff; color: #1e2228; }
   .device {
     width: ${preset.w}px;
     height: ${preset.h}px;
-    background: #000;
-    border-radius: 48px;
-    box-shadow: 0 30px 80px rgba(0,0,0,0.55), 0 0 0 12px #1a1d22, 0 0 0 13px #2d3138;
-    position: relative;
+    background: #fff;
+    border: 1px solid #3a3e45;
+    border-radius: 18px;
+    box-shadow: 0 14px 40px rgba(0,0,0,0.45);
     overflow: hidden;
-  }
-  .device .notch {
-    position: absolute;
-    top: 10px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 120px;
-    height: 26px;
-    background: #000;
-    border-radius: 16px;
-    z-index: 2;
-    pointer-events: none;
+    flex: 0 0 auto;
   }
   .device iframe {
     width: 100%;
@@ -411,19 +401,17 @@ function renderDeviceFrame(presetName: string, url: URL): string {
     display: block;
     background: #fff;
   }
-  .hint { margin-top: 18px; font-size: 11px; color: #8b929c; }
 </style>
 </head><body>
 <div class="bar">
-  <span class="label">${escape(preset.label)} — ${preset.w}×${preset.h}</span>
-  <a href="?as=${escape(url.searchParams.get('as') ?? 'bryan')}">exit simulation</a>
-  <a href="?mobile=iphone16pm${url.searchParams.get('as') ? `&as=${escape(url.searchParams.get('as')!)}` : ''}">iPhone 16 Pro Max</a>
-  <a href="?mobile=iphone16${url.searchParams.get('as') ? `&as=${escape(url.searchParams.get('as')!)}` : ''}">iPhone 16</a>
-  <a href="?mobile=iphonese${url.searchParams.get('as') ? `&as=${escape(url.searchParams.get('as')!)}` : ''}">iPhone SE</a>
-  <a href="?mobile=pixel8${url.searchParams.get('as') ? `&as=${escape(url.searchParams.get('as')!)}` : ''}">Pixel 8</a>
+  <span class="label">${escape(preset.label)} · ${preset.w}×${preset.h}</span>
+  <a href="?as=${escape(asParam)}">← exit</a>
+  <a class="${presetName === 'iphone16pm' ? 'current' : ''}" href="?mobile=iphone16pm&as=${escape(asParam)}">16 Pro Max</a>
+  <a class="${presetName === 'iphone16' ? 'current' : ''}" href="?mobile=iphone16&as=${escape(asParam)}">16</a>
+  <a class="${presetName === 'iphonese' ? 'current' : ''}" href="?mobile=iphonese&as=${escape(asParam)}">SE</a>
+  <a class="${presetName === 'pixel8' ? 'current' : ''}" href="?mobile=pixel8&as=${escape(asParam)}">Pixel 8</a>
 </div>
-<div class="device-wrap"><div class="device"><div class="notch"></div><iframe src="${escape(innerUrl)}" allow="clipboard-write"></iframe></div></div>
-<div class="hint">Media queries inside the iframe respond to ${preset.w}px width.</div>
+<div class="device"><iframe src="${escape(innerUrl)}" allow="clipboard-write"></iframe></div>
 </body></html>`;
 }
 

@@ -137,7 +137,10 @@ button {
 }
 #editor-pane {
   display: grid;
-  grid-template-rows: 42px 1fr;
+  /* Toolbar takes its natural height (handles flex-wrap on narrow screens
+     where buttons reflow onto 2 rows). Was previously fixed 42px which
+     caused wrapped rows to visually escape into the editor area. */
+  grid-template-rows: auto 1fr;
   overflow: hidden;
   background: var(--bg);
   border-right: 1px solid var(--border);
@@ -207,6 +210,27 @@ button {
   .format-bar button.primary {
     min-height: 40px;
     padding: 8px 16px;
+  }
+}
+/* On phones the second half of the toolbar (code, code-block, link,
+   hr, undo/redo) takes up too much vertical space. Hide it — these
+   are rarely needed from a touch device and the keyboard / context
+   menu provides undo. The Comment button (primary) and core formatting
+   (B, I, H1-H3, lists, blockquote) stay. */
+@media (max-width: 560px) {
+  .format-bar button[data-cmd='code'],
+  .format-bar button[data-cmd='codeBlock'],
+  .format-bar button[data-cmd='link'],
+  .format-bar button[data-cmd='hr'],
+  .format-bar button[data-cmd='undo'],
+  .format-bar button[data-cmd='redo'] {
+    display: none;
+  }
+  /* The matching separators around those buttons become orphaned; hide
+     any separator whose next visible sibling is another separator or
+     the primary button. Simpler: hide every sep on narrow. */
+  .format-bar .sep {
+    display: none;
   }
 }
 

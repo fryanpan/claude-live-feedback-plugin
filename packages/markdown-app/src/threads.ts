@@ -222,5 +222,8 @@ function formatTime(ts: number): string {
   if (diff < 60_000) return 'just now';
   if (diff < 3600_000) return `${Math.floor(diff / 60_000)}m`;
   if (diff < 86400_000) return `${Math.floor(diff / 3600_000)}h`;
-  return d.toLocaleString();
+  if (diff < 7 * 86400_000) return `${Math.floor(diff / 86400_000)}d`;
+  // Older: short month+day like "Apr 18" instead of a full datetime, which
+  // is too noisy to squeeze next to an author name on mobile.
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
