@@ -1,9 +1,9 @@
 {
-  "$comment": "MCP server registration. Today the server lives alongside the plugin in the monorepo (`../server/src/mcp.ts`). That path resolves correctly when the marketplace is added as a local path (the plugin dir stays inside the repo). Remote / self-contained install is a TODO — see packages/plugin/README.md Roadmap.",
+  "$comment": "MCP server registration. Runs the published npm package via npx so this plugin works for users who haven't cloned the monorepo. For local development before publishing (or after changes), `cd packages/mcp && npm link` makes npx resolve to the local workspace — same command, no config swap.",
   "mcpServers": {
     "live-feedback": {
-      "command": "bun",
-      "args": ["run", "${CLAUDE_PLUGIN_ROOT}/../server/src/mcp.ts"],
+      "command": "npx",
+      "args": ["-y", "@fryanpan/live-feedback-mcp@latest"],
       "env": {
         "FEEDBACK_BASE_URL": "http://localhost:8787",
         "FEEDBACK_AUTHOR": "agent"

@@ -21,32 +21,35 @@ doc editor + injectable widget) as a single install.
 ## Requirements
 
 - [Claude Code](https://code.claude.com/docs) ≥ 2.0.70 (plugin v2 format).
-- [Bun](https://bun.sh) on the host machine — the MCP server and the hook
-  both run as `bun` scripts.
-- A clone of
-  [fryanpan/claude-live-feedback-plugin](https://github.com/fryanpan/claude-live-feedback-plugin).
-  The MCP server lives alongside the plugin in that monorepo, so the
-  current release expects the whole repo checked out. A self-contained
-  release is on the roadmap.
+- Node ≥ 18 (for `npx`, which runs the MCP server on demand).
+- [Bun](https://bun.sh) on the host that runs the feedback HTTP/WS
+  server. Reviewers' devices (phone, teammate's laptop) don't need Bun.
 
 ## Install
 
 ```bash
-# 1. Clone the repo (stays wherever you like)
-git clone https://github.com/fryanpan/claude-live-feedback-plugin.git
-cd claude-live-feedback-plugin
-bun install
-
-# 2. Add the repo as a local marketplace
-claude plugin marketplace add .
-
-# 3. Install the plugin
+claude plugin marketplace add fryanpan/claude-live-feedback-plugin
 claude plugin install live-feedback@claude-live-feedback
 ```
 
-That's it. The plugin's `plugin.json`, `.mcp.json`, `hooks/hooks.json`,
-and `commands/*.md` are all wired automatically — you do **not** need to
-edit your project's `settings.json`.
+That's the entire client install. The plugin's `plugin.json`, `.mcp.json`,
+`hooks/hooks.json`, and `commands/*.md` wire themselves — you do **not**
+need to edit your project's `settings.json`. The MCP server is pulled
+from [npm](https://www.npmjs.com/package/@fryanpan/live-feedback-mcp)
+via `npx` on first use.
+
+To run the **browser review surfaces** (markdown + widget), you still
+need a clone on the machine that'll host the server:
+
+```bash
+git clone https://github.com/fryanpan/claude-live-feedback-plugin.git
+cd claude-live-feedback-plugin
+bun install
+bun run dev
+```
+
+Reviewers connect to the printed Tailscale / LAN URL from any device —
+no install on their side.
 
 To enable auto-approval for Chrome navigation, create a
 `.claude/live-feedback.json` in whichever project(s) you want it active:
@@ -65,11 +68,14 @@ hook to fire.
 ## Update
 
 ```bash
-cd /path/to/claude-live-feedback-plugin
-git pull
 claude plugin marketplace update claude-live-feedback
 claude plugin update live-feedback@claude-live-feedback
 ```
+
+Commands, hooks, and the MCP tool surface are pinned to the plugin's
+`version` in `.claude-plugin/plugin.json`. `npx` always fetches the
+matching `@fryanpan/live-feedback-mcp` from npm on demand, so you never
+have a stale MCP binary.
 
 ## Uninstall
 
@@ -132,12 +138,19 @@ tunnels, no certs. For a phone-simulator viewport on desktop append
 Swap `localhost` for the host's Tailscale or LAN hostname when connecting
 from a phone or teammate's laptop.
 
+## Release flow (maintainers)
+
+1. Bump `version` in `packages/plugin/.claude-plugin/plugin.json`,
+   `.claude-plugin/marketplace.json`, and `packages/mcp/package.json`
+   in lockstep.
+2. `bun run build:mcp` to refresh `packages/mcp/dist/`.
+3. `bun run publish:mcp` (wraps `npm publish` inside `packages/mcp`).
+4. `git commit`, tag `v<n>`, push.
+
+Users pick up commands/hooks/manifest changes via `claude plugin update`
+and the new MCP binary via `npx` (no user action required).
+
 ## Roadmap
 
-- **Self-contained release** — today the plugin depends on the sibling
-  `packages/server` in the monorepo. A future release will either bundle
-  the MCP binary into the plugin or publish it as an npm package so the
-  plugin works off a plain `claude plugin marketplace add fryanpan/...`
-  from a fresh shell with no clone required.
 - **Team presence** — multi-cursor awareness is wired on the Yjs side;
   UI still to come.

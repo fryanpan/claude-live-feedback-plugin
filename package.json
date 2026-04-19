@@ -15,7 +15,9 @@
     "format": "biome format --write .",
     "build:widget": "bun run packages/widget/scripts/build.ts",
     "build:markdown-app": "bun run packages/markdown-app/scripts/build.ts",
-    "build:all": "bun run build:widget && bun run build:markdown-app",
+    "build:mcp": "bun run packages/mcp/scripts/build.ts",
+    "build:all": "bun run build:widget && bun run build:markdown-app && bun run build:mcp",
+    "publish:mcp": "cd packages/mcp && npm publish",
     "check:widget-size": "bun run scripts/check-widget-size.ts"
   },
   "devDependencies": {

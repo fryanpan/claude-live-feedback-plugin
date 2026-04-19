@@ -62,6 +62,16 @@
         "yjs": "^13.6.20",
       },
     },
+    "packages/mcp": {
+      "name": "@fryanpan/live-feedback-mcp",
+      "version": "0.0.1",
+      "bin": {
+        "live-feedback-mcp": "./dist/mcp.js",
+      },
+      "dependencies": {
+        "@modelcontextprotocol/sdk": "^1.29.0",
+      },
+    },
     "packages/server": {
       "name": "@feedback/server",
       "version": "0.0.0",
@@ -200,6 +210,8 @@
     "@feedback/server": ["@feedback/server@workspace:packages/server"],
 
     "@feedback/widget": ["@feedback/widget@workspace:packages/widget"],
+
+    "@fryanpan/live-feedback-mcp": ["@fryanpan/live-feedback-mcp@workspace:packages/mcp"],
 
     "@hono/node-server": ["@hono/node-server@1.19.14", "", { "peerDependencies": { "hono": "^4" } }, "sha512-GwtvgtXxnWsucXvbQXkRgqksiH2Qed37H9xHZocE5sA3N8O8O8/8FA3uclQXxXVzc9XBZuEOMK7+r02FmSpHtw=="],
 
