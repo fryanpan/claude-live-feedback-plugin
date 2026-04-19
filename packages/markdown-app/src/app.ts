@@ -25,11 +25,19 @@ function docIdFromPath(): string {
  */
 function wireKeyboardInset(): void {
   const vv = window.visualViewport;
+  // iOS shows a form-accessory bar (^ v ✓) ABOVE the keyboard whenever a
+  // text input is focused. visualViewport doesn't account for it — its
+  // height only excludes the keyboard itself — so bottom-docked UI pinned
+  // to --kb-bottom sits UNDER that bar. Pad --kb-bottom by its typical
+  // height (~46px) whenever the keyboard is open so the composer clears
+  // both the keyboard AND the accessory bar.
+  const IOS_ACCESSORY = 46;
   const apply = () => {
     let kb = 0;
     if (vv) {
       kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
     }
+    if (kb > 0) kb += IOS_ACCESSORY;
     document.documentElement.style.setProperty('--kb-bottom', `${Math.round(kb)}px`);
   };
   apply();
@@ -145,17 +153,36 @@ async function boot(): Promise<void> {
         pillMode = 'range';
         caretParaRange = null;
         commentPill.classList.remove('caret');
-        // End-of-selection coords (bottom-right of last line)
-        const endCoords = view.coordsAtPos(to);
-        // Try placing JUST past the selection end, inline with last line
-        let left = endCoords.right + gap;
-        let top = Math.max(8, endCoords.top - 2);
-        // If that runs past the right edge, drop to the next line's start
-        if (left + pillW > viewportW - 8) {
-          left = Math.max(8, endCoords.left - pillW - gap);
-          top = endCoords.bottom + gap;
+        // Prefer the DOM selection's LAST client rect — that's what the
+        // user actually sees highlighted on iOS (where native selection
+        // handles don't always stay in lockstep with ProseMirror's `to`).
+        // Fall back to coordsAtPos if DOM selection is empty.
+        let endRight = 0;
+        let endTop = 0;
+        let endBottom = 0;
+        const winSel = window.getSelection();
+        if (winSel && winSel.rangeCount > 0 && !winSel.isCollapsed) {
+          const rects = winSel.getRangeAt(0).getClientRects();
+          const last = rects.length > 0 ? rects[rects.length - 1] : null;
+          if (last) {
+            endRight = last.right;
+            endTop = last.top;
+            endBottom = last.bottom;
+          }
         }
-        // Clamp to visible area (keep above keyboard)
+        if (endRight === 0) {
+          const c = view.coordsAtPos(to);
+          endRight = c.right;
+          endTop = c.top;
+          endBottom = c.bottom;
+        }
+        let left = endRight + gap;
+        let top = Math.max(8, endTop - 2);
+        // If that runs past the right edge, tuck below the selection end.
+        if (left + pillW > viewportW - 8) {
+          left = Math.max(8, endRight - pillW);
+          top = endBottom + gap;
+        }
         top = Math.min(top, availableBottom);
         commentPill.style.left = `${Math.max(8, left)}px`;
         commentPill.style.top = `${top}px`;
