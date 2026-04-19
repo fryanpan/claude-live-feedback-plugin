@@ -60,7 +60,8 @@ async function boot(): Promise<void> {
   const docTitleEl = el<HTMLElement>('doc-title');
   const composer = el<HTMLElement>('composer');
   const composerText = el<HTMLTextAreaElement>('composer-text');
-  const composerContext = el<HTMLElement>('composer-context');
+  const composerAvatar = el<HTMLElement>('composer-avatar');
+  const composerScrim = el<HTMLElement>('composer-scrim');
   const selectionBar = el<HTMLElement>('selection-bar');
   const selectionSnippet = el<HTMLElement>('selection-bar-snippet');
   const selectionCommentBtn = el<HTMLButtonElement>('selection-comment');
@@ -163,11 +164,16 @@ async function boot(): Promise<void> {
   });
 
   // =========================================================================
-  // COMPOSER
-  //   Opens as a bottom sheet with snippet CONTEXT (a few chars before + the
-  //   selected text + a few chars after). When the textarea focuses, we scroll
-  //   the editor so the selection stays visible above the composer.
+  // COMPOSER (Notion-style slim sheet)
+  //   The doc stays behind a dim scrim with the selection still visible
+  //   (we do NOT re-quote the snippet inside the composer — the user sees
+  //   what they're commenting on in place). On open we scroll the editor
+  //   so the selection sits above the composer + keyboard.
   // =========================================================================
+
+  // Seed the composer avatar with the current user's color + initial
+  composerAvatar.style.background = user.color;
+  composerAvatar.textContent = (user.name[0] ?? '?').toUpperCase();
 
   function openComposerForSelection(): void {
     const current = editor.getSelectionRel();
@@ -177,30 +183,11 @@ async function boot(): Promise<void> {
       return;
     }
     selection = use;
-
-    // Build context: take ~40 chars before and ~40 after the selection
-    const { from, to } = editor.editor.state.selection;
-    const doc = editor.editor.state.doc;
-    const before = Math.max(0, from - 40);
-    const after = Math.min(doc.content.size, to + 40);
-    const prefix = doc.textBetween(before, from, ' ').replace(/\s+/g, ' ');
-    const selected = use.snippet;
-    const suffix = doc.textBetween(to, after, ' ').replace(/\s+/g, ' ');
-    composerContext.innerHTML = '';
-    if (before > 0) composerContext.appendChild(document.createTextNode('…' + prefix));
-    else if (prefix) composerContext.appendChild(document.createTextNode(prefix));
-    const sel = document.createElement('span');
-    sel.className = 'selected';
-    sel.textContent = selected;
-    composerContext.appendChild(sel);
-    if (after < doc.content.size)
-      composerContext.appendChild(document.createTextNode(suffix + '…'));
-    else if (suffix) composerContext.appendChild(document.createTextNode(suffix));
-
     composer.classList.remove('hidden');
+    composerScrim.classList.remove('hidden');
+    document.body.classList.add('composer-open');
     hideSelectionBar();
     composerText.value = '';
-    // Focus + scroll selection into view above the composer.
     setTimeout(() => {
       composerText.focus();
       ensureSelectionVisible();
@@ -208,7 +195,10 @@ async function boot(): Promise<void> {
   }
   function hideComposer(): void {
     composer.classList.add('hidden');
+    composerScrim.classList.add('hidden');
+    document.body.classList.remove('composer-open');
   }
+  composerScrim.addEventListener('click', hideComposer);
 
   function ensureSelectionVisible(): void {
     // When the composer occupies the bottom ~200px of the viewport, we want
@@ -468,7 +458,7 @@ async function boot(): Promise<void> {
   // =========================================================================
   // COMPOSER: submit / cancel, Enter-to-post, post-feedback pulse
   // =========================================================================
-  el<HTMLButtonElement>('composer-cancel').addEventListener('click', hideComposer);
+  // (No cancel button — tap the scrim or press Escape to dismiss.)
   composerText.addEventListener('keydown', (ev) => {
     if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) {
       ev.preventDefault();
