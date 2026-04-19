@@ -225,6 +225,40 @@ export class Rooms {
     return prose.findAndReplace(room.ydoc, opts);
   }
 
+  /**
+   * Rewrite the range a text-range thread is anchored to. The thread
+   * anchor is authoritative — we never recompute offsets on the
+   * client. When the anchor is orphaned (user deleted the text) the
+   * caller gets `anchor-orphaned` back and should either re-anchor or
+   * fall back to `findAndReplace`.
+   */
+  rewriteThreadRegion(
+    docId: string,
+    threadId: string,
+    replacement: string,
+  ): prose.AnchoredEditResult {
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'anchor-not-found' };
+    const thread = this.getThread(docId, threadId);
+    if (!thread) return { ok: false, error: 'anchor-not-found' };
+    if (thread.anchor.kind !== 'text-range') return { ok: false, error: 'anchor-orphaned' };
+    return prose.rewriteRange(room.ydoc, {
+      startRel: thread.anchor.startRel,
+      endRel: thread.anchor.endRel,
+      replacement,
+    });
+  }
+
+  /** Append text at the END position of a thread's anchored range. */
+  insertAfterThread(docId: string, threadId: string, text: string): prose.AnchoredEditResult {
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'anchor-not-found' };
+    const thread = this.getThread(docId, threadId);
+    if (!thread) return { ok: false, error: 'anchor-not-found' };
+    if (thread.anchor.kind !== 'text-range') return { ok: false, error: 'anchor-orphaned' };
+    return prose.insertAfterRange(room.ydoc, { endRel: thread.anchor.endRel, text });
+  }
+
   listThreads(docId: string, filter?: { status?: 'open' | 'resolved' }): Thread[] {
     const room = this.rooms.get(docId);
     if (!room) return [];
