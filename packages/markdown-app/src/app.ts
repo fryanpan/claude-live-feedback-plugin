@@ -197,22 +197,20 @@ async function boot(): Promise<void> {
         commentPill.classList.remove('hidden');
       } else if (selectionSettled) {
         // Caret mode — float the pill RIGHT next to the caret so the user
-        // sees it as attached to the spot they tapped. Cache the
-        // paragraph's prosemirror range so the click handler can commit
+        // sees it as attached to the spot they tapped. Cache the SENTENCE
+        // range (not the whole paragraph) so the click handler can commit
         // even if iOS blurred the editor selection in the meantime.
         pillMode = 'caret';
         commentPill.classList.add('caret');
         const caret = view.coordsAtPos(from);
         let left = caret.right + gap;
         let top = Math.max(8, caret.top - 2);
-        // Clamp right edge
         if (left + pillW > viewportW - 8) left = viewportW - pillW - 8;
         top = Math.min(top, availableBottom);
         commentPill.style.left = `${Math.max(8, left)}px`;
         commentPill.style.top = `${Math.max(8, top)}px`;
         commentPill.classList.remove('hidden');
-        const $pos = state.doc.resolve(from);
-        caretParaRange = { from: $pos.start($pos.depth), to: $pos.end($pos.depth) };
+        caretParaRange = sentenceRangeAt(state, from);
       } else {
         hidePill();
       }
@@ -794,6 +792,54 @@ async function boot(): Promise<void> {
     client.close();
     editor.destroy();
   });
+}
+
+/**
+ * Expand a caret position to the sentence it's inside (or the sentence
+ * immediately before, if the caret sits in whitespace just after a
+ * terminator). Operates on the paragraph-level textblock the caret is in
+ * — multi-paragraph sentences aren't really a thing. Returns prosemirror
+ * absolute positions.
+ */
+function sentenceRangeAt(
+  state: import('@tiptap/pm/state').EditorState,
+  pos: number,
+): { from: number; to: number } {
+  const $pos = state.doc.resolve(pos);
+  const blockStart = $pos.start($pos.depth);
+  const blockEnd = $pos.end($pos.depth);
+  const text = $pos.parent.textContent;
+  const n = text.length;
+  if (n === 0) return { from: blockStart, to: blockEnd };
+
+  let i = Math.min($pos.parentOffset, n - 1);
+  if (i < 0) i = 0;
+  // If sitting on whitespace immediately after a terminator, step back
+  // so we land in the previous sentence instead of the next.
+  if (i > 0 && /\s/.test(text.charAt(i)) && /[.!?]/.test(text.charAt(i - 1))) {
+    i = i - 1;
+  }
+
+  // Find start of sentence — scan back for a terminator followed by
+  // whitespace, then skip past the whitespace to the next real char.
+  let start = 0;
+  for (let j = i; j > 0; j--) {
+    if (/[.!?]/.test(text.charAt(j - 1)) && /\s/.test(text.charAt(j))) {
+      start = j;
+      while (start < n && /\s/.test(text.charAt(start))) start++;
+      break;
+    }
+  }
+  // Find end of sentence — scan forward for the next terminator.
+  let end = n;
+  for (let j = Math.max(i, start); j < n; j++) {
+    if (/[.!?]/.test(text.charAt(j))) {
+      end = j + 1;
+      break;
+    }
+  }
+
+  return { from: blockStart + start, to: blockStart + end };
 }
 
 function wireFormatBar(editor: EditorHandle): void {
