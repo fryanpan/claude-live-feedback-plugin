@@ -17,7 +17,31 @@ function docIdFromPath(): string {
   return m ? decodeURIComponent(m[1] ?? '') : 'default';
 }
 
+/**
+ * iOS Safari puts `position:fixed` elements on the LAYOUT viewport, which
+ * doesn't shrink when the keyboard appears — so bottom:16px ends up
+ * behind the keyboard. Track the visual viewport and publish a
+ * --kb-bottom CSS variable that every bottom-docked UI element rises by.
+ */
+function wireKeyboardInset(): void {
+  const vv = window.visualViewport;
+  const apply = () => {
+    let kb = 0;
+    if (vv) {
+      kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+    }
+    document.documentElement.style.setProperty('--kb-bottom', `${Math.round(kb)}px`);
+  };
+  apply();
+  if (vv) {
+    vv.addEventListener('resize', apply);
+    vv.addEventListener('scroll', apply);
+  }
+  window.addEventListener('orientationchange', () => setTimeout(apply, 120));
+}
+
 async function boot(): Promise<void> {
+  wireKeyboardInset();
   const docId = docIdFromPath();
   const url = new URL(location.href);
   const asParam = url.searchParams.get('as');
