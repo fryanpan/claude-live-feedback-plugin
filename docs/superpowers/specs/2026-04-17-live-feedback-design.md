@@ -20,7 +20,10 @@
 - Linear integration (each host project supplies their own webhook handler)
 - Persistent users / accounts
 - Rich text/paragraph-level reanchoring beyond Yjs `RelativePosition`
-- Production deploy (Cloudflare Tunnel setup documented, not deployed)
+- Public-internet exposure. The host binds to localhost + private
+  network interfaces; reviewers reach it over Tailscale or the LAN.
+  Making it public-internet accessible is an opt-in users layer on
+  (Cloudflare Tunnel, ngrok, their own reverse proxy — outside scope).
 - History / audit trail beyond what Yjs gives for free
 
 ## Key workflows
@@ -61,9 +64,9 @@ flowchart TD
 
 | Approach | Effort | Risk | Usability | Impact | Decision |
 |---|---|---|---|---|---|
-| **Yjs + y-websocket (chosen)** | M | L | H | H | ✅ Mature CRDT, offline-capable, CodeMirror/Prosemirror bindings, no SaaS. |
+| **Yjs + y-websocket (chosen)** | M | L | H | H | ✅ Mature CRDT, offline-capable, Prosemirror binding for WYSIWYG, no SaaS. |
 | Liveblocks | L | M | H | H | ❌ SaaS lock-in and ongoing cost; Bryan prefers self-host. |
-| Automerge | M | M | M | M | ❌ Weaker editor ecosystem, less momentum for CodeMirror integration. |
+| Automerge | M | M | M | M | ❌ Weaker editor ecosystem, less momentum for ProseMirror integration. |
 | Build minimal OT | XL | H | M | M | ❌ NIH — CRDT correctness is the boring bit we don't want to own. |
 
 | Approach | Effort | Risk | Usability | Impact | Decision |
@@ -85,7 +88,7 @@ flowchart TD
 ```mermaid
 graph TB
     subgraph "Browser — Surface 1: Markdown"
-        MA[markdown-app<br/>CodeMirror 6 + remark + mermaid]
+        MA[markdown-app<br/>Tiptap + y-prosemirror + tiptap-markdown]
         MA --> CORE
     end
 
@@ -112,7 +115,7 @@ graph TB
 |---|---|---|
 | `@feedback/core` | Yjs schema, thread/anchor types, anchor resolvers, user identity | yjs |
 | `@feedback/server` | Bun HTTP+WS server, MCP, SSE, webhook dispatch, doc persistence | core, @modelcontextprotocol/sdk, y-websocket/bin |
-| `@feedback/markdown-app` | Surface 1 browser app | core, codemirror, remark, mermaid |
+| `@feedback/markdown-app` | Surface 1 browser app (WYSIWYG) | core, @tiptap/core, @tiptap/starter-kit, @tiptap/extension-collaboration, @tiptap/y-tiptap, tiptap-markdown |
 | `@feedback/widget` | Surfaces 2 & 3 injectable widget | core (minus server-only deps) |
 | `@feedback/demo-mockup` | Static HTML mockup using the widget | widget |
 | `@feedback/demo-dev-server` | Vite dev server using the widget | widget |
@@ -163,9 +166,9 @@ observe_url(docId)             → sseUrl
 **Widget init:**
 ```html
 <script type="module">
-  import { FeedbackWidget } from "https://tunnel-host/widget.js";
+  import { FeedbackWidget } from "http://host.tailnet.ts.net:8787/widget.js";
   FeedbackWidget.init({
-    serverUrl: "wss://tunnel-host",
+    serverUrl: "ws://host.tailnet.ts.net:8787",
     docId: "my-mockup",
     user: "?",                        // null/undefined → anonymous
   });
@@ -234,7 +237,7 @@ One autonomous build session. Chunked as:
 2. **Core package** — types, Yjs schema, text-range resolver (Yjs RelativePosition), element resolver (port + refactor fingerprint from health-tool).
 3. **Server** — Bun HTTP+WS with y-websocket, SSE, webhook dispatch, disk persistence of ydocs (crude: `data/<docId>.ydoc`).
 4. **MCP server** — stdio server exposing the 7 tools, running in the same Bun process or a thin wrapper.
-5. **Markdown app (Surface 1)** — CodeMirror 6 + y-codemirror.next, remark GFM, mermaid via mermaid-it-lazy, thread panel, orphan panel.
+5. **Markdown app (Surface 1)** — Tiptap (ProseMirror) + StarterKit + tiptap-markdown for WYSIWYG editing, y-prosemirror Collaboration for Yjs sync, Decoration plugin for thread-range highlights, thread panel, orphan panel.
 6. **Widget package (Surfaces 2 & 3)** — Custom Element + Shadow DOM, element selector UI, thread popover, orphan panel. Enforce bundle size in CI.
 7. **Demo mockup** — static HTML page using widget.
 8. **Demo dev server** — minimal Vite project using widget; test HMR survival.
@@ -253,7 +256,7 @@ One autonomous build session. Chunked as:
 
 ### Risk notes
 
-- **Yjs + y-codemirror.next integration version skew** — both are moving packages. Pin exact versions, test early.
+- **Tiptap / y-prosemirror plugin-key mismatch** — Tiptap's Collaboration extension registers its ySyncPlugin under `@tiptap/y-tiptap`'s PluginKey, not `y-prosemirror`'s. Imports MUST come from `@tiptap/y-tiptap` or `getState()` returns undefined and selections never resolve. Pin `@tiptap/y-tiptap` alongside `@tiptap/extension-collaboration`.
 - **Widget bundle size** — Yjs is ~40KB gzipped alone. We may need to tree-shake or code-split; if we blow the budget, document it and propose a fix rather than silently shipping over.
 - **Shadow DOM + mermaid** — Mermaid uses global state and SVG id collisions. Only used in the markdown-app (no Shadow DOM there), so should be fine.
 - **Bun + MCP SDK compatibility** — Anthropic's MCP SDK is Node-first. If Bun chokes, fall back to a Node sidecar for MCP only.
@@ -265,7 +268,11 @@ One autonomous build session. Chunked as:
 - **E2E smoke (Playwright):** open markdown app, leave comment, reload, comment persists. Open mockup demo, leave element comment, remove element from DOM, comment shows in Orphans panel.
 - **Bundle size CI step:** `bun run build:widget && node scripts/check-widget-size.js` with 40KB gzip hard limit.
 - **UX review gate:** `/ux-review` on both user-facing surfaces with claude-in-chrome before PR.
-- **Deploy:** not tonight. Local dev only. README documents Cloudflare Tunnel command for public URL.
+- **Deploy:** runs locally on the host machine. Access for remote
+  devices is via the host's Tailscale hostname (preferred — works
+  across networks) or its `.local` / LAN IP (same-wifi). `bun run
+  scripts/serve.ts` prints all three URL forms at startup. No public
+  tunnel, no DNS setup.
 
 ## Open items to revisit later
 

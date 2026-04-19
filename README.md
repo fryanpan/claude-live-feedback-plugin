@@ -8,9 +8,15 @@ See [docs/product/vision.md](docs/product/vision.md) for the full problem and th
 
 ## Status
 
-MVP build in progress (2026-04-17). Design spec at [docs/superpowers/specs/2026-04-17-live-feedback-design.md](docs/superpowers/specs/2026-04-17-live-feedback-design.md); plan at [docs/product/plans/mvp-plan.md](docs/product/plans/mvp-plan.md).
+MVP in review. Design spec at [docs/superpowers/specs/2026-04-17-live-feedback-design.md](docs/superpowers/specs/2026-04-17-live-feedback-design.md); plan at [docs/product/plans/mvp-plan.md](docs/product/plans/mvp-plan.md).
 
-Stack: TypeScript + Bun, Yjs over WebSocket, vanilla Custom Elements + Shadow DOM for the injectable widget, CodeMirror 6 for the markdown surface.
+Stack: TypeScript + Bun, Yjs over WebSocket, vanilla Custom Elements + Shadow DOM for the injectable widget, Tiptap (ProseMirror) + y-prosemirror for the WYSIWYG markdown surface.
+
+**Access model:** no public tunnels. The host machine exposes the
+feedback server on `localhost:<port>`; reviewers open it via the host's
+**Tailscale** hostname (private network) or its `.local` / LAN IP
+(same-wifi devices). `bun run scripts/serve.ts` prints all three URLs.
+Public access is an explicit opt-in users would layer on themselves.
 
 ## License
 

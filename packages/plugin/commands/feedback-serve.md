@@ -1,36 +1,32 @@
 ---
-allowed-tools: Bash(bun run *), Bash(cd *), Bash(pgrep *), Bash(kill *)
-description: Start the live-feedback server (with a Cloudflare quick tunnel) for this project
+allowed-tools: Bash(bun run *), Bash(pgrep *), Bash(lsof *)
+description: Start the live-feedback server; prints localhost / tailscale / LAN URLs
 ---
 
 ## Context
 
-- Repo root: !`/bin/pwd`
-- Server already running? !`/usr/bin/pgrep -fl "packages/server/src/bin.ts" | /usr/bin/head -3 || echo "no"`
-- Existing tunnel? !`/usr/bin/pgrep -fl "cloudflared tunnel --url" | /usr/bin/head -1 || echo "no"`
+- Running server? !`/usr/bin/pgrep -fl "packages/server/src/bin.ts" | /usr/bin/head -3 || echo "no"`
 
 ## Your task
 
-Start the live-feedback server with a throwaway Cloudflare quick tunnel so
-the user can share the URL with teammates or open in their phone browser.
+Start the feedback server via `bun run scripts/serve.ts`. The script:
 
-Run `bun run scripts/start-tunneled.ts` in the background and watch its
-log for the `https://<random>.trycloudflare.com` URL. Print the three
-canonical routes:
+1. Picks a free port (default start 8787).
+2. Spawns the feedback server as a child process.
+3. Prints three URL forms so the user can pick whichever reaches their
+   device:
+   - `http://localhost:<port>` — this machine only
+   - `http://<tailscale-host>:<port>` — for anyone on the tailnet
+   - `http://<lan-host>.local:<port>` — for anyone on the same wifi
+
+This project intentionally does **not** use a public tunnel. Reviews
+happen over Tailscale or the local network. Private by default.
+
+After starting, suggest the user try:
 
 ```
- Markdown review:   <url>/review/<docId>?as=bryan
- Demo mockup:       <url>/demos/mockup
- Widget bundle:     <url>/widget.iife.js
+http://<tailscale-or-lan-host>:<port>/review/<docId>?as=bryan
 ```
 
-If the server is already running on a port, don't start a new one —
-just print the existing URL. If a `.claude/live-feedback.json` in this
-project lists a tunnel domain (e.g. `tunnel.fryanpan.com`) and the user
-has the stable-tunnel setup, prefer that over a quick tunnel.
-
-## Notes
-
-- If `cloudflared` is not installed, tell the user: `brew install cloudflared`.
-- If the port is in use, the server auto-picks the next free one.
-- Stop everything with: `kill $(pgrep -f 'packages/server/src/bin.ts') $(pgrep -f 'cloudflared tunnel --url')`
+For a simulated phone viewport on a desktop browser, append
+`&mobile=iphone16pm`.

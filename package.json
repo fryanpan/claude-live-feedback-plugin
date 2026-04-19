@@ -4,7 +4,8 @@
   "version": "0.0.0",
   "workspaces": ["packages/*", "demos/*"],
   "scripts": {
-    "dev": "bun run packages/server/src/bin.ts",
+    "dev": "bun run scripts/serve.ts",
+    "dev:bare": "bun run packages/server/src/bin.ts",
     "typecheck": "tsc --noEmit --project tsconfig.json",
     "test": "bun run test:vitest && bun run test:server",
     "test:vitest": "vitest run",

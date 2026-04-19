@@ -60,39 +60,37 @@ hostnames the agent is allowed to navigate to without prompting:
 
 ```json
 {
-  "trustedPreviewDomains": ["tunnel.yourdomain.com"]
+  "trustedPreviewDomains": ["<your-tailnet>.ts.net", "local"]
 }
 ```
 
+Find your tailnet suffix with `tailscale status --json | jq -r .CurrentTailnet.MagicDNSSuffix`.
+Adding `local` covers `.local` mDNS hostnames on the same wifi.
+
 **No shared defaults.** The plugin ships with nothing in the trust list
-so you can't accidentally auto-approve `*.trycloudflare.com` (anyone's
-tunnel) or similar shared hosts.
+so you can't accidentally auto-approve a hostname that isn't yours.
 
 ## Running the feedback server
 
-**Quick (no setup):** random `*.trycloudflare.com` URL per session.
-
 ```
-bun run scripts/start-tunneled.ts
+bun run scripts/serve.ts
 ```
 
-**Stable (one-time Cloudflare setup):** every session gets a subdomain
-under your own domain, e.g. `abc123.tunnel.yourdomain.com`. Pair with
-the trust-list and you never get a navigate prompt for your own tunnels.
+Picks a free port, starts the server, and prints three URL forms:
 
 ```
-# one-time (needs cloudflared logged in to your account)
-./scripts/setup-named-tunnel.sh tunnel.yourdomain.com
-
-# long-running (router + cloudflared — tmux / launchctl / pm2)
-bun run packages/router/src/router.ts
-cloudflared tunnel --config ~/.cloudflared/live-feedback.yml run
-
-# per session, in any repo
-bun run scripts/register-preview.ts --slug myfeature
+ local:      http://localhost:<port>
+ tailscale:  http://<this-host>.<tailnet>.ts.net:<port>
+ lan:        http://<this-host>.local:<port>   (and any LAN IPv4)
 ```
 
-Then open `https://myfeature.tunnel.yourdomain.com/review/<docId>?as=bryan`.
+Open the one that reaches the device you're reviewing from. No tunnels,
+no DNS, no certs. The project assumes reviewers are on the same
+**Tailscale network** or **local network** as the host — that's the
+whole access-control model.
+
+For a simulated phone viewport on a desktop browser, append
+`&mobile=iphone16pm` (or `iphone16`, `iphonese`, `pixel8`).
 
 ## Commands
 
@@ -115,7 +113,9 @@ In any dev server's HTML (or index.html of your app):
 </script>
 ```
 
-On production you'd point `serverUrl` at your tunnel. The widget injects
+On a remote device (phone, teammate's laptop) you'd point `serverUrl`
+at the host's Tailscale or LAN hostname instead of `localhost`. The
+widget injects
 a `<claude-feedback-widget>` Custom Element with a Shadow DOM — no
 framework or CSS conflicts with the host page.
 
@@ -131,7 +131,8 @@ framework or CSS conflicts with the host page.
 ## Roadmap
 
 - Publishing to a plugin registry (today install is local-path only).
-- A named-tunnel helper for `*.tunnel.<user-domain>.com` so every session
-  gets a stable subdomain instead of a fresh `trycloudflare.com` URL.
 - Slide-out bottom-sheet composer for mobile (the current composer docks
   fine but a native-feeling sheet would be better on touch).
+- Team preview mode — when multiple people on the same tailnet point at
+  the same host, surface a presence list and per-user cursors in the
+  editor (awareness protocol is already wired; UI pending).
