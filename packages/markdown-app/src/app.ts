@@ -129,6 +129,14 @@ async function boot(): Promise<void> {
       hidePill();
       return;
     }
+    // Don't reposition (and don't re-show) the pill while the composer
+    // is open. The visualViewport `resize` that fires when the keyboard
+    // slides up would otherwise repaint the pill mid-transition at a
+    // stale location.
+    if (!composer.classList.contains('hidden')) {
+      hidePill();
+      return;
+    }
     const state = editor.editor.state;
     const view = editor.editor.view;
     const { from, to, empty } = state.selection;
@@ -311,12 +319,48 @@ async function boot(): Promise<void> {
     hidePill();
     composerText.value = '';
     // preventScroll: true stops iOS's auto-scroll-to-focus from yanking
-    // the whole page up when the textarea takes focus. The composer is
-    // already pinned above the keyboard via --kb-bottom, so no scroll
-    // is needed.
+    // the whole page up when the textarea takes focus. We do our OWN
+    // scroll below so the anchored text stays visible above the keyboard.
     setTimeout(() => {
       composerText.focus({ preventScroll: true });
+      // Wait for the keyboard to finish sliding up (visualViewport
+      // resizes), THEN scroll the editor so the selection sits ~20%
+      // from the top of the visible-above-keyboard area. If vv doesn't
+      // resize within 500ms, assume the keyboard was already open and
+      // scroll anyway.
+      const vv = window.visualViewport;
+      let done = false;
+      const run = () => {
+        if (done) return;
+        done = true;
+        vv?.removeEventListener('resize', run);
+        scrollSelectionAboveKeyboard();
+      };
+      vv?.addEventListener('resize', run);
+      setTimeout(run, 500);
     }, 30);
+  }
+
+  function scrollSelectionAboveKeyboard(): void {
+    try {
+      const vv = window.visualViewport;
+      const vvTop = vv?.offsetTop ?? 0;
+      const vvHeight = vv?.height ?? window.innerHeight;
+      // 20% from the top of the visible-above-keyboard area
+      const desiredTop = vvTop + vvHeight * 0.2;
+      let selTop = 0;
+      const winSel = window.getSelection();
+      if (winSel && winSel.rangeCount > 0 && !winSel.isCollapsed) {
+        selTop = winSel.getRangeAt(0).getBoundingClientRect().top;
+      } else {
+        const { from } = editor.editor.state.selection;
+        selTop = editor.editor.view.coordsAtPos(from).top;
+      }
+      const deltaY = selTop - desiredTop;
+      if (Math.abs(deltaY) < 20) return;
+      const scroller = document.getElementById('editor');
+      if (scroller) scroller.scrollBy({ top: deltaY, behavior: 'smooth' });
+    } catch {}
   }
   function hideComposer(): void {
     composer.classList.add('hidden');
