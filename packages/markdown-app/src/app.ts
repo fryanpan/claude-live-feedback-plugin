@@ -222,6 +222,12 @@ async function boot(): Promise<void> {
   editor.editor.on('selectionUpdate', () => {
     if (!isDragging && selectionSettled) positionPill();
   });
+  // Typing into the editor hides the caret-mode pill — it's a commenting
+  // affordance, not something we want hovering mid-sentence. Range-mode
+  // pill auto-clears because a selection can't exist while typing.
+  editor.editor.on('update', () => {
+    if (pillMode === 'caret') hidePill();
+  });
   // Keep pill in sync if the keyboard appears/disappears (visualViewport
   // resize changes --kb-bottom, which changes our clamp max).
   window.visualViewport?.addEventListener('resize', () => positionPill());
