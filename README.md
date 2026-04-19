@@ -6,6 +6,21 @@ Make giving feedback to LLM agents as fast as pointing and saying "this." So fas
 
 See [docs/product/vision.md](docs/product/vision.md) for the full problem and the three surfaces this project is building (markdown/diagram review, UX mockup review, live dev-server review).
 
+## Install
+
+```bash
+git clone https://github.com/fryanpan/claude-live-feedback-plugin.git
+cd claude-live-feedback-plugin
+bun install
+claude plugin marketplace add .
+claude plugin install live-feedback@claude-live-feedback
+```
+
+See [packages/plugin/README.md](packages/plugin/README.md) for the full
+install / update / uninstall flow and the one-off
+`.claude/live-feedback.json` needed to enable auto-approval of Chrome
+navigation.
+
 ## Status
 
 MVP in review. Design spec at [docs/superpowers/specs/2026-04-17-live-feedback-design.md](docs/superpowers/specs/2026-04-17-live-feedback-design.md); plan at [docs/product/plans/mvp-plan.md](docs/product/plans/mvp-plan.md).
