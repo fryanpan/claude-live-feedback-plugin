@@ -1,4 +1,5 @@
 import {
+  type AnchorContext,
   type ElementAnchor,
   type Thread,
   type User,
@@ -6,6 +7,8 @@ import {
   listThreads,
   resolveUser,
 } from '@feedback/core';
+
+const { contextMatches, hasContext } = anchors;
 import { type WidgetClient, connect } from './client.ts';
 import { widgetStyles } from './styles.ts';
 
@@ -27,6 +30,14 @@ export interface WidgetOpts {
   serverUrl?: string;
   docId: string;
   user?: string | null;
+  /**
+   * Initial page/view context. If omitted, the widget auto-captures
+   * `location.pathname + location.search + location.hash` and updates
+   * it on history navigation. Pass an explicit `view` to declare
+   * dynamic UI state ("modal=settings", "tab=billing") so comments
+   * anchored in that view don't leak onto the base page.
+   */
+  context?: AnchorContext;
 }
 
 const TAG = 'claude-feedback-widget';
@@ -36,7 +47,13 @@ class FeedbackWidgetEl extends HTMLElement {
   private shadow: ShadowRoot;
   private client: WidgetClient | null = null;
   private user: User | null = null;
-  private opts: Required<WidgetOpts> = { serverUrl: '', docId: '', user: null };
+  private opts: WidgetOpts & { serverUrl: string; user: string | null } = {
+    serverUrl: '',
+    docId: '',
+    user: null,
+  };
+  private currentContext: AnchorContext = {};
+  private historyPatched = false;
   private pickerActive = false;
   private hoverEl: HTMLElement | null = null;
   private overlay: HTMLDivElement | null = null;
@@ -63,13 +80,66 @@ class FeedbackWidgetEl extends HTMLElement {
     this.opts.user = opts.user ?? null;
     this.opts.serverUrl =
       opts.serverUrl ?? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`;
-    this.user = resolveUser(this.opts.user, {
+    this.user = resolveUser(this.opts.user ?? null, {
       get: (k) => localStorage.getItem(`cfw:${k}`),
       set: (k, v) => localStorage.setItem(`cfw:${k}`, v),
     });
+    this.currentContext = {
+      url: currentUrl(),
+      ...(opts.context?.view ? { view: opts.context.view } : {}),
+    };
+    this.wireHistoryListeners();
     this.renderShell();
     this.connect();
     this.startObserver();
+  }
+
+  /**
+   * Update the current page/view context at runtime. Merges into the
+   * existing context — pass `{ view: undefined }` to clear the view.
+   * Call this:
+   *   - when opening/closing a modal, drawer, or other transient surface
+   *   - when your SPA changes "mode" in a way pathname doesn't capture
+   *   - after a route change if your router doesn't use pushState
+   * The `url` field is auto-managed from `location`; you normally only
+   * need to touch `view`.
+   */
+  setContext(partial: Partial<AnchorContext>): void {
+    const next: AnchorContext = {};
+    const url = 'url' in partial ? partial.url : this.currentContext.url;
+    const view = 'view' in partial ? partial.view : this.currentContext.view;
+    if (url) next.url = url;
+    if (view) next.view = view;
+    this.currentContext = next;
+    this.scheduleRender();
+  }
+
+  getContext(): AnchorContext {
+    return { ...this.currentContext };
+  }
+
+  private wireHistoryListeners(): void {
+    if (this.historyPatched) return;
+    this.historyPatched = true;
+    const emit = () => {
+      this.currentContext = {
+        ...this.currentContext,
+        url: currentUrl(),
+      };
+      this.scheduleRender();
+    };
+    window.addEventListener('popstate', emit);
+    window.addEventListener('hashchange', emit);
+    // Patch pushState/replaceState so SPAs that change routes without
+    // firing popstate still refresh context.
+    for (const name of ['pushState', 'replaceState'] as const) {
+      const orig = history[name].bind(history);
+      history[name] = (...args: [unknown, string, string | URL | null | undefined]) => {
+        const ret = orig(...args);
+        emit();
+        return ret;
+      };
+    }
   }
 
   disconnectedCallback(): void {
@@ -261,7 +331,10 @@ class FeedbackWidgetEl extends HTMLElement {
   // --- Composer ---
 
   private openComposerForElement(el: HTMLElement, cx: number, cy: number): void {
-    const anchor = anchors.Element.createAnchor(el);
+    const anchor: ElementAnchor = {
+      ...anchors.Element.createAnchor(el),
+      ...(hasContext(this.currentContext) ? { context: { ...this.currentContext } } : {}),
+    };
     this.showComposer(anchor, cx, cy, null);
   }
 
@@ -352,6 +425,14 @@ class FeedbackWidgetEl extends HTMLElement {
         t.status === 'resolved' ? 'resolved' : 'open';
       if (t.anchor.kind === 'orphan') {
         annotated.push({ thread: t, status: 'orphan', el: null });
+        continue;
+      }
+      // Pin only when the anchor's captured context matches the current
+      // page / view. Legacy anchors with no context show everywhere
+      // (back-compat). Off-context threads still flow into the side
+      // panel via listThreads — they're just not overlaid on the doc.
+      if (!contextMatches(t.anchor.context, this.currentContext)) {
+        annotated.push({ thread: t, status: statusBase, el: null });
         continue;
       }
       const res = anchors.Element.resolve(t.anchor, { root: document });
@@ -676,4 +757,8 @@ function formatTime(ts: number): string {
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function currentUrl(): string {
+  return location.pathname + location.search + location.hash;
 }

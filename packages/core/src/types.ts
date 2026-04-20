@@ -27,6 +27,20 @@ export interface AnchorSnippet {
 }
 
 /**
+ * Page / app-state snapshot captured at anchor-create time. Lets a single
+ * docId span a multi-page site or an SPA — when the current context
+ * doesn't match an anchor's captured context, the widget hides the pin
+ * (the thread is still listed, just not overlaid on a page where it
+ * doesn't belong).
+ */
+export interface AnchorContext {
+  /** Usually `location.pathname + location.search + location.hash` at capture time. */
+  url?: string;
+  /** App-declared view key — e.g. `modal=settings` or `tab=billing`. Opaque. */
+  view?: string;
+}
+
+/**
  * Text range anchor backed by Yjs RelativePosition (auto-adjusts across edits).
  * `startRel` / `endRel` are serialized `Y.RelativePosition`.
  */
@@ -35,6 +49,7 @@ export interface TextRangeAnchor {
   startRel: Uint8Array;
   endRel: Uint8Array;
   snippet: AnchorSnippet;
+  context?: AnchorContext;
 }
 
 /** Fingerprint of a DOM element for anchor recovery after DOM changes. */
@@ -62,6 +77,7 @@ export interface ElementAnchor {
   fingerprint: ElementFingerprint;
   /** short text for orphan display. */
   snippet: AnchorSnippet;
+  context?: AnchorContext;
 }
 
 /** Wraps a non-orphan anchor when recovery fails. */
