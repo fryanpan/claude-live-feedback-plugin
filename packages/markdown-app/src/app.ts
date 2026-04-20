@@ -718,17 +718,69 @@ async function boot(): Promise<void> {
     if (threadViewId) renderThreadView(threadViewId);
   });
   const meta = ydoc.getMap('meta');
-  meta.observe(() => {
+  meta.observe(() => renderDocLabel());
+  function renderDocLabel(): void {
     const m = readDocMeta(ydoc);
-    docTitleEl.textContent = m.title ?? m.docId;
-  });
+    // Prefer the sourceUrl (set when the doc originated from a real
+    // file path or URL) so the header shows an obvious identifier; fall
+    // back to the human title, then the docId as last resort.
+    docTitleEl.textContent = m.sourceUrl ?? m.title ?? m.docId;
+    docTitleEl.title = m.sourceUrl ?? m.title ?? m.docId;
+  }
   client.onReady(() => {
-    const m = readDocMeta(ydoc);
-    docTitleEl.textContent = m.title ?? m.docId;
+    renderDocLabel();
     editor.migrateLegacyIfNeeded();
     editor.seedIfEmpty(welcomeSeed);
     redrawThreads();
   });
+
+  // ---- Save state indicator ----
+  //   dirty   = local change produced but not yet confirmed synced to server
+  //   saved   = WS is up AND no pending local updates after a short idle window
+  //   offline = WS connection closed or reconnecting
+  // The widget's canonical "saved" signal is a server ack of the most
+  // recent local update. y-websocket doesn't surface per-update acks,
+  // so we use the next best thing: WS status + a short "typing stopped
+  // and nothing went out for 500ms" debounce. Good enough to trust for
+  // "my keystrokes made it to the server."
+  const saveStateEl = el<HTMLElement>('save-state');
+  let pendingLocalEdits = 0;
+  let saveTimer: ReturnType<typeof setTimeout> | null = null;
+  let wsOnline = false;
+  function renderSaveState(): void {
+    saveStateEl.classList.remove('save-state--saved', 'save-state--dirty', 'save-state--offline');
+    if (!wsOnline) {
+      saveStateEl.textContent = 'Offline — reconnecting…';
+      saveStateEl.classList.add('save-state--offline');
+      return;
+    }
+    if (pendingLocalEdits > 0) {
+      saveStateEl.textContent = 'Unsaved changes';
+      saveStateEl.classList.add('save-state--dirty');
+      return;
+    }
+    saveStateEl.textContent = 'All changes saved';
+    saveStateEl.classList.add('save-state--saved');
+  }
+  ydoc.on('update', (_update, origin) => {
+    // Remote updates come from the server with origin === client.ws
+    // (see readSyncMessage in client.ts). Everything else — typing,
+    // formatting toolbar actions, agent edits merged in — counts as a
+    // local change the server hasn't ack'd yet.
+    if (origin === client.ws) return;
+    pendingLocalEdits++;
+    renderSaveState();
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      pendingLocalEdits = 0;
+      renderSaveState();
+    }, 500);
+  });
+  client.onStatus((s) => {
+    wsOnline = s === 'open';
+    renderSaveState();
+  });
+  renderSaveState();
 
   // =========================================================================
   // FORMATTING TOOLBAR — collapsed by default. Aa button toggles it.
