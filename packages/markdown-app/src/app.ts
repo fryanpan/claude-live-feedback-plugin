@@ -792,6 +792,22 @@ async function boot(): Promise<void> {
   wireFormatBar(editor);
 
   // =========================================================================
+  // FONT TOGGLE — sans (default) ↔ serif. Persisted per browser.
+  // =========================================================================
+  const toggleFont = el<HTMLButtonElement>('toggle-font');
+  const savedFont = localStorage.getItem('cfw:font') ?? 'sans';
+  const applyFont = (v: 'sans' | 'serif') => {
+    document.body.classList.toggle('font-serif', v === 'serif');
+    toggleFont.setAttribute('aria-pressed', String(v === 'serif'));
+  };
+  applyFont(savedFont === 'serif' ? 'serif' : 'sans');
+  toggleFont.addEventListener('click', () => {
+    const next = document.body.classList.contains('font-serif') ? 'sans' : 'serif';
+    localStorage.setItem('cfw:font', next);
+    applyFont(next);
+  });
+
+  // =========================================================================
   // HOTKEYS
   // =========================================================================
   document.addEventListener('keydown', (ev) => {
