@@ -39,7 +39,21 @@ const server = new Server(
     version: '0.0.1',
   },
   {
-    capabilities: { tools: {} },
+    capabilities: {
+      tools: {},
+      // Declares this server as a Claude Code channel — incoming feedback
+      // events get pushed to the session as <channel source="live-feedback" …>
+      // via `notifications/claude/channel`.
+      experimental: { 'claude/channel': {} },
+    },
+    instructions: [
+      'Channel events arrive as <channel source="live-feedback" doc_id="..." ',
+      'thread_id="..." event="..." author="..." sent_at="...">body</channel>.',
+      'Treat them as explicit asks from the reviewer: read, decide if the',
+      'comment is in your domain, and act via the edit tools',
+      '(rewrite_thread_region / find_and_replace / insert_blocks_after_thread).',
+      'Call watch_doc(docId) to start receiving events for a doc; unwatch_doc to stop.',
+    ].join(' '),
   },
 );
 
@@ -237,6 +251,30 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ['docId'],
       },
     },
+    {
+      name: 'watch_doc',
+      description:
+        "Start pushing live feedback events for this doc into the current Claude Code session as <channel source='live-feedback' …> messages. Every thread.created / thread.replied / thread.resolved / thread.reopened on the doc arrives as a channel event until you call unwatch_doc.",
+      inputSchema: {
+        type: 'object',
+        properties: { docId: { type: 'string' } },
+        required: ['docId'],
+      },
+    },
+    {
+      name: 'unwatch_doc',
+      description: 'Stop pushing channel events for this doc.',
+      inputSchema: {
+        type: 'object',
+        properties: { docId: { type: 'string' } },
+        required: ['docId'],
+      },
+    },
+    {
+      name: 'list_watched_docs',
+      description: 'Return the docIds this session is currently subscribed to for channel events.',
+      inputSchema: { type: 'object', properties: {} },
+    },
   ],
 }));
 
@@ -392,6 +430,19 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const { docId } = a as { docId: string };
         return ok({ sseUrl: `${BASE_URL}/events/${encodeURIComponent(docId)}` });
       }
+      case 'watch_doc': {
+        const { docId } = a as { docId: string };
+        await watchDoc(docId);
+        return ok({ docId, watching: Array.from(watchers.keys()) });
+      }
+      case 'unwatch_doc': {
+        const { docId } = a as { docId: string };
+        unwatchDoc(docId);
+        return ok({ docId, watching: Array.from(watchers.keys()) });
+      }
+      case 'list_watched_docs': {
+        return ok({ watching: Array.from(watchers.keys()) });
+      }
       default:
         return err(`unknown tool: ${name}`);
     }
@@ -399,6 +450,136 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     return err(e instanceof Error ? e.message : String(e));
   }
 });
+
+// ===========================================================================
+// CHANNEL — bridge the feedback server's SSE stream into Claude Code via
+// `notifications/claude/channel`. Each active watcher owns one fetch
+// connection to /events/<docId>; events are forwarded as channel messages.
+// ===========================================================================
+
+interface Watcher {
+  controller: AbortController;
+  docId: string;
+}
+const watchers = new Map<string, Watcher>();
+
+async function watchDoc(docId: string): Promise<void> {
+  if (watchers.has(docId)) return;
+  const controller = new AbortController();
+  watchers.set(docId, { controller, docId });
+  void runSseLoop(docId, controller.signal).catch((err) => {
+    console.error(`[live-feedback-mcp] watcher ${docId} crashed:`, err);
+    watchers.delete(docId);
+  });
+}
+
+function unwatchDoc(docId: string): void {
+  const w = watchers.get(docId);
+  if (!w) return;
+  w.controller.abort();
+  watchers.delete(docId);
+}
+
+async function runSseLoop(docId: string, signal: AbortSignal): Promise<void> {
+  // Tight reconnect loop — the server sends keepalive comments every
+  // ~15s, so an abrupt close is almost always a transient network blip.
+  while (!signal.aborted) {
+    try {
+      const res = await fetch(`${BASE_URL}/events/${encodeURIComponent(docId)}`, { signal });
+      if (!res.ok || !res.body) throw new Error(`sse /events/${docId} → ${res.status}`);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      while (!signal.aborted) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        // Split on blank-line boundaries per SSE framing.
+        let sep = buf.indexOf('\n\n');
+        while (sep >= 0) {
+          const frame = buf.slice(0, sep);
+          buf = buf.slice(sep + 2);
+          await handleFrame(frame);
+          sep = buf.indexOf('\n\n');
+        }
+      }
+    } catch (err) {
+      if (signal.aborted) return;
+      console.error(`[live-feedback-mcp] ${docId} sse error, retrying:`, err);
+    }
+    // Backoff before reconnect
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+}
+
+async function handleFrame(raw: string): Promise<void> {
+  // Only forward data frames — ignore keepalive ':ok' comments.
+  const lines = raw.split('\n');
+  let ev = 'message';
+  const dataParts: string[] = [];
+  for (const line of lines) {
+    if (line.startsWith(':')) continue;
+    if (line.startsWith('event:')) ev = line.slice(6).trim();
+    else if (line.startsWith('data:')) dataParts.push(line.slice(5).trimStart());
+  }
+  if (dataParts.length === 0) return;
+  let payload: unknown;
+  try {
+    payload = JSON.parse(dataParts.join('\n'));
+  } catch {
+    return;
+  }
+  await emitChannelMessage(ev, payload);
+}
+
+interface ChannelPayload {
+  docId?: string;
+  threadId?: string;
+  thread?: {
+    anchor?: { snippet?: { text?: string }; original?: { snippet?: { text?: string } } };
+    status?: string;
+    comments?: Array<{ author?: { name?: string }; text?: string; ts?: number }>;
+  };
+  comment?: { author?: { name?: string }; text?: string; ts?: number };
+}
+
+async function emitChannelMessage(event: string, rawPayload: unknown): Promise<void> {
+  const p = (rawPayload ?? {}) as ChannelPayload;
+  const docId = p.docId ?? 'unknown';
+  const threadId = p.threadId ?? '';
+  const snippet =
+    p.thread?.anchor?.snippet?.text ?? p.thread?.anchor?.original?.snippet?.text ?? '';
+  const author = p.comment?.author?.name ?? p.thread?.comments?.[0]?.author?.name ?? '';
+  const text = p.comment?.text ?? p.thread?.comments?.at(-1)?.text ?? '';
+  const sentAt = new Date(p.comment?.ts ?? Date.now()).toISOString();
+
+  // Human-readable body — what the agent reads in their context.
+  const action = event.startsWith('thread.') ? event.slice('thread.'.length) : event;
+  const header = snippet ? `on "${truncate(snippet, 60)}"` : '';
+  const body = text
+    ? `[${action}] ${author ? `${author}: ` : ''}${text}`
+    : `[${action}] thread ${threadId} ${header}`.trim();
+
+  await server.notification({
+    method: 'notifications/claude/channel',
+    params: {
+      source: 'live-feedback',
+      sent_at: sentAt,
+      content: body,
+      meta: {
+        doc_id: docId,
+        thread_id: threadId,
+        event,
+        author,
+        anchor_text: snippet,
+      },
+    },
+  });
+}
+
+function truncate(s: string, n: number): string {
+  return s.length > n ? `${s.slice(0, n - 1)}…` : s;
+}
 
 async function http(method: string, path: string, body?: unknown): Promise<unknown> {
   const res = await fetch(`${BASE_URL}${path}`, {
