@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import {
+  autoReanchorDoc,
   createAgentAnchor,
   findAndReplace,
   getProseFragment,
   insertAfterRange,
+  insertBlocksAfterAnchor,
+  parseMarkdownBlocks,
   readAgentAnchor,
   rewriteRange,
   walkProse,
@@ -177,6 +180,161 @@ describe('insertAfterRange', () => {
     const res = insertAfterRange(doc, { endRel: a.endRel, text: ' there,' });
     expect(res.ok).toBe(true);
     expect(walkProse(getProseFragment(doc)).plainText).toBe('Hello there, world.');
+  });
+});
+
+describe('rewriteRange — cross-node within same block', () => {
+  it('splices across two XmlText siblings inside one block', () => {
+    const doc = new Y.Doc();
+    // Simulate a mark boundary: paragraph with two XmlText children
+    // "hello " + "world" — as if "world" was bolded.
+    const frag = getProseFragment(doc);
+    const p = new Y.XmlElement('paragraph');
+    const t1 = new Y.XmlText();
+    t1.insert(0, 'hello ');
+    const t2 = new Y.XmlText();
+    t2.insert(0, 'world');
+    doc.transact(() => {
+      p.insert(0, [t1, t2]);
+      frag.push([p]);
+    });
+    // Anchor from offset 2 in t1 ("llo ") through offset 3 in t2 ("wor")
+    const startRel = Y.encodeRelativePosition(Y.createRelativePositionFromTypeIndex(t1, 2));
+    const endRel = Y.encodeRelativePosition(Y.createRelativePositionFromTypeIndex(t2, 3));
+    const res = rewriteRange(doc, { startRel, endRel, replacement: 'OWDY-P' });
+    expect(res.ok).toBe(true);
+    expect(walkProse(frag).plainText).toBe('heOWDY-Pld');
+  });
+});
+
+describe('parseMarkdownBlocks', () => {
+  // Y.XmlElement.getAttribute returns undefined until the element is
+  // integrated into a Y.Doc — push into a fragment first.
+  const integrate = (blocks: Y.XmlElement[]): Y.XmlElement[] => {
+    const doc = new Y.Doc();
+    const frag = getProseFragment(doc);
+    doc.transact(() => frag.push(blocks));
+    return frag.toArray() as Y.XmlElement[];
+  };
+
+  it('parses headings, paragraphs, and bullet lists', () => {
+    const blocks = integrate(parseMarkdownBlocks('## Hello\n\nA paragraph.\n\n- one\n- two'));
+    expect(blocks).toHaveLength(3);
+    expect(blocks[0]?.nodeName).toBe('heading');
+    expect(blocks[0]?.getAttribute('level')).toBe('2');
+    expect(blocks[1]?.nodeName).toBe('paragraph');
+    expect(blocks[2]?.nodeName).toBe('bulletList');
+    expect(blocks[2]?.toArray()).toHaveLength(2);
+  });
+
+  it('parses numbered lists and blockquotes', () => {
+    const blocks = integrate(parseMarkdownBlocks('1. first\n2. second\n\n> quoted'));
+    expect(blocks[0]?.nodeName).toBe('orderedList');
+    expect(blocks[1]?.nodeName).toBe('blockquote');
+  });
+
+  it('parses horizontal rule', () => {
+    const blocks = integrate(parseMarkdownBlocks('a\n\n---\n\nb'));
+    expect(blocks[1]?.nodeName).toBe('horizontalRule');
+  });
+});
+
+describe('insertBlocksAfterAnchor', () => {
+  it('inserts new blocks immediately after the host block', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [
+      { tag: 'heading', text: 'Gorillas', attrs: { level: '2' } },
+      { tag: 'heading', text: 'Monkeys', attrs: { level: '2' } },
+    ]);
+    // Anchor inside the Gorillas heading
+    const frag = getProseFragment(doc);
+    const first = frag.toArray()[0] as Y.XmlElement;
+    const heading = first.toArray()[0] as Y.XmlText;
+    const anchorRel = Y.encodeRelativePosition(Y.createRelativePositionFromTypeIndex(heading, 0));
+    const res = insertBlocksAfterAnchor(doc, {
+      anchorRel,
+      markdown: 'Gentle giants of central Africa.\n\n- diet: plants\n- habitat: forest',
+    });
+    expect(res.ok).toBe(true);
+    const text = walkProse(frag).plainText;
+    // New paragraph + bullet list should land between the two headings
+    expect(text).toMatch(
+      /Gorillas\n\nGentle giants.*\n\ndiet: plants\n\nhabitat: forest\n\nMonkeys/s,
+    );
+  });
+});
+
+describe('autoReanchorDoc', () => {
+  it('recovers a text-range thread whose XmlText was recreated', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'The quick brown fox' }]);
+    // Create a thread anchor pointing at "quick brown"
+    const frag = getProseFragment(doc);
+    const p = frag.toArray()[0] as Y.XmlElement;
+    const text = p.toArray()[0] as Y.XmlText;
+    const startRel = Y.createRelativePositionFromTypeIndex(text, 4);
+    const endRel = Y.createRelativePositionFromTypeIndex(text, 15);
+    const threads = doc.getMap('threads') as Y.Map<Y.Map<unknown>>;
+    const threadMap = new Y.Map<unknown>();
+    threadMap.set('anchor', {
+      kind: 'text-range',
+      startRel: Y.encodeRelativePosition(startRel),
+      endRel: Y.encodeRelativePosition(endRel),
+      snippet: { text: 'quick brown' },
+    });
+    threads.set('t1', threadMap);
+
+    // Simulate a destructive edit that wipes the XmlText and replaces
+    // it with a fresh one containing the same content — anchors in the
+    // old node become orphaned.
+    doc.transact(() => {
+      p.delete(0, p.length);
+      const fresh = new Y.XmlText();
+      fresh.insert(0, 'The quick brown fox');
+      p.insert(0, [fresh]);
+    });
+
+    // Pre-sweep: anchor should not resolve.
+    const before = threadMap.get('anchor') as { startRel: Uint8Array };
+    expect(
+      Y.createAbsolutePositionFromRelativePosition(Y.decodeRelativePosition(before.startRel), doc),
+    ).toBeNull();
+
+    const summary = autoReanchorDoc(doc);
+    expect(summary.reanchored).toBe(1);
+
+    const after = threadMap.get('anchor') as { startRel: Uint8Array };
+    const resolved = Y.createAbsolutePositionFromRelativePosition(
+      Y.decodeRelativePosition(after.startRel),
+      doc,
+    );
+    expect(resolved).not.toBeNull();
+  });
+
+  it('leaves ambiguous threads orphaned rather than guessing wrong', () => {
+    // Build the anchor against a scratch doc, then plant it in a
+    // DIFFERENT doc whose plain text has multiple matches of the
+    // snippet. The anchor can't resolve (wrong doc) and the snippet
+    // is ambiguous, so reanchor should refuse to guess.
+    const scratch = new Y.Doc();
+    const scratchText = new Y.Text();
+    scratch.getMap('tmp').set('x', scratchText);
+    scratchText.insert(0, 'dummy');
+    const startRel = Y.encodeRelativePosition(
+      Y.createRelativePositionFromTypeIndex(scratchText, 0),
+    );
+    const endRel = Y.encodeRelativePosition(Y.createRelativePositionFromTypeIndex(scratchText, 3));
+
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'cat cat cat' }]);
+    const threads = doc.getMap('threads') as Y.Map<Y.Map<unknown>>;
+    const tm = new Y.Map<unknown>();
+    tm.set('anchor', { kind: 'text-range', startRel, endRel, snippet: { text: 'cat' } });
+    threads.set('t1', tm);
+
+    const res = autoReanchorDoc(doc);
+    expect(res.reanchored).toBe(0);
+    expect(res.stillOrphan).toBe(1);
   });
 });
 

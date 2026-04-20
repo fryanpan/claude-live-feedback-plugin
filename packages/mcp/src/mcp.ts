@@ -155,7 +155,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'insert_after_thread',
       description:
-        "Insert text at the END of a thread's anchored range. Useful for 'add a note right after this sentence' without modifying what the user wrote. Mark formatting at the end position carries onto the inserted text.",
+        "Insert text at the END of a thread's anchored range (INLINE — stays in the same paragraph/heading). For 'add a note right after this sentence.' If you want to add a whole new block after the anchor's block, use insert_blocks_after_thread instead.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -164,6 +164,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           text: { type: 'string' },
         },
         required: ['docId', 'threadId', 'text'],
+      },
+    },
+    {
+      name: 'insert_blocks_after_thread',
+      description:
+        "Insert one or more new block elements (paragraphs, headings, lists, blockquotes, code blocks) AFTER the block that contains the thread's anchor. Accepts markdown: `# heading`, `## sub`, `- bullet`, `1. numbered`, `> quote`, ```code blocks```, and `---` for a horizontal rule. Blank lines separate paragraphs. Use this for 'add a section', 'add a paragraph below', 'insert a bullet list here'.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          docId: { type: 'string' },
+          threadId: { type: 'string' },
+          markdown: { type: 'string' },
+        },
+        required: ['docId', 'threadId', 'markdown'],
       },
     },
     {
@@ -319,6 +333,19 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           'POST',
           `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/insert_after`,
           { text },
+        );
+        return ok(res);
+      }
+      case 'insert_blocks_after_thread': {
+        const { docId, threadId, markdown } = a as {
+          docId: string;
+          threadId: string;
+          markdown: string;
+        };
+        const res = await http(
+          'POST',
+          `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/insert_blocks_after`,
+          { markdown },
         );
         return ok(res);
       }

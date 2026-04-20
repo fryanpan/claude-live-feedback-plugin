@@ -303,6 +303,39 @@ export class Rooms {
     return prose.insertAfterRange(room.ydoc, { endRel: thread.anchor.endRel, text });
   }
 
+  /**
+   * Parse markdown into block elements and insert them immediately
+   * after the block that contains the thread's anchor. Use this for
+   * "add a section below this comment" — the anchor picks the
+   * location, the markdown describes the new blocks.
+   */
+  insertBlocksAfterThread(
+    docId: string,
+    threadId: string,
+    markdown: string,
+  ): prose.AnchoredEditResult {
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'anchor-not-found' };
+    const thread = this.getThread(docId, threadId);
+    if (!thread) return { ok: false, error: 'anchor-not-found' };
+    if (thread.anchor.kind !== 'text-range') return { ok: false, error: 'anchor-orphaned' };
+    return prose.insertBlocksAfterAnchor(room.ydoc, {
+      anchorRel: thread.anchor.endRel,
+      markdown,
+    });
+  }
+
+  /**
+   * Sweep every text-range thread in a doc and best-effort re-anchor
+   * the ones whose Y.RelativePosition no longer resolves. Idempotent —
+   * safe to call on every significant doc change.
+   */
+  autoReanchor(docId: string): { checked: number; reanchored: number; stillOrphan: number } | null {
+    const room = this.rooms.get(docId);
+    if (!room) return null;
+    return prose.autoReanchorDoc(room.ydoc);
+  }
+
   listThreads(docId: string, filter?: { status?: 'open' | 'resolved' }): Thread[] {
     const room = this.rooms.get(docId);
     if (!room) return [];
@@ -342,6 +375,30 @@ export class Rooms {
     room.ydoc.on('update', () => {
       this.saveToDisk(room);
     });
+    // Every prose change triggers a best-effort sweep that rebuilds
+    // Y.RelativePositions for threads whose anchors no longer resolve
+    // (e.g. the user split a block or re-typed the anchored text —
+    // prosemirror can destroy the original Y.XmlText during those).
+    // Debounced so a burst of keystrokes only does one sweep.
+    const fragment = prose.getProseFragment(room.ydoc);
+    let reanchorTimer: ReturnType<typeof setTimeout> | null = null;
+    fragment.observeDeep((_events, tr) => {
+      // Don't re-enter on our own re-anchor writes.
+      if (tr.origin === 'agent-reanchor') return;
+      if (reanchorTimer) clearTimeout(reanchorTimer);
+      reanchorTimer = setTimeout(() => {
+        const res = prose.autoReanchorDoc(room.ydoc);
+        if (res.reanchored > 0) {
+          console.log(`[rooms] ${room.docId}: auto-reanchored ${res.reanchored} thread(s)`);
+        }
+      }, 250);
+    });
+    // Also sweep once on room load so threads recover after server
+    // restart even if no new edits happen.
+    const initial = prose.autoReanchorDoc(room.ydoc);
+    if (initial.reanchored > 0) {
+      console.log(`[rooms] ${room.docId}: on-load auto-reanchored ${initial.reanchored} thread(s)`);
+    }
   }
 
   private pathFor(docId: string): string {
