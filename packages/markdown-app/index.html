@@ -32,9 +32,9 @@
             type="button"
             id="toggle-threads"
             class="icon-btn threads-toggle"
-            title="Show threads"
+            title="Show comments"
             aria-pressed="false"
-            aria-label="Toggle threads"
+            aria-label="Toggle comments"
           >
             💬
             <span id="threads-count" class="badge">0</span>
@@ -83,16 +83,16 @@
           💬
         </button>
 
-        <aside id="threads-pane" aria-label="Threads" aria-hidden="true">
+        <aside id="threads-pane" aria-label="Comments" aria-hidden="true">
           <div class="threads-header">
             <div class="threads-title-row">
-              <h2>Threads</h2>
+              <h2>Comments</h2>
               <button
                 type="button"
                 id="close-threads"
                 class="icon-btn threads-close"
                 title="Close"
-                aria-label="Close threads"
+                aria-label="Close comments"
               >
                 ×
               </button>
@@ -113,12 +113,12 @@
         id="thread-view"
         class="thread-view hidden"
         role="dialog"
-        aria-label="Thread"
+        aria-label="Comment"
         aria-hidden="true"
       >
         <header class="thread-view-header">
           <span class="drag-handle" aria-hidden="true"></span>
-          <h2 class="thread-view-title">Discussion</h2>
+          <h2 class="thread-view-title">Comment</h2>
           <button
             id="thread-view-close"
             type="button"

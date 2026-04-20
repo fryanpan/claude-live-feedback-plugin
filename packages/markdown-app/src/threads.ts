@@ -105,10 +105,10 @@ export class ThreadPanel {
       empty.className = 'threads-empty';
       empty.textContent =
         this.tab === 'open'
-          ? 'No open threads. Select text in the doc to leave a comment.'
+          ? 'No open comments. Select text in the doc to leave one.'
           : this.tab === 'resolved'
             ? 'Nothing resolved yet.'
-            : 'No threads on this doc yet.';
+            : 'No comments on this doc yet.';
       c.appendChild(empty);
       this.lastRenderKey = key;
       return;

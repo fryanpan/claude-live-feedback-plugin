@@ -558,33 +558,39 @@ button {
 .thread.orphan .status-dot {
   background: var(--yellow);
 }
+/* The snippet quotes the anchored text — use the same serif family as
+   the doc so the quote looks like it was lifted straight from the page. */
 .thread .snippet {
-  font-size: 12px;
+  font-family: Charter, "Iowan Old Style", "Source Serif Pro", Georgia, serif;
+  font-size: 13px;
+  line-height: 1.5;
   color: var(--fg-muted);
   font-style: italic;
   border-left: 3px solid var(--border);
   padding: 2px 8px;
-  margin-bottom: 8px;
-  max-height: 2.8em;
+  margin-bottom: 10px;
+  max-height: 3em;
   overflow: hidden;
 }
 .thread .comments {
   margin-top: 2px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
 .thread .comment {
-  font-size: 13px;
-  line-height: 1.45;
+  font-size: 14.5px;
+  line-height: 1.55;
 }
+/* Author/time chrome stays sans for clear metadata-vs-content contrast. */
 .thread .comment .author {
   display: flex;
   align-items: center;
   gap: 6px;
   font-size: 12px;
   color: var(--fg);
-  margin-bottom: 2px;
+  margin-bottom: 4px;
+  font-family: var(--sans);
 }
 .thread .comment .author .swatch {
   display: inline-block;
@@ -602,8 +608,16 @@ button {
   margin-left: auto;
   font-weight: 400;
 }
+/* Comment body is the thing people read — apply the same serif reading
+   stack as the editor, slightly smaller to fit the narrower panel. */
 .thread .comment .body {
   color: var(--fg);
+  font-family: Charter, "Iowan Old Style", "Source Serif Pro", Georgia, serif;
+  font-feature-settings: "kern", "liga";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  white-space: pre-wrap;
+  word-wrap: break-word;
 }
 .thread-reply {
   display: none;
@@ -923,8 +937,10 @@ body.composer-open #editor .ProseMirror ::selection {
   padding: 16px 16px 20px;
 }
 .thread-view-body .thread-anchor {
-  font-size: 14px;
-  line-height: 1.45;
+  font-family: Charter, "Iowan Old Style", "Source Serif Pro", Georgia, serif;
+  font-size: 15px;
+  line-height: 1.55;
+  font-style: italic;
   color: var(--fg);
   background: rgba(255, 213, 79, 0.22);
   border-left: 3px solid rgba(191, 135, 0, 0.55);
@@ -933,7 +949,7 @@ body.composer-open #editor .ProseMirror ::selection {
   margin-bottom: 16px;
 }
 .thread-view-body .comment {
-  padding: 12px 0;
+  padding: 14px 0;
   border-bottom: 1px solid var(--bg-hover);
 }
 .thread-view-body .comment:last-child {
@@ -944,7 +960,8 @@ body.composer-open #editor .ProseMirror ::selection {
   align-items: center;
   gap: 8px;
   font-size: 13px;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
+  font-family: var(--sans);
 }
 .thread-view-body .comment .author .swatch {
   width: 10px;
@@ -961,9 +978,15 @@ body.composer-open #editor .ProseMirror ::selection {
   margin-left: auto;
 }
 .thread-view-body .comment .body {
-  font-size: 15px;
-  line-height: 1.5;
+  font-family: Charter, "Iowan Old Style", "Source Serif Pro", Georgia, serif;
+  font-size: 16px;
+  line-height: 1.6;
   color: var(--fg);
+  font-feature-settings: "kern", "liga";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  white-space: pre-wrap;
+  word-wrap: break-word;
 }
 .thread-view-actions {
   display: flex;
