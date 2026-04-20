@@ -270,15 +270,23 @@ export function resolveRelativePositionRaw(
 
 export interface AnchoredEditResult {
   ok: boolean;
-  error?: 'anchor-not-found' | 'anchor-orphaned' | 'cross-node';
+  error?: 'anchor-not-found' | 'anchor-orphaned' | 'cross-block' | 'no-host-block' | 'parse-failed';
 }
 
 /**
  * Replace the text spanned by two serialized Y.RelativePositions with a
- * new string, inside a single Yjs transaction. Requires both anchors
- * to resolve to the same Y.XmlText — cross-node ranges are rejected
- * for MVP (they'd need to delete from end of one node, all of middle,
- * start of another, which is more code than it's worth right now).
+ * new string, inside a single Yjs transaction.
+ *
+ * Handles three cases:
+ *   1. same Y.XmlText → splice in place (the common case).
+ *   2. multiple Y.XmlTexts inside the SAME block element (happens when
+ *      the range crosses a mark boundary — bold, italic, link) → delete
+ *      the tail of the first, wipe any middles, delete the head of the
+ *      last, insert the replacement at the first position.
+ *   3. spans multiple blocks → rejected (`cross-block`). Joining blocks
+ *      by deleting block boundaries would require restructuring the XML
+ *      tree, which is out of scope for a text-range tool. Use
+ *      `insertBlocksAfterAnchor` + manual cleanup if you really need it.
  */
 export function rewriteRange(
   doc: Y.Doc,
@@ -292,12 +300,54 @@ export function rewriteRange(
   const start = resolveRelativePositionRaw(doc, opts.startRel);
   const end = resolveRelativePositionRaw(doc, opts.endRel);
   if (!start || !end) return { ok: false, error: 'anchor-orphaned' };
-  if (start.node !== end.node) return { ok: false, error: 'cross-node' };
-  const from = Math.min(start.offset, end.offset);
-  const to = Math.max(start.offset, end.offset);
+
+  if (start.node === end.node) {
+    const from = Math.min(start.offset, end.offset);
+    const to = Math.max(start.offset, end.offset);
+    doc.transact(() => {
+      start.node.delete(from, to - from);
+      if (opts.replacement.length > 0) start.node.insert(from, opts.replacement);
+    }, opts.transactionOrigin ?? 'agent');
+    return { ok: true };
+  }
+
+  // Cross-node. Walk the flattened fragment, locate the block each
+  // anchor is in, and bail if they're in different blocks.
+  const fragment = getProseFragment(doc);
+  const { segments } = walkProse(fragment);
+  const startSeg = segments.find((s) => s.node === start.node);
+  const endSeg = segments.find((s) => s.node === end.node);
+  if (!startSeg || !endSeg) return { ok: false, error: 'anchor-orphaned' };
+  if (!startSeg.block || startSeg.block !== endSeg.block) {
+    return { ok: false, error: 'cross-block' };
+  }
+
+  // Order the two endpoints by flattened docOffset so we always iterate
+  // left-to-right regardless of which anchor was which.
+  const firstSeg = startSeg.docOffset <= endSeg.docOffset ? startSeg : endSeg;
+  const lastSeg = firstSeg === startSeg ? endSeg : startSeg;
+  const firstOffset = firstSeg === startSeg ? start.offset : end.offset;
+  const lastOffset = lastSeg === endSeg ? end.offset : start.offset;
+  const blockSegments = segments.filter((s) => s.block === startSeg.block);
+  const firstIdx = blockSegments.indexOf(firstSeg);
+  const lastIdx = blockSegments.indexOf(lastSeg);
+  const touched = blockSegments.slice(firstIdx, lastIdx + 1);
+
   doc.transact(() => {
-    start.node.delete(from, to - from);
-    if (opts.replacement.length > 0) start.node.insert(from, opts.replacement);
+    // Delete from the END so earlier node indices don't shift.
+    for (let i = touched.length - 1; i >= 0; i--) {
+      const seg = touched[i]!;
+      if (i === touched.length - 1) {
+        seg.node.delete(0, lastOffset);
+      } else if (i === 0) {
+        seg.node.delete(firstOffset, seg.length - firstOffset);
+      } else {
+        seg.node.delete(0, seg.length);
+      }
+    }
+    if (opts.replacement.length > 0) {
+      touched[0]!.node.insert(firstOffset, opts.replacement);
+    }
   }, opts.transactionOrigin ?? 'agent');
   return { ok: true };
 }
@@ -323,6 +373,253 @@ export function insertAfterRange(
     end.node.insert(end.offset, opts.text);
   }, opts.transactionOrigin ?? 'agent');
   return { ok: true };
+}
+
+/**
+ * Parse a small subset of markdown into Y.XmlElement blocks matching
+ * tiptap-starter-kit's schema. Enough for the agent to answer "add a
+ * section", "insert a bullet list", "add a heading" without having to
+ * build XmlElement trees by hand.
+ *
+ * Supported:
+ *   # / ## / ###        → heading (level from # count)
+ *   -, *                → bulletList > listItem > paragraph
+ *   1.                  → orderedList > listItem > paragraph
+ *   >                   → blockquote > paragraph
+ *   ```                 → codeBlock
+ *   ---                 → horizontalRule
+ *   (anything else)     → paragraph (blank lines split paragraphs)
+ *
+ * Deliberately NOT a full markdown parser. Inline marks (bold/italic/
+ * links) come through as literal text for now — the agent can follow
+ * up with find_and_replace or edit_at_anchor to add marks later.
+ */
+export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
+  const lines = markdown.replace(/\r\n/g, '\n').split('\n');
+  const out: Y.XmlElement[] = [];
+  let i = 0;
+
+  const isHeading = (s: string) => /^#{1,6}\s+/.test(s);
+  const isBullet = (s: string) => /^[-*]\s+/.test(s);
+  const isNumbered = (s: string) => /^\d+\.\s+/.test(s);
+  const isQuote = (s: string) => /^>\s?/.test(s);
+  const isFence = (s: string) => /^```/.test(s);
+  const isRule = (s: string) => /^(---|\*\*\*|___)\s*$/.test(s);
+
+  const isBlockStart = (s: string) =>
+    isHeading(s) || isBullet(s) || isNumbered(s) || isQuote(s) || isFence(s) || isRule(s);
+
+  const mkParagraph = (text: string): Y.XmlElement => {
+    const p = new Y.XmlElement('paragraph');
+    if (text.length > 0) {
+      const t = new Y.XmlText();
+      t.insert(0, text);
+      p.insert(0, [t]);
+    }
+    return p;
+  };
+
+  while (i < lines.length) {
+    const line = lines[i] ?? '';
+    if (line.trim() === '') {
+      i++;
+      continue;
+    }
+
+    if (isHeading(line)) {
+      const m = line.match(/^(#{1,6})\s+(.*)$/);
+      const level = Math.min(6, Math.max(1, m?.[1]?.length ?? 1));
+      const text = m?.[2] ?? '';
+      const h = new Y.XmlElement('heading');
+      h.setAttribute('level', String(level));
+      if (text) {
+        const t = new Y.XmlText();
+        t.insert(0, text);
+        h.insert(0, [t]);
+      }
+      out.push(h);
+      i++;
+      continue;
+    }
+
+    if (isRule(line)) {
+      out.push(new Y.XmlElement('horizontalRule'));
+      i++;
+      continue;
+    }
+
+    if (isFence(line)) {
+      i++;
+      const code: string[] = [];
+      while (i < lines.length && !isFence(lines[i] ?? '')) {
+        code.push(lines[i] ?? '');
+        i++;
+      }
+      if (i < lines.length) i++; // skip closing fence
+      const cb = new Y.XmlElement('codeBlock');
+      const t = new Y.XmlText();
+      t.insert(0, code.join('\n'));
+      cb.insert(0, [t]);
+      out.push(cb);
+      continue;
+    }
+
+    if (isBullet(line) || isNumbered(line)) {
+      const ordered = isNumbered(line);
+      const list = new Y.XmlElement(ordered ? 'orderedList' : 'bulletList');
+      const stripRe = ordered ? /^\d+\.\s+/ : /^[-*]\s+/;
+      while (i < lines.length && (ordered ? isNumbered : isBullet)(lines[i] ?? '')) {
+        const itemText = (lines[i] ?? '').replace(stripRe, '');
+        const li = new Y.XmlElement('listItem');
+        li.insert(0, [mkParagraph(itemText)]);
+        list.insert(list.length, [li]);
+        i++;
+      }
+      out.push(list);
+      continue;
+    }
+
+    if (isQuote(line)) {
+      const quoted: string[] = [];
+      while (i < lines.length && isQuote(lines[i] ?? '')) {
+        quoted.push((lines[i] ?? '').replace(/^>\s?/, ''));
+        i++;
+      }
+      const bq = new Y.XmlElement('blockquote');
+      bq.insert(0, [mkParagraph(quoted.join('\n'))]);
+      out.push(bq);
+      continue;
+    }
+
+    // Default: a paragraph. Gather consecutive non-blank, non-block-start
+    // lines and join with a space so soft-wrapped prose becomes one
+    // paragraph (standard markdown convention).
+    const paraLines: string[] = [line];
+    i++;
+    while (i < lines.length) {
+      const nxt = lines[i] ?? '';
+      if (nxt.trim() === '' || isBlockStart(nxt)) break;
+      paraLines.push(nxt);
+      i++;
+    }
+    out.push(mkParagraph(paraLines.join(' ')));
+  }
+  return out;
+}
+
+/**
+ * Insert one or more markdown-parsed blocks AFTER the block containing
+ * the anchor. Use this for "add a paragraph after this heading" or
+ * "add a section here" — the anchor tells the agent where in the doc
+ * structure to splice, and the markdown describes the new content.
+ */
+export function insertBlocksAfterAnchor(
+  doc: Y.Doc,
+  opts: {
+    anchorRel: Uint8Array;
+    markdown: string;
+    transactionOrigin?: unknown;
+  },
+): AnchoredEditResult {
+  const raw = resolveRelativePositionRaw(doc, opts.anchorRel);
+  if (!raw) return { ok: false, error: 'anchor-orphaned' };
+  const fragment = getProseFragment(doc);
+  const { segments } = walkProse(fragment);
+  const seg = segments.find((s) => s.node === raw.node);
+  if (!seg || !seg.block) return { ok: false, error: 'no-host-block' };
+  const block = seg.block;
+  const parent = block.parent as Y.XmlFragment | Y.XmlElement | null;
+  if (!parent) return { ok: false, error: 'no-host-block' };
+  const siblings = parent.toArray();
+  const idx = siblings.indexOf(block);
+  if (idx < 0) return { ok: false, error: 'no-host-block' };
+
+  const blocks = parseMarkdownBlocks(opts.markdown);
+  if (blocks.length === 0) return { ok: false, error: 'parse-failed' };
+
+  doc.transact(() => {
+    parent.insert(idx + 1, blocks);
+  }, opts.transactionOrigin ?? 'agent');
+  return { ok: true };
+}
+
+/**
+ * Scan all text-range threads in a doc. For each thread whose anchor
+ * no longer resolves (e.g. the user split the block, re-typed the
+ * text, or moved content across blocks in a way prosemirror destroyed
+ * the original Y.XmlText), try to recover by text-matching the
+ * thread's stored snippet against the current plain text. If the
+ * snippet appears exactly once, build a new Y.RelativePosition and
+ * update the thread's anchor in place.
+ *
+ * Returns a summary the caller can log. Safe to call repeatedly —
+ * idempotent when nothing has changed.
+ */
+export function autoReanchorDoc(
+  doc: Y.Doc,
+  opts: { transactionOrigin?: unknown } = {},
+): { checked: number; reanchored: number; stillOrphan: number } {
+  const threads = doc.getMap('threads') as Y.Map<Y.Map<unknown>>;
+  const fragment = getProseFragment(doc);
+  const walk = walkProse(fragment);
+  let checked = 0;
+  let reanchored = 0;
+  let stillOrphan = 0;
+
+  threads.forEach((threadMap) => {
+    const anchor = threadMap.get('anchor') as
+      | { kind: 'text-range'; startRel: Uint8Array; endRel: Uint8Array; snippet: { text: string } }
+      | { kind: 'element' | 'orphan' }
+      | undefined;
+    if (!anchor || anchor.kind !== 'text-range') return;
+    checked++;
+    if (
+      resolveRelativePositionRaw(doc, anchor.startRel) &&
+      resolveRelativePositionRaw(doc, anchor.endRel)
+    ) {
+      return;
+    }
+    const needle = anchor.snippet.text;
+    if (!needle) {
+      stillOrphan++;
+      return;
+    }
+    const first = walk.plainText.indexOf(needle);
+    if (first < 0 || walk.plainText.indexOf(needle, first + 1) >= 0) {
+      // zero or multiple matches — don't guess
+      stillOrphan++;
+      return;
+    }
+    const startSeg = walk.segments.find(
+      (s) => first >= s.docOffset && first < s.docOffset + s.length,
+    );
+    const endSeg = walk.segments.find(
+      (s) => first + needle.length > s.docOffset && first + needle.length <= s.docOffset + s.length,
+    );
+    if (!startSeg || !endSeg) {
+      stillOrphan++;
+      return;
+    }
+    const startRel = Y.createRelativePositionFromTypeIndex(
+      startSeg.node,
+      first - startSeg.docOffset,
+    );
+    const endRel = Y.createRelativePositionFromTypeIndex(
+      endSeg.node,
+      first + needle.length - endSeg.docOffset,
+    );
+    doc.transact(() => {
+      threadMap.set('anchor', {
+        kind: 'text-range',
+        startRel: Y.encodeRelativePosition(startRel),
+        endRel: Y.encodeRelativePosition(endRel),
+        snippet: { text: needle },
+      });
+    }, opts.transactionOrigin ?? 'agent-reanchor');
+    reanchored++;
+  });
+
+  return { checked, reanchored, stillOrphan };
 }
 
 /**

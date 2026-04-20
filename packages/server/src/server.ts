@@ -166,6 +166,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             const res = rooms.insertAfterThread(docId, threadId, text);
             return res.ok ? j(200, res) : j(409, res);
           }
+          if (threadRest === '/insert_blocks_after' && req.method === 'POST') {
+            const body = await safeJson(req);
+            const markdown = String(body?.markdown ?? '');
+            const res = rooms.insertBlocksAfterThread(docId, threadId, markdown);
+            return res.ok ? j(200, res) : j(409, res);
+          }
         }
         if (rest === 'threads' && req.method === 'POST') {
           const body = await safeJson(req);
