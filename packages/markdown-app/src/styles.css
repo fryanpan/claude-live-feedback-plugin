@@ -15,10 +15,19 @@
   --shadow: 0 1px 2px rgba(27, 31, 35, 0.06), 0 0 1px rgba(27, 31, 35, 0.12);
   --shadow-lg: 0 20px 50px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(27, 31, 35, 0.08);
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --sans: -apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif;
+  --sans: -apple-system, BlinkMacSystemFont, "Inter", "SF Pro Text", "Segoe UI", system-ui,
+    sans-serif;
+  --serif: Charter, "Iowan Old Style", "Source Serif Pro", Georgia, "Times New Roman", serif;
+  /* Prose font — overridden by body.font-serif. Default is sans because
+     most docs here sit next to code; serif is a one-click override for
+     longer-form reading. */
+  --prose: var(--sans);
   /* iOS safe-area inset (nothing by default on desktop) */
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-top: env(safe-area-inset-top, 0px);
+}
+body.font-serif {
+  --prose: var(--serif);
 }
 
 * {
@@ -105,6 +114,27 @@ button {
 .save-state--offline {
   color: #7a0f14;
   background: rgba(220, 53, 69, 0.12);
+}
+.font-toggle {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  min-width: 52px;
+}
+body.font-serif .font-toggle-label::before {
+  content: "Serif";
+}
+body:not(.font-serif) .font-toggle-label::before {
+  content: "Sans";
+}
+/* Hide the original label text, use the pseudo content so the same
+   button reflects current state without JS poking textContent. */
+.font-toggle-label {
+  font-size: 0;
+  line-height: 1;
+}
+.font-toggle-label::before {
+  font-size: 12px;
 }
 .toolbar {
   display: flex;
@@ -282,7 +312,7 @@ button {
   max-width: 36rem; /* ≈ 720px at 18px — ~70 chars per line */
   margin: 0 auto;
   line-height: 1.65;
-  font-family: Charter, "Iowan Old Style", "Source Serif Pro", Georgia, "Times New Roman", serif;
+  font-family: var(--prose);
   font-size: 18px;
   color: var(--fg);
   min-height: 60vh;
@@ -298,7 +328,7 @@ button {
 #editor .ProseMirror h1,
 #editor .ProseMirror h2,
 #editor .ProseMirror h3 {
-  font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Helvetica, Arial, sans-serif;
+  font-family: var(--sans);
   letter-spacing: -0.01em;
   line-height: 1.25;
 }
@@ -561,7 +591,7 @@ button {
 /* The snippet quotes the anchored text — use the same serif family as
    the doc so the quote looks like it was lifted straight from the page. */
 .thread .snippet {
-  font-family: Charter, "Iowan Old Style", "Source Serif Pro", Georgia, serif;
+  font-family: var(--prose);
   font-size: 13px;
   line-height: 1.5;
   color: var(--fg-muted);
@@ -612,7 +642,7 @@ button {
    stack as the editor, slightly smaller to fit the narrower panel. */
 .thread .comment .body {
   color: var(--fg);
-  font-family: Charter, "Iowan Old Style", "Source Serif Pro", Georgia, serif;
+  font-family: var(--prose);
   font-feature-settings: "kern", "liga";
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -937,7 +967,7 @@ body.composer-open #editor .ProseMirror ::selection {
   padding: 16px 16px 20px;
 }
 .thread-view-body .thread-anchor {
-  font-family: Charter, "Iowan Old Style", "Source Serif Pro", Georgia, serif;
+  font-family: var(--prose);
   font-size: 15px;
   line-height: 1.55;
   font-style: italic;
@@ -978,7 +1008,7 @@ body.composer-open #editor .ProseMirror ::selection {
   margin-left: auto;
 }
 .thread-view-body .comment .body {
-  font-family: Charter, "Iowan Old Style", "Source Serif Pro", Georgia, serif;
+  font-family: var(--prose);
   font-size: 16px;
   line-height: 1.6;
   color: var(--fg);
