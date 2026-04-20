@@ -3,6 +3,7 @@ import type { Anchor, ElementAnchor, TextRangeAnchor } from '../types.ts';
 import * as Element from './element.ts';
 import * as TextRange from './text-range.ts';
 
+export * from './context.ts';
 export { TextRange, Element };
 
 export interface TextResolveEnv {

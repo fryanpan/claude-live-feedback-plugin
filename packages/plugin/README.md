@@ -122,6 +122,15 @@ tunnels, no certs. For a phone-simulator viewport on desktop append
 - `/feedback-serve` — start the feedback HTTP/WS server from inside Claude.
 - `/feedback-threads <docId>` — list open threads on a doc.
 
+## Skills
+
+- `embedding-feedback-widget` — Claude auto-invokes this when asked to
+  generate HTML mockups, sample pages, or dev-server demos. It
+  encodes the rules around `docId` reuse, multi-page context filtering,
+  and `setContext({ view })` for dynamic surfaces (modals, tabs, SPA
+  state). You don't call it directly; just ask Claude to make a
+  mockup and this skill fires.
+
 ## Widget integration
 
 ```html
