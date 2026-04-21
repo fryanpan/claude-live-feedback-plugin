@@ -206,6 +206,31 @@ export class Rooms {
   }
 
   /**
+   * Seed a brand-new doc with initial markdown. Intended for agents
+   * that create a review doc via POST /api/docs and want to populate
+   * it without waiting for a human browser to open the URL.
+   *
+   * Fails with `non-empty` when the prose fragment already has any
+   * content — we never clobber existing text. Use find_and_replace /
+   * rewrite_thread_region for edits against non-empty docs.
+   */
+  seedDoc(
+    docId: string,
+    markdown: string,
+  ): { ok: boolean; error?: 'not-found' | 'non-empty' | 'parse-failed'; blocks?: number } {
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'not-found' };
+    const fragment = prose.getProseFragment(room.ydoc);
+    if (fragment.length > 0) return { ok: false, error: 'non-empty' };
+    const blocks = prose.parseMarkdownBlocks(markdown);
+    if (blocks.length === 0) return { ok: false, error: 'parse-failed' };
+    room.ydoc.transact(() => {
+      fragment.push(blocks);
+    }, 'agent-seed');
+    return { ok: true, blocks: blocks.length };
+  }
+
+  /**
    * Replace `find` with `replace` inside the doc. Optional context
    * string around the match disambiguates repeated phrases; pass
    * `occurrence` to pick by index when you know the match count.
