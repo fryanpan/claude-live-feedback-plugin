@@ -47,8 +47,21 @@ export interface RoomsConfig {
   webhooks: WebhookDispatcher;
 }
 
+/**
+ * Per-room binding to a markdown file on disk. Maintained by
+ * `attachFile` — every prose change debounces a write of the
+ * serialized fragment back to the file. First attach seeds from disk
+ * if the fragment is empty.
+ */
+interface FileBinding {
+  path: string;
+  writeTimer?: ReturnType<typeof setTimeout> | null;
+  lastWritten?: string;
+}
+
 export class Rooms {
   private rooms = new Map<string, DocRoom>();
+  private fileBindings = new Map<string, FileBinding>();
 
   constructor(private cfg: RoomsConfig) {
     if (!existsSync(cfg.dataDir)) mkdirSync(cfg.dataDir, { recursive: true });
@@ -214,6 +227,81 @@ export class Rooms {
    * content — we never clobber existing text. Use find_and_replace /
    * rewrite_thread_region for edits against non-empty docs.
    */
+  /**
+   * Bind a doc to a file path on disk. After attach:
+   *   - if the doc's prose fragment is empty AND the file exists with
+   *     content, the file is parsed and seeded into the fragment
+   *   - every subsequent prose change debounces a write of the
+   *     serialized markdown back to the file (default 800ms)
+   *
+   * File path is resolved relative to the server's process cwd if
+   * relative. An absolute path is strongly recommended. No external-
+   * file-watch yet — edits made directly to the file on disk after
+   * attach are NOT reflected in the live doc; that's a follow-up.
+   */
+  attachFile(
+    docId: string,
+    filePath: string,
+  ): {
+    ok: boolean;
+    error?: 'not-found' | 'path-empty' | 'read-failed';
+    seeded?: boolean;
+    resolvedPath?: string;
+  } {
+    if (!filePath || filePath.trim() === '') return { ok: false, error: 'path-empty' };
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'not-found' };
+    const abs = filePath.startsWith('/') ? filePath : join(process.cwd(), filePath);
+    const fragment = prose.getProseFragment(room.ydoc);
+    let seeded = false;
+    if (fragment.length === 0 && existsSync(abs)) {
+      try {
+        const md = readFileSync(abs, 'utf8');
+        const blocks = prose.parseMarkdownBlocks(md);
+        if (blocks.length > 0) {
+          room.ydoc.transact(() => fragment.push(blocks), 'file-seed');
+          seeded = true;
+        }
+      } catch (err) {
+        console.error(`[rooms] read failed for ${abs}:`, err);
+        return { ok: false, error: 'read-failed' };
+      }
+    }
+    const existing = this.fileBindings.get(docId);
+    if (existing?.writeTimer) clearTimeout(existing.writeTimer);
+    const binding: FileBinding = { path: abs };
+    this.fileBindings.set(docId, binding);
+    // sourceUrl mirrors the path so UI headers can show "Editing: <path>"
+    if (!room.meta.sourceUrl) {
+      const m = room.ydoc.getMap('meta');
+      room.ydoc.transact(() => m.set('sourceUrl', abs));
+      room.meta.sourceUrl = abs;
+    }
+    // Schedule a first write so the file is touched even if Bryan just
+    // opens the doc and looks at it (mtime proves the binding works).
+    fragment.observeDeep((_events, tr) => {
+      // Don't echo our own seed-from-disk back to disk immediately.
+      if (tr.origin === 'file-seed') return;
+      this.scheduleFileWrite(room, binding);
+    });
+    if (seeded) binding.lastWritten = prose.serializeFragmentToMarkdown(fragment);
+    return { ok: true, seeded, resolvedPath: abs };
+  }
+
+  private scheduleFileWrite(room: DocRoom, binding: FileBinding): void {
+    if (binding.writeTimer) clearTimeout(binding.writeTimer);
+    binding.writeTimer = setTimeout(() => {
+      try {
+        const md = prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
+        if (md === binding.lastWritten) return;
+        writeFileSync(binding.path, md);
+        binding.lastWritten = md;
+      } catch (err) {
+        console.error(`[rooms] file write failed for ${binding.path}:`, err);
+      }
+    }, 800);
+  }
+
   seedDoc(
     docId: string,
     markdown: string,

@@ -159,6 +159,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'attach_file',
+      description:
+        "Bind this review doc to a markdown file on disk. On attach, if the doc's prose is empty and the file exists, its contents are parsed and loaded into the doc. Every subsequent edit (from the browser editor, the agent, or the widget) is debounced and written back to the file within ~1 second. Path should be absolute; relative paths resolve against the server's cwd. File-to-doc updates (when you edit the .md in your IDE after attach) are not yet supported — it's a one-way live write right now.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          docId: { type: 'string' },
+          path: { type: 'string' },
+        },
+        required: ['docId', 'path'],
+      },
+    },
+    {
       name: 'seed_doc',
       description:
         'One-shot initial content load for a brand-new empty review doc. Accepts markdown (headings, paragraphs, lists, blockquotes, code blocks, horizontal rules — same parser as insert_blocks_after_thread). Fails with `non-empty` if the doc already has any content — this tool NEVER clobbers existing text. Use when an agent creates a doc via POST /api/docs and wants to populate it without waiting for a browser session to open the URL.',
@@ -370,6 +383,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const { docId, markdown } = a as { docId: string; markdown: string };
         const res = await http('POST', `/api/docs/${encodeURIComponent(docId)}/seed`, {
           markdown,
+        });
+        return ok(res);
+      }
+      case 'attach_file': {
+        const { docId, path } = a as { docId: string; path: string };
+        const res = await http('POST', `/api/docs/${encodeURIComponent(docId)}/attach_file`, {
+          path,
         });
         return ok(res);
       }

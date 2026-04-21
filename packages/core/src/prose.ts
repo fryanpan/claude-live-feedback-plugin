@@ -508,6 +508,82 @@ export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
 }
 
 /**
+ * Serialize the entire prose fragment back into markdown. Round-trips
+ * the block types parseMarkdownBlocks handles (headings, paragraphs,
+ * bullet/ordered lists, blockquotes, code blocks, horizontal rules).
+ * Inline marks (bold/italic/link) are lost — same limitation as the
+ * parser. Used by the file-backed-doc writer so edits flow out to
+ * disk as human-readable markdown.
+ */
+export function serializeFragmentToMarkdown(fragment: Y.XmlFragment): string {
+  const parts: string[] = [];
+  for (const child of fragment.toArray()) {
+    const s = serializeBlock(child as Y.XmlElement | Y.XmlText);
+    if (s != null && s !== '') parts.push(s);
+  }
+  return parts.length > 0 ? `${parts.join('\n\n')}\n` : '';
+}
+
+function serializeBlock(node: Y.XmlElement | Y.XmlText): string | null {
+  if (node instanceof Y.XmlText) {
+    const s = node.toString();
+    return s.length > 0 ? s : null;
+  }
+  if (!(node instanceof Y.XmlElement)) return null;
+  switch (node.nodeName) {
+    case 'paragraph':
+      return textContent(node);
+    case 'heading': {
+      const level = Math.min(6, Math.max(1, Number(node.getAttribute('level') ?? 1)));
+      const text = textContent(node);
+      return text.length > 0 ? `${'#'.repeat(level)} ${text}` : null;
+    }
+    case 'blockquote':
+      return textContent(node)
+        .split('\n')
+        .map((l) => `> ${l}`)
+        .join('\n');
+    case 'codeBlock':
+      return `\`\`\`\n${textContent(node)}\n\`\`\``;
+    case 'horizontalRule':
+      return '---';
+    case 'bulletList':
+      return listItems(node)
+        .map((item) => `- ${item}`)
+        .join('\n');
+    case 'orderedList':
+      return listItems(node)
+        .map((item, i) => `${i + 1}. ${item}`)
+        .join('\n');
+    default:
+      return textContent(node);
+  }
+}
+
+function textContent(node: Y.XmlElement): string {
+  const parts: string[] = [];
+  for (const child of node.toArray()) {
+    if (child instanceof Y.XmlText) parts.push(child.toString());
+    else if (child instanceof Y.XmlElement) parts.push(textContent(child));
+  }
+  return parts.join('');
+}
+
+function listItems(list: Y.XmlElement): string[] {
+  const items: string[] = [];
+  for (const li of list.toArray()) {
+    if (!(li instanceof Y.XmlElement) || li.nodeName !== 'listItem') continue;
+    // listItem contains one or more paragraphs; concatenate their text.
+    const bits: string[] = [];
+    for (const child of li.toArray()) {
+      if (child instanceof Y.XmlElement) bits.push(textContent(child));
+    }
+    items.push(bits.join(' '));
+  }
+  return items;
+}
+
+/**
  * Insert one or more markdown-parsed blocks AFTER the block containing
  * the anchor. Use this for "add a paragraph after this heading" or
  * "add a section here" — the anchor tells the agent where in the doc

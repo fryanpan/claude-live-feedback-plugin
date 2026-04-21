@@ -196,6 +196,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const res = rooms.seedDoc(docId, markdown);
           return res.ok ? j(200, res) : j(409, res);
         }
+        if (rest === 'attach_file' && req.method === 'POST') {
+          const body = await safeJson(req);
+          const path = String(body?.path ?? '');
+          const res = rooms.attachFile(docId, path);
+          return res.ok ? j(200, res) : j(409, res);
+        }
         if (rest === 'agent_anchors' && req.method === 'POST') {
           const body = await safeJson(req);
           const find = String(body?.find ?? '');
