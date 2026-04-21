@@ -3,7 +3,7 @@
   "mcpServers": {
     "live-feedback": {
       "command": "npx",
-      "args": ["-y", "@fryanpan/live-feedback-mcp@latest"],
+      "args": ["@fryanpan/live-feedback-mcp"],
       "env": {
         "FEEDBACK_AUTHOR": "agent"
       }
