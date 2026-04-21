@@ -89,7 +89,7 @@ export function walkProse(fragment: Y.XmlFragment): {
 
 function isBlock(tag: string): boolean {
   // Any prosemirror block node that can contain text. The list here
-  // matches tiptap-starter-kit's defaults.
+  // matches tiptap-starter-kit's defaults plus @tiptap/extension-table.
   return (
     tag === 'paragraph' ||
     tag === 'heading' ||
@@ -98,7 +98,11 @@ function isBlock(tag: string): boolean {
     tag === 'bulletList' ||
     tag === 'orderedList' ||
     tag === 'listItem' ||
-    tag === 'horizontalRule'
+    tag === 'horizontalRule' ||
+    tag === 'table' ||
+    tag === 'tableRow' ||
+    tag === 'tableCell' ||
+    tag === 'tableHeader'
   );
 }
 
@@ -405,9 +409,19 @@ export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
   const isQuote = (s: string) => /^>\s?/.test(s);
   const isFence = (s: string) => /^```/.test(s);
   const isRule = (s: string) => /^(---|\*\*\*|___)\s*$/.test(s);
+  // Pipe-table heuristics: a table row has a leading/trailing pipe with
+  // cells between them. The second line is a separator of dashes.
+  const isTableRow = (s: string) => /^\s*\|.*\|\s*$/.test(s);
+  const isTableSep = (s: string) => /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/.test(s);
 
   const isBlockStart = (s: string) =>
-    isHeading(s) || isBullet(s) || isNumbered(s) || isQuote(s) || isFence(s) || isRule(s);
+    isHeading(s) ||
+    isBullet(s) ||
+    isNumbered(s) ||
+    isQuote(s) ||
+    isFence(s) ||
+    isRule(s) ||
+    isTableRow(s);
 
   const mkParagraph = (text: string): Y.XmlElement => {
     const p = new Y.XmlElement('paragraph');
@@ -491,6 +505,21 @@ export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
       continue;
     }
 
+    // GFM-style pipe table. Detected by: header row → separator row
+    // (dashes + pipes) → one-or-more body rows. Cells are split on
+    // `|`, trimmed, and wrapped as paragraph children of each cell.
+    if (isTableRow(line) && i + 1 < lines.length && isTableSep(lines[i + 1] ?? '')) {
+      const headerCells = splitTableRow(line);
+      i += 2; // consume header + separator
+      const bodyRows: string[][] = [];
+      while (i < lines.length && isTableRow(lines[i] ?? '')) {
+        bodyRows.push(splitTableRow(lines[i] ?? ''));
+        i++;
+      }
+      out.push(mkTable(headerCells, bodyRows));
+      continue;
+    }
+
     // Default: a paragraph. Gather consecutive non-blank, non-block-start
     // lines and join with a space so soft-wrapped prose becomes one
     // paragraph (standard markdown convention).
@@ -505,6 +534,48 @@ export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
     out.push(mkParagraph(paraLines.join(' ')));
   }
   return out;
+}
+
+function splitTableRow(line: string): string[] {
+  // Strip the optional leading/trailing pipe, then split on `|`.
+  const inner = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+  return inner.split('|').map((c) => c.trim());
+}
+
+function mkTable(headerCells: string[], bodyRows: string[][]): Y.XmlElement {
+  const table = new Y.XmlElement('table');
+  // Header row
+  const headerRow = new Y.XmlElement('tableRow');
+  for (const cell of headerCells) {
+    const th = new Y.XmlElement('tableHeader');
+    const p = new Y.XmlElement('paragraph');
+    if (cell.length > 0) {
+      const t = new Y.XmlText();
+      t.insert(0, cell);
+      p.insert(0, [t]);
+    }
+    th.insert(0, [p]);
+    headerRow.insert(headerRow.length, [th]);
+  }
+  table.insert(0, [headerRow]);
+  // Body rows — pad with empty cells if a row is short so shape stays rectangular.
+  for (const row of bodyRows) {
+    const tr = new Y.XmlElement('tableRow');
+    for (let ci = 0; ci < headerCells.length; ci++) {
+      const cellText = row[ci] ?? '';
+      const td = new Y.XmlElement('tableCell');
+      const p = new Y.XmlElement('paragraph');
+      if (cellText.length > 0) {
+        const t = new Y.XmlText();
+        t.insert(0, cellText);
+        p.insert(0, [t]);
+      }
+      td.insert(0, [p]);
+      tr.insert(tr.length, [td]);
+    }
+    table.insert(table.length, [tr]);
+  }
+  return table;
 }
 
 /**
@@ -555,9 +626,44 @@ function serializeBlock(node: Y.XmlElement | Y.XmlText): string | null {
       return listItems(node)
         .map((item, i) => `${i + 1}. ${item}`)
         .join('\n');
+    case 'table':
+      return serializeTable(node);
     default:
       return textContent(node);
   }
+}
+
+function serializeTable(table: Y.XmlElement): string {
+  const rows = table
+    .toArray()
+    .filter((n): n is Y.XmlElement => n instanceof Y.XmlElement && n.nodeName === 'tableRow');
+  if (rows.length === 0) return '';
+  const cells: string[][] = rows.map((r) =>
+    r
+      .toArray()
+      .filter(
+        (c): c is Y.XmlElement =>
+          c instanceof Y.XmlElement && (c.nodeName === 'tableCell' || c.nodeName === 'tableHeader'),
+      )
+      .map((c) => textContent(c).replace(/\|/g, '\\|').replace(/\n/g, ' ')),
+  );
+  const colCount = Math.max(...cells.map((r) => r.length));
+  // Pad ragged rows to rectangular shape.
+  for (const r of cells) while (r.length < colCount) r.push('');
+  // Column widths for pretty alignment (cap to avoid runaway widths).
+  const widths = new Array(colCount).fill(0);
+  for (const r of cells) {
+    for (let ci = 0; ci < colCount; ci++) {
+      widths[ci] = Math.min(60, Math.max(widths[ci], r[ci]?.length ?? 0, 3));
+    }
+  }
+  const pad = (s: string, w: number) => s + ' '.repeat(Math.max(0, w - s.length));
+  const lines: string[] = [];
+  const [header, ...body] = cells;
+  if (header) lines.push(`| ${header.map((c, ci) => pad(c, widths[ci])).join(' | ')} |`);
+  lines.push(`| ${widths.map((w) => '-'.repeat(w)).join(' | ')} |`);
+  for (const row of body) lines.push(`| ${row.map((c, ci) => pad(c, widths[ci])).join(' | ')} |`);
+  return lines.join('\n');
 }
 
 function textContent(node: Y.XmlElement): string {

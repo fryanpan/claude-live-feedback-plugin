@@ -365,6 +365,41 @@ button {
   margin: 1.2em 0;
 }
 
+/* ========== tables (GFM) ========== */
+#editor .ProseMirror table {
+  border-collapse: collapse;
+  margin: 1em 0;
+  width: 100%;
+  overflow: auto;
+  font-family: var(--sans); /* tables read better sans even in serif-body mode */
+  font-size: 14px;
+}
+#editor .ProseMirror th,
+#editor .ProseMirror td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  vertical-align: top;
+  text-align: left;
+  min-width: 6em;
+}
+#editor .ProseMirror th {
+  background: var(--bg-panel);
+  font-weight: 600;
+}
+#editor .ProseMirror tr:nth-child(even) td {
+  background: rgba(246, 248, 250, 0.5);
+}
+#editor .ProseMirror td > p,
+#editor .ProseMirror th > p {
+  margin: 0;
+}
+/* Wrap tables so wide ones scroll horizontally instead of blowing out the layout */
+#editor .ProseMirror .prose-table {
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+}
+
 /* ========== thread highlights ========== */
 #editor .ProseMirror .thread-range {
   background: rgba(255, 213, 79, 0.35);

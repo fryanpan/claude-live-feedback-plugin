@@ -1,5 +1,9 @@
 import { Editor } from '@tiptap/core';
 import Collaboration from '@tiptap/extension-collaboration';
+import { Table } from '@tiptap/extension-table';
+import { TableCell } from '@tiptap/extension-table-cell';
+import { TableHeader } from '@tiptap/extension-table-header';
+import { TableRow } from '@tiptap/extension-table-row';
 import StarterKit from '@tiptap/starter-kit';
 // IMPORTANT: these must come from @tiptap/y-tiptap, not y-prosemirror.
 // Tiptap's Collaboration extension registers the sync plugin under its own
@@ -83,6 +87,12 @@ export function createEditor(opts: CreateEditorOpts): EditorHandle {
         breaks: false,
         transformPastedText: true,
       }),
+      // GFM tables. resizable:false keeps the column widths inferred
+      // from content — no drag handles competing with the comment pill.
+      Table.configure({ resizable: false, HTMLAttributes: { class: 'prose-table' } }),
+      TableRow,
+      TableHeader,
+      TableCell,
       Collaboration.configure({
         document: opts.ydoc,
         field: fragmentName,
