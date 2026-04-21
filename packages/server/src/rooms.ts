@@ -190,30 +190,47 @@ export class Rooms {
     const fragment = prose.getProseFragment(room.ydoc);
     const walk = prose.walkProse(fragment);
 
-    // Group segments into blocks for readable structure hints.
-    const blocks: Array<{
+    // Group segments by their TOP-LEVEL block — so a table's many cells
+    // surface as one `type: "table"` block, not N `type: "paragraph"`
+    // cells. Same applies to lists (`bulletList` / `orderedList`) — the
+    // agent sees the list as one block.
+    const grouped: Array<{
+      top: Y.XmlElement | null;
       type: string | null;
-      headingLevel?: number;
       text: string;
       startOffset: number;
       endOffset: number;
+      headingLevel?: number;
     }> = [];
     for (const s of walk.segments) {
-      const last = blocks[blocks.length - 1];
-      if (last && last.type === s.blockType && last.endOffset === s.docOffset) {
+      const last = grouped[grouped.length - 1];
+      if (last && last.top === s.topBlock && s.topBlock != null) {
         last.text += s.node.toString();
         last.endOffset = s.docOffset + s.length;
       } else {
-        const b = {
-          type: s.blockType,
+        grouped.push({
+          top: s.topBlock,
+          type: s.topBlockType,
           text: s.node.toString(),
           startOffset: s.docOffset,
           endOffset: s.docOffset + s.length,
           ...(s.headingLevel != null ? { headingLevel: s.headingLevel } : {}),
-        };
-        blocks.push(b);
+        });
       }
     }
+    // Second pass: for tables (and lists), re-render from the actual
+    // Y.XmlElement so the text field is human-readable GFM rather than
+    // cells glued together.
+    for (const g of grouped) {
+      if (g.top && (g.type === 'table' || g.type === 'bulletList' || g.type === 'orderedList')) {
+        const md = prose.serializeBlockToMarkdown(g.top);
+        if (md) g.text = md;
+      }
+    }
+    const blocks = grouped.map(({ top, ...rest }) => {
+      void top;
+      return rest;
+    });
 
     return { plainText: walk.plainText, blocks, threads: listThreads(room.ydoc) };
   }
