@@ -189,6 +189,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!doc) return j(404, { error: 'doc not found' });
           return j(200, doc);
         }
+        if (rest === 'seed' && req.method === 'POST') {
+          const body = await safeJson(req);
+          const markdown = String(body?.markdown ?? '');
+          if (markdown.length === 0) return j(400, { error: 'markdown is required' });
+          const res = rooms.seedDoc(docId, markdown);
+          return res.ok ? j(200, res) : j(409, res);
+        }
         if (rest === 'agent_anchors' && req.method === 'POST') {
           const body = await safeJson(req);
           const find = String(body?.find ?? '');

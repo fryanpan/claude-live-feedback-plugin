@@ -159,6 +159,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'seed_doc',
+      description:
+        'One-shot initial content load for a brand-new empty review doc. Accepts markdown (headings, paragraphs, lists, blockquotes, code blocks, horizontal rules — same parser as insert_blocks_after_thread). Fails with `non-empty` if the doc already has any content — this tool NEVER clobbers existing text. Use when an agent creates a doc via POST /api/docs and wants to populate it without waiting for a browser session to open the URL.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          docId: { type: 'string' },
+          markdown: { type: 'string' },
+        },
+        required: ['docId', 'markdown'],
+      },
+    },
+    {
       name: 'find_and_replace',
       description:
         "Replace a string of plain text in the doc with another string. `find` must match the doc's plain text content (no markdown syntax — marks like bold/italic are preserved automatically). Use `contextBefore` / `contextAfter` to disambiguate repeated phrases. If the match is still ambiguous the tool returns a list of candidates. Use `occurrence` (1-indexed) to pick one explicitly. Runs as a single Yjs transaction so it merges cleanly with concurrent user edits.",
@@ -351,6 +364,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       case 'get_doc': {
         const { docId } = a as { docId: string };
         const res = await http('GET', `/api/docs/${encodeURIComponent(docId)}/content`);
+        return ok(res);
+      }
+      case 'seed_doc': {
+        const { docId, markdown } = a as { docId: string; markdown: string };
+        const res = await http('POST', `/api/docs/${encodeURIComponent(docId)}/seed`, {
+          markdown,
+        });
         return ok(res);
       }
       case 'find_and_replace': {
