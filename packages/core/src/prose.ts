@@ -25,10 +25,16 @@ export interface TextSegment {
   docOffset: number;
   /** Length of this segment (= node.length at walk time). */
   length: number;
-  /** Block element this text lives inside (heading / paragraph / …). */
+  /** Innermost block the text lives inside (paragraph inside table cell, etc.). */
   block: Y.XmlElement | null;
-  /** Block tag name, e.g. "paragraph", "heading". */
+  /** Innermost block tag name. */
   blockType: string | null;
+  /** TOP-LEVEL block the text lives inside (table, heading, paragraph at doc root).
+   *  Differs from `block` for nested structures — a table cell's paragraph has
+   *  blockType='paragraph' but topBlockType='table'. Used by get_doc to surface
+   *  structural containers (tables, lists) as one logical block instead of N. */
+  topBlock: Y.XmlElement | null;
+  topBlockType: string | null;
   /** If a heading, its level attribute. */
   headingLevel?: number;
 }
@@ -51,6 +57,7 @@ export function walkProse(fragment: Y.XmlFragment): {
   const visit = (
     node: Y.XmlElement | Y.XmlText | Y.XmlFragment,
     currentBlock: Y.XmlElement | null,
+    topBlock: Y.XmlElement | null,
   ): void => {
     if (node instanceof Y.XmlText) {
       const length = node.length;
@@ -60,6 +67,8 @@ export function walkProse(fragment: Y.XmlFragment): {
         length,
         block: currentBlock,
         blockType: currentBlock?.nodeName ?? null,
+        topBlock,
+        topBlockType: topBlock?.nodeName ?? null,
         headingLevel:
           currentBlock?.nodeName === 'heading'
             ? Number(currentBlock.getAttribute('level') ?? 1)
@@ -76,14 +85,19 @@ export function walkProse(fragment: Y.XmlFragment): {
         docOffset += 2;
       }
       const childBlock = isBlock(node.nodeName) ? node : currentBlock;
-      for (const child of node.toArray()) visit(child as Y.XmlElement | Y.XmlText, childBlock);
+      // topBlock sticks to the first block we entered — doesn't update for
+      // nested blocks inside it (so table-cell text reports topBlock=table).
+      const childTop = isBlock(node.nodeName) ? (topBlock ?? node) : topBlock;
+      for (const child of node.toArray())
+        visit(child as Y.XmlElement | Y.XmlText, childBlock, childTop);
       return;
     }
     // Y.XmlFragment (top-level)
-    for (const child of node.toArray()) visit(child as Y.XmlElement | Y.XmlText, currentBlock);
+    for (const child of node.toArray())
+      visit(child as Y.XmlElement | Y.XmlText, currentBlock, topBlock);
   };
 
-  visit(fragment, null);
+  visit(fragment, null, null);
   return { plainText, segments };
 }
 
@@ -593,6 +607,12 @@ export function serializeFragmentToMarkdown(fragment: Y.XmlFragment): string {
     if (s != null && s !== '') parts.push(s);
   }
   return parts.length > 0 ? `${parts.join('\n\n')}\n` : '';
+}
+
+/** Serialize a single block element to markdown (public accessor for
+ *  get_doc's table/list rendering). */
+export function serializeBlockToMarkdown(node: Y.XmlElement): string {
+  return serializeBlock(node) ?? '';
 }
 
 function serializeBlock(node: Y.XmlElement | Y.XmlText): string | null {
