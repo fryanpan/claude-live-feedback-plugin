@@ -76,6 +76,13 @@ const server = new Server(
       'comment is in your domain, and act via the edit tools',
       '(rewrite_thread_region / find_and_replace / insert_blocks_after_thread).',
       'Call watch_doc(docId) to start receiving events for a doc; unwatch_doc to stop.',
+      '',
+      'IMPORTANT — file-backed docs: if list_docs shows a doc whose sourceUrl matches',
+      'a markdown file on disk, that file is bound to the live editor. NEVER edit the',
+      '.md file directly with Write/Edit/str_replace — the plugin serializes the live',
+      'doc back to disk ~1s after every change, so a filesystem edit gets silently',
+      'clobbered by the next flush and diverges from what the user sees in the browser.',
+      'Always route edits through the MCP tools listed above.',
     ].join(' '),
   },
 );
