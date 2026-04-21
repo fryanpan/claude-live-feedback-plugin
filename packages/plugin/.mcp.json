@@ -1,9 +1,8 @@
 {
-  "$comment": "MCP server registration. Runs the published npm package via npx so this plugin works for users who haven't cloned the monorepo. For local development, `cd packages/mcp && npm link` makes npx resolve to the local workspace. Port is auto-discovered from ~/.claude/live-feedback/server.json (written by scripts/serve.ts on startup); set FEEDBACK_BASE_URL to override.",
+  "$comment": "MCP server registration. Invokes the live-feedback-mcp binary directly — works whether it was installed via `npm install -g @fryanpan/live-feedback-mcp` (post-publish) or via `cd packages/mcp && npm link` (local dev). More reliable than `npx`, which hits the npm registry for `@latest` and fails when the package isn't published yet. Port is auto-discovered from ~/.claude/live-feedback/server.json.",
   "mcpServers": {
     "live-feedback": {
-      "command": "npx",
-      "args": ["@fryanpan/live-feedback-mcp"],
+      "command": "live-feedback-mcp",
       "env": {
         "FEEDBACK_AUTHOR": "agent"
       }
