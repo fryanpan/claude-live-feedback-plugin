@@ -17,9 +17,9 @@
  * Stops cleanly on Ctrl+C.
  */
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createServer as netServer } from 'node:net';
-import { hostname, networkInterfaces } from 'node:os';
+import { homedir, hostname, networkInterfaces } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -104,6 +104,17 @@ const mdApp = spawn(
   { stdio: 'inherit', env: { ...process.env, NODE_ENV: 'dev' } },
 );
 
+// Publish the live port so the live-feedback MCP (and any other local
+// agent tooling) can discover whichever port `scripts/serve.ts` ended
+// up on. The MCP reads this file if $FEEDBACK_BASE_URL isn't set.
+const discoveryDir = join(homedir(), '.claude', 'live-feedback');
+const discoveryFile = join(discoveryDir, 'server.json');
+mkdirSync(discoveryDir, { recursive: true });
+writeFileSync(
+  discoveryFile,
+  `${JSON.stringify({ port, pid: server.pid, startedAt: new Date().toISOString() }, null, 2)}\n`,
+);
+
 const ts = tailscaleHost();
 const lan = lanHostnames();
 
@@ -130,6 +141,9 @@ function cleanup() {
       p.kill('SIGTERM');
     } catch {}
   }
+  try {
+    unlinkSync(discoveryFile);
+  } catch {}
   setTimeout(() => process.exit(0), 300);
 }
 server.on('exit', cleanup);

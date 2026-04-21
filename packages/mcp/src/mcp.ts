@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -8,12 +11,32 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
  * over HTTP. Agents launch this binary via stdio; it calls the main
  * server's REST API so state is authoritative there.
  *
+ * Base URL resolution (first hit wins):
+ *   1. $FEEDBACK_BASE_URL — explicit override
+ *   2. ~/.claude/live-feedback/server.json — written by scripts/serve.ts
+ *      on startup so the MCP auto-finds whichever port the server landed on
+ *   3. http://localhost:8787 — last-resort default
+ *
  * env:
- *   FEEDBACK_BASE_URL  — e.g. http://localhost:8787  (default)
+ *   FEEDBACK_BASE_URL  — optional override; usually discovery handles it
  *   FEEDBACK_AUTHOR    — e.g. agent (used as the reply author)
  */
 
-const BASE_URL = process.env.FEEDBACK_BASE_URL ?? 'http://localhost:8787';
+function resolveBaseUrl(): string {
+  if (process.env.FEEDBACK_BASE_URL) return process.env.FEEDBACK_BASE_URL;
+  const discovery = join(homedir(), '.claude', 'live-feedback', 'server.json');
+  if (existsSync(discovery)) {
+    try {
+      const j = JSON.parse(readFileSync(discovery, 'utf8')) as { port?: number };
+      if (j.port) return `http://localhost:${j.port}`;
+    } catch {
+      // ignore — fall through to default
+    }
+  }
+  return 'http://localhost:8787';
+}
+
+const BASE_URL = resolveBaseUrl();
 const AUTHOR_ID = process.env.FEEDBACK_AUTHOR ?? 'agent';
 
 const KNOWN_USERS: Record<
