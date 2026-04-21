@@ -57,7 +57,6 @@ async function boot(): Promise<void> {
     get: (k) => localStorage.getItem(k),
     set: (k, v) => localStorage.setItem(k, v),
   });
-  renderMe(user);
 
   const client = connect(DEFAULT_WS_PATH(docId));
   const { ydoc, awareness } = client;
@@ -792,22 +791,6 @@ async function boot(): Promise<void> {
   wireFormatBar(editor);
 
   // =========================================================================
-  // FONT TOGGLE — sans (default) ↔ serif. Persisted per browser.
-  // =========================================================================
-  const toggleFont = el<HTMLButtonElement>('toggle-font');
-  const savedFont = localStorage.getItem('cfw:font') ?? 'sans';
-  const applyFont = (v: 'sans' | 'serif') => {
-    document.body.classList.toggle('font-serif', v === 'serif');
-    toggleFont.setAttribute('aria-pressed', String(v === 'serif'));
-  };
-  applyFont(savedFont === 'serif' ? 'serif' : 'sans');
-  toggleFont.addEventListener('click', () => {
-    const next = document.body.classList.contains('font-serif') ? 'sans' : 'serif';
-    localStorage.setItem('cfw:font', next);
-    applyFont(next);
-  });
-
-  // =========================================================================
   // HOTKEYS
   // =========================================================================
   document.addEventListener('keydown', (ev) => {
@@ -1018,12 +1001,6 @@ function wireFormatBar(editor: EditorHandle): void {
   };
   editor.editor.on('selectionUpdate', refresh);
   editor.editor.on('transaction', refresh);
-}
-
-function renderMe(user: User): void {
-  const me = document.getElementById('me');
-  if (!me) return;
-  me.innerHTML = `<span class="swatch" style="background:${user.color}"></span>${user.name}`;
 }
 
 let toastTimer: ReturnType<typeof setTimeout> | null = null;

@@ -18,16 +18,11 @@
   --sans: -apple-system, BlinkMacSystemFont, "Inter", "SF Pro Text", "Segoe UI", system-ui,
     sans-serif;
   --serif: Charter, "Iowan Old Style", "Source Serif Pro", Georgia, "Times New Roman", serif;
-  /* Prose font — overridden by body.font-serif. Default is sans because
-     most docs here sit next to code; serif is a one-click override for
-     longer-form reading. */
-  --prose: var(--sans);
+  /* Reading font — used across editor body + comments + anchor quote. */
+  --prose: var(--serif);
   /* iOS safe-area inset (nothing by default on desktop) */
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-top: env(safe-area-inset-top, 0px);
-}
-body.font-serif {
-  --prose: var(--serif);
 }
 
 * {
@@ -115,27 +110,6 @@ button {
   color: #7a0f14;
   background: rgba(220, 53, 69, 0.12);
 }
-.font-toggle {
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0.01em;
-  min-width: 52px;
-}
-body.font-serif .font-toggle-label::before {
-  content: "Serif";
-}
-body:not(.font-serif) .font-toggle-label::before {
-  content: "Sans";
-}
-/* Hide the original label text, use the pseudo content so the same
-   button reflects current state without JS poking textContent. */
-.font-toggle-label {
-  font-size: 0;
-  line-height: 1;
-}
-.font-toggle-label::before {
-  font-size: 12px;
-}
 .toolbar {
   display: flex;
   align-items: center;
@@ -183,22 +157,6 @@ body:not(.font-serif) .font-toggle-label::before {
 }
 .icon-btn .badge.has-count {
   display: inline-block;
-}
-.user-chip {
-  font-size: 12px;
-  background: var(--bg-panel);
-  padding: 4px 8px;
-  border-radius: 99px;
-  border: 1px solid var(--border);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.user-chip .swatch {
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
 }
 
 /* ================= MAIN LAYOUT ================= */
