@@ -335,6 +335,36 @@ export class Rooms {
   }
 
   /**
+   * Force a re-parse of the bound file into the live doc, ignoring
+   * the currentSerialized match and lastWritten guards. Useful when
+   * the parser itself changed (e.g. after a fix) and the on-disk
+   * content would parse differently now even though its bytes are
+   * unchanged.
+   */
+  reparseFromDisk(docId: string): { ok: boolean; error?: 'not-found' | 'no-binding' | 'missing' } {
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'not-found' };
+    const binding = this.fileBindings.get(docId);
+    if (!binding) return { ok: false, error: 'no-binding' };
+    if (!existsSync(binding.path)) return { ok: false, error: 'missing' };
+    let md: string;
+    try {
+      md = readFileSync(binding.path, 'utf8');
+    } catch {
+      return { ok: false, error: 'missing' };
+    }
+    const blocks = prose.parseMarkdownBlocks(md);
+    if (blocks.length === 0) return { ok: false, error: 'missing' };
+    const fragment = prose.getProseFragment(room.ydoc);
+    room.ydoc.transact(() => {
+      fragment.delete(0, fragment.length);
+      fragment.push(blocks);
+    }, 'file-watch');
+    binding.lastWritten = md;
+    return { ok: true };
+  }
+
+  /**
    * External file changed — read it, compare to what we think is
    * canonical, and apply the delta to the live doc if different.
    * Applies in one transact origin='file-watch' so the doc→disk

@@ -202,6 +202,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const res = rooms.attachFile(docId, path);
           return res.ok ? j(200, res) : j(409, res);
         }
+        if (rest === 'reparse_from_disk' && req.method === 'POST') {
+          const res = rooms.reparseFromDisk(docId);
+          return res.ok ? j(200, res) : j(409, res);
+        }
         if (rest === 'agent_anchors' && req.method === 'POST') {
           const body = await safeJson(req);
           const find = String(body?.find ?? '');
