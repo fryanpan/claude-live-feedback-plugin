@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { type FSWatcher, existsSync, mkdirSync, readFileSync, watch, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   type Anchor,
@@ -56,6 +56,10 @@ export interface RoomsConfig {
 interface FileBinding {
   path: string;
   writeTimer?: ReturnType<typeof setTimeout> | null;
+  readTimer?: ReturnType<typeof setTimeout> | null;
+  watcher?: FSWatcher | null;
+  /** The serialized markdown we last wrote or last read from disk.
+   *  Both directions guard against this to break echo loops. */
   lastWritten?: string;
 }
 
@@ -252,9 +256,16 @@ export class Rooms {
    *     serialized markdown back to the file (default 800ms)
    *
    * File path is resolved relative to the server's process cwd if
-   * relative. An absolute path is strongly recommended. No external-
-   * file-watch yet — edits made directly to the file on disk after
-   * attach are NOT reflected in the live doc; that's a follow-up.
+   * relative. An absolute path is strongly recommended.
+   *
+   * Bidirectional sync:
+   *   doc → disk — every prose change debounces an 800ms serialize+write
+   *   disk → doc — fs.watch fires on external edits, debounced 300ms,
+   *     reads the file, diffs against current serialized output, and if
+   *     different applies the new markdown in one 'file-watch' transact.
+   *   Echo loop is broken by `binding.lastWritten` on both sides — a
+   *   write we initiated won't be re-applied, and a read that matches
+   *   our cached content is silently ignored.
    */
   attachFile(
     docId: string,
@@ -286,6 +297,10 @@ export class Rooms {
     }
     const existing = this.fileBindings.get(docId);
     if (existing?.writeTimer) clearTimeout(existing.writeTimer);
+    if (existing?.readTimer) clearTimeout(existing.readTimer);
+    try {
+      existing?.watcher?.close();
+    } catch {}
     const binding: FileBinding = { path: abs };
     this.fileBindings.set(docId, binding);
     // sourceUrl mirrors the path so UI headers can show "Editing: <path>"
@@ -294,15 +309,71 @@ export class Rooms {
       room.ydoc.transact(() => m.set('sourceUrl', abs));
       room.meta.sourceUrl = abs;
     }
-    // Schedule a first write so the file is touched even if Bryan just
-    // opens the doc and looks at it (mtime proves the binding works).
+    // doc → disk: every change schedules a debounced write.
     fragment.observeDeep((_events, tr) => {
-      // Don't echo our own seed-from-disk back to disk immediately.
-      if (tr.origin === 'file-seed') return;
+      // Don't echo our own seed-from-disk or file-watch apply back to disk.
+      if (tr.origin === 'file-seed' || tr.origin === 'file-watch') return;
       this.scheduleFileWrite(room, binding);
     });
     if (seeded) binding.lastWritten = prose.serializeFragmentToMarkdown(fragment);
+
+    // disk → doc: watch the file for external edits.
+    if (existsSync(abs)) {
+      try {
+        binding.watcher = watch(abs, { persistent: false }, () => {
+          // fs.watch can fire several times per write (rename + change
+          // on macOS); debounce through binding.readTimer.
+          if (binding.readTimer) clearTimeout(binding.readTimer);
+          binding.readTimer = setTimeout(() => this.reconcileFromDisk(room, binding), 300);
+        });
+      } catch (err) {
+        console.error(`[rooms] fs.watch failed for ${abs}:`, err);
+      }
+    }
+
     return { ok: true, seeded, resolvedPath: abs };
+  }
+
+  /**
+   * External file changed — read it, compare to what we think is
+   * canonical, and apply the delta to the live doc if different.
+   * Applies in one transact origin='file-watch' so the doc→disk
+   * observer knows not to re-flush (which would bounce back here).
+   */
+  private reconcileFromDisk(room: DocRoom, binding: FileBinding): void {
+    if (!existsSync(binding.path)) return;
+    let md: string;
+    try {
+      md = readFileSync(binding.path, 'utf8');
+    } catch (err) {
+      console.error(`[rooms] read failed for ${binding.path}:`, err);
+      return;
+    }
+    // Same content as last round-trip → nothing to do.
+    if (md === binding.lastWritten) return;
+    // If the current fragment would serialize to the same file content
+    // (up to serializer whitespace), we're already in sync — just catch
+    // up bookkeeping.
+    const fragment = prose.getProseFragment(room.ydoc);
+    const currentSerialized = prose.serializeFragmentToMarkdown(fragment);
+    if (currentSerialized === md) {
+      binding.lastWritten = md;
+      return;
+    }
+    const blocks = prose.parseMarkdownBlocks(md);
+    if (blocks.length === 0) return; // don't wipe to empty on a parse failure
+    // Apply destructively: parse fresh, replace all blocks. Y.XmlText
+    // identities change so thread anchors in the replaced region may
+    // orphan — auto-reanchor's snippet-match sweep catches the common
+    // case on the next tick.
+    room.ydoc.transact(() => {
+      fragment.delete(0, fragment.length);
+      fragment.push(blocks);
+    }, 'file-watch');
+    binding.lastWritten = md;
+    console.log(
+      `[rooms] ${room.docId}: applied external edit from ${binding.path} (${blocks.length} blocks)`,
+    );
   }
 
   private scheduleFileWrite(room: DocRoom, binding: FileBinding): void {
