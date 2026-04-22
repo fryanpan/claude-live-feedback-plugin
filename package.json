@@ -4,6 +4,7 @@
   "version": "0.0.0",
   "workspaces": ["packages/*", "demos/*"],
   "scripts": {
+    "bootstrap": "bun run scripts/bootstrap.ts",
     "dev": "bun run scripts/serve.ts",
     "dev:bare": "bun run packages/server/src/bin.ts",
     "typecheck": "tsc --noEmit --project tsconfig.json",
