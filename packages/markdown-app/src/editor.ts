@@ -18,6 +18,7 @@ import {
 import { Markdown } from 'tiptap-markdown';
 import type { Awareness } from 'y-protocols/awareness';
 import * as Y from 'yjs';
+import { MermaidCodeBlock } from './mermaid-code-block.ts';
 import { ThreadDecorations, type ThreadRange, setThreadDecorations } from './thread-decorations.ts';
 
 /**
@@ -74,12 +75,14 @@ export function createEditor(opts: CreateEditorOpts): EditorHandle {
     extensions: [
       StarterKit.configure({
         undoRedo: false, // Yjs Collaboration plugin owns undo/redo
+        codeBlock: false, // replaced by MermaidCodeBlock below
         link: {
           openOnClick: false,
           autolink: true,
           HTMLAttributes: { rel: 'noopener noreferrer', target: '_blank' },
         },
       }),
+      MermaidCodeBlock,
       Markdown.configure({
         html: false,
         tightLists: true,

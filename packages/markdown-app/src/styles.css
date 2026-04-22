@@ -365,6 +365,42 @@ button {
   margin: 1.2em 0;
 }
 
+/* ========== code blocks + mermaid diagrams ========== */
+#editor .ProseMirror .cm-codeblock {
+  margin: 0.8em 0;
+}
+#editor .ProseMirror .cm-codeblock pre {
+  margin: 0;
+}
+#editor .ProseMirror .cm-diagram {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin: 0 0 8px 0;
+  display: flex;
+  justify-content: center;
+  overflow: auto;
+  user-select: none;
+}
+#editor .ProseMirror .cm-diagram:empty {
+  display: none;
+}
+#editor .ProseMirror .cm-diagram svg {
+  max-width: 100%;
+  height: auto;
+}
+#editor .ProseMirror .cm-diagram-error {
+  color: var(--red);
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: 8px 12px;
+  background: rgba(215, 58, 73, 0.08);
+  border-left: 3px solid var(--red);
+  border-radius: 4px;
+  white-space: pre-wrap;
+}
+
 /* ========== tables (GFM) ========== */
 #editor .ProseMirror table {
   border-collapse: collapse;
