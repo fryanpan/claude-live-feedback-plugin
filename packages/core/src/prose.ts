@@ -412,6 +412,118 @@ export function insertAfterRange(
  * links) come through as literal text for now — the agent can follow
  * up with find_and_replace or edit_at_anchor to add marks later.
  */
+/**
+ * Tokenize a line of inline prose into a Yjs delta with mark attributes.
+ * Handles the common syntax round-tripped by tiptap-markdown:
+ *   `code`   **bold**   *italic*   ~~strike~~   [text](url)
+ * Underscore variants (__bold__, _italic_) are supported too.
+ * Ambiguous text (unpaired asterisks etc.) passes through literal.
+ */
+export function inlineMarksToDelta(
+  text: string,
+): Array<{ insert: string; attributes?: Record<string, unknown> }> {
+  const out: Array<{ insert: string; attributes?: Record<string, unknown> }> = [];
+  let buf = '';
+  let i = 0;
+  const flush = () => {
+    if (buf.length === 0) return;
+    out.push({ insert: buf });
+    buf = '';
+  };
+  const emitWith = (inner: string, attrs: Record<string, unknown>) => {
+    flush();
+    const nested = inlineMarksToDelta(inner);
+    for (const op of nested) {
+      out.push({
+        insert: op.insert,
+        attributes: { ...(op.attributes ?? {}), ...attrs },
+      });
+    }
+  };
+
+  while (i < text.length) {
+    const r = text.slice(i);
+
+    // `code`
+    if (r.startsWith('`')) {
+      const close = r.indexOf('`', 1);
+      if (close > 1) {
+        flush();
+        out.push({ insert: r.slice(1, close), attributes: { code: true } });
+        i += close + 1;
+        continue;
+      }
+    }
+
+    // [text](url)
+    if (r.startsWith('[')) {
+      const rb = r.indexOf(']');
+      if (rb > 0 && r[rb + 1] === '(') {
+        const rp = r.indexOf(')', rb + 2);
+        if (rp > 0) {
+          flush();
+          out.push({
+            insert: r.slice(1, rb),
+            attributes: { link: { href: r.slice(rb + 2, rp) } },
+          });
+          i += rp + 1;
+          continue;
+        }
+      }
+    }
+
+    // ~~strike~~
+    if (r.startsWith('~~')) {
+      const close = r.indexOf('~~', 2);
+      if (close > 2) {
+        emitWith(r.slice(2, close), { strike: true });
+        i += close + 2;
+        continue;
+      }
+    }
+
+    // 2-char wrappers: **bold** / __bold__
+    let matched = false;
+    for (const m of ['**', '__'] as const) {
+      if (r.startsWith(m)) {
+        const close = r.indexOf(m, m.length);
+        if (close > m.length) {
+          emitWith(r.slice(m.length, close), { bold: true });
+          i += close + m.length;
+          matched = true;
+          break;
+        }
+      }
+    }
+    if (matched) continue;
+
+    // 1-char wrappers: *italic* / _italic_
+    // Require the inner char to be non-space so "a * b" doesn't italicize.
+    for (const m of ['*', '_'] as const) {
+      if (r.startsWith(m) && r[1] && r[1] !== ' ' && r[1] !== m) {
+        const close = r.indexOf(m, 1);
+        if (close > 1 && r[close - 1] !== ' ') {
+          emitWith(r.slice(1, close), { italic: true });
+          i += close + 1;
+          matched = true;
+          break;
+        }
+      }
+    }
+    if (matched) continue;
+
+    buf += text[i];
+    i++;
+  }
+  flush();
+  return out;
+}
+
+function insertDeltaInto(xmlText: Y.XmlText, delta: ReturnType<typeof inlineMarksToDelta>): void {
+  if (delta.length === 0) return;
+  xmlText.applyDelta(delta);
+}
+
 export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
   const lines = markdown.replace(/\r\n/g, '\n').split('\n');
   const out: Y.XmlElement[] = [];
@@ -441,7 +553,7 @@ export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
     const p = new Y.XmlElement('paragraph');
     if (text.length > 0) {
       const t = new Y.XmlText();
-      t.insert(0, text);
+      insertDeltaInto(t, inlineMarksToDelta(text));
       p.insert(0, [t]);
     }
     return p;
@@ -462,7 +574,7 @@ export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
       h.setAttribute('level', String(level));
       if (text) {
         const t = new Y.XmlText();
-        t.insert(0, text);
+        insertDeltaInto(t, inlineMarksToDelta(text));
         h.insert(0, [t]);
       }
       out.push(h);
@@ -477,6 +589,8 @@ export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
     }
 
     if (isFence(line)) {
+      // Capture the language hint after the opening fence (```mermaid, ```ts, …).
+      const lang = line.replace(/^```/, '').trim();
       i++;
       const code: string[] = [];
       while (i < lines.length && !isFence(lines[i] ?? '')) {
@@ -485,6 +599,7 @@ export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
       }
       if (i < lines.length) i++; // skip closing fence
       const cb = new Y.XmlElement('codeBlock');
+      if (lang) cb.setAttribute('language', lang);
       const t = new Y.XmlText();
       t.insert(0, code.join('\n'));
       cb.insert(0, [t]);
@@ -565,7 +680,7 @@ function mkTable(headerCells: string[], bodyRows: string[][]): Y.XmlElement {
     const p = new Y.XmlElement('paragraph');
     if (cell.length > 0) {
       const t = new Y.XmlText();
-      t.insert(0, cell);
+      insertDeltaInto(t, inlineMarksToDelta(cell));
       p.insert(0, [t]);
     }
     th.insert(0, [p]);
@@ -581,7 +696,7 @@ function mkTable(headerCells: string[], bodyRows: string[][]): Y.XmlElement {
       const p = new Y.XmlElement('paragraph');
       if (cellText.length > 0) {
         const t = new Y.XmlText();
-        t.insert(0, cellText);
+        insertDeltaInto(t, inlineMarksToDelta(cellText));
         p.insert(0, [t]);
       }
       td.insert(0, [p]);
@@ -634,8 +749,10 @@ function serializeBlock(node: Y.XmlElement | Y.XmlText): string | null {
         .split('\n')
         .map((l) => `> ${l}`)
         .join('\n');
-    case 'codeBlock':
-      return `\`\`\`\n${textContent(node)}\n\`\`\``;
+    case 'codeBlock': {
+      const lang = node.getAttribute('language') ?? '';
+      return `\`\`\`${lang}\n${textContent(node)}\n\`\`\``;
+    }
     case 'horizontalRule':
       return '---';
     case 'bulletList':
@@ -689,10 +806,44 @@ function serializeTable(table: Y.XmlElement): string {
 function textContent(node: Y.XmlElement): string {
   const parts: string[] = [];
   for (const child of node.toArray()) {
-    if (child instanceof Y.XmlText) parts.push(child.toString());
+    if (child instanceof Y.XmlText) parts.push(textWithMarks(child));
     else if (child instanceof Y.XmlElement) parts.push(textContent(child));
   }
   return parts.join('');
+}
+
+/**
+ * Read a Y.XmlText's delta and re-emit markdown syntax for any marks
+ * (bold/italic/code/link/strike) it carries. Inverse of
+ * inlineMarksToDelta — plain text remains plain; marked runs get
+ * wrapped in the appropriate syntax.
+ */
+function textWithMarks(xmlText: Y.XmlText): string {
+  const delta = xmlText.toDelta() as Array<{
+    insert?: string;
+    attributes?: Record<string, unknown>;
+  }>;
+  let out = '';
+  for (const op of delta) {
+    if (typeof op.insert !== 'string') continue;
+    out += wrapMarks(op.insert, op.attributes);
+  }
+  return out;
+}
+
+function wrapMarks(text: string, attrs: Record<string, unknown> | undefined): string {
+  if (!attrs || text.length === 0) return text;
+  let s = text;
+  // Order matters: inner marks wrap first, outer last. Link goes outermost.
+  if (attrs.code) s = `\`${s}\``;
+  if (attrs.italic) s = `*${s}*`;
+  if (attrs.bold) s = `**${s}**`;
+  if (attrs.strike) s = `~~${s}~~`;
+  if (attrs.link && typeof attrs.link === 'object' && attrs.link !== null) {
+    const href = (attrs.link as { href?: string }).href ?? '';
+    if (href) s = `[${s}](${href})`;
+  }
+  return s;
 }
 
 function listItems(list: Y.XmlElement): string[] {
