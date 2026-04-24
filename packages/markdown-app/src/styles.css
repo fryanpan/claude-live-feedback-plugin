@@ -372,6 +372,26 @@ button {
 #editor .ProseMirror .cm-codeblock pre {
   margin: 0;
 }
+/* Mermaid blocks: only show the diagram in the default (read) view.
+   Click the diagram to move the cursor into the code block — the
+   NodeView adds .is-editing, which reveals the source. Click outside
+   to collapse back to diagram-only. */
+#editor .ProseMirror .cm-codeblock.is-mermaid .cm-source {
+  display: none;
+}
+#editor .ProseMirror .cm-codeblock.is-mermaid.is-editing .cm-source {
+  display: block;
+  margin-top: 8px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+}
+#editor .ProseMirror .cm-codeblock.is-mermaid .cm-diagram {
+  cursor: pointer;
+}
+#editor .ProseMirror .cm-codeblock.is-mermaid.is-editing .cm-diagram {
+  cursor: default;
+  opacity: 0.9;
+}
 #editor .ProseMirror .cm-diagram {
   background: var(--bg-panel);
   border: 1px solid var(--border);

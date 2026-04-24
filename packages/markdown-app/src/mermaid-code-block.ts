@@ -53,7 +53,7 @@ function escapeHtml(s: string): string {
 
 export const MermaidCodeBlock = CodeBlock.extend({
   addNodeView() {
-    return ({ node: initial }: NodeViewRendererProps) => {
+    return ({ node: initial, editor, getPos }: NodeViewRendererProps) => {
       let node = initial;
 
       const wrapper = document.createElement('div');
@@ -67,18 +67,33 @@ export const MermaidCodeBlock = CodeBlock.extend({
 
       // Source <pre><code> — Tiptap puts the editable text here.
       const pre = document.createElement('pre');
+      pre.className = 'cm-source';
       const code = document.createElement('code');
       const lang = (node.attrs.language as string | null) ?? '';
       if (lang) code.className = `language-${lang}`;
       pre.appendChild(code);
       wrapper.appendChild(pre);
 
+      // Click the diagram to drop the cursor inside the code block — CSS
+      // then reveals the source for editing. Click outside to collapse.
+      rendered.addEventListener('click', () => {
+        const pos = typeof getPos === 'function' ? getPos() : null;
+        if (typeof pos !== 'number') return;
+        editor
+          .chain()
+          .focus()
+          .setTextSelection(pos + 1)
+          .run();
+      });
+
       let lastSource = '';
       let pending: ReturnType<typeof setTimeout> | null = null;
 
       const scheduleRender = () => {
         const language = (node.attrs.language as string | null) ?? '';
-        if (language !== 'mermaid') {
+        const isMermaid = language === 'mermaid';
+        wrapper.classList.toggle('is-mermaid', isMermaid);
+        if (!isMermaid) {
           rendered.style.display = 'none';
           return;
         }
@@ -106,7 +121,22 @@ export const MermaidCodeBlock = CodeBlock.extend({
         }, 400);
       };
 
+      const updateEditingClass = () => {
+        const pos = typeof getPos === 'function' ? getPos() : null;
+        if (typeof pos !== 'number') {
+          wrapper.classList.remove('is-editing');
+          return;
+        }
+        const { from, to } = editor.state.selection;
+        const start = pos;
+        const end = pos + node.nodeSize;
+        const inside = from >= start && to <= end;
+        wrapper.classList.toggle('is-editing', inside);
+      };
+
+      editor.on('selectionUpdate', updateEditingClass);
       scheduleRender();
+      updateEditingClass();
 
       return {
         dom: wrapper,
@@ -118,6 +148,7 @@ export const MermaidCodeBlock = CodeBlock.extend({
           const newLang = (newNode.attrs.language as string | null) ?? '';
           code.className = newLang ? `language-${newLang}` : '';
           scheduleRender();
+          updateEditingClass();
           return true;
         },
         // Every SVG we inject into `rendered` is a DOM mutation OUTSIDE
@@ -132,6 +163,7 @@ export const MermaidCodeBlock = CodeBlock.extend({
         },
         destroy() {
           if (pending) clearTimeout(pending);
+          editor.off('selectionUpdate', updateEditingClass);
         },
       };
     };
