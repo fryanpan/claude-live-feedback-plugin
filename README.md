@@ -49,14 +49,14 @@ flowchart LR
     MCP["live-feedback-mcp<br/>(stdio)"]
   end
 
-  Browser <-->|WebSocket<br/>(y-protocol sync)| Yjs
+  Browser <-->|"WebSocket<br/>(y-protocol sync)"| Yjs
   Server --- Yjs
-  Yjs <-->|bidirectional sync<br/>+ debounced| Disk
+  Yjs <-->|"bidirectional sync<br/>+ debounced"| Disk
   Yjs --> Persist
-  Server -->|SSE<br/>thread events| MCP
-  MCP -->|notifications/claude/channel| Agent
-  Agent -->|MCP tool calls<br/>(edit, reply, resolve)| MCP
-  MCP -->|REST| Server
+  Server -->|"SSE<br/>thread events"| MCP
+  MCP -->|"notifications/claude/channel"| Agent
+  Agent -->|"MCP tool calls<br/>(edit, reply, resolve)"| MCP
+  MCP -->|"REST"| Server
 ```
 
 Yjs is the source of truth at runtime. Disk is authoritative at rest: every prose change flushes to the `.md` file within ~1 second, and external edits to that file (VS Code, git pull, another agent) flow back into the live doc within ~1 second via `fs.watch`. Claude sees comments as channel events pushed via the MCP's `notifications/claude/channel` capability.
