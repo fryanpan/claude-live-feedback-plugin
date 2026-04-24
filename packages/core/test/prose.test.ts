@@ -57,6 +57,60 @@ describe('walkProse', () => {
     expect(plainText).toBe('');
     expect(segments).toHaveLength(0);
   });
+
+  it('strips mark XML from plainText so offsets stay aligned with segment lengths', () => {
+    // Y.XmlText.toString() renders marks as "<bold>hello</bold>" (18 chars)
+    // but node.length reports the unmarked char count (5). If walkProse
+    // appended toString() to plainText, segment docOffsets would drift
+    // behind by the width of each mark wrapper, breaking indexOf→segment
+    // lookups for anything after a marked span.
+    const doc = new Y.Doc();
+    const frag = getProseFragment(doc);
+    doc.transact(() => {
+      const p1 = new Y.XmlElement('paragraph');
+      const t1 = new Y.XmlText();
+      t1.insert(0, 'hello');
+      t1.format(0, 5, { bold: {} });
+      p1.insert(0, [t1]);
+      const p2 = new Y.XmlElement('paragraph');
+      const t2 = new Y.XmlText();
+      t2.insert(0, 'world');
+      p2.insert(0, [t2]);
+      frag.push([p1, p2]);
+    });
+    const { plainText, segments } = walkProse(frag);
+    expect(plainText).toBe('hello\n\nworld');
+    expect(plainText.indexOf('world')).toBe(7);
+    // Second segment sits at offset 7 (5 + "\n\n"), covering 5 chars.
+    expect(segments[1]?.docOffset).toBe(7);
+    expect(segments[1]?.length).toBe(5);
+  });
+});
+
+describe('findAndReplace — with marks', () => {
+  it('matches text after a marked span', () => {
+    // Regression: before the fix, plainText.indexOf("world") landed at a
+    // position beyond any segment's [docOffset, docOffset+length) range
+    // because the preceding marked "hello" had inflated plainText but not
+    // docOffset, so findSegmentForOffset returned null → silent no-match.
+    const doc = new Y.Doc();
+    const frag = getProseFragment(doc);
+    doc.transact(() => {
+      const p1 = new Y.XmlElement('paragraph');
+      const t1 = new Y.XmlText();
+      t1.insert(0, 'hello');
+      t1.format(0, 5, { bold: {} });
+      p1.insert(0, [t1]);
+      const p2 = new Y.XmlElement('paragraph');
+      const t2 = new Y.XmlText();
+      t2.insert(0, 'world');
+      p2.insert(0, [t2]);
+      frag.push([p1, p2]);
+    });
+    const res = findAndReplace(doc, { find: 'world', replace: 'WORLD' });
+    expect(res.ok).toBe(true);
+    expect(walkProse(frag).plainText).toBe('hello\n\nWORLD');
+  });
 });
 
 describe('findAndReplace', () => {

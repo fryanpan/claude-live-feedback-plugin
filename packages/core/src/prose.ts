@@ -74,7 +74,16 @@ export function walkProse(fragment: Y.XmlFragment): {
             ? Number(currentBlock.getAttribute('level') ?? 1)
             : undefined,
       });
-      plainText += node.toString();
+      // IMPORTANT: toString() includes XML wrappers around marks
+      // (e.g. "<bold>hello</bold>") but node.length is the unmarked
+      // character count (5). If we used toString() here, plainText
+      // would grow faster than docOffset and every segment after a
+      // marked span would have an incorrect offset — find_and_replace
+      // would silently no-match or land edits in the wrong place.
+      // toDelta() gives us the raw insert strings without the wrappers.
+      for (const op of node.toDelta() as Array<{ insert?: string }>) {
+        if (typeof op.insert === 'string') plainText += op.insert;
+      }
       docOffset += length;
       return;
     }

@@ -206,16 +206,23 @@ export class Rooms {
       endOffset: number;
       headingLevel?: number;
     }> = [];
+    const rawText = (node: Y.XmlText): string => {
+      let out = '';
+      for (const op of node.toDelta() as Array<{ insert?: string }>) {
+        if (typeof op.insert === 'string') out += op.insert;
+      }
+      return out;
+    };
     for (const s of walk.segments) {
       const last = grouped[grouped.length - 1];
       if (last && last.top === s.topBlock && s.topBlock != null) {
-        last.text += s.node.toString();
+        last.text += rawText(s.node);
         last.endOffset = s.docOffset + s.length;
       } else {
         grouped.push({
           top: s.topBlock,
           type: s.topBlockType,
-          text: s.node.toString(),
+          text: rawText(s.node),
           startOffset: s.docOffset,
           endOffset: s.docOffset + s.length,
           ...(s.headingLevel != null ? { headingLevel: s.headingLevel } : {}),
