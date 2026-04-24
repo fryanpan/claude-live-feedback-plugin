@@ -120,6 +120,16 @@ export const MermaidCodeBlock = CodeBlock.extend({
           scheduleRender();
           return true;
         },
+        // Every SVG we inject into `rendered` is a DOM mutation OUTSIDE
+        // the contentDOM (which is `code`). Without this, prosemirror
+        // observes the mutation, re-dispatches update(), destroys the
+        // NodeView, recreates it — and the loop runs forever at ~30Hz.
+        ignoreMutation(mutation) {
+          const target = mutation.target as Node;
+          if (code === target) return false;
+          if (code.contains(target)) return false;
+          return true;
+        },
         destroy() {
           if (pending) clearTimeout(pending);
         },

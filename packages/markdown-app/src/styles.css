@@ -384,7 +384,13 @@ button {
   user-select: none;
 }
 #editor .ProseMirror .cm-diagram:empty {
-  display: none;
+  /* Don't reserve vertical space while mermaid's first render is in
+     flight, but keep the element in the layout so the NodeView can
+     swap in SVG or an error without a reflow jump. */
+  padding: 0;
+  border: 0;
+  background: transparent;
+  min-height: 0;
 }
 #editor .ProseMirror .cm-diagram svg {
   max-width: 100%;
