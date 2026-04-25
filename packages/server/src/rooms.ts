@@ -229,11 +229,15 @@ export class Rooms {
         });
       }
     }
-    // Second pass: for tables (and lists), re-render from the actual
-    // Y.XmlElement so the text field is human-readable GFM rather than
-    // cells glued together.
+    // Second pass: re-render every block from its Y.XmlElement so
+    // block.text is proper markdown — preserving heading levels,
+    // code-block fences with language, list bullets/numbering, table
+    // pipes, AND inline marks (**bold**, *italic*, `code`, links).
+    // Without this, agents reading get_doc lose all formatting cues
+    // because the raw-toDelta concat we use for offset-aligned
+    // plainText strips marks deliberately.
     for (const g of grouped) {
-      if (g.top && (g.type === 'table' || g.type === 'bulletList' || g.type === 'orderedList')) {
+      if (g.top) {
         const md = prose.serializeBlockToMarkdown(g.top);
         if (md) g.text = md;
       }
