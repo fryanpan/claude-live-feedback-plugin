@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { extname, join } from 'node:path';
 import type { Anchor, DocType, User } from '@feedback/core';
 import { publicBaseUrl } from './public-host.ts';
-import { type FeedbackWs, Rooms, type RoomsConfig } from './rooms.ts';
+import { type FeedbackWs, Rooms } from './rooms.ts';
 import { SseHub, openSseStream } from './sse.ts';
 import { type WebhookLogEntry, createWebhookDispatcher } from './webhooks.ts';
 import { onClose, onMessage, onOpen } from './yjs-protocol.ts';
@@ -54,15 +54,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       if (webhookLog.length > 1000) webhookLog.shift();
     },
   });
-  // Lazy ref so `withReviewUrl` (defined after Bun.serve) can be reused
-  // for SSE/webhook payloads via the Rooms decorator.
-  let decorateDocMeta: RoomsConfig['decorateDocMeta'];
-  const rooms = new Rooms({
-    dataDir,
-    sse,
-    webhooks,
-    decorateDocMeta: (m) => decorateDocMeta?.(m) ?? m,
-  });
+  // `withReviewUrl` is a hoisted function declaration; it captures
+  // `server` lazily and is only invoked during requests / thread events,
+  // after Bun.serve has assigned. Same instance is reused for SSE +
+  // webhook payloads via the Rooms decorator.
+  const rooms = new Rooms({ dataDir, sse, webhooks, decorateDocMeta: withReviewUrl });
 
   const server = Bun.serve<{ docId: string }>({
     port,
@@ -391,7 +387,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     const base = publicBaseUrl(server.port ?? port);
     return { ...meta, reviewUrl: `${base}/review/${encodeURIComponent(meta.docId)}` };
   }
-  decorateDocMeta = withReviewUrl;
 
   return {
     port: server.port ?? port,
