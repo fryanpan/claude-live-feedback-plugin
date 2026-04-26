@@ -925,14 +925,21 @@ function sentenceRangeAt(
 
 const WIDTH_PREF_KEY = 'lfb.editor.width';
 
+// In-memory mirror so the toggle still works in private mode (where
+// localStorage throws on get and set) — without it, every read would
+// fall back to the default and the button wouldn't appear to do
+// anything.
+let widthPrefInMemory: 'full' | 'reading' | undefined;
+
 /** Read the persisted width preference. Default is 'full' so wide tables
  *  in review docs aren't squeezed. Falsy / unknown values normalize to
  *  the default. */
 function readWidthPref(): 'full' | 'reading' {
   try {
-    return localStorage.getItem(WIDTH_PREF_KEY) === 'reading' ? 'reading' : 'full';
+    const raw = localStorage.getItem(WIDTH_PREF_KEY);
+    return raw === 'reading' ? 'reading' : 'full';
   } catch {
-    return 'full';
+    return widthPrefInMemory ?? 'full';
   }
 }
 
@@ -945,10 +952,11 @@ function applyWidthPref(): void {
 
 function toggleWidthPref(): void {
   const next = readWidthPref() === 'reading' ? 'full' : 'reading';
+  widthPrefInMemory = next;
   try {
     localStorage.setItem(WIDTH_PREF_KEY, next);
   } catch {
-    // localStorage disabled (private mode etc.) — ignore; in-memory toggle still works.
+    // localStorage disabled (private mode) — in-memory mirror keeps the toggle alive for this session.
   }
   applyWidthPref();
 }
