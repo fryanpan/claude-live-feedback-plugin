@@ -45,6 +45,8 @@ export interface RoomsConfig {
   /** Called on new thread / reply / status change to dispatch webhooks + SSE. */
   sse: SseHub;
   webhooks: WebhookDispatcher;
+  /** Decorate doc metadata on the way out (e.g. with a reachable reviewUrl). */
+  decorateDocMeta?: (meta: DocMeta) => DocMeta & { reviewUrl?: string };
 }
 
 /**
@@ -598,12 +600,13 @@ export class Rooms {
     comment?: { id: string; author: User; text: string; ts: number },
   ): void {
     room.seq++;
+    const decorate = this.cfg.decorateDocMeta ?? ((m) => m);
     const payload = {
       event,
       docId: room.docId,
       threadId: thread.id,
       thread,
-      doc: room.meta,
+      doc: decorate(room.meta),
       comment,
       seq: room.seq,
     };
