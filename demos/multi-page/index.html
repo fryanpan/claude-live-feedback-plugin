@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Atlas Labs · Home</title>
+    <link rel="stylesheet" href="/demos/multi-page/style.css" />
+  </head>
+  <body>
+    <header class="topnav">
+      <div class="brand">🧭 Atlas Labs</div>
+      <nav>
+        <a href="/demos/multi-page/" class="active">Home</a>
+        <a href="/demos/multi-page/features.html">Features</a>
+        <a href="/demos/multi-page/pricing.html">Pricing</a>
+        <a href="/demos/multi-page/about.html">About</a>
+      </nav>
+      <button class="cta">Try it</button>
+    </header>
+
+    <main>
+      <h1>Maps for the rest of us.</h1>
+      <p class="subtitle">
+        Atlas Labs builds routing, geocoding, and base-map services that don't require a
+        PhD to integrate. Ship in an afternoon, scale when you need to.
+      </p>
+
+      <div class="grid">
+        <div class="card">
+          <h3>Turn-by-turn routing</h3>
+          <p>Car, bike, or on foot — same API, no map-style lock-in.</p>
+        </div>
+        <div class="card">
+          <h3>Geocoding at the edge</h3>
+          <p>Under 30 ms globally, with a free tier that doesn't expire.</p>
+        </div>
+        <div class="card">
+          <h3>Open data first</h3>
+          <p>OSM + our own diffs. Attribution ready, rights transparent.</p>
+        </div>
+      </div>
+    </main>
+
+    <footer>© Atlas Labs · a fictional company for live-feedback-plugin demo purposes</footer>
+
+    <script src="/widget.iife.js"></script>
+    <script>
+      (function () {
+        var params = new URLSearchParams(location.search);
+        window.FeedbackWidget.init({
+          docId: 'multi-page-demo',
+          user: params.get('as'),
+        });
+      })();
+    </script>
+  </body>
+</html>

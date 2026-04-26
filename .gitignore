@@ -11,3 +11,6 @@ build/
 .envrc
 .worktrees/
 __pycache__/
+data/
+coverage/
+.vitest-cache/

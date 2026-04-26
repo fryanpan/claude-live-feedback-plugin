@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Demo — Mock Checkout · Live Feedback</title>
+    <link rel="stylesheet" href="/demos/mockup/style.css" />
+  </head>
+  <body>
+    <header class="topnav">
+      <div class="brand"><span class="logo">Ac</span> Acme Clinic</div>
+      <nav>
+        <a href="#">Patients</a>
+        <a href="#">Schedule</a>
+        <a href="#">Billing</a>
+        <a href="#" class="active">Checkout</a>
+      </nav>
+      <div class="actions">
+        <button class="secondary">Help</button>
+        <button class="primary">New Visit</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero">
+        <h1>Checkout for Maria Alvarez</h1>
+        <p class="subtitle">Visit #48119 · Dr. Patel · April 18, 2026</p>
+      </section>
+
+      <section class="columns">
+        <div class="card" id="charges">
+          <header class="card-header">Charges</header>
+          <table>
+            <tr><td>Office visit — 99213</td><td class="num">$140.00</td></tr>
+            <tr><td>Flu vaccine — 90662</td><td class="num">$42.00</td></tr>
+            <tr><td>Lab panel — 80053</td><td class="num">$88.00</td></tr>
+            <tr class="total"><td>Total</td><td class="num">$270.00</td></tr>
+          </table>
+        </div>
+
+        <div class="card" id="payment">
+          <header class="card-header">Payment</header>
+          <label>
+            <span>Amount</span>
+            <input type="text" value="$270.00" aria-label="Amount" />
+          </label>
+          <label>
+            <span>Method</span>
+            <select aria-label="Payment method">
+              <option>Credit card</option>
+              <option>Debit</option>
+              <option>Cash</option>
+              <option>Insurance only</option>
+            </select>
+          </label>
+          <label>
+            <span>Memo</span>
+            <input type="text" placeholder="optional" aria-label="Memo" />
+          </label>
+          <div class="row">
+            <button class="secondary">Save draft</button>
+            <button class="primary" id="collect-btn" data-testid="collect-payment">
+              Collect payment
+            </button>
+          </div>
+        </div>
+
+        <div class="card" id="next-steps">
+          <header class="card-header">Next step</header>
+          <ul>
+            <li><button class="ghost">Send receipt by email</button></li>
+            <li><button class="ghost">Schedule follow-up</button></li>
+            <li><button class="ghost">Flag for review</button></li>
+            <li><button class="ghost danger">Cancel visit</button></li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="notice">
+        <strong>Heads up:</strong> this is a mock page used by the Live Feedback Plugin
+        demo. Click the blue <em>✎</em> button in the bottom-right to open the widget,
+        then <em>Comment on element…</em> to anchor a comment anywhere on this page.
+      </section>
+    </main>
+
+    <footer>
+      <small>
+        Docs: <a href="/">/</a> · Widget: <a href="/widget.iife.js">/widget.iife.js</a> ·
+        <a href="?as=bryan">Open as Bryan</a> ·
+        <a href="?as=agent">Open as Agent</a>
+      </small>
+    </footer>
+
+    <script src="/widget.iife.js"></script>
+    <script>
+      (function () {
+        var params = new URLSearchParams(location.search);
+        var user = params.get('as');
+        window.FeedbackWidget.init({
+          docId: 'demo-mockup',
+          user: user,
+        });
+      })();
+    </script>
+  </body>
+</html>

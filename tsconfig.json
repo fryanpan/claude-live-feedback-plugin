@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.base.json",
+  "include": [
+    "packages/*/src/**/*.ts",
+    "packages/*/scripts/**/*.ts",
+    "packages/*/test/**/*.ts",
+    "demos/*/src/**/*.ts",
+    "demos/*/scripts/**/*.ts",
+    "cookbook/**/*.ts",
+    "scripts/**/*.ts"
+  ],
+  "exclude": ["**/node_modules", "**/dist", "**/build"]
+}

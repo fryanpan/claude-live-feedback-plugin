@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Atlas Labs · Pricing</title>
+    <link rel="stylesheet" href="/demos/multi-page/style.css" />
+  </head>
+  <body>
+    <header class="topnav">
+      <div class="brand">🧭 Atlas Labs</div>
+      <nav>
+        <a href="/demos/multi-page/">Home</a>
+        <a href="/demos/multi-page/features.html">Features</a>
+        <a href="/demos/multi-page/pricing.html" class="active">Pricing</a>
+        <a href="/demos/multi-page/about.html">About</a>
+      </nav>
+      <button class="cta">Try it</button>
+    </header>
+
+    <main>
+      <h1>Simple pricing, generous free tier</h1>
+      <p class="subtitle">No credit card to start. Only pay when you cross the free-tier line.</p>
+
+      <div class="price-grid">
+        <div class="tier">
+          <h3>Hobby</h3>
+          <div class="price">$0</div>
+          <ul>
+            <li>100k requests / month</li>
+            <li>Community support</li>
+            <li>Rate-limited to 10/s</li>
+          </ul>
+        </div>
+        <div class="tier recommended">
+          <h3>Pro</h3>
+          <div class="price">$29 / mo</div>
+          <ul>
+            <li>1M requests / month</li>
+            <li>Email support, 1-day SLA</li>
+            <li>No hard rate limit</li>
+            <li>Team seats: 5</li>
+          </ul>
+        </div>
+        <div class="tier">
+          <h3>Scale</h3>
+          <div class="price">Let's talk</div>
+          <ul>
+            <li>Usage-based</li>
+            <li>Dedicated support</li>
+            <li>Custom SLAs &amp; data residency</li>
+          </ul>
+        </div>
+      </div>
+    </main>
+
+    <footer>© Atlas Labs · demo</footer>
+
+    <script src="/widget.iife.js"></script>
+    <script>
+      (function () {
+        var params = new URLSearchParams(location.search);
+        window.FeedbackWidget.init({ docId: 'multi-page-demo', user: params.get('as') });
+      })();
+    </script>
+  </body>
+</html>

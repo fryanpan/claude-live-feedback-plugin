@@ -1,0 +1,32 @@
+{
+  "name": "claude-live-feedback-plugin",
+  "private": true,
+  "version": "0.0.0",
+  "workspaces": ["packages/*", "demos/*"],
+  "scripts": {
+    "bootstrap": "bun run scripts/bootstrap.ts",
+    "dev": "bun run scripts/serve.ts",
+    "dev:bare": "bun run packages/server/src/bin.ts",
+    "typecheck": "tsc --noEmit --project tsconfig.json",
+    "test": "bun run test:vitest && bun run test:server",
+    "test:vitest": "vitest run",
+    "test:server": "bun test packages/server/test",
+    "test:watch": "vitest",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "build:widget": "bun run packages/widget/scripts/build.ts",
+    "build:markdown-app": "bun run packages/markdown-app/scripts/build.ts",
+    "build:mcp": "bun run packages/mcp/scripts/build.ts",
+    "build:all": "bun run build:widget && bun run build:markdown-app && bun run build:mcp",
+    "publish:mcp": "cd packages/mcp && npm publish",
+    "check:widget-size": "bun run scripts/check-widget-size.ts"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "1.9.4",
+    "@types/bun": "^1.1.14",
+    "@types/node": "^22.10.2",
+    "happy-dom": "^15.11.7",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

@@ -36,7 +36,7 @@ Each cycle has minutes-to-hours of latency. When the artifact is a UI mockup or 
 This project has to make three surfaces work, sharing as much of the comment-and-thread UX as possible:
 
 ### 1. Markdown + diagram review
-Agent posts a link to a markdown file (often with mermaid diagrams). Bryan can't open it locally because the agent is on a remote machine. He opens it in a browser via secure Cloudflare tunnel and:
+Agent posts a link to a markdown file (often with mermaid diagrams). Bryan opens it in a browser on whatever device is convenient — the host machine's Tailscale hostname works from his phone or another laptop without any public-internet exposure. He then:
 - Sees rendered markdown + mermaid
 - Leaves comments anchored to specific text ranges (margin-style)
 - Edits text in place, with redlining UX showing what the agent changed since the last view
