@@ -788,6 +788,7 @@ async function boot(): Promise<void> {
     const collapsed = formatBar.classList.toggle('is-collapsed');
     toggleFormat.setAttribute('aria-pressed', String(!collapsed));
   });
+  applyWidthPref();
   wireFormatBar(editor);
 
   // =========================================================================
@@ -922,6 +923,36 @@ function sentenceRangeAt(
   return { from: blockStart + start, to: blockStart + end };
 }
 
+const WIDTH_PREF_KEY = 'lfb.editor.width';
+
+/** Read the persisted width preference. Default is 'full' so wide tables
+ *  in review docs aren't squeezed. Falsy / unknown values normalize to
+ *  the default. */
+function readWidthPref(): 'full' | 'reading' {
+  try {
+    return localStorage.getItem(WIDTH_PREF_KEY) === 'reading' ? 'reading' : 'full';
+  } catch {
+    return 'full';
+  }
+}
+
+function applyWidthPref(): void {
+  const pref = readWidthPref();
+  document.body.classList.toggle('is-reading-width', pref === 'reading');
+  const btn = document.querySelector<HTMLButtonElement>('#format-bar [data-cmd="width"]');
+  if (btn) btn.setAttribute('aria-pressed', String(pref === 'reading'));
+}
+
+function toggleWidthPref(): void {
+  const next = readWidthPref() === 'reading' ? 'full' : 'reading';
+  try {
+    localStorage.setItem(WIDTH_PREF_KEY, next);
+  } catch {
+    // localStorage disabled (private mode etc.) — ignore; in-memory toggle still works.
+  }
+  applyWidthPref();
+}
+
 function wireFormatBar(editor: EditorHandle): void {
   const bar = document.getElementById('format-bar');
   if (!bar) return;
@@ -938,6 +969,7 @@ function wireFormatBar(editor: EditorHandle): void {
     code: () => chain().toggleCode().run(),
     codeBlock: () => chain().toggleCodeBlock().run(),
     hr: () => chain().setHorizontalRule().run(),
+    width: toggleWidthPref,
     link: () => {
       const existing = editor.editor.getAttributes('link').href as string | undefined;
       const href = prompt('Link URL', existing ?? 'https://');
