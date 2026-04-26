@@ -261,13 +261,15 @@ button {
   padding: 36px 40px calc(160px + var(--safe-bottom));
   -webkit-overflow-scrolling: touch;
 }
-/* Readability-first prose. Serif body for sustained reading + native
-   system UI elsewhere. Hanging max-width tuned for ~70 chars / line at
-   18px — the Bringhurst comfort range. Line-height 1.65 gives text
-   room to breathe without feeling loose. */
+/* Prose width: full by default (so wide tables breathe), with an opt-in
+   reading-width mode for long-form prose. The toggle in the Aa toolbar
+   sets `body.is-reading-width` and persists the choice in localStorage.
+   1200px ceiling so a 4K monitor doesn't stretch a paragraph across
+   the whole screen; 36rem reading mode is the Bringhurst comfort range
+   (~70 chars / line at 18px). */
 #editor .ProseMirror {
   outline: none;
-  max-width: 36rem; /* ≈ 720px at 18px — ~70 chars per line */
+  max-width: min(100%, 1200px);
   margin: 0 auto;
   line-height: 1.65;
   font-family: var(--prose);
@@ -279,6 +281,9 @@ button {
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+body.is-reading-width #editor .ProseMirror {
+  max-width: 36rem; /* ≈ 720px at 18px */
 }
 #editor .ProseMirror p {
   margin: 0 0 1em;
