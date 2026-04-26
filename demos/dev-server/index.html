@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Dev Server Demo · Live Feedback</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+    <script src="http://localhost:8787/widget.iife.js"></script>
+    <script>
+      (function init() {
+        if (!window.FeedbackWidget) return setTimeout(init, 100);
+        var p = new URLSearchParams(location.search);
+        window.FeedbackWidget.init({
+          serverUrl: 'ws://localhost:8787',
+          docId: 'demo-dev-server',
+          user: p.get('as'),
+        });
+      })();
+    </script>
+  </body>
+</html>
