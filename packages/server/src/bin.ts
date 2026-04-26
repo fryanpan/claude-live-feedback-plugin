@@ -2,6 +2,7 @@
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { lanHostnames, tailscaleHost } from './public-host.ts';
 import { createServer } from './server.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -48,11 +49,13 @@ for (let i = 0; i < 20 && !handle; i++) {
 if (!handle) throw lastErr ?? new Error('could not start server');
 port = handle.port;
 
-console.log(`[feedback] listening on http://localhost:${port}`);
-console.log(`[feedback]   - landing:     http://localhost:${port}/`);
-console.log('[feedback]   - markdown app /review/<docId>');
-console.log('[feedback]   - widget       /widget.iife.js');
-console.log('[feedback]   - demos        /demos/mockup');
+const ts = tailscaleHost();
+const lan = lanHostnames();
+console.log(`[feedback] listening on :${port}`);
+console.log(`[feedback]   local:      http://localhost:${port}`);
+if (ts) console.log(`[feedback]   tailscale:  http://${ts}:${port}`);
+for (const h of lan) console.log(`[feedback]   lan:        http://${h}:${port}`);
+console.log('[feedback]   routes:     /  /review/<docId>  /widget.iife.js  /demos/mockup');
 if (!widgetDist)
   console.log('[feedback] (widget bundle not built yet — run: bun run build:widget)');
 if (!markdownAppDist)

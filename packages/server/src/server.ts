@@ -1,7 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { extname, join } from 'node:path';
 import type { Anchor, DocType, User } from '@feedback/core';
-import { type FeedbackWs, Rooms } from './rooms.ts';
+import { publicBaseUrl } from './public-host.ts';
+import { type FeedbackWs, Rooms, type RoomsConfig } from './rooms.ts';
 import { SseHub, openSseStream } from './sse.ts';
 import { type WebhookLogEntry, createWebhookDispatcher } from './webhooks.ts';
 import { onClose, onMessage, onOpen } from './yjs-protocol.ts';
@@ -53,7 +54,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       if (webhookLog.length > 1000) webhookLog.shift();
     },
   });
-  const rooms = new Rooms({ dataDir, sse, webhooks });
+  // Lazy ref so `withReviewUrl` (defined after Bun.serve) can be reused
+  // for SSE/webhook payloads via the Rooms decorator.
+  let decorateDocMeta: RoomsConfig['decorateDocMeta'];
+  const rooms = new Rooms({
+    dataDir,
+    sse,
+    webhooks,
+    decorateDocMeta: (m) => decorateDocMeta?.(m) ?? m,
+  });
 
   const server = Bun.serve<{ docId: string }>({
     port,
@@ -95,10 +104,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           title: body?.title as string | undefined,
           webhookUrl: body?.webhookUrl as string | undefined,
         });
-        return j(200, { docId: room.docId, meta: room.meta });
+        return j(200, { docId: room.docId, meta: withReviewUrl(room.meta) });
       }
       if (pathname === '/api/docs' && req.method === 'GET') {
-        return j(200, { docs: rooms.list() });
+        return j(200, { docs: rooms.list().map(withReviewUrl) });
       }
       const docMatch = pathname.match(/^\/api\/docs\/([^/]+)(?:\/(.*))?$/);
       if (docMatch) {
@@ -115,7 +124,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         const room = isThreadCreate ? rooms.getOrCreate(docId) : rooms.get(docId);
         if (!room) return j(404, { error: 'doc not found' });
         if (rest === '' && req.method === 'GET') {
-          return j(200, { meta: room.meta });
+          return j(200, { meta: withReviewUrl(room.meta) });
         }
         if (rest === 'threads' && req.method === 'GET') {
           const status = url.searchParams.get('status') as 'open' | 'resolved' | null;
@@ -263,7 +272,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               docId,
               threadId: last.id,
               thread: last,
-              doc: room.meta,
+              doc: withReviewUrl(room.meta),
               seq: ++room.seq,
             });
           }
@@ -370,6 +379,19 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       },
     },
   });
+
+  // Decorate doc metadata with a `reviewUrl` that's actually reachable from
+  // other devices on the tailnet / LAN. Markdown docs render at /review/...;
+  // mockup and dev surfaces are hosted by their own integrations, so we
+  // don't fabricate a URL for those.
+  function withReviewUrl<T extends { docId: string; type: string }>(
+    meta: T,
+  ): T & { reviewUrl?: string } {
+    if (meta.type !== 'markdown') return meta;
+    const base = publicBaseUrl(server.port ?? port);
+    return { ...meta, reviewUrl: `${base}/review/${encodeURIComponent(meta.docId)}` };
+  }
+  decorateDocMeta = withReviewUrl;
 
   return {
     port: server.port ?? port,
