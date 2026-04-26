@@ -44,19 +44,25 @@ export function lanHostnames(): string[] {
 }
 
 /**
- * Cache the host across all calls — `tailscale status` shells out and we
- * embed `reviewUrl` on every doc response.
+ * Cache the host across calls — `tailscale status` shells out and we
+ * embed `reviewUrl` on every doc response. TTL'd at 60s so a server
+ * started before the tailscale daemon eventually picks up the
+ * MagicDNS name without a restart.
  */
 let cachedPublicHost: string | undefined;
+let cachedAt = 0;
+const HOST_TTL_MS = 60_000;
 export function publicHost(): string {
-  if (cachedPublicHost !== undefined) return cachedPublicHost;
+  const now = Date.now();
+  if (cachedPublicHost !== undefined && now - cachedAt < HOST_TTL_MS) return cachedPublicHost;
   const ts = tailscaleHost();
   if (ts) {
     cachedPublicHost = ts;
-    return ts;
+  } else {
+    const [first] = lanHostnames();
+    cachedPublicHost = first ?? 'localhost';
   }
-  const [first] = lanHostnames();
-  cachedPublicHost = first ?? 'localhost';
+  cachedAt = now;
   return cachedPublicHost;
 }
 
