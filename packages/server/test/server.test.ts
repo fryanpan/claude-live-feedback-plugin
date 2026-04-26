@@ -118,26 +118,33 @@ describe('server REST', () => {
     expect(openOnly.threads.find((t) => t.id === created.thread.id)).toBeUndefined();
   });
 
-  it('pushes an edit and reads back content', async () => {
-    // create a markdown doc for edits
+  it('seeds a doc and edits via find_and_replace', async () => {
     await fetch(`${base}/api/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'md-1', type: 'markdown' }),
     });
-    const edit1 = await fetch(`${base}/api/docs/md-1/edit`, {
+    await fetch(`${base}/api/docs/md-1/seed`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ start: 0, end: 0, replacement: 'Hello, world!' }),
-    }).then((r) => j<{ ok: boolean; content: string }>(r));
-    expect(edit1.content).toBe('Hello, world!');
+      body: JSON.stringify({ markdown: 'Hello, world!' }),
+    }).then((r) => j(r));
 
-    const edit2 = await fetch(`${base}/api/docs/md-1/edit`, {
+    const seeded = await fetch(`${base}/api/docs/md-1/content`).then((r) =>
+      j<{ blocks: { text: string }[] }>(r),
+    );
+    expect(seeded.blocks[0]?.text).toBe('Hello, world!');
+
+    await fetch(`${base}/api/docs/md-1/find_and_replace`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ start: 7, end: 12, replacement: 'Bryan' }),
-    }).then((r) => j<{ ok: boolean; content: string }>(r));
-    expect(edit2.content).toBe('Hello, Bryan!');
+      body: JSON.stringify({ find: 'world', replace: 'Bryan' }),
+    }).then((r) => j(r));
+
+    const edited = await fetch(`${base}/api/docs/md-1/content`).then((r) =>
+      j<{ blocks: { text: string }[] }>(r),
+    );
+    expect(edited.blocks[0]?.text).toBe('Hello, Bryan!');
   });
 
   it('fires webhooks when configured', async () => {
