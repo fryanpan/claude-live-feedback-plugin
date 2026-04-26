@@ -1,0 +1,125 @@
+/** Kinds of surfaces the feedback core can power. */
+export type DocType = 'markdown' | 'mockup' | 'dev';
+
+export interface DocMeta {
+  docId: string;
+  type: DocType;
+  sourceUrl?: string;
+  title?: string;
+  createdAt: number;
+}
+
+export interface User {
+  /** stable id (localStorage or query param). */
+  id: string;
+  /** display name. */
+  name: string;
+  /** anonymous users have `kind: 'anon'`, known users have `'known'`. */
+  kind: 'known' | 'anon';
+  /** computed accent color (#rrggbb). */
+  color: string;
+}
+
+/** Snippet used to display an orphaned anchor in the "All Threads" panel. */
+export interface AnchorSnippet {
+  text: string;
+  rect?: { x: number; y: number; w: number; h: number };
+}
+
+/**
+ * Page / app-state snapshot captured at anchor-create time. Lets a single
+ * docId span a multi-page site or an SPA — when the current context
+ * doesn't match an anchor's captured context, the widget hides the pin
+ * (the thread is still listed, just not overlaid on a page where it
+ * doesn't belong).
+ */
+export interface AnchorContext {
+  /** Usually `location.pathname + location.search + location.hash` at capture time. */
+  url?: string;
+  /** App-declared view key — e.g. `modal=settings` or `tab=billing`. Opaque. */
+  view?: string;
+}
+
+/**
+ * Text range anchor backed by Yjs RelativePosition (auto-adjusts across edits).
+ * `startRel` / `endRel` are serialized `Y.RelativePosition`.
+ */
+export interface TextRangeAnchor {
+  kind: 'text-range';
+  startRel: Uint8Array;
+  endRel: Uint8Array;
+  snippet: AnchorSnippet;
+  context?: AnchorContext;
+}
+
+/** Fingerprint of a DOM element for anchor recovery after DOM changes. */
+export interface ElementFingerprint {
+  /** element id, if present. */
+  id?: string;
+  /** tagName (uppercased, e.g. BUTTON). */
+  tag: string;
+  /** stable attrs — role, aria-label, name, data-testid. */
+  stableAttrs: Record<string, string>;
+  /** class tokens (sorted, deduped). */
+  classes: string[];
+  /** short text snippet of the element's textContent (first 60 chars, collapsed whitespace). */
+  text: string;
+  /** index-based path walking up to 5 ancestors: "BUTTON[1] > DIV[0] > MAIN[0]". */
+  path: string;
+  /** data-* attrs (sorted keys). */
+  dataAttrs: Record<string, string>;
+  /** optional normalized bounding rect at capture time. */
+  rect?: { x: number; y: number; w: number; h: number };
+}
+
+export interface ElementAnchor {
+  kind: 'element';
+  fingerprint: ElementFingerprint;
+  /** short text for orphan display. */
+  snippet: AnchorSnippet;
+  context?: AnchorContext;
+}
+
+/** Wraps a non-orphan anchor when recovery fails. */
+export interface OrphanAnchor {
+  kind: 'orphan';
+  original: TextRangeAnchor | ElementAnchor;
+  lastSeenAt: number;
+}
+
+export type Anchor = TextRangeAnchor | ElementAnchor | OrphanAnchor;
+
+export interface Comment {
+  id: string;
+  author: User;
+  text: string;
+  ts: number;
+}
+
+export type ThreadStatus = 'open' | 'resolved';
+
+export interface ThreadSummary {
+  id: string;
+  status: ThreadStatus;
+  anchor: Anchor;
+  commentCount: number;
+  lastActivity: number;
+  createdBy: User;
+}
+
+export interface Thread extends ThreadSummary {
+  comments: Comment[];
+}
+
+/** Payload POSTed to a host integration webhook. */
+export interface WebhookPayload {
+  event: 'thread.created' | 'thread.replied' | 'thread.resolved' | 'thread.reopened';
+  docId: string;
+  threadId: string;
+  thread: Thread;
+  doc: DocMeta;
+  /** the comment that triggered the event (undefined for resolve/reopen). */
+  comment?: Comment;
+  /** monotonically-increasing sequence within a doc. */
+  seq: number;
+}

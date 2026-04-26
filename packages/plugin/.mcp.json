@@ -1,0 +1,11 @@
+{
+  "$comment": "MCP server registration. Invokes the live-feedback-mcp binary directly — works whether it was installed via `npm install -g @fryanpan/live-feedback-mcp` (post-publish) or via `cd packages/mcp && npm link` (local dev). More reliable than `npx`, which hits the npm registry for `@latest` and fails when the package isn't published yet. Port is auto-discovered from ~/.claude/live-feedback/server.json.",
+  "mcpServers": {
+    "live-feedback": {
+      "command": "live-feedback-mcp",
+      "env": {
+        "FEEDBACK_AUTHOR": "agent"
+      }
+    }
+  }
+}
