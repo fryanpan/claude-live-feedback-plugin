@@ -17,9 +17,9 @@
  * Stops cleanly on Ctrl+C.
  */
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createServer as netServer } from 'node:net';
-import { homedir, hostname, networkInterfaces } from 'node:os';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -46,43 +46,6 @@ async function pickFreePort(start: number): Promise<number> {
     if ((await canBind(p, '127.0.0.1')) && (await canBind(p, '::1'))) return p;
   }
   throw new Error(`no free port near ${start}`);
-}
-
-function tailscaleHost(): string | null {
-  // Try the CLI in both common install paths
-  const candidates = [
-    '/usr/local/bin/tailscale',
-    '/Applications/Tailscale.app/Contents/MacOS/Tailscale',
-  ];
-  for (const bin of candidates) {
-    if (!existsSync(bin)) continue;
-    try {
-      const out = Bun.spawnSync({ cmd: [bin, 'status', '--json'], stdout: 'pipe' });
-      const j = JSON.parse(out.stdout.toString('utf8')) as {
-        Self?: { DNSName?: string };
-      };
-      const dns = j.Self?.DNSName?.replace(/\.$/, '');
-      if (dns) return dns;
-    } catch {
-      // ignore
-    }
-  }
-  return null;
-}
-
-function lanHostnames(): string[] {
-  const out: string[] = [];
-  // OS hostname often resolves via mDNS as "<hostname>.local" on the LAN
-  const h = hostname().replace(/\.local$/, '');
-  if (h) out.push(`${h}.local`);
-  // IPv4 addresses on non-internal interfaces
-  const nets = networkInterfaces();
-  for (const infos of Object.values(nets)) {
-    for (const info of infos ?? []) {
-      if (info.family === 'IPv4' && !info.internal) out.push(info.address);
-    }
-  }
-  return out;
 }
 
 const port = await pickFreePort(requestedPort);
@@ -115,21 +78,12 @@ writeFileSync(
   `${JSON.stringify({ port, pid: server.pid, startedAt: new Date().toISOString() }, null, 2)}\n`,
 );
 
-const ts = tailscaleHost();
-const lan = lanHostnames();
-
+// bin.ts prints its own URL banner (tailscale + lan + localhost), so we
+// stay quiet here — just leave a hint after about the review URL shape.
 console.log('');
-console.log('=============================================================');
-console.log(` Feedback server listening on :${port}`);
-console.log('');
-console.log(`   local:      http://localhost:${port}`);
-if (ts) console.log(`   tailscale:  http://${ts}:${port}`);
-for (const h of lan) console.log(`   lan:        http://${h}:${port}`);
-console.log('');
-console.log(' Markdown review:   .../review/<docId>?as=bryan');
-console.log(' Demo mockup:       .../demos/mockup');
-console.log(' Mobile preview:    append  &mobile=iphone16pm  to a review URL');
-console.log('=============================================================');
+console.log('[supervisor] markdown review: .../review/<docId>?as=bryan');
+console.log('[supervisor] demo mockup:    .../demos/mockup');
+console.log('[supervisor] mobile preview: append  &mobile=iphone16pm  to a review URL');
 console.log('');
 
 let cleaningUp = false;
