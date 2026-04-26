@@ -380,7 +380,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // other devices on the tailnet / LAN. Markdown docs render at /review/...;
   // mockup and dev surfaces are hosted by their own integrations, so we
   // don't fabricate a URL for those.
-  function withReviewUrl<T extends { docId: string; type: string }>(
+  function withReviewUrl<T extends { docId: string; type: DocType }>(
     meta: T,
   ): T & { reviewUrl?: string } {
     if (meta.type !== 'markdown') return meta;
