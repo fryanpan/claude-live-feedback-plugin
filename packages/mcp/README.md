@@ -24,8 +24,24 @@ plugin's `.mcp.json` contains:
 
 ## Tools exposed
 
-`list_docs`, `list_threads`, `get_thread`, `post_reply`,
-`resolve_thread`, `reopen_thread`, `push_edit`, `observe_url`.
+Doc state: `list_docs`, `get_doc`, `seed_doc`, `attach_file`.
+
+Editing:
+- `find_and_replace`, `rewrite_thread_region`,
+  `insert_after_thread`, `insert_blocks_after_thread`,
+  `create_anchor` / `edit_at_anchor` / `delete_anchor`.
+- `delete_block_at_anchor` — remove the block an anchor points at.
+- `delete_blocks_in_range` — remove every top-level block between two
+  find strings (block-inclusive — partial match deletes the whole
+  containing block).
+- `delete_section` — heading-aware: remove a heading plus everything
+  until the next heading at ≤ same level.
+
+Threads: `list_threads`, `get_thread`, `post_reply`, `resolve_thread`,
+`reopen_thread`.
+
+Channel / observation: `watch_doc`, `unwatch_doc`,
+`list_watched_docs`, `observe_url`.
 
 See source at [`src/mcp.ts`](src/mcp.ts) for the exact JSON schemas.
 

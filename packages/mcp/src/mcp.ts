@@ -74,7 +74,8 @@ const server = new Server(
       'thread_id="..." event="..." author="..." sent_at="...">body</channel>.',
       'Treat them as explicit asks from the reviewer: read, decide if the',
       'comment is in your domain, and act via the edit tools',
-      '(rewrite_thread_region / find_and_replace / insert_blocks_after_thread).',
+      '(rewrite_thread_region / find_and_replace / insert_blocks_after_thread /',
+      'delete_block_at_anchor / delete_blocks_in_range / delete_section).',
       'Call watch_doc(docId) to start receiving events for a doc; unwatch_doc to stop.',
       '',
       'IMPORTANT — file-backed docs: if list_docs shows a doc whose sourceUrl matches',
@@ -298,6 +299,53 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'delete_block_at_anchor',
+      description:
+        "Delete the entire block (paragraph, heading, blockquote, list item, table cell — whichever block contains the anchor) the anchor points at. Pass exactly one of `threadId` (a comment thread's anchor) or `anchorId` (an agent anchor minted via create_anchor). Use this when find_and_replace with an empty replacement isn't enough — empty-string find_and_replace empties the block's text but leaves a blank block element behind that the editor still renders. This removes the block entirely. NOTE: for an anchor inside a list item or table cell, only the innermost containing block (the list item's paragraph, the cell's paragraph) goes away — the list item / cell shell remains. Use delete_section or delete_blocks_in_range for whole-list / whole-section deletion.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          docId: { type: 'string' },
+          threadId: { type: 'string' },
+          anchorId: { type: 'string' },
+        },
+        required: ['docId'],
+      },
+    },
+    {
+      name: 'delete_blocks_in_range',
+      description:
+        'Delete every TOP-LEVEL block from the one containing `startFind` through the one containing `endFind`. Block-INCLUSIVE: a partial-string match still removes the entire containing block — this is intentional ("blow away the section that contains this string"). Use for trailing template cruft or any contiguous span where no heading bounds the area. Both finds use the same disambiguation as find_and_replace; pass `contextBefore` / `contextAfter` for shared disambiguation, or `startOccurrence` / `endOccurrence` (1-indexed) when the same string repeats. Errors: `no-match`, `ambiguous` (with `candidates` tagged `start` / `end`), `inverted-range` (end before start). For "delete this whole section" prefer delete_section, which is heading-aware.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          docId: { type: 'string' },
+          startFind: { type: 'string' },
+          endFind: { type: 'string' },
+          contextBefore: { type: 'string' },
+          contextAfter: { type: 'string' },
+          startOccurrence: { type: 'number' },
+          endOccurrence: { type: 'number' },
+        },
+        required: ['docId', 'startFind', 'endFind'],
+      },
+    },
+    {
+      name: 'delete_section',
+      description:
+        'Delete a heading block plus every subsequent top-level block until the next heading at level ≤ the start heading\'s level (or end of doc). The highest-leverage tool for "delete the X section" — what a single call replaces in one go would otherwise take a dozen find_and_replace calls and still leave empty-paragraph residue. `heading` is the exact heading text (whitespace-trimmed); pass `level` (1..6) to disambiguate when the same text appears at multiple heading levels, `occurrence` (1-indexed) for repeats at the same level. Returns the heading that ended the run (or null if the section ran to the end of the doc) so you can confirm what was kept. Errors: `no-match`, `ambiguous`, `not-a-heading` (string matched body text, not a heading block).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          docId: { type: 'string' },
+          heading: { type: 'string' },
+          level: { type: 'number' },
+          occurrence: { type: 'number' },
+        },
+        required: ['docId', 'heading'],
+      },
+    },
+    {
       name: 'observe_url',
       description:
         'Return the SSE URL that streams live thread events for a doc. Useful for long-running agents.',
@@ -494,6 +542,68 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           'DELETE',
           `/api/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}`,
         );
+        return ok(res);
+      }
+      case 'delete_block_at_anchor': {
+        const { docId, threadId, anchorId } = a as {
+          docId: string;
+          threadId?: string;
+          anchorId?: string;
+        };
+        const res = await http(
+          'POST',
+          `/api/docs/${encodeURIComponent(docId)}/delete_block_at_anchor`,
+          {
+            ...(threadId !== undefined ? { threadId } : {}),
+            ...(anchorId !== undefined ? { anchorId } : {}),
+          },
+        );
+        return ok(res);
+      }
+      case 'delete_blocks_in_range': {
+        const {
+          docId,
+          startFind,
+          endFind,
+          contextBefore,
+          contextAfter,
+          startOccurrence,
+          endOccurrence,
+        } = a as {
+          docId: string;
+          startFind: string;
+          endFind: string;
+          contextBefore?: string;
+          contextAfter?: string;
+          startOccurrence?: number;
+          endOccurrence?: number;
+        };
+        const res = await http(
+          'POST',
+          `/api/docs/${encodeURIComponent(docId)}/delete_blocks_in_range`,
+          {
+            startFind,
+            endFind,
+            ...(contextBefore !== undefined ? { contextBefore } : {}),
+            ...(contextAfter !== undefined ? { contextAfter } : {}),
+            ...(startOccurrence !== undefined ? { startOccurrence } : {}),
+            ...(endOccurrence !== undefined ? { endOccurrence } : {}),
+          },
+        );
+        return ok(res);
+      }
+      case 'delete_section': {
+        const { docId, heading, level, occurrence } = a as {
+          docId: string;
+          heading: string;
+          level?: number;
+          occurrence?: number;
+        };
+        const res = await http('POST', `/api/docs/${encodeURIComponent(docId)}/delete_section`, {
+          heading,
+          ...(level !== undefined ? { level } : {}),
+          ...(occurrence !== undefined ? { occurrence } : {}),
+        });
         return ok(res);
       }
       case 'observe_url': {
