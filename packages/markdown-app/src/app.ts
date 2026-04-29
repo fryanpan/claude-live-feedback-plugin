@@ -92,8 +92,6 @@ async function boot(): Promise<void> {
     user: { name: user.name, color: user.color },
   });
 
-  const welcomeSeed = `# ${docId}\n\nWelcome. Select any text to leave a comment — the bar slides up from the bottom. Tap the 💬 in the top bar to see all threads. Tap "Aa" to show formatting.\n`;
-
   // =========================================================================
   // COMMENT PILL — small inline affordance
   //   • Range selection → pill appears just past the end of the selection
@@ -729,7 +727,6 @@ async function boot(): Promise<void> {
   client.onReady(() => {
     renderDocLabel();
     editor.migrateLegacyIfNeeded();
-    editor.seedIfEmpty(welcomeSeed);
     redrawThreads();
   });
 

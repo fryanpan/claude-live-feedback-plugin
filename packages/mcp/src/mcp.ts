@@ -70,19 +70,28 @@ const server = new Server(
       experimental: { 'claude/channel': {} },
     },
     instructions: [
-      'Channel events arrive as <channel source="live-feedback" doc_id="..." ',
-      'thread_id="..." event="..." author="..." sent_at="...">body</channel>.',
-      'Treat them as explicit asks from the reviewer: read, decide if the',
-      'comment is in your domain, and act via the edit tools',
-      '(rewrite_thread_region / find_and_replace / insert_blocks_after_thread).',
-      'Call watch_doc(docId) to start receiving events for a doc; unwatch_doc to stop.',
+      'Every markdown review doc is backed by a .md file on disk. The file is the',
+      'source of truth at rest; the live editor is the source of truth at runtime;',
+      'the plugin keeps them in sync bidirectionally (~1s debounced).',
       '',
-      'IMPORTANT — file-backed docs: if list_docs shows a doc whose sourceUrl matches',
-      'a markdown file on disk, that file is bound to the live editor. NEVER edit the',
-      '.md file directly with Write/Edit/str_replace — the plugin serializes the live',
-      'doc back to disk ~1s after every change, so a filesystem edit gets silently',
-      'clobbered by the next flush and diverges from what the user sees in the browser.',
-      'Always route edits through the MCP tools listed above.',
+      'CREATE: call create_review_doc(docId, path) to bring a .md under review.',
+      'The server reads the file, parses it into the live editor, sets up the',
+      'fs.watch + write-back, and returns a reviewUrl you can hand to a human.',
+      '',
+      'EDIT: never use Write/Edit/str_replace on the .md while it is under review',
+      '— your filesystem edit gets clobbered by the next flush and diverges from',
+      'what the reviewer sees. Route edits through the MCP tools below: find_and_replace',
+      'for prose changes, rewrite_thread_region / insert_after_thread / insert_blocks_after_thread',
+      'for comment-anchored edits. External edits to the bound file (VS Code, git pull)',
+      'flow back into the live doc automatically via fs.watch.',
+      '',
+      'OBSERVE: call watch_doc(docId) once per doc to receive thread events as',
+      '<channel source="live-feedback" doc_id="..." thread_id="..." event="..." author="..." sent_at="...">body</channel>',
+      'messages. Treat each as an explicit ask from the reviewer; read, decide if it',
+      "is in your domain, act via an edit tool. unwatch_doc when you're done.",
+      '',
+      'BEFORE YOU EDIT A .md FILE: call list_docs first. If a doc has sourceUrl',
+      'matching the path, route through the MCP. If not, normal file edits are fine.',
     ].join(' '),
   },
 );
@@ -166,29 +175,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
-      name: 'attach_file',
+      name: 'create_review_doc',
       description:
-        "Bind this review doc to a markdown file on disk. On attach, if the doc's prose is empty and the file exists, its contents are parsed and loaded into the doc. Every subsequent edit (from the browser editor, the agent, or the widget) is debounced and written back to the file within ~1 second. Path should be absolute; relative paths resolve against the server's cwd. File-to-doc updates (when you edit the .md in your IDE after attach) are not yet supported — it's a one-way live write right now.",
+        "Create a markdown review doc backed by a file on disk. The server reads the file, parses it into the live editor, and sets up bidirectional sync — every edit (from the browser, the agent, or the widget) writes back to the .md within ~1 second, and external edits to the file (VS Code, git pull) flow into the live doc within ~1 second via fs.watch. `path` should be absolute; relative paths resolve against the server's cwd. The file must exist (create it first if it doesn't). Returns the review URL plus the attach result.",
       inputSchema: {
         type: 'object',
         properties: {
           docId: { type: 'string' },
           path: { type: 'string' },
+          title: { type: 'string' },
         },
         required: ['docId', 'path'],
-      },
-    },
-    {
-      name: 'seed_doc',
-      description:
-        'One-shot initial content load for a brand-new empty review doc. Accepts markdown (headings, paragraphs, lists, blockquotes, code blocks, horizontal rules — same parser as insert_blocks_after_thread). Fails with `non-empty` if the doc already has any content — this tool NEVER clobbers existing text. Use when an agent creates a doc via POST /api/docs and wants to populate it without waiting for a browser session to open the URL.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          docId: { type: 'string' },
-          markdown: { type: 'string' },
-        },
-        required: ['docId', 'markdown'],
       },
     },
     {
@@ -386,17 +383,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const res = await http('GET', `/api/docs/${encodeURIComponent(docId)}/content`);
         return ok(res);
       }
-      case 'seed_doc': {
-        const { docId, markdown } = a as { docId: string; markdown: string };
-        const res = await http('POST', `/api/docs/${encodeURIComponent(docId)}/seed`, {
-          markdown,
-        });
-        return ok(res);
-      }
-      case 'attach_file': {
-        const { docId, path } = a as { docId: string; path: string };
-        const res = await http('POST', `/api/docs/${encodeURIComponent(docId)}/attach_file`, {
-          path,
+      case 'create_review_doc': {
+        const { docId, path, title } = a as { docId: string; path: string; title?: string };
+        const res = await http('POST', '/api/docs', {
+          docId,
+          type: 'markdown',
+          sourceUrl: path,
+          ...(title ? { title } : {}),
         });
         return ok(res);
       }
