@@ -3,6 +3,9 @@ import * as Y from 'yjs';
 import {
   autoReanchorDoc,
   createAgentAnchor,
+  deleteBlockAtAnchor,
+  deleteBlocksInRange,
+  deleteSection,
   findAndReplace,
   getProseFragment,
   insertAfterRange,
@@ -428,5 +431,365 @@ describe('createAgentAnchor', () => {
     expect(res.ok).toBe(false);
     expect(res.error).toBe('ambiguous');
     expect(res.candidates).toHaveLength(3);
+  });
+});
+
+// ===========================================================================
+// Block-deletion API — deleteBlockAtAnchor / deleteBlocksInRange / deleteSection
+// ===========================================================================
+
+/** Build an anchor at offset 0 of the FIRST text node inside top-level
+ *  block at `topIdx`. Used by deleteBlockAtAnchor tests. */
+function anchorInTopBlock(doc: Y.Doc, topIdx: number, offset = 0) {
+  const frag = getProseFragment(doc);
+  const top = frag.toArray()[topIdx] as Y.XmlElement;
+  // Walk down through any nested blocks to the first XmlText.
+  let cursor: Y.XmlElement | Y.XmlText = top;
+  while (cursor instanceof Y.XmlElement) {
+    const first = cursor.toArray()[0];
+    if (!first) throw new Error('no leaf');
+    cursor = first as Y.XmlElement | Y.XmlText;
+  }
+  const text = cursor as Y.XmlText;
+  return Y.encodeRelativePosition(Y.createRelativePositionFromTypeIndex(text, offset));
+}
+
+describe('deleteBlockAtAnchor', () => {
+  it('deletes the host paragraph at the doc root', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [
+      { tag: 'paragraph', text: 'first' },
+      { tag: 'paragraph', text: 'middle (delete me)' },
+      { tag: 'paragraph', text: 'last' },
+    ]);
+    const anchorRel = anchorInTopBlock(doc, 1);
+    const res = deleteBlockAtAnchor(doc, { anchorRel });
+    expect(res.ok).toBe(true);
+    expect(res.deleted?.tag).toBe('paragraph');
+    expect(res.deleted?.snippet).toContain('middle');
+    expect(walkProse(getProseFragment(doc)).plainText).toBe('first\n\nlast');
+  });
+
+  it('deletes the innermost host block when the anchor is nested', () => {
+    // bulletList > listItem > paragraph > XmlText. walkProse reports
+    // the innermost block (the paragraph) as the host — that's what we
+    // delete. The empty listItem is left behind; that's a known
+    // limitation of the "innermost host" rule and matches the proposal's
+    // wording. Use deleteSection / deleteBlocksInRange for whole-list deletion.
+    const doc = new Y.Doc();
+    const frag = getProseFragment(doc);
+    const list = new Y.XmlElement('bulletList');
+    const itemTexts: Y.XmlText[] = [];
+    doc.transact(() => {
+      for (const t of ['one', 'two', 'three']) {
+        const li = new Y.XmlElement('listItem');
+        const p = new Y.XmlElement('paragraph');
+        const xt = new Y.XmlText();
+        xt.insert(0, t);
+        p.insert(0, [xt]);
+        li.insert(0, [p]);
+        list.insert(list.length, [li]);
+        itemTexts.push(xt);
+      }
+      frag.push([list]);
+    });
+    const anchorRel = Y.encodeRelativePosition(
+      Y.createRelativePositionFromTypeIndex(itemTexts[1]!, 0),
+    );
+    const res = deleteBlockAtAnchor(doc, { anchorRel });
+    expect(res.ok).toBe(true);
+    expect(res.deleted?.tag).toBe('paragraph');
+    expect(res.deleted?.snippet).toContain('two');
+    // The listItem-2 still exists but its paragraph is gone — flat text
+    // shows just "one" and "three" because the empty listItem contributes
+    // no text.
+    expect(walkProse(frag).plainText).toBe('one\n\nthree');
+    // bulletList still has all three listItems (one is now empty).
+    expect(list.length).toBe(3);
+  });
+
+  it('returns anchor-orphaned when the anchor no longer resolves', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'gone soon' }]);
+    const anchorRel = anchorInTopBlock(doc, 0);
+    // Wipe the entire fragment — anchor's referenced XmlText is destroyed.
+    doc.transact(() => {
+      const frag = getProseFragment(doc);
+      frag.delete(0, frag.length);
+    });
+    const res = deleteBlockAtAnchor(doc, { anchorRel });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('anchor-orphaned');
+  });
+
+  it("tags the transaction with origin='agent' by default", () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'go' }]);
+    const anchorRel = anchorInTopBlock(doc, 0);
+    const origins: unknown[] = [];
+    doc.on('afterTransaction', (tr) => origins.push(tr.origin));
+    deleteBlockAtAnchor(doc, { anchorRel });
+    expect(origins).toContain('agent');
+  });
+});
+
+describe('deleteBlocksInRange', () => {
+  it('deletes all top-level blocks from start match through end match', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [
+      { tag: 'paragraph', text: 'keep before' },
+      { tag: 'heading', text: 'TEMPLATE START', attrs: { level: '2' } },
+      { tag: 'paragraph', text: 'cruft 1' },
+      { tag: 'paragraph', text: 'cruft 2' },
+      { tag: 'paragraph', text: 'TEMPLATE END' },
+      { tag: 'paragraph', text: 'keep after' },
+    ]);
+    const res = deleteBlocksInRange(doc, {
+      startFind: 'TEMPLATE START',
+      endFind: 'TEMPLATE END',
+    });
+    expect(res.ok).toBe(true);
+    expect(res.deleted).toBe(4);
+    expect(walkProse(getProseFragment(doc)).plainText).toBe('keep before\n\nkeep after');
+  });
+
+  it('is block-inclusive — partial match removes the WHOLE containing block', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [
+      { tag: 'paragraph', text: 'before' },
+      { tag: 'paragraph', text: 'first paragraph of section' },
+      { tag: 'paragraph', text: 'last paragraph of section' },
+      { tag: 'paragraph', text: 'after' },
+    ]);
+    // "first" only matches a fragment of the second block but the whole
+    // block is deleted regardless — this is the proposal's chosen
+    // behavior ("blow away the section that contains this string").
+    const res = deleteBlocksInRange(doc, {
+      startFind: 'first',
+      endFind: 'last',
+    });
+    expect(res.ok).toBe(true);
+    expect(res.deleted).toBe(2);
+    expect(walkProse(getProseFragment(doc)).plainText).toBe('before\n\nafter');
+  });
+
+  it('returns inverted-range when end appears before start', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [
+      { tag: 'paragraph', text: 'alpha' },
+      { tag: 'paragraph', text: 'beta' },
+    ]);
+    const res = deleteBlocksInRange(doc, {
+      startFind: 'beta',
+      endFind: 'alpha',
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('inverted-range');
+    // Doc is untouched.
+    expect(walkProse(getProseFragment(doc)).plainText).toBe('alpha\n\nbeta');
+  });
+
+  it('returns no-match when startFind is not present', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'hello' }]);
+    const res = deleteBlocksInRange(doc, { startFind: 'nope', endFind: 'hello' });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('no-match');
+  });
+
+  it('returns ambiguous with candidates tagged start/end when find is not unique', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [
+      { tag: 'paragraph', text: 'cat one' },
+      { tag: 'paragraph', text: 'cat two' },
+      { tag: 'paragraph', text: 'end' },
+    ]);
+    const res = deleteBlocksInRange(doc, { startFind: 'cat', endFind: 'end' });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('ambiguous');
+    expect(res.candidates).toBeTruthy();
+    expect(res.candidates?.every((c) => c.which === 'start')).toBe(true);
+    expect(res.candidates).toHaveLength(2);
+  });
+
+  it('disambiguates via startOccurrence/endOccurrence', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [
+      { tag: 'paragraph', text: 'marker' },
+      { tag: 'paragraph', text: 'middle' },
+      { tag: 'paragraph', text: 'marker' },
+      { tag: 'paragraph', text: 'tail' },
+    ]);
+    const res = deleteBlocksInRange(doc, {
+      startFind: 'marker',
+      endFind: 'marker',
+      startOccurrence: 1,
+      endOccurrence: 2,
+    });
+    expect(res.ok).toBe(true);
+    expect(res.deleted).toBe(3);
+    expect(walkProse(getProseFragment(doc)).plainText).toBe('tail');
+  });
+
+  it('match inside a nested listItem deletes the whole top-level list', () => {
+    // Block-inclusive at the top level — see proposal: nested matches
+    // resolve to their topBlock, which IS the deleted unit.
+    const doc = new Y.Doc();
+    const frag = getProseFragment(doc);
+    doc.transact(() => {
+      const before = new Y.XmlElement('paragraph');
+      const bt = new Y.XmlText();
+      bt.insert(0, 'before');
+      before.insert(0, [bt]);
+      const list = new Y.XmlElement('bulletList');
+      for (const t of ['one', 'two']) {
+        const li = new Y.XmlElement('listItem');
+        const p = new Y.XmlElement('paragraph');
+        const x = new Y.XmlText();
+        x.insert(0, t);
+        p.insert(0, [x]);
+        li.insert(0, [p]);
+        list.insert(list.length, [li]);
+      }
+      const after = new Y.XmlElement('paragraph');
+      const at = new Y.XmlText();
+      at.insert(0, 'after');
+      after.insert(0, [at]);
+      frag.push([before, list, after]);
+    });
+    const res = deleteBlocksInRange(doc, { startFind: 'one', endFind: 'two' });
+    expect(res.ok).toBe(true);
+    // Only the bulletList (one top-level block) is deleted.
+    expect(res.deleted).toBe(1);
+    expect(walkProse(frag).plainText).toBe('before\n\nafter');
+  });
+
+  it('runs every removal as a single Yjs transaction', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [
+      { tag: 'paragraph', text: 'a' },
+      { tag: 'paragraph', text: 'b' },
+      { tag: 'paragraph', text: 'c' },
+    ]);
+    let txCount = 0;
+    doc.on('afterTransaction', (tr) => {
+      if (tr.origin === 'agent') txCount++;
+    });
+    const res = deleteBlocksInRange(doc, { startFind: 'a', endFind: 'c' });
+    expect(res.ok).toBe(true);
+    expect(txCount).toBe(1);
+  });
+});
+
+describe('deleteSection', () => {
+  it('deletes a heading and its body up to the next heading at the same level', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [
+      { tag: 'heading', text: 'Intro', attrs: { level: '1' } },
+      { tag: 'paragraph', text: 'Welcome.' },
+      { tag: 'heading', text: 'Routes', attrs: { level: '2' } },
+      { tag: 'paragraph', text: 'p1' },
+      { tag: 'paragraph', text: 'p2' },
+      { tag: 'heading', text: 'Goodbye', attrs: { level: '2' } },
+      { tag: 'paragraph', text: 'bye.' },
+    ]);
+    const res = deleteSection(doc, { heading: 'Routes' });
+    expect(res.ok).toBe(true);
+    expect(res.deleted).toBe(3); // Routes h2 + p1 + p2
+    expect(res.nextHeading).toEqual({ level: 2, text: 'Goodbye' });
+    expect(walkProse(getProseFragment(doc)).plainText).toBe('Intro\n\nWelcome.\n\nGoodbye\n\nbye.');
+  });
+
+  it('runs to end of doc when no later heading at ≤ level exists', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [
+      { tag: 'heading', text: 'Top', attrs: { level: '1' } },
+      { tag: 'paragraph', text: 'a' },
+      { tag: 'heading', text: 'Sub', attrs: { level: '3' } },
+      { tag: 'paragraph', text: 'b' },
+    ]);
+    const res = deleteSection(doc, { heading: 'Top', level: 1 });
+    expect(res.ok).toBe(true);
+    expect(res.deleted).toBe(4);
+    expect(res.nextHeading).toBe(null);
+    expect(walkProse(getProseFragment(doc)).plainText).toBe('');
+  });
+
+  it('stops at a HIGHER-level heading too (h3 section ends at h2)', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [
+      { tag: 'heading', text: 'A', attrs: { level: '3' } },
+      { tag: 'paragraph', text: 'inside-a' },
+      { tag: 'heading', text: 'B', attrs: { level: '2' } },
+      { tag: 'paragraph', text: 'after-a' },
+    ]);
+    const res = deleteSection(doc, { heading: 'A', level: 3 });
+    expect(res.ok).toBe(true);
+    expect(res.deleted).toBe(2);
+    expect(res.nextHeading).toEqual({ level: 2, text: 'B' });
+  });
+
+  it('returns no-match when the heading text is absent', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'heading', text: 'Other', attrs: { level: '1' } }]);
+    const res = deleteSection(doc, { heading: 'Missing' });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('no-match');
+  });
+
+  it('returns not-a-heading when the string matches a non-heading block', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [
+      { tag: 'heading', text: 'Real Heading', attrs: { level: '1' } },
+      { tag: 'paragraph', text: 'Fake Heading lives here in body text.' },
+    ]);
+    const res = deleteSection(doc, { heading: 'Fake Heading' });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('not-a-heading');
+  });
+
+  it('returns ambiguous when the same heading text appears more than once', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [
+      { tag: 'heading', text: 'Notes', attrs: { level: '2' } },
+      { tag: 'paragraph', text: 'a' },
+      { tag: 'heading', text: 'Notes', attrs: { level: '2' } },
+      { tag: 'paragraph', text: 'b' },
+    ]);
+    const res = deleteSection(doc, { heading: 'Notes' });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('ambiguous');
+    expect(res.candidates).toHaveLength(2);
+  });
+
+  it('disambiguates by occurrence and level', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [
+      { tag: 'heading', text: 'Notes', attrs: { level: '2' } },
+      { tag: 'paragraph', text: 'first-section' },
+      { tag: 'heading', text: 'Notes', attrs: { level: '2' } },
+      { tag: 'paragraph', text: 'second-section' },
+    ]);
+    const res = deleteSection(doc, { heading: 'Notes', occurrence: 2 });
+    expect(res.ok).toBe(true);
+    expect(res.deleted).toBe(2);
+    expect(walkProse(getProseFragment(doc)).plainText).toBe('Notes\n\nfirst-section');
+  });
+
+  it('runs every removal as a single Yjs transaction', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [
+      { tag: 'heading', text: 'X', attrs: { level: '2' } },
+      { tag: 'paragraph', text: 'a' },
+      { tag: 'paragraph', text: 'b' },
+      { tag: 'paragraph', text: 'c' },
+    ]);
+    let txCount = 0;
+    doc.on('afterTransaction', (tr) => {
+      if (tr.origin === 'agent') txCount++;
+    });
+    const res = deleteSection(doc, { heading: 'X' });
+    expect(res.ok).toBe(true);
+    expect(txCount).toBe(1);
   });
 });
