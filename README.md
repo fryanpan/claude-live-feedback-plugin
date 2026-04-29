@@ -26,7 +26,7 @@ If you didn't need the full power of synchronous, live editing and comments goin
 
 - **Markdown review** — a browser-based WYSIWYG editor backed by a file on disk. Open `/review/<docId>?as=<name>` from any device on your Tailnet or LAN. Comments anchor to text ranges and survive concurrent edits via CRDT. Bidirectional disk sync keeps your repo's `.md` in lockstep with the live editor.
 - **UX / mockup widget** — one `<script>` tag (web component, shadow-DOM isolated) drops comment threads onto any HTML page. Anchors include page URL + optional view state so one `docId` can span a multi-page site or SPA.
-- **Agent tool surface** — an MCP server the plugin installs into Claude Code. Agent can `get_doc`, `find_and_replace`, `rewrite_thread_region`, `insert_blocks_after_thread`, `seed_doc`, `attach_file`, and more.
+- **Agent tool surface** — an MCP server the plugin installs into Claude Code. Agent can `get_doc`, `find_and_replace`, `rewrite_thread_region`, `insert_blocks_after_thread`, `delete_block_at_anchor`, `delete_blocks_in_range`, `delete_section`, `seed_doc`, `attach_file`, and more.
 - **Claude Code channel** — thread events (`thread.created` / `thread.replied` / `thread.resolved` / `thread.reopened`) arrive in the agent's session as `<channel source="live-feedback" ...>` messages. The agent reacts the same way it would to any peer ping.
 
 ## Architecture

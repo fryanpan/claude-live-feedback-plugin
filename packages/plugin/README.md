@@ -133,7 +133,9 @@ tunnels, no certs. For a phone-simulator viewport on desktop append
 - `editing-review-docs` — auto-invokes before Claude edits a `.md`
   file. Checks `list_docs` to see if the file is bound to a live
   review doc via `attach_file`, and if so routes edits through
-  `find_and_replace` / `rewrite_thread_region` / `insert_blocks_after_thread`
+  `find_and_replace` / `rewrite_thread_region` /
+  `insert_blocks_after_thread` /
+  `delete_block_at_anchor` / `delete_blocks_in_range` / `delete_section`
   instead of touching the file directly. Prevents the "agent wrote
   to disk while Bryan was editing in the browser, now they diverge"
   class of bug.
