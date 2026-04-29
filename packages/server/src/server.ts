@@ -72,10 +72,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
         const type = url.searchParams.get('type') as DocType | null;
         const sourceUrl = url.searchParams.get('sourceUrl') ?? undefined;
-        rooms.getOrCreate(docId, {
-          type: type && ['markdown', 'mockup', 'dev'].includes(type) ? type : undefined,
-          sourceUrl,
-        });
+        // Mockup/dev docs auto-create on WS — the widget connects first
+        // with a known type + sourceUrl. Markdown docs MUST be created
+        // upfront via POST /api/docs (which auto-attaches a file). The
+        // browser navigating to /review/<docId> before the agent has
+        // created the doc gets a clean 404 from /review's own handler.
+        if (!rooms.get(docId)) {
+          if (type === 'mockup' || type === 'dev') {
+            rooms.getOrCreate(docId, { type, sourceUrl });
+          } else {
+            return j(404, { error: 'doc not found' });
+          }
+        }
         const upgraded = server.upgrade(req, { data: { docId } });
         if (!upgraded) return new Response('upgrade required', { status: 426 });
         return undefined;
@@ -85,7 +93,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       if (pathname.startsWith('/events/')) {
         const docId = decodeURIComponent(pathname.slice('/events/'.length));
         if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
-        rooms.getOrCreate(docId);
+        if (!rooms.get(docId)) return j(404, { error: 'doc not found' });
         return openSseStream(sse, docId);
       }
 
@@ -94,13 +102,36 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         const body = await safeJson(req);
         const docId = (body?.docId as string) ?? '';
         if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
+        const type = (body?.type as DocType) ?? 'markdown';
+        const sourceUrl = body?.sourceUrl as string | undefined;
+        // Every markdown doc is file-backed. POST /api/docs is the sole
+        // creation path for markdown — sourceUrl is required, and the
+        // server attaches the file (loads content + sets up bidirectional
+        // disk sync) before returning. Mockup/dev docs are about
+        // commenting on running surfaces, not about a markdown buffer,
+        // so they don't need a file.
+        if (type === 'markdown' && !sourceUrl) {
+          return j(400, {
+            error: 'sourceUrl required',
+            hint: 'Markdown review docs are always backed by a .md file. Pass sourceUrl: "/abs/path/to/file.md" in the POST body. The server will load the file and bidirectionally sync edits.',
+          });
+        }
         const room = rooms.getOrCreate(docId, {
-          type: (body?.type as DocType) ?? 'markdown',
-          sourceUrl: body?.sourceUrl as string | undefined,
+          type,
+          sourceUrl,
           title: body?.title as string | undefined,
           webhookUrl: body?.webhookUrl as string | undefined,
         });
-        return j(200, { docId: room.docId, meta: withReviewUrl(room.meta) });
+        let attached: ReturnType<typeof rooms.attachFile> | undefined;
+        if (type === 'markdown' && sourceUrl) {
+          attached = rooms.attachFile(docId, sourceUrl);
+          if (!attached.ok) return j(409, { error: 'attach_failed', attached });
+        }
+        return j(200, {
+          docId: room.docId,
+          meta: withReviewUrl(room.meta),
+          ...(attached ? { attached } : {}),
+        });
       }
       if (pathname === '/api/docs' && req.method === 'GET') {
         return j(200, { docs: rooms.list().map(withReviewUrl) });
@@ -110,14 +141,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         const docId = decodeURIComponent(docMatch[1] ?? '');
         const rest = docMatch[2] ?? '';
         if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
-        // Auto-create ONLY for thread creation — the single path a widget/
-        // integration hits before anything else exists. Replies, edits,
-        // resolves etc. need a real prior doc; making them auto-create
-        // turns this endpoint into a trivial open-write target behind any
-        // tunnel. Thread creation itself is gated by the existence of a
-        // valid anchor further down.
-        const isThreadCreate = rest === 'threads' && req.method === 'POST';
-        const room = isThreadCreate ? rooms.getOrCreate(docId) : rooms.get(docId);
+        const room = rooms.get(docId);
         if (!room) return j(404, { error: 'doc not found' });
         if (rest === '' && req.method === 'GET') {
           return j(200, { meta: withReviewUrl(room.meta) });
@@ -193,19 +217,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const doc = rooms.getDoc(docId);
           if (!doc) return j(404, { error: 'doc not found' });
           return j(200, doc);
-        }
-        if (rest === 'seed' && req.method === 'POST') {
-          const body = await safeJson(req);
-          const markdown = String(body?.markdown ?? '');
-          if (markdown.length === 0) return j(400, { error: 'markdown is required' });
-          const res = rooms.seedDoc(docId, markdown);
-          return res.ok ? j(200, res) : j(409, res);
-        }
-        if (rest === 'attach_file' && req.method === 'POST') {
-          const body = await safeJson(req);
-          const path = String(body?.path ?? '');
-          const res = rooms.attachFile(docId, path);
-          return res.ok ? j(200, res) : j(409, res);
         }
         if (rest === 'reparse_from_disk' && req.method === 'POST') {
           const res = rooms.reparseFromDisk(docId);
@@ -308,7 +319,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       if (markdownAppDist && pathname.startsWith('/review/')) {
         const docId = decodeURIComponent(pathname.slice('/review/'.length));
         if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
-        rooms.getOrCreate(docId, { type: 'markdown' });
+        // Markdown docs are file-backed and must be created upfront via
+        // POST /api/docs with sourceUrl. Navigating here before the
+        // agent has done that gets a clean 404 — the markdown app
+        // can't render anything useful for a doc that doesn't exist.
+        if (!rooms.get(docId)) {
+          return new Response(renderReviewNotFound(docId), {
+            status: 404,
+            headers: { 'content-type': 'text/html; charset=utf-8' },
+          });
+        }
         // Device-frame simulation: when ?mobile=<preset> is on the URL,
         // return an HTML shell that hosts the real page in an iframe sized
         // to the preset's viewport. Media queries inside the iframe see
@@ -426,6 +446,20 @@ function serveStatic(p: string): Response | null {
   const buf = readFileSync(p);
   const ct = CT[extname(p).toLowerCase()] ?? 'application/octet-stream';
   return new Response(buf, { headers: { 'content-type': ct, 'cache-control': 'no-cache' } });
+}
+
+function renderReviewNotFound(docId: string): string {
+  const safe = escape(docId);
+  return `<!doctype html><meta charset="utf-8"><title>Doc not found · Live Feedback</title>
+<style>body{font:15px/1.55 system-ui, sans-serif;margin:60px auto;max-width:560px;color:#222;padding:0 20px}
+h1{font-size:22px}code{background:#f3f3f3;padding:1px 5px;border-radius:3px;font-size:90%}
+small{color:#777}</style>
+<h1>Doc not found</h1>
+<p>No review doc exists for <code>${safe}</code>. Markdown review docs are
+created by an agent calling <code>POST /api/docs</code> with a
+<code>sourceUrl</code> pointing at a markdown file on disk.</p>
+<p>Ask the agent who shared this URL to create the doc, then refresh this page.</p>
+<p><small><a href="/">all docs</a></small></p>`;
 }
 
 function renderLanding(docs: { docId: string; type: string; title?: string }[]): string {
