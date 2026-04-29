@@ -1,6 +1,6 @@
 ---
 name: editing-review-docs
-description: Use whenever you're about to edit a markdown file that might be under live review via the live-feedback plugin (file-backed docs). Edits must flow through the MCP tools so the plugin serializes them back to disk — writing to the .md directly desyncs the live editor and the file.
+description: Use whenever you're about to edit a markdown file or post structured findings via the live-feedback plugin. Edits to file-backed docs must flow through the MCP tools so the live editor and the file stay in sync; structured findings (UX issues, code-review notes, etc.) post via the create_anchor + post_reply primitive pattern.
 ---
 
 # Editing files that are under live-feedback review
@@ -14,14 +14,16 @@ a live Yjs doc. After that:
 - The plugin serializes the doc back to the file on disk ~1 second
   after each change (`writeFileSync` debounced in
   `rooms.ts:scheduleFileWrite`).
-- Disk → doc watching is NOT yet wired up in the plugin. If you
-  `Write`/`Edit`/`str_replace` the `.md` on disk, the live doc does
-  NOT pick up your change. Bryan keeps seeing the old content in his
-  browser and his next edit there will overwrite your file change on
-  the next debounced flush.
+- Disk → doc watching is wired both ways: external edits to the
+  bound file (VS Code, `git pull`, another agent) propagate into the
+  live doc within ~1 second via `fs.watch`. Echo loops are blocked
+  by tracking `lastWritten` and the current serialized fragment.
 
 **Therefore:** before editing any markdown file, check whether it's
-under live review. If yes, edit through MCP tools, not the filesystem.
+under live review. If yes, edit through MCP tools so the live editor
+shows your change immediately and Bryan sees it land in real time.
+Direct file writes still work (the watcher reconciles), but the
+agent appears in the live editor only when edits go through MCP.
 
 ## Before editing a .md file
 
@@ -57,12 +59,51 @@ Pick the smallest tool that does the job, in this order:
 
 Do NOT:
 
-- `Write` / `Edit` / `str_replace` on the `.md` while it's attached
-  — your change silently loses to the live editor's next flush.
-- `git checkout` / `git stash pop` a file that's attached — same
-  divergence problem.
-- Run a formatter / linter that rewrites the file on disk. Run it
-  AFTER the review is complete, when no browser session is open.
+- `Write` / `Edit` / `str_replace` on the `.md` while a reviewer is
+  actively reading. The watcher reconciles, but Bryan sees a
+  re-flow rather than your edit landing surgically. Use MCP tools
+  for any change you want him to see arrive in real time.
+- Run a formatter / linter that rewrites the file on disk during a
+  live review session — the watcher will diff and reflow the whole
+  doc, blowing up Bryan's scroll position. Run formatters after.
+
+## Posting structured findings (UX issues, review notes, etc.)
+
+When you're not editing prose but **adding a finding** — a UX
+critique, a code-review note, an accessibility issue, a question
+the human should answer — post it as a comment thread anchored to
+the relevant text or DOM region. The pattern is two MCP calls:
+
+1. `create_anchor(docId, find, { contextBefore?, contextAfter?, occurrence?, label? })`
+   to pin a position in the doc / page.
+2. `post_reply(docId, threadId, text)` after creating the thread —
+   or use the widget's existing thread-create endpoint with the
+   anchor you just minted.
+
+Use this body shape for findings so the panel renders cleanly and
+the next agent reading it can parse it without ambiguity:
+
+```markdown
+**Severity:** moderate · **Page:** /jobs/123
+
+The "Apply" CTA disappears below the fold on iPhone 12 mini —
+clipped by the sticky footer at viewport heights under ~700px.
+
+**Suggested fix:** make the footer auto-hide on scroll under 768px,
+or move the CTA above the fold in the layout component.
+```
+
+Why this pattern instead of a dedicated `post_finding_at_anchor`
+tool: the MCP surface is intentionally small and primitive.
+`create_anchor` + `post_reply` already compose into "agent posts a
+finding"; adding bespoke tools per use case fragments the API and
+hides what's actually a markdown-body convention. From the human
+reviewer's panel, your structured finding looks identical to a
+human-written comment — which is the design.
+
+Use one of these labels in your `create_anchor` call so the
+"All threads" panel groups findings by source: `"ux-finding"`,
+`"code-review"`, `"a11y"`, or your agent's own short tag.
 
 ## Signals the file is under review
 
