@@ -729,7 +729,14 @@ async function boot(): Promise<void> {
   client.onReady(() => {
     renderDocLabel();
     editor.migrateLegacyIfNeeded();
-    editor.seedIfEmpty(welcomeSeed);
+    // The welcome placeholder is for fresh docs that genuinely have no
+    // source. File-backed docs (those with `sourceUrl`) should populate
+    // from the bound file — server auto-attaches on POST /api/docs, but
+    // this defends against the race where a reviewer arrives before the
+    // attach finishes. No welcome means an empty editor briefly while
+    // the file syncs in, which is the right UX (vs. a placeholder that
+    // gets buried under file content and shows up in the .md on save).
+    if (!readDocMeta(ydoc).sourceUrl) editor.seedIfEmpty(welcomeSeed);
     redrawThreads();
   });
 
