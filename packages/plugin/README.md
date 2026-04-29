@@ -132,11 +132,9 @@ tunnels, no certs. For a phone-simulator viewport on desktop append
   mockup and this skill fires.
 - `editing-review-docs` — auto-invokes before Claude edits a `.md`
   file. Checks `list_docs` to see if the file is bound to a live
-  review doc via `attach_file`, and if so routes edits through
-  `find_and_replace` / `rewrite_thread_region` / `insert_blocks_after_thread`
-  instead of touching the file directly. Prevents the "agent wrote
-  to disk while Bryan was editing in the browser, now they diverge"
-  class of bug.
+  review doc, and if so routes edits through `find_and_replace` /
+  `rewrite_thread_region` / `insert_blocks_after_thread` so the
+  reviewer sees changes land surgically rather than as a full reflow.
 
 ## Widget integration
 

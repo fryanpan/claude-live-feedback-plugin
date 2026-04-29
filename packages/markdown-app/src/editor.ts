@@ -31,9 +31,6 @@ import { ThreadDecorations, type ThreadRange, setThreadDecorations } from './thr
 
 export interface EditorHandle {
   editor: Editor;
-  /** Seed the fragment with markdown if it's empty and not already seeded.
-   *  Call AFTER the initial Yjs sync (from client.onReady). */
-  seedIfEmpty: (markdown: string) => void;
   /** Migrate legacy Y.Text 'content' into the fragment, once per doc. */
   migrateLegacyIfNeeded: () => void;
   getSelectionRel: () => { start: Uint8Array; end: Uint8Array; snippet: string } | null;
@@ -106,9 +103,9 @@ export function createEditor(opts: CreateEditorOpts): EditorHandle {
     onUpdate: () => opts.onUpdate?.(),
   });
 
-  // NOTE: seeding is the caller's responsibility via `seedIfEmpty()` below.
-  // Seeding before the initial Yjs sync completes would duplicate content
-  // (local seed + server's content both land in the fragment).
+  // Content arrives via Yjs sync from the server (which loaded it from the
+  // bound .md file). The editor never seeds locally — that would race the
+  // server's authoritative content.
 
   function syncState() {
     return ySyncPluginKey.getState(editor.state);
@@ -116,18 +113,6 @@ export function createEditor(opts: CreateEditorOpts): EditorHandle {
 
   return {
     editor,
-    seedIfEmpty(markdown: string): void {
-      // Must be called AFTER initial Yjs sync. Guards against double-seed
-      // across reloads / multi-client opens using a meta flag.
-      const meta = opts.ydoc.getMap('meta');
-      if (fragment.length > 0) return; // already has content
-      if (meta.get('seeded')) return; // another client beat us to it
-      opts.ydoc.transact(() => {
-        meta.set('seeded', true);
-        if (legacy.length > 0) legacy.delete(0, legacy.length);
-      });
-      editor.commands.setContent(markdown, { emitUpdate: true });
-    },
     migrateLegacyIfNeeded(): void {
       // Legacy Y.Text content from the old CodeMirror editor → migrate
       // exactly once per doc (guarded by meta.seeded), after initial sync.

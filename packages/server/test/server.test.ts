@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ElementAnchor, User } from '@feedback/core';
@@ -118,22 +118,21 @@ describe('server REST', () => {
     expect(openOnly.threads.find((t) => t.id === created.thread.id)).toBeUndefined();
   });
 
-  it('seeds a doc and edits via find_and_replace', async () => {
-    await fetch(`${base}/api/docs`, {
+  it('creates a file-backed markdown doc and edits via find_and_replace', async () => {
+    const file = join(dataDir, 'edit-test.md');
+    writeFileSync(file, 'Hello, world!\n');
+    const created = await fetch(`${base}/api/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ docId: 'md-1', type: 'markdown' }),
-    });
-    await fetch(`${base}/api/docs/md-1/seed`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ markdown: 'Hello, world!' }),
-    }).then((r) => j(r));
+      body: JSON.stringify({ docId: 'md-1', type: 'markdown', sourceUrl: file }),
+    }).then((r) => j<{ attached: { ok: boolean; seeded?: boolean } }>(r));
+    expect(created.attached?.ok).toBe(true);
+    expect(created.attached?.seeded).toBe(true);
 
-    const seeded = await fetch(`${base}/api/docs/md-1/content`).then((r) =>
+    const loaded = await fetch(`${base}/api/docs/md-1/content`).then((r) =>
       j<{ blocks: { text: string }[] }>(r),
     );
-    expect(seeded.blocks[0]?.text).toBe('Hello, world!');
+    expect(loaded.blocks[0]?.text).toBe('Hello, world!');
 
     await fetch(`${base}/api/docs/md-1/find_and_replace`, {
       method: 'POST',
@@ -145,6 +144,25 @@ describe('server REST', () => {
       j<{ blocks: { text: string }[] }>(r),
     );
     expect(edited.blocks[0]?.text).toBe('Hello, Bryan!');
+  });
+
+  it('rejects POST /api/docs for markdown without sourceUrl', async () => {
+    const r = await fetch(`${base}/api/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId: 'md-no-source', type: 'markdown' }),
+    });
+    expect(r.status).toBe(400);
+    const body = (await r.json()) as { error: string; hint?: string };
+    expect(body.error).toBe('sourceUrl required');
+    expect(body.hint).toContain('sourceUrl');
+  });
+
+  it('returns 404 for endpoints on a doc that does not exist', async () => {
+    const r1 = await fetch(`${base}/api/docs/nonexistent/content`);
+    expect(r1.status).toBe(404);
+    const r2 = await fetch(`${base}/events/nonexistent`);
+    expect(r2.status).toBe(404);
   });
 
   it('fires webhooks when configured', async () => {
@@ -159,10 +177,17 @@ describe('server REST', () => {
     const hits: unknown[] = [];
     try {
       const webhookUrl = `http://localhost:${sink.port}/hook`;
+      const file = join(dataDir, 'hooked.md');
+      writeFileSync(file, '# hooked\n');
       await fetch(`${base}/api/docs`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ docId: 'hooked-1', type: 'markdown', webhookUrl }),
+        body: JSON.stringify({
+          docId: 'hooked-1',
+          type: 'markdown',
+          sourceUrl: file,
+          webhookUrl,
+        }),
       });
       await fetch(`${base}/api/docs/hooked-1/threads`, {
         method: 'POST',
