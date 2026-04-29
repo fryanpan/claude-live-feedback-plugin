@@ -63,6 +63,30 @@ Do NOT:
   divergence problem.
 - Run a formatter / linter that rewrites the file on disk. Run it
   AFTER the review is complete, when no browser session is open.
+- Call `seed_doc` on a doc that already has content. If `get_doc`
+  shows the welcome placeholder ("Welcome. Select any text..."),
+  that doc was created without `sourceUrl` and the markdown-app
+  client seeded the placeholder when a reviewer opened the URL.
+  `seed_doc` will 409. The fix is to recreate the doc with
+  `sourceUrl` set so the server auto-attaches at create time, or
+  call `attach_file` followed by `reparse_from_disk` to wipe the
+  placeholder and reload from the file.
+
+## Diagnosing an "empty" browser display
+
+If a reviewer says the editor looks empty, **call `get_doc` before
+doing anything else.** Three possible states:
+
+1. **`get_doc` returns the welcome placeholder** — the doc has no
+   `sourceUrl` (or was created before sourceUrl auto-attach landed).
+   Browser-seeded placeholder, not actual content. Fix: recreate
+   with `sourceUrl`, or `attach_file` + `reparse_from_disk`.
+2. **`get_doc` returns real content** — server is correct; the
+   reviewer's browser tab is stale. Ask them to refresh.
+3. **`get_doc` returns an empty `plainText`** — the doc was
+   created without `sourceUrl` and never opened in a browser, so
+   even the placeholder hasn't been seeded. Use `seed_doc` (will
+   succeed) or recreate with `sourceUrl`.
 
 ## Signals the file is under review
 

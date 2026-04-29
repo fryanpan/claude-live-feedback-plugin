@@ -147,6 +147,47 @@ describe('server REST', () => {
     expect(edited.blocks[0]?.text).toBe('Hello, Bryan!');
   });
 
+  it('POST /api/docs with sourceUrl auto-attaches and seeds from the file', async () => {
+    const tmpFile = join(dataDir, 'auto-attach.md');
+    require('node:fs').writeFileSync(tmpFile, '# File-loaded content\n\nFrom disk.\n');
+
+    const create = await fetch(`${base}/api/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId: 'md-auto', type: 'markdown', sourceUrl: tmpFile }),
+    }).then((r) => j<{ attached: { ok: boolean; seeded?: boolean } }>(r));
+    expect(create.attached?.ok).toBe(true);
+    expect(create.attached?.seeded).toBe(true);
+
+    const content = await fetch(`${base}/api/docs/md-auto/content`).then((r) =>
+      j<{ blocks: { text: string }[] }>(r),
+    );
+    expect(content.blocks[0]?.text).toContain('File-loaded content');
+  });
+
+  it('seed_doc on a bound non-empty doc returns a diagnostic hint pointing at the path', async () => {
+    const tmpFile = join(dataDir, 'hint-test.md');
+    require('node:fs').writeFileSync(tmpFile, '# Existing content\n');
+    await fetch(`${base}/api/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId: 'md-hint', type: 'markdown', sourceUrl: tmpFile }),
+    }).then((r) => j(r));
+
+    const res = await fetch(`${base}/api/docs/md-hint/seed`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ markdown: 'Different content' }),
+    });
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { ok: boolean; error: string; hint?: string };
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe('non-empty');
+    expect(body.hint).toBeDefined();
+    expect(body.hint).toContain(tmpFile);
+    expect(body.hint).toContain('reparse_from_disk');
+  });
+
   it('fires webhooks when configured', async () => {
     // spin up a tiny sink
     const sink = Bun.serve({

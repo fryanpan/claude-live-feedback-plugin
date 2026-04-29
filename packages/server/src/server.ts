@@ -94,13 +94,26 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         const body = await safeJson(req);
         const docId = (body?.docId as string) ?? '';
         if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
+        const sourceUrl = body?.sourceUrl as string | undefined;
         const room = rooms.getOrCreate(docId, {
           type: (body?.type as DocType) ?? 'markdown',
-          sourceUrl: body?.sourceUrl as string | undefined,
+          sourceUrl,
           title: body?.title as string | undefined,
           webhookUrl: body?.webhookUrl as string | undefined,
         });
-        return j(200, { docId: room.docId, meta: withReviewUrl(room.meta) });
+        // If sourceUrl was provided, bind the doc to that file path on
+        // creation. attachFile is idempotent for the same path and handles
+        // missing files gracefully (binding is set up; no seed). This makes
+        // the contract "POST with sourceUrl = file-backed doc" actually
+        // true — without this, the markdown app's welcome-placeholder seed
+        // races the agent's later attach_file and corrupts the doc.
+        let attached: ReturnType<typeof rooms.attachFile> | undefined;
+        if (sourceUrl) attached = rooms.attachFile(docId, sourceUrl);
+        return j(200, {
+          docId: room.docId,
+          meta: withReviewUrl(room.meta),
+          ...(attached ? { attached } : {}),
+        });
       }
       if (pathname === '/api/docs' && req.method === 'GET') {
         return j(200, { docs: rooms.list().map(withReviewUrl) });

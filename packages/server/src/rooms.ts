@@ -436,11 +436,27 @@ export class Rooms {
   seedDoc(
     docId: string,
     markdown: string,
-  ): { ok: boolean; error?: 'not-found' | 'non-empty' | 'parse-failed'; blocks?: number } {
+  ): {
+    ok: boolean;
+    error?: 'not-found' | 'non-empty' | 'parse-failed';
+    blocks?: number;
+    hint?: string;
+  } {
     const room = this.rooms.get(docId);
     if (!room) return { ok: false, error: 'not-found' };
     const fragment = prose.getProseFragment(room.ydoc);
-    if (fragment.length > 0) return { ok: false, error: 'non-empty' };
+    if (fragment.length > 0) {
+      // The most common reason an agent reaches for seed_doc is a reviewer
+      // reporting an "empty" browser tab on a doc that already has some
+      // content (welcome placeholder, file content, prior edits). Surface
+      // the diagnosis in the response body so the agent doesn't retry
+      // with a wrong inference.
+      const binding = this.fileBindings.get(docId);
+      const hint = binding
+        ? `Doc is bound to ${binding.path}. seed_doc cannot replace existing content; use find_and_replace / rewrite_thread_region / insert_blocks_after_thread for incremental edits, or call reparse_from_disk to discard live state and reload from the file.`
+        : 'Doc already has content (likely a welcome placeholder seeded by the markdown-app client when a reviewer opened the URL). seed_doc only applies to empty docs. To populate from a file: POST /api/docs with sourceUrl set so the server auto-attaches and loads file content before any reviewer arrives.';
+      return { ok: false, error: 'non-empty', hint };
+    }
     const blocks = prose.parseMarkdownBlocks(markdown);
     if (blocks.length === 0) return { ok: false, error: 'parse-failed' };
     room.ydoc.transact(() => {
