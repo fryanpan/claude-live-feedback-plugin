@@ -200,6 +200,38 @@ describe('server REST', () => {
     expect(content.blocks[0]?.text).toBe('First paragraph.');
   });
 
+  it('docs created with the same setId share the set', async () => {
+    const f1 = join(dataDir, 'set-a.md');
+    const f2 = join(dataDir, 'set-b.md');
+    const f3 = join(dataDir, 'other.md');
+    writeFileSync(f1, '# A\n');
+    writeFileSync(f2, '# B\n');
+    writeFileSync(f3, '# Other\n');
+    await fetch(`${base}/api/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId: 'set-a', type: 'markdown', sourceUrl: f1, setId: 's1' }),
+    }).then((r) => j(r));
+    await fetch(`${base}/api/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId: 'set-b', type: 'markdown', sourceUrl: f2, setId: 's1' }),
+    }).then((r) => j(r));
+    await fetch(`${base}/api/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId: 'other', type: 'markdown', sourceUrl: f3 }),
+    }).then((r) => j(r));
+
+    const list = await fetch(`${base}/api/docs`).then((r) =>
+      j<{ docs: Array<{ docId: string; setId?: string }> }>(r),
+    );
+    const inSet = list.docs.filter((d) => d.setId === 's1').map((d) => d.docId);
+    expect(inSet.sort()).toEqual(['set-a', 'set-b']);
+    const lone = list.docs.find((d) => d.docId === 'other');
+    expect(lone?.setId).toBeUndefined();
+  });
+
   it('returns 404 for endpoints on a doc that does not exist', async () => {
     const r1 = await fetch(`${base}/api/docs/nonexistent/content`);
     expect(r1.status).toBe(404);
