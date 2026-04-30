@@ -51,7 +51,14 @@ Pick the smallest tool that does the job:
   including tables.
 - **Batch edits across the doc** → `create_anchor(docId, find, …)` to
   pin positions, then `edit_at_anchor(docId, anchorId, …)` for each.
-  Anchors survive intermediate user edits.
+  Anchors survive intermediate user edits. **`edit_at_anchor` is
+  inline only** — it inserts/replaces text inside the anchor's block.
+- **Add new block(s) at an anchor** → `insert_blocks_at_anchor(docId,
+  anchorId, markdown)`. Use this — not `edit_at_anchor` with
+  `insert_after` — when you want a new heading, paragraph, list, or
+  table after the anchor. `edit_at_anchor` would insert the literal
+  `## Heading` characters inside the existing block; this routes
+  through the markdown parser and produces real sibling blocks.
 
 For external file changes you want to force-load (e.g. you wrote a
 file directly because the doc isn't under review yet, then created
