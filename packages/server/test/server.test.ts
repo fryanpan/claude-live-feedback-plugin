@@ -158,6 +158,48 @@ describe('server REST', () => {
     expect(body.hint).toContain('sourceUrl');
   });
 
+  it('insert_blocks_at_anchor parses markdown into sibling blocks', async () => {
+    const file = join(dataDir, 'blocks-at-anchor.md');
+    writeFileSync(file, 'First paragraph.\n\nSecond paragraph.\n');
+    await fetch(`${base}/api/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId: 'md-blocks', type: 'markdown', sourceUrl: file }),
+    }).then((r) => j(r));
+
+    const anchor = await fetch(`${base}/api/docs/md-blocks/agent_anchors`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ find: 'First paragraph.' }),
+    }).then((r) => j<{ anchorId: string }>(r));
+
+    const res = await fetch(
+      `${base}/api/docs/md-blocks/agent_anchors/${encodeURIComponent(anchor.anchorId)}/insert_blocks`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          markdown: '## New section\n\nA paragraph.\n\n| col1 | col2 |\n| --- | --- |\n| A | B |\n',
+        }),
+      },
+    );
+    expect(res.status).toBe(200);
+
+    const content = await fetch(`${base}/api/docs/md-blocks/content`).then((r) =>
+      j<{ blocks: { type: string | null; text: string; headingLevel?: number }[] }>(r),
+    );
+    // The inserted markdown should produce sibling blocks: heading, paragraph, table.
+    // First paragraph is preserved; new blocks land between it and "Second paragraph."
+    const types = content.blocks.map((b) => b.type);
+    expect(types).toContain('heading');
+    expect(types).toContain('table');
+    const heading = content.blocks.find((b) => b.type === 'heading');
+    expect(heading?.headingLevel).toBe(2);
+    expect(heading?.text).toContain('New section');
+    // Critical anti-regression: the first block must NOT swallow the inserted markdown.
+    expect(content.blocks[0]?.text).toBe('First paragraph.');
+  });
+
   it('returns 404 for endpoints on a doc that does not exist', async () => {
     const r1 = await fetch(`${base}/api/docs/nonexistent/content`);
     expect(r1.status).toBe(404);
