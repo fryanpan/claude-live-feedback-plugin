@@ -79,23 +79,46 @@ export class Rooms {
 
   getOrCreate(
     docId: string,
-    init?: { type?: DocType; sourceUrl?: string; title?: string; webhookUrl?: string },
+    init?: {
+      type?: DocType;
+      sourceUrl?: string;
+      title?: string;
+      setId?: string;
+      webhookUrl?: string;
+    },
   ): DocRoom {
     const existing = this.rooms.get(docId);
     if (existing) {
       if (init?.webhookUrl !== undefined) existing.webhookUrl = init.webhookUrl;
+      // Allow re-tagging an existing doc into a different set without a
+      // server restart — agents may rebatch their review queue.
+      if (init?.setId !== undefined && init.setId !== existing.meta.setId) {
+        const m = existing.ydoc.getMap('meta');
+        existing.ydoc.transact(() => m.set('setId', init.setId));
+        existing.meta.setId = init.setId;
+      }
       return existing;
     }
     const ydoc = new Y.Doc();
     this.loadFromDisk(docId, ydoc);
     const meta: DocMeta = (() => {
       const current = readDocMeta(ydoc);
-      if (current.docId) return current;
+      if (current.docId) {
+        // Restored doc; allow init to override setId (set membership
+        // is editorial, not part of the persisted CRDT contract).
+        if (init?.setId !== undefined && init.setId !== current.setId) {
+          const m = ydoc.getMap('meta');
+          ydoc.transact(() => m.set('setId', init.setId));
+          current.setId = init.setId;
+        }
+        return current;
+      }
       const now: DocMeta = {
         docId,
         type: init?.type ?? 'markdown',
         sourceUrl: init?.sourceUrl,
         title: init?.title,
+        setId: init?.setId,
         createdAt: Date.now(),
       };
       initDocMeta(ydoc, now);
