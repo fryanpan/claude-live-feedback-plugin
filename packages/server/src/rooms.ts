@@ -512,6 +512,29 @@ export class Rooms {
     return prose.deleteAgentAnchor(room.ydoc, anchorId);
   }
 
+  /**
+   * Parse markdown into block elements and insert them as siblings
+   * immediately after the block that contains the agent anchor.
+   * Use this for adding new headings / paragraphs / lists / tables —
+   * `edit_at_anchor` with `insert_after` does a character-stream
+   * insert which keeps the new text inside the anchor's block,
+   * producing literal `## Heading` text instead of a heading element.
+   */
+  insertBlocksAtAnchor(
+    docId: string,
+    anchorId: string,
+    markdown: string,
+  ): prose.AnchoredEditResult {
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'anchor-not-found' };
+    const anchor = prose.readAgentAnchor(room.ydoc, anchorId);
+    if (!anchor) return { ok: false, error: 'anchor-not-found' };
+    return prose.insertBlocksAfterAnchor(room.ydoc, {
+      anchorRel: anchor.endRel,
+      markdown,
+    });
+  }
+
   /** Append text at the END position of a thread's anchored range. */
   insertAfterThread(docId: string, threadId: string, text: string): prose.AnchoredEditResult {
     const room = this.rooms.get(docId);

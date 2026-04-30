@@ -267,7 +267,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'edit_at_anchor',
       description:
-        "Apply an edit at a previously-created agent anchor. `op.kind` is 'replace' (rewrite the anchored range) or 'insert_after' (insert text right after the anchor's end). Runs as a Yjs transaction; merges cleanly with concurrent user edits.",
+        "Apply an INLINE edit at a previously-created agent anchor. `op.kind` is 'replace' (rewrite the anchored range) or 'insert_after' (insert text right after the anchor's end). The text stays inside the anchor's block — use this for prose tweaks, not for adding new headings/paragraphs/lists/tables. For new blocks, use insert_blocks_at_anchor (which routes through the markdown parser so `## Heading` becomes a real heading element, not literal text). Runs as a Yjs transaction; merges cleanly with concurrent user edits.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -283,6 +283,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
         },
         required: ['docId', 'anchorId', 'op'],
+      },
+    },
+    {
+      name: 'insert_blocks_at_anchor',
+      description:
+        "Parse markdown and insert the resulting blocks (headings, paragraphs, lists, blockquotes, code blocks, tables, horizontal rules) immediately AFTER the block that contains the agent anchor. Use this — not edit_at_anchor — for adding new sections / sub-headings / tables. edit_at_anchor with insert_after does a character-level insert that keeps the new text trapped inside the anchor's block, producing literal `## Heading` text instead of a heading element.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          docId: { type: 'string' },
+          anchorId: { type: 'string' },
+          markdown: { type: 'string' },
+        },
+        required: ['docId', 'anchorId', 'markdown'],
       },
     },
     {
@@ -478,6 +492,19 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           'POST',
           `/api/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}/edit`,
           op,
+        );
+        return ok(res);
+      }
+      case 'insert_blocks_at_anchor': {
+        const { docId, anchorId, markdown } = a as {
+          docId: string;
+          anchorId: string;
+          markdown: string;
+        };
+        const res = await http(
+          'POST',
+          `/api/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}/insert_blocks`,
+          { markdown },
         );
         return ok(res);
       }
