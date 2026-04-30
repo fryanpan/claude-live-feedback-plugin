@@ -249,6 +249,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             const res = rooms.editAtAgentAnchor(docId, anchorId, { kind, text });
             return res.ok ? j(200, res) : j(409, res);
           }
+          if (anchorRest === '/insert_blocks' && req.method === 'POST') {
+            const body = await safeJson(req);
+            const markdown = String(body?.markdown ?? '');
+            if (markdown.length === 0) return j(400, { error: 'markdown is required' });
+            const res = rooms.insertBlocksAtAnchor(docId, anchorId, markdown);
+            return res.ok ? j(200, res) : j(409, res);
+          }
           if (anchorRest === '' && req.method === 'DELETE') {
             const removed = rooms.deleteAgentAnchor(docId, anchorId);
             return removed ? j(200, { ok: true }) : j(404, { error: 'anchor not found' });
