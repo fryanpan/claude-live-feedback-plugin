@@ -167,12 +167,156 @@ button {
   grid-template-columns: 1fr 360px;
   overflow: hidden;
 }
-/* On mobile / narrow, editor takes the full screen. Threads pane
-   becomes an off-canvas drawer (see further down). */
+/* Review-set sidebar adds a left column on desktop when the doc is
+   tagged with a setId. Below 1100px the sidebar collapses (dropdown
+   in the topbar takes over); below 900px, threads also drawer-ify. */
+body.has-set #main {
+  grid-template-columns: 240px 1fr 360px;
+}
+@media (max-width: 1100px) {
+  body.has-set #main {
+    grid-template-columns: 1fr 360px;
+  }
+  body.has-set #set-pane {
+    display: none;
+  }
+}
 @media (max-width: 900px) {
   #main {
     grid-template-columns: 1fr;
   }
+  body.has-set #main {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ================= REVIEW-SET SIDEBAR + DROPDOWN ================= */
+
+#set-pane {
+  display: none;
+  border-right: 1px solid var(--border);
+  background: var(--bg-subtle, #fafafa);
+  overflow-y: auto;
+  font-size: 13px;
+}
+body.has-set #set-pane {
+  display: block;
+}
+.set-pane-header {
+  padding: 14px 16px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+#set-pane-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 8px 16px;
+}
+#set-pane-list li {
+  margin: 2px 0;
+}
+#set-pane-list a,
+.doc-menu a {
+  display: block;
+  padding: 8px 10px;
+  border-radius: 6px;
+  color: var(--fg);
+  text-decoration: none;
+  line-height: 1.35;
+  word-break: break-word;
+}
+#set-pane-list a:hover,
+.doc-menu a:hover {
+  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+}
+#set-pane-list a.active,
+.doc-menu a.active {
+  background: var(--accent-subtle, rgba(46, 125, 215, 0.1));
+  color: var(--accent, #2e7dd7);
+  font-weight: 600;
+}
+#set-pane-list a small,
+.doc-menu a small {
+  display: block;
+  font-size: 11px;
+  color: var(--fg-muted);
+  margin-top: 2px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+/* Doc-switcher button in the topbar. Behaves like a label by default;
+   becomes interactive (caret visible, hover + click) only when the
+   doc has a setId. */
+.doc-switcher {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 2px 6px;
+  margin: 0 -6px;
+  border: 0;
+  background: transparent;
+  cursor: default;
+  border-radius: 4px;
+  font: inherit;
+  color: inherit;
+  min-width: 0;
+}
+.doc-switcher:focus-visible {
+  outline: 2px solid var(--accent, #2e7dd7);
+  outline-offset: 1px;
+}
+.doc-switcher-caret {
+  display: none;
+  font-size: 10px;
+  color: var(--fg-muted);
+}
+body.has-set .doc-switcher {
+  cursor: pointer;
+}
+body.has-set .doc-switcher:hover {
+  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+}
+body.has-set .doc-switcher-caret {
+  display: inline;
+}
+
+/* Dropdown menu — anchored under the topbar's doc-crumb. Only shown
+   when has-set + open. */
+.doc-menu {
+  position: absolute;
+  top: var(--topbar-h, 48px);
+  left: 0;
+  right: auto;
+  z-index: 30;
+  max-width: min(420px, 90vw);
+  max-height: 60vh;
+  overflow-y: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 0 0 8px 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
+  padding: 6px;
+  margin-left: 14px;
+  font-size: 13px;
+}
+.doc-menu.hidden {
+  display: none;
+}
+.doc-menu ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.doc-menu li {
+  margin: 0;
+}
+@media (min-width: 1101px) {
+  /* On wide screens, the sidebar already shows the list; the dropdown
+     is redundant. Keep it for keyboard / explicit-tap users but the
+     primary nav is the sidebar. */
 }
 
 #editor-pane {

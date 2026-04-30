@@ -715,7 +715,10 @@ async function boot(): Promise<void> {
     if (threadViewId) renderThreadView(threadViewId);
   });
   const meta = ydoc.getMap('meta');
-  meta.observe(() => renderDocLabel());
+  meta.observe(() => {
+    renderDocLabel();
+    void renderSetNav();
+  });
   function renderDocLabel(): void {
     const m = readDocMeta(ydoc);
     // Prefer the sourceUrl (set when the doc originated from a real
@@ -724,8 +727,111 @@ async function boot(): Promise<void> {
     docTitleEl.textContent = m.sourceUrl ?? m.title ?? m.docId;
     docTitleEl.title = m.sourceUrl ?? m.title ?? m.docId;
   }
+
+  // ---- Review-set navigation ----
+  // If the doc has a setId, fetch all docs sharing that set and render
+  // them into both the desktop sidebar and the topbar dropdown. The same
+  // list goes into both; CSS handles which is visible.
+  const setPane = document.getElementById('set-pane');
+  const setPaneList = document.getElementById('set-pane-list');
+  const docMenu = document.getElementById('doc-menu');
+  const docSwitcher = document.getElementById('doc-switcher') as HTMLButtonElement | null;
+  let lastRenderedSetId: string | null = null;
+
+  async function renderSetNav(): Promise<void> {
+    const m = readDocMeta(ydoc);
+    const setId = m.setId ?? '';
+    if (setId === lastRenderedSetId) return;
+    lastRenderedSetId = setId;
+    document.body.classList.toggle('has-set', !!setId);
+    setPane?.setAttribute('aria-hidden', setId ? 'false' : 'true');
+    if (!setId) {
+      if (setPaneList) setPaneList.innerHTML = '';
+      if (docMenu) docMenu.innerHTML = '';
+      docSwitcher?.setAttribute('aria-expanded', 'false');
+      return;
+    }
+    try {
+      const res = await fetch('/api/docs');
+      if (!res.ok) return;
+      const data = (await res.json()) as {
+        docs: Array<{
+          docId: string;
+          type: string;
+          sourceUrl?: string;
+          title?: string;
+          setId?: string;
+        }>;
+      };
+      const siblings = data.docs.filter((d) => d.setId === setId && d.type === 'markdown');
+      // Stable order: title (or sourceUrl basename) ASC, then docId.
+      siblings.sort((a, b) => {
+        const ka = (a.title ?? a.sourceUrl ?? a.docId).toLowerCase();
+        const kb = (b.title ?? b.sourceUrl ?? b.docId).toLowerCase();
+        return ka < kb ? -1 : ka > kb ? 1 : 0;
+      });
+      const items = siblings
+        .map((d) => {
+          const isActive = d.docId === docId;
+          const label = d.title ?? basename(d.sourceUrl ?? d.docId);
+          const sub = d.sourceUrl && d.title ? d.sourceUrl : '';
+          const params = new URLSearchParams(location.search);
+          const href = `/review/${encodeURIComponent(d.docId)}${
+            params.toString() ? `?${params.toString()}` : ''
+          }`;
+          return `<li><a href="${href}" class="${isActive ? 'active' : ''}"${
+            isActive ? ' aria-current="page"' : ''
+          }>${escapeHtml(label)}${sub ? `<small>${escapeHtml(sub)}</small>` : ''}</a></li>`;
+        })
+        .join('');
+      if (setPaneList) setPaneList.innerHTML = items;
+      if (docMenu) docMenu.innerHTML = `<ol>${items}</ol>`;
+    } catch {
+      // Fetch failure — skip; not load-bearing for the editor itself.
+    }
+  }
+
+  function basename(p: string): string {
+    const m = p.match(/[^/]+$/);
+    return m ? m[0] : p;
+  }
+  function escapeHtml(s: string): string {
+    return s.replace(
+      /[&<>"']/g,
+      (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] ?? c,
+    );
+  }
+
+  // Wire the dropdown toggle. On click outside or Escape, close.
+  if (docSwitcher && docMenu) {
+    docSwitcher.addEventListener('click', (ev) => {
+      if (!document.body.classList.contains('has-set')) return;
+      ev.stopPropagation();
+      const isOpen = !docMenu.classList.contains('hidden');
+      docMenu.classList.toggle('hidden', isOpen);
+      docMenu.setAttribute('aria-hidden', String(isOpen));
+      docSwitcher.setAttribute('aria-expanded', String(!isOpen));
+    });
+    document.addEventListener('click', (ev) => {
+      if (docMenu.classList.contains('hidden')) return;
+      if (!docMenu.contains(ev.target as Node) && !docSwitcher.contains(ev.target as Node)) {
+        docMenu.classList.add('hidden');
+        docMenu.setAttribute('aria-hidden', 'true');
+        docSwitcher.setAttribute('aria-expanded', 'false');
+      }
+    });
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape' && !docMenu.classList.contains('hidden')) {
+        docMenu.classList.add('hidden');
+        docMenu.setAttribute('aria-hidden', 'true');
+        docSwitcher.setAttribute('aria-expanded', 'false');
+      }
+    });
+  }
+
   client.onReady(() => {
     renderDocLabel();
+    void renderSetNav();
     editor.migrateLegacyIfNeeded();
     redrawThreads();
   });
