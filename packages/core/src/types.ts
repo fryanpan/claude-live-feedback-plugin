@@ -6,6 +6,12 @@ export interface DocMeta {
   type: DocType;
   sourceUrl?: string;
   title?: string;
+  /**
+   * Optional grouping tag. Docs that share a `setId` show up in each
+   * other's sidebar in the markdown editor — lets an agent register
+   * a batch of related files for one review session.
+   */
+  setId?: string;
   createdAt: number;
 }
 

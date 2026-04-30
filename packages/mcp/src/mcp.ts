@@ -177,13 +177,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'create_review_doc',
       description:
-        "Create a markdown review doc backed by a file on disk. The server reads the file, parses it into the live editor, and sets up bidirectional sync — every edit (from the browser, the agent, or the widget) writes back to the .md within ~1 second, and external edits to the file (VS Code, git pull) flow into the live doc within ~1 second via fs.watch. `path` should be absolute; relative paths resolve against the server's cwd. The file must exist (create it first if it doesn't). Returns the review URL plus the attach result.",
+        "Create a markdown review doc backed by a file on disk. The server reads the file, parses it into the live editor, and sets up bidirectional sync — every edit (from the browser, the agent, or the widget) writes back to the .md within ~1 second, and external edits to the file (VS Code, git pull) flow into the live doc within ~1 second via fs.watch. `path` should be absolute; relative paths resolve against the server's cwd. The file must exist (create it first if it doesn't). Pass `setId` to group multiple docs for one review session — docs sharing a setId show up in each other's sidebar in the markdown editor, so the reviewer can hop between related files. Returns the review URL plus the attach result.",
       inputSchema: {
         type: 'object',
         properties: {
           docId: { type: 'string' },
           path: { type: 'string' },
           title: { type: 'string' },
+          setId: { type: 'string' },
         },
         required: ['docId', 'path'],
       },
@@ -398,12 +399,18 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok(res);
       }
       case 'create_review_doc': {
-        const { docId, path, title } = a as { docId: string; path: string; title?: string };
+        const { docId, path, title, setId } = a as {
+          docId: string;
+          path: string;
+          title?: string;
+          setId?: string;
+        };
         const res = await http('POST', '/api/docs', {
           docId,
           type: 'markdown',
           sourceUrl: path,
           ...(title ? { title } : {}),
+          ...(setId ? { setId } : {}),
         });
         return ok(res);
       }

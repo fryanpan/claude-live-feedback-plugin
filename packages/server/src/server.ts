@@ -120,6 +120,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           type,
           sourceUrl,
           title: body?.title as string | undefined,
+          setId: body?.setId as string | undefined,
           webhookUrl: body?.webhookUrl as string | undefined,
         });
         let attached: ReturnType<typeof rooms.attachFile> | undefined;

@@ -106,7 +106,24 @@ the reviewer.
 ## Creating a new review doc
 
 If a `.md` file isn't under review yet and you want to bring it into
-the editor, call `create_review_doc(docId, path, title?)`. The doc
-must not already exist server-side; pick a fresh `docId`. The server
-will read the file, parse it, attach the watcher, and return a
+the editor, call `create_review_doc(docId, path, title?, setId?)`. The
+doc must not already exist server-side; pick a fresh `docId`. The
+server will read the file, parse it, attach the watcher, and return a
 `reviewUrl` you can hand to a human.
+
+**Reviewing multiple files together:** pass the same `setId` when
+creating each doc. Docs sharing a setId show up in each other's
+sidebar in the markdown editor (left sidebar on desktop, dropdown
+from the doc title on mobile). Hand the human the URL of any one
+doc in the set; they hop between siblings via the sidebar.
+
+```
+create_review_doc({ docId: "auth-rfc",     path: "/abs/auth-rfc.md",     setId: "feb-2026-rfcs" })
+create_review_doc({ docId: "billing-rfc",  path: "/abs/billing-rfc.md",  setId: "feb-2026-rfcs" })
+create_review_doc({ docId: "schema-rfc",   path: "/abs/schema-rfc.md",   setId: "feb-2026-rfcs" })
+# share /review/auth-rfc?as=bryan — sidebar lists all three.
+```
+
+`setId` is just a tag — pick any short string. No setup step needed
+before using one. Calling `create_review_doc` again on an existing
+docId with a different `setId` re-tags it (handy for rebatching).
