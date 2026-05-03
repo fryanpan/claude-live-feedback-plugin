@@ -22,6 +22,16 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
  *   FEEDBACK_AUTHOR    — e.g. agent (used as the reply author)
  */
 
+// Resolved per-request, not frozen at module load. The MCP stdio child runs
+// for the life of a Claude Code session — sometimes days. The supervisor may
+// not be running yet at child-start, may move ports on restart, or may not
+// have written server.json yet. Reading the discovery file on each http()
+// call is a single fs read of a tiny JSON blob and lets the child pick up
+// port changes without a restart.
+//
+// No silent default: port 8787 used to be the fallback, but it's squatted by
+// notion-channel-mcp on developer machines and silently routed every call to
+// the wrong server. If discovery is unavailable, fail loudly with a hint.
 function resolveBaseUrl(): string {
   if (process.env.FEEDBACK_BASE_URL) return process.env.FEEDBACK_BASE_URL;
   const discovery = join(homedir(), '.claude', 'live-feedback', 'server.json');
@@ -30,13 +40,14 @@ function resolveBaseUrl(): string {
       const j = JSON.parse(readFileSync(discovery, 'utf8')) as { port?: number };
       if (j.port) return `http://localhost:${j.port}`;
     } catch {
-      // ignore — fall through to default
+      // fall through to throw — corrupt discovery file
     }
   }
-  return 'http://localhost:8787';
+  throw new Error(
+    'live-feedback server not found — start it with `bun run dev` (or set FEEDBACK_BASE_URL). ' +
+      `Looked for discovery file at ${discovery}.`,
+  );
 }
-
-const BASE_URL = resolveBaseUrl();
 const AUTHOR_ID = process.env.FEEDBACK_AUTHOR ?? 'agent';
 
 const KNOWN_USERS: Record<
@@ -525,7 +536,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       }
       case 'observe_url': {
         const { docId } = a as { docId: string };
-        return ok({ sseUrl: `${BASE_URL}/events/${encodeURIComponent(docId)}` });
+        return ok({ sseUrl: `${resolveBaseUrl()}/events/${encodeURIComponent(docId)}` });
       }
       case 'watch_doc': {
         const { docId } = a as { docId: string };
@@ -582,7 +593,9 @@ async function runSseLoop(docId: string, signal: AbortSignal): Promise<void> {
   // ~15s, so an abrupt close is almost always a transient network blip.
   while (!signal.aborted) {
     try {
-      const res = await fetch(`${BASE_URL}/events/${encodeURIComponent(docId)}`, { signal });
+      const res = await fetch(`${resolveBaseUrl()}/events/${encodeURIComponent(docId)}`, {
+        signal,
+      });
       if (!res.ok || !res.body) throw new Error(`sse /events/${docId} → ${res.status}`);
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -679,15 +692,18 @@ function truncate(s: string, n: number): string {
 }
 
 async function http(method: string, path: string, body?: unknown): Promise<unknown> {
-  const res = await fetch(`${BASE_URL}${path}`, {
+  const baseUrl = resolveBaseUrl();
+  const res = await fetch(`${baseUrl}${path}`, {
     method,
     headers: body ? { 'content-type': 'application/json' } : {},
     body: body ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
-  const json = text ? JSON.parse(text) : {};
+  // Check status before parsing — the server's catch-all returns the bare
+  // string "not found" for unmatched routes, which would explode JSON.parse
+  // and bury the actual HTTP error.
   if (!res.ok) throw new Error(`${method} ${path} → ${res.status}: ${text}`);
-  return json;
+  return text ? JSON.parse(text) : {};
 }
 
 function ok(data: unknown) {
@@ -705,4 +721,12 @@ function err(message: string) {
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-console.error(`[mcp] connected — base ${BASE_URL}, author ${AUTHOR.name}`);
+// Best-effort startup banner. Fall back gracefully if discovery isn't ready
+// at child-start — http() will resolve fresh per request anyway.
+let bannerBase: string;
+try {
+  bannerBase = resolveBaseUrl();
+} catch {
+  bannerBase = '<discovery pending — server not yet running>';
+}
+console.error(`[mcp] connected — base ${bannerBase}, author ${AUTHOR.name}`);
