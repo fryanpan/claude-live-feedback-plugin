@@ -281,4 +281,25 @@ describe('server REST', () => {
       sink.stop();
     }
   });
+
+  it('returns CORS headers on /api/* responses', async () => {
+    const res = await fetch(`${base}/api/docs`, { method: 'GET' });
+    expect(res.headers.get('access-control-allow-origin')).toBe('*');
+    expect(res.headers.get('access-control-allow-methods')).toContain('POST');
+    expect(res.headers.get('access-control-allow-headers')).toContain('content-type');
+  });
+
+  it('handles OPTIONS preflight', async () => {
+    const res = await fetch(`${base}/api/docs`, {
+      method: 'OPTIONS',
+      headers: {
+        origin: 'http://example.test',
+        'access-control-request-method': 'POST',
+        'access-control-request-headers': 'content-type',
+      },
+    });
+    expect(res.status).toBe(204);
+    expect(res.headers.get('access-control-allow-origin')).toBe('*');
+    expect(res.headers.get('access-control-allow-methods')).toContain('POST');
+  });
 });
