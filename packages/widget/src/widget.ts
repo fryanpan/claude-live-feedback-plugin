@@ -69,6 +69,7 @@ class FeedbackWidgetEl extends HTMLElement {
   private rafId: number | null = null;
   private resizeHandler: (() => void) | null = null;
   private scrollHandler: (() => void) | null = null;
+  private vvHandler: (() => void) | null = null;
 
   constructor() {
     super();
@@ -89,6 +90,7 @@ class FeedbackWidgetEl extends HTMLElement {
       ...(opts.context?.view ? { view: opts.context.view } : {}),
     };
     this.wireHistoryListeners();
+    this.wireVisualViewport();
     this.renderShell();
     this.connect();
     this.startObserver();
@@ -116,6 +118,24 @@ class FeedbackWidgetEl extends HTMLElement {
 
   getContext(): AnchorContext {
     return { ...this.currentContext };
+  }
+
+  // Mobile Safari overlays the URL bar on top of `position: fixed` content
+  // when the layout viewport is taller than the visual viewport. Without this
+  // the FAB hides behind the URL bar on first paint until the user scrolls.
+  // The same fix handles iOS keyboard pop-up moving the visual viewport up.
+  private wireVisualViewport(): void {
+    if (this.vvHandler) return;
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const update = () => {
+      const overlap = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+      this.style.setProperty('--lf-vv-bottom', `${Math.round(overlap)}px`);
+    };
+    this.vvHandler = update;
+    vv.addEventListener('resize', update);
+    vv.addEventListener('scroll', update);
+    update();
   }
 
   private wireHistoryListeners(): void {
@@ -166,6 +186,12 @@ class FeedbackWidgetEl extends HTMLElement {
     if (this.scrollHandler) {
       try {
         window.removeEventListener('scroll', this.scrollHandler);
+      } catch {}
+    }
+    if (this.vvHandler && window.visualViewport) {
+      try {
+        window.visualViewport.removeEventListener('resize', this.vvHandler);
+        window.visualViewport.removeEventListener('scroll', this.vvHandler);
       } catch {}
     }
   }
