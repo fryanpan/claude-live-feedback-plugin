@@ -66,6 +66,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       const url = new URL(req.url);
       const { pathname } = url;
 
+      // --- CORS preflight ---
+      // The canonical embed loads the widget bundle from this server but
+      // runs on a different origin (e.g. an Astro dev server on :4321).
+      // Every REST call from the widget is therefore cross-origin and
+      // browsers preflight non-simple requests (POST + JSON body) with an
+      // OPTIONS. Reply once here so we don't have to thread the response
+      // through every route handler.
+      if (req.method === 'OPTIONS') {
+        return withCors(req, new Response(null, { status: 204 }));
+      }
+
       // --- WebSocket upgrade ---
       if (pathname.startsWith('/y/')) {
         const docId = decodeURIComponent(pathname.slice(3));
@@ -437,8 +448,30 @@ function isValidDocId(s: string): boolean {
 function j(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...CORS_HEADERS },
   });
+}
+
+// The canonical embed loads the widget bundle from this server but runs the
+// host page on a different origin (e.g. an Astro dev server on a different
+// port). Every REST call from the widget is therefore cross-origin and needs
+// CORS. The widget posts comments without credentials (auth is via the
+// request body's `author` field, not cookies), so `*` is safe and avoids
+// the per-request-Origin echo dance.
+const CORS_HEADERS = {
+  'access-control-allow-origin': '*',
+  'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS',
+  'access-control-allow-headers': 'content-type, authorization',
+  'access-control-max-age': '600',
+} as const;
+
+// withCors is still useful for non-j() responses (preflight 204, static
+// bundle response when the consumer wants to fetch() it instead of using a
+// script tag). Cheap to merge headers — no body copy.
+function withCors(_req: Request, res: Response): Response {
+  const headers = new Headers(res.headers);
+  for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v);
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
 }
 
 async function safeJson(req: Request): Promise<Record<string, unknown> | null> {
