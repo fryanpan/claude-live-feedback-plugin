@@ -116,6 +116,20 @@ export const widgetStyles = `
   overflow-y: auto;
   flex: 1;
 }
+.resolved-toggle {
+  display: block;
+  width: calc(100% - 12px);
+  margin: 8px 6px;
+  padding: 6px 8px;
+  background: transparent;
+  border: 1px dashed #d1d5da;
+  border-radius: 6px;
+  color: #6e7781;
+  font-size: 11px;
+  cursor: pointer;
+  text-align: center;
+}
+.resolved-toggle:hover { color: #1b1f23; border-color: #afb8c1; }
 .section-heading {
   font-size: 10px;
   font-weight: 600;
