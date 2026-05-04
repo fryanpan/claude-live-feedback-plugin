@@ -75,6 +75,20 @@ button {
   color: var(--fg-muted);
   flex: 0 0 auto;
 }
+.back-link {
+  flex: 0 0 auto;
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 16px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 4px;
+  align-self: center;
+}
+.back-link:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+}
 .doc-path {
   color: var(--fg);
   font-weight: 600;
