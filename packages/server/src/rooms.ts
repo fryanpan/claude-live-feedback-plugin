@@ -1,4 +1,12 @@
-import { type FSWatcher, existsSync, mkdirSync, readFileSync, watch, writeFileSync } from 'node:fs';
+import {
+  type FSWatcher,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  watch,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import {
   type Anchor,
@@ -71,10 +79,37 @@ export class Rooms {
 
   constructor(private cfg: RoomsConfig) {
     if (!existsSync(cfg.dataDir)) mkdirSync(cfg.dataDir, { recursive: true });
+    this.hydrateFromDisk();
   }
 
   list(): DocMeta[] {
     return Array.from(this.rooms.values()).map((r) => r.meta);
+  }
+
+  // The persisted Yjs files are the source of truth for doc existence —
+  // the in-memory `rooms` map is just a hot cache. Without this hydration
+  // step, `list()` only returns rooms that have been touched since the
+  // last supervisor restart, which is misleading (every `bun --watch`
+  // reload silently shrinks the result). Load every persisted doc into
+  // memory at startup so discovery via list_docs is always accurate.
+  // File-bound markdown rooms aren't auto-rebound here — that needs an
+  // existsSync check on sourceUrl and would be surprising on restart for
+  // files that have moved. Callers re-bind via create_review_doc when
+  // they want disk write-back to resume.
+  private hydrateFromDisk(): void {
+    let count = 0;
+    try {
+      for (const file of readdirSync(this.cfg.dataDir)) {
+        if (!file.endsWith('.ydoc')) continue;
+        const docId = file.slice(0, -'.ydoc'.length);
+        if (!docId) continue;
+        this.getOrCreate(docId);
+        count++;
+      }
+    } catch (err) {
+      console.error('[rooms] hydrateFromDisk failed:', err);
+    }
+    if (count > 0) console.error(`[rooms] hydrated ${count} doc(s) from ${this.cfg.dataDir}`);
   }
 
   getOrCreate(
@@ -101,17 +136,18 @@ export class Rooms {
     }
     const ydoc = new Y.Doc();
     this.loadFromDisk(docId, ydoc);
+    const restored = readDocMeta(ydoc);
+    const isNew = !restored.docId;
     const meta: DocMeta = (() => {
-      const current = readDocMeta(ydoc);
-      if (current.docId) {
+      if (!isNew) {
         // Restored doc; allow init to override setId (set membership
         // is editorial, not part of the persisted CRDT contract).
-        if (init?.setId !== undefined && init.setId !== current.setId) {
+        if (init?.setId !== undefined && init.setId !== restored.setId) {
           const m = ydoc.getMap('meta');
           ydoc.transact(() => m.set('setId', init.setId));
-          current.setId = init.setId;
+          restored.setId = init.setId;
         }
-        return current;
+        return restored;
       }
       const now: DocMeta = {
         docId,
@@ -135,6 +171,13 @@ export class Rooms {
     };
     this.rooms.set(docId, room);
     this.wireEvents(room);
+    // For freshly-created rooms (no on-disk state), the initDocMeta call
+    // above fired its update event before wireEvents listened, so nothing
+    // would ever flush this room to disk if the user hasn't done another
+    // mutation by the next supervisor restart. Force a snapshot now so a
+    // create_review_doc immediately followed by a `bun --watch` reload
+    // doesn't lose the doc.
+    if (isNew) this.saveToDisk(room);
     return room;
   }
 
