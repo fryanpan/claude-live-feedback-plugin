@@ -568,6 +568,35 @@ export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
     return p;
   };
 
+  // YAML frontmatter — only at the very top of the file. Captured as a
+  // single codeBlock(language='yaml-frontmatter') holding the raw YAML text
+  // so the keys aren't merged into a single space-joined paragraph by the
+  // generic line-coalescer below, and the serializer can emit `---\n…\n---`
+  // verbatim. Falls through to normal parsing if there's no closing `---`.
+  if (i < lines.length && (lines[i] ?? '').trim() === '---') {
+    let j = i + 1;
+    while (j < lines.length && (lines[j] ?? '').trim() !== '---') j++;
+    if (j < lines.length) {
+      const yamlLines: string[] = [];
+      for (let k = i + 1; k < j; k++) {
+        const ln = lines[k] ?? '';
+        // Drop blank lines so frontmatter that was previously round-tripped
+        // through the old parser (which left blank lines between values)
+        // self-heals on the next reparse.
+        if (ln.trim() !== '') yamlLines.push(ln);
+      }
+      if (yamlLines.length > 0) {
+        const cb = new Y.XmlElement('codeBlock');
+        cb.setAttribute('language', 'yaml-frontmatter');
+        const t = new Y.XmlText();
+        t.insert(0, yamlLines.join('\n'));
+        cb.insert(0, [t]);
+        out.push(cb);
+        i = j + 1;
+      }
+    }
+  }
+
   while (i < lines.length) {
     const line = lines[i] ?? '';
     if (line.trim() === '') {
@@ -725,12 +754,49 @@ function mkTable(headerCells: string[], bodyRows: string[][]): Y.XmlElement {
  * disk as human-readable markdown.
  */
 export function serializeFragmentToMarkdown(fragment: Y.XmlFragment): string {
+  const children = fragment.toArray();
+  // Recognize a leading YAML-frontmatter pattern: horizontalRule, then one or
+  // more paragraphs (the YAML lines), then a closing horizontalRule. The
+  // markdown parser doesn't have a typed frontmatter node — it tokenizes
+  // `---` as horizontalRule and the YAML lines as plain paragraphs — so on
+  // round-trip we need to emit the block back as `---\nyaml\n---` without
+  // the `\n\n` block separators that would otherwise appear between every
+  // paragraph and corrupt the YAML. Self-heals docs whose frontmatter was
+  // already corrupted by a prior round-trip (the parser ignores blank lines
+  // so they're absent from the Yjs state — the serializer just stops
+  // re-introducing them).
+  let i = 0;
+  let frontmatterMd: string | null = null;
+  if (children.length >= 2) {
+    const first = children[0];
+    if (isHorizontalRuleNode(first)) {
+      let j = 1;
+      const yamlLines: string[] = [];
+      while (j < children.length && isParagraphNode(children[j])) {
+        yamlLines.push(textContent(children[j] as Y.XmlElement));
+        j++;
+      }
+      if (j < children.length && isHorizontalRuleNode(children[j]) && yamlLines.length > 0) {
+        frontmatterMd = `---\n${yamlLines.join('\n')}\n---`;
+        i = j + 1;
+      }
+    }
+  }
+
   const parts: string[] = [];
-  for (const child of fragment.toArray()) {
-    const s = serializeBlock(child as Y.XmlElement | Y.XmlText);
+  if (frontmatterMd != null) parts.push(frontmatterMd);
+  for (; i < children.length; i++) {
+    const s = serializeBlock(children[i] as Y.XmlElement | Y.XmlText);
     if (s != null && s !== '') parts.push(s);
   }
   return parts.length > 0 ? `${parts.join('\n\n')}\n` : '';
+}
+
+function isHorizontalRuleNode(n: unknown): boolean {
+  return n instanceof Y.XmlElement && n.nodeName === 'horizontalRule';
+}
+function isParagraphNode(n: unknown): boolean {
+  return n instanceof Y.XmlElement && n.nodeName === 'paragraph';
 }
 
 /** Serialize a single block element to markdown (public accessor for
@@ -760,6 +826,12 @@ function serializeBlock(node: Y.XmlElement | Y.XmlText): string | null {
         .join('\n');
     case 'codeBlock': {
       const lang = node.getAttribute('language') ?? '';
+      // YAML frontmatter is captured as a typed codeBlock at parse time so
+      // the keys round-trip without being merged into a single paragraph.
+      // The serializer emits it back as a `---`-bracketed block.
+      if (lang === 'yaml-frontmatter') {
+        return `---\n${textContent(node)}\n---`;
+      }
       return `\`\`\`${lang}\n${textContent(node)}\n\`\`\``;
     }
     case 'horizontalRule':
