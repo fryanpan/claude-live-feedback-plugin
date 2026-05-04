@@ -378,7 +378,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
 
       // --- Landing ---
       if (pathname === '/') {
-        return new Response(renderLanding(rooms.list()), {
+        const summaries = rooms.list().map((m) => {
+          const threads = rooms.listThreads(m.docId);
+          const open = threads.filter((t) => t.status === 'open').length;
+          const lastActivity = threads.reduce((max, t) => Math.max(max, t.lastActivity), 0);
+          return { ...m, openCount: open, threadCount: threads.length, lastActivity };
+        });
+        return new Response(renderLanding(summaries), {
           headers: { 'content-type': 'text/html; charset=utf-8' },
         });
       }
@@ -503,21 +509,105 @@ created by an agent calling <code>POST /api/docs</code> with a
 <p><small><a href="/">all docs</a></small></p>`;
 }
 
-function renderLanding(docs: { docId: string; type: string; title?: string }[]): string {
-  const rows = docs
-    .map(
-      (d) =>
-        `<li><a href="/review/${encodeURIComponent(d.docId)}">${escape(d.title ?? d.docId)}</a> <small>${d.type}</small></li>`,
-    )
+interface LandingDoc {
+  docId: string;
+  type: string;
+  title?: string;
+  sourceUrl?: string;
+  setId?: string;
+  openCount: number;
+  threadCount: number;
+  lastActivity: number;
+  createdAt?: number;
+}
+
+function renderLanding(docs: LandingDoc[]): string {
+  // Sort by signal: docs with open feedback float to the top, then by most
+  // recent activity, then alphabetically. Mirrors how a reviewer scans the
+  // list — "what needs my attention?" is the primary question.
+  const sorted = [...docs].sort((a, b) => {
+    if (a.openCount !== b.openCount) return b.openCount - a.openCount;
+    if (a.lastActivity !== b.lastActivity) return b.lastActivity - a.lastActivity;
+    return a.docId.localeCompare(b.docId);
+  });
+  const rows = sorted
+    .map((d) => {
+      const title = d.title || d.docId;
+      const titleHtml = `<a href="/review/${encodeURIComponent(d.docId)}">${escape(title)}</a>`;
+      const titleDiffersFromId = title !== d.docId;
+      const idSubtitle = titleDiffersFromId ? `<span class="docid">${escape(d.docId)}</span>` : '';
+      const openBadge =
+        d.openCount > 0
+          ? `<span class="badge badge-open">${d.openCount} open</span>`
+          : d.threadCount > 0
+            ? `<span class="badge badge-resolved">all resolved</span>`
+            : '';
+      const setBadge = d.setId
+        ? `<span class="badge badge-set">set: ${escape(d.setId)}</span>`
+        : '';
+      const typeBadge = `<span class="badge badge-type">${escape(d.type)}</span>`;
+      const sourceLine = d.sourceUrl ? `<div class="src">${escape(d.sourceUrl)}</div>` : '';
+      const activityLine =
+        d.lastActivity > 0
+          ? `<div class="meta">last activity ${escape(formatRelative(d.lastActivity))}</div>`
+          : d.createdAt
+            ? `<div class="meta">created ${escape(formatRelative(d.createdAt))} · no comments yet</div>`
+            : '';
+      return `<li class="${d.openCount > 0 ? 'has-open' : ''}">
+        <div class="row">
+          <div class="title">${titleHtml}</div>
+          <div class="badges">${openBadge}${setBadge}${typeBadge}</div>
+        </div>
+        ${idSubtitle}
+        ${sourceLine}
+        ${activityLine}
+      </li>`;
+    })
     .join('');
+  const total = docs.length;
+  const totalOpen = docs.reduce((sum, d) => sum + d.openCount, 0);
+  const summary =
+    total === 0
+      ? ''
+      : `${total} doc${total === 1 ? '' : 's'} · ${totalOpen} open thread${totalOpen === 1 ? '' : 's'}`;
   return `<!doctype html><meta charset="utf-8"><title>Live Feedback</title>
-<style>body{font:14px/1.4 system-ui, sans-serif;margin:40px auto;max-width:640px;color:#222}
-h1{font-size:20px}a{color:#2e7dd7}ul{padding:0;list-style:none}li{padding:6px 0;border-bottom:1px solid #eee}
-small{color:#999;margin-left:8px}</style>
+<style>
+body{font:14px/1.5 system-ui, -apple-system, sans-serif;margin:32px auto;max-width:760px;padding:0 16px;color:#1b1f23}
+h1{font-size:22px;margin:0 0 4px}
+.summary{color:#6e7781;font-size:12px;margin-bottom:20px}
+ul{padding:0;list-style:none;margin:0}
+li{padding:12px 0;border-bottom:1px solid #eef0f2}
+li.has-open{border-left:3px solid #e36f1e;padding-left:10px;margin-left:-13px}
+.row{display:flex;align-items:baseline;gap:10px}
+.title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.title a{color:#2e7dd7;text-decoration:none;font-weight:600;font-size:15px}
+.title a:hover{text-decoration:underline}
+.badges{display:flex;gap:4px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end}
+.badge{font-size:10.5px;padding:1.5px 7px;border-radius:99px;background:#f6f8fa;color:#6e7781;font-weight:500}
+.badge-open{background:#fff1e6;color:#bf5b16}
+.badge-resolved{background:#e8f5ed;color:#2da44e}
+.badge-set{background:#ecf3fb;color:#2e7dd7}
+.badge-type{background:#f6f8fa;color:#8b95a1;font-variant-numeric:tabular-nums}
+.docid{display:block;color:#8b95a1;font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;margin-top:2px}
+.src{color:#6e7781;font-size:12px;margin-top:3px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.meta{color:#8b95a1;font-size:11px;margin-top:3px}
+.empty{color:#6e7781;padding:24px 0;text-align:center;font-style:italic}
+footer{margin-top:24px;color:#8b95a1;font-size:11px}
+</style>
 <h1>Live Feedback</h1>
-<p>Open docs to review:</p>
-<ul>${rows || '<li><em>none yet — POST /api/docs to create one</em></li>'}</ul>
-<p><small>API: POST /api/docs &middot; widget: /widget.iife.js &middot; demo: /demos/mockup</small></p>`;
+<div class="summary">${summary}</div>
+<ul>${rows || '<li class="empty">No docs yet — POST /api/docs to create one.</li>'}</ul>
+<footer>POST /api/docs · /widget.iife.js · /demos/mockup</footer>`;
+}
+
+function formatRelative(ts: number): string {
+  const diff = Date.now() - ts;
+  if (diff < 60_000) return 'just now';
+  if (diff < 3_600_000) return `${Math.round(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)}h ago`;
+  if (diff < 7 * 86_400_000) return `${Math.round(diff / 86_400_000)}d ago`;
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 // Viewport presets for ?mobile=<preset>. CSS px sizes (logical).
