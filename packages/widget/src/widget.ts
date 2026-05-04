@@ -89,6 +89,7 @@ class FeedbackWidgetEl extends HTMLElement {
   private resizeHandler: (() => void) | null = null;
   private scrollHandler: (() => void) | null = null;
   private vvHandler: (() => void) | null = null;
+  private showResolved = false;
 
   constructor() {
     super();
@@ -105,6 +106,7 @@ class FeedbackWidgetEl extends HTMLElement {
       get: (k) => localStorage.getItem(`cfw:${k}`),
       set: (k, v) => localStorage.setItem(`cfw:${k}`, v),
     });
+    this.showResolved = localStorage.getItem('cfw:showResolved') === '1';
     this.currentContext = {
       url: currentUrl(),
       ...(opts.context?.view ? { view: opts.context.view } : {}),
@@ -506,6 +508,11 @@ class FeedbackWidgetEl extends HTMLElement {
         continue;
       }
       annotated.push({ thread: t, status: statusBase, el: res.element });
+      // Hide pins for resolved threads by default — they pile up visual
+      // noise on the page during iteration. The thread still flows into
+      // the panel list (where it's collapsed under a "Show resolved (N)"
+      // toggle), so reopening is one click away.
+      if (statusBase === 'resolved' && !this.showResolved) continue;
       const pin = document.createElement('div');
       pin.setAttribute(IGNORE_ATTR, '');
       pin.className = 'cfw-pin';
@@ -571,7 +578,7 @@ class FeedbackWidgetEl extends HTMLElement {
       list.appendChild(e);
       return;
     }
-    for (const key of ['open', 'orphan', 'resolved'] as const) {
+    for (const key of ['open', 'orphan'] as const) {
       const group = groups[key];
       if (!group.length) continue;
       const h = document.createElement('div');
@@ -580,6 +587,26 @@ class FeedbackWidgetEl extends HTMLElement {
       list.appendChild(h);
       for (const { thread, status } of group) {
         list.appendChild(this.renderThreadRow(thread, status));
+      }
+    }
+    if (groups.resolved.length) {
+      const toggle = document.createElement('button');
+      toggle.type = 'button';
+      toggle.className = 'resolved-toggle';
+      toggle.textContent = this.showResolved
+        ? `Hide resolved (${groups.resolved.length})`
+        : `Show resolved (${groups.resolved.length})`;
+      toggle.addEventListener('click', () => {
+        this.showResolved = !this.showResolved;
+        localStorage.setItem('cfw:showResolved', this.showResolved ? '1' : '0');
+        // Rerender to flip pins on/off and the resolved group visibility
+        this.scheduleRender();
+      });
+      list.appendChild(toggle);
+      if (this.showResolved) {
+        for (const { thread, status } of groups.resolved) {
+          list.appendChild(this.renderThreadRow(thread, status));
+        }
       }
     }
   }
