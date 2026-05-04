@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ElementAnchor, User } from '@feedback/core';
@@ -301,5 +301,37 @@ describe('server REST', () => {
     expect(res.status).toBe(204);
     expect(res.headers.get('access-control-allow-origin')).toBe('*');
     expect(res.headers.get('access-control-allow-methods')).toContain('POST');
+  });
+
+  it('hydrates persisted docs into list_docs after a supervisor restart', async () => {
+    const created = await j<{ docId: string }>(
+      await fetch(`${base}/api/docs`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ docId: 'hydrate-test', type: 'mockup' }),
+      }),
+    );
+    expect(created.docId).toBe('hydrate-test');
+    // Yjs snapshot debounce + writeFileSync cycle. Poll until the file
+    // appears rather than racing a fixed sleep.
+    const ydocPath = join(dataDir, 'hydrate-test.ydoc');
+    for (let i = 0; i < 30 && !existsSync(ydocPath); i++) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(existsSync(ydocPath)).toBe(true);
+
+    // Spin up a second server pointed at the same dataDir — simulates a
+    // bun --watch reload. The new instance starts with an empty rooms map
+    // and must hydrate from disk so list_docs is accurate.
+    const second = createServer({ port: 0, dataDir });
+    try {
+      const list = await j<{ docs: { docId: string }[] }>(
+        await fetch(`http://localhost:${second.port}/api/docs`),
+      );
+      const ids = list.docs.map((d) => d.docId);
+      expect(ids).toContain('hydrate-test');
+    } finally {
+      await second.stop();
+    }
   });
 });
