@@ -129,7 +129,9 @@ Plus two slash commands: `/feedback-serve`, `/feedback-threads`.
 
 ## Access model
 
-No public tunnels. Reviewers reach the host over **Tailscale** (private WireGuard mesh, "MagicDNS" handles the hostname) or on the same **local network** (mDNS / LAN IP). If you want public access, add a tunnel of your choice (Cloudflare, ngrok, Caddy) — the server is just HTTP.
+Default: **Tailscale or LAN, no public tunnels.** Reviewers reach the host over Tailscale (private WireGuard mesh, "MagicDNS" handles the hostname) or on the same local network (mDNS / LAN IP).
+
+Optional: **Cloudflare Access share** for explicit external-team review (markdown today; dev server / mockup next). The agent calls `share_doc(...)` and gets back a public URL gated by email-OTP login restricted to your configured allow-list (e.g. `@appdevforall.org`); shares expire automatically at a TTL (default 72h). See [docs/product/sharing.md](docs/product/sharing.md) for setup.
 
 ## Status
 
