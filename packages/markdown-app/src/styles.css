@@ -191,9 +191,6 @@ body.has-set #main {
   body.has-set #main {
     grid-template-columns: 1fr 360px;
   }
-  body.has-set #set-pane {
-    display: none;
-  }
 }
 @media (max-width: 900px) {
   #main {
@@ -213,8 +210,15 @@ body.has-set #main {
   overflow-y: auto;
   font-size: 13px;
 }
-body.has-set #set-pane {
-  display: block;
+/* Sidebar is desktop-only. Below 1100px the dropdown in the topbar is
+   the only nav for the review set — don't burn vertical space on a
+   stacked list above the editor. Gated on min-width (rather than the
+   prior unconditional show + max-width hide) so source order can't
+   re-introduce the mobile sidebar bug. */
+@media (min-width: 1101px) {
+  body.has-set #set-pane {
+    display: block;
+  }
 }
 .set-pane-header {
   padding: 14px 16px 8px;
@@ -482,6 +486,34 @@ body.is-reading-width #editor .ProseMirror {
 #editor .ProseMirror a:hover {
   text-decoration-color: currentColor;
 }
+/* Mobile prose tuning. Trim horizontal padding (40px → 16px) so a
+   ~390px viewport doesn't have content squeezed into the middle 300px,
+   and scale headings down — 2rem h1 at desktop is gigantic on mobile.
+   `overflow-wrap: anywhere` is the catch for long unbreakable tokens
+   (file paths, inline code like `apk-viewer-plugin`, urls) that would
+   otherwise force horizontal scroll. */
+@media (max-width: 720px) {
+  #editor {
+    padding: 20px 16px calc(160px + var(--safe-bottom));
+  }
+  #editor .ProseMirror {
+    font-size: 17px;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  #editor .ProseMirror h1 {
+    font-size: 1.5rem;
+    margin: 1.2em 0 0.4em;
+    padding-bottom: 6px;
+  }
+  #editor .ProseMirror h2 {
+    font-size: 1.25rem;
+  }
+  #editor .ProseMirror h3 {
+    font-size: 1.1rem;
+  }
+}
+
 #editor .ProseMirror code {
   background: var(--bg-hover);
   padding: 1px 5px;
