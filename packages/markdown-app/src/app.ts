@@ -724,9 +724,32 @@ async function boot(): Promise<void> {
     // Prefer the sourceUrl (set when the doc originated from a real
     // file path or URL) so the header shows an obvious identifier; fall
     // back to the human title, then the docId as last resort.
-    docTitleEl.textContent = m.sourceUrl ?? m.title ?? m.docId;
-    docTitleEl.title = m.sourceUrl ?? m.title ?? m.docId;
+    const full = m.sourceUrl ?? m.title ?? m.docId;
+    // On mobile the full path eats the topbar — show just the filename
+    // (basename) truncated to ~32 chars, with the full path in `title`
+    // for tap-and-hold tooltip. Resize re-renders so rotation works.
+    const isMobile = window.matchMedia('(max-width: 720px)').matches;
+    docTitleEl.textContent = isMobile ? mobileLabel(full) : full;
+    docTitleEl.title = full;
   }
+
+  function mobileLabel(full: string): string {
+    // Strip URL prefix if present (http://host/path → /path), then take the
+    // last path segment. Truncate to 32 chars with a leading ellipsis so
+    // the meaningful end (the actual filename) survives.
+    let s = full;
+    try {
+      if (/^https?:\/\//.test(s)) s = new URL(s).pathname;
+    } catch {}
+    const parts = s.split('/').filter(Boolean);
+    const base = parts[parts.length - 1] ?? s;
+    return base.length <= 32 ? base : `…${base.slice(-31)}`;
+  }
+
+  // Re-render the label when the viewport crosses the mobile breakpoint
+  // (orientation change, window resize, etc.) so we don't leave a
+  // mid-resize stale form on screen.
+  window.matchMedia('(max-width: 720px)').addEventListener('change', () => renderDocLabel());
 
   // ---- Review-set navigation ----
   // If the doc has a setId, fetch all docs sharing that set and render
@@ -786,10 +809,23 @@ async function boot(): Promise<void> {
         .join('');
       if (setPaneList) setPaneList.innerHTML = items;
       if (docMenu) docMenu.innerHTML = `<ol>${items}</ol>`;
+      // On mobile, the desktop sidebar is hidden — the dropdown is the
+      // ONLY surface that shows the review set. Open it on first render
+      // so the reviewer sees siblings without having to discover the
+      // doc-switcher tap target. The existing scroll-to-close handler
+      // dismisses it as soon as they engage with the content.
+      const isMobile = window.matchMedia('(max-width: 1100px)').matches;
+      if (isMobile && docMenu && docSwitcher && !openedOnce) {
+        openedOnce = true;
+        docMenu.classList.remove('hidden');
+        docMenu.setAttribute('aria-hidden', 'false');
+        docSwitcher.setAttribute('aria-expanded', 'true');
+      }
     } catch {
       // Fetch failure — skip; not load-bearing for the editor itself.
     }
   }
+  let openedOnce = false;
 
   function basename(p: string): string {
     const m = p.match(/[^/]+$/);
