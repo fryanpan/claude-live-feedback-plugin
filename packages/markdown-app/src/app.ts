@@ -827,6 +827,17 @@ async function boot(): Promise<void> {
         docSwitcher.setAttribute('aria-expanded', 'false');
       }
     });
+    // Auto-close on scroll. The dropdown overlays the doc, and on mobile
+    // the user reaching the content is the strongest "I'm done with the
+    // nav" signal — don't make them tap-to-dismiss before reading.
+    const closeOnScroll = () => {
+      if (docMenu.classList.contains('hidden')) return;
+      docMenu.classList.add('hidden');
+      docMenu.setAttribute('aria-hidden', 'true');
+      docSwitcher.setAttribute('aria-expanded', 'false');
+    };
+    document.getElementById('editor')?.addEventListener('scroll', closeOnScroll, { passive: true });
+    window.addEventListener('scroll', closeOnScroll, { passive: true });
   }
 
   client.onReady(() => {
