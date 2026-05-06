@@ -50,6 +50,25 @@ Big decisions that future sessions should respect or revisit deliberately.
 - Enforced via `scripts/check-widget-size.js` in CI. Builds fail above the limit.
 - Yjs alone is ~40KB; we may need to split Yjs out as a CDN peer-dep if the budget breaks. Document the break rather than silently exceeding.
 
+## 2026-05-07 — Cloudflare Access share for explicit external-team review (overrides the 2026-04-19 stance for this case)
+- Default access remains Tailscale/LAN (the 2026-04-19 decision below
+  still holds for normal review). What's new: an explicit, agent-driven
+  publish step (`share_doc` MCP tool / `bun share` CLI) that creates a
+  per-share Cloudflare Access app gated by email domain (e.g.
+  `@appdevforall.org`) for a bounded window (default 72h).
+- Driver: Bryan started working with an external team that doesn't share
+  a tailnet and needs to review markdown docs / interactive mockups /
+  dev servers for a few days at a time. Adding everyone to the tailnet
+  is the wrong tool for ephemeral external review.
+- Architecture: MCP-first (the share command runs against the
+  long-running live-feedback server, not as a foreground bun process);
+  cloudflared runs as a launchd service alongside the existing
+  notion-bridge / sentry-bridge tunnels; per-repo team config in
+  `.claude/live-feedback.json`; TTL-based persistent shares with
+  manual `unshare` for early teardown.
+- See `docs/product/plans/cf-access-share-plan.md` for the plan and
+  `docs/product/sharing.md` for the user-facing guide.
+
 ## 2026-04-19 — Access model: Tailscale or LAN, no public tunnels
 - The feedback server binds to `localhost:<port>`. Reviewers reach it
   via the host's Tailscale hostname (e.g. `mac-mini.tailb53801.ts.net`)
