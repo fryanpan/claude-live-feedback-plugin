@@ -4,6 +4,9 @@ import type { Anchor, DocType, User } from '@feedback/core';
 import { type CfAccessOptions, createCfAccessVerifier } from './middleware/cf-access.ts';
 import { publicBaseUrl } from './public-host.ts';
 import { type FeedbackWs, Rooms } from './rooms.ts';
+import { CfApi } from './share/cf-api.ts';
+import { Shares } from './share/shares.ts';
+import type { ShareConfig } from './share/types.ts';
 import { SseHub, openSseStream } from './sse.ts';
 import { type WebhookLogEntry, createWebhookDispatcher } from './webhooks.ts';
 import { onClose, onMessage, onOpen } from './yjs-protocol.ts';
@@ -25,8 +28,24 @@ export interface ServerOptions {
    * `CF_Authorization` cookie) signed by the team's JWKS and matching the
    * given audience. When unset, the server runs unauthenticated — local
    * dev / Tailscale-only use is unchanged.
+   *
+   * When `share` is also set, the verifier only gates requests whose
+   * Host header matches an active share — Tailscale traffic to the
+   * canonical hostname stays unauthenticated.
    */
   cfAccess?: CfAccessOptions;
+  /**
+   * Cloudflare Access share machinery. When set, the server exposes
+   * /api/share routes for creating/listing/revoking shares, instantiates
+   * a CfApi client (uses `cfApi` directly if provided, else builds one
+   * from `cfApiToken`), and wires the cf-access middleware's audience to
+   * the shares registry so each share's hostname gets its own AUD.
+   */
+  share?: {
+    config: ShareConfig;
+    cfApiToken?: string;
+    cfApi?: CfApi;
+  };
 }
 
 const CT: Record<string, string> = {
@@ -44,6 +63,7 @@ const CT: Record<string, string> = {
 export interface ServerHandle {
   port: number;
   rooms: Rooms;
+  shares: Shares | null;
   webhookLog: WebhookLogEntry[];
   stop: () => Promise<void>;
 }
@@ -54,7 +74,30 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const widgetDist = opts.widgetDistDir ?? null;
   const markdownAppDist = opts.markdownAppDistDir ?? null;
   const demosDir = opts.demosDir ?? null;
-  const cfAccessVerifier = opts.cfAccess ? createCfAccessVerifier(opts.cfAccess) : null;
+
+  let shares: Shares | null = null;
+  if (opts.share) {
+    const cfApi =
+      opts.share.cfApi ??
+      new CfApi({
+        accountId: opts.share.config.cfAccountId,
+        token: opts.share.cfApiToken ?? '',
+      });
+    shares = new Shares({
+      dataDir,
+      cfApi,
+      config: opts.share.config,
+    });
+  }
+
+  // When shares is wired, automatically derive the cf-access audience from
+  // the registry so each share-<slug> host can use its own AUD. Callers
+  // can still override by passing cfAccess.audience explicitly.
+  const cfAccessConfig =
+    opts.cfAccess && shares
+      ? { ...opts.cfAccess, audience: shares.audienceResolver }
+      : opts.cfAccess;
+  const cfAccessVerifier = cfAccessConfig ? createCfAccessVerifier(cfAccessConfig) : null;
 
   const sse = new SseHub();
   const webhookLog: WebhookLogEntry[] = [];
@@ -89,12 +132,61 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
 
       // --- Cloudflare Access gate ---
       // When cfAccess is configured (server is reachable via a public
-      // tunnel), every non-preflight request must carry a valid Access
-      // JWT. Local dev / Tailscale paths leave cfAccess unset and skip
-      // this entirely.
+      // tunnel), gate the request. Two modes:
+      //   - With shares wired: gate ONLY requests whose Host matches an
+      //     active share. Tailscale/LAN traffic to the canonical hostname
+      //     stays unauthenticated, so the agent's MCP tools can still
+      //     hit /api/share over loopback.
+      //   - Without shares: gate everything (legacy/test mode).
       if (cfAccessVerifier) {
-        const result = await cfAccessVerifier(req);
-        if (!result.ok) return j(result.status, { error: result.error });
+        const host = req.headers.get('host')?.toLowerCase() ?? '';
+        const isShareHost = shares ? shares.findByHostname(host) !== null : false;
+        const shouldGate = shares ? isShareHost : true;
+        if (shouldGate) {
+          const result = await cfAccessVerifier(req);
+          if (!result.ok) return j(result.status, { error: result.error });
+        }
+      }
+
+      // --- REST: shares ---
+      if (pathname === '/api/share' && req.method === 'GET') {
+        if (!shares) return j(404, { error: 'sharing not enabled' });
+        return j(200, { shares: shares.list() });
+      }
+      if (pathname === '/api/share/doc' && req.method === 'POST') {
+        if (!shares) return j(404, { error: 'sharing not enabled' });
+        const body = await safeJson(req);
+        const docId = (body?.docId as string) ?? '';
+        const allowDomains = (body?.allowDomains as string[]) ?? [];
+        if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
+        if (!rooms.get(docId)) return j(404, { error: 'doc not found' });
+        if (!Array.isArray(allowDomains) || allowDomains.length === 0) {
+          return j(400, { error: 'allowDomains must be a non-empty array' });
+        }
+        try {
+          const share = await shares.createShareDoc({
+            docId,
+            allowDomains,
+            ttlSeconds: typeof body?.ttlSeconds === 'number' ? body.ttlSeconds : undefined,
+            name: typeof body?.name === 'string' ? body.name : undefined,
+          });
+          return j(200, { share });
+        } catch (err) {
+          const error = err instanceof Error ? err.message : 'create_share_failed';
+          return j(502, { error });
+        }
+      }
+      const shareIdMatch = pathname.match(/^\/api\/share\/([^/]+)$/);
+      if (shareIdMatch && req.method === 'DELETE') {
+        if (!shares) return j(404, { error: 'sharing not enabled' });
+        const shareId = decodeURIComponent(shareIdMatch[1] ?? '');
+        try {
+          const result = await shares.deleteShare(shareId);
+          return result.ok ? j(200, { ok: true }) : j(404, { error: 'share not found' });
+        } catch (err) {
+          const error = err instanceof Error ? err.message : 'delete_share_failed';
+          return j(502, { error });
+        }
       }
 
       // --- WebSocket upgrade ---
@@ -456,6 +548,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   return {
     port: server.port ?? port,
     rooms,
+    shares,
     webhookLog,
     stop: async () => {
       server.stop();
