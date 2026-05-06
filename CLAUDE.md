@@ -45,6 +45,7 @@ The feedback widget that ships Linear tickets in `~/dev/health-tool` and `~/dev/
 - Public repo with branch protection on main — all changes via PR.
 - TypeScript strict mode.
 - Widget bundle size is a hard constraint — measure and report it on every PR that touches widget code.
+- **Mobile UX is load-bearing.** Bryan reviews on his phone. Any UI change touching the editor, widget, or landing page must follow [docs/product/design-mobile.md](docs/product/design-mobile.md) — verify at 430px wide before shipping.
 
 ## Linear
 

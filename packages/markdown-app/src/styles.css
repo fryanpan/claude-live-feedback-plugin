@@ -178,26 +178,31 @@ button {
 #main {
   position: relative;
   display: grid;
-  grid-template-columns: 1fr 360px;
+  /* `minmax(0, 1fr)` (not `1fr`) so the prose column can't be widened by
+     long unbreakable tokens inside it — `1fr` = `minmax(auto, 1fr)` and
+     `auto`'s min is content-driven, which causes mobile horizontal
+     overflow whenever a single long file path / URL / inline code
+     exists in the doc. */
+  grid-template-columns: minmax(0, 1fr) 360px;
   overflow: hidden;
 }
 /* Review-set sidebar adds a left column on desktop when the doc is
    tagged with a setId. Below 1100px the sidebar collapses (dropdown
    in the topbar takes over); below 900px, threads also drawer-ify. */
 body.has-set #main {
-  grid-template-columns: 240px 1fr 360px;
+  grid-template-columns: 240px minmax(0, 1fr) 360px;
 }
 @media (max-width: 1100px) {
   body.has-set #main {
-    grid-template-columns: 1fr 360px;
+    grid-template-columns: minmax(0, 1fr) 360px;
   }
 }
 @media (max-width: 900px) {
   #main {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   body.has-set #main {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -494,23 +499,49 @@ body.is-reading-width #editor .ProseMirror {
    otherwise force horizontal scroll. */
 @media (max-width: 720px) {
   #editor {
-    padding: 20px 16px calc(160px + var(--safe-bottom));
+    padding: 16px 14px calc(160px + var(--safe-bottom));
   }
   #editor .ProseMirror {
-    font-size: 17px;
+    font-size: 16px;
+    line-height: 1.55;
     overflow-wrap: anywhere;
     word-break: break-word;
   }
+  /* Catch-all so no descendant element (table, codeBlock, image) can
+     force the prose column wider than the viewport. */
+  #editor .ProseMirror * {
+    max-width: 100%;
+  }
   #editor .ProseMirror h1 {
-    font-size: 1.5rem;
-    margin: 1.2em 0 0.4em;
+    font-size: 1.4rem;
+    margin: 1em 0 0.4em;
     padding-bottom: 6px;
   }
   #editor .ProseMirror h2 {
-    font-size: 1.25rem;
+    font-size: 1.2rem;
   }
   #editor .ProseMirror h3 {
-    font-size: 1.1rem;
+    font-size: 1.05rem;
+  }
+  /* Tables can't word-wrap their cells the same way, so let them scroll
+     horizontally inside their own container instead of pushing the page. */
+  #editor .ProseMirror .prose-table,
+  #editor .ProseMirror table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  /* Topbar tightening — the path/title takes a single ellipsis-truncated
+     line; the doc-label "Editing:" prefix is hidden to free up space
+     (the topbar already implies that context). */
+  .doc-label {
+    display: none;
+  }
+  .doc-path {
+    font-size: 13px;
+  }
+  .save-state {
+    display: none;
   }
 }
 
