@@ -23,6 +23,13 @@ const widgetDist = pathOrNull(join(repoRoot, 'packages', 'widget', 'dist'));
 const markdownAppDist = pathOrNull(join(repoRoot, 'packages', 'markdown-app', 'dist'));
 const demosDir = pathOrNull(join(repoRoot, 'demos'));
 
+// Cloudflare Access gate (only active when both env vars are set — the
+// share machinery sets these when it brings up a tunnel for external review).
+const cfAccessTeam = process.env.CF_ACCESS_TEAM_DOMAIN;
+const cfAccessAud = process.env.CF_ACCESS_AUD;
+const cfAccess =
+  cfAccessTeam && cfAccessAud ? { teamDomain: cfAccessTeam, audience: cfAccessAud } : undefined;
+
 // Try the requested port first; if it's taken (e.g. another agent owns it),
 // walk up to the next 20 ports. This keeps `bun run dev` working without
 // conflicts when multiple agents are on the same machine.
@@ -37,6 +44,7 @@ for (let i = 0; i < 20 && !handle; i++) {
       widgetDistDir: widgetDist,
       markdownAppDistDir: markdownAppDist,
       demosDir,
+      cfAccess,
     });
   } catch (err) {
     lastErr = err;
@@ -56,6 +64,11 @@ console.log(`[feedback]   local:      http://localhost:${port}`);
 if (ts) console.log(`[feedback]   tailscale:  http://${ts}:${port}`);
 for (const h of lan) console.log(`[feedback]   lan:        http://${h}:${port}`);
 console.log('[feedback]   routes:     /  /review/<docId>  /widget.iife.js  /demos/mockup');
+if (cfAccess) {
+  console.log(
+    `[feedback]   cf-access:  team=${cfAccess.teamDomain} aud=${cfAccess.audience.slice(0, 8)}…`,
+  );
+}
 if (!widgetDist)
   console.log('[feedback] (widget bundle not built yet — run: bun run build:widget)');
 if (!markdownAppDist)

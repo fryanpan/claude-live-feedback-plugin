@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { extname, join } from 'node:path';
 import type { Anchor, DocType, User } from '@feedback/core';
+import { type CfAccessOptions, createCfAccessVerifier } from './middleware/cf-access.ts';
 import { publicBaseUrl } from './public-host.ts';
 import { type FeedbackWs, Rooms } from './rooms.ts';
 import { SseHub, openSseStream } from './sse.ts';
@@ -18,6 +19,14 @@ export interface ServerOptions {
   markdownAppDistDir?: string | null;
   /** Absolute path to the demos dir (static HTML). */
   demosDir?: string | null;
+  /**
+   * Cloudflare Access JWT verification config. When set, every non-OPTIONS
+   * request must carry a valid `Cf-Access-Jwt-Assertion` header (or
+   * `CF_Authorization` cookie) signed by the team's JWKS and matching the
+   * given audience. When unset, the server runs unauthenticated — local
+   * dev / Tailscale-only use is unchanged.
+   */
+  cfAccess?: CfAccessOptions;
 }
 
 const CT: Record<string, string> = {
@@ -45,6 +54,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const widgetDist = opts.widgetDistDir ?? null;
   const markdownAppDist = opts.markdownAppDistDir ?? null;
   const demosDir = opts.demosDir ?? null;
+  const cfAccessVerifier = opts.cfAccess ? createCfAccessVerifier(opts.cfAccess) : null;
 
   const sse = new SseHub();
   const webhookLog: WebhookLogEntry[] = [];
@@ -75,6 +85,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // through every route handler.
       if (req.method === 'OPTIONS') {
         return withCors(req, new Response(null, { status: 204 }));
+      }
+
+      // --- Cloudflare Access gate ---
+      // When cfAccess is configured (server is reachable via a public
+      // tunnel), every non-preflight request must carry a valid Access
+      // JWT. Local dev / Tailscale paths leave cfAccess unset and skip
+      // this entirely.
+      if (cfAccessVerifier) {
+        const result = await cfAccessVerifier(req);
+        if (!result.ok) return j(result.status, { error: result.error });
       }
 
       // --- WebSocket upgrade ---
