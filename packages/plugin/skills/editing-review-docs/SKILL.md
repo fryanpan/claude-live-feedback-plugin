@@ -41,7 +41,14 @@ Pick the smallest tool that does the job:
   find, replace, { contextBefore?, contextAfter?, occurrence? })`.
   Works across all block types including table cells. Use
   `contextBefore`/`contextAfter` to disambiguate when the same string
-  appears more than once.
+  appears more than once. **Gotcha:** `find_and_replace` operates on
+  text, not block structure — if your replacement empties a containing
+  block (e.g. you delete the only sentence in a blockquote, or all
+  items in a list), the empty block stays behind in the doc. There's
+  no structural-delete tool today; the workaround is to do a clean
+  serialization pass when the .md hits its final destination (e.g. a
+  PR that swaps a draft into the canonical file). Track this if
+  you're using `find_and_replace` for substantial deletions.
 - **Rewrite the range a comment is anchored to** →
   `rewrite_thread_region(docId, threadId, replacement)`. Primary path
   when you're responding to a reviewer's comment — the anchor already
