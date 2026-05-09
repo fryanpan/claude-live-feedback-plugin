@@ -22,6 +22,16 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
  *   FEEDBACK_AUTHOR    — e.g. agent (used as the reply author)
  */
 
+// Resolved per-request, not frozen at module load. The MCP stdio child runs
+// for the life of a Claude Code session — sometimes days. The supervisor may
+// not be running yet at child-start, may move ports on restart, or may not
+// have written server.json yet. Reading the discovery file on each http()
+// call is a single fs read of a tiny JSON blob and lets the child pick up
+// port changes without a restart.
+//
+// No silent default: port 8787 used to be the fallback, but it's squatted by
+// notion-channel-mcp on developer machines and silently routed every call to
+// the wrong server. If discovery is unavailable, fail loudly with a hint.
 function resolveBaseUrl(): string {
   if (process.env.FEEDBACK_BASE_URL) return process.env.FEEDBACK_BASE_URL;
   const discovery = join(homedir(), '.claude', 'live-feedback', 'server.json');
@@ -30,13 +40,14 @@ function resolveBaseUrl(): string {
       const j = JSON.parse(readFileSync(discovery, 'utf8')) as { port?: number };
       if (j.port) return `http://localhost:${j.port}`;
     } catch {
-      // ignore — fall through to default
+      // fall through to throw — corrupt discovery file
     }
   }
-  return 'http://localhost:8787';
+  throw new Error(
+    'live-feedback server not found — start it with `bun run dev` (or set FEEDBACK_BASE_URL). ' +
+      `Looked for discovery file at ${discovery}.`,
+  );
 }
-
-const BASE_URL = resolveBaseUrl();
 const AUTHOR_ID = process.env.FEEDBACK_AUTHOR ?? 'agent';
 
 const KNOWN_USERS: Record<
@@ -70,20 +81,28 @@ const server = new Server(
       experimental: { 'claude/channel': {} },
     },
     instructions: [
-      'Channel events arrive as <channel source="live-feedback" doc_id="..." ',
-      'thread_id="..." event="..." author="..." sent_at="...">body</channel>.',
-      'Treat them as explicit asks from the reviewer: read, decide if the',
-      'comment is in your domain, and act via the edit tools',
-      '(rewrite_thread_region / find_and_replace / insert_blocks_after_thread /',
-      'delete_block_at_anchor / delete_blocks_in_range / delete_section).',
-      'Call watch_doc(docId) to start receiving events for a doc; unwatch_doc to stop.',
+      'Every markdown review doc is backed by a .md file on disk. The file is the',
+      'source of truth at rest; the live editor is the source of truth at runtime;',
+      'the plugin keeps them in sync bidirectionally (~1s debounced).',
       '',
-      'IMPORTANT — file-backed docs: if list_docs shows a doc whose sourceUrl matches',
-      'a markdown file on disk, that file is bound to the live editor. NEVER edit the',
-      '.md file directly with Write/Edit/str_replace — the plugin serializes the live',
-      'doc back to disk ~1s after every change, so a filesystem edit gets silently',
-      'clobbered by the next flush and diverges from what the user sees in the browser.',
-      'Always route edits through the MCP tools listed above.',
+      'CREATE: call create_review_doc(docId, path) to bring a .md under review.',
+      'The server reads the file, parses it into the live editor, sets up the',
+      'fs.watch + write-back, and returns a reviewUrl you can hand to a human.',
+      '',
+      'EDIT: never use Write/Edit/str_replace on the .md while it is under review',
+      '— your filesystem edit gets clobbered by the next flush and diverges from',
+      'what the reviewer sees. Route edits through the MCP tools below: find_and_replace',
+      'for prose changes, rewrite_thread_region / insert_after_thread / insert_blocks_after_thread',
+      'for comment-anchored edits. External edits to the bound file (VS Code, git pull)',
+      'flow back into the live doc automatically via fs.watch.',
+      '',
+      'OBSERVE: call watch_doc(docId) once per doc to receive thread events as',
+      '<channel source="live-feedback" doc_id="..." thread_id="..." event="..." author="..." sent_at="...">body</channel>',
+      'messages. Treat each as an explicit ask from the reviewer; read, decide if it',
+      "is in your domain, act via an edit tool. unwatch_doc when you're done.",
+      '',
+      'BEFORE YOU EDIT A .md FILE: call list_docs first. If a doc has sourceUrl',
+      'matching the path, route through the MCP. If not, normal file edits are fine.',
     ].join(' '),
   },
 );
@@ -167,29 +186,18 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
-      name: 'attach_file',
+      name: 'create_review_doc',
       description:
-        "Bind this review doc to a markdown file on disk. On attach, if the doc's prose is empty and the file exists, its contents are parsed and loaded into the doc. Every subsequent edit (from the browser editor, the agent, or the widget) is debounced and written back to the file within ~1 second. Path should be absolute; relative paths resolve against the server's cwd. File-to-doc updates (when you edit the .md in your IDE after attach) are not yet supported — it's a one-way live write right now.",
+        "Create a markdown review doc backed by a file on disk. The server reads the file, parses it into the live editor, and sets up bidirectional sync — every edit (from the browser, the agent, or the widget) writes back to the .md within ~1 second, and external edits to the file (VS Code, git pull) flow into the live doc within ~1 second via fs.watch. `path` should be absolute; relative paths resolve against the server's cwd. The file must exist (create it first if it doesn't). Pass `setId` to group multiple docs for one review session — docs sharing a setId show up in each other's sidebar in the markdown editor, so the reviewer can hop between related files. Returns the review URL plus the attach result.",
       inputSchema: {
         type: 'object',
         properties: {
           docId: { type: 'string' },
           path: { type: 'string' },
+          title: { type: 'string' },
+          setId: { type: 'string' },
         },
         required: ['docId', 'path'],
-      },
-    },
-    {
-      name: 'seed_doc',
-      description:
-        'One-shot initial content load for a brand-new empty review doc. Accepts markdown (headings, paragraphs, lists, blockquotes, code blocks, horizontal rules — same parser as insert_blocks_after_thread). Fails with `non-empty` if the doc already has any content — this tool NEVER clobbers existing text. Use when an agent creates a doc via POST /api/docs and wants to populate it without waiting for a browser session to open the URL.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          docId: { type: 'string' },
-          markdown: { type: 'string' },
-        },
-        required: ['docId', 'markdown'],
       },
     },
     {
@@ -271,7 +279,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'edit_at_anchor',
       description:
-        "Apply an edit at a previously-created agent anchor. `op.kind` is 'replace' (rewrite the anchored range) or 'insert_after' (insert text right after the anchor's end). Runs as a Yjs transaction; merges cleanly with concurrent user edits.",
+        "Apply an INLINE edit at a previously-created agent anchor. `op.kind` is 'replace' (rewrite the anchored range) or 'insert_after' (insert text right after the anchor's end). The text stays inside the anchor's block — use this for prose tweaks, not for adding new headings/paragraphs/lists/tables. For new blocks, use insert_blocks_at_anchor (which routes through the markdown parser so `## Heading` becomes a real heading element, not literal text). Runs as a Yjs transaction; merges cleanly with concurrent user edits.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -287,6 +295,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
         },
         required: ['docId', 'anchorId', 'op'],
+      },
+    },
+    {
+      name: 'insert_blocks_at_anchor',
+      description:
+        "Parse markdown and insert the resulting blocks (headings, paragraphs, lists, blockquotes, code blocks, tables, horizontal rules) immediately AFTER the block that contains the agent anchor. Use this — not edit_at_anchor — for adding new sections / sub-headings / tables. edit_at_anchor with insert_after does a character-level insert that keeps the new text trapped inside the anchor's block, producing literal `## Heading` text instead of a heading element.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          docId: { type: 'string' },
+          anchorId: { type: 'string' },
+          markdown: { type: 'string' },
+        },
+        required: ['docId', 'anchorId', 'markdown'],
       },
     },
     {
@@ -379,6 +401,41 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       description: 'Return the docIds this session is currently subscribed to for channel events.',
       inputSchema: { type: 'object', properties: {} },
     },
+    {
+      name: 'share_doc',
+      description:
+        "Publish a markdown review doc behind a Cloudflare Access gate so external reviewers (e.g. an outside team's email domain) can access it over the public internet for a bounded window. The doc must already exist via create_review_doc. Returns { share: { shareId, url, hostname, expiresAt, ... } }. Read .claude/live-feedback.json's `share.defaultAllowDomains` first; if a repo has no config, ASK THE USER which domain(s) to allow before calling — never default to 'anyone'. Default ttlSeconds is 72h. Reviewers hitting the share URL get a Cloudflare email-OTP login page; only allowed domains can complete login.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          docId: { type: 'string' },
+          allowDomains: {
+            type: 'array',
+            items: { type: 'string' },
+            description: "Email domains, e.g. ['@appdevforall.org']",
+          },
+          ttlSeconds: { type: 'number' },
+          name: { type: 'string', description: 'Optional slug override for the subdomain' },
+        },
+        required: ['docId', 'allowDomains'],
+      },
+    },
+    {
+      name: 'list_shares',
+      description:
+        'List currently active shares with their hostnames, allowed domains, and expiry.',
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'unshare',
+      description:
+        'Revoke a share by id. Deletes the Cloudflare Access app + policy and removes the registry entry. Use this for early teardown — shares otherwise expire on their own at the configured TTL.',
+      inputSchema: {
+        type: 'object',
+        properties: { shareId: { type: 'string' } },
+        required: ['shareId'],
+      },
+    },
   ],
 }));
 
@@ -434,17 +491,19 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const res = await http('GET', `/api/docs/${encodeURIComponent(docId)}/content`);
         return ok(res);
       }
-      case 'seed_doc': {
-        const { docId, markdown } = a as { docId: string; markdown: string };
-        const res = await http('POST', `/api/docs/${encodeURIComponent(docId)}/seed`, {
-          markdown,
-        });
-        return ok(res);
-      }
-      case 'attach_file': {
-        const { docId, path } = a as { docId: string; path: string };
-        const res = await http('POST', `/api/docs/${encodeURIComponent(docId)}/attach_file`, {
-          path,
+      case 'create_review_doc': {
+        const { docId, path, title, setId } = a as {
+          docId: string;
+          path: string;
+          title?: string;
+          setId?: string;
+        };
+        const res = await http('POST', '/api/docs', {
+          docId,
+          type: 'markdown',
+          sourceUrl: path,
+          ...(title ? { title } : {}),
+          ...(setId ? { setId } : {}),
         });
         return ok(res);
       }
@@ -536,6 +595,19 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         );
         return ok(res);
       }
+      case 'insert_blocks_at_anchor': {
+        const { docId, anchorId, markdown } = a as {
+          docId: string;
+          anchorId: string;
+          markdown: string;
+        };
+        const res = await http(
+          'POST',
+          `/api/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}/insert_blocks`,
+          { markdown },
+        );
+        return ok(res);
+      }
       case 'delete_anchor': {
         const { docId, anchorId } = a as { docId: string; anchorId: string };
         const res = await http(
@@ -608,7 +680,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       }
       case 'observe_url': {
         const { docId } = a as { docId: string };
-        return ok({ sseUrl: `${BASE_URL}/events/${encodeURIComponent(docId)}` });
+        return ok({ sseUrl: `${resolveBaseUrl()}/events/${encodeURIComponent(docId)}` });
       }
       case 'watch_doc': {
         const { docId } = a as { docId: string };
@@ -622,6 +694,35 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       }
       case 'list_watched_docs': {
         return ok({ watching: Array.from(watchers.keys()) });
+      }
+      case 'share_doc': {
+        const {
+          docId,
+          allowDomains,
+          ttlSeconds,
+          name: slug,
+        } = a as {
+          docId: string;
+          allowDomains: string[];
+          ttlSeconds?: number;
+          name?: string;
+        };
+        const res = await http('POST', '/api/share/doc', {
+          docId,
+          allowDomains,
+          ttlSeconds,
+          name: slug,
+        });
+        return ok(res);
+      }
+      case 'list_shares': {
+        const res = await http('GET', '/api/share');
+        return ok(res);
+      }
+      case 'unshare': {
+        const { shareId } = a as { shareId: string };
+        const res = await http('DELETE', `/api/share/${encodeURIComponent(shareId)}`);
+        return ok(res);
       }
       default:
         return err(`unknown tool: ${name}`);
@@ -665,7 +766,9 @@ async function runSseLoop(docId: string, signal: AbortSignal): Promise<void> {
   // ~15s, so an abrupt close is almost always a transient network blip.
   while (!signal.aborted) {
     try {
-      const res = await fetch(`${BASE_URL}/events/${encodeURIComponent(docId)}`, { signal });
+      const res = await fetch(`${resolveBaseUrl()}/events/${encodeURIComponent(docId)}`, {
+        signal,
+      });
       if (!res.ok || !res.body) throw new Error(`sse /events/${docId} → ${res.status}`);
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -762,15 +865,18 @@ function truncate(s: string, n: number): string {
 }
 
 async function http(method: string, path: string, body?: unknown): Promise<unknown> {
-  const res = await fetch(`${BASE_URL}${path}`, {
+  const baseUrl = resolveBaseUrl();
+  const res = await fetch(`${baseUrl}${path}`, {
     method,
     headers: body ? { 'content-type': 'application/json' } : {},
     body: body ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
-  const json = text ? JSON.parse(text) : {};
+  // Check status before parsing — the server's catch-all returns the bare
+  // string "not found" for unmatched routes, which would explode JSON.parse
+  // and bury the actual HTTP error.
   if (!res.ok) throw new Error(`${method} ${path} → ${res.status}: ${text}`);
-  return json;
+  return text ? JSON.parse(text) : {};
 }
 
 function ok(data: unknown) {
@@ -788,4 +894,12 @@ function err(message: string) {
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-console.error(`[mcp] connected — base ${BASE_URL}, author ${AUTHOR.name}`);
+// Best-effort startup banner. Fall back gracefully if discovery isn't ready
+// at child-start — http() will resolve fresh per request anyway.
+let bannerBase: string;
+try {
+  bannerBase = resolveBaseUrl();
+} catch {
+  bannerBase = '<discovery pending — server not yet running>';
+}
+console.error(`[mcp] connected — base ${bannerBase}, author ${AUTHOR.name}`);

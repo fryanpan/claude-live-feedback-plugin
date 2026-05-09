@@ -3,5 +3,12 @@
   "trustedPreviewDomains": [
     "tailb53801.ts.net",
     "local"
-  ]
+  ],
+  "share": {
+    "$comment": "Per-repo Cloudflare Access share defaults. Agents reading this file pass `defaultAllowDomains` to the share_doc MCP tool when the user asks to publish a review for an external team. If absent, the agent must ask the user which domains to allow before sharing — never default to 'anyone'. defaultTTL is the share lifetime; the cf-access cookie + the registry entry both expire after this window.",
+    "defaultAllowDomains": [
+      "@appdevforall.org"
+    ],
+    "defaultTTL": "72h"
+  }
 }

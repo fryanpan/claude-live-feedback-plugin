@@ -1,4 +1,12 @@
-import { type FSWatcher, existsSync, mkdirSync, readFileSync, watch, writeFileSync } from 'node:fs';
+import {
+  type FSWatcher,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  watch,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import {
   type Anchor,
@@ -71,31 +79,82 @@ export class Rooms {
 
   constructor(private cfg: RoomsConfig) {
     if (!existsSync(cfg.dataDir)) mkdirSync(cfg.dataDir, { recursive: true });
+    this.hydrateFromDisk();
   }
 
   list(): DocMeta[] {
     return Array.from(this.rooms.values()).map((r) => r.meta);
   }
 
+  // The persisted Yjs files are the source of truth for doc existence —
+  // the in-memory `rooms` map is just a hot cache. Without this hydration
+  // step, `list()` only returns rooms that have been touched since the
+  // last supervisor restart, which is misleading (every `bun --watch`
+  // reload silently shrinks the result). Load every persisted doc into
+  // memory at startup so discovery via list_docs is always accurate.
+  // File-bound markdown rooms aren't auto-rebound here — that needs an
+  // existsSync check on sourceUrl and would be surprising on restart for
+  // files that have moved. Callers re-bind via create_review_doc when
+  // they want disk write-back to resume.
+  private hydrateFromDisk(): void {
+    let count = 0;
+    try {
+      for (const file of readdirSync(this.cfg.dataDir)) {
+        if (!file.endsWith('.ydoc')) continue;
+        const docId = file.slice(0, -'.ydoc'.length);
+        if (!docId) continue;
+        this.getOrCreate(docId);
+        count++;
+      }
+    } catch (err) {
+      console.error('[rooms] hydrateFromDisk failed:', err);
+    }
+    if (count > 0) console.error(`[rooms] hydrated ${count} doc(s) from ${this.cfg.dataDir}`);
+  }
+
   getOrCreate(
     docId: string,
-    init?: { type?: DocType; sourceUrl?: string; title?: string; webhookUrl?: string },
+    init?: {
+      type?: DocType;
+      sourceUrl?: string;
+      title?: string;
+      setId?: string;
+      webhookUrl?: string;
+    },
   ): DocRoom {
     const existing = this.rooms.get(docId);
     if (existing) {
       if (init?.webhookUrl !== undefined) existing.webhookUrl = init.webhookUrl;
+      // Allow re-tagging an existing doc into a different set without a
+      // server restart — agents may rebatch their review queue.
+      if (init?.setId !== undefined && init.setId !== existing.meta.setId) {
+        const m = existing.ydoc.getMap('meta');
+        existing.ydoc.transact(() => m.set('setId', init.setId));
+        existing.meta.setId = init.setId;
+      }
       return existing;
     }
     const ydoc = new Y.Doc();
     this.loadFromDisk(docId, ydoc);
+    const restored = readDocMeta(ydoc);
+    const isNew = !restored.docId;
     const meta: DocMeta = (() => {
-      const current = readDocMeta(ydoc);
-      if (current.docId) return current;
+      if (!isNew) {
+        // Restored doc; allow init to override setId (set membership
+        // is editorial, not part of the persisted CRDT contract).
+        if (init?.setId !== undefined && init.setId !== restored.setId) {
+          const m = ydoc.getMap('meta');
+          ydoc.transact(() => m.set('setId', init.setId));
+          restored.setId = init.setId;
+        }
+        return restored;
+      }
       const now: DocMeta = {
         docId,
         type: init?.type ?? 'markdown',
         sourceUrl: init?.sourceUrl,
         title: init?.title,
+        setId: init?.setId,
         createdAt: Date.now(),
       };
       initDocMeta(ydoc, now);
@@ -112,6 +171,13 @@ export class Rooms {
     };
     this.rooms.set(docId, room);
     this.wireEvents(room);
+    // For freshly-created rooms (no on-disk state), the initDocMeta call
+    // above fired its update event before wireEvents listened, so nothing
+    // would ever flush this room to disk if the user hasn't done another
+    // mutation by the next supervisor restart. Force a snapshot now so a
+    // create_review_doc immediately followed by a `bun --watch` reload
+    // doesn't lose the doc.
+    if (isNew) this.saveToDisk(room);
     return room;
   }
 
@@ -252,15 +318,6 @@ export class Rooms {
     return { plainText: walk.plainText, blocks, threads: listThreads(room.ydoc) };
   }
 
-  /**
-   * Seed a brand-new doc with initial markdown. Intended for agents
-   * that create a review doc via POST /api/docs and want to populate
-   * it without waiting for a human browser to open the URL.
-   *
-   * Fails with `non-empty` when the prose fragment already has any
-   * content — we never clobber existing text. Use find_and_replace /
-   * rewrite_thread_region for edits against non-empty docs.
-   */
   /**
    * Bind a doc to a file path on disk. After attach:
    *   - if the doc's prose fragment is empty AND the file exists with
@@ -433,22 +490,6 @@ export class Rooms {
     }, 800);
   }
 
-  seedDoc(
-    docId: string,
-    markdown: string,
-  ): { ok: boolean; error?: 'not-found' | 'non-empty' | 'parse-failed'; blocks?: number } {
-    const room = this.rooms.get(docId);
-    if (!room) return { ok: false, error: 'not-found' };
-    const fragment = prose.getProseFragment(room.ydoc);
-    if (fragment.length > 0) return { ok: false, error: 'non-empty' };
-    const blocks = prose.parseMarkdownBlocks(markdown);
-    if (blocks.length === 0) return { ok: false, error: 'parse-failed' };
-    room.ydoc.transact(() => {
-      fragment.push(blocks);
-    }, 'agent-seed');
-    return { ok: true, blocks: blocks.length };
-  }
-
   /**
    * Replace `find` with `replace` inside the doc. Optional context
    * string around the match disambiguates repeated phrases; pass
@@ -535,6 +576,29 @@ export class Rooms {
     const room = this.rooms.get(docId);
     if (!room) return false;
     return prose.deleteAgentAnchor(room.ydoc, anchorId);
+  }
+
+  /**
+   * Parse markdown into block elements and insert them as siblings
+   * immediately after the block that contains the agent anchor.
+   * Use this for adding new headings / paragraphs / lists / tables —
+   * `edit_at_anchor` with `insert_after` does a character-stream
+   * insert which keeps the new text inside the anchor's block,
+   * producing literal `## Heading` text instead of a heading element.
+   */
+  insertBlocksAtAnchor(
+    docId: string,
+    anchorId: string,
+    markdown: string,
+  ): prose.AnchoredEditResult {
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'anchor-not-found' };
+    const anchor = prose.readAgentAnchor(room.ydoc, anchorId);
+    if (!anchor) return { ok: false, error: 'anchor-not-found' };
+    return prose.insertBlocksAfterAnchor(room.ydoc, {
+      anchorRel: anchor.endRel,
+      markdown,
+    });
   }
 
   /** Append text at the END position of a thread's anchored range. */

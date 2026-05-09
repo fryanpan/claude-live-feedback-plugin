@@ -13,8 +13,19 @@
     <div id="shell">
       <header id="topbar">
         <div class="doc-crumb">
+          <a href="/" class="back-link" title="All review docs" aria-label="Back to all review docs">←</a>
           <span class="doc-label">Editing:</span>
-          <span class="doc-path" id="doc-title">—</span>
+          <button
+            type="button"
+            id="doc-switcher"
+            class="doc-switcher"
+            aria-haspopup="true"
+            aria-expanded="false"
+            aria-controls="doc-menu"
+          >
+            <span class="doc-path" id="doc-title">—</span>
+            <span class="doc-switcher-caret" aria-hidden="true">▾</span>
+          </button>
           <span id="save-state" class="save-state save-state--saved">All changes saved</span>
         </div>
         <div class="toolbar">
@@ -41,7 +52,26 @@
           </button>
         </div>
       </header>
+      <!-- Dropdown listing all docs in the current set. Anchored under
+           the topbar; only shown when the doc has a setId. The same data
+           also renders into #set-pane on desktop. -->
+      <nav
+        id="doc-menu"
+        class="doc-menu hidden"
+        role="menu"
+        aria-label="Pick a doc in this review set"
+        aria-hidden="true"
+      ></nav>
       <main id="main">
+        <!-- Persistent left sidebar for desktop. Empty + display:none
+             unless the doc has a setId (then body.has-set toggles it
+             visible and JS populates the list). On mobile (<1100px) the
+             sidebar collapses to free up space; the dropdown above is
+             the only nav. -->
+        <aside id="set-pane" aria-label="Docs in this review set" aria-hidden="true">
+          <div class="set-pane-header">In this review</div>
+          <ol id="set-pane-list"></ol>
+        </aside>
         <section id="editor-pane">
           <div
             id="format-bar"

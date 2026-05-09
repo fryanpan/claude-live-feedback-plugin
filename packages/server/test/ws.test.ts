@@ -105,10 +105,10 @@ describe('ws sync', () => {
   });
 
   it('two clients converge on text edits', async () => {
-    const a = connectDoc(`${wsBase}/y/ws-1`);
+    const a = connectDoc(`${wsBase}/y/ws-1?type=mockup`);
     await waitForOpen(a.ws);
     await a.ready;
-    const b = connectDoc(`${wsBase}/y/ws-1`);
+    const b = connectDoc(`${wsBase}/y/ws-1?type=mockup`);
     await waitForOpen(b.ws);
     await b.ready;
 
@@ -127,7 +127,7 @@ describe('ws sync', () => {
   });
 
   it('persists Y.Text to disk and reloads it on a new client', async () => {
-    const a = connectDoc(`${wsBase}/y/ws-persist`);
+    const a = connectDoc(`${wsBase}/y/ws-persist?type=mockup`);
     await waitForOpen(a.ws);
     await a.ready;
     a.ydoc.getText('content').insert(0, 'Persistent body');
@@ -137,7 +137,7 @@ describe('ws sync', () => {
     // small delay to ensure close has been processed
     await new Promise((r) => setTimeout(r, 100));
 
-    const b = connectDoc(`${wsBase}/y/ws-persist`);
+    const b = connectDoc(`${wsBase}/y/ws-persist?type=mockup`);
     await waitForOpen(b.ws);
     await b.ready;
     expect(b.ydoc.getText('content').toString()).toBe('Persistent body');

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ElementAnchor, User } from '@feedback/core';
@@ -118,22 +118,21 @@ describe('server REST', () => {
     expect(openOnly.threads.find((t) => t.id === created.thread.id)).toBeUndefined();
   });
 
-  it('seeds a doc and edits via find_and_replace', async () => {
-    await fetch(`${base}/api/docs`, {
+  it('creates a file-backed markdown doc and edits via find_and_replace', async () => {
+    const file = join(dataDir, 'edit-test.md');
+    writeFileSync(file, 'Hello, world!\n');
+    const created = await fetch(`${base}/api/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ docId: 'md-1', type: 'markdown' }),
-    });
-    await fetch(`${base}/api/docs/md-1/seed`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ markdown: 'Hello, world!' }),
-    }).then((r) => j(r));
+      body: JSON.stringify({ docId: 'md-1', type: 'markdown', sourceUrl: file }),
+    }).then((r) => j<{ attached: { ok: boolean; seeded?: boolean } }>(r));
+    expect(created.attached?.ok).toBe(true);
+    expect(created.attached?.seeded).toBe(true);
 
-    const seeded = await fetch(`${base}/api/docs/md-1/content`).then((r) =>
+    const loaded = await fetch(`${base}/api/docs/md-1/content`).then((r) =>
       j<{ blocks: { text: string }[] }>(r),
     );
-    expect(seeded.blocks[0]?.text).toBe('Hello, world!');
+    expect(loaded.blocks[0]?.text).toBe('Hello, world!');
 
     await fetch(`${base}/api/docs/md-1/find_and_replace`, {
       method: 'POST',
@@ -145,6 +144,99 @@ describe('server REST', () => {
       j<{ blocks: { text: string }[] }>(r),
     );
     expect(edited.blocks[0]?.text).toBe('Hello, Bryan!');
+  });
+
+  it('rejects POST /api/docs for markdown without sourceUrl', async () => {
+    const r = await fetch(`${base}/api/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId: 'md-no-source', type: 'markdown' }),
+    });
+    expect(r.status).toBe(400);
+    const body = (await r.json()) as { error: string; hint?: string };
+    expect(body.error).toBe('sourceUrl required');
+    expect(body.hint).toContain('sourceUrl');
+  });
+
+  it('insert_blocks_at_anchor parses markdown into sibling blocks', async () => {
+    const file = join(dataDir, 'blocks-at-anchor.md');
+    writeFileSync(file, 'First paragraph.\n\nSecond paragraph.\n');
+    await fetch(`${base}/api/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId: 'md-blocks', type: 'markdown', sourceUrl: file }),
+    }).then((r) => j(r));
+
+    const anchor = await fetch(`${base}/api/docs/md-blocks/agent_anchors`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ find: 'First paragraph.' }),
+    }).then((r) => j<{ anchorId: string }>(r));
+
+    const res = await fetch(
+      `${base}/api/docs/md-blocks/agent_anchors/${encodeURIComponent(anchor.anchorId)}/insert_blocks`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          markdown: '## New section\n\nA paragraph.\n\n| col1 | col2 |\n| --- | --- |\n| A | B |\n',
+        }),
+      },
+    );
+    expect(res.status).toBe(200);
+
+    const content = await fetch(`${base}/api/docs/md-blocks/content`).then((r) =>
+      j<{ blocks: { type: string | null; text: string; headingLevel?: number }[] }>(r),
+    );
+    // The inserted markdown should produce sibling blocks: heading, paragraph, table.
+    // First paragraph is preserved; new blocks land between it and "Second paragraph."
+    const types = content.blocks.map((b) => b.type);
+    expect(types).toContain('heading');
+    expect(types).toContain('table');
+    const heading = content.blocks.find((b) => b.type === 'heading');
+    expect(heading?.headingLevel).toBe(2);
+    expect(heading?.text).toContain('New section');
+    // Critical anti-regression: the first block must NOT swallow the inserted markdown.
+    expect(content.blocks[0]?.text).toBe('First paragraph.');
+  });
+
+  it('docs created with the same setId share the set', async () => {
+    const f1 = join(dataDir, 'set-a.md');
+    const f2 = join(dataDir, 'set-b.md');
+    const f3 = join(dataDir, 'other.md');
+    writeFileSync(f1, '# A\n');
+    writeFileSync(f2, '# B\n');
+    writeFileSync(f3, '# Other\n');
+    await fetch(`${base}/api/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId: 'set-a', type: 'markdown', sourceUrl: f1, setId: 's1' }),
+    }).then((r) => j(r));
+    await fetch(`${base}/api/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId: 'set-b', type: 'markdown', sourceUrl: f2, setId: 's1' }),
+    }).then((r) => j(r));
+    await fetch(`${base}/api/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId: 'other', type: 'markdown', sourceUrl: f3 }),
+    }).then((r) => j(r));
+
+    const list = await fetch(`${base}/api/docs`).then((r) =>
+      j<{ docs: Array<{ docId: string; setId?: string }> }>(r),
+    );
+    const inSet = list.docs.filter((d) => d.setId === 's1').map((d) => d.docId);
+    expect(inSet.sort()).toEqual(['set-a', 'set-b']);
+    const lone = list.docs.find((d) => d.docId === 'other');
+    expect(lone?.setId).toBeUndefined();
+  });
+
+  it('returns 404 for endpoints on a doc that does not exist', async () => {
+    const r1 = await fetch(`${base}/api/docs/nonexistent/content`);
+    expect(r1.status).toBe(404);
+    const r2 = await fetch(`${base}/events/nonexistent`);
+    expect(r2.status).toBe(404);
   });
 
   it('fires webhooks when configured', async () => {
@@ -159,10 +251,17 @@ describe('server REST', () => {
     const hits: unknown[] = [];
     try {
       const webhookUrl = `http://localhost:${sink.port}/hook`;
+      const file = join(dataDir, 'hooked.md');
+      writeFileSync(file, '# hooked\n');
       await fetch(`${base}/api/docs`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ docId: 'hooked-1', type: 'markdown', webhookUrl }),
+        body: JSON.stringify({
+          docId: 'hooked-1',
+          type: 'markdown',
+          sourceUrl: file,
+          webhookUrl,
+        }),
       });
       await fetch(`${base}/api/docs/hooked-1/threads`, {
         method: 'POST',
@@ -180,6 +279,59 @@ describe('server REST', () => {
       expect(payload.docId).toBe('hooked-1');
     } finally {
       sink.stop();
+    }
+  });
+
+  it('returns CORS headers on /api/* responses', async () => {
+    const res = await fetch(`${base}/api/docs`, { method: 'GET' });
+    expect(res.headers.get('access-control-allow-origin')).toBe('*');
+    expect(res.headers.get('access-control-allow-methods')).toContain('POST');
+    expect(res.headers.get('access-control-allow-headers')).toContain('content-type');
+  });
+
+  it('handles OPTIONS preflight', async () => {
+    const res = await fetch(`${base}/api/docs`, {
+      method: 'OPTIONS',
+      headers: {
+        origin: 'http://example.test',
+        'access-control-request-method': 'POST',
+        'access-control-request-headers': 'content-type',
+      },
+    });
+    expect(res.status).toBe(204);
+    expect(res.headers.get('access-control-allow-origin')).toBe('*');
+    expect(res.headers.get('access-control-allow-methods')).toContain('POST');
+  });
+
+  it('hydrates persisted docs into list_docs after a supervisor restart', async () => {
+    const created = await j<{ docId: string }>(
+      await fetch(`${base}/api/docs`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ docId: 'hydrate-test', type: 'mockup' }),
+      }),
+    );
+    expect(created.docId).toBe('hydrate-test');
+    // Yjs snapshot debounce + writeFileSync cycle. Poll until the file
+    // appears rather than racing a fixed sleep.
+    const ydocPath = join(dataDir, 'hydrate-test.ydoc');
+    for (let i = 0; i < 30 && !existsSync(ydocPath); i++) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(existsSync(ydocPath)).toBe(true);
+
+    // Spin up a second server pointed at the same dataDir — simulates a
+    // bun --watch reload. The new instance starts with an empty rooms map
+    // and must hydrate from disk so list_docs is accurate.
+    const second = createServer({ port: 0, dataDir });
+    try {
+      const list = await j<{ docs: { docId: string }[] }>(
+        await fetch(`http://localhost:${second.port}/api/docs`),
+      );
+      const ids = list.docs.map((d) => d.docId);
+      expect(ids).toContain('hydrate-test');
+    } finally {
+      await second.stop();
     }
   });
 });

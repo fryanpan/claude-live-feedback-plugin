@@ -43,10 +43,29 @@ export interface WidgetOpts {
 const TAG = 'claude-feedback-widget';
 const IGNORE_ATTR = 'data-feedback-widget';
 
+// The host page and the live-feedback server normally live on different ports
+// (e.g. Astro dev :4321 vs LF :8788). The widget bundle is served by the LF
+// server, so its script origin is the right default for the WS server URL.
+// Captured at top-level evaluation time, when document.currentScript still
+// points at the loading <script> tag.
+const BUNDLE_ORIGIN: string | null = (() => {
+  try {
+    const s = document.currentScript as HTMLScriptElement | null;
+    if (s?.src) return new URL(s.src).origin;
+  } catch {}
+  return null;
+})();
+
+function defaultServerUrl(): string {
+  if (BUNDLE_ORIGIN) return BUNDLE_ORIGIN.replace(/^http/, 'ws');
+  return `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`;
+}
+
 class FeedbackWidgetEl extends HTMLElement {
   private shadow: ShadowRoot;
   private client: WidgetClient | null = null;
   private user: User | null = null;
+  private initialized = false;
   private opts: WidgetOpts & { serverUrl: string; user: string | null } = {
     serverUrl: '',
     docId: '',
@@ -69,6 +88,8 @@ class FeedbackWidgetEl extends HTMLElement {
   private rafId: number | null = null;
   private resizeHandler: (() => void) | null = null;
   private scrollHandler: (() => void) | null = null;
+  private vvHandler: (() => void) | null = null;
+  private showResolved = false;
 
   constructor() {
     super();
@@ -76,22 +97,44 @@ class FeedbackWidgetEl extends HTMLElement {
   }
 
   init(opts: WidgetOpts): void {
+    if (this.initialized) return;
+    this.initialized = true;
     this.opts.docId = opts.docId;
     this.opts.user = opts.user ?? null;
-    this.opts.serverUrl =
-      opts.serverUrl ?? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`;
+    this.opts.serverUrl = opts.serverUrl ?? defaultServerUrl();
     this.user = resolveUser(this.opts.user ?? null, {
       get: (k) => localStorage.getItem(`cfw:${k}`),
       set: (k, v) => localStorage.setItem(`cfw:${k}`, v),
     });
+    this.showResolved = localStorage.getItem('cfw:showResolved') === '1';
     this.currentContext = {
       url: currentUrl(),
       ...(opts.context?.view ? { view: opts.context.view } : {}),
     };
     this.wireHistoryListeners();
+    this.wireVisualViewport();
     this.renderShell();
     this.connect();
     this.startObserver();
+  }
+
+  // Auto-initialize from HTML attributes. Lets the canonical "drop in a tag +
+  // a script" pattern just work without a separate init() call. The element
+  // upgrades on parse, connectedCallback fires once the parser has set
+  // attributes, and we derive opts from them. Programmatic FeedbackWidget.init
+  // remains supported and is idempotent thanks to the flag in init().
+  connectedCallback(): void {
+    if (this.initialized) return;
+    const docId = this.getAttribute('doc-id');
+    if (!docId) return;
+    const opts: WidgetOpts = { docId };
+    const user = this.getAttribute('user');
+    if (user !== null) opts.user = user;
+    const serverUrl = this.getAttribute('server-url');
+    if (serverUrl) opts.serverUrl = serverUrl;
+    const view = this.getAttribute('view');
+    if (view) opts.context = { view };
+    this.init(opts);
   }
 
   /**
@@ -116,6 +159,24 @@ class FeedbackWidgetEl extends HTMLElement {
 
   getContext(): AnchorContext {
     return { ...this.currentContext };
+  }
+
+  // Mobile Safari overlays the URL bar on top of `position: fixed` content
+  // when the layout viewport is taller than the visual viewport. Without this
+  // the FAB hides behind the URL bar on first paint until the user scrolls.
+  // The same fix handles iOS keyboard pop-up moving the visual viewport up.
+  private wireVisualViewport(): void {
+    if (this.vvHandler) return;
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const update = () => {
+      const overlap = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+      this.style.setProperty('--lf-vv-bottom', `${Math.round(overlap)}px`);
+    };
+    this.vvHandler = update;
+    vv.addEventListener('resize', update);
+    vv.addEventListener('scroll', update);
+    update();
   }
 
   private wireHistoryListeners(): void {
@@ -166,6 +227,12 @@ class FeedbackWidgetEl extends HTMLElement {
     if (this.scrollHandler) {
       try {
         window.removeEventListener('scroll', this.scrollHandler);
+      } catch {}
+    }
+    if (this.vvHandler && window.visualViewport) {
+      try {
+        window.visualViewport.removeEventListener('resize', this.vvHandler);
+        window.visualViewport.removeEventListener('scroll', this.vvHandler);
       } catch {}
     }
   }
@@ -441,6 +508,11 @@ class FeedbackWidgetEl extends HTMLElement {
         continue;
       }
       annotated.push({ thread: t, status: statusBase, el: res.element });
+      // Hide pins for resolved threads by default — they pile up visual
+      // noise on the page during iteration. The thread still flows into
+      // the panel list (where it's collapsed under a "Show resolved (N)"
+      // toggle), so reopening is one click away.
+      if (statusBase === 'resolved' && !this.showResolved) continue;
       const pin = document.createElement('div');
       pin.setAttribute(IGNORE_ATTR, '');
       pin.className = 'cfw-pin';
@@ -506,7 +578,7 @@ class FeedbackWidgetEl extends HTMLElement {
       list.appendChild(e);
       return;
     }
-    for (const key of ['open', 'orphan', 'resolved'] as const) {
+    for (const key of ['open', 'orphan'] as const) {
       const group = groups[key];
       if (!group.length) continue;
       const h = document.createElement('div');
@@ -515,6 +587,26 @@ class FeedbackWidgetEl extends HTMLElement {
       list.appendChild(h);
       for (const { thread, status } of group) {
         list.appendChild(this.renderThreadRow(thread, status));
+      }
+    }
+    if (groups.resolved.length) {
+      const toggle = document.createElement('button');
+      toggle.type = 'button';
+      toggle.className = 'resolved-toggle';
+      toggle.textContent = this.showResolved
+        ? `Hide resolved (${groups.resolved.length})`
+        : `Show resolved (${groups.resolved.length})`;
+      toggle.addEventListener('click', () => {
+        this.showResolved = !this.showResolved;
+        localStorage.setItem('cfw:showResolved', this.showResolved ? '1' : '0');
+        // Rerender to flip pins on/off and the resolved group visibility
+        this.scheduleRender();
+      });
+      list.appendChild(toggle);
+      if (this.showResolved) {
+        for (const { thread, status } of groups.resolved) {
+          list.appendChild(this.renderThreadRow(thread, status));
+        }
       }
     }
   }
@@ -711,12 +803,20 @@ declare global {
   }
 }
 
+// Register the custom element on bundle load — independent of any init() call.
+// This way an HTML-author who drops `<claude-feedback-widget doc-id="...">`
+// into a page gets the element upgraded immediately; connectedCallback then
+// auto-inits from attributes. The script-tag-plus-init pattern still works.
+if (!customElements.get(TAG)) customElements.define(TAG, FeedbackWidgetEl);
+
 const FeedbackWidget = {
   /** Install + start the widget. Safe to call multiple times (idempotent). */
   init(opts: WidgetOpts): FeedbackWidgetEl {
-    if (!customElements.get(TAG)) customElements.define(TAG, FeedbackWidgetEl);
     const existing = document.querySelector(TAG) as FeedbackWidgetEl | null;
-    if (existing) return existing;
+    if (existing) {
+      existing.init(opts);
+      return existing;
+    }
     const el = document.createElement(TAG) as FeedbackWidgetEl;
     el.setAttribute(IGNORE_ATTR, '');
     document.body.appendChild(el);

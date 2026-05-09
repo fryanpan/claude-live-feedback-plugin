@@ -1,147 +1,80 @@
-# claude-live-feedback-plugin (Prototype!)
+# Claude Live Feedback Plugin
 
-## Goal: Smoother Iterative Remote Review with Claude
+A Claude Code plugin that lets people and a Claude Code instance securely co-edit a Markdown document, mockup, or live dev server **on the same surface, in real time** — point at a line, leave a comment, watch the agent's edit land within seconds.
 
-This plugin lets you work iteratively and remotely with Claude on reviewing Markdown documents, interactive mockups, and dev server previews of your live web app.
+## Goal: Faster Remote Iteration with Claude
 
-Claude gives you a secure link to the doc, mockup or dev server you're working together on (via Tailscale if you're not on local network).
+Giving feedback to vanilla Claude Code is slow, especially on a development server or live mockup — it takes work to explain what elements you're looking at, and then you need to translate that to a prompt.
 
-And then it listens to comments (via <link class="null" href="https://code.claude.com/docs/en/channels" rel="noopener noreferrer" target="_blank" title="null">channels</link>) and can immediately address your feedback live.  Meanwhile you can keep reading (or with markdown, you can also edit directly yourself at the same time as Claude).
+This plugin is inspired by Claude Design, Nimbalyst, Antigravity and other tools that have a more integrated workflow; however, instead of a bulky heavy-weight tool, this is a lightweight plugin that you can spin up in any Claude Code session.
 
-This is a companion plugin to the <link class="null" href="https://github.com/fryanpan/ai-project-support" rel="noopener noreferrer" target="_blank" title="null">ai-project-support</link> project, which makes it easier to work with a team of agents locally or remotely, with a team lead agent, with all agents backed by git repos and running Claude Code sessions.
+The plugin lets you work interactively with Claude on each of the following:
 
-## Before This Plugin
+- **Markdown docs** to plan with or give context to Claude. You can also edit the doc in real-time at the same time as Claude.
+- **Interactive mockups** for UX design iteration while planning with Claude.
+- **Development servers** for testing and improving features with Claude.
 
-Before this plugin existed, if I was working remotely (which I often do while funemployed!), I couldn't read access any development artifacts to give feedback.  
+You point at an element and tell Claude what to change, and a minute later, Claude updates what you're looking at.
 
-Sometimes, I made do working with Claude remotely using Notion pages, but Notion is pretty heavyweight and clunky for Claude to interact with (Claude regularly struggles with the size of the API and the page structure)
+If you've used [Claude Design](https://claude.ai/design), there's some overlap; however, this plugin is mainly meant to:
 
-## Alternatives
+- **Integrate directly into your code repo.** No translation needed from Claude Design on the design. The requests you make get implemented directly in code, not just in the mockup.
+- **Work on artifacts throughout the plan/design, implement, and test cycle.**
 
-If you didn't need the full power of synchronous, live editing and comments going directly to Claude, I probably could have mounted my development folders in Dropbox (or other cloud fileshare) and read them remotely.
+Note that this plugin does **not** work with code yet, but could be extended to do so. On my personal projects, I've stopped writing code and review code in larger batches after multiple features land in an IDE. So I do not need to do this regularly any more.
 
-<link class="null" href="https://claude.ai/design" rel="noopener noreferrer" target="_blank" title="null">Claude Design</link> is also a fun prototype, but I've found that for the projects I'm working on now, Claude Design performs worse than using Claude Code Opus 4.7 in repo, with the ability to look at the web app running with actual data in Chrome.  And iterating there.  Instead of iterating on mockups and having one more level of indirection and trying to manage context transfer between disjoint tools.
+## Installation
 
-## What's in the box
+1. Clone this plugin to a local folder:
 
-- **Markdown review** — a browser-based WYSIWYG editor backed by a file on disk. Open `/review/<docId>?as=<name>` from any device on your Tailnet or LAN. Comments anchor to text ranges and survive concurrent edits via CRDT. Bidirectional disk sync keeps your repo's `.md` in lockstep with the live editor.
-- **UX / mockup widget** — one `<script>` tag (web component, shadow-DOM isolated) drops comment threads onto any HTML page. Anchors include page URL + optional view state so one `docId` can span a multi-page site or SPA.
-- **Agent tool surface** — an MCP server the plugin installs into Claude Code. Agent can `get_doc`, `find_and_replace`, `rewrite_thread_region`, `insert_blocks_after_thread`, `delete_block_at_anchor`, `delete_blocks_in_range`, `delete_section`, `seed_doc`, `attach_file`, and more.
-- **Claude Code channel** — thread events (`thread.created` / `thread.replied` / `thread.resolved` / `thread.reopened`) arrive in the agent's session as `<channel source="live-feedback" ...>` messages. The agent reacts the same way it would to any peer ping.
+   ```sh
+   git clone https://github.com/fryanpan/claude-live-feedback-plugin.git
+   cd claude-live-feedback-plugin
+   bun install
+   ```
 
-## Architecture
+2. Enable channel events for live-feedback. Add this one-line alias to your shell init file (e.g., `~/.zshrc`):
 
-```mermaid
-flowchart LR
-  subgraph Reviewer["Reviewer (any device on your network)"]
-    Browser["Browser: Tiptap editor<br/>OR widget on a mockup"]
-  end
+   ```sh
+   claude() { /path/to/claude --dangerously-load-development-channels plugin:live-feedback@claude-live-feedback "$@"; }
+   ```
 
-  subgraph Host["Host machine"]
-    Server["HTTP + WebSocket server<br/>(Bun)"]
-    Yjs["Yjs rooms<br/>(CRDT state)"]
-    Disk[(.md files)]
-    Persist[(Yjs updates<br/>on disk)]
-  end
+   Reload your shell (`source ~/.zshrc`) and relaunch Claude Code.
 
-  subgraph CC["Claude Code session"]
-    Agent["Claude agent"]
-    MCP["live-feedback-mcp<br/>(stdio)"]
-  end
+3. Install the plugin at the user level. From the cloned plugin directory:
 
-  Browser <-->|"WebSocket<br/>(y-protocol sync)"| Yjs
-  Server --- Yjs
-  Yjs <-->|"bidirectional sync<br/>+ debounced"| Disk
-  Yjs --> Persist
-  Server -->|"SSE<br/>thread events"| MCP
-  MCP -->|"notifications/claude/channel"| Agent
-  Agent -->|"MCP tool calls<br/>(edit, reply, resolve)"| MCP
-  MCP -->|"REST"| Server
-```
+   ```sh
+   cd packages/mcp && npm link && cd ../..
+   claude plugin marketplace add .
+   claude plugin install live-feedback@claude-live-feedback --scope user
+   ```
 
-Yjs is the source of truth at runtime. Disk is authoritative at rest: every prose change flushes to the `.md` file within ~1 second, and external edits to that file (VS Code, git pull, another agent) flow back into the live doc within ~1 second via `fs.watch`. Claude sees comments as channel events pushed via the MCP's `notifications/claude/channel` capability.
+   The `npm link` step registers the `live-feedback-mcp` binary on your PATH so Claude Code can resolve it. The two `claude` commands register this repo as a local plugin marketplace and install the plugin user-wide.
 
-## Install
+4. Use the plugin by asking Claude like this:
+   - "Show me the doc &lt;your doc name&gt; with live feedback"
+   - "Show me a mockup with live feedback"
+   - "Show me the dev server with live feedback"
 
-### One-time setup (on the host machine that'll run the review server)
+## What It Does Under The Hood
 
-```
-git clone https://github.com/fryanpan/claude-live-feedback-plugin.git
-cd claude-live-feedback-plugin
-bun install
-bun run bootstrap    # wires up npm link, adds marketplace, installs plugin at user scope
-```
+- **Uses [Claude Channels](https://code.claude.com/docs/en/channels) for messaging.** Comments arrive at the agent's session as `<channel source="live-feedback" ...>` events the same way GitHub mentions and CI failures do — no polling, no MCP tool round-trips just to check inbox. The agent typically posts a reply or lands an edit within a few seconds of you clicking "send."
+- **Surface-anchored, not chat-anchored.** Every comment carries a CRDT anchor to the exact text range or DOM element you're discussing. When the agent edits, we try to keep anchors stable and attached. This could use some more work.
+- **Primitives, not bespoke flows.** The MCP surface is small and composable: `get_doc`, `find_and_replace`, `create_anchor`, `edit_at_anchor`, `rewrite_thread_region`, `post_reply`. Agents stitch them however the workflow needs.
 
-That script does:
+## What it's not
 
-1. `cd packages/mcp && npm link` — so `live-feedback-mcp` resolves on your PATH.
-2. `claude plugin marketplace add .` — adds this repo as a local marketplace.
-3. `claude plugin install live-feedback@claude-live-feedback --scope user` — enables the plugin for every Claude Code session on this machine.
-
-### Enable channel events in Claude Code (one-line shell edit)
-
-Claude Code requires an explicit opt-in per session for plugins that emit channel events. Add this flag to however you launch `claude`:
-
-```
---dangerously-load-development-channels plugin:live-feedback@claude-live-feedback
-```
-
-e.g. in your `~/.zshrc`:
-
-```
-claude() {
-  /path/to/claude \
-    --dangerously-load-development-channels plugin:live-feedback@claude-live-feedback \
-    "$@"
-}
-```
-
-Then `source ~/.zshrc` and relaunch Claude Code.
-
-## Run
-
-```
-bun run dev
-```
-
-Starts the feedback server + watches source files for live reload. Prints URLs for every way to reach it:
-
-```
- local:      http://localhost:<port>
- tailscale:  http://<host>.<tailnet>.ts.net:<port>
- lan:        http://<host>.local:<port>
-```
-
-Open any URL in a browser. To review a markdown file from your repo:
-
-```
-# In a Claude Code session
-attach_file({ docId: "my-review", path: "/abs/path/to/doc.md" })
-# Then open:  http://.../review/my-review?as=<name>
-```
-
-## Skills shipped with the plugin
-
-- **`embedding-feedback-widget`** — fires when the agent is asked to generate a mockup or sample page. Wires the widget with the right `docId` / `setContext` pattern.
-- **`editing-review-docs`** — fires before the agent edits a `.md` file. Checks whether the file is under live review and routes edits through MCP tools instead of `Edit`/`Write` if so, preventing divergence.
-
-Plus two slash commands: `/feedback-serve`, `/feedback-threads`.
-
-## Access model
-
-No public tunnels. Reviewers reach the host over **Tailscale** (private WireGuard mesh, "MagicDNS" handles the hostname) or on the same **local network** (mDNS / LAN IP). If you want public access, add a tunnel of your choice (Cloudflare, ngrok, Caddy) — the server is just HTTP.
+- **Not a hosted SaaS.** The server runs on your machine, on your network. Reviewers reach you over Tailscale or LAN. No public tunnel by default.
+- **Not a replacement for issue trackers.** This is for the inner loop — minutes-to-hours iterative review, not days-to-weeks ticket lifecycles. However, at least on personal projects, where the speed I can build things is faster than I can come up with ideas to build, I have mostly stopped using issue trackers.
+- **Not framework-specific.** The widget is a vanilla web component (Shadow DOM); inject one `<script>` tag into any HTML page.
 
 ## Status
 
-Working alpha, used for small reviews between me and my own agents. See [docs/product/vision.md](docs/product/vision.md) for the fuller problem framing and [docs/product/plans/mvp-plan.md](docs/product/plans/mvp-plan.md) for what shipped.
+v0.0.1 — alpha. Working well enough to be barely useful.
 
-Current limitations:
-
-- Plugin is installed from a local clone; not yet published. `npm link` bridges it for now. `npm publish` of the `@fryanpan/live-feedback-mcp` binary would let remote users skip the clone.
-- Inline marks (bold/italic/link) round-trip as plain text through the file serializer.
-- Cross-block ranges on `rewrite_thread_region` are rejected; fall back to `find_and_replace`.
+- Inline marks (bold / italic / link / strike) round-trip cleanly; cross-block `rewrite_thread_region` falls back to `find_and_replace`.
+- Disk ↔ doc sync is bidirectional via `fs.watch` + debounced 800ms write-back, with a `lastWritten` cache to break echo loops.
 
 ## License
 
 [MIT](LICENSE)
-

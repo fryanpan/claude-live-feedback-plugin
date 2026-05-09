@@ -13,6 +13,7 @@ import {
   parseMarkdownBlocks,
   readAgentAnchor,
   rewriteRange,
+  serializeFragmentToMarkdown,
   walkProse,
 } from '../src/prose.ts';
 
@@ -791,5 +792,73 @@ describe('deleteSection', () => {
     const res = deleteSection(doc, { heading: 'X' });
     expect(res.ok).toBe(true);
     expect(txCount).toBe(1);
+  });
+});
+
+describe('YAML frontmatter round-trip', () => {
+  function roundTrip(md: string): string {
+    const doc = new Y.Doc();
+    const fragment = getProseFragment(doc);
+    const blocks = parseMarkdownBlocks(md);
+    doc.transact(() => fragment.push(blocks));
+    return serializeFragmentToMarkdown(fragment);
+  }
+
+  it('preserves clean frontmatter without inserting blank lines', () => {
+    const input = '---\ntitle: Welcome\nlang: en\n---\n\n# About\n\nBody text.\n';
+    const out = roundTrip(input);
+    expect(out).toBe('---\ntitle: Welcome\nlang: en\n---\n\n# About\n\nBody text.\n');
+  });
+
+  it('self-heals frontmatter that already has blank lines between values', () => {
+    const input = '---\n\nlang: en\n\n---\n\n# About\n';
+    const out = roundTrip(input);
+    expect(out).toBe('---\nlang: en\n---\n\n# About\n');
+  });
+
+  it('leaves a horizontal rule in body content alone', () => {
+    const input = '# Heading\n\nBody A\n\n---\n\nBody B\n';
+    const out = roundTrip(input);
+    expect(out).toBe('# Heading\n\nBody A\n\n---\n\nBody B\n');
+  });
+
+  it('treats a leading hr without a closing hr as a normal horizontal rule', () => {
+    const input = '---\n\n# Just a heading\n';
+    const out = roundTrip(input);
+    expect(out).toBe('---\n\n# Just a heading\n');
+  });
+});
+
+describe('YAML frontmatter — legacy in-Yjs shape', () => {
+  it('serializes legacy [hr, paragraphs, hr] without inserting blank lines (back-compat)', () => {
+    // Docs seeded by the OLD parser have frontmatter as [horizontalRule,
+    // paragraph(\"key: value\"), horizontalRule] in Yjs. The serializer
+    // recognizes that shape at the start of the fragment and emits
+    // `---\nkeys\n---` so they keep round-tripping cleanly without a
+    // re-seed.
+    const doc = new Y.Doc();
+    const frag = getProseFragment(doc);
+    doc.transact(() => {
+      frag.push([new Y.XmlElement('horizontalRule')]);
+      const p1 = new Y.XmlElement('paragraph');
+      const t1 = new Y.XmlText();
+      t1.insert(0, 'title: Welcome');
+      p1.insert(0, [t1]);
+      frag.push([p1]);
+      const p2 = new Y.XmlElement('paragraph');
+      const t2 = new Y.XmlText();
+      t2.insert(0, 'lang: en');
+      p2.insert(0, [t2]);
+      frag.push([p2]);
+      frag.push([new Y.XmlElement('horizontalRule')]);
+      const h = new Y.XmlElement('heading');
+      h.setAttribute('level', '1');
+      const ht = new Y.XmlText();
+      ht.insert(0, 'About');
+      h.insert(0, [ht]);
+      frag.push([h]);
+    });
+    const out = serializeFragmentToMarkdown(frag);
+    expect(out).toBe('---\ntitle: Welcome\nlang: en\n---\n\n# About\n');
   });
 });

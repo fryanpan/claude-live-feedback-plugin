@@ -39,7 +39,8 @@ export function readDocMeta(doc: Y.Doc): DocMeta {
   const createdAt = (m.get('createdAt') as number) ?? Date.now();
   const sourceUrl = m.get('sourceUrl') as string | undefined;
   const title = m.get('title') as string | undefined;
-  return { docId, type, createdAt, sourceUrl, title };
+  const setId = m.get('setId') as string | undefined;
+  return { docId, type, createdAt, sourceUrl, title, setId };
 }
 
 export function initDocMeta(doc: Y.Doc, meta: DocMeta): void {
@@ -50,6 +51,7 @@ export function initDocMeta(doc: Y.Doc, meta: DocMeta): void {
     if (!m.has('createdAt')) m.set('createdAt', meta.createdAt);
     if (meta.sourceUrl !== undefined) m.set('sourceUrl', meta.sourceUrl);
     if (meta.title !== undefined) m.set('title', meta.title);
+    if (meta.setId !== undefined) m.set('setId', meta.setId);
   });
 }
 

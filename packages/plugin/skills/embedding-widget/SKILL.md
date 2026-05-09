@@ -12,8 +12,31 @@ exactly; the widget relies on them to attach comments correctly.
 
 ## Base setup (every page)
 
-Put these two `<script>` tags at the **end of `<body>`**, after all the
-page content has rendered:
+The simplest embed is one element + one script tag:
+
+```html
+<claude-feedback-widget doc-id="<DOC_ID>" user="bryan"></claude-feedback-widget>
+<script src="http://<lf-server-host>:8788/widget.iife.js"></script>
+```
+
+- The bundle registers the custom element at load time. The element's
+  `connectedCallback` reads attributes and auto-initializes — no JS call
+  required from the consumer.
+- The widget's WebSocket defaults to the **bundle's origin** (where the
+  script came from), so dev-server pages on a different port still reach
+  the LF server without a `server-url` attribute.
+- `docId` names the review session. One `docId` per conceptual project,
+  shared across all pages of that project.
+- `user` self-identifies the reviewer; omit for anonymous.
+- The widget auto-captures `location.pathname + location.search +
+  location.hash` as each new comment's `context.url` — no manual
+  per-page config needed.
+
+### Programmatic init (when you need conditional setup)
+
+If you need to derive `docId` or `user` at runtime — e.g. from a query
+parameter — call `FeedbackWidget.init` instead. Idempotent; safe to call
+even if a `<claude-feedback-widget>` element is already in the DOM.
 
 ```html
 <script src="/widget.iife.js"></script>
@@ -28,13 +51,14 @@ page content has rendered:
 </script>
 ```
 
-- `docId` names the review session. One `docId` per conceptual project,
-  shared across all pages of that project.
-- `user` comes from the `?as=<name>` query parameter so reviewers can
-  self-identify; leave it `null` for anonymous.
-- The widget auto-captures `location.pathname + location.search +
-  location.hash` as each new comment's `context.url` — no manual
-  per-page config needed.
+### Supported element attributes
+
+| Attribute | Maps to opt | Notes |
+|---|---|---|
+| `doc-id` | `docId` | required |
+| `user` | `user` | optional; omit for anonymous |
+| `server-url` | `serverUrl` | optional; defaults to bundle origin |
+| `view` | `context.view` | optional; SPA modal/tab state |
 
 ## Multi-page sites — same docId, let context do the filtering
 

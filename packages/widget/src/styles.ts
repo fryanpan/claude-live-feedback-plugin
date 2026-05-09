@@ -3,13 +3,13 @@
  * Kept as a TS string so the build can tree-shake it into the bundle.
  */
 export const widgetStyles = `
-:host { all: initial; }
+:host { all: initial; --lf-vv-bottom: 0px; }
 * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif; }
 
 .fab {
   position: fixed;
-  right: 18px;
-  bottom: 18px;
+  right: max(18px, env(safe-area-inset-right));
+  bottom: calc(var(--lf-vv-bottom) + max(18px, env(safe-area-inset-bottom)));
   width: 48px;
   height: 48px;
   border-radius: 50%;
@@ -31,8 +31,8 @@ export const widgetStyles = `
 
 .panel {
   position: fixed;
-  right: 16px;
-  bottom: 82px;
+  right: max(16px, env(safe-area-inset-right));
+  bottom: calc(var(--lf-vv-bottom) + max(82px, calc(env(safe-area-inset-bottom) + 82px)));
   width: 340px;
   max-height: 70vh;
   background: #fff;
@@ -116,6 +116,20 @@ export const widgetStyles = `
   overflow-y: auto;
   flex: 1;
 }
+.resolved-toggle {
+  display: block;
+  width: calc(100% - 12px);
+  margin: 8px 6px;
+  padding: 6px 8px;
+  background: transparent;
+  border: 1px dashed #d1d5da;
+  border-radius: 6px;
+  color: #6e7781;
+  font-size: 11px;
+  cursor: pointer;
+  text-align: center;
+}
+.resolved-toggle:hover { color: #1b1f23; border-color: #afb8c1; }
 .section-heading {
   font-size: 10px;
   font-weight: 600;
@@ -259,7 +273,7 @@ export const widgetStyles = `
 }
 .picker-banner {
   position: fixed;
-  top: 12px;
+  top: max(12px, calc(env(safe-area-inset-top) + 12px));
   left: 50%;
   transform: translateX(-50%);
   z-index: 2147483647;
