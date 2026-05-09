@@ -1,6 +1,6 @@
 {
   "name": "@fryanpan/live-feedback-mcp",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "MCP stdio server for claude-live-feedback-plugin. Lets Claude Code agents observe and reply to review comments.",
   "type": "module",
   "bin": {
