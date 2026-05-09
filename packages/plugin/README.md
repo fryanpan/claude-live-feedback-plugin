@@ -133,8 +133,10 @@ tunnels, no certs. For a phone-simulator viewport on desktop append
 - `editing-review-docs` — auto-invokes before Claude edits a `.md`
   file. Checks `list_docs` to see if the file is bound to a live
   review doc, and if so routes edits through `find_and_replace` /
-  `rewrite_thread_region` / `insert_blocks_after_thread` so the
-  reviewer sees changes land surgically rather than as a full reflow.
+  `rewrite_thread_region` / `insert_blocks_after_thread` /
+  `delete_block_at_anchor` / `delete_blocks_in_range` / `delete_section`
+  so the reviewer sees changes land surgically rather than as a full
+  reflow.
 
 ## Widget integration
 

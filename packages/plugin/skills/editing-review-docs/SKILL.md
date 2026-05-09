@@ -56,6 +56,19 @@ Pick the smallest tool that does the job:
 - **Insert a new block after a comment's block** →
   `insert_blocks_after_thread(docId, threadId, markdown)`. Accepts GFM
   including tables.
+- **Delete the block a comment / anchor points at** →
+  `delete_block_at_anchor(docId, { threadId | anchorId })`. Use this
+  when an empty-string `find_and_replace` would leave a blank block
+  element behind.
+- **Delete every block between two find strings** →
+  `delete_blocks_in_range(docId, startFind, endFind, …)`.
+  Block-inclusive — a partial match deletes the whole containing
+  block. Useful for trailing template cruft.
+- **Delete a whole heading-bound section** →
+  `delete_section(docId, heading, { level?, occurrence? })`. Removes
+  the heading plus every following top-level block until the next
+  heading at level ≤ the start heading's. Highest-leverage tool for
+  "delete the X section" requests.
 - **Batch edits across the doc** → `create_anchor(docId, find, …)` to
   pin positions, then `edit_at_anchor(docId, anchorId, …)` for each.
   Anchors survive intermediate user edits. **`edit_at_anchor` is

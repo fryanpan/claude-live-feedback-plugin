@@ -35,6 +35,9 @@ The MCP surface is intentionally primitive — agents compose these into whateve
 - `find_and_replace(docId, find, replace, { contextBefore?, contextAfter?, occurrence? })` — text edits across all block types including table cells.
 - `rewrite_thread_region(docId, threadId, replacement)` — replace exactly the range a comment is anchored to.
 - `insert_after_thread(docId, threadId, text)` / `insert_blocks_after_thread(docId, threadId, markdown)` — append after a comment's host block. Block form accepts GFM.
+- `delete_block_at_anchor(docId, { threadId | anchorId })` — remove the (innermost containing) block an anchor points at.
+- `delete_blocks_in_range(docId, startFind, endFind, …)` — remove every top-level block from the start match through the end match. Block-inclusive (partial match deletes the whole containing block).
+- `delete_section(docId, heading, { level?, occurrence? })` — heading-aware: delete a heading plus every following top-level block until the next heading at level ≤ that heading's.
 - `reparse_from_disk(docId)` — discard live state and reload the bound file. Useful when an external write happened that you want to force-load.
 
 **Anchors (agent-issued, survive intermediate edits)**

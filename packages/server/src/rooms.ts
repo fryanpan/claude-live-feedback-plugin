@@ -634,6 +634,58 @@ export class Rooms {
   }
 
   /**
+   * Delete the single block containing a thread's anchored range. Use
+   * for "remove the paragraph this comment points at." Empty-string
+   * find_and_replace cannot do this — it removes text but leaves the
+   * empty block element behind.
+   */
+  deleteBlockAtThread(docId: string, threadId: string): prose.DeleteBlockResult {
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'anchor-orphaned' };
+    const thread = this.getThread(docId, threadId);
+    if (!thread) return { ok: false, error: 'anchor-orphaned' };
+    if (thread.anchor.kind !== 'text-range') return { ok: false, error: 'anchor-orphaned' };
+    return prose.deleteBlockAtAnchor(room.ydoc, { anchorRel: thread.anchor.startRel });
+  }
+
+  /** Same, keyed on an agent anchor. */
+  deleteBlockAtAgentAnchor(docId: string, anchorId: string): prose.DeleteBlockResult {
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'anchor-orphaned' };
+    const anchor = prose.readAgentAnchor(room.ydoc, anchorId);
+    if (!anchor) return { ok: false, error: 'anchor-orphaned' };
+    return prose.deleteBlockAtAnchor(room.ydoc, { anchorRel: anchor.startRel });
+  }
+
+  /** Delete every top-level block from start match through end match.
+   *  Block-inclusive — partial match still deletes the whole block. */
+  deleteBlocksInRange(
+    docId: string,
+    opts: {
+      startFind: string;
+      endFind: string;
+      contextBefore?: string;
+      contextAfter?: string;
+      startOccurrence?: number;
+      endOccurrence?: number;
+    },
+  ): prose.DeleteBlocksInRangeResult {
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'no-match' };
+    return prose.deleteBlocksInRange(room.ydoc, opts);
+  }
+
+  /** Delete a heading block + everything until the next heading at ≤ level. */
+  deleteSection(
+    docId: string,
+    opts: { heading: string; level?: number; occurrence?: number },
+  ): prose.DeleteSectionResult {
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'no-match' };
+    return prose.deleteSection(room.ydoc, opts);
+  }
+
+  /**
    * Sweep every text-range thread in a doc and best-effort re-anchor
    * the ones whose Y.RelativePosition no longer resolves. Idempotent —
    * safe to call on every significant doc change.
