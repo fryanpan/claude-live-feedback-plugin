@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ElementAnchor, User } from '@feedback/core';
@@ -330,6 +330,62 @@ describe('server REST', () => {
       );
       const ids = list.docs.map((d) => d.docId);
       expect(ids).toContain('hydrate-test');
+    } finally {
+      await second.stop();
+    }
+  });
+
+  it('re-attaches file bindings after restart so disk write-back resumes (regression: 2026-05-09)', async () => {
+    // Bug: hydrateFromDisk used to load Yjs state but skip attachFile, so
+    // every supervisor restart left bound markdown docs with their listener
+    // wiring missing — reads worked, observeDeep never fired, disk drifted
+    // silently behind the live editor. Fix: hydrateFromDisk now auto-rebinds
+    // any markdown doc whose sourceUrl points at an existing file.
+    const mdPath = join(dataDir, 'rebind-test.md');
+    writeFileSync(mdPath, '# initial\n');
+    const created = await j<{ docId: string }>(
+      await fetch(`${base}/api/docs`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          docId: 'rebind-test',
+          type: 'markdown',
+          sourceUrl: mdPath,
+        }),
+      }),
+    );
+    expect(created.docId).toBe('rebind-test');
+    // Wait for initial Yjs persistence to disk.
+    const ydocPath = join(dataDir, 'rebind-test.ydoc');
+    for (let i = 0; i < 30 && !existsSync(ydocPath); i++) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(existsSync(ydocPath)).toBe(true);
+
+    // Simulate a supervisor restart: spin up a second server on the same
+    // dataDir without re-calling create_review_doc.
+    const second = createServer({ port: 0, dataDir });
+    try {
+      // Trigger a Yjs mutation via find_and_replace. With the bug, the
+      // observeDeep listener wouldn't be wired, so this would land in
+      // memory but never reach disk.
+      const fr = await fetch(
+        `http://localhost:${second.port}/api/docs/rebind-test/find_and_replace`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ find: 'initial', replace: 'after-restart' }),
+        },
+      );
+      expect(fr.status).toBe(200);
+      // Wait for the debounced write-back (800ms + slack).
+      for (let i = 0; i < 30; i++) {
+        const md = readFileSync(mdPath, 'utf8');
+        if (md.includes('after-restart')) break;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      const md = readFileSync(mdPath, 'utf8');
+      expect(md).toContain('after-restart');
     } finally {
       await second.stop();
     }
