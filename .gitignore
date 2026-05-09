@@ -8,6 +8,7 @@ build/
 .DS_Store
 .bun-cache/
 .claude/discord/
+.claude/scheduled_tasks.lock
 .envrc
 .worktrees/
 __pycache__/
