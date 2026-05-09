@@ -92,24 +92,39 @@ export class Rooms {
   // last supervisor restart, which is misleading (every `bun --watch`
   // reload silently shrinks the result). Load every persisted doc into
   // memory at startup so discovery via list_docs is always accurate.
-  // File-bound markdown rooms aren't auto-rebound here — that needs an
-  // existsSync check on sourceUrl and would be surprising on restart for
-  // files that have moved. Callers re-bind via create_review_doc when
-  // they want disk write-back to resume.
+  // File-bound markdown rooms re-attach automatically when their sourceUrl
+  // points at an existing file. Without this, every supervisor restart
+  // silently leaves bound docs with their Yjs state intact in memory but
+  // no observeDeep listener wired to write-back — reads work, writes never
+  // fire, disk drifts behind the live editor. Bug surfaced 2026-05-09:
+  // ~16 hours of edits sat unflushed before disk was inspected.
+  // Files that have moved (sourceUrl present, file missing) are left
+  // unbound; callers can rebind via create_review_doc with the new path.
   private hydrateFromDisk(): void {
     let count = 0;
+    let rebound = 0;
     try {
       for (const file of readdirSync(this.cfg.dataDir)) {
         if (!file.endsWith('.ydoc')) continue;
         const docId = file.slice(0, -'.ydoc'.length);
         if (!docId) continue;
-        this.getOrCreate(docId);
+        const room = this.getOrCreate(docId);
         count++;
+        const src = room.meta.sourceUrl;
+        if (room.meta.type === 'markdown' && src && existsSync(src)) {
+          const res = this.attachFile(docId, src);
+          if (res.ok) rebound++;
+        }
       }
     } catch (err) {
       console.error('[rooms] hydrateFromDisk failed:', err);
     }
-    if (count > 0) console.error(`[rooms] hydrated ${count} doc(s) from ${this.cfg.dataDir}`);
+    if (count > 0) {
+      console.error(
+        `[rooms] hydrated ${count} doc(s) from ${this.cfg.dataDir}` +
+          (rebound > 0 ? ` (${rebound} markdown docs auto-rebound)` : ''),
+      );
+    }
   }
 
   getOrCreate(
