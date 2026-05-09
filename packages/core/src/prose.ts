@@ -1156,3 +1156,299 @@ export function deleteAgentAnchor(doc: Y.Doc, anchorId: string): boolean {
   doc.transact(() => map.delete(anchorId), 'agent');
   return true;
 }
+
+// ===========================================================================
+// Block-deletion API — see docs/proposals/delete-blocks-api.md.
+//
+// Three exported functions, smallest first:
+//
+//   deleteBlockAtAnchor   — delete the single host block of an anchor.
+//   deleteBlocksInRange   — delete every whole block from startFind through
+//                           endFind (block-inclusive).
+//   deleteSection         — heading-aware: delete a heading block plus all
+//                           subsequent top-level blocks until the next
+//                           heading at level ≤ the start heading's level.
+//
+// All three wrap their mutations in a single `doc.transact(fn, 'agent')`
+// for clean Yjs CRDT concurrency, exactly like rewriteRange and
+// insertBlocksAfterAnchor.
+// ===========================================================================
+
+/** Short preview of a block's textual content — useful for the
+ *  agent-facing return of deleteBlockAtAnchor. Strips wrapper marks. */
+function blockSnippet(block: Y.XmlElement, max = 80): string {
+  const text = textContent(block).replace(/\s+/g, ' ').trim();
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+export interface DeleteBlockResult {
+  ok: boolean;
+  error?: 'anchor-orphaned' | 'no-host-block';
+  deleted?: { tag: string; snippet: string };
+}
+
+/**
+ * Delete the single block that contains the anchor. The "host block" is
+ * the INNERMOST prosemirror block ancestor of the anchored Y.XmlText —
+ * for an anchor inside a paragraph at the doc root, that's the
+ * paragraph itself; for an anchor inside a listItem's paragraph, that's
+ * the paragraph (NOT the listItem). Same notion of "host block"
+ * walkProse already exposes via `segment.block`.
+ *
+ * Caveat: deleting the inner paragraph of a listItem leaves the
+ * containing listItem empty (it still occupies the list slot). For
+ * "delete the whole list item" or "delete the whole list", reach for
+ * deleteBlocksInRange / deleteSection instead — they operate at the
+ * top-level fragment.
+ *
+ * The anchor's start position is used to locate the host block. End
+ * position is irrelevant — block deletion is all-or-nothing.
+ */
+export function deleteBlockAtAnchor(
+  doc: Y.Doc,
+  opts: {
+    anchorRel: Uint8Array;
+    transactionOrigin?: unknown;
+  },
+): DeleteBlockResult {
+  const raw = resolveRelativePositionRaw(doc, opts.anchorRel);
+  if (!raw) return { ok: false, error: 'anchor-orphaned' };
+  const fragment = getProseFragment(doc);
+  const { segments } = walkProse(fragment);
+  const seg = segments.find((s) => s.node === raw.node);
+  if (!seg || !seg.block) return { ok: false, error: 'no-host-block' };
+  const block = seg.block;
+  const parent = block.parent as Y.XmlFragment | Y.XmlElement | null;
+  if (!parent) return { ok: false, error: 'no-host-block' };
+  const siblings = parent.toArray();
+  const idx = siblings.indexOf(block);
+  if (idx < 0) return { ok: false, error: 'no-host-block' };
+
+  const tag = block.nodeName;
+  const snippet = blockSnippet(block);
+
+  doc.transact(() => {
+    parent.delete(idx, 1);
+  }, opts.transactionOrigin ?? 'agent');
+
+  return { ok: true, deleted: { tag, snippet } };
+}
+
+export interface DeleteBlocksInRangeResult {
+  ok: boolean;
+  error?: 'no-match' | 'ambiguous' | 'inverted-range' | 'no-blocks';
+  /** Number of TOP-LEVEL blocks removed from the fragment. */
+  deleted?: number;
+  /** For ambiguous results, candidate previews. `which` says whether
+   *  the ambiguity was on `startFind` or `endFind`. */
+  candidates?: Array<{ which: 'start' | 'end'; docOffset: number; preview: string }>;
+}
+
+/**
+ * Delete every TOP-LEVEL block from the one containing `startFind`
+ * through the one containing `endFind` — block-inclusive. A partial
+ * match still removes the entire containing block; this is intentional
+ * ("blow away the section that contains this string"). Both find
+ * strings disambiguate via the same contextBefore / contextAfter /
+ * occurrence machinery as findAndReplace.
+ *
+ * Operates on the fragment's top-level blocks. If the start match lives
+ * inside a nested block (a listItem, a tableCell), the whole containing
+ * top-level block (the bulletList, the table) is deleted. This is
+ * deliberate — it keeps the contract simple ("delete the section") and
+ * sidesteps the hairier question of "delete this listItem from its
+ * bulletList but keep the others." Use deleteBlockAtAnchor for that.
+ */
+export function deleteBlocksInRange(
+  doc: Y.Doc,
+  opts: {
+    startFind: string;
+    endFind: string;
+    contextBefore?: string;
+    contextAfter?: string;
+    startOccurrence?: number;
+    endOccurrence?: number;
+    transactionOrigin?: unknown;
+  },
+): DeleteBlocksInRangeResult {
+  const fragment = getProseFragment(doc);
+
+  const startRes = resolveSingleFind(fragment, {
+    find: opts.startFind,
+    contextBefore: opts.contextBefore,
+    contextAfter: opts.contextAfter,
+    occurrence: opts.startOccurrence,
+  });
+  if (!startRes.ok) return mapFindError(startRes.error, startRes.candidates, 'start');
+
+  const endRes = resolveSingleFind(fragment, {
+    find: opts.endFind,
+    contextBefore: opts.contextBefore,
+    contextAfter: opts.contextAfter,
+    occurrence: opts.endOccurrence,
+  });
+  if (!endRes.ok) return mapFindError(endRes.error, endRes.candidates, 'end');
+
+  const startTop = startRes.match.segment.topBlock;
+  const endTop = endRes.match.segment.topBlock;
+  if (!startTop || !endTop) return { ok: false, error: 'no-blocks' };
+
+  const top = fragment.toArray() as Y.XmlElement[];
+  const startIdx = top.indexOf(startTop);
+  const endIdx = top.indexOf(endTop);
+  if (startIdx < 0 || endIdx < 0) return { ok: false, error: 'no-blocks' };
+  if (endIdx < startIdx) return { ok: false, error: 'inverted-range' };
+
+  const count = endIdx - startIdx + 1;
+  doc.transact(() => {
+    fragment.delete(startIdx, count);
+  }, opts.transactionOrigin ?? 'agent');
+
+  return { ok: true, deleted: count };
+}
+
+export interface DeleteSectionResult {
+  ok: boolean;
+  error?: 'no-match' | 'ambiguous' | 'not-a-heading';
+  /** Number of top-level blocks removed (heading + body). */
+  deleted?: number;
+  /** Heading that ended the run (= first block AFTER the deleted span),
+   *  or null if the section ran to the end of the doc. */
+  nextHeading?: { level: number; text: string } | null;
+  candidates?: Array<{ docOffset: number; preview: string }>;
+}
+
+/**
+ * Delete a heading block plus every subsequent top-level block until the
+ * next heading at level ≤ the start heading's level (or end of doc).
+ * Convenience layer over deleteBlocksInRange for the common ask: "delete
+ * the X section." `heading` matches against block-text exactly (after
+ * trimming surrounding whitespace) — pass `level` to disambiguate when
+ * the same heading text appears at multiple levels, `occurrence` for
+ * repeats at the same level.
+ */
+export function deleteSection(
+  doc: Y.Doc,
+  opts: {
+    heading: string;
+    level?: number;
+    occurrence?: number;
+    transactionOrigin?: unknown;
+  },
+): DeleteSectionResult {
+  const fragment = getProseFragment(doc);
+  const top = fragment.toArray() as Y.XmlElement[];
+  const wanted = opts.heading.trim();
+
+  // Collect every heading block whose text matches, optionally filtered by level.
+  const matches: Array<{ idx: number; level: number; el: Y.XmlElement }> = [];
+  for (let i = 0; i < top.length; i++) {
+    const el = top[i]!;
+    if (el.nodeName !== 'heading') continue;
+    const level = Math.min(6, Math.max(1, Number(el.getAttribute('level') ?? 1)));
+    if (opts.level != null && level !== opts.level) continue;
+    if (textContent(el).trim() !== wanted) continue;
+    matches.push({ idx: i, level, el });
+  }
+
+  if (matches.length === 0) {
+    // Distinguish "string isn't anywhere in the doc" from "found, but not
+    // on a heading block" — same shape as the proposal's error vocabulary.
+    const { plainText } = walkProse(fragment);
+    if (plainText.includes(wanted)) return { ok: false, error: 'not-a-heading' };
+    return { ok: false, error: 'no-match' };
+  }
+
+  let chosen: { idx: number; level: number; el: Y.XmlElement };
+  if (opts.occurrence != null) {
+    if (opts.occurrence < 1 || opts.occurrence > matches.length) {
+      return { ok: false, error: 'no-match' };
+    }
+    chosen = matches[opts.occurrence - 1]!;
+  } else if (matches.length > 1) {
+    return {
+      ok: false,
+      error: 'ambiguous',
+      candidates: matches.map((m) => ({
+        docOffset: m.idx,
+        preview: `h${m.level}: ${blockSnippet(m.el, 60)}`,
+      })),
+    };
+  } else {
+    chosen = matches[0]!;
+  }
+
+  // Walk forward to find the first heading at level <= chosen.level.
+  let endExclusive = top.length;
+  let nextHeading: { level: number; text: string } | null = null;
+  for (let i = chosen.idx + 1; i < top.length; i++) {
+    const el = top[i]!;
+    if (el.nodeName !== 'heading') continue;
+    const level = Math.min(6, Math.max(1, Number(el.getAttribute('level') ?? 1)));
+    if (level <= chosen.level) {
+      endExclusive = i;
+      nextHeading = { level, text: textContent(el).trim() };
+      break;
+    }
+  }
+
+  const count = endExclusive - chosen.idx;
+  doc.transact(() => {
+    fragment.delete(chosen.idx, count);
+  }, opts.transactionOrigin ?? 'agent');
+
+  return { ok: true, deleted: count, nextHeading };
+}
+
+/** Resolve a single find with the same disambiguation as findAndReplace,
+ *  returning the chosen LocatedMatch or a typed error.  */
+function resolveSingleFind(
+  fragment: Y.XmlFragment,
+  opts: {
+    find: string;
+    contextBefore?: string;
+    contextAfter?: string;
+    occurrence?: number;
+  },
+):
+  | { ok: true; match: LocatedMatch }
+  | {
+      ok: false;
+      error: 'no-match' | 'ambiguous';
+      candidates?: Array<{ docOffset: number; preview: string }>;
+    } {
+  const { matches, plainText } = locateMatches(fragment, opts);
+  if (matches.length === 0) return { ok: false, error: 'no-match' };
+  if (opts.occurrence != null) {
+    if (opts.occurrence < 1 || opts.occurrence > matches.length) {
+      return { ok: false, error: 'no-match' };
+    }
+    return { ok: true, match: matches[opts.occurrence - 1]! };
+  }
+  if (matches.length > 1) {
+    return {
+      ok: false,
+      error: 'ambiguous',
+      candidates: matches.map((m) => ({
+        docOffset: m.docOffset,
+        preview: preview(plainText, m.docOffset, m.length),
+      })),
+    };
+  }
+  return { ok: true, match: matches[0]! };
+}
+
+function mapFindError(
+  error: 'no-match' | 'ambiguous',
+  candidates: Array<{ docOffset: number; preview: string }> | undefined,
+  which: 'start' | 'end',
+): DeleteBlocksInRangeResult {
+  if (error === 'ambiguous') {
+    return {
+      ok: false,
+      error: 'ambiguous',
+      candidates: (candidates ?? []).map((c) => ({ which, ...c })),
+    };
+  }
+  return { ok: false, error: 'no-match' };
+}

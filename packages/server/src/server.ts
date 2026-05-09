@@ -399,6 +399,48 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           });
           return res.ok ? j(200, res) : j(409, res);
         }
+        if (rest === 'delete_block_at_anchor' && req.method === 'POST') {
+          const body = await safeJson(req);
+          const threadId = body?.threadId ? String(body.threadId) : undefined;
+          const anchorId = body?.anchorId ? String(body.anchorId) : undefined;
+          if ((threadId && anchorId) || (!threadId && !anchorId)) {
+            return j(400, { error: 'exactly one of threadId or anchorId required' });
+          }
+          const res = threadId
+            ? rooms.deleteBlockAtThread(docId, threadId)
+            : rooms.deleteBlockAtAgentAnchor(docId, anchorId!);
+          return res.ok ? j(200, res) : j(409, res);
+        }
+        if (rest === 'delete_blocks_in_range' && req.method === 'POST') {
+          const body = await safeJson(req);
+          const startFind = String(body?.startFind ?? '');
+          const endFind = String(body?.endFind ?? '');
+          if (startFind.length === 0 || endFind.length === 0) {
+            return j(400, { error: 'startFind and endFind are required' });
+          }
+          const res = rooms.deleteBlocksInRange(docId, {
+            startFind,
+            endFind,
+            contextBefore: body?.contextBefore ? String(body.contextBefore) : undefined,
+            contextAfter: body?.contextAfter ? String(body.contextAfter) : undefined,
+            startOccurrence:
+              typeof body?.startOccurrence === 'number' ? Number(body.startOccurrence) : undefined,
+            endOccurrence:
+              typeof body?.endOccurrence === 'number' ? Number(body.endOccurrence) : undefined,
+          });
+          return res.ok ? j(200, res) : j(409, res);
+        }
+        if (rest === 'delete_section' && req.method === 'POST') {
+          const body = await safeJson(req);
+          const heading = String(body?.heading ?? '');
+          if (heading.length === 0) return j(400, { error: 'heading is required' });
+          const res = rooms.deleteSection(docId, {
+            heading,
+            level: typeof body?.level === 'number' ? Number(body.level) : undefined,
+            occurrence: typeof body?.occurrence === 'number' ? Number(body.occurrence) : undefined,
+          });
+          return res.ok ? j(200, res) : j(409, res);
+        }
         if (rest === 'hooks/fire' && req.method === 'POST') {
           // debug-fires the last thread update again
           const ts = rooms.listThreads(docId);
