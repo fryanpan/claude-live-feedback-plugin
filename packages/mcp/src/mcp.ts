@@ -354,6 +354,41 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       description: 'Return the docIds this session is currently subscribed to for channel events.',
       inputSchema: { type: 'object', properties: {} },
     },
+    {
+      name: 'share_doc',
+      description:
+        "Publish a markdown review doc behind a Cloudflare Access gate so external reviewers (e.g. an outside team's email domain) can access it over the public internet for a bounded window. The doc must already exist via create_review_doc. Returns { share: { shareId, url, hostname, expiresAt, ... } }. Read .claude/live-feedback.json's `share.defaultAllowDomains` first; if a repo has no config, ASK THE USER which domain(s) to allow before calling — never default to 'anyone'. Default ttlSeconds is 72h. Reviewers hitting the share URL get a Cloudflare email-OTP login page; only allowed domains can complete login.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          docId: { type: 'string' },
+          allowDomains: {
+            type: 'array',
+            items: { type: 'string' },
+            description: "Email domains, e.g. ['@appdevforall.org']",
+          },
+          ttlSeconds: { type: 'number' },
+          name: { type: 'string', description: 'Optional slug override for the subdomain' },
+        },
+        required: ['docId', 'allowDomains'],
+      },
+    },
+    {
+      name: 'list_shares',
+      description:
+        'List currently active shares with their hostnames, allowed domains, and expiry.',
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'unshare',
+      description:
+        'Revoke a share by id. Deletes the Cloudflare Access app + policy and removes the registry entry. Use this for early teardown — shares otherwise expire on their own at the configured TTL.',
+      inputSchema: {
+        type: 'object',
+        properties: { shareId: { type: 'string' } },
+        required: ['shareId'],
+      },
+    },
   ],
 }));
 
@@ -550,6 +585,35 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       }
       case 'list_watched_docs': {
         return ok({ watching: Array.from(watchers.keys()) });
+      }
+      case 'share_doc': {
+        const {
+          docId,
+          allowDomains,
+          ttlSeconds,
+          name: slug,
+        } = a as {
+          docId: string;
+          allowDomains: string[];
+          ttlSeconds?: number;
+          name?: string;
+        };
+        const res = await http('POST', '/api/share/doc', {
+          docId,
+          allowDomains,
+          ttlSeconds,
+          name: slug,
+        });
+        return ok(res);
+      }
+      case 'list_shares': {
+        const res = await http('GET', '/api/share');
+        return ok(res);
+      }
+      case 'unshare': {
+        const { shareId } = a as { shareId: string };
+        const res = await http('DELETE', `/api/share/${encodeURIComponent(shareId)}`);
+        return ok(res);
       }
       default:
         return err(`unknown tool: ${name}`);
