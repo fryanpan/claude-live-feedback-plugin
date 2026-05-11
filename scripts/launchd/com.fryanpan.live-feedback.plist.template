@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.fryanpan.live-feedback</string>
+
+    <key>WorkingDirectory</key>
+    <string>{{REPO_DIR}}</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>{{BUN_BIN}}</string>
+        <string>run</string>
+        <string>scripts/serve.ts</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>{{HOME_DIR}}</string>
+        <key>PATH</key>
+        <string>{{BUN_DIR}}:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>{{LOG_DIR}}/com.fryanpan.live-feedback.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{LOG_DIR}}/com.fryanpan.live-feedback.err.log</string>
+</dict>
+</plist>
