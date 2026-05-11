@@ -36,20 +36,43 @@ echo "[install] bun:      ${BUN_BIN}"
 echo "[install] plist:    ${PLIST_DEST}"
 echo "[install] logs:     ${LOG_DIR}/${LABEL}.{out,err}.log"
 
+DOMAIN="gui/$(id -u)"
+
 # Stop and remove any existing instance so re-running is idempotent.
-if launchctl list "${LABEL}" >/dev/null 2>&1; then
-    echo "[install] existing service found — unloading first"
-    launchctl unload -w "${PLIST_DEST}" 2>/dev/null || true
+if launchctl print "${DOMAIN}/${LABEL}" >/dev/null 2>&1; then
+    echo "[install] existing service found — bootout first"
+    launchctl bootout "${DOMAIN}/${LABEL}" 2>/dev/null || true
 fi
 
 # Stop any foreground server squatting on the port. The supervised instance
-# needs to be the one binding 8788.
+# needs to be the one binding 8788. macOS BSD xargs doesn't support -r, so
+# guard on a non-empty PID list before invoking kill.
+kill_port_8788() {
+    local sig="$1"
+    local pids
+    pids="$(lsof -nP -ti:8788 -sTCP:LISTEN 2>/dev/null || true)"
+    if [ -n "${pids}" ]; then
+        # shellcheck disable=SC2086
+        kill -"${sig}" ${pids} 2>/dev/null || true
+        return 0
+    fi
+    return 1
+}
+
 if lsof -nP -iTCP:8788 -sTCP:LISTEN >/dev/null 2>&1; then
     echo "[install] killing foreground server on :8788"
-    lsof -nP -ti:8788 -sTCP:LISTEN | xargs -r kill -TERM 2>/dev/null || true
-    sleep 1
-    # Force-kill if still alive.
-    lsof -nP -ti:8788 -sTCP:LISTEN | xargs -r kill -KILL 2>/dev/null || true
+    kill_port_8788 TERM || true
+    # Poll up to 5s for the port to free up before escalating to KILL.
+    for _ in 1 2 3 4 5; do
+        if ! lsof -nP -iTCP:8788 -sTCP:LISTEN >/dev/null 2>&1; then
+            break
+        fi
+        sleep 1
+    done
+    if lsof -nP -iTCP:8788 -sTCP:LISTEN >/dev/null 2>&1; then
+        kill_port_8788 KILL || true
+        sleep 1
+    fi
 fi
 
 mkdir -p "$(dirname "${PLIST_DEST}")" "${LOG_DIR}"
@@ -63,7 +86,7 @@ sed \
     -e "s|{{LOG_DIR}}|${LOG_DIR}|g" \
     "${TEMPLATE}" > "${PLIST_DEST}"
 
-launchctl load -w "${PLIST_DEST}"
+launchctl bootstrap "${DOMAIN}" "${PLIST_DEST}"
 
 # Wait up to 15s for the service to start listening so the install reports the
 # right state. The serve.ts supervisor binds the port within a few seconds in
