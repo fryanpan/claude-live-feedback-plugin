@@ -64,7 +64,9 @@ By default `bun run scripts/serve.ts` runs in the foreground — convenient for 
 ./scripts/launchd/install.sh
 ```
 
-The script writes `~/Library/LaunchAgents/com.fryanpan.live-feedback.plist`, loads it, and waits for port 8788 to come up. Logs land at `~/Library/Logs/com.fryanpan.live-feedback.{out,err}.log`.
+The script writes `~/Library/LaunchAgents/com.fryanpan.live-feedback.plist`, bootstraps it into your user session, and waits for port 8788 to come up. Logs land at `~/Library/Logs/com.fryanpan.live-feedback.{out,err}.log`. The service runs as a per-user `LaunchAgent` — it starts at login (not boot) and stops at logout, which matches Bryan's Mac-mini-always-logged-in setup.
+
+Re-run `install.sh` after pulling code that changes the launch args (it's idempotent — boots out the old plist first).
 
 To uninstall:
 

@@ -4,6 +4,7 @@
 set -euo pipefail
 
 LABEL="com.fryanpan.live-feedback"
+DOMAIN="gui/$(id -u)"
 PLIST_DEST="${HOME}/Library/LaunchAgents/${LABEL}.plist"
 
 if [ ! -f "${PLIST_DEST}" ]; then
@@ -11,8 +12,8 @@ if [ ! -f "${PLIST_DEST}" ]; then
     exit 0
 fi
 
-echo "[uninstall] unloading ${LABEL}"
-launchctl unload -w "${PLIST_DEST}" 2>/dev/null || true
+echo "[uninstall] bootout ${DOMAIN}/${LABEL}"
+launchctl bootout "${DOMAIN}/${LABEL}" 2>/dev/null || true
 
 echo "[uninstall] removing ${PLIST_DEST}"
 rm -f "${PLIST_DEST}"
