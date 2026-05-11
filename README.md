@@ -56,6 +56,32 @@ Note that this plugin does **not** work with code yet, but could be extended to 
    - "Show me a mockup with live feedback"
    - "Show me the dev server with live feedback"
 
+## Run as a service (macOS)
+
+By default `bun run scripts/serve.ts` runs in the foreground — convenient for development, but the server dies when the terminal closes. To keep it always-on (survives logout, Mac reboot, and crashes), install the launchd supervisor:
+
+```sh
+./scripts/launchd/install.sh
+```
+
+The script writes `~/Library/LaunchAgents/com.fryanpan.live-feedback.plist`, bootstraps it into your user session, and waits for port 8788 to come up. Logs land at `~/Library/Logs/com.fryanpan.live-feedback.{out,err}.log`. The service runs as a per-user `LaunchAgent` — it starts at login (not boot) and stops at logout, which matches Bryan's Mac-mini-always-logged-in setup.
+
+Re-run `install.sh` after pulling code that changes the launch args (it's idempotent — boots out the old plist first).
+
+To uninstall:
+
+```sh
+./scripts/launchd/uninstall.sh
+```
+
+Useful commands once installed:
+
+```sh
+launchctl list | grep com.fryanpan.live-feedback   # status
+launchctl kickstart -k gui/$(id -u)/com.fryanpan.live-feedback   # force restart
+tail -f ~/Library/Logs/com.fryanpan.live-feedback.err.log         # follow logs
+```
+
 ## What It Does Under The Hood
 
 - **Uses [Claude Channels](https://code.claude.com/docs/en/channels) for messaging.** Comments arrive at the agent's session as `<channel source="live-feedback" ...>` events the same way GitHub mentions and CI failures do — no polling, no MCP tool round-trips just to check inbox. The agent typically posts a reply or lands an edit within a few seconds of you clicking "send."
