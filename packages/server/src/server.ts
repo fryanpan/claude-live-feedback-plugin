@@ -310,7 +310,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (threadRest === '/rewrite_region' && req.method === 'POST') {
             const body = await safeJson(req);
             const replacement = String(body?.replacement ?? '');
-            const res = rooms.rewriteThreadRegion(docId, threadId, replacement);
+            const parseInlineMarks = body?.parseInlineMarks === true;
+            const res = rooms.rewriteThreadRegion(docId, threadId, replacement, {
+              parseInlineMarks,
+            });
             return res.ok ? j(200, res) : j(409, res);
           }
           if (threadRest === '/insert_after' && req.method === 'POST') {
@@ -396,6 +399,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             contextBefore: body?.contextBefore ? String(body.contextBefore) : undefined,
             contextAfter: body?.contextAfter ? String(body.contextAfter) : undefined,
             occurrence: typeof body?.occurrence === 'number' ? Number(body.occurrence) : undefined,
+            parseInlineMarks: body?.parseInlineMarks === true,
           });
           return res.ok ? j(200, res) : j(409, res);
         }
