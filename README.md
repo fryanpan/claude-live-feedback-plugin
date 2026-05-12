@@ -44,12 +44,11 @@ Note that this plugin does **not** work with code yet, but could be extended to 
 3. Install the plugin at the user level. From the cloned plugin directory:
 
    ```sh
-   cd packages/mcp && npm link && cd ../..
    claude plugin marketplace add .
    claude plugin install live-feedback@claude-live-feedback --scope user
    ```
 
-   The `npm link` step registers the `live-feedback-mcp` binary on your PATH so Claude Code can resolve it. The two `claude` commands register this repo as a local plugin marketplace and install the plugin user-wide.
+   The MCP server is bundled inside the plugin tree at `packages/plugin/mcp/index.js` and invoked via Claude Code's `${CLAUDE_PLUGIN_ROOT}` substitution, so no `npm link` step or PATH setup is needed — the plugin install is the complete install.
 
 4. Use the plugin by asking Claude like this:
    - "Show me the doc &lt;your doc name&gt; with live feedback"
