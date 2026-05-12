@@ -340,6 +340,28 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const t = await rooms.postComment(docId, null, user, text, anchor);
           return t ? j(200, { thread: t }) : j(500, { error: 'could not create thread' });
         }
+        if (rest === 'threads/by_find' && req.method === 'POST') {
+          const body = await safeJson(req);
+          const author = body?.author as User | undefined;
+          const text = body?.text as string | undefined;
+          const find = body?.find ? String(body.find) : '';
+          if (!author || !text || find.length === 0) {
+            return j(400, { error: 'author + text + find required' });
+          }
+          const res = await rooms.createThreadByFind(
+            docId,
+            {
+              find,
+              contextBefore: body?.contextBefore ? String(body.contextBefore) : undefined,
+              contextAfter: body?.contextAfter ? String(body.contextAfter) : undefined,
+              occurrence:
+                typeof body?.occurrence === 'number' ? Number(body.occurrence) : undefined,
+            },
+            author,
+            text,
+          );
+          return res.ok ? j(200, { thread: res.thread }) : j(409, res);
+        }
         if (rest === 'content' && req.method === 'GET') {
           const doc = rooms.getDoc(docId);
           if (!doc) return j(404, { error: 'doc not found' });
