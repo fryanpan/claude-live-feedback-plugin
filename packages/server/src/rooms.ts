@@ -269,10 +269,22 @@ export class Rooms {
       }
       return { ok: false, error: resolved.error };
     }
+    // Yjs's encodeAny silently JSON-stringifies a Uint8Array inside a plain
+    // object — it becomes { "0": ..., "1": ... } on the way out, with no
+    // .length and no iteration, so `new Uint8Array(anchor.startRel)` on the
+    // client produces an empty array. Anchor resolution then returns null,
+    // the editor renders no decoration, and clicks miss entirely. The editor
+    // serializes the same way it sends over JSON: as a number[]. Match it.
+    // See packages/markdown-app/src/app.ts:976 (`Array.from(selection.start)`).
     const anchor: Anchor = {
       kind: 'text-range',
-      startRel: resolved.startRel,
-      endRel: resolved.endRel,
+      // biome-ignore lint/suspicious/noExplicitAny: Anchor.startRel/endRel
+      // are typed as Uint8Array but Yjs round-trips number[] cleanly (what
+      // the editor sends). The type is a documentation aid, not a runtime
+      // enforcement — both serialize identically over the network.
+      startRel: Array.from(resolved.startRel) as any,
+      // biome-ignore lint/suspicious/noExplicitAny: same as above.
+      endRel: Array.from(resolved.endRel) as any,
       snippet: { text: resolved.snippetText },
     };
     const thread = await this.postComment(docId, null, author, text, anchor);
