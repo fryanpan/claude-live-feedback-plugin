@@ -203,7 +203,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'find_and_replace',
       description:
-        "Replace a string of plain text in the doc with another string. `find` must match the doc's plain text content (no markdown syntax — marks like bold/italic are preserved automatically). Use `contextBefore` / `contextAfter` to disambiguate repeated phrases. If the match is still ambiguous the tool returns a list of candidates. Use `occurrence` (1-indexed) to pick one explicitly. Runs as a single Yjs transaction so it merges cleanly with concurrent user edits.",
+        "Replace a string of plain text in the doc with another string. `find` must match the doc's plain text content (no markdown syntax — marks like bold/italic are preserved automatically). Use `contextBefore` / `contextAfter` to disambiguate repeated phrases. If the match is still ambiguous the tool returns a list of candidates. Use `occurrence` (1-indexed) to pick one explicitly. Pass `parseInlineMarks: true` to interpret `[label](url)` / `**bold**` / `*italic*` / `` `code` `` / `~~strike~~` in `replace` as marks on the inserted text instead of literal characters — required when adding a labeled link or other inline mark to text that doesn't already have one. Runs as a single Yjs transaction so it merges cleanly with concurrent user edits.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -213,6 +213,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           contextBefore: { type: 'string' },
           contextAfter: { type: 'string' },
           occurrence: { type: 'number' },
+          parseInlineMarks: { type: 'boolean' },
         },
         required: ['docId', 'find', 'replace'],
       },
@@ -220,13 +221,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'rewrite_thread_region',
       description:
-        'Rewrite the text a thread is anchored to. Primary path for comment-driven edits: the user commented, the agent fixes the exact range they commented on. Immune to concurrent user edits because the anchor is a Y.RelativePosition, resolved to current offsets at apply time. Returns `anchor-orphaned` if the user deleted the anchored text — fall back to find_and_replace in that case.',
+        'Rewrite the text a thread is anchored to. Primary path for comment-driven edits: the user commented, the agent fixes the exact range they commented on. Immune to concurrent user edits because the anchor is a Y.RelativePosition, resolved to current offsets at apply time. Pass `parseInlineMarks: true` to interpret `[label](url)` / `**bold**` / `*italic*` / `` `code` `` / `~~strike~~` in `replacement` as marks on the inserted text instead of literal characters. Returns `anchor-orphaned` if the user deleted the anchored text — fall back to find_and_replace in that case.',
       inputSchema: {
         type: 'object',
         properties: {
           docId: { type: 'string' },
           threadId: { type: 'string' },
           replacement: { type: 'string' },
+          parseInlineMarks: { type: 'boolean' },
         },
         required: ['docId', 'threadId', 'replacement'],
       },
@@ -508,33 +510,40 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok(res);
       }
       case 'find_and_replace': {
-        const { docId, find, replace, contextBefore, contextAfter, occurrence } = a as {
-          docId: string;
-          find: string;
-          replace: string;
-          contextBefore?: string;
-          contextAfter?: string;
-          occurrence?: number;
-        };
+        const { docId, find, replace, contextBefore, contextAfter, occurrence, parseInlineMarks } =
+          a as {
+            docId: string;
+            find: string;
+            replace: string;
+            contextBefore?: string;
+            contextAfter?: string;
+            occurrence?: number;
+            parseInlineMarks?: boolean;
+          };
         const res = await http('POST', `/api/docs/${encodeURIComponent(docId)}/find_and_replace`, {
           find,
           replace,
           ...(contextBefore !== undefined ? { contextBefore } : {}),
           ...(contextAfter !== undefined ? { contextAfter } : {}),
           ...(occurrence !== undefined ? { occurrence } : {}),
+          ...(parseInlineMarks === true ? { parseInlineMarks: true } : {}),
         });
         return ok(res);
       }
       case 'rewrite_thread_region': {
-        const { docId, threadId, replacement } = a as {
+        const { docId, threadId, replacement, parseInlineMarks } = a as {
           docId: string;
           threadId: string;
           replacement: string;
+          parseInlineMarks?: boolean;
         };
         const res = await http(
           'POST',
           `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/rewrite_region`,
-          { replacement },
+          {
+            replacement,
+            ...(parseInlineMarks === true ? { parseInlineMarks: true } : {}),
+          },
         );
         return ok(res);
       }

@@ -189,6 +189,96 @@ describe('findAndReplace', () => {
   });
 });
 
+/** Read the first paragraph's Y.XmlText delta — handy for inspecting marks
+ *  applied to inserted text by parseInlineMarks. */
+function firstParaDelta(
+  doc: Y.Doc,
+): Array<{ insert: string; attributes?: Record<string, unknown> }> {
+  const frag = getProseFragment(doc);
+  const first = frag.toArray()[0] as Y.XmlElement;
+  const text = first.toArray()[0] as Y.XmlText;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return text.toDelta() as any;
+}
+
+describe('findAndReplace — parseInlineMarks', () => {
+  it('default (parseInlineMarks omitted) inserts markdown syntax as literal text', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'Sonjayas project-creator was an inspiration' }]);
+    const res = findAndReplace(doc, {
+      find: 'project-creator',
+      replace: '[project-creator](https://github.com/Consortium-team/project-creator)',
+    });
+    expect(res.ok).toBe(true);
+    // Plain text now contains the literal markdown characters.
+    expect(walkProse(getProseFragment(doc)).plainText).toContain(
+      '[project-creator](https://github.com/Consortium-team/project-creator)',
+    );
+    // No link mark — the inserted span has no mark attributes.
+    const delta = firstParaDelta(doc);
+    for (const op of delta) {
+      expect(op.attributes ?? {}).not.toHaveProperty('link');
+    }
+  });
+
+  it('parseInlineMarks=true applies a link mark to inserted [label](url)', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'Sonjayas project-creator was an inspiration' }]);
+    const res = findAndReplace(doc, {
+      find: 'project-creator',
+      replace: '[project-creator](https://github.com/Consortium-team/project-creator)',
+      parseInlineMarks: true,
+    });
+    expect(res.ok).toBe(true);
+    // Visible text is just the label, not the markdown.
+    expect(walkProse(getProseFragment(doc)).plainText).toBe(
+      'Sonjayas project-creator was an inspiration',
+    );
+    // The "project-creator" run has a link mark with the right href.
+    const delta = firstParaDelta(doc);
+    const linked = delta.find((op) => op.insert === 'project-creator' && op.attributes?.link);
+    expect(linked).toBeDefined();
+    expect((linked!.attributes!.link as { href: string }).href).toBe(
+      'https://github.com/Consortium-team/project-creator',
+    );
+  });
+
+  it('parseInlineMarks=true applies bold + link in one replacement', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'placeholder' }]);
+    const res = findAndReplace(doc, {
+      find: 'placeholder',
+      replace: 'see **the [docs](https://example.com)** for details',
+      parseInlineMarks: true,
+    });
+    expect(res.ok).toBe(true);
+    const delta = firstParaDelta(doc);
+    expect(walkProse(getProseFragment(doc)).plainText).toBe('see the docs for details');
+    // 'docs' is both bold AND a link (nested marks).
+    const docsRun = delta.find((op) => op.insert === 'docs');
+    expect(docsRun?.attributes?.bold).toBeTruthy();
+    expect((docsRun?.attributes?.link as { href: string } | undefined)?.href).toBe(
+      'https://example.com',
+    );
+    // 'the ' is bold but not linked.
+    const theRun = delta.find((op) => op.insert === 'the ');
+    expect(theRun?.attributes?.bold).toBeTruthy();
+    expect(theRun?.attributes?.link).toBeUndefined();
+  });
+
+  it('parseInlineMarks=true with no inline syntax in replace behaves like plain insert', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'old word here' }]);
+    const res = findAndReplace(doc, {
+      find: 'old word',
+      replace: 'new word',
+      parseInlineMarks: true,
+    });
+    expect(res.ok).toBe(true);
+    expect(walkProse(getProseFragment(doc)).plainText).toBe('new word here');
+  });
+});
+
 /** Build a text-range anchor on the FIRST text node covering [from, to). */
 function anchorIn(doc: Y.Doc, from: number, to: number) {
   const frag = getProseFragment(doc);
@@ -227,6 +317,24 @@ describe('rewriteRange', () => {
     const res = rewriteRange(doc, { ...a, replacement: 'lazy blue' });
     expect(res.ok).toBe(true);
     expect(walkProse(getProseFragment(doc)).plainText).toBe('ANYWAY, The lazy blue fox.');
+  });
+
+  it('parseInlineMarks=true applies a link mark on the rewritten range', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'See foo for details.' }]);
+    const a = anchorIn(doc, 4, 7); // "foo"
+    const res = rewriteRange(doc, {
+      ...a,
+      replacement: '[the docs](https://example.com)',
+      parseInlineMarks: true,
+    });
+    expect(res.ok).toBe(true);
+    expect(walkProse(getProseFragment(doc)).plainText).toBe('See the docs for details.');
+    const delta = firstParaDelta(doc);
+    const linked = delta.find((op) => op.insert === 'the docs');
+    expect((linked?.attributes?.link as { href: string } | undefined)?.href).toBe(
+      'https://example.com',
+    );
   });
 });
 
