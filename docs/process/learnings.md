@@ -33,12 +33,32 @@ Technical discoveries that should persist across sessions for this project.
 - The live-feedback server has no auto-restart story today. If it crashes
   while Bryan is mobile, his bound docs stop accepting new edits via the
   /review URL (browser shows reconnect loop with `data:` flicker). Restart
-  recovers state from `.ydoc` files cleanly. Backlog: install as a launchd
-  service alongside the existing `notion-bridge` / `sentry-bridge`
-  cloudflared services.
+  recovers state from `.ydoc` files cleanly. PR #31 ships a launchd
+  supervisor; PR #33 fixes the install-time gotchas (see below).
 - `bun --watch` does NOT reliably reload on changes to deeply-imported
   files. After landing a server-side fix, restart manually
   (`pkill -f bin.ts && bun run dev`) to verify it's loaded.
+
+## macOS launchd + non-default home volume
+
+- **TCC blocks launchd-spawned processes from reading `/Volumes/<X>/Users/...`
+  by default**, even if the user's actual home directory lives there (via
+  `/Users/<name>` symlink). Symptom: launchd reports the service "running"
+  but the process never writes to stdout/stderr, never binds its port,
+  never spawns children. `sample <pid>` shows 100% time in
+  `__open_nocancel` because the kernel is returning `EPERM` on `getcwd()`
+  ancestor walks and the language runtime retries instead of surfacing.
+  Confirm with a minimal test plist running `/bin/sh -c "pwd"` — you'll
+  see `getcwd: cannot access parent directories: Operation not permitted`.
+  Fix: System Settings → Privacy & Security → Full Disk Access → add the
+  binary (e.g. `~/.bun/bin/bun`). Shell-spawned processes inherit
+  Terminal's TCC scope and don't hit this — only launchd does.
+- **`launchctl bootstrap gui/$(id -u)` is the modern entry point.**
+  `launchctl load/unload` is deprecated on macOS 11+; `kickstart -k` is
+  the modern way to force-restart a supervised service.
+- **`KeepAlive` must include `SuccessfulExit=false`** to avoid a restart
+  loop when the service exits cleanly (e.g. on `pkill -TERM`). Pair with
+  `Crashed=true` so launchd respawns after a real crash.
 
 ## File-binding semantics
 
