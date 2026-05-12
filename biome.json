@@ -1,7 +1,15 @@
 {
   "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
   "files": {
-    "ignore": ["**/node_modules", "**/dist", "**/build", "**/.claude", "**/data", "**/.bun-cache"]
+    "ignore": [
+      "**/node_modules",
+      "**/dist",
+      "**/build",
+      "**/.claude",
+      "**/data",
+      "**/.bun-cache",
+      "packages/plugin/mcp"
+    ]
   },
   "organizeImports": { "enabled": true },
   "linter": {
