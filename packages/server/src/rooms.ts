@@ -518,6 +518,7 @@ export class Rooms {
       contextBefore?: string;
       contextAfter?: string;
       occurrence?: number;
+      parseInlineMarks?: boolean;
     },
   ): prose.ReplaceResult {
     const room = this.rooms.get(docId);
@@ -536,6 +537,7 @@ export class Rooms {
     docId: string,
     threadId: string,
     replacement: string,
+    opts?: { parseInlineMarks?: boolean },
   ): prose.AnchoredEditResult {
     const room = this.rooms.get(docId);
     if (!room) return { ok: false, error: 'anchor-not-found' };
@@ -546,6 +548,7 @@ export class Rooms {
       startRel: thread.anchor.startRel,
       endRel: thread.anchor.endRel,
       replacement,
+      parseInlineMarks: opts?.parseInlineMarks === true,
     });
   }
 

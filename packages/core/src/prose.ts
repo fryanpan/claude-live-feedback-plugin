@@ -209,11 +209,51 @@ export interface ReplaceResult {
 }
 
 /**
+ * Insert `text` into `node` at `offset`. When `parseInlineMarks` is true,
+ * the text is tokenized via `inlineMarksToDelta` and inserted via
+ * `applyDelta` so `[label](url)`, `**bold**`, `*italic*`, `` `code` ``,
+ * and `~~strike~~` syntax in the input becomes real marks on the inserted
+ * text. When false (default), the text is inserted as plain characters
+ * and the insertion inherits any marks at `offset` from the surrounding
+ * text — the original behavior.
+ *
+ * We use `applyDelta` rather than a loop of `insert(cursor, str, attrs)`
+ * calls because per-call attributes set Yjs's open-mark state forward —
+ * a subsequent unmarked `insert(cursor, plain)` then picks up the prior
+ * marks and bleeds them into surrounding text. `applyDelta` treats each
+ * op's attributes as scoped to that op's insert.
+ */
+function insertWithOptionalMarks(
+  node: Y.XmlText,
+  offset: number,
+  text: string,
+  parseInlineMarks: boolean,
+): void {
+  if (text.length === 0) return;
+  if (!parseInlineMarks) {
+    node.insert(offset, text);
+    return;
+  }
+  const delta = inlineMarksToDelta(text);
+  const positioned: Array<{
+    retain?: number;
+    insert?: string;
+    attributes?: Record<string, unknown>;
+  }> = offset > 0 ? [{ retain: offset }, ...delta] : [...delta];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  node.applyDelta(positioned as any);
+}
+
+/**
  * Resolve a find (with optional context) and replace it in place. The
- * replacement is inserted as plain text into the SAME Y.XmlText node —
- * so any marks (bold, italic, links) covering the matched text apply
- * to the replacement too, which is what you want when fixing a typo
- * inside an italicized span.
+ * replacement is inserted into the SAME Y.XmlText node — so any marks
+ * (bold, italic, links) covering the matched text apply to the
+ * replacement too, which is what you want when fixing a typo inside an
+ * italicized span.
+ *
+ * Pass `parseInlineMarks: true` to interpret `[label](url)` / `**bold**`
+ * / `*italic*` / `` `code` `` / `~~strike~~` syntax in the `replace`
+ * string as marks on the inserted text (instead of literal characters).
  */
 export function findAndReplace(
   doc: Y.Doc,
@@ -224,6 +264,8 @@ export function findAndReplace(
     contextAfter?: string;
     /** 1-indexed. When omitted, requires a unique match. */
     occurrence?: number;
+    /** Parse inline markdown in `replace` into Yjs marks. Default false. */
+    parseInlineMarks?: boolean;
     transactionOrigin?: unknown;
   },
 ): ReplaceResult {
@@ -253,7 +295,12 @@ export function findAndReplace(
 
   doc.transact(() => {
     chosen.segment.node.delete(chosen.offsetInNode, chosen.length);
-    if (opts.replace.length > 0) chosen.segment.node.insert(chosen.offsetInNode, opts.replace);
+    insertWithOptionalMarks(
+      chosen.segment.node,
+      chosen.offsetInNode,
+      opts.replace,
+      opts.parseInlineMarks === true,
+    );
   }, opts.transactionOrigin ?? 'agent');
 
   return { ok: true };
@@ -321,19 +368,22 @@ export function rewriteRange(
     startRel: Uint8Array;
     endRel: Uint8Array;
     replacement: string;
+    /** Parse inline markdown in `replacement` into Yjs marks. Default false. */
+    parseInlineMarks?: boolean;
     transactionOrigin?: unknown;
   },
 ): AnchoredEditResult {
   const start = resolveRelativePositionRaw(doc, opts.startRel);
   const end = resolveRelativePositionRaw(doc, opts.endRel);
   if (!start || !end) return { ok: false, error: 'anchor-orphaned' };
+  const parseInlineMarks = opts.parseInlineMarks === true;
 
   if (start.node === end.node) {
     const from = Math.min(start.offset, end.offset);
     const to = Math.max(start.offset, end.offset);
     doc.transact(() => {
       start.node.delete(from, to - from);
-      if (opts.replacement.length > 0) start.node.insert(from, opts.replacement);
+      insertWithOptionalMarks(start.node, from, opts.replacement, parseInlineMarks);
     }, opts.transactionOrigin ?? 'agent');
     return { ok: true };
   }
@@ -372,9 +422,7 @@ export function rewriteRange(
         seg.node.delete(0, seg.length);
       }
     }
-    if (opts.replacement.length > 0) {
-      touched[0]!.node.insert(firstOffset, opts.replacement);
-    }
+    insertWithOptionalMarks(touched[0]!.node, firstOffset, opts.replacement, parseInlineMarks);
   }, opts.transactionOrigin ?? 'agent');
   return { ok: true };
 }
