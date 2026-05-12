@@ -12,6 +12,7 @@ import {
   insertBlocksAfterAnchor,
   parseMarkdownBlocks,
   readAgentAnchor,
+  resolveTextRangeFromFind,
   rewriteRange,
   serializeFragmentToMarkdown,
   walkProse,
@@ -540,6 +541,57 @@ describe('createAgentAnchor', () => {
     expect(res.ok).toBe(false);
     expect(res.error).toBe('ambiguous');
     expect(res.candidates).toHaveLength(3);
+  });
+});
+
+describe('resolveTextRangeFromFind', () => {
+  it('returns startRel + endRel + matched snippet for a unique find', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'Foo bar baz.' }]);
+    const res = resolveTextRangeFromFind(doc, { find: 'bar' });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.startRel).toBeInstanceOf(Uint8Array);
+      expect(res.endRel).toBeInstanceOf(Uint8Array);
+      expect(res.snippetText).toBe('bar');
+    }
+  });
+
+  it('disambiguates via contextAfter the same way find_and_replace does', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [
+      { tag: 'paragraph', text: 'The cat sat.' },
+      { tag: 'paragraph', text: 'The cat jumped.' },
+    ]);
+    const res = resolveTextRangeFromFind(doc, { find: 'cat', contextAfter: ' jumped' });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.snippetText).toBe('cat');
+  });
+
+  it('returns ambiguous with candidates when not disambiguated', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'cat cat cat' }]);
+    const res = resolveTextRangeFromFind(doc, { find: 'cat' });
+    expect(res.ok).toBe(false);
+    if (!res.ok && res.error === 'ambiguous') {
+      expect(res.candidates).toHaveLength(3);
+    }
+  });
+
+  it('returns no-match when find is absent', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'Hello' }]);
+    const res = resolveTextRangeFromFind(doc, { find: 'bye' });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toBe('no-match');
+  });
+
+  it('picks by occurrence index when specified', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'a a a' }]);
+    const res = resolveTextRangeFromFind(doc, { find: 'a', occurrence: 2 });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.snippetText).toBe('a');
   });
 });
 
