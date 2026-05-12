@@ -955,6 +955,74 @@ describe('deleteSection', () => {
   });
 });
 
+describe('heading-level round-trip', () => {
+  function roundTrip(md: string): string {
+    const doc = new Y.Doc();
+    const fragment = getProseFragment(doc);
+    const blocks = parseMarkdownBlocks(md);
+    doc.transact(() => fragment.push(blocks));
+    return serializeFragmentToMarkdown(fragment);
+  }
+
+  // Regression coverage for a "live editor renders H3 but disk shows ##"
+  // report from 2026-05-12. Verified server-side: parser captures the
+  // `#` count, sets `level` attribute as a string, serializer reads it
+  // back and emits `'#'.repeat(level)`. No level downgrade.
+  it('preserves every level from H1 through H6 unchanged', () => {
+    const input = [
+      '# H1 title',
+      '',
+      '## H2 section',
+      '',
+      '### H3 subsection',
+      '',
+      '#### H4 sub-subsection',
+      '',
+      '##### H5',
+      '',
+      '###### H6',
+      '',
+    ].join('\n');
+    const out = roundTrip(input);
+    expect(out).toContain('# H1 title');
+    expect(out).toContain('## H2 section');
+    expect(out).toContain('### H3 subsection');
+    expect(out).toContain('#### H4 sub-subsection');
+    expect(out).toContain('##### H5');
+    expect(out).toContain('###### H6');
+    // And ensure no level got promoted/demoted (`#### ` doesn't appear
+    // as `### ` etc.).
+    expect(out.split('\n').filter((l) => l.startsWith('# '))).toHaveLength(1);
+    expect(out.split('\n').filter((l) => l.startsWith('## '))).toHaveLength(1);
+    expect(out.split('\n').filter((l) => l.startsWith('### '))).toHaveLength(1);
+    expect(out.split('\n').filter((l) => l.startsWith('#### '))).toHaveLength(1);
+    expect(out.split('\n').filter((l) => l.startsWith('##### '))).toHaveLength(1);
+    expect(out.split('\n').filter((l) => l.startsWith('###### '))).toHaveLength(1);
+  });
+
+  it('preserves H3 specifically when interleaved with H2 (the reported scenario)', () => {
+    const input = [
+      '## Section',
+      '',
+      '### Subsection A',
+      '',
+      'Body A.',
+      '',
+      '### Subsection B',
+      '',
+      'Body B.',
+      '',
+      '## Next section',
+      '',
+    ].join('\n');
+    const out = roundTrip(input);
+    // The three H3s must survive — not downgrade to ##.
+    expect(out.split('\n').filter((l) => l.startsWith('### '))).toHaveLength(2);
+    expect(out).toContain('### Subsection A');
+    expect(out).toContain('### Subsection B');
+  });
+});
+
 describe('YAML frontmatter round-trip', () => {
   function roundTrip(md: string): string {
     const doc = new Y.Doc();
