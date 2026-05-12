@@ -455,38 +455,56 @@ async function boot(): Promise<void> {
       );
     },
     onResolve: async (id) => {
-      await fetch(
-        `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/resolve`,
-        { method: 'POST' },
-      );
+      try {
+        const res = await fetch(
+          `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/resolve`,
+          { method: 'POST' },
+        );
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        showToast('✓ Resolved');
+      } catch {
+        showToast('Failed to resolve — try again');
+      }
     },
     onReopen: async (id) => {
-      await fetch(
-        `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/reopen`,
-        { method: 'POST' },
-      );
+      try {
+        const res = await fetch(
+          `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/reopen`,
+          { method: 'POST' },
+        );
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        showToast('✓ Reopened');
+      } catch {
+        showToast('Failed to reopen — try again');
+      }
     },
-    onReanchor: (id) => {
+    onReanchor: async (id) => {
       const sel = editor.getSelectionRel();
       if (!sel) {
         showToast('Select new text first, then click Re-anchor.');
         return;
       }
-      void fetch(
-        `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/reanchor`,
-        {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            anchor: {
-              kind: 'text-range',
-              startRel: Array.from(sel.start),
-              endRel: Array.from(sel.end),
-              snippet: { text: sel.snippet },
-            },
-          }),
-        },
-      );
+      try {
+        const res = await fetch(
+          `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/reanchor`,
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              anchor: {
+                kind: 'text-range',
+                startRel: Array.from(sel.start),
+                endRel: Array.from(sel.end),
+                snippet: { text: sel.snippet },
+              },
+            }),
+          },
+        );
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        showToast('✓ Re-anchored');
+      } catch {
+        showToast('Failed to re-anchor — try again');
+      }
     },
   });
 
@@ -642,21 +660,38 @@ async function boot(): Promise<void> {
     actions.className = 'thread-view-actions';
     if (t.status === 'resolved') {
       actions.appendChild(
-        makeBtn('Reopen', () => {
-          void fetch(
-            `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(t.id)}/reopen`,
-            { method: 'POST' },
-          );
+        makeBtn('Reopen', async () => {
+          try {
+            const res = await fetch(
+              `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(t.id)}/reopen`,
+              { method: 'POST' },
+            );
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            showToast('✓ Reopened');
+          } catch {
+            showToast('Failed to reopen — try again');
+          }
         }),
       );
     } else {
       actions.appendChild(
-        makeBtn('Resolve', () => {
-          void fetch(
-            `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(t.id)}/resolve`,
-            { method: 'POST' },
-          );
-          closeThreadView();
+        makeBtn('Resolve', async () => {
+          // Don't close the sheet until the fetch confirms — closing on a
+          // fire-and-forget call leaves the user with no signal when the
+          // network blips, and they can't tell "my click registered" from
+          // "the resolve happened." Yjs sync re-renders the panel + clears
+          // the doc highlight automatically once status flips server-side.
+          try {
+            const res = await fetch(
+              `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(t.id)}/resolve`,
+              { method: 'POST' },
+            );
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            showToast('✓ Resolved');
+            closeThreadView();
+          } catch {
+            showToast('Failed to resolve — try again');
+          }
         }),
       );
     }
