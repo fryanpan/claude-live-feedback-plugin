@@ -146,6 +146,70 @@ describe('server REST', () => {
     expect(edited.blocks[0]?.text).toBe('Hello, Bryan!');
   });
 
+  it('creates a thread via threads/by_find with shared anchor resolution', async () => {
+    const file = join(dataDir, 'thread-by-find.md');
+    writeFileSync(file, 'The cat sat on the mat.\n');
+    await fetch(`${base}/api/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId: 'thread-by-find-1', type: 'markdown', sourceUrl: file }),
+    }).then((r) => j(r));
+
+    // Happy path: unique match resolves to an anchor and a thread is created.
+    const created = await fetch(`${base}/api/docs/thread-by-find-1/threads/by_find`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        author: agent,
+        text: 'Cats are nice. Worth a sentence about the rug, too.',
+        find: 'cat',
+      }),
+    }).then((r) =>
+      j<{
+        thread: {
+          id: string;
+          anchor: { kind: string; snippet: { text: string } };
+          comments: { text: string }[];
+        };
+      }>(r),
+    );
+    expect(created.thread.anchor.kind).toBe('text-range');
+    expect(created.thread.anchor.snippet.text).toBe('cat');
+    expect(created.thread.comments[0]?.text).toContain('Cats are nice');
+
+    // The new thread shows up in the same listing the editor uses.
+    const list = await fetch(`${base}/api/docs/thread-by-find-1/threads`).then((r) =>
+      j<{ threads: { id: string }[] }>(r),
+    );
+    expect(list.threads.map((t) => t.id)).toContain(created.thread.id);
+
+    // Ambiguous match → 409 with candidates (same shape as find_and_replace).
+    writeFileSync(file, 'cat cat cat\n');
+    await fetch(`${base}/api/docs/thread-by-find-1/reparse_from_disk`, { method: 'POST' }).then(
+      (r) => j(r),
+    );
+    const ambig = await fetch(`${base}/api/docs/thread-by-find-1/threads/by_find`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ author: agent, text: 'which cat?', find: 'cat' }),
+    });
+    expect(ambig.status).toBe(409);
+    const ambigBody = (await ambig.json()) as {
+      error: string;
+      candidates?: Array<{ docOffset: number }>;
+    };
+    expect(ambigBody.error).toBe('ambiguous');
+    expect(ambigBody.candidates).toHaveLength(3);
+
+    // Rejects missing required fields.
+    const bad = await fetch(`${base}/api/docs/thread-by-find-1/threads/by_find`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ author: agent, text: 'no find' }),
+    });
+    expect(bad.status).toBe(400);
+  });
+
   it('rejects POST /api/docs for markdown without sourceUrl', async () => {
     const r = await fetch(`${base}/api/docs`, {
       method: 'POST',
