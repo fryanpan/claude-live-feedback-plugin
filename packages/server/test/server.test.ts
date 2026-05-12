@@ -168,7 +168,12 @@ describe('server REST', () => {
       j<{
         thread: {
           id: string;
-          anchor: { kind: string; snippet: { text: string } };
+          anchor: {
+            kind: string;
+            startRel: number[];
+            endRel: number[];
+            snippet: { text: string };
+          };
           comments: { text: string }[];
         };
       }>(r),
@@ -176,6 +181,17 @@ describe('server REST', () => {
     expect(created.thread.anchor.kind).toBe('text-range');
     expect(created.thread.anchor.snippet.text).toBe('cat');
     expect(created.thread.comments[0]?.text).toContain('Cats are nice');
+    // Regression: startRel/endRel MUST serialize as JSON arrays, not as
+    // numeric-keyed objects. Storing a Uint8Array in a plain object inside
+    // a Y.Map encodes via JSON-stringify, producing `{"0":..,"1":..}` on
+    // the way out — which breaks the client's `new Uint8Array(anchor.startRel)`
+    // reconstruction (empty array, no iteration). Editor-created threads use
+    // `Array.from(uint8array)` in packages/markdown-app/src/app.ts:976 and
+    // round-trip cleanly. Agent path must match.
+    expect(Array.isArray(created.thread.anchor.startRel)).toBe(true);
+    expect(Array.isArray(created.thread.anchor.endRel)).toBe(true);
+    expect(created.thread.anchor.startRel.length).toBeGreaterThan(0);
+    expect(created.thread.anchor.endRel.length).toBeGreaterThan(0);
 
     // The new thread shows up in the same listing the editor uses.
     const list = await fetch(`${base}/api/docs/thread-by-find-1/threads`).then((r) =>
