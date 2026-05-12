@@ -76,10 +76,10 @@ const BASH_PREFIX_ALLOWLIST = [
  * for another service still prompts.
  */
 const BASH_SUBSTRING_ALLOWLIST = [
-  `launchctl bootstrap gui/`, // followed by uid + plist; the install.sh script uses this exact form
-  `launchctl bootout gui/`,
-  `launchctl kickstart -k gui/`,
-  `launchctl print gui/`,
+  'launchctl bootstrap gui/', // followed by uid + plist; the install.sh script uses this exact form
+  'launchctl bootout gui/',
+  'launchctl kickstart -k gui/',
+  'launchctl print gui/',
   `launchctl list ${SERVICE_LABEL}`,
 ];
 
