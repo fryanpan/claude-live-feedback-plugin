@@ -276,15 +276,22 @@ export class Rooms {
     // the editor renders no decoration, and clicks miss entirely. The editor
     // serializes the same way it sends over JSON: as a number[]. Match it.
     // See packages/markdown-app/src/app.ts:976 (`Array.from(selection.start)`).
+    // `Anchor.startRel`/`endRel` is typed as Uint8Array, but the editor's
+    // own thread-create path (`packages/markdown-app/src/app.ts:976`)
+    // sends a number[] — and that's what survives Yjs's encoder cleanly
+    // inside a plain object. A Uint8Array nested in a plain object gets
+    // JSON-stringified to `{"0":2,"1":251,...}` on the way out, with no
+    // .length and no iteration, so `new Uint8Array(anchor.startRel)` on
+    // the client produces an empty array and decorations stop rendering.
+    // Match the editor's wire shape. The `unknown` double-cast is the
+    // accepted way to thread a number[] through a Uint8Array-typed slot
+    // without `as any`.
+    const startRelArr = Array.from(resolved.startRel) as unknown as Uint8Array;
+    const endRelArr = Array.from(resolved.endRel) as unknown as Uint8Array;
     const anchor: Anchor = {
       kind: 'text-range',
-      // biome-ignore lint/suspicious/noExplicitAny: Anchor.startRel/endRel
-      // are typed as Uint8Array but Yjs round-trips number[] cleanly (what
-      // the editor sends). The type is a documentation aid, not a runtime
-      // enforcement — both serialize identically over the network.
-      startRel: Array.from(resolved.startRel) as any,
-      // biome-ignore lint/suspicious/noExplicitAny: same as above.
-      endRel: Array.from(resolved.endRel) as any,
+      startRel: startRelArr,
+      endRel: endRelArr,
       snippet: { text: resolved.snippetText },
     };
     const thread = await this.postComment(docId, null, author, text, anchor);
