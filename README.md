@@ -25,11 +25,33 @@ Note that this plugin does **not** work with code yet, but could be extended to 
 
 ## Installation
 
-1. Clone this plugin to a local folder:
+The fastest path:
+
+```sh
+git clone https://github.com/fryanpan/claude-live-feedback-plugin.git
+cd claude-live-feedback-plugin
+claude
+```
+
+Then in the Claude Code session, run:
+
+```
+/setup
+```
+
+Claude walks through every step — `bun install`, the dev-channels shell alias, plugin registration + install, and (optionally) the macOS launchd supervisor — pausing for confirmation on each side-effect.
+
+After setup, ask Claude things like:
+
+- "Show me the doc &lt;your doc name&gt; with live feedback"
+- "Show me a mockup with live feedback"
+- "Show me the dev server with live feedback"
+
+### Manual install (if you'd rather do it yourself)
+
+1. Install JS deps:
 
    ```sh
-   git clone https://github.com/fryanpan/claude-live-feedback-plugin.git
-   cd claude-live-feedback-plugin
    bun install
    ```
 
@@ -41,7 +63,7 @@ Note that this plugin does **not** work with code yet, but could be extended to 
 
    Reload your shell (`source ~/.zshrc`) and relaunch Claude Code.
 
-3. Install the plugin at the user level. From the cloned plugin directory:
+3. Register + install the plugin at user scope:
 
    ```sh
    claude plugin marketplace add .
@@ -49,11 +71,6 @@ Note that this plugin does **not** work with code yet, but could be extended to 
    ```
 
    The MCP server is bundled inside the plugin tree at `packages/plugin/mcp/index.js` and invoked via Claude Code's `${CLAUDE_PLUGIN_ROOT}` substitution, so no `npm link` step or PATH setup is needed — the plugin install is the complete install.
-
-4. Use the plugin by asking Claude like this:
-   - "Show me the doc &lt;your doc name&gt; with live feedback"
-   - "Show me a mockup with live feedback"
-   - "Show me the dev server with live feedback"
 
 ## Run as a service (macOS)
 
