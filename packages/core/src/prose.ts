@@ -1132,18 +1132,37 @@ export interface CreateAnchorResult {
  * persist its start/end as a named anchor. Returns a short id the
  * agent can pass to editAtAnchor later.
  */
-export function createAgentAnchor(
+/**
+ * Resolve a `find` (with optional context / occurrence) to a serialized
+ * Y.RelativePosition pair plus the matched snippet text. Shared by:
+ *   - `createAgentAnchor` (agent-private bookmarks)
+ *   - `rooms.createThreadByFind` (agent-created review threads)
+ *
+ * Both call sites need the same disambiguation semantics as
+ * `find_and_replace`: occurrence picker, cross-node detection, ambiguous
+ * candidate listing. Keeping one resolver means a bug-fix here lands in
+ * both paths automatically.
+ */
+export type ResolveTextRangeResult =
+  | { ok: true; startRel: Uint8Array; endRel: Uint8Array; snippetText: string }
+  | { ok: false; error: 'no-match' | 'cross-node' }
+  | {
+      ok: false;
+      error: 'ambiguous';
+      candidates: Array<{ docOffset: number; preview: string }>;
+    };
+
+export function resolveTextRangeFromFind(
   doc: Y.Doc,
   opts: {
     find: string;
     contextBefore?: string;
     contextAfter?: string;
     occurrence?: number;
-    label?: string;
   },
-): CreateAnchorResult {
+): ResolveTextRangeResult {
   const fragment = getProseFragment(doc);
-  const { matches, crossNode } = locateMatches(fragment, opts);
+  const { matches, crossNode, plainText } = locateMatches(fragment, opts);
   if (matches.length === 0) {
     if (crossNode > 0) return { ok: false, error: 'cross-node' };
     return { ok: false, error: 'no-match' };
@@ -1155,7 +1174,6 @@ export function createAgentAnchor(
     }
     chosen = matches[opts.occurrence - 1]!;
   } else if (matches.length > 1) {
-    const { plainText } = walkProse(fragment);
     return {
       ok: false,
       error: 'ambiguous',
@@ -1168,16 +1186,38 @@ export function createAgentAnchor(
     chosen = matches[0]!;
   }
 
-  const startRel = Y.createRelativePositionFromTypeIndex(chosen.segment.node, chosen.offsetInNode);
-  const endRel = Y.createRelativePositionFromTypeIndex(
-    chosen.segment.node,
-    chosen.offsetInNode + chosen.length,
+  const startRel = Y.encodeRelativePosition(
+    Y.createRelativePositionFromTypeIndex(chosen.segment.node, chosen.offsetInNode),
   );
+  const endRel = Y.encodeRelativePosition(
+    Y.createRelativePositionFromTypeIndex(chosen.segment.node, chosen.offsetInNode + chosen.length),
+  );
+  const snippetText = plainText.slice(chosen.docOffset, chosen.docOffset + chosen.length);
+  return { ok: true, startRel, endRel, snippetText };
+}
+
+export function createAgentAnchor(
+  doc: Y.Doc,
+  opts: {
+    find: string;
+    contextBefore?: string;
+    contextAfter?: string;
+    occurrence?: number;
+    label?: string;
+  },
+): CreateAnchorResult {
+  const resolved = resolveTextRangeFromFind(doc, opts);
+  if (!resolved.ok) {
+    if (resolved.error === 'ambiguous') {
+      return { ok: false, error: 'ambiguous', candidates: resolved.candidates };
+    }
+    return { ok: false, error: resolved.error };
+  }
   const anchorId = `a-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   const entry = new Y.Map<unknown>();
   doc.transact(() => {
-    entry.set('startRel', Y.encodeRelativePosition(startRel));
-    entry.set('endRel', Y.encodeRelativePosition(endRel));
+    entry.set('startRel', resolved.startRel);
+    entry.set('endRel', resolved.endRel);
     entry.set('createdAt', Date.now());
     if (opts.label) entry.set('label', opts.label);
     getAgentAnchorsMap(doc).set(anchorId, entry);

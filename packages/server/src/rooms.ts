@@ -232,6 +232,54 @@ export class Rooms {
     return thread;
   }
 
+  /**
+   * Agent-side thread creation. Mirrors the user-side editor flow
+   * (editor → POST /api/docs/<id>/threads with a pre-built Anchor) but
+   * accepts `find`+context the same way `find_and_replace` does — the
+   * agent doesn't have a cursor to anchor against, so it specifies the
+   * text range by its visible content. Once the anchor is built, the
+   * write path is identical: `postComment(docId, null, ...)` fires
+   * `thread.created` on the same channel the editor uses, so widgets
+   * see the new thread instantly.
+   */
+  async createThreadByFind(
+    docId: string,
+    opts: {
+      find: string;
+      contextBefore?: string;
+      contextAfter?: string;
+      occurrence?: number;
+    },
+    author: User,
+    text: string,
+  ): Promise<
+    | { ok: true; thread: Thread }
+    | {
+        ok: false;
+        error: 'no-match' | 'cross-node' | 'ambiguous' | 'no-doc';
+        candidates?: Array<{ docOffset: number; preview: string }>;
+      }
+  > {
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'no-doc' };
+    const resolved = prose.resolveTextRangeFromFind(room.ydoc, opts);
+    if (!resolved.ok) {
+      if (resolved.error === 'ambiguous') {
+        return { ok: false, error: 'ambiguous', candidates: resolved.candidates };
+      }
+      return { ok: false, error: resolved.error };
+    }
+    const anchor: Anchor = {
+      kind: 'text-range',
+      startRel: resolved.startRel,
+      endRel: resolved.endRel,
+      snippet: { text: resolved.snippetText },
+    };
+    const thread = await this.postComment(docId, null, author, text, anchor);
+    if (!thread) return { ok: false, error: 'no-doc' };
+    return { ok: true, thread };
+  }
+
   resolve(docId: string, threadId: string): Thread | null {
     const room = this.rooms.get(docId);
     if (!room) return null;
