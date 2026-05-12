@@ -9,9 +9,19 @@
 
 set -euo pipefail
 
+# /usr/sbin for lsof. Without it, the foreground-kill step silently no-ops
+# because BSD lsof lives at /usr/sbin/lsof, not /usr/bin/lsof.
+PATH="/usr/bin:/bin:/usr/sbin:${PATH:-}"
+
 LABEL="com.fryanpan.live-feedback"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# `pwd -P` resolves through symlinks. macOS launchd processes given a
+# symlinked WorkingDirectory can wedge in `getcwd()` walking parent inodes
+# across a non-default /Volumes mount — observed via `sample` showing the
+# parent bun stuck in __getcwd → open$NOCANCEL for the full sample window,
+# never reaching `pickFreePort` or `spawn`. Pass the real path so the
+# child process can `getcwd()` cleanly.
+REPO_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd -P)"
 TEMPLATE="${SCRIPT_DIR}/${LABEL}.plist.template"
 PLIST_DEST="${HOME}/Library/LaunchAgents/${LABEL}.plist"
 LOG_DIR="${HOME}/Library/Logs"
@@ -104,7 +114,33 @@ done
 if ! lsof -nP -iTCP:8788 -sTCP:LISTEN >/dev/null 2>&1; then
     echo
     echo "[install] WARNING: port 8788 not listening after 15s."
-    echo "[install] check logs: tail -f ${LOG_DIR}/${LABEL}.err.log"
+
+    # Diagnose: a launchd-spawned process that can't read the repo CWD (e.g.,
+    # if the repo lives under /Volumes/<something>/ and bun doesn't have Full
+    # Disk Access) wedges in getcwd() with EPERM. The symptom is empty
+    # stdout/stderr logs because bun never reaches console.log.
+    if [ -z "$(cat "${LOG_DIR}/${LABEL}.out.log" 2>/dev/null)" ] &&
+       [ -z "$(cat "${LOG_DIR}/${LABEL}.err.log" 2>/dev/null)" ]; then
+        case "${REPO_DIR}" in
+            /Volumes/*)
+                echo "[install]"
+                echo "[install] Empty logs + repo under /Volumes/ — looks like TCC is blocking"
+                echo "[install] the launchd-spawned bun from reading the repo. Grant Full Disk"
+                echo "[install] Access to bun:"
+                echo "[install]"
+                echo "[install]   System Settings → Privacy & Security → Full Disk Access → '+' →"
+                echo "[install]   ${BUN_BIN}"
+                echo "[install]"
+                echo "[install] Then re-run this script. Background: shell-spawned processes"
+                echo "[install] inherit Terminal's TCC scope; launchd-spawned ones start fresh."
+                ;;
+            *)
+                echo "[install] check logs: tail -f ${LOG_DIR}/${LABEL}.err.log"
+                ;;
+        esac
+    else
+        echo "[install] check logs: tail -f ${LOG_DIR}/${LABEL}.err.log"
+    fi
     exit 2
 fi
 
