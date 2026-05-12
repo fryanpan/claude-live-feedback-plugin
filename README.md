@@ -64,6 +64,8 @@ By default `bun run scripts/serve.ts` runs in the foreground — convenient for 
 ./scripts/launchd/install.sh
 ```
 
+> **If your home directory lives on a non-default volume** (e.g. `/Volumes/Data/Users/...` symlinked into `/Users/`), grant **Full Disk Access** to `bun` first: System Settings → Privacy & Security → Full Disk Access → "+" → `~/.bun/bin/bun` (⌘⇧G to type the hidden path). Without it, the launchd-spawned bun gets EPERM on the repo's working directory and wedges in `getcwd()` — symptom is empty `~/Library/Logs/com.fryanpan.live-feedback.{out,err}.log`. Shell-spawned processes inherit Terminal's TCC scope and avoid this; launchd-spawned ones start fresh. `install.sh` detects the case and prints the same instructions.
+
 The script writes `~/Library/LaunchAgents/com.fryanpan.live-feedback.plist`, bootstraps it into your user session, and waits for port 8788 to come up. Logs land at `~/Library/Logs/com.fryanpan.live-feedback.{out,err}.log`. The service runs as a per-user `LaunchAgent` — it starts at login (not boot) and stops at logout, which matches Bryan's Mac-mini-always-logged-in setup.
 
 Re-run `install.sh` after pulling code that changes the launch args (it's idempotent — boots out the old plist first).
