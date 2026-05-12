@@ -9,6 +9,24 @@
             "command": "bun run ${CLAUDE_PLUGIN_ROOT}/hooks/auto-approve-preview-nav.ts"
           }
         ]
+      },
+      {
+        "matcher": "mcp__plugin_live-feedback_live-feedback__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run ${CLAUDE_PLUGIN_ROOT}/hooks/auto-approve-plugin-ops.ts"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run ${CLAUDE_PLUGIN_ROOT}/hooks/auto-approve-plugin-ops.ts"
+          }
+        ]
       }
     ]
   }
