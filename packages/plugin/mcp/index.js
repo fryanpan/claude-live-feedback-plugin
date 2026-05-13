@@ -13823,16 +13823,31 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "create_review_doc",
-      description: "Create a markdown review doc backed by a file on disk. The server reads the file, parses it into the live editor, and sets up bidirectional sync — every edit (from the browser, the agent, or the widget) writes back to the .md within ~1 second, and external edits to the file (VS Code, git pull) flow into the live doc within ~1 second via fs.watch. `path` should be absolute; relative paths resolve against the server's cwd. The file must exist (create it first if it doesn't). Pass `setId` to group multiple docs for one review session — docs sharing a setId show up in each other's sidebar in the markdown editor, so the reviewer can hop between related files. Returns the review URL plus the attach result.",
+      description: "Create a markdown review doc backed by a file on disk. The server reads the file, parses it into the live editor, and sets up bidirectional sync — every edit (from the browser, the agent, or the widget) writes back to the .md within ~1 second, and external edits to the file (VS Code, git pull) flow into the live doc within ~1 second via fs.watch. `path` should be absolute; relative paths resolve against the server's cwd. The file must exist (create it first if it doesn't). Pass `setId` to group multiple docs for one review session — docs sharing a setId show up in each other's sidebar in the markdown editor, so the reviewer can hop between related files. The caller is auto-subscribed to thread events for this doc (`watch_doc`) on creation so comments arrive as channel messages without a separate call; pass `subscribe: false` for the rare drive-by case where another agent will own the review. Returns the review URL plus the attach result.",
       inputSchema: {
         type: "object",
         properties: {
           docId: { type: "string" },
           path: { type: "string" },
           title: { type: "string" },
-          setId: { type: "string" }
+          setId: { type: "string" },
+          subscribe: { type: "boolean" }
         },
         required: ["docId", "path"]
+      }
+    },
+    {
+      name: "bind_mock",
+      description: 'Bind an HTML mockup (or similar non-markdown review surface) to a docId. Use this when serving an HTML page that embeds `<claude-feedback-widget doc-id="...">` — declares the docId to the server proactively so the agent shows up in `list_docs` before the widget posts its first event, and auto-subscribes the caller to thread events on the doc. `sourceHtmlPath` is optional metadata so `list_docs` can surface the on-disk source. Pass `subscribe: false` to skip the auto-watch (rare). Idempotent — calling twice on the same docId is safe. Mirrors `create_review_doc` semantics for the HTML-widget path: no MCP entry point existed for this before, which made the auto-subscribe gap silent (agent serves HTML, user leaves comments, agent never gets events).',
+      inputSchema: {
+        type: "object",
+        properties: {
+          docId: { type: "string" },
+          sourceHtmlPath: { type: "string" },
+          title: { type: "string" },
+          subscribe: { type: "boolean" }
+        },
+        required: ["docId"]
       }
     },
     {
@@ -14005,7 +14020,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "watch_doc",
-      description: "Start pushing live feedback events for this doc into the current Claude Code session as <channel source='live-feedback' …> messages. Every thread.created / thread.replied / thread.resolved / thread.reopened on the doc arrives as a channel event until you call unwatch_doc.",
+      description: "Start pushing live feedback events for this doc into the current Claude Code session as <channel source='live-feedback' …> messages. Every thread.created / thread.replied / thread.resolved / thread.reopened on the doc arrives as a channel event until you call unwatch_doc. NOTE: this is normally redundant — `create_review_doc`, `bind_mock`, and most other docId-bearing tools auto-subscribe the caller on first touch. Use `watch_doc` explicitly when you want to subscribe to a doc you haven't otherwise interacted with (e.g., a peer's doc you only want to observe). Idempotent.",
       inputSchema: {
         type: "object",
         properties: { docId: { type: "string" } },
@@ -14060,9 +14075,23 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     }
   ]
 }));
+var NO_AUTO_WATCH_TOOLS = new Set(["unwatch_doc", "watch_doc", "observe_url"]);
+async function maybeAutoWatch(name, args) {
+  if (NO_AUTO_WATCH_TOOLS.has(name))
+    return;
+  if (!args || typeof args !== "object")
+    return;
+  const a = args;
+  if (a.subscribe === false)
+    return;
+  if (typeof a.docId !== "string" || a.docId.length === 0)
+    return;
+  await watchDoc(a.docId);
+}
 server.setRequestHandler(CallToolRequestSchema, async (req) => {
   const { name, arguments: a = {} } = req.params;
   try {
+    await maybeAutoWatch(name, a);
     switch (name) {
       case "list_docs": {
         const res = await http("GET", "/api/docs");
@@ -14119,6 +14148,16 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           sourceUrl: path,
           ...title ? { title } : {},
           ...setId ? { setId } : {}
+        });
+        return ok(res);
+      }
+      case "bind_mock": {
+        const { docId, sourceHtmlPath, title } = a;
+        const res = await http("POST", "/api/docs", {
+          docId,
+          type: "mockup",
+          ...sourceHtmlPath ? { sourceUrl: sourceHtmlPath } : {},
+          ...title ? { title } : {}
         });
         return ok(res);
       }
