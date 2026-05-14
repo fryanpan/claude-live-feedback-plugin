@@ -221,7 +221,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'bind_mock',
       description:
-        'Bind an HTML mockup (or similar non-markdown review surface) to a docId. Use this when serving an HTML page that embeds `<claude-feedback-widget doc-id="...">` — declares the docId to the server proactively so the agent shows up in `list_docs` before the widget posts its first event, and auto-subscribes the caller to thread events on the doc. `sourceHtmlPath` is optional metadata so `list_docs` can surface the on-disk source. Pass `subscribe: false` to skip the auto-watch (rare). Idempotent — calling twice on the same docId is safe. Mirrors `create_review_doc` semantics for the HTML-widget path: no MCP entry point existed for this before, which made the auto-subscribe gap silent (agent serves HTML, user leaves comments, agent never gets events).',
+        "Bind an HTML mockup to a docId AND serve it. `sourceHtmlPath` is an absolute path to an HTML file (typically one the agent just wrote, embedding `<claude-feedback-widget doc-id=\"...\">`). The server reads the file at that path on each request and streams it as HTML at `/mockup/<docId>` — no symlinking into the plugin's `demos/` directory required. Returns `meta.reviewUrl` pointing at the served URL; hand that to a human. Also auto-subscribes the caller to thread events on the doc (same as `create_review_doc`). Pass `subscribe: false` to skip the auto-watch (rare). Idempotent — calling twice on the same docId is safe; just updates the bound source path. Single-file mockups only: HTML that references sibling CSS/JS via relative paths won't resolve through this route since we don't serve the source directory. For multi-file mockups, drop the directory into the plugin's `demos/` and use `/demos/<dirname>/` as before.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -230,7 +230,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           title: { type: 'string' },
           subscribe: { type: 'boolean' },
         },
-        required: ['docId'],
+        required: ['docId', 'sourceHtmlPath'],
       },
     },
     {
