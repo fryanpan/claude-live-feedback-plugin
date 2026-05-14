@@ -548,6 +548,38 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         if (resp) return resp;
       }
 
+      // --- Mockup HTML — bound to a docId via bind_mock / POST /api/docs
+      //     with type='mockup'. Reads the file at the room's sourceUrl
+      //     (any absolute path on disk) and streams it as text/html. The
+      //     pre-bind_mock workflow required symlinking each new HTML
+      //     into <plugin-repo>/demos/ — `/mockup/<docId>` replaces that
+      //     dance and matches the contract of `/review/<docId>` for
+      //     markdown docs: one MCP call, one URL, no filesystem juggling.
+      //     Single-file mockups only — assets the HTML references via
+      //     relative paths won't resolve since we don't serve the source
+      //     directory. Use the existing /demos/ multi-page path for
+      //     mockups that ship with sibling files.
+      if (pathname.startsWith('/mockup/')) {
+        const slug = decodeURIComponent(pathname.slice('/mockup/'.length));
+        // Tolerate `/mockup/<docId>.html` AND `/mockup/<docId>` — agents
+        // share whichever URL feels natural.
+        const docId = slug.replace(/\.html?$/i, '');
+        if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
+        const room = rooms.get(docId);
+        if (!room || room.meta.type !== 'mockup' || !room.meta.sourceUrl) {
+          return new Response(renderMockupNotFound(docId), {
+            status: 404,
+            headers: { 'content-type': 'text/html; charset=utf-8' },
+          });
+        }
+        const resp = serveStatic(room.meta.sourceUrl);
+        if (resp) return resp;
+        return new Response(renderMockupNotFound(docId), {
+          status: 404,
+          headers: { 'content-type': 'text/html; charset=utf-8' },
+        });
+      }
+
       // --- Demos ---
       if (demosDir && pathname.startsWith('/demos/')) {
         let p = join(demosDir, pathname.slice('/demos/'.length));
@@ -603,14 +635,21 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
 
   // Decorate doc metadata with a `reviewUrl` that's actually reachable from
   // other devices on the tailnet / LAN. Markdown docs render at /review/...;
-  // mockup and dev surfaces are hosted by their own integrations, so we
-  // don't fabricate a URL for those.
-  function withReviewUrl<T extends { docId: string; type: DocType }>(
+  // mockup docs bound to a file on disk render at /mockup/<docId> — same
+  // one-call-one-URL contract as markdown. Mockup docs without a sourceUrl
+  // (e.g. dev-server surfaces hosted elsewhere) get no URL — there's nothing
+  // for us to serve.
+  function withReviewUrl<T extends { docId: string; type: DocType; sourceUrl?: string }>(
     meta: T,
   ): T & { reviewUrl?: string } {
-    if (meta.type !== 'markdown') return meta;
     const base = publicBaseUrl(server.port ?? port);
-    return { ...meta, reviewUrl: `${base}/review/${encodeURIComponent(meta.docId)}` };
+    if (meta.type === 'markdown') {
+      return { ...meta, reviewUrl: `${base}/review/${encodeURIComponent(meta.docId)}` };
+    }
+    if (meta.type === 'mockup' && meta.sourceUrl) {
+      return { ...meta, reviewUrl: `${base}/mockup/${encodeURIComponent(meta.docId)}` };
+    }
+    return meta;
   }
 
   return {
@@ -674,6 +713,19 @@ function serveStatic(p: string): Response | null {
   const buf = readFileSync(p);
   const ct = CT[extname(p).toLowerCase()] ?? 'application/octet-stream';
   return new Response(buf, { headers: { 'content-type': ct, 'cache-control': 'no-cache' } });
+}
+
+function renderMockupNotFound(docId: string): string {
+  const safe = escape(docId);
+  return `<!doctype html><meta charset="utf-8"><title>Mockup not found · Live Feedback</title>
+<style>body{font:15px/1.55 system-ui, sans-serif;margin:60px auto;max-width:560px;color:#222;padding:0 20px}
+h1{font-size:22px}code{background:#f3f3f3;padding:1px 5px;border-radius:3px;font-size:90%}
+small{color:#777}</style>
+<h1>Mockup not found</h1>
+<p>No mockup is bound to <code>${safe}</code>, or its source file isn't readable.
+Mockups are bound by an agent calling <code>bind_mock</code> with an absolute path
+to an HTML file. Once bound, the file is served here without any symlink dance.</p>
+<p>Ask the agent who shared this URL to call <code>bind_mock(docId, sourceHtmlPath)</code>, then refresh.</p>`;
 }
 
 function renderReviewNotFound(docId: string): string {

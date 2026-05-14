@@ -60,6 +60,44 @@ describe('server REST', () => {
     expect(docs.map((d) => d.docId)).toContain('unit-1');
   });
 
+  it('serves a bound mockup HTML at /mockup/<docId> with reviewUrl in meta', async () => {
+    // Reproduces ADFA's friction report: pre-bind_mock-serve, agents had to
+    // symlink each new HTML into the plugin's demos/ to make the URL serve.
+    // With the route the symlink dance disappears.
+    const file = join(dataDir, 'served-mockup.html');
+    writeFileSync(
+      file,
+      '<!doctype html><html><body><h1>Mock body</h1><claude-feedback-widget doc-id="mock-served-1"></claude-feedback-widget></body></html>',
+    );
+    const created = await fetch(`${base}/api/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId: 'mock-served-1', type: 'mockup', sourceUrl: file }),
+    }).then((r) =>
+      j<{ meta: { docId: string; type: string; sourceUrl?: string; reviewUrl?: string } }>(r),
+    );
+    // The decorated meta should now carry a reviewUrl pointing at /mockup/.
+    expect(created.meta.reviewUrl).toBeDefined();
+    expect(created.meta.reviewUrl).toContain(`/mockup/${encodeURIComponent('mock-served-1')}`);
+
+    // GET the served URL — should be the HTML body the agent wrote.
+    const served = await fetch(`${base}/mockup/mock-served-1`);
+    expect(served.status).toBe(200);
+    expect(served.headers.get('content-type')).toContain('text/html');
+    const body = await served.text();
+    expect(body).toContain('Mock body');
+    expect(body).toContain('claude-feedback-widget');
+
+    // `.html` suffix should also work — agents may share whichever form
+    // feels natural.
+    const servedSuffixed = await fetch(`${base}/mockup/mock-served-1.html`);
+    expect(servedSuffixed.status).toBe(200);
+
+    // Unbound docId → 404.
+    const missing = await fetch(`${base}/mockup/never-bound`);
+    expect(missing.status).toBe(404);
+  });
+
   it('rejects bad docId', async () => {
     const r = await fetch(`${base}/api/docs`, {
       method: 'POST',
