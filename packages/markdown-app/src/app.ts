@@ -77,6 +77,7 @@ async function boot(): Promise<void> {
   const threadViewReplySubmit = el<HTMLButtonElement>('thread-view-reply-submit');
   const formatBar = el<HTMLElement>('format-bar');
   const toggleFormat = el<HTMLButtonElement>('toggle-format');
+  const toggleEditMode = el<HTMLButtonElement>('toggle-edit-mode');
   const toggleThreads = el<HTMLButtonElement>('toggle-threads');
   const threadsCount = el<HTMLElement>('threads-count');
   const closeThreads = el<HTMLButtonElement>('close-threads');
@@ -975,6 +976,50 @@ async function boot(): Promise<void> {
   });
   applyWidthPref();
   wireFormatBar(editor);
+
+  // =========================================================================
+  // VIEW / EDIT MODE
+  //   Mobile Safari focuses the editor on tap → keyboard opens → bottom UI
+  //   gets pushed around. Default mobile viewports to read-only (view) mode
+  //   so a tap doesn't bring up the keyboard. Long-press to select text
+  //   still works in view mode and surfaces the comment pill. Persist the
+  //   user's chosen mode in localStorage so a desktop user who toggles to
+  //   view (or a mobile user who toggles to edit) is remembered next visit.
+  // =========================================================================
+  type EditMode = 'view' | 'edit';
+  const EDIT_MODE_KEY = 'lf:edit-mode';
+  function defaultEditMode(): EditMode {
+    // Treat viewport <=768px as a phone/small tablet — touch-first.
+    return window.matchMedia('(max-width: 768px)').matches ? 'view' : 'edit';
+  }
+  function readEditModePref(): EditMode {
+    const stored = localStorage.getItem(EDIT_MODE_KEY);
+    return stored === 'view' || stored === 'edit' ? stored : defaultEditMode();
+  }
+  function applyEditMode(mode: EditMode): void {
+    const editable = mode === 'edit';
+    editor.editor.setEditable(editable);
+    document.body.classList.toggle('view-mode', !editable);
+    toggleEditMode.setAttribute('aria-pressed', String(editable));
+    toggleEditMode.title = editable ? 'Tap to switch to view mode' : 'Tap to switch to edit mode';
+    toggleEditMode.setAttribute(
+      'aria-label',
+      editable
+        ? 'Currently editing — tap to switch to view mode'
+        : 'Currently viewing — tap to switch to edit mode',
+    );
+    if (!editable) {
+      formatBar.classList.add('is-collapsed');
+      toggleFormat.setAttribute('aria-pressed', 'false');
+    }
+  }
+  let editMode: EditMode = readEditModePref();
+  applyEditMode(editMode);
+  toggleEditMode.addEventListener('click', () => {
+    editMode = editMode === 'edit' ? 'view' : 'edit';
+    localStorage.setItem(EDIT_MODE_KEY, editMode);
+    applyEditMode(editMode);
+  });
 
   // =========================================================================
   // HOTKEYS
