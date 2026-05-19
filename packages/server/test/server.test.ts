@@ -226,6 +226,88 @@ describe('server REST', () => {
     expect(bad.status).toBe(400);
   });
 
+  it('DELETE /api/docs/:docId removes the doc + .ydoc, refuses on open threads without force', async () => {
+    // 1. Create a file-backed markdown doc with one open thread.
+    const file = join(dataDir, 'to-delete.md');
+    writeFileSync(file, '# Doc to delete\n\nBody paragraph.\n');
+    await fetch(`${base}/api/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId: 'del-1', type: 'markdown', sourceUrl: file }),
+    }).then((r) => j(r));
+    const created = await fetch(`${base}/api/docs/del-1/threads`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ author: bryan, text: 'keep me', anchor: fakeAnchor }),
+    }).then((r) => j<{ thread: { id: string } }>(r));
+
+    // 2. Refuses delete while an open thread exists.
+    const blocked = await fetch(`${base}/api/docs/del-1`, { method: 'DELETE' });
+    expect(blocked.status).toBe(409);
+    const blockedBody = (await blocked.json()) as {
+      ok: boolean;
+      error: string;
+      openThreadCount: number;
+    };
+    expect(blockedBody.ok).toBe(false);
+    expect(blockedBody.error).toBe('open-threads');
+    expect(blockedBody.openThreadCount).toBe(1);
+
+    // 3. After resolving the thread + letting the save timer flush, delete
+    //    succeeds and the persisted .ydoc is unlinked.
+    await fetch(`${base}/api/docs/del-1/threads/${created.thread.id}/resolve`, {
+      method: 'POST',
+    }).then((r) => j(r));
+    // Wait past the 200ms save debounce so the .ydoc is actually on disk.
+    await new Promise((r) => setTimeout(r, 300));
+    const ydocPath = join(dataDir, 'del-1.ydoc');
+    expect(existsSync(ydocPath)).toBe(true);
+    const ok = await fetch(`${base}/api/docs/del-1`, { method: 'DELETE' });
+    expect(ok.status).toBe(200);
+    const okBody = (await ok.json()) as { ok: boolean; deletedYdocPath?: string };
+    expect(okBody.ok).toBe(true);
+    expect(okBody.deletedYdocPath).toBe(ydocPath);
+    expect(existsSync(ydocPath)).toBe(false);
+
+    // 4. list_docs no longer includes the deleted doc.
+    const { docs } = await fetch(`${base}/api/docs`).then((r) =>
+      j<{ docs: { docId: string }[] }>(r),
+    );
+    expect(docs.map((d) => d.docId)).not.toContain('del-1');
+
+    // 5. Re-DELETE returns 404.
+    const gone = await fetch(`${base}/api/docs/del-1`, { method: 'DELETE' });
+    expect(gone.status).toBe(404);
+
+    // 6. The bound .md file is left intact (user data).
+    expect(existsSync(file)).toBe(true);
+  });
+
+  it('DELETE /api/docs/:docId?force=1 bypasses the open-thread guardrail', async () => {
+    const file = join(dataDir, 'force-delete.md');
+    writeFileSync(file, '# force\n');
+    await fetch(`${base}/api/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId: 'del-force', type: 'markdown', sourceUrl: file }),
+    }).then((r) => j(r));
+    await fetch(`${base}/api/docs/del-force/threads`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ author: bryan, text: 'still open', anchor: fakeAnchor }),
+    }).then((r) => j(r));
+
+    const forced = await fetch(`${base}/api/docs/del-force?force=1`, { method: 'DELETE' });
+    expect(forced.status).toBe(200);
+    const forcedBody = (await forced.json()) as { ok: boolean };
+    expect(forcedBody.ok).toBe(true);
+
+    const { docs } = await fetch(`${base}/api/docs`).then((r) =>
+      j<{ docs: { docId: string }[] }>(r),
+    );
+    expect(docs.map((d) => d.docId)).not.toContain('del-force');
+  });
+
   it('rejects POST /api/docs for markdown without sourceUrl', async () => {
     const r = await fetch(`${base}/api/docs`, {
       method: 'POST',

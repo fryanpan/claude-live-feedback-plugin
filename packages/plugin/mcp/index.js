@@ -14037,6 +14037,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       }
     },
     {
+      name: "delete_doc",
+      description: "Fully remove a review doc — tears down the file binding + fs watcher, closes live ws connections, deletes the persisted .ydoc, and drops the in-memory room so it no longer appears in `list_docs`. The bound .md file (if any) is LEFT ALONE — that's user data, never owned by the server. Refuses by default if the doc has open (unresolved) threads to avoid an agent nuking human-authored feedback; pass `force: true` to override (typical case: cleaning up a stale binding whose source .md was already deleted, so its threads are orphaned anyway). Returns `{ ok: true, deletedYdocPath? }` on success or `{ ok: false, error: 'open-threads', openThreadCount }` when the guardrail trips. If you mean only to stop receiving events, use `unwatch_doc` instead — it leaves the doc intact.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          docId: { type: "string" },
+          force: {
+            type: "boolean",
+            description: "Delete even if open threads exist. Use for stale bindings whose .md is already gone."
+          }
+        },
+        required: ["docId"]
+      }
+    },
+    {
       name: "list_watched_docs",
       description: "Return the docIds this session is currently subscribed to for channel events.",
       inputSchema: { type: "object", properties: {} }
@@ -14075,7 +14090,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     }
   ]
 }));
-var NO_AUTO_WATCH_TOOLS = new Set(["unwatch_doc", "watch_doc", "observe_url"]);
+var NO_AUTO_WATCH_TOOLS = new Set(["unwatch_doc", "watch_doc", "observe_url", "delete_doc"]);
 async function maybeAutoWatch(name, args) {
   if (NO_AUTO_WATCH_TOOLS.has(name))
     return;
@@ -14267,6 +14282,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const { docId } = a;
         unwatchDoc(docId);
         return ok({ docId, watching: Array.from(watchers.keys()) });
+      }
+      case "delete_doc": {
+        const { docId, force } = a;
+        unwatchDoc(docId);
+        const qs = force ? "?force=1" : "";
+        const res = await http("DELETE", `/api/docs/${encodeURIComponent(docId)}${qs}`);
+        return ok(res);
       }
       case "list_watched_docs": {
         return ok({ watching: Array.from(watchers.keys()) });
