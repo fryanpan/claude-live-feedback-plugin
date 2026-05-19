@@ -154,6 +154,12 @@ button {
   color: #fff;
   border-color: var(--accent);
 }
+/* In view mode, the editor is read-only — formatting commands are no-ops
+   and the Aa toggle would just confuse. Hide it. The 💬 (threads) and
+   ✏️ (edit-mode) buttons stay useful. */
+body.view-mode #toggle-format {
+  display: none;
+}
 .icon-btn .badge {
   display: none;
   position: absolute;
@@ -1192,7 +1198,14 @@ body.composer-open #editor .ProseMirror ::selection {
 
 .thread-view {
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 0;
+  right: 0;
+  /* Ride above the iOS keyboard via --kb-bottom — when the reply
+     textarea is focused, the keyboard would otherwise push the
+     reply bar (textarea + submit ↑) off-screen because position:fixed
+     is layout-viewport-relative on iOS. */
+  bottom: var(--kb-bottom, 0px);
   z-index: 1100;
   background: var(--bg);
   display: flex;
