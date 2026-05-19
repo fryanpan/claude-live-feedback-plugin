@@ -4,6 +4,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  unlinkSync,
   watch,
   writeFileSync,
 } from 'node:fs';
@@ -779,6 +780,82 @@ export class Rooms {
     const room = this.rooms.get(docId);
     if (!room) return null;
     return prose.autoReanchorDoc(room.ydoc);
+  }
+
+  /**
+   * Fully remove a doc — tear down timers + fs watcher + binding,
+   * close any live ws connections, delete the .ydoc from disk, and
+   * drop the in-memory room. The bound `.md` file (if any) is left
+   * alone — that's user data, never owned by the server. By default
+   * refuses when the doc still has open threads so an agent can't
+   * accidentally nuke reviewer feedback; pass `force` to override
+   * (e.g. cleaning up a stale binding whose source file was already
+   * deleted).
+   */
+  delete(
+    docId: string,
+    opts?: { force?: boolean },
+  ): {
+    ok: boolean;
+    error?: 'not-found' | 'open-threads';
+    openThreadCount?: number;
+    deletedYdocPath?: string;
+  } {
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'not-found' };
+
+    if (!opts?.force) {
+      const openCount = listThreads(room.ydoc).filter((t) => t.status === 'open').length;
+      if (openCount > 0) {
+        return { ok: false, error: 'open-threads', openThreadCount: openCount };
+      }
+    }
+
+    const saveTimer = this.saveTimers.get(docId);
+    if (saveTimer) clearTimeout(saveTimer);
+    this.saveTimers.delete(docId);
+
+    const binding = this.fileBindings.get(docId);
+    if (binding) {
+      if (binding.writeTimer) clearTimeout(binding.writeTimer);
+      if (binding.readTimer) clearTimeout(binding.readTimer);
+      if (binding.watcher) {
+        try {
+          binding.watcher.close();
+        } catch (err) {
+          console.error(`[rooms] failed to close watcher for ${docId}:`, err);
+        }
+      }
+      this.fileBindings.delete(docId);
+    }
+
+    for (const ws of room.conns) {
+      try {
+        ws.close(1000, 'doc deleted');
+      } catch {
+        // ws may already be closing; ignore
+      }
+    }
+
+    const path = this.pathFor(docId);
+    let deletedYdocPath: string | undefined;
+    if (existsSync(path)) {
+      try {
+        unlinkSync(path);
+        deletedYdocPath = path;
+      } catch (err) {
+        console.error(`[rooms] failed to unlink ${path}:`, err);
+      }
+    }
+
+    try {
+      room.ydoc.destroy();
+    } catch (err) {
+      console.error(`[rooms] ydoc destroy failed for ${docId}:`, err);
+    }
+
+    this.rooms.delete(docId);
+    return { ok: true, deletedYdocPath };
   }
 
   listThreads(docId: string, filter?: { status?: 'open' | 'resolved' }): Thread[] {
