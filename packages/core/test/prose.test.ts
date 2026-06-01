@@ -1104,9 +1104,11 @@ describe('GFM table round-trip', () => {
   }
 
   it('parses a pipe table into a table block', () => {
-    const md = ['| Decision | Signal | Owner |', '| --- | --- | --- |', '| Hire | velocity | EM |'].join(
-      '\n',
-    );
+    const md = [
+      '| Decision | Signal | Owner |',
+      '| --- | --- | --- |',
+      '| Hire | velocity | EM |',
+    ].join('\n');
     const blocks = parseMarkdownBlocks(md);
     expect(blocks.some((b) => b.nodeName === 'table')).toBe(true);
   });
@@ -1119,7 +1121,15 @@ describe('GFM table round-trip', () => {
       '| Cut scope | cycle time | weekly |',
     ].join('\n');
     const out = roundtrip(md);
-    for (const cell of ['Decision', 'Signal', 'Cadence', 'Hire', 'velocity', 'Cut scope', 'weekly']) {
+    for (const cell of [
+      'Decision',
+      'Signal',
+      'Cadence',
+      'Hire',
+      'velocity',
+      'Cut scope',
+      'weekly',
+    ]) {
       expect(out).toContain(cell);
     }
   });
