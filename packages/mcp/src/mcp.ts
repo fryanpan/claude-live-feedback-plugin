@@ -610,10 +610,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       }
       case 'reparse_from_disk': {
         const { docId } = a as { docId: string };
-        const res = await http(
-          'POST',
-          `/api/docs/${encodeURIComponent(docId)}/reparse_from_disk`,
-        );
+        const res = await http('POST', `/api/docs/${encodeURIComponent(docId)}/reparse_from_disk`);
         return ok(res);
       }
       case 'bind_mock': {
