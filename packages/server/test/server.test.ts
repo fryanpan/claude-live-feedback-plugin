@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ElementAnchor, User } from '@feedback/core';
@@ -144,6 +144,55 @@ describe('server REST', () => {
       j<{ blocks: { text: string }[] }>(r),
     );
     expect(edited.blocks[0]?.text).toBe('Hello, Bryan!');
+  });
+
+  it('keeps applying external edits after a rename-based save (fs.watch re-arm regression)', async () => {
+    // Editors — and Claude Code's own Edit tool — save via write-temp +
+    // atomic rename, which replaces the file's inode. macOS kqueue binds to
+    // the inode at watch-creation time, so without re-arming the watcher
+    // goes deaf after the FIRST rename save and every later external edit is
+    // silently lost (deterministic; reproduced on Bun + Node). This guards
+    // armFileWatcher's re-bind-on-rename behavior.
+    const file = join(dataDir, 'rearm-test.md');
+    writeFileSync(file, 'one\n');
+    await j(
+      await fetch(`${base}/api/docs`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ docId: 'rearm-1', type: 'markdown', sourceUrl: file }),
+      }),
+    );
+
+    // Atomic replace — same shape as an editor save (NOT an in-place write,
+    // which wouldn't reproduce the kqueue staleness).
+    const renameSave = (content: string) => {
+      const tmp = `${file}.tmp`;
+      writeFileSync(tmp, content);
+      renameSync(tmp, file);
+    };
+    const waitForBlock = async (want: string) => {
+      for (let i = 0; i < 40; i++) {
+        const doc = await fetch(`${base}/api/docs/rearm-1/content`).then((r) =>
+          j<{ blocks: { text: string }[] }>(r),
+        );
+        if (doc.blocks[0]?.text === want) return;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      throw new Error(`first block never became ${JSON.stringify(want)}`);
+    };
+
+    // First rename save — pre-fix this one still syncs (watcher fires once).
+    renameSave('two\n');
+    await waitForBlock('two');
+
+    // Second rename save — pre-fix the watcher is now stale and this never
+    // arrives. Post-fix it re-armed on the first rename event.
+    renameSave('three\n');
+    await waitForBlock('three');
+
+    // Third, for good measure — a long-lived binding stays live.
+    renameSave('four\n');
+    await waitForBlock('four');
   });
 
   it('creates a thread via threads/by_find with shared anchor resolution', async () => {
