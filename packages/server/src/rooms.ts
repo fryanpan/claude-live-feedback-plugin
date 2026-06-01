@@ -1,13 +1,5 @@
-import {
-  type FSWatcher,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  watch,
-  writeFileSync,
-} from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   type Anchor,
   type DocMeta,
@@ -67,7 +59,10 @@ interface FileBinding {
   path: string;
   writeTimer?: ReturnType<typeof setTimeout> | null;
   readTimer?: ReturnType<typeof setTimeout> | null;
-  watcher?: FSWatcher | null;
+  /** Interval handle for the stat-mtime poll (see armFileWatcher). */
+  pollTimer?: ReturnType<typeof setInterval> | null;
+  /** Last file mtime (ms) we observed, so the poll reacts only to changes. */
+  lastMtimeMs?: number;
   /** The serialized markdown we last wrote or last read from disk.
    *  Both directions guard against this to break echo loops. */
   lastWritten?: string;
@@ -462,9 +457,7 @@ export class Rooms {
     const existing = this.fileBindings.get(docId);
     if (existing?.writeTimer) clearTimeout(existing.writeTimer);
     if (existing?.readTimer) clearTimeout(existing.readTimer);
-    try {
-      existing?.watcher?.close();
-    } catch {}
+    if (existing?.pollTimer) clearInterval(existing.pollTimer);
     const binding: FileBinding = { path: abs };
     this.fileBindings.set(docId, binding);
     // sourceUrl mirrors the path so UI headers can show "Editing: <path>"
@@ -481,51 +474,51 @@ export class Rooms {
     });
     if (seeded) binding.lastWritten = prose.serializeFragmentToMarkdown(fragment);
 
-    // disk → doc: watch for external edits. armFileWatcher watches the
-    // parent directory (not the file) so rename-based saves don't make us
-    // go deaf after the first edit — see its comment for the inode bug.
+    // disk → doc: poll for external edits (see armFileWatcher).
     this.armFileWatcher(room, binding);
 
     return { ok: true, seeded, resolvedPath: abs };
   }
 
   /**
-   * Create the fs.watch watcher for a binding.
+   * Watch the bound file for external edits via an mtime poll.
    *
-   * We watch the file's PARENT DIRECTORY and filter events by basename,
-   * NOT the file directly. A file-level watch is bound to the inode
-   * present at watch-creation time (kqueue on macOS, inotify on Linux).
-   * Most editors — and Claude Code's own Edit tool — save via
-   * write-temp-then-rename, which atomically replaces the file's inode.
-   * A file-level watch then delivers one final event and goes permanently
-   * stale, so only the FIRST external edit ever reaches the live doc
-   * (confirmed deterministic repro on Bun + Node, both platforms). The
-   * directory inode is stable across child renames, so a directory watch
-   * keeps catching every save. This is the same reason chokidar/nodemon
-   * watch directories rather than files.
+   * We deliberately do NOT use fs.watch. A file-level fs.watch is bound to
+   * the inode present at watch-creation time (kqueue on macOS, inotify on
+   * Linux). Editors — and Claude Code's own Edit tool — save via
+   * write-temp-then-rename, which atomically replaces the file's inode, so
+   * the watch goes stale and only the FIRST external edit ever reaches the
+   * live doc (deterministic repro on Bun + Node). Watching the parent
+   * directory dodges the inode problem on macOS but proved unreliable under
+   * Bun-on-Linux. A stat-mtime poll is immune to all of it — inode
+   * replacement, platform, and runtime — and ~1s latency matches the doc's
+   * existing sync contract.
    */
   private armFileWatcher(room: DocRoom, binding: FileBinding): void {
-    try {
-      binding.watcher?.close();
-    } catch {}
-    binding.watcher = null;
+    if (binding.pollTimer) clearInterval(binding.pollTimer);
+    binding.pollTimer = null;
     if (!existsSync(binding.path)) return;
-    const dir = dirname(binding.path);
-    const base = basename(binding.path);
     try {
-      binding.watcher = watch(dir, { persistent: false }, (_event, filename) => {
-        // Ignore sibling files in the same directory. filename can be null
-        // on some platforms/events — when it is, fall through and let
-        // reconcileFromDisk decide (it no-ops if our file is unchanged).
-        if (filename && filename !== base) return;
-        // fs.watch can fire several times per write (temp create + rename
-        // + change); debounce through binding.readTimer.
-        if (binding.readTimer) clearTimeout(binding.readTimer);
-        binding.readTimer = setTimeout(() => this.reconcileFromDisk(room, binding), 300);
-      });
-    } catch (err) {
-      console.error(`[rooms] fs.watch failed for ${dir}:`, err);
-    }
+      binding.lastMtimeMs = statSync(binding.path).mtimeMs;
+    } catch {}
+    const timer = setInterval(() => {
+      let mtimeMs: number;
+      try {
+        if (!existsSync(binding.path)) return;
+        mtimeMs = statSync(binding.path).mtimeMs;
+      } catch (err) {
+        console.error(`[rooms] stat failed for ${binding.path}:`, err);
+        return;
+      }
+      if (mtimeMs === binding.lastMtimeMs) return;
+      binding.lastMtimeMs = mtimeMs;
+      // Debounce so we don't read a half-written file mid-save.
+      if (binding.readTimer) clearTimeout(binding.readTimer);
+      binding.readTimer = setTimeout(() => this.reconcileFromDisk(room, binding), 150);
+    }, 500);
+    // Don't let the poll keep the process (or a test runner) alive.
+    timer.unref?.();
+    binding.pollTimer = timer;
   }
 
   /**
@@ -633,6 +626,11 @@ export class Rooms {
         if (md === binding.lastWritten) return;
         writeFileSync(binding.path, md);
         binding.lastWritten = md;
+        // Record our own write's mtime so the poll doesn't treat the
+        // write-back as an external edit and schedule a redundant reconcile.
+        try {
+          binding.lastMtimeMs = statSync(binding.path).mtimeMs;
+        } catch {}
       } catch (err) {
         console.error(`[rooms] file write failed for ${binding.path}:`, err);
       }

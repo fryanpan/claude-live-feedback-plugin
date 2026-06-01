@@ -146,14 +146,14 @@ describe('server REST', () => {
     expect(edited.blocks[0]?.text).toBe('Hello, Bryan!');
   });
 
-  it('keeps applying external edits after a rename-based save (fs.watch re-arm regression)', async () => {
+  it('keeps applying external edits across successive rename-based saves', async () => {
     // Editors — and Claude Code's own Edit tool — save via write-temp +
-    // atomic rename, which replaces the file's inode. macOS kqueue binds to
-    // the inode at watch-creation time, so without re-arming the watcher
-    // goes deaf after the FIRST rename save and every later external edit is
-    // silently lost (deterministic; reproduced on Bun + Node, both
-    // platforms). This guards armFileWatcher's directory-watch approach,
-    // which survives child renames because the directory inode is stable.
+    // atomic rename, which replaces the file's inode. A file-level fs.watch
+    // is inode-bound (kqueue/inotify) and goes deaf after the first rename
+    // save, so only the FIRST external edit ever reaches the live doc
+    // (deterministic; reproduced on Bun + Node). This guards the mtime-poll
+    // watcher, which is immune to inode replacement. Each save below uses an
+    // atomic rename, NOT an in-place write, to exercise that path.
     const file = join(dataDir, 'rearm-test.md');
     writeFileSync(file, 'one\n');
     await j(
@@ -164,34 +164,29 @@ describe('server REST', () => {
       }),
     );
 
-    // Atomic replace — same shape as an editor save (NOT an in-place write,
-    // which wouldn't reproduce the kqueue staleness).
     const renameSave = (content: string) => {
       const tmp = `${file}.tmp`;
       writeFileSync(tmp, content);
       renameSync(tmp, file);
     };
     const waitForBlock = async (want: string) => {
-      for (let i = 0; i < 40; i++) {
+      // Generous budget: server polls every 500ms + 150ms debounce, and CI
+      // runners are slow. Returns as soon as it matches.
+      for (let i = 0; i < 80; i++) {
         const doc = await fetch(`${base}/api/docs/rearm-1/content`).then((r) =>
           j<{ blocks: { text: string }[] }>(r),
         );
         if (doc.blocks[0]?.text === want) return;
-        await new Promise((r) => setTimeout(r, 50));
+        await new Promise((r) => setTimeout(r, 100));
       }
       throw new Error(`first block never became ${JSON.stringify(want)}`);
     };
 
-    // First rename save — pre-fix this one still syncs (watcher fires once).
+    // Each successive rename save must land — pre-fix only the first did.
     renameSave('two\n');
     await waitForBlock('two');
-
-    // Second rename save — pre-fix the watcher is now stale and this never
-    // arrives. Post-fix it re-armed on the first rename event.
     renameSave('three\n');
     await waitForBlock('three');
-
-    // Third, for good measure — a long-lived binding stays live.
     renameSave('four\n');
     await waitForBlock('four');
   });
