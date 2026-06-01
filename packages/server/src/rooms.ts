@@ -7,7 +7,7 @@ import {
   watch,
   writeFileSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import {
   type Anchor,
   type DocMeta,
@@ -481,27 +481,28 @@ export class Rooms {
     });
     if (seeded) binding.lastWritten = prose.serializeFragmentToMarkdown(fragment);
 
-    // disk → doc: watch the file for external edits. armFileWatcher
-    // re-binds after rename-based saves so we don't go deaf after the
-    // first external edit (see its comment for the kqueue staleness bug).
+    // disk → doc: watch for external edits. armFileWatcher watches the
+    // parent directory (not the file) so rename-based saves don't make us
+    // go deaf after the first edit — see its comment for the inode bug.
     this.armFileWatcher(room, binding);
 
     return { ok: true, seeded, resolvedPath: abs };
   }
 
   /**
-   * (Re)create the fs.watch watcher for a binding.
+   * Create the fs.watch watcher for a binding.
    *
-   * macOS kqueue (used by both Node and Bun's fs.watch) binds to the
-   * INODE present at watch-creation time, not the path. Most editors —
-   * and Claude Code's own Edit tool — save via write-temp-then-rename,
-   * which atomically replaces the file's inode. kqueue delivers ONE
-   * final 'rename' event for the old inode and then goes permanently
-   * stale: every subsequent save lands on a new inode the watcher isn't
-   * looking at, so only the FIRST external edit ever reaches the live
-   * doc (confirmed deterministic repro on Bun + Node). Re-arming on the
-   * 'rename' event rebinds the watcher to the new inode at the same path
-   * so successive saves keep flowing in.
+   * We watch the file's PARENT DIRECTORY and filter events by basename,
+   * NOT the file directly. A file-level watch is bound to the inode
+   * present at watch-creation time (kqueue on macOS, inotify on Linux).
+   * Most editors — and Claude Code's own Edit tool — save via
+   * write-temp-then-rename, which atomically replaces the file's inode.
+   * A file-level watch then delivers one final event and goes permanently
+   * stale, so only the FIRST external edit ever reaches the live doc
+   * (confirmed deterministic repro on Bun + Node, both platforms). The
+   * directory inode is stable across child renames, so a directory watch
+   * keeps catching every save. This is the same reason chokidar/nodemon
+   * watch directories rather than files.
    */
   private armFileWatcher(room: DocRoom, binding: FileBinding): void {
     try {
@@ -509,18 +510,21 @@ export class Rooms {
     } catch {}
     binding.watcher = null;
     if (!existsSync(binding.path)) return;
+    const dir = dirname(binding.path);
+    const base = basename(binding.path);
     try {
-      binding.watcher = watch(binding.path, { persistent: false }, (event) => {
-        // A rename means the inode we were bound to was replaced — rebind
-        // before scheduling the read so the NEXT save is still seen.
-        if (event === 'rename') this.armFileWatcher(room, binding);
-        // fs.watch can fire several times per write (rename + change on
-        // macOS); debounce through binding.readTimer.
+      binding.watcher = watch(dir, { persistent: false }, (_event, filename) => {
+        // Ignore sibling files in the same directory. filename can be null
+        // on some platforms/events — when it is, fall through and let
+        // reconcileFromDisk decide (it no-ops if our file is unchanged).
+        if (filename && filename !== base) return;
+        // fs.watch can fire several times per write (temp create + rename
+        // + change); debounce through binding.readTimer.
         if (binding.readTimer) clearTimeout(binding.readTimer);
         binding.readTimer = setTimeout(() => this.reconcileFromDisk(room, binding), 300);
       });
     } catch (err) {
-      console.error(`[rooms] fs.watch failed for ${binding.path}:`, err);
+      console.error(`[rooms] fs.watch failed for ${dir}:`, err);
     }
   }
 
