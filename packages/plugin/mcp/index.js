@@ -13840,6 +13840,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       }
     },
     {
+      name: "reparse_from_disk",
+      description: "Force-pull the bound .md file from disk into the live doc, replacing the doc's current content with a fresh parse of the file. Recovery tool for when an external edit (Write/Edit/git pull) didn't propagate — e.g. the file watcher went stale after an editor's rename-based save, or a prior reconcile failed. Bypasses the lastWritten / serialized-match guards that normally suppress redundant reparses. DESTRUCTIVE: any un-flushed live edits are overwritten by disk content, and thread anchors in replaced regions may orphan (auto-reanchor re-attaches the common case). Use it when get_doc returns stale content or a `syncError`. Returns ok:false with error 'no-binding' (doc isn't file-backed), 'missing' (file gone/empty), or 'not-found' (unknown docId).",
+      inputSchema: {
+        type: "object",
+        properties: { docId: { type: "string" } },
+        required: ["docId"]
+      }
+    },
+    {
       name: "bind_mock",
       description: 'Bind an HTML mockup (or similar non-markdown review surface) to a docId. Use this when serving an HTML page that embeds `<claude-feedback-widget doc-id="...">` — declares the docId to the server proactively so the agent shows up in `list_docs` before the widget posts its first event, and auto-subscribes the caller to thread events on the doc. `sourceHtmlPath` is optional metadata so `list_docs` can surface the on-disk source. Pass `subscribe: false` to skip the auto-watch (rare). Idempotent — calling twice on the same docId is safe. Mirrors `create_review_doc` semantics for the HTML-widget path: no MCP entry point existed for this before, which made the auto-subscribe gap silent (agent serves HTML, user leaves comments, agent never gets events).',
       inputSchema: {
@@ -14152,6 +14161,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...title ? { title } : {},
           ...setId ? { setId } : {}
         });
+        return ok(res);
+      }
+      case "reparse_from_disk": {
+        const { docId } = a;
+        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/reparse_from_disk`);
         return ok(res);
       }
       case "bind_mock": {
