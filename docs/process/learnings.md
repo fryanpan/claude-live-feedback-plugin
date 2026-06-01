@@ -12,6 +12,34 @@ Technical discoveries that should persist across sessions for this project.
   flow wires up — silent half-attached states are extremely hard to
   diagnose because reads keep working.
 
+## fs.watch is the wrong primitive for disk→doc sync
+
+- **A file-level `fs.watch` goes deaf after the first rename-based save.**
+  `fs.watch(file)` is bound to the file's *inode* at watch-creation time
+  (kqueue on macOS, inotify on Linux). Editors — and Claude Code's own
+  `Edit` tool — save via write-temp-then-`rename`, which atomically
+  replaces the inode. The watch fires one final event and then is
+  permanently stale: only the FIRST external edit ever reaches the live
+  doc. Deterministic, reproduced on both Bun and Node. This is the bug
+  behind "I edited the bound .md and it stopped syncing" reports (PR #46).
+- **The fixes that *look* right are platform-divergent.** Re-arming the
+  watcher on the `rename` event works on macOS but still drops the 2nd
+  save on Linux; watching the parent directory + filtering by basename
+  works on macOS but proved unreliable under Bun-on-Linux. Don't trust a
+  watcher fix that only passed on your Mac — Linux CI will catch it.
+- **Resolution: poll the file's mtime instead** (PR #46 ships a 500ms
+  `statSync().mtimeMs` poll, `unref()`'d so it never blocks process/test
+  exit). Immune to inode swaps, platform, and runtime; ~1s latency matches
+  the doc's sync contract. `scheduleFileWrite` stamps its own write's mtime
+  so the write-back isn't mistaken for an external edit. General rule: if
+  you need reliable cross-platform file-change detection, reach for an
+  mtime poll, not `fs.watch`.
+- **Recovery tool:** `reparse_from_disk(docId)` MCP tool force-pulls disk
+  into the live doc in place (no URL re-bind). The server method/route had
+  existed for a while but no MCP tool wrapped it — so docs referenced a
+  tool that couldn't be called. When you add a server route meant for
+  agents, add the MCP tool in the same change.
+
 ## find_and_replace gotchas
 
 - Empties a containing block but doesn't remove it. If a replacement
