@@ -151,8 +151,9 @@ describe('server REST', () => {
     // atomic rename, which replaces the file's inode. macOS kqueue binds to
     // the inode at watch-creation time, so without re-arming the watcher
     // goes deaf after the FIRST rename save and every later external edit is
-    // silently lost (deterministic; reproduced on Bun + Node). This guards
-    // armFileWatcher's re-bind-on-rename behavior.
+    // silently lost (deterministic; reproduced on Bun + Node, both
+    // platforms). This guards armFileWatcher's directory-watch approach,
+    // which survives child renames because the directory inode is stable.
     const file = join(dataDir, 'rearm-test.md');
     writeFileSync(file, 'one\n');
     await j(
