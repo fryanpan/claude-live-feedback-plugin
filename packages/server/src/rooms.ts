@@ -71,6 +71,11 @@ interface FileBinding {
   /** The serialized markdown we last wrote or last read from disk.
    *  Both directions guard against this to break echo loops. */
   lastWritten?: string;
+  /** Set when the most recent disk→doc reconcile failed (parse threw or
+   *  produced zero blocks). Cleared on the next successful reconcile.
+   *  Surfaced via getDoc so a wedged doc reports WHY it's stale instead
+   *  of silently serving pre-edit content. */
+  lastSyncError?: { message: string; at: number };
 }
 
 export class Rooms {
@@ -338,6 +343,7 @@ export class Rooms {
       endOffset: number;
     }>;
     threads: Thread[];
+    syncError?: { message: string; at: number };
   } | null {
     const room = this.rooms.get(docId);
     if (!room) return null;
@@ -397,7 +403,13 @@ export class Rooms {
       return rest;
     });
 
-    return { plainText: walk.plainText, blocks, threads: listThreads(room.ydoc) };
+    const syncError = this.fileBindings.get(docId)?.lastSyncError;
+    return {
+      plainText: walk.plainText,
+      blocks,
+      threads: listThreads(room.ydoc),
+      ...(syncError ? { syncError } : {}),
+    };
   }
 
   /**
@@ -469,21 +481,47 @@ export class Rooms {
     });
     if (seeded) binding.lastWritten = prose.serializeFragmentToMarkdown(fragment);
 
-    // disk → doc: watch the file for external edits.
-    if (existsSync(abs)) {
-      try {
-        binding.watcher = watch(abs, { persistent: false }, () => {
-          // fs.watch can fire several times per write (rename + change
-          // on macOS); debounce through binding.readTimer.
-          if (binding.readTimer) clearTimeout(binding.readTimer);
-          binding.readTimer = setTimeout(() => this.reconcileFromDisk(room, binding), 300);
-        });
-      } catch (err) {
-        console.error(`[rooms] fs.watch failed for ${abs}:`, err);
-      }
-    }
+    // disk → doc: watch the file for external edits. armFileWatcher
+    // re-binds after rename-based saves so we don't go deaf after the
+    // first external edit (see its comment for the kqueue staleness bug).
+    this.armFileWatcher(room, binding);
 
     return { ok: true, seeded, resolvedPath: abs };
+  }
+
+  /**
+   * (Re)create the fs.watch watcher for a binding.
+   *
+   * macOS kqueue (used by both Node and Bun's fs.watch) binds to the
+   * INODE present at watch-creation time, not the path. Most editors —
+   * and Claude Code's own Edit tool — save via write-temp-then-rename,
+   * which atomically replaces the file's inode. kqueue delivers ONE
+   * final 'rename' event for the old inode and then goes permanently
+   * stale: every subsequent save lands on a new inode the watcher isn't
+   * looking at, so only the FIRST external edit ever reaches the live
+   * doc (confirmed deterministic repro on Bun + Node). Re-arming on the
+   * 'rename' event rebinds the watcher to the new inode at the same path
+   * so successive saves keep flowing in.
+   */
+  private armFileWatcher(room: DocRoom, binding: FileBinding): void {
+    try {
+      binding.watcher?.close();
+    } catch {}
+    binding.watcher = null;
+    if (!existsSync(binding.path)) return;
+    try {
+      binding.watcher = watch(binding.path, { persistent: false }, (event) => {
+        // A rename means the inode we were bound to was replaced — rebind
+        // before scheduling the read so the NEXT save is still seen.
+        if (event === 'rename') this.armFileWatcher(room, binding);
+        // fs.watch can fire several times per write (rename + change on
+        // macOS); debounce through binding.readTimer.
+        if (binding.readTimer) clearTimeout(binding.readTimer);
+        binding.readTimer = setTimeout(() => this.reconcileFromDisk(room, binding), 300);
+      });
+    } catch (err) {
+      console.error(`[rooms] fs.watch failed for ${binding.path}:`, err);
+    }
   }
 
   /**
@@ -513,6 +551,7 @@ export class Rooms {
       fragment.push(blocks);
     }, 'file-watch');
     binding.lastWritten = md;
+    binding.lastSyncError = undefined;
     return { ok: true };
   }
 
@@ -542,8 +581,31 @@ export class Rooms {
       binding.lastWritten = md;
       return;
     }
-    const blocks = prose.parseMarkdownBlocks(md);
-    if (blocks.length === 0) return; // don't wipe to empty on a parse failure
+    let blocks: Y.XmlElement[];
+    try {
+      blocks = prose.parseMarkdownBlocks(md);
+    } catch (err) {
+      // A parse throw used to vanish into the setTimeout callback, leaving
+      // the doc silently serving pre-edit content. Record + log instead so
+      // getDoc can report WHY it's stale. The fragment is left untouched
+      // (we never started the transact), so the next edit retries cleanly.
+      const message = err instanceof Error ? err.message : String(err);
+      binding.lastSyncError = { message: `parse failed: ${message}`, at: Date.now() };
+      console.error(`[rooms] ${room.docId}: disk→doc parse failed for ${binding.path}:`, err);
+      return;
+    }
+    if (blocks.length === 0) {
+      // Don't wipe to empty on a parse that produced nothing — but DON'T
+      // do it silently either (the old behavior). Surface it.
+      binding.lastSyncError = {
+        message: 'disk content parsed to zero blocks; live doc left unchanged',
+        at: Date.now(),
+      };
+      console.warn(
+        `[rooms] ${room.docId}: disk→doc reconcile yielded 0 blocks from ${binding.path}; keeping prior state`,
+      );
+      return;
+    }
     // Apply destructively: parse fresh, replace all blocks. Y.XmlText
     // identities change so thread anchors in the replaced region may
     // orphan — auto-reanchor's snippet-match sweep catches the common
@@ -553,6 +615,7 @@ export class Rooms {
       fragment.push(blocks);
     }, 'file-watch');
     binding.lastWritten = md;
+    binding.lastSyncError = undefined;
     console.log(
       `[rooms] ${room.docId}: applied external edit from ${binding.path} (${blocks.length} blocks)`,
     );
