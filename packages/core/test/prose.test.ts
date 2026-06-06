@@ -1090,3 +1090,53 @@ describe('YAML frontmatter — legacy in-Yjs shape', () => {
     expect(out).toBe('---\ntitle: Welcome\nlang: en\n---\n\n# About\n');
   });
 });
+
+describe('GFM table round-trip', () => {
+  // Regression guard: a peer reported a table "wedging" disk→doc sync and
+  // hypothesized tables weren't handled. They are — the wedge was a stale
+  // fs.watch watcher. These pin the parse + serialize round-trip so the
+  // table path doesn't silently regress.
+  function roundtrip(md: string): string {
+    const doc = new Y.Doc();
+    const frag = getProseFragment(doc);
+    doc.transact(() => frag.push(parseMarkdownBlocks(md)));
+    return serializeFragmentToMarkdown(frag);
+  }
+
+  it('parses a pipe table into a table block', () => {
+    const md = [
+      '| Decision | Signal | Owner |',
+      '| --- | --- | --- |',
+      '| Hire | velocity | EM |',
+    ].join('\n');
+    const blocks = parseMarkdownBlocks(md);
+    expect(blocks.some((b) => b.nodeName === 'table')).toBe(true);
+  });
+
+  it('round-trips a table without dropping cells', () => {
+    const md = [
+      '| Decision | Signal | Cadence |',
+      '| --- | --- | --- |',
+      '| Hire | velocity | monthly |',
+      '| Cut scope | cycle time | weekly |',
+    ].join('\n');
+    const out = roundtrip(md);
+    for (const cell of [
+      'Decision',
+      'Signal',
+      'Cadence',
+      'Hire',
+      'velocity',
+      'Cut scope',
+      'weekly',
+    ]) {
+      expect(out).toContain(cell);
+    }
+  });
+
+  it('keeps a paragraph that follows a table', () => {
+    const md = ['| A | B |', '| --- | --- |', '| 1 | 2 |', '', 'Paragraph after table.'].join('\n');
+    const out = roundtrip(md);
+    expect(out).toContain('Paragraph after table.');
+  });
+});
