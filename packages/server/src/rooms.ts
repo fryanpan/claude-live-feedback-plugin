@@ -1,12 +1,4 @@
-import {
-  type FSWatcher,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  watch,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   type Anchor,
@@ -67,10 +59,18 @@ interface FileBinding {
   path: string;
   writeTimer?: ReturnType<typeof setTimeout> | null;
   readTimer?: ReturnType<typeof setTimeout> | null;
-  watcher?: FSWatcher | null;
+  /** Interval handle for the stat-mtime poll (see armFileWatcher). */
+  pollTimer?: ReturnType<typeof setInterval> | null;
+  /** Last file mtime (ms) we observed, so the poll reacts only to changes. */
+  lastMtimeMs?: number;
   /** The serialized markdown we last wrote or last read from disk.
    *  Both directions guard against this to break echo loops. */
   lastWritten?: string;
+  /** Set when the most recent disk→doc reconcile failed (parse threw or
+   *  produced zero blocks). Cleared on the next successful reconcile.
+   *  Surfaced via getDoc so a wedged doc reports WHY it's stale instead
+   *  of silently serving pre-edit content. */
+  lastSyncError?: { message: string; at: number };
 }
 
 export class Rooms {
@@ -338,6 +338,7 @@ export class Rooms {
       endOffset: number;
     }>;
     threads: Thread[];
+    syncError?: { message: string; at: number };
   } | null {
     const room = this.rooms.get(docId);
     if (!room) return null;
@@ -397,7 +398,13 @@ export class Rooms {
       return rest;
     });
 
-    return { plainText: walk.plainText, blocks, threads: listThreads(room.ydoc) };
+    const syncError = this.fileBindings.get(docId)?.lastSyncError;
+    return {
+      plainText: walk.plainText,
+      blocks,
+      threads: listThreads(room.ydoc),
+      ...(syncError ? { syncError } : {}),
+    };
   }
 
   /**
@@ -450,9 +457,7 @@ export class Rooms {
     const existing = this.fileBindings.get(docId);
     if (existing?.writeTimer) clearTimeout(existing.writeTimer);
     if (existing?.readTimer) clearTimeout(existing.readTimer);
-    try {
-      existing?.watcher?.close();
-    } catch {}
+    if (existing?.pollTimer) clearInterval(existing.pollTimer);
     const binding: FileBinding = { path: abs };
     this.fileBindings.set(docId, binding);
     // sourceUrl mirrors the path so UI headers can show "Editing: <path>"
@@ -469,21 +474,51 @@ export class Rooms {
     });
     if (seeded) binding.lastWritten = prose.serializeFragmentToMarkdown(fragment);
 
-    // disk → doc: watch the file for external edits.
-    if (existsSync(abs)) {
-      try {
-        binding.watcher = watch(abs, { persistent: false }, () => {
-          // fs.watch can fire several times per write (rename + change
-          // on macOS); debounce through binding.readTimer.
-          if (binding.readTimer) clearTimeout(binding.readTimer);
-          binding.readTimer = setTimeout(() => this.reconcileFromDisk(room, binding), 300);
-        });
-      } catch (err) {
-        console.error(`[rooms] fs.watch failed for ${abs}:`, err);
-      }
-    }
+    // disk → doc: poll for external edits (see armFileWatcher).
+    this.armFileWatcher(room, binding);
 
     return { ok: true, seeded, resolvedPath: abs };
+  }
+
+  /**
+   * Watch the bound file for external edits via an mtime poll.
+   *
+   * We deliberately do NOT use fs.watch. A file-level fs.watch is bound to
+   * the inode present at watch-creation time (kqueue on macOS, inotify on
+   * Linux). Editors — and Claude Code's own Edit tool — save via
+   * write-temp-then-rename, which atomically replaces the file's inode, so
+   * the watch goes stale and only the FIRST external edit ever reaches the
+   * live doc (deterministic repro on Bun + Node). Watching the parent
+   * directory dodges the inode problem on macOS but proved unreliable under
+   * Bun-on-Linux. A stat-mtime poll is immune to all of it — inode
+   * replacement, platform, and runtime — and ~1s latency matches the doc's
+   * existing sync contract.
+   */
+  private armFileWatcher(room: DocRoom, binding: FileBinding): void {
+    if (binding.pollTimer) clearInterval(binding.pollTimer);
+    binding.pollTimer = null;
+    if (!existsSync(binding.path)) return;
+    try {
+      binding.lastMtimeMs = statSync(binding.path).mtimeMs;
+    } catch {}
+    const timer = setInterval(() => {
+      let mtimeMs: number;
+      try {
+        if (!existsSync(binding.path)) return;
+        mtimeMs = statSync(binding.path).mtimeMs;
+      } catch (err) {
+        console.error(`[rooms] stat failed for ${binding.path}:`, err);
+        return;
+      }
+      if (mtimeMs === binding.lastMtimeMs) return;
+      binding.lastMtimeMs = mtimeMs;
+      // Debounce so we don't read a half-written file mid-save.
+      if (binding.readTimer) clearTimeout(binding.readTimer);
+      binding.readTimer = setTimeout(() => this.reconcileFromDisk(room, binding), 150);
+    }, 500);
+    // Don't let the poll keep the process (or a test runner) alive.
+    timer.unref?.();
+    binding.pollTimer = timer;
   }
 
   /**
@@ -513,6 +548,7 @@ export class Rooms {
       fragment.push(blocks);
     }, 'file-watch');
     binding.lastWritten = md;
+    binding.lastSyncError = undefined;
     return { ok: true };
   }
 
@@ -542,8 +578,31 @@ export class Rooms {
       binding.lastWritten = md;
       return;
     }
-    const blocks = prose.parseMarkdownBlocks(md);
-    if (blocks.length === 0) return; // don't wipe to empty on a parse failure
+    let blocks: Y.XmlElement[];
+    try {
+      blocks = prose.parseMarkdownBlocks(md);
+    } catch (err) {
+      // A parse throw used to vanish into the setTimeout callback, leaving
+      // the doc silently serving pre-edit content. Record + log instead so
+      // getDoc can report WHY it's stale. The fragment is left untouched
+      // (we never started the transact), so the next edit retries cleanly.
+      const message = err instanceof Error ? err.message : String(err);
+      binding.lastSyncError = { message: `parse failed: ${message}`, at: Date.now() };
+      console.error(`[rooms] ${room.docId}: disk→doc parse failed for ${binding.path}:`, err);
+      return;
+    }
+    if (blocks.length === 0) {
+      // Don't wipe to empty on a parse that produced nothing — but DON'T
+      // do it silently either (the old behavior). Surface it.
+      binding.lastSyncError = {
+        message: 'disk content parsed to zero blocks; live doc left unchanged',
+        at: Date.now(),
+      };
+      console.warn(
+        `[rooms] ${room.docId}: disk→doc reconcile yielded 0 blocks from ${binding.path}; keeping prior state`,
+      );
+      return;
+    }
     // Apply destructively: parse fresh, replace all blocks. Y.XmlText
     // identities change so thread anchors in the replaced region may
     // orphan — auto-reanchor's snippet-match sweep catches the common
@@ -553,6 +612,7 @@ export class Rooms {
       fragment.push(blocks);
     }, 'file-watch');
     binding.lastWritten = md;
+    binding.lastSyncError = undefined;
     console.log(
       `[rooms] ${room.docId}: applied external edit from ${binding.path} (${blocks.length} blocks)`,
     );
@@ -566,6 +626,11 @@ export class Rooms {
         if (md === binding.lastWritten) return;
         writeFileSync(binding.path, md);
         binding.lastWritten = md;
+        // Record our own write's mtime so the poll doesn't treat the
+        // write-back as an external edit and schedule a redundant reconcile.
+        try {
+          binding.lastMtimeMs = statSync(binding.path).mtimeMs;
+        } catch {}
       } catch (err) {
         console.error(`[rooms] file write failed for ${binding.path}:`, err);
       }
