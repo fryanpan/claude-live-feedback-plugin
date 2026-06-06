@@ -584,3 +584,83 @@ describe('decideReconcile — disk→doc conflict policy', () => {
     );
   });
 });
+
+describe('delete_doc', () => {
+  let handle: ServerHandle;
+  let dataDir: string;
+  let base: string;
+
+  beforeAll(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'feedback-del-'));
+    handle = createServer({ port: 0, dataDir });
+    base = `http://localhost:${handle.port}`;
+  });
+  afterAll(async () => {
+    await handle.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+  const mk = (docId: string) =>
+    fetch(`${base}/api/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId, type: 'mockup', title: docId }),
+    });
+  const addThread = (docId: string) =>
+    fetch(`${base}/api/docs/${docId}/threads`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ author: bryan, text: 'keep?', anchor: fakeAnchor }),
+    });
+
+  it('refuses to delete a doc with open threads (guardrail)', async () => {
+    await mk('del-guard');
+    await addThread('del-guard');
+    const r = await fetch(`${base}/api/docs/del-guard`, { method: 'DELETE' });
+    expect(r.status).toBe(409);
+    const body = (await r.json()) as { error: string; openThreads: number };
+    expect(body.error).toBe('has-open-threads');
+    expect(body.openThreads).toBe(1);
+    // still present
+    const list = await fetch(`${base}/api/docs`).then(
+      (r) => r.json() as Promise<{ docs: { docId: string }[] }>,
+    );
+    expect(list.docs.map((d) => d.docId)).toContain('del-guard');
+  });
+
+  it('deletes a doc with no open threads and removes its .ydoc', async () => {
+    await mk('del-ok');
+    // wait for the debounced persist (200ms) so we can prove the file is removed
+    const ydocPath = join(dataDir, 'del-ok.ydoc');
+    for (let i = 0; i < 20 && !existsSync(ydocPath); i++)
+      await new Promise((r) => setTimeout(r, 25));
+    expect(existsSync(ydocPath)).toBe(true);
+
+    const r = await fetch(`${base}/api/docs/del-ok`, { method: 'DELETE' });
+    expect(r.status).toBe(200);
+    expect(((await r.json()) as { ok: boolean }).ok).toBe(true);
+    expect(existsSync(ydocPath)).toBe(false);
+
+    const list = await fetch(`${base}/api/docs`).then(
+      (r) => r.json() as Promise<{ docs: { docId: string }[] }>,
+    );
+    expect(list.docs.map((d) => d.docId)).not.toContain('del-ok');
+    const g = await fetch(`${base}/api/docs/del-ok`);
+    expect(g.status).toBe(404);
+  });
+
+  it('force-deletes a doc despite open threads', async () => {
+    await mk('del-force');
+    await addThread('del-force');
+    const r = await fetch(`${base}/api/docs/del-force?force=true`, { method: 'DELETE' });
+    expect(r.status).toBe(200);
+    const list = await fetch(`${base}/api/docs`).then(
+      (r) => r.json() as Promise<{ docs: { docId: string }[] }>,
+    );
+    expect(list.docs.map((d) => d.docId)).not.toContain('del-force');
+  });
+
+  it('returns 404 when deleting a nonexistent doc', async () => {
+    const r = await fetch(`${base}/api/docs/does-not-exist`, { method: 'DELETE' });
+    expect(r.status).toBe(404);
+  });
+});

@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import {
   type Anchor,
@@ -115,6 +123,60 @@ export class Rooms {
 
   list(): DocMeta[] {
     return Array.from(this.rooms.values()).map((r) => r.meta);
+  }
+
+  /**
+   * Permanently remove a review doc: drop the in-memory room, cancel its
+   * timers, and delete the persisted `.ydoc` so it doesn't reload on the
+   * next restart. The bound SOURCE file (sourceUrl) is the user's own file
+   * and is left untouched.
+   *
+   * Guardrail: refuses if the doc still has OPEN comment threads (returns
+   * `has-open-threads` + the count) unless `force` is set — open threads
+   * mean someone is still waiting on that feedback. This is the primary
+   * cleanup path for the "doc used for 30 min then obsolete" lifecycle.
+   */
+  deleteDoc(
+    docId: string,
+    opts?: { force?: boolean },
+  ): { ok: boolean; error?: 'not-found' | 'has-open-threads'; openThreads?: number } {
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'not-found' };
+    const openThreads = listThreads(room.ydoc).filter((t) => t.status === 'open').length;
+    if (openThreads > 0 && !opts?.force) {
+      return { ok: false, error: 'has-open-threads', openThreads };
+    }
+    // Cancel pending persistence first so it can't recreate the .ydoc after
+    // we remove it.
+    const saveTimer = this.saveTimers.get(docId);
+    if (saveTimer) clearTimeout(saveTimer);
+    this.saveTimers.delete(docId);
+    // Tear down the file binding + its poll/write/read timers.
+    const binding = this.fileBindings.get(docId);
+    if (binding) {
+      if (binding.writeTimer) clearTimeout(binding.writeTimer);
+      if (binding.readTimer) clearTimeout(binding.readTimer);
+      if (binding.pollTimer) clearInterval(binding.pollTimer);
+      this.fileBindings.delete(docId);
+    }
+    // Close any live viewers so they don't hold a dead room reference.
+    for (const ws of room.conns) {
+      try {
+        ws.close(1000, 'doc deleted');
+      } catch {}
+    }
+    this.rooms.delete(docId);
+    try {
+      const p = this.pathFor(docId);
+      if (existsSync(p)) rmSync(p);
+    } catch (err) {
+      console.error(`[rooms] failed to remove persisted ${docId}:`, err);
+    }
+    try {
+      room.awareness.destroy();
+      room.ydoc.destroy();
+    } catch {}
+    return { ok: true };
   }
 
   // The persisted Yjs files are the source of truth for doc existence —
