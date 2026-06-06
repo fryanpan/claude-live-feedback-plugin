@@ -122,7 +122,23 @@ export class Rooms {
   }
 
   list(): DocMeta[] {
-    return Array.from(this.rooms.values()).map((r) => r.meta);
+    return Array.from(this.rooms.values()).map((r) => this.withActivity(r.meta));
+  }
+
+  /**
+   * Stamp a doc's meta with `lastActivityAt`, derived from the persisted
+   * `.ydoc` mtime. saveToDisk rewrites that file on every prose/thread
+   * change (200ms debounced), so its mtime tracks real activity without a
+   * CRDT field that would churn the doc history on every keystroke. Falls
+   * back to `createdAt` when the file isn't on disk yet.
+   */
+  private withActivity(meta: DocMeta): DocMeta {
+    let lastActivityAt = meta.createdAt;
+    try {
+      const p = this.pathFor(meta.docId);
+      if (existsSync(p)) lastActivityAt = Math.round(statSync(p).mtimeMs);
+    } catch {}
+    return { ...meta, lastActivityAt };
   }
 
   /**
@@ -228,6 +244,7 @@ export class Rooms {
       title?: string;
       setId?: string;
       webhookUrl?: string;
+      owner?: string;
     },
   ): DocRoom {
     const existing = this.rooms.get(docId);
@@ -263,6 +280,7 @@ export class Rooms {
         sourceUrl: init?.sourceUrl,
         title: init?.title,
         setId: init?.setId,
+        owner: init?.owner,
         createdAt: Date.now(),
       };
       initDocMeta(ydoc, now);

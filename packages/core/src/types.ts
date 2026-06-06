@@ -13,6 +13,20 @@ export interface DocMeta {
    */
   setId?: string;
   createdAt: number;
+  /**
+   * Identifier of the agent that created the doc — the live-feedback MCP
+   * child's cwd, which is the agent's project directory and matches how
+   * claude-hive keys peers (`from_cwd`). Lets a cleanup job route a "still
+   * needed?" prompt to the owning agent. Persisted; absent on legacy docs.
+   */
+  owner?: string;
+  /**
+   * Epoch ms of the doc's last activity (edit or thread change). DERIVED
+   * server-side from the persisted `.ydoc` mtime, not stored in the CRDT —
+   * so it can't churn the doc history on every keystroke. Used to find
+   * idle docs for cleanup. Absent until the server populates it.
+   */
+  lastActivityAt?: number;
 }
 
 export interface User {

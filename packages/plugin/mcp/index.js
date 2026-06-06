@@ -14180,6 +14180,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           docId,
           type: "markdown",
           sourceUrl: path,
+          owner: process.cwd(),
           ...title ? { title } : {},
           ...setId ? { setId } : {}
         });
@@ -14201,6 +14202,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const res = await http("POST", "/api/docs", {
           docId,
           type: "mockup",
+          owner: process.cwd(),
           ...sourceHtmlPath ? { sourceUrl: sourceHtmlPath } : {},
           ...title ? { title } : {}
         });
