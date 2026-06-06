@@ -664,3 +664,58 @@ describe('delete_doc', () => {
     expect(r.status).toBe(404);
   });
 });
+
+describe('doc owner + lastActivityAt', () => {
+  let handle: ServerHandle;
+  let dataDir: string;
+  let base: string;
+  beforeAll(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'feedback-owner-'));
+    handle = createServer({ port: 0, dataDir });
+    base = `http://localhost:${handle.port}`;
+  });
+  afterAll(async () => {
+    await handle.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+  const getMeta = async (docId: string) => {
+    const { docs } = (await fetch(`${base}/api/docs`).then((r) => r.json())) as {
+      docs: { docId: string; owner?: string; lastActivityAt?: number; createdAt: number }[];
+    };
+    return docs.find((d) => d.docId === docId);
+  };
+
+  it('records the owner passed at creation and surfaces it in list_docs', async () => {
+    await fetch(`${base}/api/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId: 'own-1', type: 'mockup', owner: '/Volumes/x/dev/agent-foo' }),
+    });
+    const meta = await getMeta('own-1');
+    expect(meta?.owner).toBe('/Volumes/x/dev/agent-foo');
+    expect(typeof meta?.lastActivityAt).toBe('number');
+    expect(meta?.lastActivityAt).toBeGreaterThanOrEqual(meta!.createdAt - 1000);
+  });
+
+  it('advances lastActivityAt when the doc is edited', async () => {
+    const file = join(dataDir, 'activity.md');
+    writeFileSync(file, 'before\n');
+    await fetch(`${base}/api/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId: 'act-1', type: 'markdown', sourceUrl: file }),
+    });
+    // let the create-time persist settle
+    await new Promise((r) => setTimeout(r, 250));
+    const before = (await getMeta('act-1'))!.lastActivityAt!;
+    await new Promise((r) => setTimeout(r, 1100));
+    await fetch(`${base}/api/docs/act-1/find_and_replace`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ find: 'before', replace: 'after' }),
+    });
+    await new Promise((r) => setTimeout(r, 350)); // wait for the 200ms persist
+    const after = (await getMeta('act-1'))!.lastActivityAt!;
+    expect(after).toBeGreaterThan(before);
+  });
+});
