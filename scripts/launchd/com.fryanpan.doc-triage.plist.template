@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.fryanpan.doc-triage</string>
+
+    <key>WorkingDirectory</key>
+    <string>{{REPO_DIR}}</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>{{REPO_DIR}}/scripts/triage/run-doc-triage.sh</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>{{HOME_DIR}}</string>
+        <key>PATH</key>
+        <string>{{CLAUDE_DIR}}:/usr/local/bin:/usr/bin:/bin</string>
+        <key>CLAUDE_BIN</key>
+        <string>{{CLAUDE_BIN}}</string>
+    </dict>
+
+    <!-- Fire once a day at 09:00 local. Tune the hour/minute as you like;
+         re-run install-triage.sh after editing. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>9</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <!-- One-shot per fire; do NOT KeepAlive (this is a cron-style job, not a
+         long-running service). -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>{{LOG_DIR}}/com.fryanpan.doc-triage.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{LOG_DIR}}/com.fryanpan.doc-triage.err.log</string>
+</dict>
+</plist>

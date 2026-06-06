@@ -38,7 +38,26 @@ identity can't distinguish owners; cwd can.)
 - MCP `create_review_doc` + `bind_mock`: pass `owner: process.cwd()`.
 - Tests: owner round-trips; lastActivityAt advances on edit.
 
-## Increment 2 — Daily triage agent (separate PR)
+## Increment 2 — Daily triage agent (SHIPPED)
+
+Built as a **local launchd job** (`com.fryanpan.doc-triage`, fires 09:00 daily)
+that runs `scripts/triage/run-doc-triage.sh` → a headless `claude -p` with the
+claude-hive channel. Cloud routines can't reach `localhost:8787` or the local
+claude-hive network, so it must run on the Mac Mini. Verified headless
+`claude -p --dangerously-load-development-channels server:claude-hive` reaches
+claude-hive. Install with `scripts/launchd/install-triage.sh`. The triage logic
+lives in `scripts/triage/doc-triage-prompt.md`; it only ASKS owners, never
+deletes. Dry-run confirmed idle detection, owner grouping, peer/conductor
+lookup, and the orphan→conductor-digest fallback all work.
+
+**Future enhancement (noted, not built):** when `owner` is absent (legacy
+docs), fall back to the doc's `sourceUrl` project/git-root to find the owning
+peer, instead of going straight to the conductor digest. The dry-run showed a
+legacy doc whose `sourceUrl` lived in a project with live peers — it could have
+routed as an owner-ping. New docs carry `owner`, so this only helps the legacy
+tail.
+
+### Original design notes
 
 A daily scheduled agent (via the `schedule` skill / cron):
 1. `GET /api/docs`; select docs with `now - lastActivityAt > 24h`.
