@@ -1,8 +1,17 @@
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ElementAnchor, User } from '@feedback/core';
+import { decideReconcile } from '../src/rooms.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 
 const bryan: User = { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' };
@@ -164,10 +173,22 @@ describe('server REST', () => {
       }),
     );
 
+    let saveSeq = 0;
     const renameSave = (content: string) => {
       const tmp = `${file}.tmp`;
       writeFileSync(tmp, content);
       renameSync(tmp, file);
+      // Force a strictly-increasing mtime. The poll detects external edits by
+      // mtime; rapid back-to-back saves can otherwise land in the same mtime
+      // tick on a coarse temp filesystem, and the second save would be
+      // invisible (flaky pre-fix: failed at "two" ~half the time). Real editor
+      // saves are seconds apart, so distinct mtimes are realistic — this
+      // removes the granularity race without bypassing the inode-survival path
+      // the test exists to guard (a file-level fs.watch would go deaf after the
+      // rename regardless of mtime).
+      saveSeq += 1;
+      const stamp = new Date(Date.now() + saveSeq * 1000);
+      utimesSync(file, stamp, stamp);
     };
     const waitForBlock = async (want: string) => {
       // Generous budget: server polls every 500ms + 150ms debounce, and CI
@@ -189,7 +210,9 @@ describe('server REST', () => {
     await waitForBlock('three');
     renameSave('four\n');
     await waitForBlock('four');
-  });
+    // Internal poll budget is 80×100ms=8s; raise the per-test timeout above
+    // Bun's 5s default so it can't trip under full-suite load.
+  }, 15000);
 
   it('creates a thread via threads/by_find with shared anchor resolution', async () => {
     const file = join(dataDir, 'thread-by-find.md');
@@ -514,5 +537,50 @@ describe('server REST', () => {
     } finally {
       await second.stop();
     }
+  });
+});
+
+describe('decideReconcile — disk→doc conflict policy', () => {
+  // A peer reported agent edits "clobbering" a human's unflushed edits on a
+  // bound doc. The in-memory agent+human path is CRDT-safe (see ws.test.ts);
+  // the real server-side data-loss vector is reconcileFromDisk, which used to
+  // destructively replace the live fragment with disk content whenever an
+  // external write diverged — even if the live doc held un-flushed edits of
+  // its own. decideReconcile centralizes the policy: when an external change
+  // collides with un-flushed live edits, keep the live edits (the editor is
+  // the runtime source of truth) instead of clobbering them.
+
+  it('no-ops when disk is unchanged since our last write', () => {
+    expect(decideReconcile({ disk: 'a\n', lastWritten: 'a\n', currentSerialized: 'a\n' })).toBe(
+      'in-sync',
+    );
+  });
+
+  it('catches up bookkeeping when disk already equals the live serialization', () => {
+    // e.g. the live doc was edited and its serialization happens to match disk.
+    expect(decideReconcile({ disk: 'b\n', lastWritten: 'a\n', currentSerialized: 'b\n' })).toBe(
+      'catch-up',
+    );
+  });
+
+  it('applies the external edit when the live doc is clean (no un-flushed edits)', () => {
+    // disk changed externally; live still matches what we last wrote → safe.
+    expect(decideReconcile({ disk: 'b\n', lastWritten: 'a\n', currentSerialized: 'a\n' })).toBe(
+      'apply',
+    );
+  });
+
+  it('flags a conflict when an external edit collides with un-flushed live edits', () => {
+    // disk changed externally (b) AND the live doc changed since our last
+    // write (c). Clobbering would lose the human's in-progress work.
+    expect(decideReconcile({ disk: 'b\n', lastWritten: 'a\n', currentSerialized: 'c\n' })).toBe(
+      'conflict',
+    );
+  });
+
+  it('treats a first-ever reconcile with no prior write as applicable', () => {
+    expect(decideReconcile({ disk: 'b\n', lastWritten: undefined, currentSerialized: 'b\n' })).toBe(
+      'catch-up',
+    );
   });
 });

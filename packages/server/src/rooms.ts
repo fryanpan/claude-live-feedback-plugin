@@ -73,6 +73,37 @@ interface FileBinding {
   lastSyncError?: { message: string; at: number };
 }
 
+/**
+ * Decide what a disk→doc reconcile should do, given the file's current
+ * content (`disk`), the markdown we last wrote/read (`lastWritten`), and the
+ * live doc's current serialization (`currentSerialized`).
+ *
+ *   - `in-sync`   disk is byte-identical to our last write → nothing to do.
+ *   - `catch-up`  disk differs from lastWritten but already equals the live
+ *                 doc → just advance bookkeeping, don't touch the fragment.
+ *   - `apply`     disk changed externally and the live doc is clean (still
+ *                 equals lastWritten) → safe to pull disk into the doc.
+ *   - `conflict`  disk changed externally AND the live doc has its own
+ *                 un-flushed edits (diverged from lastWritten) → a blind
+ *                 replace would clobber the human's in-progress work. The
+ *                 caller keeps the live edits (the editor is the runtime
+ *                 source of truth) and reasserts them to disk.
+ *
+ * Pure + exported so the policy is unit-tested without timing races.
+ */
+export function decideReconcile(args: {
+  disk: string;
+  lastWritten: string | undefined;
+  currentSerialized: string;
+}): 'in-sync' | 'catch-up' | 'apply' | 'conflict' {
+  const { disk, lastWritten, currentSerialized } = args;
+  if (disk === lastWritten) return 'in-sync';
+  if (disk === currentSerialized) return 'catch-up';
+  // disk diverges from BOTH our last write and the live doc.
+  if (currentSerialized !== lastWritten) return 'conflict';
+  return 'apply';
+}
+
 export class Rooms {
   private rooms = new Map<string, DocRoom>();
   private fileBindings = new Map<string, FileBinding>();
@@ -567,17 +598,39 @@ export class Rooms {
       console.error(`[rooms] read failed for ${binding.path}:`, err);
       return;
     }
-    // Same content as last round-trip → nothing to do.
-    if (md === binding.lastWritten) return;
-    // If the current fragment would serialize to the same file content
-    // (up to serializer whitespace), we're already in sync — just catch
-    // up bookkeeping.
     const fragment = prose.getProseFragment(room.ydoc);
     const currentSerialized = prose.serializeFragmentToMarkdown(fragment);
-    if (currentSerialized === md) {
+    const decision = decideReconcile({
+      disk: md,
+      lastWritten: binding.lastWritten,
+      currentSerialized,
+    });
+    // Same content as last round-trip → nothing to do.
+    if (decision === 'in-sync') return;
+    // The live doc already serializes to disk (up to serializer whitespace) —
+    // just catch up bookkeeping, don't touch the fragment.
+    if (decision === 'catch-up') {
       binding.lastWritten = md;
       return;
     }
+    if (decision === 'conflict') {
+      // An external write collided with un-flushed live edits. A blind
+      // delete+push here would clobber the human's in-progress work (the bug
+      // a peer reported). The editor is the runtime source of truth, so keep
+      // the live edits and reassert them to disk via the debounced writer.
+      // The dropped external change is recoverable with reparse_from_disk.
+      binding.lastSyncError = {
+        message:
+          'external file change collided with un-flushed live edits; kept live edits (use reparse_from_disk to force disk)',
+        at: Date.now(),
+      };
+      console.warn(
+        `[rooms] ${room.docId}: disk↔doc conflict for ${binding.path}; kept live edits, reasserting to disk`,
+      );
+      this.scheduleFileWrite(room, binding);
+      return;
+    }
+    // decision === 'apply' — disk changed externally and the live doc is clean.
     let blocks: Y.XmlElement[];
     try {
       blocks = prose.parseMarkdownBlocks(md);
