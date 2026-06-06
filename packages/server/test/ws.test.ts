@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { prose } from '@feedback/core';
 import * as decoding from 'lib0/decoding';
 import * as encoding from 'lib0/encoding';
 import * as syncProtocol from 'y-protocols/sync';
@@ -92,11 +93,13 @@ describe('ws sync', () => {
   let handle: ServerHandle;
   let dataDir: string;
   let wsBase: string;
+  let restBase: string;
 
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'feedback-ws-'));
     handle = createServer({ port: 0, dataDir });
     wsBase = `ws://localhost:${handle.port}`;
+    restBase = `http://localhost:${handle.port}`;
   });
 
   afterAll(async () => {
@@ -142,5 +145,55 @@ describe('ws sync', () => {
     await b.ready;
     expect(b.ydoc.getText('content').toString()).toBe('Persistent body');
     b.close();
+  });
+
+  it('an agent find_and_replace does not clobber a concurrent browser prose edit', async () => {
+    // A peer reported that an agent's surgical edit (find_and_replace) on a
+    // bound doc clobbered a human's in-progress browser edits. Agent edits run
+    // as targeted Yjs transactions on the live doc — the SAME doc the browser
+    // syncs to — so they CRDT-merge with concurrent human edits rather than
+    // overwrite them. This pins that safety: a browser edits one paragraph
+    // while the agent find_and_replaces another, and BOTH land on disk.
+    const file = join(dataDir, 'concurrent.md');
+    writeFileSync(file, 'Alpha line\n\nBravo line\n');
+    const r = await fetch(`${restBase}/api/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId: 'concur-1', type: 'markdown', sourceUrl: file }),
+    });
+    expect(r.ok).toBe(true);
+
+    // Connect a browser-shaped client and wait for the seeded prose to sync.
+    const browser = connectDoc(`${wsBase}/y/concur-1`);
+    await waitForOpen(browser.ws);
+    await browser.ready;
+    const frag = prose.getProseFragment(browser.ydoc);
+    for (let i = 0; i < 50 && frag.length < 2; i++) {
+      await new Promise((res) => setTimeout(res, 20));
+    }
+    expect(frag.length).toBeGreaterThanOrEqual(2);
+
+    // Human edit in the browser: append " EDIT" to the "Bravo line" paragraph.
+    const bravoPara = frag.toArray()[1] as Y.XmlElement;
+    const bravoText = bravoPara.toArray()[0] as Y.XmlText;
+    bravoText.insert(bravoText.length, ' EDIT');
+
+    // Concurrently, the agent rewrites the OTHER paragraph via REST.
+    await fetch(`${restBase}/api/docs/concur-1/find_and_replace`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ find: 'Alpha', replace: 'Alpha2' }),
+    }).then((res) => expect(res.ok).toBe(true));
+
+    // Wait for the debounced write-back (800ms) and assert both edits survive.
+    let disk = '';
+    for (let i = 0; i < 40; i++) {
+      disk = readFileSync(file, 'utf8');
+      if (disk.includes('Alpha2') && disk.includes('Bravo line EDIT')) break;
+      await new Promise((res) => setTimeout(res, 50));
+    }
+    expect(disk).toContain('Alpha2 line');
+    expect(disk).toContain('Bravo line EDIT');
+    browser.close();
   });
 });
