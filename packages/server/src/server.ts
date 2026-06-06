@@ -270,6 +270,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         if (rest === '' && req.method === 'GET') {
           return j(200, { meta: withReviewUrl(room.meta) });
         }
+        if (rest === '' && req.method === 'DELETE') {
+          const force = url.searchParams.get('force') === 'true';
+          const res = rooms.deleteDoc(docId, { force });
+          if (res.ok) return j(200, res);
+          return j(res.error === 'has-open-threads' ? 409 : 404, res);
+        }
         if (rest === 'threads' && req.method === 'GET') {
           const status = url.searchParams.get('status') as 'open' | 'resolved' | null;
           return j(200, {
