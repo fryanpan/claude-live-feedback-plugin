@@ -1140,3 +1140,104 @@ describe('GFM table round-trip', () => {
     expect(out).toContain('Paragraph after table.');
   });
 });
+
+describe('nested list round-trip', () => {
+  // Bug reported by a peer: a human built a nested bullet structure (a
+  // "Notes & Questions" section with sub-bullets and sub-paragraphs) in the
+  // browser editor. On write-back the serializer flattened every nested item
+  // and sub-paragraph of a list item into a single space-joined line, and the
+  // flattened version propagated back into the live doc + disk, destroying the
+  // nesting irrecoverably. These pin nested-list fidelity through the
+  // serialize → parse → serialize round-trip on BOTH ends (parser + serializer
+  // were nesting-blind).
+
+  function roundtrip(md: string): string {
+    const doc = new Y.Doc();
+    const frag = getProseFragment(doc);
+    doc.transact(() => frag.push(parseMarkdownBlocks(md)));
+    return serializeFragmentToMarkdown(frag);
+  }
+
+  // Build bulletList > listItem(paragraph "Parent A" + nested bulletList) the
+  // way y-prosemirror emits a nested list at rest, so we test the SERIALIZER
+  // against editor-shaped state, not just parser output.
+  function mkPara(text: string): Y.XmlElement {
+    const p = new Y.XmlElement('paragraph');
+    const t = new Y.XmlText();
+    t.insert(0, text);
+    p.insert(0, [t]);
+    return p;
+  }
+  function mkItem(children: Y.XmlElement[]): Y.XmlElement {
+    const li = new Y.XmlElement('listItem');
+    li.insert(0, children);
+    return li;
+  }
+
+  it('serializes a nested bullet list with indentation, not a flat line', () => {
+    const doc = new Y.Doc();
+    const frag = getProseFragment(doc);
+    const nested = new Y.XmlElement('bulletList');
+    nested.insert(0, [mkItem([mkPara('Child A1')]), mkItem([mkPara('Child A2')])]);
+    const top = new Y.XmlElement('bulletList');
+    top.insert(0, [mkItem([mkPara('Parent A'), nested]), mkItem([mkPara('Parent B')])]);
+    doc.transact(() => frag.push([top]));
+
+    const out = serializeFragmentToMarkdown(frag);
+    expect(out).toContain('- Parent A');
+    expect(out).toContain('  - Child A1');
+    expect(out).toContain('  - Child A2');
+    expect(out).toContain('- Parent B');
+    // The bug smashed children onto the parent line:
+    expect(out).not.toContain('Parent A Child A1');
+  });
+
+  it('parses an indented bullet as a nested list under the parent item', () => {
+    const doc = new Y.Doc();
+    const frag = getProseFragment(doc);
+    doc.transact(() => frag.push(parseMarkdownBlocks('- Parent\n  - Child\n')));
+    const top = frag.toArray()[0] as Y.XmlElement;
+    expect(top.nodeName).toBe('bulletList');
+    expect(top.toArray()).toHaveLength(1);
+    const li = top.toArray()[0] as Y.XmlElement;
+    const childTags = li.toArray().map((c) => (c as Y.XmlElement).nodeName);
+    expect(childTags).toContain('paragraph');
+    expect(childTags).toContain('bulletList');
+  });
+
+  it('round-trips two levels of bullets without flattening', () => {
+    const md = `${['- A', '  - A1', '  - A2', '- B'].join('\n')}\n`;
+    expect(roundtrip(md)).toBe(md);
+  });
+
+  it('round-trips three levels of bullets', () => {
+    const md = `${['- A', '  - A1', '    - A1a', '  - A2'].join('\n')}\n`;
+    expect(roundtrip(md)).toBe(md);
+  });
+
+  it('round-trips an ordered list nested under a bullet', () => {
+    const md = `${['- Steps', '  1. first', '  2. second'].join('\n')}\n`;
+    expect(roundtrip(md)).toBe(md);
+  });
+
+  it('preserves a second paragraph inside a list item', () => {
+    const md = `${['- Item one', '', '  More detail for item one', '- Item two'].join('\n')}\n`;
+    const out = roundtrip(md);
+    expect(out).toContain('More detail for item one');
+    // Not flattened onto the marker line:
+    expect(out).not.toContain('Item one More detail');
+    expect(out).toContain('- Item two');
+  });
+
+  it('still round-trips a flat list (regression)', () => {
+    const md = `${['- one', '- two', '- three'].join('\n')}\n`;
+    expect(roundtrip(md)).toBe(md);
+  });
+
+  it('keeps a heading after a nested list (region boundary)', () => {
+    const md = `${['- A', '  - A1', '', '## After'].join('\n')}\n`;
+    const out = roundtrip(md);
+    expect(out).toContain('  - A1');
+    expect(out).toContain('## After');
+  });
+});
