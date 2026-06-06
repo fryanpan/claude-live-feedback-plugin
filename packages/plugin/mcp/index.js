@@ -13727,6 +13727,13 @@ var server = new Server({
     "messages. Treat each as an explicit ask from the reviewer; read, decide if it",
     "is in your domain, act via an edit tool. unwatch_doc when you're done.",
     "",
+    "CLEANUP: review docs are usually short-lived — bound for a ~30-minute",
+    "feedback pass, then obsolete. When you no longer need one, call",
+    "delete_doc(docId) to remove it (the bound source .md is left on disk; only",
+    "the review session goes away). It refuses if the doc still has open threads",
+    "(someone's waiting on that feedback) — resolve them first or pass force:true.",
+    "Don't leave stale docs piling up in list_docs.",
+    "",
     "BEFORE YOU EDIT A .md FILE: call list_docs first. If a doc has sourceUrl",
     "matching the path, route through the MCP. If not, normal file edits are fine."
   ].join(" ")
@@ -13845,6 +13852,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       inputSchema: {
         type: "object",
         properties: { docId: { type: "string" } },
+        required: ["docId"]
+      }
+    },
+    {
+      name: "delete_doc",
+      description: "Permanently delete a review doc you no longer need. Drops the live doc, cancels its sync, and removes the persisted state so it won't reload — but leaves the bound SOURCE .md file on disk untouched (only the review session is removed). Most review docs are short-lived: you bind one, get feedback for ~30 minutes, and then it's obsolete — call delete_doc to clean it up instead of letting it linger in list_docs forever. GUARDRAIL: refuses with ok:false, error:'has-open-threads' (+ openThreads count) if the doc still has OPEN comment threads, since that means someone is still waiting on that feedback — resolve_thread the threads first, or pass force:true to delete anyway. Also returns error:'not-found' for an unknown docId. Safe to call on a doc bound to a now-deleted file. Prefer this over leaving stale docs around.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          docId: { type: "string" },
+          force: {
+            type: "boolean",
+            description: "Delete even if open threads exist. Default false."
+          }
+        },
         required: ["docId"]
       }
     },
@@ -14166,6 +14188,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       case "reparse_from_disk": {
         const { docId } = a;
         const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/reparse_from_disk`);
+        return ok(res);
+      }
+      case "delete_doc": {
+        const { docId, force } = a;
+        const qs = force ? "?force=true" : "";
+        const res = await http("DELETE", `/api/docs/${encodeURIComponent(docId)}${qs}`);
         return ok(res);
       }
       case "bind_mock": {
