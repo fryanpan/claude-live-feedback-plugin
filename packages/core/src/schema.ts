@@ -40,7 +40,8 @@ export function readDocMeta(doc: Y.Doc): DocMeta {
   const sourceUrl = m.get('sourceUrl') as string | undefined;
   const title = m.get('title') as string | undefined;
   const setId = m.get('setId') as string | undefined;
-  return { docId, type, createdAt, sourceUrl, title, setId };
+  const owner = m.get('owner') as string | undefined;
+  return { docId, type, createdAt, sourceUrl, title, setId, owner };
 }
 
 export function initDocMeta(doc: Y.Doc, meta: DocMeta): void {
@@ -52,6 +53,7 @@ export function initDocMeta(doc: Y.Doc, meta: DocMeta): void {
     if (meta.sourceUrl !== undefined) m.set('sourceUrl', meta.sourceUrl);
     if (meta.title !== undefined) m.set('title', meta.title);
     if (meta.setId !== undefined) m.set('setId', meta.setId);
+    if (meta.owner !== undefined && !m.has('owner')) m.set('owner', meta.owner);
   });
 }
 

@@ -245,6 +245,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           title: body?.title as string | undefined,
           setId: body?.setId as string | undefined,
           webhookUrl: body?.webhookUrl as string | undefined,
+          owner: body?.owner as string | undefined,
         });
         let attached: ReturnType<typeof rooms.attachFile> | undefined;
         if (type === 'markdown' && sourceUrl) {
