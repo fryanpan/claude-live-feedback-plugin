@@ -90,11 +90,14 @@ const server = new Server(
       'fs.watch + write-back, and returns a reviewUrl you can hand to a human.',
       '',
       'EDIT: never use Write/Edit/str_replace on the .md while it is under review',
-      '— your filesystem edit gets clobbered by the next flush and diverges from',
-      'what the reviewer sees. Route edits through the MCP tools below: find_and_replace',
-      'for prose changes, rewrite_thread_region / insert_after_thread / insert_blocks_after_thread',
-      'for comment-anchored edits. External edits to the bound file (VS Code, git pull)',
-      'flow back into the live doc automatically via fs.watch.',
+      '— direct filesystem edits race against the live doc’s own ~1s flush, and if',
+      'LF has any pending state your edit can be silently overwritten by the next',
+      'write-back. Route edits through the MCP tools below: find_and_replace for',
+      'prose changes, rewrite_thread_region / insert_after_thread / insert_blocks_after_thread',
+      'for comment-anchored edits. External edits (VS Code, git pull) flow back',
+      'into the live doc via fs.watch when LF is idle, but the same race applies',
+      'mid-session — if you wrote to a bound file externally and need to be sure',
+      'it landed, call reparse_from_disk(docId) to force-pull from disk.',
       '',
       'OBSERVE: call watch_doc(docId) once per doc to receive thread events as',
       '<channel source="live-feedback" doc_id="..." thread_id="..." event="..." author="..." sent_at="...">body</channel>',
@@ -205,7 +208,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'create_review_doc',
       description:
-        "Create a markdown review doc backed by a file on disk. The server reads the file, parses it into the live editor, and sets up bidirectional sync — every edit (from the browser, the agent, or the widget) writes back to the .md within ~1 second, and external edits to the file (VS Code, git pull) flow into the live doc within ~1 second via fs.watch. `path` should be absolute; relative paths resolve against the server's cwd. The file must exist (create it first if it doesn't). Pass `setId` to group multiple docs for one review session — docs sharing a setId show up in each other's sidebar in the markdown editor, so the reviewer can hop between related files. The caller is auto-subscribed to thread events for this doc (`watch_doc`) on creation so comments arrive as channel messages without a separate call; pass `subscribe: false` for the rare drive-by case where another agent will own the review. Returns the review URL plus the attach result.",
+        "Create a markdown review doc backed by a file on disk. The server reads the file, parses it into the live editor, and sets up bidirectional sync — every edit (from the browser, the agent, or the widget) writes back to the .md within ~1 second, and external edits to the file (VS Code, git pull) flow into the live doc within ~1 second via fs.watch. Note: the disk→doc sync races against the doc→disk write-back; if you Write/Edit a bound .md while LF has any pending state, your file edit can be silently clobbered by the next flush. Route programmatic edits through the LF tools (`find_and_replace`, `rewrite_thread_region`, etc.) once a doc is bound, and call `reparse_from_disk(docId)` if you need to force-pull an external edit. `path` should be absolute; relative paths resolve against the server's cwd. The file must exist (create it first if it doesn't). Pass `setId` to group multiple docs for one review session — docs sharing a setId show up in each other's sidebar in the markdown editor, so the reviewer can hop between related files. The caller is auto-subscribed to thread events for this doc (`watch_doc`) on creation so comments arrive as channel messages without a separate call; pass `subscribe: false` for the rare drive-by case where another agent will own the review. Returns the review URL plus the attach result.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -216,6 +219,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           subscribe: { type: 'boolean' },
         },
         required: ['docId', 'path'],
+      },
+    },
+    {
+      name: 'reparse_from_disk',
+      description:
+        "Force-pull the bound .md file from disk into the live doc, replacing the doc's current content with a fresh parse of the file. Recovery tool for when an external edit (Write/Edit/git pull) didn't propagate — e.g. the file watcher went stale after an editor's rename-based save, or a prior reconcile failed. Bypasses the lastWritten / serialized-match guards that normally suppress redundant reparses. DESTRUCTIVE: any un-flushed live edits are overwritten by disk content, and thread anchors in replaced regions may orphan (auto-reanchor re-attaches the common case). Use it when get_doc returns stale content or a `syncError`. Returns ok:false with error 'no-binding' (doc isn't file-backed), 'missing' (file gone/empty), or 'not-found' (unknown docId).",
+      inputSchema: {
+        type: 'object',
+        properties: { docId: { type: 'string' } },
+        required: ['docId'],
       },
     },
     {
@@ -593,6 +606,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...(title ? { title } : {}),
           ...(setId ? { setId } : {}),
         });
+        return ok(res);
+      }
+      case 'reparse_from_disk': {
+        const { docId } = a as { docId: string };
+        const res = await http('POST', `/api/docs/${encodeURIComponent(docId)}/reparse_from_disk`);
         return ok(res);
       }
       case 'bind_mock': {
