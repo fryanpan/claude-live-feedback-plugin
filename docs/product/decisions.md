@@ -102,3 +102,29 @@ Big decisions that future sessions should respect or revisit deliberately.
   gets a different key instance, so getState() always returned
   undefined and the Comment button always reported "no selection".
   This footgun cost two debug sessions; noting for future sessions.
+
+## 2026-06-06 — Concurrent-edit safety: merge (CRDT) + non-destructive disk reconcile
+- A peer reported an agent's `find_and_replace` clobbering a human's
+  in-progress browser edits on a bound doc. Root-cause investigation
+  showed the in-memory path is already safe: every agent edit
+  (`findAndReplace`, `rewriteRange`, `insertAfterRange`,
+  `insertBlocksAfterAnchor`) runs as a targeted Yjs transaction on the
+  same live doc the browser syncs to, so concurrent edits CRDT-merge —
+  they do not overwrite. Pinned by a ws.test.ts test (browser edits one
+  paragraph while the agent rewrites another; both survive on disk).
+- Chose **merge over lock/reject** for the agent-vs-human contract.
+  Locking or reject-on-conflict would fight the product's core goal
+  (real-time co-editing); CRDT merge already delivers it.
+- The real server-side data-loss vector was `reconcileFromDisk`, which
+  destructively replaced the whole live fragment whenever the file
+  diverged on disk — clobbering un-flushed live edits if an external
+  write collided with them. Centralized the policy in a pure, unit-tested
+  `decideReconcile()`: when an external change collides with un-flushed
+  live edits, **keep the live edits** (the editor is the runtime source of
+  truth) and reassert them to disk; record a `syncError` so the dropped
+  external change is observable and recoverable via `reparse_from_disk`.
+- Nested-list serialization uses a **2-space-per-level indent** convention,
+  read back by leading-space count, so the serialize→parse round-trip is
+  lossless. Picked 2 spaces (vs 4) to match the editor's typical output;
+  the parser accepts any indentation increase as a deeper level so
+  human-authored 4-space markdown still nests correctly.
