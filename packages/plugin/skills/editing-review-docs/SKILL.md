@@ -147,3 +147,35 @@ create_review_doc({ docId: "schema-rfc",   path: "/abs/schema-rfc.md",   setId: 
 `setId` is just a tag — pick any short string. No setup step needed
 before using one. Calling `create_review_doc` again on an existing
 docId with a different `setId` re-tags it (handy for rebatching).
+
+## Cleaning up a doc you're done with
+
+Most review docs are short-lived: you bind a file, get a round of
+feedback over ~30 minutes, and then the doc is obsolete. **Delete it
+when you're done** instead of leaving it to linger in `list_docs`
+forever — orphaned docs pile up fast and make the review list useless.
+
+```
+delete_doc({ docId: "auth-rfc" })
+```
+
+What it does: drops the live doc, stops its sync, and removes the
+persisted state so it won't reload on the next server restart. The
+bound **source `.md` file is left untouched on disk** — only the
+review session goes away. Safe to call even if the source file was
+already deleted.
+
+**Guardrail — open threads block deletion.** If the doc still has open
+comment threads, `delete_doc` refuses with
+`{ ok: false, error: "has-open-threads", openThreads: N }`, because an
+open thread means someone is still waiting on that feedback. Either:
+
+- resolve the threads first (`resolve_thread`) once you've addressed
+  them, then delete; or
+- pass `force: true` to delete anyway (`delete_doc({ docId, force: true })`)
+  when you know the threads are stale.
+
+If you're unsure whether a doc is still needed — e.g. it's been quiet
+for a day but might be waiting on the human — leave it. Don't
+force-delete something a human may still come back to; deleting the
+short-lived, clearly-finished ones is enough to keep the list clean.
