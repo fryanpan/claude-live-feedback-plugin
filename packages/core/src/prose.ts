@@ -616,6 +616,77 @@ export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
     return p;
   };
 
+  // --- Nested list parsing -------------------------------------------------
+  // The serializer emits 2-space-per-level indentation; the parser reads
+  // nesting back by leading-space count so the round-trip is lossless. We
+  // accept any increase in indentation as a deeper level (handles 2- and
+  // 4-space human-authored markdown alike). `isBullet`/`isNumbered` above
+  // anchor at column 0; these indent-aware variants drive the list builder.
+  const indentOf = (s: string) => s.match(/^ */)?.[0].length ?? 0;
+  const isListItemLine = (s: string) => /^\s*(?:[-*]|\d+\.)\s+/.test(s);
+  const isOrderedLine = (s: string) => /^\s*\d+\.\s+/.test(s);
+  const stripMarker = (s: string) => s.replace(/^\s*(?:[-*]|\d+\.)\s+/, '');
+
+  // Append an item's child content (nested lists + continuation paragraphs,
+  // all indented deeper than `baseIndent`) to `li`. Returns the next index.
+  function consumeItemChildren(start: number, baseIndent: number, li: Y.XmlElement): number {
+    let k = start;
+    for (;;) {
+      let j = k;
+      while (j < lines.length && (lines[j] ?? '').trim() === '') j++;
+      if (j >= lines.length) return k;
+      const ind = indentOf(lines[j] ?? '');
+      if (ind <= baseIndent) return k; // back to sibling level or shallower
+      k = j; // consume intervening blanks now that we know content follows
+      if (isListItemLine(lines[k] ?? '')) {
+        const [sub, next] = parseListAt(k, ind);
+        li.insert(li.length, [sub]);
+        k = next;
+      } else {
+        const paraLines: string[] = [];
+        while (
+          k < lines.length &&
+          (lines[k] ?? '').trim() !== '' &&
+          indentOf(lines[k] ?? '') > baseIndent &&
+          !isListItemLine(lines[k] ?? '')
+        ) {
+          paraLines.push((lines[k] ?? '').trim());
+          k++;
+        }
+        li.insert(li.length, [mkParagraph(paraLines.join(' '))]);
+      }
+    }
+  }
+
+  // Parse a list whose items sit at exactly `baseIndent`. Consumes sibling
+  // items, their nested lists, and continuation paragraphs. Returns the
+  // list element and the next index.
+  function parseListAt(start: number, baseIndent: number): [Y.XmlElement, number] {
+    const ordered = isOrderedLine(lines[start] ?? '');
+    const list = new Y.XmlElement(ordered ? 'orderedList' : 'bulletList');
+    let k = start;
+    for (;;) {
+      let j = k;
+      while (j < lines.length && (lines[j] ?? '').trim() === '') j++;
+      if (j >= lines.length) {
+        k = j;
+        break;
+      }
+      const ind = indentOf(lines[j] ?? '');
+      if (ind < baseIndent) break;
+      if (ind > baseIndent) break; // deeper content with no open item — malformed
+      if (!isListItemLine(lines[j] ?? '')) break; // non-item line at this level
+      if (isOrderedLine(lines[j] ?? '') !== ordered) break; // list type switches
+      k = j;
+      const li = new Y.XmlElement('listItem');
+      li.insert(li.length, [mkParagraph(stripMarker(lines[k] ?? ''))]);
+      k++;
+      k = consumeItemChildren(k, baseIndent, li);
+      list.insert(list.length, [li]);
+    }
+    return [list, k];
+  }
+
   // YAML frontmatter — only at the very top of the file. Captured as a
   // single codeBlock(language='yaml-frontmatter') holding the raw YAML text
   // so the keys aren't merged into a single space-joined paragraph by the
@@ -694,17 +765,9 @@ export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
     }
 
     if (isBullet(line) || isNumbered(line)) {
-      const ordered = isNumbered(line);
-      const list = new Y.XmlElement(ordered ? 'orderedList' : 'bulletList');
-      const stripRe = ordered ? /^\d+\.\s+/ : /^[-*]\s+/;
-      while (i < lines.length && (ordered ? isNumbered : isBullet)(lines[i] ?? '')) {
-        const itemText = (lines[i] ?? '').replace(stripRe, '');
-        const li = new Y.XmlElement('listItem');
-        li.insert(0, [mkParagraph(itemText)]);
-        list.insert(list.length, [li]);
-        i++;
-      }
+      const [list, next] = parseListAt(i, indentOf(line));
       out.push(list);
+      i = next;
       continue;
     }
 
@@ -885,13 +948,8 @@ function serializeBlock(node: Y.XmlElement | Y.XmlText): string | null {
     case 'horizontalRule':
       return '---';
     case 'bulletList':
-      return listItems(node)
-        .map((item) => `- ${item}`)
-        .join('\n');
     case 'orderedList':
-      return listItems(node)
-        .map((item, i) => `${i + 1}. ${item}`)
-        .join('\n');
+      return serializeList(node, 0);
     case 'table':
       return serializeTable(node);
     default:
@@ -975,18 +1033,50 @@ function wrapMarks(text: string, attrs: Record<string, unknown> | undefined): st
   return s;
 }
 
-function listItems(list: Y.XmlElement): string[] {
-  const items: string[] = [];
+/**
+ * Serialize a bulletList / orderedList to markdown, preserving nested
+ * lists and multi-paragraph list items. `depth` is the nesting level
+ * (0 = top). Indentation is 2 spaces per level — the same unit the
+ * parser reads back, so the round-trip is lossless.
+ *
+ * The editor (y-prosemirror) shapes a list item as
+ *   listItem > paragraph [, bulletList|orderedList ] [, paragraph … ]
+ * The previous serializer flattened EVERY child of a listItem with
+ * `textContent` joined by a single space, which silently destroyed
+ * nested bullets and sub-paragraphs on write-back (a peer lost a nested
+ * "Notes & Questions" section this way). Recurse instead.
+ */
+function serializeList(list: Y.XmlElement, depth: number): string {
+  const ordered = list.nodeName === 'orderedList';
+  const indent = '  '.repeat(depth);
+  const contIndent = '  '.repeat(depth + 1);
+  const lines: string[] = [];
+  let n = 0;
   for (const li of list.toArray()) {
     if (!(li instanceof Y.XmlElement) || li.nodeName !== 'listItem') continue;
-    // listItem contains one or more paragraphs; concatenate their text.
-    const bits: string[] = [];
-    for (const child of li.toArray()) {
-      if (child instanceof Y.XmlElement) bits.push(textContent(child));
+    n++;
+    const marker = ordered ? `${n}. ` : '- ';
+    const children = li.toArray().filter((c): c is Y.XmlElement => c instanceof Y.XmlElement);
+    // The first paragraph is the item's own line; everything after it
+    // (nested lists, extra paragraphs) renders as indented child content.
+    const firstParaIdx = children.findIndex((c) => c.nodeName === 'paragraph');
+    const firstText = firstParaIdx >= 0 ? textContent(children[firstParaIdx]!) : '';
+    lines.push(`${indent}${marker}${firstText}`);
+    for (let k = 0; k < children.length; k++) {
+      if (k === firstParaIdx) continue;
+      const child = children[k]!;
+      if (child.nodeName === 'bulletList' || child.nodeName === 'orderedList') {
+        lines.push(serializeList(child, depth + 1));
+      } else {
+        // Continuation paragraph (or other block) inside the item: blank
+        // line, then indent one level deeper than the marker.
+        const text = serializeBlock(child) ?? textContent(child);
+        lines.push('');
+        for (const tl of text.split('\n')) lines.push(tl.length > 0 ? `${contIndent}${tl}` : tl);
+      }
     }
-    items.push(bits.join(' '));
   }
-  return items;
+  return lines.join('\n');
 }
 
 /**
