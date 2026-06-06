@@ -2,6 +2,58 @@
 
 Technical discoveries that should persist across sessions for this project.
 
+## Concurrent agent+human edits are CRDT-safe; disk reconcile was not
+
+- **Agent edits don't clobber a live human editor — the in-memory path is
+  already safe.** Every agent edit tool (`findAndReplace`, `rewriteRange`,
+  `insertAfterRange`, `insertBlocksAfterAnchor`) runs as a targeted Yjs
+  transaction on the SAME `room.ydoc` the browser syncs to over the
+  websocket. Concurrent agent + browser edits therefore CRDT-merge, they
+  don't overwrite. A peer reported "agent find_and_replace clobbered my
+  edits"; reproduced the scenario in `ws.test.ts` and it does NOT clobber.
+  Don't reach for a lock/reject scheme — it would fight the real-time
+  co-editing goal. The reported loss was actually the serializer bug below.
+- **The real clobber vector was `reconcileFromDisk`'s destructive
+  delete-all+push.** When the bound file changed on disk AND the live doc
+  had its own un-flushed edits, the old reconcile blindly replaced the
+  whole fragment with disk content, discarding the human's in-progress
+  work. Fix (PR for the two-bug report): a pure, unit-tested
+  `decideReconcile(disk, lastWritten, currentSerialized)` returning
+  `in-sync | catch-up | apply | conflict`. On `conflict` keep the live
+  edits (editor = runtime source of truth), reassert them to disk via the
+  debounced writer, and record a `syncError` (recoverable with
+  `reparse_from_disk`). General rule: a destructive `fragment.delete(0,len)
+  + push` from an external source must first check whether the live doc
+  diverged since the last write — if it did, that's a conflict, not a
+  one-way apply.
+- **mtime-poll detection misses same-mtime writes — don't write a test that
+  saves faster than the filesystem's mtime granularity.** The disk→doc poll
+  detects changes by `statSync().mtimeMs`. Rapid back-to-back saves can land
+  in the same mtime tick on a coarse temp filesystem, so the second write is
+  invisible. A rename-survival test that did three saves with no spacing was
+  ~50% flaky (failed at the 2nd save) on BOTH the pre-change and changed
+  trees — pre-existing, surfaced only because a single local run looked
+  green. Fix: force a strictly-increasing mtime in the test (`utimesSync`);
+  real editor saves are seconds apart so distinct mtimes are realistic. When
+  a test fails intermittently, measure the baseline flakiness on unmodified
+  HEAD (run it 5×) BEFORE assuming your change caused it.
+
+## Serializer must recurse for nested lists (round-trip fidelity)
+
+- **The markdown serializer flattened nested lists + multi-paragraph list
+  items into one space-joined line, destroying structure on write-back.**
+  `listItems()` did `textContent(child)` for EVERY child of a `listItem`
+  joined by a space — but a `listItem` holds a paragraph PLUS optional
+  nested `bulletList`/`orderedList` children and extra paragraphs (the
+  y-prosemirror shape). A human's nested "Notes & Questions" section was
+  irrecoverably flattened on the doc→disk→doc path. Fix: a recursive
+  `serializeList(node, depth)` (2-space indent per level) + an
+  indentation-stack parser (`parseListAt` / `consumeItemChildren`) so BOTH
+  ends round-trip. Lesson: any serializer for a recursive document schema
+  must itself recurse — a flat `textContent` join silently eats nesting,
+  and the parser must read the same indentation convention back or the
+  round-trip still loses data on the next reload.
+
 ## Stateful services + hydration
 
 - Yjs state hydration ≠ binding hydration. Loading `.ydoc` files restores
