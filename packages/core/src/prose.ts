@@ -557,14 +557,20 @@ export function inlineMarksToDelta(
     // 1-char wrappers: *italic* / _italic_
     // Require the inner char to be non-space so "a * b" doesn't italicize.
     for (const m of ['*', '_'] as const) {
-      if (r.startsWith(m) && r[1] && r[1] !== ' ' && r[1] !== m) {
-        const close = r.indexOf(m, 1);
-        if (close > 1 && r[close - 1] !== ' ') {
-          emitWith(r.slice(1, close), { italic: true });
-          i += close + 1;
-          matched = true;
-          break;
-        }
+      if (!r.startsWith(m) || !r[1] || r[1] === ' ' || r[1] === m) continue;
+      // CommonMark: underscore emphasis does NOT open/close intra-word
+      // (asterisk does). Without this, snake_case identifiers like
+      // `estimated_effort_h` get parsed as `estimated`+<em>effort</em>+`h`
+      // and round-trip back to `estimated*effort*h` — which broke bound-doc
+      // editing of any doc full of snake_case field names.
+      if (m === '_' && /\w/.test(i > 0 ? (text[i - 1] ?? '') : '')) continue;
+      const close = r.indexOf(m, 1);
+      if (close > 1 && r[close - 1] !== ' ') {
+        if (m === '_' && /\w/.test(r[close + 1] ?? '')) continue;
+        emitWith(r.slice(1, close), { italic: true });
+        i += close + 1;
+        matched = true;
+        break;
       }
     }
     if (matched) continue;
