@@ -519,12 +519,19 @@ async function boot(): Promise<void> {
     if (!threadId) return;
     ev.preventDefault();
     ev.stopPropagation();
-    threadsPanel.setActive(threadId);
     refreshThreadDecorations(threadId);
     const range = resolveThreadRange(threadId);
     if (range) editor.pulseRange(range.from, range.to);
-    if (isMobile()) openThreadView(threadId);
-    else openDrawer();
+    if (isMobile()) {
+      threadsPanel.setActive(threadId);
+      openThreadView(threadId);
+    } else {
+      // Open the drawer first, then (after layout) scroll the panel to the
+      // clicked thread — otherwise the active comment lands off-screen and the
+      // click appears to do nothing.
+      openDrawer();
+      requestAnimationFrame(() => threadsPanel.revealThread(threadId));
+    }
   });
 
   function resolveThreadRange(threadId: string): { from: number; to: number } | null {
