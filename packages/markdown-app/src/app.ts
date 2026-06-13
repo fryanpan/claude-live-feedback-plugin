@@ -415,6 +415,75 @@ async function boot(): Promise<void> {
   toggleThreads.addEventListener('click', toggleDrawer);
   closeThreads.addEventListener('click', closeDrawer);
   scrim.addEventListener('click', closeDrawer);
+
+  // Resizable comments panel (desktop). Drag the handle on the panel's left
+  // edge to widen/narrow it; the width persists. On mobile the panel is a
+  // full-height overlay and the handle is hidden.
+  (() => {
+    const pane = document.getElementById('threads-pane');
+    if (!pane) return;
+    const THREADS_W_KEY = 'lf:threads-w';
+    const MIN_W = 280;
+    const maxW = () => Math.min(720, Math.round(window.innerWidth * 0.6));
+    const clamp = (w: number) => Math.max(MIN_W, Math.min(maxW(), w));
+    const apply = (w: number) =>
+      document.documentElement.style.setProperty('--threads-w', `${w}px`);
+    try {
+      const saved = Number(localStorage.getItem(THREADS_W_KEY));
+      if (Number.isFinite(saved) && saved >= MIN_W) apply(clamp(saved));
+    } catch {
+      // localStorage unavailable — fall back to the CSS default width.
+    }
+
+    const handle = document.createElement('div');
+    handle.className = 'threads-resize';
+    handle.setAttribute('role', 'separator');
+    handle.setAttribute('aria-orientation', 'vertical');
+    handle.setAttribute('aria-label', 'Resize comments panel');
+    handle.title = 'Drag to resize · double-click to reset';
+    pane.appendChild(handle);
+
+    let dragging = false;
+    const onMove = (e: PointerEvent) => {
+      if (dragging) apply(clamp(window.innerWidth - e.clientX));
+    };
+    const onUp = () => {
+      if (!dragging) return;
+      dragging = false;
+      handle.classList.remove('dragging');
+      document.body.classList.remove('threads-resizing');
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      const px = Number.parseInt(
+        getComputedStyle(document.documentElement).getPropertyValue('--threads-w'),
+        10,
+      );
+      if (Number.isFinite(px)) {
+        try {
+          localStorage.setItem(THREADS_W_KEY, String(px));
+        } catch {
+          // ignore — width still applied for this session
+        }
+      }
+    };
+    handle.addEventListener('pointerdown', (e) => {
+      if (window.matchMedia('(max-width: 900px)').matches) return;
+      e.preventDefault();
+      dragging = true;
+      handle.classList.add('dragging');
+      document.body.classList.add('threads-resizing');
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+    });
+    handle.addEventListener('dblclick', () => {
+      document.documentElement.style.removeProperty('--threads-w');
+      try {
+        localStorage.removeItem(THREADS_W_KEY);
+      } catch {
+        // ignore
+      }
+    });
+  })();
   // Desktop layout shows the drawer inline; open by default there
   if (window.matchMedia('(min-width: 901px)').matches) openDrawer();
 
