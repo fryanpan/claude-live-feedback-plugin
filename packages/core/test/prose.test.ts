@@ -1295,3 +1295,41 @@ describe('nested list round-trip', () => {
     expect(out).toContain('## After');
   });
 });
+
+describe('underscore (snake_case) round-trip — no intraword emphasis', () => {
+  // A peer's bound-doc editing was defeated by this: snake_case field names
+  // like `estimated_effort_h` came back as estimated*effort*h on write-back
+  // because `_..._` was parsed as italic intra-word. CommonMark: underscore
+  // emphasis does NOT open/close intra-word (asterisk does).
+  function roundtrip(md: string): string {
+    const doc = new Y.Doc();
+    const frag = getProseFragment(doc);
+    doc.transact(() => frag.push(parseMarkdownBlocks(md)));
+    return serializeFragmentToMarkdown(frag);
+  }
+
+  it('keeps snake_case literal in prose', () => {
+    expect(roundtrip('estimated_effort_h is the metric\n')).toBe(
+      'estimated_effort_h is the metric\n',
+    );
+  });
+
+  it('keeps multi-underscore identifiers literal', () => {
+    expect(roundtrip('wall_clock_speedup vs est_h\n')).toBe('wall_clock_speedup vs est_h\n');
+  });
+
+  it('keeps snake_case literal inside a table cell', () => {
+    const md = `${['| field | type |', '| --- | --- |', '| estimated_effort_h | number |'].join('\n')}\n`;
+    const out = roundtrip(md);
+    expect(out).toContain('estimated_effort_h');
+    expect(out).not.toContain('estimated*effort*h');
+  });
+
+  it('still italicizes a space-flanked _word_ (normalized to *word*)', () => {
+    expect(roundtrip('this is _important_ stuff\n')).toBe('this is *important* stuff\n');
+  });
+
+  it('leaves backtick-wrapped code untouched (underscores protected)', () => {
+    expect(roundtrip('`estimated_effort_h`\n')).toBe('`estimated_effort_h`\n');
+  });
+});
