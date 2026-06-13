@@ -596,6 +596,10 @@ export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
   // cells between them. The second line is a separator of dashes.
   const isTableRow = (s: string) => /^\s*\|.*\|\s*$/.test(s);
   const isTableSep = (s: string) => /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/.test(s);
+  // A line that is *only* a markdown image: ![alt](src) or ![alt](src "title").
+  // Captured as an image node so the src lives in an attribute and never gets
+  // run through inline emphasis parsing (which would mangle `_` in URLs).
+  const isImage = (s: string) => /^!\[[^\]]*\]\([^)]*\)\s*$/.test(s.trim());
 
   const isBlockStart = (s: string) =>
     isHeading(s) ||
@@ -604,6 +608,7 @@ export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
     isQuote(s) ||
     isFence(s) ||
     isRule(s) ||
+    isImage(s) ||
     isTableRow(s);
 
   const mkParagraph = (text: string): Y.XmlElement => {
@@ -614,6 +619,20 @@ export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
       p.insert(0, [t]);
     }
     return p;
+  };
+
+  // Build an `image` node from a standalone `![alt](src "title")` line. The
+  // node name matches the Tiptap Image extension so it renders in the live
+  // editor; src/alt/title round-trip as attributes. src is matched as a run
+  // of non-space chars, so remote URLs and relative paths both work and
+  // underscores in the path are never parsed as emphasis.
+  const mkImage = (raw: string): Y.XmlElement => {
+    const m = raw.trim().match(/^!\[([^\]]*)\]\(\s*(\S+?)(?:\s+"([^"]*)")?\s*\)$/);
+    const img = new Y.XmlElement('image');
+    img.setAttribute('src', m?.[2] ?? '');
+    img.setAttribute('alt', m?.[1] ?? '');
+    if (m?.[3]) img.setAttribute('title', m[3]);
+    return img;
   };
 
   // --- Nested list parsing -------------------------------------------------
@@ -798,6 +817,13 @@ export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
       continue;
     }
 
+    // Standalone image line → image node (keeps the src out of inline parsing).
+    if (isImage(line)) {
+      out.push(mkImage(line));
+      i++;
+      continue;
+    }
+
     // Default: a paragraph. Gather consecutive non-blank, non-block-start
     // lines and join with a space so soft-wrapped prose becomes one
     // paragraph (standard markdown convention).
@@ -952,6 +978,14 @@ function serializeBlock(node: Y.XmlElement | Y.XmlText): string | null {
       return serializeList(node, 0);
     case 'table':
       return serializeTable(node);
+    case 'image': {
+      const src = String(node.getAttribute('src') ?? '');
+      if (!src) return null;
+      const alt = String(node.getAttribute('alt') ?? '');
+      const title = node.getAttribute('title');
+      const titlePart = title ? ` "${String(title)}"` : '';
+      return `![${alt}](${src}${titlePart})`;
+    }
     default:
       return textContent(node);
   }
