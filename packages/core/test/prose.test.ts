@@ -406,6 +406,60 @@ describe('parseMarkdownBlocks', () => {
   });
 });
 
+describe('markdown images', () => {
+  const integrate = (md: string): Y.XmlElement[] => {
+    const doc = new Y.Doc();
+    const frag = getProseFragment(doc);
+    doc.transact(() => frag.push(parseMarkdownBlocks(md)));
+    return frag.toArray() as Y.XmlElement[];
+  };
+  const roundtrip = (md: string): string => {
+    const doc = new Y.Doc();
+    const frag = getProseFragment(doc);
+    doc.transact(() => frag.push(parseMarkdownBlocks(md)));
+    return serializeFragmentToMarkdown(frag).trim();
+  };
+
+  it('parses a standalone image into an image node with src + alt', () => {
+    const [img] = integrate('![a fork](https://example.com/fork.jpg)');
+    expect(img?.nodeName).toBe('image');
+    expect(img?.getAttribute('src')).toBe('https://example.com/fork.jpg');
+    expect(img?.getAttribute('alt')).toBe('a fork');
+  });
+
+  it('round-trips an empty-alt image (regression: used to serialize to "!")', () => {
+    expect(roundtrip('![](https://example.com/x.jpg)')).toBe('![](https://example.com/x.jpg)');
+  });
+
+  it('preserves underscores in a remote URL (regression: were parsed as italics)', () => {
+    const md = '![](https://helixhelix.b-cdn.net/_images/DSC_1962_900x600.jpg)';
+    const [img] = integrate(md);
+    expect(img?.getAttribute('src')).toBe(
+      'https://helixhelix.b-cdn.net/_images/DSC_1962_900x600.jpg',
+    );
+    expect(roundtrip(md)).toBe(md);
+  });
+
+  it('round-trips a relative local path', () => {
+    const md = '![fork](./_images/fork-step.jpg)';
+    const [img] = integrate(md);
+    expect(img?.getAttribute('src')).toBe('./_images/fork-step.jpg');
+    expect(roundtrip(md)).toBe(md);
+  });
+
+  it('round-trips an image title', () => {
+    const md = '![alt](https://example.com/x.jpg "a title")';
+    const [img] = integrate(md);
+    expect(img?.getAttribute('title')).toBe('a title');
+    expect(roundtrip(md)).toBe(md);
+  });
+
+  it('keeps an image as its own block between paragraphs', () => {
+    const blocks = integrate('Before.\n\n![](https://e.com/x.jpg)\n\nAfter.');
+    expect(blocks.map((b) => b.nodeName)).toEqual(['paragraph', 'image', 'paragraph']);
+  });
+});
+
 describe('insertBlocksAfterAnchor', () => {
   it('inserts new blocks immediately after the host block', () => {
     const doc = new Y.Doc();

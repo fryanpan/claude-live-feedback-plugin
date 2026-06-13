@@ -1,5 +1,6 @@
 import { Editor } from '@tiptap/core';
 import Collaboration from '@tiptap/extension-collaboration';
+import { Image } from '@tiptap/extension-image';
 import { Table } from '@tiptap/extension-table';
 import { TableCell } from '@tiptap/extension-table-cell';
 import { TableHeader } from '@tiptap/extension-table-header';
@@ -80,6 +81,11 @@ export function createEditor(opts: CreateEditorOpts): EditorHandle {
         },
       }),
       MermaidCodeBlock,
+      // Block-level images. The server-side markdown round-trip (packages/core
+      // prose.ts) emits/consumes `image` nodes for `![alt](src)` lines; without
+      // this extension the schema has no `image` node and sync would drop them.
+      // Works for remote URLs and relative/local paths alike.
+      Image.configure({ inline: false, allowBase64: false }),
       Markdown.configure({
         html: false,
         tightLists: true,
