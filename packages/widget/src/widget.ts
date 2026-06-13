@@ -332,24 +332,39 @@ class FeedbackWidgetEl extends HTMLElement {
     if (this.pickerActive) return;
     this.pickerActive = true;
     document.body.style.cursor = 'crosshair';
+    // iOS Safari fires `click` reliably only on elements that have
+    // `cursor: pointer` (or are a button/anchor). The picker needs to
+    // catch taps on arbitrary mockup elements — `<div>`s, custom
+    // components, etc. — that DON'T have a clickable cursor style. A
+    // window-level click listener silently no-ops on those.
+    //
+    // Switching to pointer events fixes it: `pointerup` fires for
+    // mouse, touch, and pen regardless of cursor style. Bonus:
+    // `touch-action: manipulation` on the body suppresses the 300ms
+    // double-tap-zoom delay on iOS so taps register instantly.
+    const prevTouchAction = document.body.style.touchAction;
+    document.body.style.touchAction = 'manipulation';
     this.togglePanel(false);
 
     // Show a banner so the user knows picker mode is on and how to exit.
     const banner = document.createElement('div');
     banner.className = 'picker-banner';
     banner.innerHTML = `
-      <span>Click any element to leave a comment.</span>
+      <span>Tap any element to leave a comment.</span>
       <button type="button" class="picker-cancel">Cancel (Esc)</button>
     `;
     this.shadow.appendChild(banner);
 
-    const onMove = (ev: MouseEvent) => {
+    const onMove = (ev: PointerEvent) => {
+      // Skip hover-highlight on touch — fingers don't "hover," and
+      // repainting outlines along a drag is just visual noise.
+      if (ev.pointerType === 'touch') return;
       const t = this.hitTest(ev);
       if (this.hoverEl && this.hoverEl !== t) this.unhighlight(this.hoverEl);
       this.hoverEl = t;
       if (t) this.highlight(t);
     };
-    const onClick = (ev: MouseEvent) => {
+    const onTap = (ev: PointerEvent) => {
       ev.preventDefault();
       ev.stopPropagation();
       const t = this.hitTest(ev);
@@ -362,19 +377,20 @@ class FeedbackWidgetEl extends HTMLElement {
     const cleanup = () => {
       this.pickerActive = false;
       document.body.style.cursor = '';
+      document.body.style.touchAction = prevTouchAction;
       if (this.hoverEl) this.unhighlight(this.hoverEl);
       this.hoverEl = null;
       banner.remove();
-      window.removeEventListener('mousemove', onMove, true);
-      window.removeEventListener('click', onClick, true);
+      window.removeEventListener('pointermove', onMove, true);
+      window.removeEventListener('pointerup', onTap, true);
       window.removeEventListener('keydown', onKey, true);
     };
     banner.querySelector('.picker-cancel')?.addEventListener('click', (ev) => {
       ev.stopPropagation();
       cleanup();
     });
-    window.addEventListener('mousemove', onMove, true);
-    window.addEventListener('click', onClick, true);
+    window.addEventListener('pointermove', onMove, true);
+    window.addEventListener('pointerup', onTap, true);
     window.addEventListener('keydown', onKey, true);
   }
 
