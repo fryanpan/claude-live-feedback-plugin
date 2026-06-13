@@ -41,6 +41,37 @@ export class ThreadPanel {
     this.render();
   }
 
+  /**
+   * Bring a thread fully into the panel: switch to a tab that shows it (so
+   * clicking a resolved highlight while on the 'open' tab still surfaces it),
+   * mark it active, and scroll it into view. This is the doc→panel half of
+   * "click a highlight, see its comment" — the editor scroll was already
+   * wired; the panel scroll was not.
+   */
+  revealThread(id: string): void {
+    const status = this.statusMap.get(id);
+    if (status && this.tab !== 'all') {
+      const wantTab: ThreadTab = status === 'resolved' ? 'resolved' : 'open';
+      if (this.tab !== wantTab) this.tab = wantTab;
+    }
+    this.activeId = id;
+    this.lastRenderKey = '';
+    this.render();
+    this.scrollActiveIntoView();
+  }
+
+  private scrollActiveIntoView(): void {
+    if (!this.activeId) return;
+    const sel =
+      typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(this.activeId) : this.activeId;
+    const row = this.opts.container.querySelector<HTMLElement>(`.thread[data-thread-id="${sel}"]`);
+    // 'start', not 'nearest': the active thread expands (comments + reply box)
+    // and is often taller than the panel viewport — 'nearest' would land the
+    // user on the reply box at the bottom. Align the top so they see the
+    // comment from its start.
+    row?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }
+
   setTab(tab: ThreadTab): void {
     if (this.tab === tab) return;
     this.tab = tab;
