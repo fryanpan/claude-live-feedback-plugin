@@ -1,4 +1,5 @@
 import type { Thread, User } from '@feedback/core';
+import { renderCommentMarkdown } from './comment-markdown.ts';
 
 export type ThreadTab = 'open' | 'resolved' | 'all';
 
@@ -218,7 +219,9 @@ export class ThreadPanel {
 
       const body = document.createElement('div');
       body.className = 'body';
-      body.textContent = c.text;
+      // Comments are untrusted input; renderCommentMarkdown escapes first and
+      // only emits a fixed safe tag set, so innerHTML is safe here.
+      body.innerHTML = renderCommentMarkdown(c.text);
 
       row.appendChild(authorRow);
       row.appendChild(body);
