@@ -47,6 +47,21 @@ The feedback widget that ships Linear tickets in `~/dev/health-tool` and `~/dev/
 - Widget bundle size is a hard constraint — measure and report it on every PR that touches widget code.
 - **Mobile UX is load-bearing.** Bryan reviews on his phone. Any UI change touching the editor, widget, or landing page must follow [docs/product/design-mobile.md](docs/product/design-mobile.md) — verify at 430px wide before shipping.
 
+## Pre-push leak gate
+
+This repo is **public**. `.githooks/pre-push` runs two scanners on every push and blocks the push if either flags a leak. The principle: once a push lands and a PR is opened, the content is public-record forever (PR descriptions and commits can't be removed) — so the gate fires before the push.
+
+**Layer 1 — regex** (`scripts/scrub-check.py`): scans for hand-curated denylist patterns at `~/.config/conductor/scrub-denylist.txt` (family names, tax keywords, health specifics, etc.) and, if a `registry.yaml` exists at repo root or at `~/dev/ai-team-lead/`, for other project names from the registry.
+
+**Layer 2 — Haiku** (`scripts/scrub-haiku.py`): sends the diff to `claude-haiku-4-5-20251001` with a strict scanner prompt. Catches unrecognized real names, contextual identifiers, financial/health specifics in personal context, OAuth tokens, etc. Auto-runs only on pushes to `github.com/fryanpan/` remotes. Requires `SCRUB_HAIKU_API_KEY` (preferred) or `ANTHROPIC_API_KEY`. API failure → warn + pass (regex layer still ran).
+
+**Setup once after clone:**
+```bash
+git config core.hooksPath .githooks
+```
+
+Bypass: `SCRUB_SKIP=1 git push ...` (both layers), `SCRUB_SKIP_HAIKU=1 git push ...` (Haiku only). Use sparingly.
+
 ## Linear
 
 - Team: Bryan Chan (BRY)

@@ -1,0 +1,62 @@
+#!/bin/bash
+# Pre-push gate: run scripts/scrub-check.py on the diff that's about to be pushed.
+# The principle: once a push lands and a PR is opened, the content is public-record
+# forever. We catch leaks here so they never reach GitHub.
+#
+# Bypass entirely with SCRUB_SKIP=1 (logged). Use sparingly.
+
+set -u
+
+if [ "${SCRUB_SKIP:-}" = "1" ]; then
+  echo "[scrub-check] SCRUB_SKIP=1 — bypassing pre-push gate." >&2
+  exit 0
+fi
+
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+regex_script="$repo_root/scripts/scrub-check.py"
+haiku_script="$repo_root/scripts/scrub-haiku.py"
+
+# Not installed in this repo — silently no-op so peer repos without the script aren't blocked.
+[ ! -f "$regex_script" ] && exit 0
+
+# Haiku layer runs only when pushing to a fryanpan-owned remote (personal-account
+# isolation for the dedicated SCRUB_HAIKU_API_KEY billing). Other remotes get the
+# regex layer only. Override with SCRUB_HAIKU_FORCE=1 to enable Haiku on any push.
+origin_url="$(git remote get-url origin 2>/dev/null || true)"
+haiku_enabled=0
+case "$origin_url" in
+  *github.com[/:]fryanpan/*) haiku_enabled=1 ;;
+esac
+[ "${SCRUB_HAIKU_FORCE:-}" = "1" ] && haiku_enabled=1
+
+ZERO_SHA="0000000000000000000000000000000000000000"
+exit_code=0
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  # Skip deletes
+  [ "$local_sha" = "$ZERO_SHA" ] && continue
+
+  if [ "$remote_sha" = "$ZERO_SHA" ]; then
+    # New branch — diff against the remote's default branch.
+    default_branch="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')"
+    default_branch="${default_branch:-main}"
+    range="origin/${default_branch}..${local_sha}"
+  else
+    range="${remote_sha}..${local_sha}"
+  fi
+
+  # Regex pass first (fast, deterministic, free).
+  if ! python3 "$regex_script" --diff-range "$range"; then
+    exit_code=1
+    continue  # don't spend an API call on a push that's already blocked
+  fi
+
+  # Haiku pass second (context-aware, catches what regex misses).
+  if [ "$haiku_enabled" = "1" ] && [ -f "$haiku_script" ]; then
+    if ! python3 "$haiku_script" --diff-range "$range"; then
+      exit_code=1
+    fi
+  fi
+done
+
+exit "$exit_code"
