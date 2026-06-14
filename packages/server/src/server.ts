@@ -233,10 +233,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // disk sync) before returning. Mockup/dev docs are about
         // commenting on running surfaces, not about a markdown buffer,
         // so they don't need a file.
-        if (type === 'markdown' && !sourceUrl) {
+        if ((type === 'markdown' || type === 'code') && !sourceUrl) {
           return j(400, {
             error: 'sourceUrl required',
-            hint: 'Markdown review docs are always backed by a .md file. Pass sourceUrl: "/abs/path/to/file.md" in the POST body. The server will load the file and bidirectionally sync edits.',
+            hint: 'Markdown and code review docs are backed by a file on disk. Pass sourceUrl: "/abs/path/to/file" in the POST body.',
           });
         }
         const room = rooms.getOrCreate(docId, {
@@ -246,10 +246,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           setId: body?.setId as string | undefined,
           webhookUrl: body?.webhookUrl as string | undefined,
           owner: body?.owner as string | undefined,
+          workspaceId: body?.workspaceId as string | undefined,
+          relPath: body?.relPath as string | undefined,
+          workspaceRoot: body?.workspaceRoot as string | undefined,
         });
         let attached: ReturnType<typeof rooms.attachFile> | undefined;
         if (type === 'markdown' && sourceUrl) {
           attached = rooms.attachFile(docId, sourceUrl);
+          if (!attached.ok) return j(409, { error: 'attach_failed', attached });
+        } else if (type === 'code' && sourceUrl) {
+          attached = rooms.attachReadonlyFile(docId, sourceUrl);
           if (!attached.ok) return j(409, { error: 'attach_failed', attached });
         }
         return j(200, {
@@ -650,7 +656,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     meta: T,
   ): T & { reviewUrl?: string } {
     const base = publicBaseUrl(server.port ?? port);
-    if (meta.type === 'markdown') {
+    if (meta.type === 'markdown' || meta.type === 'code') {
+      // Code review shares the same SPA route; the app branches the editor
+      // on the doc's type at boot.
       return { ...meta, reviewUrl: `${base}/review/${encodeURIComponent(meta.docId)}` };
     }
     if (meta.type === 'mockup' && meta.sourceUrl) {

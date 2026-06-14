@@ -220,9 +220,12 @@ export class Rooms {
         const room = this.getOrCreate(docId);
         count++;
         const src = room.meta.sourceUrl;
-        if (room.meta.type === 'markdown' && src && existsSync(src)) {
-          const res = this.attachFile(docId, src);
-          if (res.ok) rebound++;
+        if (src && existsSync(src)) {
+          if (room.meta.type === 'markdown') {
+            if (this.attachFile(docId, src).ok) rebound++;
+          } else if (room.meta.type === 'code') {
+            if (this.attachReadonlyFile(docId, src).ok) rebound++;
+          }
         }
       }
     } catch (err) {
@@ -245,6 +248,9 @@ export class Rooms {
       setId?: string;
       webhookUrl?: string;
       owner?: string;
+      workspaceId?: string;
+      relPath?: string;
+      workspaceRoot?: string;
     },
   ): DocRoom {
     const existing = this.rooms.get(docId);
@@ -281,6 +287,9 @@ export class Rooms {
         title: init?.title,
         setId: init?.setId,
         owner: init?.owner,
+        workspaceId: init?.workspaceId,
+        relPath: init?.relPath,
+        workspaceRoot: init?.workspaceRoot,
         createdAt: Date.now(),
       };
       initDocMeta(ydoc, now);
@@ -453,6 +462,18 @@ export class Rooms {
   } | null {
     const room = this.rooms.get(docId);
     if (!room) return null;
+    // Code docs are flat read-only text in the `content` Y.Text, not a prose
+    // fragment — surface the whole source as one block.
+    if (room.meta.type === 'code') {
+      const text = room.ydoc.getText('content').toString();
+      const syncError = this.fileBindings.get(docId)?.lastSyncError;
+      return {
+        plainText: text,
+        blocks: [{ type: 'code', text, startOffset: 0, endOffset: text.length }],
+        threads: listThreads(room.ydoc),
+        ...(syncError ? { syncError } : {}),
+      };
+    }
     const fragment = prose.getProseFragment(room.ydoc);
     const walk = prose.walkProse(fragment);
 
@@ -592,6 +613,53 @@ export class Rooms {
   }
 
   /**
+   * Bind a READ-ONLY source file (type='code') for review. The file's raw
+   * text is seeded into the flat `content` Y.Text (no markdown parse), the
+   * mtime poll is armed for disk→doc refresh, and — crucially — there is NO
+   * doc→disk write-back: the browser never edits a code file (it only
+   * comments), so the file is never rewritten by live-feedback. The agent
+   * edits the source via its normal tools; the poll re-renders the view.
+   */
+  attachReadonlyFile(
+    docId: string,
+    filePath: string,
+  ): { ok: boolean; error?: 'not-found' | 'path-empty' | 'read-failed'; resolvedPath?: string } {
+    if (!filePath || filePath.trim() === '') return { ok: false, error: 'path-empty' };
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'not-found' };
+    const abs = filePath.startsWith('/') ? filePath : join(process.cwd(), filePath);
+    const content = room.ydoc.getText('content');
+    let text = '';
+    if (existsSync(abs)) {
+      try {
+        text = readFileSync(abs, 'utf8');
+      } catch (err) {
+        console.error(`[rooms] read failed for ${abs}:`, err);
+        return { ok: false, error: 'read-failed' };
+      }
+    }
+    // Seed only when empty (don't double-seed across reloads); 'file-seed'
+    // origin so it isn't mistaken for a user edit.
+    if (content.length === 0 && text.length > 0) {
+      room.ydoc.transact(() => content.insert(0, text), 'file-seed');
+    }
+    const existing = this.fileBindings.get(docId);
+    if (existing?.writeTimer) clearTimeout(existing.writeTimer);
+    if (existing?.readTimer) clearTimeout(existing.readTimer);
+    if (existing?.pollTimer) clearInterval(existing.pollTimer);
+    const binding: FileBinding = { path: abs, lastWritten: content.toString() };
+    this.fileBindings.set(docId, binding);
+    if (!room.meta.sourceUrl) {
+      const m = room.ydoc.getMap('meta');
+      room.ydoc.transact(() => m.set('sourceUrl', abs));
+      room.meta.sourceUrl = abs;
+    }
+    // NO write-back observer for code docs (read-only). Only disk → doc.
+    this.armFileWatcher(room, binding);
+    return { ok: true, resolvedPath: abs };
+  }
+
+  /**
    * Watch the bound file for external edits via an mtime poll.
    *
    * We deliberately do NOT use fs.watch. A file-level fs.watch is bound to
@@ -651,6 +719,16 @@ export class Rooms {
     } catch {
       return { ok: false, error: 'missing' };
     }
+    if (room.meta.type === 'code') {
+      const content = room.ydoc.getText('content');
+      room.ydoc.transact(() => {
+        content.delete(0, content.length);
+        content.insert(0, md);
+      }, 'file-watch');
+      binding.lastWritten = md;
+      binding.lastSyncError = undefined;
+      return { ok: true };
+    }
     const blocks = prose.parseMarkdownBlocks(md);
     if (blocks.length === 0) return { ok: false, error: 'missing' };
     const fragment = prose.getProseFragment(room.ydoc);
@@ -676,6 +754,30 @@ export class Rooms {
       md = readFileSync(binding.path, 'utf8');
     } catch (err) {
       console.error(`[rooms] read failed for ${binding.path}:`, err);
+      return;
+    }
+    // Code docs are flat text — replace the whole `content` Y.Text on change.
+    // No write-back means no live edits, so there's never a conflict; the
+    // pure decideReconcile is reused only to skip no-op reads.
+    if (room.meta.type === 'code') {
+      const content = room.ydoc.getText('content');
+      const current = content.toString();
+      const decision = decideReconcile({
+        disk: md,
+        lastWritten: binding.lastWritten,
+        currentSerialized: current,
+      });
+      if (decision === 'in-sync') return;
+      if (decision === 'catch-up') {
+        binding.lastWritten = md;
+        return;
+      }
+      room.ydoc.transact(() => {
+        content.delete(0, content.length);
+        content.insert(0, md);
+      }, 'file-watch');
+      binding.lastWritten = md;
+      binding.lastSyncError = undefined;
       return;
     }
     const fragment = prose.getProseFragment(room.ydoc);
@@ -1019,6 +1121,10 @@ export class Rooms {
     room.ydoc.on('update', () => {
       this.saveToDisk(room);
     });
+    // Code docs have no prose fragment — the auto-reanchor sweep below walks
+    // the prose fragment and would orphan content-anchored threads. Skip it;
+    // code-anchor recovery is handled separately (flat-text snippet match).
+    if (room.meta.type === 'code') return;
     // Every prose change triggers a best-effort sweep that rebuilds
     // Y.RelativePositions for threads whose anchors no longer resolve
     // (e.g. the user split a block or re-typed the anchored text —
