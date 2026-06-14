@@ -10,14 +10,22 @@ const DEFAULT_WS_PATH = (docId: string, type: string) =>
 /** Fetch a doc's persisted type before mounting a surface. Defaults to
  *  'markdown' if the meta can't be read (the markdown path is the safe
  *  fallback — it migrates legacy content and never assumes code). */
-async function fetchDocType(docId: string): Promise<string> {
+async function fetchDocMeta(
+  docId: string,
+): Promise<{ type: string; sourceUrl: string; workspaceId: string }> {
   try {
     const res = await fetch(`/api/docs/${encodeURIComponent(docId)}`);
-    if (!res.ok) return 'markdown';
-    const data = (await res.json()) as { meta?: { type?: string } };
-    return data.meta?.type ?? 'markdown';
+    if (!res.ok) return { type: 'markdown', sourceUrl: '', workspaceId: '' };
+    const data = (await res.json()) as {
+      meta?: { type?: string; sourceUrl?: string; workspaceId?: string };
+    };
+    return {
+      type: data.meta?.type ?? 'markdown',
+      sourceUrl: data.meta?.sourceUrl ?? '',
+      workspaceId: data.meta?.workspaceId ?? '',
+    };
   } catch {
-    return 'markdown';
+    return { type: 'markdown', sourceUrl: '', workspaceId: '' };
   }
 }
 
@@ -73,7 +81,11 @@ async function boot(): Promise<void> {
     set: (k, v) => localStorage.setItem(k, v),
   });
 
-  const docType = await fetchDocType(docId);
+  const {
+    type: docType,
+    sourceUrl: docSourceUrl,
+    workspaceId: docWorkspaceId,
+  } = await fetchDocMeta(docId);
   const client = connect(DEFAULT_WS_PATH(docId, docType));
 
   // Code docs get a read-only, syntax-highlighted CodeMirror surface that
@@ -81,7 +93,7 @@ async function boot(): Promise<void> {
   // Tiptap/ProseMirror-specific (format bar, edit-mode toggle, comment pill
   // positioning) and only applies to markdown docs.
   if (docType === 'code') {
-    bootCode({ docId, client, user });
+    bootCode({ docId, client, user, sourceUrl: docSourceUrl, workspaceId: docWorkspaceId });
     return;
   }
 
