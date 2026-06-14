@@ -1,6 +1,7 @@
 import { type Thread, type User, readDocMeta } from '@feedback/core';
 import type { FeedbackClient } from '../client.ts';
 import { ThreadPanel, type ThreadTab } from '../threads.ts';
+import { renderWorkspaceTree, wireWorkspaceTreeRefresh } from '../workspace-tree.ts';
 import { createCodeEditor } from './code-editor.ts';
 
 /**
@@ -15,8 +16,21 @@ import { createCodeEditor } from './code-editor.ts';
  * composer. Clicking a gutter dot or a panel thread reveals + scrolls +
  * pulses the anchored lines, mirroring the markdown path.
  */
-export function bootCode(opts: { docId: string; client: FeedbackClient; user: User }): void {
+export function bootCode(opts: {
+  docId: string;
+  client: FeedbackClient;
+  user: User;
+  sourceUrl?: string;
+  workspaceId?: string;
+}): void {
   const { docId, client, user } = opts;
+  // A code file bound via bind_folder belongs to a workspace — render the
+  // shared file tree so the reviewer can navigate the folder (same as the
+  // markdown surface; code docs skip app.ts's renderSetNav by booting here).
+  if (opts.workspaceId) {
+    void renderWorkspaceTree(docId, opts.workspaceId);
+    wireWorkspaceTreeRefresh(docId, opts.workspaceId);
+  }
   const { ydoc } = client;
   document.body.classList.add('code-mode');
 
@@ -39,7 +53,10 @@ export function bootCode(opts: { docId: string; client: FeedbackClient; user: Us
   const scrim = el<HTMLElement>('threads-scrim');
   const shell = document.getElementById('shell') as HTMLElement;
 
-  const sourceUrl = readDocMeta(ydoc).sourceUrl ?? '';
+  // Prefer the sourceUrl from the REST meta (available immediately) over the
+  // Yjs meta map, which hasn't synced yet at boot — otherwise the language
+  // extension is chosen from an empty path and the file renders unhighlighted.
+  const sourceUrl = opts.sourceUrl || (readDocMeta(ydoc).sourceUrl ?? '');
 
   let selection: { start: Uint8Array; end: Uint8Array; snippet: string } | null = null;
 
