@@ -722,9 +722,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
 function isValidDocId(s: string): boolean {
   // Allow a reasonable set of URL-safe chars. Disallow leading dot so IDs
   // can't masquerade as hidden files on disk. Length cap protects the
-  // filename from being pathological.
+  // filename from being pathological. `~` is permitted because workspace
+  // member docIds encode the relPath's `/` separators as `~`
+  // (`${workspaceId}:${relPath.replaceAll('/', '~')}` in rooms.ts), so any
+  // file in a subdirectory of a bound folder needs `~` to be reachable via
+  // the /api/docs/:docId routes. `~` is RFC 3986 unreserved (URL-safe) and a
+  // valid filename char, matching the .ydoc-on-disk naming.
   if (!s || s.startsWith('.')) return false;
-  return /^[a-zA-Z0-9_.:\-]{1,100}$/.test(s);
+  return /^[a-zA-Z0-9_.:~\-]{1,100}$/.test(s);
 }
 
 function j(status: number, body: unknown): Response {
