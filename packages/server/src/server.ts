@@ -233,10 +233,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // disk sync) before returning. Mockup/dev docs are about
         // commenting on running surfaces, not about a markdown buffer,
         // so they don't need a file.
-        if (type === 'markdown' && !sourceUrl) {
+        if ((type === 'markdown' || type === 'code') && !sourceUrl) {
           return j(400, {
             error: 'sourceUrl required',
-            hint: 'Markdown review docs are always backed by a .md file. Pass sourceUrl: "/abs/path/to/file.md" in the POST body. The server will load the file and bidirectionally sync edits.',
+            hint: 'Markdown and code review docs are backed by a file on disk. Pass sourceUrl: "/abs/path/to/file" in the POST body.',
           });
         }
         const room = rooms.getOrCreate(docId, {
@@ -246,10 +246,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           setId: body?.setId as string | undefined,
           webhookUrl: body?.webhookUrl as string | undefined,
           owner: body?.owner as string | undefined,
+          workspaceId: body?.workspaceId as string | undefined,
+          relPath: body?.relPath as string | undefined,
+          workspaceRoot: body?.workspaceRoot as string | undefined,
         });
         let attached: ReturnType<typeof rooms.attachFile> | undefined;
         if (type === 'markdown' && sourceUrl) {
           attached = rooms.attachFile(docId, sourceUrl);
+          if (!attached.ok) return j(409, { error: 'attach_failed', attached });
+        } else if (type === 'code' && sourceUrl) {
+          attached = rooms.attachReadonlyFile(docId, sourceUrl);
           if (!attached.ok) return j(409, { error: 'attach_failed', attached });
         }
         return j(200, {
@@ -260,6 +266,47 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       }
       if (pathname === '/api/docs' && req.method === 'GET') {
         return j(200, { docs: rooms.list().map(withReviewUrl) });
+      }
+
+      // --- REST: workspaces (folder bind) ---
+      if (pathname === '/api/workspaces' && req.method === 'POST') {
+        const body = await safeJson(req);
+        const folderPath = body?.folderPath as string | undefined;
+        if (!folderPath || typeof folderPath !== 'string') {
+          return j(400, { error: 'folderPath required' });
+        }
+        const res = rooms.bindFolder({
+          folderPath,
+          workspaceId: body?.workspaceId as string | undefined,
+          title: body?.title as string | undefined,
+          include: Array.isArray(body?.include) ? (body.include as string[]) : undefined,
+          maxFiles: typeof body?.maxFiles === 'number' ? Number(body.maxFiles) : undefined,
+          owner: body?.owner as string | undefined,
+        });
+        if (!res.ok) {
+          // not-found → 404; too-many-files → 409 (guardrail, caller must
+          // narrow the folder or raise maxFiles).
+          return j(res.error === 'not-found' ? 404 : 409, res);
+        }
+        return j(200, {
+          ...res,
+          files: res.files.map((f) => ({
+            ...f,
+            reviewUrl: withReviewUrl({ docId: f.docId, type: f.type }).reviewUrl,
+          })),
+        });
+      }
+      // File-tree view for a bound workspace: nested directory tree with
+      // per-file unresolved-comment counts + folder roll-ups. Files are
+      // decorated with reviewUrl by the rooms decorator (withReviewUrl).
+      const wsTreeMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/tree$/);
+      if (wsTreeMatch && req.method === 'GET') {
+        const workspaceId = decodeURIComponent(wsTreeMatch[1] ?? '');
+        const tree = rooms.buildWorkspaceTree(workspaceId);
+        if (tree.tree.children.length === 0) {
+          return j(404, { error: 'workspace not found', workspaceId });
+        }
+        return j(200, tree);
       }
       const docMatch = pathname.match(/^\/api\/docs\/([^/]+)(?:\/(.*))?$/);
       if (docMatch) {
@@ -650,7 +697,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     meta: T,
   ): T & { reviewUrl?: string } {
     const base = publicBaseUrl(server.port ?? port);
-    if (meta.type === 'markdown') {
+    if (meta.type === 'markdown' || meta.type === 'code') {
+      // Code review shares the same SPA route; the app branches the editor
+      // on the doc's type at boot.
       return { ...meta, reviewUrl: `${base}/review/${encodeURIComponent(meta.docId)}` };
     }
     if (meta.type === 'mockup' && meta.sourceUrl) {
@@ -673,9 +722,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
 function isValidDocId(s: string): boolean {
   // Allow a reasonable set of URL-safe chars. Disallow leading dot so IDs
   // can't masquerade as hidden files on disk. Length cap protects the
-  // filename from being pathological.
+  // filename from being pathological. `~` is permitted because workspace
+  // member docIds encode the relPath's `/` separators as `~`
+  // (`${workspaceId}:${relPath.replaceAll('/', '~')}` in rooms.ts), so any
+  // file in a subdirectory of a bound folder needs `~` to be reachable via
+  // the /api/docs/:docId routes. `~` is RFC 3986 unreserved (URL-safe) and a
+  // valid filename char, matching the .ydoc-on-disk naming.
   if (!s || s.startsWith('.')) return false;
-  return /^[a-zA-Z0-9_.:\-]{1,100}$/.test(s);
+  return /^[a-zA-Z0-9_.:~\-]{1,100}$/.test(s);
 }
 
 function j(status: number, body: unknown): Response {

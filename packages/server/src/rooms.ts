@@ -1,3 +1,5 @@
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
@@ -7,6 +9,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
+import { basename, relative, resolve as resolvePath, sep } from 'node:path';
 import { join } from 'node:path';
 import {
   type Anchor,
@@ -46,6 +49,41 @@ export interface DocRoom {
   webhookUrl?: string;
   /** incremented per webhook event. */
   seq: number;
+}
+
+/** A file leaf in the workspace tree (a single bound review doc). */
+export interface WorkspaceFileNode {
+  type: 'file';
+  docId: string;
+  /** Basename of relPath. */
+  name: string;
+  relPath: string;
+  fileType: DocType;
+  /** Open (unresolved) thread count on this file. */
+  openCount: number;
+  /** Total thread count (open + resolved). */
+  threadCount: number;
+  reviewUrl?: string;
+  lastActivityAt?: number;
+}
+
+/** A directory node in the workspace tree; `openCount` is rolled up from
+ *  all descendant files. */
+export interface WorkspaceDirNode {
+  type: 'dir';
+  /** Path segment name; empty string for the tree root. */
+  name: string;
+  openCount: number;
+  children: Array<WorkspaceDirNode | WorkspaceFileNode>;
+}
+
+/** Result of `buildWorkspaceTree` — a nested directory tree plus totals. */
+export interface WorkspaceTree {
+  workspaceId: string;
+  /** Absolute workspace root, when known (from member docs' workspaceRoot). */
+  root?: string;
+  totalOpen: number;
+  tree: WorkspaceDirNode;
 }
 
 export interface RoomsConfig {
@@ -220,9 +258,12 @@ export class Rooms {
         const room = this.getOrCreate(docId);
         count++;
         const src = room.meta.sourceUrl;
-        if (room.meta.type === 'markdown' && src && existsSync(src)) {
-          const res = this.attachFile(docId, src);
-          if (res.ok) rebound++;
+        if (src && existsSync(src)) {
+          if (room.meta.type === 'markdown') {
+            if (this.attachFile(docId, src).ok) rebound++;
+          } else if (room.meta.type === 'code') {
+            if (this.attachReadonlyFile(docId, src).ok) rebound++;
+          }
         }
       }
     } catch (err) {
@@ -245,6 +286,9 @@ export class Rooms {
       setId?: string;
       webhookUrl?: string;
       owner?: string;
+      workspaceId?: string;
+      relPath?: string;
+      workspaceRoot?: string;
     },
   ): DocRoom {
     const existing = this.rooms.get(docId);
@@ -281,6 +325,9 @@ export class Rooms {
         title: init?.title,
         setId: init?.setId,
         owner: init?.owner,
+        workspaceId: init?.workspaceId,
+        relPath: init?.relPath,
+        workspaceRoot: init?.workspaceRoot,
         createdAt: Date.now(),
       };
       initDocMeta(ydoc, now);
@@ -453,6 +500,18 @@ export class Rooms {
   } | null {
     const room = this.rooms.get(docId);
     if (!room) return null;
+    // Code docs are flat read-only text in the `content` Y.Text, not a prose
+    // fragment — surface the whole source as one block.
+    if (room.meta.type === 'code') {
+      const text = room.ydoc.getText('content').toString();
+      const syncError = this.fileBindings.get(docId)?.lastSyncError;
+      return {
+        plainText: text,
+        blocks: [{ type: 'code', text, startOffset: 0, endOffset: text.length }],
+        threads: listThreads(room.ydoc),
+        ...(syncError ? { syncError } : {}),
+      };
+    }
     const fragment = prose.getProseFragment(room.ydoc);
     const walk = prose.walkProse(fragment);
 
@@ -516,6 +575,171 @@ export class Rooms {
       threads: listThreads(room.ydoc),
       ...(syncError ? { syncError } : {}),
     };
+  }
+
+  /**
+   * Build the file-tree view for a workspace: every doc tagged with
+   * `workspaceId`, arranged into a nested directory tree by its `relPath`,
+   * with per-file unresolved-comment counts and folder roll-ups.
+   *
+   * Each FILE node carries `{docId, name, relPath, fileType, openCount,
+   * threadCount, reviewUrl?, lastActivityAt}`. Each DIR node carries a
+   * rolled-up `openCount` = sum of every descendant file's openCount.
+   *
+   * Sort within each level: directories first, then open-count desc, then
+   * name asc — so the folders/files that need attention float up, matching
+   * the landing page's "what needs my review?" ordering.
+   *
+   * `reviewUrl` is filled in by the caller via the rooms decorator
+   * (`decorateDocMeta`) so the URL machinery stays in the server layer.
+   */
+  buildWorkspaceTree(workspaceId: string): WorkspaceTree {
+    const decorate = this.cfg.decorateDocMeta;
+    const root: WorkspaceDirNode = { type: 'dir', name: '', openCount: 0, children: [] };
+    let totalOpen = 0;
+    let workspaceRoot: string | undefined;
+
+    for (const meta of this.list()) {
+      if (meta.workspaceId !== workspaceId) continue;
+      if (!workspaceRoot && meta.workspaceRoot) workspaceRoot = meta.workspaceRoot;
+      const relPath = meta.relPath ?? meta.docId;
+      const openCount = this.listThreads(meta.docId, { status: 'open' }).length;
+      const threadCount = this.listThreads(meta.docId).length;
+      totalOpen += openCount;
+      const decorated = decorate ? decorate(meta) : meta;
+      const fileNode: WorkspaceFileNode = {
+        type: 'file',
+        docId: meta.docId,
+        name: relPath.split('/').pop() ?? relPath,
+        relPath,
+        fileType: meta.type,
+        openCount,
+        threadCount,
+        reviewUrl: (decorated as { reviewUrl?: string }).reviewUrl,
+        lastActivityAt: meta.lastActivityAt,
+      };
+      // Walk/create the directory chain, accumulating openCount as we go.
+      const parts = relPath.split('/');
+      const dirs = parts.slice(0, -1);
+      let cursor = root;
+      cursor.openCount += openCount;
+      for (const part of dirs) {
+        let next = cursor.children.find(
+          (c): c is WorkspaceDirNode => c.type === 'dir' && c.name === part,
+        );
+        if (!next) {
+          next = { type: 'dir', name: part, openCount: 0, children: [] };
+          cursor.children.push(next);
+        }
+        next.openCount += openCount;
+        cursor = next;
+      }
+      cursor.children.push(fileNode);
+    }
+
+    sortTreeChildren(root);
+    return { workspaceId, root: workspaceRoot, totalOpen, tree: root };
+  }
+
+  /**
+   * Bind a whole folder/worktree for review. Scans the folder for
+   * supported files, creates one review doc per file grouped under a
+   * single `workspaceId`, and returns the resulting file list plus a
+   * record of anything skipped.
+   *
+   * Scan strategy: prefer `git ls-files` (respects .gitignore for free —
+   * skips node_modules/dist/etc); fall back to a recursive readdir with a
+   * hardcoded skip set when the folder isn't a git repo.
+   *
+   * Allowlist by extension: .md → markdown (WYSIWYG, editable, write-back);
+   * code extensions → read-only syntax-highlighted source. Files that are
+   * too big (>512 KB) or look binary (NUL byte in the first 8 KB) are
+   * recorded in `skipped[]` and never bound.
+   *
+   * Guardrail: if the surviving file count exceeds `maxFiles` (default
+   * 300), nothing is created — returns `{ ok:false, error:'too-many-files',
+   * fileCount }` so a stray bind on a giant tree can't melt the server with
+   * thousands of mtime polls.
+   *
+   * Deterministic docIds (`${workspaceId}:${relPath}`) make re-binding
+   * idempotent: the same file maps to the same docId, so threads survive.
+   */
+  bindFolder(opts: {
+    folderPath: string;
+    workspaceId?: string;
+    title?: string;
+    include?: string[];
+    maxFiles?: number;
+    owner?: string;
+  }):
+    | {
+        ok: true;
+        workspaceId: string;
+        root: string;
+        fileCount: number;
+        skipped: Array<{ path: string; reason: string }>;
+        files: Array<{ docId: string; relPath: string; type: DocType; title: string }>;
+      }
+    | { ok: false; error: 'not-found' | 'too-many-files'; fileCount?: number } {
+    const root = resolvePath(opts.folderPath);
+    if (!existsSync(root)) return { ok: false, error: 'not-found' };
+
+    const allow = buildAllowlist(opts.include);
+    const candidates = scanFolder(root);
+    const skipped: Array<{ path: string; reason: string }> = [];
+    const accepted: Array<{ abs: string; relPath: string; type: DocType }> = [];
+
+    for (const abs of candidates) {
+      const relPath = relative(root, abs).split(sep).join('/');
+      const dotIdx = abs.lastIndexOf('.');
+      const slash = Math.max(abs.lastIndexOf('/'), abs.lastIndexOf('\\'));
+      const ext = dotIdx > slash ? abs.slice(dotIdx).toLowerCase() : '';
+      const type = allow.get(ext);
+      if (!type) continue;
+      let size: number;
+      try {
+        size = statSync(abs).size;
+      } catch {
+        skipped.push({ path: relPath, reason: 'stat-failed' });
+        continue;
+      }
+      if (size > 512 * 1024) {
+        skipped.push({ path: relPath, reason: 'too-large' });
+        continue;
+      }
+      if (looksBinary(abs)) {
+        skipped.push({ path: relPath, reason: 'binary' });
+        continue;
+      }
+      accepted.push({ abs, relPath, type });
+    }
+
+    const max = opts.maxFiles ?? 300;
+    if (accepted.length > max) {
+      return { ok: false, error: 'too-many-files', fileCount: accepted.length };
+    }
+
+    const workspaceId = opts.workspaceId ?? deriveWorkspaceId(root);
+    const files: Array<{ docId: string; relPath: string; type: DocType; title: string }> = [];
+    for (const { abs, relPath, type } of accepted) {
+      let docId = `${workspaceId}:${relPath.replaceAll('/', '~')}`;
+      if (docId.length > 100) docId = `${workspaceId}:${shortHash(relPath)}`;
+      this.getOrCreate(docId, {
+        type,
+        sourceUrl: abs,
+        setId: workspaceId,
+        owner: opts.owner,
+        workspaceId,
+        workspaceRoot: root,
+        relPath,
+        title: relPath,
+      });
+      if (type === 'markdown') this.attachFile(docId, abs);
+      else this.attachReadonlyFile(docId, abs);
+      files.push({ docId, relPath, type, title: relPath });
+    }
+
+    return { ok: true, workspaceId, root, fileCount: files.length, skipped, files };
   }
 
   /**
@@ -592,6 +816,53 @@ export class Rooms {
   }
 
   /**
+   * Bind a READ-ONLY source file (type='code') for review. The file's raw
+   * text is seeded into the flat `content` Y.Text (no markdown parse), the
+   * mtime poll is armed for disk→doc refresh, and — crucially — there is NO
+   * doc→disk write-back: the browser never edits a code file (it only
+   * comments), so the file is never rewritten by live-feedback. The agent
+   * edits the source via its normal tools; the poll re-renders the view.
+   */
+  attachReadonlyFile(
+    docId: string,
+    filePath: string,
+  ): { ok: boolean; error?: 'not-found' | 'path-empty' | 'read-failed'; resolvedPath?: string } {
+    if (!filePath || filePath.trim() === '') return { ok: false, error: 'path-empty' };
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'not-found' };
+    const abs = filePath.startsWith('/') ? filePath : join(process.cwd(), filePath);
+    const content = room.ydoc.getText('content');
+    let text = '';
+    if (existsSync(abs)) {
+      try {
+        text = readFileSync(abs, 'utf8');
+      } catch (err) {
+        console.error(`[rooms] read failed for ${abs}:`, err);
+        return { ok: false, error: 'read-failed' };
+      }
+    }
+    // Seed only when empty (don't double-seed across reloads); 'file-seed'
+    // origin so it isn't mistaken for a user edit.
+    if (content.length === 0 && text.length > 0) {
+      room.ydoc.transact(() => content.insert(0, text), 'file-seed');
+    }
+    const existing = this.fileBindings.get(docId);
+    if (existing?.writeTimer) clearTimeout(existing.writeTimer);
+    if (existing?.readTimer) clearTimeout(existing.readTimer);
+    if (existing?.pollTimer) clearInterval(existing.pollTimer);
+    const binding: FileBinding = { path: abs, lastWritten: content.toString() };
+    this.fileBindings.set(docId, binding);
+    if (!room.meta.sourceUrl) {
+      const m = room.ydoc.getMap('meta');
+      room.ydoc.transact(() => m.set('sourceUrl', abs));
+      room.meta.sourceUrl = abs;
+    }
+    // NO write-back observer for code docs (read-only). Only disk → doc.
+    this.armFileWatcher(room, binding);
+    return { ok: true, resolvedPath: abs };
+  }
+
+  /**
    * Watch the bound file for external edits via an mtime poll.
    *
    * We deliberately do NOT use fs.watch. A file-level fs.watch is bound to
@@ -651,6 +922,16 @@ export class Rooms {
     } catch {
       return { ok: false, error: 'missing' };
     }
+    if (room.meta.type === 'code') {
+      const content = room.ydoc.getText('content');
+      room.ydoc.transact(() => {
+        content.delete(0, content.length);
+        content.insert(0, md);
+      }, 'file-watch');
+      binding.lastWritten = md;
+      binding.lastSyncError = undefined;
+      return { ok: true };
+    }
     const blocks = prose.parseMarkdownBlocks(md);
     if (blocks.length === 0) return { ok: false, error: 'missing' };
     const fragment = prose.getProseFragment(room.ydoc);
@@ -676,6 +957,30 @@ export class Rooms {
       md = readFileSync(binding.path, 'utf8');
     } catch (err) {
       console.error(`[rooms] read failed for ${binding.path}:`, err);
+      return;
+    }
+    // Code docs are flat text — replace the whole `content` Y.Text on change.
+    // No write-back means no live edits, so there's never a conflict; the
+    // pure decideReconcile is reused only to skip no-op reads.
+    if (room.meta.type === 'code') {
+      const content = room.ydoc.getText('content');
+      const current = content.toString();
+      const decision = decideReconcile({
+        disk: md,
+        lastWritten: binding.lastWritten,
+        currentSerialized: current,
+      });
+      if (decision === 'in-sync') return;
+      if (decision === 'catch-up') {
+        binding.lastWritten = md;
+        return;
+      }
+      room.ydoc.transact(() => {
+        content.delete(0, content.length);
+        content.insert(0, md);
+      }, 'file-watch');
+      binding.lastWritten = md;
+      binding.lastSyncError = undefined;
       return;
     }
     const fragment = prose.getProseFragment(room.ydoc);
@@ -1019,6 +1324,33 @@ export class Rooms {
     room.ydoc.on('update', () => {
       this.saveToDisk(room);
     });
+    // Code docs have no prose fragment — the prose-fragment auto-reanchor
+    // sweep below would find nothing and orphan every thread. Run the
+    // flat-text twin instead: observe the raw `content` Y.Text and re-anchor
+    // threads by snippet match after agent edits re-render the source.
+    if (room.meta.type === 'code') {
+      const content = room.ydoc.getText('content');
+      let codeReanchorTimer: ReturnType<typeof setTimeout> | null = null;
+      content.observe((_event, tr) => {
+        if (tr.origin === 'agent-reanchor') return;
+        if (codeReanchorTimer) clearTimeout(codeReanchorTimer);
+        codeReanchorTimer = setTimeout(() => {
+          const res = prose.autoReanchorCodeDoc(room.ydoc);
+          if (res.reanchored > 0 || res.stillOrphan > 0) {
+            console.log(
+              `[rooms] ${room.docId}: code re-anchor — ${res.reanchored} fixed, ${res.stillOrphan} orphaned`,
+            );
+          }
+        }, 250);
+      });
+      const initialCode = prose.autoReanchorCodeDoc(room.ydoc);
+      if (initialCode.reanchored > 0) {
+        console.log(
+          `[rooms] ${room.docId}: on-load code re-anchored ${initialCode.reanchored} thread(s)`,
+        );
+      }
+      return;
+    }
     // Every prose change triggers a best-effort sweep that rebuilds
     // Y.RelativePositions for threads whose anchors no longer resolve
     // (e.g. the user split a block or re-typed the anchored text —
@@ -1082,4 +1414,123 @@ export class Rooms {
 
 export function randomId(): string {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+}
+
+/**
+ * Sort a workspace dir node's children in place, recursively: directories
+ * first, then by open-count descending (attention floats up), then by name
+ * ascending. Mirrors the landing page's "what needs my review?" ordering.
+ */
+function sortTreeChildren(node: WorkspaceDirNode): void {
+  node.children.sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+    if (a.openCount !== b.openCount) return b.openCount - a.openCount;
+    return a.name.localeCompare(b.name);
+  });
+  for (const child of node.children) {
+    if (child.type === 'dir') sortTreeChildren(child);
+  }
+}
+
+/** Extension → DocType. `.md` is editable markdown; everything else is
+ *  read-only source. `include[]` (extensions like `.rb` or `rb`) extends
+ *  the code set. */
+function buildAllowlist(include?: string[]): Map<string, DocType> {
+  const map = new Map<string, DocType>([['.md', 'markdown']]);
+  const code = [
+    '.ts',
+    '.tsx',
+    '.js',
+    '.jsx',
+    '.mjs',
+    '.cjs',
+    '.java',
+    '.kt',
+    '.kts',
+    '.py',
+    '.json',
+  ];
+  for (const ext of code) map.set(ext, 'code');
+  for (const raw of include ?? []) {
+    const ext = raw.startsWith('.') ? raw.toLowerCase() : `.${raw.toLowerCase()}`;
+    if (!map.has(ext)) map.set(ext, 'code');
+  }
+  return map;
+}
+
+/**
+ * Enumerate the files in `root`. Prefer `git ls-files` (cached + untracked,
+ * honoring .gitignore) so node_modules/dist/etc are skipped for free; fall
+ * back to a recursive readdir with a hardcoded skip set when the folder
+ * isn't inside a git repo or git isn't available. Returns absolute paths.
+ */
+function scanFolder(root: string): string[] {
+  try {
+    const res = spawnSync(
+      'git',
+      ['-C', root, 'ls-files', '--cached', '--others', '--exclude-standard'],
+      { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
+    );
+    if (res.status === 0 && typeof res.stdout === 'string') {
+      const out: string[] = [];
+      for (const line of res.stdout.split('\n')) {
+        const rel = line.trim();
+        if (rel) out.push(join(root, rel));
+      }
+      return out;
+    }
+  } catch {
+    // git missing or threw — fall through to readdir.
+  }
+  return readdirRecursive(root);
+}
+
+const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', '.next', 'coverage']);
+
+function readdirRecursive(dir: string): string[] {
+  const out: string[] = [];
+  let entries: import('node:fs').Dirent[];
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  for (const entry of entries) {
+    const name = entry.name;
+    const abs = join(dir, name);
+    if (entry.isDirectory()) {
+      // Skip .git, any dotdir, and the hardcoded heavy dirs.
+      if (name.startsWith('.') || SKIP_DIRS.has(name)) continue;
+      out.push(...readdirRecursive(abs));
+    } else if (entry.isFile()) {
+      out.push(abs);
+    }
+  }
+  return out;
+}
+
+/** Sniff the first 8 KB for a NUL byte — a cheap binary detector that
+ *  keeps images/compiled output out of the text-only review surface. */
+function looksBinary(abs: string): boolean {
+  try {
+    const buf = readFileSync(abs);
+    const len = Math.min(buf.length, 8 * 1024);
+    for (let i = 0; i < len; i++) {
+      if (buf[i] === 0) return true;
+    }
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+/** Deterministic workspace id: folder basename + 6-char hash of the
+ *  absolute path, so two folders named `core` don't collide. */
+function deriveWorkspaceId(absRoot: string): string {
+  const base = basename(absRoot).replace(/[^a-zA-Z0-9_.\-]/g, '-') || 'workspace';
+  return `${base}-${shortHash(absRoot)}`;
+}
+
+function shortHash(s: string): string {
+  return createHash('sha1').update(s).digest('hex').slice(0, 6);
 }

@@ -41,7 +41,21 @@ export function readDocMeta(doc: Y.Doc): DocMeta {
   const title = m.get('title') as string | undefined;
   const setId = m.get('setId') as string | undefined;
   const owner = m.get('owner') as string | undefined;
-  return { docId, type, createdAt, sourceUrl, title, setId, owner };
+  const workspaceId = m.get('workspaceId') as string | undefined;
+  const relPath = m.get('relPath') as string | undefined;
+  const workspaceRoot = m.get('workspaceRoot') as string | undefined;
+  return {
+    docId,
+    type,
+    createdAt,
+    sourceUrl,
+    title,
+    setId,
+    owner,
+    workspaceId,
+    relPath,
+    workspaceRoot,
+  };
 }
 
 export function initDocMeta(doc: Y.Doc, meta: DocMeta): void {
@@ -54,6 +68,11 @@ export function initDocMeta(doc: Y.Doc, meta: DocMeta): void {
     if (meta.title !== undefined) m.set('title', meta.title);
     if (meta.setId !== undefined) m.set('setId', meta.setId);
     if (meta.owner !== undefined && !m.has('owner')) m.set('owner', meta.owner);
+    if (meta.workspaceId !== undefined && !m.has('workspaceId'))
+      m.set('workspaceId', meta.workspaceId);
+    if (meta.relPath !== undefined && !m.has('relPath')) m.set('relPath', meta.relPath);
+    if (meta.workspaceRoot !== undefined && !m.has('workspaceRoot'))
+      m.set('workspaceRoot', meta.workspaceRoot);
   });
 }
 

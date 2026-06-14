@@ -1,5 +1,10 @@
-/** Kinds of surfaces the feedback core can power. */
-export type DocType = 'markdown' | 'mockup' | 'dev';
+/** Kinds of surfaces the feedback core can power.
+ *  - markdown: WYSIWYG prose editing (Tiptap), bidirectional file sync.
+ *  - mockup/dev: HTML / running surfaces reviewed via the injectable widget.
+ *  - code: read-only source file (Java/Kotlin/TS/Python/JSON…) shown with
+ *    syntax highlighting; the agent edits the file on disk, the view re-renders.
+ */
+export type DocType = 'markdown' | 'mockup' | 'dev' | 'code';
 
 export interface DocMeta {
   docId: string;
@@ -27,6 +32,23 @@ export interface DocMeta {
    * idle docs for cleanup. Absent until the server populates it.
    */
   lastActivityAt?: number;
+  /**
+   * Workspace (bound folder/worktree) this doc belongs to, when it was
+   * created by `bind_folder`. Equals `setId` for folder members, so the
+   * existing set-sidebar lights up. Absent for standalone docs.
+   */
+  workspaceId?: string;
+  /**
+   * POSIX-style path of this file RELATIVE to the workspace root, e.g.
+   * "packages/core/src/types.ts". Drives the file-tree UI. Absent for
+   * standalone / mockup / dev docs.
+   */
+  relPath?: string;
+  /**
+   * Absolute folder that is the workspace root (= bind_folder's folderPath),
+   * stored on every member doc so the tree is derivable without a registry.
+   */
+  workspaceRoot?: string;
 }
 
 export interface User {

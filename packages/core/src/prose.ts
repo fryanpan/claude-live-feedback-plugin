@@ -1235,6 +1235,102 @@ export function autoReanchorDoc(
 }
 
 /**
+ * Flat-text twin of `autoReanchorDoc` for `type='code'` docs.
+ *
+ * Code docs store their raw source in the flat `content` Y.Text (no prose
+ * fragment), so the prose-fragment walk that `autoReanchorDoc` does would
+ * find nothing and orphan every thread. This version operates on
+ * `content.toString()`.
+ *
+ * NOTE the difference from the prose path: a relative position on a flat
+ * Y.Text never truly "fails to resolve" — after a delete+reinsert the
+ * Y.Text is the same CRDT type, so `createAbsolutePositionFromRelativePosition`
+ * returns a clamped index (often 0) rather than null. So we can't gate on
+ * resolution alone; an anchor is "still valid" only if both positions
+ * resolve AND the text between them still equals the stored snippet. When
+ * it doesn't, we text-match the snippet: if it appears exactly once, rebuild
+ * the relative positions at that index; otherwise mark the thread orphaned
+ * (preserving the original anchor for later manual re-anchoring).
+ *
+ * Returns a summary the caller can log. Idempotent — safe to call on every
+ * `content` change.
+ */
+export function autoReanchorCodeDoc(
+  doc: Y.Doc,
+  opts: { transactionOrigin?: unknown } = {},
+): { checked: number; reanchored: number; stillOrphan: number } {
+  const threads = doc.getMap('threads') as Y.Map<Y.Map<unknown>>;
+  const content = doc.getText('content');
+  const text = content.toString();
+  let checked = 0;
+  let reanchored = 0;
+  let stillOrphan = 0;
+
+  threads.forEach((threadMap) => {
+    const anchor = threadMap.get('anchor') as
+      | { kind: 'text-range'; startRel: Uint8Array; endRel: Uint8Array; snippet: { text: string } }
+      | { kind: 'element' | 'orphan' }
+      | undefined;
+    if (!anchor || anchor.kind !== 'text-range') return;
+    checked++;
+    const needle = anchor.snippet.text;
+    // Still valid? Both positions must resolve AND the spanned text must
+    // still equal the snippet. (Resolution alone is insufficient — see the
+    // note above about flat-Y.Text clamping.)
+    const startAbs = Y.createAbsolutePositionFromRelativePosition(
+      Y.decodeRelativePosition(anchor.startRel),
+      doc,
+    );
+    const endAbs = Y.createAbsolutePositionFromRelativePosition(
+      Y.decodeRelativePosition(anchor.endRel),
+      doc,
+    );
+    if (startAbs && endAbs) {
+      const lo = Math.min(startAbs.index, endAbs.index);
+      const hi = Math.max(startAbs.index, endAbs.index);
+      if (text.slice(lo, hi) === needle) return;
+    }
+    if (!needle) {
+      markThreadOrphan(doc, threadMap, opts.transactionOrigin);
+      stillOrphan++;
+      return;
+    }
+    const first = text.indexOf(needle);
+    if (first < 0 || text.indexOf(needle, first + 1) >= 0) {
+      // zero or multiple matches — don't guess
+      markThreadOrphan(doc, threadMap, opts.transactionOrigin);
+      stillOrphan++;
+      return;
+    }
+    const startRel = Y.createRelativePositionFromTypeIndex(content, first);
+    const endRel = Y.createRelativePositionFromTypeIndex(content, first + needle.length);
+    doc.transact(() => {
+      threadMap.set('anchor', {
+        kind: 'text-range',
+        startRel: Y.encodeRelativePosition(startRel),
+        endRel: Y.encodeRelativePosition(endRel),
+        snippet: { text: needle },
+      });
+    }, opts.transactionOrigin ?? 'agent-reanchor');
+    reanchored++;
+  });
+
+  return { checked, reanchored, stillOrphan };
+}
+
+/** Mark a thread orphaned in place, preserving its original anchor so it
+ *  can be re-anchored later. No-op if already orphaned. */
+function markThreadOrphan(doc: Y.Doc, threadMap: Y.Map<unknown>, origin: unknown): void {
+  const current = threadMap.get('anchor') as
+    | { kind: 'text-range' | 'element' | 'orphan' }
+    | undefined;
+  if (!current || current.kind === 'orphan') return;
+  doc.transact(() => {
+    threadMap.set('anchor', { kind: 'orphan', original: current, lastSeenAt: Date.now() });
+  }, origin ?? 'agent-reanchor');
+}
+
+/**
  * Ephemeral anchors the AGENT mints for its own bookkeeping — same
  * Y.RelativePosition tech as thread anchors, but stored separately so
  * they never show up in the user's threads list. Useful for "anchor

@@ -757,3 +757,63 @@ describe('doc owner + lastActivityAt', () => {
     expect(after).toBeGreaterThan(before);
   });
 });
+
+describe('read-only code docs', () => {
+  let handle: ServerHandle;
+  let dataDir: string;
+  let base: string;
+  beforeAll(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'feedback-code-'));
+    handle = createServer({ port: 0, dataDir });
+    base = `http://localhost:${handle.port}`;
+  });
+  afterAll(async () => {
+    await handle.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+  const content = async (docId: string) =>
+    fetch(`${base}/api/docs/${docId}/content`).then(
+      (r) =>
+        r.json() as Promise<{ plainText: string; blocks: { type: string | null; text: string }[] }>,
+    );
+
+  it('binds a source file read-only and serves its raw text', async () => {
+    const file = join(dataDir, 'sample.ts');
+    writeFileSync(file, 'const x: number = 1;\n');
+    const r = await fetch(`${base}/api/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId: 'code-1', type: 'code', sourceUrl: file }),
+    });
+    const body = (await r.json()) as { meta: { type: string; reviewUrl?: string } };
+    expect(body.meta.type).toBe('code');
+    expect(body.meta.reviewUrl).toContain('/review/code-1');
+    const c = await content('code-1');
+    expect(c.plainText).toBe('const x: number = 1;\n');
+    expect(c.blocks[0]?.type).toBe('code');
+  });
+
+  it('reconciles an external edit into the code doc (no write-back)', async () => {
+    const file = join(dataDir, 'live.ts');
+    writeFileSync(file, 'first\n');
+    await fetch(`${base}/api/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId: 'code-2', type: 'code', sourceUrl: file }),
+    });
+    expect((await content('code-2')).plainText).toBe('first\n');
+    // external edit via atomic rename + forced distinct mtime (see rearm test)
+    const tmp = `${file}.tmp`;
+    writeFileSync(tmp, 'second edited\n');
+    renameSync(tmp, file);
+    const stamp = new Date(Date.now() + 1000);
+    utimesSync(file, stamp, stamp);
+    for (let i = 0; i < 80; i++) {
+      if ((await content('code-2')).plainText === 'second edited\n') break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    expect((await content('code-2')).plainText).toBe('second edited\n');
+    // disk is NOT rewritten by LF (read-only): file content unchanged by server
+    expect(readFileSync(file, 'utf8')).toBe('second edited\n');
+  }, 15000);
+});
