@@ -1,10 +1,33 @@
 import { type Thread, type User, readDocMeta, resolveUser } from '@feedback/core';
 import { connect } from './client.ts';
+import { bootCode } from './code/code-app.ts';
 import { type EditorHandle, createEditor } from './editor.ts';
 import { ThreadPanel, type ThreadTab } from './threads.ts';
 
-const DEFAULT_WS_PATH = (docId: string) =>
-  `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/y/${encodeURIComponent(docId)}?type=markdown`;
+const DEFAULT_WS_PATH = (docId: string, type: string) =>
+  `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/y/${encodeURIComponent(docId)}?type=${encodeURIComponent(type)}`;
+
+/** Fetch a doc's persisted type before mounting a surface. Defaults to
+ *  'markdown' if the meta can't be read (the markdown path is the safe
+ *  fallback — it migrates legacy content and never assumes code). */
+async function fetchDocMeta(
+  docId: string,
+): Promise<{ type: string; sourceUrl: string; workspaceId: string }> {
+  try {
+    const res = await fetch(`/api/docs/${encodeURIComponent(docId)}`);
+    if (!res.ok) return { type: 'markdown', sourceUrl: '', workspaceId: '' };
+    const data = (await res.json()) as {
+      meta?: { type?: string; sourceUrl?: string; workspaceId?: string };
+    };
+    return {
+      type: data.meta?.type ?? 'markdown',
+      sourceUrl: data.meta?.sourceUrl ?? '',
+      workspaceId: data.meta?.workspaceId ?? '',
+    };
+  } catch {
+    return { type: 'markdown', sourceUrl: '', workspaceId: '' };
+  }
+}
 
 interface Selection {
   start: Uint8Array;
@@ -58,7 +81,22 @@ async function boot(): Promise<void> {
     set: (k, v) => localStorage.setItem(k, v),
   });
 
-  const client = connect(DEFAULT_WS_PATH(docId));
+  const {
+    type: docType,
+    sourceUrl: docSourceUrl,
+    workspaceId: docWorkspaceId,
+  } = await fetchDocMeta(docId);
+  const client = connect(DEFAULT_WS_PATH(docId, docType));
+
+  // Code docs get a read-only, syntax-highlighted CodeMirror surface that
+  // reuses the same thread/comment stack. Everything below this branch is
+  // Tiptap/ProseMirror-specific (format bar, edit-mode toggle, comment pill
+  // positioning) and only applies to markdown docs.
+  if (docType === 'code') {
+    bootCode({ docId, client, user, sourceUrl: docSourceUrl, workspaceId: docWorkspaceId });
+    return;
+  }
+
   const { ydoc, awareness } = client;
   awareness.setLocalStateField('user', { name: user.name, color: user.color });
 
@@ -875,17 +913,29 @@ async function boot(): Promise<void> {
 
   async function renderSetNav(): Promise<void> {
     const m = readDocMeta(ydoc);
+    const workspaceId = m.workspaceId ?? '';
     const setId = m.setId ?? '';
-    if (setId === lastRenderedSetId) return;
-    lastRenderedSetId = setId;
-    document.body.classList.toggle('has-set', !!setId);
-    setPane?.setAttribute('aria-hidden', setId ? 'false' : 'true');
-    if (!setId) {
+    // The sidebar grid shows whenever the doc is part of a workspace OR a
+    // legacy hand-grouped set. workspaceId implies a folder bind → tree;
+    // setId-only stays on the flat list.
+    const navKey = workspaceId || setId;
+    document.body.classList.toggle('has-set', !!navKey);
+    setPane?.setAttribute('aria-hidden', navKey ? 'false' : 'true');
+    if (!navKey) {
+      lastRenderedSetId = '';
       if (setPaneList) setPaneList.innerHTML = '';
       if (docMenu) docMenu.innerHTML = '';
       docSwitcher?.setAttribute('aria-expanded', 'false');
       return;
     }
+    if (workspaceId) {
+      await renderWorkspaceTree(workspaceId);
+      return;
+    }
+    // ---- Legacy flat setId path ----
+    // Cache so a meta-observe storm doesn't re-fetch /api/docs each tick.
+    if (setId === lastRenderedSetId) return;
+    lastRenderedSetId = setId;
     try {
       const res = await fetch('/api/docs');
       if (!res.ok) return;
@@ -938,6 +988,114 @@ async function boot(): Promise<void> {
     }
   }
   let openedOnce = false;
+
+  // ---- Workspace (folder) file tree ----
+  // A doc bound via bind_folder carries a workspaceId. Fetch the tree
+  // endpoint and render a collapsible <details>/<summary> tree with
+  // per-file open-comment badges + folder roll-ups. Counts are a
+  // navigation-time snapshot; refetched on focus + a ~30s interval below.
+  interface TreeFile {
+    type: 'file';
+    docId: string;
+    name: string;
+    relPath: string;
+    fileType: string;
+    openCount: number;
+    threadCount: number;
+    reviewUrl?: string;
+    lastActivityAt?: number;
+  }
+  interface TreeDir {
+    type: 'dir';
+    name: string;
+    openCount: number;
+    children: Array<TreeDir | TreeFile>;
+  }
+
+  function treeDetailsKey(workspaceId: string, relPath: string): string {
+    return `lf:tree-open:${workspaceId}:${relPath}`;
+  }
+
+  function renderTreeNode(node: TreeDir | TreeFile, workspaceId: string, prefix: string): string {
+    if (node.type === 'file') {
+      const isActive = node.docId === docId;
+      const params = new URLSearchParams(location.search);
+      const href = node.reviewUrl
+        ? // Prefer the server-decorated reachable URL but carry our query
+          // params (?as=…) onto it.
+          appendParams(node.reviewUrl, params)
+        : `/review/${encodeURIComponent(node.docId)}${
+            params.toString() ? `?${params.toString()}` : ''
+          }`;
+      const badge =
+        node.openCount > 0 ? `<span class="tree-badge badge-open">${node.openCount}</span>` : '';
+      return `<li class="tree-file"><a href="${href}" class="${isActive ? 'active' : ''}"${
+        isActive ? ' aria-current="page"' : ''
+      }><span class="tree-name">${escapeHtml(node.name)}</span>${badge}</a></li>`;
+    }
+    // Directory node — collapsible <details>. Persist open/closed per
+    // workspaceId:relPath so the tree shape sticks across navigations.
+    const relPath = prefix ? `${prefix}/${node.name}` : node.name;
+    let open = true;
+    try {
+      const stored = localStorage.getItem(treeDetailsKey(workspaceId, relPath));
+      if (stored === 'closed') open = false;
+    } catch {}
+    const badge =
+      node.openCount > 0 ? `<span class="tree-badge tree-badge-dir">${node.openCount}</span>` : '';
+    const children = node.children.map((c) => renderTreeNode(c, workspaceId, relPath)).join('');
+    return `<li class="tree-dir"><details${open ? ' open' : ''} data-rel="${escapeHtml(
+      relPath,
+    )}"><summary><span class="tree-name">${escapeHtml(
+      node.name,
+    )}</span>${badge}</summary><ul>${children}</ul></details></li>`;
+  }
+
+  function appendParams(url: string, params: URLSearchParams): string {
+    const qs = params.toString();
+    if (!qs) return url;
+    return url.includes('?') ? `${url}&${qs}` : `${url}?${qs}`;
+  }
+
+  async function renderWorkspaceTree(workspaceId: string): Promise<void> {
+    try {
+      const res = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/tree`);
+      if (!res.ok) return;
+      const data = (await res.json()) as { tree: TreeDir };
+      const html = data.tree.children.map((c) => renderTreeNode(c, workspaceId, '')).join('');
+      const treeHtml = `<ul class="tree-root">${html}</ul>`;
+      if (setPaneList) setPaneList.innerHTML = treeHtml;
+      if (docMenu) docMenu.innerHTML = treeHtml;
+      lastRenderedSetId = workspaceId;
+      // Persist details open/closed state on toggle.
+      for (const root of [setPaneList, docMenu]) {
+        if (!root) continue;
+        root.querySelectorAll('details[data-rel]').forEach((d) => {
+          d.addEventListener('toggle', () => {
+            const rel = d.getAttribute('data-rel') ?? '';
+            try {
+              localStorage.setItem(
+                treeDetailsKey(workspaceId, rel),
+                (d as HTMLDetailsElement).open ? 'open' : 'closed',
+              );
+            } catch {}
+          });
+        });
+      }
+    } catch {
+      // Fetch failure — skip; not load-bearing for the editor itself.
+    }
+  }
+
+  // Refresh per-file counts when the reviewer returns to the tab and on a
+  // ~30s heartbeat, so the badges reflect newly-opened/resolved threads
+  // without a full reload. Only fires when this doc is part of a workspace.
+  function refreshWorkspaceTree(): void {
+    const wid = readDocMeta(ydoc).workspaceId;
+    if (wid) void renderWorkspaceTree(wid);
+  }
+  window.addEventListener('focus', refreshWorkspaceTree);
+  setInterval(refreshWorkspaceTree, 30_000);
 
   function basename(p: string): string {
     const m = p.match(/[^/]+$/);

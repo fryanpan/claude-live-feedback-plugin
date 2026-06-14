@@ -270,6 +270,23 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'bind_folder',
+      description:
+        "Bind a whole folder / worktree for review in one call: the server scans the folder and creates one review doc per supported file, grouped under a single workspace. Markdown files (.md) open as WYSIWYG editable docs; source files (.ts/.tsx/.js/.jsx/.mjs/.cjs/.java/.kt/.kts/.py/.json) open as read-only, syntax-highlighted source with line-anchored comments — the human comments, you edit the code via your normal tools and the view re-renders. Respects .gitignore (scans via `git ls-files`, so node_modules/dist/build are skipped automatically; falls back to a recursive walk with a hardcoded skip set outside a git repo). Files over 512 KB or that look binary are skipped and reported in `skipped[]`. GUARDRAIL: if more than `maxFiles` (default 300) supported files survive the filter, nothing is created and it returns error:'too-many-files' with the count — narrow `folderPath` or raise `maxFiles`. docIds are deterministic (`<workspaceId>:<relPath>`), so re-binding the same folder is idempotent and preserves existing comment threads. Pass `include` (e.g. ['.rb','.go']) to extend the source allowlist. The caller is auto-subscribed to thread events for every markdown + code doc created (pass `subscribe:false` to skip). `folderPath` should be absolute. Returns the workspace id, root, file list (each with docId/relPath/type/reviewUrl), and anything skipped.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          folderPath: { type: 'string' },
+          workspaceId: { type: 'string' },
+          title: { type: 'string' },
+          include: { type: 'array', items: { type: 'string' } },
+          maxFiles: { type: 'number' },
+          subscribe: { type: 'boolean' },
+        },
+        required: ['folderPath'],
+      },
+    },
+    {
       name: 'find_and_replace',
       description:
         "Replace a string of plain text in the doc with another string. `find` must match the doc's plain text content (no markdown syntax — marks like bold/italic are preserved automatically). Use `contextBefore` / `contextAfter` to disambiguate repeated phrases. If the match is still ambiguous the tool returns a list of candidates. Use `occurrence` (1-indexed) to pick one explicitly. Pass `parseInlineMarks: true` to interpret `[label](url)` / `**bold**` / `*italic*` / `` `code` `` / `~~strike~~` in `replace` as marks on the inserted text instead of literal characters — required when adding a labeled link or other inline mark to text that doesn't already have one. Runs as a single Yjs transaction so it merges cleanly with concurrent user edits.",
@@ -659,6 +676,34 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...(sourceHtmlPath ? { sourceUrl: sourceHtmlPath } : {}),
           ...(title ? { title } : {}),
         });
+        return ok(res);
+      }
+      case 'bind_folder': {
+        const { folderPath, workspaceId, title, include, maxFiles, subscribe } = a as {
+          folderPath: string;
+          workspaceId?: string;
+          title?: string;
+          include?: string[];
+          maxFiles?: number;
+          subscribe?: boolean;
+        };
+        const res = (await http('POST', '/api/workspaces', {
+          folderPath,
+          owner: process.cwd(),
+          ...(workspaceId ? { workspaceId } : {}),
+          ...(title ? { title } : {}),
+          ...(include ? { include } : {}),
+          ...(maxFiles !== undefined ? { maxFiles } : {}),
+        })) as { ok?: boolean; files?: Array<{ docId: string }> };
+        // bind_folder has no single docId, so maybeAutoWatch can't subscribe
+        // it — fan the auto-watch out across every file the bind created
+        // (mirrors create_review_doc's per-doc auto-subscribe). Opt out with
+        // subscribe:false.
+        if (subscribe !== false && res?.ok && Array.isArray(res.files)) {
+          for (const f of res.files) {
+            if (f?.docId) await watchDoc(f.docId);
+          }
+        }
         return ok(res);
       }
       case 'find_and_replace': {

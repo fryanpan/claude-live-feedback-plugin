@@ -276,6 +276,95 @@ body.has-set #main {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
 
+/* ================= WORKSPACE FILE TREE ================= */
+/* Rendered into #set-pane-list (and the mobile dropdown) when the doc has
+   a workspaceId. Collapsible native <details>/<summary> per directory;
+   indentation comes from nested <ul> padding so depth is self-describing. */
+.tree-root,
+.tree-root ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.tree-root ul {
+  /* Each nesting level indents one notch; the <summary>/<a> padding
+     supplies the row height. */
+  padding-left: 12px;
+}
+.tree-dir > details > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--fg);
+  list-style: none;
+  user-select: none;
+}
+.tree-dir > details > summary::-webkit-details-marker {
+  display: none;
+}
+.tree-dir > details > summary::before {
+  content: "▸";
+  font-size: 9px;
+  color: var(--fg-muted);
+  transition: transform 0.1s ease;
+  flex-shrink: 0;
+}
+.tree-dir > details[open] > summary::before {
+  transform: rotate(90deg);
+}
+.tree-dir > details > summary:hover {
+  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+}
+.tree-file a {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px 6px 25px;
+  border-radius: 6px;
+  color: var(--fg);
+  text-decoration: none;
+  line-height: 1.35;
+}
+.tree-file a:hover {
+  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+}
+.tree-file a.active {
+  background: var(--accent-subtle, rgba(46, 125, 215, 0.1));
+  color: var(--accent, #2e7dd7);
+  font-weight: 600;
+}
+.tree-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Open-count pill — clones the landing page's .badge-open look. */
+.tree-badge {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  line-height: 1;
+  padding: 2px 7px;
+  border-radius: 99px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.tree-badge.badge-open {
+  background: #fff1e6;
+  color: #bf5b16;
+}
+/* Folder roll-up badge — same shape, slightly muted so files read as the
+   primary signal. */
+.tree-badge.tree-badge-dir {
+  background: #f3f0ec;
+  color: #9a7a55;
+  font-weight: 500;
+}
+
 /* Doc-switcher button in the topbar. Behaves like a label by default;
    becomes interactive (caret visible, hover + click) only when the
    doc has a setId. */
@@ -1452,4 +1541,65 @@ body.composer-open #editor .ProseMirror ::selection {
 }
 .composer-scrim.hidden {
   display: block !important;
+}
+
+/* ================= CODE REVIEW SURFACE ================= */
+/* The read-only CodeMirror surface for type='code' docs. The format bar
+   and the edit-mode toggle are markdown/Tiptap-only — hide them so the
+   code surface shows only the comment affordances. */
+body.code-mode #format-bar,
+body.code-mode #toggle-format,
+body.code-mode #toggle-edit-mode {
+  display: none !important;
+}
+
+/* Let the CodeMirror editor fill #editor and own its own scroll. The
+   markdown path scrolls #editor; CodeMirror scrolls .cm-scroller, so drop
+   the prose padding and let CM stretch full-height. */
+body.code-mode #editor {
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+}
+body.code-mode #editor .cm-editor {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  font-family: var(--mono);
+  font-size: 13.5px;
+}
+body.code-mode #editor .cm-scroller {
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+}
+body.code-mode #editor .cm-content {
+  /* Bottom padding so the last lines clear the composer / bottom UI. */
+  padding-bottom: calc(160px + var(--safe-bottom));
+}
+
+/* Comment-marker gutter: a dot on the start line of each open thread.
+   Active thread's dot uses the accent; others are muted. */
+.cm-comment-gutter {
+  min-width: 14px;
+}
+.cm-comment-dot {
+  display: inline-block;
+  width: 100%;
+  text-align: center;
+  color: var(--border-strong);
+  font-size: 11px;
+  line-height: inherit;
+  cursor: pointer;
+}
+.cm-comment-dot:hover {
+  color: var(--accent);
+}
+.cm-comment-dot.active {
+  color: var(--accent);
+}
+
+/* Transient pulse when a thread is revealed (panel click / gutter click). */
+.cm-line.cm-pulse-line {
+  background: var(--accent-subtle, rgba(46, 125, 215, 0.18));
+  transition: background 0.25s ease;
 }
