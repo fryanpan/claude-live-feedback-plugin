@@ -39,6 +39,25 @@ describe('schema', () => {
     expect(m.sourceUrl).toBe('/x.md');
   });
 
+  it('persists code-doc workspace fields', () => {
+    const doc = new Y.Doc();
+    initDocMeta(doc, {
+      docId: 'ws1:src~a.ts',
+      type: 'code',
+      createdAt: 2,
+      sourceUrl: '/repo/src/a.ts',
+      setId: 'ws1',
+      workspaceId: 'ws1',
+      workspaceRoot: '/repo',
+      relPath: 'src/a.ts',
+    });
+    const m = readDocMeta(doc);
+    expect(m.type).toBe('code');
+    expect(m.workspaceId).toBe('ws1');
+    expect(m.relPath).toBe('src/a.ts');
+    expect(m.workspaceRoot).toBe('/repo');
+  });
+
   it('creates a thread with a first comment', () => {
     const doc = new Y.Doc();
     const t = createThread(doc, {
