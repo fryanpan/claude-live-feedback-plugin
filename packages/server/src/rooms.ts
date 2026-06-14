@@ -51,6 +51,41 @@ export interface DocRoom {
   seq: number;
 }
 
+/** A file leaf in the workspace tree (a single bound review doc). */
+export interface WorkspaceFileNode {
+  type: 'file';
+  docId: string;
+  /** Basename of relPath. */
+  name: string;
+  relPath: string;
+  fileType: DocType;
+  /** Open (unresolved) thread count on this file. */
+  openCount: number;
+  /** Total thread count (open + resolved). */
+  threadCount: number;
+  reviewUrl?: string;
+  lastActivityAt?: number;
+}
+
+/** A directory node in the workspace tree; `openCount` is rolled up from
+ *  all descendant files. */
+export interface WorkspaceDirNode {
+  type: 'dir';
+  /** Path segment name; empty string for the tree root. */
+  name: string;
+  openCount: number;
+  children: Array<WorkspaceDirNode | WorkspaceFileNode>;
+}
+
+/** Result of `buildWorkspaceTree` — a nested directory tree plus totals. */
+export interface WorkspaceTree {
+  workspaceId: string;
+  /** Absolute workspace root, when known (from member docs' workspaceRoot). */
+  root?: string;
+  totalOpen: number;
+  tree: WorkspaceDirNode;
+}
+
 export interface RoomsConfig {
   dataDir: string;
   /** Called on new thread / reply / status change to dispatch webhooks + SSE. */
@@ -540,6 +575,70 @@ export class Rooms {
       threads: listThreads(room.ydoc),
       ...(syncError ? { syncError } : {}),
     };
+  }
+
+  /**
+   * Build the file-tree view for a workspace: every doc tagged with
+   * `workspaceId`, arranged into a nested directory tree by its `relPath`,
+   * with per-file unresolved-comment counts and folder roll-ups.
+   *
+   * Each FILE node carries `{docId, name, relPath, fileType, openCount,
+   * threadCount, reviewUrl?, lastActivityAt}`. Each DIR node carries a
+   * rolled-up `openCount` = sum of every descendant file's openCount.
+   *
+   * Sort within each level: directories first, then open-count desc, then
+   * name asc — so the folders/files that need attention float up, matching
+   * the landing page's "what needs my review?" ordering.
+   *
+   * `reviewUrl` is filled in by the caller via the rooms decorator
+   * (`decorateDocMeta`) so the URL machinery stays in the server layer.
+   */
+  buildWorkspaceTree(workspaceId: string): WorkspaceTree {
+    const decorate = this.cfg.decorateDocMeta;
+    const root: WorkspaceDirNode = { type: 'dir', name: '', openCount: 0, children: [] };
+    let totalOpen = 0;
+    let workspaceRoot: string | undefined;
+
+    for (const meta of this.list()) {
+      if (meta.workspaceId !== workspaceId) continue;
+      if (!workspaceRoot && meta.workspaceRoot) workspaceRoot = meta.workspaceRoot;
+      const relPath = meta.relPath ?? meta.docId;
+      const openCount = this.listThreads(meta.docId, { status: 'open' }).length;
+      const threadCount = this.listThreads(meta.docId).length;
+      totalOpen += openCount;
+      const decorated = decorate ? decorate(meta) : meta;
+      const fileNode: WorkspaceFileNode = {
+        type: 'file',
+        docId: meta.docId,
+        name: relPath.split('/').pop() ?? relPath,
+        relPath,
+        fileType: meta.type,
+        openCount,
+        threadCount,
+        reviewUrl: (decorated as { reviewUrl?: string }).reviewUrl,
+        lastActivityAt: meta.lastActivityAt,
+      };
+      // Walk/create the directory chain, accumulating openCount as we go.
+      const parts = relPath.split('/');
+      const dirs = parts.slice(0, -1);
+      let cursor = root;
+      cursor.openCount += openCount;
+      for (const part of dirs) {
+        let next = cursor.children.find(
+          (c): c is WorkspaceDirNode => c.type === 'dir' && c.name === part,
+        );
+        if (!next) {
+          next = { type: 'dir', name: part, openCount: 0, children: [] };
+          cursor.children.push(next);
+        }
+        next.openCount += openCount;
+        cursor = next;
+      }
+      cursor.children.push(fileNode);
+    }
+
+    sortTreeChildren(root);
+    return { workspaceId, root: workspaceRoot, totalOpen, tree: root };
   }
 
   /**
@@ -1315,6 +1414,22 @@ export class Rooms {
 
 export function randomId(): string {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+}
+
+/**
+ * Sort a workspace dir node's children in place, recursively: directories
+ * first, then by open-count descending (attention floats up), then by name
+ * ascending. Mirrors the landing page's "what needs my review?" ordering.
+ */
+function sortTreeChildren(node: WorkspaceDirNode): void {
+  node.children.sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+    if (a.openCount !== b.openCount) return b.openCount - a.openCount;
+    return a.name.localeCompare(b.name);
+  });
+  for (const child of node.children) {
+    if (child.type === 'dir') sortTreeChildren(child);
+  }
 }
 
 /** Extension → DocType. `.md` is editable markdown; everything else is
