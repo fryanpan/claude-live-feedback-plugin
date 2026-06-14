@@ -44,7 +44,18 @@ export function readDocMeta(doc: Y.Doc): DocMeta {
   const workspaceId = m.get('workspaceId') as string | undefined;
   const relPath = m.get('relPath') as string | undefined;
   const workspaceRoot = m.get('workspaceRoot') as string | undefined;
-  return { docId, type, createdAt, sourceUrl, title, setId, owner, workspaceId, relPath, workspaceRoot };
+  return {
+    docId,
+    type,
+    createdAt,
+    sourceUrl,
+    title,
+    setId,
+    owner,
+    workspaceId,
+    relPath,
+    workspaceRoot,
+  };
 }
 
 export function initDocMeta(doc: Y.Doc, meta: DocMeta): void {
