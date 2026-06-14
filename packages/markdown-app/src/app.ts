@@ -1,10 +1,25 @@
 import { type Thread, type User, readDocMeta, resolveUser } from '@feedback/core';
 import { connect } from './client.ts';
+import { bootCode } from './code/code-app.ts';
 import { type EditorHandle, createEditor } from './editor.ts';
 import { ThreadPanel, type ThreadTab } from './threads.ts';
 
-const DEFAULT_WS_PATH = (docId: string) =>
-  `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/y/${encodeURIComponent(docId)}?type=markdown`;
+const DEFAULT_WS_PATH = (docId: string, type: string) =>
+  `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/y/${encodeURIComponent(docId)}?type=${encodeURIComponent(type)}`;
+
+/** Fetch a doc's persisted type before mounting a surface. Defaults to
+ *  'markdown' if the meta can't be read (the markdown path is the safe
+ *  fallback — it migrates legacy content and never assumes code). */
+async function fetchDocType(docId: string): Promise<string> {
+  try {
+    const res = await fetch(`/api/docs/${encodeURIComponent(docId)}`);
+    if (!res.ok) return 'markdown';
+    const data = (await res.json()) as { meta?: { type?: string } };
+    return data.meta?.type ?? 'markdown';
+  } catch {
+    return 'markdown';
+  }
+}
 
 interface Selection {
   start: Uint8Array;
@@ -58,7 +73,18 @@ async function boot(): Promise<void> {
     set: (k, v) => localStorage.setItem(k, v),
   });
 
-  const client = connect(DEFAULT_WS_PATH(docId));
+  const docType = await fetchDocType(docId);
+  const client = connect(DEFAULT_WS_PATH(docId, docType));
+
+  // Code docs get a read-only, syntax-highlighted CodeMirror surface that
+  // reuses the same thread/comment stack. Everything below this branch is
+  // Tiptap/ProseMirror-specific (format bar, edit-mode toggle, comment pill
+  // positioning) and only applies to markdown docs.
+  if (docType === 'code') {
+    bootCode({ docId, client, user });
+    return;
+  }
+
   const { ydoc, awareness } = client;
   awareness.setLocalStateField('user', { name: user.name, color: user.color });
 

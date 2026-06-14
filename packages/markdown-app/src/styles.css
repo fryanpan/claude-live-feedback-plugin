@@ -1453,3 +1453,64 @@ body.composer-open #editor .ProseMirror ::selection {
 .composer-scrim.hidden {
   display: block !important;
 }
+
+/* ================= CODE REVIEW SURFACE ================= */
+/* The read-only CodeMirror surface for type='code' docs. The format bar
+   and the edit-mode toggle are markdown/Tiptap-only — hide them so the
+   code surface shows only the comment affordances. */
+body.code-mode #format-bar,
+body.code-mode #toggle-format,
+body.code-mode #toggle-edit-mode {
+  display: none !important;
+}
+
+/* Let the CodeMirror editor fill #editor and own its own scroll. The
+   markdown path scrolls #editor; CodeMirror scrolls .cm-scroller, so drop
+   the prose padding and let CM stretch full-height. */
+body.code-mode #editor {
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+}
+body.code-mode #editor .cm-editor {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  font-family: var(--mono);
+  font-size: 13.5px;
+}
+body.code-mode #editor .cm-scroller {
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+}
+body.code-mode #editor .cm-content {
+  /* Bottom padding so the last lines clear the composer / bottom UI. */
+  padding-bottom: calc(160px + var(--safe-bottom));
+}
+
+/* Comment-marker gutter: a dot on the start line of each open thread.
+   Active thread's dot uses the accent; others are muted. */
+.cm-comment-gutter {
+  min-width: 14px;
+}
+.cm-comment-dot {
+  display: inline-block;
+  width: 100%;
+  text-align: center;
+  color: var(--border-strong);
+  font-size: 11px;
+  line-height: inherit;
+  cursor: pointer;
+}
+.cm-comment-dot:hover {
+  color: var(--accent);
+}
+.cm-comment-dot.active {
+  color: var(--accent);
+}
+
+/* Transient pulse when a thread is revealed (panel click / gutter click). */
+.cm-line.cm-pulse-line {
+  background: var(--accent-subtle, rgba(46, 125, 215, 0.18));
+  transition: background 0.25s ease;
+}
