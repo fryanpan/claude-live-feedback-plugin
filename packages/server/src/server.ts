@@ -267,6 +267,35 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       if (pathname === '/api/docs' && req.method === 'GET') {
         return j(200, { docs: rooms.list().map(withReviewUrl) });
       }
+
+      // --- REST: workspaces (folder bind) ---
+      if (pathname === '/api/workspaces' && req.method === 'POST') {
+        const body = await safeJson(req);
+        const folderPath = body?.folderPath as string | undefined;
+        if (!folderPath || typeof folderPath !== 'string') {
+          return j(400, { error: 'folderPath required' });
+        }
+        const res = rooms.bindFolder({
+          folderPath,
+          workspaceId: body?.workspaceId as string | undefined,
+          title: body?.title as string | undefined,
+          include: Array.isArray(body?.include) ? (body.include as string[]) : undefined,
+          maxFiles: typeof body?.maxFiles === 'number' ? Number(body.maxFiles) : undefined,
+          owner: body?.owner as string | undefined,
+        });
+        if (!res.ok) {
+          // not-found → 404; too-many-files → 409 (guardrail, caller must
+          // narrow the folder or raise maxFiles).
+          return j(res.error === 'not-found' ? 404 : 409, res);
+        }
+        return j(200, {
+          ...res,
+          files: res.files.map((f) => ({
+            ...f,
+            reviewUrl: withReviewUrl({ docId: f.docId, type: f.type }).reviewUrl,
+          })),
+        });
+      }
       const docMatch = pathname.match(/^\/api\/docs\/([^/]+)(?:\/(.*))?$/);
       if (docMatch) {
         const docId = decodeURIComponent(docMatch[1] ?? '');

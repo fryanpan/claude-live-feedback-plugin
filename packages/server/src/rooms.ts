@@ -1,3 +1,5 @@
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
@@ -7,6 +9,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
+import { basename, relative, resolve as resolvePath, sep } from 'node:path';
 import { join } from 'node:path';
 import {
   type Anchor,
@@ -537,6 +540,107 @@ export class Rooms {
       threads: listThreads(room.ydoc),
       ...(syncError ? { syncError } : {}),
     };
+  }
+
+  /**
+   * Bind a whole folder/worktree for review. Scans the folder for
+   * supported files, creates one review doc per file grouped under a
+   * single `workspaceId`, and returns the resulting file list plus a
+   * record of anything skipped.
+   *
+   * Scan strategy: prefer `git ls-files` (respects .gitignore for free —
+   * skips node_modules/dist/etc); fall back to a recursive readdir with a
+   * hardcoded skip set when the folder isn't a git repo.
+   *
+   * Allowlist by extension: .md → markdown (WYSIWYG, editable, write-back);
+   * code extensions → read-only syntax-highlighted source. Files that are
+   * too big (>512 KB) or look binary (NUL byte in the first 8 KB) are
+   * recorded in `skipped[]` and never bound.
+   *
+   * Guardrail: if the surviving file count exceeds `maxFiles` (default
+   * 300), nothing is created — returns `{ ok:false, error:'too-many-files',
+   * fileCount }` so a stray bind on a giant tree can't melt the server with
+   * thousands of mtime polls.
+   *
+   * Deterministic docIds (`${workspaceId}:${relPath}`) make re-binding
+   * idempotent: the same file maps to the same docId, so threads survive.
+   */
+  bindFolder(opts: {
+    folderPath: string;
+    workspaceId?: string;
+    title?: string;
+    include?: string[];
+    maxFiles?: number;
+    owner?: string;
+  }):
+    | {
+        ok: true;
+        workspaceId: string;
+        root: string;
+        fileCount: number;
+        skipped: Array<{ path: string; reason: string }>;
+        files: Array<{ docId: string; relPath: string; type: DocType; title: string }>;
+      }
+    | { ok: false; error: 'not-found' | 'too-many-files'; fileCount?: number } {
+    const root = resolvePath(opts.folderPath);
+    if (!existsSync(root)) return { ok: false, error: 'not-found' };
+
+    const allow = buildAllowlist(opts.include);
+    const candidates = scanFolder(root);
+    const skipped: Array<{ path: string; reason: string }> = [];
+    const accepted: Array<{ abs: string; relPath: string; type: DocType }> = [];
+
+    for (const abs of candidates) {
+      const relPath = relative(root, abs).split(sep).join('/');
+      const dotIdx = abs.lastIndexOf('.');
+      const slash = Math.max(abs.lastIndexOf('/'), abs.lastIndexOf('\\'));
+      const ext = dotIdx > slash ? abs.slice(dotIdx).toLowerCase() : '';
+      const type = allow.get(ext);
+      if (!type) continue;
+      let size: number;
+      try {
+        size = statSync(abs).size;
+      } catch {
+        skipped.push({ path: relPath, reason: 'stat-failed' });
+        continue;
+      }
+      if (size > 512 * 1024) {
+        skipped.push({ path: relPath, reason: 'too-large' });
+        continue;
+      }
+      if (looksBinary(abs)) {
+        skipped.push({ path: relPath, reason: 'binary' });
+        continue;
+      }
+      accepted.push({ abs, relPath, type });
+    }
+
+    const max = opts.maxFiles ?? 300;
+    if (accepted.length > max) {
+      return { ok: false, error: 'too-many-files', fileCount: accepted.length };
+    }
+
+    const workspaceId = opts.workspaceId ?? deriveWorkspaceId(root);
+    const files: Array<{ docId: string; relPath: string; type: DocType; title: string }> = [];
+    for (const { abs, relPath, type } of accepted) {
+      let docId = `${workspaceId}:${relPath.replaceAll('/', '~')}`;
+      if (docId.length > 100) docId = `${workspaceId}:${shortHash(relPath)}`;
+      this.getOrCreate(docId, {
+        type,
+        sourceUrl: abs,
+        setId: workspaceId,
+        owner: opts.owner,
+        workspaceId,
+        workspaceRoot: root,
+        relPath,
+        title: relPath,
+      });
+      if (type === 'markdown') this.attachFile(docId, abs);
+      else this.attachReadonlyFile(docId, abs);
+      files.push({ docId, relPath, type, title: relPath });
+    }
+
+    return { ok: true, workspaceId, root, fileCount: files.length, skipped, files };
   }
 
   /**
@@ -1211,4 +1315,107 @@ export class Rooms {
 
 export function randomId(): string {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+}
+
+/** Extension → DocType. `.md` is editable markdown; everything else is
+ *  read-only source. `include[]` (extensions like `.rb` or `rb`) extends
+ *  the code set. */
+function buildAllowlist(include?: string[]): Map<string, DocType> {
+  const map = new Map<string, DocType>([['.md', 'markdown']]);
+  const code = [
+    '.ts',
+    '.tsx',
+    '.js',
+    '.jsx',
+    '.mjs',
+    '.cjs',
+    '.java',
+    '.kt',
+    '.kts',
+    '.py',
+    '.json',
+  ];
+  for (const ext of code) map.set(ext, 'code');
+  for (const raw of include ?? []) {
+    const ext = raw.startsWith('.') ? raw.toLowerCase() : `.${raw.toLowerCase()}`;
+    if (!map.has(ext)) map.set(ext, 'code');
+  }
+  return map;
+}
+
+/**
+ * Enumerate the files in `root`. Prefer `git ls-files` (cached + untracked,
+ * honoring .gitignore) so node_modules/dist/etc are skipped for free; fall
+ * back to a recursive readdir with a hardcoded skip set when the folder
+ * isn't inside a git repo or git isn't available. Returns absolute paths.
+ */
+function scanFolder(root: string): string[] {
+  try {
+    const res = spawnSync(
+      'git',
+      ['-C', root, 'ls-files', '--cached', '--others', '--exclude-standard'],
+      { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
+    );
+    if (res.status === 0 && typeof res.stdout === 'string') {
+      const out: string[] = [];
+      for (const line of res.stdout.split('\n')) {
+        const rel = line.trim();
+        if (rel) out.push(join(root, rel));
+      }
+      return out;
+    }
+  } catch {
+    // git missing or threw — fall through to readdir.
+  }
+  return readdirRecursive(root);
+}
+
+const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', '.next', 'coverage']);
+
+function readdirRecursive(dir: string): string[] {
+  const out: string[] = [];
+  let entries: import('node:fs').Dirent[];
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  for (const entry of entries) {
+    const name = entry.name;
+    const abs = join(dir, name);
+    if (entry.isDirectory()) {
+      // Skip .git, any dotdir, and the hardcoded heavy dirs.
+      if (name.startsWith('.') || SKIP_DIRS.has(name)) continue;
+      out.push(...readdirRecursive(abs));
+    } else if (entry.isFile()) {
+      out.push(abs);
+    }
+  }
+  return out;
+}
+
+/** Sniff the first 8 KB for a NUL byte — a cheap binary detector that
+ *  keeps images/compiled output out of the text-only review surface. */
+function looksBinary(abs: string): boolean {
+  try {
+    const buf = readFileSync(abs);
+    const len = Math.min(buf.length, 8 * 1024);
+    for (let i = 0; i < len; i++) {
+      if (buf[i] === 0) return true;
+    }
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+/** Deterministic workspace id: folder basename + 6-char hash of the
+ *  absolute path, so two folders named `core` don't collide. */
+function deriveWorkspaceId(absRoot: string): string {
+  const base = basename(absRoot).replace(/[^a-zA-Z0-9_.\-]/g, '-') || 'workspace';
+  return `${base}-${shortHash(absRoot)}`;
+}
+
+function shortHash(s: string): string {
+  return createHash('sha1').update(s).digest('hex').slice(0, 6);
 }
