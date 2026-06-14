@@ -1121,10 +1121,33 @@ export class Rooms {
     room.ydoc.on('update', () => {
       this.saveToDisk(room);
     });
-    // Code docs have no prose fragment — the auto-reanchor sweep below walks
-    // the prose fragment and would orphan content-anchored threads. Skip it;
-    // code-anchor recovery is handled separately (flat-text snippet match).
-    if (room.meta.type === 'code') return;
+    // Code docs have no prose fragment — the prose-fragment auto-reanchor
+    // sweep below would find nothing and orphan every thread. Run the
+    // flat-text twin instead: observe the raw `content` Y.Text and re-anchor
+    // threads by snippet match after agent edits re-render the source.
+    if (room.meta.type === 'code') {
+      const content = room.ydoc.getText('content');
+      let codeReanchorTimer: ReturnType<typeof setTimeout> | null = null;
+      content.observe((_event, tr) => {
+        if (tr.origin === 'agent-reanchor') return;
+        if (codeReanchorTimer) clearTimeout(codeReanchorTimer);
+        codeReanchorTimer = setTimeout(() => {
+          const res = prose.autoReanchorCodeDoc(room.ydoc);
+          if (res.reanchored > 0 || res.stillOrphan > 0) {
+            console.log(
+              `[rooms] ${room.docId}: code re-anchor — ${res.reanchored} fixed, ${res.stillOrphan} orphaned`,
+            );
+          }
+        }, 250);
+      });
+      const initialCode = prose.autoReanchorCodeDoc(room.ydoc);
+      if (initialCode.reanchored > 0) {
+        console.log(
+          `[rooms] ${room.docId}: on-load code re-anchored ${initialCode.reanchored} thread(s)`,
+        );
+      }
+      return;
+    }
     // Every prose change triggers a best-effort sweep that rebuilds
     // Y.RelativePositions for threads whose anchors no longer resolve
     // (e.g. the user split a block or re-typed the anchored text —
