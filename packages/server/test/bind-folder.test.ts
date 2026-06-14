@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { WorkspaceDirNode, WorkspaceFileNode } from '../src/rooms.ts';
 import { Rooms } from '../src/rooms.ts';
 import { SseHub } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
@@ -11,7 +12,19 @@ function makeRooms(dataDir: string): Rooms {
     dataDir,
     sse: new SseHub(),
     webhooks: createWebhookDispatcher({ onLog: () => {} }),
+    decorateDocMeta: (m) => ({ ...m, reviewUrl: `http://test/review/${m.docId}` }),
   });
+}
+
+/** Flatten the tree's file leaves keyed by relPath, for assertions. */
+function fileMap(node: WorkspaceDirNode): Map<string, WorkspaceFileNode> {
+  const out = new Map<string, WorkspaceFileNode>();
+  const walk = (n: WorkspaceDirNode | WorkspaceFileNode) => {
+    if (n.type === 'file') out.set(n.relPath, n);
+    else for (const c of n.children) walk(c);
+  };
+  walk(node);
+  return out;
 }
 
 describe('Rooms.bindFolder', () => {
@@ -95,6 +108,65 @@ describe('Rooms.bindFolder', () => {
     if (!first.ok || !second.ok) return;
     expect(first.files[0]!.docId).toBe(second.files[0]!.docId);
     expect(first.workspaceId).toBe(second.workspaceId);
+  });
+
+  it('buildWorkspaceTree nests files by relPath with rolled-up open counts', async () => {
+    writeFileSync(join(folder, 'top.ts'), 'export const top = 1;\n');
+    mkdirSync(join(folder, 'docs'));
+    mkdirSync(join(folder, 'docs', 'deep'));
+    // Markdown file nested two levels down — used as the thread target so we
+    // exercise the prose anchor path the editor uses.
+    writeFileSync(join(folder, 'docs', 'deep', 'guide.md'), '# Guide\n\nthe unique target line\n');
+    writeFileSync(join(folder, 'docs', 'a.ts'), 'export const a = 1;\n');
+
+    const bound = rooms.bindFolder({ folderPath: folder });
+    expect(bound.ok).toBe(true);
+    if (!bound.ok) return;
+    const workspaceId = bound.workspaceId;
+
+    // No threads yet → all counts zero.
+    let tree = rooms.buildWorkspaceTree(workspaceId);
+    expect(tree.workspaceId).toBe(workspaceId);
+    expect(tree.root).toBe(bound.root);
+    expect(tree.totalOpen).toBe(0);
+    expect(tree.tree.type).toBe('dir');
+    expect(tree.tree.name).toBe('');
+
+    // Structure: top-level has the docs dir + top.ts file; dirs sort first.
+    const topNames = tree.tree.children.map((c) => c.name);
+    expect(topNames).toEqual(['docs', 'top.ts']);
+    expect(tree.tree.children[0]!.type).toBe('dir');
+
+    // The nested file carries a decorated reviewUrl.
+    const guide = fileMap(tree.tree).get('docs/deep/guide.md')!;
+    expect(guide.fileType).toBe('markdown');
+    expect(guide.reviewUrl).toBe(`http://test/review/${guide.docId}`);
+
+    // Create an open thread on the nested markdown file.
+    const created = await rooms.createThreadByFind(
+      guide.docId,
+      { find: 'the unique target line' },
+      { id: 'u1', name: 'Reviewer', kind: 'known', color: '#2e7dd7' },
+      'expand this',
+    );
+    expect(created.ok).toBe(true);
+
+    // Rebuild: openCount rolls up through docs/deep, docs, and the total.
+    tree = rooms.buildWorkspaceTree(workspaceId);
+    expect(tree.totalOpen).toBe(1);
+    const files = fileMap(tree.tree);
+    expect(files.get('docs/deep/guide.md')!.openCount).toBe(1);
+    expect(files.get('docs/deep/guide.md')!.threadCount).toBe(1);
+    expect(files.get('docs/a.ts')!.openCount).toBe(0);
+
+    const docsDir = tree.tree.children.find(
+      (c): c is WorkspaceDirNode => c.type === 'dir' && c.name === 'docs',
+    )!;
+    expect(docsDir.openCount).toBe(1);
+    const deepDir = docsDir.children.find(
+      (c): c is WorkspaceDirNode => c.type === 'dir' && c.name === 'deep',
+    )!;
+    expect(deepDir.openCount).toBe(1);
   });
 
   it('guardrail: too-many-files returns without creating any docs', () => {
