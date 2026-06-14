@@ -296,6 +296,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           })),
         });
       }
+      // File-tree view for a bound workspace: nested directory tree with
+      // per-file unresolved-comment counts + folder roll-ups. Files are
+      // decorated with reviewUrl by the rooms decorator (withReviewUrl).
+      const wsTreeMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/tree$/);
+      if (wsTreeMatch && req.method === 'GET') {
+        const workspaceId = decodeURIComponent(wsTreeMatch[1] ?? '');
+        const tree = rooms.buildWorkspaceTree(workspaceId);
+        if (tree.tree.children.length === 0) {
+          return j(404, { error: 'workspace not found', workspaceId });
+        }
+        return j(200, tree);
+      }
       const docMatch = pathname.match(/^\/api\/docs\/([^/]+)(?:\/(.*))?$/);
       if (docMatch) {
         const docId = decodeURIComponent(docMatch[1] ?? '');
