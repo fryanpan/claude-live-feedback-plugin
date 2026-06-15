@@ -2,6 +2,7 @@ import { type Thread, type User, readDocMeta, resolveUser } from '@feedback/core
 import { connect } from './client.ts';
 import { bootCode } from './code/code-app.ts';
 import { type EditorHandle, createEditor } from './editor.ts';
+import { startReadingTracker } from './reading-tracker.ts';
 import { ThreadPanel, type ThreadTab } from './threads.ts';
 
 const DEFAULT_WS_PATH = (docId: string, type: string) =>
@@ -130,6 +131,10 @@ async function boot(): Promise<void> {
     onUpdate: () => redrawThreads(),
     user: { name: user.name, color: user.color },
   });
+
+  // Interaction-bounded reading-session capture (doc_open + read_session).
+  // The #editor element is the scroll container on the markdown surface.
+  startReadingTracker({ docId, user, scrollEl: editorMount });
 
   // =========================================================================
   // COMMENT PILL — small inline affordance

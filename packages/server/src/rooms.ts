@@ -30,6 +30,18 @@ import type { ServerWebSocket } from 'bun';
 import * as awarenessProtocol from 'y-protocols/awareness';
 import * as Y from 'yjs';
 
+import {
+  type ActivityType,
+  type Event,
+  appendActivity,
+  buildEventDoc,
+  classifyActor,
+  eventId,
+  isOwnerActor,
+  payloadDigest,
+  toUtcIso,
+  wordCount,
+} from './activity.ts';
 import type { SseHub } from './sse.ts';
 import type { WebhookDispatcher } from './webhooks.ts';
 
@@ -289,6 +301,7 @@ export class Rooms {
       workspaceId?: string;
       relPath?: string;
       workspaceRoot?: string;
+      producedBy?: { agentId?: string; sessionId?: string };
     },
   ): DocRoom {
     const existing = this.rooms.get(docId);
@@ -328,6 +341,7 @@ export class Rooms {
         workspaceId: init?.workspaceId,
         relPath: init?.relPath,
         workspaceRoot: init?.workspaceRoot,
+        producedBy: init?.producedBy,
         createdAt: Date.now(),
       };
       initDocMeta(ydoc, now);
@@ -377,6 +391,7 @@ export class Rooms {
         firstComment: { id: randomId(), text },
       });
       this.fireEvent(room, 'thread.created', t);
+      this.recordActivity(room, 'comment', author, t.id, { text, tsMs: Date.now() });
       return t;
     }
     const comment = schemaPostReply(room.ydoc, threadId, {
@@ -387,6 +402,7 @@ export class Rooms {
     if (!comment) return null;
     const thread = this.getThread(docId, threadId);
     if (thread) this.fireEvent(room, 'thread.replied', thread, comment);
+    this.recordActivity(room, 'reply', author, threadId, { text, tsMs: comment.ts });
     return thread;
   }
 
@@ -457,19 +473,29 @@ export class Rooms {
     return { ok: true, thread };
   }
 
-  resolve(docId: string, threadId: string): Thread | null {
+  resolve(docId: string, threadId: string, author?: User): Thread | null {
     const room = this.rooms.get(docId);
     if (!room) return null;
     const t = schemaSetStatus(room.ydoc, threadId, 'resolved');
-    if (t) this.fireEvent(room, 'thread.resolved', t);
+    if (t) {
+      this.fireEvent(room, 'thread.resolved', t);
+      this.recordActivity(room, 'resolve', author ?? DEFAULT_REVIEWER, threadId, {
+        tsMs: Date.now(),
+      });
+    }
     return t;
   }
 
-  reopen(docId: string, threadId: string): Thread | null {
+  reopen(docId: string, threadId: string, author?: User): Thread | null {
     const room = this.rooms.get(docId);
     if (!room) return null;
     const t = schemaSetStatus(room.ydoc, threadId, 'open');
-    if (t) this.fireEvent(room, 'thread.reopened', t);
+    if (t) {
+      this.fireEvent(room, 'thread.reopened', t);
+      this.recordActivity(room, 'reopen', author ?? DEFAULT_REVIEWER, threadId, {
+        tsMs: Date.now(),
+      });
+    }
     return t;
   }
 
@@ -671,6 +697,7 @@ export class Rooms {
     include?: string[];
     maxFiles?: number;
     owner?: string;
+    producedBy?: { agentId?: string; sessionId?: string };
   }):
     | {
         ok: true;
@@ -733,6 +760,7 @@ export class Rooms {
         workspaceRoot: root,
         relPath,
         title: relPath,
+        producedBy: opts.producedBy,
       });
       if (type === 'markdown') this.attachFile(docId, abs);
       else this.attachReadonlyFile(docId, abs);
@@ -1297,6 +1325,98 @@ export class Rooms {
     return listThreads(room.ydoc).find((t) => t.id === threadId) ?? null;
   }
 
+  /**
+   * Append a comment-family activity event (comment / reply / resolve /
+   * reopen) for a successful thread action. Both person and agent actions are
+   * recorded — agent events carry actor:'agent' so the Weekly Review agent can
+   * filter them, but person events are never dropped. Best-effort: any failure
+   * is swallowed so activity capture can't break the action it observes.
+   */
+  private recordActivity(
+    room: DocRoom,
+    type: ActivityType,
+    author: User,
+    threadId: string,
+    opts: { text?: string; tsMs: number },
+  ): void {
+    try {
+      const actor = classifyActor(author);
+      const ts = toUtcIso(opts.tsMs);
+      const payload: Event['payload'] =
+        opts.text !== undefined ? { text: opts.text, wordCount: wordCount(opts.text) } : {};
+      const id = eventId({
+        ts,
+        actor,
+        docId: room.docId,
+        type,
+        threadId,
+        payloadDigest: payloadDigest(opts.text),
+      });
+      const event: Event = {
+        eventId: id,
+        ts,
+        type,
+        actor,
+        actorId: author.id,
+        actorName: author.name,
+        isOwner: isOwnerActor(author),
+        threadId,
+        doc: buildEventDoc(room.meta),
+        payload,
+      };
+      appendActivity(this.cfg.dataDir, event);
+    } catch (err) {
+      console.error('[rooms] recordActivity failed:', err);
+    }
+  }
+
+  /**
+   * Append a browser-originated reading event (read_session / doc_open). The
+   * client posts the interaction-bounded payload; the server resolves the doc
+   * / repo / producedBy and stamps actor=person, ts=now. Unknown `type`s are
+   * rejected so a malformed POST can't poison the stream.
+   */
+  recordReadEvent(
+    docId: string,
+    type: 'read_session' | 'doc_open',
+    payload: Event['payload'],
+    author: User,
+  ): { ok: boolean; error?: 'no-doc' | 'bad-type' } {
+    if (type !== 'read_session' && type !== 'doc_open') {
+      return { ok: false, error: 'bad-type' };
+    }
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'no-doc' };
+    try {
+      const ts = toUtcIso(Date.now());
+      const sessionId = payload.sessionId;
+      const id = eventId({
+        ts,
+        actor: 'person',
+        docId,
+        type,
+        threadId: null,
+        payloadDigest: payloadDigest(sessionId),
+      });
+      const event: Event = {
+        eventId: id,
+        ts,
+        type,
+        actor: 'person',
+        actorId: author.id,
+        actorName: author.name,
+        isOwner: isOwnerActor(author),
+        doc: buildEventDoc(room.meta),
+        payload,
+      };
+      appendActivity(this.cfg.dataDir, event);
+      return { ok: true };
+    } catch (err) {
+      console.error('[rooms] recordReadEvent failed:', err);
+      return { ok: false, error: 'no-doc' };
+    }
+  }
+
   private fireEvent(
     room: DocRoom,
     event: 'thread.created' | 'thread.replied' | 'thread.resolved' | 'thread.reopened',
@@ -1415,6 +1535,17 @@ export class Rooms {
 export function randomId(): string {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
 }
+
+/** Resolve / reopen actions come from the reviewer surface, which doesn't
+ *  send an author in the body. Default to the known reviewer (Bryan, the
+ *  doc owner) so the activity stream attributes them to a person. The route
+ *  may override by passing an explicit author. */
+const DEFAULT_REVIEWER: User = {
+  id: 'known-bryan',
+  name: 'Bryan',
+  kind: 'known',
+  color: '#2e7dd7',
+};
 
 /**
  * Sort a workspace dir node's children in place, recursively: directories

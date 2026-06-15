@@ -1,5 +1,6 @@
 import { type Thread, type User, readDocMeta } from '@feedback/core';
 import type { FeedbackClient } from '../client.ts';
+import { startReadingTracker } from '../reading-tracker.ts';
 import { ThreadPanel, type ThreadTab } from '../threads.ts';
 import { renderWorkspaceTree, wireWorkspaceTreeRefresh } from '../workspace-tree.ts';
 import { createCodeEditor } from './code-editor.ts';
@@ -75,6 +76,11 @@ export function bootCode(opts: {
     },
     onMarkerClick: (id) => revealThread(id),
   });
+
+  // Interaction-bounded reading-session capture (doc_open + read_session).
+  // CodeMirror manages its own scroller inside #editor; the tracker reads
+  // scroll depth from editorMount and listens for interaction at the window.
+  startReadingTracker({ docId, user, scrollEl: editorMount });
 
   // --- comment affordance: a pill anchored to the selection -----------------
   function positionPill(): void {
