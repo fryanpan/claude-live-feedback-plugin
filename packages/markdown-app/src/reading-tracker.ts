@@ -7,28 +7,75 @@ import type { User } from '@feedback/core';
  * Contract:
  *   - A session's `durationMs` is the SUM OF ACTIVE-INTERACTION SPANS only,
  *     never (endTs - startTs). Idle gaps are excluded.
- *   - "Interaction" = scroll | pointer (move/down) | keydown.
+ *   - Each interaction marks a window of `ACTIVE_WINDOW_MS` as active around
+ *     it. Overlapping windows (interactions within ACTIVE_WINDOW_MS of each
+ *     other) merge into one continuous span; a gap larger than the window
+ *     closes the span and is excluded as idle. `durationMs` is the total
+ *     length of those merged active spans — so a SINGLE interaction is worth
+ *     one window, and the last interaction's window is always counted (the
+ *     two cases the naive "sum the gaps between interactions" model dropped).
+ *   - "Interaction" = scroll | pointerdown | keydown. A bare `pointermove`
+ *     only EXTENDS an already-open session; it never opens one, so a stray
+ *     mouse twitch on a focused-but-unread tab stays noise.
  *   - After IDLE_GAP_MS of NO interaction, the session ENDS and is flushed.
  *     The idle gap itself never counts toward durationMs.
- *   - A focused tab with ZERO interaction emits NOTHING (never opens a
- *     session). Only the first interaction opens a session.
+ *   - A focused tab with ZERO opening interaction emits NOTHING (never opens
+ *     a session).
  *   - A single session caps at MAX_SESSION_MS (20 min); exceeding it flushes
  *     and a fresh session starts on the next interaction.
  *   - maxScrollDepthPct is tracked across the session.
  *   - On pagehide / visibilitychange→hidden, any in-flight session flushes.
  *   - A `doc_open` event is emitted exactly once, on load.
- *
- * Active span accounting: each interaction extends the current "active span"
- * to a window of ACTIVE_WINDOW_MS around it. We accrue the wall time between
- * consecutive interactions ONLY when that gap is <= ACTIVE_WINDOW_MS;
- * larger gaps are treated as idle and excluded.
  */
 
-const IDLE_GAP_MS = 45_000; // 45s of no interaction ends the session
-const MAX_SESSION_MS = 20 * 60_000; // cap a single session at 20 min
-// Wall time between two interactions is counted as "active" only up to this
-// window; a longer gap is idle (and, past IDLE_GAP_MS, ends the session).
-const ACTIVE_WINDOW_MS = 5_000;
+export const IDLE_GAP_MS = 45_000; // 45s of no interaction ends the session
+export const MAX_SESSION_MS = 20 * 60_000; // cap a single session at 20 min
+// Each interaction marks this much wall time as "active" around it. Windows
+// within ACTIVE_WINDOW_MS of each other merge; a larger gap is idle.
+export const ACTIVE_WINDOW_MS = 5_000;
+
+/**
+ * Pure active-span accumulator — the accrual math, factored out so it's
+ * unit-testable without DOM/timers. Tracks the running union-length of the
+ * active windows around each interaction.
+ *
+ * `durationMs` holds the length of already-CLOSED spans; the in-flight span
+ * runs `[spanStartMs, spanEndMs)`. The reported duration is `spanDuration()`
+ * (closed + in-flight).
+ */
+export interface ActiveSpanState {
+  durationMs: number;
+  spanStartMs: number;
+  spanEndMs: number;
+}
+
+/** Open the first active window around an interaction at `nowMs`. */
+export function openSpan(nowMs: number): ActiveSpanState {
+  return { durationMs: 0, spanStartMs: nowMs, spanEndMs: nowMs + ACTIVE_WINDOW_MS };
+}
+
+/**
+ * Fold an interaction at `nowMs` into the state: extend the current window if
+ * it's still active, otherwise close the previous span (excluding the idle
+ * gap) and open a fresh window.
+ */
+export function extendSpan(s: ActiveSpanState, nowMs: number): void {
+  if (nowMs <= s.spanEndMs) {
+    // Contiguous activity — stretch the active window forward.
+    s.spanEndMs = nowMs + ACTIVE_WINDOW_MS;
+  } else {
+    // Gap exceeded the window — bank the closed span, drop the idle gap,
+    // start a new window.
+    s.durationMs += s.spanEndMs - s.spanStartMs;
+    s.spanStartMs = nowMs;
+    s.spanEndMs = nowMs + ACTIVE_WINDOW_MS;
+  }
+}
+
+/** Total active time: closed spans + the in-flight span. */
+export function spanDuration(s: ActiveSpanState): number {
+  return s.durationMs + (s.spanEndMs - s.spanStartMs);
+}
 
 export interface ReadingTrackerOptions {
   docId: string;
@@ -43,9 +90,8 @@ export interface ReadingTrackerOptions {
 interface Session {
   sessionId: string;
   startMs: number;
-  /** Accrued active-interaction time (ms) — the reported durationMs. */
-  durationMs: number;
-  /** Wall-clock time of the most recent interaction. */
+  span: ActiveSpanState;
+  /** Wall-clock time of the most recent interaction (idle-timer + endTs). */
   lastInteractionMs: number;
   maxScrollDepthPct: number;
 }
@@ -108,14 +154,15 @@ export function startReadingTracker(opts: ReadingTrackerOptions): () => void {
     if (!session) return;
     const s = session;
     session = null;
-    // Only emit sessions that accrued real active time. A zero-duration
-    // session (e.g. a single stray pointermove) is noise.
-    if (s.durationMs <= 0) return;
+    const durationMs = Math.min(spanDuration(s.span), MAX_SESSION_MS);
+    // Defensive: a session always banks at least one window once opened, so
+    // this is never <= 0, but guard anyway rather than emit empty noise.
+    if (durationMs <= 0) return;
     post('read_session', {
       sessionId: s.sessionId,
       startTs: new Date(s.startMs).toISOString(),
       endTs: new Date(endMs).toISOString(),
-      durationMs: Math.min(s.durationMs, MAX_SESSION_MS),
+      durationMs,
       maxScrollDepthPct: s.maxScrollDepthPct,
       interactionBounded: true,
     });
@@ -125,45 +172,48 @@ export function startReadingTracker(opts: ReadingTrackerOptions): () => void {
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = setTimeout(() => {
       // No interaction for IDLE_GAP_MS — end the session at the last
-      // interaction time (the idle gap is excluded from durationMs).
+      // interaction time (the idle gap is excluded from durationMs; the
+      // last interaction's active window is still banked via spanDuration).
       if (session) flush(session.lastInteractionMs);
     }, IDLE_GAP_MS);
   };
 
-  const onInteraction = (): void => {
+  // `opensSession=false` (a bare pointermove) extends an open session but
+  // never starts one — a stray twitch on an unread tab stays noise.
+  const onSignal = (opensSession: boolean): void => {
     const now = Date.now();
     if (!session) {
-      // First interaction opens a session. A focus-only tab never gets here.
+      if (!opensSession) return;
       session = {
         sessionId: randomSessionId(),
         startMs: now,
-        durationMs: 0,
+        span: openSpan(now),
         lastInteractionMs: now,
         maxScrollDepthPct: scrollDepthPct(),
       };
       armIdleTimer();
       return;
     }
-    const gap = now - session.lastInteractionMs;
-    // Accrue active time for the gap, but only up to ACTIVE_WINDOW_MS — a
-    // longer gap was (partly) idle and must not inflate durationMs.
-    session.durationMs += Math.min(gap, ACTIVE_WINDOW_MS);
+    extendSpan(session.span, now);
     session.lastInteractionMs = now;
     const depth = scrollDepthPct();
     if (depth > session.maxScrollDepthPct) session.maxScrollDepthPct = depth;
     // Cap a single session at MAX_SESSION_MS; flush + let the next
-    // interaction open a fresh one.
-    if (session.durationMs >= MAX_SESSION_MS) {
+    // opening interaction start a fresh one.
+    if (spanDuration(session.span) >= MAX_SESSION_MS) {
       flush(now);
       return;
     }
     armIdleTimer();
   };
 
-  const interactionEvents = ['scroll', 'pointerdown', 'pointermove', 'keydown'] as const;
-  for (const ev of interactionEvents) {
-    window.addEventListener(ev, onInteraction, { passive: true, capture: true });
+  const onOpener = (): void => onSignal(true);
+  const onMove = (): void => onSignal(false);
+  const openerEvents = ['scroll', 'pointerdown', 'keydown'] as const;
+  for (const ev of openerEvents) {
+    window.addEventListener(ev, onOpener, { passive: true, capture: true });
   }
+  window.addEventListener('pointermove', onMove, { passive: true, capture: true });
 
   const onHide = (): void => {
     if (session) flush(Date.now());
@@ -175,9 +225,10 @@ export function startReadingTracker(opts: ReadingTrackerOptions): () => void {
   document.addEventListener('visibilitychange', onVisibility);
 
   return () => {
-    for (const ev of interactionEvents) {
-      window.removeEventListener(ev, onInteraction, { capture: true } as EventListenerOptions);
+    for (const ev of openerEvents) {
+      window.removeEventListener(ev, onOpener, { capture: true } as EventListenerOptions);
     }
+    window.removeEventListener('pointermove', onMove, { capture: true } as EventListenerOptions);
     window.removeEventListener('pagehide', onHide);
     document.removeEventListener('visibilitychange', onVisibility);
     if (idleTimer) clearTimeout(idleTimer);

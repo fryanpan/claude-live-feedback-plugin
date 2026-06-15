@@ -10,7 +10,7 @@ import {
   initDocMeta,
 } from '@feedback/core';
 import * as Y from 'yjs';
-import { runBackfill } from '../src/activity-backfill.ts';
+import { eventsForDoc, runBackfill } from '../src/activity-backfill.ts';
 import { activityLogPath } from '../src/activity.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 
@@ -45,7 +45,14 @@ interface ActivityEvent {
     repo: { owner: string; name: string };
     producedBy: { agentId: string | null; sessionId: string | null; cwd: string | null };
   };
-  payload: { text?: string; wordCount?: number; durationMs?: number; interactionBounded?: boolean };
+  payload: {
+    text?: string;
+    wordCount?: number;
+    durationMs?: number;
+    interactionBounded?: boolean;
+    sessionId?: string;
+    maxScrollDepthPct?: number;
+  };
 }
 
 function readEvents(dataDir: string): ActivityEvent[] {
@@ -187,6 +194,70 @@ describe('hands-on activity stream', () => {
       body: JSON.stringify({ type: 'bogus', payload: {} }),
     });
     expect(bad.status).toBe(400);
+  });
+
+  it('live comment eventId matches the backfill eventId for the same thread (dedup contract)', async () => {
+    const file = join(dataDir, 'act-dedup.md');
+    writeFileSync(file, '# Dedup\n\nText to comment on.\n');
+    const docRes = await j<{ docId: string; meta: DocMeta }>(
+      await fetch(`${base}/api/docs`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ docId: 'act-dedup', type: 'markdown', sourceUrl: file }),
+      }),
+    );
+    await j(
+      await fetch(`${base}/api/docs/act-dedup/threads`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ author: bryan, text: 'dedup me', anchor: fakeAnchor }),
+      }),
+    );
+
+    // The live event the REST comment just appended.
+    const live = readEvents(dataDir).find(
+      (e) => e.type === 'comment' && e.doc.docId === 'act-dedup',
+    );
+    expect(live).toBeDefined();
+
+    // Reconstruct the SAME comment via the backfill path (eventsForDoc) over
+    // the full thread, and confirm the deterministic id + ts line up. This is
+    // the contract that lets a backfill re-run dedupe against live capture —
+    // it only holds because the live event hashes the comment's PERSISTED ts,
+    // not a fresh Date.now().
+    const summary = handle.rooms.listThreads('act-dedup')[0];
+    const full = handle.rooms.getThread('act-dedup', summary!.id);
+    expect(full).not.toBeNull();
+    const backfill = eventsForDoc(docRes.meta, [full!]).find((e) => e.type === 'comment');
+    expect(backfill).toBeDefined();
+    expect(live!.ts).toBe(backfill!.ts);
+    expect(live!.eventId).toBe(backfill!.eventId);
+  });
+
+  it('server re-clamps an over-cap read_session durationMs', async () => {
+    const r = await fetch(`${base}/api/docs/act-doc/activity`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        type: 'read_session',
+        author: bryan,
+        payload: {
+          sessionId: 'sess-inflated',
+          // 10 hours — a spoofed/buggy client value that must NOT land verbatim.
+          durationMs: 36_000_000,
+          maxScrollDepthPct: 999,
+          interactionBounded: true,
+        },
+      }),
+    });
+    expect(r.status).toBe(200);
+    const read = readEvents(dataDir).find(
+      (e) => e.type === 'read_session' && e.payload.sessionId === 'sess-inflated',
+    );
+    expect(read).toBeDefined();
+    // Clamped to the 20-min cap and 0..100 scroll range.
+    expect(read!.payload.durationMs).toBe(20 * 60_000);
+    expect(read!.payload.maxScrollDepthPct).toBe(100);
   });
 });
 

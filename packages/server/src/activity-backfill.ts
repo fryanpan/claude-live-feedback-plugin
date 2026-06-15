@@ -97,9 +97,6 @@ function ydocFiles(dataDir: string): string[] {
 export function eventsForDoc(meta: DocMeta, threads: Thread[]): Event[] {
   const out: Event[] = [];
   const doc = buildEventDoc(meta);
-  // Validation window end (inclusive-ish): Jun 13 end-of-day.
-  const valEnd = Date.parse('2026-06-13T23:59:59.999Z');
-  void valEnd;
   for (const thread of threads) {
     thread.comments.forEach((c, i) => {
       if (c.ts < CLEAN_DATA_START_MS) return;
