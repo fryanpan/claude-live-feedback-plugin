@@ -1082,7 +1082,7 @@ function renderLanding(model: LandingModel): string {
     model.totalArtifacts === 0
       ? ''
       : `${model.totalArtifacts} artifact${model.totalArtifacts === 1 ? '' : 's'} · ${model.totalOpen} open thread${model.totalOpen === 1 ? '' : 's'}`;
-  return `<!doctype html><meta charset="utf-8"><title>Live Feedback</title>
+  return `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Live Feedback</title>
 <style>
 body{font:14px/1.5 system-ui, -apple-system, sans-serif;margin:32px auto;max-width:760px;padding:0 16px;color:#1b1f23}
 h1{font-size:22px;margin:0 0 4px}
