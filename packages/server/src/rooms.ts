@@ -30,6 +30,19 @@ import type { ServerWebSocket } from 'bun';
 import * as awarenessProtocol from 'y-protocols/awareness';
 import * as Y from 'yjs';
 
+import {
+  type ActivityType,
+  type Event,
+  appendActivity,
+  buildEventDoc,
+  clampReadPayload,
+  classifyActor,
+  eventId,
+  isOwnerActor,
+  payloadDigest,
+  toUtcIso,
+  wordCount,
+} from './activity.ts';
 import type { SseHub } from './sse.ts';
 import type { WebhookDispatcher } from './webhooks.ts';
 
@@ -289,6 +302,7 @@ export class Rooms {
       workspaceId?: string;
       relPath?: string;
       workspaceRoot?: string;
+      producedBy?: { agentId?: string; sessionId?: string };
     },
   ): DocRoom {
     const existing = this.rooms.get(docId);
@@ -328,6 +342,7 @@ export class Rooms {
         workspaceId: init?.workspaceId,
         relPath: init?.relPath,
         workspaceRoot: init?.workspaceRoot,
+        producedBy: init?.producedBy,
         createdAt: Date.now(),
       };
       initDocMeta(ydoc, now);
@@ -377,6 +392,14 @@ export class Rooms {
         firstComment: { id: randomId(), text },
       });
       this.fireEvent(room, 'thread.created', t);
+      // Hash the activity event with the comment's PERSISTED ts (not a fresh
+      // Date.now()), so a later backfill — which reconstructs this event from
+      // the same stored ts — produces an IDENTICAL eventId and dedupes
+      // instead of double-counting.
+      this.recordActivity(room, 'comment', author, t.id, {
+        text,
+        tsMs: t.comments[0]?.ts ?? Date.now(),
+      });
       return t;
     }
     const comment = schemaPostReply(room.ydoc, threadId, {
@@ -387,6 +410,7 @@ export class Rooms {
     if (!comment) return null;
     const thread = this.getThread(docId, threadId);
     if (thread) this.fireEvent(room, 'thread.replied', thread, comment);
+    this.recordActivity(room, 'reply', author, threadId, { text, tsMs: comment.ts });
     return thread;
   }
 
@@ -457,19 +481,29 @@ export class Rooms {
     return { ok: true, thread };
   }
 
-  resolve(docId: string, threadId: string): Thread | null {
+  resolve(docId: string, threadId: string, author?: User): Thread | null {
     const room = this.rooms.get(docId);
     if (!room) return null;
     const t = schemaSetStatus(room.ydoc, threadId, 'resolved');
-    if (t) this.fireEvent(room, 'thread.resolved', t);
+    if (t) {
+      this.fireEvent(room, 'thread.resolved', t);
+      this.recordActivity(room, 'resolve', author ?? DEFAULT_REVIEWER, threadId, {
+        tsMs: Date.now(),
+      });
+    }
     return t;
   }
 
-  reopen(docId: string, threadId: string): Thread | null {
+  reopen(docId: string, threadId: string, author?: User): Thread | null {
     const room = this.rooms.get(docId);
     if (!room) return null;
     const t = schemaSetStatus(room.ydoc, threadId, 'open');
-    if (t) this.fireEvent(room, 'thread.reopened', t);
+    if (t) {
+      this.fireEvent(room, 'thread.reopened', t);
+      this.recordActivity(room, 'reopen', author ?? DEFAULT_REVIEWER, threadId, {
+        tsMs: Date.now(),
+      });
+    }
     return t;
   }
 
@@ -671,6 +705,7 @@ export class Rooms {
     include?: string[];
     maxFiles?: number;
     owner?: string;
+    producedBy?: { agentId?: string; sessionId?: string };
   }):
     | {
         ok: true;
@@ -733,6 +768,7 @@ export class Rooms {
         workspaceRoot: root,
         relPath,
         title: relPath,
+        producedBy: opts.producedBy,
       });
       if (type === 'markdown') this.attachFile(docId, abs);
       else this.attachReadonlyFile(docId, abs);
@@ -740,6 +776,120 @@ export class Rooms {
     }
 
     return { ok: true, workspaceId, root, fileCount: files.length, skipped, files };
+  }
+
+  /**
+   * List the bound workspaces with rolled-up triage signals — so the daily
+   * cleanup can treat a folder bind as ONE unit instead of nagging per file.
+   * Each entry aggregates its member docs (`meta.workspaceId === id`):
+   *   - `fileCount`     number of member docs
+   *   - `openThreads`   sum of every member's open-thread count
+   *   - `allIdle`       true iff EVERY member is idle (lastActivityAt older
+   *                     than 24h) — a workspace is only idle when nothing in
+   *                     it has moved recently
+   *   - `owner`         the creating agent's cwd (first member that has one)
+   *   - `lastActivityAt` max member lastActivityAt (most recent touch)
+   */
+  listWorkspaces(now: number = Date.now()): Array<{
+    workspaceId: string;
+    root?: string;
+    title?: string;
+    owner?: string;
+    fileCount: number;
+    openThreads: number;
+    allIdle: boolean;
+    lastActivityAt?: number;
+  }> {
+    const IDLE_MS = 24 * 60 * 60 * 1000;
+    const byId = new Map<
+      string,
+      {
+        workspaceId: string;
+        root?: string;
+        title?: string;
+        owner?: string;
+        fileCount: number;
+        openThreads: number;
+        allIdle: boolean;
+        lastActivityAt?: number;
+      }
+    >();
+    for (const meta of this.list()) {
+      const id = meta.workspaceId;
+      if (!id) continue;
+      let entry = byId.get(id);
+      if (!entry) {
+        entry = {
+          workspaceId: id,
+          root: meta.workspaceRoot,
+          title: meta.title,
+          owner: meta.owner,
+          fileCount: 0,
+          openThreads: 0,
+          allIdle: true,
+          lastActivityAt: undefined,
+        };
+        byId.set(id, entry);
+      }
+      if (!entry.root && meta.workspaceRoot) entry.root = meta.workspaceRoot;
+      if (!entry.owner && meta.owner) entry.owner = meta.owner;
+      entry.fileCount += 1;
+      entry.openThreads += this.listThreads(meta.docId, { status: 'open' }).length;
+      const last = meta.lastActivityAt ?? meta.createdAt;
+      if (entry.lastActivityAt === undefined || last > entry.lastActivityAt) {
+        entry.lastActivityAt = last;
+      }
+      // A member is idle if its last activity is older than 24h. The
+      // workspace is idle only when every member is — so a single recently
+      // touched file keeps the whole workspace out of the cleanup queue.
+      if (now - last < IDLE_MS) entry.allIdle = false;
+    }
+    return Array.from(byId.values()).sort((a, b) => {
+      if (a.openThreads !== b.openThreads) return b.openThreads - a.openThreads;
+      return a.workspaceId.localeCompare(b.workspaceId);
+    });
+  }
+
+  /**
+   * Delete a whole workspace (a bound folder) as one unit: loop its member
+   * docs and `deleteDoc` each, applying the per-file open-thread guardrail.
+   *
+   * Semantics are ALL-OR-NOTHING:
+   *   - WITHOUT `force`: if ANY member still has open threads, abort the
+   *     entire delete (nothing is removed) and return the offending files.
+   *   - WITH `force`: delete every member regardless of open threads.
+   *
+   * The bound SOURCE files on disk are left untouched (same as deleteDoc).
+   */
+  deleteWorkspace(
+    workspaceId: string,
+    opts?: { force?: boolean },
+  ):
+    | { ok: true; deleted: number }
+    | { ok: false; error: 'not-found' }
+    | {
+        ok: false;
+        error: 'has-open-threads';
+        files: Array<{ docId: string; openThreads: number }>;
+      } {
+    const members = this.list().filter((m) => m.workspaceId === workspaceId);
+    if (members.length === 0) return { ok: false, error: 'not-found' };
+    if (!opts?.force) {
+      // Pre-flight the guardrail across ALL members before deleting any, so a
+      // workspace with even one open thread is left fully intact.
+      const blocked: Array<{ docId: string; openThreads: number }> = [];
+      for (const m of members) {
+        const openThreads = this.listThreads(m.docId, { status: 'open' }).length;
+        if (openThreads > 0) blocked.push({ docId: m.docId, openThreads });
+      }
+      if (blocked.length > 0) return { ok: false, error: 'has-open-threads', files: blocked };
+    }
+    let deleted = 0;
+    for (const m of members) {
+      const res = this.deleteDoc(m.docId, { force: true });
+      if (res.ok) deleted += 1;
+    }
+    return { ok: true, deleted };
   }
 
   /**
@@ -1297,6 +1447,101 @@ export class Rooms {
     return listThreads(room.ydoc).find((t) => t.id === threadId) ?? null;
   }
 
+  /**
+   * Append a comment-family activity event (comment / reply / resolve /
+   * reopen) for a successful thread action. Both person and agent actions are
+   * recorded — agent events carry actor:'agent' so the Weekly Review agent can
+   * filter them, but person events are never dropped. Best-effort: any failure
+   * is swallowed so activity capture can't break the action it observes.
+   */
+  private recordActivity(
+    room: DocRoom,
+    type: ActivityType,
+    author: User,
+    threadId: string,
+    opts: { text?: string; tsMs: number },
+  ): void {
+    try {
+      const actor = classifyActor(author);
+      const ts = toUtcIso(opts.tsMs);
+      const payload: Event['payload'] =
+        opts.text !== undefined ? { text: opts.text, wordCount: wordCount(opts.text) } : {};
+      const id = eventId({
+        ts,
+        actor,
+        docId: room.docId,
+        type,
+        threadId,
+        payloadDigest: payloadDigest(opts.text),
+      });
+      const event: Event = {
+        eventId: id,
+        ts,
+        type,
+        actor,
+        actorId: author.id,
+        actorName: author.name,
+        isOwner: isOwnerActor(author),
+        threadId,
+        doc: buildEventDoc(room.meta),
+        payload,
+      };
+      appendActivity(this.cfg.dataDir, event);
+    } catch (err) {
+      console.error('[rooms] recordActivity failed:', err);
+    }
+  }
+
+  /**
+   * Append a browser-originated reading event (read_session / doc_open). The
+   * client posts the interaction-bounded payload; the server resolves the doc
+   * / repo / producedBy and stamps actor=person, ts=now. Unknown `type`s are
+   * rejected so a malformed POST can't poison the stream.
+   */
+  recordReadEvent(
+    docId: string,
+    type: 'read_session' | 'doc_open',
+    payload: Event['payload'],
+    author: User,
+  ): { ok: boolean; error?: 'no-doc' | 'bad-type' | 'append-failed' } {
+    if (type !== 'read_session' && type !== 'doc_open') {
+      return { ok: false, error: 'bad-type' };
+    }
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'no-doc' };
+    try {
+      // Re-clamp the browser-supplied duration/scroll fields server-side so a
+      // spoofed or buggy POST can't write an inflated read time.
+      clampReadPayload(payload);
+      const ts = toUtcIso(Date.now());
+      const sessionId = payload.sessionId;
+      const id = eventId({
+        ts,
+        actor: 'person',
+        docId,
+        type,
+        threadId: null,
+        payloadDigest: payloadDigest(sessionId),
+      });
+      const event: Event = {
+        eventId: id,
+        ts,
+        type,
+        actor: 'person',
+        actorId: author.id,
+        actorName: author.name,
+        isOwner: isOwnerActor(author),
+        doc: buildEventDoc(room.meta),
+        payload,
+      };
+      appendActivity(this.cfg.dataDir, event);
+      return { ok: true };
+    } catch (err) {
+      console.error('[rooms] recordReadEvent failed:', err);
+      return { ok: false, error: 'append-failed' };
+    }
+  }
+
   private fireEvent(
     room: DocRoom,
     event: 'thread.created' | 'thread.replied' | 'thread.resolved' | 'thread.reopened',
@@ -1415,6 +1660,17 @@ export class Rooms {
 export function randomId(): string {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
 }
+
+/** Resolve / reopen actions come from the reviewer surface, which doesn't
+ *  send an author in the body. Default to the known reviewer (Bryan, the
+ *  doc owner) so the activity stream attributes them to a person. The route
+ *  may override by passing an explicit author. */
+const DEFAULT_REVIEWER: User = {
+  id: 'known-bryan',
+  name: 'Bryan',
+  kind: 'known',
+  color: '#2e7dd7',
+};
 
 /**
  * Sort a workspace dir node's children in place, recursively: directories
