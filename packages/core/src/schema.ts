@@ -44,6 +44,7 @@ export function readDocMeta(doc: Y.Doc): DocMeta {
   const workspaceId = m.get('workspaceId') as string | undefined;
   const relPath = m.get('relPath') as string | undefined;
   const workspaceRoot = m.get('workspaceRoot') as string | undefined;
+  const producedBy = m.get('producedBy') as DocMeta['producedBy'] | undefined;
   return {
     docId,
     type,
@@ -55,6 +56,7 @@ export function readDocMeta(doc: Y.Doc): DocMeta {
     workspaceId,
     relPath,
     workspaceRoot,
+    producedBy,
   };
 }
 
@@ -73,6 +75,7 @@ export function initDocMeta(doc: Y.Doc, meta: DocMeta): void {
     if (meta.relPath !== undefined && !m.has('relPath')) m.set('relPath', meta.relPath);
     if (meta.workspaceRoot !== undefined && !m.has('workspaceRoot'))
       m.set('workspaceRoot', meta.workspaceRoot);
+    if (meta.producedBy !== undefined && !m.has('producedBy')) m.set('producedBy', meta.producedBy);
   });
 }
 
