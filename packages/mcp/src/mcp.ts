@@ -224,6 +224,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           title: { type: 'string' },
           setId: { type: 'string' },
           subscribe: { type: 'boolean' },
+          producedBy: {
+            type: 'object',
+            description:
+              'Optional provenance for the activity event stream: {agentId?, sessionId?}. Captured into doc meta so hands-on activity events can attribute the doc to the producing agent + session. If omitted, agentId is derived from the owner cwd and sessionId stays null.',
+            properties: {
+              agentId: { type: 'string' },
+              sessionId: { type: 'string' },
+            },
+          },
         },
         required: ['docId', 'path'],
       },
@@ -282,6 +291,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           include: { type: 'array', items: { type: 'string' } },
           maxFiles: { type: 'number' },
           subscribe: { type: 'boolean' },
+          producedBy: {
+            type: 'object',
+            description:
+              'Optional provenance for the activity event stream: {agentId?, sessionId?}. Stored on every doc the bind creates so hands-on activity events can attribute them to the producing agent + session.',
+            properties: {
+              agentId: { type: 'string' },
+              sessionId: { type: 'string' },
+            },
+          },
         },
         required: ['folderPath'],
       },
@@ -633,11 +651,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok(res);
       }
       case 'create_review_doc': {
-        const { docId, path, title, setId } = a as {
+        const { docId, path, title, setId, producedBy } = a as {
           docId: string;
           path: string;
           title?: string;
           setId?: string;
+          producedBy?: { agentId?: string; sessionId?: string };
         };
         const res = await http('POST', '/api/docs', {
           docId,
@@ -646,6 +665,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           owner: process.cwd(),
           ...(title ? { title } : {}),
           ...(setId ? { setId } : {}),
+          ...(producedBy ? { producedBy } : {}),
         });
         return ok(res);
       }
@@ -679,13 +699,14 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok(res);
       }
       case 'bind_folder': {
-        const { folderPath, workspaceId, title, include, maxFiles, subscribe } = a as {
+        const { folderPath, workspaceId, title, include, maxFiles, subscribe, producedBy } = a as {
           folderPath: string;
           workspaceId?: string;
           title?: string;
           include?: string[];
           maxFiles?: number;
           subscribe?: boolean;
+          producedBy?: { agentId?: string; sessionId?: string };
         };
         const res = (await http('POST', '/api/workspaces', {
           folderPath,
@@ -694,6 +715,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...(title ? { title } : {}),
           ...(include ? { include } : {}),
           ...(maxFiles !== undefined ? { maxFiles } : {}),
+          ...(producedBy ? { producedBy } : {}),
         })) as { ok?: boolean; files?: Array<{ docId: string }> };
         // bind_folder has no single docId, so maybeAutoWatch can't subscribe
         // it — fan the auto-watch out across every file the bind created

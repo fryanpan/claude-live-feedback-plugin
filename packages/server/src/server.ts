@@ -249,6 +249,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           workspaceId: body?.workspaceId as string | undefined,
           relPath: body?.relPath as string | undefined,
           workspaceRoot: body?.workspaceRoot as string | undefined,
+          producedBy: body?.producedBy as { agentId?: string; sessionId?: string } | undefined,
         });
         let attached: ReturnType<typeof rooms.attachFile> | undefined;
         if (type === 'markdown' && sourceUrl) {
@@ -282,6 +283,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           include: Array.isArray(body?.include) ? (body.include as string[]) : undefined,
           maxFiles: typeof body?.maxFiles === 'number' ? Number(body.maxFiles) : undefined,
           owner: body?.owner as string | undefined,
+          producedBy: body?.producedBy as { agentId?: string; sessionId?: string } | undefined,
         });
         if (!res.ok) {
           // not-found → 404; too-many-files → 409 (guardrail, caller must
@@ -347,11 +349,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             return t ? j(200, { thread: t }) : j(404, { error: 'thread not found' });
           }
           if (threadRest === '/resolve' && req.method === 'POST') {
-            const t = rooms.resolve(docId, threadId);
+            const body = await safeJson(req);
+            const author = body?.author as User | undefined;
+            const t = rooms.resolve(docId, threadId, author);
             return t ? j(200, { thread: t }) : j(404, { error: 'thread not found' });
           }
           if (threadRest === '/reopen' && req.method === 'POST') {
-            const t = rooms.reopen(docId, threadId);
+            const body = await safeJson(req);
+            const author = body?.author as User | undefined;
+            const t = rooms.reopen(docId, threadId, author);
             return t ? j(200, { thread: t }) : j(404, { error: 'thread not found' });
           }
           if (threadRest === '/reanchor' && req.method === 'POST') {
@@ -424,6 +430,26 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         if (rest === 'reparse_from_disk' && req.method === 'POST') {
           const res = rooms.reparseFromDisk(docId);
           return res.ok ? j(200, res) : j(409, res);
+        }
+        // Browser-originated reading activity (read_session / doc_open). The
+        // markdown/code review surfaces POST interaction-bounded reading
+        // sessions here; the server resolves doc/repo/producedBy and stamps
+        // actor=person. Unknown types are ignored (400). See activity.ts.
+        if (rest === 'activity' && req.method === 'POST') {
+          const body = await safeJson(req);
+          const type = body?.type as 'read_session' | 'doc_open' | undefined;
+          if (type !== 'read_session' && type !== 'doc_open') {
+            return j(400, { error: 'type must be read_session or doc_open' });
+          }
+          const payload = (body?.payload as Record<string, unknown> | undefined) ?? {};
+          const author = (body?.author as User | undefined) ?? {
+            id: 'known-bryan',
+            name: 'Bryan',
+            kind: 'known' as const,
+            color: '#2e7dd7',
+          };
+          const res = rooms.recordReadEvent(docId, type, payload, author);
+          return res.ok ? j(200, { ok: true }) : j(404, res);
         }
         if (rest === 'agent_anchors' && req.method === 'POST') {
           const body = await safeJson(req);
