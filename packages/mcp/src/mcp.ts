@@ -305,6 +305,22 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'delete_workspace',
+      description:
+        "Permanently delete a whole workspace (a folder bound via bind_folder) as ONE unit: drops every member review doc, cancels their sync, and removes the persisted state — but leaves the bound SOURCE files on disk untouched. Use this when a worktree/folder review is done instead of calling delete_doc once per file. GUARDRAIL is ALL-OR-NOTHING: without force, if ANY member file still has OPEN comment threads, nothing is deleted and it returns ok:false, error:'has-open-threads' with files:[{docId, openThreads}] listing the offenders — resolve those threads first, or pass force:true to delete everything regardless. Returns error:'not-found' if no docs carry that workspaceId. On success returns {ok:true, deleted:<count>}.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          workspaceId: { type: 'string' },
+          force: {
+            type: 'boolean',
+            description: 'Delete even if some member files have open threads. Default false.',
+          },
+        },
+        required: ['workspaceId'],
+      },
+    },
+    {
       name: 'find_and_replace',
       description:
         "Replace a string of plain text in the doc with another string. `find` must match the doc's plain text content (no markdown syntax — marks like bold/italic are preserved automatically). Use `contextBefore` / `contextAfter` to disambiguate repeated phrases. If the match is still ambiguous the tool returns a list of candidates. Use `occurrence` (1-indexed) to pick one explicitly. Pass `parseInlineMarks: true` to interpret `[label](url)` / `**bold**` / `*italic*` / `` `code` `` / `~~strike~~` in `replace` as marks on the inserted text instead of literal characters — required when adding a labeled link or other inline mark to text that doesn't already have one. Runs as a single Yjs transaction so it merges cleanly with concurrent user edits.",
@@ -726,6 +742,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             if (f?.docId) await watchDoc(f.docId);
           }
         }
+        return ok(res);
+      }
+      case 'delete_workspace': {
+        const { workspaceId, force } = a as { workspaceId: string; force?: boolean };
+        const qs = force ? '?force=true' : '';
+        const res = await http('DELETE', `/api/workspaces/${encodeURIComponent(workspaceId)}${qs}`);
         return ok(res);
       }
       case 'find_and_replace': {
