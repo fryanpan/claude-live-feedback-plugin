@@ -3,7 +3,7 @@ import { extname, join } from 'node:path';
 import type { Anchor, DocType, User } from '@feedback/core';
 import { type CfAccessOptions, createCfAccessVerifier } from './middleware/cf-access.ts';
 import { publicBaseUrl } from './public-host.ts';
-import { type FeedbackWs, Rooms } from './rooms.ts';
+import { type FeedbackWs, Rooms, type WorkspaceDirNode, type WorkspaceFileNode } from './rooms.ts';
 import { CfApi } from './share/cf-api.ts';
 import { Shares } from './share/shares.ts';
 import type { ShareConfig } from './share/types.ts';
@@ -297,6 +297,23 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             reviewUrl: withReviewUrl({ docId: f.docId, type: f.type }).reviewUrl,
           })),
         });
+      }
+      // List bound workspaces with rolled-up triage signals (fileCount,
+      // openThreads, allIdle, owner, lastActivityAt). The daily triage uses
+      // this to treat a folder bind as one cleanup unit.
+      if (pathname === '/api/workspaces' && req.method === 'GET') {
+        return j(200, { workspaces: rooms.listWorkspaces() });
+      }
+      // Delete a whole workspace as one unit (all-or-nothing open-thread
+      // guardrail; ?force=true to override). Member SOURCE files are left
+      // untouched, same as DELETE /api/docs/:id.
+      const wsDeleteMatch = pathname.match(/^\/api\/workspaces\/([^/]+)$/);
+      if (wsDeleteMatch && req.method === 'DELETE') {
+        const workspaceId = decodeURIComponent(wsDeleteMatch[1] ?? '');
+        const force = url.searchParams.get('force') === 'true';
+        const res = rooms.deleteWorkspace(workspaceId, { force });
+        if (res.ok) return j(200, res);
+        return j(res.error === 'has-open-threads' ? 409 : 404, res);
       }
       // File-tree view for a bound workspace: nested directory tree with
       // per-file unresolved-comment counts + folder roll-ups. Files are
@@ -670,13 +687,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
 
       // --- Landing ---
       if (pathname === '/') {
-        const summaries = rooms.list().map((m) => {
-          const threads = rooms.listThreads(m.docId);
-          const open = threads.filter((t) => t.status === 'open').length;
-          const lastActivity = threads.reduce((max, t) => Math.max(max, t.lastActivity), 0);
-          return { ...m, openCount: open, threadCount: threads.length, lastActivity };
-        });
-        return new Response(renderLanding(summaries), {
+        return new Response(renderLanding(buildLandingModel(rooms, withReviewUrl)), {
           headers: { 'content-type': 'text/html; charset=utf-8' },
         });
       }
@@ -829,94 +840,286 @@ created by an agent calling <code>POST /api/docs</code> with a
 <p><small><a href="/">all docs</a></small></p>`;
 }
 
-interface LandingDoc {
-  docId: string;
-  type: string;
-  title?: string;
-  sourceUrl?: string;
-  setId?: string;
+// --- Landing page: project → artifacts model ---
+//
+// The landing page answers "what does this project have under review, and what
+// needs my attention?". It groups by PROJECT (the creating agent's cwd =
+// doc.owner; 'ungrouped' when absent), and within a project lists ARTIFACTS.
+// An artifact is one of:
+//   - a workspace (bound folder/worktree; docs sharing a workspaceId) →
+//     one expandable row with a rolled-up open-count badge and a nested file
+//     list, each file linking to its reviewUrl
+//   - a single markdown file, a code file, a mockup, or a dev server
+// Each artifact carries its open-comment count and a kind glyph/label.
+
+type ArtifactKind = 'workspace' | 'markdown' | 'code' | 'mockup' | 'dev';
+
+interface LandingFile {
+  name: string;
+  reviewUrl?: string;
+  openCount: number;
+}
+
+interface LandingArtifact {
+  kind: ArtifactKind;
+  /** Display name (file basename, workspace title, or docId fallback). */
+  name: string;
+  /** docId for standalone artifacts; workspaceId for workspaces. */
+  id: string;
+  reviewUrl?: string;
   openCount: number;
   threadCount: number;
   lastActivity: number;
-  createdAt?: number;
+  /** Nested file list (workspace artifacts only). */
+  files?: LandingFile[];
 }
 
-function renderLanding(docs: LandingDoc[]): string {
-  // Sort by signal: docs with open feedback float to the top, then by most
-  // recent activity, then alphabetically. Mirrors how a reviewer scans the
-  // list — "what needs my attention?" is the primary question.
-  const sorted = [...docs].sort((a, b) => {
-    if (a.openCount !== b.openCount) return b.openCount - a.openCount;
-    if (a.lastActivity !== b.lastActivity) return b.lastActivity - a.lastActivity;
-    return a.docId.localeCompare(b.docId);
+interface LandingProject {
+  /** Project key = creating agent's cwd, or 'ungrouped'. */
+  owner: string;
+  totalOpen: number;
+  artifacts: LandingArtifact[];
+}
+
+interface LandingModel {
+  projects: LandingProject[];
+  totalArtifacts: number;
+  totalOpen: number;
+}
+
+// Glyph + human label per artifact kind. The glyph keeps the kinds visually
+// distinct at a glance; the label disambiguates for screen readers / clarity.
+const ARTIFACT_KIND: Record<ArtifactKind, { glyph: string; label: string }> = {
+  workspace: { glyph: '📁', label: 'folder' },
+  markdown: { glyph: '📄', label: 'markdown' },
+  code: { glyph: '⟨⟩', label: 'code' },
+  mockup: { glyph: '🖼', label: 'mockup' },
+  dev: { glyph: '⚡', label: 'dev server' },
+};
+
+/** Flatten a workspace tree into a sorted file list for the landing nesting. */
+function flattenWorkspaceFiles(node: WorkspaceDirNode | WorkspaceFileNode): LandingFile[] {
+  if (node.type === 'file') {
+    return [{ name: node.relPath, reviewUrl: node.reviewUrl, openCount: node.openCount }];
+  }
+  return node.children.flatMap(flattenWorkspaceFiles);
+}
+
+/**
+ * Build the project → artifacts model from the live rooms. Pure data shaping —
+ * all HTML lives in `renderLanding`. Exported-shape via the route only.
+ */
+function buildLandingModel(
+  rooms: Rooms,
+  decorate: <T extends { docId: string; type: DocType; sourceUrl?: string }>(
+    meta: T,
+  ) => T & { reviewUrl?: string },
+): LandingModel {
+  // workspaceId → accumulating workspace artifact (filled from buildWorkspaceTree).
+  const workspaceArtifacts = new Map<string, LandingArtifact>();
+  // owner → its standalone + workspace artifacts.
+  const projects = new Map<string, LandingProject>();
+
+  const ensureProject = (owner: string): LandingProject => {
+    let p = projects.get(owner);
+    if (!p) {
+      p = { owner, totalOpen: 0, artifacts: [] };
+      projects.set(owner, p);
+    }
+    return p;
+  };
+
+  for (const meta of rooms.list()) {
+    const threads = rooms.listThreads(meta.docId);
+    const openCount = threads.filter((t) => t.status === 'open').length;
+    const lastActivity = Math.max(
+      meta.lastActivityAt ?? 0,
+      threads.reduce((max, t) => Math.max(max, t.lastActivity), 0),
+    );
+    const owner = meta.owner || 'ungrouped';
+
+    if (meta.workspaceId) {
+      // Workspace member — fold into (or create) the workspace artifact. The
+      // per-file detail comes from buildWorkspaceTree; here we just track the
+      // owner/lastActivity rollup and ensure the artifact is registered.
+      let art = workspaceArtifacts.get(meta.workspaceId);
+      if (!art) {
+        const tree = rooms.buildWorkspaceTree(meta.workspaceId);
+        const files = flattenWorkspaceFiles(tree.tree);
+        art = {
+          kind: 'workspace',
+          name: meta.workspaceId,
+          id: meta.workspaceId,
+          openCount: tree.totalOpen,
+          threadCount: 0,
+          lastActivity: 0,
+          files,
+        };
+        workspaceArtifacts.set(meta.workspaceId, art);
+        ensureProject(owner).artifacts.push(art);
+      }
+      art.threadCount += threads.length;
+      if (lastActivity > art.lastActivity) art.lastActivity = lastActivity;
+      continue;
+    }
+
+    // Standalone artifact (single file / mockup / dev).
+    const decorated = decorate(meta);
+    const kind = (meta.type as ArtifactKind) ?? 'markdown';
+    const name = meta.sourceUrl ? basenameOf(meta.sourceUrl) : meta.title || meta.docId;
+    ensureProject(owner).artifacts.push({
+      kind,
+      name,
+      id: meta.docId,
+      reviewUrl: decorated.reviewUrl,
+      openCount,
+      threadCount: threads.length,
+      lastActivity,
+    });
+  }
+
+  // Sort artifacts within each project, then projects by total open desc.
+  const projectList = Array.from(projects.values());
+  for (const p of projectList) {
+    p.totalOpen = p.artifacts.reduce((sum, a) => sum + a.openCount, 0);
+    p.artifacts.sort((a, b) => {
+      if (a.openCount !== b.openCount) return b.openCount - a.openCount;
+      if (a.lastActivity !== b.lastActivity) return b.lastActivity - a.lastActivity;
+      return a.name.localeCompare(b.name);
+    });
+  }
+  projectList.sort((a, b) => {
+    if (a.totalOpen !== b.totalOpen) return b.totalOpen - a.totalOpen;
+    return a.owner.localeCompare(b.owner);
   });
-  const rows = sorted
-    .map((d) => {
-      const title = d.title || d.docId;
-      const titleHtml = `<a href="/review/${encodeURIComponent(d.docId)}">${escape(title)}</a>`;
-      const titleDiffersFromId = title !== d.docId;
-      const idSubtitle = titleDiffersFromId ? `<span class="docid">${escape(d.docId)}</span>` : '';
-      const openBadge =
-        d.openCount > 0
-          ? `<span class="badge badge-open">${d.openCount} open</span>`
-          : d.threadCount > 0
-            ? `<span class="badge badge-resolved">all resolved</span>`
-            : '';
-      const setBadge = d.setId
-        ? `<span class="badge badge-set">set: ${escape(d.setId)}</span>`
+
+  const totalArtifacts = projectList.reduce((sum, p) => sum + p.artifacts.length, 0);
+  const totalOpen = projectList.reduce((sum, p) => sum + p.totalOpen, 0);
+  return { projects: projectList, totalArtifacts, totalOpen };
+}
+
+function basenameOf(p: string): string {
+  let s = p;
+  try {
+    if (/^https?:\/\//.test(s)) s = new URL(s).pathname;
+  } catch {}
+  const m = s.match(/[^/\\]+$/);
+  return m ? m[0] : s;
+}
+
+/** Display label for a project owner (cwd) — its basename, or the raw key. */
+function projectLabel(owner: string): string {
+  if (owner === 'ungrouped') return 'Ungrouped';
+  return basenameOf(owner) || owner;
+}
+
+function renderLandingFile(f: LandingFile): string {
+  const link = f.reviewUrl
+    ? `<a href="${escape(f.reviewUrl)}">${escape(f.name)}</a>`
+    : escape(f.name);
+  const badge = f.openCount > 0 ? `<span class="badge badge-open">${f.openCount} open</span>` : '';
+  return `<li class="ws-file"><span class="ws-file-name">${link}</span>${badge}</li>`;
+}
+
+function renderLandingArtifact(a: LandingArtifact): string {
+  const kind = ARTIFACT_KIND[a.kind];
+  const openBadge =
+    a.openCount > 0
+      ? `<span class="badge badge-open">${a.openCount} open</span>`
+      : a.threadCount > 0
+        ? `<span class="badge badge-resolved">all resolved</span>`
         : '';
-      const typeBadge = `<span class="badge badge-type">${escape(d.type)}</span>`;
-      const sourceLine = d.sourceUrl ? `<div class="src">${escape(d.sourceUrl)}</div>` : '';
-      const activityLine =
-        d.lastActivity > 0
-          ? `<div class="meta">last activity ${escape(formatRelative(d.lastActivity))}</div>`
-          : d.createdAt
-            ? `<div class="meta">created ${escape(formatRelative(d.createdAt))} · no comments yet</div>`
-            : '';
-      return `<li class="${d.openCount > 0 ? 'has-open' : ''}">
-        <div class="row">
-          <div class="title">${titleHtml}</div>
-          <div class="badges">${openBadge}${setBadge}${typeBadge}</div>
-        </div>
-        ${idSubtitle}
-        ${sourceLine}
-        ${activityLine}
-      </li>`;
+  const kindBadge = `<span class="badge badge-kind">${kind.glyph} ${escape(kind.label)}</span>`;
+  const activityLine =
+    a.lastActivity > 0
+      ? `<div class="meta">last activity ${escape(formatRelative(a.lastActivity))}</div>`
+      : '';
+
+  if (a.kind === 'workspace') {
+    const fileCount = a.files?.length ?? 0;
+    const files = (a.files ?? []).map(renderLandingFile).join('');
+    // Native <details> so folder expansion needs no JS.
+    return `<li class="artifact ${a.openCount > 0 ? 'has-open' : ''}">
+      <details>
+        <summary>
+          <span class="art-glyph">${kind.glyph}</span>
+          <span class="art-name">${escape(a.name)}</span>
+          <span class="art-sub">${fileCount} file${fileCount === 1 ? '' : 's'}</span>
+          <span class="badges">${openBadge}<span class="badge badge-kind">${escape(kind.label)}</span></span>
+        </summary>
+        <ul class="ws-files">${files || '<li class="ws-file empty">(no files)</li>'}</ul>
+      </details>
+      ${activityLine}
+    </li>`;
+  }
+
+  const link = a.reviewUrl
+    ? `<a href="${escape(a.reviewUrl)}">${escape(a.name)}</a>`
+    : escape(a.name);
+  return `<li class="artifact ${a.openCount > 0 ? 'has-open' : ''}">
+    <div class="row">
+      <span class="art-glyph">${kind.glyph}</span>
+      <span class="art-name">${link}</span>
+      <span class="badges">${openBadge}${kindBadge}</span>
+    </div>
+    ${activityLine}
+  </li>`;
+}
+
+function renderLanding(model: LandingModel): string {
+  const projectsHtml = model.projects
+    .map((p) => {
+      const openBadge =
+        p.totalOpen > 0 ? `<span class="badge badge-open">${p.totalOpen} open</span>` : '';
+      const arts = p.artifacts.map(renderLandingArtifact).join('');
+      return `<section class="project">
+        <h2 class="project-head">${escape(projectLabel(p.owner))}${openBadge}</h2>
+        <ul class="artifacts">${arts}</ul>
+      </section>`;
     })
     .join('');
-  const total = docs.length;
-  const totalOpen = docs.reduce((sum, d) => sum + d.openCount, 0);
   const summary =
-    total === 0
+    model.totalArtifacts === 0
       ? ''
-      : `${total} doc${total === 1 ? '' : 's'} · ${totalOpen} open thread${totalOpen === 1 ? '' : 's'}`;
+      : `${model.totalArtifacts} artifact${model.totalArtifacts === 1 ? '' : 's'} · ${model.totalOpen} open thread${model.totalOpen === 1 ? '' : 's'}`;
   return `<!doctype html><meta charset="utf-8"><title>Live Feedback</title>
 <style>
 body{font:14px/1.5 system-ui, -apple-system, sans-serif;margin:32px auto;max-width:760px;padding:0 16px;color:#1b1f23}
 h1{font-size:22px;margin:0 0 4px}
 .summary{color:#6e7781;font-size:12px;margin-bottom:20px}
 ul{padding:0;list-style:none;margin:0}
-li{padding:12px 0;border-bottom:1px solid #eef0f2}
-li.has-open{border-left:3px solid #e36f1e;padding-left:10px;margin-left:-13px}
-.row{display:flex;align-items:baseline;gap:10px}
-.title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.title a{color:#2e7dd7;text-decoration:none;font-weight:600;font-size:15px}
-.title a:hover{text-decoration:underline}
+.project{margin-bottom:26px}
+.project-head{font-size:13px;font-weight:600;color:#57606a;margin:0 0 8px;display:flex;align-items:center;gap:8px;text-transform:none;border-bottom:1px solid #eef0f2;padding-bottom:6px}
+li.artifact{padding:10px 0;border-bottom:1px solid #f3f4f6}
+li.artifact.has-open{border-left:3px solid #e36f1e;padding-left:10px;margin-left:-13px}
+.row{display:flex;align-items:baseline;gap:8px}
+.art-glyph{flex-shrink:0;font-size:13px;width:1.4em;text-align:center}
+.art-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.art-name a{color:#2e7dd7;text-decoration:none;font-weight:600;font-size:15px}
+.art-name a:hover{text-decoration:underline}
+.art-sub{color:#8b95a1;font-size:11px;flex-shrink:0}
 .badges{display:flex;gap:4px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end}
 .badge{font-size:10.5px;padding:1.5px 7px;border-radius:99px;background:#f6f8fa;color:#6e7781;font-weight:500}
 .badge-open{background:#fff1e6;color:#bf5b16}
 .badge-resolved{background:#e8f5ed;color:#2da44e}
-.badge-set{background:#ecf3fb;color:#2e7dd7}
-.badge-type{background:#f6f8fa;color:#8b95a1;font-variant-numeric:tabular-nums}
-.docid{display:block;color:#8b95a1;font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;margin-top:2px}
-.src{color:#6e7781;font-size:12px;margin-top:3px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.meta{color:#8b95a1;font-size:11px;margin-top:3px}
+.badge-kind{background:#f6f8fa;color:#8b95a1}
+.meta{color:#8b95a1;font-size:11px;margin-top:3px;padding-left:1.4em}
+details > summary{display:flex;align-items:baseline;gap:8px;cursor:pointer;list-style:none}
+details > summary::-webkit-details-marker{display:none}
+details > summary::before{content:'▸';color:#8b95a1;font-size:11px;flex-shrink:0}
+details[open] > summary::before{content:'▾'}
+.ws-files{margin:6px 0 0 1.8em;border-left:1px solid #eef0f2;padding-left:10px}
+.ws-file{display:flex;align-items:baseline;gap:8px;padding:3px 0}
+.ws-file-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+.ws-file-name a{color:#2e7dd7;text-decoration:none}
+.ws-file-name a:hover{text-decoration:underline}
+.ws-file.empty{color:#8b95a1;font-style:italic}
 .empty{color:#6e7781;padding:24px 0;text-align:center;font-style:italic}
 footer{margin-top:24px;color:#8b95a1;font-size:11px}
 </style>
 <h1>Live Feedback</h1>
 <div class="summary">${summary}</div>
-<ul>${rows || '<li class="empty">No docs yet — POST /api/docs to create one.</li>'}</ul>
+${projectsHtml || '<div class="empty">No docs yet — POST /api/docs to create one.</div>'}
 <footer>POST /api/docs · /widget.iife.js · /demos/mockup</footer>`;
 }
 

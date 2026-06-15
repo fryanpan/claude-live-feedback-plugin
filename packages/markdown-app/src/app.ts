@@ -4,6 +4,7 @@ import { bootCode } from './code/code-app.ts';
 import { type EditorHandle, createEditor } from './editor.ts';
 import { startReadingTracker } from './reading-tracker.ts';
 import { ThreadPanel, type ThreadTab } from './threads.ts';
+import { renderWorkspaceTree, wireWorkspaceTreeRefresh } from './workspace-tree.ts';
 
 const DEFAULT_WS_PATH = (docId: string, type: string) =>
   `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/y/${encodeURIComponent(docId)}?type=${encodeURIComponent(type)}`;
@@ -934,7 +935,7 @@ async function boot(): Promise<void> {
       return;
     }
     if (workspaceId) {
-      await renderWorkspaceTree(workspaceId);
+      await renderWorkspaceTree(docId, workspaceId);
       return;
     }
     // ---- Legacy flat setId path ----
@@ -995,112 +996,15 @@ async function boot(): Promise<void> {
   let openedOnce = false;
 
   // ---- Workspace (folder) file tree ----
-  // A doc bound via bind_folder carries a workspaceId. Fetch the tree
-  // endpoint and render a collapsible <details>/<summary> tree with
-  // per-file open-comment badges + folder roll-ups. Counts are a
-  // navigation-time snapshot; refetched on focus + a ~30s interval below.
-  interface TreeFile {
-    type: 'file';
-    docId: string;
-    name: string;
-    relPath: string;
-    fileType: string;
-    openCount: number;
-    threadCount: number;
-    reviewUrl?: string;
-    lastActivityAt?: number;
-  }
-  interface TreeDir {
-    type: 'dir';
-    name: string;
-    openCount: number;
-    children: Array<TreeDir | TreeFile>;
-  }
-
-  function treeDetailsKey(workspaceId: string, relPath: string): string {
-    return `lf:tree-open:${workspaceId}:${relPath}`;
-  }
-
-  function renderTreeNode(node: TreeDir | TreeFile, workspaceId: string, prefix: string): string {
-    if (node.type === 'file') {
-      const isActive = node.docId === docId;
-      const params = new URLSearchParams(location.search);
-      const href = node.reviewUrl
-        ? // Prefer the server-decorated reachable URL but carry our query
-          // params (?as=…) onto it.
-          appendParams(node.reviewUrl, params)
-        : `/review/${encodeURIComponent(node.docId)}${
-            params.toString() ? `?${params.toString()}` : ''
-          }`;
-      const badge =
-        node.openCount > 0 ? `<span class="tree-badge badge-open">${node.openCount}</span>` : '';
-      return `<li class="tree-file"><a href="${href}" class="${isActive ? 'active' : ''}"${
-        isActive ? ' aria-current="page"' : ''
-      }><span class="tree-name">${escapeHtml(node.name)}</span>${badge}</a></li>`;
-    }
-    // Directory node — collapsible <details>. Persist open/closed per
-    // workspaceId:relPath so the tree shape sticks across navigations.
-    const relPath = prefix ? `${prefix}/${node.name}` : node.name;
-    let open = true;
-    try {
-      const stored = localStorage.getItem(treeDetailsKey(workspaceId, relPath));
-      if (stored === 'closed') open = false;
-    } catch {}
-    const badge =
-      node.openCount > 0 ? `<span class="tree-badge tree-badge-dir">${node.openCount}</span>` : '';
-    const children = node.children.map((c) => renderTreeNode(c, workspaceId, relPath)).join('');
-    return `<li class="tree-dir"><details${open ? ' open' : ''} data-rel="${escapeHtml(
-      relPath,
-    )}"><summary><span class="tree-name">${escapeHtml(
-      node.name,
-    )}</span>${badge}</summary><ul>${children}</ul></details></li>`;
-  }
-
-  function appendParams(url: string, params: URLSearchParams): string {
-    const qs = params.toString();
-    if (!qs) return url;
-    return url.includes('?') ? `${url}&${qs}` : `${url}?${qs}`;
-  }
-
-  async function renderWorkspaceTree(workspaceId: string): Promise<void> {
-    try {
-      const res = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/tree`);
-      if (!res.ok) return;
-      const data = (await res.json()) as { tree: TreeDir };
-      const html = data.tree.children.map((c) => renderTreeNode(c, workspaceId, '')).join('');
-      const treeHtml = `<ul class="tree-root">${html}</ul>`;
-      if (setPaneList) setPaneList.innerHTML = treeHtml;
-      if (docMenu) docMenu.innerHTML = treeHtml;
-      lastRenderedSetId = workspaceId;
-      // Persist details open/closed state on toggle.
-      for (const root of [setPaneList, docMenu]) {
-        if (!root) continue;
-        root.querySelectorAll('details[data-rel]').forEach((d) => {
-          d.addEventListener('toggle', () => {
-            const rel = d.getAttribute('data-rel') ?? '';
-            try {
-              localStorage.setItem(
-                treeDetailsKey(workspaceId, rel),
-                (d as HTMLDetailsElement).open ? 'open' : 'closed',
-              );
-            } catch {}
-          });
-        });
-      }
-    } catch {
-      // Fetch failure — skip; not load-bearing for the editor itself.
-    }
-  }
-
-  // Refresh per-file counts when the reviewer returns to the tab and on a
-  // ~30s heartbeat, so the badges reflect newly-opened/resolved threads
-  // without a full reload. Only fires when this doc is part of a workspace.
-  function refreshWorkspaceTree(): void {
-    const wid = readDocMeta(ydoc).workspaceId;
-    if (wid) void renderWorkspaceTree(wid);
-  }
-  window.addEventListener('focus', refreshWorkspaceTree);
-  setInterval(refreshWorkspaceTree, 30_000);
+  // A doc bound via bind_folder carries a workspaceId. The collapsible
+  // <details>/<summary> tree (per-file open-comment badges + folder
+  // roll-ups) lives in the shared ./workspace-tree.ts module so both the
+  // markdown (Tiptap) and code (CodeMirror) boot paths render it identically.
+  // renderSetNav (above) calls renderWorkspaceTree on the workspace branch;
+  // here we just wire the focus + ~30s heartbeat refresh so the badges
+  // reflect newly-opened/resolved threads without a full reload.
+  const workspaceId = readDocMeta(ydoc).workspaceId;
+  if (workspaceId) wireWorkspaceTreeRefresh(docId, workspaceId);
 
   function basename(p: string): string {
     const m = p.match(/[^/]+$/);

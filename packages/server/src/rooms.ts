@@ -771,6 +771,120 @@ export class Rooms {
   }
 
   /**
+   * List the bound workspaces with rolled-up triage signals — so the daily
+   * cleanup can treat a folder bind as ONE unit instead of nagging per file.
+   * Each entry aggregates its member docs (`meta.workspaceId === id`):
+   *   - `fileCount`     number of member docs
+   *   - `openThreads`   sum of every member's open-thread count
+   *   - `allIdle`       true iff EVERY member is idle (lastActivityAt older
+   *                     than 24h) — a workspace is only idle when nothing in
+   *                     it has moved recently
+   *   - `owner`         the creating agent's cwd (first member that has one)
+   *   - `lastActivityAt` max member lastActivityAt (most recent touch)
+   */
+  listWorkspaces(now: number = Date.now()): Array<{
+    workspaceId: string;
+    root?: string;
+    title?: string;
+    owner?: string;
+    fileCount: number;
+    openThreads: number;
+    allIdle: boolean;
+    lastActivityAt?: number;
+  }> {
+    const IDLE_MS = 24 * 60 * 60 * 1000;
+    const byId = new Map<
+      string,
+      {
+        workspaceId: string;
+        root?: string;
+        title?: string;
+        owner?: string;
+        fileCount: number;
+        openThreads: number;
+        allIdle: boolean;
+        lastActivityAt?: number;
+      }
+    >();
+    for (const meta of this.list()) {
+      const id = meta.workspaceId;
+      if (!id) continue;
+      let entry = byId.get(id);
+      if (!entry) {
+        entry = {
+          workspaceId: id,
+          root: meta.workspaceRoot,
+          title: meta.title,
+          owner: meta.owner,
+          fileCount: 0,
+          openThreads: 0,
+          allIdle: true,
+          lastActivityAt: undefined,
+        };
+        byId.set(id, entry);
+      }
+      if (!entry.root && meta.workspaceRoot) entry.root = meta.workspaceRoot;
+      if (!entry.owner && meta.owner) entry.owner = meta.owner;
+      entry.fileCount += 1;
+      entry.openThreads += this.listThreads(meta.docId, { status: 'open' }).length;
+      const last = meta.lastActivityAt ?? meta.createdAt;
+      if (entry.lastActivityAt === undefined || last > entry.lastActivityAt) {
+        entry.lastActivityAt = last;
+      }
+      // A member is idle if its last activity is older than 24h. The
+      // workspace is idle only when every member is — so a single recently
+      // touched file keeps the whole workspace out of the cleanup queue.
+      if (now - last < IDLE_MS) entry.allIdle = false;
+    }
+    return Array.from(byId.values()).sort((a, b) => {
+      if (a.openThreads !== b.openThreads) return b.openThreads - a.openThreads;
+      return a.workspaceId.localeCompare(b.workspaceId);
+    });
+  }
+
+  /**
+   * Delete a whole workspace (a bound folder) as one unit: loop its member
+   * docs and `deleteDoc` each, applying the per-file open-thread guardrail.
+   *
+   * Semantics are ALL-OR-NOTHING:
+   *   - WITHOUT `force`: if ANY member still has open threads, abort the
+   *     entire delete (nothing is removed) and return the offending files.
+   *   - WITH `force`: delete every member regardless of open threads.
+   *
+   * The bound SOURCE files on disk are left untouched (same as deleteDoc).
+   */
+  deleteWorkspace(
+    workspaceId: string,
+    opts?: { force?: boolean },
+  ):
+    | { ok: true; deleted: number }
+    | { ok: false; error: 'not-found' }
+    | {
+        ok: false;
+        error: 'has-open-threads';
+        files: Array<{ docId: string; openThreads: number }>;
+      } {
+    const members = this.list().filter((m) => m.workspaceId === workspaceId);
+    if (members.length === 0) return { ok: false, error: 'not-found' };
+    if (!opts?.force) {
+      // Pre-flight the guardrail across ALL members before deleting any, so a
+      // workspace with even one open thread is left fully intact.
+      const blocked: Array<{ docId: string; openThreads: number }> = [];
+      for (const m of members) {
+        const openThreads = this.listThreads(m.docId, { status: 'open' }).length;
+        if (openThreads > 0) blocked.push({ docId: m.docId, openThreads });
+      }
+      if (blocked.length > 0) return { ok: false, error: 'has-open-threads', files: blocked };
+    }
+    let deleted = 0;
+    for (const m of members) {
+      const res = this.deleteDoc(m.docId, { force: true });
+      if (res.ok) deleted += 1;
+    }
+    return { ok: true, deleted };
+  }
+
+  /**
    * Bind a doc to a file path on disk. After attach:
    *   - if the doc's prose fragment is empty AND the file exists with
    *     content, the file is parsed and seeded into the fragment
