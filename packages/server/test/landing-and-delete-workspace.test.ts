@@ -84,6 +84,10 @@ describe('landing + delete_workspace e2e (HTTP)', () => {
     expect(r.ok).toBe(true);
     const html = await r.text();
 
+    // Mobile is load-bearing (Bryan reviews on his phone): the landing page
+    // MUST ship the responsive viewport meta or it renders at ~980px and
+    // scales down to unreadable on a phone.
+    expect(html).toContain('name="viewport"');
     // Project header derives from the owner cwd basename.
     expect(html).toContain('alpha');
     // The folder artifact appears as an expandable <details> with a folder glyph,
