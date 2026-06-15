@@ -166,6 +166,19 @@ async function boot(): Promise<void> {
     if (sel) selection = sel;
   }
 
+  /** Is there a non-collapsed native selection sitting inside the editor?
+   *  In VIEW mode (contenteditable=false) the editor is never focused and
+   *  ProseMirror's selection stays empty, so the pill must key off the raw
+   *  DOM selection instead — this is what makes iOS long-press commenting
+   *  work without making the doc editable. */
+  function hasDomSelection(): boolean {
+    const s = window.getSelection();
+    if (!s || s.rangeCount === 0 || s.isCollapsed) return false;
+    const r = s.getRangeAt(0);
+    const dom = editor.editor.view.dom;
+    return dom.contains(r.startContainer) && dom.contains(r.endContainer);
+  }
+
   function positionPill(): void {
     if (isDragging) {
       hidePill();
@@ -179,9 +192,10 @@ async function boot(): Promise<void> {
       hidePill();
       return;
     }
-    // No focus = no active cursor = no pill. The pill only represents a
-    // commentable spot while the user is actively pointing at one.
-    if (!editor.editor.isFocused) {
+    // No focus = no active cursor = no pill — UNLESS there's a raw DOM
+    // selection inside the editor (view mode, where the editor never takes
+    // focus but the user can still long-press-select text to comment on).
+    if (!editor.editor.isFocused && !hasDomSelection()) {
       hidePill();
       return;
     }
@@ -205,7 +219,10 @@ async function boot(): Promise<void> {
       const vvHeight = vv?.height ?? window.innerHeight;
       const availableBottom = vvTop + vvHeight - pillH - 8;
 
-      if (!empty) {
+      // Range mode fires when PM has a selection (edit mode) OR there's a raw
+      // DOM selection (view mode). The positioning below already prefers the
+      // DOM selection's client rects, so it works the same either way.
+      if (!empty || hasDomSelection()) {
         pillMode = 'range';
         caretParaRange = null;
         commentPill.classList.remove('caret');
@@ -352,6 +369,22 @@ async function boot(): Promise<void> {
   window.visualViewport?.addEventListener('resize', () => positionPill());
   window.addEventListener('scroll', () => positionPill(), { passive: true });
   el<HTMLElement>('editor').addEventListener('scroll', () => positionPill(), { passive: true });
+  // VIEW mode: ProseMirror fires no selectionUpdate (the editor isn't
+  // editable), and iOS selection-handle drags don't always produce a clean
+  // pointerup on the editor DOM. The document `selectionchange` event is the
+  // reliable signal there, so (debounced) drive the pill off it. In edit mode
+  // PM's own selectionUpdate already handles this, so skip to avoid double work.
+  let selChangeTimer: ReturnType<typeof setTimeout> | null = null;
+  document.addEventListener('selectionchange', () => {
+    if (!document.body.classList.contains('view-mode')) return;
+    if (isDragging) return; // wait for the drag to settle (pointerup path)
+    if (selChangeTimer) clearTimeout(selChangeTimer);
+    selChangeTimer = setTimeout(() => {
+      selectionSettled = true;
+      refreshSelectionState();
+      positionPill();
+    }, 120);
+  });
 
   // =========================================================================
   // COMPOSER (Notion-style slim sheet)
@@ -368,7 +401,11 @@ async function boot(): Promise<void> {
   function openComposerForSelection(): void {
     const current = editor.getSelectionRel();
     const use = current ?? selection;
-    if (!use || editor.editor.state.selection.empty) {
+    // `use` already encodes a resolved range (from PM in edit mode, or from
+    // the DOM selection in view mode). Don't also require a non-empty PM
+    // selection — in view mode it's always empty even with a live DOM
+    // selection, and that check used to wrongly block commenting.
+    if (!use) {
       showToast('Select some text first to leave a comment.');
       return;
     }
@@ -1132,15 +1169,14 @@ async function boot(): Promise<void> {
   type EditMode = 'view' | 'edit';
   const EDIT_MODE_KEY = 'lf:edit-mode';
   function defaultEditMode(): EditMode {
-    // Default to EDIT everywhere. View mode (contenteditable=false) is great for
-    // tap-to-read on mobile, but on iOS Safari a non-editable ProseMirror does
-    // NOT propagate the long-press text selection back to ProseMirror's
-    // selection state, so getSelectionRel() comes back empty and the comment
-    // pill never appears — i.e. you can neither edit NOR comment. Until view-
-    // mode commenting is wired off the raw DOM selection, edit mode (which
-    // makes both work) is the safe default; the Aa toolbar toggle still opts
-    // into view mode (and the choice is remembered per device).
-    return 'edit';
+    // Default to VIEW everywhere. This is a review surface — read first, edit
+    // by choice — and view mode avoids the mobile keyboard popping up on every
+    // tap. View-mode commenting now works: getSelectionRel() falls back to the
+    // raw DOM selection (mapped via posAtDOM), and the pill keys off it, so an
+    // iOS long-press selection raises the comment pill even though the doc is
+    // non-editable. The Aa toolbar toggle opts into edit mode (remembered per
+    // device).
+    return 'view';
   }
   function readEditModePref(): EditMode {
     const stored = localStorage.getItem(EDIT_MODE_KEY);
