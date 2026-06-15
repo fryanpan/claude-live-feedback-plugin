@@ -224,6 +224,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           title: { type: 'string' },
           setId: { type: 'string' },
           subscribe: { type: 'boolean' },
+          producedBy: {
+            type: 'object',
+            description:
+              'Optional provenance for the activity event stream: {agentId?, sessionId?}. Captured into doc meta so hands-on activity events can attribute the doc to the producing agent + session. If omitted, agentId is derived from the owner cwd and sessionId stays null.',
+            properties: {
+              agentId: { type: 'string' },
+              sessionId: { type: 'string' },
+            },
+          },
         },
         required: ['docId', 'path'],
       },
@@ -282,8 +291,33 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           include: { type: 'array', items: { type: 'string' } },
           maxFiles: { type: 'number' },
           subscribe: { type: 'boolean' },
+          producedBy: {
+            type: 'object',
+            description:
+              'Optional provenance for the activity event stream: {agentId?, sessionId?}. Stored on every doc the bind creates so hands-on activity events can attribute them to the producing agent + session.',
+            properties: {
+              agentId: { type: 'string' },
+              sessionId: { type: 'string' },
+            },
+          },
         },
         required: ['folderPath'],
+      },
+    },
+    {
+      name: 'delete_workspace',
+      description:
+        "Permanently delete a whole workspace (a folder bound via bind_folder) as ONE unit: drops every member review doc, cancels their sync, and removes the persisted state — but leaves the bound SOURCE files on disk untouched. Use this when a worktree/folder review is done instead of calling delete_doc once per file. GUARDRAIL is ALL-OR-NOTHING: without force, if ANY member file still has OPEN comment threads, nothing is deleted and it returns ok:false, error:'has-open-threads' with files:[{docId, openThreads}] listing the offenders — resolve those threads first, or pass force:true to delete everything regardless. Returns error:'not-found' if no docs carry that workspaceId. On success returns {ok:true, deleted:<count>}.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          workspaceId: { type: 'string' },
+          force: {
+            type: 'boolean',
+            description: 'Delete even if some member files have open threads. Default false.',
+          },
+        },
+        required: ['workspaceId'],
       },
     },
     {
@@ -633,11 +667,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok(res);
       }
       case 'create_review_doc': {
-        const { docId, path, title, setId } = a as {
+        const { docId, path, title, setId, producedBy } = a as {
           docId: string;
           path: string;
           title?: string;
           setId?: string;
+          producedBy?: { agentId?: string; sessionId?: string };
         };
         const res = await http('POST', '/api/docs', {
           docId,
@@ -646,6 +681,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           owner: process.cwd(),
           ...(title ? { title } : {}),
           ...(setId ? { setId } : {}),
+          ...(producedBy ? { producedBy } : {}),
         });
         return ok(res);
       }
@@ -679,13 +715,14 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok(res);
       }
       case 'bind_folder': {
-        const { folderPath, workspaceId, title, include, maxFiles, subscribe } = a as {
+        const { folderPath, workspaceId, title, include, maxFiles, subscribe, producedBy } = a as {
           folderPath: string;
           workspaceId?: string;
           title?: string;
           include?: string[];
           maxFiles?: number;
           subscribe?: boolean;
+          producedBy?: { agentId?: string; sessionId?: string };
         };
         const res = (await http('POST', '/api/workspaces', {
           folderPath,
@@ -694,6 +731,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...(title ? { title } : {}),
           ...(include ? { include } : {}),
           ...(maxFiles !== undefined ? { maxFiles } : {}),
+          ...(producedBy ? { producedBy } : {}),
         })) as { ok?: boolean; files?: Array<{ docId: string }> };
         // bind_folder has no single docId, so maybeAutoWatch can't subscribe
         // it — fan the auto-watch out across every file the bind created
@@ -704,6 +742,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             if (f?.docId) await watchDoc(f.docId);
           }
         }
+        return ok(res);
+      }
+      case 'delete_workspace': {
+        const { workspaceId, force } = a as { workspaceId: string; force?: boolean };
+        const qs = force ? '?force=true' : '';
+        const res = await http('DELETE', `/api/workspaces/${encodeURIComponent(workspaceId)}${qs}`);
         return ok(res);
       }
       case 'find_and_replace': {
