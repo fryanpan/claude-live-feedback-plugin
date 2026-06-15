@@ -257,6 +257,26 @@ export function buildEventDoc(meta: DocMeta): EventDoc {
   };
 }
 
+/** Hard cap on a single read-session's reported active duration (20 min).
+ *  Mirrors the client tracker's cap; re-clamped server-side so a buggy or
+ *  spoofed POST can't write an inflated duration into the WR agent's data. */
+export const MAX_READ_SESSION_MS = 20 * 60_000;
+
+/**
+ * Sanitize a browser-supplied read-session payload before it's persisted:
+ * clamp `durationMs` / `maxScrollDepthPct` to sane ranges. Mutates and returns
+ * the same object. Non-numeric/absent fields are left untouched.
+ */
+export function clampReadPayload(payload: Event['payload']): Event['payload'] {
+  if (typeof payload.durationMs === 'number' && Number.isFinite(payload.durationMs)) {
+    payload.durationMs = Math.max(0, Math.min(payload.durationMs, MAX_READ_SESSION_MS));
+  }
+  if (typeof payload.maxScrollDepthPct === 'number' && Number.isFinite(payload.maxScrollDepthPct)) {
+    payload.maxScrollDepthPct = Math.max(0, Math.min(payload.maxScrollDepthPct, 100));
+  }
+  return payload;
+}
+
 /** Absolute path of the activity log inside a data dir. */
 export function activityLogPath(dataDir: string): string {
   return join(dataDir, 'activity.jsonl');

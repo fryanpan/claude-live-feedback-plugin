@@ -35,6 +35,7 @@ import {
   type Event,
   appendActivity,
   buildEventDoc,
+  clampReadPayload,
   classifyActor,
   eventId,
   isOwnerActor,
@@ -391,7 +392,14 @@ export class Rooms {
         firstComment: { id: randomId(), text },
       });
       this.fireEvent(room, 'thread.created', t);
-      this.recordActivity(room, 'comment', author, t.id, { text, tsMs: Date.now() });
+      // Hash the activity event with the comment's PERSISTED ts (not a fresh
+      // Date.now()), so a later backfill — which reconstructs this event from
+      // the same stored ts — produces an IDENTICAL eventId and dedupes
+      // instead of double-counting.
+      this.recordActivity(room, 'comment', author, t.id, {
+        text,
+        tsMs: t.comments[0]?.ts ?? Date.now(),
+      });
       return t;
     }
     const comment = schemaPostReply(room.ydoc, threadId, {
@@ -1495,13 +1503,16 @@ export class Rooms {
     type: 'read_session' | 'doc_open',
     payload: Event['payload'],
     author: User,
-  ): { ok: boolean; error?: 'no-doc' | 'bad-type' } {
+  ): { ok: boolean; error?: 'no-doc' | 'bad-type' | 'append-failed' } {
     if (type !== 'read_session' && type !== 'doc_open') {
       return { ok: false, error: 'bad-type' };
     }
     const room = this.rooms.get(docId);
     if (!room) return { ok: false, error: 'no-doc' };
     try {
+      // Re-clamp the browser-supplied duration/scroll fields server-side so a
+      // spoofed or buggy POST can't write an inflated read time.
+      clampReadPayload(payload);
       const ts = toUtcIso(Date.now());
       const sessionId = payload.sessionId;
       const id = eventId({
@@ -1527,7 +1538,7 @@ export class Rooms {
       return { ok: true };
     } catch (err) {
       console.error('[rooms] recordReadEvent failed:', err);
-      return { ok: false, error: 'no-doc' };
+      return { ok: false, error: 'append-failed' };
     }
   }
 
