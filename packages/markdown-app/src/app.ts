@@ -1223,8 +1223,15 @@ async function boot(): Promise<void> {
   type EditMode = 'view' | 'edit';
   const EDIT_MODE_KEY = 'lf:edit-mode';
   function defaultEditMode(): EditMode {
-    // Treat viewport <=768px as a phone/small tablet — touch-first.
-    return window.matchMedia('(max-width: 768px)').matches ? 'view' : 'edit';
+    // Default to EDIT everywhere. View mode (contenteditable=false) is great for
+    // tap-to-read on mobile, but on iOS Safari a non-editable ProseMirror does
+    // NOT propagate the long-press text selection back to ProseMirror's
+    // selection state, so getSelectionRel() comes back empty and the comment
+    // pill never appears — i.e. you can neither edit NOR comment. Until view-
+    // mode commenting is wired off the raw DOM selection, edit mode (which
+    // makes both work) is the safe default; the Aa toolbar toggle still opts
+    // into view mode (and the choice is remembered per device).
+    return 'edit';
   }
   function readEditModePref(): EditMode {
     const stored = localStorage.getItem(EDIT_MODE_KEY);
