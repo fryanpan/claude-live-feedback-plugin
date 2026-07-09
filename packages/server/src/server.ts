@@ -335,6 +335,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           reviewId,
           title: body?.title as string | undefined,
           exclude: Array.isArray(body?.exclude) ? (body.exclude as string[]) : undefined,
+          groups: Array.isArray(body?.groups)
+            ? (body.groups as Array<{ title: string; paths: string[] }>)
+            : undefined,
           maxFiles: typeof body?.maxFiles === 'number' ? Number(body.maxFiles) : undefined,
           owner: body?.owner as string | undefined,
           producedBy: body?.producedBy as { agentId?: string; sessionId?: string } | undefined,
