@@ -48,6 +48,12 @@ button {
 #shell {
   display: grid;
   grid-template-rows: 48px 1fr;
+  /* Pin the single column to the viewport. The implicit column is
+     max-content sized, so a long unbreakable topbar label (e.g. a diff
+     doc's absolute worktree path) would otherwise push the whole shell
+     wider than the window — same `1fr` vs `minmax(0,1fr)` footgun as
+     #main, one level up. */
+  grid-template-columns: minmax(0, 1fr);
   height: 100dvh;
 }
 
