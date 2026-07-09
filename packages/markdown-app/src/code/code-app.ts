@@ -1,4 +1,5 @@
 import { type FeedbackClient, type User, readDocMeta } from '@feedback/core';
+import { renderDiffNav, wireDiffNavRefresh } from '../diff-nav.ts';
 import { startReadingTracker } from '../reading-tracker.ts';
 import { el, mountReviewChrome } from '../review-chrome.ts';
 import { renderWorkspaceTree, wireWorkspaceTreeRefresh } from '../workspace-tree.ts';
@@ -26,12 +27,21 @@ export async function bootCode(opts: {
 }): Promise<void> {
   const { docId, client, user } = opts;
   const isDiff = opts.docType === 'diff';
-  // A code file bound via bind_folder belongs to a workspace — render the
-  // shared file tree so the reviewer can navigate the folder (same as the
-  // markdown surface; code docs skip app.ts's renderSetNav by booting here).
+  // Workspace nav: diff reviews get the grouped-diffs / all-files sidebar;
+  // plain folder binds keep the folder tree. Detection is by data, not doc
+  // type, so a context file (type 'code') opened inside a diff review still
+  // shows the diff nav.
   if (opts.workspaceId) {
-    void renderWorkspaceTree(docId, opts.workspaceId);
-    wireWorkspaceTreeRefresh(docId, opts.workspaceId);
+    const workspaceId = opts.workspaceId;
+    void (async () => {
+      const isDiffNav = await renderDiffNav(docId, workspaceId);
+      if (isDiffNav) {
+        wireDiffNavRefresh(docId, workspaceId);
+      } else {
+        void renderWorkspaceTree(docId, workspaceId);
+        wireWorkspaceTreeRefresh(docId, workspaceId);
+      }
+    })();
   }
   const { ydoc } = client;
   document.body.classList.add('code-mode');
@@ -68,6 +78,10 @@ export async function bootCode(opts: {
 
   let selection: { start: Uint8Array; end: Uint8Array; snippet: string } | null = null;
 
+  // Forward ref — the chrome mounts right after the editor; editor callbacks
+  // are user-triggered so the guard never fires in practice.
+  // biome-ignore lint/style/useConst: assigned after createCodeEditor so its callbacks can close over it
+  let chromeRef: import('../review-chrome.ts').ReviewChrome | undefined;
   const surface = createCodeEditor({
     parent: editorMount,
     ydoc,
@@ -82,7 +96,10 @@ export async function bootCode(opts: {
         hidePill();
       }
     },
-    onMarkerClick: (id) => chrome.revealThread(id),
+    onMarkerClick: (id) => chromeRef?.revealThread(id),
+    // PR-style: clicking a line number selects the line and opens the
+    // composer directly — no range selection needed.
+    onGutterComment: () => chromeRef?.openComposer(),
   });
 
   const chrome = mountReviewChrome({
@@ -90,11 +107,43 @@ export async function bootCode(opts: {
     user,
     ydoc,
     surface,
-    selectHint: 'Select some lines first to leave a comment.',
+    selectHint: 'Click a line number, or select some lines, to leave a comment.',
     reanchorHint: 'Select new lines first, then click Re-anchor.',
     getSelection: () => surface.getSelectionRel() ?? selection,
     hidePill,
   });
+  chromeRef = chrome;
+
+  // Click a line (not just its number) → light caret-style pill on that
+  // line; tapping it opens the composer for the whole line.
+  editorMount.addEventListener('click', (ev) => {
+    const target = ev.target as HTMLElement | null;
+    if (!target?.closest('.cm-content')) return;
+    if (!document.getElementById('composer')?.classList.contains('hidden')) return;
+    // Let CodeMirror place the cursor first.
+    setTimeout(() => {
+      if (surface.getSelectionRel()) return; // real range selection → normal pill
+      const lineSel = surface.getCursorLineRel();
+      if (!lineSel) return;
+      selection = lineSel;
+      const gap = 10;
+      const pillW = 36;
+      let left = ev.clientX + gap;
+      if (left + pillW > window.innerWidth - 8) left = window.innerWidth - pillW - 8;
+      commentPill.classList.add('caret');
+      commentPill.style.left = `${Math.max(8, left)}px`;
+      commentPill.style.top = `${Math.max(8, ev.clientY - 14)}px`;
+      commentPill.classList.remove('hidden');
+    }, 30);
+  });
+  // The caret pill is a click affordance, not a cursor follower — dismiss on scroll.
+  editorMount.addEventListener(
+    'scroll',
+    () => {
+      if (commentPill.classList.contains('caret')) hidePill();
+    },
+    { passive: true, capture: true },
+  );
 
   // Interaction-bounded reading-session capture (doc_open + read_session).
   // CodeMirror manages its own scroller inside #editor; the tracker reads
@@ -153,6 +202,7 @@ export async function bootCode(opts: {
       let left = last.right + gap;
       const top = Math.max(8, last.top - 2);
       if (left + pillW > viewportW - 8) left = Math.max(8, last.right - pillW);
+      commentPill.classList.remove('caret');
       commentPill.style.left = `${Math.max(8, left)}px`;
       commentPill.style.top = `${top}px`;
       commentPill.classList.remove('hidden');
@@ -162,6 +212,7 @@ export async function bootCode(opts: {
   }
   function hidePill(): void {
     commentPill.classList.add('hidden');
+    commentPill.classList.remove('caret');
   }
   commentPill.addEventListener('mousedown', (ev) => ev.preventDefault());
   commentPill.addEventListener('click', () => chrome.openComposer());

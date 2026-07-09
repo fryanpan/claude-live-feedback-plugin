@@ -107,6 +107,9 @@ const numberDeletedLines = ViewPlugin.fromClass(
 export interface DiffViewConfig {
   /** The file's text at the base commit ('' for added files). */
   baseText: string;
+  /** Collapse long unchanged stretches (diff mode). File mode passes false
+   *  so the whole file shows, with added/changed lines still highlighted. */
+  collapse?: boolean;
 }
 
 /**
@@ -120,7 +123,7 @@ export function diffMergeExtensions(cfg: DiffViewConfig): Extension[] {
     unifiedMergeView({
       original: cfg.baseText,
       mergeControls: false,
-      collapseUnchanged: { margin: 3, minSize: 6 },
+      ...(cfg.collapse !== false ? { collapseUnchanged: { margin: 3, minSize: 6 } } : {}),
       diffConfig: { scanLimit: 2000 },
     }),
     numberDeletedLines,

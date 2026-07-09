@@ -444,6 +444,7 @@ body.has-set .doc-switcher-caret {
 }
 
 #editor-pane {
+  position: relative; /* anchors the floating diff/file view toggle */
   display: grid;
   grid-template-rows: auto 1fr;
   overflow: hidden;
@@ -1731,4 +1732,127 @@ body.diff-mode .cm-collapsedLines {
   body.diff-mode .cm-deletedChunk .cm-deletedLine {
     padding-left: calc(4ch + 10px);
   }
+}
+
+/* ================= DIFF NAV (grouped diffs / all files sidebar) ========== */
+.diff-nav-toggle {
+  display: flex;
+  gap: 4px;
+  padding: 6px 8px 8px;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: inherit;
+  z-index: 1;
+}
+.diff-nav-toggle button {
+  flex: 1;
+  min-height: 36px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg-muted);
+  font: 600 11.5px var(--sans);
+  padding: 0 6px;
+  cursor: pointer;
+}
+.diff-nav-toggle button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.diff-group {
+  margin: 8px 0 2px;
+}
+.diff-group-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px 4px;
+  font: 700 11px var(--sans);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+}
+.diff-group-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.diff-group-files .diff-file a {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  min-height: 36px;
+  text-decoration: none;
+  color: var(--fg);
+  font-size: 12.5px;
+  border-left: 2px solid transparent;
+  overflow: hidden;
+}
+.diff-group-files .diff-file a.active {
+  background: var(--bg-hover);
+  border-left-color: var(--accent);
+}
+.diff-file-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.diff-file-name,
+.diff-file-dir {
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+.diff-file-dir {
+  color: var(--fg-muted);
+  font-size: 10.5px;
+  direction: rtl; /* keep the tail (nearest dir) visible when truncated */
+  text-align: left;
+}
+.diff-changed-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--orange);
+}
+.diff-nav-empty {
+  padding: 8px 10px;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+[data-context-path].loading {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* The Diff|File toggle floats top-right INSIDE the editor pane. */
+body.diff-mode #view-toggle {
+  position: absolute;
+  top: 8px;
+  right: 16px;
+  z-index: 5;
+  background: var(--bg);
+  box-shadow: var(--shadow);
+}
+
+/* File mode on a diff doc: whole live file with added/changed lines still
+   highlighted; deletion widgets and collapse bars are diff-view-only. */
+.cm-file-mode .cm-deletedChunk,
+.cm-file-mode .cm-collapsedLines {
+  display: none !important;
+}
+
+/* Clickable line numbers advertise the click-to-comment affordance. */
+body.code-mode .cm-lineNumbers .cm-gutterElement {
+  cursor: pointer;
+}
+body.code-mode .cm-lineNumbers .cm-gutterElement:hover {
+  color: var(--accent);
+  font-weight: 700;
 }

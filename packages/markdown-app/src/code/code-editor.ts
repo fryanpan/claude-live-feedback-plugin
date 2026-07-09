@@ -36,6 +36,9 @@ export interface CreateCodeEditorOpts {
   onSelectionChange?: () => void;
   /** Click handler for a gutter comment marker (the thread's id). */
   onMarkerClick?: (threadId: string) => void;
+  /** Click on a line number: PR-style "click a line to comment". The
+   *  editor selects the whole line first, so getSelectionRel() is ready. */
+  onGutterComment?: () => void;
   /** When set, the surface starts in unified-diff mode against this base
    *  text; `setViewMode` toggles diff ↔ whole-file. Anchors are offsets into
    *  the same (target) document in both modes, so threads are unaffected. */
@@ -46,6 +49,9 @@ export interface CreateCodeEditorOpts {
 export interface CodeSurface extends ReviewSurface {
   setViewMode: (mode: CodeViewMode) => void;
   getViewMode: () => CodeViewMode;
+  /** The whole line under the cursor as a line-snapped anchor selection —
+   *  lets a bare click (empty selection) comment on its line. */
+  getCursorLineRel: () => { start: Uint8Array; end: Uint8Array; snippet: string } | null;
 }
 
 // --- gutter comment markers --------------------------------------------------
@@ -154,13 +160,51 @@ export function createCodeEditor(opts: CreateCodeEditorOpts): CodeSurface {
 
   // Diff docs boot in diff mode; the toggle reconfigures this compartment.
   // The old-line gutter must precede lineNumbers() so base numbering renders
-  // to the LEFT of target numbering (GitHub column order).
+  // to the LEFT of target numbering (GitHub column order). File mode on a
+  // diff doc KEEPS the merge machinery so added/changed lines stay
+  // highlighted — deletion widgets and the collapse bars are diff-only
+  // (hidden via the cm-file-mode class; deletions can't render in a
+  // whole-file view anyway).
   const viewModeComp = new Compartment();
   let viewMode: CodeViewMode = opts.diff ? 'diff' : 'file';
-  const modeExtensions = (mode: CodeViewMode): Extension[] =>
-    mode === 'diff' && opts.diff
-      ? [oldLineNumberGutter(), lineNumbers(), ...diffMergeExtensions(opts.diff)]
-      : [lineNumbers()];
+  // Select the line on mousedown (so the user sees it), open the composer
+  // on the completed CLICK — opening mid-mousedown races the browser's
+  // remaining mouseup/click dispatch against the composer's scrim/focus.
+  let gutterClickPending = false;
+  const lineNumbersExt = () =>
+    lineNumbers({
+      domEventHandlers: {
+        mousedown: (v, line) => {
+          selectWholeLine(v as EditorView, line.from);
+          gutterClickPending = true;
+          return true;
+        },
+        click: () => {
+          if (!gutterClickPending) return false;
+          gutterClickPending = false;
+          opts.onGutterComment?.();
+          return true;
+        },
+      },
+    });
+  const modeExtensions = (mode: CodeViewMode): Extension[] => {
+    if (!opts.diff) return [lineNumbersExt()];
+    return mode === 'diff'
+      ? [
+          oldLineNumberGutter(),
+          lineNumbersExt(),
+          ...diffMergeExtensions({ ...opts.diff, collapse: true }),
+        ]
+      : [lineNumbersExt(), ...diffMergeExtensions({ ...opts.diff, collapse: false })];
+  };
+
+  function selectWholeLine(v: EditorView, pos: number): void {
+    // Select up to line.to (EXCLUDING the newline) — snapToLines already
+    // extends to line boundaries, and including the \n would drag the
+    // snap through the following line.
+    const line = v.state.doc.lineAt(Math.min(pos, v.state.doc.length));
+    v.dispatch({ selection: { anchor: line.from, head: line.to } });
+  }
 
   const langExt = languageExtensionFor(opts.sourceUrl);
   const extensions: Extension[] = [
@@ -198,6 +242,7 @@ export function createCodeEditor(opts: CreateCodeEditorOpts): CodeSurface {
     doc: content.toString(),
     extensions,
   });
+  view.dom.classList.toggle('cm-file-mode', viewMode === 'file');
 
   // One-way bind: when the agent edits the source file, the server applies
   // it to `content`; mirror it into the CM doc by replacing the whole text.
@@ -259,9 +304,21 @@ export function createCodeEditor(opts: CreateCodeEditorOpts): CodeSurface {
       if (mode === viewMode) return;
       viewMode = mode;
       view.dispatch({ effects: viewModeComp.reconfigure(modeExtensions(mode)) });
+      view.dom.classList.toggle('cm-file-mode', mode === 'file');
     },
     getViewMode() {
       return viewMode;
+    },
+    getCursorLineRel() {
+      const pos = view.state.selection.main.head;
+      const line = view.state.doc.lineAt(pos);
+      if (line.from === line.to) return null;
+      const snippet = view.state.doc.sliceString(line.from, line.to).slice(0, 120);
+      return {
+        start: encodeOffsetRel(content, line.from),
+        end: encodeOffsetRel(content, line.to),
+        snippet,
+      };
     },
     destroy() {
       content.unobserve(onContentChange);
