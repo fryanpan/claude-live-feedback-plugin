@@ -1,3 +1,5 @@
+import { STATUS_COLORS } from '@feedback/core';
+
 /**
  * Styles for the shadow-DOM portion of the widget.
  * Kept as a TS string so the build can tree-shake it into the bundle.
@@ -62,7 +64,7 @@ export const widgetStyles = `
   background: #f6f8fa;
   color: #6e7781;
 }
-.status-open, .status-open.status { background: #e8f5ed; color: #2da44e; }
+.status-open, .status-open.status { background: #e8f5ed; color: ${STATUS_COLORS.resolved}; }
 .status-connecting { background: #fff5dc; color: #9a6700; }
 .status-closed { background: #ffe9e7; color: #a40e26; }
 .icon-btn {
@@ -158,11 +160,11 @@ export const widgetStyles = `
 }
 .thread .dot {
   width: 7px; height: 7px; border-radius: 50%;
-  background: #e36f1e;
+  background: ${STATUS_COLORS.open};
   display: inline-block;
 }
-.thread.status-resolved .dot { background: #2da44e; }
-.thread.status-orphan .dot { background: #bf8700; }
+.thread.status-resolved .dot { background: ${STATUS_COLORS.resolved}; }
+.thread.status-orphan .dot { background: ${STATUS_COLORS.orphan}; }
 .thread .time { margin-left: auto; color: #afb8c1; }
 .thread .snippet {
   font-size: 11px;
@@ -244,8 +246,8 @@ export const widgetStyles = `
   border-radius: 99px;
 }
 .tag-open { background: #ecf3fb; color: #2e7dd7; }
-.tag-resolved { background: #e8f5ed; color: #2da44e; }
-.tag-orphan { background: #fff5dc; color: #bf8700; }
+.tag-resolved { background: #e8f5ed; color: ${STATUS_COLORS.resolved}; }
+.tag-orphan { background: #fff5dc; color: ${STATUS_COLORS.orphan}; }
 .thread-popover .snippet {
   font-size: 11px;
   font-style: italic;

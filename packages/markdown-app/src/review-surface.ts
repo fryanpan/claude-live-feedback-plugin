@@ -6,8 +6,8 @@
  * regardless of which surface is mounted.
  *
  * The `EditorHandle` from `editor.ts` is a structural superset of this —
- * it adds Tiptap-specific members (`editor`, `getMarkdown`, …) that the
- * markdown-only code paths in `app.ts` gate behind `type === 'markdown'`.
+ * it adds Tiptap-specific members (`editor`, `getMarkdown`, …) used only
+ * by the markdown boot path.
  */
 export interface SurfaceThreadRange {
   id: string;
