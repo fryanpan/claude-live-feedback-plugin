@@ -468,6 +468,40 @@ describe('Rooms.bindDiff', () => {
     expect(g2.groups[0]?.files[0]?.relPath).toBe('src/kept.ts');
   });
 
+  it('group paths match directories as prefixes; re-binds preserve explicit groups', () => {
+    // Directory prefix claims everything under it.
+    const a = rooms.bindDiff({
+      repoPath: fixture.repo,
+      base: fixture.base,
+      reviewId: 'prefix-groups',
+      groups: [{ title: 'All source', paths: ['src'] }],
+    });
+    expect(a.ok).toBe(true);
+    if (!a.ok) return;
+    expect(new Set(a.files.map((f) => f.group))).toEqual(new Set(['All source']));
+
+    // A group-less refresh re-bind must NOT clobber the explicit groups.
+    const b = rooms.bindDiff({
+      repoPath: fixture.repo,
+      base: fixture.base,
+      reviewId: 'prefix-groups',
+    });
+    expect(b.ok).toBe(true);
+    const grouped = rooms.listGroupedDiff('prefix-groups');
+    expect(grouped.groups.map((g) => g.title)).toEqual(['All source']);
+
+    // Passing groups again DOES reassign (explicit wins).
+    const c = rooms.bindDiff({
+      repoPath: fixture.repo,
+      base: fixture.base,
+      reviewId: 'prefix-groups',
+      groups: [{ title: 'Renamed only', paths: ['src/renamed.ts'] }],
+    });
+    expect(c.ok).toBe(true);
+    const regrouped = rooms.listGroupedDiff('prefix-groups');
+    expect(regrouped.groups.map((g) => g.title)).toEqual(['Renamed only', 'Other']);
+  });
+
   it('listRepoFiles marks changed files; openContextFile lazily binds the rest', () => {
     const res = rooms.bindDiff({ repoPath: fixture.repo, base: fixture.base });
     expect(res.ok).toBe(true);

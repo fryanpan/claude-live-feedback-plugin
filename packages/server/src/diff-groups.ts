@@ -50,25 +50,26 @@ export function assignGroups(
   const out = new Map<string, FileGroupAssignment>();
 
   if (explicit && explicit.length > 0) {
-    const claim = new Map<string, string>();
-    for (const g of explicit) {
-      for (const p of g.paths) {
-        const norm = p.replace(/^\/+/, '');
-        if (!claim.has(norm)) claim.set(norm, g.title);
-      }
-    }
-    const order = explicit.map((g) => g.title);
-    let usedOther = false;
+    // A group path matches a file exactly OR as a directory prefix —
+    // "maps/src/test" claims every file under it, so agents don't have to
+    // enumerate 26 test files. First group (in order) to match wins.
+    const norm = explicit.map((g) => ({
+      title: g.title,
+      paths: g.paths.map((p) => p.replace(/^\/+/, '').replace(/\/+$/, '')),
+    }));
     for (const f of files) {
-      const title = claim.get(f.relPath);
-      if (title) {
-        out.set(f.relPath, { group: title, rank: order.indexOf(title) });
-      } else {
-        usedOther = true;
-        out.set(f.relPath, { group: 'Other', rank: order.length });
+      let assigned = false;
+      for (let rank = 0; rank < norm.length; rank++) {
+        const g = norm[rank];
+        if (!g) continue;
+        if (g.paths.some((p) => f.relPath === p || f.relPath.startsWith(`${p}/`))) {
+          out.set(f.relPath, { group: g.title, rank });
+          assigned = true;
+          break;
+        }
       }
+      if (!assigned) out.set(f.relPath, { group: 'Other', rank: norm.length });
     }
-    void usedOther;
     return out;
   }
 
