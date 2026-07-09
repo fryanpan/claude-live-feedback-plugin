@@ -30,6 +30,7 @@ interface RepoFile {
   changed: boolean;
   docId?: string;
   reviewUrl?: string;
+  status?: 'added' | 'modified' | 'deleted' | 'renamed';
 }
 
 type NavView = 'grouped' | 'all';
@@ -65,7 +66,7 @@ export async function renderDiffNav(docId: string, workspaceId: string): Promise
   const render = async () => {
     const header = `
       <div class="diff-nav-toggle" role="group" aria-label="Sidebar view">
-        <button type="button" data-nav="grouped" class="${view === 'grouped' ? 'active' : ''}">Show Grouped Diffs</button>
+        <button type="button" data-nav="grouped" class="${view === 'grouped' ? 'active' : ''}">Show Changed Files</button>
         <button type="button" data-nav="all" class="${view === 'all' ? 'active' : ''}">Show All Files</button>
       </div>`;
     const body =
@@ -186,25 +187,30 @@ async function renderAllFiles(workspaceId: string, activeDocId: string): Promise
     // deeper levels start collapsed so a big repo stays scannable.
     const dirs = Array.from(node.dirs.entries())
       .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(
-        ([name, child]) => `<li class="tree-dir"><details${depth === 0 ? ' open' : ''}>
+      .map(([name, child]) => {
+        // Folders on the path to a change auto-expand so the changed files
+        // are visible without spelunking; unchanged folders stay collapsed
+        // below the top level.
+        const changed = hasChanged(child);
+        return `<li class="tree-dir"><details${depth === 0 || changed ? ' open' : ''}>
           <summary><span class="tree-name">${escapeHtml(name)}</span>${
-            hasChanged(child)
-              ? '<span class="diff-changed-dot" title="contains changes"></span>'
-              : ''
+            changed ? '<span class="diff-changed-dot" title="contains changes"></span>' : ''
           }</summary>
-          <ul>${renderNode(child, depth + 1)}</ul></details></li>`,
-      )
+          <ul>${renderNode(child, depth + 1)}</ul></details></li>`;
+      })
       .join('');
     const files = node.files
       .map((f) => {
         const name = f.relPath.split('/').pop() ?? f.relPath;
         const isActive = f.docId === activeDocId;
         if (f.reviewUrl) {
+          const letter = f.status ? (f.status[0]?.toUpperCase() ?? '') : '';
           return `<li class="tree-file"><a href="${appendParams(f.reviewUrl)}" class="${
             isActive ? 'active' : ''
-          }"><span class="tree-name">${escapeHtml(name)}</span>${
-            f.changed ? '<span class="diff-changed-dot" title="changed"></span>' : ''
+          }${f.changed ? ' changed' : ''}"><span class="tree-name">${escapeHtml(name)}</span>${
+            letter
+              ? `<span class="tree-diff-status tree-diff-${letter}" title="${f.status}">${letter}</span>`
+              : ''
           }</a></li>`;
         }
         return `<li class="tree-file"><a href="#" data-context-path="${escapeHtml(

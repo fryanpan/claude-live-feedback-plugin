@@ -799,7 +799,13 @@ export class Rooms {
     ok: boolean;
     root?: string;
     truncated?: boolean;
-    files?: Array<{ relPath: string; changed: boolean; docId?: string; reviewUrl?: string }>;
+    files?: Array<{
+      relPath: string;
+      changed: boolean;
+      docId?: string;
+      reviewUrl?: string;
+      status?: DocMeta['diffStatus'];
+    }>;
     error?: 'not-found';
   } {
     const members = this.list().filter((m) => m.workspaceId === workspaceId);
@@ -819,6 +825,7 @@ export class Rooms {
         changed: member.type === 'diff',
         docId: member.docId,
         reviewUrl: (decorated as { reviewUrl?: string }).reviewUrl,
+        ...(member.diffStatus !== undefined ? { status: member.diffStatus } : {}),
       };
     });
     return { ok: true, root, truncated, files };

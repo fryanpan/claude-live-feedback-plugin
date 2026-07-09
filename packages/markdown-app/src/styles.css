@@ -1856,3 +1856,32 @@ body.code-mode .cm-lineNumbers .cm-gutterElement:hover {
   color: var(--accent);
   font-weight: 700;
 }
+
+/* PR-style chunk colors. @codemirror/merge's default marks changed text
+   with a 2px bottom-gradient "underline" — on inserted lines that means
+   every line (indentation included) reads as green underlining. Override
+   with GitHub-style solid tints: line-level wash + stronger word-level
+   emphasis, no underlines. */
+body.code-mode .cm-editor .cm-changedLine {
+  background-color: #e6ffec !important;
+}
+body.code-mode .cm-editor .cm-changedText {
+  background: #abf2bc !important;
+}
+body.code-mode .cm-editor .cm-deletedChunk {
+  background-color: #ffebe9 !important;
+}
+body.code-mode .cm-editor .cm-deletedChunk .cm-deletedText {
+  background: #ffc9c0 !important;
+}
+
+/* "Show All Files": make changed files unmistakable — tinted row + bold
+   name + status letter; folders on the path to changes auto-expand and
+   carry the orange dot. */
+.tree-file a.changed {
+  background: rgba(45, 164, 78, 0.09);
+  font-weight: 600;
+}
+.tree-file a.changed:hover {
+  background: rgba(45, 164, 78, 0.16);
+}
