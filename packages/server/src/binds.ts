@@ -345,9 +345,14 @@ export function bindDiff(host: BindHost, opts: BindDiffOpts): BindDiffResult {
       diffGroup: groupOf.get(entry.relPath)?.group,
       diffGroupRank: groupOf.get(entry.relPath)?.rank,
     });
-    // initDocMeta is set-if-absent, but status/counts/groups are DERIVED and
-    // go stale as the working tree moves — refresh them on every (re)bind.
-    refreshDiffMeta(room, entry, groupOf.get(entry.relPath));
+    // initDocMeta is set-if-absent, but status/counts are DERIVED and go
+    // stale as the working tree moves — refresh them on every (re)bind.
+    // Groups refresh only when the caller PASSED groups (explicit wins) or
+    // the file has none yet — a group-less refresh re-bind must not clobber
+    // semantic groups an agent set earlier.
+    const groupAssignment =
+      opts.groups || room.meta.diffGroup === undefined ? groupOf.get(entry.relPath) : undefined;
+    refreshDiffMeta(room, entry, groupAssignment);
     if (target) {
       // Pinned mode: seed the target-commit content once; no file
       // binding, no poll — content can't change underneath us.
