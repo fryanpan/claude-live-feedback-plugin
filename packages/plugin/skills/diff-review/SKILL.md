@@ -37,9 +37,10 @@ can re-attach it.
 - Per-file **Diff ↔ File** toggle shows the whole file as it is on disk, also
   commentable.
 
-**Group the files for the reviewer.** The sidebar's default view shows the
-changed files in logical groups. Pass `groups` and organize by INTENT — the
-same judgment you'd use splitting a branch into reviewable commits:
+**Group the files for the reviewer — always pass `groups`.** The sidebar's
+default view shows the changed files in logical groups, and YOU know your
+change's intent far better than the service's heuristic. Organize by INTENT —
+the same judgment you'd use splitting a branch into reviewable commits:
 
 ```
 groups: [
