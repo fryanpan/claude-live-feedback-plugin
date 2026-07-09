@@ -307,17 +307,21 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           })),
         });
       }
-      // --- REST: diff reviews (git base..target) ---
-      // One doc per changed file, grouped as a workspace (= the review id),
-      // content pinned to the target commit. Returns per-file reviewUrls
-      // plus an entryUrl (first changed file) the agent can hand to a human.
+      // --- REST: diff reviews ---
+      // One doc per changed file, grouped as a workspace (= the review id).
+      // Default mode diffs base → the WORKING TREE (live: docs bind to the
+      // files on disk and re-render as the agent edits); pass `target` for a
+      // review pinned to a commit. Returns per-file reviewUrls plus an
+      // entryUrl (first changed file) the agent can hand to a human.
       if (pathname === '/api/diffs' && req.method === 'POST') {
         const body = await safeJson(req);
         const repoPath = body?.repo as string | undefined;
         const base = body?.base as string | undefined;
         const target = body?.target as string | undefined;
-        if (!repoPath || !base || !target) {
-          return j(400, { error: 'repo, base, and target are required' });
+        if (!repoPath || !base) {
+          return j(400, {
+            error: 'repo and base are required (target optional: omit to review the working tree)',
+          });
         }
         const reviewId = body?.reviewId as string | undefined;
         if (reviewId !== undefined && !isValidDocId(reviewId)) {

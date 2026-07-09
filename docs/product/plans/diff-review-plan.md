@@ -1,5 +1,15 @@
 # Plan: Git diff review — PR-style diff surface with live line comments
 
+> **Revision (2026-07-09, after Bryan's spec correction):** the primary mode
+> is now **working-tree review** — `create_diff_review(repo, base)` diffs base
+> against the folder as it is NOW (uncommitted + untracked included), each doc
+> binds to the live file (code-doc mtime poll), and the reviewer's diff
+> re-renders within ~1s as the agent edits. Comments ride along via the
+> existing snippet auto-reanchor; a vanished line orphans the thread into the
+> existing outdated-comments flow. The original pinned two-hash mode remains
+> available by passing `target`. "Immutable content" claims below apply to
+> pinned mode only.
+
 ## Context
 
 Bryan wants to review git diffs (repo path + base..target hashes) through live-feedback instead of GitHub: a PR-style diff UI grouped by file, with hunks and old/new line numbers, live line-anchored comment threads that the producing agent watches and resolves, and a per-file toggle between the diff and the whole file at the target hash (commentable in both views). Driver: four real ADFA diffs to dogfood immediately (smallest: 1 file +33/−6; largest: ~65 files +4303/−1367).

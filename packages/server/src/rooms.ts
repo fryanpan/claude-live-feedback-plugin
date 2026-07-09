@@ -285,7 +285,10 @@ export class Rooms {
         if (src && existsSync(src)) {
           if (room.meta.type === 'markdown') {
             if (this.attachFile(docId, src).ok) rebound++;
-          } else if (room.meta.type === 'code') {
+          } else if (room.meta.type === 'code' || room.meta.type === 'diff') {
+            // Working-tree diff docs have a sourceUrl and re-arm their live
+            // poll like code docs. Pinned diff docs have no sourceUrl and
+            // need no binding — content is already in the .ydoc.
             if (this.attachReadonlyFile(docId, src).ok) rebound++;
           }
         }
@@ -854,25 +857,37 @@ export class Rooms {
   }
 
   /**
-   * Bind a git diff (repo + base..target) for review. One doc per changed
-   * file, grouped under a workspace whose id is the review id — so the
-   * file-tree UI, thread tools, cleanup, and delete_workspace all work on a
-   * diff review exactly as they do on a bound folder.
+   * Bind a git diff for review. One doc per changed file, grouped under a
+   * workspace whose id is the review id — so the file-tree UI, thread
+   * tools, cleanup, and delete_workspace all work on a diff review exactly
+   * as they do on a bound folder.
    *
-   * Each doc's `content` Y.Text is the file at the TARGET commit (via
-   * `git show`) — immutable, so line anchors can never drift. The diff
-   * itself is rendered client-side against the base text served on demand.
+   * Two modes, chosen by whether `target` is passed:
    *
-   * Refs are resolved to full hashes up front; re-binding the same review id
-   * with a different range is rejected (threads are pinned to the old
-   * content). Binary files, files >512 KB, and `exclude`-prefixed paths are
-   * skipped (recorded in `skipped[]`) so a vendored-artifacts directory
-   * can't swamp the review.
+   * WORKING-TREE (default, `target` omitted) — diff base → the folder as it
+   * is NOW, uncommitted edits and untracked files included. Each doc binds
+   * to the live file on disk (same mtime poll as code docs), so the agent
+   * keeps editing and the review re-renders within ~1s. Line anchors ride
+   * along via the snippet auto-reanchor sweep; when an anchored line is
+   * gone, the thread orphans into the existing outdated-comments flow.
+   * Re-binding the same review refreshes the changed-file list (new files
+   * appear, statuses/counts update); threads survive re-binds.
+   *
+   * PINNED (`target` passed) — content is the file at the target commit
+   * (via `git show`), immutable, no poll. Re-binding the same review id
+   * with a different range is rejected (threads anchor into the pinned
+   * content).
+   *
+   * In both modes the diff is rendered client-side against the base text
+   * served on demand, and binary files, files >512 KB, and
+   * `exclude`-prefixed paths are skipped (recorded in `skipped[]`) so a
+   * vendored-artifacts directory can't swamp the review.
    */
   bindDiff(opts: {
     repoPath: string;
     base: string;
-    target: string;
+    /** Target commit for a pinned review; omit to review the working tree. */
+    target?: string;
     reviewId?: string;
     title?: string;
     /** Path prefixes (relative to repo root) to leave out of the review. */
@@ -886,7 +901,8 @@ export class Rooms {
         reviewId: string;
         root: string;
         base: string;
-        target: string;
+        /** Resolved target hash for pinned reviews; null in working-tree mode. */
+        target: string | null;
         fileCount: number;
         skipped: Array<{ path: string; reason: string }>;
         files: Array<{
@@ -915,8 +931,8 @@ export class Rooms {
     if (!existsSync(root)) return { ok: false, error: 'not-found' };
 
     const base = resolveCommit(root, opts.base);
-    const target = resolveCommit(root, opts.target);
-    if (!base || !target) {
+    const target = opts.target !== undefined ? resolveCommit(root, opts.target) : null;
+    if (!base || (opts.target !== undefined && !target)) {
       return {
         ok: false,
         error: 'bad-ref',
@@ -930,11 +946,13 @@ export class Rooms {
 
     const reviewId = opts.reviewId ?? deriveDiffReviewId(root, base, target);
 
-    // A review id is pinned to its range: threads anchor into content at
-    // `target`, so silently re-seeding different content would corrupt them.
+    // A review id is pinned to its range: threads anchor into that content,
+    // so silently re-seeding a different range would corrupt them. (In
+    // working-tree mode only the base is pinned — the target side is live
+    // by design.)
     for (const meta of this.list()) {
       if (meta.workspaceId !== reviewId || meta.type !== 'diff') continue;
-      if (meta.diffBase !== base || meta.diffTarget !== target) {
+      if (meta.diffBase !== base || (meta.diffTarget ?? null) !== target) {
         return { ok: false, error: 'review-exists-different-range' };
       }
       break;
@@ -952,7 +970,21 @@ export class Rooms {
         skipped.push({ path: entry.relPath, reason: 'binary' });
         continue;
       }
-      const text = entry.status === 'deleted' ? '' : (showFile(root, target, entry.relPath) ?? '');
+      // Working-tree mode reads the live file; pinned mode reads the blob at
+      // the target commit. Deleted files carry no target-side content.
+      let text = '';
+      if (entry.status !== 'deleted') {
+        if (target) {
+          text = showFile(root, target, entry.relPath) ?? '';
+        } else {
+          try {
+            text = readFileSync(join(root, entry.relPath), 'utf8');
+          } catch {
+            skipped.push({ path: entry.relPath, reason: 'read-failed' });
+            continue;
+          }
+        }
+      }
       if (text.length > 512 * 1024) {
         skipped.push({ path: entry.relPath, reason: 'too-large' });
         continue;
@@ -991,17 +1023,28 @@ export class Rooms {
         title: entry.relPath,
         producedBy: opts.producedBy,
         diffBase: base,
-        diffTarget: target,
+        ...(target ? { diffTarget: target } : {}),
         diffStatus: entry.status,
         diffOldPath: entry.oldPath,
         diffAdditions: entry.additions,
         diffDeletions: entry.deletions,
       });
-      // Seed the target-commit content once; no file binding, no poll —
-      // the content is pinned to a hash and can't change underneath us.
-      const content = room.ydoc.getText('content');
-      if (content.length === 0 && text.length > 0) {
-        room.ydoc.transact(() => content.insert(0, text), 'file-seed');
+      // initDocMeta is set-if-absent, but status/counts are DERIVED and go
+      // stale as the working tree moves — refresh them on every (re)bind.
+      this.refreshDiffMeta(room, entry);
+      if (target) {
+        // Pinned mode: seed the target-commit content once; no file
+        // binding, no poll — content can't change underneath us.
+        const content = room.ydoc.getText('content');
+        if (content.length === 0 && text.length > 0) {
+          room.ydoc.transact(() => content.insert(0, text), 'file-seed');
+        }
+      } else if (entry.status !== 'deleted') {
+        // Working-tree mode: bind the live file like a code doc — seeds the
+        // content, arms the mtime poll (agent edits re-render in ~1s), no
+        // write-back. The wireEvents reanchor sweep keeps threads attached
+        // or orphans them when their line disappears.
+        this.attachReadonlyFile(docId, join(root, entry.relPath));
       }
       files.push({
         docId,
@@ -1024,6 +1067,33 @@ export class Rooms {
       skipped,
       files,
     };
+  }
+
+  /**
+   * Refresh the derived diff fields (status, rename source, line counts) on
+   * an existing room. `initDocMeta` is deliberately set-if-absent, which is
+   * right for identity fields but wrong for these — in working-tree mode
+   * they change every time the agent edits, and a re-bind should show the
+   * current numbers, not the ones from the first bind.
+   */
+  private refreshDiffMeta(room: DocRoom, entry: DiffFileEntry): void {
+    const next: Partial<DocMeta> = {
+      diffStatus: entry.status,
+      diffOldPath: entry.oldPath,
+      diffAdditions: entry.additions,
+      diffDeletions: entry.deletions,
+    };
+    const m = room.ydoc.getMap('meta');
+    const changed = (Object.entries(next) as Array<[keyof DocMeta, unknown]>).filter(
+      ([k, v]) => v !== undefined && room.meta[k] !== v,
+    );
+    if (changed.length === 0) return;
+    room.ydoc.transact(() => {
+      for (const [k, v] of changed) m.set(k, v);
+    });
+    for (const [k, v] of changed) {
+      (room.meta as unknown as Record<string, unknown>)[k] = v;
+    }
   }
 
   /**
@@ -1239,10 +1309,19 @@ export class Rooms {
         return { ok: false, error: 'read-failed' };
       }
     }
-    // Seed only when empty (don't double-seed across reloads); 'file-seed'
-    // origin so it isn't mistaken for a user edit.
-    if (content.length === 0 && text.length > 0) {
-      room.ydoc.transact(() => content.insert(0, text), 'file-seed');
+    // Sync content to the file's CURRENT bytes. The surface is read-only —
+    // the live doc never holds browser edits — so disk is authoritative at
+    // attach time. This covers both the first seed and content that drifted
+    // while the server was down: the poll's mtime baseline resets on attach,
+    // so a change missed during downtime would otherwise stay stale until
+    // the NEXT disk write. The 'file-watch' origin routes the replace
+    // through the same reanchor sweep as a live edit.
+    if (existsSync(abs) && text !== content.toString()) {
+      const origin = content.length === 0 ? 'file-seed' : 'file-watch';
+      room.ydoc.transact(() => {
+        if (content.length > 0) content.delete(0, content.length);
+        if (text.length > 0) content.insert(0, text);
+      }, origin);
     }
     const existing = this.fileBindings.get(docId);
     if (existing?.writeTimer) clearTimeout(existing.writeTimer);
@@ -1311,9 +1390,11 @@ export class Rooms {
   reparseFromDisk(docId: string): { ok: boolean; error?: 'not-found' | 'no-binding' | 'missing' } {
     const room = this.rooms.get(docId);
     if (!room) return { ok: false, error: 'not-found' };
-    // Diff docs have no file binding — their content is pinned to a commit.
-    // Recover by re-reading the file at the target hash from the repo.
-    if (room.meta.type === 'diff') {
+    // PINNED diff docs have no file binding — their content is pinned to a
+    // commit. Recover by re-reading the file at the target hash from the
+    // repo. (Working-tree diff docs have a live binding and fall through to
+    // the normal flat-text path below.)
+    if (room.meta.type === 'diff' && room.meta.diffTarget) {
       const { workspaceRoot, diffTarget, relPath, diffStatus } = room.meta;
       if (!workspaceRoot || !diffTarget || !relPath) return { ok: false, error: 'no-binding' };
       if (diffStatus === 'deleted') return { ok: true };
@@ -1335,7 +1416,7 @@ export class Rooms {
     } catch {
       return { ok: false, error: 'missing' };
     }
-    if (room.meta.type === 'code') {
+    if (room.meta.type === 'code' || room.meta.type === 'diff') {
       const content = room.ydoc.getText('content');
       room.ydoc.transact(() => {
         content.delete(0, content.length);
@@ -1372,10 +1453,11 @@ export class Rooms {
       console.error(`[rooms] read failed for ${binding.path}:`, err);
       return;
     }
-    // Code docs are flat text — replace the whole `content` Y.Text on change.
-    // No write-back means no live edits, so there's never a conflict; the
-    // pure decideReconcile is reused only to skip no-op reads.
-    if (room.meta.type === 'code') {
+    // Code and working-tree diff docs are flat text — replace the whole
+    // `content` Y.Text on change. No write-back means no live edits, so
+    // there's never a conflict; the pure decideReconcile is reused only to
+    // skip no-op reads.
+    if (room.meta.type === 'code' || room.meta.type === 'diff') {
       const content = room.ydoc.getText('content');
       const current = content.toString();
       const decision = decideReconcile({
@@ -2045,12 +2127,13 @@ function looksBinary(abs: string): boolean {
   }
 }
 
-/** Deterministic diff-review id: repo basename + short hashes of the range,
- *  so re-running the same create_diff_review lands on the same docs (threads
- *  survive) while a different range gets its own review. */
-function deriveDiffReviewId(absRoot: string, base: string, target: string): string {
+/** Deterministic diff-review id: repo basename + short hashes of the range
+ *  ('live' for the working-tree side), so re-running the same
+ *  create_diff_review lands on the same docs (threads survive) while a
+ *  different range gets its own review. */
+function deriveDiffReviewId(absRoot: string, base: string, target: string | null): string {
   const name = basename(absRoot).replace(/[^a-zA-Z0-9_.\-]/g, '-') || 'repo';
-  return `${name}-${base.slice(0, 7)}-${target.slice(0, 7)}`;
+  return `${name}-${base.slice(0, 7)}-${target ? target.slice(0, 7) : 'live'}`;
 }
 
 /** Deterministic workspace id: folder basename + 6-char hash of the

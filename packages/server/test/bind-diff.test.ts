@@ -335,6 +335,72 @@ describe('Rooms.bindDiff', () => {
     if (!res.ok) expect(res.error).toBe('empty-diff');
   });
 
+  it('working-tree mode: binds live files incl. uncommitted + untracked', async () => {
+    // Uncommitted edit on top of target, plus a brand-new untracked file.
+    writeFileSync(join(fixture.repo, 'src', 'kept.ts'), 'line1\nline2 WORKTREE\nline3\n');
+    writeFileSync(join(fixture.repo, 'src', 'untracked.ts'), 'not yet added\n');
+
+    const res = rooms.bindDiff({ repoPath: fixture.repo, base: fixture.base });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.target).toBeNull();
+    expect(res.reviewId.endsWith('-live')).toBe(true);
+
+    const byRel = new Map(res.files.map((f) => [f.relPath, f]));
+    // Untracked file shows up as an addition.
+    expect(byRel.get('src/untracked.ts')?.status).toBe('added');
+    // Content is the WORKING TREE bytes, not the last commit.
+    const keptDocId = byRel.get('src/kept.ts')?.docId ?? '';
+    const keptRoom = rooms.get(keptDocId);
+    expect(keptRoom?.ydoc.getText('content').toString()).toBe('line1\nline2 WORKTREE\nline3\n');
+    expect(keptRoom?.meta.diffTarget).toBeUndefined();
+    // Live binding: sourceUrl set (poll armed), unlike pinned docs.
+    expect(keptRoom?.meta.sourceUrl).toBe(join(fixture.repo, 'src', 'kept.ts'));
+
+    // Agent edits the file → reparse (poll shortcut) → live doc updates and
+    // the thread stack re-anchors by snippet.
+    const anchorLine = 'line2 WORKTREE\n';
+    const created = await rooms.createThreadByFind(
+      keptDocId,
+      { find: anchorLine.trim() },
+      { id: 'u1', name: 'T', kind: 'known', color: '#000' },
+      'watch this line',
+    );
+    expect(created.ok).toBe(true);
+    writeFileSync(
+      join(fixture.repo, 'src', 'kept.ts'),
+      'line0 new\nline1\nline2 WORKTREE\nline3\n',
+    );
+    expect(rooms.reparseFromDisk(keptDocId).ok).toBe(true);
+    expect(keptRoom?.ydoc.getText('content').toString()).toContain('line0 new');
+    // Thread still resolves to the (moved) line — snippet re-anchor keeps it.
+    const threads = rooms.listThreads(keptDocId);
+    expect(threads).toHaveLength(1);
+
+    // Re-bind refreshes derived counts idempotently.
+    const again = rooms.bindDiff({ repoPath: fixture.repo, base: fixture.base });
+    expect(again.ok).toBe(true);
+    if (!again.ok) return;
+    expect(again.reviewId).toBe(res.reviewId);
+    expect(rooms.listThreads(keptDocId)).toHaveLength(1);
+    const keptAgain = again.files.find((f) => f.relPath === 'src/kept.ts');
+    // +2 now: "line2 WORKTREE" replaced line2 and "line0 new" was added.
+    expect(keptAgain?.additions).toBe(2);
+  });
+
+  it('working-tree and pinned reviews of the same repo coexist under different ids', () => {
+    const live = rooms.bindDiff({ repoPath: fixture.repo, base: fixture.base });
+    const pinned = rooms.bindDiff({
+      repoPath: fixture.repo,
+      base: fixture.base,
+      target: fixture.target,
+    });
+    expect(live.ok).toBe(true);
+    expect(pinned.ok).toBe(true);
+    if (!live.ok || !pinned.ok) return;
+    expect(live.reviewId).not.toBe(pinned.reviewId);
+  });
+
   it('builds a workspace tree with diff badges', () => {
     const res = rooms.bindDiff({
       repoPath: fixture.repo,

@@ -47,15 +47,19 @@ export interface DiffFileEntry {
 }
 
 /**
- * List the files changed between two commits, with rename detection and
- * per-file line counts. Copies (C) are treated as additions.
+ * List the files changed between a base commit and either a target commit
+ * or — when `target` is null — the WORKING TREE (the folder as it is now,
+ * uncommitted edits included; untracked files are appended as additions).
+ * Rename detection on, per-file line counts joined in. Copies (C) are
+ * treated as additions.
  */
 export function diffFiles(
   repo: string,
   base: string,
-  target: string,
+  target: string | null,
 ): { ok: true; files: DiffFileEntry[] } | { ok: false; error: string } {
-  const ns = git(repo, ['diff', '--name-status', '-z', '-M', base, target, '--']);
+  const range = target ? [base, target] : [base];
+  const ns = git(repo, ['diff', '--name-status', '-z', '-M', ...range, '--']);
   if (!ns.ok) return { ok: false, error: ns.stderr.trim() || 'git diff failed' };
 
   const files: DiffFileEntry[] = [];
@@ -84,8 +88,22 @@ export function diffFiles(
     files.push({ relPath: path, status: mapped, binary: false });
   }
 
+  // Working-tree mode: untracked files never show up in `git diff` — append
+  // them as additions so a brand-new file the agent just wrote is reviewable.
+  if (!target) {
+    const untracked = git(repo, ['ls-files', '--others', '--exclude-standard', '-z']);
+    if (untracked.ok) {
+      const known = new Set(files.map((f) => f.relPath));
+      for (const path of untracked.stdout.split('\0')) {
+        if (path && !known.has(path)) {
+          files.push({ relPath: path, status: 'added', binary: false });
+        }
+      }
+    }
+  }
+
   // Join in line counts; numstat reports "-\t-" for binary files.
-  const num = git(repo, ['diff', '--numstat', '-z', '-M', base, target, '--']);
+  const num = git(repo, ['diff', '--numstat', '-z', '-M', ...range, '--']);
   if (num.ok) {
     const counts = new Map<string, { additions?: number; deletions?: number; binary: boolean }>();
     // -z numstat: "add\tdel\tpath\0" normally; for renames/copies the path
