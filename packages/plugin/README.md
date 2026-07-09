@@ -12,6 +12,9 @@ doc editor + injectable widget) as a single install.
   `observe_url`. The agent watches for new comments and replies in place.
 - **Markdown review surface** — `/review/<docId>` for live-editing
   markdown with anchored text-range comments (Tiptap + Yjs).
+- **Git diff review** — `create_diff_review(repo, base, target)` renders a
+  GitHub-PR-style unified diff (per-file tree, old/new line numbers,
+  Diff ↔ whole-file toggle) with live line-anchored comment threads.
 - **Injectable widget** — one `<script>` tag turns any HTML page or
   dev-server into a commentable surface.
 - **Slash commands** — `/feedback-serve`, `/feedback-threads`.
@@ -130,6 +133,11 @@ tunnels, no certs. For a phone-simulator viewport on desktop append
   and `setContext({ view })` for dynamic surfaces (modals, tabs, SPA
   state). You don't call it directly; just ask Claude to make a
   mockup and this skill fires.
+- `diff-review` — fires when the reviewer asks to "review a diff" /
+  a branch / two commits. Covers `create_diff_review` (repo + base +
+  target → PR-style review URL), sharing the `entryUrl`, handling
+  line-comment events per file, `exclude`-ing vendored paths on big
+  diffs, and `delete_workspace` cleanup.
 - `editing-review-docs` — auto-invokes before Claude edits a `.md`
   file. Checks `list_docs` to see if the file is bound to a live
   review doc, and if so routes edits through `find_and_replace` /

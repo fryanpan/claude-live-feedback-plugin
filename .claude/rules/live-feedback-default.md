@@ -11,11 +11,12 @@ When you want Bryan to review a markdown doc OR a dev server / interactive previ
 - Drafting any markdown for Bryan's voice / structure / content pass (blog posts, plans, audits, retros, design docs, decision docs)
 - Sharing a dev server URL or HTML mockup for UX feedback
 - Surfacing any document where you want comment-level input, not just a thumbs up
+- Bryan asking to review a git diff / branch / two commits of a local checkout — use `create_diff_review` (see the `live-feedback:diff-review` skill)
 
 ## When to skip
 
 - One-or-two-line acks where there's no review surface
-- Code review — PR diff is the canonical surface for code
+- Code review already happening on a GitHub PR — don't duplicate the surface unless Bryan asks for a live-feedback pass
 - Your own logs / private notes (no Bryan input expected)
 
 ## How
@@ -23,6 +24,8 @@ When you want Bryan to review a markdown doc OR a dev server / interactive previ
 **Markdown docs** — bind via `mcp__plugin_live-feedback__create_review_doc(docId, path, title?)`. Share the review URL (`http://mac-mini.tailb53801.ts.net:8788/review/<docId>`) in your message to Bryan.
 
 **Dev servers / HTML mockups** — use the `live-feedback:embedding-widget` skill (it covers the `<script>` tags + `setContext` calls).
+
+**Git diffs** — `create_diff_review(repo, base, target)` → share the returned `entryUrl` (bare URL on its own line). One doc per changed file; comments arrive per file via the auto-watch; `delete_workspace(reviewId)` when done.
 
 **Apply Bryan's comments via the live-feedback edit tools** — once a doc is bound, NEVER edit the .md file directly with Write/Edit. Use `find_and_replace`, `rewrite_thread_region`, `insert_blocks_after_thread`, etc. The plugin serializes the live doc back to disk ~1s after every change; direct filesystem edits get silently clobbered by the next flush. See the `live-feedback:editing-review-docs` skill for the full pattern.
 
