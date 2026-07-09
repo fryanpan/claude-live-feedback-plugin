@@ -49,9 +49,12 @@ groups: [
 ]
 ```
 
-Order matters (first group = read first). Unlisted changed files land in an
-automatic "Other" group. If you omit `groups`, a heuristic groups by
-module/tests/docs/config — acceptable, but your semantic grouping is better.
+Order matters (first group = read first). A path entry may be a DIRECTORY —
+`"maps/src/test"` claims every changed file under it, so you don't have to
+enumerate them. Unlisted changed files land in an automatic "Other" group.
+If you omit `groups`, a heuristic groups by module/tests/docs/config —
+acceptable, but your semantic grouping is better. Re-binding without
+`groups` preserves whatever grouping the review already has.
 
 **Pinned mode** — pass `target: "<ref>"` to freeze the review at a commit
 (reviewing merged/finished work). Anchors can never drift there; the same
