@@ -251,6 +251,53 @@ describe('Rooms.bindDiff', () => {
     expect(rooms.listThreads(docId)).toHaveLength(1);
   });
 
+  it('create_thread by_find works on diff docs (flat content, line-snapped)', async () => {
+    const res = rooms.bindDiff({
+      repoPath: fixture.repo,
+      base: fixture.base,
+      target: fixture.target,
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const docId = res.files.find((f) => f.relPath === 'src/kept.ts')?.docId ?? '';
+    const created = await rooms.createThreadByFind(
+      docId,
+      { find: 'line2 CHANGED' },
+      { id: 'u1', name: 'T', kind: 'known', color: '#000' },
+      'why changed?',
+    );
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const anchor = created.thread.anchor;
+    expect(anchor.kind).toBe('text-range');
+    if (anchor.kind !== 'text-range') return;
+    // Snapped to the whole line.
+    expect(anchor.snippet.text).toBe('line2 CHANGED\n');
+
+    // Ambiguous finds surface candidates instead of guessing.
+    const ambiguous = await rooms.createThreadByFind(
+      docId,
+      { find: 'line' },
+      { id: 'u1', name: 'T', kind: 'known', color: '#000' },
+      'x',
+    );
+    expect(ambiguous.ok).toBe(false);
+    if (!ambiguous.ok) {
+      expect(ambiguous.error).toBe('ambiguous');
+      expect((ambiguous.candidates ?? []).length).toBeGreaterThan(1);
+    }
+
+    // Missing text → no-match.
+    const miss = await rooms.createThreadByFind(
+      docId,
+      { find: 'does-not-exist' },
+      { id: 'u1', name: 'T', kind: 'known', color: '#000' },
+      'x',
+    );
+    expect(miss.ok).toBe(false);
+    if (!miss.ok) expect(miss.error).toBe('no-match');
+  });
+
   it('applies exclude path prefixes', () => {
     const res = rooms.bindDiff({
       repoPath: fixture.repo,
