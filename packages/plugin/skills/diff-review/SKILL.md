@@ -37,6 +37,22 @@ can re-attach it.
 - Per-file **Diff ↔ File** toggle shows the whole file as it is on disk, also
   commentable.
 
+**Group the files for the reviewer.** The sidebar's default view shows the
+changed files in logical groups. Pass `groups` and organize by INTENT — the
+same judgment you'd use splitting a branch into reviewable commits:
+
+```
+groups: [
+  { title: "Routing refactor", paths: ["src/router.ts", "src/routes/map.ts"] },
+  { title: "Dark mode",        paths: ["src/theme.ts", "src/styles/dark.css"] },
+  { title: "Tests",            paths: ["src/router.test.ts"] },
+]
+```
+
+Order matters (first group = read first). Unlisted changed files land in an
+automatic "Other" group. If you omit `groups`, a heuristic groups by
+module/tests/docs/config — acceptable, but your semantic grouping is better.
+
 **Pinned mode** — pass `target: "<ref>"` to freeze the review at a commit
 (reviewing merged/finished work). Anchors can never drift there; the same
 `reviewId` with a different range is rejected.

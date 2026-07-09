@@ -394,6 +394,38 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         const threads = rooms.listWorkspaceThreads(workspaceId, status ? { status } : undefined);
         return j(200, { workspaceId, threads });
       }
+      // Grouped-diff sidebar model: changed files organized into logical
+      // groups (agent-supplied or heuristic). The default nav for diff
+      // reviews.
+      const wsGroupedMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/grouped$/);
+      if (wsGroupedMatch && req.method === 'GET') {
+        const workspaceId = decodeURIComponent(wsGroupedMatch[1] ?? '');
+        const grouped = rooms.listGroupedDiff(workspaceId);
+        if (grouped.groups.length === 0) {
+          return j(404, { error: 'no diff review found', workspaceId });
+        }
+        return j(200, grouped);
+      }
+      // Every file in the workspace's repo (changed ones marked) — the
+      // "Show All Files" context view.
+      const wsFilesMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/files$/);
+      if (wsFilesMatch && req.method === 'GET') {
+        const workspaceId = decodeURIComponent(wsFilesMatch[1] ?? '');
+        const res = rooms.listRepoFiles(workspaceId);
+        return res.ok ? j(200, res) : j(404, res);
+      }
+      // Lazily open an unchanged repo file for context (read-only code doc
+      // in the same workspace).
+      const wsCtxMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/context-file$/);
+      if (wsCtxMatch && req.method === 'POST') {
+        const workspaceId = decodeURIComponent(wsCtxMatch[1] ?? '');
+        const body = await safeJson(req);
+        const relPath = body?.relPath as string | undefined;
+        if (!relPath) return j(400, { error: 'relPath required' });
+        const res = rooms.openContextFile(workspaceId, relPath);
+        if (!res.ok) return j(res.error === 'bad-path' ? 400 : 404, res);
+        return j(200, { docId: res.docId, meta: withReviewUrl(res.meta) });
+      }
       const wsTreeMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/tree$/);
       if (wsTreeMatch && req.method === 'GET') {
         const workspaceId = decodeURIComponent(wsTreeMatch[1] ?? '');

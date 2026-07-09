@@ -435,6 +435,72 @@ describe('Rooms.bindDiff', () => {
     expect(rooms.listWorkspaceThreads(res.reviewId, { status: 'open' })).toHaveLength(1);
   });
 
+  it('groups changed files: explicit groups win, heuristic falls back', () => {
+    // Heuristic: src files group by top segment; nothing test/doc-ish here.
+    const auto = rooms.bindDiff({ repoPath: fixture.repo, base: fixture.base });
+    expect(auto.ok).toBe(true);
+    if (!auto.ok) return;
+    expect(new Set(auto.files.map((f) => f.group))).toEqual(new Set(['src']));
+
+    const grouped = rooms.listGroupedDiff(auto.reviewId);
+    expect(grouped.groups).toHaveLength(1);
+    expect(grouped.groups[0]?.title).toBe('src');
+    // Ordered by churn desc within the group.
+    const churn = (grouped.groups[0]?.files ?? []).map(
+      (f) => (f.diffAdditions ?? 0) + (f.diffDeletions ?? 0),
+    );
+    expect([...churn].sort((a, b) => b - a)).toEqual(churn);
+
+    // Explicit groups: agent-supplied titles + ordering; unlisted → Other.
+    const explicit = rooms.bindDiff({
+      repoPath: fixture.repo,
+      base: fixture.base,
+      reviewId: 'explicit-groups',
+      groups: [
+        { title: 'Core change', paths: ['src/kept.ts'] },
+        { title: 'Renames', paths: ['src/renamed.ts'] },
+      ],
+    });
+    expect(explicit.ok).toBe(true);
+    if (!explicit.ok) return;
+    const g2 = rooms.listGroupedDiff('explicit-groups');
+    expect(g2.groups.map((g) => g.title)).toEqual(['Core change', 'Renames', 'Other']);
+    expect(g2.groups[0]?.files[0]?.relPath).toBe('src/kept.ts');
+  });
+
+  it('listRepoFiles marks changed files; openContextFile lazily binds the rest', () => {
+    const res = rooms.bindDiff({ repoPath: fixture.repo, base: fixture.base });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+
+    const all = rooms.listRepoFiles(res.reviewId);
+    expect(all.ok).toBe(true);
+    const files = all.files ?? [];
+    // note.md is unchanged but present; kept.ts changed.
+    expect(files.find((f) => f.relPath === 'note.md')?.changed).toBe(false);
+    expect(files.find((f) => f.relPath === 'src/kept.ts')?.changed).toBe(true);
+
+    // Open unchanged note.md for context → code doc in same workspace.
+    const opened = rooms.openContextFile(res.reviewId, 'note.md');
+    expect(opened.ok).toBe(true);
+    if (!opened.ok) return;
+    const room = rooms.get(opened.docId);
+    expect(room?.meta.type).toBe('code');
+    expect(room?.meta.workspaceId).toBe(res.reviewId);
+    expect(room?.ydoc.getText('content').toString()).toContain('# unchanged');
+
+    // Context docs stay OUT of the grouped-diff view.
+    const grouped = rooms.listGroupedDiff(res.reviewId);
+    expect(grouped.groups.flatMap((g) => g.files).some((f) => f.relPath === 'note.md')).toBe(false);
+
+    // Idempotent re-open; traversal rejected.
+    const again = rooms.openContextFile(res.reviewId, 'note.md');
+    expect(again.ok && again.docId === opened.docId).toBe(true);
+    const evil = rooms.openContextFile(res.reviewId, '../outside.txt');
+    expect(evil.ok).toBe(false);
+    if (!evil.ok) expect(evil.error).toBe('bad-path');
+  });
+
   it('builds a workspace tree with diff badges', () => {
     const res = rooms.bindDiff({
       repoPath: fixture.repo,

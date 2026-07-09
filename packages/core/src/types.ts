@@ -101,6 +101,13 @@ export interface DocMeta {
   diffOldPath?: string;
   diffAdditions?: number;
   diffDeletions?: number;
+  /**
+   * Logical group for the sidebar's grouped-diff view (e.g. "Routing",
+   * "Tests"). Supplied by the creating agent or derived heuristically at
+   * bind time; refreshed on re-bind. `diffGroupRank` orders groups.
+   */
+  diffGroup?: string;
+  diffGroupRank?: number;
 }
 
 export interface User {
