@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import type { DocType } from '@feedback/core';
 
 /** Filesystem scanning + file-type gating for folder binds. */
@@ -56,6 +56,13 @@ export function scanFolder(root: string): string[] {
     // git missing or threw — fall through to readdir.
   }
   return readdirRecursive(root);
+}
+
+/** Repo-relative POSIX paths for every scanned file, sorted. */
+export function scanFolderPaths(root: string): string[] {
+  return scanFolder(root)
+    .map((abs) => relative(root, abs).split(sep).join('/'))
+    .sort();
 }
 
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', '.next', 'coverage']);

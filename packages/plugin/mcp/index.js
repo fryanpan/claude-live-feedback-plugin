@@ -14326,7 +14326,18 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok(res);
       }
       case "create_diff_review": {
-        const { repo, base, target, reviewId, title, exclude, maxFiles, subscribe, producedBy } = a;
+        const {
+          repo,
+          base,
+          target,
+          reviewId,
+          title,
+          exclude,
+          groups,
+          maxFiles,
+          subscribe,
+          producedBy
+        } = a;
         const res = await http("POST", "/api/diffs", {
           repo,
           base,
@@ -14335,6 +14346,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...reviewId ? { reviewId } : {},
           ...title ? { title } : {},
           ...exclude ? { exclude } : {},
+          ...groups ? { groups } : {},
           ...maxFiles !== undefined ? { maxFiles } : {},
           ...producedBy ? { producedBy } : {}
         });

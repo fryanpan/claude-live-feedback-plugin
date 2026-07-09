@@ -48,7 +48,9 @@ import {
   type BindFolderResult,
   bindDiff as bindDiffImpl,
   bindFolder as bindFolderImpl,
+  memberDocId,
 } from './binds.ts';
+import { scanFolderPaths } from './fs-scan.ts';
 import { showFile } from './git-diff.ts';
 import type { SseHub } from './sse.ts';
 import type { WebhookDispatcher } from './webhooks.ts';
@@ -722,6 +724,145 @@ export class Rooms {
     }
     out.sort((a, b) => b.lastActivity - a.lastActivity);
     return out;
+  }
+
+  /**
+   * The grouped-diff sidebar model: a diff review's CHANGED files organized
+   * into their logical groups (agent-supplied at bind time or heuristic),
+   * ordered by group rank then churn. Context files opened from the
+   * all-files view (type 'code') are deliberately excluded — this view is
+   * "what changed", not "what's open".
+   */
+  listGroupedDiff(workspaceId: string): {
+    workspaceId: string;
+    totalOpen: number;
+    groups: Array<{ title: string; openCount: number; files: WorkspaceFileNode[] }>;
+  } {
+    const decorate = this.cfg.decorateDocMeta;
+    const byGroup = new Map<string, { rank: number; files: WorkspaceFileNode[] }>();
+    let totalOpen = 0;
+    for (const meta of this.list()) {
+      if (meta.workspaceId !== workspaceId || meta.type !== 'diff') continue;
+      const relPath = meta.relPath ?? meta.docId;
+      const openCount = this.listThreads(meta.docId, { status: 'open' }).length;
+      const threadCount = this.listThreads(meta.docId).length;
+      totalOpen += openCount;
+      const decorated = decorate ? decorate(meta) : meta;
+      const node: WorkspaceFileNode = {
+        type: 'file',
+        docId: meta.docId,
+        name: relPath.split('/').pop() ?? relPath,
+        relPath,
+        fileType: meta.type,
+        openCount,
+        threadCount,
+        reviewUrl: (decorated as { reviewUrl?: string }).reviewUrl,
+        lastActivityAt: meta.lastActivityAt,
+        ...(meta.diffStatus !== undefined ? { diffStatus: meta.diffStatus } : {}),
+        ...(meta.diffAdditions !== undefined ? { diffAdditions: meta.diffAdditions } : {}),
+        ...(meta.diffDeletions !== undefined ? { diffDeletions: meta.diffDeletions } : {}),
+      };
+      const title = meta.diffGroup ?? 'Files';
+      let g = byGroup.get(title);
+      if (!g) {
+        g = { rank: meta.diffGroupRank ?? Number.MAX_SAFE_INTEGER, files: [] };
+        byGroup.set(title, g);
+      }
+      g.rank = Math.min(g.rank, meta.diffGroupRank ?? Number.MAX_SAFE_INTEGER);
+      g.files.push(node);
+    }
+    const groups = Array.from(byGroup.entries())
+      .sort((a, b) => a[1].rank - b[1].rank || a[0].localeCompare(b[0]))
+      .map(([title, g]) => {
+        g.files.sort(
+          (a, b) =>
+            (b.diffAdditions ?? 0) +
+            (b.diffDeletions ?? 0) -
+            ((a.diffAdditions ?? 0) + (a.diffDeletions ?? 0)),
+        );
+        return {
+          title,
+          openCount: g.files.reduce((s, f) => s + f.openCount, 0),
+          files: g.files,
+        };
+      });
+    return { workspaceId, totalOpen, groups };
+  }
+
+  /**
+   * Every reviewable file in the workspace's repo folder (gitignore-aware
+   * scan), with changed files marked — powers the "Show All Files" context
+   * view. Files that are already docs carry their reviewUrl; anything else
+   * can be opened on demand via `openContextFile`.
+   */
+  listRepoFiles(workspaceId: string): {
+    ok: boolean;
+    root?: string;
+    truncated?: boolean;
+    files?: Array<{ relPath: string; changed: boolean; docId?: string; reviewUrl?: string }>;
+    error?: 'not-found';
+  } {
+    const members = this.list().filter((m) => m.workspaceId === workspaceId);
+    const root = members.find((m) => m.workspaceRoot)?.workspaceRoot;
+    if (!root || !existsSync(root)) return { ok: false, error: 'not-found' };
+    const decorate = this.cfg.decorateDocMeta;
+    const byRel = new Map(members.map((m) => [m.relPath ?? '', m]));
+    const MAX_FILES = 10_000;
+    const scanned = scanFolderPaths(root);
+    const truncated = scanned.length > MAX_FILES;
+    const files = scanned.slice(0, MAX_FILES).map((relPath) => {
+      const member = byRel.get(relPath);
+      if (!member) return { relPath, changed: false };
+      const decorated = decorate ? decorate(member) : member;
+      return {
+        relPath,
+        changed: member.type === 'diff',
+        docId: member.docId,
+        reviewUrl: (decorated as { reviewUrl?: string }).reviewUrl,
+      };
+    });
+    return { ok: true, root, truncated, files };
+  }
+
+  /**
+   * Open an UNCHANGED repo file for context from the all-files view: bind it
+   * lazily as a read-only code doc in the same workspace (deterministic
+   * docId, so repeat opens reuse the doc and any comments on it survive).
+   * relPath is validated against the workspace root — no traversal.
+   */
+  openContextFile(
+    workspaceId: string,
+    relPath: string,
+  ):
+    | { ok: true; docId: string; meta: DocMeta }
+    | { ok: false; error: 'not-found' | 'bad-path' | 'attach-failed' } {
+    const members = this.list().filter((m) => m.workspaceId === workspaceId);
+    const root = members.find((m) => m.workspaceRoot)?.workspaceRoot;
+    if (!root) return { ok: false, error: 'not-found' };
+    const clean = relPath.replace(/^\/+/, '');
+    const abs = join(root, clean);
+    // Traversal guard: the resolved path must stay under the root.
+    if (clean.split('/').includes('..') || !`${abs}/`.startsWith(`${root}/`)) {
+      return { ok: false, error: 'bad-path' };
+    }
+    if (!existsSync(abs)) return { ok: false, error: 'not-found' };
+    const existing = members.find((m) => m.relPath === clean);
+    if (existing) return { ok: true, docId: existing.docId, meta: existing };
+    const owner = members.find((m) => m.owner)?.owner;
+    const docId = memberDocId(workspaceId, clean);
+    const room = this.getOrCreate(docId, {
+      type: 'code',
+      sourceUrl: abs,
+      setId: workspaceId,
+      owner,
+      workspaceId,
+      workspaceRoot: root,
+      relPath: clean,
+      title: clean,
+    });
+    const attached = this.attachReadonlyFile(docId, abs);
+    if (!attached.ok) return { ok: false, error: 'attach-failed' };
+    return { ok: true, docId: room.docId, meta: room.meta };
   }
 
   buildWorkspaceTree(workspaceId: string): WorkspaceTree {

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { basename, join, relative, resolve as resolvePath, sep } from 'node:path';
 import type { DocMeta, DocType } from '@feedback/core';
+import { assignGroups } from './diff-groups.ts';
 import { buildAllowlist, looksBinary, scanFolder } from './fs-scan.ts';
 import {
   type DiffFileEntry,
@@ -41,6 +42,8 @@ export interface BindHost {
       diffOldPath?: string;
       diffAdditions?: number;
       diffDeletions?: number;
+      diffGroup?: string;
+      diffGroupRank?: number;
     },
   ): DocRoom;
   attachFile(docId: string, path: string): { ok: boolean };
@@ -167,6 +170,10 @@ export interface BindDiffOpts {
   title?: string;
   /** Path prefixes (relative to repo root) to leave out of the review. */
   exclude?: string[];
+  /** Logical file groups for the sidebar (agent-supplied, like organizing
+   *  commits). Unlisted changed files land in an "Other" group. When absent,
+   *  a heuristic groups by Tests/Docs/Build buckets + top-level module. */
+  groups?: Array<{ title: string; paths: string[] }>;
   maxFiles?: number;
   owner?: string;
   producedBy?: { agentId?: string; sessionId?: string };
@@ -190,6 +197,7 @@ export type BindDiffResult =
         status: DocMeta['diffStatus'];
         additions?: number;
         deletions?: number;
+        group?: string;
       }>;
     }
   | {
@@ -298,6 +306,15 @@ export function bindDiff(host: BindHost, opts: BindDiffOpts): BindDiffResult {
     return { ok: false, error: 'too-many-files', fileCount: accepted.length };
   }
 
+  const groupOf = assignGroups(
+    accepted.map(({ entry }) => ({
+      relPath: entry.relPath,
+      additions: entry.additions,
+      deletions: entry.deletions,
+    })),
+    opts.groups,
+  );
+
   const out: Array<{
     docId: string;
     relPath: string;
@@ -306,6 +323,7 @@ export function bindDiff(host: BindHost, opts: BindDiffOpts): BindDiffResult {
     status: DocMeta['diffStatus'];
     additions?: number;
     deletions?: number;
+    group?: string;
   }> = [];
   for (const { entry, text } of accepted) {
     const docId = memberDocId(reviewId, entry.relPath);
@@ -324,10 +342,12 @@ export function bindDiff(host: BindHost, opts: BindDiffOpts): BindDiffResult {
       diffOldPath: entry.oldPath,
       diffAdditions: entry.additions,
       diffDeletions: entry.deletions,
+      diffGroup: groupOf.get(entry.relPath)?.group,
+      diffGroupRank: groupOf.get(entry.relPath)?.rank,
     });
-    // initDocMeta is set-if-absent, but status/counts are DERIVED and go
-    // stale as the working tree moves — refresh them on every (re)bind.
-    refreshDiffMeta(room, entry);
+    // initDocMeta is set-if-absent, but status/counts/groups are DERIVED and
+    // go stale as the working tree moves — refresh them on every (re)bind.
+    refreshDiffMeta(room, entry, groupOf.get(entry.relPath));
     if (target) {
       // Pinned mode: seed the target-commit content once; no file
       // binding, no poll — content can't change underneath us.
@@ -350,6 +370,7 @@ export function bindDiff(host: BindHost, opts: BindDiffOpts): BindDiffResult {
       status: entry.status,
       additions: entry.additions,
       deletions: entry.deletions,
+      group: groupOf.get(entry.relPath)?.group,
     });
   }
 
@@ -372,12 +393,18 @@ export function bindDiff(host: BindHost, opts: BindDiffOpts): BindDiffResult {
  * they change every time the agent edits, and a re-bind should show the
  * current numbers, not the ones from the first bind.
  */
-function refreshDiffMeta(room: DocRoom, entry: DiffFileEntry): void {
+function refreshDiffMeta(
+  room: DocRoom,
+  entry: DiffFileEntry,
+  group?: { group: string; rank: number },
+): void {
   const next: Partial<DocMeta> = {
     diffStatus: entry.status,
     diffOldPath: entry.oldPath,
     diffAdditions: entry.additions,
     diffDeletions: entry.deletions,
+    diffGroup: group?.group,
+    diffGroupRank: group?.rank,
   };
   const m = room.ydoc.getMap('meta');
   const changed = (Object.entries(next) as Array<[keyof DocMeta, unknown]>).filter(
