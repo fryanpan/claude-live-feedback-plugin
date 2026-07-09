@@ -13722,6 +13722,15 @@ var server = new Server({
     "mid-session — if you wrote to a bound file externally and need to be sure",
     "it landed, call reparse_from_disk(docId) to force-pull from disk.",
     "",
+    "DIFF REVIEW: when the human wants to review a git diff / PR-style change",
+    '(a branch, two commits, "review this diff"), call',
+    "create_diff_review(repo, base, target) — one review doc per changed file,",
+    "PR-style unified diff with line comments and a per-file Diff ↔ File toggle.",
+    "Share the returned entryUrl with the human (bare URL on its own line);",
+    "the file tree navigates the rest. Thread events arrive per file via the",
+    "auto-watch; resolve threads as you address them; delete_workspace(reviewId)",
+    "when the review is done.",
+    "",
     "OBSERVE: call watch_doc(docId) once per doc to receive thread events as",
     '<channel source="live-feedback" doc_id="..." thread_id="..." event="..." author="..." sent_at="...">body</channel>',
     "messages. Treat each as an explicit ask from the reviewer; read, decide if it",
@@ -13914,6 +13923,39 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           }
         },
         required: ["folderPath"]
+      }
+    },
+    {
+      name: "create_diff_review",
+      description: "Create a GitHub-PR-style review of a git diff: point it at a local repo and two commits, and the server creates one review doc per changed file, grouped as a workspace — the reviewer gets a file tree with per-file A/M/D/R + line-count badges, a unified diff view with old/new line numbers and collapsed unchanged regions, a per-file Diff ↔ whole-File toggle (the whole file at the TARGET commit), and line-anchored comment threads in both views. Content is pinned to the target hash, so anchors never drift. `repo` is an absolute path to a local checkout/worktree containing both commits; `base` and `target` are any refs git can resolve (hashes, branches, HEAD~2). Re-running with the same range is idempotent (threads survive); the same reviewId with a DIFFERENT range is rejected. Binary files and files over 512 KB are skipped and reported in skipped[]. Pass `exclude` (path prefixes, e.g. ['src/main/assets/vendored-repo']) to keep vendored or generated directories out of the review. GUARDRAIL: more than `maxFiles` (default 300) changed files → error 'too-many-files'; narrow with `exclude` or raise `maxFiles`. The caller is auto-subscribed to thread events on every file doc (pass subscribe:false to skip). Returns {reviewId, entryUrl, files[{docId, relPath, status, additions, deletions, reviewUrl}], skipped[]} — hand `entryUrl` to the human (the file tree navigates to the rest). Clean up with delete_workspace(reviewId) when the review is done. Comments on DELETED lines aren't supported yet — ask the reviewer to comment on an adjacent kept line.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo: { type: "string", description: "Absolute path to the local git repo/worktree." },
+          base: { type: "string", description: 'Base ref (the "before" side).' },
+          target: { type: "string", description: 'Target ref (the "after" side).' },
+          reviewId: {
+            type: "string",
+            description: "Optional review/workspace id. Defaults to <repo-basename>-<base7>-<target7>."
+          },
+          title: { type: "string" },
+          exclude: {
+            type: "array",
+            items: { type: "string" },
+            description: "Path prefixes (relative to repo root) to leave out of the review."
+          },
+          maxFiles: { type: "number" },
+          subscribe: { type: "boolean" },
+          producedBy: {
+            type: "object",
+            description: "Optional provenance for the activity event stream: {agentId?, sessionId?}. Stored on every doc the review creates.",
+            properties: {
+              agentId: { type: "string" },
+              sessionId: { type: "string" }
+            }
+          }
+        },
+        required: ["repo", "base", "target"]
       }
     },
     {
@@ -14264,6 +14306,27 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...workspaceId ? { workspaceId } : {},
           ...title ? { title } : {},
           ...include ? { include } : {},
+          ...maxFiles !== undefined ? { maxFiles } : {},
+          ...producedBy ? { producedBy } : {}
+        });
+        if (subscribe !== false && res?.ok && Array.isArray(res.files)) {
+          for (const f of res.files) {
+            if (f?.docId)
+              await watchDoc(f.docId);
+          }
+        }
+        return ok(res);
+      }
+      case "create_diff_review": {
+        const { repo, base, target, reviewId, title, exclude, maxFiles, subscribe, producedBy } = a;
+        const res = await http("POST", "/api/diffs", {
+          repo,
+          base,
+          target,
+          owner: process.cwd(),
+          ...reviewId ? { reviewId } : {},
+          ...title ? { title } : {},
+          ...exclude ? { exclude } : {},
           ...maxFiles !== undefined ? { maxFiles } : {},
           ...producedBy ? { producedBy } : {}
         });
