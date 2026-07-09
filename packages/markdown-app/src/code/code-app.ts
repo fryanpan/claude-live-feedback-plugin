@@ -17,14 +17,20 @@ import { createCodeEditor } from './code-editor.ts';
  * composer. Clicking a gutter dot or a panel thread reveals + scrolls +
  * pulses the anchored lines, mirroring the markdown path.
  */
-export function bootCode(opts: {
+export async function bootCode(opts: {
   docId: string;
   client: FeedbackClient;
   user: User;
   sourceUrl?: string;
   workspaceId?: string;
-}): void {
+  /** 'diff' boots the same surface in unified-diff mode with a view toggle. */
+  docType?: 'code' | 'diff';
+  /** Path relative to the repo root — language detection + doc label for
+   *  diff docs, which have no sourceUrl (content comes from git, not disk). */
+  relPath?: string;
+}): Promise<void> {
   const { docId, client, user } = opts;
+  const isDiff = opts.docType === 'diff';
   // A code file bound via bind_folder belongs to a workspace — render the
   // shared file tree so the reviewer can navigate the folder (same as the
   // markdown surface; code docs skip app.ts's renderSetNav by booting here).
@@ -34,6 +40,27 @@ export function bootCode(opts: {
   }
   const { ydoc } = client;
   document.body.classList.add('code-mode');
+  if (isDiff) document.body.classList.add('diff-mode');
+
+  // Diff rendering data: the base-commit text this file is compared against.
+  // Fetched before mounting so the surface can boot straight into diff mode.
+  // When it's unavailable (repo worktree pruned), fall back to the whole-file
+  // view — that needs nothing beyond the ydoc content.
+  interface DiffInfo {
+    baseText: string | null;
+    status?: 'added' | 'modified' | 'deleted' | 'renamed';
+    oldPath?: string;
+    error?: string;
+  }
+  let diffInfo: DiffInfo | null = null;
+  if (isDiff) {
+    try {
+      const res = await fetch(`/api/docs/${encodeURIComponent(docId)}/diff`);
+      if (res.ok) diffInfo = (await res.json()) as DiffInfo;
+    } catch {
+      // fall through to whole-file mode
+    }
+  }
 
   const editorMount = el<HTMLElement>('editor');
   const threadsListEl = el<HTMLElement>('threads-list');
@@ -57,7 +84,8 @@ export function bootCode(opts: {
   // Prefer the sourceUrl from the REST meta (available immediately) over the
   // Yjs meta map, which hasn't synced yet at boot — otherwise the language
   // extension is chosen from an empty path and the file renders unhighlighted.
-  const sourceUrl = opts.sourceUrl || (readDocMeta(ydoc).sourceUrl ?? '');
+  // Diff docs have no sourceUrl; their relPath serves the same purpose.
+  const sourceUrl = opts.sourceUrl || opts.relPath || (readDocMeta(ydoc).sourceUrl ?? '');
 
   let selection: { start: Uint8Array; end: Uint8Array; snippet: string } | null = null;
 
@@ -65,6 +93,7 @@ export function bootCode(opts: {
     parent: editorMount,
     ydoc,
     sourceUrl,
+    diff: diffInfo?.baseText != null ? { baseText: diffInfo.baseText } : undefined,
     onSelectionChange: () => {
       const sel = surface.getSelectionRel();
       if (sel) {
@@ -76,6 +105,34 @@ export function bootCode(opts: {
     },
     onMarkerClick: (id) => revealThread(id),
   });
+
+  // --- diff ↔ whole-file toggle ---------------------------------------------
+  if (isDiff) {
+    const toggle = document.getElementById('view-toggle');
+    const btnDiff = document.getElementById('view-diff') as HTMLButtonElement | null;
+    const btnFile = document.getElementById('view-file') as HTMLButtonElement | null;
+    if (diffInfo?.baseText != null && toggle && btnDiff && btnFile) {
+      toggle.classList.remove('hidden');
+      const applyMode = (mode: 'diff' | 'file') => {
+        surface.setViewMode(mode);
+        btnDiff.classList.toggle('active', mode === 'diff');
+        btnDiff.setAttribute('aria-pressed', String(mode === 'diff'));
+        btnFile.classList.toggle('active', mode === 'file');
+        btnFile.setAttribute('aria-pressed', String(mode === 'file'));
+      };
+      btnDiff.addEventListener('click', () => applyMode('diff'));
+      btnFile.addEventListener('click', () => applyMode('file'));
+    }
+    if (diffInfo?.status === 'deleted') {
+      showBanner('This file was deleted in this diff — the content shown is the base version.');
+    } else if (diffInfo?.baseText == null) {
+      showBanner(
+        `Diff unavailable (${diffInfo?.error ?? 'no diff data'}) — showing the whole file at the target commit.`,
+      );
+    } else if (diffInfo.status === 'renamed' && diffInfo.oldPath) {
+      showBanner(`Renamed from ${diffInfo.oldPath}`);
+    }
+  }
 
   // Interaction-bounded reading-session capture (doc_open + read_session).
   // CodeMirror manages its own scroller inside #editor; the tracker reads
@@ -538,6 +595,21 @@ function el<T extends HTMLElement>(id: string): T {
   const e = document.getElementById(id);
   if (!e) throw new Error(`missing element #${id}`);
   return e as T;
+}
+
+/** Persistent one-line notice above the editor (rename origin, deleted file,
+ *  diff-unavailable fallback). Distinct from the transient toast. */
+function showBanner(msg: string): void {
+  const pane = document.getElementById('editor-pane');
+  if (!pane) return;
+  let b = document.getElementById('diff-banner');
+  if (!b) {
+    b = document.createElement('div');
+    b.id = 'diff-banner';
+    b.className = 'diff-banner';
+    pane.insertBefore(b, pane.firstChild);
+  }
+  b.textContent = msg;
 }
 
 let toastTimer: ReturnType<typeof setTimeout> | null = null;

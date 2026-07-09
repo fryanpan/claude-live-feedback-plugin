@@ -1,5 +1,6 @@
 import { defaultHighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import {
+  Compartment,
   EditorState,
   type Extension,
   RangeSet,
@@ -19,7 +20,14 @@ import { getContent } from '@feedback/core';
 import * as Y from 'yjs';
 import type { ReviewSurface, SurfaceThreadRange } from '../review-surface.ts';
 import { encodeOffsetRel, resolveRelOffset, snapToLines } from './code-anchor.ts';
+import {
+  type DiffViewConfig,
+  diffMergeExtensions,
+  oldLineNumberGutter,
+} from './diff-extensions.ts';
 import { languageExtensionFor } from './languages.ts';
+
+export type CodeViewMode = 'diff' | 'file';
 
 export interface CreateCodeEditorOpts {
   parent: HTMLElement;
@@ -28,6 +36,16 @@ export interface CreateCodeEditorOpts {
   onSelectionChange?: () => void;
   /** Click handler for a gutter comment marker (the thread's id). */
   onMarkerClick?: (threadId: string) => void;
+  /** When set, the surface starts in unified-diff mode against this base
+   *  text; `setViewMode` toggles diff ↔ whole-file. Anchors are offsets into
+   *  the same (target) document in both modes, so threads are unaffected. */
+  diff?: DiffViewConfig;
+}
+
+/** A ReviewSurface that can also swap between diff and whole-file rendering. */
+export interface CodeSurface extends ReviewSurface {
+  setViewMode: (mode: CodeViewMode) => void;
+  getViewMode: () => CodeViewMode;
 }
 
 // --- gutter comment markers --------------------------------------------------
@@ -131,14 +149,24 @@ const pulseField = StateField.define<DecorationSet>({
  * edits — comments anchor to whole lines via the same `text-range` /
  * `Y.RelativePosition` wire shape the markdown editor uses.
  */
-export function createCodeEditor(opts: CreateCodeEditorOpts): ReviewSurface {
+export function createCodeEditor(opts: CreateCodeEditorOpts): CodeSurface {
   const content = getContent(opts.ydoc);
+
+  // Diff docs boot in diff mode; the toggle reconfigures this compartment.
+  // The old-line gutter must precede lineNumbers() so base numbering renders
+  // to the LEFT of target numbering (GitHub column order).
+  const viewModeComp = new Compartment();
+  let viewMode: CodeViewMode = opts.diff ? 'diff' : 'file';
+  const modeExtensions = (mode: CodeViewMode): Extension[] =>
+    mode === 'diff' && opts.diff
+      ? [oldLineNumberGutter(), lineNumbers(), ...diffMergeExtensions(opts.diff)]
+      : [lineNumbers()];
 
   const langExt = languageExtensionFor(opts.sourceUrl);
   const extensions: Extension[] = [
     EditorState.readOnly.of(true),
     EditorView.editable.of(false),
-    lineNumbers(),
+    viewModeComp.of(modeExtensions(viewMode)),
     syntaxHighlighting(defaultHighlightStyle),
     markerField,
     pulseField,
@@ -214,6 +242,14 @@ export function createCodeEditor(opts: CreateCodeEditorOpts): ReviewSurface {
         .filter((r) => r.status !== 'resolved')
         .map((r) => ({ id: r.id, from: r.from, active: r.id === activeId }));
       view.dispatch({ effects: setMarkersEffect.of(markers) });
+    },
+    setViewMode(mode: CodeViewMode) {
+      if (mode === viewMode) return;
+      viewMode = mode;
+      view.dispatch({ effects: viewModeComp.reconfigure(modeExtensions(mode)) });
+    },
+    getViewMode() {
+      return viewMode;
     },
     destroy() {
       content.unobserve(onContentChange);

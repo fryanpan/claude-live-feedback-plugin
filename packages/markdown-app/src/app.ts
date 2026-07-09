@@ -14,20 +14,21 @@ const DEFAULT_WS_PATH = (docId: string, type: string) =>
  *  fallback — it migrates legacy content and never assumes code). */
 async function fetchDocMeta(
   docId: string,
-): Promise<{ type: string; sourceUrl: string; workspaceId: string }> {
+): Promise<{ type: string; sourceUrl: string; workspaceId: string; relPath: string }> {
   try {
     const res = await fetch(`/api/docs/${encodeURIComponent(docId)}`);
-    if (!res.ok) return { type: 'markdown', sourceUrl: '', workspaceId: '' };
+    if (!res.ok) return { type: 'markdown', sourceUrl: '', workspaceId: '', relPath: '' };
     const data = (await res.json()) as {
-      meta?: { type?: string; sourceUrl?: string; workspaceId?: string };
+      meta?: { type?: string; sourceUrl?: string; workspaceId?: string; relPath?: string };
     };
     return {
       type: data.meta?.type ?? 'markdown',
       sourceUrl: data.meta?.sourceUrl ?? '',
       workspaceId: data.meta?.workspaceId ?? '',
+      relPath: data.meta?.relPath ?? '',
     };
   } catch {
-    return { type: 'markdown', sourceUrl: '', workspaceId: '' };
+    return { type: 'markdown', sourceUrl: '', workspaceId: '', relPath: '' };
   }
 }
 
@@ -87,15 +88,25 @@ async function boot(): Promise<void> {
     type: docType,
     sourceUrl: docSourceUrl,
     workspaceId: docWorkspaceId,
+    relPath: docRelPath,
   } = await fetchDocMeta(docId);
   const client = connect(DEFAULT_WS_PATH(docId, docType));
 
-  // Code docs get a read-only, syntax-highlighted CodeMirror surface that
-  // reuses the same thread/comment stack. Everything below this branch is
-  // Tiptap/ProseMirror-specific (format bar, edit-mode toggle, comment pill
-  // positioning) and only applies to markdown docs.
-  if (docType === 'code') {
-    bootCode({ docId, client, user, sourceUrl: docSourceUrl, workspaceId: docWorkspaceId });
+  // Code and diff docs get a read-only, syntax-highlighted CodeMirror
+  // surface that reuses the same thread/comment stack (diff docs add the
+  // unified-diff rendering + view toggle on top). Everything below this
+  // branch is Tiptap/ProseMirror-specific (format bar, edit-mode toggle,
+  // comment pill positioning) and only applies to markdown docs.
+  if (docType === 'code' || docType === 'diff') {
+    void bootCode({
+      docId,
+      client,
+      user,
+      sourceUrl: docSourceUrl,
+      workspaceId: docWorkspaceId,
+      docType,
+      relPath: docRelPath,
+    });
     return;
   }
 

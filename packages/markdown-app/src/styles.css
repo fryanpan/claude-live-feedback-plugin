@@ -1603,3 +1603,126 @@ body.code-mode #editor .cm-content {
   background: var(--accent-subtle, rgba(46, 125, 215, 0.18));
   transition: background 0.25s ease;
 }
+
+/* ================= DIFF REVIEW SURFACE ================= */
+/* Unified-diff rendering on top of the code surface (type='diff' docs).
+   @codemirror/merge's baseTheme colors the chunks; these rules add the
+   PR-style dual line-number columns, the view toggle, and the banners. */
+
+/* Diff ↔ File segmented toggle in the topbar. 36px tap targets (mobile). */
+.view-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.view-toggle.hidden {
+  display: none;
+}
+.view-toggle-btn {
+  min-height: 36px;
+  min-width: 48px;
+  padding: 0 10px;
+  border: none;
+  background: var(--bg);
+  color: var(--fg-muted);
+  font: 600 12.5px var(--sans);
+  cursor: pointer;
+}
+.view-toggle-btn + .view-toggle-btn {
+  border-left: 1px solid var(--border);
+}
+.view-toggle-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* Old-line-number gutter (base commit). Sits LEFT of the target numbers;
+   blank on added/changed lines, like GitHub's left column. */
+.cm-old-line-gutter {
+  min-width: 3ch;
+  padding: 0 3px 0 8px;
+  text-align: right;
+  color: var(--fg-muted);
+  opacity: 0.65;
+}
+
+/* Deleted-chunk widgets: number each deleted line from data-old-line
+   (stamped by numberDeletedLines) in a left column that mirrors a gutter. */
+body.diff-mode .cm-deletedChunk {
+  padding-left: 0;
+}
+body.diff-mode .cm-deletedChunk .cm-deletedLine {
+  display: block;
+  position: relative;
+  padding-left: calc(6ch + 16px);
+}
+body.diff-mode .cm-deletedChunk .cm-deletedLine::before {
+  content: attr(data-old-line);
+  position: absolute;
+  left: 0;
+  width: 3ch;
+  padding: 0 3px 0 8px;
+  text-align: right;
+  color: var(--fg-muted);
+  opacity: 0.65;
+  font-size: inherit;
+}
+
+/* Persistent notice above the editor (renamed-from, deleted file,
+   diff-unavailable fallback). */
+.diff-banner {
+  padding: 6px 14px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-muted);
+  font: 12.5px / 1.4 var(--sans);
+  overflow-wrap: anywhere;
+}
+
+/* Workspace-tree badges for diff members: A/M/D/R letter + line counts. */
+.tree-diff-status {
+  flex: none;
+  display: inline-block;
+  min-width: 14px;
+  text-align: center;
+  border-radius: 3px;
+  font: 700 10px / 16px var(--sans);
+}
+.tree-diff-A {
+  color: var(--green);
+}
+.tree-diff-M {
+  color: var(--yellow);
+}
+.tree-diff-D {
+  color: var(--red);
+}
+.tree-diff-R {
+  color: var(--accent);
+}
+.tree-diff-counts {
+  flex: none;
+  color: var(--fg-muted);
+  font: 10.5px / 16px var(--mono);
+  white-space: nowrap;
+}
+
+/* Collapsed-unchanged bar (from @codemirror/merge) — make the tap target
+   comfortable on mobile. */
+body.diff-mode .cm-collapsedLines {
+  padding: 6px 12px;
+  min-height: 28px;
+}
+
+@media (max-width: 720px) {
+  /* Keep the toggle compact but tappable next to the 💬 button. */
+  .view-toggle-btn {
+    min-width: 42px;
+    padding: 0 8px;
+  }
+  /* Tighter deleted-line number column on narrow screens. */
+  body.diff-mode .cm-deletedChunk .cm-deletedLine {
+    padding-left: calc(4ch + 10px);
+  }
+}
