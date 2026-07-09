@@ -535,6 +535,32 @@ describe('Rooms.bindDiff', () => {
     if (!evil.ok) expect(evil.error).toBe('bad-path');
   });
 
+  it('HTTP route forwards groups end-to-end (regression: param was dropped)', async () => {
+    const { createServer } = await import('../src/server.ts');
+    const httpDataDir = mkdtempSync(join(tmpdir(), 'bd-http-'));
+    const handle = createServer({ port: 0, dataDir: httpDataDir });
+    try {
+      const res = await fetch(`http://localhost:${handle.port}/api/diffs`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          repo: fixture.repo,
+          base: fixture.base,
+          reviewId: 'http-groups',
+          groups: [{ title: 'Via HTTP', paths: ['src'] }],
+        }),
+      });
+      expect(res.ok).toBe(true);
+      const grouped = (await (
+        await fetch(`http://localhost:${handle.port}/api/workspaces/http-groups/grouped`)
+      ).json()) as { groups: Array<{ title: string }> };
+      expect(grouped.groups.map((g) => g.title)).toEqual(['Via HTTP']);
+    } finally {
+      await handle.stop();
+      rmSync(httpDataDir, { recursive: true, force: true });
+    }
+  });
+
   it('builds a workspace tree with diff badges', () => {
     const res = rooms.bindDiff({
       repoPath: fixture.repo,
