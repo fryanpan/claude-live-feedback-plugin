@@ -1039,6 +1039,11 @@ const ARTIFACT_KIND: Record<ArtifactKind, { glyph: string; label: string }> = {
   mockup: { glyph: '🖼', label: 'mockup' },
 };
 
+function flattenTreeFileNodes(node: WorkspaceDirNode | WorkspaceFileNode): WorkspaceFileNode[] {
+  if (node.type === 'file') return [node];
+  return node.children.flatMap(flattenTreeFileNodes);
+}
+
 /** Flatten a workspace tree into a sorted file list for the landing nesting. */
 function flattenWorkspaceFiles(node: WorkspaceDirNode | WorkspaceFileNode): LandingFile[] {
   if (node.type === 'file') {
@@ -1088,10 +1093,23 @@ function buildLandingModel(
       if (!art) {
         const tree = rooms.buildWorkspaceTree(meta.workspaceId);
         const files = flattenWorkspaceFiles(tree.tree);
+        // Clicking the workspace opens its entry file directly (the
+        // biggest change for a diff review, first file otherwise);
+        // expansion is a separate affordance in the renderer.
+        const treeFiles = flattenTreeFileNodes(tree.tree);
+        const entry = treeFiles.reduce(
+          (best, f) =>
+            (f.diffAdditions ?? 0) + (f.diffDeletions ?? 0) >
+            (best?.diffAdditions ?? 0) + (best?.diffDeletions ?? 0)
+              ? f
+              : best,
+          treeFiles[0],
+        );
         art = {
           kind: 'workspace',
           name: meta.workspaceId,
           id: meta.workspaceId,
+          reviewUrl: entry?.reviewUrl,
           openCount: tree.totalOpen,
           threadCount: 0,
           lastActivity: 0,
@@ -1100,6 +1118,9 @@ function buildLandingModel(
         workspaceArtifacts.set(meta.workspaceId, art);
         ensureProject(owner).artifacts.push(art);
       }
+      // A diff member marks the whole workspace as a diff review (members
+      // can also include plain 'code' context docs — any diff doc wins).
+      if (meta.type === 'diff') art.kind = 'diff';
       art.threadCount += threads.length;
       if (lastActivity > art.lastActivity) art.lastActivity = lastActivity;
       continue;
@@ -1177,18 +1198,22 @@ function renderLandingArtifact(a: LandingArtifact): string {
       ? `<div class="meta">last activity ${escape(formatRelative(a.lastActivity))}</div>`
       : '';
 
-  if (a.kind === 'workspace') {
-    const fileCount = a.files?.length ?? 0;
-    const files = (a.files ?? []).map(renderLandingFile).join('');
-    // Native <details> so folder expansion needs no JS.
+  if (a.files) {
+    const fileCount = a.files.length;
+    const files = a.files.map(renderLandingFile).join('');
+    const nameLink = a.reviewUrl
+      ? `<a href="${escape(a.reviewUrl)}">${escape(a.name)}</a>`
+      : escape(a.name);
+    // Clicking the NAME opens the review's entry file; the caret + file
+    // count is the (separate) expansion affordance for the nested list.
     return `<li class="artifact ${a.openCount > 0 ? 'has-open' : ''}">
-      <details>
-        <summary>
-          <span class="art-glyph">${kind.glyph}</span>
-          <span class="art-name">${escape(a.name)}</span>
-          <span class="art-sub">${fileCount} file${fileCount === 1 ? '' : 's'}</span>
-          <span class="badges">${openBadge}<span class="badge badge-kind">${escape(kind.label)}</span></span>
-        </summary>
+      <div class="row">
+        <span class="art-glyph">${kind.glyph}</span>
+        <span class="art-name">${nameLink}</span>
+        <span class="badges">${openBadge}<span class="badge badge-kind">${escape(kind.label)}</span></span>
+      </div>
+      <details class="ws-details">
+        <summary><span class="art-sub">${fileCount} file${fileCount === 1 ? '' : 's'}</span></summary>
         <ul class="ws-files">${files || '<li class="ws-file empty">(no files)</li>'}</ul>
       </details>
       ${activityLine}
