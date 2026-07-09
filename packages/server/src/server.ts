@@ -352,7 +352,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           ...f,
           reviewUrl: withReviewUrl({ docId: f.docId, type: f.type }).reviewUrl,
         }));
-        return j(200, { ...res, files, entryUrl: files[0]?.reviewUrl });
+        // Land the reviewer on the MEATIEST change, not the first file
+        // alphabetically (which is usually dotfile/config noise on a big
+        // review). The in-page tree navigates to everything else.
+        const entry = files.reduce(
+          (best, f) =>
+            (f.additions ?? 0) + (f.deletions ?? 0) > (best.additions ?? 0) + (best.deletions ?? 0)
+              ? f
+              : best,
+          files[0],
+        );
+        return j(200, { ...res, files, entryUrl: entry?.reviewUrl });
       }
       // List bound workspaces with rolled-up triage signals (fileCount,
       // openThreads, allIdle, owner, lastActivityAt). The daily triage uses
@@ -374,6 +384,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // File-tree view for a bound workspace: nested directory tree with
       // per-file unresolved-comment counts + folder roll-ups. Files are
       // decorated with reviewUrl by the rooms decorator (withReviewUrl).
+      // All threads across a workspace (folder bind or diff review) in one
+      // call — lets a watching agent poll a single endpoint per review
+      // instead of one per member file. ?status=open|resolved filters.
+      const wsThreadsMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/threads$/);
+      if (wsThreadsMatch && req.method === 'GET') {
+        const workspaceId = decodeURIComponent(wsThreadsMatch[1] ?? '');
+        const status = url.searchParams.get('status') as 'open' | 'resolved' | null;
+        const threads = rooms.listWorkspaceThreads(workspaceId, status ? { status } : undefined);
+        return j(200, { workspaceId, threads });
+      }
       const wsTreeMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/tree$/);
       if (wsTreeMatch && req.method === 'GET') {
         const workspaceId = decodeURIComponent(wsTreeMatch[1] ?? '');

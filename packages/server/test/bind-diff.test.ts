@@ -401,6 +401,40 @@ describe('Rooms.bindDiff', () => {
     expect(live.reviewId).not.toBe(pinned.reviewId);
   });
 
+  it('listWorkspaceThreads aggregates threads across a review with doc context', async () => {
+    const res = rooms.bindDiff({
+      repoPath: fixture.repo,
+      base: fixture.base,
+      target: fixture.target,
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const keptId = res.files.find((f) => f.relPath === 'src/kept.ts')?.docId ?? '';
+    const newId = res.files.find((f) => f.relPath === 'src/new.ts')?.docId ?? '';
+    await rooms.createThreadByFind(
+      keptId,
+      { find: 'line2 CHANGED' },
+      { id: 'u1', name: 'T', kind: 'known', color: '#000' },
+      'a',
+    );
+    await rooms.createThreadByFind(
+      newId,
+      { find: 'brand new' },
+      { id: 'u1', name: 'T', kind: 'known', color: '#000' },
+      'b',
+    );
+    const all = rooms.listWorkspaceThreads(res.reviewId);
+    expect(all).toHaveLength(2);
+    expect(all.map((t) => t.relPath).sort()).toEqual(['src/kept.ts', 'src/new.ts']);
+    expect(all.every((t) => t.docId.length > 0)).toBe(true);
+
+    const one = rooms.listWorkspaceThreads(res.reviewId, { status: 'open' });
+    expect(one).toHaveLength(2);
+    const kept = all.find((t) => t.relPath === 'src/kept.ts');
+    if (kept) rooms.resolve(kept.docId, kept.id);
+    expect(rooms.listWorkspaceThreads(res.reviewId, { status: 'open' })).toHaveLength(1);
+  });
+
   it('builds a workspace tree with diff badges', () => {
     const res = rooms.bindDiff({
       repoPath: fixture.repo,

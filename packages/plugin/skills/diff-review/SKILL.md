@@ -58,6 +58,10 @@ other changed file.
 - You're auto-subscribed to every file doc: comments arrive as
   `<channel source="live-feedback" doc_id="..." thread_id="...">` events.
   The `doc_id` tells you which file (`<reviewId>:<relPath with / as ~>`).
+- Prefer one poll over N: `GET /api/workspaces/<reviewId>/threads?status=open`
+  returns every open thread across the whole review, each tagged with its
+  `docId` + `relPath` — use it to survey a big review instead of hitting
+  every file's thread route.
 - Treat each comment as an explicit ask. Reply with `post_reply`, and
   `resolve_thread` once you've addressed it — in working-tree mode the fix
   itself shows up in the reviewer's diff as soon as you save, so resolve with
