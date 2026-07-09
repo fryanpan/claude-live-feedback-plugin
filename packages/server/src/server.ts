@@ -196,13 +196,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
         const type = url.searchParams.get('type') as DocType | null;
         const sourceUrl = url.searchParams.get('sourceUrl') ?? undefined;
-        // Mockup/dev docs auto-create on WS — the widget connects first
-        // with a known type + sourceUrl. Markdown docs MUST be created
-        // upfront via POST /api/docs (which auto-attaches a file). The
-        // browser navigating to /review/<docId> before the agent has
+        // Mockup docs auto-create on WS — the widget connects first with a
+        // known type + sourceUrl (this covers the dev-server surface too;
+        // the widget always identifies as 'mockup'). Markdown docs MUST be
+        // created upfront via POST /api/docs (which auto-attaches a file).
+        // The browser navigating to /review/<docId> before the agent has
         // created the doc gets a clean 404 from /review's own handler.
         if (!rooms.get(docId)) {
-          if (type === 'mockup' || type === 'dev') {
+          if (type === 'mockup') {
             rooms.getOrCreate(docId, { type, sourceUrl });
           } else {
             return j(404, { error: 'doc not found' });
@@ -938,7 +939,7 @@ created by an agent calling <code>POST /api/docs</code> with a
 //   - a single markdown file, a code file, a mockup, or a dev server
 // Each artifact carries its open-comment count and a kind glyph/label.
 
-type ArtifactKind = 'workspace' | 'markdown' | 'code' | 'mockup' | 'dev';
+type ArtifactKind = 'workspace' | 'markdown' | 'code' | 'diff' | 'mockup';
 
 interface LandingFile {
   name: string;
@@ -979,8 +980,8 @@ const ARTIFACT_KIND: Record<ArtifactKind, { glyph: string; label: string }> = {
   workspace: { glyph: '📁', label: 'folder' },
   markdown: { glyph: '📄', label: 'markdown' },
   code: { glyph: '⟨⟩', label: 'code' },
+  diff: { glyph: '±', label: 'diff' },
   mockup: { glyph: '🖼', label: 'mockup' },
-  dev: { glyph: '⚡', label: 'dev server' },
 };
 
 /** Flatten a workspace tree into a sorted file list for the landing nesting. */
