@@ -2,6 +2,28 @@
 
 Technical discoveries that should persist across sessions for this project.
 
+## The route layer silently drops params unit tests can't see
+
+- **Every REST handler in server.ts hand-copies body fields into the rooms
+  call — a new param needs THREE additions (MCP tool, route, rooms), and
+  the route is the one nothing type-checks.** `groups` was added to the MCP
+  tool schema and to `bindDiff`, but not forwarded by `POST /api/diffs`:
+  the API accepted it, returned ok:true, and discarded it. Unit tests
+  passed (they call `bindDiff` directly); the outside agent reported
+  success TWICE (it trusted the 200). Only probing the live server's
+  resulting state exposed it. Rules: (1) when adding a param to a rooms
+  method, grep the route that fronts it in the same change; (2) write at
+  least one HTTP-level test through the real route per new param; (3) a
+  peer agent's "it worked" means "the call didn't error" — verify the
+  server-side EFFECT before believing a success report (same lesson as
+  diagnose-before-recommending, inverted).
+- **Related: don't let your own maintenance operations clobber
+  caller-supplied state.** A group-less refresh re-bind overwrote
+  agent-supplied groups with the heuristic because "refresh derived
+  fields" treated groups as derived. Fields that are sometimes derived and
+  sometimes caller-authored need an explicit precedence rule (explicit
+  wins; refresh only fills gaps).
+
 ## Diff review (type='diff') — immutable content changes the rules
 
 - **A diff review is "bind_folder where the file list comes from `git diff`
