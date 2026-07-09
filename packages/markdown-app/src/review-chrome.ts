@@ -100,74 +100,29 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
   closeThreads.addEventListener('click', closeDrawer);
   scrim.addEventListener('click', closeDrawer);
 
-  // Resizable comments panel (desktop). Drag the handle on the panel's left
-  // edge to widen/narrow it; the width persists. On mobile the panel is a
-  // full-height overlay and the handle is hidden.
-  (() => {
-    const pane = document.getElementById('threads-pane');
-    if (!pane) return;
-    const THREADS_W_KEY = 'lf:threads-w';
-    const MIN_W = 280;
-    const maxW = () => Math.min(720, Math.round(window.innerWidth * 0.6));
-    const clamp = (w: number) => Math.max(MIN_W, Math.min(maxW(), w));
-    const apply = (w: number) =>
-      document.documentElement.style.setProperty('--threads-w', `${w}px`);
-    try {
-      const saved = Number(localStorage.getItem(THREADS_W_KEY));
-      if (Number.isFinite(saved) && saved >= MIN_W) apply(clamp(saved));
-    } catch {
-      // localStorage unavailable — fall back to the CSS default width.
-    }
-
-    const handle = document.createElement('div');
-    handle.className = 'threads-resize';
-    handle.setAttribute('role', 'separator');
-    handle.setAttribute('aria-orientation', 'vertical');
-    handle.setAttribute('aria-label', 'Resize comments panel');
-    handle.title = 'Drag to resize · double-click to reset';
-    pane.appendChild(handle);
-
-    let dragging = false;
-    const onMove = (e: PointerEvent) => {
-      if (dragging) apply(clamp(window.innerWidth - e.clientX));
-    };
-    const onUp = () => {
-      if (!dragging) return;
-      dragging = false;
-      handle.classList.remove('dragging');
-      document.body.classList.remove('threads-resizing');
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-      const px = Number.parseInt(
-        getComputedStyle(document.documentElement).getPropertyValue('--threads-w'),
-        10,
-      );
-      if (Number.isFinite(px)) {
-        try {
-          localStorage.setItem(THREADS_W_KEY, String(px));
-        } catch {
-          // ignore — width still applied for this session
-        }
-      }
-    };
-    handle.addEventListener('pointerdown', (e) => {
-      if (window.matchMedia('(max-width: 900px)').matches) return;
-      e.preventDefault();
-      dragging = true;
-      handle.classList.add('dragging');
-      document.body.classList.add('threads-resizing');
-      window.addEventListener('pointermove', onMove);
-      window.addEventListener('pointerup', onUp);
-    });
-    handle.addEventListener('dblclick', () => {
-      document.documentElement.style.removeProperty('--threads-w');
-      try {
-        localStorage.removeItem(THREADS_W_KEY);
-      } catch {
-        // ignore
-      }
-    });
-  })();
+  // Resizable side panels (desktop): the comments pane (right edge drag)
+  // and the In-This-Review pane (left edge drag). Widths persist; on
+  // mobile both are overlays and the handles are hidden.
+  wireResizeHandle({
+    pane: document.getElementById('threads-pane'),
+    cssVar: '--threads-w',
+    storageKey: 'lf:threads-w',
+    min: 280,
+    max: () => Math.min(720, Math.round(window.innerWidth * 0.6)),
+    widthFromPointer: (e) => window.innerWidth - e.clientX,
+    handleClass: 'threads-resize',
+    label: 'Resize comments panel',
+  });
+  wireResizeHandle({
+    pane: document.getElementById('set-pane'),
+    cssVar: '--set-w',
+    storageKey: 'lf:set-w',
+    min: 240,
+    max: () => Math.min(600, Math.round(window.innerWidth * 0.45)),
+    widthFromPointer: (e) => e.clientX,
+    handleClass: 'set-resize',
+    label: 'Resize review panel',
+  });
   // Desktop layout shows the drawer inline; open by default there.
   if (window.matchMedia('(min-width: 901px)').matches) openDrawer();
 
@@ -596,6 +551,82 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     hideComposer,
     renderDocLabel,
   };
+}
+
+// --- resizable side panels ----------------------------------------------------
+
+interface ResizeOpts {
+  pane: HTMLElement | null;
+  cssVar: string;
+  storageKey: string;
+  min: number;
+  max: () => number;
+  /** Pointer x → desired panel width (direction depends on which edge). */
+  widthFromPointer: (e: PointerEvent) => number;
+  handleClass: string;
+  label: string;
+}
+
+function wireResizeHandle(opts: ResizeOpts): void {
+  const { pane } = opts;
+  if (!pane) return;
+  const clamp = (w: number) => Math.max(opts.min, Math.min(opts.max(), w));
+  const apply = (w: number) => document.documentElement.style.setProperty(opts.cssVar, `${w}px`);
+  try {
+    const saved = Number(localStorage.getItem(opts.storageKey));
+    if (Number.isFinite(saved) && saved >= opts.min) apply(clamp(saved));
+  } catch {
+    // localStorage unavailable — fall back to the CSS default width.
+  }
+
+  const handle = document.createElement('div');
+  handle.className = opts.handleClass;
+  handle.setAttribute('role', 'separator');
+  handle.setAttribute('aria-orientation', 'vertical');
+  handle.setAttribute('aria-label', opts.label);
+  handle.title = 'Drag to resize · double-click to reset';
+  pane.appendChild(handle);
+
+  let dragging = false;
+  const onMove = (e: PointerEvent) => {
+    if (dragging) apply(clamp(opts.widthFromPointer(e)));
+  };
+  const onUp = () => {
+    if (!dragging) return;
+    dragging = false;
+    handle.classList.remove('dragging');
+    document.body.classList.remove('threads-resizing');
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onUp);
+    const px = Number.parseInt(
+      getComputedStyle(document.documentElement).getPropertyValue(opts.cssVar),
+      10,
+    );
+    if (Number.isFinite(px)) {
+      try {
+        localStorage.setItem(opts.storageKey, String(px));
+      } catch {
+        // ignore — width still applied for this session
+      }
+    }
+  };
+  handle.addEventListener('pointerdown', (e) => {
+    if (window.matchMedia('(max-width: 900px)').matches) return;
+    e.preventDefault();
+    dragging = true;
+    handle.classList.add('dragging');
+    document.body.classList.add('threads-resizing');
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  });
+  handle.addEventListener('dblclick', () => {
+    document.documentElement.style.removeProperty(opts.cssVar);
+    try {
+      localStorage.removeItem(opts.storageKey);
+    } catch {
+      // ignore
+    }
+  });
 }
 
 // --- tiny DOM helpers shared by the boots -------------------------------------
