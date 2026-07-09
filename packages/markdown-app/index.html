@@ -29,17 +29,6 @@
           <span id="save-state" class="save-state save-state--saved">All changes saved</span>
         </div>
         <div class="toolbar">
-          <!-- Diff-review view toggle: unified diff vs whole file at the
-               target commit. Hidden except on diff docs (code-app shows it
-               once the base text is available). -->
-          <div id="view-toggle" class="view-toggle hidden" role="group" aria-label="View mode">
-            <button type="button" id="view-diff" class="view-toggle-btn active" aria-pressed="true">
-              Diff
-            </button>
-            <button type="button" id="view-file" class="view-toggle-btn" aria-pressed="false">
-              File
-            </button>
-          </div>
           <button
             type="button"
             id="toggle-edit-mode"
@@ -94,6 +83,17 @@
           <ol id="set-pane-list"></ol>
         </aside>
         <section id="editor-pane">
+          <!-- Diff-review view toggle: unified diff vs whole file (live).
+               Floats top-right of the editor; hidden except on diff docs
+               (code-app shows it once the base text is available). -->
+          <div id="view-toggle" class="view-toggle hidden" role="group" aria-label="View mode">
+            <button type="button" id="view-diff" class="view-toggle-btn active" aria-pressed="true">
+              Diff
+            </button>
+            <button type="button" id="view-file" class="view-toggle-btn" aria-pressed="false">
+              File
+            </button>
+          </div>
           <div
             id="format-bar"
             class="format-bar is-collapsed"
