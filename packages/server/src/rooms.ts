@@ -467,6 +467,54 @@ export class Rooms {
   > {
     const room = this.rooms.get(docId);
     if (!room) return { ok: false, error: 'no-doc' };
+    // Code/diff docs are flat text in the `content` Y.Text — the prose
+    // resolver below would walk an empty fragment and always miss. Find the
+    // text directly and snap the anchor to whole lines, matching the code
+    // surface's own selection convention.
+    if (room.meta.type === 'code' || room.meta.type === 'diff') {
+      const content = room.ydoc.getText('content');
+      const hay = content.toString();
+      const before = opts.contextBefore ?? '';
+      const after = opts.contextAfter ?? '';
+      const needle = before + opts.find + after;
+      const hits: number[] = [];
+      for (let i = hay.indexOf(needle); i !== -1; i = hay.indexOf(needle, i + 1)) hits.push(i);
+      if (hits.length === 0) return { ok: false, error: 'no-match' };
+      let hit: number | undefined;
+      if (opts.occurrence != null) {
+        hit = hits[opts.occurrence - 1];
+        if (hit === undefined) return { ok: false, error: 'no-match' };
+      } else if (hits.length > 1) {
+        return {
+          ok: false,
+          error: 'ambiguous',
+          candidates: hits.slice(0, 5).map((docOffset) => ({
+            docOffset,
+            preview: hay.slice(Math.max(0, docOffset - 30), docOffset + needle.length + 30),
+          })),
+        };
+      } else {
+        hit = hits[0] as number;
+      }
+      const from = hit + before.length;
+      const to = from + opts.find.length;
+      const lineStart = hay.lastIndexOf('\n', Math.max(0, from - 1)) + 1;
+      const nl = hay.indexOf('\n', Math.max(to - 1, lineStart));
+      const lineEnd = nl === -1 ? hay.length : nl + 1;
+      const enc = (offset: number) =>
+        Array.from(
+          Y.encodeRelativePosition(Y.createRelativePositionFromTypeIndex(content, offset)),
+        ) as unknown as Uint8Array;
+      const anchor: Anchor = {
+        kind: 'text-range',
+        startRel: enc(lineStart),
+        endRel: enc(lineEnd),
+        snippet: { text: hay.slice(lineStart, lineEnd).slice(0, 120) },
+      };
+      const thread = await this.postComment(docId, null, author, text, anchor);
+      if (!thread) return { ok: false, error: 'no-doc' };
+      return { ok: true, thread };
+    }
     const resolved = prose.resolveTextRangeFromFind(room.ydoc, opts);
     if (!resolved.ok) {
       if (resolved.error === 'ambiguous') {
