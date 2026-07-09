@@ -7,7 +7,29 @@
  *    the file at the TARGET commit — immutable, so anchors never drift; the
  *    diff itself is a client-side rendering against the base text.
  */
-export type DocType = 'markdown' | 'mockup' | 'dev' | 'code' | 'diff';
+export type DocType = 'markdown' | 'mockup' | 'code' | 'diff';
+
+/**
+ * Which Yjs content surface a doc kind uses — THE derived concept most
+ * server code actually branches on. New doc kinds fill in this table
+ * instead of adding `type === '…'` checks at every call site.
+ *  - prose: editable `prose` XmlFragment (Tiptap), markdown file write-back.
+ *  - flat:  read-only `content` Y.Text (code viewer / diff viewer).
+ *  - none:  no LF-held content — the surface is a host page (widget).
+ */
+export type ContentKind = 'prose' | 'flat' | 'none';
+
+export function contentKind(type: DocType): ContentKind {
+  switch (type) {
+    case 'markdown':
+      return 'prose';
+    case 'code':
+    case 'diff':
+      return 'flat';
+    default:
+      return 'none';
+  }
+}
 
 /** File change kind within a git diff review (git --name-status letter). */
 export type DiffFileStatus = 'added' | 'modified' | 'deleted' | 'renamed';
