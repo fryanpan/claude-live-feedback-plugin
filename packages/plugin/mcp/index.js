@@ -13722,14 +13722,19 @@ var server = new Server({
     "mid-session — if you wrote to a bound file externally and need to be sure",
     "it landed, call reparse_from_disk(docId) to force-pull from disk.",
     "",
-    "DIFF REVIEW: when the human wants to review a git diff / PR-style change",
-    '(a branch, two commits, "review this diff"), call',
-    "create_diff_review(repo, base, target) — one review doc per changed file,",
-    "PR-style unified diff with line comments and a per-file Diff ↔ File toggle.",
-    "Share the returned entryUrl with the human (bare URL on its own line);",
-    "the file tree navigates the rest. Thread events arrive per file via the",
-    "auto-watch; resolve threads as you address them; delete_workspace(reviewId)",
-    "when the review is done.",
+    'DIFF REVIEW: when the human wants to review your code changes ("review',
+    'this diff", a branch, work in progress), call create_diff_review(repo,',
+    "base) — one review doc per changed file, PR-style unified diff with line",
+    "comments and a per-file Diff ↔ File toggle. Default mode diffs base",
+    "against the LIVE working tree: keep editing the code and the reviewer",
+    "sees your changes re-render within ~1s, with their comments riding along",
+    "(threads orphan into the outdated-comments flow if their line disappears).",
+    "Pass target only to pin a review to a finished range. Re-run the tool",
+    "after touching files that were not in the diff before (idempotent;",
+    "refreshes the file list). Share the returned entryUrl with the human",
+    "(bare URL on its own line); the file tree navigates the rest. Thread",
+    "events arrive per file via the auto-watch; resolve threads as you address",
+    "them; delete_workspace(reviewId) when the review is done.",
     "",
     "OBSERVE: call watch_doc(docId) once per doc to receive thread events as",
     '<channel source="live-feedback" doc_id="..." thread_id="..." event="..." author="..." sent_at="...">body</channel>',
@@ -13927,16 +13932,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "create_diff_review",
-      description: "Create a GitHub-PR-style review of a git diff: point it at a local repo and two commits, and the server creates one review doc per changed file, grouped as a workspace — the reviewer gets a file tree with per-file A/M/D/R + line-count badges, a unified diff view with old/new line numbers and collapsed unchanged regions, a per-file Diff ↔ whole-File toggle (the whole file at the TARGET commit), and line-anchored comment threads in both views. Content is pinned to the target hash, so anchors never drift. `repo` is an absolute path to a local checkout/worktree containing both commits; `base` and `target` are any refs git can resolve (hashes, branches, HEAD~2). Re-running with the same range is idempotent (threads survive); the same reviewId with a DIFFERENT range is rejected. Binary files and files over 512 KB are skipped and reported in skipped[]. Pass `exclude` (path prefixes, e.g. ['src/main/assets/vendored-repo']) to keep vendored or generated directories out of the review. GUARDRAIL: more than `maxFiles` (default 300) changed files → error 'too-many-files'; narrow with `exclude` or raise `maxFiles`. The caller is auto-subscribed to thread events on every file doc (pass subscribe:false to skip). Returns {reviewId, entryUrl, files[{docId, relPath, status, additions, deletions, reviewUrl}], skipped[]} — hand `entryUrl` to the human (the file tree navigates to the rest). Clean up with delete_workspace(reviewId) when the review is done. Comments on DELETED lines aren't supported yet — ask the reviewer to comment on an adjacent kept line.",
+      description: "Create a GitHub-PR-style review of a git diff: point it at a local repo and a base ref, and the server creates one review doc per changed file, grouped as a workspace — the reviewer gets a file tree with per-file A/M/D/R + line-count badges, a unified diff view with old/new line numbers and collapsed unchanged regions, a per-file Diff ↔ whole-File toggle, and line-anchored comment threads in both views. DEFAULT MODE (no `target`): diff base → the WORKING TREE, i.e. the folder as it is right now, uncommitted edits and untracked files included. The docs bind to the live files on disk, so as you keep editing the code the reviewer's diff re-renders within ~1s — this is the live-loop mode. Comments stay anchored to their lines through edits (snippet-based auto-reanchor); if an anchored line disappears, the thread lands in the existing Orphaned/outdated section where the reviewer can re-anchor it. Re-run the tool after changing a file that wasn't in the diff before — re-binding is idempotent (same docIds, threads survive) and refreshes the file list + badges. PINNED MODE (pass `target`): content is frozen at the target commit; anchors can never drift; same reviewId with a different range is rejected. `repo` is an absolute path to a local checkout/worktree; `base`/`target` are any refs git can resolve (hashes, branches, HEAD~2). Binary files and files over 512 KB are skipped and reported in skipped[]. Pass `exclude` (path prefixes, e.g. ['src/main/assets/vendored-repo']) to keep vendored or generated directories out of the review. GUARDRAIL: more than `maxFiles` (default 300) changed files → error 'too-many-files'; narrow with `exclude` or raise `maxFiles`. The caller is auto-subscribed to thread events on every file doc (pass subscribe:false to skip). Returns {reviewId, entryUrl, files[{docId, relPath, status, additions, deletions, reviewUrl}], skipped[]} — hand `entryUrl` to the human (the file tree navigates to the rest). Clean up with delete_workspace(reviewId) when the review is done. Comments on DELETED lines aren't supported yet — ask the reviewer to comment on an adjacent kept line.",
       inputSchema: {
         type: "object",
         properties: {
           repo: { type: "string", description: "Absolute path to the local git repo/worktree." },
           base: { type: "string", description: 'Base ref (the "before" side).' },
-          target: { type: "string", description: 'Target ref (the "after" side).' },
+          target: {
+            type: "string",
+            description: "Optional target ref. Omit to review the LIVE working tree (default); pass a ref to pin the review to that commit."
+          },
           reviewId: {
             type: "string",
-            description: "Optional review/workspace id. Defaults to <repo-basename>-<base7>-<target7>."
+            description: "Optional review/workspace id. Defaults to <repo-basename>-<base7>-<target7|live>."
           },
           title: { type: "string" },
           exclude: {
@@ -13955,7 +13963,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             }
           }
         },
-        required: ["repo", "base", "target"]
+        required: ["repo", "base"]
       }
     },
     {
@@ -14322,7 +14330,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const res = await http("POST", "/api/diffs", {
           repo,
           base,
-          target,
+          ...target ? { target } : {},
           owner: process.cwd(),
           ...reviewId ? { reviewId } : {},
           ...title ? { title } : {},

@@ -16,18 +16,30 @@ comment threads that reach you as channel events.
 
 ```
 create_diff_review(
-  repo:   "/abs/path/to/local/checkout-or-worktree",
-  base:   "<ref of the BEFORE side>",   // hash, branch, HEAD~3 …
-  target: "<ref of the AFTER side>",
+  repo: "/abs/path/to/local/checkout-or-worktree",
+  base: "<ref of the BEFORE side>",   // hash, branch, HEAD~3 …
 )
 ```
 
+**Default = live working-tree mode.** The diff is base → the folder as it is
+NOW — uncommitted edits and untracked files included. Every file doc binds to
+the live file on disk, so this is the live loop: you keep editing the code
+with your normal tools, and the reviewer's diff re-renders within ~1 second.
+Their comments stay anchored to their lines through your edits; when an
+anchored line disappears, the thread drops into the existing Orphaned /
+outdated-comments section where the reviewer (or you, via the reanchor route)
+can re-attach it.
+
 - One review doc per changed file, grouped as a workspace (`reviewId`).
-- Content is pinned to the **target hash** — comments can never drift, and the
-  per-file **Diff ↔ File** toggle shows the whole file at that hash, also
+- Re-running the tool is idempotent (same docIds, threads survive) and
+  **refreshes the file list and badges** — do it after you change a file that
+  wasn't part of the diff before, so it appears in the tree.
+- Per-file **Diff ↔ File** toggle shows the whole file as it is on disk, also
   commentable.
-- Re-running with the same range is idempotent; threads survive. The same
-  `reviewId` with a different range is rejected.
+
+**Pinned mode** — pass `target: "<ref>"` to freeze the review at a commit
+(reviewing merged/finished work). Anchors can never drift there; the same
+`reviewId` with a different range is rejected.
 
 Then hand the human the returned `entryUrl`, as a bare URL on its own line
 (no markdown around it). The file tree inside the page navigates to every
@@ -47,7 +59,9 @@ other changed file.
   `<channel source="live-feedback" doc_id="..." thread_id="...">` events.
   The `doc_id` tells you which file (`<reviewId>:<relPath with / as ~>`).
 - Treat each comment as an explicit ask. Reply with `post_reply`, and
-  `resolve_thread` once you've addressed it (e.g. pushed a fix commit).
+  `resolve_thread` once you've addressed it — in working-tree mode the fix
+  itself shows up in the reviewer's diff as soon as you save, so resolve with
+  a short "done, see line N" reply.
 - The diff surface is **read-only** — you change code with your normal tools
   in the repo, not through live-feedback edit tools (those are for markdown
   docs).

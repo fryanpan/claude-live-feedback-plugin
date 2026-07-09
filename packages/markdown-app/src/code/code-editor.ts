@@ -204,13 +204,17 @@ export function createCodeEditor(opts: CreateCodeEditorOpts): CodeSurface {
   const onContentChange = () => {
     const text = content.toString();
     if (text === view.state.doc.toString()) return;
+    const wasEmpty = view.state.doc.length === 0;
     view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
     // The merge machinery computes chunks incrementally, but its
     // collapse-unchanged ranges are built ONLY at field init — and at mount
     // time the doc is usually still empty (Yjs hasn't synced yet), so
-    // nothing would ever collapse. Re-init the compartment now that the
-    // real content is in; cheap, since diff content changes at most once.
-    if (viewMode === 'diff' && opts.diff) {
+    // nothing would ever collapse. Re-init the compartment once the real
+    // content lands. Only on the empty→content transition: later live
+    // edits (working-tree reviews re-render as the agent saves) flow
+    // through the incremental chunk update, and a re-init there would
+    // throw away the reviewer's expanded/collapsed regions.
+    if (wasEmpty && viewMode === 'diff' && opts.diff) {
       view.dispatch({ effects: viewModeComp.reconfigure(modeExtensions('diff')) });
     }
   };
