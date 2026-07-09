@@ -45,6 +45,12 @@ export function readDocMeta(doc: Y.Doc): DocMeta {
   const relPath = m.get('relPath') as string | undefined;
   const workspaceRoot = m.get('workspaceRoot') as string | undefined;
   const producedBy = m.get('producedBy') as DocMeta['producedBy'] | undefined;
+  const diffBase = m.get('diffBase') as string | undefined;
+  const diffTarget = m.get('diffTarget') as string | undefined;
+  const diffStatus = m.get('diffStatus') as DocMeta['diffStatus'] | undefined;
+  const diffOldPath = m.get('diffOldPath') as string | undefined;
+  const diffAdditions = m.get('diffAdditions') as number | undefined;
+  const diffDeletions = m.get('diffDeletions') as number | undefined;
   return {
     docId,
     type,
@@ -57,6 +63,12 @@ export function readDocMeta(doc: Y.Doc): DocMeta {
     relPath,
     workspaceRoot,
     producedBy,
+    diffBase,
+    diffTarget,
+    diffStatus,
+    diffOldPath,
+    diffAdditions,
+    diffDeletions,
   };
 }
 
@@ -76,6 +88,15 @@ export function initDocMeta(doc: Y.Doc, meta: DocMeta): void {
     if (meta.workspaceRoot !== undefined && !m.has('workspaceRoot'))
       m.set('workspaceRoot', meta.workspaceRoot);
     if (meta.producedBy !== undefined && !m.has('producedBy')) m.set('producedBy', meta.producedBy);
+    if (meta.diffBase !== undefined && !m.has('diffBase')) m.set('diffBase', meta.diffBase);
+    if (meta.diffTarget !== undefined && !m.has('diffTarget')) m.set('diffTarget', meta.diffTarget);
+    if (meta.diffStatus !== undefined && !m.has('diffStatus')) m.set('diffStatus', meta.diffStatus);
+    if (meta.diffOldPath !== undefined && !m.has('diffOldPath'))
+      m.set('diffOldPath', meta.diffOldPath);
+    if (meta.diffAdditions !== undefined && !m.has('diffAdditions'))
+      m.set('diffAdditions', meta.diffAdditions);
+    if (meta.diffDeletions !== undefined && !m.has('diffDeletions'))
+      m.set('diffDeletions', meta.diffDeletions);
   });
 }
 

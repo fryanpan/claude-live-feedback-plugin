@@ -3,8 +3,14 @@
  *  - mockup/dev: HTML / running surfaces reviewed via the injectable widget.
  *  - code: read-only source file (Java/Kotlin/TS/Python/JSON…) shown with
  *    syntax highlighting; the agent edits the file on disk, the view re-renders.
+ *  - diff: one changed file of a git diff review (base..target). Content is
+ *    the file at the TARGET commit — immutable, so anchors never drift; the
+ *    diff itself is a client-side rendering against the base text.
  */
-export type DocType = 'markdown' | 'mockup' | 'dev' | 'code';
+export type DocType = 'markdown' | 'mockup' | 'dev' | 'code' | 'diff';
+
+/** File change kind within a git diff review (git --name-status letter). */
+export type DiffFileStatus = 'added' | 'modified' | 'deleted' | 'renamed';
 
 export interface DocMeta {
   docId: string;
@@ -59,6 +65,20 @@ export interface DocMeta {
    * sessionId null.
    */
   producedBy?: { agentId?: string; sessionId?: string };
+  /**
+   * Git diff review fields — present only on `type: 'diff'` docs (one doc per
+   * changed file, grouped under `workspaceId` = the review id, with
+   * `workspaceRoot` = the repo path and `relPath` = the file's path at target).
+   * `diffBase`/`diffTarget` are the resolved full commit hashes so the review
+   * stays pinned even if the refs move later.
+   */
+  diffBase?: string;
+  diffTarget?: string;
+  diffStatus?: DiffFileStatus;
+  /** Path at the BASE commit when the file was renamed (baseText source). */
+  diffOldPath?: string;
+  diffAdditions?: number;
+  diffDeletions?: number;
 }
 
 export interface User {
