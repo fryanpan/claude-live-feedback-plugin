@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { extname, join } from 'node:path';
-import type { Anchor, DocType, User } from '@feedback/core';
+import { type Anchor, type DocType, type User, contentKind } from '@feedback/core';
 import { showFile } from './git-diff.ts';
 import { type CfAccessOptions, createCfAccessVerifier } from './middleware/cf-access.ts';
 import { publicBaseUrl } from './public-host.ts';
@@ -821,9 +821,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     meta: T,
   ): T & { reviewUrl?: string } {
     const base = publicBaseUrl(server.port ?? port);
-    if (meta.type === 'markdown' || meta.type === 'code' || meta.type === 'diff') {
-      // Code and diff review share the same SPA route; the app branches the
-      // editor on the doc's type at boot.
+    if (contentKind(meta.type) !== 'none') {
+      // Every doc kind with LF-held content (markdown/code/diff) shares the
+      // SPA route; the app branches the editor on the doc's type at boot.
       return { ...meta, reviewUrl: `${base}/review/${encodeURIComponent(meta.docId)}` };
     }
     if (meta.type === 'mockup' && meta.sourceUrl) {

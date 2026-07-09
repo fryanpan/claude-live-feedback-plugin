@@ -1,5 +1,3 @@
-import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
@@ -9,7 +7,6 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { basename, relative, resolve as resolvePath, sep } from 'node:path';
 import { join } from 'node:path';
 import {
   type Anchor,
@@ -17,6 +14,7 @@ import {
   type DocType,
   type Thread,
   type User,
+  contentKind,
   createThread,
   initDocMeta,
   listThreads,
@@ -44,12 +42,14 @@ import {
   wordCount,
 } from './activity.ts';
 import {
-  type DiffFileEntry,
-  diffFiles,
-  resolveCommit,
-  showFile,
-  textLooksBinary,
-} from './git-diff.ts';
+  type BindDiffOpts,
+  type BindDiffResult,
+  type BindFolderOpts,
+  type BindFolderResult,
+  bindDiff as bindDiffImpl,
+  bindFolder as bindFolderImpl,
+} from './binds.ts';
+import { showFile } from './git-diff.ts';
 import type { SseHub } from './sse.ts';
 import type { WebhookDispatcher } from './webhooks.ts';
 
@@ -283,9 +283,9 @@ export class Rooms {
         count++;
         const src = room.meta.sourceUrl;
         if (src && existsSync(src)) {
-          if (room.meta.type === 'markdown') {
+          if (contentKind(room.meta.type) === 'prose') {
             if (this.attachFile(docId, src).ok) rebound++;
-          } else if (room.meta.type === 'code' || room.meta.type === 'diff') {
+          } else if (contentKind(room.meta.type) === 'flat') {
             // Working-tree diff docs have a sourceUrl and re-arm their live
             // poll like code docs. Pinned diff docs have no sourceUrl and
             // need no binding — content is already in the .ydoc.
@@ -474,7 +474,7 @@ export class Rooms {
     // resolver below would walk an empty fragment and always miss. Find the
     // text directly and snap the anchor to whole lines, matching the code
     // surface's own selection convention.
-    if (room.meta.type === 'code' || room.meta.type === 'diff') {
+    if (contentKind(room.meta.type) === 'flat') {
       const content = room.ydoc.getText('content');
       const hay = content.toString();
       const before = opts.contextBefore ?? '';
@@ -611,7 +611,7 @@ export class Rooms {
     // Code and diff docs are flat read-only text in the `content` Y.Text,
     // not a prose fragment — surface the whole source as one block. (For a
     // diff doc that text is the file at the target commit.)
-    if (room.meta.type === 'code' || room.meta.type === 'diff') {
+    if (contentKind(room.meta.type) === 'flat') {
       const text = room.ydoc.getText('content').toString();
       const syncError = this.fileBindings.get(docId)?.lastSyncError;
       return {
@@ -776,324 +776,14 @@ export class Rooms {
    * Deterministic docIds (`${workspaceId}:${relPath}`) make re-binding
    * idempotent: the same file maps to the same docId, so threads survive.
    */
-  bindFolder(opts: {
-    folderPath: string;
-    workspaceId?: string;
-    title?: string;
-    include?: string[];
-    maxFiles?: number;
-    owner?: string;
-    producedBy?: { agentId?: string; sessionId?: string };
-  }):
-    | {
-        ok: true;
-        workspaceId: string;
-        root: string;
-        fileCount: number;
-        skipped: Array<{ path: string; reason: string }>;
-        files: Array<{ docId: string; relPath: string; type: DocType; title: string }>;
-      }
-    | { ok: false; error: 'not-found' | 'too-many-files'; fileCount?: number } {
-    const root = resolvePath(opts.folderPath);
-    if (!existsSync(root)) return { ok: false, error: 'not-found' };
-
-    const allow = buildAllowlist(opts.include);
-    const candidates = scanFolder(root);
-    const skipped: Array<{ path: string; reason: string }> = [];
-    const accepted: Array<{ abs: string; relPath: string; type: DocType }> = [];
-
-    for (const abs of candidates) {
-      const relPath = relative(root, abs).split(sep).join('/');
-      const dotIdx = abs.lastIndexOf('.');
-      const slash = Math.max(abs.lastIndexOf('/'), abs.lastIndexOf('\\'));
-      const ext = dotIdx > slash ? abs.slice(dotIdx).toLowerCase() : '';
-      const type = allow.get(ext);
-      if (!type) continue;
-      let size: number;
-      try {
-        size = statSync(abs).size;
-      } catch {
-        skipped.push({ path: relPath, reason: 'stat-failed' });
-        continue;
-      }
-      if (size > 512 * 1024) {
-        skipped.push({ path: relPath, reason: 'too-large' });
-        continue;
-      }
-      if (looksBinary(abs)) {
-        skipped.push({ path: relPath, reason: 'binary' });
-        continue;
-      }
-      accepted.push({ abs, relPath, type });
-    }
-
-    const max = opts.maxFiles ?? 300;
-    if (accepted.length > max) {
-      return { ok: false, error: 'too-many-files', fileCount: accepted.length };
-    }
-
-    const workspaceId = opts.workspaceId ?? deriveWorkspaceId(root);
-    const files: Array<{ docId: string; relPath: string; type: DocType; title: string }> = [];
-    for (const { abs, relPath, type } of accepted) {
-      let docId = `${workspaceId}:${relPath.replaceAll('/', '~')}`;
-      if (docId.length > 100) docId = `${workspaceId}:${shortHash(relPath)}`;
-      this.getOrCreate(docId, {
-        type,
-        sourceUrl: abs,
-        setId: workspaceId,
-        owner: opts.owner,
-        workspaceId,
-        workspaceRoot: root,
-        relPath,
-        title: relPath,
-        producedBy: opts.producedBy,
-      });
-      if (type === 'markdown') this.attachFile(docId, abs);
-      else this.attachReadonlyFile(docId, abs);
-      files.push({ docId, relPath, type, title: relPath });
-    }
-
-    return { ok: true, workspaceId, root, fileCount: files.length, skipped, files };
+  /** Bind a whole folder/worktree for review — see binds.ts. */
+  bindFolder(opts: BindFolderOpts): BindFolderResult {
+    return bindFolderImpl(this, opts);
   }
 
-  /**
-   * Bind a git diff for review. One doc per changed file, grouped under a
-   * workspace whose id is the review id — so the file-tree UI, thread
-   * tools, cleanup, and delete_workspace all work on a diff review exactly
-   * as they do on a bound folder.
-   *
-   * Two modes, chosen by whether `target` is passed:
-   *
-   * WORKING-TREE (default, `target` omitted) — diff base → the folder as it
-   * is NOW, uncommitted edits and untracked files included. Each doc binds
-   * to the live file on disk (same mtime poll as code docs), so the agent
-   * keeps editing and the review re-renders within ~1s. Line anchors ride
-   * along via the snippet auto-reanchor sweep; when an anchored line is
-   * gone, the thread orphans into the existing outdated-comments flow.
-   * Re-binding the same review refreshes the changed-file list (new files
-   * appear, statuses/counts update); threads survive re-binds.
-   *
-   * PINNED (`target` passed) — content is the file at the target commit
-   * (via `git show`), immutable, no poll. Re-binding the same review id
-   * with a different range is rejected (threads anchor into the pinned
-   * content).
-   *
-   * In both modes the diff is rendered client-side against the base text
-   * served on demand, and binary files, files >512 KB, and
-   * `exclude`-prefixed paths are skipped (recorded in `skipped[]`) so a
-   * vendored-artifacts directory can't swamp the review.
-   */
-  bindDiff(opts: {
-    repoPath: string;
-    base: string;
-    /** Target commit for a pinned review; omit to review the working tree. */
-    target?: string;
-    reviewId?: string;
-    title?: string;
-    /** Path prefixes (relative to repo root) to leave out of the review. */
-    exclude?: string[];
-    maxFiles?: number;
-    owner?: string;
-    producedBy?: { agentId?: string; sessionId?: string };
-  }):
-    | {
-        ok: true;
-        reviewId: string;
-        root: string;
-        base: string;
-        /** Resolved target hash for pinned reviews; null in working-tree mode. */
-        target: string | null;
-        fileCount: number;
-        skipped: Array<{ path: string; reason: string }>;
-        files: Array<{
-          docId: string;
-          relPath: string;
-          type: DocType;
-          title: string;
-          status: DocMeta['diffStatus'];
-          additions?: number;
-          deletions?: number;
-        }>;
-      }
-    | {
-        ok: false;
-        error:
-          | 'not-found'
-          | 'bad-ref'
-          | 'diff-failed'
-          | 'empty-diff'
-          | 'too-many-files'
-          | 'review-exists-different-range';
-        detail?: string;
-        fileCount?: number;
-      } {
-    const root = resolvePath(opts.repoPath);
-    if (!existsSync(root)) return { ok: false, error: 'not-found' };
-
-    const base = resolveCommit(root, opts.base);
-    const target = opts.target !== undefined ? resolveCommit(root, opts.target) : null;
-    if (!base || (opts.target !== undefined && !target)) {
-      return {
-        ok: false,
-        error: 'bad-ref',
-        detail: `could not resolve ${!base ? opts.base : opts.target} to a commit in ${root}`,
-      };
-    }
-
-    const listed = diffFiles(root, base, target);
-    if (!listed.ok) return { ok: false, error: 'diff-failed', detail: listed.error };
-    if (listed.files.length === 0) return { ok: false, error: 'empty-diff' };
-
-    const reviewId = opts.reviewId ?? deriveDiffReviewId(root, base, target);
-
-    // A review id is pinned to its range: threads anchor into that content,
-    // so silently re-seeding a different range would corrupt them. (In
-    // working-tree mode only the base is pinned — the target side is live
-    // by design.)
-    for (const meta of this.list()) {
-      if (meta.workspaceId !== reviewId || meta.type !== 'diff') continue;
-      if (meta.diffBase !== base || (meta.diffTarget ?? null) !== target) {
-        return { ok: false, error: 'review-exists-different-range' };
-      }
-      break;
-    }
-
-    const excludes = (opts.exclude ?? []).map((p) => p.replace(/^\/+/, '').replace(/\/+$/, ''));
-    const skipped: Array<{ path: string; reason: string }> = [];
-    const accepted: Array<{ entry: DiffFileEntry; text: string }> = [];
-    for (const entry of listed.files) {
-      if (excludes.some((p) => entry.relPath === p || entry.relPath.startsWith(`${p}/`))) {
-        skipped.push({ path: entry.relPath, reason: 'excluded' });
-        continue;
-      }
-      if (entry.binary) {
-        skipped.push({ path: entry.relPath, reason: 'binary' });
-        continue;
-      }
-      // Working-tree mode reads the live file; pinned mode reads the blob at
-      // the target commit. Deleted files carry no target-side content.
-      let text = '';
-      if (entry.status !== 'deleted') {
-        if (target) {
-          text = showFile(root, target, entry.relPath) ?? '';
-        } else {
-          try {
-            text = readFileSync(join(root, entry.relPath), 'utf8');
-          } catch {
-            skipped.push({ path: entry.relPath, reason: 'read-failed' });
-            continue;
-          }
-        }
-      }
-      if (text.length > 512 * 1024) {
-        skipped.push({ path: entry.relPath, reason: 'too-large' });
-        continue;
-      }
-      if (textLooksBinary(text)) {
-        skipped.push({ path: entry.relPath, reason: 'binary' });
-        continue;
-      }
-      accepted.push({ entry, text });
-    }
-
-    const max = opts.maxFiles ?? 300;
-    if (accepted.length > max) {
-      return { ok: false, error: 'too-many-files', fileCount: accepted.length };
-    }
-
-    const files: Array<{
-      docId: string;
-      relPath: string;
-      type: DocType;
-      title: string;
-      status: DocMeta['diffStatus'];
-      additions?: number;
-      deletions?: number;
-    }> = [];
-    for (const { entry, text } of accepted) {
-      let docId = `${reviewId}:${entry.relPath.replaceAll('/', '~')}`;
-      if (docId.length > 100) docId = `${reviewId}:${shortHash(entry.relPath)}`;
-      const room = this.getOrCreate(docId, {
-        type: 'diff',
-        setId: reviewId,
-        owner: opts.owner,
-        workspaceId: reviewId,
-        workspaceRoot: root,
-        relPath: entry.relPath,
-        title: entry.relPath,
-        producedBy: opts.producedBy,
-        diffBase: base,
-        ...(target ? { diffTarget: target } : {}),
-        diffStatus: entry.status,
-        diffOldPath: entry.oldPath,
-        diffAdditions: entry.additions,
-        diffDeletions: entry.deletions,
-      });
-      // initDocMeta is set-if-absent, but status/counts are DERIVED and go
-      // stale as the working tree moves — refresh them on every (re)bind.
-      this.refreshDiffMeta(room, entry);
-      if (target) {
-        // Pinned mode: seed the target-commit content once; no file
-        // binding, no poll — content can't change underneath us.
-        const content = room.ydoc.getText('content');
-        if (content.length === 0 && text.length > 0) {
-          room.ydoc.transact(() => content.insert(0, text), 'file-seed');
-        }
-      } else if (entry.status !== 'deleted') {
-        // Working-tree mode: bind the live file like a code doc — seeds the
-        // content, arms the mtime poll (agent edits re-render in ~1s), no
-        // write-back. The wireEvents reanchor sweep keeps threads attached
-        // or orphans them when their line disappears.
-        this.attachReadonlyFile(docId, join(root, entry.relPath));
-      }
-      files.push({
-        docId,
-        relPath: entry.relPath,
-        type: 'diff',
-        title: entry.relPath,
-        status: entry.status,
-        additions: entry.additions,
-        deletions: entry.deletions,
-      });
-    }
-
-    return {
-      ok: true,
-      reviewId,
-      root,
-      base,
-      target,
-      fileCount: files.length,
-      skipped,
-      files,
-    };
-  }
-
-  /**
-   * Refresh the derived diff fields (status, rename source, line counts) on
-   * an existing room. `initDocMeta` is deliberately set-if-absent, which is
-   * right for identity fields but wrong for these — in working-tree mode
-   * they change every time the agent edits, and a re-bind should show the
-   * current numbers, not the ones from the first bind.
-   */
-  private refreshDiffMeta(room: DocRoom, entry: DiffFileEntry): void {
-    const next: Partial<DocMeta> = {
-      diffStatus: entry.status,
-      diffOldPath: entry.oldPath,
-      diffAdditions: entry.additions,
-      diffDeletions: entry.deletions,
-    };
-    const m = room.ydoc.getMap('meta');
-    const changed = (Object.entries(next) as Array<[keyof DocMeta, unknown]>).filter(
-      ([k, v]) => v !== undefined && room.meta[k] !== v,
-    );
-    if (changed.length === 0) return;
-    room.ydoc.transact(() => {
-      for (const [k, v] of changed) m.set(k, v);
-    });
-    for (const [k, v] of changed) {
-      (room.meta as unknown as Record<string, unknown>)[k] = v;
-    }
+  /** Bind a git diff (working-tree or pinned) for review — see binds.ts. */
+  bindDiff(opts: BindDiffOpts): BindDiffResult {
+    return bindDiffImpl(this, opts);
   }
 
   /**
@@ -1416,7 +1106,7 @@ export class Rooms {
     } catch {
       return { ok: false, error: 'missing' };
     }
-    if (room.meta.type === 'code' || room.meta.type === 'diff') {
+    if (contentKind(room.meta.type) === 'flat') {
       const content = room.ydoc.getText('content');
       room.ydoc.transact(() => {
         content.delete(0, content.length);
@@ -1457,7 +1147,7 @@ export class Rooms {
     // `content` Y.Text on change. No write-back means no live edits, so
     // there's never a conflict; the pure decideReconcile is reused only to
     // skip no-op reads.
-    if (room.meta.type === 'code' || room.meta.type === 'diff') {
+    if (contentKind(room.meta.type) === 'flat') {
       const content = room.ydoc.getText('content');
       const current = content.toString();
       const decision = decideReconcile({
@@ -1920,7 +1610,7 @@ export class Rooms {
     // re-anchor threads by snippet match. (Diff content is pinned to a
     // commit and normally never changes, but a reparse after data loss
     // re-seeds it, and the sweep re-anchors threads then.)
-    if (room.meta.type === 'code' || room.meta.type === 'diff') {
+    if (contentKind(room.meta.type) === 'flat') {
       const content = room.ydoc.getText('content');
       let codeReanchorTimer: ReturnType<typeof setTimeout> | null = null;
       content.observe((_event, tr) => {
@@ -2033,116 +1723,4 @@ function sortTreeChildren(node: WorkspaceDirNode): void {
   for (const child of node.children) {
     if (child.type === 'dir') sortTreeChildren(child);
   }
-}
-
-/** Extension → DocType. `.md` is editable markdown; everything else is
- *  read-only source. `include[]` (extensions like `.rb` or `rb`) extends
- *  the code set. */
-function buildAllowlist(include?: string[]): Map<string, DocType> {
-  const map = new Map<string, DocType>([['.md', 'markdown']]);
-  const code = [
-    '.ts',
-    '.tsx',
-    '.js',
-    '.jsx',
-    '.mjs',
-    '.cjs',
-    '.java',
-    '.kt',
-    '.kts',
-    '.py',
-    '.json',
-  ];
-  for (const ext of code) map.set(ext, 'code');
-  for (const raw of include ?? []) {
-    const ext = raw.startsWith('.') ? raw.toLowerCase() : `.${raw.toLowerCase()}`;
-    if (!map.has(ext)) map.set(ext, 'code');
-  }
-  return map;
-}
-
-/**
- * Enumerate the files in `root`. Prefer `git ls-files` (cached + untracked,
- * honoring .gitignore) so node_modules/dist/etc are skipped for free; fall
- * back to a recursive readdir with a hardcoded skip set when the folder
- * isn't inside a git repo or git isn't available. Returns absolute paths.
- */
-function scanFolder(root: string): string[] {
-  try {
-    const res = spawnSync(
-      'git',
-      ['-C', root, 'ls-files', '--cached', '--others', '--exclude-standard'],
-      { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
-    );
-    if (res.status === 0 && typeof res.stdout === 'string') {
-      const out: string[] = [];
-      for (const line of res.stdout.split('\n')) {
-        const rel = line.trim();
-        if (rel) out.push(join(root, rel));
-      }
-      return out;
-    }
-  } catch {
-    // git missing or threw — fall through to readdir.
-  }
-  return readdirRecursive(root);
-}
-
-const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', '.next', 'coverage']);
-
-function readdirRecursive(dir: string): string[] {
-  const out: string[] = [];
-  let entries: import('node:fs').Dirent[];
-  try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return out;
-  }
-  for (const entry of entries) {
-    const name = entry.name;
-    const abs = join(dir, name);
-    if (entry.isDirectory()) {
-      // Skip .git, any dotdir, and the hardcoded heavy dirs.
-      if (name.startsWith('.') || SKIP_DIRS.has(name)) continue;
-      out.push(...readdirRecursive(abs));
-    } else if (entry.isFile()) {
-      out.push(abs);
-    }
-  }
-  return out;
-}
-
-/** Sniff the first 8 KB for a NUL byte — a cheap binary detector that
- *  keeps images/compiled output out of the text-only review surface. */
-function looksBinary(abs: string): boolean {
-  try {
-    const buf = readFileSync(abs);
-    const len = Math.min(buf.length, 8 * 1024);
-    for (let i = 0; i < len; i++) {
-      if (buf[i] === 0) return true;
-    }
-    return false;
-  } catch {
-    return true;
-  }
-}
-
-/** Deterministic diff-review id: repo basename + short hashes of the range
- *  ('live' for the working-tree side), so re-running the same
- *  create_diff_review lands on the same docs (threads survive) while a
- *  different range gets its own review. */
-function deriveDiffReviewId(absRoot: string, base: string, target: string | null): string {
-  const name = basename(absRoot).replace(/[^a-zA-Z0-9_.\-]/g, '-') || 'repo';
-  return `${name}-${base.slice(0, 7)}-${target ? target.slice(0, 7) : 'live'}`;
-}
-
-/** Deterministic workspace id: folder basename + 6-char hash of the
- *  absolute path, so two folders named `core` don't collide. */
-function deriveWorkspaceId(absRoot: string): string {
-  const base = basename(absRoot).replace(/[^a-zA-Z0-9_.\-]/g, '-') || 'workspace';
-  return `${base}-${shortHash(absRoot)}`;
-}
-
-function shortHash(s: string): string {
-  return createHash('sha1').update(s).digest('hex').slice(0, 6);
 }
