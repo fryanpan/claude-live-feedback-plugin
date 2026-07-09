@@ -215,10 +215,23 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     surface.setThreadRanges(ranges, activeId);
   }
 
+  // "L293" / "L293–301" for line-oriented surfaces (code/diff); null on
+  // prose. Recomputed at render time so labels track live edits.
+  function threadLineLabel(threadId: string): string | null {
+    if (!surface.lineForPos) return null;
+    const r = resolveThreadRange(threadId);
+    if (!r) return null;
+    const a = surface.lineForPos(r.from);
+    const b = surface.lineForPos(Math.max(r.from, r.to - 1));
+    if (a == null) return null;
+    return b != null && b > a ? `L${a}–${b}` : `L${a}`;
+  }
+
   // --- thread panel ------------------------------------------------------
   const threadsPanel = new ThreadPanel({
     container: threadsListEl,
     currentUser: user,
+    threadLineLabel,
     onThreadClick: (id) => {
       const range = resolveThreadRange(id);
       if (range) {
@@ -412,6 +425,13 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     const anchor = document.createElement('div');
     anchor.className = 'thread-anchor';
     anchor.textContent = anchorText;
+    const lineLabel = threadLineLabel(id);
+    if (lineLabel) {
+      const chip = document.createElement('span');
+      chip.className = 'thread-line';
+      chip.textContent = lineLabel;
+      anchor.prepend(chip);
+    }
     threadViewBody.appendChild(anchor);
     for (const c of t.comments) {
       const row = document.createElement('div');

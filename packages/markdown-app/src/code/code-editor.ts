@@ -290,6 +290,10 @@ export function createCodeEditor(opts: CreateCodeEditorOpts): CodeSurface {
       const clamped = Math.max(0, Math.min(pos, view.state.doc.length));
       view.dispatch({ effects: EditorView.scrollIntoView(clamped, { y: 'center' }) });
     },
+    lineForPos(pos) {
+      const clamped = Math.max(0, Math.min(pos, view.state.doc.length));
+      return view.state.doc.lineAt(clamped).number;
+    },
     pulseRange(from, to) {
       view.dispatch({ effects: setPulseEffect.of({ from, to }) });
       setTimeout(() => view.dispatch({ effects: setPulseEffect.of(null) }), 1200);

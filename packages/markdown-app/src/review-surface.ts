@@ -25,6 +25,9 @@ export interface ReviewSurface {
    *  the anchor no longer resolves (orphaned). */
   resolveRel: (startRel: Uint8Array, endRel: Uint8Array) => { from: number; to: number } | null;
   scrollToPos: (pos: number) => void;
+  /** 1-based line number for an offset — line-oriented surfaces (code/diff)
+   *  implement it so comments can display "L293"; prose surfaces omit it. */
+  lineForPos?: (pos: number) => number | null;
   /** Brief highlight pulse on a range — used when revealing a thread. */
   pulseRange: (from: number, to: number) => void;
   /** Update which thread anchors are highlighted, and which is active. */
