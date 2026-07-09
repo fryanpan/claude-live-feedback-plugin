@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { extname, join } from 'node:path';
 import type { Anchor, DocType, User } from '@feedback/core';
+import { showFile } from './git-diff.ts';
 import { type CfAccessOptions, createCfAccessVerifier } from './middleware/cf-access.ts';
 import { publicBaseUrl } from './public-host.ts';
 import { type FeedbackWs, Rooms, type WorkspaceDirNode, type WorkspaceFileNode } from './rooms.ts';
@@ -233,6 +234,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // disk sync) before returning. Mockup/dev docs are about
         // commenting on running surfaces, not about a markdown buffer,
         // so they don't need a file.
+        // Diff docs are created only via POST /api/diffs, which resolves the
+        // range and seeds content from git — a bare create can't do that.
+        if (type === 'diff') {
+          return j(400, {
+            error: 'use /api/diffs',
+            hint: 'Diff review docs are created per changed file by POST /api/diffs {repo, base, target}.',
+          });
+        }
         if ((type === 'markdown' || type === 'code') && !sourceUrl) {
           return j(400, {
             error: 'sourceUrl required',
@@ -297,6 +306,48 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             reviewUrl: withReviewUrl({ docId: f.docId, type: f.type }).reviewUrl,
           })),
         });
+      }
+      // --- REST: diff reviews (git base..target) ---
+      // One doc per changed file, grouped as a workspace (= the review id),
+      // content pinned to the target commit. Returns per-file reviewUrls
+      // plus an entryUrl (first changed file) the agent can hand to a human.
+      if (pathname === '/api/diffs' && req.method === 'POST') {
+        const body = await safeJson(req);
+        const repoPath = body?.repo as string | undefined;
+        const base = body?.base as string | undefined;
+        const target = body?.target as string | undefined;
+        if (!repoPath || !base || !target) {
+          return j(400, { error: 'repo, base, and target are required' });
+        }
+        const reviewId = body?.reviewId as string | undefined;
+        if (reviewId !== undefined && !isValidDocId(reviewId)) {
+          return j(400, { error: 'bad reviewId' });
+        }
+        const res = rooms.bindDiff({
+          repoPath,
+          base,
+          target,
+          reviewId,
+          title: body?.title as string | undefined,
+          exclude: Array.isArray(body?.exclude) ? (body.exclude as string[]) : undefined,
+          maxFiles: typeof body?.maxFiles === 'number' ? Number(body.maxFiles) : undefined,
+          owner: body?.owner as string | undefined,
+          producedBy: body?.producedBy as { agentId?: string; sessionId?: string } | undefined,
+        });
+        if (!res.ok) {
+          const status =
+            res.error === 'not-found' || res.error === 'bad-ref'
+              ? 404
+              : res.error === 'empty-diff'
+                ? 400
+                : 409;
+          return j(status, res);
+        }
+        const files = res.files.map((f) => ({
+          ...f,
+          reviewUrl: withReviewUrl({ docId: f.docId, type: f.type }).reviewUrl,
+        }));
+        return j(200, { ...res, files, entryUrl: files[0]?.reviewUrl });
       }
       // List bound workspaces with rolled-up triage signals (fileCount,
       // openThreads, allIdle, owner, lastActivityAt). The daily triage uses
@@ -447,6 +498,37 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         if (rest === 'reparse_from_disk' && req.method === 'POST') {
           const res = rooms.reparseFromDisk(docId);
           return res.ok ? j(200, res) : j(409, res);
+        }
+        // Diff-review rendering data: the file's text at the BASE commit
+        // (the target text is the doc's own content, streamed over Yjs).
+        // Computed on demand from the repo; if the worktree has since been
+        // cleaned up, baseText comes back null and the client falls back to
+        // the full-file view, which needs nothing beyond the ydoc.
+        if (rest === 'diff' && req.method === 'GET') {
+          const meta = room.meta;
+          if (meta.type !== 'diff') return j(400, { error: 'not a diff doc' });
+          const { workspaceRoot, diffBase, diffTarget, relPath } = meta;
+          const basePath = meta.diffOldPath ?? relPath;
+          let baseText: string | null = null;
+          let error: string | undefined;
+          if (meta.diffStatus === 'added') {
+            baseText = '';
+          } else if (workspaceRoot && diffBase && basePath) {
+            baseText = showFile(workspaceRoot, diffBase, basePath);
+            if (baseText === null) error = 'base content unavailable (repo moved or pruned?)';
+          } else {
+            error = 'diff metadata incomplete';
+          }
+          return j(200, {
+            baseText,
+            status: meta.diffStatus,
+            oldPath: meta.diffOldPath,
+            base: diffBase,
+            target: diffTarget,
+            additions: meta.diffAdditions,
+            deletions: meta.diffDeletions,
+            ...(error ? { error } : {}),
+          });
         }
         // Browser-originated reading activity (read_session / doc_open). The
         // markdown/code review surfaces POST interaction-bounded reading
@@ -734,9 +816,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     meta: T,
   ): T & { reviewUrl?: string } {
     const base = publicBaseUrl(server.port ?? port);
-    if (meta.type === 'markdown' || meta.type === 'code') {
-      // Code review shares the same SPA route; the app branches the editor
-      // on the doc's type at boot.
+    if (meta.type === 'markdown' || meta.type === 'code' || meta.type === 'diff') {
+      // Code and diff review share the same SPA route; the app branches the
+      // editor on the doc's type at boot.
       return { ...meta, reviewUrl: `${base}/review/${encodeURIComponent(meta.docId)}` };
     }
     if (meta.type === 'mockup' && meta.sourceUrl) {
