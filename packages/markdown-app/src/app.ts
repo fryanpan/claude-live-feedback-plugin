@@ -10,7 +10,7 @@ const DEFAULT_WS_PATH = (docId: string, type: string) =>
 
 /** Fetch a doc's persisted type before mounting a surface. Defaults to
  *  'markdown' if the meta can't be read (the markdown path is the safe
- *  fallback — it migrates legacy content and never assumes code). */
+ *  fallback — it never assumes code). */
 async function fetchDocMeta(
   docId: string,
 ): Promise<{ type: string; sourceUrl: string; workspaceId: string; relPath: string }> {
@@ -598,7 +598,6 @@ async function boot(): Promise<void> {
   client.onReady(() => {
     reviewChrome.renderDocLabel();
     void renderSetNav();
-    editor.migrateLegacyIfNeeded();
     reviewChrome.redrawThreads();
   });
 
