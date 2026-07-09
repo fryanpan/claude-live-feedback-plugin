@@ -702,6 +702,28 @@ export class Rooms {
    * `reviewUrl` is filled in by the caller via the rooms decorator
    * (`decorateDocMeta`) so the URL machinery stays in the server layer.
    */
+  /**
+   * All threads across a workspace's member docs in one call — so an agent
+   * watching a folder or diff review can poll ONE endpoint instead of one
+   * per file (a 64-file diff review would otherwise mean 64 polls). Each
+   * thread is tagged with its docId + relPath so replies/resolves know
+   * where to go. Sorted most-recent-activity first.
+   */
+  listWorkspaceThreads(
+    workspaceId: string,
+    opts?: { status?: 'open' | 'resolved' },
+  ): Array<Thread & { docId: string; relPath?: string }> {
+    const out: Array<Thread & { docId: string; relPath?: string }> = [];
+    for (const meta of this.list()) {
+      if (meta.workspaceId !== workspaceId) continue;
+      for (const t of this.listThreads(meta.docId, opts)) {
+        out.push({ ...t, docId: meta.docId, relPath: meta.relPath });
+      }
+    }
+    out.sort((a, b) => b.lastActivity - a.lastActivity);
+    return out;
+  }
+
   buildWorkspaceTree(workspaceId: string): WorkspaceTree {
     const decorate = this.cfg.decorateDocMeta;
     const root: WorkspaceDirNode = { type: 'dir', name: '', openCount: 0, children: [] };
