@@ -1909,3 +1909,16 @@ body.code-mode .cm-editor .cm-deletedChunk .cm-deletedText {
     display: none;
   }
 }
+
+/* Line-number chip on comments (code/diff surfaces): "L293" / "L293-301". */
+.thread-line {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--bg-hover);
+  color: var(--fg-muted);
+  font: 600 10.5px / 16px var(--mono);
+  vertical-align: 1px;
+  white-space: nowrap;
+}
