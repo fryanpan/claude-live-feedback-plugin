@@ -43,6 +43,13 @@ import {
   toUtcIso,
   wordCount,
 } from './activity.ts';
+import {
+  type DiffFileEntry,
+  diffFiles,
+  resolveCommit,
+  showFile,
+  textLooksBinary,
+} from './git-diff.ts';
 import type { SseHub } from './sse.ts';
 import type { WebhookDispatcher } from './webhooks.ts';
 
@@ -78,6 +85,10 @@ export interface WorkspaceFileNode {
   threadCount: number;
   reviewUrl?: string;
   lastActivityAt?: number;
+  /** Diff-review extras (present only on `type:'diff'` members). */
+  diffStatus?: DocMeta['diffStatus'];
+  diffAdditions?: number;
+  diffDeletions?: number;
 }
 
 /** A directory node in the workspace tree; `openCount` is rolled up from
@@ -303,6 +314,12 @@ export class Rooms {
       relPath?: string;
       workspaceRoot?: string;
       producedBy?: { agentId?: string; sessionId?: string };
+      diffBase?: string;
+      diffTarget?: string;
+      diffStatus?: DocMeta['diffStatus'];
+      diffOldPath?: string;
+      diffAdditions?: number;
+      diffDeletions?: number;
     },
   ): DocRoom {
     const existing = this.rooms.get(docId);
@@ -343,6 +360,12 @@ export class Rooms {
         relPath: init?.relPath,
         workspaceRoot: init?.workspaceRoot,
         producedBy: init?.producedBy,
+        diffBase: init?.diffBase,
+        diffTarget: init?.diffTarget,
+        diffStatus: init?.diffStatus,
+        diffOldPath: init?.diffOldPath,
+        diffAdditions: init?.diffAdditions,
+        diffDeletions: init?.diffDeletions,
         createdAt: Date.now(),
       };
       initDocMeta(ydoc, now);
@@ -534,9 +557,10 @@ export class Rooms {
   } | null {
     const room = this.rooms.get(docId);
     if (!room) return null;
-    // Code docs are flat read-only text in the `content` Y.Text, not a prose
-    // fragment — surface the whole source as one block.
-    if (room.meta.type === 'code') {
+    // Code and diff docs are flat read-only text in the `content` Y.Text,
+    // not a prose fragment — surface the whole source as one block. (For a
+    // diff doc that text is the file at the target commit.)
+    if (room.meta.type === 'code' || room.meta.type === 'diff') {
       const text = room.ydoc.getText('content').toString();
       const syncError = this.fileBindings.get(docId)?.lastSyncError;
       return {
@@ -651,6 +675,9 @@ export class Rooms {
         threadCount,
         reviewUrl: (decorated as { reviewUrl?: string }).reviewUrl,
         lastActivityAt: meta.lastActivityAt,
+        ...(meta.diffStatus !== undefined ? { diffStatus: meta.diffStatus } : {}),
+        ...(meta.diffAdditions !== undefined ? { diffAdditions: meta.diffAdditions } : {}),
+        ...(meta.diffDeletions !== undefined ? { diffDeletions: meta.diffDeletions } : {}),
       };
       // Walk/create the directory chain, accumulating openCount as we go.
       const parts = relPath.split('/');
@@ -776,6 +803,179 @@ export class Rooms {
     }
 
     return { ok: true, workspaceId, root, fileCount: files.length, skipped, files };
+  }
+
+  /**
+   * Bind a git diff (repo + base..target) for review. One doc per changed
+   * file, grouped under a workspace whose id is the review id — so the
+   * file-tree UI, thread tools, cleanup, and delete_workspace all work on a
+   * diff review exactly as they do on a bound folder.
+   *
+   * Each doc's `content` Y.Text is the file at the TARGET commit (via
+   * `git show`) — immutable, so line anchors can never drift. The diff
+   * itself is rendered client-side against the base text served on demand.
+   *
+   * Refs are resolved to full hashes up front; re-binding the same review id
+   * with a different range is rejected (threads are pinned to the old
+   * content). Binary files, files >512 KB, and `exclude`-prefixed paths are
+   * skipped (recorded in `skipped[]`) so a vendored-artifacts directory
+   * can't swamp the review.
+   */
+  bindDiff(opts: {
+    repoPath: string;
+    base: string;
+    target: string;
+    reviewId?: string;
+    title?: string;
+    /** Path prefixes (relative to repo root) to leave out of the review. */
+    exclude?: string[];
+    maxFiles?: number;
+    owner?: string;
+    producedBy?: { agentId?: string; sessionId?: string };
+  }):
+    | {
+        ok: true;
+        reviewId: string;
+        root: string;
+        base: string;
+        target: string;
+        fileCount: number;
+        skipped: Array<{ path: string; reason: string }>;
+        files: Array<{
+          docId: string;
+          relPath: string;
+          type: DocType;
+          title: string;
+          status: DocMeta['diffStatus'];
+          additions?: number;
+          deletions?: number;
+        }>;
+      }
+    | {
+        ok: false;
+        error:
+          | 'not-found'
+          | 'bad-ref'
+          | 'diff-failed'
+          | 'empty-diff'
+          | 'too-many-files'
+          | 'review-exists-different-range';
+        detail?: string;
+        fileCount?: number;
+      } {
+    const root = resolvePath(opts.repoPath);
+    if (!existsSync(root)) return { ok: false, error: 'not-found' };
+
+    const base = resolveCommit(root, opts.base);
+    const target = resolveCommit(root, opts.target);
+    if (!base || !target) {
+      return {
+        ok: false,
+        error: 'bad-ref',
+        detail: `could not resolve ${!base ? opts.base : opts.target} to a commit in ${root}`,
+      };
+    }
+
+    const listed = diffFiles(root, base, target);
+    if (!listed.ok) return { ok: false, error: 'diff-failed', detail: listed.error };
+    if (listed.files.length === 0) return { ok: false, error: 'empty-diff' };
+
+    const reviewId = opts.reviewId ?? deriveDiffReviewId(root, base, target);
+
+    // A review id is pinned to its range: threads anchor into content at
+    // `target`, so silently re-seeding different content would corrupt them.
+    for (const meta of this.list()) {
+      if (meta.workspaceId !== reviewId || meta.type !== 'diff') continue;
+      if (meta.diffBase !== base || meta.diffTarget !== target) {
+        return { ok: false, error: 'review-exists-different-range' };
+      }
+      break;
+    }
+
+    const excludes = (opts.exclude ?? []).map((p) => p.replace(/^\/+/, '').replace(/\/+$/, ''));
+    const skipped: Array<{ path: string; reason: string }> = [];
+    const accepted: Array<{ entry: DiffFileEntry; text: string }> = [];
+    for (const entry of listed.files) {
+      if (excludes.some((p) => entry.relPath === p || entry.relPath.startsWith(`${p}/`))) {
+        skipped.push({ path: entry.relPath, reason: 'excluded' });
+        continue;
+      }
+      if (entry.binary) {
+        skipped.push({ path: entry.relPath, reason: 'binary' });
+        continue;
+      }
+      const text = entry.status === 'deleted' ? '' : (showFile(root, target, entry.relPath) ?? '');
+      if (text.length > 512 * 1024) {
+        skipped.push({ path: entry.relPath, reason: 'too-large' });
+        continue;
+      }
+      if (textLooksBinary(text)) {
+        skipped.push({ path: entry.relPath, reason: 'binary' });
+        continue;
+      }
+      accepted.push({ entry, text });
+    }
+
+    const max = opts.maxFiles ?? 300;
+    if (accepted.length > max) {
+      return { ok: false, error: 'too-many-files', fileCount: accepted.length };
+    }
+
+    const files: Array<{
+      docId: string;
+      relPath: string;
+      type: DocType;
+      title: string;
+      status: DocMeta['diffStatus'];
+      additions?: number;
+      deletions?: number;
+    }> = [];
+    for (const { entry, text } of accepted) {
+      let docId = `${reviewId}:${entry.relPath.replaceAll('/', '~')}`;
+      if (docId.length > 100) docId = `${reviewId}:${shortHash(entry.relPath)}`;
+      const room = this.getOrCreate(docId, {
+        type: 'diff',
+        setId: reviewId,
+        owner: opts.owner,
+        workspaceId: reviewId,
+        workspaceRoot: root,
+        relPath: entry.relPath,
+        title: entry.relPath,
+        producedBy: opts.producedBy,
+        diffBase: base,
+        diffTarget: target,
+        diffStatus: entry.status,
+        diffOldPath: entry.oldPath,
+        diffAdditions: entry.additions,
+        diffDeletions: entry.deletions,
+      });
+      // Seed the target-commit content once; no file binding, no poll —
+      // the content is pinned to a hash and can't change underneath us.
+      const content = room.ydoc.getText('content');
+      if (content.length === 0 && text.length > 0) {
+        room.ydoc.transact(() => content.insert(0, text), 'file-seed');
+      }
+      files.push({
+        docId,
+        relPath: entry.relPath,
+        type: 'diff',
+        title: entry.relPath,
+        status: entry.status,
+        additions: entry.additions,
+        deletions: entry.deletions,
+      });
+    }
+
+    return {
+      ok: true,
+      reviewId,
+      root,
+      base,
+      target,
+      fileCount: files.length,
+      skipped,
+      files,
+    };
   }
 
   /**
@@ -1063,6 +1263,21 @@ export class Rooms {
   reparseFromDisk(docId: string): { ok: boolean; error?: 'not-found' | 'no-binding' | 'missing' } {
     const room = this.rooms.get(docId);
     if (!room) return { ok: false, error: 'not-found' };
+    // Diff docs have no file binding — their content is pinned to a commit.
+    // Recover by re-reading the file at the target hash from the repo.
+    if (room.meta.type === 'diff') {
+      const { workspaceRoot, diffTarget, relPath, diffStatus } = room.meta;
+      if (!workspaceRoot || !diffTarget || !relPath) return { ok: false, error: 'no-binding' };
+      if (diffStatus === 'deleted') return { ok: true };
+      const text = showFile(workspaceRoot, diffTarget, relPath);
+      if (text === null) return { ok: false, error: 'missing' };
+      const content = room.ydoc.getText('content');
+      room.ydoc.transact(() => {
+        content.delete(0, content.length);
+        content.insert(0, text);
+      }, 'file-watch');
+      return { ok: true };
+    }
     const binding = this.fileBindings.get(docId);
     if (!binding) return { ok: false, error: 'no-binding' };
     if (!existsSync(binding.path)) return { ok: false, error: 'missing' };
@@ -1569,11 +1784,13 @@ export class Rooms {
     room.ydoc.on('update', () => {
       this.saveToDisk(room);
     });
-    // Code docs have no prose fragment — the prose-fragment auto-reanchor
-    // sweep below would find nothing and orphan every thread. Run the
-    // flat-text twin instead: observe the raw `content` Y.Text and re-anchor
-    // threads by snippet match after agent edits re-render the source.
-    if (room.meta.type === 'code') {
+    // Code and diff docs have no prose fragment — the prose-fragment
+    // auto-reanchor sweep below would find nothing and orphan every thread.
+    // Run the flat-text twin instead: observe the raw `content` Y.Text and
+    // re-anchor threads by snippet match. (Diff content is pinned to a
+    // commit and normally never changes, but a reparse after data loss
+    // re-seeds it, and the sweep re-anchors threads then.)
+    if (room.meta.type === 'code' || room.meta.type === 'diff') {
       const content = room.ydoc.getText('content');
       let codeReanchorTimer: ReturnType<typeof setTimeout> | null = null;
       content.observe((_event, tr) => {
@@ -1778,6 +1995,14 @@ function looksBinary(abs: string): boolean {
   } catch {
     return true;
   }
+}
+
+/** Deterministic diff-review id: repo basename + short hashes of the range,
+ *  so re-running the same create_diff_review lands on the same docs (threads
+ *  survive) while a different range gets its own review. */
+function deriveDiffReviewId(absRoot: string, base: string, target: string): string {
+  const name = basename(absRoot).replace(/[^a-zA-Z0-9_.\-]/g, '-') || 'repo';
+  return `${name}-${base.slice(0, 7)}-${target.slice(0, 7)}`;
 }
 
 /** Deterministic workspace id: folder basename + 6-char hash of the
