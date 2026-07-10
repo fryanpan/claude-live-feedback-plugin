@@ -12,7 +12,8 @@
     "./types": "./src/types.ts"
   },
   "dependencies": {
-    "yjs": "^13.6.20",
-    "y-protocols": "^1.0.6"
+    "lib0": "^0.2.117",
+    "y-protocols": "^1.0.6",
+    "yjs": "^13.6.20"
   }
 }

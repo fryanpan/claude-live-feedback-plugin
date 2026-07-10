@@ -58,6 +58,33 @@ describe('schema', () => {
     expect(m.workspaceRoot).toBe('/repo');
   });
 
+  it('persists diff-doc fields', () => {
+    const doc = new Y.Doc();
+    initDocMeta(doc, {
+      docId: 'rev1:src~a.ts',
+      type: 'diff',
+      createdAt: 3,
+      setId: 'rev1',
+      workspaceId: 'rev1',
+      workspaceRoot: '/repo',
+      relPath: 'src/a.ts',
+      diffBase: 'aaa111',
+      diffTarget: 'bbb222',
+      diffStatus: 'renamed',
+      diffOldPath: 'src/old.ts',
+      diffAdditions: 12,
+      diffDeletions: 3,
+    });
+    const m = readDocMeta(doc);
+    expect(m.type).toBe('diff');
+    expect(m.diffBase).toBe('aaa111');
+    expect(m.diffTarget).toBe('bbb222');
+    expect(m.diffStatus).toBe('renamed');
+    expect(m.diffOldPath).toBe('src/old.ts');
+    expect(m.diffAdditions).toBe(12);
+    expect(m.diffDeletions).toBe(3);
+  });
+
   it('creates a thread with a first comment', () => {
     const doc = new Y.Doc();
     const t = createThread(doc, {

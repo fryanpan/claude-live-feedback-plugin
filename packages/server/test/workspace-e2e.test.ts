@@ -11,6 +11,7 @@ import { type ServerHandle, createServer } from '../src/server.ts';
  * REST routes against a throwaway server on a temp dataDir + temp folder —
  * NOT the in-process Rooms API (bind-folder.test.ts already covers that).
  */
+
 describe('workspace folder-review e2e (HTTP)', () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -53,7 +54,7 @@ describe('workspace folder-review e2e (HTTP)', () => {
   let workspaceId: string;
   let files: Map<string, BindFile>;
 
-  it('(a) POST /api/workspaces binds the folder and lists the 3 files with types', async () => {
+  it('(a) POST /api/workspaces binds lazily (entry only); the rest open on demand', async () => {
     const r = await fetch(`${base}/api/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -64,12 +65,33 @@ describe('workspace folder-review e2e (HTTP)', () => {
     workspaceId = body.workspaceId;
     files = new Map(body.files.map((f) => [f.relPath, f]));
 
-    expect([...files.keys()].sort()).toEqual(['README.md', 'src/data.json', 'src/index.ts']);
+    // Lazy contract: one eagerly-bound entry (README preferred, editable
+    // markdown); fileCount reports the full scan.
+    expect([...files.keys()]).toEqual(['README.md']);
     expect(files.get('README.md')?.type).toBe('markdown');
-    expect(files.get('src/index.ts')?.type).toBe('code');
-    expect(files.get('src/data.json')?.type).toBe('code');
-    // Code files get a /review reviewUrl decorated by withReviewUrl.
-    expect(files.get('src/index.ts')?.reviewUrl).toContain('/review/');
+    expect((body as unknown as { fileCount: number }).fileCount).toBe(3);
+
+    // Open the remaining files like a reviewer clicking the all-files tree.
+    for (const relPath of ['src/index.ts', 'src/data.json']) {
+      const cr = await fetch(
+        `${base}/api/workspaces/${encodeURIComponent(workspaceId)}/context-file`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ relPath }),
+        },
+      );
+      const opened = await j<{ docId: string; meta: { type: string; reviewUrl?: string } }>(cr);
+      expect(opened.meta.type).toBe('code');
+      expect(opened.meta.reviewUrl).toContain('/review/');
+      files.set(relPath, {
+        relPath,
+        docId: opened.docId,
+        type: opened.meta.type,
+        reviewUrl: opened.meta.reviewUrl,
+      } as never);
+    }
+    expect([...files.keys()].sort()).toEqual(['README.md', 'src/data.json', 'src/index.ts']);
   });
 
   it('(b) GET /api/workspaces/:id/tree returns the nested tree with zero open counts', async () => {
