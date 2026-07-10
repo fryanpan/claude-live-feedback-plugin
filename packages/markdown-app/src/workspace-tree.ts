@@ -68,7 +68,7 @@ function renderTreeNode(
       const letter = node.diffStatus[0]?.toUpperCase() ?? '';
       const counts =
         node.diffAdditions != null || node.diffDeletions != null
-          ? `<span class="tree-diff-counts">+${node.diffAdditions ?? 0} −${node.diffDeletions ?? 0}</span>`
+          ? `<span class="tree-diff-counts"><span class="add">+${node.diffAdditions ?? 0}</span> <span class="del">−${node.diffDeletions ?? 0}</span></span>`
           : '';
       diffBadge = `<span class="tree-diff-status tree-diff-${letter}" title="${escapeHtml(node.diffStatus)}">${letter}</span>${counts}`;
     }

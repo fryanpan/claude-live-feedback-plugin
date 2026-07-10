@@ -1962,3 +1962,11 @@ body.code-mode .cm-editor .cm-deletedChunk .cm-deletedText {
   vertical-align: 1px;
   white-space: nowrap;
 }
+
+/* Diff-standard count colors: additions green, deletions red. */
+.tree-diff-counts .add {
+  color: var(--green);
+}
+.tree-diff-counts .del {
+  color: var(--red);
+}
