@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { basename, join, relative, resolve as resolvePath, sep } from 'node:path';
 import type { DocMeta, DocType } from '@feedback/core';
 import { assignGroups } from './diff-groups.ts';
-import { buildAllowlist, looksBinary, scanFolder } from './fs-scan.ts';
+import { scanFolder } from './fs-scan.ts';
 import {
   type DiffFileEntry,
   diffFiles,
@@ -48,6 +48,10 @@ export interface BindHost {
   ): DocRoom;
   attachFile(docId: string, path: string): { ok: boolean };
   attachReadonlyFile(docId: string, path: string): { ok: boolean };
+  openContextFile(
+    workspaceId: string,
+    relPath: string,
+  ): { ok: true; docId: string; meta: DocMeta } | { ok: false; error: string };
   list(): DocMeta[];
 }
 
@@ -76,8 +80,10 @@ export interface BindFolderOpts {
   folderPath: string;
   workspaceId?: string;
   title?: string;
+  /** Accepted for back-compat; lazy opening made the allowlist obsolete. */
   include?: string[];
   exclude?: string[];
+  /** Accepted for back-compat; browse mode binds lazily so no cap applies. */
   maxFiles?: number;
   owner?: string;
   producedBy?: { agentId?: string; sessionId?: string };
@@ -94,76 +100,59 @@ export type BindFolderResult =
     }
   | { ok: false; error: 'not-found' | 'too-many-files'; fileCount?: number };
 
+/**
+ * bind_folder is now an alias for a BROWSE-mode diff workspace (bindDiff
+ * without a base): the whole folder is navigable from the all-files
+ * sidebar, files open lazily (markdown editable, source read-only), and
+ * only an entry doc binds eagerly. `fileCount` is the scan count, not a
+ * bound-docs count — the old eager-bind-everything path (and its 300-file
+ * cap + per-file pollers) is gone.
+ */
 export function bindFolder(host: BindHost, opts: BindFolderOpts): BindFolderResult {
-  const root = resolvePath(opts.folderPath);
-  if (!existsSync(root)) return { ok: false, error: 'not-found' };
-
-  const allow = buildAllowlist(opts.include);
-  const excludes = normalizeExcludes(opts.exclude);
-  const candidates = scanFolder(root);
-  const skipped: Array<{ path: string; reason: string }> = [];
-  const accepted: Array<{ abs: string; relPath: string; type: DocType }> = [];
-
-  for (const abs of candidates) {
-    const relPath = relative(root, abs).split(sep).join('/');
-    const dotIdx = abs.lastIndexOf('.');
-    const slash = Math.max(abs.lastIndexOf('/'), abs.lastIndexOf('\\'));
-    const ext = dotIdx > slash ? abs.slice(dotIdx).toLowerCase() : '';
-    const type = allow.get(ext);
-    if (!type) continue;
-    if (isExcluded(relPath, excludes)) {
-      skipped.push({ path: relPath, reason: 'excluded' });
-      continue;
+  const res = bindDiff(host, {
+    repoPath: opts.folderPath,
+    reviewId: opts.workspaceId,
+    title: opts.title,
+    exclude: opts.exclude,
+    owner: opts.owner,
+    producedBy: opts.producedBy,
+  });
+  if (!res.ok) {
+    if (res.error === 'empty-diff') {
+      // An empty (but existing) folder is a degenerate success, matching
+      // the old eager bind's behavior for a folder with no supported files.
+      const root = resolvePath(opts.folderPath);
+      return {
+        ok: true,
+        workspaceId: opts.workspaceId ?? deriveWorkspaceId(root),
+        root,
+        fileCount: 0,
+        skipped: [],
+        files: [],
+      };
     }
-    let size: number;
-    try {
-      size = statSync(abs).size;
-    } catch {
-      skipped.push({ path: relPath, reason: 'stat-failed' });
-      continue;
-    }
-    if (size > MAX_REVIEW_FILE_BYTES) {
-      skipped.push({ path: relPath, reason: 'too-large' });
-      continue;
-    }
-    if (looksBinary(abs)) {
-      skipped.push({ path: relPath, reason: 'binary' });
-      continue;
-    }
-    accepted.push({ abs, relPath, type });
+    return { ok: false, error: 'not-found' };
   }
-
-  const max = opts.maxFiles ?? DEFAULT_MAX_FILES;
-  if (accepted.length > max) {
-    return { ok: false, error: 'too-many-files', fileCount: accepted.length };
-  }
-
-  const workspaceId = opts.workspaceId ?? deriveWorkspaceId(root);
-  const files: Array<{ docId: string; relPath: string; type: DocType; title: string }> = [];
-  for (const { abs, relPath, type } of accepted) {
-    const docId = memberDocId(workspaceId, relPath);
-    host.getOrCreate(docId, {
-      type,
-      sourceUrl: abs,
-      setId: workspaceId,
-      owner: opts.owner,
-      workspaceId,
-      workspaceRoot: root,
-      relPath,
-      title: relPath,
-      producedBy: opts.producedBy,
-    });
-    if (type === 'markdown') host.attachFile(docId, abs);
-    else host.attachReadonlyFile(docId, abs);
-    files.push({ docId, relPath, type, title: relPath });
-  }
-
-  return { ok: true, workspaceId, root, fileCount: files.length, skipped, files };
+  return {
+    ok: true,
+    workspaceId: res.reviewId,
+    root: res.root,
+    fileCount: res.fileCount,
+    skipped: res.skipped,
+    files: res.files.map((f) => ({
+      docId: f.docId,
+      relPath: f.relPath,
+      type: f.type,
+      title: f.title,
+    })),
+  };
 }
 
 export interface BindDiffOpts {
   repoPath: string;
-  base: string;
+  /** Diff base ref. OMIT for BROWSE mode: no diff — the workspace is the
+   *  folder itself, files open lazily from the all-files sidebar. */
+  base?: string;
   /** Target commit for a pinned review; omit to review the working tree. */
   target?: string;
   reviewId?: string;
@@ -184,9 +173,12 @@ export type BindDiffResult =
       ok: true;
       reviewId: string;
       root: string;
-      base: string;
+      /** Resolved base hash; null in browse mode (no diff). */
+      base: string | null;
       /** Resolved target hash for pinned reviews; null in working-tree mode. */
       target: string | null;
+      /** True when this is a browse-mode workspace (no diff members). */
+      browse?: boolean;
       fileCount: number;
       skipped: Array<{ path: string; reason: string }>;
       files: Array<{
@@ -234,6 +226,67 @@ export type BindDiffResult =
 export function bindDiff(host: BindHost, opts: BindDiffOpts): BindDiffResult {
   const root = resolvePath(opts.repoPath);
   if (!existsSync(root)) return { ok: false, error: 'not-found' };
+
+  // BROWSE mode — no base to diff against (plain folder, fresh repo, or the
+  // caller just wants to look around). No eager per-file binds: files open
+  // lazily from the all-files sidebar (openContextFile), which removes the
+  // maxFiles ceiling and the per-file pollers. One ENTRY doc is opened
+  // eagerly so the workspace exists and there's a page to land on.
+  if (opts.base === undefined) {
+    const reviewId = opts.reviewId ?? deriveWorkspaceId(root);
+    const excludes = normalizeExcludes(opts.exclude);
+    const scanned = scanFolder(root)
+      .map((abs) => relative(root, abs).split(sep).join('/'))
+      .filter((rel) => !isExcluded(rel, excludes))
+      .sort();
+    if (scanned.length === 0) return { ok: false, error: 'empty-diff' };
+    const entryRel =
+      scanned.find((r) => r.toLowerCase() === 'readme.md') ??
+      scanned.find((r) => r.toLowerCase().endsWith('.md')) ??
+      scanned[0];
+    if (!entryRel) return { ok: false, error: 'empty-diff' };
+    const opened = host.openContextFile(reviewId, entryRel);
+    // First open must create workspace meta from nothing — openContextFile
+    // derives root from members, so seed the entry doc directly here.
+    if (!opened.ok) {
+      const docId = memberDocId(reviewId, entryRel);
+      const abs = join(root, entryRel);
+      const isMd = entryRel.toLowerCase().endsWith('.md');
+      host.getOrCreate(docId, {
+        type: isMd ? 'markdown' : 'code',
+        sourceUrl: abs,
+        setId: reviewId,
+        owner: opts.owner,
+        workspaceId: reviewId,
+        workspaceRoot: root,
+        relPath: entryRel,
+        title: opts.title ?? entryRel,
+        producedBy: opts.producedBy,
+      });
+      if (isMd) host.attachFile(docId, abs);
+      else host.attachReadonlyFile(docId, abs);
+    }
+    const entryDocId = memberDocId(reviewId, entryRel);
+    return {
+      ok: true,
+      reviewId,
+      root,
+      base: null,
+      target: null,
+      browse: true,
+      fileCount: scanned.length,
+      skipped: [],
+      files: [
+        {
+          docId: entryDocId,
+          relPath: entryRel,
+          type: entryRel.toLowerCase().endsWith('.md') ? 'markdown' : 'code',
+          title: entryRel,
+          status: undefined,
+        },
+      ],
+    };
+  }
 
   const base = resolveCommit(root, opts.base);
   const target = opts.target !== undefined ? resolveCommit(root, opts.target) : null;

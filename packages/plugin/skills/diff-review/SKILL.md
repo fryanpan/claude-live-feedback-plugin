@@ -61,6 +61,11 @@ acceptable, but your semantic grouping is better. Re-binding without
 (reviewing merged/finished work). Anchors can never drift there; the same
 `reviewId` with a different range is rejected.
 
+**Browse mode** — omit `base` entirely to bind a folder with NO diff: the
+reviewer navigates everything from the all-files sidebar, files open lazily
+(markdown editable, source read-only). Works on plain folders and fresh
+repos with no commits; `bind_folder` is an alias for this.
+
 Then hand the human the returned `entryUrl`, as a bare URL on its own line
 (no markdown around it). The file tree inside the page navigates to every
 other changed file.
@@ -102,5 +107,6 @@ remain unless `force:true`.
 
 - The change is already on GitHub and a normal PR review is happening there —
   don't duplicate the surface unless the human asks.
-- Reviewing a document or a folder of files at HEAD — use `create_review_doc`
-  or `bind_folder`.
+- Reviewing a single standalone document — use `create_review_doc`.
+  (Folder browsing is no longer separate: omit `base` here instead of
+  reaching for `bind_folder`.)

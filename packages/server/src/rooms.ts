@@ -857,8 +857,11 @@ export class Rooms {
     if (existing) return { ok: true, docId: existing.docId, meta: existing };
     const owner = members.find((m) => m.owner)?.owner;
     const docId = memberDocId(workspaceId, clean);
+    // Markdown opens as the full WYSIWYG editable doc (same as bind_folder
+    // always did); everything else is read-only highlighted source.
+    const isMd = clean.toLowerCase().endsWith('.md');
     const room = this.getOrCreate(docId, {
-      type: 'code',
+      type: isMd ? 'markdown' : 'code',
       sourceUrl: abs,
       setId: workspaceId,
       owner,
@@ -867,7 +870,7 @@ export class Rooms {
       relPath: clean,
       title: clean,
     });
-    const attached = this.attachReadonlyFile(docId, abs);
+    const attached = isMd ? this.attachFile(docId, abs) : this.attachReadonlyFile(docId, abs);
     if (!attached.ok) return { ok: false, error: 'attach-failed' };
     return { ok: true, docId: room.docId, meta: room.meta };
   }
@@ -1765,6 +1768,11 @@ export class Rooms {
       seq: room.seq,
     };
     this.cfg.sse.broadcast(room.docId, payload);
+    // Workspace members double-broadcast on a per-workspace channel so an
+    // agent can watch ONE stream per review/folder instead of one per file.
+    if (room.meta.workspaceId) {
+      this.cfg.sse.broadcast(`ws~${room.meta.workspaceId}`, payload);
+    }
     if (room.webhookUrl) {
       void this.cfg.webhooks.send(room.webhookUrl, payload);
     }

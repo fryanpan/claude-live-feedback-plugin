@@ -1,35 +1,8 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
-import type { DocType } from '@feedback/core';
 
 /** Filesystem scanning + file-type gating for folder binds. */
-
-/** Extension → DocType. `.md` is editable markdown; everything else is
- *  read-only source. `include[]` (extensions like `.rb` or `rb`) extends
- *  the code set. */
-export function buildAllowlist(include?: string[]): Map<string, DocType> {
-  const map = new Map<string, DocType>([['.md', 'markdown']]);
-  const code = [
-    '.ts',
-    '.tsx',
-    '.js',
-    '.jsx',
-    '.mjs',
-    '.cjs',
-    '.java',
-    '.kt',
-    '.kts',
-    '.py',
-    '.json',
-  ];
-  for (const ext of code) map.set(ext, 'code');
-  for (const raw of include ?? []) {
-    const ext = raw.startsWith('.') ? raw.toLowerCase() : `.${raw.toLowerCase()}`;
-    if (!map.has(ext)) map.set(ext, 'code');
-  }
-  return map;
-}
 
 /**
  * Enumerate the files in `root`. Prefer `git ls-files` (cached + untracked,
@@ -87,19 +60,4 @@ function readdirRecursive(dir: string): string[] {
     }
   }
   return out;
-}
-
-/** Sniff the first 8 KB for a NUL byte — a cheap binary detector that
- *  keeps images/compiled output out of the text-only review surface. */
-export function looksBinary(abs: string): boolean {
-  try {
-    const buf = readFileSync(abs);
-    const len = Math.min(buf.length, 8 * 1024);
-    for (let i = 0; i < len; i++) {
-      if (buf[i] === 0) return true;
-    }
-    return false;
-  } catch {
-    return true;
-  }
 }

@@ -514,14 +514,16 @@ describe('Rooms.bindDiff', () => {
     expect(files.find((f) => f.relPath === 'note.md')?.changed).toBe(false);
     expect(files.find((f) => f.relPath === 'src/kept.ts')?.changed).toBe(true);
 
-    // Open unchanged note.md for context → code doc in same workspace.
+    // Open unchanged note.md for context → EDITABLE markdown doc in the
+    // same workspace (md routes to the WYSIWYG surface; code stays flat).
     const opened = rooms.openContextFile(res.reviewId, 'note.md');
     expect(opened.ok).toBe(true);
     if (!opened.ok) return;
     const room = rooms.get(opened.docId);
-    expect(room?.meta.type).toBe('code');
+    expect(room?.meta.type).toBe('markdown');
     expect(room?.meta.workspaceId).toBe(res.reviewId);
-    expect(room?.ydoc.getText('content').toString()).toContain('# unchanged');
+    // Markdown content lives in the prose fragment, not the flat Y.Text.
+    expect(room?.ydoc.getXmlFragment('prose').length).toBeGreaterThan(0);
 
     // Context docs stay OUT of the grouped-diff view.
     const grouped = rooms.listGroupedDiff(res.reviewId);
@@ -555,6 +557,63 @@ describe('Rooms.bindDiff', () => {
         await fetch(`http://localhost:${handle.port}/api/workspaces/http-groups/grouped`)
       ).json()) as { groups: Array<{ title: string }> };
       expect(grouped.groups.map((g) => g.title)).toEqual(['Via HTTP']);
+    } finally {
+      await handle.stop();
+      rmSync(httpDataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('browse mode (no base): entry doc only, README preferred, no diff members', () => {
+    const res = rooms.bindDiff({ repoPath: fixture.repo });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.browse).toBe(true);
+    expect(res.base).toBeNull();
+    expect(res.files).toHaveLength(1);
+    expect(res.files[0]?.relPath).toBe('note.md'); // only .md in the fixture
+    expect(res.files[0]?.type).toBe('markdown');
+    expect(res.fileCount).toBeGreaterThan(1); // scan count, not bound count
+    // No diff members → grouped view is empty (sidebar falls to all-files).
+    expect(rooms.listGroupedDiff(res.reviewId).groups).toHaveLength(0);
+  });
+
+  it('workspace SSE stream delivers thread events from any member', async () => {
+    const { createServer } = await import('../src/server.ts');
+    const httpDataDir = mkdtempSync(join(tmpdir(), 'bd-ws-sse-'));
+    const handle = createServer({ port: 0, dataDir: httpDataDir });
+    try {
+      const bound = handle.rooms.bindDiff({
+        repoPath: fixture.repo,
+        base: fixture.base,
+        reviewId: 'sse-ws',
+      });
+      expect(bound.ok).toBe(true);
+      if (!bound.ok) return;
+      const docId = bound.files.find((f) => f.relPath === 'src/kept.ts')?.docId ?? '';
+
+      const res = await fetch(`http://localhost:${handle.port}/events/workspace/sse-ws`);
+      expect(res.ok).toBe(true);
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error('no sse body');
+
+      await handle.rooms.createThreadByFind(
+        docId,
+        { find: 'line2 CHANGED' },
+        { id: 'u1', name: 'T', kind: 'known', color: '#000' },
+        'via workspace stream',
+      );
+
+      const decoder = new TextDecoder();
+      let buf = '';
+      const deadline = Date.now() + 5000;
+      while (!buf.includes('thread.created') && Date.now() < deadline) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+      }
+      await reader.cancel().catch(() => {});
+      expect(buf).toContain('thread.created');
+      expect(buf).toContain(docId.replace(/~/g, '~')); // member docId appears in payload
     } finally {
       await handle.stop();
       rmSync(httpDataDir, { recursive: true, force: true });

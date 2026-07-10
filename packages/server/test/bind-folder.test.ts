@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { WorkspaceDirNode, WorkspaceFileNode } from '../src/rooms.ts';
 import { Rooms } from '../src/rooms.ts';
 import { SseHub } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
@@ -16,18 +15,12 @@ function makeRooms(dataDir: string): Rooms {
   });
 }
 
-/** Flatten the tree's file leaves keyed by relPath, for assertions. */
-function fileMap(node: WorkspaceDirNode): Map<string, WorkspaceFileNode> {
-  const out = new Map<string, WorkspaceFileNode>();
-  const walk = (n: WorkspaceDirNode | WorkspaceFileNode) => {
-    if (n.type === 'file') out.set(n.relPath, n);
-    else for (const c of n.children) walk(c);
-  };
-  walk(node);
-  return out;
-}
-
-describe('Rooms.bindFolder', () => {
+/**
+ * bind_folder is now an alias for a BROWSE-mode workspace (bindDiff without
+ * a base): one eagerly-bound entry doc, everything else lazily opened via
+ * openContextFile. These tests cover the new contract.
+ */
+describe('Rooms.bindFolder (browse-mode alias)', () => {
   let dataDir: string;
   let folder: string;
   let rooms: Rooms;
@@ -43,143 +36,98 @@ describe('Rooms.bindFolder', () => {
     rmSync(folder, { recursive: true, force: true });
   });
 
+  function seedFolder(): void {
+    writeFileSync(join(folder, 'README.md'), '# Hello\n\nbody\n');
+    writeFileSync(join(folder, 'index.ts'), 'export const x = 1;\n');
+    mkdirSync(join(folder, 'src'));
+    writeFileSync(join(folder, 'src', 'util.ts'), 'export const y = 2;\n');
+  }
+
   it('errors not-found for a missing folder', () => {
     const res = rooms.bindFolder({ folderPath: join(folder, 'nope') });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toBe('not-found');
   });
 
-  it('creates one doc per supported file with relPath + type, skipping junk dirs and binaries', () => {
-    // Supported files
-    writeFileSync(join(folder, 'README.md'), '# Hello\n\nbody\n');
-    writeFileSync(join(folder, 'index.ts'), 'export const x = 1;\n');
-    writeFileSync(join(folder, 'data.json'), '{"a":1}\n');
-    // Nested supported file
-    mkdirSync(join(folder, 'src'));
-    writeFileSync(join(folder, 'src', 'util.ts'), 'export const y = 2;\n');
-    // Unsupported extension — ignored entirely (not even in skipped)
-    writeFileSync(join(folder, 'notes.txt'), 'plain\n');
-    // Skipped dirs (readdir fallback path — no git repo here)
-    mkdirSync(join(folder, 'node_modules'));
-    writeFileSync(join(folder, 'node_modules', 'dep.js'), 'module.exports = {}\n');
-    mkdirSync(join(folder, '.git'));
-    writeFileSync(join(folder, '.git', 'config.js'), 'x\n');
-    // Too-big file
-    writeFileSync(join(folder, 'big.js'), 'a'.repeat(512 * 1024 + 1));
-    // Binary file (NUL byte) with a code extension
-    writeFileSync(join(folder, 'bin.json'), Buffer.from([0x7b, 0x00, 0x7d]));
-
+  it('binds ONE entry doc (README preferred, editable markdown); fileCount is the scan count', () => {
+    seedFolder();
     const res = rooms.bindFolder({ folderPath: folder, owner: '/cwd' });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
 
-    const byRel = new Map(res.files.map((f) => [f.relPath, f]));
-    expect([...byRel.keys()].sort()).toEqual(['README.md', 'data.json', 'index.ts', 'src/util.ts']);
-    expect(byRel.get('README.md')?.type).toBe('markdown');
-    expect(byRel.get('index.ts')?.type).toBe('code');
-    expect(byRel.get('data.json')?.type).toBe('code');
-    expect(res.fileCount).toBe(4);
+    expect(res.fileCount).toBe(3); // scan count, not bound-docs count
+    expect(res.files).toHaveLength(1); // only the entry binds eagerly
+    expect(res.files[0]?.relPath).toBe('README.md');
+    expect(res.files[0]?.type).toBe('markdown');
 
-    // node_modules + .git contents never appear
-    expect(res.files.some((f) => f.relPath.includes('node_modules'))).toBe(false);
-    expect(res.files.some((f) => f.relPath.includes('.git'))).toBe(false);
-
-    // big + binary recorded in skipped
-    const reasons = new Map(res.skipped.map((s) => [s.path, s.reason]));
-    expect(reasons.get('big.js')).toBe('too-large');
-    expect(reasons.get('bin.json')).toBe('binary');
-
-    // Docs actually exist and carry workspace metadata.
-    const file = byRel.get('src/util.ts')!;
-    expect(file.docId).toContain(':');
-    const room = rooms.get(file.docId);
-    expect(room).toBeTruthy();
-    expect(room?.meta.workspaceId).toBe(res.workspaceId);
-    expect(room?.meta.relPath).toBe('src/util.ts');
-    expect(room?.meta.workspaceRoot).toBe(res.root);
-    expect(room?.meta.setId).toBe(res.workspaceId);
+    const entry = rooms.get(res.files[0]?.docId ?? '');
+    expect(entry?.meta.workspaceId).toBe(res.workspaceId);
+    expect(entry?.meta.workspaceRoot).toBe(res.root);
+    // Markdown entry is EDITABLE (prose-bound, not flat content).
+    expect(entry?.meta.type).toBe('markdown');
   });
 
-  it('is idempotent — re-binding maps to the same docIds', () => {
-    writeFileSync(join(folder, 'a.ts'), 'const a = 1;\n');
-    const first = rooms.bindFolder({ folderPath: folder });
-    const second = rooms.bindFolder({ folderPath: folder });
-    expect(first.ok && second.ok).toBe(true);
-    if (!first.ok || !second.ok) return;
-    expect(first.files[0]!.docId).toBe(second.files[0]!.docId);
-    expect(first.workspaceId).toBe(second.workspaceId);
+  it('remaining files open lazily with md → editable markdown, code → read-only', () => {
+    seedFolder();
+    const res = rooms.bindFolder({ folderPath: folder });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+
+    const code = rooms.openContextFile(res.workspaceId, 'src/util.ts');
+    expect(code.ok).toBe(true);
+    if (!code.ok) return;
+    expect(rooms.get(code.docId)?.meta.type).toBe('code');
+    expect(rooms.get(code.docId)?.ydoc.getText('content').toString()).toContain('const y = 2');
+
+    // Re-open is idempotent.
+    const again = rooms.openContextFile(res.workspaceId, 'src/util.ts');
+    expect(again.ok && again.docId === code.docId).toBe(true);
+
+    // listRepoFiles surfaces everything, none marked changed (no diff).
+    const all = rooms.listRepoFiles(res.workspaceId);
+    expect(all.ok).toBe(true);
+    expect((all.files ?? []).map((f) => f.relPath).sort()).toEqual([
+      'README.md',
+      'index.ts',
+      'src/util.ts',
+    ]);
+    expect((all.files ?? []).every((f) => !f.changed)).toBe(true);
   });
 
-  it('buildWorkspaceTree nests files by relPath with rolled-up open counts', async () => {
-    writeFileSync(join(folder, 'top.ts'), 'export const top = 1;\n');
-    mkdirSync(join(folder, 'docs'));
-    mkdirSync(join(folder, 'docs', 'deep'));
-    // Markdown file nested two levels down — used as the thread target so we
-    // exercise the prose anchor path the editor uses.
-    writeFileSync(join(folder, 'docs', 'deep', 'guide.md'), '# Guide\n\nthe unique target line\n');
-    writeFileSync(join(folder, 'docs', 'a.ts'), 'export const a = 1;\n');
+  it('is idempotent — re-binding maps to the same workspace + entry doc', () => {
+    seedFolder();
+    const a = rooms.bindFolder({ folderPath: folder });
+    const b = rooms.bindFolder({ folderPath: folder });
+    expect(a.ok && b.ok).toBe(true);
+    if (!a.ok || !b.ok) return;
+    expect(b.workspaceId).toBe(a.workspaceId);
+    expect(b.files[0]?.docId).toBe(a.files[0]?.docId);
+  });
 
-    const bound = rooms.bindFolder({ folderPath: folder });
-    expect(bound.ok).toBe(true);
-    if (!bound.ok) return;
-    const workspaceId = bound.workspaceId;
+  it('empty folder is a degenerate success (no entry to bind)', () => {
+    const res = rooms.bindFolder({ folderPath: folder });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.fileCount).toBe(0);
+    expect(res.files).toHaveLength(0);
+  });
 
-    // No threads yet → all counts zero.
-    let tree = rooms.buildWorkspaceTree(workspaceId);
-    expect(tree.workspaceId).toBe(workspaceId);
-    expect(tree.root).toBe(bound.root);
-    expect(tree.totalOpen).toBe(0);
-    expect(tree.tree.type).toBe('dir');
-    expect(tree.tree.name).toBe('');
-
-    // Structure: top-level has the docs dir + top.ts file; dirs sort first.
-    const topNames = tree.tree.children.map((c) => c.name);
-    expect(topNames).toEqual(['docs', 'top.ts']);
-    expect(tree.tree.children[0]!.type).toBe('dir');
-
-    // The nested file carries a decorated reviewUrl.
-    const guide = fileMap(tree.tree).get('docs/deep/guide.md')!;
-    expect(guide.fileType).toBe('markdown');
-    expect(guide.reviewUrl).toBe(`http://test/review/${guide.docId}`);
-
-    // Create an open thread on the nested markdown file.
+  it('workspace tree still rolls up counts across lazily-opened members', async () => {
+    seedFolder();
+    const res = rooms.bindFolder({ folderPath: folder });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const opened = rooms.openContextFile(res.workspaceId, 'src/util.ts');
+    expect(opened.ok).toBe(true);
+    if (!opened.ok) return;
     const created = await rooms.createThreadByFind(
-      guide.docId,
-      { find: 'the unique target line' },
-      { id: 'u1', name: 'Reviewer', kind: 'known', color: '#2e7dd7' },
-      'expand this',
+      opened.docId,
+      { find: 'const y = 2' },
+      { id: 'u1', name: 'T', kind: 'known', color: '#000' },
+      'why 2?',
     );
     expect(created.ok).toBe(true);
-
-    // Rebuild: openCount rolls up through docs/deep, docs, and the total.
-    tree = rooms.buildWorkspaceTree(workspaceId);
+    const tree = rooms.buildWorkspaceTree(res.workspaceId);
     expect(tree.totalOpen).toBe(1);
-    const files = fileMap(tree.tree);
-    expect(files.get('docs/deep/guide.md')!.openCount).toBe(1);
-    expect(files.get('docs/deep/guide.md')!.threadCount).toBe(1);
-    expect(files.get('docs/a.ts')!.openCount).toBe(0);
-
-    const docsDir = tree.tree.children.find(
-      (c): c is WorkspaceDirNode => c.type === 'dir' && c.name === 'docs',
-    )!;
-    expect(docsDir.openCount).toBe(1);
-    const deepDir = docsDir.children.find(
-      (c): c is WorkspaceDirNode => c.type === 'dir' && c.name === 'deep',
-    )!;
-    expect(deepDir.openCount).toBe(1);
-  });
-
-  it('guardrail: too-many-files returns without creating any docs', () => {
-    for (let i = 0; i < 5; i++) {
-      writeFileSync(join(folder, `f${i}.ts`), `const f = ${i};\n`);
-    }
-    const before = rooms.list().length;
-    const res = rooms.bindFolder({ folderPath: folder, maxFiles: 3 });
-    expect(res.ok).toBe(false);
-    if (res.ok) return;
-    expect(res.error).toBe('too-many-files');
-    expect(res.fileCount).toBe(5);
-    // Nothing created.
-    expect(rooms.list().length).toBe(before);
   });
 });

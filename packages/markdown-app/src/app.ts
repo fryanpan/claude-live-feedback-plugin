@@ -1,5 +1,6 @@
 import { type User, connect, escapeHtml, readDocMeta, resolveUser } from '@feedback/core';
 import { bootCode } from './code/code-app.ts';
+import { renderDiffNav } from './diff-nav.ts';
 import { type EditorHandle, createEditor } from './editor.ts';
 import { startReadingTracker } from './reading-tracker.ts';
 import { type ReviewChrome, el, mountReviewChrome, showToast } from './review-chrome.ts';
@@ -482,7 +483,11 @@ async function boot(): Promise<void> {
       return;
     }
     if (workspaceId) {
-      await renderWorkspaceTree(docId, workspaceId);
+      // Same chooser as the code/diff boot: diff reviews + browse
+      // workspaces get the diff-nav; only data-less workspaces fall back
+      // to the legacy folder tree.
+      const ok = await renderDiffNav(docId, workspaceId);
+      if (!ok) await renderWorkspaceTree(docId, workspaceId);
       return;
     }
     // ---- Legacy flat setId path ----

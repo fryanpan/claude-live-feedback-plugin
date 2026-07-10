@@ -45,30 +45,40 @@ function appendParams(url: string): string {
   return url.includes('?') ? `${url}&${qs}` : `${url}?${qs}`;
 }
 
-/** Try to render the diff-review nav. Returns false when the workspace has
- *  no diff members (caller falls back to the folder tree). */
+/** Render the workspace nav. Diff reviews get the Changed/All toggle;
+ *  BROWSE workspaces (no diff members) get the all-files tree only.
+ *  Returns false when the workspace has no navigable file data at all. */
 export async function renderDiffNav(docId: string, workspaceId: string): Promise<boolean> {
   const res = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/grouped`).catch(
     () => null,
   );
-  if (!res || !res.ok) return false;
-  const grouped = (await res.json()) as GroupedModel;
-  if (!grouped.groups.length) return false;
+  const grouped =
+    res?.ok === true ? ((await res.json()) as GroupedModel) : ({ groups: [] } as GroupedModel);
+  const hasDiff = grouped.groups.length > 0;
+  if (!hasDiff) {
+    // Browse mode is only viable when the all-files endpoint works.
+    const probe = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/files`).catch(
+      () => null,
+    );
+    if (!probe || !probe.ok) return false;
+  }
 
   document.body.classList.add('has-set');
   document.getElementById('set-pane')?.setAttribute('aria-hidden', 'false');
 
-  let view: NavView = 'grouped';
+  let view: NavView = hasDiff ? 'grouped' : 'all';
   try {
-    if (localStorage.getItem(viewKey(workspaceId)) === 'all') view = 'all';
+    if (hasDiff && localStorage.getItem(viewKey(workspaceId)) === 'all') view = 'all';
   } catch {}
 
   const render = async () => {
-    const header = `
+    const header = hasDiff
+      ? `
       <div class="diff-nav-toggle" role="group" aria-label="Sidebar view">
         <button type="button" data-nav="grouped" class="${view === 'grouped' ? 'active' : ''}">Show Changed Files</button>
         <button type="button" data-nav="all" class="${view === 'all' ? 'active' : ''}">Show All Files</button>
-      </div>`;
+      </div>`
+      : '';
     const body =
       view === 'grouped' ? renderGrouped(grouped, docId) : await renderAllFiles(workspaceId, docId);
     const html = header + body;
