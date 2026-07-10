@@ -214,6 +214,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         return undefined;
       }
 
+      // --- SSE (workspace-level): every thread event on any member doc of a
+      // workspace/diff review, one stream — agents watch this instead of one
+      // stream per file. ---
+      const wsEventsMatch = pathname.match(/^\/events\/workspace\/([^/]+)$/);
+      if (wsEventsMatch) {
+        const workspaceId = decodeURIComponent(wsEventsMatch[1] ?? '');
+        if (!isValidDocId(workspaceId)) return j(400, { error: 'bad workspaceId' });
+        const exists = rooms.list().some((m) => m.workspaceId === workspaceId);
+        if (!exists) return j(404, { error: 'workspace not found' });
+        return openSseStream(sse, `ws~${workspaceId}`);
+      }
       // --- SSE ---
       if (pathname.startsWith('/events/')) {
         const docId = decodeURIComponent(pathname.slice('/events/'.length));
@@ -319,10 +330,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         const repoPath = body?.repo as string | undefined;
         const base = body?.base as string | undefined;
         const target = body?.target as string | undefined;
-        if (!repoPath || !base) {
+        if (!repoPath) {
           return j(400, {
-            error: 'repo and base are required (target optional: omit to review the working tree)',
+            error:
+              'repo is required. base optional: omit for a BROWSE workspace (no diff); pass base to diff against the working tree; base+target for a pinned range.',
           });
+        }
+        if (target && !base) {
+          return j(400, { error: 'target requires base' });
         }
         const reviewId = body?.reviewId as string | undefined;
         if (reviewId !== undefined && !isValidDocId(reviewId)) {

@@ -12,6 +12,7 @@ import { type ServerHandle, createServer } from '../src/server.ts';
  *   - DELETE /api/workspaces/:id enforces the all-or-nothing open-thread
  *     guardrail and force-deletes the whole folder as a unit
  */
+
 describe('landing + delete_workspace e2e (HTTP)', () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -63,6 +64,22 @@ describe('landing + delete_workspace e2e (HTTP)', () => {
     const body = await j<BindResp>(r);
     workspaceId = body.workspaceId;
     files = new Map(body.files.map((f) => [f.relPath, f]));
+    // bind is lazy now (entry only) — open the rest like a reviewer would.
+    const allR = await fetch(`${base}/api/workspaces/${encodeURIComponent(workspaceId)}/files`);
+    const all = await j<{ files: Array<{ relPath: string }> }>(allR);
+    for (const f of all.files) {
+      if (files.has(f.relPath)) continue;
+      const cr = await fetch(
+        `${base}/api/workspaces/${encodeURIComponent(workspaceId)}/context-file`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ relPath: f.relPath }),
+        },
+      );
+      const opened = await j<{ docId: string }>(cr);
+      files.set(f.relPath, { docId: opened.docId, relPath: f.relPath } as BindFile);
+    }
 
     // Standalone markdown doc under the same project owner.
     const sr = await fetch(`${base}/api/docs`, {
@@ -92,7 +109,7 @@ describe('landing + delete_workspace e2e (HTTP)', () => {
     expect(html).toContain('alpha');
     // The folder artifact appears as an expandable <details> with a folder glyph,
     // labeled by its workspaceId, and nests its member files (README.md, index.ts).
-    expect(html).toContain('<details>');
+    expect(html).toContain('<details');
     expect(html).toContain(workspaceId);
     expect(html).toContain('README.md');
     expect(html).toContain('src/index.ts');
