@@ -80,7 +80,9 @@ export async function renderDiffNav(docId: string, workspaceId: string): Promise
       </div>`
       : '';
     const body =
-      view === 'grouped' ? renderGrouped(grouped, docId) : await renderAllFiles(workspaceId, docId);
+      view === 'grouped'
+        ? renderGrouped(grouped, docId, workspaceId)
+        : await renderAllFiles(workspaceId, docId);
     const html = header + body;
     const setPaneList = document.getElementById('set-pane-list');
     const docMenu = document.getElementById('doc-menu');
@@ -90,6 +92,15 @@ export async function renderDiffNav(docId: string, workspaceId: string): Promise
       if (!rootEl) continue;
       wireToggle(rootEl);
       if (view === 'all') wireContextOpen(rootEl, workspaceId);
+      // Persist each group's open/closed state.
+      for (const d of rootEl.querySelectorAll<HTMLDetailsElement>('details.diff-group')) {
+        d.addEventListener('toggle', () => {
+          const title = d.getAttribute('data-group') ?? '';
+          try {
+            localStorage.setItem(groupKey(workspaceId, title), d.open ? 'open' : 'closed');
+          } catch {}
+        });
+      }
     }
   };
 
@@ -135,7 +146,9 @@ export async function renderDiffNav(docId: string, workspaceId: string): Promise
 function fileRow(f: GroupedFile, activeDocId: string): string {
   const isActive = f.docId === activeDocId;
   const href = f.reviewUrl ? appendParams(f.reviewUrl) : '#';
-  const dir = f.relPath.includes('/') ? f.relPath.slice(0, f.relPath.lastIndexOf('/')) : '';
+  // One compact scannable row: status letter left-justified, filename, then
+  // churn right-justified. The folder path is deliberately absent — it's
+  // visible once the file is open; hover shows it via title.
   const letter = f.diffStatus ? (f.diffStatus[0]?.toUpperCase() ?? '') : '';
   const counts =
     f.diffAdditions != null || f.diffDeletions != null
@@ -144,24 +157,32 @@ function fileRow(f: GroupedFile, activeDocId: string): string {
   const open = f.openCount > 0 ? `<span class="tree-badge badge-open">${f.openCount}</span>` : '';
   return `<li class="diff-file"><a href="${href}" class="${isActive ? 'active' : ''}"${
     isActive ? ' aria-current="page"' : ''
-  } title="${escapeHtml(f.relPath)}">
-    ${letter ? `<span class="tree-diff-status tree-diff-${letter}">${letter}</span>` : ''}
-    <span class="diff-file-name">${escapeHtml(f.name)}${
-      dir ? `<small class="diff-file-dir">${escapeHtml(dir)}</small>` : ''
-    }</span>${counts}${open}</a></li>`;
+  } title="${escapeHtml(f.relPath)}"><span class="tree-diff-status tree-diff-${letter}">${letter}</span><span class="diff-file-name">${escapeHtml(
+    f.name,
+  )}</span>${open}${counts}</a></li>`;
 }
 
-function renderGrouped(model: GroupedModel, activeDocId: string): string {
+function groupKey(workspaceId: string, title: string): string {
+  return `lf:diff-group:${workspaceId}:${title}`;
+}
+
+function renderGrouped(model: GroupedModel, activeDocId: string, workspaceId: string): string {
   return model.groups
-    .map(
-      (g) => `
-      <section class="diff-group">
-        <div class="diff-group-title">${escapeHtml(g.title)}${
-          g.openCount > 0 ? `<span class="tree-badge tree-badge-dir">${g.openCount}</span>` : ''
-        }</div>
+    .map((g) => {
+      let open = true;
+      try {
+        if (localStorage.getItem(groupKey(workspaceId, g.title)) === 'closed') open = false;
+      } catch {}
+      return `
+      <details class="diff-group"${open ? ' open' : ''} data-group="${escapeHtml(g.title)}">
+        <summary class="diff-group-title"><span class="diff-group-name">${escapeHtml(
+          g.title,
+        )}</span><span class="diff-group-meta">${g.files.length}</span>${
+          g.openCount > 0 ? `<span class="tree-badge badge-open">${g.openCount}</span>` : ''
+        }</summary>
         <ul class="diff-group-files">${g.files.map((f) => fileRow(f, activeDocId)).join('')}</ul>
-      </section>`,
-    )
+      </details>`;
+    })
     .join('');
 }
 
