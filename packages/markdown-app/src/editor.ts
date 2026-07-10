@@ -115,19 +115,45 @@ export function createEditor(opts: CreateEditorOpts): EditorHandle {
   return {
     editor,
     getSelectionRel() {
-      const { from, to, empty } = editor.state.selection;
-      if (empty) return null;
       const sync = syncState();
       if (!sync?.binding) return null;
       const { mapping, type } = sync.binding;
-      const startRel = absolutePositionToRelativePosition(from, type, mapping);
-      const endRel = absolutePositionToRelativePosition(to, type, mapping);
-      const snippet = editor.state.doc.textBetween(from, to, ' ').slice(0, 80);
-      return {
-        start: Y.encodeRelativePosition(startRel),
-        end: Y.encodeRelativePosition(endRel),
-        snippet,
+      const toRel = (from: number, to: number) => {
+        const startRel = absolutePositionToRelativePosition(from, type, mapping);
+        const endRel = absolutePositionToRelativePosition(to, type, mapping);
+        const snippet = editor.state.doc.textBetween(from, to, ' ').slice(0, 80);
+        return {
+          start: Y.encodeRelativePosition(startRel),
+          end: Y.encodeRelativePosition(endRel),
+          snippet,
+        };
       };
+      // 1) ProseMirror's own selection — authoritative in edit mode.
+      const { from, to, empty } = editor.state.selection;
+      if (!empty) return toRel(from, to);
+      // 2) Fall back to the raw DOM selection. In VIEW mode (contenteditable
+      //    =false) a long-press text selection — notably on iOS Safari —
+      //    never propagates into ProseMirror's selection state, so the PM
+      //    selection reads empty even though the user has visibly selected
+      //    text. Map the DOM range back to document positions via posAtDOM so
+      //    commenting works without making the doc editable.
+      const dom = window.getSelection();
+      if (!dom || dom.rangeCount === 0 || dom.isCollapsed) return null;
+      const range = dom.getRangeAt(0);
+      const view = editor.view;
+      if (!view.dom.contains(range.startContainer) || !view.dom.contains(range.endContainer)) {
+        return null;
+      }
+      let a: number;
+      let b: number;
+      try {
+        a = view.posAtDOM(range.startContainer, range.startOffset);
+        b = view.posAtDOM(range.endContainer, range.endOffset);
+      } catch {
+        return null;
+      }
+      if (a < 0 || b < 0 || a === b) return null;
+      return toRel(Math.min(a, b), Math.max(a, b));
     },
     resolveRel(startRel, endRel) {
       const sync = syncState();
