@@ -24,16 +24,13 @@ import { ThreadDecorations, type ThreadRange, setThreadDecorations } from './thr
 
 /**
  * WYSIWYG markdown editor backed by Tiptap (ProseMirror) + Yjs collaboration.
- * Storage: content lives in a Y.XmlFragment named `prose`. On first load, if
- * that fragment is empty but the legacy Y.Text `content` has data, the
- * content is migrated into the prose fragment so docs created with the old
- * CodeMirror source editor keep their text.
+ * Storage: content lives in a Y.XmlFragment named `prose`. (The pre-Tiptap
+ * `content` Y.Text migration was removed 2026-07 after a scan showed no
+ * persisted doc still needed it; `content` is now the CODE/DIFF surface.)
  */
 
 export interface EditorHandle {
   editor: Editor;
-  /** Migrate legacy Y.Text 'content' into the fragment, once per doc. */
-  migrateLegacyIfNeeded: () => void;
   getSelectionRel: () => { start: Uint8Array; end: Uint8Array; snippet: string } | null;
   resolveRel: (startRel: Uint8Array, endRel: Uint8Array) => { from: number; to: number } | null;
   scrollToPos: (pos: number) => void;
@@ -65,8 +62,6 @@ export function createEditor(opts: CreateEditorOpts): EditorHandle {
   void opts.user;
 
   const fragmentName = opts.fragmentName ?? 'prose';
-  const fragment = opts.ydoc.getXmlFragment(fragmentName);
-  const legacy = opts.ydoc.getText('content');
 
   const editor = new Editor({
     element: opts.parent,
@@ -119,20 +114,6 @@ export function createEditor(opts: CreateEditorOpts): EditorHandle {
 
   return {
     editor,
-    migrateLegacyIfNeeded(): void {
-      // Legacy Y.Text content from the old CodeMirror editor → migrate
-      // exactly once per doc (guarded by meta.seeded), after initial sync.
-      const meta = opts.ydoc.getMap('meta');
-      if (fragment.length > 0) return;
-      if (meta.get('seeded')) return;
-      if (legacy.length === 0) return;
-      const text = legacy.toString();
-      opts.ydoc.transact(() => {
-        meta.set('seeded', true);
-        legacy.delete(0, legacy.length);
-      });
-      editor.commands.setContent(text, { emitUpdate: true });
-    },
     getSelectionRel() {
       const sync = syncState();
       if (!sync?.binding) return null;

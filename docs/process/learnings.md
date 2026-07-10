@@ -2,6 +2,64 @@
 
 Technical discoveries that should persist across sessions for this project.
 
+## The route layer silently drops params unit tests can't see
+
+- **Every REST handler in server.ts hand-copies body fields into the rooms
+  call — a new param needs THREE additions (MCP tool, route, rooms), and
+  the route is the one nothing type-checks.** `groups` was added to the MCP
+  tool schema and to `bindDiff`, but not forwarded by `POST /api/diffs`:
+  the API accepted it, returned ok:true, and discarded it. Unit tests
+  passed (they call `bindDiff` directly); the outside agent reported
+  success TWICE (it trusted the 200). Only probing the live server's
+  resulting state exposed it. Rules: (1) when adding a param to a rooms
+  method, grep the route that fronts it in the same change; (2) write at
+  least one HTTP-level test through the real route per new param; (3) a
+  peer agent's "it worked" means "the call didn't error" — verify the
+  server-side EFFECT before believing a success report (same lesson as
+  diagnose-before-recommending, inverted).
+- **Related: don't let your own maintenance operations clobber
+  caller-supplied state.** A group-less refresh re-bind overwrote
+  agent-supplied groups with the heuristic because "refresh derived
+  fields" treated groups as derived. Fields that are sometimes derived and
+  sometimes caller-authored need an explicit precedence rule (explicit
+  wins; refresh only fills gaps).
+
+## Diff review (type='diff') — immutable content changes the rules
+
+- **A diff review is "bind_folder where the file list comes from `git diff`
+  and the bytes come from `git show target:path`".** One doc per changed
+  file grouped under workspaceId = reviewId buys the tree UI, thread stack,
+  SSE watch, delete_workspace, and cleanup for free. Content pinned to a
+  commit hash needs NO mtime poll, NO write-back, and anchors can never
+  drift — most of the sync machinery is deliberately not wired.
+- **@codemirror/merge's `collapseUnchanged` computes its ranges ONLY at
+  StateField init** (`CollapsedRanges.init(buildCollapsedRanges)`); the
+  update path only ever removes ranges. Our editors mount before the Yjs
+  websocket delivers content, so the field initialized over an empty doc
+  and nothing ever collapsed. Fix: re-init the merge compartment
+  (`Compartment.reconfigure` with fresh extensions) on the first real
+  content change. General rule: any CM extension that derives state via
+  `Field.init(...)` is stale for docs that stream in after mount.
+- **Viewport-virtualized DOM lies to counting queries.** `querySelectorAll
+  ('.cm-changedLine').length === 0` at scroll-top proved nothing — CM only
+  renders the viewport. Scroll to the region (or use state, not DOM) before
+  concluding a decoration is missing. Also: match deletion widgets to
+  chunks by `view.posAtDOM(widget)`, never by DOM order — off-viewport
+  widgets aren't in the DOM at all.
+- **`createThreadByFind` resolved only against the prose fragment**, so
+  agent-side `create_thread` returned no-match on every code/diff doc
+  (empty fragment) — a gap dating from the code surface (PR #55). Flat
+  content docs need their own find path against `content.toString()` with
+  line-snapped anchors. When a doc kind stores content in a different Yjs
+  surface, grep every `prose.*(ydoc)` call site for the missing branch.
+- **Old/new dual line numbers**: new = `lineNumbers()`; old = a custom
+  gutter mapping posB→posA by accumulating chunk size deltas (pure,
+  unit-tested `oldLineForPos`); deleted lines live inside widget DOM where
+  no gutter reaches — stamp `data-old-line` on `.cm-deletedLine` divs and
+  render via CSS `::before content: attr(...)`. Gutter ORDER follows
+  extension order: the old-number gutter must precede `lineNumbers()` in
+  the same extension list to render on the left.
+
 ## Concurrent agent+human edits are CRDT-safe; disk reconcile was not
 
 - **Agent edits don't clobber a live human editor — the in-memory path is

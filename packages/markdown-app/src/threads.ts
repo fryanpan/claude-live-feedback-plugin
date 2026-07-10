@@ -1,4 +1,4 @@
-import type { Thread, User } from '@feedback/core';
+import { type Thread, type User, formatTime } from '@feedback/core';
 import { renderCommentMarkdown } from './comment-markdown.ts';
 
 export type ThreadTab = 'open' | 'resolved' | 'all';
@@ -11,6 +11,8 @@ export interface ThreadPanelOpts {
   onResolve: (threadId: string) => void;
   onReopen: (threadId: string) => void;
   onReanchor: (threadId: string) => void;
+  /** "L293" / "L293–301" label for line-oriented surfaces; null hides it. */
+  threadLineLabel?: (threadId: string) => string | null;
 }
 
 export class ThreadPanel {
@@ -188,6 +190,13 @@ export class ThreadPanel {
     const snippet = document.createElement('div');
     snippet.className = 'snippet';
     snippet.textContent = snippetText(t);
+    const lineLabel = this.opts.threadLineLabel?.(t.id);
+    if (lineLabel) {
+      const chip = document.createElement('span');
+      chip.className = 'thread-line';
+      chip.textContent = lineLabel;
+      snippet.prepend(chip);
+    }
     el.appendChild(snippet);
 
     const comments = document.createElement('div');
@@ -291,16 +300,4 @@ function snippetText(t: Thread): string {
 
 function sortByActivity(ts: Thread[]): Thread[] {
   return [...ts].sort((a, b) => b.lastActivity - a.lastActivity);
-}
-
-function formatTime(ts: number): string {
-  if (!ts) return '';
-  const d = new Date(ts);
-  const now = Date.now();
-  const diff = now - ts;
-  if (diff < 60_000) return 'just now';
-  if (diff < 3600_000) return `${Math.floor(diff / 60_000)}m`;
-  if (diff < 86400_000) return `${Math.floor(diff / 3600_000)}h`;
-  if (diff < 7 * 86400_000) return `${Math.floor(diff / 86400_000)}d`;
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }

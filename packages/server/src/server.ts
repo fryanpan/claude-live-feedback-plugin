@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { extname, join } from 'node:path';
-import type { Anchor, DocType, User } from '@feedback/core';
+import { type Anchor, type DocType, type User, contentKind } from '@feedback/core';
+import { showFile } from './git-diff.ts';
 import { type CfAccessOptions, createCfAccessVerifier } from './middleware/cf-access.ts';
 import { publicBaseUrl } from './public-host.ts';
 import { type FeedbackWs, Rooms, type WorkspaceDirNode, type WorkspaceFileNode } from './rooms.ts';
@@ -195,13 +196,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
         const type = url.searchParams.get('type') as DocType | null;
         const sourceUrl = url.searchParams.get('sourceUrl') ?? undefined;
-        // Mockup/dev docs auto-create on WS — the widget connects first
-        // with a known type + sourceUrl. Markdown docs MUST be created
-        // upfront via POST /api/docs (which auto-attaches a file). The
-        // browser navigating to /review/<docId> before the agent has
+        // Mockup docs auto-create on WS — the widget connects first with a
+        // known type + sourceUrl (this covers the dev-server surface too;
+        // the widget always identifies as 'mockup'). Markdown docs MUST be
+        // created upfront via POST /api/docs (which auto-attaches a file).
+        // The browser navigating to /review/<docId> before the agent has
         // created the doc gets a clean 404 from /review's own handler.
         if (!rooms.get(docId)) {
-          if (type === 'mockup' || type === 'dev') {
+          if (type === 'mockup') {
             rooms.getOrCreate(docId, { type, sourceUrl });
           } else {
             return j(404, { error: 'doc not found' });
@@ -212,6 +214,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         return undefined;
       }
 
+      // --- SSE (workspace-level): every thread event on any member doc of a
+      // workspace/diff review, one stream — agents watch this instead of one
+      // stream per file. ---
+      const wsEventsMatch = pathname.match(/^\/events\/workspace\/([^/]+)$/);
+      if (wsEventsMatch) {
+        const workspaceId = decodeURIComponent(wsEventsMatch[1] ?? '');
+        if (!isValidDocId(workspaceId)) return j(400, { error: 'bad workspaceId' });
+        const exists = rooms.list().some((m) => m.workspaceId === workspaceId);
+        if (!exists) return j(404, { error: 'workspace not found' });
+        return openSseStream(sse, `ws~${workspaceId}`);
+      }
       // --- SSE ---
       if (pathname.startsWith('/events/')) {
         const docId = decodeURIComponent(pathname.slice('/events/'.length));
@@ -233,6 +246,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // disk sync) before returning. Mockup/dev docs are about
         // commenting on running surfaces, not about a markdown buffer,
         // so they don't need a file.
+        // Diff docs are created only via POST /api/diffs, which resolves the
+        // range and seeds content from git — a bare create can't do that.
+        if (type === 'diff') {
+          return j(400, {
+            error: 'use /api/diffs',
+            hint: 'Diff review docs are created per changed file by POST /api/diffs {repo, base, target}.',
+          });
+        }
         if ((type === 'markdown' || type === 'code') && !sourceUrl) {
           return j(400, {
             error: 'sourceUrl required',
@@ -298,6 +319,69 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           })),
         });
       }
+      // --- REST: diff reviews ---
+      // One doc per changed file, grouped as a workspace (= the review id).
+      // Default mode diffs base → the WORKING TREE (live: docs bind to the
+      // files on disk and re-render as the agent edits); pass `target` for a
+      // review pinned to a commit. Returns per-file reviewUrls plus an
+      // entryUrl (first changed file) the agent can hand to a human.
+      if (pathname === '/api/diffs' && req.method === 'POST') {
+        const body = await safeJson(req);
+        const repoPath = body?.repo as string | undefined;
+        const base = body?.base as string | undefined;
+        const target = body?.target as string | undefined;
+        if (!repoPath) {
+          return j(400, {
+            error:
+              'repo is required. base optional: omit for a BROWSE workspace (no diff); pass base to diff against the working tree; base+target for a pinned range.',
+          });
+        }
+        if (target && !base) {
+          return j(400, { error: 'target requires base' });
+        }
+        const reviewId = body?.reviewId as string | undefined;
+        if (reviewId !== undefined && !isValidDocId(reviewId)) {
+          return j(400, { error: 'bad reviewId' });
+        }
+        const res = rooms.bindDiff({
+          repoPath,
+          base,
+          target,
+          reviewId,
+          title: body?.title as string | undefined,
+          exclude: Array.isArray(body?.exclude) ? (body.exclude as string[]) : undefined,
+          groups: Array.isArray(body?.groups)
+            ? (body.groups as Array<{ title: string; paths: string[] }>)
+            : undefined,
+          maxFiles: typeof body?.maxFiles === 'number' ? Number(body.maxFiles) : undefined,
+          owner: body?.owner as string | undefined,
+          producedBy: body?.producedBy as { agentId?: string; sessionId?: string } | undefined,
+        });
+        if (!res.ok) {
+          const status =
+            res.error === 'not-found' || res.error === 'bad-ref'
+              ? 404
+              : res.error === 'empty-diff'
+                ? 400
+                : 409;
+          return j(status, res);
+        }
+        const files = res.files.map((f) => ({
+          ...f,
+          reviewUrl: withReviewUrl({ docId: f.docId, type: f.type }).reviewUrl,
+        }));
+        // Land the reviewer on the MEATIEST change, not the first file
+        // alphabetically (which is usually dotfile/config noise on a big
+        // review). The in-page tree navigates to everything else.
+        const entry = files.reduce(
+          (best, f) =>
+            (f.additions ?? 0) + (f.deletions ?? 0) > (best.additions ?? 0) + (best.deletions ?? 0)
+              ? f
+              : best,
+          files[0],
+        );
+        return j(200, { ...res, files, entryUrl: entry?.reviewUrl });
+      }
       // List bound workspaces with rolled-up triage signals (fileCount,
       // openThreads, allIdle, owner, lastActivityAt). The daily triage uses
       // this to treat a folder bind as one cleanup unit.
@@ -318,6 +402,51 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // File-tree view for a bound workspace: nested directory tree with
       // per-file unresolved-comment counts + folder roll-ups. Files are
       // decorated with reviewUrl by the rooms decorator (withReviewUrl).
+      // All threads across a workspace (folder bind or diff review) in one
+      // call — lets a watching agent poll a single endpoint per review
+      // instead of one per member file. ?status=open|resolved filters.
+      const wsThreadsMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/threads$/);
+      if (wsThreadsMatch && req.method === 'GET') {
+        const workspaceId = decodeURIComponent(wsThreadsMatch[1] ?? '');
+        if (!rooms.list().some((m) => m.workspaceId === workspaceId)) {
+          return j(404, { error: 'workspace not found', workspaceId });
+        }
+        const status = url.searchParams.get('status') as 'open' | 'resolved' | null;
+        const threads = rooms.listWorkspaceThreads(workspaceId, status ? { status } : undefined);
+        return j(200, { workspaceId, threads });
+      }
+      // Grouped-diff sidebar model: changed files organized into logical
+      // groups (agent-supplied or heuristic). The default nav for diff
+      // reviews.
+      const wsGroupedMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/grouped$/);
+      if (wsGroupedMatch && req.method === 'GET') {
+        const workspaceId = decodeURIComponent(wsGroupedMatch[1] ?? '');
+        const grouped = rooms.listGroupedDiff(workspaceId);
+        if (grouped.groups.length === 0) {
+          return j(404, { error: 'no diff review found', workspaceId });
+        }
+        return j(200, grouped);
+      }
+      // Every file in the workspace's repo (changed ones marked) — the
+      // "Show All Files" context view.
+      const wsFilesMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/files$/);
+      if (wsFilesMatch && req.method === 'GET') {
+        const workspaceId = decodeURIComponent(wsFilesMatch[1] ?? '');
+        const res = rooms.listRepoFiles(workspaceId);
+        return res.ok ? j(200, res) : j(404, res);
+      }
+      // Lazily open an unchanged repo file for context (read-only code doc
+      // in the same workspace).
+      const wsCtxMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/context-file$/);
+      if (wsCtxMatch && req.method === 'POST') {
+        const workspaceId = decodeURIComponent(wsCtxMatch[1] ?? '');
+        const body = await safeJson(req);
+        const relPath = body?.relPath as string | undefined;
+        if (!relPath) return j(400, { error: 'relPath required' });
+        const res = rooms.openContextFile(workspaceId, relPath);
+        if (!res.ok) return j(res.error === 'bad-path' ? 400 : 404, res);
+        return j(200, { docId: res.docId, meta: withReviewUrl(res.meta) });
+      }
       const wsTreeMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/tree$/);
       if (wsTreeMatch && req.method === 'GET') {
         const workspaceId = decodeURIComponent(wsTreeMatch[1] ?? '');
@@ -447,6 +576,37 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         if (rest === 'reparse_from_disk' && req.method === 'POST') {
           const res = rooms.reparseFromDisk(docId);
           return res.ok ? j(200, res) : j(409, res);
+        }
+        // Diff-review rendering data: the file's text at the BASE commit
+        // (the target text is the doc's own content, streamed over Yjs).
+        // Computed on demand from the repo; if the worktree has since been
+        // cleaned up, baseText comes back null and the client falls back to
+        // the full-file view, which needs nothing beyond the ydoc.
+        if (rest === 'diff' && req.method === 'GET') {
+          const meta = room.meta;
+          if (meta.type !== 'diff') return j(400, { error: 'not a diff doc' });
+          const { workspaceRoot, diffBase, diffTarget, relPath } = meta;
+          const basePath = meta.diffOldPath ?? relPath;
+          let baseText: string | null = null;
+          let error: string | undefined;
+          if (meta.diffStatus === 'added') {
+            baseText = '';
+          } else if (workspaceRoot && diffBase && basePath) {
+            baseText = showFile(workspaceRoot, diffBase, basePath);
+            if (baseText === null) error = 'base content unavailable (repo moved or pruned?)';
+          } else {
+            error = 'diff metadata incomplete';
+          }
+          return j(200, {
+            baseText,
+            status: meta.diffStatus,
+            oldPath: meta.diffOldPath,
+            base: diffBase,
+            target: diffTarget,
+            additions: meta.diffAdditions,
+            deletions: meta.diffDeletions,
+            ...(error ? { error } : {}),
+          });
         }
         // Browser-originated reading activity (read_session / doc_open). The
         // markdown/code review surfaces POST interaction-bounded reading
@@ -734,9 +894,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     meta: T,
   ): T & { reviewUrl?: string } {
     const base = publicBaseUrl(server.port ?? port);
-    if (meta.type === 'markdown' || meta.type === 'code') {
-      // Code review shares the same SPA route; the app branches the editor
-      // on the doc's type at boot.
+    if (contentKind(meta.type) !== 'none') {
+      // Every doc kind with LF-held content (markdown/code/diff) shares the
+      // SPA route; the app branches the editor on the doc's type at boot.
       return { ...meta, reviewUrl: `${base}/review/${encodeURIComponent(meta.docId)}` };
     }
     if (meta.type === 'mockup' && meta.sourceUrl) {
@@ -852,7 +1012,7 @@ created by an agent calling <code>POST /api/docs</code> with a
 //   - a single markdown file, a code file, a mockup, or a dev server
 // Each artifact carries its open-comment count and a kind glyph/label.
 
-type ArtifactKind = 'workspace' | 'markdown' | 'code' | 'mockup' | 'dev';
+type ArtifactKind = 'workspace' | 'markdown' | 'code' | 'diff' | 'mockup';
 
 interface LandingFile {
   name: string;
@@ -893,9 +1053,14 @@ const ARTIFACT_KIND: Record<ArtifactKind, { glyph: string; label: string }> = {
   workspace: { glyph: '📁', label: 'folder' },
   markdown: { glyph: '📄', label: 'markdown' },
   code: { glyph: '⟨⟩', label: 'code' },
+  diff: { glyph: '±', label: 'diff' },
   mockup: { glyph: '🖼', label: 'mockup' },
-  dev: { glyph: '⚡', label: 'dev server' },
 };
+
+function flattenTreeFileNodes(node: WorkspaceDirNode | WorkspaceFileNode): WorkspaceFileNode[] {
+  if (node.type === 'file') return [node];
+  return node.children.flatMap(flattenTreeFileNodes);
+}
 
 /** Flatten a workspace tree into a sorted file list for the landing nesting. */
 function flattenWorkspaceFiles(node: WorkspaceDirNode | WorkspaceFileNode): LandingFile[] {
@@ -946,10 +1111,23 @@ function buildLandingModel(
       if (!art) {
         const tree = rooms.buildWorkspaceTree(meta.workspaceId);
         const files = flattenWorkspaceFiles(tree.tree);
+        // Clicking the workspace opens its entry file directly (the
+        // biggest change for a diff review, first file otherwise);
+        // expansion is a separate affordance in the renderer.
+        const treeFiles = flattenTreeFileNodes(tree.tree);
+        const entry = treeFiles.reduce(
+          (best, f) =>
+            (f.diffAdditions ?? 0) + (f.diffDeletions ?? 0) >
+            (best?.diffAdditions ?? 0) + (best?.diffDeletions ?? 0)
+              ? f
+              : best,
+          treeFiles[0],
+        );
         art = {
           kind: 'workspace',
           name: meta.workspaceId,
           id: meta.workspaceId,
+          reviewUrl: entry?.reviewUrl,
           openCount: tree.totalOpen,
           threadCount: 0,
           lastActivity: 0,
@@ -958,6 +1136,9 @@ function buildLandingModel(
         workspaceArtifacts.set(meta.workspaceId, art);
         ensureProject(owner).artifacts.push(art);
       }
+      // A diff member marks the whole workspace as a diff review (members
+      // can also include plain 'code' context docs — any diff doc wins).
+      if (meta.type === 'diff') art.kind = 'diff';
       art.threadCount += threads.length;
       if (lastActivity > art.lastActivity) art.lastActivity = lastActivity;
       continue;
@@ -1035,18 +1216,22 @@ function renderLandingArtifact(a: LandingArtifact): string {
       ? `<div class="meta">last activity ${escape(formatRelative(a.lastActivity))}</div>`
       : '';
 
-  if (a.kind === 'workspace') {
-    const fileCount = a.files?.length ?? 0;
-    const files = (a.files ?? []).map(renderLandingFile).join('');
-    // Native <details> so folder expansion needs no JS.
+  if (a.files) {
+    const fileCount = a.files.length;
+    const files = a.files.map(renderLandingFile).join('');
+    const nameLink = a.reviewUrl
+      ? `<a href="${escape(a.reviewUrl)}">${escape(a.name)}</a>`
+      : escape(a.name);
+    // Clicking the NAME opens the review's entry file; the caret + file
+    // count is the (separate) expansion affordance for the nested list.
     return `<li class="artifact ${a.openCount > 0 ? 'has-open' : ''}">
-      <details>
-        <summary>
-          <span class="art-glyph">${kind.glyph}</span>
-          <span class="art-name">${escape(a.name)}</span>
-          <span class="art-sub">${fileCount} file${fileCount === 1 ? '' : 's'}</span>
-          <span class="badges">${openBadge}<span class="badge badge-kind">${escape(kind.label)}</span></span>
-        </summary>
+      <div class="row">
+        <span class="art-glyph">${kind.glyph}</span>
+        <span class="art-name">${nameLink}</span>
+        <span class="badges">${openBadge}<span class="badge badge-kind">${escape(kind.label)}</span></span>
+      </div>
+      <details class="ws-details">
+        <summary><span class="art-sub">${fileCount} file${fileCount === 1 ? '' : 's'}</span></summary>
         <ul class="ws-files">${files || '<li class="ws-file empty">(no files)</li>'}</ul>
       </details>
       ${activityLine}
