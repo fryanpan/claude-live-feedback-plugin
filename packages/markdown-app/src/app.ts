@@ -1,9 +1,9 @@
-import { type Thread, type User, readDocMeta, resolveUser } from '@feedback/core';
-import { connect } from './client.ts';
+import { type User, connect, escapeHtml, readDocMeta, resolveUser } from '@feedback/core';
 import { bootCode } from './code/code-app.ts';
+import { renderDiffNav } from './diff-nav.ts';
 import { type EditorHandle, createEditor } from './editor.ts';
 import { startReadingTracker } from './reading-tracker.ts';
-import { ThreadPanel, type ThreadTab } from './threads.ts';
+import { type ReviewChrome, el, mountReviewChrome, showToast } from './review-chrome.ts';
 import { renderWorkspaceTree, wireWorkspaceTreeRefresh } from './workspace-tree.ts';
 
 const DEFAULT_WS_PATH = (docId: string, type: string) =>
@@ -11,23 +11,24 @@ const DEFAULT_WS_PATH = (docId: string, type: string) =>
 
 /** Fetch a doc's persisted type before mounting a surface. Defaults to
  *  'markdown' if the meta can't be read (the markdown path is the safe
- *  fallback — it migrates legacy content and never assumes code). */
+ *  fallback — it never assumes code). */
 async function fetchDocMeta(
   docId: string,
-): Promise<{ type: string; sourceUrl: string; workspaceId: string }> {
+): Promise<{ type: string; sourceUrl: string; workspaceId: string; relPath: string }> {
   try {
     const res = await fetch(`/api/docs/${encodeURIComponent(docId)}`);
-    if (!res.ok) return { type: 'markdown', sourceUrl: '', workspaceId: '' };
+    if (!res.ok) return { type: 'markdown', sourceUrl: '', workspaceId: '', relPath: '' };
     const data = (await res.json()) as {
-      meta?: { type?: string; sourceUrl?: string; workspaceId?: string };
+      meta?: { type?: string; sourceUrl?: string; workspaceId?: string; relPath?: string };
     };
     return {
       type: data.meta?.type ?? 'markdown',
       sourceUrl: data.meta?.sourceUrl ?? '',
       workspaceId: data.meta?.workspaceId ?? '',
+      relPath: data.meta?.relPath ?? '',
     };
   } catch {
-    return { type: 'markdown', sourceUrl: '', workspaceId: '' };
+    return { type: 'markdown', sourceUrl: '', workspaceId: '', relPath: '' };
   }
 }
 
@@ -87,51 +88,93 @@ async function boot(): Promise<void> {
     type: docType,
     sourceUrl: docSourceUrl,
     workspaceId: docWorkspaceId,
+    relPath: docRelPath,
   } = await fetchDocMeta(docId);
   const client = connect(DEFAULT_WS_PATH(docId, docType));
 
-  // Code docs get a read-only, syntax-highlighted CodeMirror surface that
-  // reuses the same thread/comment stack. Everything below this branch is
-  // Tiptap/ProseMirror-specific (format bar, edit-mode toggle, comment pill
-  // positioning) and only applies to markdown docs.
-  if (docType === 'code') {
-    bootCode({ docId, client, user, sourceUrl: docSourceUrl, workspaceId: docWorkspaceId });
+  // Code and diff docs get a read-only, syntax-highlighted CodeMirror
+  // surface that reuses the same thread/comment stack (diff docs add the
+  // unified-diff rendering + view toggle on top). Everything below this
+  // branch is Tiptap/ProseMirror-specific (format bar, edit-mode toggle,
+  // comment pill positioning) and only applies to markdown docs.
+  if (docType === 'code' || docType === 'diff') {
+    void bootCode({
+      docId,
+      client,
+      user,
+      sourceUrl: docSourceUrl,
+      workspaceId: docWorkspaceId,
+      docType,
+      relPath: docRelPath,
+    });
     return;
   }
 
   const { ydoc, awareness } = client;
   awareness.setLocalStateField('user', { name: user.name, color: user.color });
 
+  // The thread panel / composer / thread-view / drawer elements are owned
+  // by the shared review chrome now; only the markdown-specific elements
+  // are grabbed here.
   const editorMount = el<HTMLElement>('editor');
-  const threadsListEl = el<HTMLElement>('threads-list');
-  const docTitleEl = el<HTMLElement>('doc-title');
   const composer = el<HTMLElement>('composer');
-  const composerText = el<HTMLTextAreaElement>('composer-text');
-  const composerAvatar = el<HTMLElement>('composer-avatar');
-  const composerScrim = el<HTMLElement>('composer-scrim');
   const commentPill = el<HTMLButtonElement>('comment-pill');
-  const threadView = el<HTMLElement>('thread-view');
-  const threadViewBody = el<HTMLElement>('thread-view-body');
-  const threadViewClose = el<HTMLButtonElement>('thread-view-close');
-  const threadViewReplyText = el<HTMLTextAreaElement>('thread-view-reply-text');
-  const threadViewReplySubmit = el<HTMLButtonElement>('thread-view-reply-submit');
   const formatBar = el<HTMLElement>('format-bar');
   const toggleFormat = el<HTMLButtonElement>('toggle-format');
   const toggleEditMode = el<HTMLButtonElement>('toggle-edit-mode');
-  const toggleThreads = el<HTMLButtonElement>('toggle-threads');
-  const threadsCount = el<HTMLElement>('threads-count');
-  const closeThreads = el<HTMLButtonElement>('close-threads');
-  const scrim = el<HTMLElement>('threads-scrim');
-  const shell = document.getElementById('shell') as HTMLElement;
 
+  // Forward ref: the chrome is mounted right after the editor, but editor
+  // callbacks can fire during initial Yjs application — guard until set.
+  // biome-ignore lint/style/useConst: assigned after createEditor so its callbacks can close over it
+  let chrome: ReviewChrome | undefined;
   const editor: EditorHandle = createEditor({
     parent: editorMount,
     ydoc,
     awareness,
     onSelectionChange: () => refreshSelectionState(),
-    onUpdate: () => redrawThreads(),
+    onUpdate: () => chrome?.redrawThreads(),
     user: { name: user.name, color: user.color },
   });
+
+  chrome = mountReviewChrome({
+    docId,
+    user,
+    ydoc,
+    surface: editor,
+    selectHint: 'Select some text first to leave a comment.',
+    reanchorHint: 'Select new text first, then click Re-anchor.',
+    // The cached `selection` covers iOS blurring the editor between the
+    // pill appearing and being tapped; the empty-check mirrors the old
+    // openComposerForSelection guard.
+    getSelection: () => {
+      const use = editor.getSelectionRel() ?? selection;
+      if (!use || editor.editor.state.selection.empty) return null;
+      return use;
+    },
+    onComposerOpened: () => {
+      // Wait for the keyboard to finish sliding up (visualViewport
+      // resizes), THEN scroll the editor so the selection sits ~20% from
+      // the top of the visible-above-keyboard area. If vv doesn't resize
+      // within 500ms, assume the keyboard was already open.
+      const vv = window.visualViewport;
+      let done = false;
+      const run = () => {
+        if (done) return;
+        done = true;
+        vv?.removeEventListener('resize', run);
+        scrollSelectionAboveKeyboard();
+      };
+      vv?.addEventListener('resize', run);
+      setTimeout(run, 500);
+    },
+    onPosted: () => {
+      // Drop focus so no caret blinks in the doc after posting.
+      editor.editor.commands.blur();
+      (document.activeElement as HTMLElement | null)?.blur?.();
+    },
+    hidePill: () => hidePill(),
+  });
+  const reviewChrome = chrome;
 
   // Interaction-bounded reading-session capture (doc_open + read_session).
   // The #editor element is the scroll container on the markdown surface.
@@ -292,9 +335,9 @@ async function boot(): Promise<void> {
       // setTextSelection is synchronous; read the rel positions now.
       const sel = editor.getSelectionRel();
       if (sel) selection = sel;
-      openComposerForSelection();
+      reviewChrome.openComposer();
     } else {
-      openComposerForSelection();
+      reviewChrome.openComposer();
     }
   });
 
@@ -361,51 +404,6 @@ async function boot(): Promise<void> {
   //   so the selection sits above the composer + keyboard.
   // =========================================================================
 
-  // Seed the composer avatar with the current user's color + initial
-  composerAvatar.style.background = user.color;
-  composerAvatar.textContent = (user.name[0] ?? '?').toUpperCase();
-
-  function openComposerForSelection(): void {
-    const current = editor.getSelectionRel();
-    const use = current ?? selection;
-    if (!use || editor.editor.state.selection.empty) {
-      showToast('Select some text first to leave a comment.');
-      return;
-    }
-    selection = use;
-    // Show a muted quote of the anchored text so the user doesn't lose
-    // sight of what they're commenting on once iOS lifts the keyboard
-    // and potentially shifts the editor out of the visible viewport.
-    const quote = el<HTMLElement>('composer-quote');
-    quote.textContent = use.snippet;
-    composer.classList.remove('hidden');
-    composerScrim.classList.remove('hidden');
-    document.body.classList.add('composer-open');
-    hidePill();
-    composerText.value = '';
-    // preventScroll: true stops iOS's auto-scroll-to-focus from yanking
-    // the whole page up when the textarea takes focus. We do our OWN
-    // scroll below so the anchored text stays visible above the keyboard.
-    setTimeout(() => {
-      composerText.focus({ preventScroll: true });
-      // Wait for the keyboard to finish sliding up (visualViewport
-      // resizes), THEN scroll the editor so the selection sits ~20%
-      // from the top of the visible-above-keyboard area. If vv doesn't
-      // resize within 500ms, assume the keyboard was already open and
-      // scroll anyway.
-      const vv = window.visualViewport;
-      let done = false;
-      const run = () => {
-        if (done) return;
-        done = true;
-        vv?.removeEventListener('resize', run);
-        scrollSelectionAboveKeyboard();
-      };
-      vv?.addEventListener('resize', run);
-      setTimeout(run, 500);
-    }, 30);
-  }
-
   function scrollSelectionAboveKeyboard(): void {
     try {
       const vv = window.visualViewport;
@@ -427,201 +425,6 @@ async function boot(): Promise<void> {
       if (scroller) scroller.scrollBy({ top: deltaY, behavior: 'smooth' });
     } catch {}
   }
-  function hideComposer(): void {
-    composer.classList.add('hidden');
-    composerScrim.classList.add('hidden');
-    document.body.classList.remove('composer-open');
-  }
-  composerScrim.addEventListener('click', hideComposer);
-
-  // =========================================================================
-  // THREADS DRAWER
-  //   Hidden by default on mobile. Opened via the 💬 button in the top bar,
-  //   the tap-highlight handler, or automatically after posting a comment so
-  //   the user can see their new thread in context.
-  //   Tabs: Open (default) / Resolved / All.
-  // =========================================================================
-
-  function openDrawer(): void {
-    shell.classList.add('threads-open');
-    toggleThreads.setAttribute('aria-pressed', 'true');
-    document.getElementById('threads-pane')?.setAttribute('aria-hidden', 'false');
-  }
-  function closeDrawer(): void {
-    shell.classList.remove('threads-open');
-    toggleThreads.setAttribute('aria-pressed', 'false');
-    document.getElementById('threads-pane')?.setAttribute('aria-hidden', 'true');
-  }
-  function toggleDrawer(): void {
-    if (shell.classList.contains('threads-open')) closeDrawer();
-    else openDrawer();
-  }
-  toggleThreads.addEventListener('click', toggleDrawer);
-  closeThreads.addEventListener('click', closeDrawer);
-  scrim.addEventListener('click', closeDrawer);
-
-  // Resizable comments panel (desktop). Drag the handle on the panel's left
-  // edge to widen/narrow it; the width persists. On mobile the panel is a
-  // full-height overlay and the handle is hidden.
-  (() => {
-    const pane = document.getElementById('threads-pane');
-    if (!pane) return;
-    const THREADS_W_KEY = 'lf:threads-w';
-    const MIN_W = 280;
-    const maxW = () => Math.min(720, Math.round(window.innerWidth * 0.6));
-    const clamp = (w: number) => Math.max(MIN_W, Math.min(maxW(), w));
-    const apply = (w: number) =>
-      document.documentElement.style.setProperty('--threads-w', `${w}px`);
-    try {
-      const saved = Number(localStorage.getItem(THREADS_W_KEY));
-      if (Number.isFinite(saved) && saved >= MIN_W) apply(clamp(saved));
-    } catch {
-      // localStorage unavailable — fall back to the CSS default width.
-    }
-
-    const handle = document.createElement('div');
-    handle.className = 'threads-resize';
-    handle.setAttribute('role', 'separator');
-    handle.setAttribute('aria-orientation', 'vertical');
-    handle.setAttribute('aria-label', 'Resize comments panel');
-    handle.title = 'Drag to resize · double-click to reset';
-    pane.appendChild(handle);
-
-    let dragging = false;
-    const onMove = (e: PointerEvent) => {
-      if (dragging) apply(clamp(window.innerWidth - e.clientX));
-    };
-    const onUp = () => {
-      if (!dragging) return;
-      dragging = false;
-      handle.classList.remove('dragging');
-      document.body.classList.remove('threads-resizing');
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-      const px = Number.parseInt(
-        getComputedStyle(document.documentElement).getPropertyValue('--threads-w'),
-        10,
-      );
-      if (Number.isFinite(px)) {
-        try {
-          localStorage.setItem(THREADS_W_KEY, String(px));
-        } catch {
-          // ignore — width still applied for this session
-        }
-      }
-    };
-    handle.addEventListener('pointerdown', (e) => {
-      if (window.matchMedia('(max-width: 900px)').matches) return;
-      e.preventDefault();
-      dragging = true;
-      handle.classList.add('dragging');
-      document.body.classList.add('threads-resizing');
-      window.addEventListener('pointermove', onMove);
-      window.addEventListener('pointerup', onUp);
-    });
-    handle.addEventListener('dblclick', () => {
-      document.documentElement.style.removeProperty('--threads-w');
-      try {
-        localStorage.removeItem(THREADS_W_KEY);
-      } catch {
-        // ignore
-      }
-    });
-  })();
-  // Desktop layout shows the drawer inline; open by default there
-  if (window.matchMedia('(min-width: 901px)').matches) openDrawer();
-
-  const tabButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('.threads-tabs .tab'));
-  tabButtons.forEach((b) => {
-    b.addEventListener('click', () => {
-      const tab = (b.getAttribute('data-tab') ?? 'open') as ThreadTab;
-      threadsPanel.setTab(tab);
-      for (const x of tabButtons) x.classList.toggle('active', x === b);
-    });
-  });
-
-  const threadsPanel = new ThreadPanel({
-    container: threadsListEl,
-    currentUser: user,
-    onThreadClick: (id) => {
-      const range = resolveThreadRange(id);
-      if (range) {
-        editor.scrollToPos(range.from);
-        editor.pulseRange(range.from, range.to);
-      }
-      threadsPanel.setActive(id);
-      refreshThreadDecorations(id);
-      // On mobile, swap the drawer for a full-screen thread view (Notion
-      // pattern) — gives the conversation room to breathe on a small screen.
-      if (isMobile()) {
-        closeDrawer();
-        openThreadView(id);
-      }
-    },
-    onReply: async (id, text) => {
-      await fetch(
-        `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/comments`,
-        {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ author: user, text }),
-        },
-      );
-    },
-    onResolve: async (id) => {
-      try {
-        const res = await fetch(
-          `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/resolve`,
-          { method: 'POST' },
-        );
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        showToast('✓ Resolved');
-      } catch {
-        showToast('Failed to resolve — try again');
-      }
-    },
-    onReopen: async (id) => {
-      try {
-        const res = await fetch(
-          `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/reopen`,
-          { method: 'POST' },
-        );
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        showToast('✓ Reopened');
-      } catch {
-        showToast('Failed to reopen — try again');
-      }
-    },
-    onReanchor: async (id) => {
-      const sel = editor.getSelectionRel();
-      if (!sel) {
-        showToast('Select new text first, then click Re-anchor.');
-        return;
-      }
-      try {
-        const res = await fetch(
-          `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/reanchor`,
-          {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-              anchor: {
-                kind: 'text-range',
-                startRel: Array.from(sel.start),
-                endRel: Array.from(sel.end),
-                snippet: { text: sel.snippet },
-              },
-            }),
-          },
-        );
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        showToast('✓ Re-anchored');
-      } catch {
-        showToast('Failed to re-anchor — try again');
-      }
-    },
-  });
-
   // Tap-on-highlight in the editor → focus the thread.
   //   • Mobile: full-screen thread view (Notion pattern — gives the
   //     conversation space without the doc competing for it).
@@ -633,280 +436,25 @@ async function boot(): Promise<void> {
     if (!threadId) return;
     ev.preventDefault();
     ev.stopPropagation();
-    refreshThreadDecorations(threadId);
-    const range = resolveThreadRange(threadId);
+    reviewChrome.refreshThreadDecorations(threadId);
+    // No scrollToPos here — the user clicked the highlight, it's already
+    // on screen; jumping the doc would feel broken.
+    const range = reviewChrome.resolveThreadRange(threadId);
     if (range) editor.pulseRange(range.from, range.to);
-    if (isMobile()) {
-      threadsPanel.setActive(threadId);
-      openThreadView(threadId);
+    if (reviewChrome.isMobile()) {
+      reviewChrome.threadsPanel.setActive(threadId);
+      reviewChrome.openThreadView(threadId);
     } else {
-      // Open the drawer first, then (after layout) scroll the panel to the
-      // clicked thread — otherwise the active comment lands off-screen and the
-      // click appears to do nothing.
-      openDrawer();
-      requestAnimationFrame(() => threadsPanel.revealThread(threadId));
+      reviewChrome.openDrawer();
+      requestAnimationFrame(() => reviewChrome.threadsPanel.revealThread(threadId));
     }
   });
 
-  function resolveThreadRange(threadId: string): { from: number; to: number } | null {
-    const doc = ydoc.getMap('threads').get(threadId) as import('yjs').Map<unknown> | undefined;
-    if (!doc) return null;
-    const anchor = doc.get('anchor') as
-      | {
-          kind: 'text-range';
-          startRel: Uint8Array | number[];
-          endRel: Uint8Array | number[];
-        }
-      | { kind: 'element' | 'orphan' }
-      | undefined;
-    if (!anchor || anchor.kind !== 'text-range') return null;
-    const startRel =
-      anchor.startRel instanceof Uint8Array ? anchor.startRel : new Uint8Array(anchor.startRel);
-    const endRel =
-      anchor.endRel instanceof Uint8Array ? anchor.endRel : new Uint8Array(anchor.endRel);
-    return editor.resolveRel(startRel, endRel);
-  }
-
-  let activeThreadId: string | null = null;
-  function redrawThreads(): void {
-    const all = collectThreads();
-    threadsPanel.setThreads(all);
-    refreshThreadDecorations(activeThreadId);
-    const counts = threadsPanel.countByStatus();
-    const openCount = counts.open + counts.orphan;
-    threadsCount.textContent = String(openCount);
-    threadsCount.classList.toggle('has-count', openCount > 0);
-  }
-  function refreshThreadDecorations(activeId: string | null): void {
-    activeThreadId = activeId;
-    const ranges = collectThreads()
-      .filter((t) => t.anchor.kind === 'text-range')
-      .map((t) => {
-        const r = resolveThreadRange(t.id);
-        if (!r) return null;
-        return { id: t.id, from: r.from, to: r.to, status: t.status };
-      })
-      .filter((x): x is NonNullable<typeof x> => x != null);
-    editor.setThreadRanges(ranges, activeId);
-  }
-
-  function collectThreads(): Thread[] {
-    const threadsMap = ydoc.getMap('threads');
-    const out: Thread[] = [];
-    threadsMap.forEach((entry, id) => {
-      const threadMap = entry as import('yjs').Map<unknown>;
-      const anchorRaw = threadMap.get('anchor') as Thread['anchor'] | undefined;
-      const status = threadMap.get('status') as Thread['status'] | undefined;
-      const createdBy = threadMap.get('createdBy') as User | undefined;
-      const commentsArr = threadMap.get('comments') as
-        | import('yjs').Array<import('yjs').Map<unknown>>
-        | undefined;
-      if (!anchorRaw || !status || !createdBy) return;
-      const comments = [];
-      if (commentsArr) {
-        for (const c of commentsArr) {
-          const cid = c.get('id') as string | undefined;
-          const author = c.get('author') as User | undefined;
-          const text = c.get('text') as string | undefined;
-          const ts = c.get('ts') as number | undefined;
-          if (cid && author && text != null && ts != null)
-            comments.push({ id: cid, author, text, ts });
-        }
-      }
-      let displayAnchor: Thread['anchor'] = anchorRaw;
-      if (anchorRaw.kind === 'text-range') {
-        const r = resolveThreadRange(id);
-        if (!r) {
-          displayAnchor = { kind: 'orphan', original: anchorRaw, lastSeenAt: Date.now() };
-        }
-      }
-      out.push({
-        id,
-        status,
-        anchor: displayAnchor,
-        createdBy,
-        commentCount: comments.length,
-        lastActivity: comments.length > 0 ? (comments[comments.length - 1]?.ts ?? 0) : 0,
-        comments,
-      });
-    });
-    return out;
-  }
-
-  // =========================================================================
-  // FULL-SCREEN THREAD VIEW — Notion-style focused conversation.
-  //   On mobile, tapping a highlight in the doc (or a thread in the drawer)
-  //   opens this sheet instead of the side drawer. All comments are laid
-  //   out in a tall scrollable column with a sticky reply composer at the
-  //   bottom. Desktop keeps the inline drawer.
-  // =========================================================================
-  let threadViewId: string | null = null;
-
-  function isMobile(): boolean {
-    return !window.matchMedia('(min-width: 901px)').matches;
-  }
-
-  function renderThreadView(id: string): void {
-    const t = collectThreads().find((x) => x.id === id);
-    if (!t) return;
-    const anchorText =
-      t.anchor.kind === 'orphan' ? t.anchor.original.snippet.text : t.anchor.snippet.text;
-    threadViewBody.innerHTML = '';
-    const anchor = document.createElement('div');
-    anchor.className = 'thread-anchor';
-    anchor.textContent = anchorText;
-    threadViewBody.appendChild(anchor);
-    for (const c of t.comments) {
-      const row = document.createElement('div');
-      row.className = 'comment';
-      const a = document.createElement('div');
-      a.className = 'author';
-      const sw = document.createElement('span');
-      sw.className = 'swatch';
-      sw.style.background = c.author.color;
-      const nm = document.createElement('span');
-      nm.className = 'name';
-      nm.textContent = c.author.name;
-      const tm = document.createElement('span');
-      tm.className = 'time';
-      tm.textContent = formatTs(c.ts);
-      a.append(sw, nm, tm);
-      const body = document.createElement('div');
-      body.className = 'body';
-      body.textContent = c.text;
-      row.append(a, body);
-      threadViewBody.appendChild(row);
-    }
-    const actions = document.createElement('div');
-    actions.className = 'thread-view-actions';
-    if (t.status === 'resolved') {
-      actions.appendChild(
-        makeBtn('Reopen', async () => {
-          try {
-            const res = await fetch(
-              `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(t.id)}/reopen`,
-              { method: 'POST' },
-            );
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            showToast('✓ Reopened');
-          } catch {
-            showToast('Failed to reopen — try again');
-          }
-        }),
-      );
-    } else {
-      actions.appendChild(
-        makeBtn('Resolve', async () => {
-          // Don't close the sheet until the fetch confirms — closing on a
-          // fire-and-forget call leaves the user with no signal when the
-          // network blips, and they can't tell "my click registered" from
-          // "the resolve happened." Yjs sync re-renders the panel + clears
-          // the doc highlight automatically once status flips server-side.
-          try {
-            const res = await fetch(
-              `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(t.id)}/resolve`,
-              { method: 'POST' },
-            );
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            showToast('✓ Resolved');
-            closeThreadView();
-          } catch {
-            showToast('Failed to resolve — try again');
-          }
-        }),
-      );
-    }
-    threadViewBody.appendChild(actions);
-  }
-
-  function openThreadView(id: string): void {
-    threadViewId = id;
-    threadsPanel.setActive(id);
-    refreshThreadDecorations(id);
-    renderThreadView(id);
-    hidePill();
-    threadView.classList.remove('hidden');
-    threadView.setAttribute('aria-hidden', 'false');
-    document.body.classList.add('thread-view-open');
-    // Scroll the anchor into view behind the sheet for when the user closes it.
-    const range = resolveThreadRange(id);
-    if (range) editor.scrollToPos(range.from);
-  }
-
-  function closeThreadView(): void {
-    threadViewId = null;
-    threadView.classList.add('hidden');
-    threadView.setAttribute('aria-hidden', 'true');
-    document.body.classList.remove('thread-view-open');
-    threadViewReplyText.value = '';
-  }
-
-  threadViewClose.addEventListener('click', closeThreadView);
-
-  async function submitThreadReply(): Promise<void> {
-    if (!threadViewId) return;
-    const text = threadViewReplyText.value.trim();
-    if (!text) return;
-    const id = threadViewId;
-    threadViewReplyText.value = '';
-    await fetch(
-      `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/comments`,
-      {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ author: user, text }),
-      },
-    );
-  }
-  threadViewReplySubmit.addEventListener('click', () => void submitThreadReply());
-  threadViewReplyText.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) {
-      ev.preventDefault();
-      void submitThreadReply();
-    }
-  });
-
-  ydoc.getMap('threads').observeDeep(() => {
-    redrawThreads();
-    if (threadViewId) renderThreadView(threadViewId);
-  });
   const meta = ydoc.getMap('meta');
   meta.observe(() => {
-    renderDocLabel();
+    reviewChrome.renderDocLabel();
     void renderSetNav();
   });
-  function renderDocLabel(): void {
-    const m = readDocMeta(ydoc);
-    // Prefer the sourceUrl (set when the doc originated from a real
-    // file path or URL) so the header shows an obvious identifier; fall
-    // back to the human title, then the docId as last resort.
-    const full = m.sourceUrl ?? m.title ?? m.docId;
-    // On mobile the full path eats the topbar — show just the filename
-    // (basename) truncated to ~32 chars, with the full path in `title`
-    // for tap-and-hold tooltip. Resize re-renders so rotation works.
-    const isMobile = window.matchMedia('(max-width: 720px)').matches;
-    docTitleEl.textContent = isMobile ? mobileLabel(full) : full;
-    docTitleEl.title = full;
-  }
-
-  function mobileLabel(full: string): string {
-    // Strip URL prefix if present (http://host/path → /path), then take the
-    // last path segment. Truncate to 32 chars with a leading ellipsis so
-    // the meaningful end (the actual filename) survives.
-    let s = full;
-    try {
-      if (/^https?:\/\//.test(s)) s = new URL(s).pathname;
-    } catch {}
-    const parts = s.split('/').filter(Boolean);
-    const base = parts[parts.length - 1] ?? s;
-    return base.length <= 32 ? base : `…${base.slice(-31)}`;
-  }
-
-  // Re-render the label when the viewport crosses the mobile breakpoint
-  // (orientation change, window resize, etc.) so we don't leave a
-  // mid-resize stale form on screen.
-  window.matchMedia('(max-width: 720px)').addEventListener('change', () => renderDocLabel());
-
   // ---- Review-set navigation ----
   // If the doc has a setId, fetch all docs sharing that set and render
   // them into both the desktop sidebar and the topbar dropdown. The same
@@ -935,7 +483,11 @@ async function boot(): Promise<void> {
       return;
     }
     if (workspaceId) {
-      await renderWorkspaceTree(docId, workspaceId);
+      // Same chooser as the code/diff boot: diff reviews + browse
+      // workspaces get the diff-nav; only data-less workspaces fall back
+      // to the legacy folder tree.
+      const ok = await renderDiffNav(docId, workspaceId);
+      if (!ok) await renderWorkspaceTree(docId, workspaceId);
       return;
     }
     // ---- Legacy flat setId path ----
@@ -1010,13 +562,6 @@ async function boot(): Promise<void> {
     const m = p.match(/[^/]+$/);
     return m ? m[0] : p;
   }
-  function escapeHtml(s: string): string {
-    return s.replace(
-      /[&<>"']/g,
-      (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] ?? c,
-    );
-  }
-
   // Wire the dropdown toggle. On click outside or Escape, close.
   if (docSwitcher && docMenu) {
     docSwitcher.addEventListener('click', (ev) => {
@@ -1056,10 +601,9 @@ async function boot(): Promise<void> {
   }
 
   client.onReady(() => {
-    renderDocLabel();
+    reviewChrome.renderDocLabel();
     void renderSetNav();
-    editor.migrateLegacyIfNeeded();
-    redrawThreads();
+    reviewChrome.redrawThreads();
   });
 
   // ---- Save state indicator ----
@@ -1174,80 +718,14 @@ async function boot(): Promise<void> {
   // =========================================================================
   // HOTKEYS
   // =========================================================================
+  // ⌘M / Escape are wired by the shared review chrome; only the
+  // markdown-specific format-bar hotkey lives here.
   document.addEventListener('keydown', (ev) => {
-    if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'm') {
-      ev.preventDefault();
-      openComposerForSelection();
-    }
     if ((ev.metaKey || ev.ctrlKey) && ev.shiftKey && ev.key.toLowerCase() === 'f') {
       ev.preventDefault();
       toggleFormat.click();
     }
-    if (ev.key === 'Escape') {
-      if (!composer.classList.contains('hidden')) hideComposer();
-      else if (!threadView.classList.contains('hidden')) closeThreadView();
-      else if (shell.classList.contains('threads-open')) closeDrawer();
-    }
   });
-
-  // =========================================================================
-  // COMPOSER: submit / cancel, Enter-to-post, post-feedback pulse
-  // =========================================================================
-  // (No cancel button — tap the scrim or press Escape to dismiss.)
-  composerText.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) {
-      ev.preventDefault();
-      void submitComposer();
-    }
-    if (ev.key === 'Escape') hideComposer();
-  });
-  el<HTMLButtonElement>('composer-submit').addEventListener('click', () => void submitComposer());
-
-  async function submitComposer(): Promise<void> {
-    const text = composerText.value.trim();
-    if (!text) return;
-    if (!selection) {
-      showToast('Lost the selection — try again.');
-      return;
-    }
-    const anchor = {
-      kind: 'text-range' as const,
-      startRel: Array.from(selection.start),
-      endRel: Array.from(selection.end),
-      snippet: { text: selection.snippet },
-    };
-    const submitBtn = el<HTMLButtonElement>('composer-submit');
-    submitBtn.disabled = true;
-    try {
-      const res = await fetch(`/api/docs/${encodeURIComponent(docId)}/threads`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ author: user, text, anchor }),
-      });
-      if (!res.ok) throw new Error('post failed');
-      const body = (await res.json()) as { thread: { id: string } };
-      const newId = body.thread.id;
-      hideComposer();
-      // Drop focus so no caret blinks in the doc after posting — Bryan's
-      // done commenting, nothing to type, nothing to look at.
-      editor.editor.commands.blur();
-      (document.activeElement as HTMLElement | null)?.blur?.();
-      showToast('✓ Comment posted');
-      // Post-feedback: wait for the Yjs update to land the highlight, then
-      // scroll it into view + pulse so the user can see where it landed.
-      setTimeout(() => {
-        const r = resolveThreadRange(newId);
-        if (r) {
-          editor.scrollToPos(r.from);
-          editor.pulseRange(r.from, r.to);
-        }
-      }, 150);
-    } catch {
-      showToast('Failed to post comment');
-    } finally {
-      submitBtn.disabled = false;
-    }
-  }
 
   addEventListener('beforeunload', () => {
     client.close();
@@ -1421,42 +899,6 @@ function wireFormatBar(editor: EditorHandle): void {
   };
   editor.editor.on('selectionUpdate', refresh);
   editor.editor.on('transaction', refresh);
-}
-
-let toastTimer: ReturnType<typeof setTimeout> | null = null;
-function showToast(msg: string): void {
-  const t = document.getElementById('toast');
-  if (!t) return;
-  t.textContent = msg;
-  t.classList.remove('hidden');
-  if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.add('hidden'), 2400);
-}
-
-function el<T extends HTMLElement>(id: string): T {
-  const e = document.getElementById(id);
-  if (!e) throw new Error(`missing element #${id}`);
-  return e as T;
-}
-
-function formatTs(ts: number): string {
-  if (!ts) return '';
-  const d = new Date(ts);
-  const diff = Date.now() - ts;
-  if (diff < 60_000) return 'just now';
-  if (diff < 3600_000) return `${Math.floor(diff / 60_000)}m`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3600_000)}h`;
-  if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)}d`;
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-}
-
-function makeBtn(label: string, onClick: () => void, primary = false): HTMLButtonElement {
-  const b = document.createElement('button');
-  b.type = 'button';
-  if (primary) b.className = 'primary';
-  b.textContent = label;
-  b.addEventListener('click', onClick);
-  return b;
 }
 
 void boot();

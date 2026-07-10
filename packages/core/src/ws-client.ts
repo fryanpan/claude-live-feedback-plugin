@@ -5,41 +5,50 @@ import * as syncProtocol from 'y-protocols/sync';
 import * as Y from 'yjs';
 
 /**
- * Browser-side y-websocket client for our minimal protocol.
- * Shared by the markdown-app and (in a trimmed form) the widget.
+ * Browser-side Yjs websocket client for the feedback server's minimal
+ * protocol (varuint kind prefix: 0 = sync, 1 = awareness). THE single
+ * implementation — consumed by both the markdown-app SPA and the injectable
+ * widget, which previously carried a drifting copy each. Deliberately
+ * DOM-free beyond WebSocket so it stays safe for the widget bundle.
  */
+
 const MSG_SYNC = 0;
 const MSG_AWARENESS = 1;
+
+export type ConnectionStatus = 'connecting' | 'open' | 'closed';
 
 export interface FeedbackClient {
   ydoc: Y.Doc;
   awareness: awarenessProtocol.Awareness;
+  /** The CURRENT socket — replaced on every reconnect. */
   ws: WebSocket;
+  status: ConnectionStatus;
   close(): void;
+  /** Fires once, after the first sync-step-2/update lands (doc hydrated). */
   onReady(cb: () => void): void;
-  onStatus(cb: (s: 'connecting' | 'open' | 'closed') => void): void;
+  /** Fires on every transition; also called immediately with the current status. */
+  onStatus(cb: (s: ConnectionStatus) => void): void;
 }
 
 export function connect(url: string): FeedbackClient {
   const ydoc = new Y.Doc();
   const awareness = new awarenessProtocol.Awareness(ydoc);
   let ws: WebSocket;
-  let readyCbs: (() => void)[] = [];
-  const statusCbs: ((s: 'connecting' | 'open' | 'closed') => void)[] = [];
-  let gotInitialSync = false;
   let closed = false;
+  let gotInitialSync = false;
+  let readyCbs: (() => void)[] = [];
+  const statusCbs: ((s: ConnectionStatus) => void)[] = [];
+  let status: ConnectionStatus = 'connecting';
   let reconnectDelay = 500;
 
-  const docUpdateHandler = (update: Uint8Array, origin: unknown) => {
-    if (origin === ws) return;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const docUpdate = (update: Uint8Array, origin: unknown) => {
+    if (origin === ws || !ws || ws.readyState !== WebSocket.OPEN) return;
     const enc = encoding.createEncoder();
     encoding.writeVarUint(enc, MSG_SYNC);
     syncProtocol.writeUpdate(enc, update);
     ws.send(encoding.toUint8Array(enc));
   };
-
-  const awarenessHandler = (
+  const awareUpdate = (
     { added, updated, removed }: { added: number[]; updated: number[]; removed: number[] },
     origin: unknown,
   ) => {
@@ -52,24 +61,30 @@ export function connect(url: string): FeedbackClient {
     }
   };
 
-  ydoc.on('update', docUpdateHandler);
-  awareness.on('update', awarenessHandler);
+  ydoc.on('update', docUpdate);
+  awareness.on('update', awareUpdate);
+
+  function setStatus(s: ConnectionStatus) {
+    status = s;
+    for (const cb of statusCbs) cb(s);
+  }
 
   function open() {
     if (closed) return;
-    statusCbs.forEach((cb) => cb('connecting'));
+    setStatus('connecting');
     ws = new WebSocket(url);
     ws.binaryType = 'arraybuffer';
 
     ws.addEventListener('open', () => {
       reconnectDelay = 500;
-      statusCbs.forEach((cb) => cb('open'));
+      setStatus('open');
       // sync step 1
       const enc = encoding.createEncoder();
       encoding.writeVarUint(enc, MSG_SYNC);
       syncProtocol.writeSyncStep1(enc, ydoc);
       ws.send(encoding.toUint8Array(enc));
-      // send our local awareness
+      // Push our local awareness so peers see us after a (re)connect. No-op
+      // for clients (like the widget) that never set local awareness state.
       const states = awareness.getStates();
       if (states.size > 0) {
         const enc2 = encoding.createEncoder();
@@ -96,7 +111,7 @@ export function connect(url: string): FeedbackClient {
           (type === syncProtocol.messageYjsSyncStep2 || type === syncProtocol.messageYjsUpdate)
         ) {
           gotInitialSync = true;
-          readyCbs.forEach((cb) => cb());
+          for (const cb of readyCbs) cb();
           readyCbs = [];
         }
       } else if (kind === MSG_AWARENESS) {
@@ -105,7 +120,7 @@ export function connect(url: string): FeedbackClient {
     });
 
     ws.addEventListener('close', () => {
-      statusCbs.forEach((cb) => cb('closed'));
+      setStatus('closed');
       if (closed) return;
       setTimeout(open, Math.min(reconnectDelay, 10000));
       reconnectDelay = Math.min(reconnectDelay * 2, 10000);
@@ -126,10 +141,13 @@ export function connect(url: string): FeedbackClient {
     get ws() {
       return ws;
     },
+    get status() {
+      return status;
+    },
     close() {
       closed = true;
-      ydoc.off('update', docUpdateHandler);
-      awareness.off('update', awarenessHandler);
+      ydoc.off('update', docUpdate);
+      awareness.off('update', awareUpdate);
       try {
         ws.close();
       } catch {}
@@ -140,6 +158,7 @@ export function connect(url: string): FeedbackClient {
     },
     onStatus(cb) {
       statusCbs.push(cb);
+      cb(status);
     },
   };
 }
