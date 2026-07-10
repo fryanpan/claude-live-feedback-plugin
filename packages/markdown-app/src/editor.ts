@@ -19,6 +19,7 @@ import {
 import { Markdown } from 'tiptap-markdown';
 import type { Awareness } from 'y-protocols/awareness';
 import * as Y from 'yjs';
+import { safeLinkHref } from './link-open.ts';
 import { MermaidCodeBlock } from './mermaid-code-block.ts';
 import { ThreadDecorations, type ThreadRange, setThreadDecorations } from './thread-decorations.ts';
 
@@ -108,6 +109,24 @@ export function createEditor(opts: CreateEditorOpts): EditorHandle {
   // bound .md file). The editor never seeds locally — that would race the
   // server's authoritative content.
 
+  // Links are non-navigable on a plain click (openOnClick:false) so the cursor
+  // can be placed inside them to edit — but a Cmd/Ctrl+Click should open the
+  // link in a new tab, matching the browser convention for opening links in a
+  // read-only surface. Bound at the DOM level so it works in both edit and
+  // view mode. Script-bearing schemes are filtered by safeLinkHref.
+  const onLinkClick = (ev: MouseEvent) => {
+    if (!(ev.metaKey || ev.ctrlKey)) return;
+    const target = ev.target as HTMLElement | null;
+    const anchor = target?.closest?.('a[href]') as HTMLAnchorElement | null;
+    if (!anchor) return;
+    const href = safeLinkHref(anchor.getAttribute('href'));
+    if (!href) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    window.open(href, '_blank', 'noopener,noreferrer');
+  };
+  editor.view.dom.addEventListener('click', onLinkClick);
+
   function syncState() {
     return ySyncPluginKey.getState(editor.state);
   }
@@ -180,6 +199,7 @@ export function createEditor(opts: CreateEditorOpts): EditorHandle {
       return store?.getMarkdown() ?? this.getText();
     },
     destroy() {
+      editor.view.dom.removeEventListener('click', onLinkClick);
       editor.destroy();
     },
   };
