@@ -269,12 +269,28 @@ describe('ADVERSARIAL: landing project->artifacts + delete_workspace guardrail',
     const body = await j<{ ok: true; workspaceId: string; files: BindFile[] }>(r);
     workspaceId = body.workspaceId;
     files = new Map(body.files.map((f) => [f.relPath, f]));
+    // bind is lazy now (entry only) — open the rest like a reviewer would.
+    const allR = await fetch(`${base}/api/workspaces/${encodeURIComponent(workspaceId)}/files`);
+    const all = await j<{ files: Array<{ relPath: string }> }>(allR);
+    for (const f of all.files) {
+      if (files.has(f.relPath)) continue;
+      const cr = await fetch(
+        `${base}/api/workspaces/${encodeURIComponent(workspaceId)}/context-file`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ relPath: f.relPath }),
+        },
+      );
+      const opened = await j<{ docId: string }>(cr);
+      files.set(f.relPath, { docId: opened.docId, relPath: f.relPath });
+    }
 
     const html = await (await fetch(`${base}/`)).text();
     // Grouped under the project owner basename.
     expect(html).toContain('adv');
     // ONE expandable folder artifact, nesting its members.
-    expect(html).toContain('<details>');
+    expect(html).toContain('<details');
     expect(html).toContain(workspaceId);
     expect(html).toContain('README.md');
     expect(html).toContain('src/index.ts');

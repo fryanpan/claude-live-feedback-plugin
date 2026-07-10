@@ -21,6 +21,10 @@ interface TreeFile {
   threadCount: number;
   reviewUrl?: string;
   lastActivityAt?: number;
+  /** Diff-review members: change status + line counts for badges. */
+  diffStatus?: 'added' | 'modified' | 'deleted' | 'renamed';
+  diffAdditions?: number;
+  diffDeletions?: number;
 }
 interface TreeDir {
   type: 'dir';
@@ -58,9 +62,19 @@ function renderTreeNode(
       : `/review/${encodeURIComponent(node.docId)}${params.toString() ? `?${params.toString()}` : ''}`;
     const badge =
       node.openCount > 0 ? `<span class="tree-badge badge-open">${node.openCount}</span>` : '';
+    // Diff-review files carry an A/M/D/R status letter + line-count badge.
+    let diffBadge = '';
+    if (node.diffStatus) {
+      const letter = node.diffStatus[0]?.toUpperCase() ?? '';
+      const counts =
+        node.diffAdditions != null || node.diffDeletions != null
+          ? `<span class="tree-diff-counts"><span class="add">+${node.diffAdditions ?? 0}</span> <span class="del">−${node.diffDeletions ?? 0}</span></span>`
+          : '';
+      diffBadge = `<span class="tree-diff-status tree-diff-${letter}" title="${escapeHtml(node.diffStatus)}">${letter}</span>${counts}`;
+    }
     return `<li class="tree-file"><a href="${href}" class="${isActive ? 'active' : ''}"${
       isActive ? ' aria-current="page"' : ''
-    }><span class="tree-name">${escapeHtml(node.name)}</span>${badge}</a></li>`;
+    }><span class="tree-name">${escapeHtml(node.name)}</span>${diffBadge}${badge}</a></li>`;
   }
   const relPath = prefix ? `${prefix}/${node.name}` : node.name;
   let open = true;
