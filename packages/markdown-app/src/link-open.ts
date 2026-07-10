@@ -14,6 +14,15 @@ export function safeLinkHref(href: string | null | undefined): string | null {
   if (!href) return null;
   const trimmed = href.trim();
   if (!trimmed) return null;
-  if (UNSAFE_SCHEME.test(trimmed)) return null;
+  // Browsers ignore embedded whitespace/control chars (tabs, newlines, NUL)
+  // when resolving a URL's scheme — so `java\tscript:` still executes. Drop
+  // every char with code point <= 0x20 before matching the denylist so
+  // obfuscated scheme prefixes can't slip past. The original (only trimmed)
+  // href is what we return/open.
+  let forSchemeCheck = '';
+  for (const ch of trimmed) {
+    if (ch.charCodeAt(0) > 0x20) forSchemeCheck += ch;
+  }
+  if (UNSAFE_SCHEME.test(forSchemeCheck)) return null;
   return trimmed;
 }
