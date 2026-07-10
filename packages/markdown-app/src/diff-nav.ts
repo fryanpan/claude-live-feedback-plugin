@@ -152,7 +152,7 @@ function fileRow(f: GroupedFile, activeDocId: string): string {
   const letter = f.diffStatus ? (f.diffStatus[0]?.toUpperCase() ?? '') : '';
   const counts =
     f.diffAdditions != null || f.diffDeletions != null
-      ? `<span class="tree-diff-counts">+${f.diffAdditions ?? 0} −${f.diffDeletions ?? 0}</span>`
+      ? `<span class="tree-diff-counts"><span class="add">+${f.diffAdditions ?? 0}</span> <span class="del">−${f.diffDeletions ?? 0}</span></span>`
       : '';
   const open = f.openCount > 0 ? `<span class="tree-badge badge-open">${f.openCount}</span>` : '';
   return `<li class="diff-file"><a href="${href}" class="${isActive ? 'active' : ''}"${

@@ -774,12 +774,7 @@ export class Rooms {
     const groups = Array.from(byGroup.entries())
       .sort((a, b) => a[1].rank - b[1].rank || a[0].localeCompare(b[0]))
       .map(([title, g]) => {
-        g.files.sort(
-          (a, b) =>
-            (b.diffAdditions ?? 0) +
-            (b.diffDeletions ?? 0) -
-            ((a.diffAdditions ?? 0) + (a.diffDeletions ?? 0)),
-        );
+        g.files.sort((a, b) => a.name.localeCompare(b.name) || a.relPath.localeCompare(b.relPath));
         return {
           title,
           openCount: g.files.reduce((s, f) => s + f.openCount, 0),
