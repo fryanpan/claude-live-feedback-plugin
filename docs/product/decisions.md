@@ -128,3 +128,22 @@ Big decisions that future sessions should respect or revisit deliberately.
   lossless. Picked 2 spaces (vs 4) to match the editor's typical output;
   the parser accepts any indentation increase as a deeper level so
   human-authored 4-space markdown still nests correctly.
+
+## 2026-07-10 — Editor link-open (Cmd+Click) + table editing UI
+- **Links stay non-navigable on a plain click** (`openOnClick:false`) so the
+  cursor can be placed inside a link to edit it; a **Cmd/Ctrl+Click opens** the
+  link in a new tab instead. Bound as a DOM `click` listener on the editor view
+  (works in both edit and view mode) rather than via the Link extension's
+  built-in open, which has no modifier-gated mode. Script-bearing schemes
+  (`javascript:`/`data:`/`vbscript:`) are filtered by a pure `safeLinkHref()`;
+  everything else (http(s), mailto, tel, relative, anchors) opens.
+- **Table create/edit uses `@tiptap/extension-table` (prosemirror-tables)** —
+  the framework was already a dependency and wired into the editor; only UI was
+  missing. Per Bryan's constraint we did NOT hand-roll a table engine. Added a
+  `▦` format-bar button opening a contextual popover: "Insert table" (3×3 with
+  header row) always, plus row/column add + delete-row/column/table when the
+  cursor is inside a table. Items come from a pure `tableMenuItems(inTable)`
+  helper; each dispatches the matching Tiptap chain command. The popover is a
+  fixed-position element in `<body>` so it escapes the format bar's
+  `overflow:hidden`. Tables round-trip to disk as GFM via the existing
+  `serializeTable`/`mkTable` path in `packages/core/prose.ts`.
