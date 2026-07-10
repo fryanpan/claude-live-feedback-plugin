@@ -408,6 +408,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       const wsThreadsMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/threads$/);
       if (wsThreadsMatch && req.method === 'GET') {
         const workspaceId = decodeURIComponent(wsThreadsMatch[1] ?? '');
+        if (!rooms.list().some((m) => m.workspaceId === workspaceId)) {
+          return j(404, { error: 'workspace not found', workspaceId });
+        }
         const status = url.searchParams.get('status') as 'open' | 'resolved' | null;
         const threads = rooms.listWorkspaceThreads(workspaceId, status ? { status } : undefined);
         return j(200, { workspaceId, threads });
