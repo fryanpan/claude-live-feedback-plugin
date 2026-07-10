@@ -4,6 +4,7 @@ import { renderDiffNav } from './diff-nav.ts';
 import { type EditorHandle, createEditor } from './editor.ts';
 import { startReadingTracker } from './reading-tracker.ts';
 import { type ReviewChrome, el, mountReviewChrome, showToast } from './review-chrome.ts';
+import { type TableMenuItem, tableMenuItems } from './table-menu.ts';
 import { renderWorkspaceTree, wireWorkspaceTreeRefresh } from './workspace-tree.ts';
 
 const DEFAULT_WS_PATH = (docId: string, type: string) =>
@@ -854,10 +855,119 @@ function toggleWidthPref(): void {
   applyWidthPref();
 }
 
+/**
+ * Contextual popover for table operations. Insert/edit are powered by
+ * @tiptap/extension-table (prosemirror-tables); this just renders the item
+ * list from tableMenuItems() and dispatches to the matching Tiptap command.
+ * Rendered into <body> as a fixed-position element so it escapes the format
+ * bar's `overflow:hidden` clipping.
+ */
+interface TableMenuController {
+  toggle: (anchor: HTMLElement) => void;
+  close: () => void;
+}
+
+function wireTableMenu(editor: EditorHandle): TableMenuController {
+  const menu = document.createElement('div');
+  menu.className = 'table-menu hidden';
+  menu.setAttribute('role', 'menu');
+  menu.setAttribute('aria-hidden', 'true');
+  document.body.appendChild(menu);
+
+  let anchorBtn: HTMLElement | null = null;
+
+  const close = () => {
+    if (menu.classList.contains('hidden')) return;
+    menu.classList.add('hidden');
+    menu.setAttribute('aria-hidden', 'true');
+    anchorBtn?.setAttribute('aria-expanded', 'false');
+    anchorBtn = null;
+  };
+
+  const runTableCmd = (cmd: TableMenuItem['cmd']) => {
+    const c = editor.editor.chain().focus();
+    switch (cmd) {
+      case 'insertTable':
+        c.insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run();
+        break;
+      case 'addRowBefore':
+        c.addRowBefore().run();
+        break;
+      case 'addRowAfter':
+        c.addRowAfter().run();
+        break;
+      case 'addColumnBefore':
+        c.addColumnBefore().run();
+        break;
+      case 'addColumnAfter':
+        c.addColumnAfter().run();
+        break;
+      case 'deleteRow':
+        c.deleteRow().run();
+        break;
+      case 'deleteColumn':
+        c.deleteColumn().run();
+        break;
+      case 'deleteTable':
+        c.deleteTable().run();
+        break;
+    }
+  };
+
+  const open = (anchor: HTMLElement) => {
+    anchorBtn = anchor;
+    menu.innerHTML = '';
+    for (const item of tableMenuItems(editor.editor.isActive('table'))) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = `table-menu-item${item.danger ? ' danger' : ''}`;
+      b.setAttribute('role', 'menuitem');
+      b.textContent = item.label;
+      b.addEventListener('click', () => {
+        runTableCmd(item.cmd);
+        close();
+      });
+      menu.appendChild(b);
+    }
+    menu.classList.remove('hidden');
+    menu.setAttribute('aria-hidden', 'false');
+    anchor.setAttribute('aria-expanded', 'true');
+    // Position under the anchor, clamped to the viewport (mobile-safe).
+    const r = anchor.getBoundingClientRect();
+    menu.style.top = `${r.bottom + 4}px`;
+    const mw = menu.offsetWidth;
+    let left = Math.min(r.left, window.innerWidth - 8 - mw);
+    if (left < 8) left = 8;
+    menu.style.left = `${left}px`;
+  };
+
+  // Keep the editor selection alive while pressing menu items.
+  menu.addEventListener('mousedown', (ev) => ev.preventDefault());
+  document.addEventListener('click', (ev) => {
+    if (menu.classList.contains('hidden')) return;
+    const t = ev.target as Node;
+    if (menu.contains(t) || anchorBtn?.contains(t)) return;
+    close();
+  });
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape') close();
+  });
+  document.getElementById('editor')?.addEventListener('scroll', close, { passive: true });
+
+  return {
+    toggle: (anchor) => {
+      if (!menu.classList.contains('hidden') && anchorBtn === anchor) close();
+      else open(anchor);
+    },
+    close,
+  };
+}
+
 function wireFormatBar(editor: EditorHandle): void {
   const bar = document.getElementById('format-bar');
   if (!bar) return;
   const chain = () => editor.editor.chain().focus();
+  const tableMenu = wireTableMenu(editor);
   const handlers: Record<string, () => void> = {
     bold: () => chain().toggleBold().run(),
     italic: () => chain().toggleItalic().run(),
@@ -871,6 +981,10 @@ function wireFormatBar(editor: EditorHandle): void {
     codeBlock: () => chain().toggleCodeBlock().run(),
     hr: () => chain().setHorizontalRule().run(),
     width: toggleWidthPref,
+    table: () => {
+      const btn = bar.querySelector<HTMLElement>('[data-cmd="table"]');
+      if (btn) tableMenu.toggle(btn);
+    },
     link: () => {
       const existing = editor.editor.getAttributes('link').href as string | undefined;
       const href = prompt('Link URL', existing ?? 'https://');
@@ -927,6 +1041,9 @@ function wireFormatBar(editor: EditorHandle): void {
           break;
         case 'link':
           active = editor.editor.isActive('link');
+          break;
+        case 'table':
+          active = editor.editor.isActive('table');
           break;
       }
       btn.classList.toggle('active', active);
