@@ -3,8 +3,36 @@
  *  - mockup/dev: HTML / running surfaces reviewed via the injectable widget.
  *  - code: read-only source file (Java/Kotlin/TS/Python/JSON…) shown with
  *    syntax highlighting; the agent edits the file on disk, the view re-renders.
+ *  - diff: one changed file of a git diff review (base..target). Content is
+ *    the file at the TARGET commit — immutable, so anchors never drift; the
+ *    diff itself is a client-side rendering against the base text.
  */
-export type DocType = 'markdown' | 'mockup' | 'dev' | 'code';
+export type DocType = 'markdown' | 'mockup' | 'code' | 'diff';
+
+/**
+ * Which Yjs content surface a doc kind uses — THE derived concept most
+ * server code actually branches on. New doc kinds fill in this table
+ * instead of adding `type === '…'` checks at every call site.
+ *  - prose: editable `prose` XmlFragment (Tiptap), markdown file write-back.
+ *  - flat:  read-only `content` Y.Text (code viewer / diff viewer).
+ *  - none:  no LF-held content — the surface is a host page (widget).
+ */
+export type ContentKind = 'prose' | 'flat' | 'none';
+
+export function contentKind(type: DocType): ContentKind {
+  switch (type) {
+    case 'markdown':
+      return 'prose';
+    case 'code':
+    case 'diff':
+      return 'flat';
+    default:
+      return 'none';
+  }
+}
+
+/** File change kind within a git diff review (git --name-status letter). */
+export type DiffFileStatus = 'added' | 'modified' | 'deleted' | 'renamed';
 
 export interface DocMeta {
   docId: string;
@@ -59,6 +87,27 @@ export interface DocMeta {
    * sessionId null.
    */
   producedBy?: { agentId?: string; sessionId?: string };
+  /**
+   * Git diff review fields — present only on `type: 'diff'` docs (one doc per
+   * changed file, grouped under `workspaceId` = the review id, with
+   * `workspaceRoot` = the repo path and `relPath` = the file's path at target).
+   * `diffBase`/`diffTarget` are the resolved full commit hashes so the review
+   * stays pinned even if the refs move later.
+   */
+  diffBase?: string;
+  diffTarget?: string;
+  diffStatus?: DiffFileStatus;
+  /** Path at the BASE commit when the file was renamed (baseText source). */
+  diffOldPath?: string;
+  diffAdditions?: number;
+  diffDeletions?: number;
+  /**
+   * Logical group for the sidebar's grouped-diff view (e.g. "Routing",
+   * "Tests"). Supplied by the creating agent or derived heuristically at
+   * bind time; refreshed on re-bind. `diffGroupRank` orders groups.
+   */
+  diffGroup?: string;
+  diffGroupRank?: number;
 }
 
 export interface User {

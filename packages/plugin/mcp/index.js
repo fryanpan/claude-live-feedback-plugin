@@ -13722,6 +13722,28 @@ var server = new Server({
     "mid-session — if you wrote to a bound file externally and need to be sure",
     "it landed, call reparse_from_disk(docId) to force-pull from disk.",
     "",
+    "DIFF REVIEW / FOLDER BROWSE: when the human wants to review your code",
+    'changes ("review this diff", a branch, work in progress), call',
+    "create_diff_review(repo, base) — one review doc per changed file,",
+    "PR-style unified diff with line comments. Omit base to BROWSE a folder",
+    "instead (no diff): everything is navigable from the all-files sidebar,",
+    "files open lazily, markdown editable — works on plain folders and",
+    "fresh repos too (bind_folder is an alias for this). Default mode diffs",
+    "base against the LIVE working tree: keep editing the code and the reviewer",
+    "sees your changes re-render within ~1s, with their comments riding along",
+    "(threads orphan into the outdated-comments flow if their line disappears).",
+    "ALWAYS pass groups: [{title, paths[]}] — organize the changed files by",
+    "INTENT (the way you would split a branch into reviewable commits); you",
+    "know the semantics of your change far better than the heuristic fallback.",
+    "First group = read first; a directory path claims every file under it;",
+    'unlisted files land in "Other". Pass target only to pin a review to a',
+    "finished range. Re-run the tool after touching files that were not in",
+    "the diff before (idempotent; refreshes the file list; keeps your groups",
+    "unless you pass new ones). Share the returned entryUrl with the human",
+    "(bare URL on its own line); the file tree navigates the rest. Thread",
+    "events arrive per file via the auto-watch; resolve threads as you address",
+    "them; delete_workspace(reviewId) when the review is done.",
+    "",
     "OBSERVE: call watch_doc(docId) once per doc to receive thread events as",
     '<channel source="live-feedback" doc_id="..." thread_id="..." event="..." author="..." sent_at="...">body</channel>',
     "messages. Treat each as an explicit ask from the reviewer; read, decide if it",
@@ -13894,7 +13916,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "bind_folder",
-      description: "Bind a whole folder / worktree for review in one call: the server scans the folder and creates one review doc per supported file, grouped under a single workspace. Markdown files (.md) open as WYSIWYG editable docs; source files (.ts/.tsx/.js/.jsx/.mjs/.cjs/.java/.kt/.kts/.py/.json) open as read-only, syntax-highlighted source with line-anchored comments — the human comments, you edit the code via your normal tools and the view re-renders. Respects .gitignore (scans via `git ls-files`, so node_modules/dist/build are skipped automatically; falls back to a recursive walk with a hardcoded skip set outside a git repo). Files over 512 KB or that look binary are skipped and reported in `skipped[]`. GUARDRAIL: if more than `maxFiles` (default 300) supported files survive the filter, nothing is created and it returns error:'too-many-files' with the count — narrow `folderPath` or raise `maxFiles`. docIds are deterministic (`<workspaceId>:<relPath>`), so re-binding the same folder is idempotent and preserves existing comment threads. Pass `include` (e.g. ['.rb','.go']) to extend the source allowlist. The caller is auto-subscribed to thread events for every markdown + code doc created (pass `subscribe:false` to skip). `folderPath` should be absolute. Returns the workspace id, root, file list (each with docId/relPath/type/reviewUrl), and anything skipped.",
+      description: "Alias for create_diff_review WITHOUT a base: binds a folder/worktree as a BROWSE workspace. One entry doc binds eagerly (README preferred; markdown opens editable); every other file appears in the all-files sidebar and opens lazily on click — no eager per-file binds, no file-count cap. Prefer create_diff_review directly: pass base to ALSO get the PR-style changed-files diff on top of browsing. Returns the workspace id, root, scan fileCount, and the entry file.",
       inputSchema: {
         type: "object",
         properties: {
@@ -13914,6 +13936,45 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           }
         },
         required: ["folderPath"]
+      }
+    },
+    {
+      name: "create_diff_review",
+      description: "Create a GitHub-PR-style review of a git diff: point it at a local repo and a base ref, and the server creates one review doc per changed file, grouped as a workspace — the reviewer gets a file tree with per-file A/M/D/R + line-count badges, a unified diff view with old/new line numbers and collapsed unchanged regions, a per-file Diff ↔ whole-File toggle, and line-anchored comment threads in both views. DEFAULT MODE (no `target`): diff base → the WORKING TREE, i.e. the folder as it is right now, uncommitted edits and untracked files included. The docs bind to the live files on disk, so as you keep editing the code the reviewer's diff re-renders within ~1s — this is the live-loop mode. Comments stay anchored to their lines through edits (snippet-based auto-reanchor); if an anchored line disappears, the thread lands in the existing Orphaned/outdated section where the reviewer can re-anchor it. Re-run the tool after changing a file that wasn't in the diff before — re-binding is idempotent (same docIds, threads survive) and refreshes the file list + badges. PINNED MODE (pass `target`): content is frozen at the target commit; anchors can never drift; same reviewId with a different range is rejected. `repo` is an absolute path to a local checkout/worktree; `base`/`target` are any refs git can resolve (hashes, branches, HEAD~2). Binary files and files over 512 KB are skipped and reported in skipped[]. Pass `exclude` (path prefixes, e.g. ['src/main/assets/vendored-repo']) to keep vendored or generated directories out of the review. GUARDRAIL: more than `maxFiles` (default 300) changed files → error 'too-many-files'; narrow with `exclude` or raise `maxFiles`. The caller is auto-subscribed to thread events on every file doc (pass subscribe:false to skip). Returns {reviewId, entryUrl, files[{docId, relPath, status, additions, deletions, reviewUrl}], skipped[]} — hand `entryUrl` to the human (the file tree navigates to the rest). Clean up with delete_workspace(reviewId) when the review is done. Comments on DELETED lines aren't supported yet — ask the reviewer to comment on an adjacent kept line.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo: { type: "string", description: "Absolute path to the local git repo/worktree." },
+          base: {
+            type: "string",
+            description: 'Base ref (the "before" side). OMIT for a BROWSE workspace: no diff — the whole folder is navigable from the all-files sidebar, files open lazily (markdown editable, source read-only).'
+          },
+          target: {
+            type: "string",
+            description: "Optional target ref. Omit to review the LIVE working tree (default); pass a ref to pin the review to that commit."
+          },
+          reviewId: {
+            type: "string",
+            description: "Optional review/workspace id. Defaults to <repo-basename>-<base7>-<target7|live>."
+          },
+          title: { type: "string" },
+          exclude: {
+            type: "array",
+            items: { type: "string" },
+            description: "Path prefixes (relative to repo root) to leave out of the review."
+          },
+          maxFiles: { type: "number" },
+          subscribe: { type: "boolean" },
+          producedBy: {
+            type: "object",
+            description: "Optional provenance for the activity event stream: {agentId?, sessionId?}. Stored on every doc the review creates.",
+            properties: {
+              agentId: { type: "string" },
+              sessionId: { type: "string" }
+            }
+          }
+        },
+        required: ["repo"]
       }
     },
     {
@@ -14267,11 +14328,38 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...maxFiles !== undefined ? { maxFiles } : {},
           ...producedBy ? { producedBy } : {}
         });
-        if (subscribe !== false && res?.ok && Array.isArray(res.files)) {
-          for (const f of res.files) {
-            if (f?.docId)
-              await watchDoc(f.docId);
-          }
+        if (subscribe !== false && res?.workspaceId) {
+          await watchWorkspace(res.workspaceId);
+        }
+        return ok(res);
+      }
+      case "create_diff_review": {
+        const {
+          repo,
+          base,
+          target,
+          reviewId,
+          title,
+          exclude,
+          groups,
+          maxFiles,
+          subscribe,
+          producedBy
+        } = a;
+        const res = await http("POST", "/api/diffs", {
+          repo,
+          base,
+          ...target ? { target } : {},
+          owner: process.cwd(),
+          ...reviewId ? { reviewId } : {},
+          ...title ? { title } : {},
+          ...exclude ? { exclude } : {},
+          ...groups ? { groups } : {},
+          ...maxFiles !== undefined ? { maxFiles } : {},
+          ...producedBy ? { producedBy } : {}
+        });
+        if (subscribe !== false && res?.reviewId) {
+          await watchWorkspace(res.reviewId);
         }
         return ok(res);
       }
@@ -14428,9 +14516,20 @@ async function watchDoc(docId) {
     return;
   const controller = new AbortController;
   watchers.set(docId, { controller, docId });
-  runSseLoop(docId, controller.signal).catch((err) => {
+  runSseLoop(docId, `/events/${encodeURIComponent(docId)}`, controller.signal).catch((err) => {
     console.error(`[live-feedback-mcp] watcher ${docId} crashed:`, err);
     watchers.delete(docId);
+  });
+}
+async function watchWorkspace(workspaceId) {
+  const key = `ws:${workspaceId}`;
+  if (watchers.has(key))
+    return;
+  const controller = new AbortController;
+  watchers.set(key, { controller, docId: key });
+  runSseLoop(key, `/events/workspace/${encodeURIComponent(workspaceId)}`, controller.signal).catch((err) => {
+    console.error(`[live-feedback-mcp] workspace watcher ${workspaceId} crashed:`, err);
+    watchers.delete(key);
   });
 }
 function unwatchDoc(docId) {
@@ -14440,14 +14539,14 @@ function unwatchDoc(docId) {
   w.controller.abort();
   watchers.delete(docId);
 }
-async function runSseLoop(docId, signal) {
+async function runSseLoop(label, path, signal) {
   while (!signal.aborted) {
     try {
-      const res = await fetch(`${resolveBaseUrl()}/events/${encodeURIComponent(docId)}`, {
+      const res = await fetch(`${resolveBaseUrl()}${path}`, {
         signal
       });
       if (!res.ok || !res.body)
-        throw new Error(`sse /events/${docId} → ${res.status}`);
+        throw new Error(`sse ${path} → ${res.status}`);
       const reader = res.body.getReader();
       const decoder = new TextDecoder;
       let buf = "";
@@ -14471,7 +14570,7 @@ async function runSseLoop(docId, signal) {
     } catch (err) {
       if (signal.aborted)
         return;
-      console.error(`[live-feedback-mcp] ${docId} sse error, retrying:`, err);
+      console.error(`[live-feedback-mcp] ${label} sse error, retrying:`, err);
     }
     await new Promise((r) => setTimeout(r, 1500));
   }

@@ -9,7 +9,13 @@ import {
 } from '@feedback/core';
 
 const { contextMatches, hasContext } = anchors;
-import { type WidgetClient, connect } from './client.ts';
+import {
+  type FeedbackClient,
+  STATUS_COLORS,
+  connect,
+  escapeHtml as escape,
+  formatTime,
+} from '@feedback/core';
 import { widgetStyles } from './styles.ts';
 
 /**
@@ -63,7 +69,7 @@ function defaultServerUrl(): string {
 
 class FeedbackWidgetEl extends HTMLElement {
   private shadow: ShadowRoot;
-  private client: WidgetClient | null = null;
+  private client: FeedbackClient | null = null;
   private user: User | null = null;
   private initialized = false;
   private opts: WidgetOpts & { serverUrl: string; user: string | null } = {
@@ -540,7 +546,7 @@ class FeedbackWidgetEl extends HTMLElement {
         'width:24px',
         'height:24px',
         'border-radius:50%',
-        `background:${statusBase === 'resolved' ? '#2da44e' : '#e36f1e'}`,
+        `background:${statusBase === 'resolved' ? STATUS_COLORS.resolved : STATUS_COLORS.open}`,
         'color:#fff',
         'font:600 12px system-ui',
         'display:flex',
@@ -736,8 +742,8 @@ class FeedbackWidgetEl extends HTMLElement {
     s.setAttribute(IGNORE_ATTR, '');
     s.textContent = `
       .cfw-pin:hover { transform: translate(-50%,-100%) scale(1.08); }
-      .cfw-pin[data-status="resolved"] { background: #2da44e !important; }
-      .cfw-pin[data-status="orphan"] { background: #bf8700 !important; }
+      .cfw-pin[data-status="resolved"] { background: ${STATUS_COLORS.resolved} !important; }
+      .cfw-pin[data-status="orphan"] { background: ${STATUS_COLORS.orphan} !important; }
     `;
     document.head.appendChild(s);
   }
@@ -848,28 +854,6 @@ if (typeof window !== 'undefined') {
 
 export { FeedbackWidget };
 export default FeedbackWidget;
-
-function escape(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => {
-    const map: Record<string, string> = {
-      '&': '&amp;',
-      '<': '&lt;',
-      '>': '&gt;',
-      '"': '&quot;',
-      "'": '&#39;',
-    };
-    return map[c] ?? c;
-  });
-}
-
-function formatTime(ts: number): string {
-  if (!ts) return '';
-  const diff = Date.now() - ts;
-  if (diff < 60_000) return 'just now';
-  if (diff < 3600_000) return `${Math.floor(diff / 60_000)}m`;
-  if (diff < 86400_000) return `${Math.floor(diff / 3600_000)}h`;
-  return new Date(ts).toLocaleDateString();
-}
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
