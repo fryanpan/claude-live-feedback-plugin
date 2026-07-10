@@ -830,7 +830,6 @@ function toggleWidthPref(): void {
 interface TableMenuController {
   toggle: (anchor: HTMLElement) => void;
   close: () => void;
-  isOpen: () => boolean;
 }
 
 function wireTableMenu(editor: EditorHandle): TableMenuController {
@@ -926,7 +925,6 @@ function wireTableMenu(editor: EditorHandle): TableMenuController {
       else open(anchor);
     },
     close,
-    isOpen: () => !menu.classList.contains('hidden'),
   };
 }
 
