@@ -445,11 +445,9 @@ describe('Rooms.bindDiff', () => {
     const grouped = rooms.listGroupedDiff(auto.reviewId);
     expect(grouped.groups).toHaveLength(1);
     expect(grouped.groups[0]?.title).toBe('src');
-    // Ordered by churn desc within the group.
-    const churn = (grouped.groups[0]?.files ?? []).map(
-      (f) => (f.diffAdditions ?? 0) + (f.diffDeletions ?? 0),
-    );
-    expect([...churn].sort((a, b) => b - a)).toEqual(churn);
+    // Ordered alphabetically within the group.
+    const names = (grouped.groups[0]?.files ?? []).map((f) => f.name);
+    expect([...names].sort((a, b) => a.localeCompare(b))).toEqual(names);
 
     // Explicit groups: agent-supplied titles + ordering; unlisted → Other.
     const explicit = rooms.bindDiff({
