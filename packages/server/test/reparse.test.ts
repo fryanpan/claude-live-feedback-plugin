@@ -58,6 +58,20 @@ describe('reparseFromDisk (markdown)', () => {
     for (const h of headings) expect(typeof h.getAttribute('level')).toBe('number');
   });
 
+  it('repairs a legacy string heading level even when the markdown is identical', () => {
+    // Regress a heading to the pre-fix form, the way an existing .ydoc has it.
+    const ydoc = rooms.get('d1')!.ydoc;
+    const heading = getProseFragment(ydoc).get(0) as Y.XmlElement;
+    heading.setAttribute('level', '1');
+    expect(typeof heading.getAttribute('level')).toBe('string');
+
+    // The block diff correctly sees this block as unchanged (a string '1' and
+    // a number 1 both serialize to `# Title`), so reparse must repair the
+    // attribute itself — otherwise force-pulling a legacy doc leaves it broken.
+    expect(rooms.reparseFromDisk('d1').ok).toBe(true);
+    expect(heading.getAttribute('level')).toBe(1 as unknown as string);
+  });
+
   it('keeps a thread anchored to an untouched block alive across a reparse', async () => {
     const created = await rooms.createThreadByFind(
       'd1',
