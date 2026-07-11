@@ -388,7 +388,9 @@ describe('parseMarkdownBlocks', () => {
     const blocks = integrate(parseMarkdownBlocks('## Hello\n\nA paragraph.\n\n- one\n- two'));
     expect(blocks).toHaveLength(3);
     expect(blocks[0]?.nodeName).toBe('heading');
-    expect(blocks[0]?.getAttribute('level')).toBe('2');
+    // A NUMBER, not '2' — Tiptap matches the level against [1..6] numerically
+    // and falls back to <h1> for anything else. See reparse.test.ts.
+    expect(blocks[0]?.getAttribute('level')).toBe(2);
     expect(blocks[1]?.nodeName).toBe('paragraph');
     expect(blocks[2]?.nodeName).toBe('bulletList');
     expect(blocks[2]?.toArray()).toHaveLength(2);
