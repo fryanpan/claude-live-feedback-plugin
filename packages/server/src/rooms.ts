@@ -1292,6 +1292,12 @@ export class Rooms {
       // resolving instead of every thread in the doc orphaning.
       prose.applyMarkdownToFragment(fragment, md);
     }, 'file-watch');
+    // The diff above keys blocks by their serialized markdown, so a block
+    // whose only defect is an ATTRIBUTE (a legacy string heading level, which
+    // serializes to the same `## …`) is correctly seen as unchanged and kept.
+    // reparse is the documented recovery tool, so repair those here — without
+    // it, force-pulling a legacy doc still left its headings rendering as h1.
+    prose.normalizeHeadingLevels(room.ydoc);
     binding.lastWritten = md;
     binding.lastSyncError = undefined;
     return { ok: true };
