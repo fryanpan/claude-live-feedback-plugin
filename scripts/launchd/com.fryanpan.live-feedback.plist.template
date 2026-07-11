@@ -13,6 +13,9 @@
         <string>{{BUN_BIN}}</string>
         <string>run</string>
         <string>scripts/serve.ts</string>
+        <!-- PROD: no hot-reload. A `bun --watch` reload once left the server
+             alive-but-unbound and took the fleet-shared review server down. -->
+        <string>--no-watch</string>
     </array>
 
     <key>EnvironmentVariables</key>
