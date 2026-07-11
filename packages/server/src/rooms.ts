@@ -1284,12 +1284,13 @@ export class Rooms {
       binding.lastSyncError = undefined;
       return { ok: true };
     }
-    const blocks = prose.parseMarkdownBlocks(md);
-    if (blocks.length === 0) return { ok: false, error: 'missing' };
+    if (prose.parseMarkdownBlocks(md).length === 0) return { ok: false, error: 'missing' };
     const fragment = prose.getProseFragment(room.ydoc);
     room.ydoc.transact(() => {
-      fragment.delete(0, fragment.length);
-      fragment.push(blocks);
+      // Block-level diff, not delete-all + push: blocks the rewrite didn't
+      // touch keep their Y.XmlText identity, so their thread anchors keep
+      // resolving instead of every thread in the doc orphaning.
+      prose.applyMarkdownToFragment(fragment, md);
     }, 'file-watch');
     binding.lastWritten = md;
     binding.lastSyncError = undefined;
@@ -1394,13 +1395,12 @@ export class Rooms {
       );
       return;
     }
-    // Apply destructively: parse fresh, replace all blocks. Y.XmlText
-    // identities change so thread anchors in the replaced region may
-    // orphan — auto-reanchor's snippet-match sweep catches the common
-    // case on the next tick.
+    // Apply as a block-level diff: only blocks whose markdown actually
+    // changed are replaced, so anchors on untouched blocks keep resolving.
+    // Anchors inside a rewritten block still break — auto-reanchor's
+    // snippet-match sweep catches that case on the next tick.
     room.ydoc.transact(() => {
-      fragment.delete(0, fragment.length);
-      fragment.push(blocks);
+      prose.applyMarkdownToFragment(fragment, md);
     }, 'file-watch');
     binding.lastWritten = md;
     binding.lastSyncError = undefined;
@@ -1824,6 +1824,13 @@ export class Rooms {
         }
       }, 250);
     });
+    // Docs seeded from disk before the heading-level fix persisted `level` as
+    // a string, which makes Tiptap render every heading as <h1>. Repair them
+    // on load so an existing doc doesn't need a reparse to render correctly.
+    const fixed = prose.normalizeHeadingLevels(room.ydoc);
+    if (fixed > 0) {
+      console.log(`[rooms] ${room.docId}: normalized ${fixed} legacy string heading level(s)`);
+    }
     // Also sweep once on room load so threads recover after server
     // restart even if no new edits happen.
     const initial = prose.autoReanchorDoc(room.ydoc);
