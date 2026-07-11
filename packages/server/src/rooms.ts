@@ -1408,6 +1408,10 @@ export class Rooms {
     room.ydoc.transact(() => {
       prose.applyMarkdownToFragment(fragment, md);
     }, 'file-watch');
+    // Same as reparseFromDisk: a block whose only defect is a legacy string
+    // heading level serializes identically, so the diff keeps it and the
+    // attribute has to be repaired separately. Idempotent and cheap.
+    prose.normalizeHeadingLevels(room.ydoc);
     binding.lastWritten = md;
     binding.lastSyncError = undefined;
     console.log(
@@ -1820,7 +1824,11 @@ export class Rooms {
     const fragment = prose.getProseFragment(room.ydoc);
     let reanchorTimer: ReturnType<typeof setTimeout> | null = null;
     fragment.observeDeep((_events, tr) => {
-      // Don't re-enter on our own re-anchor writes.
+      // Don't re-enter on our own re-anchor writes. NOTE: 'file-watch' must
+      // NOT be skipped here — a disk reparse is exactly when anchors inside a
+      // rewritten block break, and this sweep is what recovers them. Adding
+      // 'file-watch' to this guard (to match the write-back observer's) would
+      // silently break reparse recovery.
       if (tr.origin === 'agent-reanchor') return;
       if (reanchorTimer) clearTimeout(reanchorTimer);
       reanchorTimer = setTimeout(() => {

@@ -123,4 +123,18 @@ describe('applyMarkdownToFragment', () => {
     expect(headingLevelOf(fragment.get(0) as Y.XmlElement)).toBe(2);
     expect(serializeFragmentToMarkdown(fragment)).toBe('## Section\n');
   });
+
+  it('does not equate two different blocks that both serialize to nothing', () => {
+    // A text-empty heading serializes to null, so an index-only fallback key
+    // made every such block compare equal and the diff kept the stale one.
+    const { fragment } = docWith('## \n');
+    applyMarkdownToFragment(fragment, '#### \n');
+    expect(headingLevelOf(fragment.get(0) as Y.XmlElement)).toBe(4);
+  });
+
+  it('refuses to wipe the fragment on empty markdown', () => {
+    const { fragment } = docWith('# Title\n\nBody.\n');
+    expect(applyMarkdownToFragment(fragment, '')).toBe(false);
+    expect(fragment.length).toBe(2);
+  });
 });

@@ -662,18 +662,39 @@ function markdownBlockKeys(
  */
 export function applyMarkdownToFragment(fragment: Y.XmlFragment, markdown: string): boolean {
   const prev = fragment.toArray() as (Y.XmlElement | Y.XmlText)[];
-  const key = (node: Y.XmlElement | Y.XmlText, i: number): string =>
-    serializeBlock(node) ?? `__unserializable_block_${i}__`;
+  // serializeBlock returns null for a text-empty heading, an empty XmlText and
+  // a src-less image. Those still have to be told apart, so the fallback key
+  // carries the node type AND its attributes — an empty `## ` and an empty
+  // `#### ` differ only in `level`, and a type-only key would call them equal
+  // and keep the stale block (with its stale level).
+  const key = (node: Y.XmlElement | Y.XmlText, i: number): string => {
+    const s = serializeBlock(node);
+    if (s != null) return s;
+    if (!(node instanceof Y.XmlElement)) return `__empty_text_${i}__`;
+    return `__empty_${node.nodeName}_${JSON.stringify(node.getAttributes())}__`;
+  };
   const prevKeys = prev.map(key);
   const nextKeys = markdownBlockKeys(markdown, key);
   // Keyed separately from the blocks we insert: reading a prelim block's
   // content requires integrating it into a doc, and an integrated Yjs type
-  // can't then be re-parented into the live fragment.
+  // can't then be re-parented into the live fragment. (So the markdown is
+  // parsed twice per call — cheap next to the Yjs work, and this runs at most
+  // once per 500ms mtime poll.)
   const next = parseMarkdownBlocks(markdown);
 
-  // Guard the O(n·m) table on pathological docs — fall back to the
-  // destructive replace rather than allocating a huge matrix.
-  if (prevKeys.length * nextKeys.length > 250_000) {
+  // Never wipe the doc to empty. Both call sites already guard on a zero-block
+  // parse, but this is exported — make it safe by construction.
+  if (next.length === 0) return false;
+
+  // Guard the O(n·m) table. Beyond this the destructive replace is the only
+  // option — which reinstates the thread-orphaning this function exists to
+  // prevent, so say so out loud rather than degrading silently. 2000×2000
+  // blocks is far past any real review doc (this repo's run 30–100).
+  if (prevKeys.length * nextKeys.length > 4_000_000) {
+    console.warn(
+      `[prose] ${prevKeys.length}→${nextKeys.length} blocks exceeds the diff budget; ` +
+        'falling back to a destructive replace — thread anchors in this doc will orphan',
+    );
     fragment.delete(0, fragment.length);
     fragment.push(next);
     return true;
@@ -683,13 +704,15 @@ export function applyMarkdownToFragment(fragment: Y.XmlFragment, markdown: strin
   // maps to in the new list.
   const n = prevKeys.length;
   const m = nextKeys.length;
-  const table: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
+  // Flat suffix table: lcs[i][j] = length of the LCS of prev[i..] and next[j..].
+  const w = m + 1;
+  const lcs = new Int32Array((n + 1) * w);
   for (let i = n - 1; i >= 0; i--) {
     for (let j = m - 1; j >= 0; j--) {
-      table[i][j] =
+      lcs[i * w + j] =
         prevKeys[i] === nextKeys[j]
-          ? table[i + 1][j + 1] + 1
-          : Math.max(table[i + 1][j], table[i][j + 1]);
+          ? lcs[(i + 1) * w + j + 1] + 1
+          : Math.max(lcs[(i + 1) * w + j], lcs[i * w + j + 1]);
     }
   }
   const keptOld = new Set<number>();
@@ -700,7 +723,7 @@ export function applyMarkdownToFragment(fragment: Y.XmlFragment, markdown: strin
       keptNew.add(j);
       i++;
       j++;
-    } else if (table[i + 1][j] >= table[i][j + 1]) {
+    } else if (lcs[(i + 1) * w + j] >= lcs[i * w + j + 1]) {
       i++;
     } else {
       j++;
@@ -712,15 +735,11 @@ export function applyMarkdownToFragment(fragment: Y.XmlFragment, markdown: strin
   for (let i = n - 1; i >= 0; i--) {
     if (!keptOld.has(i)) fragment.delete(i, 1);
   }
-  // Then insert the new blocks into the gaps, left-to-right.
-  let cursor = 0;
+  // The fragment now holds exactly the kept blocks, in order. Filling the gaps
+  // left-to-right, every index < j is already final — so j IS the insert
+  // position for the new block j.
   for (let j = 0; j < m; j++) {
-    if (keptNew.has(j)) {
-      cursor++;
-      continue;
-    }
-    fragment.insert(cursor, [next[j]]);
-    cursor++;
+    if (!keptNew.has(j)) fragment.insert(j, [next[j]]);
   }
   return true;
 }
