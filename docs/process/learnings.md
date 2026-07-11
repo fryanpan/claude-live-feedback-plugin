@@ -2,6 +2,61 @@
 
 Technical discoveries that should persist across sessions for this project.
 
+## Yjs attribute TYPES reach prosemirror untouched — a string ≠ a number
+
+- **Every heading parsed from markdown rendered as `<h1>` because we stored
+  `level` as `String(level)`.** Tiptap's Heading picks its tag with
+  `this.options.levels.includes(node.attrs.level)` against the NUMBERS
+  `[1..6]`, and y-prosemirror passes Yjs attributes through to
+  `schema.node(name, attrs)` verbatim — no coercion. `'2'` fails the
+  `includes` check, so the node falls back to `levels[0]` = `h1` and H1/H2/H3
+  all render the same size. It looked like a *reparse* bug (reparse re-seeds
+  from disk, so it re-introduced the string) and it "fixed itself" when a
+  human re-set the heading in the toolbar — because prosemirror writes the
+  NUMBER back. Rule: when a Yjs attribute feeds a prosemirror node attr,
+  match the type the extension expects exactly; every reader here already did
+  `Number(...)`, which is exactly why the bug hid for so long.
+- **Yjs stores any JSON value in an attribute; only its TS types insist on
+  strings** (`Y.XmlElement<KV>` defaults `KV` to `{[k:string]: string}`).
+  Type the element as `Y.XmlElement<{ level: number }>` rather than casting
+  the value.
+- **Legacy state needs a migration, not just a writer fix.** Docs already
+  persisted in `.ydoc` keep the string; `normalizeHeadingLevels(doc)` runs on
+  room load so existing docs repair themselves without a reparse.
+- **Verify at the layer the bug lives in.** The block model and the
+  `/content` API were CORRECT the whole time — only the rendered editor was
+  wrong. The test that proves the fix builds a real Tiptap editor over the
+  Yjs doc (`Collaboration.configure({document: ydoc})`, no provider needed)
+  and asserts `editor.getHTML()` contains `<h2>`. Reverting the writer to
+  `String(level)` makes it fail — an assertion on the Yjs attribute alone
+  would not have.
+
+## A destructive re-seed orphans threads it never needed to touch
+
+- **`fragment.delete(0, len) + push(freshBlocks)` (the old reparse/reconcile
+  apply path) destroys the `Y.XmlText` identity of EVERY block**, so every
+  thread anchor in the doc breaks — including threads on paragraphs the
+  rewrite never touched. `applyMarkdownToFragment` diffs at block granularity
+  (LCS over each block's serialized markdown) and only replaces the blocks
+  that actually changed, so untouched blocks keep their identity and their
+  RelativePositions keep resolving. The snippet-match `autoReanchorDoc` sweep
+  stays as the backstop for anchors *inside* a rewritten block.
+- **A prelim (not-yet-integrated) `Y.XmlElement` has no readable children** —
+  `toArray()` walks `_start`, which is null until the type belongs to a doc.
+  Serializing freshly-parsed blocks to key them therefore returns empty
+  strings. Integrate a throwaway copy in a scratch `Y.Doc` to read them (and
+  parse a second time for the blocks you actually insert — an integrated Yjs
+  type cannot be re-parented).
+
+## Don't let the editor tools write raw control bytes into source
+
+- A NUL byte landed in `prose.ts` from a sentinel string I meant to write as
+  a leading space (`` `\x00unserializable` ``), which turns the file "binary"
+  to grep and would have failed review. Same class as the biome
+  `noControlCharactersInRegex` trip earlier. Use plain ASCII sentinels
+  (`__unserializable_block_${i}__`); if grep starts reporting "Binary file
+  matches" on a source file you just edited, that's what happened.
+
 ## The route layer silently drops params unit tests can't see
 
 - **Every REST handler in server.ts hand-copies body fields into the rooms
