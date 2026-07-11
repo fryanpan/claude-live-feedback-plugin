@@ -55,12 +55,12 @@ if launchctl print "${DOMAIN}/${LABEL}" >/dev/null 2>&1; then
 fi
 
 # Stop any foreground server squatting on the port. The supervised instance
-# needs to be the one binding 8788. macOS BSD xargs doesn't support -r, so
+# needs to be the one binding 8787. macOS BSD xargs doesn't support -r, so
 # guard on a non-empty PID list before invoking kill.
-kill_port_8788() {
+kill_port_8787() {
     local sig="$1"
     local pids
-    pids="$(lsof -nP -ti:8788 -sTCP:LISTEN 2>/dev/null || true)"
+    pids="$(lsof -nP -ti:8787 -sTCP:LISTEN 2>/dev/null || true)"
     if [ -n "${pids}" ]; then
         # shellcheck disable=SC2086
         kill -"${sig}" ${pids} 2>/dev/null || true
@@ -69,18 +69,18 @@ kill_port_8788() {
     return 1
 }
 
-if lsof -nP -iTCP:8788 -sTCP:LISTEN >/dev/null 2>&1; then
-    echo "[install] killing foreground server on :8788"
-    kill_port_8788 TERM || true
+if lsof -nP -iTCP:8787 -sTCP:LISTEN >/dev/null 2>&1; then
+    echo "[install] killing foreground server on :8787"
+    kill_port_8787 TERM || true
     # Poll up to 5s for the port to free up before escalating to KILL.
     for _ in 1 2 3 4 5; do
-        if ! lsof -nP -iTCP:8788 -sTCP:LISTEN >/dev/null 2>&1; then
+        if ! lsof -nP -iTCP:8787 -sTCP:LISTEN >/dev/null 2>&1; then
             break
         fi
         sleep 1
     done
-    if lsof -nP -iTCP:8788 -sTCP:LISTEN >/dev/null 2>&1; then
-        kill_port_8788 KILL || true
+    if lsof -nP -iTCP:8787 -sTCP:LISTEN >/dev/null 2>&1; then
+        kill_port_8787 KILL || true
         sleep 1
     fi
 fi
@@ -101,9 +101,9 @@ launchctl bootstrap "${DOMAIN}" "${PLIST_DEST}"
 # Wait up to 15s for the service to start listening so the install reports the
 # right state. The serve.ts supervisor binds the port within a few seconds in
 # the normal case; longer means something's wrong.
-echo -n "[install] waiting for :8788"
+echo -n "[install] waiting for :8787"
 for i in $(seq 1 15); do
-    if lsof -nP -iTCP:8788 -sTCP:LISTEN >/dev/null 2>&1; then
+    if lsof -nP -iTCP:8787 -sTCP:LISTEN >/dev/null 2>&1; then
         echo " — up"
         break
     fi
@@ -111,9 +111,9 @@ for i in $(seq 1 15); do
     sleep 1
 done
 
-if ! lsof -nP -iTCP:8788 -sTCP:LISTEN >/dev/null 2>&1; then
+if ! lsof -nP -iTCP:8787 -sTCP:LISTEN >/dev/null 2>&1; then
     echo
-    echo "[install] WARNING: port 8788 not listening after 15s."
+    echo "[install] WARNING: port 8787 not listening after 15s."
 
     # Diagnose: a launchd-spawned process that can't read the repo CWD (e.g.,
     # if the repo lives under /Volumes/<something>/ and bun doesn't have Full
@@ -144,5 +144,5 @@ if ! lsof -nP -iTCP:8788 -sTCP:LISTEN >/dev/null 2>&1; then
     exit 2
 fi
 
-echo "[install] supervised PID: $(lsof -nP -ti:8788 -sTCP:LISTEN | head -n1)"
-echo "[install] done. Verify: curl -sS http://localhost:8788/ -o /dev/null -w '%{http_code}\\n'"
+echo "[install] supervised PID: $(lsof -nP -ti:8787 -sTCP:LISTEN | head -n1)"
+echo "[install] done. Verify: curl -sS http://localhost:8787/ -o /dev/null -w '%{http_code}\\n'"
