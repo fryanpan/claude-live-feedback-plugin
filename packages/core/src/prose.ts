@@ -70,9 +70,7 @@ export function walkProse(fragment: Y.XmlFragment): {
         topBlock,
         topBlockType: topBlock?.nodeName ?? null,
         headingLevel:
-          currentBlock?.nodeName === 'heading'
-            ? Number(currentBlock.getAttribute('level') ?? 1)
-            : undefined,
+          currentBlock?.nodeName === 'heading' ? headingLevelOf(currentBlock) : undefined,
       });
       // IMPORTANT: toString() includes XML wrappers around marks
       // (e.g. "<bold>hello</bold>") but node.length is the unmarked
@@ -587,6 +585,146 @@ function insertDeltaInto(xmlText: Y.XmlText, delta: ReturnType<typeof inlineMark
   xmlText.applyDelta(delta);
 }
 
+/**
+ * Store a heading's level as a NUMBER, not a string.
+ *
+ * y-prosemirror hands Yjs attributes to prosemirror verbatim, and Tiptap's
+ * Heading extension picks its tag with `options.levels.includes(attrs.level)`
+ * where `levels` is `[1..6]` — numbers. A string `'2'` fails that check, so
+ * the node renders as `<h1>` and every heading in the doc comes out the same
+ * size. (This is why manually re-setting a heading in the editor "fixed" it:
+ * prosemirror writes the number back.) Yjs itself stores any JSON value in an
+ * attribute; the default Y.XmlElement type param is what narrows it to string.
+ */
+function setHeadingLevel(el: Y.XmlElement, level: number): void {
+  const clamped = Math.min(6, Math.max(1, level));
+  (el as unknown as Y.XmlElement<{ level: number }>).setAttribute('level', clamped);
+}
+
+/** A heading's level, whatever form it was persisted in. */
+export function headingLevelOf(el: Y.XmlElement): number {
+  const raw = Number(el.getAttribute('level') ?? 1);
+  return Number.isFinite(raw) ? Math.min(6, Math.max(1, raw)) : 1;
+}
+
+/**
+ * Rewrite any heading whose `level` attribute is still a string (every doc
+ * persisted before the fix above) to the numeric form. Returns how many
+ * headings changed; idempotent, so it's safe to run on every room load.
+ */
+export function normalizeHeadingLevels(
+  doc: Y.Doc,
+  opts: { transactionOrigin?: unknown } = {},
+): number {
+  const fragment = getProseFragment(doc);
+  const stale: Y.XmlElement[] = [];
+  const visit = (node: Y.XmlElement | Y.XmlText | Y.XmlHook): void => {
+    if (!(node instanceof Y.XmlElement)) return;
+    if (node.nodeName === 'heading' && typeof node.getAttribute('level') !== 'number') {
+      stale.push(node);
+    }
+    for (const child of node.toArray()) visit(child as Y.XmlElement | Y.XmlText);
+  };
+  for (const child of fragment.toArray()) visit(child as Y.XmlElement | Y.XmlText);
+  if (stale.length === 0) return 0;
+  doc.transact(() => {
+    for (const el of stale) {
+      setHeadingLevel(el, headingLevelOf(el));
+    }
+  }, opts.transactionOrigin ?? 'file-watch');
+  return stale.length;
+}
+
+/** Serialization keys for a fresh parse of `markdown`. A prelim (not yet
+ *  integrated) Y.XmlElement exposes neither children nor attributes, so the
+ *  blocks are integrated into a throwaway doc to be read. */
+function markdownBlockKeys(
+  markdown: string,
+  key: (node: Y.XmlElement | Y.XmlText, i: number) => string,
+): string[] {
+  const scratch = new Y.Doc();
+  const fragment = getProseFragment(scratch);
+  fragment.push(parseMarkdownBlocks(markdown));
+  return (fragment.toArray() as (Y.XmlElement | Y.XmlText)[]).map(key);
+}
+
+/**
+ * Replace the fragment's top-level blocks with a fresh parse of `markdown`,
+ * touching only the blocks that actually changed.
+ *
+ * The naive `fragment.delete(0, len) + push(next)` destroys the Y.XmlText
+ * identity of EVERY block, which orphans every thread anchor in the doc —
+ * even threads on paragraphs the rewrite never touched. Diffing at block
+ * granularity (blocks keyed by their serialized markdown) keeps untouched
+ * blocks in place, so their RelativePositions keep resolving.
+ *
+ * Returns true if the fragment changed.
+ */
+export function applyMarkdownToFragment(fragment: Y.XmlFragment, markdown: string): boolean {
+  const prev = fragment.toArray() as (Y.XmlElement | Y.XmlText)[];
+  const key = (node: Y.XmlElement | Y.XmlText, i: number): string =>
+    serializeBlock(node) ?? `__unserializable_block_${i}__`;
+  const prevKeys = prev.map(key);
+  const nextKeys = markdownBlockKeys(markdown, key);
+  // Keyed separately from the blocks we insert: reading a prelim block's
+  // content requires integrating it into a doc, and an integrated Yjs type
+  // can't then be re-parented into the live fragment.
+  const next = parseMarkdownBlocks(markdown);
+
+  // Guard the O(n·m) table on pathological docs — fall back to the
+  // destructive replace rather than allocating a huge matrix.
+  if (prevKeys.length * nextKeys.length > 250_000) {
+    fragment.delete(0, fragment.length);
+    fragment.push(next);
+    return true;
+  }
+
+  // Longest common subsequence → which old blocks survive, and what each
+  // maps to in the new list.
+  const n = prevKeys.length;
+  const m = nextKeys.length;
+  const table: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      table[i][j] =
+        prevKeys[i] === nextKeys[j]
+          ? table[i + 1][j + 1] + 1
+          : Math.max(table[i + 1][j], table[i][j + 1]);
+    }
+  }
+  const keptOld = new Set<number>();
+  const keptNew = new Set<number>();
+  for (let i = 0, j = 0; i < n && j < m; ) {
+    if (prevKeys[i] === nextKeys[j]) {
+      keptOld.add(i);
+      keptNew.add(j);
+      i++;
+      j++;
+    } else if (table[i + 1][j] >= table[i][j + 1]) {
+      i++;
+    } else {
+      j++;
+    }
+  }
+  if (keptOld.size === n && keptNew.size === m) return false;
+
+  // Deletions first, right-to-left so earlier indices stay valid.
+  for (let i = n - 1; i >= 0; i--) {
+    if (!keptOld.has(i)) fragment.delete(i, 1);
+  }
+  // Then insert the new blocks into the gaps, left-to-right.
+  let cursor = 0;
+  for (let j = 0; j < m; j++) {
+    if (keptNew.has(j)) {
+      cursor++;
+      continue;
+    }
+    fragment.insert(cursor, [next[j]]);
+    cursor++;
+  }
+  return true;
+}
+
 export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
   const lines = markdown.replace(/\r\n/g, '\n').split('\n');
   const out: Y.XmlElement[] = [];
@@ -753,7 +891,7 @@ export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
       const level = Math.min(6, Math.max(1, m?.[1]?.length ?? 1));
       const text = m?.[2] ?? '';
       const h = new Y.XmlElement('heading');
-      h.setAttribute('level', String(level));
+      setHeadingLevel(h, level);
       if (text) {
         const t = new Y.XmlText();
         insertDeltaInto(t, inlineMarksToDelta(text));
@@ -958,7 +1096,7 @@ function serializeBlock(node: Y.XmlElement | Y.XmlText): string | null {
     case 'paragraph':
       return textContent(node);
     case 'heading': {
-      const level = Math.min(6, Math.max(1, Number(node.getAttribute('level') ?? 1)));
+      const level = headingLevelOf(node);
       const text = textContent(node);
       return text.length > 0 ? `${'#'.repeat(level)} ${text}` : null;
     }
@@ -1659,7 +1797,7 @@ export function deleteSection(
   for (let i = 0; i < top.length; i++) {
     const el = top[i]!;
     if (el.nodeName !== 'heading') continue;
-    const level = Math.min(6, Math.max(1, Number(el.getAttribute('level') ?? 1)));
+    const level = headingLevelOf(el);
     if (opts.level != null && level !== opts.level) continue;
     if (textContent(el).trim() !== wanted) continue;
     matches.push({ idx: i, level, el });
@@ -1698,7 +1836,7 @@ export function deleteSection(
   for (let i = chosen.idx + 1; i < top.length; i++) {
     const el = top[i]!;
     if (el.nodeName !== 'heading') continue;
-    const level = Math.min(6, Math.max(1, Number(el.getAttribute('level') ?? 1)));
+    const level = headingLevelOf(el);
     if (level <= chosen.level) {
       endExclusive = i;
       nextHeading = { level, text: textContent(el).trim() };
