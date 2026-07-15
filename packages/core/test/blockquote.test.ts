@@ -67,4 +67,19 @@ describe('blockquote serialization', () => {
     // The blank quote line is the paragraph separator — it must be there.
     expect(once).toMatch(/First paragraph\.\n>\n> Second/);
   });
+
+  it('preserves an empty blockquote instead of dropping it', () => {
+    const doc = new Y.Doc();
+    const frag = getProseFragment(doc);
+    const bq = new Y.XmlElement('blockquote');
+    bq.insert(0, [para('')]);
+    frag.push([bq]);
+    // Before the recursive serializer this emitted `> `; it must still survive
+    // the round-trip rather than vanish from the fragment serializer.
+    expect(serialize(frag)).toBe('>\n');
+
+    const round = getProseFragment(new Y.Doc());
+    round.push(parseMarkdownBlocks(serialize(frag)));
+    expect((round.get(0) as Y.XmlElement).nodeName).toBe('blockquote');
+  });
 });
