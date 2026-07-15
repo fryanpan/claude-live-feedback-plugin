@@ -1120,10 +1120,7 @@ function serializeBlock(node: Y.XmlElement | Y.XmlText): string | null {
       return text.length > 0 ? `${'#'.repeat(level)} ${text}` : null;
     }
     case 'blockquote':
-      return textContent(node)
-        .split('\n')
-        .map((l) => `> ${l}`)
-        .join('\n');
+      return serializeBlockquote(node);
     case 'codeBlock': {
       const lang = node.getAttribute('language') ?? '';
       // YAML frontmatter is captured as a typed codeBlock at parse time so
@@ -1274,6 +1271,33 @@ function serializeList(list: Y.XmlElement, depth: number): string {
     }
   }
   return lines.join('\n');
+}
+
+/**
+ * Serialize a blockquote to markdown, preserving paragraph boundaries.
+ *
+ * The editor (y-prosemirror) shapes a quote the human split with Enter as
+ *   blockquote > paragraph [, paragraph … ]
+ * The previous serializer flattened all children with `textContent` (joined
+ * by ''), so multiple paragraphs collapsed onto one `> ` line with the
+ * boundary erased — a CRM peer misread Bryan's own multi-paragraph draft as a
+ * single line because of it. Recurse over the block children instead, quoting
+ * each, and separate adjacent paragraphs with a blank `>` line (the markdown
+ * paragraph separator inside a quote). A single paragraph that carries soft
+ * line-breaks still renders as adjacent `> ` lines, so both shapes round-trip.
+ */
+function serializeBlockquote(node: Y.XmlElement): string {
+  const quote = (text: string): string =>
+    text
+      .split('\n')
+      .map((l) => (l.length > 0 ? `> ${l}` : '>'))
+      .join('\n');
+  const parts = node
+    .toArray()
+    .map((child) => serializeBlock(child as Y.XmlElement | Y.XmlText))
+    .filter((s): s is string => s != null && s !== '')
+    .map(quote);
+  return parts.join('\n>\n');
 }
 
 /**
