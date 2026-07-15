@@ -1297,7 +1297,10 @@ function serializeBlockquote(node: Y.XmlElement): string {
     .map((child) => serializeBlock(child as Y.XmlElement | Y.XmlText))
     .filter((s): s is string => s != null && s !== '')
     .map(quote);
-  return parts.join('\n>\n');
+  // An empty quote (bare `>`, or an editor placeholder before the user types)
+  // still emits its marker so the block survives the round-trip instead of
+  // being silently dropped by the fragment serializer.
+  return parts.length > 0 ? parts.join('\n>\n') : '>';
 }
 
 /**
