@@ -19,9 +19,19 @@ When you want Bryan to review a markdown doc OR a dev server / interactive previ
 - Code review already happening on a GitHub PR — don't duplicate the surface unless Bryan asks for a live-feedback pass
 - Your own logs / private notes (no Bryan input expected)
 
+## Finding the tools
+
+The live-feedback tools are **deferred** — they do NOT appear in your direct function list, and searching the single-segment name `mcp__plugin_live-feedback__*` finds nothing. The real prefix has a **doubled segment** (plugin name, then MCP-server name): `mcp__plugin_live-feedback_live-feedback__<tool>`. Load them with:
+
+```
+ToolSearch → select:mcp__plugin_live-feedback_live-feedback__create_review_doc,mcp__plugin_live-feedback_live-feedback__watch_doc,mcp__plugin_live-feedback_live-feedback__resolve_thread
+```
+
+If that returns nothing, THEN the plugin isn't enabled for your session — but check the doubled-prefix name first. "The tools aren't in my list" is expected for deferred tools, not a broken MCP.
+
 ## How
 
-**Markdown docs** — bind via `mcp__plugin_live-feedback__create_review_doc(docId, path, title?)`. Share the review URL (`http://mac-mini.<private-network>:8788/review/<docId>`) in your message to Bryan.
+**Markdown docs** — bind via `mcp__plugin_live-feedback_live-feedback__create_review_doc(docId, path, title?)`. Share the review URL (`http://mac-mini.<private-network>:8787/review/<docId>`) in your message to Bryan.
 
 **Dev servers / HTML mockups** — use the `live-feedback:embedding-widget` skill (it covers the `<script>` tags + `setContext` calls).
 
