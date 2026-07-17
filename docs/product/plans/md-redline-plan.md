@@ -21,6 +21,36 @@
 - **Never `Write`/`Edit` a bound `.md`.** The spec doc for this work is bound to live-feedback (`md-redline-diff-design`); route any edit to it through the LF MCP tools.
 - Threads on diff docs anchor **line-snapped** into `content`. Every anchor this feature creates must be byte-identical to what `code-editor.ts` `getSelectionRel()` produces for the same lines.
 
+## REVISION 2026-07-16 — how blocks reach the editor (supersedes Task 6's approach)
+
+Probing (Task 0 + a second probe, both committed) established four facts that
+together rule out the renderer Task 6 originally specified. Read these before
+touching Tasks 6-8:
+
+1. **Inline `<ins>`/`<del>` inside a markdown block works**, and markdown inside
+   the wrapper still parses (`**fresh**` → `<strong>`). This is the good case
+   and the reason to wrap inline rather than per-block.
+2. **A wrapper must never span a newline.** `- one\n<ins>- two</ins>` merged the
+   two items into a single `one - two`.
+3. **Block provenance via `data-*` requires an HTML block, and an HTML block
+   stops markdown parsing inside it.** A plain markdown heading yields
+   `lfFrom: null`; `<div data-lf-from>` around a table collapsed the whole thing
+   to `<p>ab12</p>`. So "markdown with data attributes" is not available.
+4. **One emitted markdown block ≠ one top-level node.** `- a\n- b` followed by
+   `- c\n- d` parses to ONE `bulletList`. Adjacent same-type lists merge across
+   a blank line — and a deleted list followed by its inserted replacement is
+   exactly that shape. So zipping blocks to nodes by index is unsound: one merge
+   shifts every anchor after it. (Tiptap also appends a trailing empty paragraph
+   after some block types.)
+
+**Revised approach:** render each `RedlineBlock`'s markdown to HTML *in
+isolation* (one reused scratch editor), inject `data-lf-*` into the outer tag of
+the resulting element, concatenate, and `setContent(html)`. Isolated parses
+cannot merge (fact 4 defused), inline content is already HTML by the time the
+attributes are added (fact 3 defused), and `<p data-lf-from="12">` → `lfFrom: 12`
+is verified. `RedlineProvenance` from Task 7 is retained — it was correct, it
+just needed generated HTML rather than hand-written markdown as its input.
+
 ## Refinement of the spec (read this before Task 5)
 
 The spec describes the provenance map as per-segment. Implementation refines it to **per-block (and per-list-item)**, because anchors are line-snapped anyway: a word-precise offset would be snapped back to its line immediately, so segment-level provenance buys nothing and costs the ability to render inline markdown (bold, links) inside changed text. Word-level precision is preserved in *what you see*; anchor precision is block/line — exactly matching the source diff view. This is a strict simplification, not a capability loss.
