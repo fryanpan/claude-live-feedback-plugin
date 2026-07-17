@@ -43,6 +43,11 @@ export interface CreateCodeEditorOpts {
    *  text; `setViewMode` toggles diff ↔ whole-file. Anchors are offsets into
    *  the same (target) document in both modes, so threads are unaffected. */
   diff?: DiffViewConfig;
+  /** Which mode a diff doc opens in. Defaults to 'diff'. Set it to honour a
+   *  reviewer's persisted choice — otherwise a restored 'file' selection paints
+   *  the File button active while the surface still shows the unified diff.
+   *  Ignored without `diff`: a plain code doc is always whole-file. */
+  initialViewMode?: CodeViewMode;
 }
 
 /** A ReviewSurface that can also swap between diff and whole-file rendering. */
@@ -166,7 +171,7 @@ export function createCodeEditor(opts: CreateCodeEditorOpts): CodeSurface {
   // (hidden via the cm-file-mode class; deletions can't render in a
   // whole-file view anyway).
   const viewModeComp = new Compartment();
-  let viewMode: CodeViewMode = opts.diff ? 'diff' : 'file';
+  let viewMode: CodeViewMode = opts.diff ? (opts.initialViewMode ?? 'diff') : 'file';
   // Select the line on mousedown (so the user sees it), open the composer
   // on the completed CLICK — opening mid-mousedown races the browser's
   // remaining mouseup/click dispatch against the composer's scrim/focus.
