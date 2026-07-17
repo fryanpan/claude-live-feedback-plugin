@@ -1,36 +1,39 @@
 import { type User, connect, escapeHtml, readDocMeta, resolveUser } from '@feedback/core';
-import { bootCode } from './code/code-app.ts';
-import { renderDiffNav } from './diff-nav.ts';
+import { mountCode } from './code/code-app.ts';
+import { renderDiffNav, setActiveFile } from './diff-nav.ts';
 import { type EditorHandle, createEditor } from './editor.ts';
+import type { DocMeta, MountContext } from './mount-context.ts';
+import type { MountScope } from './mount-scope.ts';
 import { startReadingTracker } from './reading-tracker.ts';
-import { bootRedline } from './redline/redline-app.ts';
+import { mountRedline } from './redline/redline-app.ts';
 import { type ReviewChrome, el, mountReviewChrome, showToast } from './review-chrome.ts';
+import { startRouter } from './router.ts';
 import { type TableMenuItem, tableMenuItems } from './table-menu.ts';
 import { renderWorkspaceTree, wireWorkspaceTreeRefresh } from './workspace-tree.ts';
 
 const DEFAULT_WS_PATH = (docId: string, type: string) =>
   `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/y/${encodeURIComponent(docId)}?type=${encodeURIComponent(type)}`;
 
-/** Fetch a doc's persisted type before mounting a surface. Defaults to
+/** Fetch a doc's persisted type + paths before mounting a surface. Defaults to
  *  'markdown' if the meta can't be read (the markdown path is the safe
  *  fallback — it never assumes code). */
-async function fetchDocMeta(
-  docId: string,
-): Promise<{ type: string; sourceUrl: string; workspaceId: string; relPath: string }> {
+async function fetchDocMeta(docId: string): Promise<DocMeta> {
+  const fallback: DocMeta = { docType: 'markdown', sourceUrl: '', workspaceId: '', relPath: '' };
   try {
     const res = await fetch(`/api/docs/${encodeURIComponent(docId)}`);
-    if (!res.ok) return { type: 'markdown', sourceUrl: '', workspaceId: '', relPath: '' };
+    if (!res.ok) return fallback;
     const data = (await res.json()) as {
       meta?: { type?: string; sourceUrl?: string; workspaceId?: string; relPath?: string };
     };
+    const t = data.meta?.type;
     return {
-      type: data.meta?.type ?? 'markdown',
+      docType: t === 'code' || t === 'diff' ? t : 'markdown',
       sourceUrl: data.meta?.sourceUrl ?? '',
       workspaceId: data.meta?.workspaceId ?? '',
       relPath: data.meta?.relPath ?? '',
     };
   } catch {
-    return { type: 'markdown', sourceUrl: '', workspaceId: '', relPath: '' };
+    return fallback;
   }
 }
 
@@ -38,11 +41,6 @@ interface Selection {
   start: Uint8Array;
   end: Uint8Array;
   snippet: string;
-}
-
-function docIdFromPath(): string {
-  const m = location.pathname.match(/^\/review\/([^/?#]+)/);
-  return m ? decodeURIComponent(m[1] ?? '') : 'default';
 }
 
 /**
@@ -76,57 +74,84 @@ function wireKeyboardInset(): void {
   window.addEventListener('orientationchange', () => setTimeout(apply, 120));
 }
 
-async function boot(): Promise<void> {
+/**
+ * Wire the topbar doc-switcher dropdown ONCE (shell-level, doc-independent).
+ * The dropdown's CONTENTS are repopulated per navigation by the sidebar
+ * renderers; only the open/close behaviour lives here.
+ */
+function wireDocSwitcher(): void {
+  const docMenu = document.getElementById('doc-menu');
+  const docSwitcher = document.getElementById('doc-switcher') as HTMLButtonElement | null;
+  if (!docSwitcher || !docMenu) return;
+  const close = () => {
+    docMenu.classList.add('hidden');
+    docMenu.setAttribute('aria-hidden', 'true');
+    docSwitcher.setAttribute('aria-expanded', 'false');
+  };
+  docSwitcher.addEventListener('click', (ev) => {
+    if (!document.body.classList.contains('has-set')) return;
+    ev.stopPropagation();
+    const isOpen = !docMenu.classList.contains('hidden');
+    docMenu.classList.toggle('hidden', isOpen);
+    docMenu.setAttribute('aria-hidden', String(isOpen));
+    docSwitcher.setAttribute('aria-expanded', String(!isOpen));
+  });
+  document.addEventListener('click', (ev) => {
+    if (docMenu.classList.contains('hidden')) return;
+    if (!docMenu.contains(ev.target as Node) && !docSwitcher.contains(ev.target as Node)) close();
+  });
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape' && !docMenu.classList.contains('hidden')) close();
+  });
+  // Auto-close on scroll. The dropdown overlays the doc, and on mobile the
+  // user reaching the content is the strongest "I'm done with the nav" signal.
+  const closeOnScroll = () => {
+    if (!docMenu.classList.contains('hidden')) close();
+  };
+  document.getElementById('editor')?.addEventListener('scroll', closeOnScroll, { passive: true });
+  window.addEventListener('scroll', closeOnScroll, { passive: true });
+}
+
+/**
+ * One-time app bootstrap: the persistent shell (keyboard inset, doc-switcher)
+ * plus the router. Everything document-specific is a per-doc mount the router
+ * runs; navigation swaps mounts in place with no reload.
+ */
+function main(): void {
   wireKeyboardInset();
-  const docId = docIdFromPath();
-  const url = new URL(location.href);
-  const asParam = url.searchParams.get('as');
+  wireDocSwitcher();
+  const asParam = new URL(location.href).searchParams.get('as');
   const user: User = resolveUser(asParam, {
     get: (k) => localStorage.getItem(k),
     set: (k, v) => localStorage.setItem(k, v),
   });
+  startRouter({
+    user,
+    fetchMeta: fetchDocMeta,
+    connectFor: (docId, docType) => connect(DEFAULT_WS_PATH(docId, docType)),
+    mountFor: (ctx) => {
+      // A MARKDOWN file in a diff review reads as prose → Word-style redline;
+      // other code/diff docs → CodeMirror source; everything else → Tiptap.
+      // (redline falls back to code when the base text is unavailable.)
+      if (ctx.docType === 'diff' && ctx.relPath.toLowerCase().endsWith('.md')) {
+        return mountRedline(ctx);
+      }
+      if (ctx.docType === 'code' || ctx.docType === 'diff') return mountCode(ctx);
+      return mountMarkdown(ctx);
+    },
+  });
+}
 
-  const {
-    type: docType,
-    sourceUrl: docSourceUrl,
-    workspaceId: docWorkspaceId,
-    relPath: docRelPath,
-  } = await fetchDocMeta(docId);
-  const client = connect(DEFAULT_WS_PATH(docId, docType));
-
-  // Code and diff docs get a read-only, syntax-highlighted CodeMirror
-  // surface that reuses the same thread/comment stack (diff docs add the
-  // unified-diff rendering + view toggle on top). Everything below this
-  // branch is Tiptap/ProseMirror-specific (format bar, edit-mode toggle,
-  // comment pill positioning) and only applies to markdown docs.
-  //
-  // Exception: a MARKDOWN file in a diff review reads as prose, not as source,
-  // so it boots the Word-style redline instead — rendered prose with changed
-  // words struck through / underlined inline. bootRedline falls back to
-  // bootCode when the base text is unavailable or the reviewer chose a source
-  // view, so this stays a rendering choice: the doc is flat either way and the
-  // two surfaces produce byte-identical anchors.
-  if (docType === 'code' || docType === 'diff') {
-    const isMarkdownDiff = docType === 'diff' && (docRelPath ?? '').toLowerCase().endsWith('.md');
-    const boot = isMarkdownDiff ? bootRedline : bootCode;
-    void boot({
-      docId,
-      client,
-      user,
-      sourceUrl: docSourceUrl,
-      workspaceId: docWorkspaceId,
-      docType,
-      relPath: docRelPath,
-    });
-    return;
-  }
-
+/** Per-document mount for the markdown (Tiptap) surface. Every listener is
+ *  bound to `ctx.scope`; the router disposes the scope on navigation, which
+ *  tears down the editor, chrome, listeners, and (via the router) the client. */
+async function mountMarkdown(ctx: MountContext): Promise<void> {
+  const { docId, client, user, scope } = ctx;
   const { ydoc, awareness } = client;
   awareness.setLocalStateField('user', { name: user.name, color: user.color });
 
   // The thread panel / composer / thread-view / drawer elements are owned
-  // by the shared review chrome now; only the markdown-specific elements
-  // are grabbed here.
+  // by the shared review chrome; only the markdown-specific elements are here.
   const editorMount = el<HTMLElement>('editor');
   const composer = el<HTMLElement>('composer');
   const commentPill = el<HTMLButtonElement>('comment-pill');
@@ -146,12 +171,17 @@ async function boot(): Promise<void> {
     onUpdate: () => chrome?.redrawThreads(),
     user: { name: user.name, color: user.color },
   });
+  // Editor teardown runs before the client closes (LIFO — client.close was
+  // registered first by the router), so the y-prosemirror binding detaches
+  // before its ydoc is destroyed.
+  scope.onCleanup(() => editor.destroy());
 
   chrome = mountReviewChrome({
     docId,
     user,
     ydoc,
     surface: editor,
+    scope,
     selectHint: 'Select some text first to leave a comment.',
     reanchorHint: 'Select new text first, then click Re-anchor.',
     // The cached `selection` covers iOS blurring the editor between the
@@ -192,7 +222,7 @@ async function boot(): Promise<void> {
 
   // Interaction-bounded reading-session capture (doc_open + read_session).
   // The #editor element is the scroll container on the markdown surface.
-  startReadingTracker({ docId, user, scrollEl: editorMount });
+  scope.onCleanup(startReadingTracker({ docId, user, scrollEl: editorMount }));
 
   // =========================================================================
   // COMMENT PILL — small inline affordance
@@ -349,8 +379,8 @@ async function boot(): Promise<void> {
   // Prevent the pill from stealing focus on DESKTOP (mousedown causes blur
   // before click). On iOS, preventDefault on touchstart/pointerdown
   // cancels the synthetic click entirely — so only hook mousedown.
-  commentPill.addEventListener('mousedown', (ev) => ev.preventDefault());
-  commentPill.addEventListener('click', () => {
+  scope.listen(commentPill, 'mousedown', (ev) => (ev as MouseEvent).preventDefault());
+  scope.listen(commentPill, 'click', () => {
     if (pillMode === 'caret') {
       // Use the cached paragraph range — the editor may have lost its
       // selection when the pill was tapped (iOS blur), but we stashed
@@ -372,12 +402,14 @@ async function boot(): Promise<void> {
     }
   });
 
+  // These live on the editor's own DOM, which is removed by editor.destroy()
+  // on teardown, so their listeners die with it — no scope binding needed.
   editor.editor.view.dom.addEventListener('pointerdown', () => {
     isDragging = true;
     selectionSettled = false;
     hidePill();
   });
-  window.addEventListener('pointerup', () => {
+  scope.listen(window, 'pointerup', () => {
     isDragging = false;
     setTimeout(() => {
       selectionSettled = true;
@@ -423,16 +455,16 @@ async function boot(): Promise<void> {
   });
   // Keep pill in sync if the keyboard appears/disappears (visualViewport
   // resize changes --kb-bottom, which changes our clamp max).
-  window.visualViewport?.addEventListener('resize', () => positionPill());
-  window.addEventListener('scroll', () => positionPill(), { passive: true });
-  el<HTMLElement>('editor').addEventListener('scroll', () => positionPill(), { passive: true });
+  if (window.visualViewport) scope.listen(window.visualViewport, 'resize', () => positionPill());
+  scope.listen(window, 'scroll', () => positionPill(), { passive: true });
+  scope.listen(editorMount, 'scroll', () => positionPill(), { passive: true });
   // VIEW mode: ProseMirror fires no selectionUpdate (the editor isn't
   // editable), and iOS selection-handle drags don't always produce a clean
   // pointerup on the editor DOM. The document `selectionchange` event is the
   // reliable signal there, so (debounced) drive the pill off it. In edit mode
   // PM's own selectionUpdate already handles this, so skip to avoid double work.
   let selChangeTimer: ReturnType<typeof setTimeout> | null = null;
-  document.addEventListener('selectionchange', () => {
+  scope.listen(document, 'selectionchange', () => {
     if (!document.body.classList.contains('view-mode')) return;
     if (isDragging) return; // wait for the drag to settle (pointerup path)
     if (selChangeTimer) clearTimeout(selChangeTimer);
@@ -476,8 +508,8 @@ async function boot(): Promise<void> {
   //   • Mobile: full-screen thread view (Notion pattern — gives the
   //     conversation space without the doc competing for it).
   //   • Desktop: open the side drawer and highlight the thread.
-  editorMount.addEventListener('click', (ev) => {
-    const t = (ev.target as HTMLElement).closest('.thread-range');
+  scope.listen(editorMount, 'click', (ev) => {
+    const t = ((ev as MouseEvent).target as HTMLElement).closest('.thread-range');
     if (!t) return;
     const threadId = t.getAttribute('data-thread-id');
     if (!threadId) return;
@@ -498,19 +530,21 @@ async function boot(): Promise<void> {
   });
 
   const meta = ydoc.getMap('meta');
-  meta.observe(() => {
+  const onMeta = () => {
     reviewChrome.renderDocLabel();
     void renderSetNav();
-  });
+  };
+  meta.observe(onMeta);
+  scope.onCleanup(() => meta.unobserve(onMeta));
   // ---- Review-set navigation ----
-  // If the doc has a setId, fetch all docs sharing that set and render
-  // them into both the desktop sidebar and the topbar dropdown. The same
-  // list goes into both; CSS handles which is visible.
+  // If the doc has a setId/workspaceId, render its siblings into the sidebar
+  // and topbar dropdown. The sidebar renderers are idempotent per nav key, so
+  // navigating between files in the same review keeps the sidebar (and its
+  // scroll) intact — only the active marker moves.
   const setPane = document.getElementById('set-pane');
   const setPaneList = document.getElementById('set-pane-list');
   const docMenu = document.getElementById('doc-menu');
   const docSwitcher = document.getElementById('doc-switcher') as HTMLButtonElement | null;
-  let lastRenderedSetId: string | null = null;
 
   async function renderSetNav(): Promise<void> {
     const m = readDocMeta(ydoc);
@@ -523,24 +557,26 @@ async function boot(): Promise<void> {
     document.body.classList.toggle('has-set', !!navKey);
     setPane?.setAttribute('aria-hidden', navKey ? 'false' : 'true');
     if (!navKey) {
-      lastRenderedSetId = '';
       if (setPaneList) setPaneList.innerHTML = '';
       if (docMenu) docMenu.innerHTML = '';
       docSwitcher?.setAttribute('aria-expanded', 'false');
       return;
     }
     if (workspaceId) {
-      // Same chooser as the code/diff boot: diff reviews + browse
-      // workspaces get the diff-nav; only data-less workspaces fall back
-      // to the legacy folder tree.
+      // Same chooser as the code/diff mount: diff reviews + browse workspaces
+      // get the diff-nav; only data-less workspaces fall back to the folder
+      // tree. Both are idempotent per workspace, so this no-ops (bar the
+      // active marker) when navigating within the same review.
       const ok = await renderDiffNav(docId, workspaceId);
       if (!ok) await renderWorkspaceTree(docId, workspaceId);
       return;
     }
     // ---- Legacy flat setId path ----
-    // Cache so a meta-observe storm doesn't re-fetch /api/docs each tick.
-    if (setId === lastRenderedSetId) return;
-    lastRenderedSetId = setId;
+    if (setId === renderedSetId) {
+      setActiveFile(docId);
+      return;
+    }
+    renderedSetId = setId;
     try {
       const res = await fetch('/api/docs');
       if (!res.ok) return;
@@ -576,11 +612,10 @@ async function boot(): Promise<void> {
         .join('');
       if (setPaneList) setPaneList.innerHTML = items;
       if (docMenu) docMenu.innerHTML = `<ol>${items}</ol>`;
-      // On mobile, the desktop sidebar is hidden — the dropdown is the
-      // ONLY surface that shows the review set. Open it on first render
-      // so the reviewer sees siblings without having to discover the
-      // doc-switcher tap target. The existing scroll-to-close handler
-      // dismisses it as soon as they engage with the content.
+      // On mobile, the desktop sidebar is hidden — the dropdown is the ONLY
+      // surface that shows the review set. Open it on first render so the
+      // reviewer sees siblings without discovering the doc-switcher tap
+      // target. The scroll-to-close handler dismisses it once they engage.
       const isMobile = window.matchMedia('(max-width: 1100px)').matches;
       if (isMobile && docMenu && docSwitcher && !openedOnce) {
         openedOnce = true;
@@ -595,59 +630,19 @@ async function boot(): Promise<void> {
   let openedOnce = false;
 
   // ---- Workspace (folder) file tree ----
-  // A doc bound via bind_folder carries a workspaceId. The collapsible
-  // <details>/<summary> tree (per-file open-comment badges + folder
-  // roll-ups) lives in the shared ./workspace-tree.ts module so both the
-  // markdown (Tiptap) and code (CodeMirror) boot paths render it identically.
-  // renderSetNav (above) calls renderWorkspaceTree on the workspace branch;
-  // here we just wire the focus + ~30s heartbeat refresh so the badges
-  // reflect newly-opened/resolved threads without a full reload.
+  // A doc bound via bind_folder carries a workspaceId. renderSetNav (above)
+  // renders it; here we wire the focus + ~30s heartbeat refresh so badges
+  // reflect newly-opened/resolved threads. Scoped so navigation drops it.
   const workspaceId = readDocMeta(ydoc).workspaceId;
-  if (workspaceId) wireWorkspaceTreeRefresh(docId, workspaceId);
+  if (workspaceId) scope.onCleanup(wireWorkspaceTreeRefresh(docId, workspaceId));
 
   function basename(p: string): string {
     const m = p.match(/[^/]+$/);
     return m ? m[0] : p;
   }
-  // Wire the dropdown toggle. On click outside or Escape, close.
-  if (docSwitcher && docMenu) {
-    docSwitcher.addEventListener('click', (ev) => {
-      if (!document.body.classList.contains('has-set')) return;
-      ev.stopPropagation();
-      const isOpen = !docMenu.classList.contains('hidden');
-      docMenu.classList.toggle('hidden', isOpen);
-      docMenu.setAttribute('aria-hidden', String(isOpen));
-      docSwitcher.setAttribute('aria-expanded', String(!isOpen));
-    });
-    document.addEventListener('click', (ev) => {
-      if (docMenu.classList.contains('hidden')) return;
-      if (!docMenu.contains(ev.target as Node) && !docSwitcher.contains(ev.target as Node)) {
-        docMenu.classList.add('hidden');
-        docMenu.setAttribute('aria-hidden', 'true');
-        docSwitcher.setAttribute('aria-expanded', 'false');
-      }
-    });
-    document.addEventListener('keydown', (ev) => {
-      if (ev.key === 'Escape' && !docMenu.classList.contains('hidden')) {
-        docMenu.classList.add('hidden');
-        docMenu.setAttribute('aria-hidden', 'true');
-        docSwitcher.setAttribute('aria-expanded', 'false');
-      }
-    });
-    // Auto-close on scroll. The dropdown overlays the doc, and on mobile
-    // the user reaching the content is the strongest "I'm done with the
-    // nav" signal — don't make them tap-to-dismiss before reading.
-    const closeOnScroll = () => {
-      if (docMenu.classList.contains('hidden')) return;
-      docMenu.classList.add('hidden');
-      docMenu.setAttribute('aria-hidden', 'true');
-      docSwitcher.setAttribute('aria-expanded', 'false');
-    };
-    document.getElementById('editor')?.addEventListener('scroll', closeOnScroll, { passive: true });
-    window.addEventListener('scroll', closeOnScroll, { passive: true });
-  }
 
   client.onReady(() => {
+    if (scope.disposed) return;
     reviewChrome.renderDocLabel();
     void renderSetNav();
     reviewChrome.redrawThreads();
@@ -660,8 +655,7 @@ async function boot(): Promise<void> {
   // The widget's canonical "saved" signal is a server ack of the most
   // recent local update. y-websocket doesn't surface per-update acks,
   // so we use the next best thing: WS status + a short "typing stopped
-  // and nothing went out for 500ms" debounce. Good enough to trust for
-  // "my keystrokes made it to the server."
+  // and nothing went out for 500ms" debounce.
   const saveStateEl = el<HTMLElement>('save-state');
   let pendingLocalEdits = 0;
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -681,11 +675,11 @@ async function boot(): Promise<void> {
     saveStateEl.textContent = 'All changes saved';
     saveStateEl.classList.add('save-state--saved');
   }
+  // ydoc.on('update') is released when the client destroys the ydoc on close.
   ydoc.on('update', (_update, origin) => {
-    // Remote updates come from the server with origin === client.ws
-    // (see readSyncMessage in client.ts). Everything else — typing,
-    // formatting toolbar actions, agent edits merged in — counts as a
-    // local change the server hasn't ack'd yet.
+    // Remote updates come from the server with origin === client.ws.
+    // Everything else — typing, formatting, agent edits merged in — counts as
+    // a local change the server hasn't ack'd yet.
     if (origin === client.ws) return;
     pendingLocalEdits++;
     renderSaveState();
@@ -696,6 +690,7 @@ async function boot(): Promise<void> {
     }, 500);
   });
   client.onStatus((s) => {
+    if (scope.disposed) return;
     wsOnline = s === 'open';
     renderSaveState();
   });
@@ -704,12 +699,12 @@ async function boot(): Promise<void> {
   // =========================================================================
   // FORMATTING TOOLBAR — collapsed by default. Aa button toggles it.
   // =========================================================================
-  toggleFormat.addEventListener('click', () => {
+  scope.listen(toggleFormat, 'click', () => {
     const collapsed = formatBar.classList.toggle('is-collapsed');
     toggleFormat.setAttribute('aria-pressed', String(!collapsed));
   });
   applyWidthPref();
-  wireFormatBar(editor);
+  wireFormatBar(editor, scope);
 
   // =========================================================================
   // VIEW / EDIT MODE
@@ -717,19 +712,16 @@ async function boot(): Promise<void> {
   //   gets pushed around. Default mobile viewports to read-only (view) mode
   //   so a tap doesn't bring up the keyboard. Long-press to select text
   //   still works in view mode and surfaces the comment pill. Persist the
-  //   user's chosen mode in localStorage so a desktop user who toggles to
-  //   view (or a mobile user who toggles to edit) is remembered next visit.
+  //   user's chosen mode in localStorage.
   // =========================================================================
   type EditMode = 'view' | 'edit';
   const EDIT_MODE_KEY = 'lf:edit-mode';
   function defaultEditMode(): EditMode {
-    // Default to VIEW everywhere. This is a review surface — read first, edit
-    // by choice — and view mode avoids the mobile keyboard popping up on every
-    // tap. View-mode commenting now works: getSelectionRel() falls back to the
-    // raw DOM selection (mapped via posAtDOM), and the pill keys off it, so an
-    // iOS long-press selection raises the comment pill even though the doc is
-    // non-editable. The Aa toolbar toggle opts into edit mode (remembered per
-    // device).
+    // Default to VIEW everywhere — a review surface reads first, edits by
+    // choice, and view mode avoids the mobile keyboard popping up on tap.
+    // View-mode commenting works: getSelectionRel() falls back to the raw DOM
+    // selection and the pill keys off it, so an iOS long-press raises the pill
+    // even though the doc is non-editable.
     return 'view';
   }
   function readEditModePref(): EditMode {
@@ -755,29 +747,28 @@ async function boot(): Promise<void> {
   }
   let editMode: EditMode = readEditModePref();
   applyEditMode(editMode);
-  toggleEditMode.addEventListener('click', () => {
+  scope.listen(toggleEditMode, 'click', () => {
     editMode = editMode === 'edit' ? 'view' : 'edit';
     localStorage.setItem(EDIT_MODE_KEY, editMode);
     applyEditMode(editMode);
   });
 
   // =========================================================================
-  // HOTKEYS
-  // =========================================================================
-  // ⌘M / Escape are wired by the shared review chrome; only the
+  // HOTKEYS — ⌘M / Escape are wired by the shared chrome; only the
   // markdown-specific format-bar hotkey lives here.
-  document.addEventListener('keydown', (ev) => {
-    if ((ev.metaKey || ev.ctrlKey) && ev.shiftKey && ev.key.toLowerCase() === 'f') {
-      ev.preventDefault();
+  // =========================================================================
+  scope.listen(document, 'keydown', (ev) => {
+    const ke = ev as KeyboardEvent;
+    if ((ke.metaKey || ke.ctrlKey) && ke.shiftKey && ke.key.toLowerCase() === 'f') {
+      ke.preventDefault();
       toggleFormat.click();
     }
   });
-
-  addEventListener('beforeunload', () => {
-    client.close();
-    editor.destroy();
-  });
 }
+
+/** Module-level so the legacy setId sidebar renders once and survives
+ *  navigation between siblings (only the active marker moves). */
+let renderedSetId: string | null = null;
 
 /**
  * Expand a caret position to the sentence it's inside (or the sentence
@@ -831,13 +822,11 @@ const WIDTH_PREF_KEY = 'lfb.editor.width';
 
 // In-memory mirror so the toggle still works in private mode (where
 // localStorage throws on get and set) — without it, every read would
-// fall back to the default and the button wouldn't appear to do
-// anything.
+// fall back to the default and the button wouldn't appear to do anything.
 let widthPrefInMemory: 'full' | 'reading' | undefined;
 
 /** Read the persisted width preference. Default is 'full' so wide tables
- *  in review docs aren't squeezed. Falsy / unknown values normalize to
- *  the default. */
+ *  in review docs aren't squeezed. */
 function readWidthPref(): 'full' | 'reading' {
   try {
     const raw = localStorage.getItem(WIDTH_PREF_KEY);
@@ -860,29 +849,30 @@ function toggleWidthPref(): void {
   try {
     localStorage.setItem(WIDTH_PREF_KEY, next);
   } catch {
-    // localStorage disabled (private mode) — in-memory mirror keeps the toggle alive for this session.
+    // localStorage disabled (private mode) — in-memory mirror keeps the toggle alive.
   }
   applyWidthPref();
 }
 
 /**
  * Contextual popover for table operations. Insert/edit are powered by
- * @tiptap/extension-table (prosemirror-tables); this just renders the item
- * list from tableMenuItems() and dispatches to the matching Tiptap command.
- * Rendered into <body> as a fixed-position element so it escapes the format
- * bar's `overflow:hidden` clipping.
+ * @tiptap/extension-table; this renders the item list from tableMenuItems()
+ * and dispatches to the matching Tiptap command. Rendered into <body> as a
+ * fixed-position element so it escapes the format bar's `overflow:hidden`.
+ * Scoped: the appended element + its document listeners are removed on nav.
  */
 interface TableMenuController {
   toggle: (anchor: HTMLElement) => void;
   close: () => void;
 }
 
-function wireTableMenu(editor: EditorHandle): TableMenuController {
+function wireTableMenu(editor: EditorHandle, scope: MountScope): TableMenuController {
   const menu = document.createElement('div');
   menu.className = 'table-menu hidden';
   menu.setAttribute('role', 'menu');
   menu.setAttribute('aria-hidden', 'true');
   document.body.appendChild(menu);
+  scope.onCleanup(() => menu.remove());
 
   let anchorBtn: HTMLElement | null = null;
 
@@ -952,17 +942,20 @@ function wireTableMenu(editor: EditorHandle): TableMenuController {
   };
 
   // Keep the editor selection alive while pressing menu items.
-  menu.addEventListener('mousedown', (ev) => ev.preventDefault());
-  document.addEventListener('click', (ev) => {
+  scope.listen(menu, 'mousedown', (ev) => (ev as MouseEvent).preventDefault());
+  scope.listen(document, 'click', (ev) => {
     if (menu.classList.contains('hidden')) return;
     const t = ev.target as Node;
     if (menu.contains(t) || anchorBtn?.contains(t)) return;
     close();
   });
-  document.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Escape') close();
+  scope.listen(document, 'keydown', (ev) => {
+    if ((ev as KeyboardEvent).key === 'Escape') close();
   });
-  document.getElementById('editor')?.addEventListener('scroll', close, { passive: true });
+  document.getElementById('editor')?.addEventListener('scroll', close, {
+    passive: true,
+    signal: scope.signal,
+  });
 
   return {
     toggle: (anchor) => {
@@ -973,11 +966,11 @@ function wireTableMenu(editor: EditorHandle): TableMenuController {
   };
 }
 
-function wireFormatBar(editor: EditorHandle): void {
+function wireFormatBar(editor: EditorHandle, scope: MountScope): void {
   const bar = document.getElementById('format-bar');
   if (!bar) return;
   const chain = () => editor.editor.chain().focus();
-  const tableMenu = wireTableMenu(editor);
+  const tableMenu = wireTableMenu(editor, scope);
   const handlers: Record<string, () => void> = {
     bold: () => chain().toggleBold().run(),
     italic: () => chain().toggleItalic().run(),
@@ -1003,12 +996,12 @@ function wireFormatBar(editor: EditorHandle): void {
       else chain().setLink({ href }).run();
     },
   };
-  bar.addEventListener('mousedown', (ev) => {
-    const t = (ev.target as HTMLElement).closest('button');
-    if (t) ev.preventDefault();
+  scope.listen(bar, 'mousedown', (ev) => {
+    const t = ((ev as MouseEvent).target as HTMLElement).closest('button');
+    if (t) (ev as MouseEvent).preventDefault();
   });
-  bar.addEventListener('click', (ev) => {
-    const t = (ev.target as HTMLElement).closest('button');
+  scope.listen(bar, 'click', (ev) => {
+    const t = ((ev as MouseEvent).target as HTMLElement).closest('button');
     if (!t) return;
     const cmd = t.getAttribute('data-cmd');
     if (cmd && handlers[cmd]) handlers[cmd]();
@@ -1063,4 +1056,4 @@ function wireFormatBar(editor: EditorHandle): void {
   editor.editor.on('transaction', refresh);
 }
 
-void boot();
+void main();

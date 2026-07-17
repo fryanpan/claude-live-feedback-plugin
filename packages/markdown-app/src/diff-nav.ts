@@ -45,10 +45,31 @@ function appendParams(url: string): string {
   return url.includes('?') ? `${url}&${qs}` : `${url}?${qs}`;
 }
 
+/** The workspace whose file tree is currently rendered into the sidebar. The
+ *  tree re-render is what loses the reviewer's scroll, so navigating between
+ *  files in the SAME workspace skips it (just moves the active marker); only a
+ *  different workspace, or a forced badge-count refresh, re-renders. */
+let renderedDiffKey: string | null = null;
+
 /** Render the workspace nav. Diff reviews get the Changed/All toggle;
  *  BROWSE workspaces (no diff members) get the all-files tree only.
- *  Returns false when the workspace has no navigable file data at all. */
-export async function renderDiffNav(docId: string, workspaceId: string): Promise<boolean> {
+ *  Returns false when the workspace has no navigable file data at all.
+ *  `force` (the heartbeat refresh) re-renders even when the key is unchanged. */
+export async function renderDiffNav(
+  docId: string,
+  workspaceId: string,
+  force = false,
+): Promise<boolean> {
+  // Same workspace already on screen → don't rebuild the tree (that resets
+  // scroll); just move the active-file marker.
+  if (
+    !force &&
+    renderedDiffKey === workspaceId &&
+    (document.getElementById('set-pane-list')?.childElementCount ?? 0) > 0
+  ) {
+    setActiveFile(docId);
+    return true;
+  }
   const res = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/grouped`).catch(
     () => null,
   );
@@ -60,8 +81,12 @@ export async function renderDiffNav(docId: string, workspaceId: string): Promise
     const probe = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/files`).catch(
       () => null,
     );
-    if (!probe || !probe.ok) return false;
+    if (!probe || !probe.ok) {
+      renderedDiffKey = null;
+      return false;
+    }
   }
+  renderedDiffKey = workspaceId;
 
   document.body.classList.add('has-set');
   document.getElementById('set-pane')?.setAttribute('aria-hidden', 'false');
@@ -264,11 +289,17 @@ function hasChanged(node: DirNode): boolean {
   return false;
 }
 
-/** Focus + ~30s heartbeat refresh, same contract as the workspace tree. */
-export function wireDiffNavRefresh(docId: string, workspaceId: string): void {
-  const refresh = () => void renderDiffNav(docId, workspaceId);
+/** Focus + ~30s heartbeat refresh, same contract as the workspace tree.
+ *  Returns a cleanup — the caller (a per-doc mount) must call it on navigation
+ *  so refreshers don't stack across docs. */
+export function wireDiffNavRefresh(docId: string, workspaceId: string): () => void {
+  const refresh = () => void renderDiffNav(docId, workspaceId, true);
   window.addEventListener('focus', refresh);
-  setInterval(refresh, 30_000);
+  const timer = setInterval(refresh, 30_000);
+  return () => {
+    window.removeEventListener('focus', refresh);
+    clearInterval(timer);
+  };
 }
 
 /** Extract the docId from a `/review/<docId>[?…]` href (absolute or relative). */

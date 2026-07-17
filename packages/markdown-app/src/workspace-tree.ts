@@ -11,6 +11,12 @@
  * the focus/interval wiring (`wireWorkspaceTreeRefresh`).
  */
 
+import { setActiveFile } from './diff-nav.ts';
+
+/** Workspace whose tree is currently rendered — navigating within it skips the
+ *  re-render (which resets scroll) and just moves the active marker. */
+let renderedTreeKey: string | null = null;
+
 interface TreeFile {
   type: 'file';
   docId: string;
@@ -93,12 +99,22 @@ function renderTreeNode(
   )}</span>${badge}</summary><ul>${children}</ul></details></li>`;
 }
 
-export async function renderWorkspaceTree(docId: string, workspaceId: string): Promise<void> {
+export async function renderWorkspaceTree(
+  docId: string,
+  workspaceId: string,
+  force = false,
+): Promise<void> {
   const setPane = document.getElementById('set-pane');
   const setPaneList = document.getElementById('set-pane-list');
   const docMenu = document.getElementById('doc-menu');
   document.body.classList.add('has-set');
   setPane?.setAttribute('aria-hidden', 'false');
+  // Same tree already on screen → move the marker without rebuilding (which
+  // resets scroll + collapses folder state to the persisted defaults).
+  if (!force && renderedTreeKey === workspaceId && (setPaneList?.childElementCount ?? 0) > 0) {
+    setActiveFile(docId);
+    return;
+  }
   try {
     const res = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/tree`);
     if (!res.ok) return;
@@ -107,6 +123,7 @@ export async function renderWorkspaceTree(docId: string, workspaceId: string): P
     const treeHtml = `<ul class="tree-root">${html}</ul>`;
     if (setPaneList) setPaneList.innerHTML = treeHtml;
     if (docMenu) docMenu.innerHTML = treeHtml;
+    renderedTreeKey = workspaceId;
     for (const root of [setPaneList, docMenu]) {
       if (!root) continue;
       root.querySelectorAll('details[data-rel]').forEach((d) => {
@@ -126,9 +143,14 @@ export async function renderWorkspaceTree(docId: string, workspaceId: string): P
   }
 }
 
-/** Wire focus + ~30s refresh of the tree (counts are a snapshot otherwise). */
-export function wireWorkspaceTreeRefresh(docId: string, workspaceId: string): void {
-  const refresh = () => void renderWorkspaceTree(docId, workspaceId);
+/** Wire focus + ~30s refresh of the tree (counts are a snapshot otherwise).
+ *  Returns a cleanup so a per-doc mount can drop it on navigation. */
+export function wireWorkspaceTreeRefresh(docId: string, workspaceId: string): () => void {
+  const refresh = () => void renderWorkspaceTree(docId, workspaceId, true);
   window.addEventListener('focus', refresh);
-  setInterval(refresh, 30_000);
+  const timer = setInterval(refresh, 30_000);
+  return () => {
+    window.removeEventListener('focus', refresh);
+    clearInterval(timer);
+  };
 }

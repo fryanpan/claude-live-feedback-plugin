@@ -1,16 +1,21 @@
-import type { FeedbackClient, User } from '@feedback/core';
-import { bootCode } from '../code/code-app.ts';
+import { mountCode } from '../code/code-app.ts';
 import { renderDiffNav, wireDiffNavRefresh } from '../diff-nav.ts';
+import type { MountContext } from '../mount-context.ts';
+import type { MountScope } from '../mount-scope.ts';
 import { startReadingTracker } from '../reading-tracker.ts';
 import { el, mountReviewChrome } from '../review-chrome.ts';
+import { remountCurrent } from '../router.ts';
 import { createRedlineEditor } from './redline-editor.ts';
 
 /**
- * Boot the Word-style redline surface for a markdown file in a diff review.
+ * Mount the Word-style redline surface for a markdown file in a diff review.
  *
  * Sibling of `code/code-app.ts`: same diff-nav, base-text fetch, reading
  * tracker, chrome mount and comment pill. What differs is the surface (a
  * read-only Tiptap redline instead of CodeMirror) and a third view mode.
+ *
+ * Every listener is bound to `ctx.scope` so navigating to another file tears
+ * this mount down cleanly; the router owns the client (closed on dispose).
  */
 
 export type RedlineViewMode = 'redline' | 'diff' | 'file';
@@ -39,13 +44,12 @@ function writeViewMode(docId: string, mode: RedlineViewMode): void {
  * Wire the view toggle for a markdown diff doc.
  *
  * Switching between the redline (Tiptap) and the source diff (CodeMirror)
- * means swapping the whole surface, and `mountReviewChrome` binds listeners to
- * shared DOM with no teardown — remounting it would double-bind. So a mode
- * change persists and reloads. Toggling is rare; the cost is a lost scroll
- * position, not lost work (threads live server-side). Making this swap in
- * place means giving ReviewChrome a destroy path — worth doing, but not here.
+ * swaps the whole surface. Now that ReviewChrome tears down cleanly, the swap
+ * happens in place: the mode change persists to localStorage and the router
+ * re-mounts the current doc (no reload, no lost history entry) — the fresh
+ * mount reads the new mode and picks redline vs. code.
  */
-function wireToggle(docId: string, current: RedlineViewMode): void {
+function wireToggle(docId: string, current: RedlineViewMode, scope: MountScope): void {
   const toggle = document.getElementById('view-toggle');
   const btnRedline = document.getElementById('view-redline') as HTMLButtonElement | null;
   const btnDiff = document.getElementById('view-diff') as HTMLButtonElement | null;
@@ -66,15 +70,15 @@ function wireToggle(docId: string, current: RedlineViewMode): void {
   const go = (mode: RedlineViewMode) => {
     if (mode === current) return;
     writeViewMode(docId, mode);
-    location.reload();
+    remountCurrent();
   };
   // In redline mode, code-app isn't running, so this file owns all three
   // buttons. In diff/file mode code-app already wired Diff/File to an
   // in-place CodeMirror swap (no reload) — only Redline needs a handler.
-  btnRedline.addEventListener('click', () => go('redline'));
+  scope.listen(btnRedline, 'click', () => go('redline'));
   if (current === 'redline') {
-    btnDiff.addEventListener('click', () => go('diff'));
-    btnFile.addEventListener('click', () => go('file'));
+    scope.listen(btnDiff, 'click', () => go('diff'));
+    scope.listen(btnFile, 'click', () => go('file'));
   }
 }
 
@@ -85,16 +89,8 @@ interface DiffInfo {
   error?: string;
 }
 
-export async function bootRedline(opts: {
-  docId: string;
-  client: FeedbackClient;
-  user: User;
-  sourceUrl?: string;
-  workspaceId?: string;
-  docType?: 'code' | 'diff';
-  relPath?: string;
-}): Promise<void> {
-  const { docId, client, user } = opts;
+export async function mountRedline(ctx: MountContext): Promise<void> {
+  const { docId, client, user, scope } = ctx;
   const mode = readViewMode(docId);
 
   // The base text this file is compared against. Fetched before mounting so
@@ -106,25 +102,27 @@ export async function bootRedline(opts: {
   } catch {
     // fall through — handled below
   }
+  if (scope.disposed) return; // navigated away during the fetch
 
   // No base text (repo worktree pruned) means there is no redline to compute;
   // and the reviewer may simply prefer the source diff. Either way that is
-  // exactly what code-app already does well.
+  // exactly what the code surface already does well.
   if (diffInfo?.baseText == null || mode !== 'redline') {
-    // Pass the persisted choice through: bootCode defaults diff docs to
+    // Pass the persisted choice through: mountCode defaults diff docs to
     // unified-diff mode, so a restored 'file' selection would otherwise paint
     // the File button active over a diff surface.
-    await bootCode({ ...opts, initialViewMode: mode === 'file' ? 'file' : 'diff' });
-    if (diffInfo?.baseText != null) wireToggle(docId, mode);
+    await mountCode(ctx, mode === 'file' ? 'file' : 'diff');
+    if (diffInfo?.baseText != null) wireToggle(docId, mode, scope);
     return;
   }
   const baseText = diffInfo.baseText;
 
-  if (opts.workspaceId) {
-    const workspaceId = opts.workspaceId;
+  if (ctx.workspaceId) {
+    const workspaceId = ctx.workspaceId;
     void (async () => {
       const isDiffNav = await renderDiffNav(docId, workspaceId);
-      if (isDiffNav) wireDiffNavRefresh(docId, workspaceId);
+      if (scope.disposed) return;
+      if (isDiffNav) scope.onCleanup(wireDiffNavRefresh(docId, workspaceId));
     })();
   }
 
@@ -150,12 +148,14 @@ export async function bootRedline(opts: {
       }
     },
   });
+  scope.onCleanup(() => surface.destroy());
 
   const chrome = mountReviewChrome({
     docId,
     user,
     ydoc,
     surface,
+    scope,
     selectHint: 'Select some text first to leave a comment.',
     reanchorHint: 'Select new text first, then click Re-anchor.',
     // The cached selection covers iOS blurring the surface between the pill
@@ -164,8 +164,8 @@ export async function bootRedline(opts: {
     hidePill,
   });
 
-  startReadingTracker({ docId, user, scrollEl: editorMount });
-  wireToggle(docId, 'redline');
+  scope.onCleanup(startReadingTracker({ docId, user, scrollEl: editorMount }));
+  wireToggle(docId, 'redline', scope);
 
   if (diffInfo.status === 'renamed' && diffInfo.oldPath) {
     showBanner(`Renamed from ${diffInfo.oldPath}`);
@@ -207,18 +207,16 @@ export async function bootRedline(opts: {
     commentPill.classList.add('hidden');
     commentPill.classList.remove('caret');
   }
-  commentPill.addEventListener('mousedown', (ev) => ev.preventDefault());
-  commentPill.addEventListener('click', () => chrome.openComposer());
+  scope.listen(commentPill, 'mousedown', (ev) => ev.preventDefault());
+  scope.listen(commentPill, 'click', () => chrome.openComposer());
 
-  ydoc.getMap('meta').observe(() => chrome.renderDocLabel());
+  const onMeta = () => chrome.renderDocLabel();
+  ydoc.getMap('meta').observe(onMeta);
+  scope.onCleanup(() => ydoc.getMap('meta').unobserve(onMeta));
   client.onReady(() => {
+    if (scope.disposed) return;
     chrome.renderDocLabel();
     chrome.redrawThreads();
-  });
-
-  addEventListener('beforeunload', () => {
-    client.close();
-    surface.destroy();
   });
 }
 
