@@ -158,3 +158,33 @@ describe('computeRedline', () => {
     }
   });
 });
+
+describe('computeRedline block ordering', () => {
+  it('keeps a deleted block in its base position, not floated above earlier text', () => {
+    // Regression: pairGap emitted every deletion before every new-side block,
+    // so a removed section that FOLLOWED a reworded paragraph rendered ABOVE
+    // it — reading as though the wrong thing was cut, and snapping comments on
+    // it to the paragraph instead of the section that follows.
+    const base = 'Intro one.\n\n## Removed\n\nGone body.\n\n## Kept\n';
+    const next = 'Intro two.\n\n## Kept\n';
+    const kinds = computeRedline(base, next).map((b) => b.kind);
+    expect(kinds).toEqual(['changed', 'del', 'del', 'same']);
+  });
+
+  it('snaps a deleted block to the block that FOLLOWED it in the base', () => {
+    const base = 'Intro one.\n\n## Removed\n\n## Kept\n';
+    const next = 'Intro two.\n\n## Kept\n';
+    const blocks = computeRedline(base, next);
+    const del = blocks.find((b) => b.kind === 'del');
+    // "## Kept" is what survives after the deletion — that is where a comment
+    // on the removed heading belongs, not back on the intro paragraph.
+    expect(del?.snapTo).toBe(next.indexOf('## Kept'));
+  });
+
+  it('places an insertion where it was added, not at the end of the gap', () => {
+    const base = 'Alpha.\n\nOmega.\n';
+    const next = 'Alpha edited.\n\nInserted middle.\n\nOmega.\n';
+    const kinds = computeRedline(base, next).map((b) => b.kind);
+    expect(kinds).toEqual(['changed', 'ins', 'same']);
+  });
+});

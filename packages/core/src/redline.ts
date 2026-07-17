@@ -283,14 +283,24 @@ export function computeRedline(baseMd: string, newMd: string): RedlineBlock[] {
   return out;
 }
 
-/** Within one gap, decide which base blocks BECAME which new blocks (word-diff
- *  them) versus which were simply deleted or added (show whole). Greedy
- *  best-match; a gap holds a handful of blocks, so optimal assignment isn't
- *  worth it. Deletions are emitted before the new-side blocks so the removal
- *  reads above its replacement, as Word does. */
+/**
+ * Within one gap, decide which base blocks BECAME which new blocks (word-diff
+ * them) versus which were simply deleted or added (show whole).
+ *
+ * Greedy best-match; a gap holds a handful of blocks, so optimal assignment
+ * isn't worth it.
+ *
+ * The output is then MERGED so a deleted block keeps its position relative to
+ * the surviving blocks around it. Emitting all deletions first is wrong: a
+ * deletion is only "above its replacement" when it IS a replacement, and an
+ * unrelated section that merely landed in the same gap would float up above
+ * text it originally followed — reading as though the wrong thing was cut, and
+ * snapping any comment on it to the wrong line.
+ */
 function pairGap(gapA: MarkdownBlockSpan[], gapB: MarkdownBlockSpan[]): RedlineBlock[] {
   const usedA = new Set<number>();
   const matchFor = new Map<number, number>(); // gapB index -> gapA index
+  const matchBack = new Map<number, number>(); // gapA index -> gapB index
   for (let bi = 0; bi < gapB.length; bi++) {
     let best = -1;
     let bestScore = 0;
@@ -306,15 +316,34 @@ function pairGap(gapA: MarkdownBlockSpan[], gapB: MarkdownBlockSpan[]): RedlineB
     if (best >= 0) {
       usedA.add(best);
       matchFor.set(bi, best);
+      matchBack.set(best, bi);
     }
   }
+
+  // Walk the BASE order. Each matched block pulls in any new-side blocks that
+  // precede its partner, so insertions land where they were added and
+  // deletions stay where they were removed from.
   const out: RedlineBlock[] = [];
+  let nextB = 0;
+  const emitInsertionsBefore = (bi: number): void => {
+    while (nextB < bi) {
+      if (!matchFor.has(nextB)) out.push(asIns(gapB[nextB]));
+      nextB++;
+    }
+  };
   for (let ai = 0; ai < gapA.length; ai++) {
-    if (!usedA.has(ai)) out.push(asDel(gapA[ai]));
+    const bi = matchBack.get(ai);
+    if (bi == null) {
+      out.push(asDel(gapA[ai]));
+      continue;
+    }
+    emitInsertionsBefore(bi);
+    out.push(asChanged(gapA[ai], gapB[bi]));
+    nextB = bi + 1;
   }
-  for (let bi = 0; bi < gapB.length; bi++) {
-    const ai = matchFor.get(bi);
-    out.push(ai == null ? asIns(gapB[bi]) : asChanged(gapA[ai], gapB[bi]));
+  // Anything left on the new side is a pure addition at the end of the gap.
+  for (; nextB < gapB.length; nextB++) {
+    if (!matchFor.has(nextB)) out.push(asIns(gapB[nextB]));
   }
   return out;
 }
