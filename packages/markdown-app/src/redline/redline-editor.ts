@@ -1,6 +1,10 @@
 import { computeRedline, getContent, snapOffsetsToLines } from '@feedback/core';
 import { Editor } from '@tiptap/core';
 import Image from '@tiptap/extension-image';
+import { Table } from '@tiptap/extension-table';
+import { TableCell } from '@tiptap/extension-table-cell';
+import { TableHeader } from '@tiptap/extension-table-header';
+import { TableRow } from '@tiptap/extension-table-row';
 import StarterKit from '@tiptap/starter-kit';
 import { Markdown } from 'tiptap-markdown';
 import type * as Y from 'yjs';
@@ -46,11 +50,18 @@ interface BlockIndexEntry {
   snap: number | null;
 }
 
+// Mirrors editor.ts's extension list — a redline of a markdown file must
+// render everything the normal markdown editor renders, or a review doc with a
+// table silently degrades to plain paragraphs in this view only.
 const EXTENSIONS = [
   StarterKit.configure({ undoRedo: false, codeBlock: false }),
   MermaidCodeBlock,
   Image,
   Markdown,
+  Table.configure({ resizable: false, HTMLAttributes: { class: 'prose-table' } }),
+  TableRow,
+  TableHeader,
+  TableCell,
   RedlineIns,
   RedlineDel,
   RedlineProvenance,
