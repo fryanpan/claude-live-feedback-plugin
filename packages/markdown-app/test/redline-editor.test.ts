@@ -156,3 +156,117 @@ describe('createRedlineEditor', () => {
     expect(range).not.toBeNull();
   });
 });
+
+describe('createRedlineEditor — structural blocks', () => {
+  it('renders a changed fenced code block as real code, not corrupted text', () => {
+    // Wrapping a fence per line produced "<del>```js</del>\n<del>const a = 1;</del>",
+    // whose backticks paired into an inline code span across the wrappers: the
+    // fence vanished and the tags rendered as escaped literal text. This repo's
+    // own docs are mostly fences.
+    const { parent } = mount(
+      'Intro.\n\n```js\nconst a = 1;\n```\n',
+      'Intro.\n\n```js\nconst a = 2;\n```\n',
+    );
+    expect(parent.querySelector('pre')).not.toBeNull();
+    expect(parent.textContent).not.toContain('</del>');
+    expect(parent.textContent).not.toContain('&lt;');
+    expect(parent.textContent).toContain('const a = 2;');
+  });
+
+  it('still anchors a comment on a changed fence', () => {
+    // The code block renders through MermaidCodeBlock's NodeView, which does
+    // not pass data-* to the DOM — but the provenance index reads NODE attrs,
+    // not the DOM, so anchoring is unaffected. (The CSS change bar cannot
+    // attach for the same reason; see the known limitation in the PR.)
+    const newText = 'Intro.\n\n```js\nconst a = 2;\n```\n';
+    const { surface, content } = mount('Intro.\n\n```js\nconst a = 1;\n```\n', newText);
+    const from = newText.indexOf('```js');
+    const range = surface.resolveRel(...anchorFor(content, from, from + 5));
+    expect(range).not.toBeNull();
+  });
+
+  it('keeps an unchanged fence unmarked and intact', () => {
+    const md = 'Intro.\n\n```js\nconst a = 1;\n```\n';
+    const { parent } = mount(md, md);
+    expect(parent.querySelector('pre')).not.toBeNull();
+    expect(parent.innerHTML).not.toContain('data-lf-change');
+  });
+
+  it('renders a changed table as a table, not a paragraph of pipes', () => {
+    const { parent } = mount(
+      'Intro.\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n',
+      'Intro.\n\n| a | b |\n| --- | --- |\n| 1 | 3 |\n',
+    );
+    expect(parent.querySelector('table')).not.toBeNull();
+    expect(parent.textContent).not.toContain('</del>');
+  });
+});
+
+describe('createRedlineEditor — getSelectionRel', () => {
+  /** Decode an anchor back to a content offset, to compare against what the
+   *  source diff surface would have produced for the same lines. */
+  function decode(ydoc: Y.Doc, bytes: Uint8Array): number | null {
+    const abs = Y.createAbsolutePositionFromRelativePosition(Y.decodeRelativePosition(bytes), ydoc);
+    return abs ? abs.index : null;
+  }
+
+  it('produces the same line-snapped anchor the source diff surface would', () => {
+    // THE headline claim of the design — previously asserted nowhere.
+    const newText = '# T\n\nAlpha here.\n\nBravo there.\n';
+    const { surface, ydoc, parent } = mount('# T\n\nAlpha here.\n', newText);
+    const target = parent.querySelector('[data-lf-change="ins"]') as HTMLElement | null;
+    expect(target).not.toBeNull();
+    const from = Number(target?.getAttribute('data-lf-from'));
+    const to = Number(target?.getAttribute('data-lf-to'));
+
+    // Select inside that block, the way a reviewer would.
+    const { doc } = surface as unknown as { __editor?: unknown } as never;
+    void doc;
+    const range = document.createRange();
+    range.selectNodeContents(target as Node);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+
+    const got = surface.getSelectionRel();
+    expect(got).not.toBeNull();
+    const start = decode(ydoc, (got as { start: Uint8Array }).start);
+    const end = decode(ydoc, (got as { end: Uint8Array }).end);
+    // Line-snapped over the block's own span — byte-identical to what
+    // snapToLines gives the CodeMirror surface for the same lines.
+    const expected = snapExpected(newText, from, to);
+    expect(start).toBe(expected.from);
+    expect(end).toBe(expected.to);
+    surface.destroy();
+  });
+
+  /** Mirror of core's snapOffsetsToLines, restated here so the test doesn't
+   *  just re-run the implementation it is checking. */
+  function snapExpected(text: string, from: number, to: number) {
+    const start = text.lastIndexOf('\n', Math.max(0, from - 1)) + 1;
+    const nl = text.indexOf('\n', to);
+    return { from: start, to: nl === -1 ? text.length : nl };
+  }
+
+  it('lets a comment be made on a deletion at the very end of the document', () => {
+    // Regression: snapTo === newMd.length made getSelectionRel return null, so
+    // the pill never appeared and the deletion was silently uncommentable.
+    const { surface, parent } = mount(
+      '# Title\n\nKept paragraph.\n\nDoomed final paragraph.\n',
+      '# Title\n\nKept paragraph.\n',
+    );
+    const del = parent.querySelector('[data-lf-change="del"]') as HTMLElement | null;
+    expect(del).not.toBeNull();
+    const range = document.createRange();
+    range.selectNodeContents(del as Node);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+
+    const got = surface.getSelectionRel();
+    expect(got).not.toBeNull();
+    // And it records what the comment was actually about.
+    expect((got as { deletedSnippet?: string }).deletedSnippet).toContain('Doomed');
+    surface.destroy();
+  });
+});

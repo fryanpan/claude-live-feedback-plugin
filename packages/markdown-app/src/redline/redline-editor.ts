@@ -142,17 +142,13 @@ export function createRedlineEditor(opts: CreateRedlineEditorOpts): RedlineSurfa
   const onContentChange = () => render();
   content.observe(onContentChange);
 
-  /** The indexed block containing a PM position, or the nearest one before it. */
+  /** The indexed block containing a PM position, or — for a position in
+   *  trailing whitespace past the last block — the nearest one before it. */
   function blockAt(pos: number): BlockIndexEntry | null {
     let best: BlockIndexEntry | null = null;
     for (const e of index) {
       if (e.pmFrom > pos) break;
       best = e;
-    }
-    if (best && pos >= best.pmTo) {
-      // Past the end of the last block that starts before pos — still the best
-      // answer for a selection that ends in trailing whitespace.
-      return best;
     }
     return best;
   }

@@ -2,7 +2,7 @@ import type { FeedbackClient, User } from '@feedback/core';
 import { bootCode } from '../code/code-app.ts';
 import { renderDiffNav, wireDiffNavRefresh } from '../diff-nav.ts';
 import { startReadingTracker } from '../reading-tracker.ts';
-import { type ReviewChrome, el, mountReviewChrome } from '../review-chrome.ts';
+import { el, mountReviewChrome } from '../review-chrome.ts';
 import { createRedlineEditor } from './redline-editor.ts';
 
 /**
@@ -136,8 +136,6 @@ export async function bootRedline(opts: {
 
   let selection: ReturnType<ReturnType<typeof createRedlineEditor>['getSelectionRel']> = null;
 
-  // biome-ignore lint/style/useConst: assigned after createRedlineEditor so its callbacks can close over it
-  let chromeRef: ReviewChrome | undefined;
   const surface = createRedlineEditor({
     parent: editorMount,
     ydoc,
@@ -165,8 +163,6 @@ export async function bootRedline(opts: {
     getSelection: () => surface.getSelectionRel() ?? selection,
     hidePill,
   });
-  chromeRef = chrome;
-  void chromeRef;
 
   startReadingTracker({ docId, user, scrollEl: editorMount });
   wireToggle(docId, 'redline');

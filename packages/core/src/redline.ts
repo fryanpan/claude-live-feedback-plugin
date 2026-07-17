@@ -156,6 +156,21 @@ export function snapOffsetsToLines(
   return { from: start, to: end };
 }
 
+/**
+ * Start offset of the last non-empty line — the end-of-document anchor a
+ * trailing deletion snaps to.
+ *
+ * Not `text.length`: a markdown file ends with a newline, so that offset sits
+ * on the empty line past it, where `snapOffsetsToLines` returns an empty range,
+ * `getSelectionRel` returns null, and the comment pill silently never appears.
+ * Deleting the last section of a doc is routine.
+ */
+function lastLineStart(text: string): number {
+  const trimmed = text.trimEnd();
+  if (trimmed.length === 0) return 0;
+  return trimmed.lastIndexOf('\n') + 1;
+}
+
 /** Token overlap ratio — cheap, and enough to answer "did this paragraph
  *  BECOME that paragraph, or is it a different paragraph entirely?".
  *
@@ -243,6 +258,16 @@ export function computeRedline(baseMd: string, newMd: string): RedlineBlock[] {
   const baseBlocks = splitMarkdownBlocks(baseMd);
   const newBlocks = splitMarkdownBlocks(newMd);
 
+  // lcs.ts's contract puts the budget on the caller. Past it, treat every
+  // block as changed rather than allocate an O(n*m) table on the main thread —
+  // this runs on every content change.
+  if (baseBlocks.length * newBlocks.length > LCS_CELL_BUDGET) {
+    console.warn(
+      `[redline] ${baseBlocks.length}x${newBlocks.length} blocks exceeds the diff budget; ` +
+        'rendering the whole file as a replacement',
+    );
+    return [...baseBlocks.map(asDel), ...newBlocks.map(asIns)];
+  }
   const { keptA, keptB } = lcsKept(
     baseBlocks.map((b) => b.text),
     newBlocks.map((b) => b.text),
@@ -270,8 +295,14 @@ export function computeRedline(baseMd: string, newMd: string): RedlineBlock[] {
 
   // A deleted block has no new-side position, so a comment on it snaps to the
   // nearest FOLLOWING new-side offset. Backward pass: the target is the next
-  // later block that has one, or the end of the document.
-  let nextFrom = newMd.replace(/\r\n/g, '\n').length;
+  // later block that has one, or — for a deletion at the very end — the last
+  // real line.
+  //
+  // NOT the document length: a markdown file ends with a newline, so that
+  // offset sits on the empty line past it, where snapOffsetsToLines returns an
+  // empty range, getSelectionRel returns null, and the comment pill silently
+  // never appears. Deleting the last section of a doc is routine.
+  let nextFrom = lastLineStart(newMd);
   for (let k = out.length - 1; k >= 0; k--) {
     const b = out[k];
     if (b.from != null) {
@@ -298,14 +329,21 @@ export function computeRedline(baseMd: string, newMd: string): RedlineBlock[] {
  * snapping any comment on it to the wrong line.
  */
 function pairGap(gapA: MarkdownBlockSpan[], gapB: MarkdownBlockSpan[]): RedlineBlock[] {
-  const usedA = new Set<number>();
   const matchFor = new Map<number, number>(); // gapB index -> gapA index
   const matchBack = new Map<number, number>(); // gapA index -> gapB index
+  // Matching is MONOTONIC: gapB[bi] may only pair with a base block after the
+  // one gapB[bi-1] took. Unconstrained matching lets pairs cross (B0<->A1,
+  // B1<->A0), and the merge below then walks base order while new-side order
+  // runs backwards — which emitted a block twice, broke the ascending-offset
+  // invariant the snapTo pass depends on, and made resolveRel union a range
+  // across the whole document. A moved block is a delete plus an add in a
+  // linear diff; refusing the crossed pair is both correct and simpler than
+  // repairing the order afterwards.
+  let minA = 0;
   for (let bi = 0; bi < gapB.length; bi++) {
     let best = -1;
     let bestScore = 0;
-    for (let ai = 0; ai < gapA.length; ai++) {
-      if (usedA.has(ai)) continue;
+    for (let ai = minA; ai < gapA.length; ai++) {
       if (!pairable(gapA[ai], gapB[bi])) continue;
       const score = similarity(gapA[ai].text, gapB[bi].text);
       if (score > bestScore) {
@@ -314,9 +352,9 @@ function pairGap(gapA: MarkdownBlockSpan[], gapB: MarkdownBlockSpan[]): RedlineB
       }
     }
     if (best >= 0) {
-      usedA.add(best);
       matchFor.set(bi, best);
       matchBack.set(best, bi);
+      minA = best + 1;
     }
   }
 
