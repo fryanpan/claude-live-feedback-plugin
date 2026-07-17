@@ -151,6 +151,26 @@ export interface TextRangeAnchor {
   endRel: Uint8Array;
   snippet: AnchorSnippet;
   context?: AnchorContext;
+  /**
+   * Set when the thread was created on text that exists only on the BASE side
+   * of a diff — i.e. struck-through text in the markdown redline view.
+   *
+   * Deleted text has no position in `content`, so there is nothing for a
+   * RelativePosition to point at. The anchor instead snaps to the nearest
+   * FOLLOWING retained line, and this records what the comment was actually
+   * about ("why did you cut this?" being one of the most natural redline
+   * comments). The redline view re-finds the deletion by matching this snippet
+   * near the anchor line — the same technique as the auto-reanchor sweep — and
+   * renders the thread back on the deletion where the reviewer put it. Other
+   * views use it to label the thread, rather than showing it as a comment on an
+   * unrelated surviving line.
+   *
+   * Persisted for free: the REST route passes `anchor` through as an opaque
+   * object and `createThread` stores it wholesale as frozen JSON, so no route
+   * or rooms change is needed. `deleted-snippet.test.ts` guards that at the
+   * HTTP level in case the route is ever "tightened" into hand-copying fields.
+   */
+  deletedSnippet?: string;
 }
 
 /** Fingerprint of a DOM element for anchor recovery after DOM changes. */
