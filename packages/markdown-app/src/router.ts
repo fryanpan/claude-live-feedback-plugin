@@ -37,6 +37,20 @@ function docIdOf(urlOrPath: string): string {
   return m ? decodeURIComponent(m[1]) : 'default';
 }
 
+/** Reduce an href to a same-origin path. Sidebar links can be ABSOLUTE
+ *  reviewUrls whose host differs from the browsing host (e.g. the server
+ *  advertises a tailscale URL but the reviewer opened localhost) — pushState
+ *  rejects a cross-origin URL, so we push only the path, which is all the
+ *  router needs. */
+function toSameOriginPath(url: string): string {
+  try {
+    const u = new URL(url, location.href);
+    return u.pathname + u.search + u.hash;
+  } catch {
+    return url;
+  }
+}
+
 /** Reset the shell to a surface-agnostic baseline between mounts — the current
  *  boot paths set body classes / chrome assuming one page load, so navigation
  *  must clear them or a markdown doc inherits a previous code doc's `code-mode`. */
@@ -105,8 +119,9 @@ async function swap(docId: string): Promise<void> {
 
 /** Navigate to a review URL: push history, then swap in place. */
 export function navigateTo(url: string): void {
-  history.pushState(null, '', url);
-  void swap(docIdOf(url));
+  const path = toSameOriginPath(url);
+  history.pushState(null, '', path);
+  void swap(docIdOf(path));
 }
 
 /** Re-mount the current document in place without touching history. Used by the

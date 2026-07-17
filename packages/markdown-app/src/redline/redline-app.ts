@@ -134,11 +134,16 @@ export async function mountRedline(ctx: MountContext): Promise<void> {
 
   let selection: ReturnType<ReturnType<typeof createRedlineEditor>['getSelectionRel']> = null;
 
+  // createRedlineEditor fires onSelectionChange synchronously during its
+  // construction render — before `surface` is bound — so guard the callback
+  // until construction returns (otherwise it hits `surface` in the TDZ).
+  let surfaceReady = false;
   const surface = createRedlineEditor({
     parent: editorMount,
     ydoc,
     baseText,
     onSelectionChange: () => {
+      if (!surfaceReady) return;
       const sel = surface.getSelectionRel();
       if (sel) {
         selection = sel;
@@ -148,6 +153,7 @@ export async function mountRedline(ctx: MountContext): Promise<void> {
       }
     },
   });
+  surfaceReady = true;
   scope.onCleanup(() => surface.destroy());
 
   const chrome = mountReviewChrome({

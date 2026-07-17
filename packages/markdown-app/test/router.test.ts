@@ -79,6 +79,26 @@ describe('router', () => {
     expect(ev.defaultPrevented).toBe(false);
   });
 
+  it('swaps for an absolute cross-origin sidebar href (pushes same-origin path)', async () => {
+    // Sidebar reviewUrls can be absolute + a different host than the browsing
+    // origin; navigateTo must push only the path so pushState doesn't reject it.
+    sidebar('<li><a href="http://other-host:8796/review/x?u=1">x</a></li>');
+    const mounted: string[] = [];
+    stop = startRouter({
+      user: { id: 'u', name: 'U', kind: 'known', color: '#000' },
+      fetchMeta: async () => meta,
+      connectFor: () => stubClient(),
+      mountFor: (ctx) => void mounted.push(ctx.docId),
+    });
+    await flush();
+    document
+      .querySelector('a[href^="http://other-host"]')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    await flush();
+    expect(mounted).toContain('x');
+    expect(location.pathname).toBe('/review/x');
+  });
+
   it('handles popstate (back button) by swapping to the URL docId', async () => {
     sidebar('<li><a href="/review/a">a</a></li><li><a href="/review/b">b</a></li>');
     const mounted: string[] = [];
