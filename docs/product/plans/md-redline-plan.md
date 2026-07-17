@@ -126,11 +126,16 @@ describe('redline render pipeline', () => {
 Run: `bunx vitest run packages/markdown-app/test/redline-pipeline.test.ts`
 Expected: the first test's outcome is the finding. The second FAILS (module doesn't exist) — that's fine, it's covered by Task 5.
 
-- [ ] **Step 3: Record the finding**
+- [x] **Step 3: Record the finding**
 
-If the first test **passes**: proceed to Task 1. Note it in the plan file as verified.
+**RESOLVED 2026-07-16 — the gate PASSES. The rendering approach is verified.** Two findings that bind the tasks below:
 
-If it **fails** (inline HTML stripped, or inner markdown not parsed): STOP. Report to the user with the actual `getHTML()` output. The fallback is building ProseMirror JSON directly in `redline-markdown.ts` and parsing inline markdown per segment — a larger Task 6, and it costs inline-formatting fidelity inside changed text. Do not silently switch approaches.
+1. **`<del>` must outrank StarterKit's Strike mark.** Strike's own `parseHTML` claims `del` (alongside `s` and `strike`) at the default priority of 50, so a plain `{ tag: 'del' }` rule LOSES and every deletion silently renders as ordinary strikethrough — visually near-identical, so this would not have been caught by eye. `RedlineDel` must use `parseHTML: () => [{ tag: 'del', priority: 60 }]` (Task 7). Do NOT fix this by disabling Strike: real `~~strikethrough~~` in the source must still render as itself.
+2. **Inline markdown inside the wrapper parses.** Verified output:
+   `<h2>A <del class="lf-del">stale</del><strong><ins class="lf-ins">fresh</ins></strong> heading</h2>`
+   — the block marker stays literal, and `**fresh**` inside the `<ins>` becomes `<strong>`. Mark nesting order (`<strong><ins>` vs `<ins><strong>`) is ProseMirror's call and is cosmetically irrelevant. Lists behave the same way.
+
+Retained for context: had it failed (inline HTML stripped, or inner markdown not parsed), the fallback was building ProseMirror JSON directly in `redline-markdown.ts` and parsing inline markdown per segment — a larger Task 6, costing inline-formatting fidelity inside changed text.
 
 - [ ] **Step 4: Commit the probe**
 
@@ -1479,10 +1484,13 @@ export const RedlineIns = Mark.create({
   renderHTML: () => ['ins', { class: 'lf-ins' }, 0],
 });
 
+// Priority 60 is load-bearing, not decoration: StarterKit's Strike mark parses
+// `del` at the default 50, so without this every deletion renders as ordinary
+// strikethrough — near-identical by eye, and silently wrong. Verified in Task 0.
 export const RedlineDel = Mark.create({
   name: 'redlineDel',
   inclusive: () => false,
-  parseHTML: () => [{ tag: 'del' }],
+  parseHTML: () => [{ tag: 'del', priority: 60 }],
   renderHTML: () => ['del', { class: 'lf-del' }, 0],
 });
 
