@@ -4,6 +4,7 @@ import {
   annotateBlockMarkdown,
   applyAttrs,
   renderRedlineHtml,
+  stripTrailingEmptyParagraphs,
 } from '../src/redline/redline-html.ts';
 
 /** Stand-in for the scratch-editor conversion: wraps in <p> so the attribute
@@ -142,5 +143,34 @@ describe('renderRedlineHtml', () => {
       return `<p>${md}</p>`;
     });
     expect(calls).toHaveLength(blocks.length);
+  });
+});
+
+describe('stripTrailingEmptyParagraphs', () => {
+  it('drops the trailing empty paragraph Tiptap appends after a block', () => {
+    // Left in, it renders as blank filler AND inherits the real block's
+    // provenance, so a comment can resolve onto the filler instead.
+    expect(stripTrailingEmptyParagraphs('<h1>T</h1><p></p>')).toBe('<h1>T</h1>');
+  });
+
+  it('drops a trailing paragraph holding only a br placeholder', () => {
+    const out = stripTrailingEmptyParagraphs(
+      '<h1>T</h1><p><br class="ProseMirror-trailingBreak"></p>',
+    );
+    expect(out).toBe('<h1>T</h1>');
+  });
+
+  it('drops several trailing empties', () => {
+    expect(stripTrailingEmptyParagraphs('<p>x</p><p></p><p></p>')).toBe('<p>x</p>');
+  });
+
+  it('keeps real content, including a paragraph with only an image', () => {
+    expect(stripTrailingEmptyParagraphs('<p>real</p>')).toBe('<p>real</p>');
+    const img = '<p><img src="x.png"></p>';
+    expect(stripTrailingEmptyParagraphs(img)).toBe(img);
+  });
+
+  it('does not strip an empty paragraph that is not trailing', () => {
+    expect(stripTrailingEmptyParagraphs('<p></p><p>x</p>')).toBe('<p></p><p>x</p>');
   });
 });
