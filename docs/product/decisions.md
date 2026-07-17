@@ -147,3 +147,19 @@ Big decisions that future sessions should respect or revisit deliberately.
   fixed-position element in `<body>` so it escapes the format bar's
   `overflow:hidden`. Tables round-trip to disk as GFM via the existing
   `serializeTable`/`mkTable` path in `packages/core/prose.ts`.
+
+## SPA navigation: MountScope.listen() over raw `{ signal }` (2026-07-17)
+
+- **Decision:** `MountScope` exposes a `listen(target, type, handler, opts)`
+  helper that registers the DOM listener with `{ signal }` AND records an
+  explicit `removeEventListener` cleanup, rather than the plan's original
+  "register listeners with `{ signal: scope.signal }` directly."
+- **Why:** The test env (happy-dom 15.11.7) ignores `options.signal` in
+  `addEventListener` (`EventTarget.js` only reads `once`/`capture`), so
+  signal-based teardown is untestable there — and Tasks 3/5/6 tests all assert
+  "no fire after dispose." Upgrading happy-dom risks a ripple across 27 test
+  files. The helper makes teardown work identically in happy-dom, old browsers,
+  and modern ones; the redundant remove is a harmless no-op where the signal
+  already fired. `signal` stays public for fetch/AbortController-aware libs.
+- **Impact:** Every per-doc listener in Tasks 3/5/6 uses `scope.listen(...)`
+  instead of `{ signal: scope.signal }`. Reversible.
