@@ -17,6 +17,33 @@ export interface ChromeSelection {
   start: Uint8Array;
   end: Uint8Array;
   snippet: string;
+  /**
+   * Set by the redline surface when the selection was entirely base-only
+   * (struck-through) text, which has no position in `content`. The anchor
+   * snaps to the nearest following retained line; this records what the
+   * comment was actually about.
+   */
+  deletedSnippet?: string;
+}
+
+/**
+ * Build the wire anchor for a selection.
+ *
+ * ONE place on purpose. Every anchor body here is hand-built field by field,
+ * so a new field added to ChromeSelection but not copied is silently dropped —
+ * the server accepts it, returns 200, and the data is gone. That is exactly
+ * how `deletedSnippet` first shipped broken (and how `groups` did before it;
+ * see docs/process/learnings.md). Add new anchor fields HERE, not at the call
+ * sites.
+ */
+export function anchorBody(sel: ChromeSelection) {
+  return {
+    kind: 'text-range' as const,
+    startRel: Array.from(sel.start),
+    endRel: Array.from(sel.end),
+    snippet: { text: sel.snippet },
+    ...(sel.deletedSnippet ? { deletedSnippet: sel.deletedSnippet } : {}),
+  };
 }
 
 export interface ChromeOpts {
@@ -293,14 +320,7 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
           {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-              anchor: {
-                kind: 'text-range',
-                startRel: Array.from(sel.start),
-                endRel: Array.from(sel.end),
-                snippet: { text: sel.snippet },
-              },
-            }),
+            body: JSON.stringify({ anchor: anchorBody(sel) }),
           },
         );
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -379,12 +399,7 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
       showToast('Lost the selection — try again.');
       return;
     }
-    const anchor = {
-      kind: 'text-range' as const,
-      startRel: Array.from(composerSelection.start),
-      endRel: Array.from(composerSelection.end),
-      snippet: { text: composerSelection.snippet },
-    };
+    const anchor = anchorBody(composerSelection);
     const submitBtn = el<HTMLButtonElement>('composer-submit');
     submitBtn.disabled = true;
     try {
@@ -685,3 +700,7 @@ export function mobileLabel(full: string): string {
   const base = parts[parts.length - 1] ?? s;
   return base.length <= 32 ? base : `…${base.slice(-31)}`;
 }
+
+/** Exposed for unit tests — this is the layer that silently drops anchor
+ *  fields, so it needs a test of its own. Not part of the public surface. */
+export const __testing = { anchorBody };
