@@ -83,11 +83,17 @@ describe('computeRedline', () => {
     expect(del?.snapTo).toBe(newMd.indexOf('C.'));
   });
 
-  it('snapTo falls back to the end of the document when nothing follows', () => {
+  it('snapTo falls back to the LAST REAL LINE when nothing follows', () => {
+    // Originally asserted newMd.length — which encoded a bug: that offset sits
+    // on the empty line after the trailing newline, so snapOffsetsToLines
+    // returned an empty range and the comment pill never appeared for a
+    // deletion at the end of a document.
     const newMd = 'A.\n';
     const blocks = computeRedline('A.\n\nTrailing.\n', newMd);
     const del = blocks.find((b) => b.kind === 'del');
-    expect(del?.snapTo).toBe(newMd.length);
+    expect(del?.snapTo).toBe(0);
+    const snapped = snapOffsetsToLines(newMd, del?.snapTo as number, del?.snapTo as number);
+    expect(newMd.slice(snapped.from, snapped.to)).toBe('A.');
   });
 
   it('renders a heading level change as delete + insert, not a word diff', () => {
@@ -186,5 +192,48 @@ describe('computeRedline block ordering', () => {
     const next = 'Alpha edited.\n\nInserted middle.\n\nOmega.\n';
     const kinds = computeRedline(base, next).map((b) => b.kind);
     expect(kinds).toEqual(['changed', 'ins', 'same']);
+  });
+});
+
+describe('computeRedline — review regressions', () => {
+  it('never emits the same new-side block twice when matches would cross', () => {
+    // Unconstrained matching let pairs cross (B0<->A1, B1<->A0); the merge then
+    // walked base order while new-side order ran backwards, re-emitting an
+    // insertion. The reviewer saw the paragraph twice, offsets stopped
+    // ascending (breaking snapTo), and resolveRel unioned a range across the
+    // whole document.
+    const base =
+      'Alpha paragraph about widgets and gears.\n\nBeta paragraph about sprockets and cogs.\n';
+    const next =
+      'Beta paragraph about sprockets and cogs now.\n\nTotally new inserted paragraph here.\n\nAlpha paragraph about widgets and gears too.\n';
+    const blocks = computeRedline(base, next);
+    const froms = blocks.filter((b) => b.from != null).map((b) => b.from as number);
+    expect(new Set(froms).size).toBe(froms.length);
+  });
+
+  it('keeps new-side offsets ascending even when blocks are reordered', () => {
+    const base =
+      'Alpha paragraph about widgets and gears.\n\nBeta paragraph about sprockets and cogs.\n';
+    const next =
+      'Beta paragraph about sprockets and cogs now.\n\nAlpha paragraph about widgets and gears too.\n';
+    const froms = computeRedline(base, next)
+      .filter((b) => b.from != null)
+      .map((b) => b.from as number);
+    // The snapTo backward pass and resolveRel both assume this ordering.
+    expect([...froms].sort((x, y) => x - y)).toEqual(froms);
+  });
+
+  it('gives a trailing deletion a snap target on a real line, not past the end', () => {
+    // snapTo === newMd.length sits on the empty line after the final newline,
+    // so snapOffsetsToLines returned an empty range, getSelectionRel returned
+    // null, and the comment pill never appeared. Deleting the last section of a
+    // doc is routine.
+    const next = '# Title\n\nKept paragraph.\n';
+    const blocks = computeRedline('# Title\n\nKept paragraph.\n\nDoomed final paragraph.\n', next);
+    const del = blocks.find((b) => b.kind === 'del');
+    expect(del?.snapTo).toBeLessThan(next.length);
+    const snapped = snapOffsetsToLines(next, del?.snapTo as number, del?.snapTo as number);
+    expect(snapped.to).toBeGreaterThan(snapped.from);
+    expect(next.slice(snapped.from, snapped.to)).toBe('Kept paragraph.');
   });
 });

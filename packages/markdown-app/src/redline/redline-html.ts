@@ -1,4 +1,4 @@
-import type { RedlineBlock, RedlineSegment } from '@feedback/core';
+import type { MarkdownBlockType, RedlineBlock, RedlineSegment } from '@feedback/core';
 
 /**
  * Render redline blocks to HTML for the read-only Tiptap surface.
@@ -32,6 +32,22 @@ const TAG = { ins: 'ins', del: 'del' } as const;
  *  turn `## Heading` into a paragraph of struck-through hashes. */
 const MARKER_RE = /^(\s*(?:#{1,6}\s+|[-*]\s+|\d+\.\s+|>\s?))/;
 
+/**
+ * Blocks whose ENTIRE body is literal syntax, where no inline wrapping is
+ * possible at all.
+ *
+ * A fence wrapped per line produces "<del>```js</del>\n<del>const a = 1;</del>",
+ * whose backticks then pair into an inline code span ACROSS the wrappers: the
+ * fence disappears, the tags render as escaped literal text, and the reviewer
+ * sees garbage with no strikethrough. A table row wrapped as "<del>| a | b |</del>"
+ * stops starting with a pipe, so it stops being a table row.
+ *
+ * `pairable()` already refuses to word-diff these, so such a block is always a
+ * whole-block same/ins/del — the change signal belongs on the block
+ * (data-lf-change + CSS), which is where the design put it anyway.
+ */
+const STRUCTURAL: readonly MarkdownBlockType[] = ['codeBlock', 'table', 'horizontalRule'];
+
 interface Piece {
   kind: RedlineSegment['kind'];
   text: string;
@@ -45,7 +61,12 @@ interface Piece {
  * outside the wrapper — not just the first line's, since a list block's later
  * items carry their own markers.
  */
-export function annotateBlockMarkdown(segments: RedlineSegment[]): string {
+export function annotateBlockMarkdown(
+  segments: RedlineSegment[],
+  type?: MarkdownBlockType,
+): string {
+  // Literal-syntax blocks are emitted verbatim; see STRUCTURAL.
+  if (type && STRUCTURAL.includes(type)) return segments.map((s) => s.text).join('');
   const lines: Piece[][] = [[]];
   for (const seg of segments) {
     const parts = seg.text.split('\n');
@@ -109,7 +130,7 @@ function attrsFor(block: RedlineBlock): Record<string, string> {
 export function renderRedlineHtml(blocks: RedlineBlock[], toHtml: MarkdownToHtml): string {
   return blocks
     .map((block) => {
-      const md = annotateBlockMarkdown(block.segments);
+      const md = annotateBlockMarkdown(block.segments, block.type);
       const html = toHtml(md);
       return applyAttrs(html, attrsFor(block));
     })
