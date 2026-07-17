@@ -111,7 +111,10 @@ export async function bootRedline(opts: {
   // and the reviewer may simply prefer the source diff. Either way that is
   // exactly what code-app already does well.
   if (diffInfo?.baseText == null || mode !== 'redline') {
-    await bootCode(opts);
+    // Pass the persisted choice through: bootCode defaults diff docs to
+    // unified-diff mode, so a restored 'file' selection would otherwise paint
+    // the File button active over a diff surface.
+    await bootCode({ ...opts, initialViewMode: mode === 'file' ? 'file' : 'diff' });
     if (diffInfo?.baseText != null) wireToggle(docId, mode);
     return;
   }

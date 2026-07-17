@@ -24,6 +24,10 @@ export async function bootCode(opts: {
   /** Path relative to the repo root — language detection + doc label for
    *  diff docs, which may have no sourceUrl in pinned mode. */
   relPath?: string;
+  /** Which mode a diff doc opens in. Defaults to 'diff'. redline-app passes a
+   *  reviewer's persisted choice through here; without it a restored 'file'
+   *  selection would paint File active over a unified-diff surface. */
+  initialViewMode?: 'diff' | 'file';
 }): Promise<void> {
   const { docId, client, user } = opts;
   const isDiff = opts.docType === 'diff';
@@ -87,6 +91,7 @@ export async function bootCode(opts: {
     ydoc,
     sourceUrl,
     diff: diffInfo?.baseText != null ? { baseText: diffInfo.baseText } : undefined,
+    initialViewMode: opts.initialViewMode,
     onSelectionChange: () => {
       const sel = surface.getSelectionRel();
       if (sel) {
@@ -166,6 +171,8 @@ export async function bootCode(opts: {
       };
       btnDiff.addEventListener('click', () => applyMode('diff'));
       btnFile.addEventListener('click', () => applyMode('file'));
+      // Paint the restored choice; the surface already booted into it.
+      if (opts.initialViewMode === 'file') applyMode('file');
     }
     if (diffInfo?.status === 'deleted') {
       showBanner('This file was deleted in this diff — the content shown is the base version.');
