@@ -83,10 +83,19 @@
           <ol id="set-pane-list"></ol>
         </aside>
         <section id="editor-pane">
-          <!-- Diff-review view toggle: unified diff vs whole file (live).
-               Floats top-right of the editor; hidden except on diff docs
-               (code-app shows it once the base text is available). -->
+          <!-- Diff-review view toggle: redline vs unified diff vs whole file
+               (live). Floats top-right of the editor; hidden except on diff
+               docs (code-app / redline-app show it once the base text is
+               available). Redline is markdown-only — hidden on other files. -->
           <div id="view-toggle" class="view-toggle hidden" role="group" aria-label="View mode">
+            <button
+              type="button"
+              id="view-redline"
+              class="view-toggle-btn hidden"
+              aria-pressed="false"
+            >
+              Redline
+            </button>
             <button type="button" id="view-diff" class="view-toggle-btn active" aria-pressed="true">
               Diff
             </button>
