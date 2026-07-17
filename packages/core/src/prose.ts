@@ -11,6 +11,7 @@
  * concurrent user edits compose via Yjs' own CRDT machinery.
  */
 import * as Y from 'yjs';
+import { LCS_CELL_BUDGET, lcsKept } from './lcs.ts';
 
 export const PROSE_FRAGMENT_KEY = 'prose';
 
@@ -690,7 +691,7 @@ export function applyMarkdownToFragment(fragment: Y.XmlFragment, markdown: strin
   // option — which reinstates the thread-orphaning this function exists to
   // prevent, so say so out loud rather than degrading silently. 2000×2000
   // blocks is far past any real review doc (this repo's run 30–100).
-  if (prevKeys.length * nextKeys.length > 4_000_000) {
+  if (prevKeys.length * nextKeys.length > LCS_CELL_BUDGET) {
     console.warn(
       `[prose] ${prevKeys.length}→${nextKeys.length} blocks exceeds the diff budget; ` +
         'falling back to a destructive replace — thread anchors in this doc will orphan',
@@ -704,31 +705,7 @@ export function applyMarkdownToFragment(fragment: Y.XmlFragment, markdown: strin
   // maps to in the new list.
   const n = prevKeys.length;
   const m = nextKeys.length;
-  // Flat suffix table: lcs[i][j] = length of the LCS of prev[i..] and next[j..].
-  const w = m + 1;
-  const lcs = new Int32Array((n + 1) * w);
-  for (let i = n - 1; i >= 0; i--) {
-    for (let j = m - 1; j >= 0; j--) {
-      lcs[i * w + j] =
-        prevKeys[i] === nextKeys[j]
-          ? lcs[(i + 1) * w + j + 1] + 1
-          : Math.max(lcs[(i + 1) * w + j], lcs[i * w + j + 1]);
-    }
-  }
-  const keptOld = new Set<number>();
-  const keptNew = new Set<number>();
-  for (let i = 0, j = 0; i < n && j < m; ) {
-    if (prevKeys[i] === nextKeys[j]) {
-      keptOld.add(i);
-      keptNew.add(j);
-      i++;
-      j++;
-    } else if (lcs[(i + 1) * w + j] >= lcs[i * w + j + 1]) {
-      i++;
-    } else {
-      j++;
-    }
-  }
+  const { keptA: keptOld, keptB: keptNew } = lcsKept(prevKeys, nextKeys);
   if (keptOld.size === n && keptNew.size === m) return false;
 
   // Deletions first, right-to-left so earlier indices stay valid.
