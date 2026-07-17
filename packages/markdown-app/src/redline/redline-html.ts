@@ -118,6 +118,34 @@ export function renderRedlineHtml(blocks: RedlineBlock[], toHtml: MarkdownToHtml
 }
 
 /**
+ * Drop trailing empty paragraphs from generated HTML.
+ *
+ * Tiptap appends a trailing empty paragraph after several block types, so a
+ * per-block conversion returns e.g. `<h1>T</h1><p></p>`. Left in, each block
+ * renders a blank filler paragraph AND — because the attributes are applied to
+ * every top-level element — that filler inherits the real block's provenance,
+ * so a comment can resolve onto the filler instead of the block it was about.
+ *
+ * Safe because the block splitter never emits an empty block: any empty
+ * paragraph here is Tiptap's, not the document's.
+ */
+export function stripTrailingEmptyParagraphs(html: string): string {
+  const host = document.createElement('div');
+  host.innerHTML = html;
+  while (host.lastElementChild && isEmptyParagraph(host.lastElementChild)) {
+    host.lastElementChild.remove();
+  }
+  return host.innerHTML;
+}
+
+function isEmptyParagraph(el: Element): boolean {
+  if (el.tagName !== 'P') return false;
+  if ((el.textContent ?? '').trim() !== '') return false;
+  // A <br> placeholder is still empty; an image or anything else is not.
+  return Array.from(el.children).every((c) => c.tagName === 'BR');
+}
+
+/**
  * Put `attrs` on the outer element of `html`.
  *
  * Done through the DOM rather than by string surgery on the opening tag: the
