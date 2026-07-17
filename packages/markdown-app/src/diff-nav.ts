@@ -270,3 +270,38 @@ export function wireDiffNavRefresh(docId: string, workspaceId: string): void {
   window.addEventListener('focus', refresh);
   setInterval(refresh, 30_000);
 }
+
+/** Extract the docId from a `/review/<docId>[?…]` href (absolute or relative). */
+function docIdOfHref(href: string | null): string | null {
+  if (!href) return null;
+  const m = href.match(/\/review\/([^/?#]+)/);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+/**
+ * Move the "open file" marker to `docId` WITHOUT re-rendering the tree — the
+ * wholesale render (renderDiffNav) is what loses the reviewer's scroll
+ * position, so navigation must not trigger it. Updates both sidebar containers
+ * (#set-pane-list and the mobile #doc-menu), which mirror the same list.
+ */
+export function setActiveFile(docId: string): void {
+  const lists = ['set-pane-list', 'doc-menu']
+    .map((id) => document.getElementById(id))
+    .filter((el): el is HTMLElement => el != null);
+  const anchorsOf = (list: HTMLElement) =>
+    Array.from(list.querySelectorAll<HTMLAnchorElement>('a[href]'));
+  // Only mutate when the target is actually in the list. A call for a docId
+  // that isn't rendered yet (or ever) must not clear the current marker.
+  const present = lists.some((list) =>
+    anchorsOf(list).some((a) => docIdOfHref(a.getAttribute('href')) === docId),
+  );
+  if (!present) return;
+  for (const list of lists) {
+    for (const a of anchorsOf(list)) {
+      const match = docIdOfHref(a.getAttribute('href')) === docId;
+      a.classList.toggle('active', match);
+      if (match) a.setAttribute('aria-current', 'page');
+      else a.removeAttribute('aria-current');
+    }
+  }
+}

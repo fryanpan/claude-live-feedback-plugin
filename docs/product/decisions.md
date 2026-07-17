@@ -163,3 +163,17 @@ Big decisions that future sessions should respect or revisit deliberately.
   already fired. `signal` stays public for fetch/AbortController-aware libs.
 - **Impact:** Every per-doc listener in Tasks 3/5/6 uses `scope.listen(...)`
   instead of `{ signal: scope.signal }`. Reversible.
+
+## SPA navigation: single setActiveFile in diff-nav.ts (2026-07-17)
+
+- **Decision:** `setActiveFile(docId)` lives only in diff-nav.ts (not also
+  workspace-tree.ts as the plan's Task 4 listed). The router imports it from
+  there.
+- **Why:** Both nav surfaces render into the SAME containers (#set-pane-list
+  and the mobile #doc-menu) with the same `/review/<docId>` href shape, so the
+  active-marker move is one identical DOM operation. Duplicating it (or
+  re-exporting) adds code without behavior. It also no-ops when the target
+  docId isn't present, so it's safe to call regardless of which surface
+  rendered the tree.
+- **Impact:** Reversible. If the two surfaces ever diverge in container/href
+  shape, split then.
