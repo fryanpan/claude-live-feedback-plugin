@@ -3,6 +3,7 @@ import { bootCode } from './code/code-app.ts';
 import { renderDiffNav } from './diff-nav.ts';
 import { type EditorHandle, createEditor } from './editor.ts';
 import { startReadingTracker } from './reading-tracker.ts';
+import { bootRedline } from './redline/redline-app.ts';
 import { type ReviewChrome, el, mountReviewChrome, showToast } from './review-chrome.ts';
 import { type TableMenuItem, tableMenuItems } from './table-menu.ts';
 import { renderWorkspaceTree, wireWorkspaceTreeRefresh } from './workspace-tree.ts';
@@ -98,8 +99,17 @@ async function boot(): Promise<void> {
   // unified-diff rendering + view toggle on top). Everything below this
   // branch is Tiptap/ProseMirror-specific (format bar, edit-mode toggle,
   // comment pill positioning) and only applies to markdown docs.
+  //
+  // Exception: a MARKDOWN file in a diff review reads as prose, not as source,
+  // so it boots the Word-style redline instead — rendered prose with changed
+  // words struck through / underlined inline. bootRedline falls back to
+  // bootCode when the base text is unavailable or the reviewer chose a source
+  // view, so this stays a rendering choice: the doc is flat either way and the
+  // two surfaces produce byte-identical anchors.
   if (docType === 'code' || docType === 'diff') {
-    void bootCode({
+    const isMarkdownDiff = docType === 'diff' && (docRelPath ?? '').toLowerCase().endsWith('.md');
+    const boot = isMarkdownDiff ? bootRedline : bootCode;
+    void boot({
       docId,
       client,
       user,

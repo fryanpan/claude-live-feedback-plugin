@@ -2016,3 +2016,109 @@ body.code-mode .cm-editor .cm-deletedChunk .cm-deletedText {
 .tree-diff-counts .del {
   color: var(--red);
 }
+
+/* ---------------------------------------------------------------------------
+   Markdown redline (body.redline-mode) — Word-style tracked changes.
+
+   Colours deliberately match the CodeMirror source-diff surface (#e6ffec
+   additions / #ffebe9 deletions) so the two views of the same file read as one
+   product rather than two features.
+
+   Colour NEVER carries the meaning on its own: the underline and the
+   strikethrough do, so the redline still reads for a colourblind reviewer and
+   in print.
+   --------------------------------------------------------------------------- */
+
+body.redline-mode #editor {
+  overflow-y: auto;
+}
+
+body.redline-mode .ProseMirror ins.lf-ins {
+  background: #e6ffec;
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 2px;
+  text-decoration-color: #1a7f37;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+body.redline-mode .ProseMirror del.lf-del {
+  background: #ffebe9;
+  color: #57606a;
+  text-decoration: line-through;
+  text-decoration-thickness: 2px;
+  text-decoration-color: #cf222e;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+/* Whole-block changes get a change bar, mirroring the source view's changed
+   lines. The bar is on the block; the inline marks stay the fine detail. */
+body.redline-mode .ProseMirror [data-lf-change] {
+  position: relative;
+  padding-left: 10px;
+}
+
+body.redline-mode .ProseMirror [data-lf-change]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.1em;
+  bottom: 0.1em;
+  width: 3px;
+  border-radius: 2px;
+  background: #d0d7de;
+}
+
+body.redline-mode .ProseMirror .lf-block-ins::before {
+  background: #1a7f37;
+}
+
+body.redline-mode .ProseMirror .lf-block-del::before {
+  background: #cf222e;
+}
+
+body.redline-mode .ProseMirror .lf-block-changed::before {
+  background: #9a6700;
+}
+
+/* A deleted block is context, not the live document — recede it so the
+   reviewer's eye lands on what the file says NOW. */
+body.redline-mode .ProseMirror .lf-block-del {
+  opacity: 0.75;
+}
+
+/* Long unbreakable strings (URLs, hashes) inside a redlined block must wrap
+   rather than force the page to scroll sideways — see the CSS Grid `1fr`
+   overflow trap in docs/process/learnings.md. */
+body.redline-mode .ProseMirror ins.lf-ins,
+body.redline-mode .ProseMirror del.lf-del {
+  overflow-wrap: anywhere;
+}
+
+/* The three-way toggle must not overflow a 430px viewport. */
+@media (max-width: 480px) {
+  body.redline-mode .ProseMirror [data-lf-change] {
+    padding-left: 8px;
+  }
+
+  .view-toggle {
+    max-width: calc(100vw - 24px);
+    flex-wrap: wrap;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  body.redline-mode .ProseMirror ins.lf-ins {
+    background: rgba(46, 160, 67, 0.2);
+    text-decoration-color: #3fb950;
+  }
+
+  body.redline-mode .ProseMirror del.lf-del {
+    background: rgba(248, 81, 73, 0.15);
+    color: #8b949e;
+    text-decoration-color: #f85149;
+  }
+}
