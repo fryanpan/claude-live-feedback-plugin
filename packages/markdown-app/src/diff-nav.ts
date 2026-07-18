@@ -56,6 +56,42 @@ function viewKey(workspaceId: string): string {
   return `lf:diff-nav:${workspaceId}`;
 }
 
+/** In-memory mirror of the Changed/All view choice per workspace. localStorage
+ *  can throw (Safari private mode); without this mirror a toggle whose write
+ *  threw would be lost the moment a heartbeat/focus refresh (which supersedes
+ *  the toggle's in-flight render via the epoch) re-reads no persisted view and
+ *  falls back to grouped — silently dropping the user's toggle. Mirrors the
+ *  widthPrefInMemory pattern in app.ts. */
+const viewInMemory = new Map<string, NavView>();
+
+/** Test-only: clear the module-level (page-lived in prod) view mirror so cases
+ *  don't leak the toggle choice into one another. */
+export function resetDiffNavViewMemory(): void {
+  viewInMemory.clear();
+}
+
+/** The persisted Changed/All choice: localStorage when readable (survives
+ *  reloads / other tabs), else the in-memory mirror, else the default. */
+function readDiffNavView(workspaceId: string, hasDiff: boolean): NavView {
+  if (!hasDiff) return 'all'; // browse workspaces have no grouped view to choose
+  try {
+    const v = localStorage.getItem(viewKey(workspaceId));
+    if (v === 'all' || v === 'grouped') return v;
+  } catch {
+    // storage disabled — fall through to the in-memory mirror
+  }
+  return viewInMemory.get(workspaceId) ?? 'grouped';
+}
+
+function writeDiffNavView(workspaceId: string, view: NavView): void {
+  viewInMemory.set(workspaceId, view);
+  try {
+    localStorage.setItem(viewKey(workspaceId), view);
+  } catch {
+    // storage disabled — the in-memory mirror keeps the choice for this session
+  }
+}
+
 function appendParams(url: string): string {
   const qs = new URLSearchParams(location.search).toString();
   if (!qs) return url;
@@ -127,10 +163,7 @@ export async function renderDiffNav(
   if (scope?.disposed || !isCurrentSidebarRender(token)) return true;
   const hasDiff = grouped.groups.length > 0;
 
-  let view: NavView = hasDiff ? 'grouped' : 'all';
-  try {
-    if (hasDiff && localStorage.getItem(viewKey(workspaceId)) === 'all') view = 'all';
-  } catch {}
+  let view: NavView = readDiffNavView(workspaceId, hasDiff);
 
   // The all/browse view renders from /files, so fetch it up front — both to
   // decide viability (browse needs it) and so the signature reflects the tree
@@ -216,9 +249,7 @@ export async function renderDiffNav(
     for (const b of rootEl.querySelectorAll<HTMLButtonElement>('.diff-nav-toggle button')) {
       b.addEventListener('click', () => {
         view = (b.getAttribute('data-nav') as NavView) ?? 'grouped';
-        try {
-          localStorage.setItem(viewKey(workspaceId), view);
-        } catch {}
+        writeDiffNavView(workspaceId, view);
         void render(view);
       });
     }

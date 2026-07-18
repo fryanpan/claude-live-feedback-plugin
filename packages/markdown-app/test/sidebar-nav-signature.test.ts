@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderDiffNav } from '../src/diff-nav.ts';
+import { renderDiffNav, resetDiffNavViewMemory } from '../src/diff-nav.ts';
 import { beginSidebarRender, resetSidebarSignature } from '../src/sidebar-nav-key.ts';
 import { renderWorkspaceTree } from '../src/workspace-tree.ts';
 
@@ -51,6 +51,7 @@ function dom(): { list: HTMLElement; menu: HTMLElement } {
 
 beforeEach(() => {
   resetSidebarSignature();
+  resetDiffNavViewMemory();
   localStorage.clear();
 });
 afterEach(() => {
@@ -238,6 +239,54 @@ describe('sidebar shared render signature', () => {
     await new Promise((r) => setTimeout(r, 0));
 
     // The toggle still switched to the all-files tree — not silently dead.
+    expect(list.querySelector('.tree-root')).not.toBeNull();
+    expect(list.querySelector('.diff-group')).toBeNull();
+  });
+
+  it('view choice (round-4) survives a heartbeat when localStorage throws', async () => {
+    const { list } = dom();
+    // Safari private mode: setItem throws, getItem returns null.
+    vi.stubGlobal('localStorage', {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error('QuotaExceeded');
+      },
+      removeItem: () => {},
+      clear: () => {},
+      key: () => null,
+      length: 0,
+    });
+    const files: GFile[] = [{ docId: 'a', name: 'a.ts', relPath: 'a.ts', reviewUrl: '/review/a' }];
+    mockFetch({
+      ...grouped(files),
+      '/files': {
+        files: [
+          {
+            relPath: 'a.ts',
+            changed: true,
+            docId: 'a',
+            reviewUrl: '/review/a',
+            status: 'modified',
+          },
+        ],
+      },
+    });
+    // Unique workspace id so the module-level in-memory mirror can't be
+    // contaminated by another test's toggle.
+    await renderDiffNav('a', 'WP'); // default grouped (localStorage empty)
+    expect(list.querySelector('.diff-group')).not.toBeNull();
+
+    // Toggle to all-files: the write can't persist (throws) but the in-memory
+    // mirror records the choice.
+    const toggle = list.querySelector<HTMLButtonElement>('.diff-nav-toggle button[data-nav="all"]');
+    toggle?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(list.querySelector('.tree-root')).not.toBeNull();
+
+    // A heartbeat force-refresh re-reads the view. Without the in-memory mirror
+    // it would fall back to grouped (localStorage empty), dropping the toggle;
+    // with it, the all-files view persists.
+    await renderDiffNav('a', 'WP', true);
     expect(list.querySelector('.tree-root')).not.toBeNull();
     expect(list.querySelector('.diff-group')).toBeNull();
   });
