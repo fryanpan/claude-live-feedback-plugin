@@ -44,6 +44,7 @@ export interface BindHost {
       diffDeletions?: number;
       diffGroup?: string;
       diffGroupRank?: number;
+      diffGroupDetails?: string;
     },
   ): DocRoom;
   attachFile(docId: string, path: string): { ok: boolean };
@@ -161,8 +162,10 @@ export interface BindDiffOpts {
   exclude?: string[];
   /** Logical file groups for the sidebar (agent-supplied, like organizing
    *  commits). Unlisted changed files land in an "Other" group. When absent,
-   *  a heuristic groups by Tests/Docs/Build buckets + top-level module. */
-  groups?: Array<{ title: string; paths: string[] }>;
+   *  a heuristic groups by Tests/Docs/Build buckets + top-level module.
+   *  Optional per-group `details` renders as a short intro under the group
+   *  title (capped at 500 chars). */
+  groups?: Array<{ title: string; paths: string[]; details?: string }>;
   maxFiles?: number;
   owner?: string;
   producedBy?: { agentId?: string; sessionId?: string };
@@ -397,6 +400,7 @@ export function bindDiff(host: BindHost, opts: BindDiffOpts): BindDiffResult {
       diffDeletions: entry.deletions,
       diffGroup: groupOf.get(entry.relPath)?.group,
       diffGroupRank: groupOf.get(entry.relPath)?.rank,
+      diffGroupDetails: groupOf.get(entry.relPath)?.details,
     });
     // initDocMeta is set-if-absent, but status/counts are DERIVED and go
     // stale as the working tree moves — refresh them on every (re)bind.
@@ -454,7 +458,7 @@ export function bindDiff(host: BindHost, opts: BindDiffOpts): BindDiffResult {
 function refreshDiffMeta(
   room: DocRoom,
   entry: DiffFileEntry,
-  group?: { group: string; rank: number },
+  group?: { group: string; rank: number; details?: string },
 ): void {
   const next: Partial<DocMeta> = {
     diffStatus: entry.status,
@@ -463,6 +467,7 @@ function refreshDiffMeta(
     diffDeletions: entry.deletions,
     diffGroup: group?.group,
     diffGroupRank: group?.rank,
+    diffGroupDetails: group?.details,
   };
   const m = room.ydoc.getMap('meta');
   const changed = (Object.entries(next) as Array<[keyof DocMeta, unknown]>).filter(
