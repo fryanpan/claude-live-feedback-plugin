@@ -361,7 +361,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const status =
             res.error === 'not-found' || res.error === 'bad-ref'
               ? 404
-              : res.error === 'empty-diff'
+              : res.error === 'empty-diff' || res.error === 'group-details-too-long'
                 ? 400
                 : 409;
           return j(status, res);

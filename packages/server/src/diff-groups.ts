@@ -19,25 +19,44 @@ export interface GroupableFile {
 export interface FileGroupAssignment {
   group: string;
   rank: number;
-  /** Per-group prose (agent-supplied), clamped to 500 chars; undefined when
-   *  the group carried none. Same value for every file in the group. */
+  /** Per-group prose (agent-supplied), trimmed; undefined when the group
+   *  carried none. Same value for every file in the group. Guaranteed
+   *  <= MAX_GROUP_DETAILS by validation at bind time (over-long is rejected,
+   *  never truncated). */
   details?: string;
 }
 
-/** Max length of a group's `details` string. Longer values are truncated
- *  (not rejected) at assignment time so the sidebar payload stays bounded. */
+/**
+ * Max length of a group's `details` string. This is a DELIBERATE hard limit,
+ * not a display convenience: an over-long `details` is REJECTED at bind time
+ * (see {@link findOverlongGroupDetails}), forcing the caller to write a short,
+ * curated one-or-two-sentence intro instead of dumping a commit body / diff
+ * summary into the sidebar. We do not silently truncate — a mid-sentence cut
+ * reads worse than a summary the author actually wrote.
+ */
 export const MAX_GROUP_DETAILS = 500;
 
-function clampDetails(details: string | undefined): string | undefined {
+/** Trim; empty/whitespace-only → undefined. Does NOT truncate — length is
+ *  enforced by rejection at bind time, not by clamping here. */
+function normalizeDetails(details: string | undefined): string | undefined {
   const trimmed = details?.trim();
-  if (!trimmed) return undefined;
-  if (trimmed.length <= MAX_GROUP_DETAILS) return trimmed;
-  let cut = trimmed.slice(0, MAX_GROUP_DETAILS);
-  // Don't slice through a surrogate pair — a lone high surrogate would render
-  // as U+FFFD. Drop a trailing unpaired high surrogate.
-  const last = cut.charCodeAt(cut.length - 1);
-  if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
-  return cut;
+  return trimmed ? trimmed : undefined;
+}
+
+/**
+ * Groups whose (trimmed) `details` exceed MAX_GROUP_DETAILS, so the bind can
+ * reject with a caller-actionable message instead of truncating. Empty result
+ * = all details are within the limit. Pure/testable.
+ */
+export function findOverlongGroupDetails(
+  explicit?: Array<{ title: string; details?: string }>,
+): Array<{ title: string; length: number }> {
+  const over: Array<{ title: string; length: number }> = [];
+  for (const g of explicit ?? []) {
+    const len = g.details?.trim().length ?? 0;
+    if (len > MAX_GROUP_DETAILS) over.push({ title: g.title, length: len });
+  }
+  return over;
 }
 
 const TEST_RE = /(^|\/)(tests?|spec|__tests__|androidTest|testFixtures)(\/|$)|\.(test|spec)\.\w+$/i;
@@ -75,7 +94,7 @@ export function assignGroups(
     const norm = explicit.map((g) => ({
       title: g.title,
       paths: g.paths.map((p) => p.replace(/^\/+/, '').replace(/\/+$/, '')),
-      details: clampDetails(g.details),
+      details: normalizeDetails(g.details),
     }));
     for (const f of files) {
       let assigned = false;
