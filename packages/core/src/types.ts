@@ -110,9 +110,10 @@ export interface DocMeta {
   diffGroupRank?: number;
   /**
    * Optional per-group prose shown under the group title in the sidebar — a
-   * short "chapter intro" (e.g. the commit message body a group was derived
-   * from). Every member of a group carries the same value. Capped at 500
-   * chars at bind time.
+   * short "chapter intro" the author writes for the group. Every member of a
+   * group carries the same value. Hard-capped at 500 chars — a longer value is
+   * rejected at bind time (deliberately forcing a short intro), never
+   * truncated, so a stored value is always within the limit.
    */
   diffGroupDetails?: string;
 }

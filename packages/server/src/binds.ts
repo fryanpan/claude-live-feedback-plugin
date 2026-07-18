@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join, relative, resolve as resolvePath, sep } from 'node:path';
 import type { DocMeta, DocType } from '@feedback/core';
-import { assignGroups } from './diff-groups.ts';
+import { MAX_GROUP_DETAILS, assignGroups, findOverlongGroupDetails } from './diff-groups.ts';
 import { scanFolder } from './fs-scan.ts';
 import {
   type DiffFileEntry,
@@ -164,7 +164,9 @@ export interface BindDiffOpts {
    *  commits). Unlisted changed files land in an "Other" group. When absent,
    *  a heuristic groups by Tests/Docs/Build buckets + top-level module.
    *  Optional per-group `details` renders as a short intro under the group
-   *  title (capped at 500 chars). */
+   *  title; over MAX_GROUP_DETAILS chars is REJECTED (error
+   *  'group-details-too-long'), not truncated — callers must write a short
+   *  intro. */
   groups?: Array<{ title: string; paths: string[]; details?: string }>;
   maxFiles?: number;
   owner?: string;
@@ -203,6 +205,7 @@ export type BindDiffResult =
         | 'diff-failed'
         | 'empty-diff'
         | 'too-many-files'
+        | 'group-details-too-long'
         | 'review-exists-different-range';
       detail?: string;
       fileCount?: number;
@@ -229,6 +232,19 @@ export type BindDiffResult =
 export function bindDiff(host: BindHost, opts: BindDiffOpts): BindDiffResult {
   const root = resolvePath(opts.repoPath);
   if (!existsSync(root)) return { ok: false, error: 'not-found' };
+
+  // A group's `details` intro is capped HARD at MAX_GROUP_DETAILS and rejected
+  // (not truncated) when over — this deliberately forces the caller to write a
+  // short, curated intro rather than dump a commit body into the sidebar.
+  const overlong = findOverlongGroupDetails(opts.groups);
+  if (overlong.length > 0) {
+    const which = overlong.map((g) => `"${g.title}" is ${g.length} chars`).join('; ');
+    return {
+      ok: false,
+      error: 'group-details-too-long',
+      detail: `${which} — max ${MAX_GROUP_DETAILS}. Write a short 1–2 sentence intro; don't paste the full commit body.`,
+    };
+  }
 
   // BROWSE mode — no base to diff against (plain folder, fresh repo, or the
   // caller just wants to look around). No eager per-file binds: files open
