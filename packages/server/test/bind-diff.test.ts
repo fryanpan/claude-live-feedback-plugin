@@ -500,15 +500,14 @@ describe('Rooms.bindDiff', () => {
     expect(regrouped.groups.map((g) => g.title)).toEqual(['Renamed only', 'Other']);
   });
 
-  it('per-group details reach listGroupedDiff (capped at 500 chars)', () => {
-    const long = 'y'.repeat(600);
+  it('per-group details reach listGroupedDiff and survive a group-less refresh', () => {
     const res = rooms.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       reviewId: 'details-groups',
       groups: [
         { title: 'Core change', paths: ['src/kept.ts'], details: 'Rewrote the kept path.' },
-        { title: 'Everything else', paths: ['src'], details: long },
+        { title: 'Everything else', paths: ['src'], details: 'The remaining source churn.' },
       ],
     });
     expect(res.ok).toBe(true);
@@ -516,8 +515,7 @@ describe('Rooms.bindDiff', () => {
     const grouped = rooms.listGroupedDiff('details-groups');
     const byTitle = new Map(grouped.groups.map((g) => [g.title, g]));
     expect(byTitle.get('Core change')?.details).toBe('Rewrote the kept path.');
-    // Second group claims the remaining src files; its details is truncated.
-    expect(byTitle.get('Everything else')?.details).toHaveLength(500);
+    expect(byTitle.get('Everything else')?.details).toBe('The remaining source churn.');
 
     // A group-less refresh re-bind preserves the details (not clobbered).
     const refresh = rooms.bindDiff({
@@ -530,6 +528,25 @@ describe('Rooms.bindDiff', () => {
     expect(new Map(after.groups.map((g) => [g.title, g.details])).get('Core change')).toBe(
       'Rewrote the kept path.',
     );
+  });
+
+  it('rejects a bind whose group details exceed the 500-char cap (no truncation)', () => {
+    const res = rooms.bindDiff({
+      repoPath: fixture.repo,
+      base: fixture.base,
+      reviewId: 'details-too-long',
+      groups: [
+        { title: 'OK', paths: ['src/kept.ts'], details: 'short' },
+        { title: 'Way too long', paths: ['src'], details: 'y'.repeat(501) },
+      ],
+    });
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toBe('group-details-too-long');
+    // The message names the offending group so the caller can fix it.
+    expect(res.detail).toContain('Way too long');
+    // Nothing was bound — the review doesn't exist.
+    expect(rooms.listGroupedDiff('details-too-long').groups).toHaveLength(0);
   });
 
   it('listRepoFiles marks changed files; openContextFile lazily binds the rest', () => {
@@ -605,6 +622,23 @@ describe('Rooms.bindDiff', () => {
         await fetch(`http://localhost:${handle.port}/api/workspaces/http-details/grouped`)
       ).json()) as { groups: Array<{ title: string; details?: string }> };
       expect(withDetails.groups[0]?.details).toBe('Chapter one.');
+
+      // Over-long details are rejected at the route with 400 (caller's fault),
+      // not silently truncated.
+      const tooLong = await fetch(`http://localhost:${handle.port}/api/diffs`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          repo: fixture.repo,
+          base: fixture.base,
+          reviewId: 'http-details-toolong',
+          groups: [{ title: 'Too long', paths: ['src'], details: 'z'.repeat(501) }],
+        }),
+      });
+      expect(tooLong.status).toBe(400);
+      const tlBody = (await tooLong.json()) as { ok: boolean; error?: string };
+      expect(tlBody.ok).toBe(false);
+      expect(tlBody.error).toBe('group-details-too-long');
     } finally {
       await handle.stop();
       rmSync(httpDataDir, { recursive: true, force: true });
