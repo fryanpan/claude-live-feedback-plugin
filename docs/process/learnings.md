@@ -2,6 +2,34 @@
 
 Technical discoveries that should persist across sessions for this project.
 
+## An MCP source fix doesn't reach peers until the tracked bundle is rebuilt
+
+- **PR #69 declared the `groups` param in `create_diff_review`'s inputSchema
+  (`packages/mcp/src/mcp.ts`) but never rebuilt `packages/plugin/mcp/index.js`
+  — so no peer ever got the fix.** Peers load the MCP server via
+  `.mcp.json` → `node ${CLAUDE_PLUGIN_ROOT}/mcp/index.js`, i.e. the
+  **tracked, committed bundle**, NOT the TypeScript source. That bundle is
+  regenerated only by `bun run build:mcp` (which writes both
+  `packages/mcp/dist/mcp.js` and `packages/plugin/mcp/index.js`). Editing
+  `mcp.ts` and merging changes nothing peers can see; the bundle on `main`
+  was last rebuilt two PRs earlier (#59) and still lacked `groups`. The
+  "peer picks it up on next session restart" reasoning was doubly wrong — a
+  restart reloads the *stale committed bundle*, so even restarting didn't
+  help.
+- **Rule: any PR that touches `packages/mcp/src/**` MUST run
+  `bun run build:mcp` and commit the regenerated
+  `packages/plugin/mcp/index.js` in the same PR.** `packages/mcp/dist/` is
+  gitignored (not shipped); `packages/plugin/mcp/index.js` is the shipped
+  artifact and IS tracked — verify it's in `git status` before pushing.
+  Grep the diff for the schema/description change in `index.js`, not just in
+  `mcp.ts`. Same class as "the route layer silently drops params": the fix
+  lived one layer away from where it's consumed.
+- The two client bundles differ in how they ship: `markdown-app/dist` is
+  **untracked** and rebuilt at deploy time on the server (served
+  per-request), so a markdown-app change is rebuild-on-the-box; the MCP
+  bundle is **tracked** and travels through git to each peer's plugin cache,
+  so it must be committed. Don't conflate them.
+
 ## Yjs attribute TYPES reach prosemirror untouched — a string ≠ a number
 
 - **Every heading parsed from markdown rendered as `<h1>` because we stored
