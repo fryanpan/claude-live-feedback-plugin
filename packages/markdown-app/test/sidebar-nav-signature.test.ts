@@ -324,8 +324,10 @@ describe('sidebar shared render signature', () => {
     await new Promise((r) => setTimeout(r, 0));
 
     // The stale toggle bailed: it did NOT overwrite the sidebar with the
-    // all-files tree; the grouped list is still on screen.
-    expect(list.querySelector('.tree-root')).toBeNull();
+    // all-files tree; the grouped list is still on screen. (`.tree-file` is
+    // unique to the all-files view — the grouped view's own folder tree uses
+    // `.diff-file` leaves — so it's the reliable "switched to all" signal.)
+    expect(list.querySelector('.tree-file')).toBeNull();
     expect(list.contains(groupedNode)).toBe(true);
   });
 
