@@ -12,7 +12,12 @@
  */
 
 import { setActiveFile } from './diff-nav.ts';
-import { setSidebarSignature, sidebarShowsSignature } from './sidebar-nav-key.ts';
+import {
+  beginSidebarRender,
+  isCurrentSidebarRender,
+  setSidebarSignature,
+  sidebarShowsSignature,
+} from './sidebar-nav-key.ts';
 
 interface TreeFile {
   type: 'file';
@@ -126,6 +131,7 @@ export async function renderWorkspaceTree(
   force = false,
   scope?: Disposable,
 ): Promise<void> {
+  const token = beginSidebarRender();
   const setPane = document.getElementById('set-pane');
   const setPaneList = document.getElementById('set-pane-list');
   const docMenu = document.getElementById('doc-menu');
@@ -138,8 +144,9 @@ export async function renderWorkspaceTree(
     const res = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/tree`);
     if (!res.ok) return;
     const data = (await res.json()) as { tree: TreeDir };
-    // Superseded while fetching → don't overwrite the current sidebar.
-    if (scope?.disposed) return;
+    // Superseded while fetching (mount torn down, or a newer sidebar render
+    // claimed the epoch) → don't overwrite the current sidebar.
+    if (scope?.disposed || !isCurrentSidebarRender(token)) return;
     if (!force && sidebarShowsSignature(treeSignature(workspaceId, data.tree))) {
       setActiveFile(docId);
       return;

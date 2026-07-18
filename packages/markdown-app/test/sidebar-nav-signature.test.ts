@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderDiffNav } from '../src/diff-nav.ts';
-import { resetSidebarSignature } from '../src/sidebar-nav-key.ts';
+import { beginSidebarRender, resetSidebarSignature } from '../src/sidebar-nav-key.ts';
 import { renderWorkspaceTree } from '../src/workspace-tree.ts';
 
 /**
@@ -240,6 +240,44 @@ describe('sidebar shared render signature', () => {
     // The toggle still switched to the all-files tree — not silently dead.
     expect(list.querySelector('.tree-root')).not.toBeNull();
     expect(list.querySelector('.diff-group')).toBeNull();
+  });
+
+  it('epoch (round-3): a toggle superseded mid-fetch does not clobber the new sidebar', async () => {
+    const { list } = dom();
+    const files: GFile[] = [
+      { docId: 'a', name: 'a.ts', relPath: 'a.ts', reviewUrl: '/review/a' },
+      { docId: 'b', name: 'b.ts', relPath: 'b.ts', reviewUrl: '/review/b' },
+    ];
+    mockFetch({
+      ...grouped(files),
+      '/files': {
+        files: [
+          {
+            relPath: 'a.ts',
+            changed: true,
+            docId: 'a',
+            reviewUrl: '/review/a',
+            status: 'modified',
+          },
+        ],
+      },
+    });
+    await renderDiffNav('a', 'W'); // grouped view; toggle buttons wired
+    const groupedNode = list.querySelector('.diff-group');
+    expect(groupedNode).not.toBeNull();
+
+    // Click "Show All Files": render('all') claims a token, then awaits
+    // fetchFiles. Before it resolves, a NEWER render claims the sidebar
+    // (simulating a navigation to a different doc landing during the fetch).
+    const toggle = list.querySelector<HTMLButtonElement>('.diff-nav-toggle button[data-nav="all"]');
+    toggle?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    beginSidebarRender(); // supersede the in-flight toggle
+    await new Promise((r) => setTimeout(r, 0));
+
+    // The stale toggle bailed: it did NOT overwrite the sidebar with the
+    // all-files tree; the grouped list is still on screen.
+    expect(list.querySelector('.tree-root')).toBeNull();
+    expect(list.contains(groupedNode)).toBe(true);
   });
 
   it('disposed guard (#3/#4): a superseded render does not move the marker', async () => {

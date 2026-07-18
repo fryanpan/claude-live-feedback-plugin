@@ -36,3 +36,30 @@ export function setSidebarSignature(sig: string): void {
 export function resetSidebarSignature(): void {
   renderedSig = null;
 }
+
+/**
+ * Monotonic sidebar-render epoch — an optimistic-concurrency token for the
+ * shared sidebar. Any code about to (re)build it claims a token via
+ * `beginSidebarRender()` BEFORE its first await, then after each await checks
+ * `isCurrentSidebarRender(token)` and bails if a newer render has since claimed
+ * the sidebar. This makes the last claim win, catching supersessions
+ * `scope.disposed` cannot: a view-toggle whose workspace was navigated away
+ * during its on-demand fetch, or two same-mount fetches (e.g. legacy-set meta
+ * ticks) resolving out of order. It complements `scope.disposed` (which catches
+ * a mount torn down with no newer render to bump the epoch) rather than
+ * replacing it.
+ */
+let renderEpoch = 0;
+
+/** Claim the sidebar for the caller's render; returns the token to re-check
+ *  after each await. */
+export function beginSidebarRender(): number {
+  renderEpoch += 1;
+  return renderEpoch;
+}
+
+/** True while `token` is still the newest claim — i.e. no later render has
+ *  superseded this one. */
+export function isCurrentSidebarRender(token: number): boolean {
+  return token === renderEpoch;
+}

@@ -1,5 +1,10 @@
 import { escapeHtml } from '@feedback/core';
-import { setSidebarSignature, sidebarShowsSignature } from './sidebar-nav-key.ts';
+import {
+  beginSidebarRender,
+  isCurrentSidebarRender,
+  setSidebarSignature,
+  sidebarShowsSignature,
+} from './sidebar-nav-key.ts';
 
 /**
  * Sidebar navigation for DIFF REVIEWS (renders into #set-pane / #doc-menu,
@@ -105,6 +110,7 @@ export async function renderDiffNav(
   force = false,
   scope?: Disposable,
 ): Promise<boolean> {
+  const token = beginSidebarRender();
   activeDocId = docId;
   // Re-fetch on every navigation so a file added to the changed set mid-review
   // shows up in place (findings #2, #7); the signature check below decides
@@ -116,6 +122,9 @@ export async function renderDiffNav(
   );
   const grouped =
     res?.ok === true ? ((await res.json()) as GroupedModel) : ({ groups: [] } as GroupedModel);
+  // Superseded while fetching (mount torn down, or a newer sidebar render
+  // claimed the epoch) → don't touch the shared sidebar (findings #3–#5).
+  if (scope?.disposed || !isCurrentSidebarRender(token)) return true;
   const hasDiff = grouped.groups.length > 0;
 
   let view: NavView = hasDiff ? 'grouped' : 'all';
@@ -130,6 +139,7 @@ export async function renderDiffNav(
   let filesData: FilesResponse | null = null;
   if (view === 'all') {
     filesData = await fetchFiles(workspaceId);
+    if (scope?.disposed || !isCurrentSidebarRender(token)) return true;
     if (!filesData) {
       // No all-files data: a browse workspace has nothing to show; a diff
       // review can still fall back to its grouped list. Don't reset the shared
@@ -139,9 +149,6 @@ export async function renderDiffNav(
       view = 'grouped';
     }
   }
-
-  // Superseded while fetching → don't touch the shared sidebar (findings #3–#5).
-  if (scope?.disposed) return true;
 
   document.body.classList.add('has-set');
   document.getElementById('set-pane')?.setAttribute('aria-hidden', 'false');
@@ -154,16 +161,19 @@ export async function renderDiffNav(
   }
 
   const render = async (v: NavView) => {
+    // Claim the sidebar for THIS render. render() is also the Changed/All view
+    // TOGGLE handler: it fires on a live user click and closes over the scope of
+    // whichever mount last fully rendered — that mount is disposed after a
+    // signature-match navigation, so a scope.disposed guard would make the
+    // toggle silently dead. The epoch token instead keeps a same-workspace
+    // toggle alive (nothing newer claimed the sidebar) while still bailing if a
+    // navigation to a DIFFERENT sidebar lands during the on-demand fetch below
+    // (round-3 finding: a stale toggle must not clobber the new sidebar).
+    const rtoken = beginSidebarRender();
     // Toggling grouped→all mid-session needs the file list now (the grouped
-    // path skipped the up-front fetch). No scope.disposed guard here: render()
-    // is also the Changed/All view TOGGLE handler, which fires on a live user
-    // click and closes over the scope of whichever mount last fully rendered —
-    // that mount is disposed after a signature-match navigation, and guarding
-    // on it would make the toggle silently dead (the navigation-supersession
-    // guard lives at the call site before this closure runs). The data this
-    // closure holds is current: only a full render() re-wires the buttons, and
-    // a signature match means the file list is unchanged.
+    // path skipped the up-front fetch).
     if (v === 'all' && !filesData) filesData = await fetchFiles(workspaceId);
+    if (!isCurrentSidebarRender(rtoken)) return;
     const header = hasDiff
       ? `
       <div class="diff-nav-toggle" role="group" aria-label="Sidebar view">

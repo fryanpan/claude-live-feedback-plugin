@@ -9,6 +9,8 @@ import { mountRedline } from './redline/redline-app.ts';
 import { type ReviewChrome, el, mountReviewChrome, showToast } from './review-chrome.ts';
 import { startRouter } from './router.ts';
 import {
+  beginSidebarRender,
+  isCurrentSidebarRender,
   resetSidebarSignature,
   setSidebarSignature,
   sidebarShowsSignature,
@@ -567,6 +569,10 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   const docSwitcher = document.getElementById('doc-switcher') as HTMLButtonElement | null;
 
   async function renderSetNav(): Promise<void> {
+    // Claim the sidebar so any concurrent/stale render (e.g. two legacy-set
+    // meta ticks resolving out of order, or a previous workspace's in-flight
+    // render) can detect it was superseded and bail before overwriting.
+    const token = beginSidebarRender();
     const m = readDocMeta(ydoc);
     const workspaceId = m.workspaceId ?? '';
     const setId = m.setId ?? '';
@@ -603,10 +609,13 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     // guards the superseded-navigation race after the await.
     try {
       const res = await fetch('/api/docs');
-      if (scope.disposed) return;
+      // Bail if the mount was torn down OR a newer sidebar render superseded us
+      // (e.g. a later meta tick's fetch already resolved) — an earlier,
+      // possibly smaller snapshot must not overwrite it.
+      if (scope.disposed || !isCurrentSidebarRender(token)) return;
       if (!res.ok) return;
       const data = (await res.json()) as LegacyDocs;
-      if (scope.disposed) return;
+      if (scope.disposed || !isCurrentSidebarRender(token)) return;
       const siblings = data.docs.filter((d) => d.setId === setId && d.type === 'markdown');
       // Stable order: title (or sourceUrl basename) ASC, then docId.
       siblings.sort((a, b) => {
