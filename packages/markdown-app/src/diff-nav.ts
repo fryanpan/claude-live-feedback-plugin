@@ -18,7 +18,7 @@ import {
  *    context docs.
  */
 
-interface GroupedFile {
+export interface GroupedFile {
   docId: string;
   name: string;
   relPath: string;
@@ -241,6 +241,18 @@ export async function renderDiffNav(
           } catch {}
         });
       }
+      // Persist each in-group folder's open/closed state so a heartbeat rebuild
+      // doesn't re-expand a folder the reviewer collapsed. Only the grouped
+      // view's folder tree carries data-rel here (the all-files view's <details>
+      // don't), so this is a no-op in 'all' view.
+      for (const d of rootEl.querySelectorAll<HTMLDetailsElement>('details[data-rel]')) {
+        d.addEventListener('toggle', () => {
+          const rel = d.getAttribute('data-rel') ?? '';
+          try {
+            localStorage.setItem(groupFolderKey(workspaceId, rel), d.open ? 'open' : 'closed');
+          } catch {}
+        });
+      }
     }
     setSidebarSignature(diffNavSignature(workspaceId, v, grouped, filesData));
   };
@@ -305,6 +317,99 @@ function groupKey(workspaceId: string, title: string): string {
   return `lf:diff-group:${workspaceId}:${title}`;
 }
 
+interface GroupTreeNode {
+  dirs: Map<string, GroupTreeNode>;
+  files: GroupedFile[];
+}
+
+/** Build a folder tree from a group's changed files. Only changed files are
+ *  present, so every directory in the tree is on a path to a change — there are
+ *  no empty directories to prune. */
+function buildGroupTree(files: GroupedFile[]): GroupTreeNode {
+  const root: GroupTreeNode = { dirs: new Map(), files: [] };
+  for (const f of files) {
+    const parts = f.relPath.split('/');
+    let cursor = root;
+    for (const part of parts.slice(0, -1)) {
+      let next = cursor.dirs.get(part);
+      if (!next) {
+        next = { dirs: new Map(), files: [] };
+        cursor.dirs.set(part, next);
+      }
+      cursor = next;
+    }
+    cursor.files.push(f);
+  }
+  return root;
+}
+
+/** Collapse a linear run of single-child directories (no files of their own,
+ *  exactly one subdirectory) into one node — VS Code's "Compact Folders". The
+ *  slash-joined label makes the fold obvious (e.g. `packages/widget/src`), and
+ *  the returned node is the deepest one that actually branches or holds files. */
+function compactDir(name: string, node: GroupTreeNode): { label: string; node: GroupTreeNode } {
+  let label = name;
+  let cur = node;
+  while (cur.files.length === 0 && cur.dirs.size === 1) {
+    const [childName, child] = Array.from(cur.dirs.entries())[0];
+    label += `/${childName}`;
+    cur = child;
+  }
+  return { label, node: cur };
+}
+
+/** localStorage key for one in-group folder's open/closed state. Namespaced by
+ *  workspace + the folder's full repo-relative path (the compacted label already
+ *  IS that path), independent of the all-files tree's own folder state. */
+function groupFolderKey(workspaceId: string, path: string): string {
+  return `lf:group-folder-open:${workspaceId}:${path}`;
+}
+
+/** Render one group's changed files as a compact folder tree: directories
+ *  (sorted) before files (sorted). Leaf files reuse fileRow, so each keeps its
+ *  A/M/D/R status, churn +/− counts, and open-comment badge. Folders default to
+ *  expanded (they're all on the path to a change) but persist a manual collapse
+ *  via `data-rel` + localStorage, so the 30s heartbeat rebuild doesn't spring
+ *  them back open. */
+function renderGroupTree(
+  node: GroupTreeNode,
+  activeDocId: string,
+  workspaceId: string,
+  prefix: string,
+): string {
+  const dirs = Array.from(node.dirs.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([name, child]) => {
+      const { label, node: leaf } = compactDir(name, child);
+      const fullPath = prefix ? `${prefix}/${label}` : label;
+      let open = true;
+      try {
+        if (localStorage.getItem(groupFolderKey(workspaceId, fullPath)) === 'closed') open = false;
+      } catch {}
+      return `<li class="tree-dir"><details${open ? ' open' : ''} data-rel="${escapeHtml(
+        fullPath,
+      )}"><summary><span class="tree-name">${escapeHtml(
+        label,
+      )}</span></summary><ul>${renderGroupTree(leaf, activeDocId, workspaceId, fullPath)}</ul></details></li>`;
+    })
+    .join('');
+  const files = node.files
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((f) => fileRow(f, activeDocId))
+    .join('');
+  return dirs + files;
+}
+
+/** Build + render a group's changed files as a compact folder tree. Exported
+ *  for unit testing the tree/compaction shape. */
+export function renderGroupFolderTree(
+  files: GroupedFile[],
+  activeDocId: string,
+  workspaceId = '',
+): string {
+  return renderGroupTree(buildGroupTree(files), activeDocId, workspaceId, '');
+}
+
 function renderGrouped(model: GroupedModel, activeDocId: string, workspaceId: string): string {
   return model.groups
     .map((g) => {
@@ -319,7 +424,7 @@ function renderGrouped(model: GroupedModel, activeDocId: string, workspaceId: st
         )}</span><span class="diff-group-meta">${g.files.length}</span>${
           g.openCount > 0 ? `<span class="tree-badge badge-open">${g.openCount}</span>` : ''
         }</summary>
-        <ul class="diff-group-files">${g.files.map((f) => fileRow(f, activeDocId)).join('')}</ul>
+        <ul class="diff-group-files tree-root">${renderGroupFolderTree(g.files, activeDocId, workspaceId)}</ul>
       </details>`;
     })
     .join('');
