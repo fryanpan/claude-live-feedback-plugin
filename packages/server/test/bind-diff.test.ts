@@ -500,6 +500,38 @@ describe('Rooms.bindDiff', () => {
     expect(regrouped.groups.map((g) => g.title)).toEqual(['Renamed only', 'Other']);
   });
 
+  it('per-group details reach listGroupedDiff (capped at 500 chars)', () => {
+    const long = 'y'.repeat(600);
+    const res = rooms.bindDiff({
+      repoPath: fixture.repo,
+      base: fixture.base,
+      reviewId: 'details-groups',
+      groups: [
+        { title: 'Core change', paths: ['src/kept.ts'], details: 'Rewrote the kept path.' },
+        { title: 'Everything else', paths: ['src'], details: long },
+      ],
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const grouped = rooms.listGroupedDiff('details-groups');
+    const byTitle = new Map(grouped.groups.map((g) => [g.title, g]));
+    expect(byTitle.get('Core change')?.details).toBe('Rewrote the kept path.');
+    // Second group claims the remaining src files; its details is truncated.
+    expect(byTitle.get('Everything else')?.details).toHaveLength(500);
+
+    // A group-less refresh re-bind preserves the details (not clobbered).
+    const refresh = rooms.bindDiff({
+      repoPath: fixture.repo,
+      base: fixture.base,
+      reviewId: 'details-groups',
+    });
+    expect(refresh.ok).toBe(true);
+    const after = rooms.listGroupedDiff('details-groups');
+    expect(new Map(after.groups.map((g) => [g.title, g.details])).get('Core change')).toBe(
+      'Rewrote the kept path.',
+    );
+  });
+
   it('listRepoFiles marks changed files; openContextFile lazily binds the rest', () => {
     const res = rooms.bindDiff({ repoPath: fixture.repo, base: fixture.base });
     expect(res.ok).toBe(true);
@@ -553,8 +585,26 @@ describe('Rooms.bindDiff', () => {
       expect(res.ok).toBe(true);
       const grouped = (await (
         await fetch(`http://localhost:${handle.port}/api/workspaces/http-groups/grouped`)
-      ).json()) as { groups: Array<{ title: string }> };
+      ).json()) as { groups: Array<{ title: string; details?: string }> };
       expect(grouped.groups.map((g) => g.title)).toEqual(['Via HTTP']);
+
+      // Per-group details must survive the route too (same class of bug as
+      // the dropped-groups param — the route casts body.groups).
+      const dRes = await fetch(`http://localhost:${handle.port}/api/diffs`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          repo: fixture.repo,
+          base: fixture.base,
+          reviewId: 'http-details',
+          groups: [{ title: 'With intro', paths: ['src'], details: 'Chapter one.' }],
+        }),
+      });
+      expect(dRes.ok).toBe(true);
+      const withDetails = (await (
+        await fetch(`http://localhost:${handle.port}/api/workspaces/http-details/grouped`)
+      ).json()) as { groups: Array<{ title: string; details?: string }> };
+      expect(withDetails.groups[0]?.details).toBe('Chapter one.');
     } finally {
       await handle.stop();
       rmSync(httpDataDir, { recursive: true, force: true });
