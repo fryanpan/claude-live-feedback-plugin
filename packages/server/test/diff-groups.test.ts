@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'bun:test';
-import { type GroupableFile, assignGroups } from '../src/diff-groups.ts';
+import {
+  type GroupableFile,
+  MAX_GROUP_DETAILS,
+  assignGroups,
+  findOverlongGroupDetails,
+} from '../src/diff-groups.ts';
 
 /**
  * assignGroups is the sidebar's "Show Grouped Diffs" logic. Agents pass
@@ -64,11 +69,11 @@ describe('assignGroups — explicit groups', () => {
     expect(out.get('src/a.ts')?.group).toBe('Core');
   });
 
-  it('carries a group’s details onto every file it claims', () => {
+  it('carries a group’s details onto every file it claims, trimmed', () => {
     const out = assignGroups(
       [f('src/a.ts'), f('src/b.ts'), f('README.md')],
       [
-        { title: 'Core', paths: ['src'], details: 'The routing rewrite.' },
+        { title: 'Core', paths: ['src'], details: '  The routing rewrite.  ' },
         { title: 'Docs', paths: ['README.md'] }, // no details
       ],
     );
@@ -77,29 +82,40 @@ describe('assignGroups — explicit groups', () => {
     expect(out.get('README.md')?.details).toBeUndefined();
   });
 
-  it('truncates details to 500 chars and treats blank details as undefined', () => {
-    const long = 'x'.repeat(600);
+  it('treats blank/whitespace details as undefined (no empty node) and never truncates', () => {
+    const atLimit = 'x'.repeat(MAX_GROUP_DETAILS);
     const out = assignGroups(
       [f('a.ts'), f('b.ts')],
       [
-        { title: 'Long', paths: ['a.ts'], details: long },
+        { title: 'AtLimit', paths: ['a.ts'], details: atLimit }, // exactly 500 → kept whole
         { title: 'Blank', paths: ['b.ts'], details: '   \n  ' },
       ],
     );
-    expect(out.get('a.ts')?.details).toHaveLength(500);
+    // At the cap: passed through untouched (validation, not assignGroups,
+    // guards the over-limit case; here it's within the limit).
+    expect(out.get('a.ts')?.details).toBe(atLimit);
     expect(out.get('b.ts')?.details).toBeUndefined();
   });
+});
 
-  it('does not truncate through a surrogate pair (no lone surrogate at the cut)', () => {
-    // 499 ASCII chars then an emoji (a surrogate pair at code units 499–500):
-    // a naive slice(0,500) keeps the high surrogate only. Expect it dropped.
-    const details = `${'a'.repeat(499)}😀${'b'.repeat(100)}`;
-    const out = assignGroups([f('a.ts')], [{ title: 'G', paths: ['a.ts'], details }]);
-    const clamped = out.get('a.ts')?.details ?? '';
-    expect(clamped).toHaveLength(499);
-    // No unpaired high surrogate remains at the boundary.
-    const last = clamped.charCodeAt(clamped.length - 1);
-    expect(last >= 0xd800 && last <= 0xdbff).toBe(false);
+describe('findOverlongGroupDetails', () => {
+  it('flags only groups whose trimmed details exceed the cap', () => {
+    const over = findOverlongGroupDetails([
+      { title: 'Fine', details: 'short' },
+      { title: 'AtLimit', details: 'x'.repeat(MAX_GROUP_DETAILS) }, // exactly 500 → ok
+      { title: 'TooLong', details: 'y'.repeat(MAX_GROUP_DETAILS + 1) },
+      { title: 'None' }, // no details
+    ]);
+    expect(over).toEqual([{ title: 'TooLong', length: MAX_GROUP_DETAILS + 1 }]);
+  });
+
+  it('measures the TRIMMED length (leading/trailing whitespace does not count)', () => {
+    const padded = `   ${'z'.repeat(MAX_GROUP_DETAILS)}   `; // 506 raw, 500 trimmed
+    expect(findOverlongGroupDetails([{ title: 'Padded', details: padded }])).toEqual([]);
+  });
+
+  it('returns empty for undefined groups', () => {
+    expect(findOverlongGroupDetails(undefined)).toEqual([]);
   });
 });
 
