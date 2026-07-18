@@ -108,6 +108,13 @@ export interface DocMeta {
    */
   diffGroup?: string;
   diffGroupRank?: number;
+  /**
+   * Optional per-group prose shown under the group title in the sidebar — a
+   * short "chapter intro" (e.g. the commit message body a group was derived
+   * from). Every member of a group carries the same value. Capped at 500
+   * chars at bind time.
+   */
+  diffGroupDetails?: string;
 }
 
 export interface User {

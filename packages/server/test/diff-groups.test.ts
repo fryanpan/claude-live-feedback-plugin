@@ -63,6 +63,32 @@ describe('assignGroups — explicit groups', () => {
     const out = assignGroups([f('src/a.ts')], [{ title: 'Core', paths: ['/src/'] }]);
     expect(out.get('src/a.ts')?.group).toBe('Core');
   });
+
+  it('carries a group’s details onto every file it claims', () => {
+    const out = assignGroups(
+      [f('src/a.ts'), f('src/b.ts'), f('README.md')],
+      [
+        { title: 'Core', paths: ['src'], details: 'The routing rewrite.' },
+        { title: 'Docs', paths: ['README.md'] }, // no details
+      ],
+    );
+    expect(out.get('src/a.ts')?.details).toBe('The routing rewrite.');
+    expect(out.get('src/b.ts')?.details).toBe('The routing rewrite.');
+    expect(out.get('README.md')?.details).toBeUndefined();
+  });
+
+  it('truncates details to 500 chars and treats blank details as undefined', () => {
+    const long = 'x'.repeat(600);
+    const out = assignGroups(
+      [f('a.ts'), f('b.ts')],
+      [
+        { title: 'Long', paths: ['a.ts'], details: long },
+        { title: 'Blank', paths: ['b.ts'], details: '   \n  ' },
+      ],
+    );
+    expect(out.get('a.ts')?.details).toHaveLength(500);
+    expect(out.get('b.ts')?.details).toBeUndefined();
+  });
 });
 
 describe('assignGroups — heuristic fallback (no explicit groups)', () => {

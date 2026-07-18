@@ -351,7 +351,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           title: body?.title as string | undefined,
           exclude: Array.isArray(body?.exclude) ? (body.exclude as string[]) : undefined,
           groups: Array.isArray(body?.groups)
-            ? (body.groups as Array<{ title: string; paths: string[] }>)
+            ? (body.groups as Array<{ title: string; paths: string[]; details?: string }>)
             : undefined,
           maxFiles: typeof body?.maxFiles === 'number' ? Number(body.maxFiles) : undefined,
           owner: body?.owner as string | undefined,
