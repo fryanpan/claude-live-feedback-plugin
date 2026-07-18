@@ -93,6 +93,23 @@ describe('renderGroupFolderTree', () => {
     expect(html).not.toMatch(/href="\/review\/src\/b\.ts"[^>]*aria-current="page"/);
   });
 
+  it('emits data-rel folder paths and respects a persisted collapsed folder', () => {
+    localStorage.clear();
+    const html = renderGroupFolderTree([gf('packages/widget/src/index.ts')], '', 'WS');
+    // The compacted folder carries its full repo-relative path for persistence.
+    expect(html).toContain('data-rel="packages/widget/src"');
+    const div = document.createElement('div');
+    div.innerHTML = html;
+    expect(div.querySelector('li.tree-dir > details')?.hasAttribute('open')).toBe(true);
+
+    // A persisted collapse survives the next (heartbeat) render.
+    localStorage.setItem('lf:group-folder-open:WS:packages/widget/src', 'closed');
+    const div2 = document.createElement('div');
+    div2.innerHTML = renderGroupFolderTree([gf('packages/widget/src/index.ts')], '', 'WS');
+    expect(div2.querySelector('li.tree-dir > details')?.hasAttribute('open')).toBe(false);
+    localStorage.clear();
+  });
+
   it('creates no directory nodes for a flat group of root files', () => {
     const html = renderGroupFolderTree([gf('a.ts'), gf('b.ts')], '');
     expect(dirLabels(html)).toEqual([]);
