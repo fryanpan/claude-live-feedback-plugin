@@ -1,49 +1,44 @@
-import { type FeedbackClient, type User, readDocMeta } from '@feedback/core';
+import { readDocMeta } from '@feedback/core';
 import { renderDiffNav, wireDiffNavRefresh } from '../diff-nav.ts';
+import type { MountContext } from '../mount-context.ts';
 import { startReadingTracker } from '../reading-tracker.ts';
 import { el, mountReviewChrome } from '../review-chrome.ts';
 import { renderWorkspaceTree, wireWorkspaceTreeRefresh } from '../workspace-tree.ts';
 import { createCodeEditor } from './code-editor.ts';
 
 /**
- * Boot the read-only code / diff review surface. All thread/composer/drawer
+ * Mount the read-only code / diff review surface. All thread/composer/drawer
  * wiring lives in the shared review chrome (review-chrome.ts); this file
  * owns only what's specific to the CodeMirror surface: mounting the editor,
  * the selection→pill affordance, and (for diff docs) the base-text fetch,
  * the Diff ↔ File toggle, and the status banner. The format bar and
  * edit-mode toggle are markdown/Tiptap-only; `body.code-mode` hides them.
+ *
+ * Every listener is bound to `ctx.scope` so navigation tears the mount down.
+ * `initialViewMode` (redline-app passes a reviewer's persisted choice through)
+ * defaults to unified-diff; without it a restored 'file' selection would paint
+ * File active over a diff surface.
  */
-export async function bootCode(opts: {
-  docId: string;
-  client: FeedbackClient;
-  user: User;
-  sourceUrl?: string;
-  workspaceId?: string;
-  /** 'diff' boots the same surface in unified-diff mode with a view toggle. */
-  docType?: 'code' | 'diff';
-  /** Path relative to the repo root — language detection + doc label for
-   *  diff docs, which may have no sourceUrl in pinned mode. */
-  relPath?: string;
-  /** Which mode a diff doc opens in. Defaults to 'diff'. redline-app passes a
-   *  reviewer's persisted choice through here; without it a restored 'file'
-   *  selection would paint File active over a unified-diff surface. */
-  initialViewMode?: 'diff' | 'file';
-}): Promise<void> {
-  const { docId, client, user } = opts;
-  const isDiff = opts.docType === 'diff';
+export async function mountCode(
+  ctx: MountContext,
+  initialViewMode?: 'diff' | 'file',
+): Promise<void> {
+  const { docId, client, user, scope } = ctx;
+  const isDiff = ctx.docType === 'diff';
   // Workspace nav: diff reviews get the grouped-diffs / all-files sidebar;
   // plain folder binds keep the folder tree. Detection is by data, not doc
   // type, so a context file (type 'code') opened inside a diff review still
   // shows the diff nav.
-  if (opts.workspaceId) {
-    const workspaceId = opts.workspaceId;
+  if (ctx.workspaceId) {
+    const workspaceId = ctx.workspaceId;
     void (async () => {
-      const isDiffNav = await renderDiffNav(docId, workspaceId);
+      const isDiffNav = await renderDiffNav(docId, workspaceId, false, scope);
+      if (scope.disposed) return;
       if (isDiffNav) {
-        wireDiffNavRefresh(docId, workspaceId);
+        scope.onCleanup(wireDiffNavRefresh(docId, workspaceId, scope));
       } else {
-        void renderWorkspaceTree(docId, workspaceId);
-        wireWorkspaceTreeRefresh(docId, workspaceId);
+        void renderWorkspaceTree(docId, workspaceId, false, scope);
+        scope.onCleanup(wireWorkspaceTreeRefresh(docId, workspaceId, scope));
       }
     })();
   }
@@ -69,6 +64,7 @@ export async function bootCode(opts: {
     } catch {
       // fall through to whole-file mode
     }
+    if (scope.disposed) return; // navigated away during the fetch
   }
 
   const editorMount = el<HTMLElement>('editor');
@@ -78,7 +74,7 @@ export async function bootCode(opts: {
   // Yjs meta map, which hasn't synced yet at boot — otherwise the language
   // extension is chosen from an empty path and the file renders unhighlighted.
   // Diff docs may have no sourceUrl; their relPath serves the same purpose.
-  const sourceUrl = opts.sourceUrl || opts.relPath || (readDocMeta(ydoc).sourceUrl ?? '');
+  const sourceUrl = ctx.sourceUrl || ctx.relPath || (readDocMeta(ydoc).sourceUrl ?? '');
 
   let selection: { start: Uint8Array; end: Uint8Array; snippet: string } | null = null;
 
@@ -91,7 +87,7 @@ export async function bootCode(opts: {
     ydoc,
     sourceUrl,
     diff: diffInfo?.baseText != null ? { baseText: diffInfo.baseText } : undefined,
-    initialViewMode: opts.initialViewMode,
+    initialViewMode,
     onSelectionChange: () => {
       const sel = surface.getSelectionRel();
       if (sel) {
@@ -106,12 +102,14 @@ export async function bootCode(opts: {
     // composer directly — no range selection needed.
     onGutterComment: () => chromeRef?.openComposer(),
   });
+  scope.onCleanup(() => surface.destroy());
 
   const chrome = mountReviewChrome({
     docId,
     user,
     ydoc,
     surface,
+    scope,
     selectHint: 'Click a line number, or select some lines, to leave a comment.',
     reanchorHint: 'Select new lines first, then click Re-anchor.',
     getSelection: () => surface.getSelectionRel() ?? selection,
@@ -121,8 +119,9 @@ export async function bootCode(opts: {
 
   // Click a line (not just its number) → light caret-style pill on that
   // line; tapping it opens the composer for the whole line.
-  editorMount.addEventListener('click', (ev) => {
-    const target = ev.target as HTMLElement | null;
+  scope.listen(editorMount, 'click', (ev) => {
+    const mev = ev as MouseEvent;
+    const target = mev.target as HTMLElement | null;
     if (!target?.closest('.cm-content')) return;
     if (!document.getElementById('composer')?.classList.contains('hidden')) return;
     // Let CodeMirror place the cursor first.
@@ -133,16 +132,17 @@ export async function bootCode(opts: {
       selection = lineSel;
       const gap = 10;
       const pillW = 36;
-      let left = ev.clientX + gap;
+      let left = mev.clientX + gap;
       if (left + pillW > window.innerWidth - 8) left = window.innerWidth - pillW - 8;
       commentPill.classList.add('caret');
       commentPill.style.left = `${Math.max(8, left)}px`;
-      commentPill.style.top = `${Math.max(8, ev.clientY - 14)}px`;
+      commentPill.style.top = `${Math.max(8, mev.clientY - 14)}px`;
       commentPill.classList.remove('hidden');
     }, 30);
   });
   // The caret pill is a click affordance, not a cursor follower — dismiss on scroll.
-  editorMount.addEventListener(
+  scope.listen(
+    editorMount,
     'scroll',
     () => {
       if (commentPill.classList.contains('caret')) hidePill();
@@ -153,7 +153,7 @@ export async function bootCode(opts: {
   // Interaction-bounded reading-session capture (doc_open + read_session).
   // CodeMirror manages its own scroller inside #editor; the tracker reads
   // scroll depth from editorMount and listens for interaction at the window.
-  startReadingTracker({ docId, user, scrollEl: editorMount });
+  scope.onCleanup(startReadingTracker({ docId, user, scrollEl: editorMount }));
 
   // --- diff ↔ whole-file toggle ---------------------------------------------
   if (isDiff) {
@@ -169,10 +169,12 @@ export async function bootCode(opts: {
         btnFile.classList.toggle('active', mode === 'file');
         btnFile.setAttribute('aria-pressed', String(mode === 'file'));
       };
-      btnDiff.addEventListener('click', () => applyMode('diff'));
-      btnFile.addEventListener('click', () => applyMode('file'));
-      // Paint the restored choice; the surface already booted into it.
-      if (opts.initialViewMode === 'file') applyMode('file');
+      scope.listen(btnDiff, 'click', () => applyMode('diff'));
+      scope.listen(btnFile, 'click', () => applyMode('file'));
+      // Always paint the toggle to THIS file's mode on mount. resetSurfaceChrome
+      // doesn't touch these buttons, so after SPA nav they'd keep the previous
+      // file's active/aria-pressed state (finding #6) — repaint unconditionally.
+      applyMode(initialViewMode === 'file' ? 'file' : 'diff');
     }
     if (diffInfo?.status === 'deleted') {
       showBanner('This file was deleted in this diff — the content shown is the base version.');
@@ -221,19 +223,17 @@ export async function bootCode(opts: {
     commentPill.classList.add('hidden');
     commentPill.classList.remove('caret');
   }
-  commentPill.addEventListener('mousedown', (ev) => ev.preventDefault());
-  commentPill.addEventListener('click', () => chrome.openComposer());
+  scope.listen(commentPill, 'mousedown', (ev) => ev.preventDefault());
+  scope.listen(commentPill, 'click', () => chrome.openComposer());
 
   // --- doc label + boot render -----------------------------------------------
-  ydoc.getMap('meta').observe(() => chrome.renderDocLabel());
+  const onMeta = () => chrome.renderDocLabel();
+  ydoc.getMap('meta').observe(onMeta);
+  scope.onCleanup(() => ydoc.getMap('meta').unobserve(onMeta));
   client.onReady(() => {
+    if (scope.disposed) return;
     chrome.renderDocLabel();
     chrome.redrawThreads();
-  });
-
-  addEventListener('beforeunload', () => {
-    client.close();
-    surface.destroy();
   });
 }
 
