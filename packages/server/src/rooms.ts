@@ -736,10 +736,18 @@ export class Rooms {
   listGroupedDiff(workspaceId: string): {
     workspaceId: string;
     totalOpen: number;
-    groups: Array<{ title: string; openCount: number; files: WorkspaceFileNode[] }>;
+    groups: Array<{
+      title: string;
+      openCount: number;
+      details?: string;
+      files: WorkspaceFileNode[];
+    }>;
   } {
     const decorate = this.cfg.decorateDocMeta;
-    const byGroup = new Map<string, { rank: number; files: WorkspaceFileNode[] }>();
+    const byGroup = new Map<
+      string,
+      { rank: number; details?: string; files: WorkspaceFileNode[] }
+    >();
     let totalOpen = 0;
     for (const meta of this.list()) {
       if (meta.workspaceId !== workspaceId || meta.type !== 'diff') continue;
@@ -769,6 +777,10 @@ export class Rooms {
         byGroup.set(title, g);
       }
       g.rank = Math.min(g.rank, meta.diffGroupRank ?? Number.MAX_SAFE_INTEGER);
+      // Every member of a group shares the same details; take the first
+      // non-empty one so a member bound before the details were set can't
+      // blank it out.
+      if (g.details === undefined && meta.diffGroupDetails) g.details = meta.diffGroupDetails;
       g.files.push(node);
     }
     const groups = Array.from(byGroup.entries())
@@ -778,6 +790,7 @@ export class Rooms {
         return {
           title,
           openCount: g.files.reduce((s, f) => s + f.openCount, 0),
+          ...(g.details !== undefined ? { details: g.details } : {}),
           files: g.files,
         };
       });
