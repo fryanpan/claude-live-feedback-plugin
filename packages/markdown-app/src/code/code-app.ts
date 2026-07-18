@@ -32,13 +32,13 @@ export async function mountCode(
   if (ctx.workspaceId) {
     const workspaceId = ctx.workspaceId;
     void (async () => {
-      const isDiffNav = await renderDiffNav(docId, workspaceId);
+      const isDiffNav = await renderDiffNav(docId, workspaceId, false, scope);
       if (scope.disposed) return;
       if (isDiffNav) {
-        scope.onCleanup(wireDiffNavRefresh(docId, workspaceId));
+        scope.onCleanup(wireDiffNavRefresh(docId, workspaceId, scope));
       } else {
-        void renderWorkspaceTree(docId, workspaceId);
-        scope.onCleanup(wireWorkspaceTreeRefresh(docId, workspaceId));
+        void renderWorkspaceTree(docId, workspaceId, false, scope);
+        scope.onCleanup(wireWorkspaceTreeRefresh(docId, workspaceId, scope));
       }
     })();
   }

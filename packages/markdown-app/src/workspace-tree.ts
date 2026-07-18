@@ -113,10 +113,18 @@ function treeSignature(workspaceId: string, tree: TreeDir): string {
   return `tree:${workspaceId}:${files.join(',')}`;
 }
 
+/** Minimal MountScope view: a render started by a navigation bails after its
+ *  fetch if that navigation was superseded, so a stale tree can't overwrite the
+ *  current one (finding #5). */
+interface Disposable {
+  readonly disposed: boolean;
+}
+
 export async function renderWorkspaceTree(
   docId: string,
   workspaceId: string,
   force = false,
+  scope?: Disposable,
 ): Promise<void> {
   const setPane = document.getElementById('set-pane');
   const setPaneList = document.getElementById('set-pane-list');
@@ -130,6 +138,8 @@ export async function renderWorkspaceTree(
     const res = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/tree`);
     if (!res.ok) return;
     const data = (await res.json()) as { tree: TreeDir };
+    // Superseded while fetching → don't overwrite the current sidebar.
+    if (scope?.disposed) return;
     if (!force && sidebarShowsSignature(treeSignature(workspaceId, data.tree))) {
       setActiveFile(docId);
       return;
@@ -160,8 +170,12 @@ export async function renderWorkspaceTree(
 
 /** Wire focus + ~30s refresh of the tree (counts are a snapshot otherwise).
  *  Returns a cleanup so a per-doc mount can drop it on navigation. */
-export function wireWorkspaceTreeRefresh(docId: string, workspaceId: string): () => void {
-  const refresh = () => void renderWorkspaceTree(docId, workspaceId, true);
+export function wireWorkspaceTreeRefresh(
+  docId: string,
+  workspaceId: string,
+  scope?: Disposable,
+): () => void {
+  const refresh = () => void renderWorkspaceTree(docId, workspaceId, true, scope);
   window.addEventListener('focus', refresh);
   const timer = setInterval(refresh, 30_000);
   return () => {

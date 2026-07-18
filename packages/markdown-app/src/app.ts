@@ -14,7 +14,7 @@ import {
   sidebarShowsSignature,
 } from './sidebar-nav-key.ts';
 import { type TableMenuItem, tableMenuItems } from './table-menu.ts';
-import { renderWorkspaceTree, wireWorkspaceTreeRefresh } from './workspace-tree.ts';
+import { renderWorkspaceTree } from './workspace-tree.ts';
 
 const DEFAULT_WS_PATH = (docId: string, type: string) =>
   `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/y/${encodeURIComponent(docId)}?type=${encodeURIComponent(type)}`;
@@ -46,6 +46,16 @@ interface Selection {
   start: Uint8Array;
   end: Uint8Array;
   snippet: string;
+}
+
+interface LegacyDocs {
+  docs: Array<{
+    docId: string;
+    type: string;
+    sourceUrl?: string;
+    title?: string;
+    setId?: string;
+  }>;
 }
 
 /**
@@ -576,28 +586,30 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     if (workspaceId) {
       // Same chooser as the code/diff mount: diff reviews + browse workspaces
       // get the diff-nav; only data-less workspaces fall back to the folder
-      // tree. Both are idempotent per workspace, so this no-ops (bar the
-      // active marker) when navigating within the same review.
-      const ok = await renderDiffNav(docId, workspaceId);
-      if (!ok) await renderWorkspaceTree(docId, workspaceId);
+      // tree. `scope` lets a superseded navigation's late fetch bail instead of
+      // clobbering the current sidebar.
+      const ok = await renderDiffNav(docId, workspaceId, false, scope);
+      if (scope.disposed) return;
+      if (!ok) await renderWorkspaceTree(docId, workspaceId, false, scope);
       return;
     }
     // ---- Legacy flat setId path ----
-    // Re-fetch on every navigation so a sibling added to the set mid-review
-    // appears in place (finding #1); the shared signature decides whether the
-    // list actually changed and needs a rebuild, or just an active-marker move.
+    // Fetch the doc list once per MOUNT (each navigation is a fresh mount) and
+    // reuse it across meta-tick re-renders, so a burst of meta.observe events
+    // during initial sync doesn't refetch the whole list every time (finding
+    // #6). A sibling added mid-review still appears on the next navigation's
+    // fresh fetch (finding #1). The shared signature then decides whether the
+    // list actually changed and needs a rebuild, or just a marker move.
     try {
-      const res = await fetch('/api/docs');
-      if (!res.ok) return;
-      const data = (await res.json()) as {
-        docs: Array<{
-          docId: string;
-          type: string;
-          sourceUrl?: string;
-          title?: string;
-          setId?: string;
-        }>;
-      };
+      if (!legacyDocsPromise) {
+        legacyDocsPromise = fetch('/api/docs')
+          .then((r) => (r.ok ? (r.json() as Promise<LegacyDocs>) : null))
+          .catch(() => null);
+      }
+      const data = await legacyDocsPromise;
+      // Superseded during the fetch, or the fetch failed → don't touch the
+      // shared sidebar for a doc that's no longer open (finding #4).
+      if (scope.disposed || !data) return;
       const siblings = data.docs.filter((d) => d.setId === setId && d.type === 'markdown');
       // Stable order: title (or sourceUrl basename) ASC, then docId.
       siblings.sort((a, b) => {
@@ -643,13 +655,33 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     }
   }
   let openedOnce = false;
+  let legacyDocsPromise: Promise<LegacyDocs | null> | null = null;
 
   // ---- Workspace (folder) file tree ----
   // A doc bound via bind_folder carries a workspaceId. renderSetNav (above)
   // renders it; here we wire the focus + ~30s heartbeat refresh so badges
   // reflect newly-opened/resolved threads. Scoped so navigation drops it.
   const workspaceId = readDocMeta(ydoc).workspaceId;
-  if (workspaceId) scope.onCleanup(wireWorkspaceTreeRefresh(docId, workspaceId));
+  if (workspaceId) {
+    // The heartbeat/focus refresh MUST use the same renderer the navigation
+    // path (renderSetNav) picks — renderDiffNav first, the folder tree only as
+    // the fallback — otherwise it writes a `tree:` signature while navigation
+    // writes `diff:`, and the shared-signature mismatch forces a full
+    // scroll-resetting rebuild on the next navigation (finding #1).
+    const refresh = () => {
+      void (async () => {
+        const ok = await renderDiffNav(docId, workspaceId, true, scope);
+        if (scope.disposed) return;
+        if (!ok) await renderWorkspaceTree(docId, workspaceId, true, scope);
+      })();
+    };
+    window.addEventListener('focus', refresh);
+    const timer = setInterval(refresh, 30_000);
+    scope.onCleanup(() => {
+      window.removeEventListener('focus', refresh);
+      clearInterval(timer);
+    });
+  }
 
   function basename(p: string): string {
     const m = p.match(/[^/]+$/);

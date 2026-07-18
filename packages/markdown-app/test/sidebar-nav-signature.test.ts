@@ -164,4 +164,54 @@ describe('sidebar shared render signature', () => {
     expect(bAnchor?.classList.contains('active')).toBe(true);
     expect(aAnchor?.classList.contains('active')).toBe(false);
   });
+
+  it('browse mode (#2): a file added to /files changes the signature → rebuild', async () => {
+    const { list } = dom();
+    // Browse workspace: no grouped diffs, tree comes from /files.
+    const files = (paths: string[]) => ({
+      '/grouped': { groups: [] },
+      '/files': {
+        files: paths.map((p) => ({
+          relPath: p,
+          changed: false,
+          docId: p,
+          reviewUrl: `/review/${p}`,
+        })),
+      },
+    });
+    mockFetch(files(['a.ts']));
+    await renderDiffNav('a.ts', 'B');
+    const firstNode = list.querySelector('.tree-file a');
+    expect(firstNode).not.toBeNull();
+
+    // Unchanged /files → fast path, no rebuild (browse signature is now derived
+    // from /files, not the empty grouped model).
+    await renderDiffNav('a.ts', 'B');
+    expect(list.contains(firstNode)).toBe(true);
+
+    // A new file appears in the folder → signature changes → rebuild in place.
+    mockFetch(files(['a.ts', 'b.ts']));
+    await renderDiffNav('a.ts', 'B');
+    expect(list.contains(firstNode)).toBe(false);
+    expect(list.querySelector('a[href="/review/b.ts"]')).not.toBeNull();
+  });
+
+  it('disposed guard (#3/#4): a superseded render does not move the marker', async () => {
+    const { list } = dom();
+    mockFetch(
+      grouped([
+        { docId: 'a', name: 'a.ts', relPath: 'a.ts', reviewUrl: '/review/a' },
+        { docId: 'b', name: 'b.ts', relPath: 'b.ts', reviewUrl: '/review/b' },
+      ]),
+    );
+    // Establish the sidebar with B active (the current document).
+    await renderDiffNav('b', 'W');
+    expect(list.querySelector('a[href="/review/b"]')?.classList.contains('active')).toBe(true);
+
+    // A stale render for A whose navigation was superseded (scope disposed
+    // during its fetch) must NOT re-mark A active over the live B.
+    await renderDiffNav('a', 'W', false, { disposed: true });
+    expect(list.querySelector('a[href="/review/a"]')?.classList.contains('active')).toBe(false);
+    expect(list.querySelector('a[href="/review/b"]')?.classList.contains('active')).toBe(true);
+  });
 });

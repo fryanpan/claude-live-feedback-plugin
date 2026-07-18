@@ -124,9 +124,9 @@ export async function mountRedline(ctx: MountContext): Promise<void> {
   if (ctx.workspaceId) {
     const workspaceId = ctx.workspaceId;
     void (async () => {
-      const isDiffNav = await renderDiffNav(docId, workspaceId);
+      const isDiffNav = await renderDiffNav(docId, workspaceId, false, scope);
       if (scope.disposed) return;
-      if (isDiffNav) scope.onCleanup(wireDiffNavRefresh(docId, workspaceId));
+      if (isDiffNav) scope.onCleanup(wireDiffNavRefresh(docId, workspaceId, scope));
     })();
   }
 
