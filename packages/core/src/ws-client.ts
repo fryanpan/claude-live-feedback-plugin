@@ -145,12 +145,20 @@ export function connect(url: string): FeedbackClient {
       return status;
     },
     close() {
+      if (closed) return;
       closed = true;
       ydoc.off('update', docUpdate);
       awareness.off('update', awareUpdate);
+      // Drop pending ready callbacks so a late reconnect/sync can't fire into
+      // a disposed surface.
+      readyCbs = [];
       try {
         ws.close();
       } catch {}
+      // Release the doc + awareness eagerly so navigation between docs doesn't
+      // accumulate live Y.Docs and their internal timers.
+      awareness.destroy();
+      ydoc.destroy();
     },
     onReady(cb) {
       if (gotInitialSync) cb();

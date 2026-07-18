@@ -1,5 +1,6 @@
 import { type Thread, type User, formatTime, readDocMeta } from '@feedback/core';
 import type * as Y from 'yjs';
+import type { MountScope } from './mount-scope.ts';
 import type { ReviewSurface } from './review-surface.ts';
 import { ThreadPanel, type ThreadTab } from './threads.ts';
 
@@ -66,6 +67,11 @@ export interface ChromeOpts {
   /** Hide the surface's comment pill (called when the composer or the
    *  thread view opens). */
   hidePill?: () => void;
+  /** Per-document lifecycle scope. When provided, every listener this mount
+   *  registers is torn down on `scope.dispose()` and the chrome self-registers
+   *  its `destroy()` — so navigating to another doc leaves no double-bound
+   *  submit handlers (which would post to the previous docId). */
+  scope?: MountScope;
 }
 
 export interface ReviewChrome {
@@ -84,10 +90,28 @@ export interface ReviewChrome {
   openComposer: () => void;
   hideComposer: () => void;
   renderDocLabel: () => void;
+  /** Tear down the chrome for this document: signal-bound listeners are
+   *  already gone via `scope.dispose()`; this clears the rendered UI so the
+   *  next document's mount doesn't briefly show this one's threads. */
+  destroy: () => void;
 }
 
 export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
   const { docId, user, ydoc, surface } = opts;
+
+  // Every listener registered here closes over this document's `docId` /
+  // `ydoc` / `surface`. When a scope is supplied, bind through it so a
+  // navigation removes them — otherwise the next mount's submit handlers stack
+  // on top of this one's and a single click posts to multiple docs.
+  const on = (
+    target: EventTarget,
+    type: string,
+    handler: EventListenerOrEventListenerObject,
+    options?: AddEventListenerOptions,
+  ): void => {
+    if (opts.scope) opts.scope.listen(target, type, handler, options);
+    else target.addEventListener(type, handler, options);
+  };
 
   const threadsListEl = el<HTMLElement>('threads-list');
   const docTitleEl = el<HTMLElement>('doc-title');
@@ -121,11 +145,11 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     toggleThreads.setAttribute('aria-pressed', 'false');
     document.getElementById('threads-pane')?.setAttribute('aria-hidden', 'true');
   }
-  toggleThreads.addEventListener('click', () =>
+  on(toggleThreads, 'click', () =>
     shell.classList.contains('threads-open') ? closeDrawer() : openDrawer(),
   );
-  closeThreads.addEventListener('click', closeDrawer);
-  scrim.addEventListener('click', closeDrawer);
+  on(closeThreads, 'click', closeDrawer);
+  on(scrim, 'click', closeDrawer);
 
   // Resizable side panels (desktop): the comments pane (right edge drag)
   // and the In-This-Review pane (left edge drag). Widths persist; on
@@ -155,7 +179,7 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
 
   const tabButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('.threads-tabs .tab'));
   for (const b of tabButtons) {
-    b.addEventListener('click', () => {
+    on(b, 'click', () => {
       const tab = (b.getAttribute('data-tab') ?? 'open') as ThreadTab;
       threadsPanel.setTab(tab);
       for (const x of tabButtons) x.classList.toggle('active', x === b);
@@ -382,15 +406,16 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     composerScrim.classList.add('hidden');
     document.body.classList.remove('composer-open');
   }
-  composerScrim.addEventListener('click', hideComposer);
-  composerText.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) {
-      ev.preventDefault();
+  on(composerScrim, 'click', hideComposer);
+  on(composerText, 'keydown', (ev) => {
+    const ke = ev as KeyboardEvent;
+    if (ke.key === 'Enter' && !ke.shiftKey && !ke.isComposing) {
+      ke.preventDefault();
       void submitComposer();
     }
-    if (ev.key === 'Escape') hideComposer();
+    if (ke.key === 'Escape') hideComposer();
   });
-  el<HTMLButtonElement>('composer-submit').addEventListener('click', () => void submitComposer());
+  on(el<HTMLButtonElement>('composer-submit'), 'click', () => void submitComposer());
 
   async function submitComposer(): Promise<void> {
     const text = composerText.value.trim();
@@ -513,7 +538,7 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     document.body.classList.remove('thread-view-open');
     threadViewReplyText.value = '';
   }
-  threadViewClose.addEventListener('click', closeThreadView);
+  on(threadViewClose, 'click', closeThreadView);
   async function submitThreadReply(): Promise<void> {
     if (!threadViewId) return;
     const text = threadViewReplyText.value.trim();
@@ -529,10 +554,11 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
       },
     );
   }
-  threadViewReplySubmit.addEventListener('click', () => void submitThreadReply());
-  threadViewReplyText.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) {
-      ev.preventDefault();
+  on(threadViewReplySubmit, 'click', () => void submitThreadReply());
+  on(threadViewReplyText, 'keydown', (ev) => {
+    const ke = ev as KeyboardEvent;
+    if (ke.key === 'Enter' && !ke.shiftKey && !ke.isComposing) {
+      ke.preventDefault();
       void submitThreadReply();
     }
   });
@@ -549,28 +575,33 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     docTitleEl.textContent = mobile ? mobileLabel(full) : full;
     docTitleEl.title = full;
   }
-  window.matchMedia('(max-width: 720px)').addEventListener('change', () => renderDocLabel());
+  on(window.matchMedia('(max-width: 720px)'), 'change', () => renderDocLabel());
 
   // --- live wiring -------------------------------------------------------------
-  ydoc.getMap('threads').observeDeep(() => {
+  // Bound to this document's ydoc, which is destroyed when its client closes on
+  // navigation (see ws-client close()), so this observer is released with it.
+  const threadsObserver = () => {
     redrawThreads();
     if (threadViewId) renderThreadView(threadViewId);
-  });
+  };
+  ydoc.getMap('threads').observeDeep(threadsObserver);
+  opts.scope?.onCleanup(() => ydoc.getMap('threads').unobserveDeep(threadsObserver));
 
   // --- hotkeys ------------------------------------------------------------------
-  document.addEventListener('keydown', (ev) => {
-    if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'm') {
-      ev.preventDefault();
+  on(document, 'keydown', (ev) => {
+    const ke = ev as KeyboardEvent;
+    if ((ke.metaKey || ke.ctrlKey) && ke.key.toLowerCase() === 'm') {
+      ke.preventDefault();
       openComposer();
     }
-    if (ev.key === 'Escape') {
+    if (ke.key === 'Escape') {
       if (!composer.classList.contains('hidden')) hideComposer();
       else if (!threadView.classList.contains('hidden')) closeThreadView();
       else if (shell.classList.contains('threads-open')) closeDrawer();
     }
   });
 
-  return {
+  const chrome: ReviewChrome = {
     threadsPanel,
     openDrawer,
     closeDrawer,
@@ -585,7 +616,18 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     openComposer,
     hideComposer,
     renderDocLabel,
+    destroy() {
+      // Signal-bound listeners are already gone via scope.dispose(); clear the
+      // rendered UI so the next document's mount doesn't briefly show this
+      // one's threads / open composer / open thread view.
+      threadsListEl.innerHTML = '';
+      hideComposer();
+      closeThreadView();
+    },
   };
+  // The router only calls scope.dispose(); make the visual teardown part of it.
+  opts.scope?.onCleanup(() => chrome.destroy());
+  return chrome;
 }
 
 // --- resizable side panels ----------------------------------------------------
@@ -605,6 +647,11 @@ interface ResizeOpts {
 function wireResizeHandle(opts: ResizeOpts): void {
   const { pane } = opts;
   if (!pane) return;
+  // The pane and handle are shell-level (doc-independent), but mountReviewChrome
+  // runs per navigation — wire the handle exactly once so re-mounts don't stack
+  // duplicate drag bars (and duplicate window pointer listeners) on the pane.
+  // Each pane owns a distinct handleClass, so a plain class query is precise.
+  if (pane.querySelector(`.${opts.handleClass}`)) return;
   const clamp = (w: number) => Math.max(opts.min, Math.min(opts.max(), w));
   const apply = (w: number) => document.documentElement.style.setProperty(opts.cssVar, `${w}px`);
   try {
