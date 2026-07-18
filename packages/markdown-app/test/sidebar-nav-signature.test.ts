@@ -129,8 +129,20 @@ describe('sidebar shared render signature', () => {
       ...grouped(files),
       '/files': {
         files: [
-          { relPath: 'a.ts', changed: true, docId: 'a', reviewUrl: '/review/a', status: 'modified' },
-          { relPath: 'b.ts', changed: true, docId: 'b', reviewUrl: '/review/b', status: 'modified' },
+          {
+            relPath: 'a.ts',
+            changed: true,
+            docId: 'a',
+            reviewUrl: '/review/a',
+            status: 'modified',
+          },
+          {
+            relPath: 'b.ts',
+            changed: true,
+            docId: 'b',
+            reviewUrl: '/review/b',
+            status: 'modified',
+          },
         ],
       },
     });
