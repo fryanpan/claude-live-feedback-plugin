@@ -89,6 +89,18 @@ describe('assignGroups — explicit groups', () => {
     expect(out.get('a.ts')?.details).toHaveLength(500);
     expect(out.get('b.ts')?.details).toBeUndefined();
   });
+
+  it('does not truncate through a surrogate pair (no lone surrogate at the cut)', () => {
+    // 499 ASCII chars then an emoji (a surrogate pair at code units 499–500):
+    // a naive slice(0,500) keeps the high surrogate only. Expect it dropped.
+    const details = `${'a'.repeat(499)}😀${'b'.repeat(100)}`;
+    const out = assignGroups([f('a.ts')], [{ title: 'G', paths: ['a.ts'], details }]);
+    const clamped = out.get('a.ts')?.details ?? '';
+    expect(clamped).toHaveLength(499);
+    // No unpaired high surrogate remains at the boundary.
+    const last = clamped.charCodeAt(clamped.length - 1);
+    expect(last >= 0xd800 && last <= 0xdbff).toBe(false);
+  });
 });
 
 describe('assignGroups — heuristic fallback (no explicit groups)', () => {
