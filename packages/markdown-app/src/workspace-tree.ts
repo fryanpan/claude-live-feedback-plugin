@@ -11,6 +11,14 @@
  * the focus/interval wiring (`wireWorkspaceTreeRefresh`).
  */
 
+import { setActiveFile } from './diff-nav.ts';
+import {
+  beginSidebarRender,
+  isCurrentSidebarRender,
+  setSidebarSignature,
+  sidebarShowsSignature,
+} from './sidebar-nav-key.ts';
+
 interface TreeFile {
   type: 'file';
   docId: string;
@@ -93,20 +101,61 @@ function renderTreeNode(
   )}</span>${badge}</summary><ul>${children}</ul></details></li>`;
 }
 
-export async function renderWorkspaceTree(docId: string, workspaceId: string): Promise<void> {
+/** Structural signature of a folder tree: renderer namespace + workspace + the
+ *  file identities (relPath + docId + diff status). Excludes open-comment counts
+ *  so a new comment doesn't force a scroll-resetting rebuild on navigation; a
+ *  file added/removed or a status change flips the signature and rebuilds. */
+function treeSignature(workspaceId: string, tree: TreeDir): string {
+  const files: string[] = [];
+  const walk = (node: TreeDir | TreeFile): void => {
+    if (node.type === 'file') {
+      files.push(`${node.relPath}:${node.docId}:${node.diffStatus ?? ''}`);
+      return;
+    }
+    for (const c of node.children) walk(c);
+  };
+  for (const c of tree.children) walk(c);
+  return `tree:${workspaceId}:${files.join(',')}`;
+}
+
+/** Minimal MountScope view: a render started by a navigation bails after its
+ *  fetch if that navigation was superseded, so a stale tree can't overwrite the
+ *  current one (finding #5). */
+interface Disposable {
+  readonly disposed: boolean;
+}
+
+export async function renderWorkspaceTree(
+  docId: string,
+  workspaceId: string,
+  force = false,
+  scope?: Disposable,
+): Promise<void> {
+  const token = beginSidebarRender();
   const setPane = document.getElementById('set-pane');
   const setPaneList = document.getElementById('set-pane-list');
   const docMenu = document.getElementById('doc-menu');
   document.body.classList.add('has-set');
   setPane?.setAttribute('aria-hidden', 'false');
   try {
+    // Re-fetch on every navigation; the shared signature below decides whether
+    // the fetched tree actually needs a DOM rebuild (which resets scroll +
+    // collapses folder state), or just an active-marker move.
     const res = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/tree`);
     if (!res.ok) return;
     const data = (await res.json()) as { tree: TreeDir };
+    // Superseded while fetching (mount torn down, or a newer sidebar render
+    // claimed the epoch) → don't overwrite the current sidebar.
+    if (scope?.disposed || !isCurrentSidebarRender(token)) return;
+    if (!force && sidebarShowsSignature(treeSignature(workspaceId, data.tree))) {
+      setActiveFile(docId);
+      return;
+    }
     const html = data.tree.children.map((c) => renderTreeNode(c, workspaceId, '', docId)).join('');
     const treeHtml = `<ul class="tree-root">${html}</ul>`;
     if (setPaneList) setPaneList.innerHTML = treeHtml;
     if (docMenu) docMenu.innerHTML = treeHtml;
+    setSidebarSignature(treeSignature(workspaceId, data.tree));
     for (const root of [setPaneList, docMenu]) {
       if (!root) continue;
       root.querySelectorAll('details[data-rel]').forEach((d) => {
@@ -126,9 +175,18 @@ export async function renderWorkspaceTree(docId: string, workspaceId: string): P
   }
 }
 
-/** Wire focus + ~30s refresh of the tree (counts are a snapshot otherwise). */
-export function wireWorkspaceTreeRefresh(docId: string, workspaceId: string): void {
-  const refresh = () => void renderWorkspaceTree(docId, workspaceId);
+/** Wire focus + ~30s refresh of the tree (counts are a snapshot otherwise).
+ *  Returns a cleanup so a per-doc mount can drop it on navigation. */
+export function wireWorkspaceTreeRefresh(
+  docId: string,
+  workspaceId: string,
+  scope?: Disposable,
+): () => void {
+  const refresh = () => void renderWorkspaceTree(docId, workspaceId, true, scope);
   window.addEventListener('focus', refresh);
-  setInterval(refresh, 30_000);
+  const timer = setInterval(refresh, 30_000);
+  return () => {
+    window.removeEventListener('focus', refresh);
+    clearInterval(timer);
+  };
 }

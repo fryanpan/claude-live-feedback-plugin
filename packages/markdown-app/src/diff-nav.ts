@@ -1,4 +1,10 @@
 import { escapeHtml } from '@feedback/core';
+import {
+  beginSidebarRender,
+  isCurrentSidebarRender,
+  setSidebarSignature,
+  sidebarShowsSignature,
+} from './sidebar-nav-key.ts';
 
 /**
  * Sidebar navigation for DIFF REVIEWS (renders into #set-pane / #doc-menu,
@@ -35,8 +41,55 @@ interface RepoFile {
 
 type NavView = 'grouped' | 'all';
 
+/** Minimal view of a MountScope. A renderer started by a navigation must bail
+ *  after its awaits if that navigation was superseded (its scope disposed), so a
+ *  stale late response can't clobber the current sidebar (findings #3, #4, #5). */
+interface Disposable {
+  readonly disposed: boolean;
+}
+interface FilesResponse {
+  files: RepoFile[];
+  truncated?: boolean;
+}
+
 function viewKey(workspaceId: string): string {
   return `lf:diff-nav:${workspaceId}`;
+}
+
+/** In-memory mirror of the Changed/All view choice per workspace. localStorage
+ *  can throw (Safari private mode); without this mirror a toggle whose write
+ *  threw would be lost the moment a heartbeat/focus refresh (which supersedes
+ *  the toggle's in-flight render via the epoch) re-reads no persisted view and
+ *  falls back to grouped — silently dropping the user's toggle. Mirrors the
+ *  widthPrefInMemory pattern in app.ts. */
+const viewInMemory = new Map<string, NavView>();
+
+/** Test-only: clear the module-level (page-lived in prod) view mirror so cases
+ *  don't leak the toggle choice into one another. */
+export function resetDiffNavViewMemory(): void {
+  viewInMemory.clear();
+}
+
+/** The persisted Changed/All choice: localStorage when readable (survives
+ *  reloads / other tabs), else the in-memory mirror, else the default. */
+function readDiffNavView(workspaceId: string, hasDiff: boolean): NavView {
+  if (!hasDiff) return 'all'; // browse workspaces have no grouped view to choose
+  try {
+    const v = localStorage.getItem(viewKey(workspaceId));
+    if (v === 'all' || v === 'grouped') return v;
+  } catch {
+    // storage disabled — fall through to the in-memory mirror
+  }
+  return viewInMemory.get(workspaceId) ?? 'grouped';
+}
+
+function writeDiffNavView(workspaceId: string, view: NavView): void {
+  viewInMemory.set(workspaceId, view);
+  try {
+    localStorage.setItem(viewKey(workspaceId), view);
+  } catch {
+    // storage disabled — the in-memory mirror keeps the choice for this session
+  }
 }
 
 function appendParams(url: string): string {
@@ -45,44 +98,131 @@ function appendParams(url: string): string {
   return url.includes('?') ? `${url}&${qs}` : `${url}?${qs}`;
 }
 
+/** The docId of the file currently being viewed. The Changed/All view toggle
+ *  re-renders the sidebar and must mark THIS file active — SPA navigation moves
+ *  the marker via setActiveFile without re-running renderDiffNav, so a docId
+ *  captured at first render would go stale (finding #5). Kept module-level and
+ *  updated on every render + setActiveFile so a later toggle paints the right
+ *  file. */
+let activeDocId: string | null = null;
+
+/** Structural signature of a rendered diff-nav: renderer namespace + workspace
+ *  + view + the identities of the files the ACTIVE view renders. The grouped
+ *  view renders the changed-files model; the all/browse view renders the
+ *  /files tree — so the signature must draw from whichever is on screen, else a
+ *  browse workspace (empty grouped model) gets a constant signature and never
+ *  refreshes when a file is added (finding #2). Excludes open-comment counts so
+ *  a new comment doesn't force a scroll-resetting rebuild on navigation (the
+ *  heartbeat updates counts); includes status so a newly-changed file changes
+ *  the signature and rebuilds in place. */
+function diffNavSignature(
+  workspaceId: string,
+  view: NavView,
+  model: GroupedModel,
+  files: FilesResponse | null,
+): string {
+  if (view === 'all') {
+    const f = (files?.files ?? [])
+      .map((x) => `${x.relPath}:${x.status ?? ''}:${x.changed ? '1' : '0'}:${x.docId ?? ''}`)
+      .join(',');
+    return `diff:${workspaceId}:all:${f}`;
+  }
+  const f = model.groups
+    .flatMap((g) => g.files.map((x) => `${x.docId}:${x.diffStatus ?? ''}`))
+    .join(',');
+  return `diff:${workspaceId}:grouped:${f}`;
+}
+
 /** Render the workspace nav. Diff reviews get the Changed/All toggle;
  *  BROWSE workspaces (no diff members) get the all-files tree only.
- *  Returns false when the workspace has no navigable file data at all. */
-export async function renderDiffNav(docId: string, workspaceId: string): Promise<boolean> {
+ *  Returns false when the workspace has no navigable file data at all.
+ *  `force` (the heartbeat refresh) rebuilds even when the signature is
+ *  unchanged, so open-comment counts refresh. `scope`, when passed, lets a
+ *  render started by a navigation bail if that navigation was superseded — a
+ *  stale late response must not clobber the current sidebar. */
+export async function renderDiffNav(
+  docId: string,
+  workspaceId: string,
+  force = false,
+  scope?: Disposable,
+): Promise<boolean> {
+  const token = beginSidebarRender();
+  activeDocId = docId;
+  // Re-fetch on every navigation so a file added to the changed set mid-review
+  // shows up in place (findings #2, #7); the signature check below decides
+  // whether the fetched list actually needs a DOM rebuild. The active marker
+  // itself already moved synchronously in the router's swap(), so this fetch
+  // never delays the perceived navigation.
   const res = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/grouped`).catch(
     () => null,
   );
   const grouped =
     res?.ok === true ? ((await res.json()) as GroupedModel) : ({ groups: [] } as GroupedModel);
+  // Superseded while fetching (mount torn down, or a newer sidebar render
+  // claimed the epoch) → don't touch the shared sidebar (findings #3–#5).
+  if (scope?.disposed || !isCurrentSidebarRender(token)) return true;
   const hasDiff = grouped.groups.length > 0;
-  if (!hasDiff) {
-    // Browse mode is only viable when the all-files endpoint works.
-    const probe = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/files`).catch(
-      () => null,
-    );
-    if (!probe || !probe.ok) return false;
+
+  let view: NavView = readDiffNavView(workspaceId, hasDiff);
+
+  // The all/browse view renders from /files, so fetch it up front — both to
+  // decide viability (browse needs it) and so the signature reflects the tree
+  // actually rendered (finding #2). Fetched lazily for the grouped view (only
+  // the toggle needs it there).
+  let filesData: FilesResponse | null = null;
+  if (view === 'all') {
+    filesData = await fetchFiles(workspaceId);
+    if (scope?.disposed || !isCurrentSidebarRender(token)) return true;
+    if (!filesData) {
+      // No all-files data: a browse workspace has nothing to show; a diff
+      // review can still fall back to its grouped list. Don't reset the shared
+      // signature on a (possibly transient) fetch miss — that would force a
+      // needless scroll-resetting rebuild next navigation (finding #8).
+      if (!hasDiff) return false;
+      view = 'grouped';
+    }
   }
 
   document.body.classList.add('has-set');
   document.getElementById('set-pane')?.setAttribute('aria-hidden', 'false');
 
-  let view: NavView = hasDiff ? 'grouped' : 'all';
-  try {
-    if (hasDiff && localStorage.getItem(viewKey(workspaceId)) === 'all') view = 'all';
-  } catch {}
+  // Same content already on screen (shared signature, not a per-renderer key) →
+  // skip the rebuild that resets scroll; just move the active-file marker.
+  if (!force && sidebarShowsSignature(diffNavSignature(workspaceId, view, grouped, filesData))) {
+    setActiveFile(docId);
+    return true;
+  }
 
-  const render = async () => {
+  const render = async (v: NavView) => {
+    // Claim the sidebar for THIS render. render() is also the Changed/All view
+    // TOGGLE handler: it fires on a live user click and closes over the scope of
+    // whichever mount last fully rendered — that mount is disposed after a
+    // signature-match navigation, so a scope.disposed guard would make the
+    // toggle silently dead. The epoch token instead keeps a same-workspace
+    // toggle alive (nothing newer claimed the sidebar) while still bailing if a
+    // navigation to a DIFFERENT sidebar lands during the on-demand fetch below
+    // (round-3 finding: a stale toggle must not clobber the new sidebar).
+    const rtoken = beginSidebarRender();
+    // Toggling grouped→all mid-session needs the file list now (the grouped
+    // path skipped the up-front fetch).
+    if (v === 'all' && !filesData) filesData = await fetchFiles(workspaceId);
+    if (!isCurrentSidebarRender(rtoken)) return;
     const header = hasDiff
       ? `
       <div class="diff-nav-toggle" role="group" aria-label="Sidebar view">
-        <button type="button" data-nav="grouped" class="${view === 'grouped' ? 'active' : ''}">Show Changed Files</button>
-        <button type="button" data-nav="all" class="${view === 'all' ? 'active' : ''}">Show All Files</button>
+        <button type="button" data-nav="grouped" class="${v === 'grouped' ? 'active' : ''}">Show Changed Files</button>
+        <button type="button" data-nav="all" class="${v === 'all' ? 'active' : ''}">Show All Files</button>
       </div>`
       : '';
+    // Always mark the CURRENT file active (module-level activeDocId), not a
+    // docId captured when this closure was built (finding #5).
+    const marked = activeDocId ?? docId;
     const body =
-      view === 'grouped'
-        ? renderGrouped(grouped, docId, workspaceId)
-        : await renderAllFiles(workspaceId, docId);
+      v === 'grouped'
+        ? renderGrouped(grouped, marked, workspaceId)
+        : filesData
+          ? buildAllFilesHtml(filesData, marked)
+          : '<div class="diff-nav-empty">File list unavailable.</div>';
     const html = header + body;
     const setPaneList = document.getElementById('set-pane-list');
     const docMenu = document.getElementById('doc-menu');
@@ -91,7 +231,7 @@ export async function renderDiffNav(docId: string, workspaceId: string): Promise
     for (const rootEl of [setPaneList, docMenu]) {
       if (!rootEl) continue;
       wireToggle(rootEl);
-      if (view === 'all') wireContextOpen(rootEl, workspaceId);
+      if (v === 'all') wireContextOpen(rootEl, workspaceId);
       // Persist each group's open/closed state.
       for (const d of rootEl.querySelectorAll<HTMLDetailsElement>('details.diff-group')) {
         d.addEventListener('toggle', () => {
@@ -102,16 +242,15 @@ export async function renderDiffNav(docId: string, workspaceId: string): Promise
         });
       }
     }
+    setSidebarSignature(diffNavSignature(workspaceId, v, grouped, filesData));
   };
 
   const wireToggle = (rootEl: HTMLElement) => {
     for (const b of rootEl.querySelectorAll<HTMLButtonElement>('.diff-nav-toggle button')) {
       b.addEventListener('click', () => {
         view = (b.getAttribute('data-nav') as NavView) ?? 'grouped';
-        try {
-          localStorage.setItem(viewKey(workspaceId), view);
-        } catch {}
-        void render();
+        writeDiffNavView(workspaceId, view);
+        void render(view);
       });
     }
   };
@@ -139,7 +278,7 @@ export async function renderDiffNav(docId: string, workspaceId: string): Promise
     }
   };
 
-  await render();
+  await render(view);
   return true;
 }
 
@@ -191,13 +330,19 @@ interface DirNode {
   files: RepoFile[];
 }
 
-async function renderAllFiles(workspaceId: string, activeDocId: string): Promise<string> {
+/** Fetch the workspace's full file list (changed + unchanged). Returns null on
+ *  any failure so the caller can distinguish "no data" from an empty repo. */
+async function fetchFiles(workspaceId: string): Promise<FilesResponse | null> {
   const res = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/files`).catch(
     () => null,
   );
-  if (!res || !res.ok) return '<div class="diff-nav-empty">File list unavailable.</div>';
-  const data = (await res.json()) as { files: RepoFile[]; truncated?: boolean };
+  if (!res || !res.ok) return null;
+  return (await res.json()) as FilesResponse;
+}
 
+/** Pure render of the all-files folder tree from an already-fetched list, so the
+ *  caller can compute the render signature from the same data it draws. */
+function buildAllFilesHtml(data: FilesResponse, activeDocId: string): string {
   const root: DirNode = { dirs: new Map(), files: [] };
   for (const f of data.files) {
     const parts = f.relPath.split('/');
@@ -264,9 +409,55 @@ function hasChanged(node: DirNode): boolean {
   return false;
 }
 
-/** Focus + ~30s heartbeat refresh, same contract as the workspace tree. */
-export function wireDiffNavRefresh(docId: string, workspaceId: string): void {
-  const refresh = () => void renderDiffNav(docId, workspaceId);
+/** Focus + ~30s heartbeat refresh, same contract as the workspace tree.
+ *  Returns a cleanup — the caller (a per-doc mount) must call it on navigation
+ *  so refreshers don't stack across docs. */
+export function wireDiffNavRefresh(
+  docId: string,
+  workspaceId: string,
+  scope?: Disposable,
+): () => void {
+  const refresh = () => void renderDiffNav(docId, workspaceId, true, scope);
   window.addEventListener('focus', refresh);
-  setInterval(refresh, 30_000);
+  const timer = setInterval(refresh, 30_000);
+  return () => {
+    window.removeEventListener('focus', refresh);
+    clearInterval(timer);
+  };
+}
+
+/** Extract the docId from a `/review/<docId>[?…]` href (absolute or relative). */
+function docIdOfHref(href: string | null): string | null {
+  if (!href) return null;
+  const m = href.match(/\/review\/([^/?#]+)/);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+/**
+ * Move the "open file" marker to `docId` WITHOUT re-rendering the tree — the
+ * wholesale render (renderDiffNav) is what loses the reviewer's scroll
+ * position, so navigation must not trigger it. Updates both sidebar containers
+ * (#set-pane-list and the mobile #doc-menu), which mirror the same list.
+ */
+export function setActiveFile(docId: string): void {
+  activeDocId = docId;
+  const lists = ['set-pane-list', 'doc-menu']
+    .map((id) => document.getElementById(id))
+    .filter((el): el is HTMLElement => el != null);
+  const anchorsOf = (list: HTMLElement) =>
+    Array.from(list.querySelectorAll<HTMLAnchorElement>('a[href]'));
+  // Only mutate when the target is actually in the list. A call for a docId
+  // that isn't rendered yet (or ever) must not clear the current marker.
+  const present = lists.some((list) =>
+    anchorsOf(list).some((a) => docIdOfHref(a.getAttribute('href')) === docId),
+  );
+  if (!present) return;
+  for (const list of lists) {
+    for (const a of anchorsOf(list)) {
+      const match = docIdOfHref(a.getAttribute('href')) === docId;
+      a.classList.toggle('active', match);
+      if (match) a.setAttribute('aria-current', 'page');
+      else a.removeAttribute('aria-current');
+    }
+  }
 }
