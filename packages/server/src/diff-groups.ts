@@ -31,7 +31,13 @@ export const MAX_GROUP_DETAILS = 500;
 function clampDetails(details: string | undefined): string | undefined {
   const trimmed = details?.trim();
   if (!trimmed) return undefined;
-  return trimmed.length > MAX_GROUP_DETAILS ? trimmed.slice(0, MAX_GROUP_DETAILS) : trimmed;
+  if (trimmed.length <= MAX_GROUP_DETAILS) return trimmed;
+  let cut = trimmed.slice(0, MAX_GROUP_DETAILS);
+  // Don't slice through a surrogate pair — a lone high surrogate would render
+  // as U+FFFD. Drop a trailing unpaired high surrogate.
+  const last = cut.charCodeAt(cut.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
+  return cut;
 }
 
 const TEST_RE = /(^|\/)(tests?|spec|__tests__|androidTest|testFixtures)(\/|$)|\.(test|spec)\.\w+$/i;
