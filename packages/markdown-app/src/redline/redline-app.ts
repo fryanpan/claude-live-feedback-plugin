@@ -112,6 +112,10 @@ export async function mountRedline(ctx: MountContext): Promise<void> {
     // unified-diff mode, so a restored 'file' selection would otherwise paint
     // the File button active over a diff surface.
     await mountCode(ctx, mode === 'file' ? 'file' : 'diff');
+    // A navigation that superseded us during mountCode's in-flight fetch already
+    // disposed this scope and hid the toggle; wireToggle would re-show it,
+    // stranding the Redline/Diff/File bar over the next document (finding #2).
+    if (scope.disposed) return;
     if (diffInfo?.baseText != null) wireToggle(docId, mode, scope);
     return;
   }

@@ -8,6 +8,11 @@ import { startReadingTracker } from './reading-tracker.ts';
 import { mountRedline } from './redline/redline-app.ts';
 import { type ReviewChrome, el, mountReviewChrome, showToast } from './review-chrome.ts';
 import { startRouter } from './router.ts';
+import {
+  resetSidebarSignature,
+  setSidebarSignature,
+  sidebarShowsSignature,
+} from './sidebar-nav-key.ts';
 import { type TableMenuItem, tableMenuItems } from './table-menu.ts';
 import { renderWorkspaceTree, wireWorkspaceTreeRefresh } from './workspace-tree.ts';
 
@@ -474,6 +479,11 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       positionPill();
     }, 120);
   });
+  // A pending selectionchange timer must not fire after this mount is torn down
+  // — it would run positionPill() against a destroyed editor on the next doc.
+  scope.onCleanup(() => {
+    if (selChangeTimer) clearTimeout(selChangeTimer);
+  });
 
   // =========================================================================
   // COMPOSER (Notion-style slim sheet)
@@ -560,6 +570,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       if (setPaneList) setPaneList.innerHTML = '';
       if (docMenu) docMenu.innerHTML = '';
       docSwitcher?.setAttribute('aria-expanded', 'false');
+      resetSidebarSignature();
       return;
     }
     if (workspaceId) {
@@ -572,11 +583,9 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       return;
     }
     // ---- Legacy flat setId path ----
-    if (setId === renderedSetId) {
-      setActiveFile(docId);
-      return;
-    }
-    renderedSetId = setId;
+    // Re-fetch on every navigation so a sibling added to the set mid-review
+    // appears in place (finding #1); the shared signature decides whether the
+    // list actually changed and needs a rebuild, or just an active-marker move.
     try {
       const res = await fetch('/api/docs');
       if (!res.ok) return;
@@ -596,6 +605,11 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
         const kb = (b.title ?? b.sourceUrl ?? b.docId).toLowerCase();
         return ka < kb ? -1 : ka > kb ? 1 : 0;
       });
+      const sig = `set:${setId}:${siblings.map((d) => d.docId).join(',')}`;
+      if (sidebarShowsSignature(sig)) {
+        setActiveFile(docId);
+        return;
+      }
       const items = siblings
         .map((d) => {
           const isActive = d.docId === docId;
@@ -612,6 +626,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
         .join('');
       if (setPaneList) setPaneList.innerHTML = items;
       if (docMenu) docMenu.innerHTML = `<ol>${items}</ol>`;
+      setSidebarSignature(sig);
       // On mobile, the desktop sidebar is hidden — the dropdown is the ONLY
       // surface that shows the review set. Open it on first render so the
       // reviewer sees siblings without discovering the doc-switcher tap
@@ -695,6 +710,15 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     renderSaveState();
   });
   renderSaveState();
+  // On navigation, cancel the pending save-state debounce and blank the shared
+  // #save-state indicator — otherwise a stale timer rewrites it with THIS
+  // mount's closed-over wsOnline/pendingLocalEdits over the next document
+  // (findings #3, #9), and code/diff surfaces have no save state to show.
+  scope.onCleanup(() => {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveStateEl.classList.remove('save-state--saved', 'save-state--dirty', 'save-state--offline');
+    saveStateEl.textContent = '';
+  });
 
   // =========================================================================
   // FORMATTING TOOLBAR — collapsed by default. Aa button toggles it.
@@ -765,10 +789,6 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     }
   });
 }
-
-/** Module-level so the legacy setId sidebar renders once and survives
- *  navigation between siblings (only the active marker moves). */
-let renderedSetId: string | null = null;
 
 /**
  * Expand a caret position to the sentence it's inside (or the sentence

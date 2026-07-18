@@ -1,4 +1,9 @@
 import { escapeHtml } from '@feedback/core';
+import {
+  resetSidebarSignature,
+  setSidebarSignature,
+  sidebarShowsSignature,
+} from './sidebar-nav-key.ts';
 
 /**
  * Sidebar navigation for DIFF REVIEWS (renders into #set-pane / #doc-menu,
@@ -45,31 +50,40 @@ function appendParams(url: string): string {
   return url.includes('?') ? `${url}&${qs}` : `${url}?${qs}`;
 }
 
-/** The workspace whose file tree is currently rendered into the sidebar. The
- *  tree re-render is what loses the reviewer's scroll, so navigating between
- *  files in the SAME workspace skips it (just moves the active marker); only a
- *  different workspace, or a forced badge-count refresh, re-renders. */
-let renderedDiffKey: string | null = null;
+/** The docId of the file currently being viewed. The Changed/All view toggle
+ *  re-renders the sidebar and must mark THIS file active — SPA navigation moves
+ *  the marker via setActiveFile without re-running renderDiffNav, so a docId
+ *  captured at first render would go stale (finding #5). Kept module-level and
+ *  updated on every render + setActiveFile so a later toggle paints the right
+ *  file. */
+let activeDocId: string | null = null;
+
+/** Structural signature of a rendered diff-nav: renderer namespace + workspace
+ *  + view + the changed-file identities. Excludes open-comment counts so a new
+ *  comment doesn't force a scroll-resetting rebuild on navigation (the heartbeat
+ *  refresh updates counts); includes docId + status so a newly-changed file
+ *  (finding #7) changes the signature and rebuilds in place. */
+function diffNavSignature(workspaceId: string, view: NavView, model: GroupedModel): string {
+  const files = model.groups
+    .flatMap((g) => g.files.map((f) => `${f.docId}:${f.diffStatus ?? ''}`))
+    .join(',');
+  return `diff:${workspaceId}:${view}:${files}`;
+}
 
 /** Render the workspace nav. Diff reviews get the Changed/All toggle;
  *  BROWSE workspaces (no diff members) get the all-files tree only.
  *  Returns false when the workspace has no navigable file data at all.
- *  `force` (the heartbeat refresh) re-renders even when the key is unchanged. */
+ *  `force` (the heartbeat refresh) rebuilds even when the signature is
+ *  unchanged, so open-comment counts refresh. */
 export async function renderDiffNav(
   docId: string,
   workspaceId: string,
   force = false,
 ): Promise<boolean> {
-  // Same workspace already on screen → don't rebuild the tree (that resets
-  // scroll); just move the active-file marker.
-  if (
-    !force &&
-    renderedDiffKey === workspaceId &&
-    (document.getElementById('set-pane-list')?.childElementCount ?? 0) > 0
-  ) {
-    setActiveFile(docId);
-    return true;
-  }
+  activeDocId = docId;
+  // Re-fetch on every navigation so a file added to the changed set mid-review
+  // shows up in place (finding #7); the signature check below decides whether
+  // the fetched list actually needs a DOM rebuild.
   const res = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/grouped`).catch(
     () => null,
   );
@@ -82,11 +96,10 @@ export async function renderDiffNav(
       () => null,
     );
     if (!probe || !probe.ok) {
-      renderedDiffKey = null;
+      resetSidebarSignature();
       return false;
     }
   }
-  renderedDiffKey = workspaceId;
 
   document.body.classList.add('has-set');
   document.getElementById('set-pane')?.setAttribute('aria-hidden', 'false');
@@ -96,18 +109,28 @@ export async function renderDiffNav(
     if (hasDiff && localStorage.getItem(viewKey(workspaceId)) === 'all') view = 'all';
   } catch {}
 
-  const render = async () => {
+  // Same content already on screen (shared signature, not a per-renderer key) →
+  // skip the rebuild that resets scroll; just move the active-file marker.
+  if (!force && sidebarShowsSignature(diffNavSignature(workspaceId, view, grouped))) {
+    setActiveFile(docId);
+    return true;
+  }
+
+  const render = async (v: NavView) => {
     const header = hasDiff
       ? `
       <div class="diff-nav-toggle" role="group" aria-label="Sidebar view">
-        <button type="button" data-nav="grouped" class="${view === 'grouped' ? 'active' : ''}">Show Changed Files</button>
-        <button type="button" data-nav="all" class="${view === 'all' ? 'active' : ''}">Show All Files</button>
+        <button type="button" data-nav="grouped" class="${v === 'grouped' ? 'active' : ''}">Show Changed Files</button>
+        <button type="button" data-nav="all" class="${v === 'all' ? 'active' : ''}">Show All Files</button>
       </div>`
       : '';
+    // Always mark the CURRENT file active (module-level activeDocId), not a
+    // docId captured when this closure was built (finding #5).
+    const marked = activeDocId ?? docId;
     const body =
-      view === 'grouped'
-        ? renderGrouped(grouped, docId, workspaceId)
-        : await renderAllFiles(workspaceId, docId);
+      v === 'grouped'
+        ? renderGrouped(grouped, marked, workspaceId)
+        : await renderAllFiles(workspaceId, marked);
     const html = header + body;
     const setPaneList = document.getElementById('set-pane-list');
     const docMenu = document.getElementById('doc-menu');
@@ -116,7 +139,7 @@ export async function renderDiffNav(
     for (const rootEl of [setPaneList, docMenu]) {
       if (!rootEl) continue;
       wireToggle(rootEl);
-      if (view === 'all') wireContextOpen(rootEl, workspaceId);
+      if (v === 'all') wireContextOpen(rootEl, workspaceId);
       // Persist each group's open/closed state.
       for (const d of rootEl.querySelectorAll<HTMLDetailsElement>('details.diff-group')) {
         d.addEventListener('toggle', () => {
@@ -127,6 +150,7 @@ export async function renderDiffNav(
         });
       }
     }
+    setSidebarSignature(diffNavSignature(workspaceId, v, grouped));
   };
 
   const wireToggle = (rootEl: HTMLElement) => {
@@ -136,7 +160,7 @@ export async function renderDiffNav(
         try {
           localStorage.setItem(viewKey(workspaceId), view);
         } catch {}
-        void render();
+        void render(view);
       });
     }
   };
@@ -164,7 +188,7 @@ export async function renderDiffNav(
     }
   };
 
-  await render();
+  await render(view);
   return true;
 }
 
@@ -316,6 +340,7 @@ function docIdOfHref(href: string | null): string | null {
  * (#set-pane-list and the mobile #doc-menu), which mirror the same list.
  */
 export function setActiveFile(docId: string): void {
+  activeDocId = docId;
   const lists = ['set-pane-list', 'doc-menu']
     .map((id) => document.getElementById(id))
     .filter((el): el is HTMLElement => el != null);

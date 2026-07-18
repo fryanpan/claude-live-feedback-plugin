@@ -171,8 +171,10 @@ export async function mountCode(
       };
       scope.listen(btnDiff, 'click', () => applyMode('diff'));
       scope.listen(btnFile, 'click', () => applyMode('file'));
-      // Paint the restored choice; the surface already booted into it.
-      if (initialViewMode === 'file') applyMode('file');
+      // Always paint the toggle to THIS file's mode on mount. resetSurfaceChrome
+      // doesn't touch these buttons, so after SPA nav they'd keep the previous
+      // file's active/aria-pressed state (finding #6) — repaint unconditionally.
+      applyMode(initialViewMode === 'file' ? 'file' : 'diff');
     }
     if (diffInfo?.status === 'deleted') {
       showBanner('This file was deleted in this diff — the content shown is the base version.');
