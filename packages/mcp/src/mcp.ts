@@ -355,6 +355,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             items: { type: 'string' },
             description: 'Path prefixes (relative to repo root) to leave out of the review.',
           },
+          groups: {
+            type: 'array',
+            description:
+              'Logical file groups for the sidebar — organize the changed files by INTENT, the way you would split a branch into reviewable commits. First group is read first. Each path matches a changed file EXACTLY or as a DIRECTORY PREFIX (e.g. "src/foo" claims every file under src/foo/), so you need not enumerate every file. First group (in array order) to claim a file wins; unlisted files fall into an "Other" group ranked last. Array order is the sidebar order. Omit to fall back to the Tests/Docs/Build + top-level-module heuristic.',
+            items: {
+              type: 'object',
+              properties: {
+                title: { type: 'string' },
+                paths: { type: 'array', items: { type: 'string' } },
+              },
+              required: ['title', 'paths'],
+            },
+          },
           maxFiles: { type: 'number' },
           subscribe: { type: 'boolean' },
           producedBy: {
