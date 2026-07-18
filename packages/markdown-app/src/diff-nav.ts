@@ -155,9 +155,15 @@ export async function renderDiffNav(
 
   const render = async (v: NavView) => {
     // Toggling grouped→all mid-session needs the file list now (the grouped
-    // path skipped the up-front fetch).
+    // path skipped the up-front fetch). No scope.disposed guard here: render()
+    // is also the Changed/All view TOGGLE handler, which fires on a live user
+    // click and closes over the scope of whichever mount last fully rendered —
+    // that mount is disposed after a signature-match navigation, and guarding
+    // on it would make the toggle silently dead (the navigation-supersession
+    // guard lives at the call site before this closure runs). The data this
+    // closure holds is current: only a full render() re-wires the buttons, and
+    // a signature match means the file list is unchanged.
     if (v === 'all' && !filesData) filesData = await fetchFiles(workspaceId);
-    if (scope?.disposed) return;
     const header = hasDiff
       ? `
       <div class="diff-nav-toggle" role="group" aria-label="Sidebar view">

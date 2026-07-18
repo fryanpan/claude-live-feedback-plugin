@@ -196,6 +196,52 @@ describe('sidebar shared render signature', () => {
     expect(list.querySelector('a[href="/review/b.ts"]')).not.toBeNull();
   });
 
+  it('view toggle (#2) still works after nav though its wiring mount is disposed', async () => {
+    const { list } = dom();
+    const files: GFile[] = [
+      { docId: 'a', name: 'a.ts', relPath: 'a.ts', reviewUrl: '/review/a' },
+      { docId: 'b', name: 'b.ts', relPath: 'b.ts', reviewUrl: '/review/b' },
+    ];
+    mockFetch({
+      ...grouped(files),
+      '/files': {
+        files: [
+          {
+            relPath: 'a.ts',
+            changed: true,
+            docId: 'a',
+            reviewUrl: '/review/a',
+            status: 'modified',
+          },
+          {
+            relPath: 'b.ts',
+            changed: true,
+            docId: 'b',
+            reviewUrl: '/review/b',
+            status: 'modified',
+          },
+        ],
+      },
+    });
+    const scopeA = { disposed: false };
+    const scopeB = { disposed: false };
+    // Mount A fully renders and wires the toggle buttons (closing over scopeA).
+    await renderDiffNav('a', 'W', false, scopeA);
+    // Navigate to B: same file list → fast path, buttons are NOT re-wired, so
+    // they still reference scopeA's render closure.
+    await renderDiffNav('b', 'W', false, scopeB);
+    // A's mount is now torn down.
+    scopeA.disposed = true;
+
+    const toggle = list.querySelector<HTMLButtonElement>('.diff-nav-toggle button[data-nav="all"]');
+    toggle?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    // The toggle still switched to the all-files tree — not silently dead.
+    expect(list.querySelector('.tree-root')).not.toBeNull();
+    expect(list.querySelector('.diff-group')).toBeNull();
+  });
+
   it('disposed guard (#3/#4): a superseded render does not move the marker', async () => {
     const { list } = dom();
     mockFetch(

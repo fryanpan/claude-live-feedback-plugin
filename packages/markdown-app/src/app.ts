@@ -594,22 +594,19 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       return;
     }
     // ---- Legacy flat setId path ----
-    // Fetch the doc list once per MOUNT (each navigation is a fresh mount) and
-    // reuse it across meta-tick re-renders, so a burst of meta.observe events
-    // during initial sync doesn't refetch the whole list every time (finding
-    // #6). A sibling added mid-review still appears on the next navigation's
-    // fresh fetch (finding #1). The shared signature then decides whether the
-    // list actually changed and needs a rebuild, or just a marker move.
+    // Re-fetch /api/docs on every renderSetNav so the list self-heals: a
+    // transient failure or an incomplete initial-sync snapshot is corrected on
+    // the next meta tick, and a sibling added mid-review appears in place. The
+    // shared signature check below means an unchanged list costs only the small
+    // fetch, not a scroll-resetting DOM rebuild. (Do NOT memo this per mount —
+    // that froze a failed/partial snapshot for the whole mount.) `scope.disposed`
+    // guards the superseded-navigation race after the await.
     try {
-      if (!legacyDocsPromise) {
-        legacyDocsPromise = fetch('/api/docs')
-          .then((r) => (r.ok ? (r.json() as Promise<LegacyDocs>) : null))
-          .catch(() => null);
-      }
-      const data = await legacyDocsPromise;
-      // Superseded during the fetch, or the fetch failed → don't touch the
-      // shared sidebar for a doc that's no longer open (finding #4).
-      if (scope.disposed || !data) return;
+      const res = await fetch('/api/docs');
+      if (scope.disposed) return;
+      if (!res.ok) return;
+      const data = (await res.json()) as LegacyDocs;
+      if (scope.disposed) return;
       const siblings = data.docs.filter((d) => d.setId === setId && d.type === 'markdown');
       // Stable order: title (or sourceUrl basename) ASC, then docId.
       siblings.sort((a, b) => {
@@ -655,7 +652,6 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     }
   }
   let openedOnce = false;
-  let legacyDocsPromise: Promise<LegacyDocs | null> | null = null;
 
   // ---- Workspace (folder) file tree ----
   // A doc bound via bind_folder carries a workspaceId. renderSetNav (above)
