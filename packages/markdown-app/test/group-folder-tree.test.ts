@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { type GroupedFile, renderGroupFolderTree } from '../src/diff-nav.ts';
+import { type GroupedFile, renderGroupFolderTree, renderGrouped } from '../src/diff-nav.ts';
 
 /**
  * The grouped Changed-Files view renders each group's changed files as a
@@ -115,5 +115,40 @@ describe('renderGroupFolderTree', () => {
     expect(dirLabels(html)).toEqual([]);
     expect(html).toContain('<span class="diff-file-name">a.ts</span>');
     expect(html).toContain('<span class="diff-file-name">b.ts</span>');
+  });
+});
+
+describe('renderGrouped — per-group details', () => {
+  it('renders a group’s details under the title and escapes HTML', () => {
+    const html = renderGrouped(
+      {
+        groups: [
+          {
+            title: 'Routing',
+            openCount: 0,
+            details: 'Rewrote <router> & guards.',
+            files: [gf('src/router.ts')],
+          },
+        ],
+      },
+      '',
+      'WS',
+    );
+    expect(html).toContain('class="diff-group-details"');
+    // Escaped — the raw angle brackets and ampersand must not appear as markup.
+    expect(html).toContain('Rewrote &lt;router&gt; &amp; guards.');
+    expect(html).not.toContain('<router>');
+    // The details node sits after the summary, before the file list.
+    expect(html.indexOf('diff-group-details')).toBeGreaterThan(html.indexOf('</summary>'));
+    expect(html.indexOf('diff-group-details')).toBeLessThan(html.indexOf('diff-group-files'));
+  });
+
+  it('omits the details node entirely when a group has none', () => {
+    const html = renderGrouped(
+      { groups: [{ title: 'Tests', openCount: 0, files: [gf('a.test.ts')] }] },
+      '',
+      'WS',
+    );
+    expect(html).not.toContain('diff-group-details');
   });
 });

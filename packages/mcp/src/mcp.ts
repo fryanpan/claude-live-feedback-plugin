@@ -355,6 +355,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             items: { type: 'string' },
             description: 'Path prefixes (relative to repo root) to leave out of the review.',
           },
+          groups: {
+            type: 'array',
+            description:
+              'Logical file groups for the sidebar — organize the changed files by INTENT, the way you would split a branch into reviewable commits. First group is read first. Each path matches a changed file EXACTLY or as a DIRECTORY PREFIX (e.g. "src/foo" claims every file under src/foo/), so you need not enumerate every file. First group (in array order) to claim a file wins; unlisted files fall into an "Other" group ranked last. Array order is the sidebar order. Optional per-group `details` is a short intro rendered under the group title (a "chapter intro" — e.g. the commit message body the group came from); capped at 500 chars. Omit `groups` to fall back to the Tests/Docs/Build + top-level-module heuristic.',
+            items: {
+              type: 'object',
+              properties: {
+                title: { type: 'string' },
+                paths: { type: 'array', items: { type: 'string' } },
+                details: { type: 'string' },
+              },
+              required: ['title', 'paths'],
+            },
+          },
           maxFiles: { type: 'number' },
           subscribe: { type: 'boolean' },
           producedBy: {
@@ -825,7 +839,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           reviewId?: string;
           title?: string;
           exclude?: string[];
-          groups?: Array<{ title: string; paths: string[] }>;
+          groups?: Array<{ title: string; paths: string[]; details?: string }>;
           maxFiles?: number;
           subscribe?: boolean;
           producedBy?: { agentId?: string; sessionId?: string };

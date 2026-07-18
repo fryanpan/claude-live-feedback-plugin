@@ -19,6 +19,25 @@ export interface GroupableFile {
 export interface FileGroupAssignment {
   group: string;
   rank: number;
+  /** Per-group prose (agent-supplied), clamped to 500 chars; undefined when
+   *  the group carried none. Same value for every file in the group. */
+  details?: string;
+}
+
+/** Max length of a group's `details` string. Longer values are truncated
+ *  (not rejected) at assignment time so the sidebar payload stays bounded. */
+export const MAX_GROUP_DETAILS = 500;
+
+function clampDetails(details: string | undefined): string | undefined {
+  const trimmed = details?.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.length <= MAX_GROUP_DETAILS) return trimmed;
+  let cut = trimmed.slice(0, MAX_GROUP_DETAILS);
+  // Don't slice through a surrogate pair — a lone high surrogate would render
+  // as U+FFFD. Drop a trailing unpaired high surrogate.
+  const last = cut.charCodeAt(cut.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
+  return cut;
 }
 
 const TEST_RE = /(^|\/)(tests?|spec|__tests__|androidTest|testFixtures)(\/|$)|\.(test|spec)\.\w+$/i;
@@ -45,7 +64,7 @@ function heuristicBucket(relPath: string): 'Tests' | 'Docs' | 'Build & config' |
  */
 export function assignGroups(
   files: GroupableFile[],
-  explicit?: Array<{ title: string; paths: string[] }>,
+  explicit?: Array<{ title: string; paths: string[]; details?: string }>,
 ): Map<string, FileGroupAssignment> {
   const out = new Map<string, FileGroupAssignment>();
 
@@ -56,6 +75,7 @@ export function assignGroups(
     const norm = explicit.map((g) => ({
       title: g.title,
       paths: g.paths.map((p) => p.replace(/^\/+/, '').replace(/\/+$/, '')),
+      details: clampDetails(g.details),
     }));
     for (const f of files) {
       let assigned = false;
@@ -63,7 +83,7 @@ export function assignGroups(
         const g = norm[rank];
         if (!g) continue;
         if (g.paths.some((p) => f.relPath === p || f.relPath.startsWith(`${p}/`))) {
-          out.set(f.relPath, { group: g.title, rank });
+          out.set(f.relPath, { group: g.title, rank, details: g.details });
           assigned = true;
           break;
         }

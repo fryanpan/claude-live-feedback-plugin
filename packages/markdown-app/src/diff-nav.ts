@@ -28,8 +28,8 @@ export interface GroupedFile {
   diffAdditions?: number;
   diffDeletions?: number;
 }
-interface GroupedModel {
-  groups: Array<{ title: string; openCount: number; files: GroupedFile[] }>;
+export interface GroupedModel {
+  groups: Array<{ title: string; openCount: number; details?: string; files: GroupedFile[] }>;
 }
 interface RepoFile {
   relPath: string;
@@ -410,20 +410,27 @@ export function renderGroupFolderTree(
   return renderGroupTree(buildGroupTree(files), activeDocId, workspaceId, '');
 }
 
-function renderGrouped(model: GroupedModel, activeDocId: string, workspaceId: string): string {
+export function renderGrouped(
+  model: GroupedModel,
+  activeDocId: string,
+  workspaceId: string,
+): string {
   return model.groups
     .map((g) => {
       let open = true;
       try {
         if (localStorage.getItem(groupKey(workspaceId, g.title)) === 'closed') open = false;
       } catch {}
+      const details = g.details?.trim()
+        ? `<p class="diff-group-details">${escapeHtml(g.details.trim())}</p>`
+        : '';
       return `
       <details class="diff-group"${open ? ' open' : ''} data-group="${escapeHtml(g.title)}">
         <summary class="diff-group-title"><span class="diff-group-name">${escapeHtml(
           g.title,
         )}</span><span class="diff-group-meta">${g.files.length}</span>${
           g.openCount > 0 ? `<span class="tree-badge badge-open">${g.openCount}</span>` : ''
-        }</summary>
+        }</summary>${details}
         <ul class="diff-group-files tree-root">${renderGroupFolderTree(g.files, activeDocId, workspaceId)}</ul>
       </details>`;
     })
