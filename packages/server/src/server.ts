@@ -520,19 +520,19 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             const res = rooms.rewriteThreadRegion(docId, threadId, replacement, {
               parseInlineMarks,
             });
-            return res.ok ? j(200, res) : j(409, res);
+            return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
           }
           if (threadRest === '/insert_after' && req.method === 'POST') {
             const body = await safeJson(req);
             const text = String(body?.text ?? '');
             const res = rooms.insertAfterThread(docId, threadId, text);
-            return res.ok ? j(200, res) : j(409, res);
+            return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
           }
           if (threadRest === '/insert_blocks_after' && req.method === 'POST') {
             const body = await safeJson(req);
             const markdown = String(body?.markdown ?? '');
             const res = rooms.insertBlocksAfterThread(docId, threadId, markdown);
-            return res.ok ? j(200, res) : j(409, res);
+            return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
           }
         }
         if (rest === 'threads' && req.method === 'POST') {
@@ -572,6 +572,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const doc = rooms.getDoc(docId);
           if (!doc) return j(404, { error: 'doc not found' });
           return j(200, doc);
+        }
+        // Whole-doc rewrite through the live doc — the safe replacement for
+        // Write-the-bound-file + reparse_from_disk, which raced the
+        // write-back and clobbered (see docs/research/2026-08-03 review).
+        if (rest === 'content' && req.method === 'POST') {
+          const body = await safeJson(req);
+          const markdown = String(body?.markdown ?? '');
+          if (markdown.length === 0) return j(400, { error: 'markdown is required' });
+          const res = rooms.setDocContent(docId, markdown);
+          return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
         }
         if (rest === 'reparse_from_disk' && req.method === 'POST') {
           const res = rooms.reparseFromDisk(docId);
@@ -653,14 +663,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               return j(400, { error: 'kind must be replace or insert_after' });
             }
             const res = rooms.editAtAgentAnchor(docId, anchorId, { kind, text });
-            return res.ok ? j(200, res) : j(409, res);
+            return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
           }
           if (anchorRest === '/insert_blocks' && req.method === 'POST') {
             const body = await safeJson(req);
             const markdown = String(body?.markdown ?? '');
             if (markdown.length === 0) return j(400, { error: 'markdown is required' });
             const res = rooms.insertBlocksAtAnchor(docId, anchorId, markdown);
-            return res.ok ? j(200, res) : j(409, res);
+            return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
           }
           if (anchorRest === '' && req.method === 'DELETE') {
             const removed = rooms.deleteAgentAnchor(docId, anchorId);
@@ -680,7 +690,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             occurrence: typeof body?.occurrence === 'number' ? Number(body.occurrence) : undefined,
             parseInlineMarks: body?.parseInlineMarks === true,
           });
-          return res.ok ? j(200, res) : j(409, res);
+          // Piggy-back any pending sync trouble on the response: agents act
+          // on edit results, not on get_doc, so this is where a conflict
+          // actually gets seen.
+          return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
         }
         if (rest === 'delete_block_at_anchor' && req.method === 'POST') {
           const body = await safeJson(req);
@@ -934,6 +947,14 @@ function j(status: number, body: unknown): Response {
     status,
     headers: { 'content-type': 'application/json', ...CORS_HEADERS },
   });
+}
+
+/** Attach the doc's pending syncError (if any) to a successful edit-tool
+ *  response. Agents read edit results, not get_doc — so this is the surface
+ *  where a disk↔doc conflict actually reaches whoever can fix it. */
+function withSyncError(rooms: Rooms, docId: string, body: object): object {
+  const syncError = rooms.getSyncError(docId);
+  return syncError ? { ...body, syncError } : body;
 }
 
 // The canonical embed loads the widget bundle from this server but runs the

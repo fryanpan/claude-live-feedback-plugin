@@ -53,6 +53,15 @@ Pick the smallest tool that does the job:
   `rewrite_thread_region(docId, threadId, replacement)`. Primary path
   when you're responding to a reviewer's comment — the anchor already
   picks the exact text they pointed at.
+- **Comprehensive rewrite / restructure of the whole doc** →
+  `set_doc_content(docId, markdown)`. Applies as a block-level diff on
+  the live doc: untouched blocks keep their identity, so comment
+  threads on them survive, and the result flushes to the `.md` like
+  any other edit. **Never** `Write` the bound file and
+  `reparse_from_disk` after, and **never** do
+  `delete_doc → Write → create_review_doc` — both race the ~1s
+  write-back (they have clobbered real files), and the latter orphans
+  every comment thread.
 - **Insert a new block after a comment's block** →
   `insert_blocks_after_thread(docId, threadId, markdown)`. Accepts GFM
   including tables.
@@ -80,10 +89,12 @@ Pick the smallest tool that does the job:
   `## Heading` characters inside the existing block; this routes
   through the markdown parser and produces real sibling blocks.
 
-For external file changes you want to force-load (e.g. you wrote a
-file directly because the doc isn't under review yet, then created
-the review doc): call `reparse_from_disk(docId)` to discard live
-state and reload from the file.
+For external file changes you want to force-load (e.g. a `git pull`
+changed the file, or you wrote it directly *before* the doc was under
+review): call `reparse_from_disk(docId)` to discard live state and
+reload from the file. If an edit-tool response or `get_doc` carries a
+`syncError`, read it — it names the conflict and the
+`clobber-backups/` file where the overwritten version was saved.
 
 ## Posting structured findings (UX issues, review notes, etc.)
 
