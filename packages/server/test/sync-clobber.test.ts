@@ -6,6 +6,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -258,6 +259,52 @@ describe('sync-clobber regressions', () => {
       } finally {
         rmSync(realDir, { recursive: true, force: true });
       }
+    });
+
+    it('a never-edited doc with pure normalization drift is not rewritten at restart', async () => {
+      // Field finding (weekly-review, 2026-08-03): binding stamps the .ydoc
+      // AFTER the .md was last written, so every never-edited doc hydrates
+      // with ydoc-newer-than-md skew. If its disk bytes differ from the
+      // serializer's output only by normalization (blank-line runs etc.),
+      // the reassert branch rewrote the file — mtime churn and a byte-level
+      // rewrite of a doc nobody touched. Semantically-equal must mean
+      // in-sync: no write, no backup, mtime untouched.
+      const p2 = join(dataDir, 'never-edited.md');
+      writeFileSync(p2, EXT_ONE); // extra blank lines = pure normalization drift
+      rooms.getOrCreate('n1', { type: 'markdown', sourceUrl: p2 });
+      expect(rooms.attachFile('n1', p2).ok).toBe(true);
+      await sleep(350); // .ydoc persists → the never-edited mtime skew is now real
+      const bytesBefore = readFileSync(p2, 'utf8');
+      const mtimeBefore = statSync(p2).mtimeMs;
+
+      makeRooms(dataDir); // restart
+      await sleep(1100); // a wrongly-scheduled reassert would flush at ~800ms
+
+      expect(readFileSync(p2, 'utf8')).toBe(bytesBefore);
+      expect(statSync(p2).mtimeMs).toBe(mtimeBefore);
+      expect(existsSync(join(dataDir, 'clobber-backups'))).toBe(false);
+    });
+
+    it('a genuine restart reassert snapshots the disk version it overwrites', async () => {
+      // The reassert branch is the ONE writer that replaces disk content the
+      // server never backed up — make it symmetric with the apply branch,
+      // which snapshots the live side before pulling disk in.
+      expect(
+        rooms.findAndReplace('d1', { find: 'Intro paragraph.', replace: 'Unflushed edit.' }).ok,
+      ).toBe(true);
+      await sleep(350); // .ydoc saved; .md write-back (800ms) has NOT run
+      const diskBefore = readFileSync(path, 'utf8');
+
+      makeRooms(dataDir); // restart inside the write-back window
+      await sleep(1100);
+
+      expect(readFileSync(path, 'utf8')).toContain('Unflushed edit.');
+      const backupDir = join(dataDir, 'clobber-backups');
+      const backups = readdirSync(backupDir);
+      const snapshot = backups.find(
+        (f) => readFileSync(join(backupDir, f), 'utf8') === diskBefore,
+      );
+      expect(snapshot).toBeDefined();
     });
 
     it('does not stack duplicate write-back observers on re-attach', () => {
