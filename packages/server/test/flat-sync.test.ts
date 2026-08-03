@@ -174,7 +174,7 @@ describe('flat write-back through bindDiff', () => {
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     const ktId = res.files.find((f) => f.relPath === 'Main.kt')?.docId ?? '';
-    await sleep(350); // let the .ydoc persist
+    await sleep(500); // let the .ydoc persist
     const rooms2 = makeRooms(dataDir);
     rooms2.get(ktId)?.ydoc.getText('content').insert(0, '// post-restart edit\n');
     await sleep(1100);
@@ -284,6 +284,14 @@ describe('flat write-back through bindDiff', () => {
     expect(readmes[0]?.openCount).toBe(2);
     expect(readmes[0]?.threadCount).toBe(2);
     expect(tree.totalOpen).toBe(2);
+    // The grouped Changed-Files sidebar — the one a diff review actually
+    // renders — must merge the companion's threads the same way.
+    const grouped = rooms.listGroupedDiff(res.reviewId);
+    const row = grouped.groups.flatMap((g) => g.files).find((f) => f.relPath === 'README.md');
+    expect(row?.docId).toBe(mdId);
+    expect(row?.openCount).toBe(2);
+    expect(row?.threadCount).toBe(2);
+    expect(grouped.totalOpen).toBe(2);
   });
 
   it('restart in the flush window: newer doc state wins, stale disk is backed up then reasserted', async () => {
@@ -307,7 +315,7 @@ describe('flat write-back through bindDiff', () => {
       workspaceRoot: repo,
     });
     room.ydoc.getText('content').insert(0, docText);
-    await sleep(400); // .ydoc persist debounce
+    await sleep(500); // .ydoc persist debounce
     // Stamp the file OLDER than the .ydoc — the on-disk truth of "the write
     // never happened".
     const past = new Date(Date.now() - 60_000);
@@ -339,7 +347,7 @@ describe('flat write-back through bindDiff', () => {
       workspaceRoot: repo,
     });
     room.ydoc.getText('content').insert(0, readFileSync(file, 'utf8'));
-    await sleep(400); // .ydoc persisted
+    await sleep(500); // .ydoc persisted
     const downtimeEdit = '// written while the server was down\n';
     writeExternal(file, downtimeEdit); // future mtime > .ydoc mtime
 

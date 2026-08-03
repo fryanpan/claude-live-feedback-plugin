@@ -5,6 +5,7 @@ import { startReadingTracker } from '../reading-tracker.ts';
 import { el, mountReviewChrome } from '../review-chrome.ts';
 import { renderWorkspaceTree, wireWorkspaceTreeRefresh } from '../workspace-tree.ts';
 import { createCodeEditor } from './code-editor.ts';
+import { isEditableFileMember } from './editable-policy.ts';
 
 /**
  * Mount the read-only code / diff review surface. All thread/composer/drawer
@@ -46,17 +47,6 @@ export async function mountCode(
   document.body.classList.add('code-mode');
   if (isDiff) document.body.classList.add('diff-mode');
 
-  // The File view of a LIVE working-tree diff member is a real editor — the
-  // server binds those members with disk write-back, so edits land in the
-  // working tree within ~1s. Pinned reviews (diffTarget set) are immutable,
-  // and `.md` members edit through the markdown surface, not raw source.
-  const editable = isDiff && !ctx.diffTarget && !ctx.relPath.toLowerCase().endsWith('.md');
-  if (editable) {
-    awareness.setLocalStateField('user', { name: user.name, color: user.color });
-    document.body.classList.add('code-editable');
-    scope.onCleanup(() => document.body.classList.remove('code-editable'));
-  }
-
   // Diff rendering data: the base-commit text this file is compared against.
   // Fetched before mounting so the surface can boot straight into diff mode.
   // When it's unavailable (repo worktree pruned), fall back to the whole-file
@@ -76,6 +66,22 @@ export async function mountCode(
       // fall through to whole-file mode
     }
     if (scope.disposed) return; // navigated away during the fetch
+  }
+
+  // The File view of a LIVE working-tree diff member is a real editor — the
+  // server binds those members with disk write-back, so edits land in the
+  // working tree within ~1s. Decided AFTER the diff fetch because status
+  // matters: see isEditableFileMember (a deleted member has no binding).
+  const editable = isEditableFileMember({
+    isDiff,
+    diffTarget: ctx.diffTarget,
+    relPath: ctx.relPath,
+    diffStatus: diffInfo?.status,
+  });
+  if (editable) {
+    awareness.setLocalStateField('user', { name: user.name, color: user.color });
+    document.body.classList.add('code-editable');
+    scope.onCleanup(() => document.body.classList.remove('code-editable'));
   }
 
   const editorMount = el<HTMLElement>('editor');
