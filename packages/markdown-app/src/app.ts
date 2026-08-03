@@ -15,6 +15,7 @@ import {
   setSidebarSignature,
   sidebarShowsSignature,
 } from './sidebar-nav-key.ts';
+import { registerMarkdownMount } from './surface-registry.ts';
 import { type TableMenuItem, tableMenuItems } from './table-menu.ts';
 import { renderWorkspaceTree } from './workspace-tree.ts';
 
@@ -155,6 +156,7 @@ function main(): void {
     get: (k) => localStorage.getItem(k),
     set: (k, v) => localStorage.setItem(k, v),
   });
+  registerMarkdownMount(mountMarkdown);
   startRouter({
     user,
     fetchMeta: fetchDocMeta,
