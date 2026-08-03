@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Rooms } from '../src/rooms.ts';
+import { type ServerHandle, createServer } from '../src/server.ts';
 import { SseHub } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 
@@ -180,6 +181,58 @@ describe('flat write-back through bindDiff', () => {
     expect(readFileSync(join(repo, 'Main.kt'), 'utf8')).toContain('// post-restart edit');
   });
 
+  it('openEditableFile: companion markdown doc whose edits reach the working tree and the member', async () => {
+    const res = rooms.bindDiff({ repoPath: repo, base });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const opened = rooms.openEditableFile(res.reviewId, 'README.md');
+    expect(opened.ok).toBe(true);
+    if (!opened.ok) return;
+    expect(opened.meta.type).toBe('markdown');
+    expect(rooms.getDoc(opened.docId)?.plainText).toContain('Body changed.');
+    // Edits made in the full markdown editor flow to the working tree...
+    expect(
+      rooms.findAndReplace(opened.docId, {
+        find: 'Body changed.',
+        replace: 'Body edited in File view.',
+      }).ok,
+    ).toBe(true);
+    await sleep(1100);
+    expect(readFileSync(join(repo, 'README.md'), 'utf8')).toContain('Body edited in File view.');
+    // ...and from there into the diff member's flat content (redline/diff
+    // re-render), closing the loop.
+    const mdId = res.files.find((f) => f.relPath === 'README.md')?.docId ?? '';
+    rooms.reconcileNow(mdId);
+    expect(rooms.get(mdId)?.ydoc.getText('content').toString()).toContain(
+      'Body edited in File view.',
+    );
+    // Idempotent: repeat opens reuse the doc (threads survive).
+    const again = rooms.openEditableFile(res.reviewId, 'README.md');
+    expect(again.ok && again.docId === opened.docId).toBe(true);
+  });
+
+  it('openEditableFile refuses pinned reviews and non-markdown members', () => {
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-q', '-m', 'target');
+    const target = git(repo, 'rev-parse', 'HEAD');
+    const pinned = rooms.bindDiff({ repoPath: repo, base, target });
+    expect(pinned.ok).toBe(true);
+    if (!pinned.ok) return;
+    const refused = rooms.openEditableFile(pinned.reviewId, 'README.md');
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) expect(refused.error).toBe('pinned');
+
+    const live = rooms.bindDiff({ repoPath: repo, base });
+    expect(live.ok).toBe(true);
+    if (!live.ok) return;
+    const notMd = rooms.openEditableFile(live.reviewId, 'Main.kt');
+    expect(notMd.ok).toBe(false);
+    if (!notMd.ok) expect(notMd.error).toBe('not-markdown');
+    const traversal = rooms.openEditableFile(live.reviewId, '../evil.md');
+    expect(traversal.ok).toBe(false);
+    if (!traversal.ok) expect(traversal.error).toBe('bad-path');
+  });
+
   it('pinned members never write back', async () => {
     const target = (() => {
       git(repo, 'add', '-A');
@@ -193,5 +246,36 @@ describe('flat write-back through bindDiff', () => {
     rooms.get(ktId)?.ydoc.getText('content').insert(0, '// pinned edit\n');
     await sleep(1100);
     expect(readFileSync(join(repo, 'Main.kt'), 'utf8')).not.toContain('// pinned edit');
+  });
+
+  it('POST /api/workspaces/:id/editable-file routes the whole flow (route-layer test per learnings)', async () => {
+    const handle: ServerHandle = createServer({ port: 0, dataDir });
+    try {
+      const httpBase = `http://localhost:${handle.port}`;
+      const bind = await fetch(`${httpBase}/api/diffs`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ repo, base }),
+      });
+      expect(bind.ok).toBe(true);
+      const bound = (await bind.json()) as { reviewId: string };
+      const open = await fetch(
+        `${httpBase}/api/workspaces/${encodeURIComponent(bound.reviewId)}/editable-file`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ relPath: 'README.md' }),
+        },
+      );
+      expect(open.status).toBe(200);
+      const opened = (await open.json()) as { docId: string; meta: { type: string } };
+      expect(opened.meta.type).toBe('markdown');
+      // Verify the server-side EFFECT, not just the 200: the doc serves the
+      // parsed markdown.
+      const read = await fetch(`${httpBase}/api/docs/${encodeURIComponent(opened.docId)}/content`);
+      expect(await read.text()).toContain('Body changed.');
+    } finally {
+      await handle.stop();
+    }
   });
 });
