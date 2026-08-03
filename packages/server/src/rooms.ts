@@ -969,12 +969,30 @@ export class Rooms {
     let totalOpen = 0;
     let workspaceRoot: string | undefined;
 
+    // One node per relPath: an editable .md gives the workspace TWO docs for
+    // the same file (the diff member + its companion editor doc, see
+    // openEditableFile). The diff member stays the face of the file — its
+    // docId is what the diff-nav and reviewUrl point at — but threads land on
+    // whichever doc the reviewer commented in, so badges merge across both.
+    const byRel = new Map<string, { meta: DocMeta; openCount: number; threadCount: number }>();
     for (const meta of this.list()) {
       if (meta.workspaceId !== workspaceId) continue;
       if (!workspaceRoot && meta.workspaceRoot) workspaceRoot = meta.workspaceRoot;
+      const key = meta.relPath ?? meta.docId;
+      const open = this.listThreads(meta.docId, { status: 'open' }).length;
+      const total = this.listThreads(meta.docId).length;
+      const prev = byRel.get(key);
+      if (!prev) {
+        byRel.set(key, { meta, openCount: open, threadCount: total });
+      } else {
+        prev.openCount += open;
+        prev.threadCount += total;
+        if (prev.meta.type !== 'diff' && meta.type === 'diff') prev.meta = meta;
+      }
+    }
+
+    for (const { meta, openCount, threadCount } of byRel.values()) {
       const relPath = meta.relPath ?? meta.docId;
-      const openCount = this.listThreads(meta.docId, { status: 'open' }).length;
-      const threadCount = this.listThreads(meta.docId).length;
       totalOpen += openCount;
       const decorated = decorate ? decorate(meta) : meta;
       const fileNode: WorkspaceFileNode = {
@@ -1336,26 +1354,42 @@ export class Rooms {
         return { ok: false, error: 'read-failed' };
       }
     }
-    // Sync content to the file's CURRENT bytes. The surface is read-only —
-    // the live doc never holds browser edits — so disk is authoritative at
-    // attach time. This covers both the first seed and content that drifted
-    // while the server was down: the poll's mtime baseline resets on attach,
-    // so a change missed during downtime would otherwise stay stale until
-    // the NEXT disk write. The 'file-watch' origin routes the replace
-    // through the same reanchor sweep as a live edit.
+    // Sync content to the file's CURRENT bytes when disk is the newer side.
+    // For read-only docs disk is always authoritative (the live doc never
+    // holds browser edits). For write-back docs the two can genuinely
+    // diverge across a restart, in BOTH directions: a File-view edit whose
+    // ~800ms flush the crash beat (doc newer — blindly seeding here silently
+    // destroyed it), or an agent editing the working tree while the server
+    // was down (disk newer — "doc always wins" would reassert pre-deploy
+    // bytes over their work). Arbitrate by mtime via diskNewerThanState;
+    // when the doc wins, back up the losing disk version and reassert below.
+    // The 'file-watch' origin routes a disk apply through the same reanchor
+    // sweep as a live edit.
+    let reassertDoc = false;
     if (existsSync(abs) && text !== content.toString()) {
-      const origin = content.length === 0 ? 'file-seed' : 'file-watch';
-      room.ydoc.transact(() => {
-        if (content.length > 0) content.delete(0, content.length);
-        if (text.length > 0) content.insert(0, text);
-      }, origin);
+      if (opts.writeBack && content.length > 0 && !this.diskNewerThanState(docId, abs)) {
+        this.backupExternalVersion(docId, text);
+        reassertDoc = true;
+      } else {
+        const origin = content.length === 0 ? 'file-seed' : 'file-watch';
+        room.ydoc.transact(() => {
+          if (content.length > 0) content.delete(0, content.length);
+          if (text.length > 0) content.insert(0, text);
+        }, origin);
+      }
     }
     const existing = this.fileBindings.get(docId);
     if (existing?.writeTimer) clearTimeout(existing.writeTimer);
     if (existing?.readTimer) clearTimeout(existing.readTimer);
     if (existing?.pollTimer) clearInterval(existing.pollTimer);
     if (existing?.contentObserver) content.unobserve(existing.contentObserver);
-    const binding: FileBinding = { path: abs, lastWritten: content.toString() };
+    // lastWritten is "what the FILE holds" — when the doc won the arbitration
+    // the file still holds the stale disk text, and recording the doc text
+    // instead would make the writer's no-op check skip the reassert.
+    const binding: FileBinding = {
+      path: abs,
+      lastWritten: reassertDoc ? text : content.toString(),
+    };
     this.fileBindings.set(docId, binding);
     if (!room.meta.sourceUrl) {
       const m = room.ydoc.getMap('meta');
@@ -1374,6 +1408,10 @@ export class Rooms {
       content.observe(observer);
     }
     this.armFileWatcher(room, binding);
+    // Doc won the attach-time arbitration above: push its state back out
+    // through the normal debounced writer (which also stamps the poll
+    // baseline so the reassert isn't misread as an external edit).
+    if (reassertDoc) this.scheduleFileWrite(room, binding);
     return { ok: true, resolvedPath: abs };
   }
 

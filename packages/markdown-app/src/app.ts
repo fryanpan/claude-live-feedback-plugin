@@ -179,6 +179,9 @@ function main(): void {
  *  tears down the editor, chrome, listeners, and (via the router) the client. */
 async function mountMarkdown(ctx: MountContext): Promise<void> {
   const { docId, client, user, scope } = ctx;
+  // Which docId the sidebar marks active — differs from `docId` only for the
+  // editable File view of a .md diff member (see MountContext.navDocId).
+  const navDocId = ctx.navDocId ?? docId;
   const { ydoc, awareness } = client;
   awareness.setLocalStateField('user', { name: user.name, color: user.color });
 
@@ -609,9 +612,9 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       // get the diff-nav; only data-less workspaces fall back to the folder
       // tree. `scope` lets a superseded navigation's late fetch bail instead of
       // clobbering the current sidebar.
-      const ok = await renderDiffNav(docId, workspaceId, false, scope);
+      const ok = await renderDiffNav(navDocId, workspaceId, false, scope);
       if (scope.disposed) return;
-      if (!ok) await renderWorkspaceTree(docId, workspaceId, false, scope);
+      if (!ok) await renderWorkspaceTree(navDocId, workspaceId, false, scope);
       return;
     }
     // ---- Legacy flat setId path ----
@@ -640,7 +643,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       });
       const sig = `set:${setId}:${siblings.map((d) => d.docId).join(',')}`;
       if (sidebarShowsSignature(sig)) {
-        setActiveFile(docId);
+        setActiveFile(navDocId);
         return;
       }
       const items = siblings
@@ -690,9 +693,9 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     // scroll-resetting rebuild on the next navigation (finding #1).
     const refresh = () => {
       void (async () => {
-        const ok = await renderDiffNav(docId, workspaceId, true, scope);
+        const ok = await renderDiffNav(navDocId, workspaceId, true, scope);
         if (scope.disposed) return;
-        if (!ok) await renderWorkspaceTree(docId, workspaceId, true, scope);
+        if (!ok) await renderWorkspaceTree(navDocId, workspaceId, true, scope);
       })();
     };
     window.addEventListener('focus', refresh);

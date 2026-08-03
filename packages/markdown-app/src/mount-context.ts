@@ -25,6 +25,12 @@ export interface DocMeta {
  */
 export interface MountContext extends DocMeta {
   docId: string;
+  /** docId the SIDEBAR should mark active when it differs from `docId`.
+   *  The editable File view of a `.md` diff member mounts the markdown
+   *  editor over a companion doc (docId = companion), but the diff-nav and
+   *  workspace tree only list the diff member — highlighting by the
+   *  companion id would leave no file marked active. Defaults to `docId`. */
+  navDocId?: string;
   scope: MountScope;
   client: FeedbackClient;
   user: User;

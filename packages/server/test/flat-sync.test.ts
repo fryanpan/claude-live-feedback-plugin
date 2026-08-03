@@ -248,6 +248,107 @@ describe('flat write-back through bindDiff', () => {
     expect(readFileSync(join(repo, 'Main.kt'), 'utf8')).not.toContain('// pinned edit');
   });
 
+  it('workspace tree lists an opened editable .md once, under the diff member, badges merged', async () => {
+    const res = rooms.bindDiff({ repoPath: repo, base });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const mdId = res.files.find((f) => f.relPath === 'README.md')?.docId ?? '';
+    const opened = rooms.openEditableFile(res.reviewId, 'README.md');
+    expect(opened.ok).toBe(true);
+    if (!opened.ok) return;
+    // One thread on the diff member, one on the companion editor doc — the
+    // tree must show ONE README.md row carrying BOTH.
+    const author = { id: 'u1', name: 'T', kind: 'known', color: '#000' } as const;
+    expect(
+      (await rooms.createThreadByFind(mdId, { find: 'Body changed.' }, author, 'on member')).ok,
+    ).toBe(true);
+    expect(
+      (
+        await rooms.createThreadByFind(
+          opened.docId,
+          { find: 'Body changed.' },
+          author,
+          'on companion',
+        )
+      ).ok,
+    ).toBe(true);
+    const tree = rooms.buildWorkspaceTree(res.reviewId);
+    const readmes = tree.tree.children.filter(
+      (c): c is Extract<typeof c, { type: 'file' }> =>
+        c.type === 'file' && c.relPath === 'README.md',
+    );
+    expect(readmes.length).toBe(1);
+    // The diff member stays the tree's face for the file (nav ids, diff
+    // badges); the companion's threads still count toward its badge.
+    expect(readmes[0]?.docId).toBe(mdId);
+    expect(readmes[0]?.openCount).toBe(2);
+    expect(readmes[0]?.threadCount).toBe(2);
+    expect(tree.totalOpen).toBe(2);
+  });
+
+  it('restart in the flush window: newer doc state wins, stale disk is backed up then reasserted', async () => {
+    // The crash ordering: File-view edit → .ydoc persisted → server dies
+    // BEFORE the ~800ms file write fires. On restart the file holds STALE
+    // bytes; blindly seeding from disk (the read-only-era behavior) would
+    // silently destroy the persisted edit. Arbitrate by mtime: the .ydoc is
+    // newer, so the doc wins, disk is backed up, and the writer reasserts.
+    const file = join(repo, 'Main.kt');
+    const staleDisk = readFileSync(file, 'utf8');
+    const docText = `// survived the crash\n${staleDisk}`;
+    // Build the persisted state WITHOUT a file binding (no poll, no writer —
+    // nothing races the setup): getOrCreate + a content edit is exactly what
+    // hydration will find after a crash mid-flush.
+    const setup = makeRooms(dataDir);
+    const room = setup.getOrCreate('crash1', {
+      type: 'diff',
+      sourceUrl: file,
+      relPath: 'Main.kt',
+      workspaceId: 'wcrash',
+      workspaceRoot: repo,
+    });
+    room.ydoc.getText('content').insert(0, docText);
+    await sleep(400); // .ydoc persist debounce
+    // Stamp the file OLDER than the .ydoc — the on-disk truth of "the write
+    // never happened".
+    const past = new Date(Date.now() - 60_000);
+    require('node:fs').utimesSync(file, past, past);
+
+    const restarted = makeRooms(dataDir);
+    expect(restarted.get('crash1')?.ydoc.getText('content').toString()).toBe(docText);
+    await sleep(1100);
+    expect(readFileSync(file, 'utf8')).toBe(docText);
+    const backupDir = join(dataDir, 'clobber-backups');
+    expect(existsSync(backupDir)).toBe(true);
+    const backups = readdirSync(backupDir).map((f) => readFileSync(join(backupDir, f), 'utf8'));
+    expect(backups).toContain(staleDisk);
+  });
+
+  it('restart after downtime edits: newer file wins over stale doc state (deploy-window safety)', async () => {
+    // The opposite ordering: server down, agent edits the working tree, then
+    // restart. Here DISK is the newer side — "doc always wins" would resurrect
+    // pre-deploy bytes into the view and then REASSERT them over the agent's
+    // work. The file's newer mtime must make disk authoritative, and no
+    // write-back of the stale doc may fire.
+    const file = join(repo, 'Main.kt');
+    const setup = makeRooms(dataDir);
+    const room = setup.getOrCreate('crash2', {
+      type: 'diff',
+      sourceUrl: file,
+      relPath: 'Main.kt',
+      workspaceId: 'wcrash',
+      workspaceRoot: repo,
+    });
+    room.ydoc.getText('content').insert(0, readFileSync(file, 'utf8'));
+    await sleep(400); // .ydoc persisted
+    const downtimeEdit = '// written while the server was down\n';
+    writeExternal(file, downtimeEdit); // future mtime > .ydoc mtime
+
+    const restarted = makeRooms(dataDir);
+    expect(restarted.get('crash2')?.ydoc.getText('content').toString()).toBe(downtimeEdit);
+    await sleep(1100);
+    expect(readFileSync(file, 'utf8')).toBe(downtimeEdit);
+  });
+
   it('POST /api/workspaces/:id/editable-file routes the whole flow (route-layer test per learnings)', async () => {
     const handle: ServerHandle = createServer({ port: 0, dataDir });
     try {
