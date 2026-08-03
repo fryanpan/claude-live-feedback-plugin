@@ -151,6 +151,13 @@ interface FileBinding {
    *  create_review_doc) stacked another write-back scheduler holding stale
    *  binding state. */
   observer?: Parameters<Y.XmlFragment['observeDeep']>[0];
+  /** True when this flat binding writes doc edits back to the file (the
+   *  editable File view). Absent/false = classic read-only code binding. */
+  writeBack?: boolean;
+  /** The content-Y.Text observer wired by attachFlatFile({writeBack:true}).
+   *  Kept so a re-attach can unobserve it (same stacking hazard as
+   *  `observer` above). */
+  contentObserver?: (event: Y.YTextEvent, tr: Y.Transaction) => void;
 }
 
 /**
@@ -298,8 +305,15 @@ export class Rooms {
           } else if (contentKind(room.meta.type) === 'flat') {
             // Working-tree diff docs have a sourceUrl and re-arm their live
             // poll like code docs. Pinned diff docs have no sourceUrl and
-            // need no binding — content is already in the .ydoc.
-            if (this.attachReadonlyFile(docId, src).ok) rebound++;
+            // need no binding — content is already in the .ydoc. Editable
+            // (write-back) members must come back editable: binding
+            // hydration ≠ state hydration, and a read-only re-attach here
+            // silently ate every post-restart File-view edit.
+            const writeBack =
+              room.meta.type === 'diff' &&
+              !room.meta.diffTarget &&
+              !(room.meta.relPath ?? '').toLowerCase().endsWith('.md');
+            if (this.attachFlatFile(docId, src, { writeBack }).ok) rebound++;
           }
         }
       }
@@ -1235,6 +1249,21 @@ export class Rooms {
     docId: string,
     filePath: string,
   ): { ok: boolean; error?: 'not-found' | 'path-empty' | 'read-failed'; resolvedPath?: string } {
+    return this.attachFlatFile(docId, filePath);
+  }
+
+  /**
+   * Bind a flat (code / working-tree diff) doc to a file. Disk→doc always
+   * flows via the mtime poll; pass `writeBack: true` to also flow doc→disk
+   * through the same debounced atomic writer prose docs use — that is what
+   * makes the File view a live editor. Pinned diff docs must never pass
+   * writeBack (their content is a commit, not a file).
+   */
+  attachFlatFile(
+    docId: string,
+    filePath: string,
+    opts: { writeBack?: boolean } = {},
+  ): { ok: boolean; error?: 'not-found' | 'path-empty' | 'read-failed'; resolvedPath?: string } {
     if (!filePath || filePath.trim() === '') return { ok: false, error: 'path-empty' };
     const room = this.rooms.get(docId);
     if (!room) return { ok: false, error: 'not-found' };
@@ -1267,6 +1296,7 @@ export class Rooms {
     if (existing?.writeTimer) clearTimeout(existing.writeTimer);
     if (existing?.readTimer) clearTimeout(existing.readTimer);
     if (existing?.pollTimer) clearInterval(existing.pollTimer);
+    if (existing?.contentObserver) content.unobserve(existing.contentObserver);
     const binding: FileBinding = { path: abs, lastWritten: content.toString() };
     this.fileBindings.set(docId, binding);
     if (!room.meta.sourceUrl) {
@@ -1274,7 +1304,17 @@ export class Rooms {
       room.ydoc.transact(() => m.set('sourceUrl', abs));
       room.meta.sourceUrl = abs;
     }
-    // NO write-back observer for code docs (read-only). Only disk → doc.
+    if (opts.writeBack) {
+      // doc → disk: same origin-guarded debounced writer as prose docs —
+      // our own seed/poll applies must not echo back out to the file.
+      binding.writeBack = true;
+      const observer = (_event: Y.YTextEvent, tr: Y.Transaction) => {
+        if (tr.origin === 'file-seed' || tr.origin === 'file-watch') return;
+        this.scheduleFileWrite(room, binding);
+      };
+      binding.contentObserver = observer;
+      content.observe(observer);
+    }
     this.armFileWatcher(room, binding);
     return { ok: true, resolvedPath: abs };
   }
@@ -1413,9 +1453,10 @@ export class Rooms {
       return 'missing';
     }
     // Code and working-tree diff docs are flat text — replace the whole
-    // `content` Y.Text on change. No write-back means no live edits, so
-    // there's never a conflict; the pure decideReconcile is reused only to
-    // skip no-op reads.
+    // `content` Y.Text on change. Read-only bindings can't hold live edits,
+    // so 'conflict' is impossible for them; editable (writeBack) bindings
+    // get the same keep-live/backup/reassert arm the prose path has — a
+    // blind replace here would eat the reviewer's in-flight keystrokes.
     if (contentKind(room.meta.type) === 'flat') {
       const content = room.ydoc.getText('content');
       const current = content.toString();
@@ -1427,6 +1468,23 @@ export class Rooms {
       if (decision === 'in-sync') return decision;
       if (decision === 'catch-up') {
         binding.lastWritten = md;
+        return decision;
+      }
+      if (decision === 'conflict' && binding.writeBack) {
+        const backupPath = this.backupExternalVersion(room.docId, md);
+        binding.lastSyncError = {
+          message:
+            'external file change collided with un-flushed live edits; kept live edits and reasserted them to disk. ' +
+            (backupPath
+              ? `The external version was saved to ${backupPath} — restore it and reparse_from_disk to make it win.`
+              : 'Backup of the external version FAILED — it survives only in your editor/git history.'),
+          at: Date.now(),
+        };
+        console.warn(
+          `[rooms] ${room.docId}: disk↔doc conflict for ${binding.path}; kept live edits, reasserting to disk` +
+            (backupPath ? ` (external version backed up to ${backupPath})` : ''),
+        );
+        this.scheduleFileWrite(room, binding);
         return decision;
       }
       room.ydoc.transact(() => {
@@ -1544,7 +1602,10 @@ export class Rooms {
             }
           } catch {}
         }
-        const md = prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
+        const md =
+          contentKind(room.meta.type) === 'flat'
+            ? room.ydoc.getText('content').toString()
+            : prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
         if (md === binding.lastWritten) return;
         // Atomic: write-temp-then-rename, so a crash mid-write can't leave
         // the user's file truncated and a concurrent reader never sees half
