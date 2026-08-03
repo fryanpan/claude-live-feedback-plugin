@@ -3,6 +3,8 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -139,10 +141,16 @@ interface FileBinding {
    *  Both directions guard against this to break echo loops. */
   lastWritten?: string;
   /** Set when the most recent disk→doc reconcile failed (parse threw or
-   *  produced zero blocks). Cleared on the next successful reconcile.
-   *  Surfaced via getDoc so a wedged doc reports WHY it's stale instead
-   *  of silently serving pre-edit content. */
+   *  produced zero blocks) or hit a conflict. Cleared on the next successful
+   *  reconcile. Surfaced via getDoc AND on edit-tool responses so a wedged
+   *  doc reports WHY it's stale instead of silently serving pre-edit
+   *  content. */
   lastSyncError?: { message: string; at: number };
+  /** The observeDeep callback wired by attachFile. Kept so a re-attach can
+   *  unobserve it — without this, every re-attach (hydrate, re-run
+   *  create_review_doc) stacked another write-back scheduler holding stale
+   *  binding state. */
+  observer?: Parameters<Y.XmlFragment['observeDeep']>[0];
 }
 
 /**
@@ -1132,7 +1140,10 @@ export class Rooms {
     if (existing?.writeTimer) clearTimeout(existing.writeTimer);
     if (existing?.readTimer) clearTimeout(existing.readTimer);
     if (existing?.pollTimer) clearInterval(existing.pollTimer);
-    const binding: FileBinding = { path: abs };
+    // A re-attach must replace the write-back observer, not stack another —
+    // each leaked observer is a duplicate scheduler holding a stale binding.
+    if (existing?.observer) fragment.unobserveDeep(existing.observer);
+    const binding: FileBinding = { path: abs, lastMtimeMs: existing?.lastMtimeMs };
     this.fileBindings.set(docId, binding);
     // sourceUrl mirrors the path so UI headers can show "Editing: <path>"
     if (!room.meta.sourceUrl) {
@@ -1140,13 +1151,71 @@ export class Rooms {
       room.ydoc.transact(() => m.set('sourceUrl', abs));
       room.meta.sourceUrl = abs;
     }
+
+    // Attaching a NON-empty fragment (hydrate after a restart, or a re-run
+    // create_review_doc): honor the sync contract's "the file is the source
+    // of truth at rest". Without this, an edit made while the server was down
+    // was never picked up — and the next flush overwrote it on disk.
+    if (!seeded && existsSync(abs)) {
+      try {
+        const md = readFileSync(abs, 'utf8');
+        const currentSerialized = prose.serializeFragmentToMarkdown(fragment);
+        const prior = existing?.lastWritten;
+        if (md !== currentSerialized) {
+          if (prior !== undefined && currentSerialized !== prior) {
+            // The live doc has un-flushed edits relative to our last write —
+            // we are NOT at rest, so don't pick a winner here. Keep the old
+            // bookkeeping; if disk also moved, the poll's reconcile will
+            // treat it as a conflict (backup + reassert). If disk did not
+            // move, re-arm the flush this re-attach just cancelled. (The
+            // conflict case reconciles NOW — armFileWatcher re-baselines the
+            // mtime below, so the poll would never see the change.)
+            binding.lastWritten = prior;
+            if (md === prior) this.scheduleFileWrite(room, binding);
+            else this.reconcileFromDisk(room, binding);
+          } else if (prior === undefined && !this.diskNewerThanState(docId, abs)) {
+            // Fresh attach with NO bookkeeping (post-restart hydrate) and the
+            // .md is OLDER than the persisted .ydoc: the crash happened inside
+            // the 800ms write-back window, so the hydrated doc is the newer
+            // side. Applying disk here would revert the just-made edit on
+            // startup (codex P1). Reassert the live doc to disk instead.
+            binding.lastWritten = md;
+            this.scheduleFileWrite(room, binding);
+          } else if (prose.parseMarkdownBlocks(md).length > 0) {
+            // At rest: pull disk in as a block diff so anchors on untouched
+            // blocks keep resolving. On the no-bookkeeping path we can't
+            // PROVE the fragment's extra state was ever flushed, so snapshot
+            // it first — restarts are rare enough that a stray backup beats
+            // an unrecoverable revert.
+            if (prior === undefined) {
+              this.backupExternalVersion(docId, currentSerialized, 'live');
+            }
+            room.ydoc.transact(() => {
+              prose.applyMarkdownToFragment(fragment, md);
+            }, 'file-watch');
+            prose.normalizeHeadingLevels(room.ydoc);
+          }
+        }
+      } catch (err) {
+        console.error(`[rooms] attach-time reconcile failed for ${abs}:`, err);
+      }
+    }
+
     // doc → disk: every change schedules a debounced write.
-    fragment.observeDeep((_events, tr) => {
+    const observer: Parameters<Y.XmlFragment['observeDeep']>[0] = (_events, tr) => {
       // Don't echo our own seed-from-disk or file-watch apply back to disk.
       if (tr.origin === 'file-seed' || tr.origin === 'file-watch') return;
       this.scheduleFileWrite(room, binding);
-    });
-    if (seeded) binding.lastWritten = prose.serializeFragmentToMarkdown(fragment);
+    };
+    binding.observer = observer;
+    fragment.observeDeep(observer);
+    // Bookkeeping lives in serializer-space: comparing raw disk bytes against
+    // normalized serializer output made every applied external edit look like
+    // permanent divergence, so the NEXT external edit was misjudged a
+    // conflict and clobbered (2026-08-03 incident, RC1).
+    if (binding.lastWritten === undefined) {
+      binding.lastWritten = prose.serializeFragmentToMarkdown(fragment);
+    }
 
     // disk → doc: poll for external edits (see armFileWatcher).
     this.armFileWatcher(room, binding);
@@ -1281,6 +1350,14 @@ export class Rooms {
     const binding = this.fileBindings.get(docId);
     if (!binding) return { ok: false, error: 'no-binding' };
     if (!existsSync(binding.path)) return { ok: false, error: 'missing' };
+    // The caller is declaring disk the winner. A pending write-back holds a
+    // PRE-reparse serialization — letting it fire would rewrite the file the
+    // caller just forced ("its stale in-memory copy flushed to disk and the
+    // reparse pulled that back", 2026-08-03 incident).
+    if (binding.writeTimer) {
+      clearTimeout(binding.writeTimer);
+      binding.writeTimer = null;
+    }
     let md: string;
     try {
       md = readFileSync(binding.path, 'utf8');
@@ -1311,7 +1388,8 @@ export class Rooms {
     // reparse is the documented recovery tool, so repair those here — without
     // it, force-pulling a legacy doc still left its headings rendering as h1.
     prose.normalizeHeadingLevels(room.ydoc);
-    binding.lastWritten = md;
+    // Serializer-space, not raw disk bytes — see attachFile (RC1).
+    binding.lastWritten = prose.serializeFragmentToMarkdown(fragment);
     binding.lastSyncError = undefined;
     return { ok: true };
   }
@@ -1322,14 +1400,17 @@ export class Rooms {
    * Applies in one transact origin='file-watch' so the doc→disk
    * observer knows not to re-flush (which would bounce back here).
    */
-  private reconcileFromDisk(room: DocRoom, binding: FileBinding): void {
-    if (!existsSync(binding.path)) return;
+  private reconcileFromDisk(
+    room: DocRoom,
+    binding: FileBinding,
+  ): 'in-sync' | 'catch-up' | 'apply' | 'conflict' | 'missing' {
+    if (!existsSync(binding.path)) return 'missing';
     let md: string;
     try {
       md = readFileSync(binding.path, 'utf8');
     } catch (err) {
       console.error(`[rooms] read failed for ${binding.path}:`, err);
-      return;
+      return 'missing';
     }
     // Code and working-tree diff docs are flat text — replace the whole
     // `content` Y.Text on change. No write-back means no live edits, so
@@ -1343,10 +1424,10 @@ export class Rooms {
         lastWritten: binding.lastWritten,
         currentSerialized: current,
       });
-      if (decision === 'in-sync') return;
+      if (decision === 'in-sync') return decision;
       if (decision === 'catch-up') {
         binding.lastWritten = md;
-        return;
+        return decision;
       }
       room.ydoc.transact(() => {
         content.delete(0, content.length);
@@ -1354,7 +1435,7 @@ export class Rooms {
       }, 'file-watch');
       binding.lastWritten = md;
       binding.lastSyncError = undefined;
-      return;
+      return decision;
     }
     const fragment = prose.getProseFragment(room.ydoc);
     const currentSerialized = prose.serializeFragmentToMarkdown(fragment);
@@ -1364,29 +1445,36 @@ export class Rooms {
       currentSerialized,
     });
     // Same content as last round-trip → nothing to do.
-    if (decision === 'in-sync') return;
+    if (decision === 'in-sync') return decision;
     // The live doc already serializes to disk (up to serializer whitespace) —
     // just catch up bookkeeping, don't touch the fragment.
     if (decision === 'catch-up') {
       binding.lastWritten = md;
-      return;
+      return decision;
     }
     if (decision === 'conflict') {
       // An external write collided with un-flushed live edits. A blind
       // delete+push here would clobber the human's in-progress work (the bug
       // a peer reported). The editor is the runtime source of truth, so keep
       // the live edits and reassert them to disk via the debounced writer.
-      // The dropped external change is recoverable with reparse_from_disk.
+      // BUT the reassert overwrites the external version on disk — so back it
+      // up first, or "recoverable with reparse_from_disk" is a lie (disk
+      // would already hold our reassert by the time anyone reparses).
+      const backupPath = this.backupExternalVersion(room.docId, md);
       binding.lastSyncError = {
         message:
-          'external file change collided with un-flushed live edits; kept live edits (use reparse_from_disk to force disk)',
+          'external file change collided with un-flushed live edits; kept live edits and reasserted them to disk. ' +
+          (backupPath
+            ? `The external version was saved to ${backupPath} — restore it and reparse_from_disk to make it win.`
+            : 'Backup of the external version FAILED — it survives only in your editor/git history.'),
         at: Date.now(),
       };
       console.warn(
-        `[rooms] ${room.docId}: disk↔doc conflict for ${binding.path}; kept live edits, reasserting to disk`,
+        `[rooms] ${room.docId}: disk↔doc conflict for ${binding.path}; kept live edits, reasserting to disk` +
+          (backupPath ? ` (external version backed up to ${backupPath})` : ''),
       );
       this.scheduleFileWrite(room, binding);
-      return;
+      return decision;
     }
     // decision === 'apply' — disk changed externally and the live doc is clean.
     let blocks: Y.XmlElement[];
@@ -1400,7 +1488,7 @@ export class Rooms {
       const message = err instanceof Error ? err.message : String(err);
       binding.lastSyncError = { message: `parse failed: ${message}`, at: Date.now() };
       console.error(`[rooms] ${room.docId}: disk→doc parse failed for ${binding.path}:`, err);
-      return;
+      return decision;
     }
     if (blocks.length === 0) {
       // Don't wipe to empty on a parse that produced nothing — but DON'T
@@ -1412,7 +1500,7 @@ export class Rooms {
       console.warn(
         `[rooms] ${room.docId}: disk→doc reconcile yielded 0 blocks from ${binding.path}; keeping prior state`,
       );
-      return;
+      return decision;
     }
     // Apply as a block-level diff: only blocks whose markdown actually
     // changed are replaced, so anchors on untouched blocks keep resolving.
@@ -1425,20 +1513,51 @@ export class Rooms {
     // heading level serializes identically, so the diff keeps it and the
     // attribute has to be repaired separately. Idempotent and cheap.
     prose.normalizeHeadingLevels(room.ydoc);
-    binding.lastWritten = md;
+    // Serializer-space, NOT the raw disk bytes (RC1): parse→serialize is not
+    // byte-identity, so storing `md` here left `currentSerialized ≠
+    // lastWritten` forever after — and the NEXT external edit was misjudged
+    // a conflict and clobbered by the reassert.
+    binding.lastWritten = prose.serializeFragmentToMarkdown(fragment);
     binding.lastSyncError = undefined;
     console.log(
       `[rooms] ${room.docId}: applied external edit from ${binding.path} (${blocks.length} blocks)`,
     );
+    return decision;
   }
 
   private scheduleFileWrite(room: DocRoom, binding: FileBinding): void {
     if (binding.writeTimer) clearTimeout(binding.writeTimer);
     binding.writeTimer = setTimeout(() => {
+      binding.writeTimer = null;
       try {
+        // Guard (RC2): if disk moved since we last read or wrote it, we'd be
+        // overwriting bytes we have never seen — the poll just hasn't caught
+        // up yet. Reconcile first; apply/conflict decides, and the conflict
+        // path both backs up the external version and re-schedules our flush.
+        if (binding.lastMtimeMs !== undefined && existsSync(binding.path)) {
+          try {
+            const mtimeMs = statSync(binding.path).mtimeMs;
+            if (mtimeMs !== binding.lastMtimeMs) {
+              binding.lastMtimeMs = mtimeMs;
+              this.reconcileFromDisk(room, binding);
+              return;
+            }
+          } catch {}
+        }
         const md = prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
         if (md === binding.lastWritten) return;
-        writeFileSync(binding.path, md);
+        // Atomic: write-temp-then-rename, so a crash mid-write can't leave
+        // the user's file truncated and a concurrent reader never sees half
+        // a document. (Same save pattern editors use.) Rename onto the
+        // REALPATH — renaming onto a symlink would replace the link with a
+        // regular file instead of writing through it (codex P2).
+        let target = binding.path;
+        try {
+          target = realpathSync(binding.path);
+        } catch {}
+        const tmp = `${target}.lf-write~`;
+        writeFileSync(tmp, md);
+        renameSync(tmp, target);
         binding.lastWritten = md;
         // Record our own write's mtime so the poll doesn't treat the
         // write-back as an external edit and schedule a redundant reconcile.
@@ -1449,6 +1568,110 @@ export class Rooms {
         console.error(`[rooms] file write failed for ${binding.path}:`, err);
       }
     }, 800);
+  }
+
+  /**
+   * Snapshot an external file version we are about to overwrite into
+   * `<dataDir>/clobber-backups/`, so a conflict reassert is recoverable
+   * instead of destructive. Returns the backup path, or null on failure —
+   * never throws (the reconcile must proceed either way).
+   */
+  private backupExternalVersion(docId: string, content: string, label = 'external'): string | null {
+    try {
+      const dir = join(this.cfg.dataDir, 'clobber-backups');
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      const safeId = docId.replace(/[^A-Za-z0-9._-]/g, '_');
+      const file = join(dir, `${safeId}-${label}-${Date.now()}.md`);
+      writeFileSync(file, content);
+      return file;
+    } catch (err) {
+      console.error(`[rooms] clobber backup failed for ${docId}:`, err);
+      return null;
+    }
+  }
+
+  /**
+   * Is the bound .md at least as new as the persisted .ydoc? Decides who wins
+   * a no-bookkeeping attach (post-restart): the .ydoc's mtime marks the live
+   * doc's last change, so an older .md means the crash beat the write-back
+   * debounce and disk is the STALE side. Errs toward disk (the documented
+   * source of truth at rest) when either stat fails.
+   */
+  private diskNewerThanState(docId: string, filePath: string): boolean {
+    try {
+      const ydocPath = this.pathFor(docId);
+      if (!existsSync(ydocPath)) return true;
+      return statSync(filePath).mtimeMs >= statSync(ydocPath).mtimeMs;
+    } catch {
+      return true;
+    }
+  }
+
+  /**
+   * Run a disk→doc reconcile for a bound doc right now (instead of waiting
+   * for the mtime poll) and report the decision. Used by tests to pin the
+   * reconcile policy without timing races, and available to routes for an
+   * explicit "sync now".
+   */
+  reconcileNow(
+    docId: string,
+  ): 'in-sync' | 'catch-up' | 'apply' | 'conflict' | 'no-binding' | 'missing' {
+    const room = this.rooms.get(docId);
+    const binding = this.fileBindings.get(docId);
+    if (!room || !binding) return 'no-binding';
+    if (!existsSync(binding.path)) return 'missing';
+    // Advance the poll baseline the same way the poll itself would, so this
+    // manual reconcile doesn't get replayed on the next tick.
+    try {
+      binding.lastMtimeMs = statSync(binding.path).mtimeMs;
+    } catch {}
+    if (binding.readTimer) {
+      clearTimeout(binding.readTimer);
+      binding.readTimer = null;
+    }
+    return this.reconcileFromDisk(room, binding);
+  }
+
+  /** The doc's pending sync trouble, if any — conflicts, parse failures. */
+  getSyncError(docId: string): { message: string; at: number } | undefined {
+    return this.fileBindings.get(docId)?.lastSyncError;
+  }
+
+  /**
+   * Replace the WHOLE document from a markdown payload — the legitimate
+   * "comprehensive rewrite" path. Applies as a block-level diff on the live
+   * doc (anchors on untouched blocks keep resolving, connected editors
+   * update live) and flushes to disk via the normal debounced writer.
+   *
+   * This is what agents used `Write` + `reparse_from_disk` — or the
+   * delete_doc → Write → create_review_doc dance — to approximate, both of
+   * which raced the write-back and clobbered (2026-07-15, 2026-08-03).
+   */
+  setDocContent(
+    docId: string,
+    markdown: string,
+  ): { ok: true } | { ok: false; error: 'not-found' | 'unsupported' | 'empty' | 'parse-failed' } {
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'not-found' };
+    // Flat docs (code / diff) are read-only review surfaces; their content
+    // comes from disk or a pinned commit, never from an agent payload.
+    if (contentKind(room.meta.type) !== 'prose') return { ok: false, error: 'unsupported' };
+    if (!markdown.trim()) return { ok: false, error: 'empty' };
+    let blocks: Y.XmlElement[];
+    try {
+      blocks = prose.parseMarkdownBlocks(markdown);
+    } catch {
+      return { ok: false, error: 'parse-failed' };
+    }
+    if (blocks.length === 0) return { ok: false, error: 'empty' };
+    const fragment = prose.getProseFragment(room.ydoc);
+    // A doc-side edit origin (NOT 'file-watch'): the write-back observer must
+    // see this and flush it to disk like any other agent edit.
+    room.ydoc.transact(() => {
+      prose.applyMarkdownToFragment(fragment, markdown);
+    }, 'agent-set-content');
+    prose.normalizeHeadingLevels(room.ydoc);
+    return { ok: true };
   }
 
   /**
