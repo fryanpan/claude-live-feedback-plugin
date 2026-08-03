@@ -770,12 +770,27 @@ export class Rooms {
       string,
       { rank: number; details?: string; files: WorkspaceFileNode[] }
     >();
+    // Companion editor docs (openEditableFile) are type 'markdown' but hold
+    // threads left in the .md File view — those must count toward the diff
+    // member's badge even though only diff members get rows here. Context
+    // files never share a relPath with a member (openContextFile
+    // short-circuits when one exists), so summing by relPath is safe.
+    const companionThreads = new Map<string, { open: number; total: number }>();
+    for (const meta of this.list()) {
+      if (meta.workspaceId !== workspaceId || meta.type === 'diff' || !meta.relPath) continue;
+      const open = this.listThreads(meta.docId, { status: 'open' }).length;
+      const total = this.listThreads(meta.docId).length;
+      if (open === 0 && total === 0) continue;
+      const prev = companionThreads.get(meta.relPath) ?? { open: 0, total: 0 };
+      companionThreads.set(meta.relPath, { open: prev.open + open, total: prev.total + total });
+    }
     let totalOpen = 0;
     for (const meta of this.list()) {
       if (meta.workspaceId !== workspaceId || meta.type !== 'diff') continue;
       const relPath = meta.relPath ?? meta.docId;
-      const openCount = this.listThreads(meta.docId, { status: 'open' }).length;
-      const threadCount = this.listThreads(meta.docId).length;
+      const extra = companionThreads.get(relPath) ?? { open: 0, total: 0 };
+      const openCount = this.listThreads(meta.docId, { status: 'open' }).length + extra.open;
+      const threadCount = this.listThreads(meta.docId).length + extra.total;
       totalOpen += openCount;
       const decorated = decorate ? decorate(meta) : meta;
       const node: WorkspaceFileNode = {
