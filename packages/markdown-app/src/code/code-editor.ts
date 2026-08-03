@@ -1,3 +1,4 @@
+import { defaultKeymap, indentWithTab } from '@codemirror/commands';
 import { defaultHighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import {
   Compartment,
@@ -14,9 +15,12 @@ import {
   EditorView,
   GutterMarker,
   gutter,
+  keymap,
   lineNumbers,
 } from '@codemirror/view';
 import { getContent } from '@feedback/core';
+import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
+import type { Awareness } from 'y-protocols/awareness';
 import * as Y from 'yjs';
 import type { ReviewSurface, SurfaceThreadRange } from '../review-surface.ts';
 import { encodeOffsetRel, resolveRelOffset, snapToLines } from './code-anchor.ts';
@@ -48,6 +52,15 @@ export interface CreateCodeEditorOpts {
    *  the File button active while the surface still shows the unified diff.
    *  Ignored without `diff`: a plain code doc is always whole-file. */
   initialViewMode?: CodeViewMode;
+  /** Make the file view a live collaborative editor: the CM doc binds
+   *  two-way to the `content` Y.Text (y-codemirror.next), so edits reach
+   *  every peer and — for working-tree diff members — the file on disk via
+   *  the server's flat write-back. The diff view of the same surface stays
+   *  read-only. Only pass for docs the server actually writes back, or the
+   *  editor is a lie. */
+  editable?: boolean;
+  /** Awareness for remote cursors in the editable file view. */
+  awareness?: Awareness | null;
 }
 
 /** A ReviewSurface that can also swap between diff and whole-file rendering. */
@@ -193,14 +206,23 @@ export function createCodeEditor(opts: CreateCodeEditorOpts): CodeSurface {
       },
     });
   const modeExtensions = (mode: CodeViewMode): Extension[] => {
-    if (!opts.diff) return [lineNumbersExt()];
+    // Writability is per MODE, not per surface: the diff rendering of an
+    // editable doc stays read-only (deletion widgets and collapse bars are
+    // not an editing surface); only the whole-file view takes input.
+    const writable = opts.editable === true && mode === 'file';
+    const access: Extension[] = [
+      EditorState.readOnly.of(!writable),
+      EditorView.editable.of(writable),
+    ];
+    if (!opts.diff) return [...access, lineNumbersExt()];
     return mode === 'diff'
       ? [
+          ...access,
           oldLineNumberGutter(),
           lineNumbersExt(),
           ...diffMergeExtensions({ ...opts.diff, collapse: true }),
         ]
-      : [lineNumbersExt(), ...diffMergeExtensions({ ...opts.diff, collapse: false })];
+      : [...access, lineNumbersExt(), ...diffMergeExtensions({ ...opts.diff, collapse: false })];
   };
 
   function selectWholeLine(v: EditorView, pos: number): void {
@@ -212,9 +234,22 @@ export function createCodeEditor(opts: CreateCodeEditorOpts): CodeSurface {
   }
 
   const langExt = languageExtensionFor(opts.sourceUrl);
+  // Editable surfaces bind the CM doc to the Y.Text through y-codemirror's
+  // sync plugin (incremental both ways, remote cursors via awareness, undo
+  // scoped to LOCAL edits via Y.UndoManager — plain CM history would undo
+  // the agent's saves too). Read-only surfaces keep the whole-doc mirror
+  // below instead: no undo stack, no awareness overhead.
+  const undoManager = opts.editable ? new Y.UndoManager(content) : null;
+  const collabExts: Extension[] = opts.editable
+    ? [
+        yCollab(content, opts.awareness ?? null, {
+          undoManager: undoManager as NonNullable<typeof undoManager>,
+        }),
+        keymap.of([...yUndoManagerKeymap, ...defaultKeymap, indentWithTab]),
+      ]
+    : [];
   const extensions: Extension[] = [
-    EditorState.readOnly.of(true),
-    EditorView.editable.of(false),
+    ...collabExts,
     viewModeComp.of(modeExtensions(viewMode)),
     syntaxHighlighting(defaultHighlightStyle),
     markerField,
@@ -249,13 +284,22 @@ export function createCodeEditor(opts: CreateCodeEditorOpts): CodeSurface {
   });
   view.dom.classList.toggle('cm-file-mode', viewMode === 'file');
 
-  // One-way bind: when the agent edits the source file, the server applies
-  // it to `content`; mirror it into the CM doc by replacing the whole text.
+  // Read-only surfaces: one-way bind — when the agent edits the source file,
+  // the server applies it to `content`; mirror it into the CM doc by
+  // replacing the whole text. Editable surfaces skip this (yCollab owns the
+  // doc binding; a whole-doc replace here would destroy the cursor on every
+  // remote change) but still need the empty→content compartment re-init.
+  // Tracked across observer calls, NOT read from the current doc: on
+  // editable surfaces yCollab's own observer runs first, so by the time
+  // this one fires the CM doc already holds the late-arriving content.
+  let hadContent = content.length > 0;
   const onContentChange = () => {
-    const text = content.toString();
-    if (text === view.state.doc.toString()) return;
-    const wasEmpty = view.state.doc.length === 0;
-    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
+    if (!opts.editable) {
+      const text = content.toString();
+      if (text !== view.state.doc.toString()) {
+        view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
+      }
+    }
     // The merge machinery computes chunks incrementally, but its
     // collapse-unchanged ranges are built ONLY at field init — and at mount
     // time the doc is usually still empty (Yjs hasn't synced yet), so
@@ -264,8 +308,11 @@ export function createCodeEditor(opts: CreateCodeEditorOpts): CodeSurface {
     // edits (working-tree reviews re-render as the agent saves) flow
     // through the incremental chunk update, and a re-init there would
     // throw away the reviewer's expanded/collapsed regions.
-    if (wasEmpty && viewMode === 'diff' && opts.diff) {
-      view.dispatch({ effects: viewModeComp.reconfigure(modeExtensions('diff')) });
+    if (!hadContent && content.length > 0) {
+      hadContent = true;
+      if (viewMode === 'diff' && opts.diff) {
+        view.dispatch({ effects: viewModeComp.reconfigure(modeExtensions('diff')) });
+      }
     }
   };
   content.observe(onContentChange);
@@ -331,6 +378,7 @@ export function createCodeEditor(opts: CreateCodeEditorOpts): CodeSurface {
     },
     destroy() {
       content.unobserve(onContentChange);
+      undoManager?.destroy();
       view.destroy();
     },
   };

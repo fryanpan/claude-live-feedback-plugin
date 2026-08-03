@@ -151,6 +151,13 @@ interface FileBinding {
    *  create_review_doc) stacked another write-back scheduler holding stale
    *  binding state. */
   observer?: Parameters<Y.XmlFragment['observeDeep']>[0];
+  /** True when this flat binding writes doc edits back to the file (the
+   *  editable File view). Absent/false = classic read-only code binding. */
+  writeBack?: boolean;
+  /** The content-Y.Text observer wired by attachFlatFile({writeBack:true}).
+   *  Kept so a re-attach can unobserve it (same stacking hazard as
+   *  `observer` above). */
+  contentObserver?: (event: Y.YTextEvent, tr: Y.Transaction) => void;
 }
 
 /**
@@ -298,8 +305,15 @@ export class Rooms {
           } else if (contentKind(room.meta.type) === 'flat') {
             // Working-tree diff docs have a sourceUrl and re-arm their live
             // poll like code docs. Pinned diff docs have no sourceUrl and
-            // need no binding — content is already in the .ydoc.
-            if (this.attachReadonlyFile(docId, src).ok) rebound++;
+            // need no binding — content is already in the .ydoc. Editable
+            // (write-back) members must come back editable: binding
+            // hydration ≠ state hydration, and a read-only re-attach here
+            // silently ate every post-restart File-view edit.
+            const writeBack =
+              room.meta.type === 'diff' &&
+              !room.meta.diffTarget &&
+              !(room.meta.relPath ?? '').toLowerCase().endsWith('.md');
+            if (this.attachFlatFile(docId, src, { writeBack }).ok) rebound++;
           }
         }
       }
@@ -756,12 +770,27 @@ export class Rooms {
       string,
       { rank: number; details?: string; files: WorkspaceFileNode[] }
     >();
+    // Companion editor docs (openEditableFile) are type 'markdown' but hold
+    // threads left in the .md File view — those must count toward the diff
+    // member's badge even though only diff members get rows here. Context
+    // files never share a relPath with a member (openContextFile
+    // short-circuits when one exists), so summing by relPath is safe.
+    const companionThreads = new Map<string, { open: number; total: number }>();
+    for (const meta of this.list()) {
+      if (meta.workspaceId !== workspaceId || meta.type === 'diff' || !meta.relPath) continue;
+      const open = this.listThreads(meta.docId, { status: 'open' }).length;
+      const total = this.listThreads(meta.docId).length;
+      if (open === 0 && total === 0) continue;
+      const prev = companionThreads.get(meta.relPath) ?? { open: 0, total: 0 };
+      companionThreads.set(meta.relPath, { open: prev.open + open, total: prev.total + total });
+    }
     let totalOpen = 0;
     for (const meta of this.list()) {
       if (meta.workspaceId !== workspaceId || meta.type !== 'diff') continue;
       const relPath = meta.relPath ?? meta.docId;
-      const openCount = this.listThreads(meta.docId, { status: 'open' }).length;
-      const threadCount = this.listThreads(meta.docId).length;
+      const extra = companionThreads.get(relPath) ?? { open: 0, total: 0 };
+      const openCount = this.listThreads(meta.docId, { status: 'open' }).length + extra.open;
+      const threadCount = this.listThreads(meta.docId).length + extra.total;
       totalOpen += openCount;
       const decorated = decorate ? decorate(meta) : meta;
       const node: WorkspaceFileNode = {
@@ -828,7 +857,15 @@ export class Rooms {
     const root = members.find((m) => m.workspaceRoot)?.workspaceRoot;
     if (!root || !existsSync(root)) return { ok: false, error: 'not-found' };
     const decorate = this.cfg.decorateDocMeta;
-    const byRel = new Map(members.map((m) => [m.relPath ?? '', m]));
+    // A changed file can carry BOTH its diff member and its companion
+    // editable markdown doc on the same relPath — the diff member is the
+    // reviewable surface this list must point at.
+    const byRel = new Map<string, DocMeta>();
+    for (const m of members) {
+      const key = m.relPath ?? '';
+      const prev = byRel.get(key);
+      if (!prev || (prev.type !== 'diff' && m.type === 'diff')) byRel.set(key, m);
+    }
     const MAX_FILES = 10_000;
     const scanned = scanFolderPaths(root);
     const truncated = scanned.length > MAX_FILES;
@@ -891,18 +928,86 @@ export class Rooms {
     return { ok: true, docId: room.docId, meta: room.meta };
   }
 
+  /**
+   * Open (or reuse) the companion EDITABLE markdown doc for a `.md` member
+   * of a LIVE working-tree diff review. The member stays the flat
+   * diff/redline surface; the companion is a full prose doc bound to the
+   * same working-tree file via attachFile, so File-view edits flow
+   * prose → disk (debounced write-back) → the member's mtime poll →
+   * redline/diff re-render. Unchanged `.md` files delegate to
+   * openContextFile (already a full markdown doc); pinned reviews refuse —
+   * their content is a commit, not a file.
+   */
+  openEditableFile(
+    workspaceId: string,
+    relPath: string,
+  ):
+    | { ok: true; docId: string; meta: DocMeta }
+    | {
+        ok: false;
+        error: 'not-found' | 'bad-path' | 'pinned' | 'not-markdown' | 'attach-failed';
+      } {
+    const members = this.list().filter((m) => m.workspaceId === workspaceId);
+    const root = members.find((m) => m.workspaceRoot)?.workspaceRoot;
+    if (!root) return { ok: false, error: 'not-found' };
+    const clean = relPath.replace(/^\/+/, '');
+    const abs = join(root, clean);
+    if (clean.split('/').includes('..') || !`${abs}/`.startsWith(`${root}/`)) {
+      return { ok: false, error: 'bad-path' };
+    }
+    if (!clean.toLowerCase().endsWith('.md')) return { ok: false, error: 'not-markdown' };
+    const member = members.find((m) => m.relPath === clean);
+    if (!member) return this.openContextFile(workspaceId, clean);
+    if (member.type !== 'diff') return { ok: true, docId: member.docId, meta: member };
+    if (member.diffTarget) return { ok: false, error: 'pinned' };
+    if (!existsSync(abs)) return { ok: false, error: 'not-found' };
+    const owner = members.find((m) => m.owner)?.owner;
+    const companionId = memberDocId(`${workspaceId}:edit`, clean);
+    const room = this.getOrCreate(companionId, {
+      type: 'markdown',
+      sourceUrl: abs,
+      setId: workspaceId,
+      owner,
+      workspaceId,
+      workspaceRoot: root,
+      relPath: clean,
+      title: clean,
+    });
+    const attached = this.attachFile(companionId, abs);
+    if (!attached.ok) return { ok: false, error: 'attach-failed' };
+    return { ok: true, docId: room.docId, meta: room.meta };
+  }
+
   buildWorkspaceTree(workspaceId: string): WorkspaceTree {
     const decorate = this.cfg.decorateDocMeta;
     const root: WorkspaceDirNode = { type: 'dir', name: '', openCount: 0, children: [] };
     let totalOpen = 0;
     let workspaceRoot: string | undefined;
 
+    // One node per relPath: an editable .md gives the workspace TWO docs for
+    // the same file (the diff member + its companion editor doc, see
+    // openEditableFile). The diff member stays the face of the file — its
+    // docId is what the diff-nav and reviewUrl point at — but threads land on
+    // whichever doc the reviewer commented in, so badges merge across both.
+    const byRel = new Map<string, { meta: DocMeta; openCount: number; threadCount: number }>();
     for (const meta of this.list()) {
       if (meta.workspaceId !== workspaceId) continue;
       if (!workspaceRoot && meta.workspaceRoot) workspaceRoot = meta.workspaceRoot;
+      const key = meta.relPath ?? meta.docId;
+      const open = this.listThreads(meta.docId, { status: 'open' }).length;
+      const total = this.listThreads(meta.docId).length;
+      const prev = byRel.get(key);
+      if (!prev) {
+        byRel.set(key, { meta, openCount: open, threadCount: total });
+      } else {
+        prev.openCount += open;
+        prev.threadCount += total;
+        if (prev.meta.type !== 'diff' && meta.type === 'diff') prev.meta = meta;
+      }
+    }
+
+    for (const { meta, openCount, threadCount } of byRel.values()) {
       const relPath = meta.relPath ?? meta.docId;
-      const openCount = this.listThreads(meta.docId, { status: 'open' }).length;
-      const threadCount = this.listThreads(meta.docId).length;
       totalOpen += openCount;
       const decorated = decorate ? decorate(meta) : meta;
       const fileNode: WorkspaceFileNode = {
@@ -1259,6 +1364,21 @@ export class Rooms {
     docId: string,
     filePath: string,
   ): { ok: boolean; error?: 'not-found' | 'path-empty' | 'read-failed'; resolvedPath?: string } {
+    return this.attachFlatFile(docId, filePath);
+  }
+
+  /**
+   * Bind a flat (code / working-tree diff) doc to a file. Disk→doc always
+   * flows via the mtime poll; pass `writeBack: true` to also flow doc→disk
+   * through the same debounced atomic writer prose docs use — that is what
+   * makes the File view a live editor. Pinned diff docs must never pass
+   * writeBack (their content is a commit, not a file).
+   */
+  attachFlatFile(
+    docId: string,
+    filePath: string,
+    opts: { writeBack?: boolean } = {},
+  ): { ok: boolean; error?: 'not-found' | 'path-empty' | 'read-failed'; resolvedPath?: string } {
     if (!filePath || filePath.trim() === '') return { ok: false, error: 'path-empty' };
     const room = this.rooms.get(docId);
     if (!room) return { ok: false, error: 'not-found' };
@@ -1273,33 +1393,64 @@ export class Rooms {
         return { ok: false, error: 'read-failed' };
       }
     }
-    // Sync content to the file's CURRENT bytes. The surface is read-only —
-    // the live doc never holds browser edits — so disk is authoritative at
-    // attach time. This covers both the first seed and content that drifted
-    // while the server was down: the poll's mtime baseline resets on attach,
-    // so a change missed during downtime would otherwise stay stale until
-    // the NEXT disk write. The 'file-watch' origin routes the replace
-    // through the same reanchor sweep as a live edit.
+    // Sync content to the file's CURRENT bytes when disk is the newer side.
+    // For read-only docs disk is always authoritative (the live doc never
+    // holds browser edits). For write-back docs the two can genuinely
+    // diverge across a restart, in BOTH directions: a File-view edit whose
+    // ~800ms flush the crash beat (doc newer — blindly seeding here silently
+    // destroyed it), or an agent editing the working tree while the server
+    // was down (disk newer — "doc always wins" would reassert pre-deploy
+    // bytes over their work). Arbitrate by mtime via diskNewerThanState;
+    // when the doc wins, back up the losing disk version and reassert below.
+    // The 'file-watch' origin routes a disk apply through the same reanchor
+    // sweep as a live edit.
+    let reassertDoc = false;
     if (existsSync(abs) && text !== content.toString()) {
-      const origin = content.length === 0 ? 'file-seed' : 'file-watch';
-      room.ydoc.transact(() => {
-        if (content.length > 0) content.delete(0, content.length);
-        if (text.length > 0) content.insert(0, text);
-      }, origin);
+      if (opts.writeBack && content.length > 0 && !this.diskNewerThanState(docId, abs)) {
+        this.backupExternalVersion(docId, text);
+        reassertDoc = true;
+      } else {
+        const origin = content.length === 0 ? 'file-seed' : 'file-watch';
+        room.ydoc.transact(() => {
+          if (content.length > 0) content.delete(0, content.length);
+          if (text.length > 0) content.insert(0, text);
+        }, origin);
+      }
     }
     const existing = this.fileBindings.get(docId);
     if (existing?.writeTimer) clearTimeout(existing.writeTimer);
     if (existing?.readTimer) clearTimeout(existing.readTimer);
     if (existing?.pollTimer) clearInterval(existing.pollTimer);
-    const binding: FileBinding = { path: abs, lastWritten: content.toString() };
+    if (existing?.contentObserver) content.unobserve(existing.contentObserver);
+    // lastWritten is "what the FILE holds" — when the doc won the arbitration
+    // the file still holds the stale disk text, and recording the doc text
+    // instead would make the writer's no-op check skip the reassert.
+    const binding: FileBinding = {
+      path: abs,
+      lastWritten: reassertDoc ? text : content.toString(),
+    };
     this.fileBindings.set(docId, binding);
     if (!room.meta.sourceUrl) {
       const m = room.ydoc.getMap('meta');
       room.ydoc.transact(() => m.set('sourceUrl', abs));
       room.meta.sourceUrl = abs;
     }
-    // NO write-back observer for code docs (read-only). Only disk → doc.
+    if (opts.writeBack) {
+      // doc → disk: same origin-guarded debounced writer as prose docs —
+      // our own seed/poll applies must not echo back out to the file.
+      binding.writeBack = true;
+      const observer = (_event: Y.YTextEvent, tr: Y.Transaction) => {
+        if (tr.origin === 'file-seed' || tr.origin === 'file-watch') return;
+        this.scheduleFileWrite(room, binding);
+      };
+      binding.contentObserver = observer;
+      content.observe(observer);
+    }
     this.armFileWatcher(room, binding);
+    // Doc won the attach-time arbitration above: push its state back out
+    // through the normal debounced writer (which also stamps the poll
+    // baseline so the reassert isn't misread as an external edit).
+    if (reassertDoc) this.scheduleFileWrite(room, binding);
     return { ok: true, resolvedPath: abs };
   }
 
@@ -1437,9 +1588,10 @@ export class Rooms {
       return 'missing';
     }
     // Code and working-tree diff docs are flat text — replace the whole
-    // `content` Y.Text on change. No write-back means no live edits, so
-    // there's never a conflict; the pure decideReconcile is reused only to
-    // skip no-op reads.
+    // `content` Y.Text on change. Read-only bindings can't hold live edits,
+    // so 'conflict' is impossible for them; editable (writeBack) bindings
+    // get the same keep-live/backup/reassert arm the prose path has — a
+    // blind replace here would eat the reviewer's in-flight keystrokes.
     if (contentKind(room.meta.type) === 'flat') {
       const content = room.ydoc.getText('content');
       const current = content.toString();
@@ -1451,6 +1603,23 @@ export class Rooms {
       if (decision === 'in-sync') return decision;
       if (decision === 'catch-up') {
         binding.lastWritten = md;
+        return decision;
+      }
+      if (decision === 'conflict' && binding.writeBack) {
+        const backupPath = this.backupExternalVersion(room.docId, md);
+        binding.lastSyncError = {
+          message:
+            'external file change collided with un-flushed live edits; kept live edits and reasserted them to disk. ' +
+            (backupPath
+              ? `The external version was saved to ${backupPath} — restore it and reparse_from_disk to make it win.`
+              : 'Backup of the external version FAILED — it survives only in your editor/git history.'),
+          at: Date.now(),
+        };
+        console.warn(
+          `[rooms] ${room.docId}: disk↔doc conflict for ${binding.path}; kept live edits, reasserting to disk` +
+            (backupPath ? ` (external version backed up to ${backupPath})` : ''),
+        );
+        this.scheduleFileWrite(room, binding);
         return decision;
       }
       room.ydoc.transact(() => {
@@ -1588,7 +1757,10 @@ export class Rooms {
             }
           } catch {}
         }
-        const md = prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
+        const md =
+          contentKind(room.meta.type) === 'flat'
+            ? room.ydoc.getText('content').toString()
+            : prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
         if (md === binding.lastWritten) return;
         // Atomic: write-temp-then-rename, so a crash mid-write can't leave
         // the user's file truncated and a concurrent reader never sees half

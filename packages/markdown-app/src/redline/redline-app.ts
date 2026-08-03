@@ -1,3 +1,4 @@
+import { connect } from '@feedback/core';
 import { mountCode } from '../code/code-app.ts';
 import { renderDiffNav, wireDiffNavRefresh } from '../diff-nav.ts';
 import type { MountContext } from '../mount-context.ts';
@@ -5,6 +6,7 @@ import type { MountScope } from '../mount-scope.ts';
 import { startReadingTracker } from '../reading-tracker.ts';
 import { el, mountReviewChrome } from '../review-chrome.ts';
 import { remountCurrent } from '../router.ts';
+import { getMarkdownMount } from '../surface-registry.ts';
 import { createRedlineEditor } from './redline-editor.ts';
 
 /**
@@ -49,7 +51,12 @@ function writeViewMode(docId: string, mode: RedlineViewMode): void {
  * re-mounts the current doc (no reload, no lost history entry) — the fresh
  * mount reads the new mode and picks redline vs. code.
  */
-function wireToggle(docId: string, current: RedlineViewMode, scope: MountScope): void {
+function wireToggle(
+  docId: string,
+  current: RedlineViewMode,
+  scope: MountScope,
+  ownAll = false,
+): void {
   const toggle = document.getElementById('view-toggle');
   const btnRedline = document.getElementById('view-redline') as HTMLButtonElement | null;
   const btnDiff = document.getElementById('view-diff') as HTMLButtonElement | null;
@@ -72,11 +79,12 @@ function wireToggle(docId: string, current: RedlineViewMode, scope: MountScope):
     writeViewMode(docId, mode);
     remountCurrent();
   };
-  // In redline mode, code-app isn't running, so this file owns all three
-  // buttons. In diff/file mode code-app already wired Diff/File to an
-  // in-place CodeMirror swap (no reload) — only Redline needs a handler.
+  // In redline mode (and the markdown-editor File view, ownAll), code-app
+  // isn't running, so this file owns all three buttons. In diff/file mode
+  // on the CODE surface, code-app already wired Diff/File to an in-place
+  // CodeMirror swap (no reload) — only Redline needs a handler there.
   scope.listen(btnRedline, 'click', () => go('redline'));
-  if (current === 'redline') {
+  if (current === 'redline' || ownAll) {
     scope.listen(btnDiff, 'click', () => go('diff'));
     scope.listen(btnFile, 'click', () => go('file'));
   }
@@ -108,6 +116,19 @@ export async function mountRedline(ctx: MountContext): Promise<void> {
   // and the reviewer may simply prefer the source diff. Either way that is
   // exactly what the code surface already does well.
   if (diffInfo?.baseText == null || mode !== 'redline') {
+    // File mode on a LIVE working-tree .md member = the full markdown
+    // editor over the companion doc (edits land in the working tree; the
+    // redline/diff re-render as they flush). Falls back to the raw-source
+    // code view when the companion can't be opened (pinned, no workspace,
+    // server error).
+    if (mode === 'file' && ctx.workspaceId && !ctx.diffTarget) {
+      const mounted = await mountEditableFileView(ctx);
+      if (scope.disposed) return;
+      if (mounted) {
+        if (diffInfo?.baseText != null) wireToggle(docId, 'file', scope, true);
+        return;
+      }
+    }
     // Pass the persisted choice through: mountCode defaults diff docs to
     // unified-diff mode, so a restored 'file' selection would otherwise paint
     // the File button active over a diff surface.
@@ -228,6 +249,48 @@ export async function mountRedline(ctx: MountContext): Promise<void> {
     chrome.renderDocLabel();
     chrome.redrawThreads();
   });
+}
+
+/**
+ * Mount the full markdown editor over the companion editable doc for this
+ * `.md` diff member. The companion is a separate doc with its own websocket;
+ * both close with the member's scope. Returns false when the companion
+ * can't be opened, so the caller can fall back to the raw-source view.
+ */
+async function mountEditableFileView(ctx: MountContext): Promise<boolean> {
+  const mountMarkdown = getMarkdownMount();
+  if (!mountMarkdown) return false;
+  let opened: { docId: string; meta?: { sourceUrl?: string } };
+  try {
+    const res = await fetch(
+      `/api/workspaces/${encodeURIComponent(ctx.workspaceId)}/editable-file`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ relPath: ctx.relPath }),
+      },
+    );
+    if (!res.ok) return false;
+    opened = (await res.json()) as { docId: string; meta?: { sourceUrl?: string } };
+  } catch {
+    return false;
+  }
+  if (ctx.scope.disposed) return true; // navigated away — report handled
+  const wsUrl = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/y/${encodeURIComponent(opened.docId)}?type=markdown`;
+  const client = connect(wsUrl);
+  ctx.scope.onCleanup(() => client.close());
+  await mountMarkdown({
+    ...ctx,
+    docId: opened.docId,
+    // The sidebar lists the diff MEMBER, not the companion — keep marking it
+    // active (mountMarkdown's nav renders would otherwise highlight nothing).
+    navDocId: ctx.docId,
+    client,
+    docType: 'markdown',
+    sourceUrl: opened.meta?.sourceUrl ?? '',
+    diffTarget: '',
+  });
+  return true;
 }
 
 /** Persistent one-line notice above the editor. Mirrors code-app's banner. */
