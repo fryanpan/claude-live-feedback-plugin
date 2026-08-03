@@ -53,11 +53,10 @@ interface BlockIndexEntry {
 // Mirrors editor.ts's extension list — a redline of a markdown file must
 // render everything the normal markdown editor renders, or a review doc with a
 // table silently degrades to plain paragraphs in this view only.
-const EXTENSIONS = [
+const RENDER_EXTENSIONS = [
   StarterKit.configure({ undoRedo: false, codeBlock: false }),
   MermaidCodeBlock,
   Image,
-  Markdown,
   Table.configure({ resizable: false, HTMLAttributes: { class: 'prose-table' } }),
   TableRow,
   TableHeader,
@@ -66,6 +65,14 @@ const EXTENSIONS = [
   RedlineDel,
   RedlineProvenance,
 ];
+
+// The Markdown extension goes ONLY on the scratch converter. Its setContent
+// override parses any string as markdown — and the display editor is fed the
+// JOINED generated HTML, which markdown-it mis-parses: an HTML block ends at
+// a blank line, so a <pre> whose code contains one (routine in mermaid
+// diagrams) shattered mid-element and the rest of the document rendered as
+// escaped literal text inside it. The display editor must parse HTML as HTML.
+const SCRATCH_EXTENSIONS = [...RENDER_EXTENSIONS, Markdown];
 
 /**
  * Read-only Tiptap surface rendering a Word-style redline of `baseText`
@@ -87,7 +94,7 @@ export function createRedlineEditor(opts: CreateRedlineEditorOpts): RedlineSurfa
   const editor = new Editor({
     element: opts.parent,
     editable: false,
-    extensions: [...EXTENSIONS, ThreadDecorations],
+    extensions: [...RENDER_EXTENSIONS, ThreadDecorations],
     content: '',
     onSelectionUpdate: () => opts.onSelectionChange?.(),
   });
@@ -96,7 +103,7 @@ export function createRedlineEditor(opts: CreateRedlineEditorOpts): RedlineSurfa
   // across blocks; converting each block in ISOLATION is the point (a shared
   // parse merges adjacent same-type lists and shifts every later anchor).
   const scratchHost = document.createElement('div');
-  const scratch = new Editor({ element: scratchHost, extensions: EXTENSIONS, content: '' });
+  const scratch = new Editor({ element: scratchHost, extensions: SCRATCH_EXTENSIONS, content: '' });
   const toHtml = (md: string): string => {
     scratch.commands.setContent(md, { emitUpdate: false });
     // Tiptap appends a trailing empty paragraph after several block types; it
