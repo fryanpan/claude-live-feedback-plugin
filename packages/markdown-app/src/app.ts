@@ -15,6 +15,7 @@ import {
   setSidebarSignature,
   sidebarShowsSignature,
 } from './sidebar-nav-key.ts';
+import { registerMarkdownMount } from './surface-registry.ts';
 import { type TableMenuItem, tableMenuItems } from './table-menu.ts';
 import { renderWorkspaceTree } from './workspace-tree.ts';
 
@@ -25,12 +26,24 @@ const DEFAULT_WS_PATH = (docId: string, type: string) =>
  *  'markdown' if the meta can't be read (the markdown path is the safe
  *  fallback — it never assumes code). */
 async function fetchDocMeta(docId: string): Promise<DocMeta> {
-  const fallback: DocMeta = { docType: 'markdown', sourceUrl: '', workspaceId: '', relPath: '' };
+  const fallback: DocMeta = {
+    docType: 'markdown',
+    sourceUrl: '',
+    workspaceId: '',
+    relPath: '',
+    diffTarget: '',
+  };
   try {
     const res = await fetch(`/api/docs/${encodeURIComponent(docId)}`);
     if (!res.ok) return fallback;
     const data = (await res.json()) as {
-      meta?: { type?: string; sourceUrl?: string; workspaceId?: string; relPath?: string };
+      meta?: {
+        type?: string;
+        sourceUrl?: string;
+        workspaceId?: string;
+        relPath?: string;
+        diffTarget?: string;
+      };
     };
     const t = data.meta?.type;
     return {
@@ -38,6 +51,7 @@ async function fetchDocMeta(docId: string): Promise<DocMeta> {
       sourceUrl: data.meta?.sourceUrl ?? '',
       workspaceId: data.meta?.workspaceId ?? '',
       relPath: data.meta?.relPath ?? '',
+      diffTarget: data.meta?.diffTarget ?? '',
     };
   } catch {
     return fallback;
@@ -142,6 +156,7 @@ function main(): void {
     get: (k) => localStorage.getItem(k),
     set: (k, v) => localStorage.setItem(k, v),
   });
+  registerMarkdownMount(mountMarkdown);
   startRouter({
     user,
     fetchMeta: fetchDocMeta,
@@ -164,6 +179,9 @@ function main(): void {
  *  tears down the editor, chrome, listeners, and (via the router) the client. */
 async function mountMarkdown(ctx: MountContext): Promise<void> {
   const { docId, client, user, scope } = ctx;
+  // Which docId the sidebar marks active — differs from `docId` only for the
+  // editable File view of a .md diff member (see MountContext.navDocId).
+  const navDocId = ctx.navDocId ?? docId;
   const { ydoc, awareness } = client;
   awareness.setLocalStateField('user', { name: user.name, color: user.color });
 
@@ -594,9 +612,9 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       // get the diff-nav; only data-less workspaces fall back to the folder
       // tree. `scope` lets a superseded navigation's late fetch bail instead of
       // clobbering the current sidebar.
-      const ok = await renderDiffNav(docId, workspaceId, false, scope);
+      const ok = await renderDiffNav(navDocId, workspaceId, false, scope);
       if (scope.disposed) return;
-      if (!ok) await renderWorkspaceTree(docId, workspaceId, false, scope);
+      if (!ok) await renderWorkspaceTree(navDocId, workspaceId, false, scope);
       return;
     }
     // ---- Legacy flat setId path ----
@@ -625,7 +643,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       });
       const sig = `set:${setId}:${siblings.map((d) => d.docId).join(',')}`;
       if (sidebarShowsSignature(sig)) {
-        setActiveFile(docId);
+        setActiveFile(navDocId);
         return;
       }
       const items = siblings
@@ -675,9 +693,9 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     // scroll-resetting rebuild on the next navigation (finding #1).
     const refresh = () => {
       void (async () => {
-        const ok = await renderDiffNav(docId, workspaceId, true, scope);
+        const ok = await renderDiffNav(navDocId, workspaceId, true, scope);
         if (scope.disposed) return;
-        if (!ok) await renderWorkspaceTree(docId, workspaceId, true, scope);
+        if (!ok) await renderWorkspaceTree(navDocId, workspaceId, true, scope);
       })();
     };
     window.addEventListener('focus', refresh);

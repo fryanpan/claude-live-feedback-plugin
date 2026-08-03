@@ -5,6 +5,7 @@ import { startReadingTracker } from '../reading-tracker.ts';
 import { el, mountReviewChrome } from '../review-chrome.ts';
 import { renderWorkspaceTree, wireWorkspaceTreeRefresh } from '../workspace-tree.ts';
 import { createCodeEditor } from './code-editor.ts';
+import { isEditableFileMember } from './editable-policy.ts';
 
 /**
  * Mount the read-only code / diff review surface. All thread/composer/drawer
@@ -42,7 +43,7 @@ export async function mountCode(
       }
     })();
   }
-  const { ydoc } = client;
+  const { ydoc, awareness } = client;
   document.body.classList.add('code-mode');
   if (isDiff) document.body.classList.add('diff-mode');
 
@@ -67,6 +68,22 @@ export async function mountCode(
     if (scope.disposed) return; // navigated away during the fetch
   }
 
+  // The File view of a LIVE working-tree diff member is a real editor — the
+  // server binds those members with disk write-back, so edits land in the
+  // working tree within ~1s. Decided AFTER the diff fetch because status
+  // matters: see isEditableFileMember (a deleted member has no binding).
+  const editable = isEditableFileMember({
+    isDiff,
+    diffTarget: ctx.diffTarget,
+    relPath: ctx.relPath,
+    diffStatus: diffInfo?.status,
+  });
+  if (editable) {
+    awareness.setLocalStateField('user', { name: user.name, color: user.color });
+    document.body.classList.add('code-editable');
+    scope.onCleanup(() => document.body.classList.remove('code-editable'));
+  }
+
   const editorMount = el<HTMLElement>('editor');
   const commentPill = el<HTMLButtonElement>('comment-pill');
 
@@ -88,6 +105,8 @@ export async function mountCode(
     sourceUrl,
     diff: diffInfo?.baseText != null ? { baseText: diffInfo.baseText } : undefined,
     initialViewMode,
+    editable,
+    awareness,
     onSelectionChange: () => {
       const sel = surface.getSelectionRel();
       if (sel) {
