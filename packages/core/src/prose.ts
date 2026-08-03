@@ -1023,6 +1023,31 @@ function mkTable(headerCells: string[], bodyRows: string[][]): Y.XmlElement {
 }
 
 /**
+ * Parse markdown and serialize it straight back: the serializer-space
+ * normal form. Two strings with the same normal form carry identical
+ * document content and differ only in formatting the round-trip doesn't
+ * preserve (blank-line runs, list indent style, ...). Sync arbitration
+ * uses this to tell pure normalization drift apart from a real edit.
+ */
+export function normalizeMarkdown(markdown: string): string {
+  const doc = new Y.Doc();
+  try {
+    const fragment = getProseFragment(doc);
+    doc.transact(() => {
+      const blocks = parseMarkdownBlocks(markdown);
+      // Parse + push, NOT applyMarkdownToFragment: the fragment is empty so
+      // the diff would insert everything anyway, and apply's block-keying
+      // reads prelim types, which logs a Yjs warning per block — at hydrate
+      // this runs for every bound doc, so that's log spam at scale.
+      if (blocks.length > 0) fragment.push(blocks);
+    });
+    return serializeFragmentToMarkdown(fragment);
+  } finally {
+    doc.destroy();
+  }
+}
+
+/**
  * Serialize the entire prose fragment back into markdown. Round-trips
  * the block types parseMarkdownBlocks handles (headings, paragraphs,
  * bullet/ordered lists, blockquotes, code blocks, horizontal rules).
