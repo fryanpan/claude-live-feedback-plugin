@@ -447,6 +447,24 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         if (!res.ok) return j(res.error === 'bad-path' ? 400 : 404, res);
         return j(200, { docId: res.docId, meta: withReviewUrl(res.meta) });
       }
+      const wsEditMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/editable-file$/);
+      if (wsEditMatch && req.method === 'POST') {
+        const workspaceId = decodeURIComponent(wsEditMatch[1] ?? '');
+        const body = await safeJson(req);
+        const relPath = body?.relPath as string | undefined;
+        if (!relPath) return j(400, { error: 'relPath required' });
+        const res = rooms.openEditableFile(workspaceId, relPath);
+        if (!res.ok) {
+          const status =
+            res.error === 'bad-path' || res.error === 'not-markdown'
+              ? 400
+              : res.error === 'pinned'
+                ? 409
+                : 404;
+          return j(status, res);
+        }
+        return j(200, { docId: res.docId, meta: withReviewUrl(res.meta) });
+      }
       const wsTreeMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/tree$/);
       if (wsTreeMatch && req.method === 'GET') {
         const workspaceId = decodeURIComponent(wsTreeMatch[1] ?? '');
