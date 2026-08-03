@@ -3,6 +3,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -1172,9 +1173,23 @@ export class Rooms {
             binding.lastWritten = prior;
             if (md === prior) this.scheduleFileWrite(room, binding);
             else this.reconcileFromDisk(room, binding);
+          } else if (prior === undefined && !this.diskNewerThanState(docId, abs)) {
+            // Fresh attach with NO bookkeeping (post-restart hydrate) and the
+            // .md is OLDER than the persisted .ydoc: the crash happened inside
+            // the 800ms write-back window, so the hydrated doc is the newer
+            // side. Applying disk here would revert the just-made edit on
+            // startup (codex P1). Reassert the live doc to disk instead.
+            binding.lastWritten = md;
+            this.scheduleFileWrite(room, binding);
           } else if (prose.parseMarkdownBlocks(md).length > 0) {
             // At rest: pull disk in as a block diff so anchors on untouched
-            // blocks keep resolving.
+            // blocks keep resolving. On the no-bookkeeping path we can't
+            // PROVE the fragment's extra state was ever flushed, so snapshot
+            // it first — restarts are rare enough that a stray backup beats
+            // an unrecoverable revert.
+            if (prior === undefined) {
+              this.backupExternalVersion(docId, currentSerialized, 'live');
+            }
             room.ydoc.transact(() => {
               prose.applyMarkdownToFragment(fragment, md);
             }, 'file-watch');
@@ -1533,10 +1548,16 @@ export class Rooms {
         if (md === binding.lastWritten) return;
         // Atomic: write-temp-then-rename, so a crash mid-write can't leave
         // the user's file truncated and a concurrent reader never sees half
-        // a document. (Same save pattern editors use.)
-        const tmp = `${binding.path}.lf-write~`;
+        // a document. (Same save pattern editors use.) Rename onto the
+        // REALPATH — renaming onto a symlink would replace the link with a
+        // regular file instead of writing through it (codex P2).
+        let target = binding.path;
+        try {
+          target = realpathSync(binding.path);
+        } catch {}
+        const tmp = `${target}.lf-write~`;
         writeFileSync(tmp, md);
-        renameSync(tmp, binding.path);
+        renameSync(tmp, target);
         binding.lastWritten = md;
         // Record our own write's mtime so the poll doesn't treat the
         // write-back as an external edit and schedule a redundant reconcile.
@@ -1555,17 +1576,34 @@ export class Rooms {
    * instead of destructive. Returns the backup path, or null on failure —
    * never throws (the reconcile must proceed either way).
    */
-  private backupExternalVersion(docId: string, content: string): string | null {
+  private backupExternalVersion(docId: string, content: string, label = 'external'): string | null {
     try {
       const dir = join(this.cfg.dataDir, 'clobber-backups');
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
       const safeId = docId.replace(/[^A-Za-z0-9._-]/g, '_');
-      const file = join(dir, `${safeId}-${Date.now()}.md`);
+      const file = join(dir, `${safeId}-${label}-${Date.now()}.md`);
       writeFileSync(file, content);
       return file;
     } catch (err) {
       console.error(`[rooms] clobber backup failed for ${docId}:`, err);
       return null;
+    }
+  }
+
+  /**
+   * Is the bound .md at least as new as the persisted .ydoc? Decides who wins
+   * a no-bookkeeping attach (post-restart): the .ydoc's mtime marks the live
+   * doc's last change, so an older .md means the crash beat the write-back
+   * debounce and disk is the STALE side. Errs toward disk (the documented
+   * source of truth at rest) when either stat fails.
+   */
+  private diskNewerThanState(docId: string, filePath: string): boolean {
+    try {
+      const ydocPath = this.pathFor(docId);
+      if (!existsSync(ydocPath)) return true;
+      return statSync(filePath).mtimeMs >= statSync(ydocPath).mtimeMs;
+    } catch {
+      return true;
     }
   }
 
