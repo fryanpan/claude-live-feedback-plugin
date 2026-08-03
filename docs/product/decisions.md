@@ -177,3 +177,15 @@ Big decisions that future sessions should respect or revisit deliberately.
   rendered the tree.
 - **Impact:** Reversible. If the two surfaces ever diverge in container/href
   shape, split then.
+
+## 2026-08-03 — Diff-review live editors: companion doc for `.md`, editable flat for code
+
+Chose approach C (companion `type:'markdown'` doc per changed `.md` member +
+editable flat `content` for code members) over flipping member doc types or
+dual-surface docs. Rationale: `contentKind` drives every server branch
+(`get_doc`, thread find paths, reconcile), so changing a member's type
+silently rewires the agent API and orphans content-offset threads; a
+companion doc reuses the whole prose sync stack and the only new machinery —
+flat write-back with a conflict arm — is required for code editing anyway.
+`.md` members do NOT get flat write-back (single-writer per file: edits flow
+through the companion doc). Reversible; revisit if the two-doc UX confuses.

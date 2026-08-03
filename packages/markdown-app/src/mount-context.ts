@@ -11,6 +11,10 @@ export interface DocMeta {
   sourceUrl: string;
   workspaceId: string;
   relPath: string;
+  /** The pinned target commit of a diff doc. Empty string = live
+   *  working-tree mode, where the File view is an editor (the server binds
+   *  those members with write-back); pinned content is immutable. */
+  diffTarget: string;
 }
 
 /**
@@ -21,6 +25,12 @@ export interface DocMeta {
  */
 export interface MountContext extends DocMeta {
   docId: string;
+  /** docId the SIDEBAR should mark active when it differs from `docId`.
+   *  The editable File view of a `.md` diff member mounts the markdown
+   *  editor over a companion doc (docId = companion), but the diff-nav and
+   *  workspace tree only list the diff member — highlighting by the
+   *  companion id would leave no file marked active. Defaults to `docId`. */
+  navDocId?: string;
   scope: MountScope;
   client: FeedbackClient;
   user: User;
