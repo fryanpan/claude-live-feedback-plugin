@@ -49,6 +49,7 @@ export interface BindHost {
   ): DocRoom;
   attachFile(docId: string, path: string): { ok: boolean };
   attachReadonlyFile(docId: string, path: string): { ok: boolean };
+  attachFlatFile(docId: string, path: string, opts?: { writeBack?: boolean }): { ok: boolean };
   openContextFile(
     workspaceId: string,
     relPath: string,
@@ -435,10 +436,13 @@ export function bindDiff(host: BindHost, opts: BindDiffOpts): BindDiffResult {
       }
     } else if (entry.status !== 'deleted') {
       // Working-tree mode: bind the live file like a code doc — seeds the
-      // content, arms the mtime poll (agent edits re-render in ~1s), no
-      // write-back. The wireEvents reanchor sweep keeps threads attached
-      // or orphans them when their line disappears.
-      host.attachReadonlyFile(docId, join(root, entry.relPath));
+      // content, arms the mtime poll (agent edits re-render in ~1s), and
+      // for code members flows File-view edits back to the working tree.
+      // `.md` members stay disk→doc only: their edits travel through the
+      // companion prose doc, and a second writer on the same file would
+      // race it.
+      const isMd = entry.relPath.toLowerCase().endsWith('.md');
+      host.attachFlatFile(docId, join(root, entry.relPath), { writeBack: !isMd });
     }
     out.push({
       docId,

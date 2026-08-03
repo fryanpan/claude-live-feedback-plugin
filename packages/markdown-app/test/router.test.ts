@@ -17,7 +17,13 @@ function stubClient(): FeedbackClient {
   } as unknown as FeedbackClient;
 }
 
-const meta: DocMeta = { docType: 'diff', sourceUrl: '', workspaceId: 'w', relPath: 'b.md' };
+const meta: DocMeta = {
+  docType: 'diff',
+  sourceUrl: '',
+  workspaceId: 'w',
+  relPath: 'b.md',
+  diffTarget: '',
+};
 
 function sidebar(html: string): void {
   document.body.innerHTML = `<aside id="set-pane"><ol id="set-pane-list">${html}</ol></aside>`;
