@@ -38,6 +38,36 @@ function mount(opts: Partial<CreateCodeEditorOpts> = {}) {
 }
 
 describe('editable code surface', () => {
+  it('content arriving AFTER mount still triggers the collapse re-init (editable path)', () => {
+    // The empty-at-mount case from learnings: collapse-unchanged ranges are
+    // computed ONLY at field init, so a doc that streams in after mount needs
+    // the compartment re-init. On EDITABLE surfaces yCollab's observer runs
+    // before ours — the CM doc already holds the content by the time our
+    // observer fires — so the empty→content transition must be tracked
+    // across calls, not read from the current doc.
+    const lines = Array.from({ length: 30 }, (_, i) => `line ${i}`);
+    const baseText = `${lines.join('\n')}\n`;
+    const changed = `${baseText}added tail\n`;
+    const ydoc = new Y.Doc();
+    const content = getContent(ydoc);
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    open.push(parent);
+    createCodeEditor({
+      parent,
+      ydoc,
+      sourceUrl: 'Main.kt',
+      editable: true,
+      diff: { baseText },
+      initialViewMode: 'diff',
+    });
+    expect(parent.querySelector('.cm-collapsedLines')).toBeNull();
+    content.insert(0, changed);
+    const view = EditorView.findFromDOM(parent);
+    expect(view?.state.doc.toString()).toBe(changed);
+    expect(parent.querySelector('.cm-collapsedLines')).not.toBeNull();
+  });
+
   it('local edits flow into the content Y.Text', () => {
     const { content, view } = mount({ editable: true });
     const pos = view.state.doc.toString().indexOf('one');
