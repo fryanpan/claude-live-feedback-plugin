@@ -25,12 +25,24 @@ const DEFAULT_WS_PATH = (docId: string, type: string) =>
  *  'markdown' if the meta can't be read (the markdown path is the safe
  *  fallback — it never assumes code). */
 async function fetchDocMeta(docId: string): Promise<DocMeta> {
-  const fallback: DocMeta = { docType: 'markdown', sourceUrl: '', workspaceId: '', relPath: '' };
+  const fallback: DocMeta = {
+    docType: 'markdown',
+    sourceUrl: '',
+    workspaceId: '',
+    relPath: '',
+    diffTarget: '',
+  };
   try {
     const res = await fetch(`/api/docs/${encodeURIComponent(docId)}`);
     if (!res.ok) return fallback;
     const data = (await res.json()) as {
-      meta?: { type?: string; sourceUrl?: string; workspaceId?: string; relPath?: string };
+      meta?: {
+        type?: string;
+        sourceUrl?: string;
+        workspaceId?: string;
+        relPath?: string;
+        diffTarget?: string;
+      };
     };
     const t = data.meta?.type;
     return {
@@ -38,6 +50,7 @@ async function fetchDocMeta(docId: string): Promise<DocMeta> {
       sourceUrl: data.meta?.sourceUrl ?? '',
       workspaceId: data.meta?.workspaceId ?? '',
       relPath: data.meta?.relPath ?? '',
+      diffTarget: data.meta?.diffTarget ?? '',
     };
   } catch {
     return fallback;
