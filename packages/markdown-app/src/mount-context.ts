@@ -11,6 +11,10 @@ export interface DocMeta {
   sourceUrl: string;
   workspaceId: string;
   relPath: string;
+  /** The pinned target commit of a diff doc. Empty string = live
+   *  working-tree mode, where the File view is an editor (the server binds
+   *  those members with write-back); pinned content is immutable. */
+  diffTarget: string;
 }
 
 /**

@@ -42,9 +42,20 @@ export async function mountCode(
       }
     })();
   }
-  const { ydoc } = client;
+  const { ydoc, awareness } = client;
   document.body.classList.add('code-mode');
   if (isDiff) document.body.classList.add('diff-mode');
+
+  // The File view of a LIVE working-tree diff member is a real editor — the
+  // server binds those members with disk write-back, so edits land in the
+  // working tree within ~1s. Pinned reviews (diffTarget set) are immutable,
+  // and `.md` members edit through the markdown surface, not raw source.
+  const editable = isDiff && !ctx.diffTarget && !ctx.relPath.toLowerCase().endsWith('.md');
+  if (editable) {
+    awareness.setLocalStateField('user', { name: user.name, color: user.color });
+    document.body.classList.add('code-editable');
+    scope.onCleanup(() => document.body.classList.remove('code-editable'));
+  }
 
   // Diff rendering data: the base-commit text this file is compared against.
   // Fetched before mounting so the surface can boot straight into diff mode.
@@ -88,6 +99,8 @@ export async function mountCode(
     sourceUrl,
     diff: diffInfo?.baseText != null ? { baseText: diffInfo.baseText } : undefined,
     initialViewMode,
+    editable,
+    awareness,
     onSelectionChange: () => {
       const sel = surface.getSelectionRel();
       if (sel) {
