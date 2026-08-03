@@ -1031,13 +1031,20 @@ function mkTable(headerCells: string[], bodyRows: string[][]): Y.XmlElement {
  */
 export function normalizeMarkdown(markdown: string): string {
   const doc = new Y.Doc();
-  const fragment = getProseFragment(doc);
-  doc.transact(() => {
-    applyMarkdownToFragment(fragment, markdown);
-  });
-  const out = serializeFragmentToMarkdown(fragment);
-  doc.destroy();
-  return out;
+  try {
+    const fragment = getProseFragment(doc);
+    doc.transact(() => {
+      const blocks = parseMarkdownBlocks(markdown);
+      // Parse + push, NOT applyMarkdownToFragment: the fragment is empty so
+      // the diff would insert everything anyway, and apply's block-keying
+      // reads prelim types, which logs a Yjs warning per block — at hydrate
+      // this runs for every bound doc, so that's log spam at scale.
+      if (blocks.length > 0) fragment.push(blocks);
+    });
+    return serializeFragmentToMarkdown(fragment);
+  } finally {
+    doc.destroy();
+  }
 }
 
 /**
