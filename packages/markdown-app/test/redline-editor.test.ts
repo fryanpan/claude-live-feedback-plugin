@@ -192,6 +192,27 @@ describe('createRedlineEditor — structural blocks', () => {
     expect(parent.innerHTML).not.toContain('data-lf-change');
   });
 
+  it('keeps a fence containing a blank line intact and does not swallow following blocks', () => {
+    // The display editor's extension list included tiptap-markdown, whose
+    // setContent override parses ANY string as markdown — including the
+    // generated HTML this surface feeds it. markdown-it terminates an HTML
+    // block at a blank line, so a <pre> whose code contains one (routine in
+    // mermaid diagrams) shattered mid-element and the REST of the document
+    // rendered as escaped literal text inside the code block — "big blocks
+    // of code instead of the markdown text" (2026-08-03 field report).
+    const fence = 'flowchart TB\n    a["first<br/>node"]\n\n    b["second<br/>node"]\n    a --> b';
+    const md = `# T\n\n\`\`\`mermaid\n${fence}\n\`\`\`\n\nAfter paragraph.\n`;
+    const { parent } = mount(md, md);
+    expect(parent.textContent).not.toContain('</code>');
+    expect(parent.textContent).not.toContain('&lt;');
+    const code = parent.querySelector('pre code, pre');
+    expect(code?.textContent).toContain('a --> b');
+    expect(code?.textContent).toContain('first<br/>node');
+    // The paragraph after the fence must come back as prose, outside the pre.
+    const paras = Array.from(parent.querySelectorAll('p')).map((p) => p.textContent ?? '');
+    expect(paras.some((t) => t.includes('After paragraph.'))).toBe(true);
+  });
+
   it('renders a changed table as a table, not a paragraph of pipes', () => {
     const { parent } = mount(
       'Intro.\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n',
