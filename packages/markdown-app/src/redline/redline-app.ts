@@ -282,6 +282,9 @@ async function mountEditableFileView(ctx: MountContext): Promise<boolean> {
   await mountMarkdown({
     ...ctx,
     docId: opened.docId,
+    // The sidebar lists the diff MEMBER, not the companion — keep marking it
+    // active (mountMarkdown's nav renders would otherwise highlight nothing).
+    navDocId: ctx.docId,
     client,
     docType: 'markdown',
     sourceUrl: opened.meta?.sourceUrl ?? '',
