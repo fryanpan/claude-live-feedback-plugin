@@ -1162,7 +1162,13 @@ export class Rooms {
         const currentSerialized = prose.serializeFragmentToMarkdown(fragment);
         const prior = existing?.lastWritten;
         if (md !== currentSerialized) {
-          if (prose.normalizeMarkdown(md) === currentSerialized) {
+          // NB: this byte-equality guard rarely spares the parse below —
+          // most real files differ from the serializer's normal form, so
+          // hydrate pays one parse+serialize per bound doc (~1ms for a
+          // typical doc). Accepted: the alternative was rewriting ~every
+          // never-edited bound file on each restart.
+          const diskNormalized = prose.normalizeMarkdown(md);
+          if (diskNormalized === currentSerialized) {
             // Pure normalization drift: disk parses to exactly the live
             // doc's content, the bytes just differ in formatting the
             // round-trip doesn't preserve. This is the steady state for
@@ -1180,7 +1186,12 @@ export class Rooms {
             // conflict case reconciles NOW — armFileWatcher re-baselines the
             // mtime below, so the poll would never see the change.)
             binding.lastWritten = prior;
-            if (md === prior) this.scheduleFileWrite(room, binding);
+            // A disk that IS (or normalizes to) our last write hasn't
+            // really changed — re-arm the flush this re-attach cancelled.
+            // Without the normalized check, a doc whose drift was
+            // suppressed at hydrate hit reconcile here and reported a
+            // false conflict (backup + syncError) though disk never moved.
+            if (md === prior || diskNormalized === prior) this.scheduleFileWrite(room, binding);
             else this.reconcileFromDisk(room, binding);
           } else if (prior === undefined && !this.diskNewerThanState(docId, abs)) {
             // Fresh attach with NO bookkeeping (post-restart hydrate) and the
@@ -1465,7 +1476,27 @@ export class Rooms {
       binding.lastWritten = md;
       return decision;
     }
+    // decideReconcile compares BYTES. A formatting-only external save
+    // (format-on-save, trailing-newline fixers) changes bytes but not
+    // content — without these checks it classified as 'apply' (block
+    // rewrite, broken anchors) or, with un-flushed live edits, 'conflict'
+    // (backup + syncError + reassert over the human's formatting). Parse
+    // cost is fine here: we only get this far on a detected mtime change.
+    const diskNormalized = prose.normalizeMarkdown(md);
+    if (diskNormalized === currentSerialized) {
+      // Formatting-variant of the live content — semantically in-sync.
+      // Leave the file as the external tool wrote it.
+      binding.lastWritten = currentSerialized;
+      return 'in-sync';
+    }
     if (decision === 'conflict') {
+      if (diskNormalized === binding.lastWritten) {
+        // Disk holds a formatting-variant of our LAST write — no semantic
+        // external change, so the un-flushed live edits are not in
+        // conflict. Re-arm the flush; the pending write carries them out.
+        this.scheduleFileWrite(room, binding);
+        return 'catch-up';
+      }
       // An external write collided with un-flushed live edits. A blind
       // delete+push here would clobber the human's in-progress work (the bug
       // a peer reported). The editor is the runtime source of truth, so keep

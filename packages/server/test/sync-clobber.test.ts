@@ -301,10 +301,56 @@ describe('sync-clobber regressions', () => {
       expect(readFileSync(path, 'utf8')).toContain('Unflushed edit.');
       const backupDir = join(dataDir, 'clobber-backups');
       const backups = readdirSync(backupDir);
-      const snapshot = backups.find(
-        (f) => readFileSync(join(backupDir, f), 'utf8') === diskBefore,
-      );
+      const snapshot = backups.find((f) => readFileSync(join(backupDir, f), 'utf8') === diskBefore);
       expect(snapshot).toBeDefined();
+    });
+
+    it('re-attach during the flush window after a suppressed drift is not a false conflict', async () => {
+      // Suppression leaves lastWritten in serializer-space while disk keeps
+      // its drifty bytes. A later re-attach with un-flushed edits then saw
+      // md !== prior and fell into reconcile → 'conflict' → backup +
+      // syncError, though disk never changed. Disk that NORMALIZES to prior
+      // must re-arm the flush, exactly like md === prior.
+      const p2 = join(dataDir, 'drifty.md');
+      writeFileSync(p2, EXT_ONE);
+      rooms.getOrCreate('r1', { type: 'markdown', sourceUrl: p2 });
+      expect(rooms.attachFile('r1', p2).ok).toBe(true);
+      await sleep(350); // .ydoc persists → restart hydrate will see ydoc newer
+      const rooms2 = makeRooms(dataDir); // suppression fires on hydrate
+      expect(
+        rooms2.findAndReplace('r1', { find: 'first external edit', replace: 'edited live' }).ok,
+      ).toBe(true);
+      expect(rooms2.attachFile('r1', p2).ok).toBe(true); // inside the 800ms window
+      expect(rooms2.getSyncError('r1')).toBeUndefined();
+      expect(existsSync(join(dataDir, 'clobber-backups'))).toBe(false);
+      await sleep(1100);
+      expect(readFileSync(p2, 'utf8')).toContain('edited live');
+    });
+
+    it('a normalization-only external save while edits are un-flushed is not a conflict', async () => {
+      // Format-on-save rewrites the bound file with different bytes but the
+      // same content as our last write. decideReconcile compares bytes, so
+      // this classified as 'conflict': backup + syncError + the reassert
+      // overwrote the external formatting — while the human was typing.
+      expect(
+        rooms.findAndReplace('d1', { find: 'Intro paragraph.', replace: 'Live edit pending.' }).ok,
+      ).toBe(true);
+      writeExternal(path, DOC.replace(/\n\n/g, '\n\n\n'));
+      expect(rooms.reconcileNow('d1')).toBe('catch-up');
+      expect(rooms.getSyncError('d1')).toBeUndefined();
+      expect(existsSync(join(dataDir, 'clobber-backups'))).toBe(false);
+      await sleep(1100);
+      expect(readFileSync(path, 'utf8')).toContain('Live edit pending.');
+    });
+
+    it('a normalization-only external save with no live edits does not rewrite blocks', () => {
+      // The 'apply' path replaces every block whose BYTES changed — for a
+      // formatting-only save that breaks anchors in blocks whose content is
+      // identical. Semantically-equal disk must read as in-sync (and the
+      // file keeps the external formatting at rest).
+      writeExternal(path, DOC.replace(/\n\n/g, '\n\n\n'));
+      expect(rooms.reconcileNow('d1')).toBe('in-sync');
+      expect(rooms.getSyncError('d1')).toBeUndefined();
     });
 
     it('does not stack duplicate write-back observers on re-attach', () => {
