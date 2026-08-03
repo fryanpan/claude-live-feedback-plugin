@@ -520,19 +520,19 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             const res = rooms.rewriteThreadRegion(docId, threadId, replacement, {
               parseInlineMarks,
             });
-            return res.ok ? j(200, res) : j(409, res);
+            return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
           }
           if (threadRest === '/insert_after' && req.method === 'POST') {
             const body = await safeJson(req);
             const text = String(body?.text ?? '');
             const res = rooms.insertAfterThread(docId, threadId, text);
-            return res.ok ? j(200, res) : j(409, res);
+            return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
           }
           if (threadRest === '/insert_blocks_after' && req.method === 'POST') {
             const body = await safeJson(req);
             const markdown = String(body?.markdown ?? '');
             const res = rooms.insertBlocksAfterThread(docId, threadId, markdown);
-            return res.ok ? j(200, res) : j(409, res);
+            return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
           }
         }
         if (rest === 'threads' && req.method === 'POST') {
@@ -663,14 +663,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               return j(400, { error: 'kind must be replace or insert_after' });
             }
             const res = rooms.editAtAgentAnchor(docId, anchorId, { kind, text });
-            return res.ok ? j(200, res) : j(409, res);
+            return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
           }
           if (anchorRest === '/insert_blocks' && req.method === 'POST') {
             const body = await safeJson(req);
             const markdown = String(body?.markdown ?? '');
             if (markdown.length === 0) return j(400, { error: 'markdown is required' });
             const res = rooms.insertBlocksAtAnchor(docId, anchorId, markdown);
-            return res.ok ? j(200, res) : j(409, res);
+            return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
           }
           if (anchorRest === '' && req.method === 'DELETE') {
             const removed = rooms.deleteAgentAnchor(docId, anchorId);

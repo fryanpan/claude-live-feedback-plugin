@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as Y from 'yjs';
@@ -210,6 +219,47 @@ describe('sync-clobber regressions', () => {
       expect(rooms2.getDoc('d1')?.plainText).toContain('edited while server was down');
     });
 
+    it('a restart inside the write-back window does not revert the un-flushed edit', async () => {
+      // The counter-case to disk-wins-at-rest (codex P1): the .ydoc persists
+      // ~200ms after an edit, the .md ~800ms after. A crash in between leaves
+      // the hydrated doc NEWER than the file — the attach-time reconcile must
+      // compare mtimes and keep the live edit, not revert it from disk.
+      expect(
+        rooms.findAndReplace('d1', {
+          find: 'Intro paragraph.',
+          replace: 'Edit persisted to ydoc only.',
+        }).ok,
+      ).toBe(true);
+      await sleep(350); // .ydoc saved (200ms debounce); .md write-back (800ms) has NOT run
+      const rooms2 = makeRooms(dataDir);
+      expect(rooms2.getDoc('d1')?.plainText).toContain('Edit persisted to ydoc only.');
+      // And the reassert flushes the live edit to disk.
+      await sleep(1100);
+      expect(readFileSync(path, 'utf8')).toContain('Edit persisted to ydoc only.');
+    });
+
+    it('write-back preserves a symlinked bound path', async () => {
+      // Rename-onto-path would replace a symlink with a regular file
+      // (codex P2) — the write must land through the link at its target.
+      const realDir = mkdtempSync(join(tmpdir(), 'lf-real-'));
+      try {
+        const realPath = join(realDir, 'real.md');
+        writeFileSync(realPath, DOC);
+        const linkPath = join(dataDir, 'link.md');
+        symlinkSync(realPath, linkPath);
+        rooms.getOrCreate('s1', { type: 'markdown', sourceUrl: linkPath });
+        expect(rooms.attachFile('s1', linkPath).ok).toBe(true);
+        expect(
+          rooms.findAndReplace('s1', { find: 'Intro paragraph.', replace: 'Through the link.' }).ok,
+        ).toBe(true);
+        await sleep(1100);
+        expect(lstatSync(linkPath).isSymbolicLink()).toBe(true);
+        expect(readFileSync(realPath, 'utf8')).toContain('Through the link.');
+      } finally {
+        rmSync(realDir, { recursive: true, force: true });
+      }
+    });
+
     it('does not stack duplicate write-back observers on re-attach', () => {
       // observeDeep listeners live in the type's _dEH handler; each leaked
       // observer is a duplicate write-back scheduler with stale binding state.
@@ -343,5 +393,27 @@ describe('sync-clobber HTTP surface', () => {
     const body = (await res.json()) as { ok: boolean; syncError?: { message: string } };
     expect(body.ok).toBe(true);
     expect(body.syncError?.message).toBeDefined();
+
+    // Thread-anchored edits are the other common agent path (codex P2) —
+    // the recovery signal must ride those responses too.
+    const created = await handle.rooms.createThreadByFind(
+      'h2',
+      // The find_and_replace above already rewrote the original sentence.
+      { find: 'Changed.' },
+      { id: 'u1', kind: 'known', name: 'Reviewer', color: '#000' },
+      'Anchor.',
+    );
+    if (!created.ok) throw new Error('thread create failed');
+    const rewrite = await fetch(
+      `${base}/api/docs/h2/threads/${encodeURIComponent(created.thread.id)}/rewrite_region`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ replacement: 'Rewritten via thread.' }),
+      },
+    );
+    const rewriteBody = (await rewrite.json()) as { ok: boolean; syncError?: { message: string } };
+    expect(rewriteBody.ok).toBe(true);
+    expect(rewriteBody.syncError?.message).toBeDefined();
   });
 });
