@@ -842,7 +842,15 @@ export class Rooms {
     const root = members.find((m) => m.workspaceRoot)?.workspaceRoot;
     if (!root || !existsSync(root)) return { ok: false, error: 'not-found' };
     const decorate = this.cfg.decorateDocMeta;
-    const byRel = new Map(members.map((m) => [m.relPath ?? '', m]));
+    // A changed file can carry BOTH its diff member and its companion
+    // editable markdown doc on the same relPath — the diff member is the
+    // reviewable surface this list must point at.
+    const byRel = new Map<string, DocMeta>();
+    for (const m of members) {
+      const key = m.relPath ?? '';
+      const prev = byRel.get(key);
+      if (!prev || (prev.type !== 'diff' && m.type === 'diff')) byRel.set(key, m);
+    }
     const MAX_FILES = 10_000;
     const scanned = scanFolderPaths(root);
     const truncated = scanned.length > MAX_FILES;
@@ -901,6 +909,56 @@ export class Rooms {
       title: clean,
     });
     const attached = isMd ? this.attachFile(docId, abs) : this.attachReadonlyFile(docId, abs);
+    if (!attached.ok) return { ok: false, error: 'attach-failed' };
+    return { ok: true, docId: room.docId, meta: room.meta };
+  }
+
+  /**
+   * Open (or reuse) the companion EDITABLE markdown doc for a `.md` member
+   * of a LIVE working-tree diff review. The member stays the flat
+   * diff/redline surface; the companion is a full prose doc bound to the
+   * same working-tree file via attachFile, so File-view edits flow
+   * prose → disk (debounced write-back) → the member's mtime poll →
+   * redline/diff re-render. Unchanged `.md` files delegate to
+   * openContextFile (already a full markdown doc); pinned reviews refuse —
+   * their content is a commit, not a file.
+   */
+  openEditableFile(
+    workspaceId: string,
+    relPath: string,
+  ):
+    | { ok: true; docId: string; meta: DocMeta }
+    | {
+        ok: false;
+        error: 'not-found' | 'bad-path' | 'pinned' | 'not-markdown' | 'attach-failed';
+      } {
+    const members = this.list().filter((m) => m.workspaceId === workspaceId);
+    const root = members.find((m) => m.workspaceRoot)?.workspaceRoot;
+    if (!root) return { ok: false, error: 'not-found' };
+    const clean = relPath.replace(/^\/+/, '');
+    const abs = join(root, clean);
+    if (clean.split('/').includes('..') || !`${abs}/`.startsWith(`${root}/`)) {
+      return { ok: false, error: 'bad-path' };
+    }
+    if (!clean.toLowerCase().endsWith('.md')) return { ok: false, error: 'not-markdown' };
+    const member = members.find((m) => m.relPath === clean);
+    if (!member) return this.openContextFile(workspaceId, clean);
+    if (member.type !== 'diff') return { ok: true, docId: member.docId, meta: member };
+    if (member.diffTarget) return { ok: false, error: 'pinned' };
+    if (!existsSync(abs)) return { ok: false, error: 'not-found' };
+    const owner = members.find((m) => m.owner)?.owner;
+    const companionId = memberDocId(`${workspaceId}:edit`, clean);
+    const room = this.getOrCreate(companionId, {
+      type: 'markdown',
+      sourceUrl: abs,
+      setId: workspaceId,
+      owner,
+      workspaceId,
+      workspaceRoot: root,
+      relPath: clean,
+      title: clean,
+    });
+    const attached = this.attachFile(companionId, abs);
     if (!attached.ok) return { ok: false, error: 'attach-failed' };
     return { ok: true, docId: room.docId, meta: room.meta };
   }
