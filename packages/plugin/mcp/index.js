@@ -13717,10 +13717,15 @@ var server = new Server({
     "LF has any pending state your edit can be silently overwritten by the next",
     "write-back. Route edits through the MCP tools below: find_and_replace for",
     "prose changes, rewrite_thread_region / insert_after_thread / insert_blocks_after_thread",
-    "for comment-anchored edits. External edits (VS Code, git pull) flow back",
-    "into the live doc via fs.watch when LF is idle, but the same race applies",
-    "mid-session — if you wrote to a bound file externally and need to be sure",
-    "it landed, call reparse_from_disk(docId) to force-pull from disk.",
+    "for comment-anchored edits, and set_doc_content(docId, markdown) for a",
+    "COMPREHENSIVE REWRITE of the whole doc (do NOT Write the file + reparse,",
+    "and do NOT delete_doc + Write + re-create — both race the flush and both",
+    "have destroyed content in the field). External edits (VS Code, git pull)",
+    "flow back into the live doc via the file poll when LF is idle; if you wrote",
+    "to a bound file externally and need to be sure it landed, call",
+    "reparse_from_disk(docId) to force-pull from disk. If an edit response or",
+    "get_doc carries a `syncError`, read it — it names the conflict and where",
+    "the overwritten version was backed up.",
     "",
     "DIFF REVIEW / FOLDER BROWSE: when the human wants to review your code",
     'changes ("review this diff", a branch, work in progress), call',
@@ -13855,7 +13860,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "create_review_doc",
-      description: "Create a markdown review doc backed by a file on disk. The server reads the file, parses it into the live editor, and sets up bidirectional sync — every edit (from the browser, the agent, or the widget) writes back to the .md within ~1 second, and external edits to the file (VS Code, git pull) flow into the live doc within ~1 second via fs.watch. Note: the disk→doc sync races against the doc→disk write-back; if you Write/Edit a bound .md while LF has any pending state, your file edit can be silently clobbered by the next flush. Route programmatic edits through the LF tools (`find_and_replace`, `rewrite_thread_region`, etc.) once a doc is bound, and call `reparse_from_disk(docId)` if you need to force-pull an external edit. `path` should be absolute; relative paths resolve against the server's cwd. The file must exist (create it first if it doesn't). Pass `setId` to group multiple docs for one review session — docs sharing a setId show up in each other's sidebar in the markdown editor, so the reviewer can hop between related files. The caller is auto-subscribed to thread events for this doc (`watch_doc`) on creation so comments arrive as channel messages without a separate call; pass `subscribe: false` for the rare drive-by case where another agent will own the review. Returns the review URL plus the attach result.",
+      description: "Create a markdown review doc backed by a file on disk. The server reads the file, parses it into the live editor, and sets up bidirectional sync — every edit (from the browser, the agent, or the widget) writes back to the .md within ~1 second, and external edits to the file (VS Code, git pull) flow into the live doc within ~1 second via fs.watch. Note: the disk→doc sync races against the doc→disk write-back; if you Write/Edit a bound .md while LF has any pending state, your file edit can be silently clobbered by the next flush. Route programmatic edits through the LF tools once a doc is bound — `find_and_replace` / `rewrite_thread_region` for targeted edits, `set_doc_content` for a whole-doc rewrite — and call `reparse_from_disk(docId)` only to force-pull an edit that already happened externally. `path` should be absolute; relative paths resolve against the server's cwd. The file must exist (create it first if it doesn't). Pass `setId` to group multiple docs for one review session — docs sharing a setId show up in each other's sidebar in the markdown editor, so the reviewer can hop between related files. The caller is auto-subscribed to thread events for this doc (`watch_doc`) on creation so comments arrive as channel messages without a separate call; pass `subscribe: false` for the rare drive-by case where another agent will own the review. Returns the review URL plus the attach result.",
       inputSchema: {
         type: "object",
         properties: {
@@ -13874,6 +13879,18 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           }
         },
         required: ["docId", "path"]
+      }
+    },
+    {
+      name: "set_doc_content",
+      description: "Replace the WHOLE document with new markdown — the safe path for a comprehensive rewrite/restructure. Applies as a block-level diff on the live doc: blocks you didn't change keep their identity, so comment threads anchored to them survive, connected editors update live, and the result flushes to the bound .md within ~1s like any other edit. Use this INSTEAD of Write-ing the bound file (then reparse_from_disk) or the delete_doc → Write → create_review_doc dance — both race the write-back and have clobbered files in practice, and the latter orphans every comment thread. Returns ok:false with error 'unsupported' (code/diff docs are read-only), 'empty' (won't wipe a doc to nothing — use delete_doc if you mean that), 'parse-failed', or 'not-found'.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          docId: { type: "string" },
+          markdown: { type: "string", description: "Full replacement markdown for the doc." }
+        },
+        required: ["docId", "markdown"]
       }
     },
     {
@@ -14305,6 +14322,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...title ? { title } : {},
           ...setId ? { setId } : {},
           ...producedBy ? { producedBy } : {}
+        });
+        return ok(res);
+      }
+      case "set_doc_content": {
+        const { docId, markdown } = a;
+        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/content`, {
+          markdown
         });
         return ok(res);
       }
