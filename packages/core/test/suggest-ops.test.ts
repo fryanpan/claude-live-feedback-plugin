@@ -420,3 +420,152 @@ describe('suggestRewriteRange (anchor-based creation primitive)', () => {
     expect(res.error).toBe('cross-block');
   });
 });
+
+/**
+ * Proposal isolation, matching half (Codex review, P1): `suggestReplace`
+ * resolves its find against the LIVE text, which contains pending
+ * `suggestInsert` characters. Without a filter an agent can anchor a new
+ * proposal onto text that is itself an unaccepted proposal — reject the
+ * first one and the second one's target evaporates. Text carrying only
+ * `suggestDelete` is still accepted-state and stays a legal target.
+ */
+describe('suggestReplace — pending-insert text is not a match target', () => {
+  it('a find whose ONLY match is inside a pending suggestInsert span fails', () => {
+    const doc = docFrom('Alpha beta gamma.\n');
+    const first = suggestReplace(doc, { find: 'beta', replace: 'delta zeta', author });
+    expect(first.ok).toBe(true);
+
+    const second = suggestReplace(doc, { find: 'zeta', replace: 'eta', author });
+    expect(second.ok).toBe(false);
+    if (second.ok) return;
+    expect(second.error).toBe('match-in-pending-suggestion');
+    // Nothing was written: still exactly one proposal in the doc.
+    expect(listSuggestions(doc)).toHaveLength(1);
+  });
+
+  it('a find matching BOTH a pending-insert span and accepted text resolves to the accepted one', () => {
+    const doc = docFrom('Keep delta here.\n\nAlpha beta gamma.\n');
+    const first = suggestReplace(doc, { find: 'beta', replace: 'delta', author });
+    expect(first.ok).toBe(true);
+
+    // Two literal occurrences of 'delta' now exist, but one of them is the
+    // pending insertion — so this is UNIQUE, not ambiguous.
+    const second = suggestReplace(doc, { find: 'delta', replace: 'epsilon', author });
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    const entry = scanSuggestions(getProseFragment(doc)).get(second.sid);
+    expect(entry).toBeDefined();
+    const del = entry!.ranges.find((r) => r.kind === 'delete');
+    expect(del?.text).toBe('delta');
+    // …and it landed in the FIRST block (the accepted occurrence).
+    expect(del?.node).toBe(blockText(doc, 0));
+  });
+
+  it('occurrence indexing skips pending-insert spans', () => {
+    const doc = docFrom('Keep delta here.\n\nAlpha beta gamma.\n\nAnd delta again.\n');
+    expect(suggestReplace(doc, { find: 'beta', replace: 'delta', author }).ok).toBe(true);
+    // Occurrences are the two ACCEPTED 'delta's, in doc order — the pending
+    // insertion between them does not consume an index.
+    const second = suggestReplace(doc, {
+      find: 'delta',
+      replace: 'epsilon',
+      occurrence: 2,
+      author,
+    });
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    const entry = scanSuggestions(getProseFragment(doc)).get(second.sid);
+    expect(entry!.ranges.find((r) => r.kind === 'delete')?.node).toBe(blockText(doc, 2));
+  });
+
+  it('suggestDelete-marked text is still a legal target (it is accepted state)', () => {
+    const doc = docFrom('Alpha beta gamma.\n');
+    expect(suggestReplace(doc, { find: 'gamma', replace: '', author }).ok).toBe(true);
+    const second = suggestReplace(doc, { find: 'gamma', replace: 'omega', author });
+    expect(second.ok).toBe(true);
+  });
+});
+
+/**
+ * Inline-mark preservation (Codex review, P2): the direct findAndReplace
+ * path inserts with NO attributes, so Yjs inherits the surrounding marks.
+ * The suggest path passed explicit attributes ({suggestInsert}), which
+ * REPLACES the inherited formatting — so accepting a proposal inside a bold
+ * span silently un-bolded the replacement.
+ */
+describe('suggestion insertions preserve surrounding inline marks', () => {
+  it('replacing inside a bold span keeps the replacement bold after accept', () => {
+    const doc = docFrom('This is **bold text** here.\n');
+    const res = suggestReplace(doc, { find: 'bold text', replace: 'strong text', author });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(acceptSuggestion(doc, res.sid).ok).toBe(true);
+    expect(serialize(doc)).toBe('This is **strong text** here.\n');
+  });
+
+  it('the pending insertion already carries the inherited mark (before accept)', () => {
+    const doc = docFrom('This is **bold text** here.\n');
+    const res = suggestReplace(doc, { find: 'bold text', replace: 'strong text', author });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const delta = blockText(doc, 0).toDelta() as Array<{
+      insert?: string;
+      attributes?: Record<string, unknown>;
+    }>;
+    const inserted = delta.find((op) => op.attributes?.[SUGGEST_INSERT_MARK] != null);
+    expect(inserted?.insert).toBe('strong text');
+    expect(inserted?.attributes?.bold).toBeDefined();
+  });
+
+  it('a suggestDelete mark from another proposal is NOT inherited by the insertion', () => {
+    const doc = docFrom('Alpha beta gamma.\n');
+    expect(suggestReplace(doc, { find: 'beta', replace: '', author }).ok).toBe(true);
+    const second = suggestReplace(doc, { find: 'beta', replace: 'zeta', author });
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    const entry = scanSuggestions(getProseFragment(doc)).get(second.sid);
+    const ins = entry!.ranges.find((r) => r.kind === 'insert');
+    expect(ins?.text).toBe('zeta');
+    // The inserted text is a pure insert of THIS sid — it must not have
+    // picked up the other proposal's suggestDelete attribute.
+    const delta = blockText(doc, 0).toDelta() as Array<{
+      insert?: string;
+      attributes?: Record<string, unknown>;
+    }>;
+    const op = delta.find((o) => o.insert === 'zeta');
+    expect(op?.attributes?.[SUGGEST_DELETE_MARK]).toBeUndefined();
+  });
+
+  it('suggestRewriteRange preserves the marks on the anchored range too', () => {
+    const doc = docFrom('This is **bold text** here.\n');
+    const t = blockText(doc, 0);
+    const start = Y.encodeRelativePosition(Y.createRelativePositionFromTypeIndex(t, 8));
+    const end = Y.encodeRelativePosition(Y.createRelativePositionFromTypeIndex(t, 17));
+    const res = suggestRewriteRange(doc, {
+      startRel: start,
+      endRel: end,
+      replacement: 'strong text',
+      author,
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(acceptSuggestion(doc, res.sid).ok).toBe(true);
+    expect(serialize(doc)).toBe('This is **strong text** here.\n');
+  });
+
+  it('parseInlineMarks:true turns markdown syntax in the replacement into real marks', () => {
+    const doc = docFrom('See the docs here.\n');
+    const res = suggestReplace(doc, {
+      find: 'the docs',
+      replace: '[the docs](https://example.com)',
+      parseInlineMarks: true,
+      author,
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    // Accepted state is still untouched while pending.
+    expect(serialize(doc)).toBe('See the docs here.\n');
+    expect(acceptSuggestion(doc, res.sid).ok).toBe(true);
+    expect(serialize(doc)).toBe('See [the docs](https://example.com) here.\n');
+  });
+});

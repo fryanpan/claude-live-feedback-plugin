@@ -2040,13 +2040,17 @@ export class Rooms {
       contextBefore?: string;
       contextAfter?: string;
       occurrence?: number;
+      parseInlineMarks?: boolean;
       author: suggestOps.SuggestionAuthor;
     },
   ):
     | { ok: true; suggestionId: string }
     | {
         ok: false;
-        error: 'not-found' | 'no-match' | 'ambiguous';
+        // `match-in-pending-suggestion`: the find only matched text that is
+        // itself an unaccepted proposal — anchoring here would make this
+        // proposal vanish when the other one is rejected.
+        error: 'not-found' | 'no-match' | 'ambiguous' | 'match-in-pending-suggestion';
         candidates?: Array<{ docOffset: number; preview: string }>;
       } {
     const room = this.rooms.get(docId);
@@ -2073,7 +2077,12 @@ export class Rooms {
   createSuggestionForThread(
     docId: string,
     threadId: string,
-    opts: { replacement: string; author: suggestOps.SuggestionAuthor; ts?: number },
+    opts: {
+      replacement: string;
+      parseInlineMarks?: boolean;
+      author: suggestOps.SuggestionAuthor;
+      ts?: number;
+    },
   ):
     | { ok: true; suggestionId: string }
     | { ok: false; error: 'anchor-not-found' | 'anchor-orphaned' | 'cross-block' } {
@@ -2086,6 +2095,7 @@ export class Rooms {
       startRel: thread.anchor.startRel,
       endRel: thread.anchor.endRel,
       replacement: opts.replacement,
+      parseInlineMarks: opts.parseInlineMarks === true,
       author: opts.author,
       ts: opts.ts,
     });
