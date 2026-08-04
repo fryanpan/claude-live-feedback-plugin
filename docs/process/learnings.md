@@ -303,3 +303,55 @@ Technical discoveries that should persist across sessions for this project.
   Some of his clients autolink URLs but don't render markdown, so
   `**https://x.com**` becomes a clickable link that includes the trailing
   `**` and 404s. Always send a bare URL on its own line.
+
+## Bound-doc sync contract (the answer to "is disk-editing a bound file safe?")
+
+- Third time a fleet peer needed this spelled out, so: **disk writes into a
+  bound .md merge cleanly when the live doc is idle** (500ms mtime poll →
+  `decideReconcile` → block-level LCS apply; thread anchors and pending
+  suggestions on unchanged blocks survive). **Against un-flushed live edits
+  they LOSE by design** (editor = runtime source of truth): the file is
+  reasserted from the live doc and a `syncError` is recorded on the binding
+  — detected, not silent, but the write is gone. So: MCP edit tools by
+  default on bound docs; direct Write/Edit only when nobody's live, and
+  check `syncError` after.
+- `reparse_from_disk` is **recovery-only**, never "make my disk write
+  stick": if the flush reasserted between your write and the reparse, the
+  reparse faithfully pulls the OLD bytes back. Known gap: reparse drops
+  pending suggestions in rewritten blocks silently (backlog).
+- **Diff-review .md members are bound LAZILY** — a companion doc (with
+  write-back) exists only once someone opens that file's redline/File view.
+  Unopened members are plain files; normal tools are fine. `list_docs`
+  shows which companions exist.
+- Backlog (peer request): emit a `syncError` event on the doc's watch
+  channel (docId, relPath, dropped sids) so a lost write announces itself
+  the way comment events do.
+
+## Multi-agent workflow implementation (balloons + suggestions pattern)
+
+- **The recipe that shipped two features with <30 min human hands-on:**
+  one persistent worktree; a Workflow of sequential TDD implement-agents
+  (one per planned commit, each passing structured `{commit, testsPass,
+  concerns}` context to the next); a parallel 3-lens review (dimension
+  prompts tailored to the feature's real risks); a fix agent that VERIFIES
+  findings before fixing; then, outside the workflow: orchestrator re-runs
+  the full suites itself, independent `codex review` pass, merge main into
+  the branch, PR. Cheaper models on mechanical commits/reviews, strongest
+  model on the incident-prone paths. The layers genuinely disagree —
+  Codex caught what the 3-lens pass rated advisory (added-vs-empty-base)
+  or missed (proposal isolation, inline-mark loss); 8 real pre-merge bugs
+  total across the two runs. Keep both layers even when one is clean.
+- Long-running feature branches that APPEND to shared files (styles.css)
+  conflict at merge; merge main into the branch before the final
+  commit/PR, and resolve both-appended-at-EOF conflicts by keeping both
+  blocks and re-closing the braces (check `{`/`}` balance).
+
+## gh pr merge --delete-branch switches your working copy to main
+
+- When the branch being deleted is the CURRENT branch of the main
+  checkout, `gh pr merge N --squash --delete-branch` checks out main
+  locally (and tries to pull, which fails on a diverged local main with
+  "Not possible to fast-forward" — harmless). The REMOTE merge succeeded;
+  but your working tree just silently changed branches, so files appear to
+  "revert" to pre-branch content. Bit us twice in one session. Run the
+  merge from a checkout that is NOT on the branch, or expect the switch.
