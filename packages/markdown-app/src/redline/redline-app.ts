@@ -5,12 +5,17 @@ import { renderDiffNav, wireDiffNavRefresh } from '../diff-nav.ts';
 import type { MountContext } from '../mount-context.ts';
 import type { MountScope } from '../mount-scope.ts';
 import { startReadingTracker } from '../reading-tracker.ts';
-import { type ChromeSelection, el, mountReviewChrome } from '../review-chrome.ts';
+import {
+  type ChromeSelection,
+  el,
+  mountReviewChrome,
+  wireThreadRangeClicks,
+} from '../review-chrome.ts';
 import type { ReviewSurface } from '../review-surface.ts';
 import { remountCurrent } from '../router.ts';
 import { getMarkdownMount } from '../surface-registry.ts';
 import { createLiveRedlineEditor } from './live-redline-editor.ts';
-import { mountMarkupMargin } from './markup-margin.ts';
+import { type MarkupMarginHandle, mountMarkupMargin } from './markup-margin.ts';
 import { createRedlineEditor } from './redline-editor.ts';
 
 /**
@@ -228,10 +233,12 @@ export async function mountRedline(ctx: MountContext): Promise<void> {
     hidePill,
   });
 
-  // The balloon margin renders deletions extracted by the editable surface;
-  // the read-only fallback keeps its inline <del> rendering instead.
+  // The balloon margin renders deletions extracted by the editable surface
+  // plus open comment threads; the read-only fallback keeps its inline <del>
+  // rendering and has no margin (no companion doc to type into).
+  let margin: MarkupMarginHandle | null = null;
   if (liveSurface) {
-    const margin = mountMarkupMargin({
+    margin = mountMarkupMargin({
       editorEl: editorMount,
       view: liveSurface.handle.editor.view,
       getDeletions: () => liveSurface.getDeletions(),
@@ -240,11 +247,25 @@ export async function mountRedline(ctx: MountContext): Promise<void> {
       scope,
     });
     // Every transaction (typing, remote edits, the debounced markup recompute
-    // dispatching its meta) can move anchors or change the deletions list.
-    const onTransaction = (): void => margin.scheduleRelayout();
+    // dispatching its meta, thread activation/decoration changes) can move
+    // anchors or change the deletions/threads list.
+    const onTransaction = (): void => margin?.scheduleRelayout();
     liveSurface.handle.editor.on('transaction', onTransaction);
     scope.onCleanup(() => liveSurface.handle.editor.off('transaction', onTransaction));
   }
+
+  // Tap-on-highlight → focus the thread. Only comments have anchors that
+  // decorate the doc (deletions never render inline here — that's the whole
+  // point of the margin), so this is purely the comment-balloon "vice versa".
+  wireThreadRangeClicks({
+    editorMount,
+    chrome,
+    surface,
+    scope,
+    revealBalloon: margin
+      ? (id) => (margin as MarkupMarginHandle).revealThreadBalloon(id)
+      : undefined,
+  });
 
   scope.onCleanup(startReadingTracker({ docId, user, scrollEl: editorMount }));
   wireToggle(docId, 'redline', scope);

@@ -2141,14 +2141,18 @@ body.redline-mode .ProseMirror del.lf-del {
 }
 
 /* ---------------------------------------------------------------------------
-   Markup margin — Word's balloon column for deletions (editable redline).
+   Markup margin — Word's balloon column for deletions AND open comment
+   threads. Mounted on the editable redline surface (deletions + comments)
+   AND on plain markdown review docs (comments only, via mountMarkupMargin
+   from app.ts) — NOT scoped to body.redline-mode, since the plain-doc mount
+   never sets that class.
 
    The grid MUST use minmax(0, 1fr): plain `1fr` is minmax(auto, 1fr), so a
    long unbreakable string in the prose would push the 300px column (and the
    page) sideways — the CSS Grid overflow trap in docs/process/learnings.md.
    --------------------------------------------------------------------------- */
 
-body.redline-mode #editor.redline-layout {
+#editor.redline-layout {
   position: relative; /* anchors the balloon column and the SVG overlay */
   display: grid;
   grid-template-columns: minmax(0, 1fr) 300px;
@@ -2156,7 +2160,7 @@ body.redline-mode #editor.redline-layout {
   align-items: start;
 }
 
-body.redline-mode #editor.redline-layout > .ProseMirror {
+#editor.redline-layout > .ProseMirror {
   min-width: 0;
 }
 
@@ -2231,12 +2235,34 @@ body.redline-mode #editor.redline-layout > .ProseMirror {
   cursor: pointer;
 }
 
+/* Comment balloons ARE the drawer's `.thread` card (ThreadPanel.renderThread,
+   reused) plus these positioning/colour overrides — `.lf-balloon` gives it
+   the absolute-positioned box, this gives it an accent (not red) edge so it
+   reads as a comment, not a deletion. Two classes on one element by design:
+   see markup-margin.ts. */
+.lf-balloon-comment {
+  border-left-color: var(--accent);
+  cursor: pointer;
+}
+
+/* The drawer only shows a thread's reply box + actions once it's the active
+   thread (saves vertical space in a long list); a balloon has no such list to
+   save space in, and "reply / resolve / re-anchor work from the balloon" is
+   the point — so always show them here regardless of active state. */
+.thread.lf-balloon-comment .thread-reply {
+  display: flex;
+}
+
+.lf-leader-comment {
+  stroke: var(--accent);
+}
+
 /* Balloons are desktop-only. Below 1100px the column and leader lines
    disappear; the mobile treatment (inline chips + drawer) is a separate
    commit. `display: block` restores the single-column flow — no 300px track
    means no horizontal scroll at 430px. */
 @media (max-width: 1100px) {
-  body.redline-mode #editor.redline-layout {
+  #editor.redline-layout {
     display: block;
   }
 
@@ -2263,4 +2289,8 @@ body.redline-mode #editor.redline-layout > .ProseMirror {
   .lf-leader {
     stroke: #f85149;
   }
+
+  /* --accent is not theme-varying (styles.css defines it once at :root), so
+     .lf-balloon-comment / .lf-leader-comment need no dark override — they
+     already read var(--accent) via the base rule above. */
 }

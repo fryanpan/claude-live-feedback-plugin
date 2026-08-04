@@ -5,8 +5,15 @@ import { type EditorHandle, createEditor } from './editor.ts';
 import type { DocMeta, MountContext } from './mount-context.ts';
 import type { MountScope } from './mount-scope.ts';
 import { startReadingTracker } from './reading-tracker.ts';
+import { mountMarkupMargin } from './redline/markup-margin.ts';
 import { mountRedline } from './redline/redline-app.ts';
-import { type ReviewChrome, el, mountReviewChrome, showToast } from './review-chrome.ts';
+import {
+  type ReviewChrome,
+  el,
+  mountReviewChrome,
+  showToast,
+  wireThreadRangeClicks,
+} from './review-chrome.ts';
 import { startRouter } from './router.ts';
 import {
   beginSidebarRender,
@@ -254,6 +261,24 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     hidePill: () => hidePill(),
   });
   const reviewChrome = chrome;
+
+  // The balloon margin: plain markdown docs get comment balloons only (no
+  // git base, so no deletions) — reuses the same mount as the redline
+  // surface, which is why comment balloons behave identically everywhere.
+  // Mounted unconditionally; the `#editor.redline-layout` grid and the
+  // `.markup-margin` column both collapse via CSS below 1100px, so this
+  // never introduces horizontal scroll on mobile.
+  const margin = mountMarkupMargin({
+    editorEl: editorMount,
+    view: editor.editor.view,
+    getDeletions: () => [],
+    threads: () => reviewChrome.collectThreads(),
+    chrome: reviewChrome,
+    scope,
+  });
+  const onMarginTransaction = (): void => margin.scheduleRelayout();
+  editor.editor.on('transaction', onMarginTransaction);
+  scope.onCleanup(() => editor.editor.off('transaction', onMarginTransaction));
 
   // Interaction-bounded reading-session capture (doc_open + read_session).
   // The #editor element is the scroll container on the markdown surface.
@@ -545,28 +570,16 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     } catch {}
   }
   // Tap-on-highlight in the editor → focus the thread.
+  //   • A visible balloon for it → scroll the balloon into view.
   //   • Mobile: full-screen thread view (Notion pattern — gives the
   //     conversation space without the doc competing for it).
   //   • Desktop: open the side drawer and highlight the thread.
-  scope.listen(editorMount, 'click', (ev) => {
-    const t = ((ev as MouseEvent).target as HTMLElement).closest('.thread-range');
-    if (!t) return;
-    const threadId = t.getAttribute('data-thread-id');
-    if (!threadId) return;
-    ev.preventDefault();
-    ev.stopPropagation();
-    reviewChrome.refreshThreadDecorations(threadId);
-    // No scrollToPos here — the user clicked the highlight, it's already
-    // on screen; jumping the doc would feel broken.
-    const range = reviewChrome.resolveThreadRange(threadId);
-    if (range) editor.pulseRange(range.from, range.to);
-    if (reviewChrome.isMobile()) {
-      reviewChrome.threadsPanel.setActive(threadId);
-      reviewChrome.openThreadView(threadId);
-    } else {
-      reviewChrome.openDrawer();
-      requestAnimationFrame(() => reviewChrome.threadsPanel.revealThread(threadId));
-    }
+  wireThreadRangeClicks({
+    editorMount,
+    chrome: reviewChrome,
+    surface: editor,
+    scope,
+    revealBalloon: (id) => margin.revealThreadBalloon(id),
   });
 
   const meta = ydoc.getMap('meta');
