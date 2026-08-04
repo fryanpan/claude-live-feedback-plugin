@@ -16,7 +16,7 @@ import {
   showToast,
   wireThreadRangeClicks,
 } from './review-chrome.ts';
-import { startRouter } from './router.ts';
+import { navigateTo, startRouter } from './router.ts';
 import {
   beginSidebarRender,
   isCurrentSidebarRender,
@@ -218,6 +218,11 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     onSelectionChange: () => refreshSelectionState(),
     onUpdate: () => chrome?.redrawThreads(),
     user: { name: user.name, color: user.color },
+    // Workspace members (folder binds, diff File views — ctx spreads through
+    // mountEditableFileView) get in-app navigation for relative sibling links.
+    docLink: ctx.workspaceId
+      ? { workspaceId: ctx.workspaceId, relPath: ctx.relPath, navigate: navigateTo }
+      : undefined,
   });
   // Editor teardown runs before the client closes (LIFO — client.close was
   // registered first by the router), so the y-prosemirror binding detaches
