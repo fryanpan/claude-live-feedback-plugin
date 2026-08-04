@@ -4,6 +4,7 @@ export * from './identity.ts';
 export * from './lcs.ts';
 export * from './markdown-blocks.ts';
 export * from './redline.ts';
+export * from './suggest.ts';
 export * from './ui-shared.ts';
 export * from './ws-client.ts';
 export * as anchors from './anchor/index.ts';
