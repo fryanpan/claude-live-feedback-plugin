@@ -1,7 +1,8 @@
-import { type User, connect, escapeHtml, readDocMeta, resolveUser } from '@feedback/core';
+import { type User, connect, escapeHtml, readDocMeta } from '@feedback/core';
 import { mountCode } from './code/code-app.ts';
 import { renderDiffNav, setActiveFile } from './diff-nav.ts';
 import { type EditorHandle, createEditor } from './editor.ts';
+import { ensureUserIdentity } from './identity-prompt.ts';
 import type { DocMeta, MountContext } from './mount-context.ts';
 import type { MountScope } from './mount-scope.ts';
 import { startReadingTracker } from './reading-tracker.ts';
@@ -148,11 +149,14 @@ function wireDocSwitcher(): void {
  * plus the router. Everything document-specific is a per-doc mount the router
  * runs; navigation swaps mounts in place with no reload.
  */
-function main(): void {
+async function main(): Promise<void> {
   wireKeyboardInset();
   wireDocSwitcher();
   const asParam = new URL(location.href).searchParams.get('as');
-  const user: User = resolveUser(asParam, {
+  // First arrival with no stored name shows the name prompt; this awaits the
+  // user's answer (or skip) before anything connects, so awareness, comments,
+  // and edits all carry the chosen identity from the first packet.
+  const user: User = await ensureUserIdentity(asParam, {
     get: (k) => localStorage.getItem(k),
     set: (k, v) => localStorage.setItem(k, v),
   });
