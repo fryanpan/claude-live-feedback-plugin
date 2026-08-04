@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { extname, join } from 'node:path';
-import { type Anchor, type DocType, type User, contentKind } from '@feedback/core';
+import { type Anchor, type DocType, type User, contentKind, suggestOps } from '@feedback/core';
 import { showFile } from './git-diff.ts';
 import { type CfAccessOptions, createCfAccessVerifier } from './middleware/cf-access.ts';
 import { publicBaseUrl } from './public-host.ts';
@@ -535,6 +535,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             const body = await safeJson(req);
             const replacement = String(body?.replacement ?? '');
             const parseInlineMarks = body?.parseInlineMarks === true;
+            if (body?.suggest === true) {
+              const author = parseSuggestionAuthor(body);
+              if (!author) return j(400, { error: 'author required when suggest is true' });
+              const res = rooms.createSuggestionForThread(docId, threadId, {
+                replacement,
+                author,
+              });
+              return res.ok ? j(200, res) : j(409, res);
+            }
             const res = rooms.rewriteThreadRegion(docId, threadId, replacement, {
               parseInlineMarks,
             });
@@ -700,18 +709,62 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const find = String(body?.find ?? '');
           const replace = String(body?.replace ?? '');
           if (find.length === 0) return j(400, { error: 'find is required' });
+          const contextBefore = body?.contextBefore ? String(body.contextBefore) : undefined;
+          const contextAfter = body?.contextAfter ? String(body.contextAfter) : undefined;
+          const occurrence =
+            typeof body?.occurrence === 'number' ? Number(body.occurrence) : undefined;
+          if (body?.suggest === true) {
+            const author = parseSuggestionAuthor(body);
+            if (!author) return j(400, { error: 'author required when suggest is true' });
+            const res = rooms.createSuggestion(docId, {
+              find,
+              replace,
+              contextBefore,
+              contextAfter,
+              occurrence,
+              author,
+            });
+            return res.ok ? j(200, res) : j(409, res);
+          }
           const res = rooms.findAndReplace(docId, {
             find,
             replace,
-            contextBefore: body?.contextBefore ? String(body.contextBefore) : undefined,
-            contextAfter: body?.contextAfter ? String(body.contextAfter) : undefined,
-            occurrence: typeof body?.occurrence === 'number' ? Number(body.occurrence) : undefined,
+            contextBefore,
+            contextAfter,
+            occurrence,
             parseInlineMarks: body?.parseInlineMarks === true,
           });
           // Piggy-back any pending sync trouble on the response: agents act
           // on edit results, not on get_doc, so this is where a conflict
           // actually gets seen.
           return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
+        }
+        // Suggested edits (redline-suggestions phase 2, commit 3): list/
+        // accept/reject/resolve-all over the doc's pending proposals. See
+        // `suggest: true` on find_and_replace / rewrite_region above for
+        // creation.
+        if (rest === 'suggestions' && req.method === 'GET') {
+          return j(200, { suggestions: rooms.listSuggestions(docId) });
+        }
+        if (rest === 'suggestions/resolve_all' && req.method === 'POST') {
+          const body = await safeJson(req);
+          const action = body?.action as 'accept' | 'reject' | undefined;
+          if (action !== 'accept' && action !== 'reject') {
+            return j(400, { error: 'action must be accept or reject' });
+          }
+          const authorId = body?.authorId ? String(body.authorId) : undefined;
+          const res = rooms.resolveAllSuggestions(docId, { action, authorId });
+          return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(404, res);
+        }
+        const suggestionMatch = rest.match(/^suggestions\/([^/]+)\/(accept|reject)$/);
+        if (suggestionMatch && req.method === 'POST') {
+          const sid = decodeURIComponent(suggestionMatch[1] ?? '');
+          const action = suggestionMatch[2];
+          const res =
+            action === 'accept'
+              ? rooms.acceptSuggestion(docId, sid)
+              : rooms.rejectSuggestion(docId, sid);
+          return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(404, res);
         }
         if (rest === 'delete_block_at_anchor' && req.method === 'POST') {
           const body = await safeJson(req);
@@ -973,6 +1026,19 @@ function j(status: number, body: unknown): Response {
 function withSyncError(rooms: Rooms, docId: string, body: object): object {
   const syncError = rooms.getSyncError(docId);
   return syncError ? { ...body, syncError } : body;
+}
+
+/** Parse a `suggest: true` request body's `author` field into a
+ *  SuggestionAuthor. Requires `id` + `name`; `color` defaults so a caller
+ *  that omits it (unlikely — MCP always sends the full identity) still
+ *  produces an attributable proposal instead of a 400. */
+function parseSuggestionAuthor(
+  body: Record<string, unknown> | null,
+): suggestOps.SuggestionAuthor | null {
+  const a = body?.author as { id?: unknown; name?: unknown; color?: unknown } | undefined;
+  if (!a || typeof a.id !== 'string' || a.id.length === 0) return null;
+  if (typeof a.name !== 'string' || a.name.length === 0) return null;
+  return { id: a.id, name: a.name, color: typeof a.color === 'string' ? a.color : '#888888' };
 }
 
 // The canonical embed loads the widget bundle from this server but runs the
