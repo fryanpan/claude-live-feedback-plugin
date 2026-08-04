@@ -240,6 +240,9 @@ export async function mountRedline(ctx: MountContext): Promise<void> {
     // appearing and being tapped.
     getSelection: () => surface.getSelectionRel() ?? selection,
     hidePill,
+    // The margin below mounts only on the editable surface — the read-only
+    // fallback keeps inline <del> and needs the drawer as its thread surface.
+    hasBalloonMargin: Boolean(liveSurface),
   });
 
   // The balloon margin renders deletions extracted by the editable surface
