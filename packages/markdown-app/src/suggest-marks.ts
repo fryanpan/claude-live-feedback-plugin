@@ -43,6 +43,20 @@ function tsAttr() {
   };
 }
 
+/**
+ * The author color as an inline CSS custom property, so the stylesheet's
+ * underline/strikethrough/tint rules render each author distinctly. The value
+ * comes from our own mark attrs, but it round-trips through user-editable
+ * HTML — only a literal hex color is allowed into the style attribute so an
+ * arbitrary string can't smuggle extra CSS declarations in.
+ */
+function authorColorStyle(attrs: Record<string, unknown>): Record<string, string> {
+  const c = attrs.authorColor;
+  return typeof c === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(c)
+    ? { style: `--lf-suggest-color: ${c}` }
+    : {};
+}
+
 function suggestionAttributes() {
   return {
     sid: stringAttr('data-sid', 'sid'),
@@ -61,9 +75,14 @@ export const SuggestInsert = Mark.create({
   inclusive: () => false,
   addAttributes: suggestionAttributes,
   parseHTML: () => [{ tag: 'span[data-lf-suggest="ins"]' }],
-  renderHTML: ({ HTMLAttributes }) => [
+  renderHTML: ({ mark, HTMLAttributes }) => [
     'span',
-    { ...HTMLAttributes, 'data-lf-suggest': 'ins', class: 'lf-suggest-ins' },
+    {
+      ...HTMLAttributes,
+      ...authorColorStyle(mark.attrs),
+      'data-lf-suggest': 'ins',
+      class: 'lf-suggest-ins',
+    },
     0,
   ],
 });
@@ -75,9 +94,14 @@ export const SuggestDelete = Mark.create({
   inclusive: () => false,
   addAttributes: suggestionAttributes,
   parseHTML: () => [{ tag: 'span[data-lf-suggest="del"]' }],
-  renderHTML: ({ HTMLAttributes }) => [
+  renderHTML: ({ mark, HTMLAttributes }) => [
     'span',
-    { ...HTMLAttributes, 'data-lf-suggest': 'del', class: 'lf-suggest-del' },
+    {
+      ...HTMLAttributes,
+      ...authorColorStyle(mark.attrs),
+      'data-lf-suggest': 'del',
+      class: 'lf-suggest-del',
+    },
     0,
   ],
 });

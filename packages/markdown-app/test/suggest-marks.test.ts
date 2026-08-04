@@ -2,6 +2,7 @@ import { Editor } from '@tiptap/core';
 import Collaboration from '@tiptap/extension-collaboration';
 import StarterKit from '@tiptap/starter-kit';
 import { describe, expect, it } from 'vitest';
+import { Awareness } from 'y-protocols/awareness';
 import * as Y from 'yjs';
 import { getProseFragment, parseMarkdownBlocks } from '../../core/src/prose.ts';
 import {
@@ -9,6 +10,7 @@ import {
   SUGGEST_INSERT_MARK,
   type SuggestionAttrs,
 } from '../../core/src/suggest.ts';
+import { createLiveRedlineEditor } from '../src/redline/live-redline-editor.ts';
 import { SuggestDelete, SuggestInsert } from '../src/suggest-marks.ts';
 
 /**
@@ -69,6 +71,29 @@ describe('suggestion marks in the live editor schema', () => {
     editor.destroy();
   });
 
+  it('carries the author color onto the rendered span so CSS can tint per author', () => {
+    const { ydoc, text } = docWith('Alpha beta gamma.\n');
+    text.insert('Alpha '.length, 'new ', { [SUGGEST_INSERT_MARK]: sattrs('s-ins') });
+    text.format('Alpha new '.length, 'beta '.length, { [SUGGEST_DELETE_MARK]: sattrs('s-del') });
+    const editor = editorOver(ydoc);
+    const html = editor.getHTML();
+    // Both marks expose the author color as a CSS custom property inline —
+    // the stylesheet's underline/strikethrough/tint rules read it.
+    const spans = html.match(/--lf-suggest-color: #7c5cff/g) ?? [];
+    expect(spans.length).toBe(2);
+    editor.destroy();
+  });
+
+  it('omits the inline style when the author color is not a safe hex color', () => {
+    const { ydoc, text } = docWith('Alpha gamma.\n');
+    text.insert('Alpha '.length, 'beta ', {
+      [SUGGEST_INSERT_MARK]: { ...sattrs('s-bad'), authorColor: 'red; background:url(x)' },
+    });
+    const editor = editorOver(ydoc);
+    expect(editor.getHTML()).not.toContain('--lf-suggest-color');
+    editor.destroy();
+  });
+
   it('keeps the mark and its attribute TYPES intact through the editor (ts stays a number)', () => {
     const { ydoc, text } = docWith('Alpha gamma.\n');
     text.insert('Alpha '.length, 'beta ', { [SUGGEST_INSERT_MARK]: sattrs('s3') });
@@ -86,5 +111,30 @@ describe('suggestion marks in the live editor schema', () => {
     expect(attrs.sid).toBe('s3');
     expect(typeof attrs.ts).toBe('number');
     editor.destroy();
+  });
+});
+
+describe('suggestion marks in the REDLINE lens', () => {
+  it('a pending proposal is visible in the redline surface too — never invisible in any lens', () => {
+    const md = 'Alpha gamma.\n';
+    const ydoc = new Y.Doc();
+    const fragment = getProseFragment(ydoc);
+    fragment.push(parseMarkdownBlocks(md));
+    const text = (fragment.get(0) as Y.XmlElement).toArray()[0] as Y.XmlText;
+    text.insert('Alpha '.length, 'beta ', { [SUGGEST_INSERT_MARK]: sattrs('s-lens') });
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const surface = createLiveRedlineEditor({
+      parent,
+      ydoc,
+      awareness: new Awareness(ydoc),
+      baseText: md,
+      debounceMs: 0,
+    });
+    const html = parent.innerHTML;
+    expect(html).toContain('data-lf-suggest="ins"');
+    expect(html).toContain('--lf-suggest-color: #7c5cff');
+    surface.destroy();
+    parent.remove();
   });
 });
