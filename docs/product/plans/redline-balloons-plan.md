@@ -8,13 +8,13 @@ The redline view should read like the *final* document, with markup pushed to th
 
 ## Measurable outcomes
 
-- **Synchronous multi-user editing (from review comment):** the redline surface is itself editable by multiple users at once — typing in it lands in the working tree within ~1s (via the companion doc), and concurrent edits, comments, and deletions made by other users or agents appear as live markup (insertions inline, deletions as balloons) with no reload or mode switch. Y/N
-
-1. On screens ≥1100px, deleted content no longer renders struck-through inline; each deletion appears as a balloon in the right margin, vertically aligned to its anchor, with a leader line. Y/N
-2. Open comment threads appear as balloons in the same margin, stacked without overlap; reply / resolve / re-anchor work from the balloon. Y/N
-3. Insertions render inline in change color; a 100%-added file renders clean with a "New file" banner instead of whole-document markup. Y/N
-4. At 430px there is no horizontal scroll: the markup column disappears, deletions collapse to a tappable inline marker that opens the deleted content in the bottom sheet, and comments keep the existing pill/drawer flow. Y/N
-5. No agent-facing API changes; thread anchors and the diff member model are untouched. Y/N
+1. **Synchronous multi-user editing (from review comment):** the redline surface is itself editable by multiple users at once — typing in it lands in the working tree within ~1s (via the companion doc), and concurrent edits, comments, and deletions made by other users or agents appear as live markup (insertions inline, deletions as balloons) with no reload or mode switch.
+2. **Layout**
+  1. On screens ≥1100px, deleted content no longer renders struck-through inline; each deletion appears as a balloon in the right margin, vertically aligned to its anchor, with a leader line.
+    1. Open comment threads appear as balloons in the same margin, stacked without overlap; reply / resolve / re-anchor work from the balloon.
+    2. Insertions render inline in change color; a 100%-added file renders clean with a "New file" banner instead of whole-document markup.
+  2. At 430px there is no horizontal scroll: the markup column disappears, deletions collapse to a tappable inline marker that opens the deleted content in the bottom sheet, and comments keep the existing pill/drawer flow.
+3. **Stable API**No agent-facing API changes; thread anchors and the diff member model are untouched.
 
 ## Alternatives
 
@@ -70,6 +70,27 @@ From review: the surface should support Word's **suggestion** concept — an edi
 **Agent-facing API** (same change adds the MCP tools, per learnings): `list_suggestions(docId)`, `accept_suggestion` / `reject_suggestion(docId, suggestionId)`, and agents can *make* suggestions via a `suggest: true` option on the existing edit tools — so an agent can propose a rewrite Bryan approves with one tap instead of applying it directly.
 
 **Phasing:** this ships as **Phase 2**, after the balloon margin + editable redline surface (Phase 1) — the balloon chrome, stacking, and accept/reject affordances are the same components, so Phase 1 builds the shelf Phase 2 stocks. Phase 2 outcome: an edit made in Suggesting mode never reaches disk until accepted; accept applies it and the working tree updates; reject removes it cleanly; both work from the balloon and from the MCP tools. Y/N
+
+## One editor, three lenses — parity with the other surfaces
+
+From review: the redline view and the normal markdown editor should be *mostly the same thing*, the way Word is the same program with Track Changes on or off — and the raw-text surface should share the features that make sense there.
+
+**Unification principle: there is ONE markdown editor.** "Redline" is that editor with a **markup lens** switched on (base-diff decorations + the margin), not a separate surface. This falls out of the architecture above — the redline mounts the same Tiptap/Yjs editor as the File view — and it has two concrete consequences:
+
+- **Comment balloons are shared chrome.** Once the margin exists, every markdown review doc (plain `create_review_doc` docs, not just diff reviews) shows its open threads as margin balloons on desktop. The pill/drawer stays as the narrow-screen and creation flow.
+- **Suggesting mode is doc-level, not diff-level.** Suggestion marks work in ANY markdown doc — you can propose edits on a plain plan doc with no git diff anywhere. The markup lens (git ins/del vs base) remains diff-review-only, since it needs a base.
+
+**Raw-text (code) surface parity** — same features where the idiom fits, deliberately different where code convention differs:
+
+| Capability              | Markdown editor                      | Code/raw-text surface                                        |
+| ----------------------- | ------------------------------------ | ------------------------------------------------------------ |
+| Live multi-user editing | ✅ (File view + redline, this plan)   | ✅ shipped (yCollab File view)                                |
+| Comments                | balloons (desktop) / drawer (mobile) | line-snapped threads, existing gutter/drawer flow — margin balloons NOT planned; inline is the code-review idiom |
+| Deletions display       | margin balloons                      | stays in the unified-diff idiom (inline deletion widgets) — that IS the "balloon" convention for code |
+| Markup lens toggle      | Markup on/off (redline ↔ clean)      | already exists as Diff ↔ File                                |
+| Suggested edits         | Phase 2 (marks + serializer rule)    | **Phase 3**: GitHub-suggestion-style proposals over flat text — same accept/reject model, suggestion ranges stored beside the Y.Text with CM decorations; accepted content is what write-back emits |
+
+Phase 3 is scoped as a follow-on, not part of this plan's build: the accept/reject chrome and the MCP tool surface from Phase 2 carry over, but flat-text suggestion storage is its own design (no marks in a Y.Text — needs a parallel suggestions map keyed by RelativePositions).
 
 ## Execution strategy
 
