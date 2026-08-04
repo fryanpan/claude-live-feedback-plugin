@@ -630,6 +630,57 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
   return chrome;
 }
 
+// --- thread-range click → focus the thread -------------------------------------
+
+export interface ThreadFocusOpts {
+  /** The scroll container that hosts the editor's `.thread-range` spans. */
+  editorMount: HTMLElement;
+  chrome: ReviewChrome;
+  surface: Pick<ReviewSurface, 'pulseRange'>;
+  scope: MountScope;
+  /**
+   * Try showing the thread in the balloon margin first (the "vice versa" of
+   * "click a balloon, see its anchor" — see markup-margin.ts). Return true
+   * when handled; the drawer/thread-view fallback below is skipped. Omit on
+   * surfaces with no margin (the click still highlights + pulses the anchor).
+   */
+  revealBalloon?: (threadId: string) => boolean;
+}
+
+/**
+ * Tap-on-highlight in the editor → focus the thread. Shared by the plain
+ * markdown mount and the redline mount so the click-to-focus behaviour is
+ * one implementation, not two forks that drift.
+ *   • A balloon margin present and showing the thread → scroll the balloon
+ *     into view (the balloon already reads as the mini-drawer for that spot).
+ *   • Otherwise: mobile → full-screen thread view; desktop → open the side
+ *     drawer and scroll to the thread's card.
+ */
+export function wireThreadRangeClicks(opts: ThreadFocusOpts): void {
+  const { editorMount, chrome, surface, scope, revealBalloon } = opts;
+  scope.listen(editorMount, 'click', (ev) => {
+    const t = ((ev as MouseEvent).target as HTMLElement).closest('.thread-range');
+    if (!t) return;
+    const threadId = t.getAttribute('data-thread-id');
+    if (!threadId) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    chrome.refreshThreadDecorations(threadId);
+    // No scrollToPos here — the user clicked the highlight, it's already
+    // on screen; jumping the doc would feel broken.
+    const range = chrome.resolveThreadRange(threadId);
+    if (range) surface.pulseRange(range.from, range.to);
+    if (revealBalloon?.(threadId)) return;
+    if (chrome.isMobile()) {
+      chrome.threadsPanel.setActive(threadId);
+      chrome.openThreadView(threadId);
+    } else {
+      chrome.openDrawer();
+      requestAnimationFrame(() => chrome.threadsPanel.revealThread(threadId));
+    }
+  });
+}
+
 // --- resizable side panels ----------------------------------------------------
 
 interface ResizeOpts {

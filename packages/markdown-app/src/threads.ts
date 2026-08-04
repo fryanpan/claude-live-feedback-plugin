@@ -86,6 +86,13 @@ export class ThreadPanel {
     return this.statusMap.get(threadId);
   }
 
+  /** The currently active thread id, or null. Read by the redline balloon
+   *  margin so a comment balloon's `.active` styling / reply visibility stays
+   *  in sync with the drawer without duplicating the state. */
+  getActive(): string | null {
+    return this.activeId;
+  }
+
   countByStatus(): { open: number; resolved: number; orphan: number } {
     let open = 0;
     let resolved = 0;
@@ -178,7 +185,14 @@ export class ThreadPanel {
     return h;
   }
 
-  private renderThread(t: Thread, pendingReply?: string): HTMLElement {
+  /**
+   * Build one thread's card DOM. Used internally by `render()` for the
+   * drawer list AND externally by the redline balloon margin — a comment
+   * balloon is literally this same card (plus positioning classes), so
+   * reply/resolve/reopen/re-anchor behave identically everywhere instead of
+   * a second implementation drifting out of sync. Public on purpose.
+   */
+  renderThread(t: Thread, pendingReply?: string): HTMLElement {
     const status = this.statusMap.get(t.id) ?? 'open';
     const el = document.createElement('div');
     el.className = `thread status-${status}`;

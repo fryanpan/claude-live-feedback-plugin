@@ -1,20 +1,32 @@
-import { connect } from '@feedback/core';
+import { type FeedbackClient, connect } from '@feedback/core';
 import { mountCode } from '../code/code-app.ts';
+import { isEditableRedlineMember } from '../code/editable-policy.ts';
 import { renderDiffNav, wireDiffNavRefresh } from '../diff-nav.ts';
 import type { MountContext } from '../mount-context.ts';
 import type { MountScope } from '../mount-scope.ts';
 import { startReadingTracker } from '../reading-tracker.ts';
-import { el, mountReviewChrome } from '../review-chrome.ts';
+import {
+  type ChromeSelection,
+  el,
+  mountReviewChrome,
+  wireThreadRangeClicks,
+} from '../review-chrome.ts';
+import type { ReviewSurface } from '../review-surface.ts';
 import { remountCurrent } from '../router.ts';
 import { getMarkdownMount } from '../surface-registry.ts';
+import { createLiveRedlineEditor } from './live-redline-editor.ts';
+import { type MarkupMarginHandle, mountMarkupMargin } from './markup-margin.ts';
 import { createRedlineEditor } from './redline-editor.ts';
 
 /**
  * Mount the Word-style redline surface for a markdown file in a diff review.
  *
  * Sibling of `code/code-app.ts`: same diff-nav, base-text fetch, reading
- * tracker, chrome mount and comment pill. What differs is the surface (a
- * read-only Tiptap redline instead of CodeMirror) and a third view mode.
+ * tracker, chrome mount and comment pill. What differs is the surface and a
+ * third view mode. For LIVE working-tree diffs the surface is the EDITABLE
+ * collaborative editor over the companion doc (the same doc the File view and
+ * the agent tools use) with ins/del markup rendered as live decorations;
+ * pinned reviews and deleted members keep the read-only derived redline.
  *
  * Every listener is bound to `ctx.scope` so navigating to another file tears
  * this mount down cleanly; the router owns the client (closed on dispose).
@@ -151,40 +163,74 @@ export async function mountRedline(ctx: MountContext): Promise<void> {
     })();
   }
 
-  const { ydoc } = client;
   document.body.classList.add('diff-mode', 'redline-mode');
 
   const editorMount = el<HTMLElement>('editor');
   const commentPill = el<HTMLButtonElement>('comment-pill');
 
-  let selection: ReturnType<ReturnType<typeof createRedlineEditor>['getSelectionRel']> = null;
+  let selection: ChromeSelection | null = null;
 
-  // createRedlineEditor fires onSelectionChange synchronously during its
-  // construction render — before `surface` is bound — so guard the callback
-  // until construction returns (otherwise it hits `surface` in the TDZ).
+  // The editable companion editor is the default redline surface for a live
+  // working-tree diff. When policy says read-only (pinned target, deleted
+  // member) — or the companion can't be opened — fall back to the derived
+  // read-only redline over the member doc's `content`.
+  const companion = isEditableRedlineMember({
+    diffTarget: ctx.diffTarget,
+    workspaceId: ctx.workspaceId,
+    diffStatus: diffInfo.status,
+  })
+    ? await openCompanionDoc(ctx)
+    : null;
+  if (scope.disposed) return;
+
+  // Both surfaces fire onSelectionChange synchronously during construction —
+  // before `surface` is bound — so guard the callback until construction
+  // returns (otherwise it hits `surface` in the TDZ).
   let surfaceReady = false;
-  const surface = createRedlineEditor({
-    parent: editorMount,
-    ydoc,
-    baseText,
-    onSelectionChange: () => {
-      if (!surfaceReady) return;
-      const sel = surface.getSelectionRel();
-      if (sel) {
-        selection = sel;
-        positionPill();
-      } else {
-        hidePill();
-      }
-    },
-  });
+  const onSelectionChange = (): void => {
+    if (!surfaceReady) return;
+    const sel = surface.getSelectionRel();
+    if (sel) {
+      selection = sel;
+      positionPill();
+    } else {
+      hidePill();
+    }
+  };
+
+  const isAdded = diffInfo.status === 'added';
+  const liveSurface = companion
+    ? createLiveRedlineEditor({
+        parent: editorMount,
+        ydoc: companion.client.ydoc,
+        awareness: companion.client.awareness,
+        baseText,
+        isAdded,
+        onSelectionChange,
+      })
+    : null;
+  const surface: ReviewSurface & { getSelectionRel: () => ChromeSelection | null } =
+    liveSurface ??
+    createRedlineEditor({
+      parent: editorMount,
+      ydoc: client.ydoc,
+      baseText,
+      isAdded,
+      onSelectionChange,
+    });
   surfaceReady = true;
   scope.onCleanup(() => surface.destroy());
 
+  // Threads live where the surface anchors them: the companion doc's prose
+  // fragment on the editable surface (interoperable with the agent's
+  // create_thread on markdown docs), the member doc's `content` on the
+  // read-only one.
+  const chromeDocId = companion ? companion.docId : docId;
+  const chromeYdoc = companion ? companion.client.ydoc : client.ydoc;
   const chrome = mountReviewChrome({
-    docId,
+    docId: chromeDocId,
     user,
-    ydoc,
+    ydoc: chromeYdoc,
     surface,
     scope,
     selectHint: 'Select some text first to leave a comment.',
@@ -195,10 +241,48 @@ export async function mountRedline(ctx: MountContext): Promise<void> {
     hidePill,
   });
 
+  // The balloon margin renders deletions extracted by the editable surface
+  // plus open comment threads; the read-only fallback keeps its inline <del>
+  // rendering and has no margin (no companion doc to type into).
+  let margin: MarkupMarginHandle | null = null;
+  if (liveSurface) {
+    margin = mountMarkupMargin({
+      editorEl: editorMount,
+      view: liveSurface.handle.editor.view,
+      getDeletions: () => liveSurface.getDeletions(),
+      threads: () => chrome.collectThreads(),
+      chrome,
+      scope,
+    });
+    // Every transaction (typing, remote edits, the debounced markup recompute
+    // dispatching its meta, thread activation/decoration changes) can move
+    // anchors or change the deletions/threads list.
+    const onTransaction = (): void => margin?.scheduleRelayout();
+    liveSurface.handle.editor.on('transaction', onTransaction);
+    scope.onCleanup(() => liveSurface.handle.editor.off('transaction', onTransaction));
+  }
+
+  // Tap-on-highlight → focus the thread. Only comments have anchors that
+  // decorate the doc (deletions never render inline here — that's the whole
+  // point of the margin), so this is purely the comment-balloon "vice versa".
+  wireThreadRangeClicks({
+    editorMount,
+    chrome,
+    surface,
+    scope,
+    revealBalloon: margin
+      ? (id) => (margin as MarkupMarginHandle).revealThreadBalloon(id)
+      : undefined,
+  });
+
   scope.onCleanup(startReadingTracker({ docId, user, scrollEl: editorMount }));
   wireToggle(docId, 'redline', scope);
 
-  if (diffInfo.status === 'renamed' && diffInfo.oldPath) {
+  if (isAdded) {
+    // Added file: nothing to mark up — render clean instead of underlining
+    // the whole document.
+    showBanner('New file in this diff');
+  } else if (diffInfo.status === 'renamed' && diffInfo.oldPath) {
     showBanner(`Renamed from ${diffInfo.oldPath}`);
   } else if (diffInfo.status === 'deleted') {
     showBanner('This file was deleted in this diff — the content shown is the base version.');
@@ -242,13 +326,49 @@ export async function mountRedline(ctx: MountContext): Promise<void> {
   scope.listen(commentPill, 'click', () => chrome.openComposer());
 
   const onMeta = () => chrome.renderDocLabel();
-  ydoc.getMap('meta').observe(onMeta);
-  scope.onCleanup(() => ydoc.getMap('meta').unobserve(onMeta));
-  client.onReady(() => {
+  chromeYdoc.getMap('meta').observe(onMeta);
+  scope.onCleanup(() => chromeYdoc.getMap('meta').unobserve(onMeta));
+  (companion ? companion.client : client).onReady(() => {
     if (scope.disposed) return;
     chrome.renderDocLabel();
     chrome.redrawThreads();
   });
+}
+
+interface CompanionDoc {
+  docId: string;
+  client: FeedbackClient;
+  sourceUrl: string;
+}
+
+/**
+ * Open (or create) the companion editable doc for this `.md` diff member and
+ * connect its websocket. The companion is a separate doc with its own socket;
+ * the socket closes with the member's scope. Returns null when the companion
+ * can't be opened (no workspace binding, server error) so callers can fall
+ * back to a read-only surface.
+ */
+async function openCompanionDoc(ctx: MountContext): Promise<CompanionDoc | null> {
+  let opened: { docId: string; meta?: { sourceUrl?: string } };
+  try {
+    const res = await fetch(
+      `/api/workspaces/${encodeURIComponent(ctx.workspaceId)}/editable-file`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ relPath: ctx.relPath }),
+      },
+    );
+    if (!res.ok) return null;
+    opened = (await res.json()) as { docId: string; meta?: { sourceUrl?: string } };
+  } catch {
+    return null;
+  }
+  if (ctx.scope.disposed) return null; // navigated away — don't open a socket
+  const wsUrl = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/y/${encodeURIComponent(opened.docId)}?type=markdown`;
+  const client = connect(wsUrl);
+  ctx.scope.onCleanup(() => client.close());
+  return { docId: opened.docId, client, sourceUrl: opened.meta?.sourceUrl ?? '' };
 }
 
 /**
@@ -260,34 +380,18 @@ export async function mountRedline(ctx: MountContext): Promise<void> {
 async function mountEditableFileView(ctx: MountContext): Promise<boolean> {
   const mountMarkdown = getMarkdownMount();
   if (!mountMarkdown) return false;
-  let opened: { docId: string; meta?: { sourceUrl?: string } };
-  try {
-    const res = await fetch(
-      `/api/workspaces/${encodeURIComponent(ctx.workspaceId)}/editable-file`,
-      {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ relPath: ctx.relPath }),
-      },
-    );
-    if (!res.ok) return false;
-    opened = (await res.json()) as { docId: string; meta?: { sourceUrl?: string } };
-  } catch {
-    return false;
-  }
+  const companion = await openCompanionDoc(ctx);
   if (ctx.scope.disposed) return true; // navigated away — report handled
-  const wsUrl = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/y/${encodeURIComponent(opened.docId)}?type=markdown`;
-  const client = connect(wsUrl);
-  ctx.scope.onCleanup(() => client.close());
+  if (!companion) return false;
   await mountMarkdown({
     ...ctx,
-    docId: opened.docId,
+    docId: companion.docId,
     // The sidebar lists the diff MEMBER, not the companion — keep marking it
     // active (mountMarkdown's nav renders would otherwise highlight nothing).
     navDocId: ctx.docId,
-    client,
+    client: companion.client,
     docType: 'markdown',
-    sourceUrl: opened.meta?.sourceUrl ?? '',
+    sourceUrl: companion.sourceUrl,
     diffTarget: '',
   });
   return true;
