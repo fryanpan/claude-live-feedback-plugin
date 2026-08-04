@@ -1,4 +1,4 @@
-import { type User, connect, escapeHtml, readDocMeta } from '@feedback/core';
+import { type User, connect, escapeHtml, readDocMeta, suggestOps } from '@feedback/core';
 import { mountCode } from './code/code-app.ts';
 import { renderDiffNav, setActiveFile } from './diff-nav.ts';
 import { type EditorHandle, createEditor } from './editor.ts';
@@ -8,6 +8,7 @@ import type { MountScope } from './mount-scope.ts';
 import { startReadingTracker } from './reading-tracker.ts';
 import { mountMarkupMargin } from './redline/markup-margin.ts';
 import { mountRedline } from './redline/redline-app.ts';
+import { mountSuggestionsSummary } from './redline/suggestions-summary.ts';
 import {
   type ReviewChrome,
   el,
@@ -279,9 +280,18 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     getDeletions: () => [],
     threads: () => reviewChrome.collectThreads(),
     chrome: reviewChrome,
+    getSuggestions: () => suggestOps.listSuggestions(ydoc),
+    docId,
     scope,
   });
-  const onMarginTransaction = (): void => margin.scheduleRelayout();
+  // Doc-level "N pending suggestions" topbar badge (Accept all / Reject all
+  // across every author) — per-suggestion Accept/Reject lives on the
+  // balloon/chip card the margin just wired above.
+  const suggestionsSummary = mountSuggestionsSummary({ docId, ydoc, scope });
+  const onMarginTransaction = (): void => {
+    margin.scheduleRelayout();
+    suggestionsSummary.scheduleRefresh();
+  };
   editor.editor.on('transaction', onMarginTransaction);
   scope.onCleanup(() => editor.editor.off('transaction', onMarginTransaction));
 

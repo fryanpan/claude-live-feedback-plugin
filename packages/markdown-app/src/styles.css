@@ -443,6 +443,47 @@ body.has-set .doc-switcher-caret {
      primary nav is the sidebar. */
 }
 
+/* Doc-level pending-suggestions menu (redline-suggestions Phase 2, commit
+   5c) — Accept all / Reject all across every author, opened from the
+   `#toggle-suggestions` topbar badge (suggestions-summary.ts). Anchored
+   under the RIGHT side of the topbar (the toolbar it belongs to), unlike
+   `.doc-menu` which anchors left under the doc-crumb — same positioning
+   idea, opposite edge, so it never collides with the doc-switcher dropdown. */
+.suggestions-menu {
+  position: absolute;
+  top: var(--topbar-h, 48px);
+  right: 8px;
+  left: auto;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  min-width: 160px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
+  padding: 4px;
+  font-size: 13px;
+}
+.suggestions-menu.hidden {
+  display: none;
+}
+.suggestions-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border: 0;
+  background: transparent;
+  border-radius: 6px;
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+.suggestions-menu button:hover {
+  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+}
+
 #editor-pane {
   position: relative; /* anchors the floating diff/file view toggle */
   display: grid;
@@ -2326,11 +2367,98 @@ body.redline-mode #toggle-suggest-mode {
   stroke: var(--accent);
 }
 
+/* The leader line lives in a separate SVG overlay, not nested inside the
+   balloon, so the balloon's inline `--lf-suggest-color` custom property
+   isn't in scope here — accent is the closest stand-in (same simplification
+   `.lf-leader-comment` already makes). */
+.lf-leader-suggestion {
+  stroke: var(--accent);
+}
+
+/* Suggestion balloon (redline-suggestions Phase 2, commit 5) — a THIRD kind
+   sharing the `.lf-balloon` card + the same layoutBalloons pass as deletions
+   and comments (markup-margin.ts). Author color drives the accent (the
+   `--lf-suggest-color` custom property set inline by buildSuggestionBalloon,
+   same hex-validated pattern as the live-doc marks in suggest-marks.ts);
+   falls back to --accent for an unsafe/missing color. */
+.lf-balloon-suggestion {
+  border-left-color: var(--lf-suggest-color, var(--accent));
+}
+
+.lf-suggest-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+
+.lf-suggest-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.lf-suggest-author {
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.lf-suggest-age {
+  color: var(--fg-muted);
+}
+
+/* Old struck / new underlined — color never carries the meaning alone,
+   same rule as the live-doc marks (styles.css, Suggested edits section). */
+.lf-suggest-old {
+  text-decoration: line-through;
+  color: var(--fg-muted);
+}
+
+.lf-suggest-new {
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 2px;
+  color: var(--fg);
+}
+
+.lf-suggest-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.lf-suggest-actions button {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.lf-suggest-actions button:hover {
+  background: var(--bg-hover);
+}
+
+.lf-suggest-accept {
+  color: #1a7f37;
+  border-color: #1a7f37;
+}
+
+.lf-suggest-reject {
+  color: #cf222e;
+  border-color: #cf222e;
+}
+
 /* Balloons are desktop-only. Below 1100px the column and leader lines
    disappear; `.lf-del-chip` (built in live-markup.ts, one per deletion group
-   — same grouping as the balloon) takes over as the mobile fallback, shown
-   only in this breakpoint. `display: block` restores the single-column flow
-   — no 300px track means no horizontal scroll at 430px. */
+   — same grouping as the balloon) and `.lf-suggest-chip` (suggestion-chips.ts,
+   one per sid) take over as the mobile fallback, shown only in this
+   breakpoint. `display: block` restores the single-column flow — no 300px
+   track means no horizontal scroll at 430px. */
 @media (max-width: 1100px) {
   #editor.redline-layout {
     display: block;
@@ -2341,7 +2469,8 @@ body.redline-mode #toggle-suggest-mode {
     display: none;
   }
 
-  .lf-del-chip {
+  .lf-del-chip,
+  .lf-suggest-chip {
     display: inline-flex;
   }
 }
@@ -2379,6 +2508,34 @@ body.redline-mode #toggle-suggest-mode {
   outline-offset: 1px;
 }
 
+/* Mobile suggestion chip (`.lf-suggest-chip`, suggestion-chips.ts widget
+   decoration) — same shape/sizing as `.lf-del-chip` above, accent-colored
+   instead of red (a suggestion is a proposal, not necessarily a removal). */
+.lf-suggest-chip {
+  display: none;
+  align-items: center;
+  gap: 3px;
+  margin: 0 2px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-panel);
+  color: var(--accent);
+  font: 600 12px / 1.4 var(--sans);
+  cursor: pointer;
+  vertical-align: baseline;
+  white-space: nowrap;
+}
+
+.lf-suggest-chip:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+.lf-suggest-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 /* The mobile deletion sheet (mountDeletionSheet, markup-margin.ts) — opened
    by tapping a `.lf-del-chip`. `.thread-view` (styles.css, FULL-SCREEN THREAD
    VIEW section above) supplies the fixed slide-up sheet, header, drag handle,
@@ -2396,6 +2553,24 @@ body.redline-mode #toggle-suggest-mode {
   word-break: break-word;
 }
 
+/* The mobile suggestion sheet (mountSuggestionSheet, markup-margin.ts) —
+   opened by tapping a `.lf-suggest-chip`. Reuses `.thread-view` for the
+   sheet chrome AND reuses `buildSuggestionBalloon`'s own card for the body
+   (same DOM the desktop balloon renders) — these overrides only neutralize
+   the balloon's absolute-positioning rules, which apply only inside the
+   margin column. */
+.lf-suggest-sheet .lf-balloon {
+  position: static;
+  left: auto;
+  right: auto;
+  box-shadow: none;
+  border: none;
+  border-left: 3px solid var(--lf-suggest-color, var(--accent));
+  border-radius: 0;
+  padding: 4px 4px 4px 12px;
+  font-size: 15px;
+}
+
 /* The balloon column is a screen-only affordance: a printed page has no
    hover/tap interaction to reveal a chip's content either, so both are
    hidden and the prose reclaims the full page width. Scoped to the redline
@@ -2410,7 +2585,9 @@ body.redline-mode #toggle-suggest-mode {
   .markup-margin,
   .lf-leader-overlay,
   .lf-del-chip,
-  .lf-del-sheet {
+  .lf-del-sheet,
+  .lf-suggest-chip,
+  .lf-suggest-sheet {
     display: none !important;
   }
 }
@@ -2438,8 +2615,10 @@ body.redline-mode #toggle-suggest-mode {
   }
 
   /* --accent is not theme-varying (styles.css defines it once at :root), so
-     .lf-balloon-comment / .lf-leader-comment need no dark override — they
-     already read var(--accent) via the base rule above. */
+     .lf-balloon-comment / .lf-leader-comment / .lf-balloon-suggestion /
+     .lf-leader-suggestion / .lf-suggest-chip need no dark override — they
+     already read var(--accent) (or the author's own --lf-suggest-color) via
+     the base rules above. */
 }
 
 /* ================= FIRST-ARRIVAL IDENTITY PROMPT ================= */
