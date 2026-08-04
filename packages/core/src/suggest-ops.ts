@@ -1,0 +1,374 @@
+import * as Y from 'yjs';
+import {
+  getProseFragment,
+  resolveSingleFind,
+  serializeBlockToMarkdown,
+  walkProse,
+} from './prose.ts';
+import {
+  SUGGEST_DELETE_MARK,
+  SUGGEST_INSERT_MARK,
+  type SuggestionAttrs,
+  readSuggestionAttrs,
+} from './suggest.ts';
+
+/**
+ * Suggestion operations (redline-suggestions phase 2): the Yjs-level
+ * registry + mutations behind list/accept/reject/resolve-all and the
+ * suggestion-creation primitive.
+ *
+ * There is deliberately NO stored registry: suggestions ARE the marks. Every
+ * operation re-scans the prose fragment for suggestion marks at execution
+ * time, so ranges survive concurrent edits for free (marks travel with the
+ * text — that's the point of mark-based storage; no RelativePositions to
+ * re-resolve) and a sid that no longer exists — accepted by someone else a
+ * moment ago, or dropped by an external rewrite — honestly reports
+ * `not-found` instead of mutating stale offsets.
+ *
+ * All mutations transact under the same 'agent' origin the existing agent
+ * edit tools use (findAndReplace, rewriteRange, block deletion): NOT
+ * 'file-seed'/'file-watch', so the rooms write-back observer flushes the
+ * result to disk; not a browser-local origin, so a client Y.UndoManager with
+ * default trackedOrigins never puts these transactions on a human's undo
+ * stack (pinned by test).
+ */
+
+export interface SuggestionAuthor {
+  id: string;
+  name: string;
+  color: string;
+}
+
+export type SuggestionKind = 'insert' | 'delete' | 'replace';
+
+/** One contiguous marked range of a suggestion, located at scan time. */
+export interface SuggestionRange {
+  node: Y.XmlText;
+  /** Offset inside `node` — valid only until the next mutation. */
+  offset: number;
+  length: number;
+  kind: 'insert' | 'delete';
+  text: string;
+  /** Innermost block the range lives inside (walkProse's notion). */
+  block: Y.XmlElement | null;
+  /** Start offset in the flattened doc text — stable ordering key. */
+  docOffset: number;
+}
+
+export interface SuggestionScanEntry {
+  attrs: SuggestionAttrs;
+  ranges: SuggestionRange[];
+}
+
+/** Agent/UI-facing summary of one pending proposal. */
+export interface SuggestionSummary {
+  sid: string;
+  author: SuggestionAuthor;
+  kind: SuggestionKind;
+  /** Human-readable preview: inserted text, deleted text, or `old → new`. */
+  snippet: string;
+  /** Accepted-state preview of the containing block. */
+  blockContext: string;
+  /** Creation time, epoch ms. */
+  ts: number;
+}
+
+export type SuggestionOpResult = { ok: true } | { ok: false; error: 'not-found' };
+
+export type SuggestReplaceResult =
+  | { ok: true; sid: string }
+  | {
+      ok: false;
+      error: 'no-match' | 'ambiguous';
+      candidates?: Array<{ docOffset: number; preview: string }>;
+    };
+
+/**
+ * Scan the fragment for suggestion marks, grouped by sid. Ranges come back
+ * in doc order. Attrs are taken from the first range seen for a sid (all
+ * ranges of one proposal are written with identical attrs).
+ */
+export function scanSuggestions(fragment: Y.XmlFragment): Map<string, SuggestionScanEntry> {
+  const out = new Map<string, SuggestionScanEntry>();
+  const { segments } = walkProse(fragment);
+  for (const seg of segments) {
+    let offset = 0;
+    const delta = seg.node.toDelta() as Array<{
+      insert?: string;
+      attributes?: Record<string, unknown>;
+    }>;
+    for (const op of delta) {
+      if (typeof op.insert !== 'string') continue;
+      const length = op.insert.length;
+      // An op carrying BOTH marks is nonsensical (text can't be both
+      // proposed-new and proposed-removed); treat insert as authoritative.
+      const insAttrs = readSuggestionAttrs(op.attributes?.[SUGGEST_INSERT_MARK]);
+      const delAttrs = insAttrs ? null : readSuggestionAttrs(op.attributes?.[SUGGEST_DELETE_MARK]);
+      const attrs = insAttrs ?? delAttrs;
+      if (attrs) {
+        let entry = out.get(attrs.sid);
+        if (!entry) {
+          entry = { attrs, ranges: [] };
+          out.set(attrs.sid, entry);
+        }
+        entry.ranges.push({
+          node: seg.node,
+          offset,
+          length,
+          kind: insAttrs ? 'insert' : 'delete',
+          text: op.insert,
+          block: seg.block,
+          docOffset: seg.docOffset + offset,
+        });
+      }
+      offset += length;
+    }
+  }
+  return out;
+}
+
+function truncate(text: string, max = 80): string {
+  const t = text.replace(/\s+/g, ' ').trim();
+  return t.length > max ? `${t.slice(0, max - 1)}…` : t;
+}
+
+/** Accepted-state preview of a range's containing block. */
+function blockContextOf(range: SuggestionRange | undefined): string {
+  const block = range?.block;
+  if (!block) return '';
+  try {
+    return truncate(serializeBlockToMarkdown(block), 100);
+  } catch {
+    return '';
+  }
+}
+
+function kindOf(entry: SuggestionScanEntry): SuggestionKind {
+  const hasInsert = entry.ranges.some((r) => r.kind === 'insert');
+  const hasDelete = entry.ranges.some((r) => r.kind === 'delete');
+  if (hasInsert && hasDelete) return 'replace';
+  return hasInsert ? 'insert' : 'delete';
+}
+
+function snippetOf(entry: SuggestionScanEntry): string {
+  const joined = (kind: 'insert' | 'delete'): string =>
+    entry.ranges
+      .filter((r) => r.kind === kind)
+      .map((r) => r.text)
+      .join('');
+  switch (kindOf(entry)) {
+    case 'insert':
+      return truncate(joined('insert'));
+    case 'delete':
+      return truncate(joined('delete'));
+    case 'replace':
+      return `${truncate(joined('delete'), 40)} → ${truncate(joined('insert'), 40)}`;
+  }
+}
+
+/** All pending proposals in the doc, in doc order. */
+export function listSuggestions(doc: Y.Doc): SuggestionSummary[] {
+  const scan = scanSuggestions(getProseFragment(doc));
+  const summaries: Array<SuggestionSummary & { order: number }> = [];
+  for (const [sid, entry] of scan) {
+    const first = entry.ranges[0];
+    summaries.push({
+      sid,
+      author: {
+        id: entry.attrs.authorId,
+        name: entry.attrs.authorName,
+        color: entry.attrs.authorColor,
+      },
+      kind: kindOf(entry),
+      snippet: snippetOf(entry),
+      blockContext: blockContextOf(first),
+      ts: entry.attrs.ts,
+      order: first?.docOffset ?? 0,
+    });
+  }
+  summaries.sort((a, b) => a.order - b.order);
+  return summaries.map(({ order: _order, ...rest }) => rest);
+}
+
+/** Total character count of every Y.XmlText descendant of `el`. */
+function totalTextLength(el: Y.XmlElement): number {
+  let n = 0;
+  for (const child of el.toArray()) {
+    if (child instanceof Y.XmlText) n += child.length;
+    else if (child instanceof Y.XmlElement) n += totalTextLength(child);
+  }
+  return n;
+}
+
+/**
+ * Remove blocks that a suggestion resolution emptied, so accepting a
+ * whole-block deletion (or rejecting a whole-block insertion) leaves no
+ * empty shell — same policy as the block-deletion API, applied at the point
+ * the emptiness is created. Cascades upward: an emptied paragraph inside a
+ * listItem takes the now-empty listItem (and a now-empty list) with it.
+ * Must run inside the caller's transact.
+ */
+function removeEmptiedBlocks(blocks: Set<Y.XmlElement>): void {
+  for (const block of blocks) {
+    let node: Y.XmlElement = block;
+    while (true) {
+      if (totalTextLength(node) > 0) break;
+      const parent = node.parent;
+      if (!(parent instanceof Y.XmlFragment) && !(parent instanceof Y.XmlElement)) break;
+      const idx = parent.toArray().indexOf(node);
+      if (idx < 0) break; // already removed via an earlier cascade
+      parent.delete(idx, 1);
+      if (!(parent instanceof Y.XmlElement)) break; // reached the fragment
+      node = parent;
+    }
+  }
+}
+
+function resolveOne(
+  doc: Y.Doc,
+  sid: string,
+  action: 'accept' | 'reject',
+  transactionOrigin: unknown,
+): SuggestionOpResult {
+  const fragment = getProseFragment(doc);
+  const entry = scanSuggestions(fragment).get(sid);
+  if (!entry) return { ok: false, error: 'not-found' };
+
+  // Group ranges per node and apply in DESCENDING offset order so text
+  // deletions don't shift the offsets of ranges we haven't touched yet.
+  const byNode = new Map<Y.XmlText, SuggestionRange[]>();
+  for (const r of entry.ranges) {
+    const list = byNode.get(r.node) ?? [];
+    list.push(r);
+    byNode.set(r.node, list);
+  }
+  const affectedBlocks = new Set<Y.XmlElement>();
+  for (const r of entry.ranges) if (r.block) affectedBlocks.add(r.block);
+
+  doc.transact(() => {
+    for (const ranges of byNode.values()) {
+      ranges.sort((a, b) => b.offset - a.offset);
+      for (const r of ranges) {
+        const keep = action === 'accept' ? r.kind === 'insert' : r.kind === 'delete';
+        if (keep) {
+          const mark = r.kind === 'insert' ? SUGGEST_INSERT_MARK : SUGGEST_DELETE_MARK;
+          r.node.format(r.offset, r.length, { [mark]: null });
+        } else {
+          r.node.delete(r.offset, r.length);
+        }
+      }
+    }
+    removeEmptiedBlocks(affectedBlocks);
+  }, transactionOrigin);
+  return { ok: true };
+}
+
+/**
+ * Accept a proposal: suggestInsert marks are stripped (the text becomes
+ * real), suggestDelete text is deleted. A block fully emptied by the
+ * deletion is removed — no empty shell. Missing sid → not-found (also the
+ * correct answer to the double-accept race).
+ */
+export function acceptSuggestion(
+  doc: Y.Doc,
+  sid: string,
+  opts?: { transactionOrigin?: unknown },
+): SuggestionOpResult {
+  return resolveOne(doc, sid, 'accept', opts?.transactionOrigin ?? 'agent');
+}
+
+/**
+ * Reject a proposal: suggestInsert text is deleted, suggestDelete marks are
+ * stripped — restoring exactly the pre-suggestion text. A block that was
+ * entirely a proposed insertion is removed.
+ */
+export function rejectSuggestion(
+  doc: Y.Doc,
+  sid: string,
+  opts?: { transactionOrigin?: unknown },
+): SuggestionOpResult {
+  return resolveOne(doc, sid, 'reject', opts?.transactionOrigin ?? 'agent');
+}
+
+/** Accept or reject every pending proposal (optionally one author's). */
+export function resolveAllSuggestions(
+  doc: Y.Doc,
+  opts: { action: 'accept' | 'reject'; authorId?: string; transactionOrigin?: unknown },
+): { ok: true; resolved: number; sids: string[] } {
+  const scan = scanSuggestions(getProseFragment(doc));
+  const sids: string[] = [];
+  for (const [sid, entry] of scan) {
+    if (opts.authorId != null && entry.attrs.authorId !== opts.authorId) continue;
+    sids.push(sid);
+  }
+  const resolvedSids: string[] = [];
+  for (const sid of sids) {
+    // Each resolution rescans, so earlier mutations can't stale-out later
+    // sids' offsets; a sid another actor raced away just skips.
+    const res = resolveOne(doc, sid, opts.action, opts.transactionOrigin ?? 'agent');
+    if (res.ok) resolvedSids.push(sid);
+  }
+  return { ok: true, resolved: resolvedSids.length, sids: resolvedSids };
+}
+
+let sidCounter = 0;
+
+function newSid(): string {
+  sidCounter = (sidCounter + 1) % 36 ** 4;
+  return `s-${Date.now().toString(36)}-${sidCounter.toString(36)}${Math.random()
+    .toString(36)
+    .slice(2, 6)}`;
+}
+
+/**
+ * The suggestion-creation primitive: resolve a find-range with the SAME
+ * matching machinery findAndReplace uses (resolveSingleFind — extracted, not
+ * duplicated), then apply the replacement AS a proposal — matched text marked
+ * suggestDelete, replacement inserted with suggestInsert, one shared sid,
+ * author from the caller. The accepted state (serialization) is unchanged
+ * until someone accepts. An empty `replace` yields a pure deletion proposal.
+ */
+export function suggestReplace(
+  doc: Y.Doc,
+  opts: {
+    find: string;
+    replace: string;
+    contextBefore?: string;
+    contextAfter?: string;
+    /** 1-indexed. When omitted, requires a unique match. */
+    occurrence?: number;
+    author: SuggestionAuthor;
+    /** Creation timestamp override (epoch ms). Defaults to Date.now(). */
+    ts?: number;
+    transactionOrigin?: unknown;
+  },
+): SuggestReplaceResult {
+  const fragment = getProseFragment(doc);
+  const resolved = resolveSingleFind(fragment, opts);
+  if (!resolved.ok) {
+    if (resolved.error === 'ambiguous') {
+      return { ok: false, error: 'ambiguous', candidates: resolved.candidates };
+    }
+    return { ok: false, error: 'no-match' };
+  }
+  const { segment, offsetInNode, length } = resolved.match;
+  const sid = newSid();
+  // Attribute types are load-bearing (the Yjs heading-level learnings):
+  // four strings + a NUMBER ts, exactly what readers expect.
+  const attrs: SuggestionAttrs = {
+    sid,
+    authorId: opts.author.id,
+    authorName: opts.author.name,
+    authorColor: opts.author.color,
+    ts: opts.ts ?? Date.now(),
+  };
+  doc.transact(() => {
+    segment.node.format(offsetInNode, length, { [SUGGEST_DELETE_MARK]: attrs });
+    if (opts.replace.length > 0) {
+      segment.node.insert(offsetInNode + length, opts.replace, {
+        [SUGGEST_INSERT_MARK]: attrs,
+      });
+    }
+  }, opts.transactionOrigin ?? 'agent');
+  return { ok: true, sid };
+}

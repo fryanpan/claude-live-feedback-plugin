@@ -1983,7 +1983,13 @@ export function deleteSection(
 
 /** Resolve a single find with the same disambiguation as findAndReplace,
  *  returning the chosen LocatedMatch or a typed error.  */
-function resolveSingleFind(
+/**
+ * Shared "choose exactly one match" resolution used by the block-deletion API
+ * and the suggestion-creation primitive (suggest-ops.ts) — the same
+ * find/context/occurrence machinery findAndReplace applies, extracted so
+ * callers don't re-implement (and drift from) the disambiguation rules.
+ */
+export function resolveSingleFind(
   fragment: Y.XmlFragment,
   opts: {
     find: string;
