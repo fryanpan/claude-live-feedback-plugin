@@ -3,7 +3,19 @@ import type { EditorView } from '@tiptap/pm/view';
 import type { MountScope } from '../mount-scope.ts';
 import type { ReviewChrome } from '../review-chrome.ts';
 import { layoutBalloons } from './balloon-layout.ts';
-import type { RedlineDeletion } from './live-markup.ts';
+import {
+  type DeletionGroup,
+  type RedlineDeletion,
+  blockIndexForPos,
+  groupDeletions,
+} from './live-markup.ts';
+
+// Re-exported for backward compatibility — the grouping algorithm lives in
+// live-markup.ts now (it needs to be shared with the mobile chip decoration,
+// which is built there), but this module is where callers/tests found it
+// first.
+export { groupDeletions };
+export type { DeletionGroup };
 
 /**
  * The markup margin: Word's balloon column for the redline surface — and,
@@ -37,39 +49,18 @@ import type { RedlineDeletion } from './live-markup.ts';
  * SVG landing changes the content height, which the observer sees.
  * Everything registers on the passed MountScope for teardown.
  *
- * Below 1100px the column is hidden via media query (the mobile treatment —
- * inline chips + drawer — is a separate commit).
+ * Below 1100px the column is hidden via media query and the mobile fallback
+ * takes over: each deletion group also renders as a compact "⌫ N lines" chip
+ * decoration inline in the prose (built in live-markup.ts, alongside the
+ * balloon so both agree on grouping), hidden ≥1100px via CSS the same way the
+ * balloon column is hidden ≤1100px. Tapping a chip opens `mountDeletionSheet`
+ * below — a bottom sheet built from the SAME DOM/CSS pattern as
+ * review-chrome.ts's full-screen thread view (fixed slide-up sheet, drag
+ * handle, close button), a distinct instance since it shows plain deleted
+ * text rather than a thread. Comments keep review-chrome's existing
+ * pill/drawer flow untouched — nothing here changes how a comment is created
+ * or read on mobile.
  */
-
-export interface DeletionGroup {
-  /** Live-doc position of the group's first deletion. */
-  pos: number;
-  /** Top-level block index the group anchors in (grouping key). */
-  blockKey: number;
-  deletedMarkdown: string;
-}
-
-/**
- * Collapse consecutive deletions that anchor in the same top-level block into
- * one group, joining their markdown line-by-line. Pure — the caller supplies
- * the pos→block mapping.
- */
-export function groupDeletions(
-  deletions: RedlineDeletion[],
-  blockKeyForPos: (pos: number) => number,
-): DeletionGroup[] {
-  const groups: DeletionGroup[] = [];
-  for (const d of deletions) {
-    const blockKey = blockKeyForPos(d.pos);
-    const last = groups[groups.length - 1];
-    if (last && last.blockKey === blockKey) {
-      last.deletedMarkdown += `\n${d.deletedMarkdown}`;
-    } else {
-      groups.push({ pos: d.pos, blockKey, deletedMarkdown: d.deletedMarkdown });
-    }
-  }
-  return groups;
-}
 
 export interface MarkupMarginOpts {
   /** The scrollable editor mount (`#editor`) — becomes the layout grid. */
@@ -137,6 +128,54 @@ interface RenderedCommentBalloon {
 
 type RenderedBalloon = RenderedDelBalloon | RenderedCommentBalloon;
 
+/**
+ * The mobile fallback for a deletion balloon: a bottom sheet showing the
+ * deleted markdown, opened by tapping a `.lf-del-chip` (live-markup.ts).
+ *
+ * Built from the SAME DOM structure and CSS classes as review-chrome.ts's
+ * full-screen thread view (`.thread-view` / `.thread-view-header` /
+ * `.thread-view-body` — fixed slide-up sheet, drag handle, close button) so
+ * it looks and animates identically to the mobile comment drawer Bryan
+ * already knows. A distinct element rather than the literal `#thread-view`
+ * singleton: that element's state machine (`threadViewId`, the reply bar,
+ * resolve/reopen) is thread-specific, and overloading it for plain deleted
+ * text would tangle two unrelated concerns. `.lf-del-sheet` is the only
+ * extra class — every positioning/animation rule comes from `.thread-view`
+ * for free.
+ */
+function mountDeletionSheet(scope: MountScope): { open: (text: string) => void } {
+  const sheet = document.createElement('div');
+  sheet.className = 'thread-view lf-del-sheet hidden';
+  sheet.setAttribute('role', 'dialog');
+  sheet.setAttribute('aria-label', 'Deleted text');
+  sheet.setAttribute('aria-hidden', 'true');
+  sheet.innerHTML = `
+    <header class="thread-view-header">
+      <span class="drag-handle" aria-hidden="true"></span>
+      <h2 class="thread-view-title">Deleted</h2>
+      <button type="button" class="icon-btn thread-view-close" aria-label="Close" title="Close">×</button>
+    </header>
+    <div class="thread-view-body"><div class="lf-del-sheet-text"></div></div>
+  `;
+  document.body.appendChild(sheet);
+  const textEl = sheet.querySelector('.lf-del-sheet-text') as HTMLElement;
+
+  function close(): void {
+    sheet.classList.add('hidden');
+    sheet.setAttribute('aria-hidden', 'true');
+  }
+  function open(text: string): void {
+    // Plain text, never HTML: deleted markdown is untrusted doc content —
+    // same rule buildDelBalloon follows below.
+    textEl.textContent = text;
+    sheet.classList.remove('hidden');
+    sheet.setAttribute('aria-hidden', 'false');
+  }
+  scope.listen(sheet.querySelector('.thread-view-close') as HTMLElement, 'click', close);
+  scope.onCleanup(() => sheet.remove());
+  return { open };
+}
+
 export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
   const { editorEl, view, getDeletions, scope } = opts;
 
@@ -153,11 +192,19 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
 
   let rendered: RenderedBalloon[] = [];
 
-  const blockKeyForPos = (pos: number): number => {
-    const doc = view.state.doc;
-    const p = Math.max(0, Math.min(pos, doc.content.size));
-    return doc.resolve(p).index(0);
-  };
+  const blockKeyForPos = (pos: number): number => blockIndexForPos(view.state.doc, pos);
+
+  // Mobile fallback: the chip decoration (live-markup.ts) is grouped and
+  // built inside the editor's own decorations; this margin only owns what
+  // happens when one is tapped — a small bottom sheet showing the deleted
+  // text, built once per mount and reused across taps.
+  const deletionSheet = mountDeletionSheet(scope);
+  scope.listen(editorEl, 'click', (ev) => {
+    const chip = (ev.target as HTMLElement).closest?.('.lf-del-chip');
+    if (!chip) return;
+    ev.preventDefault();
+    deletionSheet.open((chip as HTMLElement).dataset.lfDelText ?? '');
+  });
 
   function buildDelBalloon(group: DeletionGroup): HTMLElement {
     const el = document.createElement('div');
