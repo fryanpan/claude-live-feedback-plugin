@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { resolveAgentAuthor } from './author.ts';
 
 /**
  * Thin MCP server that proxies tool calls to a running feedback server
@@ -18,8 +19,11 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
  *   3. http://localhost:8787 — last-resort default
  *
  * env:
- *   FEEDBACK_BASE_URL  — optional override; usually discovery handles it
- *   FEEDBACK_AUTHOR    — e.g. agent (used as the reply author)
+ *   FEEDBACK_BASE_URL    — optional override; usually discovery handles it
+ *   FEEDBACK_AGENT_NAME  — this agent's display name (e.g. "Quick Build");
+ *                          wins over FEEDBACK_AUTHOR, which the plugin's
+ *                          .mcp.json pins to `agent` for every peer
+ *   FEEDBACK_AUTHOR      — fallback author key/name (default: agent)
  */
 
 // Resolved per-request, not frozen at module load. The MCP stdio child runs
@@ -48,24 +52,10 @@ function resolveBaseUrl(): string {
       `Looked for discovery file at ${discovery}.`,
   );
 }
-const AUTHOR_ID = process.env.FEEDBACK_AUTHOR ?? 'agent';
-
-const KNOWN_USERS: Record<
-  string,
-  { name: string; color: string; id: string; kind: 'known' | 'anon' }
-> = {
-  bryan: { name: 'Bryan', color: '#2e7dd7', id: 'known-bryan', kind: 'known' },
-  agent: { name: 'Agent', color: '#e36f1e', id: 'known-agent', kind: 'known' },
-};
-
-const authorKey = AUTHOR_ID.toLowerCase();
-const AUTHOR = KNOWN_USERS[authorKey] ??
-  KNOWN_USERS.agent ?? {
-    name: 'Agent',
-    color: '#e36f1e',
-    id: 'known-agent',
-    kind: 'known' as const,
-  };
+const AUTHOR = resolveAgentAuthor({
+  FEEDBACK_AUTHOR: process.env.FEEDBACK_AUTHOR,
+  FEEDBACK_AGENT_NAME: process.env.FEEDBACK_AGENT_NAME,
+});
 
 const server = new Server(
   {

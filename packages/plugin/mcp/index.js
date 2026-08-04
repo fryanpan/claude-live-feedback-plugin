@@ -13669,6 +13669,55 @@ class StdioServerTransport {
   }
 }
 
+// packages/core/src/identity.ts
+function hashToColor(input) {
+  let h = 0;
+  for (let i = 0;i < input.length; i++) {
+    h = h * 31 + input.charCodeAt(i) >>> 0;
+  }
+  const hue = h % 360;
+  return hslToHex(hue, 55, 55);
+}
+function hslToHex(h, s, l) {
+  s /= 100;
+  l /= 100;
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const hp = h / 60;
+  const x = c * (1 - Math.abs(hp % 2 - 1));
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  if (hp < 1)
+    [r, g, b] = [c, x, 0];
+  else if (hp < 2)
+    [r, g, b] = [x, c, 0];
+  else if (hp < 3)
+    [r, g, b] = [0, c, x];
+  else if (hp < 4)
+    [r, g, b] = [0, x, c];
+  else if (hp < 5)
+    [r, g, b] = [x, 0, c];
+  else
+    [r, g, b] = [c, 0, x];
+  const m = l - c / 2;
+  const to = (v) => Math.round((v + m) * 255).toString(16).padStart(2, "0");
+  return `#${to(r)}${to(g)}${to(b)}`;
+}
+
+// packages/mcp/src/author.ts
+var KNOWN_USERS = {
+  bryan: { name: "Bryan", color: "#2e7dd7", id: "known-bryan", kind: "known" },
+  agent: { name: "Agent", color: "#e36f1e", id: "known-agent", kind: "known" }
+};
+function resolveAgentAuthor(env) {
+  const name = env.FEEDBACK_AGENT_NAME?.trim() || env.FEEDBACK_AUTHOR?.trim() || "agent";
+  const known = KNOWN_USERS[name.toLowerCase()];
+  if (known)
+    return known;
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return { name, color: hashToColor(name), id: `agent-${slug}`, kind: "known" };
+}
+
 // packages/mcp/src/mcp.ts
 function resolveBaseUrl() {
   if (process.env.FEEDBACK_BASE_URL)
@@ -13683,18 +13732,10 @@ function resolveBaseUrl() {
   }
   throw new Error("live-feedback server not found — start it with `bun run dev` (or set FEEDBACK_BASE_URL). " + `Looked for discovery file at ${discovery}.`);
 }
-var AUTHOR_ID = process.env.FEEDBACK_AUTHOR ?? "agent";
-var KNOWN_USERS = {
-  bryan: { name: "Bryan", color: "#2e7dd7", id: "known-bryan", kind: "known" },
-  agent: { name: "Agent", color: "#e36f1e", id: "known-agent", kind: "known" }
-};
-var authorKey = AUTHOR_ID.toLowerCase();
-var AUTHOR = KNOWN_USERS[authorKey] ?? KNOWN_USERS.agent ?? {
-  name: "Agent",
-  color: "#e36f1e",
-  id: "known-agent",
-  kind: "known"
-};
+var AUTHOR = resolveAgentAuthor({
+  FEEDBACK_AUTHOR: process.env.FEEDBACK_AUTHOR,
+  FEEDBACK_AGENT_NAME: process.env.FEEDBACK_AGENT_NAME
+});
 var server = new Server({
   name: "claude-live-feedback",
   version: "0.0.1"
