@@ -2260,7 +2260,9 @@ body.redline-mode #toggle-suggest-mode {
 #editor.redline-layout {
   position: relative; /* anchors the balloon column and the SVG overlay */
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 300px;
+  /* 260px: balloons collapse to one-line summaries by default (Word-style),
+     so the column no longer needs full-card width at rest. */
+  grid-template-columns: minmax(0, 1fr) 260px;
   column-gap: 16px;
   align-items: start;
 }
@@ -2434,6 +2436,99 @@ body.redline-mode #toggle-suggest-mode {
   text-decoration: underline;
   text-decoration-thickness: 2px;
   text-underline-offset: 2px;
+  color: var(--fg);
+}
+
+/* Collapsed balloons (Word-style): every balloon rests as ONE line — author
+   swatch + name + truncated preview — and expands on click into the full
+   card; at most one is expanded at a time (markup-margin.ts owns the state).
+   The nowrap + ellipsis pair does the truncation; min-width: 0 on the
+   preview lets it actually shrink inside the flex row. */
+.lf-balloon-collapsed {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.lf-balloon-collapsed .lf-balloon-label {
+  margin-bottom: 0;
+  flex: none;
+}
+.lf-collapsed-swatch {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.lf-collapsed-name {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  font-weight: 600;
+}
+.lf-collapsed-preview {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  color: var(--fg-muted, #656d76);
+}
+.lf-collapsed-count {
+  flex: none;
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+}
+/* Compact ✓ / ✕ on a collapsed suggestion — same classes (and therefore the
+   same delegated behaviour) as the full card's Accept/Reject. */
+.lf-collapsed-actions {
+  flex: none;
+  display: flex;
+  gap: 2px;
+}
+.lf-collapsed-actions button {
+  padding: 0 6px;
+  font-size: 12px;
+  line-height: 1.6;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-panel);
+  cursor: pointer;
+}
+.lf-collapsed-actions .lf-suggest-accept:hover {
+  border-color: #1a7f37;
+  color: #1a7f37;
+}
+.lf-collapsed-actions .lf-suggest-reject:hover {
+  border-color: #cf222e;
+  color: #cf222e;
+}
+/* Collapse control on an expanded balloon, top-right. */
+.lf-balloon-collapse {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  padding: 0 6px;
+  border: none;
+  background: none;
+  color: var(--fg-muted, #656d76);
+  font-size: 14px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+.lf-balloon-collapse:hover,
+.lf-balloon-collapse:focus-visible {
   color: var(--fg);
 }
 

@@ -193,6 +193,12 @@ function openThreadAt(
 /** Let the (0ms in tests) markup debounce fire and the view repaint. */
 const tick = () => new Promise((r) => setTimeout(r, 25));
 
+/** Balloons rest collapsed (Word-style) — expand one the way a user does:
+ *  click it. Rebuilds the margin DOM, so re-query the balloon afterwards. */
+function clickToExpand(el: Element): void {
+  el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+}
+
 const suggestAuthor = { id: 'agent-1', name: 'Docs Agent', color: '#7c5cff' };
 
 /** A pure INSERT proposal at the start of the doc's first block — there is
@@ -272,9 +278,14 @@ describe('mountMarkupMargin — balloon DOM', () => {
     expect(parent.classList.contains('redline-layout')).toBe(true);
     const marginEl = parent.querySelector('.markup-margin');
     expect(marginEl).not.toBeNull();
-    const balloons = parent.querySelectorAll('.lf-balloon.lf-balloon-del');
+    let balloons = parent.querySelectorAll('.lf-balloon.lf-balloon-del');
     expect(balloons).toHaveLength(1);
+    // Rests collapsed: label + one-line preview, full text behind a click.
+    expect(balloons[0].classList.contains('lf-balloon-collapsed')).toBe(true);
     expect(balloons[0].querySelector('.lf-balloon-label')?.textContent).toBe('Deleted');
+    clickToExpand(balloons[0]);
+    balloons = parent.querySelectorAll('.lf-balloon.lf-balloon-del');
+    expect(balloons[0].classList.contains('lf-balloon-collapsed')).toBe(false);
     expect(balloons[0].querySelector('.lf-balloon-text')?.textContent).toContain(
       'Removed paragraph.',
     );
@@ -294,8 +305,10 @@ describe('mountMarkupMargin — balloon DOM', () => {
     const { margin } = mountMargin(parent, surface);
     margin.relayout();
 
-    const balloons = parent.querySelectorAll('.lf-balloon');
+    let balloons = parent.querySelectorAll('.lf-balloon');
     expect(balloons).toHaveLength(1);
+    clickToExpand(balloons[0]);
+    balloons = parent.querySelectorAll('.lf-balloon');
     const text = balloons[0].querySelector('.lf-balloon-text')?.textContent ?? '';
     expect(text).toContain('beta');
     expect(text).toContain('delta');
@@ -340,6 +353,7 @@ describe('mountMarkupMargin — truncation & expand toggle', () => {
     const { margin } = mountMargin(parent, surface, () => [{ pos: 1, deletedMarkdown: longMd }]);
     margin.relayout();
 
+    clickToExpand(parent.querySelector('.lf-balloon') as HTMLElement);
     const balloon = parent.querySelector('.lf-balloon') as HTMLElement;
     const text = balloon.querySelector('.lf-balloon-text') as HTMLElement;
     const toggle = balloon.querySelector('.lf-balloon-expand') as HTMLButtonElement;
@@ -363,6 +377,7 @@ describe('mountMarkupMargin — truncation & expand toggle', () => {
     const { margin } = mountMargin(parent, surface, () => [{ pos: 1, deletedMarkdown: 'short' }]);
     margin.relayout();
 
+    clickToExpand(parent.querySelector('.lf-balloon') as HTMLElement);
     const balloon = parent.querySelector('.lf-balloon') as HTMLElement;
     expect(balloon.querySelector('.lf-balloon-expand')).toBeNull();
     expect(balloon.querySelector('.lf-balloon-text')?.classList.contains('is-clamped')).toBe(false);
@@ -438,9 +453,17 @@ describe('mountMarkupMargin — comment balloons', () => {
     });
     margin.relayout();
 
-    const balloon = parent.querySelector('.lf-balloon.lf-balloon-comment') as HTMLElement;
+    // Rests collapsed: author + one-line preview, no card chrome yet.
+    let balloon = parent.querySelector('.lf-balloon.lf-balloon-comment') as HTMLElement;
     expect(balloon).not.toBeNull();
-    // It IS the drawer's thread card (ThreadPanel.renderThread), not a copy.
+    expect(balloon.classList.contains('lf-balloon-collapsed')).toBe(true);
+    expect(balloon.textContent).toContain('Please clarify this.');
+    expect(balloon.textContent).toContain('Bob');
+    expect(balloon.querySelector('textarea')).toBeNull();
+
+    clickToExpand(balloon);
+    balloon = parent.querySelector('.lf-balloon.lf-balloon-comment') as HTMLElement;
+    // Expanded, it IS the drawer's thread card (ThreadPanel.renderThread).
     expect(balloon.classList.contains('thread')).toBe(true);
     expect(balloon.getAttribute('data-thread-id')).toBe(thread.id);
     expect(balloon.textContent).toContain('Please clarify this.');
@@ -487,6 +510,7 @@ describe('mountMarkupMargin — comment balloons', () => {
     });
     margin.relayout();
 
+    clickToExpand(parent.querySelector('.lf-balloon.lf-balloon-comment') as HTMLElement);
     const balloon = parent.querySelector('.lf-balloon.lf-balloon-comment') as HTMLElement;
     const textarea = balloon.querySelector('textarea') as HTMLTextAreaElement;
     textarea.value = 'A reply from the balloon';
@@ -535,6 +559,138 @@ describe('mountMarkupMargin — comment balloons', () => {
     margin.relayout();
 
     expect(parent.querySelectorAll('.lf-balloon-comment')).toHaveLength(0);
+  });
+});
+
+describe('mountMarkupMargin — collapsed balloons (Word-style)', () => {
+  function mountTwoThreads() {
+    const fixture = mountRedlineWithChrome('', 'Alpha bravo gamma delta echo.\n');
+    const { parent, surface, ydoc, chrome, scope } = fixture;
+    const t1 = openThreadAt(
+      ydoc,
+      surface.handle.editor,
+      () => surface.getSelectionRel(),
+      { from: 1, to: 6 },
+      'First thread comment.',
+    );
+    const t2 = openThreadAt(
+      ydoc,
+      surface.handle.editor,
+      () => surface.getSelectionRel(),
+      { from: 13, to: 18 },
+      'Second thread comment.',
+    );
+    const margin = mountMarkupMargin({
+      editorEl: parent,
+      view: surface.handle.editor.view,
+      getDeletions: () => [],
+      threads: () => chrome.collectThreads(),
+      chrome,
+      scope,
+    });
+    margin.relayout();
+    return { parent, chrome, margin, t1, t2 };
+  }
+
+  const balloonFor = (parent: HTMLElement, threadId: string): HTMLElement | null => {
+    for (const el of Array.from(parent.querySelectorAll<HTMLElement>('.lf-balloon-comment'))) {
+      if (el.getAttribute('data-thread-id') === threadId) return el;
+      if (el.dataset.expandKey === `c:${threadId}`) return el;
+    }
+    return null;
+  };
+
+  it('expanding one balloon collapses the previously expanded one', async () => {
+    const { parent, t1, t2 } = mountTwoThreads();
+    await tick();
+
+    const b1 = balloonFor(parent, t1.id);
+    const b2 = balloonFor(parent, t2.id);
+    expect(b1?.classList.contains('lf-balloon-collapsed')).toBe(true);
+    expect(b2?.classList.contains('lf-balloon-collapsed')).toBe(true);
+
+    clickToExpand(b1 as HTMLElement);
+    expect(balloonFor(parent, t1.id)?.classList.contains('lf-balloon-collapsed')).toBe(false);
+    expect(balloonFor(parent, t2.id)?.classList.contains('lf-balloon-collapsed')).toBe(true);
+
+    clickToExpand(balloonFor(parent, t2.id) as HTMLElement);
+    expect(balloonFor(parent, t1.id)?.classList.contains('lf-balloon-collapsed')).toBe(true);
+    expect(balloonFor(parent, t2.id)?.classList.contains('lf-balloon-collapsed')).toBe(false);
+  });
+
+  it('the − button collapses an expanded balloon back to one line', async () => {
+    const { parent, t1 } = mountTwoThreads();
+    await tick();
+
+    clickToExpand(balloonFor(parent, t1.id) as HTMLElement);
+    const expanded = balloonFor(parent, t1.id) as HTMLElement;
+    const collapseBtn = expanded.querySelector('.lf-balloon-collapse') as HTMLButtonElement;
+    expect(collapseBtn).not.toBeNull();
+
+    collapseBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    expect(balloonFor(parent, t1.id)?.classList.contains('lf-balloon-collapsed')).toBe(true);
+  });
+
+  it('expanding a comment balloon makes it the active thread', async () => {
+    const { parent, chrome, t1 } = mountTwoThreads();
+    await tick();
+
+    expect(chrome.threadsPanel.getActive()).not.toBe(t1.id);
+    clickToExpand(balloonFor(parent, t1.id) as HTMLElement);
+    expect(chrome.threadsPanel.getActive()).toBe(t1.id);
+  });
+
+  it('a collapsed multi-line deletion (e.g. a whole table) shows one bubble with a +N lines badge', async () => {
+    const { parent, surface } = mountSurface('Kept.\n', 'Kept.\n');
+    await tick();
+    const table = '| Group | Modules |\n|---|---|\n| App | `app` |\n| Build | `tooling` |';
+    const { margin } = mountMargin(parent, surface, () => [{ pos: 1, deletedMarkdown: table }]);
+    margin.relayout();
+
+    const balloons = parent.querySelectorAll('.lf-balloon-del');
+    expect(balloons).toHaveLength(1); // ONE bubble for the whole table
+    const balloon = balloons[0] as HTMLElement;
+    expect(balloon.classList.contains('lf-balloon-collapsed')).toBe(true);
+    expect(balloon.querySelector('.lf-collapsed-preview')?.textContent).toBe('| Group | Modules |');
+    const badge = balloon.querySelector('.lf-collapsed-count') as HTMLElement;
+    expect(badge.textContent).toBe('+3');
+    expect(badge.title).toBe('3 more lines');
+  });
+
+  it('a collapsed comment with replies shows the reply count badge', async () => {
+    const fixture = mountRedlineWithChrome('', 'Alpha bravo gamma.\n');
+    const { parent, surface, ydoc, chrome, scope } = fixture;
+    const t = openThreadAt(
+      ydoc,
+      surface.handle.editor,
+      () => surface.getSelectionRel(),
+      { from: 1, to: 6 },
+      'Starter.',
+    );
+    const comments = (ydoc.getMap('threads').get(t.id) as Y.Map<unknown>).get(
+      'comments',
+    ) as Y.Array<Y.Map<unknown>>;
+    const reply = new Y.Map<unknown>();
+    reply.set('id', 'c2');
+    reply.set('author', { id: 'u3', name: 'Cara', kind: 'known', color: '#333' });
+    reply.set('text', 'A reply.');
+    reply.set('ts', Date.now());
+    comments.push([reply]);
+
+    const margin = mountMarkupMargin({
+      editorEl: parent,
+      view: surface.handle.editor.view,
+      getDeletions: () => [],
+      threads: () => chrome.collectThreads(),
+      chrome,
+      scope,
+    });
+    margin.relayout();
+    await tick();
+
+    const balloon = parent.querySelector('.lf-balloon-comment') as HTMLElement;
+    expect(balloon.classList.contains('lf-balloon-collapsed')).toBe(true);
+    expect(balloon.querySelector('.lf-collapsed-count')?.textContent).toBe('1');
   });
 });
 
@@ -692,13 +848,21 @@ describe('mountMarkupMargin — revealThreadBalloon', () => {
     });
     margin.relayout();
 
-    const balloon = parent.querySelector('.lf-balloon-comment') as HTMLElement;
-    const scrollSpy = vi.fn();
-    balloon.scrollIntoView = scrollSpy;
-
-    expect(margin.revealThreadBalloon(thread.id)).toBe(true);
-    expect(scrollSpy).toHaveBeenCalled();
-    expect(margin.revealThreadBalloon('no-such-thread')).toBe(false);
+    // Reveal EXPANDS the balloon, which rebuilds its element — spy on the
+    // prototype so the freshly-built card's scroll is still observed.
+    const scrollSpy = vi
+      .spyOn(HTMLElement.prototype, 'scrollIntoView')
+      .mockImplementation(() => {});
+    try {
+      expect(margin.revealThreadBalloon(thread.id)).toBe(true);
+      expect(scrollSpy).toHaveBeenCalled();
+      const balloon = parent.querySelector('.lf-balloon-comment') as HTMLElement;
+      expect(balloon.classList.contains('lf-balloon-collapsed')).toBe(false);
+      expect(balloon.classList.contains('thread')).toBe(true);
+      expect(margin.revealThreadBalloon('no-such-thread')).toBe(false);
+    } finally {
+      scrollSpy.mockRestore();
+    }
   });
 
   it('returns false at or below the 1100px breakpoint that hides the column (even though the thread is rendered)', async () => {
@@ -871,8 +1035,17 @@ describe('mountMarkupMargin — suggestion balloons', () => {
     });
     margin.relayout();
 
-    const balloon = parent.querySelector('.lf-balloon.lf-balloon-suggestion') as HTMLElement;
+    // Rests collapsed: author + preview + compact ✓/✕, no age line yet.
+    let balloon = parent.querySelector('.lf-balloon.lf-balloon-suggestion') as HTMLElement;
     expect(balloon).not.toBeNull();
+    expect(balloon.classList.contains('lf-balloon-collapsed')).toBe(true);
+    expect(balloon.querySelector('.lf-collapsed-name')?.textContent).toBe('Docs Agent');
+    expect(balloon.querySelector('.lf-suggest-old')).toBeNull();
+    expect(balloon.querySelector('.lf-suggest-new')?.textContent).toBe('NEW ');
+
+    clickToExpand(balloon);
+    balloon = parent.querySelector('.lf-balloon.lf-balloon-suggestion') as HTMLElement;
+    expect(balloon.classList.contains('lf-balloon-collapsed')).toBe(false);
     expect(balloon.querySelector('.lf-suggest-author')?.textContent).toBe('Docs Agent');
     expect(balloon.querySelector('.lf-suggest-age')?.textContent).toBe('just now');
     expect(balloon.querySelector('.lf-suggest-old')).toBeNull();
