@@ -265,6 +265,8 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       (document.activeElement as HTMLElement | null)?.blur?.();
     },
     hidePill: () => hidePill(),
+    // The markdown surface mounts the balloon margin unconditionally below.
+    hasBalloonMargin: true,
   });
   const reviewChrome = chrome;
 

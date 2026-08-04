@@ -72,7 +72,34 @@ export interface ChromeOpts {
    *  its `destroy()` — so navigating to another doc leaves no double-bound
    *  submit handlers (which would post to the previous docId). */
   scope?: MountScope;
+  /** The surface mounts a balloon margin (markdown / editable redline). When
+   *  the margin is actually visible (≥1101px), balloons already show every
+   *  anchored thread, so the side drawer defaults CLOSED there — it would be
+   *  a second copy of the same comments. An explicit user toggle overrides
+   *  the default for the rest of the session. */
+  hasBalloonMargin?: boolean;
 }
+
+/**
+ * Should the threads drawer start open for this mount? Pure so the
+ * drawer-default policy is unit-testable without a DOM.
+ *  - mobile: never (it's an overlay there)
+ *  - user toggled it this session: their choice wins
+ *  - balloon margin visible: closed (balloons ARE the comment surface)
+ *  - otherwise (code surface, or 901–1100px where the margin collapses): open
+ */
+export function initialDrawerOpen(opts: {
+  isDesktop: boolean;
+  marginVisible: boolean;
+  stored: string | null;
+}): boolean {
+  if (!opts.isDesktop) return false;
+  if (opts.stored === 'open') return true;
+  if (opts.stored === 'closed') return false;
+  return !opts.marginVisible;
+}
+
+const DRAWER_PREF_KEY = 'lf:drawer';
 
 export interface ReviewChrome {
   threadsPanel: ThreadPanel;
@@ -145,10 +172,26 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     toggleThreads.setAttribute('aria-pressed', 'false');
     document.getElementById('threads-pane')?.setAttribute('aria-hidden', 'true');
   }
-  on(toggleThreads, 'click', () =>
-    shell.classList.contains('threads-open') ? closeDrawer() : openDrawer(),
-  );
-  on(closeThreads, 'click', closeDrawer);
+  // Explicit open/close via the toggle or the ✕ is a stated preference —
+  // remember it so per-file navigation in a diff review doesn't keep
+  // re-applying the balloon default the user just overrode. Session-scoped
+  // on purpose: a fresh visit re-evaluates the default.
+  function rememberDrawerPref(open: boolean): void {
+    try {
+      sessionStorage.setItem(DRAWER_PREF_KEY, open ? 'open' : 'closed');
+    } catch {
+      // storage unavailable — default logic reapplies per mount
+    }
+  }
+  on(toggleThreads, 'click', () => {
+    const open = !shell.classList.contains('threads-open');
+    open ? openDrawer() : closeDrawer();
+    rememberDrawerPref(open);
+  });
+  on(closeThreads, 'click', () => {
+    closeDrawer();
+    rememberDrawerPref(false);
+  });
   on(scrim, 'click', closeDrawer);
 
   // Resizable side panels (desktop): the comments pane (right edge drag)
@@ -174,8 +217,28 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     handleClass: 'set-resize',
     label: 'Resize review panel',
   });
-  // Desktop layout shows the drawer inline; open by default there.
-  if (window.matchMedia('(min-width: 901px)').matches) openDrawer();
+  // Desktop layout shows the drawer inline. Default open — EXCEPT when a
+  // balloon margin is visible, where the drawer duplicates the balloons.
+  let storedPref: string | null = null;
+  try {
+    storedPref = sessionStorage.getItem(DRAWER_PREF_KEY);
+  } catch {
+    // storage unavailable
+  }
+  const marginVisible =
+    (opts.hasBalloonMargin ?? false) && window.matchMedia('(min-width: 1101px)').matches;
+  // Enforce (not just apply-when-open): the `threads-open` class lives on the
+  // shell and survives navigation, so a drawer a previous doc opened via
+  // revealThread would otherwise leak into a doc whose default is closed.
+  if (
+    initialDrawerOpen({
+      isDesktop: window.matchMedia('(min-width: 901px)').matches,
+      marginVisible,
+      stored: storedPref,
+    })
+  )
+    openDrawer();
+  else closeDrawer();
 
   const tabButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('.threads-tabs .tab'));
   for (const b of tabButtons) {
