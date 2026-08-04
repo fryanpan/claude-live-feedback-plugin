@@ -12,6 +12,7 @@ import {
   resolveAllSuggestions,
   scanSuggestions,
   suggestReplace,
+  suggestRewriteRange,
 } from '../src/suggest-ops.ts';
 import { SUGGEST_DELETE_MARK, SUGGEST_INSERT_MARK, type SuggestionAttrs } from '../src/suggest.ts';
 
@@ -277,5 +278,137 @@ describe('resolveAllSuggestions', () => {
     const doc = docFrom('Alpha.\n');
     expect(resolveAllSuggestions(doc, { action: 'accept' }).resolved).toBe(0);
     expect(serialize(doc)).toBe('Alpha.\n');
+  });
+});
+
+/** Build a text-range anchor on the FIRST text node covering [from, to). */
+function anchorIn(doc: Y.Doc, from: number, to: number) {
+  const frag = getProseFragment(doc);
+  const first = frag.toArray()[0] as Y.XmlElement;
+  const text = first.toArray()[0] as Y.XmlText;
+  return {
+    startRel: Y.encodeRelativePosition(Y.createRelativePositionFromTypeIndex(text, from)),
+    endRel: Y.encodeRelativePosition(Y.createRelativePositionFromTypeIndex(text, to)),
+  };
+}
+
+describe('suggestRewriteRange (anchor-based creation primitive)', () => {
+  it('marks the anchored range suggestDelete + inserts the replacement as suggestInsert, serialization unchanged', () => {
+    const doc = docFrom('The quick brown fox jumped.\n');
+    const a = anchorIn(doc, 4, 15); // "quick brown"
+    const res = suggestRewriteRange(doc, { ...a, replacement: 'lazy blue', author });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(typeof res.sid).toBe('string');
+    // Accepted state (serialization) is untouched by a proposal.
+    expect(serialize(doc)).toBe('The quick brown fox jumped.\n');
+    const scan = scanSuggestions(getProseFragment(doc));
+    const entry = scan.get(res.sid);
+    expect(entry).toBeDefined();
+    expect(entry!.ranges.some((r) => r.kind === 'delete' && r.text === 'quick brown')).toBe(true);
+    expect(entry!.ranges.some((r) => r.kind === 'insert' && r.text === 'lazy blue')).toBe(true);
+    expect(typeof entry!.attrs.ts).toBe('number');
+    expect(entry!.attrs.authorId).toBe('agent-1');
+  });
+
+  it('accepting the proposal applies the anchored rewrite exactly like rewriteRange', () => {
+    const doc = docFrom('The quick brown fox jumped.\n');
+    const a = anchorIn(doc, 4, 15); // "quick brown"
+    const res = suggestRewriteRange(doc, { ...a, replacement: 'lazy blue', author });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(acceptSuggestion(doc, res.sid)).toEqual({ ok: true });
+    expect(serialize(doc)).toBe('The lazy blue fox jumped.\n');
+  });
+
+  it('rejecting the proposal restores exactly the pre-suggestion text', () => {
+    const doc = docFrom('The quick brown fox jumped.\n');
+    const a = anchorIn(doc, 4, 15); // "quick brown"
+    const res = suggestRewriteRange(doc, { ...a, replacement: 'lazy blue', author });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(rejectSuggestion(doc, res.sid)).toEqual({ ok: true });
+    expect(serialize(doc)).toBe('The quick brown fox jumped.\n');
+    expect(scanSuggestions(getProseFragment(doc)).size).toBe(0);
+  });
+
+  it('empty replacement creates a pure deletion proposal', () => {
+    const doc = docFrom('The quick brown fox jumped.\n');
+    const a = anchorIn(doc, 3, 15); // " quick brown"
+    const res = suggestRewriteRange(doc, { ...a, replacement: '', author });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const list = listSuggestions(doc);
+    expect(list).toHaveLength(1);
+    expect(list[0]!.kind).toBe('delete');
+    expect(serialize(doc)).toBe('The quick brown fox jumped.\n');
+  });
+
+  it('survives an intervening user edit before the anchor (relative positions rebase)', () => {
+    const doc = docFrom('The quick brown fox.\n');
+    const a = anchorIn(doc, 4, 15); // "quick brown"
+    doc.transact(() => {
+      const frag = getProseFragment(doc);
+      const first = frag.toArray()[0] as Y.XmlElement;
+      const text = first.toArray()[0] as Y.XmlText;
+      text.insert(0, 'ANYWAY, ');
+    });
+    const res = suggestRewriteRange(doc, { ...a, replacement: 'lazy blue', author });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(acceptSuggestion(doc, res.sid)).toEqual({ ok: true });
+    expect(serialize(doc)).toBe('ANYWAY, The lazy blue fox.\n');
+  });
+
+  it('cross-node within the same block (mark boundary) marks every touched segment', () => {
+    const doc = new Y.Doc();
+    const frag = getProseFragment(doc);
+    const p = new Y.XmlElement('paragraph');
+    const t1 = new Y.XmlText();
+    t1.insert(0, 'hello ');
+    const t2 = new Y.XmlText();
+    t2.insert(0, 'world');
+    doc.transact(() => {
+      p.insert(0, [t1, t2]);
+      frag.push([p]);
+    });
+    const startRel = Y.encodeRelativePosition(Y.createRelativePositionFromTypeIndex(t1, 2));
+    const endRel = Y.encodeRelativePosition(Y.createRelativePositionFromTypeIndex(t2, 3));
+    const res = suggestRewriteRange(doc, { startRel, endRel, replacement: 'OWDY-P', author });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    // Accepted state (serialization) is unchanged until accept: the
+    // suggestInsert text is excluded, the suggestDelete text still
+    // serializes unmarked, so the visible text is the pre-suggestion text.
+    expect(serializeFragmentToMarkdown(frag)).toBe('hello world\n');
+    expect(acceptSuggestion(doc, res.sid)).toEqual({ ok: true });
+    expect(serializeFragmentToMarkdown(frag)).toBe('heOWDY-Pld\n');
+  });
+
+  it('anchor-orphaned when a relative position no longer resolves', () => {
+    const doc = docFrom('Alpha.\n');
+    const a = anchorIn(doc, 0, 5);
+    // Delete the whole block so the relative position can't resolve.
+    const frag = getProseFragment(doc);
+    doc.transact(() => frag.delete(0, frag.length));
+    const res = suggestRewriteRange(doc, { ...a, replacement: 'x', author });
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toBe('anchor-orphaned');
+  });
+
+  it('cross-block anchors are rejected', () => {
+    const doc = docFrom('First para.\n\nSecond para.\n');
+    const frag = getProseFragment(doc);
+    const p1 = frag.get(0) as Y.XmlElement;
+    const p2 = frag.get(1) as Y.XmlElement;
+    const t1 = p1.toArray()[0] as Y.XmlText;
+    const t2 = p2.toArray()[0] as Y.XmlText;
+    const startRel = Y.encodeRelativePosition(Y.createRelativePositionFromTypeIndex(t1, 0));
+    const endRel = Y.encodeRelativePosition(Y.createRelativePositionFromTypeIndex(t2, 3));
+    const res = suggestRewriteRange(doc, { startRel, endRel, replacement: 'x', author });
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toBe('cross-block');
   });
 });

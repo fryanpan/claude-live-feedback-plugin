@@ -1,6 +1,7 @@
 import * as Y from 'yjs';
 import {
   getProseFragment,
+  resolveRelativePositionRaw,
   resolveSingleFind,
   serializeBlockToMarkdown,
   walkProse,
@@ -82,6 +83,10 @@ export type SuggestReplaceResult =
       error: 'no-match' | 'ambiguous';
       candidates?: Array<{ docOffset: number; preview: string }>;
     };
+
+export type SuggestRewriteRangeResult =
+  | { ok: true; sid: string }
+  | { ok: false; error: 'anchor-orphaned' | 'cross-block' };
 
 /**
  * Scan the fragment for suggestion marks, grouped by sid. Ranges come back
@@ -368,6 +373,97 @@ export function suggestReplace(
       segment.node.insert(offsetInNode + length, opts.replace, {
         [SUGGEST_INSERT_MARK]: attrs,
       });
+    }
+  }, opts.transactionOrigin ?? 'agent');
+  return { ok: true, sid };
+}
+
+/**
+ * The anchor-based suggestion-creation primitive — the `rewrite_thread_region`
+ * twin of `suggestReplace`. Resolves the SAME pair of Y.RelativePositions
+ * `rewriteRange` uses (immune to concurrent edits, no offset re-derivation),
+ * then applies the rewrite AS a proposal instead of a direct edit: the
+ * anchored range is marked `suggestDelete` (not deleted), the replacement is
+ * inserted marked `suggestInsert`, one shared sid, author from the caller.
+ * Mirrors `rewriteRange`'s three cases:
+ *   1. same Y.XmlText → format in place, insert the replacement right after.
+ *   2. multiple Y.XmlTexts inside the SAME block (a mark boundary) → format
+ *      every touched segment, insert the replacement into the FIRST touched
+ *      node at the start offset — matching where `rewriteRange` inserts, so
+ *      accepting the proposal reproduces exactly what an immediate
+ *      `rewriteRange` call would have produced.
+ *   3. spans multiple blocks → rejected (`cross-block`), same as `rewriteRange`.
+ * An empty `replacement` yields a pure deletion proposal.
+ */
+export function suggestRewriteRange(
+  doc: Y.Doc,
+  opts: {
+    startRel: Uint8Array;
+    endRel: Uint8Array;
+    replacement: string;
+    author: SuggestionAuthor;
+    /** Creation timestamp override (epoch ms). Defaults to Date.now(). */
+    ts?: number;
+    transactionOrigin?: unknown;
+  },
+): SuggestRewriteRangeResult {
+  const start = resolveRelativePositionRaw(doc, opts.startRel);
+  const end = resolveRelativePositionRaw(doc, opts.endRel);
+  if (!start || !end) return { ok: false, error: 'anchor-orphaned' };
+
+  const sid = newSid();
+  const attrs: SuggestionAttrs = {
+    sid,
+    authorId: opts.author.id,
+    authorName: opts.author.name,
+    authorColor: opts.author.color,
+    ts: opts.ts ?? Date.now(),
+  };
+
+  if (start.node === end.node) {
+    const from = Math.min(start.offset, end.offset);
+    const to = Math.max(start.offset, end.offset);
+    doc.transact(() => {
+      if (to > from) {
+        start.node.format(from, to - from, { [SUGGEST_DELETE_MARK]: attrs });
+      }
+      if (opts.replacement.length > 0) {
+        start.node.insert(to, opts.replacement, { [SUGGEST_INSERT_MARK]: attrs });
+      }
+    }, opts.transactionOrigin ?? 'agent');
+    return { ok: true, sid };
+  }
+
+  // Cross-node. Walk the flattened fragment, locate the block each anchor is
+  // in, and bail if they're in different blocks (same restriction rewriteRange
+  // applies — joining blocks is out of scope for a text-range tool).
+  const fragment = getProseFragment(doc);
+  const { segments } = walkProse(fragment);
+  const startSeg = segments.find((s) => s.node === start.node);
+  const endSeg = segments.find((s) => s.node === end.node);
+  if (!startSeg || !endSeg) return { ok: false, error: 'anchor-orphaned' };
+  if (!startSeg.block || startSeg.block !== endSeg.block) {
+    return { ok: false, error: 'cross-block' };
+  }
+
+  const firstSeg = startSeg.docOffset <= endSeg.docOffset ? startSeg : endSeg;
+  const lastSeg = firstSeg === startSeg ? endSeg : startSeg;
+  const firstOffset = firstSeg === startSeg ? start.offset : end.offset;
+  const lastOffset = lastSeg === endSeg ? end.offset : start.offset;
+  const blockSegments = segments.filter((s) => s.block === startSeg.block);
+  const firstIdx = blockSegments.indexOf(firstSeg);
+  const lastIdx = blockSegments.indexOf(lastSeg);
+  const touched = blockSegments.slice(firstIdx, lastIdx + 1);
+
+  doc.transact(() => {
+    for (let i = 0; i < touched.length; i++) {
+      const seg = touched[i]!;
+      const from = i === 0 ? firstOffset : 0;
+      const to = i === touched.length - 1 ? lastOffset : seg.length;
+      if (to > from) seg.node.format(from, to - from, { [SUGGEST_DELETE_MARK]: attrs });
+    }
+    if (opts.replacement.length > 0) {
+      touched[0]!.node.insert(firstOffset, opts.replacement, { [SUGGEST_INSERT_MARK]: attrs });
     }
   }, opts.transactionOrigin ?? 'agent');
   return { ok: true, sid };

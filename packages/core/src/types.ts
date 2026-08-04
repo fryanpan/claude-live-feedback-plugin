@@ -240,8 +240,8 @@ export interface Thread extends ThreadSummary {
   comments: Comment[];
 }
 
-/** Payload POSTed to a host integration webhook. */
-export interface WebhookPayload {
+/** Payload POSTed to a host integration webhook for a thread event. */
+export interface ThreadWebhookPayload {
   event: 'thread.created' | 'thread.replied' | 'thread.resolved' | 'thread.reopened';
   docId: string;
   threadId: string;
@@ -252,3 +252,22 @@ export interface WebhookPayload {
   /** monotonically-increasing sequence within a doc. */
   seq: number;
 }
+
+/**
+ * Payload POSTed to a host integration webhook for a suggestion verdict
+ * (redline-suggestions phase 2). `suggestion` is untyped here (core's
+ * SuggestionSummary lives in suggest-ops.ts, which this module intentionally
+ * doesn't import — WebhookPayload is a thin transport shape, not the source
+ * of truth) — callers that need the full shape import suggestOps directly.
+ */
+export interface SuggestionWebhookPayload {
+  event: 'suggestion.created' | 'suggestion.accepted' | 'suggestion.rejected';
+  docId: string;
+  sid: string;
+  suggestion?: unknown;
+  doc: DocMeta;
+  seq: number;
+}
+
+/** Payload POSTed to a host integration webhook. */
+export type WebhookPayload = ThreadWebhookPayload | SuggestionWebhookPayload;
