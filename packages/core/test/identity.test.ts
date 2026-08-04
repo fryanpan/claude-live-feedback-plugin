@@ -85,6 +85,21 @@ describe('resolveUser', () => {
     expect(u.name).toBe('Bryan');
     expect(u.id).toBe('known-bryan');
   });
+
+  it('?as= does NOT overwrite an already-stored name (shared URLs must not rebrand the reviewer)', () => {
+    const s = mockStorage();
+    storeUserName(s, 'Casey');
+    const withParam = resolveUser('bryan', s);
+    expect(withParam.name).toBe('Bryan'); // param wins for THIS load only
+    const after = resolveUser(null, s);
+    expect(after.name).toBe('Casey');
+  });
+
+  it('caps stored names at 40 chars (UI maxlength is advisory only)', () => {
+    const s = mockStorage();
+    storeUserName(s, 'x'.repeat(500));
+    expect(resolveUser(null, s).name.length).toBeLessThanOrEqual(40);
+  });
 });
 
 describe('needsNamePrompt', () => {

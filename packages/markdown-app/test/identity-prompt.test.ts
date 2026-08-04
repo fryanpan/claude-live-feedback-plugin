@@ -56,6 +56,41 @@ describe('ensureUserIdentity', () => {
     expect(document.querySelector('.identity-prompt')).toBeNull();
   });
 
+  it('an unknown ?as= value prefills the name field', async () => {
+    const s = mockStorage();
+    const pending = ensureUserIdentity('Casey', s);
+    const input = document.querySelector<HTMLInputElement>('.identity-prompt input');
+    expect(input?.value).toBe('Casey');
+    const submit = document.querySelector<HTMLButtonElement>(
+      '.identity-prompt button[type="submit"]',
+    );
+    submit?.click();
+    const user = await pending;
+    expect(user.name).toBe('Casey');
+  });
+
+  it('Escape resolves anonymous WITHOUT persisting the skip (asks again next visit)', async () => {
+    const s = mockStorage();
+    const pending = ensureUserIdentity(null, s);
+    const overlay = document.querySelector<HTMLElement>('.identity-prompt');
+    overlay
+      ?.querySelector('input')
+      ?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    const user = await pending;
+    expect(user.kind).toBe('anon');
+    expect(document.querySelector('.identity-prompt')).toBeNull();
+    expect(s.get('feedback-name-prompt-dismissed')).toBeNull();
+  });
+
+  it('the dialog carries basic modal semantics', async () => {
+    const pending = ensureUserIdentity(null, mockStorage());
+    const dialog = document.querySelector<HTMLElement>('.identity-prompt [role="dialog"]');
+    expect(dialog).not.toBeNull();
+    expect(dialog?.getAttribute('aria-modal')).toBe('true');
+    document.querySelector<HTMLButtonElement>('.identity-prompt .identity-skip')?.click();
+    await pending;
+  });
+
   it('submitting an empty name keeps the prompt open', async () => {
     const s = mockStorage();
     const pending = ensureUserIdentity(null, s);

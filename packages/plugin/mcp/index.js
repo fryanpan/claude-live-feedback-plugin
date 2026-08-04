@@ -13670,6 +13670,10 @@ class StdioServerTransport {
 }
 
 // packages/core/src/identity.ts
+var KNOWN_USERS = {
+  bryan: { name: "Bryan", color: "#2e7dd7" },
+  agent: { name: "Agent", color: "#e36f1e" }
+};
 function hashToColor(input) {
   let h = 0;
   for (let i = 0;i < input.length; i++) {
@@ -13703,18 +13707,27 @@ function hslToHex(h, s, l) {
   const to = (v) => Math.round((v + m) * 255).toString(16).padStart(2, "0");
   return `#${to(r)}${to(g)}${to(b)}`;
 }
+function knownUserForName(nameOrKey) {
+  const key = nameOrKey.toLowerCase();
+  const meta2 = KNOWN_USERS[key];
+  if (!meta2)
+    return null;
+  return { id: `known-${key}`, kind: "known", name: meta2.name, color: meta2.color };
+}
 
 // packages/mcp/src/author.ts
-var KNOWN_USERS = {
-  bryan: { name: "Bryan", color: "#2e7dd7", id: "known-bryan", kind: "known" },
-  agent: { name: "Agent", color: "#e36f1e", id: "known-agent", kind: "known" }
-};
 function resolveAgentAuthor(env) {
   const name = env.FEEDBACK_AGENT_NAME?.trim() || env.FEEDBACK_AUTHOR?.trim() || "agent";
-  const known = KNOWN_USERS[name.toLowerCase()];
+  const known = knownUserForName(name);
   if (known)
     return known;
-  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  let slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  if (!slug) {
+    let h = 0;
+    for (let i = 0;i < name.length; i++)
+      h = h * 31 + name.charCodeAt(i) >>> 0;
+    slug = h.toString(36);
+  }
   return { name, color: hashToColor(name), id: `agent-${slug}`, kind: "known" };
 }
 

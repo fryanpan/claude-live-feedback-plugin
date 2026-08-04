@@ -2149,9 +2149,12 @@ body.redline-mode .ProseMirror del.lf-del {
   inset: 0;
   z-index: 1000;
   display: flex;
-  align-items: center;
+  /* Top-anchored, not centered: the input autofocuses, and on iOS the
+     keyboard covers the lower half of the LAYOUT viewport — a centered
+     card would put both buttons under it. */
+  align-items: flex-start;
   justify-content: center;
-  padding: 16px;
+  padding: max(12dvh, 24px) 16px 16px;
   background: rgba(27, 31, 35, 0.45);
 }
 .identity-card {

@@ -49,4 +49,12 @@ describe('resolveAgentAuthor', () => {
     expect(a.name).toBe('Blog Assistant');
     expect(a.id).toBe('agent-blog-assistant');
   });
+
+  it('names with no alphanumerics still get distinct non-empty ids', () => {
+    const a = resolveAgentAuthor({ FEEDBACK_AGENT_NAME: '!!!' });
+    const b = resolveAgentAuthor({ FEEDBACK_AGENT_NAME: '---' });
+    expect(a.id).not.toBe('agent-');
+    expect(b.id).not.toBe('agent-');
+    expect(a.id).not.toBe(b.id);
+  });
 });

@@ -25,9 +25,10 @@ export function ensureUserIdentity(
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
     overlay.className = 'identity-prompt';
+    // Static template only — never interpolate anything user-controlled here.
     overlay.innerHTML = `
-      <form class="identity-card">
-        <h2>Who's reviewing?</h2>
+      <form class="identity-card" role="dialog" aria-modal="true" aria-labelledby="identity-title">
+        <h2 id="identity-title">Who's reviewing?</h2>
         <p>Your name labels your comments and edits for everyone else on this doc.</p>
         <input type="text" name="name" autocomplete="name" placeholder="Your name" maxlength="40" />
         <div class="identity-actions">
@@ -38,6 +39,9 @@ export function ensureUserIdentity(
     const form = overlay.querySelector('form');
     const input = overlay.querySelector('input');
     const skip = overlay.querySelector('.identity-skip');
+    // An unrecognized ?as= value can't resolve to a known identity, but it's
+    // a perfectly good default answer — prefill so one tap confirms it.
+    if (input && asParam) input.value = asParam;
     const finish = (user: User) => {
       overlay.remove();
       resolve(user);
@@ -55,6 +59,11 @@ export function ensureUserIdentity(
     skip?.addEventListener('click', () => {
       dismissNamePrompt(storage);
       finish(resolveUser(null, storage));
+    });
+    // Escape = "not now": continue anonymous for THIS visit without
+    // remembering the dismissal, so the prompt can ask again next time.
+    overlay.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') finish(resolveUser(null, storage));
     });
     document.body.appendChild(overlay);
     input?.focus();

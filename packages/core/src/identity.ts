@@ -61,15 +61,19 @@ function stableAnonId(storage: IdentityStorage | null): string {
   return anon;
 }
 
-function knownUser(key: string): User | null {
-  const meta = KNOWN_USERS[key.toLowerCase()];
+/** The full known identity for a name/key (`bryan`, `Agent`, …), or null. */
+export function knownUserForName(nameOrKey: string): User | null {
+  const key = nameOrKey.toLowerCase();
+  const meta = KNOWN_USERS[key];
   if (!meta) return null;
-  return { id: `known-${key.toLowerCase()}`, kind: 'known', name: meta.name, color: meta.color };
+  return { id: `known-${key}`, kind: 'known', name: meta.name, color: meta.color };
 }
 
-/** Persist the user's chosen display name (first-arrival prompt, or seeded from `?as=`). */
+/** Persist the user's chosen display name (first-arrival prompt, or seeded from
+ *  `?as=`). Hard 40-char cap — the prompt's maxlength is advisory; the name is
+ *  broadcast in every awareness packet and stored on every comment. */
 export function storeUserName(storage: IdentityStorage | null, name: string): void {
-  storage?.set(NAME_KEY, name);
+  storage?.set(NAME_KEY, name.trim().slice(0, 40));
 }
 
 /** Record that the user chose to stay anonymous — the prompt won't re-ask this browser. */
@@ -100,15 +104,18 @@ export function resolveUser(
   storage: IdentityStorage | null,
 ): User {
   if (asParam) {
-    const known = knownUser(asParam);
+    const known = knownUserForName(asParam);
     if (known) {
-      storeUserName(storage, known.name);
+      // Seed only when nothing is stored: the param bootstraps a fresh
+      // browser but must never rebrand someone who already named themselves
+      // (review URLs get shared, and the server emits ?as= links).
+      if (!storedName(storage)) storeUserName(storage, known.name);
       return known;
     }
   }
   const name = storedName(storage);
   if (name) {
-    const known = knownUser(name);
+    const known = knownUserForName(name);
     if (known) return known;
     return { id: `anon-${stableAnonId(storage)}`, kind: 'known', name, color: hashToColor(name) };
   }
