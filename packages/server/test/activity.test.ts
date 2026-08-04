@@ -332,3 +332,19 @@ describe('activity backfill', () => {
     expect(ids2).toEqual(ids1);
   });
 });
+
+describe('classifyActor', () => {
+  it('classifies named per-agent identities (agent-<slug> ids) as agent, not person', async () => {
+    const { classifyActor } = await import('../src/activity.ts');
+    expect(classifyActor({ id: 'agent-quick-build', name: 'Quick Build', kind: 'known' })).toBe(
+      'agent',
+    );
+  });
+
+  it('keeps the legacy agent signals and person classification', async () => {
+    const { classifyActor } = await import('../src/activity.ts');
+    expect(classifyActor({ id: 'known-agent', name: 'Agent', kind: 'known' })).toBe('agent');
+    expect(classifyActor({ id: 'anon-abc123', name: 'Casey', kind: 'known' })).toBe('person');
+    expect(classifyActor({ id: 'known-bryan', name: 'Bryan', kind: 'known' })).toBe('person');
+  });
+});
