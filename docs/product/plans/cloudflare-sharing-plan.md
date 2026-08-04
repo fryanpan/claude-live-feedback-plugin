@@ -35,6 +35,10 @@ See docs/product/sharing.md for the design + runbook.
    - `CF_ACCESS_TEAM_DOMAIN` / `CF_ACCOUNT_ID` / `CF_SHARE_BASE_HOSTNAME`
      env into the server launchd plist (agent can wire once values known).
 
-## First shares when resumed
+## Before any real share
 
-ADFA → allow-domain `@appdevforall.org`. the partner org → domain TBD.
+A 2026-08-04 security review found two authorization gaps in the
+public-URL path — see [public-url-threat-model.md](public-url-threat-model.md).
+**Both must be fixed before the first external share is minted.** Allowed
+email domains are supplied by the operator per share; none are recorded
+in this repo.

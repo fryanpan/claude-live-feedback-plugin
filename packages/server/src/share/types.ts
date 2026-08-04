@@ -24,7 +24,7 @@ export interface Share {
   appId: string;
   /** Cloudflare Access policy id (sibling to appId). */
   policyId: string;
-  /** Allowed email domains, e.g. `["@appdevforall.org"]`. */
+  /** Allowed email domains, e.g. `["@partner-org.example"]`. */
   allowDomains: string[];
   createdAt: number;
   expiresAt: number;

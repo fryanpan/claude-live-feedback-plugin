@@ -55,7 +55,7 @@ Big decisions that future sessions should respect or revisit deliberately.
   still holds for normal review). What's new: an explicit, agent-driven
   publish step (`share_doc` MCP tool / `bun share` CLI) that creates a
   per-share Cloudflare Access app gated by email domain (e.g.
-  `@appdevforall.org`) for a bounded window (default 72h).
+  `@partner-org.example`) for a bounded window (default 72h).
 - Driver: Bryan started working with an external team that doesn't share
   a tailnet and needs to review markdown docs / interactive mockups /
   dev servers for a few days at a time. Adding everyone to the tailnet

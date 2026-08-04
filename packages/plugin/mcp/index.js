@@ -14346,7 +14346,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           allowDomains: {
             type: "array",
             items: { type: "string" },
-            description: "Email domains, e.g. ['@appdevforall.org']"
+            description: "Email domains, e.g. ['@partner-org.example']"
           },
           ttlSeconds: { type: "number" },
           name: { type: "string", description: "Optional slug override for the subdomain" }
