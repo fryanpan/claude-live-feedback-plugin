@@ -540,6 +540,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               if (!author) return j(400, { error: 'author required when suggest is true' });
               const res = rooms.createSuggestionForThread(docId, threadId, {
                 replacement,
+                parseInlineMarks,
                 author,
               });
               return res.ok ? j(200, res) : j(409, res);
@@ -722,6 +723,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               contextBefore,
               contextAfter,
               occurrence,
+              parseInlineMarks: body?.parseInlineMarks === true,
               author,
             });
             return res.ok ? j(200, res) : j(409, res);

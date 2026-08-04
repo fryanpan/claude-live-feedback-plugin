@@ -1,6 +1,7 @@
 import * as Y from 'yjs';
 import {
   getProseFragment,
+  insertTextWithMarks,
   resolveRelativePositionRaw,
   resolveSingleFind,
   serializeBlockToMarkdown,
@@ -87,7 +88,7 @@ export type SuggestReplaceResult =
   | { ok: true; sid: string }
   | {
       ok: false;
-      error: 'no-match' | 'ambiguous';
+      error: 'no-match' | 'ambiguous' | 'match-in-pending-suggestion';
       candidates?: Array<{ docOffset: number; preview: string }>;
     };
 
@@ -328,6 +329,45 @@ export function resolveAllSuggestions(
   return { ok: true, resolved: resolvedSids.length, sids: resolvedSids };
 }
 
+/**
+ * Inline-mark attributes carried by the character at `offset`, with the
+ * suggestion marks stripped out.
+ *
+ * The direct edit path (`findAndReplace`) inserts with NO attributes, so Yjs
+ * inherits the surrounding formatting and a replacement inside a bold span
+ * stays bold. The suggestion path can't do that — it MUST pass
+ * `suggestInsert`, and explicit attributes REPLACE the inherited ones — so it
+ * reads the marks off the text being replaced and merges them back in. Call
+ * this BEFORE mutating: `format(…, {suggestDelete})` rewrites the delta.
+ *
+ * An offset past the end falls back to the last op's marks, matching the
+ * left-inheritance Yjs would have applied to an unattributed insert.
+ */
+function inlineAttrsAt(node: Y.XmlText, offset: number): Record<string, unknown> {
+  const strip = (attrs: Record<string, unknown> | undefined): Record<string, unknown> => {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(attrs ?? {})) {
+      if (k === SUGGEST_INSERT_MARK || k === SUGGEST_DELETE_MARK) continue;
+      if (v == null) continue;
+      out[k] = v;
+    }
+    return out;
+  };
+  const delta = node.toDelta() as Array<{
+    insert?: string;
+    attributes?: Record<string, unknown>;
+  }>;
+  let cursor = 0;
+  let last: Record<string, unknown> | undefined;
+  for (const op of delta) {
+    if (typeof op.insert !== 'string' || op.insert.length === 0) continue;
+    last = op.attributes;
+    if (offset < cursor + op.insert.length) return strip(op.attributes);
+    cursor += op.insert.length;
+  }
+  return strip(last);
+}
+
 let sidCounter = 0;
 
 function newSid(): string {
@@ -344,6 +384,11 @@ function newSid(): string {
  * suggestDelete, replacement inserted with suggestInsert, one shared sid,
  * author from the caller. The accepted state (serialization) is unchanged
  * until someone accepts. An empty `replace` yields a pure deletion proposal.
+ *
+ * The find deliberately refuses to match inside another proposal's pending
+ * `suggestInsert` text: anchoring proposal B onto text proposal A only
+ * proposes means rejecting A silently takes B's target with it. Text marked
+ * `suggestDelete` is still accepted state and remains a legal target.
  */
 export function suggestReplace(
   doc: Y.Doc,
@@ -354,6 +399,8 @@ export function suggestReplace(
     contextAfter?: string;
     /** 1-indexed. When omitted, requires a unique match. */
     occurrence?: number;
+    /** Parse inline markdown in `replace` into marks on the proposed text. */
+    parseInlineMarks?: boolean;
     author: SuggestionAuthor;
     /** Creation timestamp override (epoch ms). Defaults to Date.now(). */
     ts?: number;
@@ -361,14 +408,18 @@ export function suggestReplace(
   },
 ): SuggestReplaceResult {
   const fragment = getProseFragment(doc);
-  const resolved = resolveSingleFind(fragment, opts);
+  const resolved = resolveSingleFind(fragment, { ...opts, excludePendingSuggestions: true });
   if (!resolved.ok) {
     if (resolved.error === 'ambiguous') {
       return { ok: false, error: 'ambiguous', candidates: resolved.candidates };
     }
-    return { ok: false, error: 'no-match' };
+    return { ok: false, error: resolved.error };
   }
   const { segment, offsetInNode, length } = resolved.match;
+  // Read the replaced text's marks BEFORE the suggestDelete format rewrites
+  // the delta, so the proposal carries the same bold/italic/code/link the
+  // direct edit path would have inherited.
+  const inherited = inlineAttrsAt(segment.node, offsetInNode);
   const sid = newSid();
   // Attribute types are load-bearing (the Yjs heading-level learnings):
   // four strings + a NUMBER ts, exactly what readers expect.
@@ -381,11 +432,10 @@ export function suggestReplace(
   };
   doc.transact(() => {
     segment.node.format(offsetInNode, length, { [SUGGEST_DELETE_MARK]: attrs });
-    if (opts.replace.length > 0) {
-      segment.node.insert(offsetInNode + length, opts.replace, {
-        [SUGGEST_INSERT_MARK]: attrs,
-      });
-    }
+    insertTextWithMarks(segment.node, offsetInNode + length, opts.replace, {
+      parseInlineMarks: opts.parseInlineMarks === true,
+      attributes: { ...inherited, [SUGGEST_INSERT_MARK]: attrs },
+    });
   }, opts.transactionOrigin ?? 'agent');
   return { ok: true, sid };
 }
@@ -413,6 +463,8 @@ export function suggestRewriteRange(
     startRel: Uint8Array;
     endRel: Uint8Array;
     replacement: string;
+    /** Parse inline markdown in `replacement` into marks on the proposed text. */
+    parseInlineMarks?: boolean;
     author: SuggestionAuthor;
     /** Creation timestamp override (epoch ms). Defaults to Date.now(). */
     ts?: number;
@@ -422,6 +474,7 @@ export function suggestRewriteRange(
   const start = resolveRelativePositionRaw(doc, opts.startRel);
   const end = resolveRelativePositionRaw(doc, opts.endRel);
   if (!start || !end) return { ok: false, error: 'anchor-orphaned' };
+  const parseInlineMarks = opts.parseInlineMarks === true;
 
   const sid = newSid();
   const attrs: SuggestionAttrs = {
@@ -435,13 +488,15 @@ export function suggestRewriteRange(
   if (start.node === end.node) {
     const from = Math.min(start.offset, end.offset);
     const to = Math.max(start.offset, end.offset);
+    const inherited = inlineAttrsAt(start.node, from);
     doc.transact(() => {
       if (to > from) {
         start.node.format(from, to - from, { [SUGGEST_DELETE_MARK]: attrs });
       }
-      if (opts.replacement.length > 0) {
-        start.node.insert(to, opts.replacement, { [SUGGEST_INSERT_MARK]: attrs });
-      }
+      insertTextWithMarks(start.node, to, opts.replacement, {
+        parseInlineMarks,
+        attributes: { ...inherited, [SUGGEST_INSERT_MARK]: attrs },
+      });
     }, opts.transactionOrigin ?? 'agent');
     return { ok: true, sid };
   }
@@ -467,6 +522,7 @@ export function suggestRewriteRange(
   const lastIdx = blockSegments.indexOf(lastSeg);
   const touched = blockSegments.slice(firstIdx, lastIdx + 1);
 
+  const inherited = inlineAttrsAt(touched[0]!.node, firstOffset);
   doc.transact(() => {
     for (let i = 0; i < touched.length; i++) {
       const seg = touched[i]!;
@@ -474,9 +530,10 @@ export function suggestRewriteRange(
       const to = i === touched.length - 1 ? lastOffset : seg.length;
       if (to > from) seg.node.format(from, to - from, { [SUGGEST_DELETE_MARK]: attrs });
     }
-    if (opts.replacement.length > 0) {
-      touched[0]!.node.insert(firstOffset, opts.replacement, { [SUGGEST_INSERT_MARK]: attrs });
-    }
+    insertTextWithMarks(touched[0]!.node, firstOffset, opts.replacement, {
+      parseInlineMarks,
+      attributes: { ...inherited, [SUGGEST_INSERT_MARK]: attrs },
+    });
   }, opts.transactionOrigin ?? 'agent');
   return { ok: true, sid };
 }

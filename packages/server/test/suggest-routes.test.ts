@@ -293,4 +293,127 @@ describe('suggested edits — HTTP routes', () => {
       sink.stop();
     }
   });
+  /**
+   * Codex review follow-ups, both at the ROUTE layer because both bugs live
+   * in params the route hand-copies (the "route silently drops params"
+   * learnings): `parseInlineMarks` was accepted alongside `suggest: true`
+   * and discarded, and the find could anchor onto another proposal's
+   * unaccepted text.
+   */
+  it('parseInlineMarks + suggest:true survives the route — the accepted proposal carries the link mark', async () => {
+    const file = await makeDoc('sug-marks', 'See the docs here.\n');
+    const created = await j<{ ok: boolean; suggestionId: string }>(
+      await fetch(`${base}/api/docs/sug-marks/find_and_replace`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          find: 'the docs',
+          replace: '[the docs](https://example.com)',
+          parseInlineMarks: true,
+          suggest: true,
+          author,
+        }),
+      }),
+    );
+    expect(created.ok).toBe(true);
+    await sleep(1300);
+    expect(readFileSync(file, 'utf8')).toBe('See the docs here.\n');
+
+    // The proposal's inserted TEXT is the discriminator: a real link mark
+    // holds the label only, while a dropped parseInlineMarks would leave the
+    // raw `[label](url)` characters. On disk the two are identical strings,
+    // so asserting on the file alone would pass either way.
+    const list = await j<{ suggestions: Array<{ sid: string; insertedText: string }> }>(
+      await fetch(`${base}/api/docs/sug-marks/suggestions`),
+    );
+    expect(list.suggestions[0]?.insertedText).toBe('the docs');
+
+    await j(
+      await fetch(`${base}/api/docs/sug-marks/suggestions/${created.suggestionId}/accept`, {
+        method: 'POST',
+      }),
+    );
+    await sleep(1300);
+    expect(readFileSync(file, 'utf8')).toBe('See [the docs](https://example.com) here.\n');
+  });
+
+  it('parseInlineMarks + suggest:true on rewrite_region survives the route too', async () => {
+    const file = await makeDoc('sug-rr-marks', 'See the docs here.\n');
+    const thread = await j<{ thread: { id: string } }>(
+      await fetch(`${base}/api/docs/sug-rr-marks/threads/by_find`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ author, text: 'link this', find: 'the docs' }),
+      }),
+    );
+    const created = await j<{ ok: boolean; suggestionId: string }>(
+      await fetch(`${base}/api/docs/sug-rr-marks/threads/${thread.thread.id}/rewrite_region`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          replacement: '[the docs](https://example.com)',
+          parseInlineMarks: true,
+          suggest: true,
+          author,
+        }),
+      }),
+    );
+    expect(created.ok).toBe(true);
+    const list = await j<{ suggestions: Array<{ insertedText: string }> }>(
+      await fetch(`${base}/api/docs/sug-rr-marks/suggestions`),
+    );
+    expect(list.suggestions[0]?.insertedText).toBe('the docs');
+    await j(
+      await fetch(`${base}/api/docs/sug-rr-marks/suggestions/${created.suggestionId}/accept`, {
+        method: 'POST',
+      }),
+    );
+    await sleep(1300);
+    expect(readFileSync(file, 'utf8')).toBe('See [the docs](https://example.com) here.\n');
+  });
+
+  it('a suggestion inside a bold span keeps the bold through accept', async () => {
+    const file = await makeDoc('sug-bold', 'This is **bold text** here.\n');
+    const created = await j<{ suggestionId: string }>(
+      await fetch(`${base}/api/docs/sug-bold/find_and_replace`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          find: 'bold text',
+          replace: 'strong text',
+          suggest: true,
+          author,
+        }),
+      }),
+    );
+    await j(
+      await fetch(`${base}/api/docs/sug-bold/suggestions/${created.suggestionId}/accept`, {
+        method: 'POST',
+      }),
+    );
+    await sleep(1300);
+    expect(readFileSync(file, 'utf8')).toBe('This is **strong text** here.\n');
+  });
+
+  it('a find that only matches inside a pending proposal is refused — 409 match-in-pending-suggestion', async () => {
+    await makeDoc('sug-isolation', 'Alpha beta gamma.\n');
+    await j(
+      await fetch(`${base}/api/docs/sug-isolation/find_and_replace`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ find: 'beta', replace: 'delta zeta', suggest: true, author }),
+      }),
+    );
+    const res = await fetch(`${base}/api/docs/sug-isolation/find_and_replace`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ find: 'zeta', replace: 'eta', suggest: true, author }),
+    });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toBe('match-in-pending-suggestion');
+    const list = await j<{ suggestions: unknown[] }>(
+      await fetch(`${base}/api/docs/sug-isolation/suggestions`),
+    );
+    expect(list.suggestions).toHaveLength(1);
+  });
 });

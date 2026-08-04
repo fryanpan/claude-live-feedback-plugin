@@ -140,6 +140,28 @@ export interface LocatedMatch {
 }
 
 /**
+ * Doc-offset spans covered by `suggestInsert` — i.e. text that exists in the
+ * live doc but is NOT part of the accepted state. Half-open [start, end).
+ */
+function pendingInsertSpans(segments: TextSegment[]): Array<[number, number]> {
+  const spans: Array<[number, number]> = [];
+  for (const seg of segments) {
+    let offset = 0;
+    for (const op of seg.node.toDelta() as Array<{
+      insert?: string;
+      attributes?: Record<string, unknown>;
+    }>) {
+      if (typeof op.insert !== 'string') continue;
+      if (op.attributes?.[SUGGEST_INSERT_MARK] != null) {
+        spans.push([seg.docOffset + offset, seg.docOffset + offset + op.insert.length]);
+      }
+      offset += op.insert.length;
+    }
+  }
+  return spans;
+}
+
+/**
  * Locate `find` in the flattened doc text, optionally requiring a
  * surrounding context. Returns all match positions mapped back to
  * (Y.XmlText, local offset) so the caller can mutate in place.
@@ -147,6 +169,13 @@ export interface LocatedMatch {
  * Matches that straddle two Y.XmlText nodes are omitted and returned as
  * a separate `crossNode` count so the caller can report a meaningful
  * error without silently skipping content.
+ *
+ * `excludePendingSuggestions` drops matches that overlap text marked
+ * `suggestInsert` — text a human hasn't accepted yet. A caller creating a
+ * NEW proposal must not anchor onto an unaccepted one (rejecting the first
+ * would take the second's target with it); the dropped count comes back as
+ * `pendingSkipped` so the caller can say so instead of reporting a bare
+ * no-match. `suggestDelete` text is still accepted state and stays matchable.
  */
 export function locateMatches(
   fragment: Y.XmlFragment,
@@ -154,11 +183,12 @@ export function locateMatches(
     find: string;
     contextBefore?: string;
     contextAfter?: string;
+    excludePendingSuggestions?: boolean;
   },
-): { matches: LocatedMatch[]; crossNode: number; plainText: string } {
+): { matches: LocatedMatch[]; crossNode: number; pendingSkipped: number; plainText: string } {
   const { plainText, segments } = walkProse(fragment);
   const find = opts.find;
-  if (find.length === 0) return { matches: [], crossNode: 0, plainText };
+  if (find.length === 0) return { matches: [], crossNode: 0, pendingSkipped: 0, plainText };
 
   const before = opts.contextBefore ?? '';
   const after = opts.contextAfter ?? '';
@@ -173,8 +203,11 @@ export function locateMatches(
     i = idx + 1; // allow overlapping contexts
   }
 
+  const pending = opts.excludePendingSuggestions === true ? pendingInsertSpans(segments) : [];
+
   const matches: LocatedMatch[] = [];
   let crossNode = 0;
+  let pendingSkipped = 0;
   for (const r of raw) {
     const seg = findSegmentForOffset(segments, r.docOffset);
     if (!seg) continue;
@@ -184,6 +217,11 @@ export function locateMatches(
       crossNode++;
       continue;
     }
+    const end = r.docOffset + find.length;
+    if (pending.some(([ps, pe]) => r.docOffset < pe && ps < end)) {
+      pendingSkipped++;
+      continue;
+    }
     matches.push({
       segment: seg,
       offsetInNode,
@@ -191,7 +229,7 @@ export function locateMatches(
       docOffset: r.docOffset,
     });
   }
-  return { matches, crossNode, plainText };
+  return { matches, crossNode, pendingSkipped, plainText };
 }
 
 function findSegmentForOffset(segments: TextSegment[], offset: number): TextSegment | null {
@@ -222,19 +260,31 @@ export interface ReplaceResult {
  * a subsequent unmarked `insert(cursor, plain)` then picks up the prior
  * marks and bleeds them into surrounding text. `applyDelta` treats each
  * op's attributes as scoped to that op's insert.
+ *
+ * `attributes` force marks onto the inserted text. Callers that want the
+ * plain-insert inheritance MUST omit it — passing explicit attributes to
+ * `Y.XmlText.insert` REPLACES what would have been inherited, so a caller
+ * with its own mark to add (the suggestion path's `suggestInsert`) has to
+ * merge the surrounding marks in itself. Per-op marks parsed out of the
+ * text win over `attributes` on a key collision: explicit beats inherited.
  */
-function insertWithOptionalMarks(
+export function insertTextWithMarks(
   node: Y.XmlText,
   offset: number,
   text: string,
-  parseInlineMarks: boolean,
+  opts?: { parseInlineMarks?: boolean; attributes?: Record<string, unknown> },
 ): void {
   if (text.length === 0) return;
-  if (!parseInlineMarks) {
-    node.insert(offset, text);
+  const extra =
+    opts?.attributes && Object.keys(opts.attributes).length > 0 ? opts.attributes : undefined;
+  if (opts?.parseInlineMarks !== true) {
+    if (extra) node.insert(offset, text, extra);
+    else node.insert(offset, text);
     return;
   }
-  const delta = inlineMarksToDelta(text);
+  const delta = inlineMarksToDelta(text).map((op) =>
+    extra ? { ...op, attributes: { ...extra, ...(op.attributes ?? {}) } } : op,
+  );
   const positioned: Array<{
     retain?: number;
     insert?: string;
@@ -242,6 +292,15 @@ function insertWithOptionalMarks(
   }> = offset > 0 ? [{ retain: offset }, ...delta] : [...delta];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   node.applyDelta(positioned as any);
+}
+
+function insertWithOptionalMarks(
+  node: Y.XmlText,
+  offset: number,
+  text: string,
+  parseInlineMarks: boolean,
+): void {
+  insertTextWithMarks(node, offset, text, { parseInlineMarks });
 }
 
 /**
@@ -1996,16 +2055,23 @@ export function resolveSingleFind(
     contextBefore?: string;
     contextAfter?: string;
     occurrence?: number;
+    /** Refuse to match inside pending `suggestInsert` text — see locateMatches. */
+    excludePendingSuggestions?: boolean;
   },
 ):
   | { ok: true; match: LocatedMatch }
   | {
       ok: false;
-      error: 'no-match' | 'ambiguous';
+      error: 'no-match' | 'ambiguous' | 'match-in-pending-suggestion';
       candidates?: Array<{ docOffset: number; preview: string }>;
     } {
-  const { matches, plainText } = locateMatches(fragment, opts);
-  if (matches.length === 0) return { ok: false, error: 'no-match' };
+  const { matches, pendingSkipped, plainText } = locateMatches(fragment, opts);
+  if (matches.length === 0) {
+    // Distinguish "the string isn't there" from "the only place it appears is
+    // somebody's unaccepted proposal" — the second is actionable advice.
+    if (pendingSkipped > 0) return { ok: false, error: 'match-in-pending-suggestion' };
+    return { ok: false, error: 'no-match' };
+  }
   if (opts.occurrence != null) {
     if (opts.occurrence < 1 || opts.occurrence > matches.length) {
       return { ok: false, error: 'no-match' };
@@ -2026,7 +2092,7 @@ export function resolveSingleFind(
 }
 
 function mapFindError(
-  error: 'no-match' | 'ambiguous',
+  error: 'no-match' | 'ambiguous' | 'match-in-pending-suggestion',
   candidates: Array<{ docOffset: number; preview: string }> | undefined,
   which: 'start' | 'end',
 ): DeleteBlocksInRangeResult {
