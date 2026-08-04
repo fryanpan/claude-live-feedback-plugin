@@ -21,6 +21,7 @@ import type { Awareness } from 'y-protocols/awareness';
 import * as Y from 'yjs';
 import { safeLinkHref } from './link-open.ts';
 import { MermaidCodeBlock } from './mermaid-code-block.ts';
+import { SuggestDelete, SuggestInsert } from './suggest-marks.ts';
 import { ThreadDecorations, type ThreadRange, setThreadDecorations } from './thread-decorations.ts';
 
 /**
@@ -98,6 +99,11 @@ export function createEditor(opts: CreateEditorOpts): EditorHandle {
       TableRow,
       TableHeader,
       TableCell,
+      // Suggested-edit marks (Phase 2). Registered in the BASE schema so
+      // y-prosemirror never drops an agent-written suggestion from the Yjs
+      // doc — see suggest-marks.ts for why this is load-bearing.
+      SuggestInsert,
+      SuggestDelete,
       Collaboration.configure({
         document: opts.ydoc,
         field: fragmentName,

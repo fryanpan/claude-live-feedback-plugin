@@ -12,6 +12,7 @@
  */
 import * as Y from 'yjs';
 import { LCS_CELL_BUDGET, lcsKept } from './lcs.ts';
+import { SUGGEST_INSERT_MARK } from './suggest.ts';
 
 export const PROSE_FRAGMENT_KEY = 'prose';
 
@@ -674,7 +675,18 @@ export function applyMarkdownToFragment(fragment: Y.XmlFragment, markdown: strin
     if (!(node instanceof Y.XmlElement)) return `__empty_text_${i}__`;
     return `__empty_${node.nodeName}_${JSON.stringify(node.getAttributes())}__`;
   };
-  const prevKeys = prev.map(key);
+  // Blocks whose entire text is a pending insert-suggestion serialize to
+  // NOTHING, so they have no key in disk space — an LCS over them would
+  // delete a pending proposal on any external disk change, even one that
+  // never touched its neighborhood. Treat them as transparent instead: they
+  // are excluded from the diff, never deleted, and new blocks are positioned
+  // relative to the accepted blocks only.
+  const suggestedPrev = prev.map((b) => b instanceof Y.XmlElement && isEntirelySuggestedInsert(b));
+  const acceptedIdx: number[] = [];
+  for (let i = 0; i < prev.length; i++) {
+    if (!suggestedPrev[i]) acceptedIdx.push(i);
+  }
+  const prevKeys = acceptedIdx.map((i) => key(prev[i]!, i));
   const nextKeys = markdownBlockKeys(markdown, key);
   // Keyed separately from the blocks we insert: reading a prelim block's
   // content requires integrating it into a doc, and an integrated Yjs type
@@ -708,17 +720,35 @@ export function applyMarkdownToFragment(fragment: Y.XmlFragment, markdown: strin
   const { keptA: keptOld, keptB: keptNew } = lcsKept(prevKeys, nextKeys);
   if (keptOld.size === n && keptNew.size === m) return false;
 
-  // Deletions first, right-to-left so earlier indices stay valid.
-  for (let i = n - 1; i >= 0; i--) {
-    if (!keptOld.has(i)) fragment.delete(i, 1);
+  // Deletions first, right-to-left so earlier indices stay valid. `keptOld`
+  // indexes the ACCEPTED (non-suggested) blocks; map back through acceptedIdx
+  // so fully-suggested blocks are never deleted.
+  for (let a = n - 1; a >= 0; a--) {
+    if (!keptOld.has(a)) fragment.delete(acceptedIdx[a]!, 1);
   }
-  // The fragment now holds exactly the kept blocks, in order. Filling the gaps
-  // left-to-right, every index < j is already final — so j IS the insert
-  // position for the new block j.
+  // The fragment now holds the kept accepted blocks in order, interleaved
+  // with any surviving fully-suggested blocks. Insert new block j where the
+  // j-th accepted block sits (append past the end), counting suggested
+  // blocks as transparent — so a proposal stays attached to its preceding
+  // accepted neighbor.
   for (let j = 0; j < m; j++) {
-    if (!keptNew.has(j)) fragment.insert(j, [next[j]]);
+    if (!keptNew.has(j)) fragment.insert(acceptedInsertPos(fragment, j), [next[j]]);
   }
   return true;
+}
+
+/** Index in `fragment` of the j-th accepted (non-fully-suggested) block, or
+ *  fragment.length when there are fewer than j+1 accepted blocks. */
+function acceptedInsertPos(fragment: Y.XmlFragment, j: number): number {
+  const kids = fragment.toArray() as (Y.XmlElement | Y.XmlText)[];
+  let accepted = 0;
+  for (let i = 0; i < kids.length; i++) {
+    const k = kids[i]!;
+    if (k instanceof Y.XmlElement && isEntirelySuggestedInsert(k)) continue;
+    if (accepted === j) return i;
+    accepted++;
+  }
+  return kids.length;
 }
 
 export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
@@ -1113,6 +1143,11 @@ function serializeBlock(node: Y.XmlElement | Y.XmlText): string | null {
     return s.length > 0 ? s : null;
   }
   if (!(node instanceof Y.XmlElement)) return null;
+  // A block whose entire text is a pending insert-suggestion has no accepted
+  // content — it contributes nothing (no empty paragraph line, no empty
+  // fence). Blocks with no text at all (horizontalRule, image, a genuinely
+  // empty codeBlock) are unaffected: the whole-block rule requires text.
+  if (isEntirelySuggestedInsert(node)) return null;
   switch (node.nodeName) {
     case 'paragraph':
       return textContent(node);
@@ -1156,7 +1191,10 @@ function serializeBlock(node: Y.XmlElement | Y.XmlText): string | null {
 function serializeTable(table: Y.XmlElement): string {
   const rows = table
     .toArray()
-    .filter((n): n is Y.XmlElement => n instanceof Y.XmlElement && n.nodeName === 'tableRow');
+    .filter((n): n is Y.XmlElement => n instanceof Y.XmlElement && n.nodeName === 'tableRow')
+    // A fully-suggested row would otherwise serialize as an all-empty `| |`
+    // line — it has no accepted content, so it contributes nothing.
+    .filter((r) => !isEntirelySuggestedInsert(r));
   if (rows.length === 0) return '';
   const cells: string[][] = rows.map((r) =>
     r
@@ -1209,9 +1247,49 @@ function textWithMarks(xmlText: Y.XmlText): string {
   let out = '';
   for (const op of delta) {
     if (typeof op.insert !== 'string') continue;
+    // THE SERIALIZER RULE (suggested edits): disk always holds the ACCEPTED
+    // state. Text carrying a pending insert-suggestion is omitted here — and
+    // ONLY here, because every doc→disk path (write-back, reconcile's
+    // currentSerialized, lastWritten, normalizeMarkdown) funnels through this
+    // function. Text carrying `suggestDelete` falls through and is emitted
+    // WITHOUT the mark: wrapMarks only re-emits the real inline marks
+    // (bold/italic/code/strike/link) and ignores suggestion attributes.
+    if (op.attributes?.[SUGGEST_INSERT_MARK] != null) continue;
     out += wrapMarks(op.insert, op.attributes);
   }
   return out;
+}
+
+/**
+ * True when a block's ENTIRE text is a pending insert-suggestion (and it has
+ * at least one character of text). Such a block does not exist in the
+ * accepted state: it must contribute nothing to serialization — not even an
+ * empty shell (`- ` marker, empty code fence) — and a disk-driven reconcile
+ * must treat it as transparent (it has no key in disk space to match).
+ */
+function isEntirelySuggestedInsert(node: Y.XmlElement): boolean {
+  let sawText = false;
+  const visit = (n: Y.XmlElement | Y.XmlText | Y.XmlHook): boolean => {
+    if (n instanceof Y.XmlText) {
+      const delta = n.toDelta() as Array<{
+        insert?: string;
+        attributes?: Record<string, unknown>;
+      }>;
+      for (const op of delta) {
+        if (typeof op.insert !== 'string' || op.insert.length === 0) continue;
+        sawText = true;
+        if (op.attributes?.[SUGGEST_INSERT_MARK] == null) return false;
+      }
+      return true;
+    }
+    if (n instanceof Y.XmlElement) {
+      for (const child of n.toArray()) {
+        if (!visit(child as Y.XmlElement | Y.XmlText)) return false;
+      }
+    }
+    return true;
+  };
+  return visit(node) && sawText;
 }
 
 function wrapMarks(text: string, attrs: Record<string, unknown> | undefined): string {
@@ -1250,6 +1328,9 @@ function serializeList(list: Y.XmlElement, depth: number): string {
   let n = 0;
   for (const li of list.toArray()) {
     if (!(li instanceof Y.XmlElement) || li.nodeName !== 'listItem') continue;
+    // A fully-suggested item is not part of the accepted list — skipping it
+    // here (not just via serializeBlock) avoids emitting an empty `- ` marker.
+    if (isEntirelySuggestedInsert(li)) continue;
     n++;
     const marker = ordered ? `${n}. ` : '- ';
     const children = li.toArray().filter((c): c is Y.XmlElement => c instanceof Y.XmlElement);
