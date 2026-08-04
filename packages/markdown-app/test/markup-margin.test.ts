@@ -1,4 +1,4 @@
-import { type Thread, type User, createThread, prose } from '@feedback/core';
+import { type Thread, type User, createThread, prose, suggestOps } from '@feedback/core';
 import type { EditorView } from '@tiptap/pm/view';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Awareness } from 'y-protocols/awareness';
@@ -192,6 +192,28 @@ function openThreadAt(
 
 /** Let the (0ms in tests) markup debounce fire and the view repaint. */
 const tick = () => new Promise((r) => setTimeout(r, 25));
+
+const suggestAuthor = { id: 'agent-1', name: 'Docs Agent', color: '#7c5cff' };
+
+/** A pure INSERT proposal at the start of the doc's first block — there is
+ *  no `suggestReplace`-style creation primitive for a zero-length find, so
+ *  this builds the same zero-length Y.RelativePosition pair
+ *  `suggestRewriteRange` expects (mirrors the pattern in
+ *  packages/core/test/suggest-ops.test.ts). */
+function suggestPureInsert(ydoc: Y.Doc, replacement: string): { sid: string } {
+  const frag = prose.getProseFragment(ydoc);
+  const block = frag.toArray()[0] as Y.XmlElement;
+  const text = block.toArray()[0] as Y.XmlText;
+  const rel = Y.encodeRelativePosition(Y.createRelativePositionFromTypeIndex(text, 0));
+  const res = suggestOps.suggestRewriteRange(ydoc, {
+    startRel: rel,
+    endRel: rel,
+    replacement,
+    author: suggestAuthor,
+  });
+  if (!res.ok) throw new Error('suggestPureInsert failed to create a proposal');
+  return res;
+}
 
 /** happy-dom's viewport width drives `window.matchMedia` — the same query
  *  the source uses to mirror the styles.css `max-width: 1100px` breakpoint
@@ -827,5 +849,293 @@ describe('mountMarkupMargin — clearance under the floating view toggle', () =>
 
     const balloon = parent.querySelector('.lf-balloon') as HTMLElement;
     expect(Number.parseFloat(balloon.style.top)).toBe(0);
+  });
+});
+
+describe('mountMarkupMargin — suggestion balloons', () => {
+  it('renders an insert-only card: author, age, and only the new text underlined', async () => {
+    const { parent, editor, ydoc, chrome, scope } = mountPlainWithChrome('Alpha bravo gamma.\n');
+    await tick();
+    suggestPureInsert(ydoc, 'NEW ');
+    await tick();
+
+    const margin = mountMarkupMargin({
+      editorEl: parent,
+      view: editor.editor.view,
+      getDeletions: () => [],
+      threads: () => chrome.collectThreads(),
+      chrome,
+      getSuggestions: () => suggestOps.listSuggestions(ydoc),
+      docId: 'd1',
+      scope,
+    });
+    margin.relayout();
+
+    const balloon = parent.querySelector('.lf-balloon.lf-balloon-suggestion') as HTMLElement;
+    expect(balloon).not.toBeNull();
+    expect(balloon.querySelector('.lf-suggest-author')?.textContent).toBe('Docs Agent');
+    expect(balloon.querySelector('.lf-suggest-age')?.textContent).toBe('just now');
+    expect(balloon.querySelector('.lf-suggest-old')).toBeNull();
+    expect(balloon.querySelector('.lf-suggest-new')?.textContent).toBe('NEW ');
+  });
+
+  it('renders a delete-only card: only the deleted text struck', async () => {
+    const { parent, editor, ydoc, chrome, scope } = mountPlainWithChrome('Alpha bravo gamma.\n');
+    await tick();
+    suggestOps.suggestReplace(ydoc, { find: 'gamma', replace: '', author: suggestAuthor });
+    await tick();
+
+    const margin = mountMarkupMargin({
+      editorEl: parent,
+      view: editor.editor.view,
+      getDeletions: () => [],
+      threads: () => chrome.collectThreads(),
+      chrome,
+      getSuggestions: () => suggestOps.listSuggestions(ydoc),
+      docId: 'd1',
+      scope,
+    });
+    margin.relayout();
+
+    const balloon = parent.querySelector('.lf-balloon.lf-balloon-suggestion') as HTMLElement;
+    expect(balloon).not.toBeNull();
+    expect(balloon.querySelector('.lf-suggest-new')).toBeNull();
+    expect(balloon.querySelector('.lf-suggest-old')?.textContent).toBe('gamma');
+  });
+
+  it('renders a replace card: old text struck AND new text underlined', async () => {
+    const { parent, editor, ydoc, chrome, scope } = mountPlainWithChrome('Alpha bravo gamma.\n');
+    await tick();
+    suggestOps.suggestReplace(ydoc, { find: 'gamma', replace: 'GAMMA', author: suggestAuthor });
+    await tick();
+
+    const margin = mountMarkupMargin({
+      editorEl: parent,
+      view: editor.editor.view,
+      getDeletions: () => [],
+      threads: () => chrome.collectThreads(),
+      chrome,
+      getSuggestions: () => suggestOps.listSuggestions(ydoc),
+      docId: 'd1',
+      scope,
+    });
+    margin.relayout();
+
+    const balloon = parent.querySelector('.lf-balloon.lf-balloon-suggestion') as HTMLElement;
+    expect(balloon.querySelector('.lf-suggest-old')?.textContent).toBe('gamma');
+    expect(balloon.querySelector('.lf-suggest-new')?.textContent).toBe('GAMMA');
+    // Plain textContent, never innerHTML — a hostile author name/snippet
+    // can't inject markup into the card.
+    expect(balloon.innerHTML).not.toContain('<script');
+  });
+
+  it('Accept posts to the accept endpoint and removes the card', async () => {
+    const { parent, editor, ydoc, chrome, scope } = mountPlainWithChrome('Alpha bravo gamma.\n');
+    await tick();
+    const res = suggestOps.suggestReplace(ydoc, {
+      find: 'gamma',
+      replace: 'GAMMA',
+      author: suggestAuthor,
+    });
+    expect(res.ok).toBe(true);
+    await tick();
+
+    const margin = mountMarkupMargin({
+      editorEl: parent,
+      view: editor.editor.view,
+      getDeletions: () => [],
+      threads: () => chrome.collectThreads(),
+      chrome,
+      getSuggestions: () => suggestOps.listSuggestions(ydoc),
+      docId: 'd1',
+      scope,
+    });
+    margin.relayout();
+
+    const fetchSpy = vi.fn(() => Promise.resolve({ ok: true }) as unknown as Promise<Response>);
+    vi.stubGlobal('fetch', fetchSpy);
+    try {
+      const balloon = parent.querySelector('.lf-balloon-suggestion') as HTMLElement;
+      const acceptBtn = balloon.querySelector('.lf-suggest-accept') as HTMLButtonElement;
+      acceptBtn.click();
+      expect(fetchSpy).toHaveBeenCalledWith(
+        expect.stringContaining(`/api/docs/d1/suggestions/${res.ok ? res.sid : ''}/accept`),
+        expect.objectContaining({ method: 'POST' }),
+      );
+      // Optimistically removed on click — doesn't wait for the round trip.
+      expect(parent.querySelectorAll('.lf-balloon-suggestion')).toHaveLength(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('handles a { ok:false, error:"not-found" } reject response gracefully — card removed, no crash', async () => {
+    const { parent, editor, ydoc, chrome, scope } = mountPlainWithChrome('Alpha bravo gamma.\n');
+    await tick();
+    suggestOps.suggestReplace(ydoc, { find: 'gamma', replace: 'GAMMA', author: suggestAuthor });
+    await tick();
+
+    const margin = mountMarkupMargin({
+      editorEl: parent,
+      view: editor.editor.view,
+      getDeletions: () => [],
+      threads: () => chrome.collectThreads(),
+      chrome,
+      getSuggestions: () => suggestOps.listSuggestions(ydoc),
+      docId: 'd1',
+      scope,
+    });
+    margin.relayout();
+
+    const fetchSpy = vi.fn(
+      () =>
+        Promise.resolve({
+          ok: false,
+          status: 404,
+          json: () => Promise.resolve({ error: 'not-found' }),
+        }) as unknown as Promise<Response>,
+    );
+    vi.stubGlobal('fetch', fetchSpy);
+    try {
+      const balloon = parent.querySelector('.lf-balloon-suggestion') as HTMLElement;
+      const rejectBtn = balloon.querySelector('.lf-suggest-reject') as HTMLButtonElement;
+      expect(() => rejectBtn.click()).not.toThrow();
+      await tick();
+      expect(parent.querySelectorAll('.lf-balloon-suggestion')).toHaveLength(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('never renders a balloon for a proposal with no docId (accept/reject would have nowhere to post)', async () => {
+    const { parent, editor, ydoc, chrome, scope } = mountPlainWithChrome('Alpha bravo gamma.\n');
+    await tick();
+    suggestOps.suggestReplace(ydoc, { find: 'gamma', replace: 'GAMMA', author: suggestAuthor });
+    await tick();
+
+    const margin = mountMarkupMargin({
+      editorEl: parent,
+      view: editor.editor.view,
+      getDeletions: () => [],
+      threads: () => chrome.collectThreads(),
+      chrome,
+      getSuggestions: () => suggestOps.listSuggestions(ydoc),
+      // docId omitted on purpose
+      scope,
+    });
+    margin.relayout();
+
+    expect(parent.querySelectorAll('.lf-balloon-suggestion')).toHaveLength(0);
+  });
+});
+
+describe('mountMarkupMargin — mobile suggestion chip opens the sheet with the same card', () => {
+  it('one chip per sid; tapping it opens the sheet with Accept/Reject; closing hides it', async () => {
+    const { parent, editor, ydoc, chrome, scope } = mountPlainWithChrome('Alpha bravo gamma.\n');
+    await tick();
+    const res = suggestOps.suggestReplace(ydoc, {
+      find: 'gamma',
+      replace: 'GAMMA',
+      author: suggestAuthor,
+    });
+    expect(res.ok).toBe(true);
+    await tick();
+
+    mountMarkupMargin({
+      editorEl: parent,
+      view: editor.editor.view,
+      getDeletions: () => [],
+      threads: () => chrome.collectThreads(),
+      chrome,
+      getSuggestions: () => suggestOps.listSuggestions(ydoc),
+      docId: 'd1',
+      scope,
+    });
+
+    // The chip is a real (base-schema) ProseMirror decoration, independent
+    // of the margin's own relayout — same "mobile fallback always in the
+    // DOM, CSS decides visibility" contract as .lf-del-chip.
+    const chips = parent.querySelectorAll('.lf-suggest-chip');
+    expect(chips).toHaveLength(1);
+    const chip = chips[0] as HTMLElement;
+    expect(chip.dataset.lfSuggestSid).toBe(res.ok ? res.sid : '');
+
+    const sheet = document.querySelector('.lf-suggest-sheet') as HTMLElement;
+    expect(sheet).not.toBeNull();
+    expect(sheet.classList.contains('hidden')).toBe(true);
+
+    chip.click();
+    expect(sheet.classList.contains('hidden')).toBe(false);
+    expect(sheet.getAttribute('aria-hidden')).toBe('false');
+    expect(sheet.querySelector('.lf-suggest-old')?.textContent).toBe('gamma');
+    expect(sheet.querySelector('.lf-suggest-new')?.textContent).toBe('GAMMA');
+    expect(sheet.querySelector('.lf-suggest-accept')).not.toBeNull();
+    expect(sheet.querySelector('.lf-suggest-reject')).not.toBeNull();
+
+    (sheet.querySelector('.thread-view-close') as HTMLElement).click();
+    expect(sheet.classList.contains('hidden')).toBe(true);
+  });
+
+  it('Reject from inside the sheet closes it', async () => {
+    const { parent, editor, ydoc, chrome, scope } = mountPlainWithChrome('Alpha bravo gamma.\n');
+    await tick();
+    suggestOps.suggestReplace(ydoc, { find: 'gamma', replace: 'GAMMA', author: suggestAuthor });
+    await tick();
+
+    mountMarkupMargin({
+      editorEl: parent,
+      view: editor.editor.view,
+      getDeletions: () => [],
+      threads: () => chrome.collectThreads(),
+      chrome,
+      getSuggestions: () => suggestOps.listSuggestions(ydoc),
+      docId: 'd1',
+      scope,
+    });
+
+    const chip = parent.querySelector('.lf-suggest-chip') as HTMLElement;
+    chip.click();
+    const sheet = document.querySelector('.lf-suggest-sheet') as HTMLElement;
+    expect(sheet.classList.contains('hidden')).toBe(false);
+
+    const fetchSpy = vi.fn(() => Promise.resolve({ ok: true }) as unknown as Promise<Response>);
+    vi.stubGlobal('fetch', fetchSpy);
+    try {
+      (sheet.querySelector('.lf-suggest-reject') as HTMLButtonElement).click();
+      expect(fetchSpy).toHaveBeenCalled();
+      expect(sheet.classList.contains('hidden')).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe('mountMarkupMargin — suggestion chip mobile-only class / 430px', () => {
+  it('the chip carries the SAME class the deletion chip uses to hide ≥1100px (`.lf-suggest-chip`, styles.css)', async () => {
+    setViewportWidth(415); // 430px-class viewport
+    const { parent, editor, ydoc, chrome, scope } = mountPlainWithChrome('Alpha bravo gamma.\n');
+    await tick();
+    suggestOps.suggestReplace(ydoc, { find: 'gamma', replace: 'GAMMA', author: suggestAuthor });
+    await tick();
+    mountMarkupMargin({
+      editorEl: parent,
+      view: editor.editor.view,
+      getDeletions: () => [],
+      threads: () => chrome.collectThreads(),
+      chrome,
+      getSuggestions: () => suggestOps.listSuggestions(ydoc),
+      docId: 'd1',
+      scope,
+    });
+    const chip = parent.querySelector('.lf-suggest-chip') as HTMLElement;
+    expect(chip).not.toBeNull();
+    // ProseMirror adds its own `ProseMirror-widget` class to a widget
+    // decoration's root node alongside ours — assert containment, not
+    // full equality.
+    expect(chip.classList.contains('lf-suggest-chip')).toBe(true);
+    // The chip decoration exists in the DOM at every width — same "always
+    // rendered, CSS decides visibility" contract as `.lf-del-chip`
+    // (live-markup.ts): styles.css, not this test, is what actually hides
+    // the balloon column and reveals the chip ≤1100px.
   });
 });

@@ -1,4 +1,4 @@
-import { type User, connect, escapeHtml, readDocMeta } from '@feedback/core';
+import { type User, connect, escapeHtml, readDocMeta, suggestOps } from '@feedback/core';
 import { mountCode } from './code/code-app.ts';
 import { renderDiffNav, setActiveFile } from './diff-nav.ts';
 import { type EditorHandle, createEditor } from './editor.ts';
@@ -8,6 +8,7 @@ import type { MountScope } from './mount-scope.ts';
 import { startReadingTracker } from './reading-tracker.ts';
 import { mountMarkupMargin } from './redline/markup-margin.ts';
 import { mountRedline } from './redline/redline-app.ts';
+import { mountSuggestionsSummary } from './redline/suggestions-summary.ts';
 import {
   type ReviewChrome,
   el,
@@ -23,6 +24,7 @@ import {
   setSidebarSignature,
   sidebarShowsSignature,
 } from './sidebar-nav-key.ts';
+import { readSuggestModePref, setSuggesting, writeSuggestModePref } from './suggest-input.ts';
 import { registerMarkdownMount } from './surface-registry.ts';
 import { type TableMenuItem, tableMenuItems } from './table-menu.ts';
 import { renderWorkspaceTree } from './workspace-tree.ts';
@@ -278,9 +280,18 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     getDeletions: () => [],
     threads: () => reviewChrome.collectThreads(),
     chrome: reviewChrome,
+    getSuggestions: () => suggestOps.listSuggestions(ydoc),
+    docId,
     scope,
   });
-  const onMarginTransaction = (): void => margin.scheduleRelayout();
+  // Doc-level "N pending suggestions" topbar badge (Accept all / Reject all
+  // across every author) — per-suggestion Accept/Reject lives on the
+  // balloon/chip card the margin just wired above.
+  const suggestionsSummary = mountSuggestionsSummary({ docId, ydoc, scope });
+  const onMarginTransaction = (): void => {
+    margin.scheduleRelayout();
+    suggestionsSummary.scheduleRefresh();
+  };
   editor.editor.on('transaction', onMarginTransaction);
   scope.onCleanup(() => editor.editor.off('transaction', onMarginTransaction));
 
@@ -847,6 +858,45 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     editMode = editMode === 'edit' ? 'view' : 'edit';
     localStorage.setItem(EDIT_MODE_KEY, editMode);
     applyEditMode(editMode);
+  });
+
+  // =========================================================================
+  // SUGGESTING MODE — Google-Docs-style proposals. While ON, the suggest-input
+  //   plugin turns typing/deleting into attributed suggestInsert/suggestDelete
+  //   marks; nothing reaches disk until accepted (the serializer emits the
+  //   accepted state). Persisted per doc (localStorage is per-browser, so the
+  //   doc key already scopes it to this user).
+  // =========================================================================
+  const toggleSuggestMode = el<HTMLButtonElement>('toggle-suggest-mode');
+  let suggesting = readSuggestModePref(docId);
+  function applySuggestMode(on: boolean): void {
+    setSuggesting(editor.editor.view, {
+      on,
+      author: { id: user.id, name: user.name, color: user.color },
+    });
+    document.body.classList.toggle('suggest-mode', on);
+    toggleSuggestMode.setAttribute('aria-pressed', String(on));
+    toggleSuggestMode.title = on
+      ? 'Suggesting — edits become proposals. Tap for direct editing'
+      : 'Tap to switch to Suggesting — edits become proposals';
+    toggleSuggestMode.setAttribute(
+      'aria-label',
+      on
+        ? 'Suggesting on — your edits become proposals. Tap for direct editing'
+        : 'Suggesting off — tap to propose edits instead of making them',
+    );
+  }
+  applySuggestMode(suggesting);
+  scope.listen(toggleSuggestMode, 'click', () => {
+    suggesting = !suggesting;
+    writeSuggestModePref(docId, suggesting);
+    // Suggesting implies an editable surface — proposing requires typing.
+    if (suggesting && editMode !== 'edit') {
+      editMode = 'edit';
+      localStorage.setItem(EDIT_MODE_KEY, editMode);
+      applyEditMode(editMode);
+    }
+    applySuggestMode(suggesting);
   });
 
   // =========================================================================

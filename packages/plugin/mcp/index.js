@@ -13749,6 +13749,9 @@ var AUTHOR = resolveAgentAuthor({
   FEEDBACK_AUTHOR: process.env.FEEDBACK_AUTHOR,
   FEEDBACK_AGENT_NAME: process.env.FEEDBACK_AGENT_NAME
 });
+function suggestionAuthor() {
+  return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
+}
 var server = new Server({
   name: "claude-live-feedback",
   version: "0.0.1"
@@ -13802,6 +13805,16 @@ var server = new Server({
     "(bare URL on its own line); the file tree navigates the rest. Thread",
     "events arrive per file via the auto-watch; resolve threads as you address",
     "them; delete_workspace(reviewId) when the review is done.",
+    "",
+    "SUGGEST: pass suggest: true on find_and_replace or rewrite_thread_region to",
+    "PROPOSE a change instead of applying it — the match is marked pending and",
+    "attributed to this agent; disk and every other reader stay on the accepted",
+    "state until a human (or accept_suggestion) accepts it. Returns { suggestionId }.",
+    "Use for judgment calls a reviewer should approve; use the plain edit for",
+    "mechanical fixes. list_suggestions(docId) / accept_suggestion(docId, sid) /",
+    "reject_suggestion(docId, sid) / resolve_all_suggestions(docId, action, authorId?)",
+    "manage proposals from any author. suggestion.created/accepted/rejected events",
+    "arrive on the same watch_doc channel as thread events.",
     "",
     "OBSERVE: call watch_doc(docId) once per doc to receive thread events as",
     '<channel source="live-feedback" doc_id="..." thread_id="..." event="..." author="..." sent_at="...">body</channel>',
@@ -14078,7 +14091,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "find_and_replace",
-      description: "Replace a string of plain text in the doc with another string. `find` must match the doc's plain text content (no markdown syntax — marks like bold/italic are preserved automatically). Use `contextBefore` / `contextAfter` to disambiguate repeated phrases. If the match is still ambiguous the tool returns a list of candidates. Use `occurrence` (1-indexed) to pick one explicitly. Pass `parseInlineMarks: true` to interpret `[label](url)` / `**bold**` / `*italic*` / `` `code` `` / `~~strike~~` in `replace` as marks on the inserted text instead of literal characters — required when adding a labeled link or other inline mark to text that doesn't already have one. Runs as a single Yjs transaction so it merges cleanly with concurrent user edits.",
+      description: "Replace a string of plain text in the doc with another string. `find` must match the doc's plain text content (no markdown syntax — marks like bold/italic are preserved automatically). Use `contextBefore` / `contextAfter` to disambiguate repeated phrases. If the match is still ambiguous the tool returns a list of candidates. Use `occurrence` (1-indexed) to pick one explicitly. Pass `parseInlineMarks: true` to interpret `[label](url)` / `**bold**` / `*italic*` / `` `code` `` / `~~strike~~` in `replace` as marks on the inserted text instead of literal characters — required when adding a labeled link or other inline mark to text that doesn't already have one. Runs as a single Yjs transaction so it merges cleanly with concurrent user edits. Pass `suggest: true` to propose the change instead of applying it directly — the match is marked as a pending suggestion (visible in the live doc, attributed to this agent) instead of edited outright; disk and every other agent's read stay on the ACCEPTED state until a human (or `accept_suggestion`) accepts it. Returns `{ suggestionId }` when `suggest` is set. Use this for judgment-call edits where a one-tap human approval is better than a silent rewrite; use the plain edit for mechanical fixes.",
       inputSchema: {
         type: "object",
         properties: {
@@ -14088,23 +14101,79 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           contextBefore: { type: "string" },
           contextAfter: { type: "string" },
           occurrence: { type: "number" },
-          parseInlineMarks: { type: "boolean" }
+          parseInlineMarks: { type: "boolean" },
+          suggest: {
+            type: "boolean",
+            description: "Propose the change instead of applying it. Returns { suggestionId } instead of ok:true."
+          }
         },
         required: ["docId", "find", "replace"]
       }
     },
     {
       name: "rewrite_thread_region",
-      description: "Rewrite the text a thread is anchored to. Primary path for comment-driven edits: the user commented, the agent fixes the exact range they commented on. Immune to concurrent user edits because the anchor is a Y.RelativePosition, resolved to current offsets at apply time. Pass `parseInlineMarks: true` to interpret `[label](url)` / `**bold**` / `*italic*` / `` `code` `` / `~~strike~~` in `replacement` as marks on the inserted text instead of literal characters. Returns `anchor-orphaned` if the user deleted the anchored text — fall back to find_and_replace in that case.",
+      description: "Rewrite the text a thread is anchored to. Primary path for comment-driven edits: the user commented, the agent fixes the exact range they commented on. Immune to concurrent user edits because the anchor is a Y.RelativePosition, resolved to current offsets at apply time. Pass `parseInlineMarks: true` to interpret `[label](url)` / `**bold**` / `*italic*` / `` `code` `` / `~~strike~~` in `replacement` as marks on the inserted text instead of literal characters. Returns `anchor-orphaned` if the user deleted the anchored text — fall back to find_and_replace in that case. Pass `suggest: true` to propose the rewrite instead of applying it directly — same semantics as find_and_replace's `suggest` flag: marked pending, attributed to this agent, invisible to disk until accepted. Returns `{ suggestionId }` when `suggest` is set.",
       inputSchema: {
         type: "object",
         properties: {
           docId: { type: "string" },
           threadId: { type: "string" },
           replacement: { type: "string" },
-          parseInlineMarks: { type: "boolean" }
+          parseInlineMarks: { type: "boolean" },
+          suggest: {
+            type: "boolean",
+            description: "Propose the rewrite instead of applying it. Returns { suggestionId } instead of ok:true."
+          }
         },
         required: ["docId", "threadId", "replacement"]
+      }
+    },
+    {
+      name: "list_suggestions",
+      description: 'List every pending suggestion (from any author — human or agent) on a doc, in doc order. Each entry has `sid`, `author` ({id,name,color}), `kind` (insert/delete/replace), a human-readable `snippet` (inserted text, deleted text, or "old → new"), `blockContext` (the accepted-state text of the containing block), and `ts` (creation time, epoch ms). Use before `accept_suggestion` / `reject_suggestion` to find the sid, or to check whether your own earlier `suggest: true` proposal is still pending.',
+      inputSchema: {
+        type: "object",
+        properties: {
+          docId: { type: "string" }
+        },
+        required: ["docId"]
+      }
+    },
+    {
+      name: "accept_suggestion",
+      description: "Accept a pending suggestion by sid: it becomes real content and flows to disk via the normal debounced write-back within ~1s. Missing sid → an error (also the correct outcome for a double-accept race — someone else already resolved it).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          docId: { type: "string" },
+          sid: { type: "string" }
+        },
+        required: ["docId", "sid"]
+      }
+    },
+    {
+      name: "reject_suggestion",
+      description: "Reject a pending suggestion by sid: restores exactly the pre-suggestion text (the proposed insert is removed, the proposed deletion is un-marked and kept). Missing sid → an error.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          docId: { type: "string" },
+          sid: { type: "string" }
+        },
+        required: ["docId", "sid"]
+      }
+    },
+    {
+      name: "resolve_all_suggestions",
+      description: "Accept or reject EVERY pending suggestion on a doc in one call — the doc-level accept-all / reject-all. Pass `authorId` to resolve only one author's proposals, leaving everyone else's pending (list_suggestions returns each entry's `author.id`). Returns the count resolved and their sids.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          docId: { type: "string" },
+          action: { type: "string", enum: ["accept", "reject"] },
+          authorId: { type: "string" }
+        },
+        required: ["docId", "action"]
       }
     },
     {
@@ -14461,23 +14530,54 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok(res);
       }
       case "find_and_replace": {
-        const { docId, find, replace, contextBefore, contextAfter, occurrence, parseInlineMarks } = a;
+        const {
+          docId,
+          find,
+          replace,
+          contextBefore,
+          contextAfter,
+          occurrence,
+          parseInlineMarks,
+          suggest
+        } = a;
         const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/find_and_replace`, {
           find,
           replace,
           ...contextBefore !== undefined ? { contextBefore } : {},
           ...contextAfter !== undefined ? { contextAfter } : {},
           ...occurrence !== undefined ? { occurrence } : {},
-          ...parseInlineMarks === true ? { parseInlineMarks: true } : {}
+          ...parseInlineMarks === true ? { parseInlineMarks: true } : {},
+          ...suggest === true ? { suggest: true, author: suggestionAuthor() } : {}
         });
         return ok(res);
       }
       case "rewrite_thread_region": {
-        const { docId, threadId, replacement, parseInlineMarks } = a;
+        const { docId, threadId, replacement, parseInlineMarks, suggest } = a;
         const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/rewrite_region`, {
           replacement,
-          ...parseInlineMarks === true ? { parseInlineMarks: true } : {}
+          ...parseInlineMarks === true ? { parseInlineMarks: true } : {},
+          ...suggest === true ? { suggest: true, author: suggestionAuthor() } : {}
         });
+        return ok(res);
+      }
+      case "list_suggestions": {
+        const { docId } = a;
+        const res = await http("GET", `/api/docs/${encodeURIComponent(docId)}/suggestions`);
+        return ok(res);
+      }
+      case "accept_suggestion": {
+        const { docId, sid } = a;
+        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/suggestions/${encodeURIComponent(sid)}/accept`);
+        return ok(res);
+      }
+      case "reject_suggestion": {
+        const { docId, sid } = a;
+        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/suggestions/${encodeURIComponent(sid)}/reject`);
+        return ok(res);
+      }
+      case "resolve_all_suggestions": {
+        const { docId, action, authorId } = a;
+        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/suggestions/resolve_all`, { action, ...authorId !== undefined ? { authorId } : {} });
         return ok(res);
       }
       case "insert_after_thread": {
@@ -14693,6 +14793,31 @@ async function handleFrame(raw) {
 async function emitChannelMessage(event, rawPayload) {
   const p = rawPayload ?? {};
   const docId = p.docId ?? "unknown";
+  if (event.startsWith("suggestion.")) {
+    const sid = p.sid ?? "";
+    const action2 = event.slice("suggestion.".length);
+    const author2 = p.suggestion?.author?.name ?? "";
+    const snippet2 = p.suggestion?.snippet ?? "";
+    const kind = p.suggestion?.kind ?? "";
+    const header2 = snippet2 ? `"${truncate(snippet2, 60)}"` : sid;
+    const body2 = `[suggestion ${action2}] ${author2 ? `${author2}: ` : ""}${kind} ${header2}`.trim();
+    await server.notification({
+      method: "notifications/claude/channel",
+      params: {
+        source: "live-feedback",
+        sent_at: new Date().toISOString(),
+        content: body2,
+        meta: {
+          doc_id: docId,
+          sid,
+          event,
+          author: author2,
+          anchor_text: snippet2
+        }
+      }
+    });
+    return;
+  }
   const threadId = p.threadId ?? "";
   const snippet = p.thread?.anchor?.snippet?.text ?? p.thread?.anchor?.original?.snippet?.text ?? "";
   const author = p.comment?.author?.name ?? p.thread?.comments?.[0]?.author?.name ?? "";

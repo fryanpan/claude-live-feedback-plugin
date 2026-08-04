@@ -16,6 +16,7 @@ import {
   type DocType,
   type Thread,
   type User,
+  type WebhookPayload,
   contentKind,
   createThread,
   initDocMeta,
@@ -25,6 +26,7 @@ import {
   postReply as schemaPostReply,
   replaceAnchor as schemaReplaceAnchor,
   setStatus as schemaSetStatus,
+  suggestOps,
 } from '@feedback/core';
 import type { ServerWebSocket } from 'bun';
 import * as awarenessProtocol from 'y-protocols/awareness';
@@ -1719,9 +1721,19 @@ export class Rooms {
     // changed are replaced, so anchors on untouched blocks keep resolving.
     // Anchors inside a rewritten block still break — auto-reanchor's
     // snippet-match sweep catches that case on the next tick.
+    //
+    // Suggestions ride the same block-granularity rule: marks in untouched
+    // blocks survive (identity preserved), but an external rewrite of a
+    // block CARRYING suggestions replaces the block and its proposals are
+    // dropped — accepted-and-surfaced, not silently swallowed. Snapshot the
+    // pending sids so the drop can be recorded below (syncError pattern; a
+    // snippet-match re-anchor sweep for suggestions is out of scope for v1).
+    const sidsBefore = new Set(suggestOps.scanSuggestions(fragment).keys());
     room.ydoc.transact(() => {
       prose.applyMarkdownToFragment(fragment, md);
     }, 'file-watch');
+    const sidsAfter = new Set(suggestOps.scanSuggestions(fragment).keys());
+    const droppedSids = [...sidsBefore].filter((sid) => !sidsAfter.has(sid));
     // Same as reparseFromDisk: a block whose only defect is a legacy string
     // heading level serializes identically, so the diff keeps it and the
     // attribute has to be repaired separately. Idempotent and cheap.
@@ -1731,7 +1743,21 @@ export class Rooms {
     // lastWritten` forever after — and the NEXT external edit was misjudged
     // a conflict and clobbered by the reassert.
     binding.lastWritten = prose.serializeFragmentToMarkdown(fragment);
-    binding.lastSyncError = undefined;
+    if (droppedSids.length > 0) {
+      // Same recoverability philosophy as the conflict backups: the reconcile
+      // SUCCEEDED, but pending proposals living in a rewritten block were
+      // dropped — record which, so agents/UI can report the loss instead of
+      // the suggestions just vanishing. Cleared by the next clean reconcile.
+      binding.lastSyncError = {
+        message: `external edit dropped pending suggestion(s): ${droppedSids.join(', ')}`,
+        at: Date.now(),
+      };
+      console.warn(
+        `[rooms] ${room.docId}: external edit to ${binding.path} dropped suggestion(s) ${droppedSids.join(', ')}`,
+      );
+    } else {
+      binding.lastSyncError = undefined;
+    }
     console.log(
       `[rooms] ${room.docId}: applied external edit from ${binding.path} (${blocks.length} blocks)`,
     );
@@ -1981,6 +2007,146 @@ export class Rooms {
     return prose.deleteAgentAnchor(room.ydoc, anchorId);
   }
 
+  // =========================================================================
+  // Suggested edits (redline-suggestions phase 2). Thin wrappers over the
+  // core suggest-ops: suggestions ARE marks in the prose fragment, so every
+  // operation rescans at execution time — no registry to keep in sync, and a
+  // sid that raced away (double-accept, external rewrite) reports not-found.
+  // All mutations run under the same 'agent' transaction origin the other
+  // agent edit tools use: the write-back observer flushes results to disk;
+  // a browser UndoManager never tracks them.
+  // =========================================================================
+
+  /** All pending proposals on the doc, in doc order. Empty for unknown docs
+   *  and for flat (code/diff) docs, whose prose fragment has no content. */
+  listSuggestions(docId: string): suggestOps.SuggestionSummary[] {
+    const room = this.rooms.get(docId);
+    if (!room) return [];
+    return suggestOps.listSuggestions(room.ydoc);
+  }
+
+  /**
+   * The suggestion-creation primitive: same find/context/occurrence matching
+   * as findAndReplace, but the replacement is written AS A PROPOSAL — the
+   * matched text marked suggestDelete, the new text inserted with
+   * suggestInsert, one shared sid, author from the caller. The doc's
+   * accepted state (and therefore disk) is unchanged until accepted.
+   */
+  createSuggestion(
+    docId: string,
+    opts: {
+      find: string;
+      replace: string;
+      contextBefore?: string;
+      contextAfter?: string;
+      occurrence?: number;
+      parseInlineMarks?: boolean;
+      author: suggestOps.SuggestionAuthor;
+    },
+  ):
+    | { ok: true; suggestionId: string }
+    | {
+        ok: false;
+        // `match-in-pending-suggestion`: the find only matched text that is
+        // itself an unaccepted proposal — anchoring here would make this
+        // proposal vanish when the other one is rejected.
+        error: 'not-found' | 'no-match' | 'ambiguous' | 'match-in-pending-suggestion';
+        candidates?: Array<{ docOffset: number; preview: string }>;
+      } {
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'not-found' };
+    const res = suggestOps.suggestReplace(room.ydoc, opts);
+    if (!res.ok) return res;
+    this.fireSuggestionEvent(
+      room,
+      'suggestion.created',
+      res.sid,
+      suggestOps.listSuggestions(room.ydoc).find((s) => s.sid === res.sid),
+    );
+    return { ok: true, suggestionId: res.sid };
+  }
+
+  /**
+   * The `rewrite_thread_region` twin of `createSuggestion`: propose the
+   * rewrite of a thread's anchored range instead of applying it directly.
+   * Same anchor resolution as `rewriteThreadRegion` — `anchor-orphaned` if
+   * the user deleted the anchored text, `cross-block` if the range somehow
+   * spans two blocks (shouldn't happen for a single-thread anchor, but
+   * mirrors `rewriteRange`'s own restriction).
+   */
+  createSuggestionForThread(
+    docId: string,
+    threadId: string,
+    opts: {
+      replacement: string;
+      parseInlineMarks?: boolean;
+      author: suggestOps.SuggestionAuthor;
+      ts?: number;
+    },
+  ):
+    | { ok: true; suggestionId: string }
+    | { ok: false; error: 'anchor-not-found' | 'anchor-orphaned' | 'cross-block' } {
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'anchor-not-found' };
+    const thread = this.getThread(docId, threadId);
+    if (!thread) return { ok: false, error: 'anchor-not-found' };
+    if (thread.anchor.kind !== 'text-range') return { ok: false, error: 'anchor-orphaned' };
+    const res = suggestOps.suggestRewriteRange(room.ydoc, {
+      startRel: thread.anchor.startRel,
+      endRel: thread.anchor.endRel,
+      replacement: opts.replacement,
+      parseInlineMarks: opts.parseInlineMarks === true,
+      author: opts.author,
+      ts: opts.ts,
+    });
+    if (!res.ok) return res;
+    this.fireSuggestionEvent(
+      room,
+      'suggestion.created',
+      res.sid,
+      suggestOps.listSuggestions(room.ydoc).find((s) => s.sid === res.sid),
+    );
+    return { ok: true, suggestionId: res.sid };
+  }
+
+  /** Accept a proposal: it becomes real content and flows to disk via the
+   *  normal debounced write-back. Missing sid (or doc) → not-found — also
+   *  the correct answer to the double-accept race. */
+  acceptSuggestion(docId: string, sid: string): suggestOps.SuggestionOpResult {
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'not-found' };
+    const before = suggestOps.listSuggestions(room.ydoc).find((s) => s.sid === sid);
+    const res = suggestOps.acceptSuggestion(room.ydoc, sid);
+    if (res.ok) this.fireSuggestionEvent(room, 'suggestion.accepted', sid, before);
+    return res;
+  }
+
+  /** Reject a proposal: restores exactly the pre-suggestion text. */
+  rejectSuggestion(docId: string, sid: string): suggestOps.SuggestionOpResult {
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'not-found' };
+    const before = suggestOps.listSuggestions(room.ydoc).find((s) => s.sid === sid);
+    const res = suggestOps.rejectSuggestion(room.ydoc, sid);
+    if (res.ok) this.fireSuggestionEvent(room, 'suggestion.rejected', sid, before);
+    return res;
+  }
+
+  /** Accept or reject every pending proposal (optionally one author's). */
+  resolveAllSuggestions(
+    docId: string,
+    opts: { action: 'accept' | 'reject'; authorId?: string },
+  ): { ok: true; resolved: number; sids: string[] } | { ok: false; error: 'not-found' } {
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'not-found' };
+    const before = new Map(suggestOps.listSuggestions(room.ydoc).map((s) => [s.sid, s]));
+    const res = suggestOps.resolveAllSuggestions(room.ydoc, opts);
+    const event = opts.action === 'accept' ? 'suggestion.accepted' : 'suggestion.rejected';
+    for (const sid of res.sids) {
+      this.fireSuggestionEvent(room, event, sid, before.get(sid));
+    }
+    return res;
+  }
+
   /**
    * Parse markdown into block elements and insert them as siblings
    * immediately after the block that contains the agent anchor.
@@ -2215,7 +2381,7 @@ export class Rooms {
   ): void {
     room.seq++;
     const decorate = this.cfg.decorateDocMeta ?? ((m) => m);
-    const payload = {
+    this.broadcastToRoom(room, {
       event,
       docId: room.docId,
       threadId: thread.id,
@@ -2223,7 +2389,40 @@ export class Rooms {
       doc: decorate(room.meta),
       comment,
       seq: room.seq,
-    };
+    });
+  }
+
+  /**
+   * Suggestion verdict events (redline-suggestions phase 2, commit 3):
+   * `suggestion.created` / `suggestion.accepted` / `suggestion.rejected` on
+   * the same doc/workspace channel thread events use, so a suggesting agent
+   * hears the outcome via `watch_doc` without polling `list_suggestions`.
+   * `summary` is the SuggestionSummary captured BEFORE the mutation for
+   * accept/reject (the marks are gone afterward, so there's nothing left to
+   * scan) — undefined only if the sid vanished between scan and fire, which
+   * shouldn't happen since callers scan and mutate in the same call.
+   */
+  private fireSuggestionEvent(
+    room: DocRoom,
+    event: 'suggestion.created' | 'suggestion.accepted' | 'suggestion.rejected',
+    sid: string,
+    summary: suggestOps.SuggestionSummary | undefined,
+  ): void {
+    room.seq++;
+    const decorate = this.cfg.decorateDocMeta ?? ((m) => m);
+    this.broadcastToRoom(room, {
+      event,
+      docId: room.docId,
+      sid,
+      suggestion: summary,
+      doc: decorate(room.meta),
+      seq: room.seq,
+    });
+  }
+
+  /** Shared SSE + workspace + webhook fan-out behind fireEvent /
+   *  fireSuggestionEvent. Caller stamps `event`/`seq`/`doc` into payload. */
+  private broadcastToRoom(room: DocRoom, payload: WebhookPayload): void {
     this.cfg.sse.broadcast(room.docId, payload);
     // Workspace members double-broadcast on a per-workspace channel so an
     // agent can watch ONE stream per review/folder instead of one per file.
