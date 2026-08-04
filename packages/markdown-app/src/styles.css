@@ -2139,3 +2139,71 @@ body.redline-mode .ProseMirror del.lf-del {
     text-decoration-color: #f85149;
   }
 }
+
+/* ================= FIRST-ARRIVAL IDENTITY PROMPT ================= */
+/* Full-viewport scrim shown once per browser (until a name is stored or the
+   prompt is skipped). Single fluid column, so it needs no separate mobile
+   breakpoint — the card shrinks to fit 430px with margin to spare. */
+.identity-prompt {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(27, 31, 35, 0.45);
+}
+.identity-card {
+  width: min(360px, 100%);
+  padding: 20px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+}
+.identity-card h2 {
+  margin: 0 0 6px;
+  font-size: 17px;
+}
+.identity-card p {
+  margin: 0 0 14px;
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+.identity-card input {
+  width: 100%;
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 16px; /* ≥16px so iOS Safari doesn't zoom the field on focus */
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+}
+.identity-card input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  border-color: var(--accent);
+}
+.identity-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+.identity-actions button {
+  padding: 8px 14px;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.identity-actions button[type="submit"] {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+.identity-actions .identity-skip {
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--fg-muted);
+}
