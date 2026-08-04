@@ -273,6 +273,29 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
 
   let rendered: RenderedBalloon[] = [];
 
+  /**
+   * Word-style collapsed balloons: every balloon renders as a one-line
+   * summary until clicked; at most ONE is expanded at a time (expanding
+   * another collapses the current one). Keyed by stable identity —
+   * `c:<threadId>` / `s:<sid>` / `d:<blockKey>` — so the expanded card
+   * survives rebuilds triggered by unrelated edits.
+   */
+  let expandedKey: string | null = null;
+  const isExpanded = (k: string): boolean => expandedKey === k;
+
+  function expandBalloon(key: string): void {
+    expandedKey = key;
+    // Expanding a comment makes it the active thread — the expanded card is
+    // the drawer card, whose reply box / highlight styling key off active
+    // state, and "expand = engage with this thread" is the intent.
+    if (key.startsWith('c:') && opts.chrome) {
+      const id = key.slice(2);
+      opts.chrome.threadsPanel.setActive(id);
+      opts.chrome.refreshThreadDecorations(id);
+    }
+    relayout();
+  }
+
   const blockKeyForPos = (pos: number): number => blockIndexForPos(view.state.doc, pos);
 
   // Mobile fallback: the chip decoration (live-markup.ts) is grouped and
@@ -407,6 +430,126 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
     return el;
   }
 
+  /** Small "collapse back to one line" button, top-right of expanded cards. */
+  function addCollapseButton(el: HTMLElement): void {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'lf-balloon-collapse';
+    b.setAttribute('aria-label', 'Collapse');
+    b.title = 'Collapse';
+    b.textContent = '−';
+    el.appendChild(b);
+  }
+
+  /** Swatch + name prefix shared by every collapsed builder. */
+  function collapsedIdentity(el: HTMLElement, name: string, color: string): void {
+    const swatch = document.createElement('span');
+    swatch.className = 'lf-collapsed-swatch';
+    swatch.style.background = color;
+    const nameEl = document.createElement('span');
+    nameEl.className = 'lf-collapsed-name';
+    // Plain text, never HTML: names are untrusted (agent-supplied).
+    nameEl.textContent = name;
+    el.append(swatch, nameEl);
+  }
+
+  function buildCollapsedComment(t: Thread): HTMLElement {
+    const el = document.createElement('div');
+    el.className = 'lf-balloon lf-balloon-comment lf-balloon-collapsed';
+    el.dataset.expandKey = `c:${t.id}`;
+    const first = t.comments[0];
+    const author = first?.author ?? t.createdBy;
+    collapsedIdentity(el, author.name, author.color);
+    const preview = document.createElement('span');
+    preview.className = 'lf-collapsed-preview';
+    // Plain text, never HTML: comment bodies are untrusted input.
+    preview.textContent = first?.text ?? '';
+    el.appendChild(preview);
+    if (t.commentCount > 1) {
+      const count = document.createElement('span');
+      count.className = 'lf-collapsed-count';
+      count.textContent = String(t.commentCount - 1);
+      count.title = `${t.commentCount - 1} ${t.commentCount === 2 ? 'reply' : 'replies'}`;
+      el.appendChild(count);
+    }
+    return el;
+  }
+
+  function buildCollapsedSuggestion(s: suggestOps.SuggestionSummary): HTMLElement {
+    const el = document.createElement('div');
+    el.className = 'lf-balloon lf-balloon-suggestion lf-balloon-collapsed';
+    el.dataset.expandKey = `s:${s.sid}`;
+    el.dataset.sid = s.sid;
+    const style = suggestColorStyle(s.author.color);
+    if (style) el.setAttribute('style', style);
+    collapsedIdentity(el, s.author.name, s.author.color);
+    const preview = document.createElement('span');
+    preview.className = 'lf-collapsed-preview';
+    // Same old-struck / new-underlined classes as the full card — plain
+    // textContent on each span, never innerHTML (untrusted content).
+    if (s.kind === 'delete' || s.kind === 'replace') {
+      const oldEl = document.createElement('span');
+      oldEl.className = 'lf-suggest-old';
+      oldEl.textContent = s.deletedText;
+      preview.appendChild(oldEl);
+    }
+    if (s.kind === 'insert' || s.kind === 'replace') {
+      if (s.kind === 'replace') preview.appendChild(document.createTextNode(' → '));
+      const newEl = document.createElement('span');
+      newEl.className = 'lf-suggest-new';
+      newEl.textContent = s.insertedText;
+      preview.appendChild(newEl);
+    }
+    el.appendChild(preview);
+    // Accept/Reject stay one click away without expanding — the compact ✓/✕
+    // wire to the SAME resolveSuggestion the full card uses.
+    const actions = document.createElement('span');
+    actions.className = 'lf-collapsed-actions';
+    const acceptBtn = document.createElement('button');
+    acceptBtn.type = 'button';
+    acceptBtn.className = 'lf-suggest-accept';
+    acceptBtn.textContent = '✓';
+    acceptBtn.setAttribute('aria-label', 'Accept suggestion');
+    acceptBtn.title = 'Accept';
+    acceptBtn.addEventListener('click', () => void resolveSuggestion(s.sid, 'accept'));
+    const rejectBtn = document.createElement('button');
+    rejectBtn.type = 'button';
+    rejectBtn.className = 'lf-suggest-reject';
+    rejectBtn.textContent = '✕';
+    rejectBtn.setAttribute('aria-label', 'Reject suggestion');
+    rejectBtn.title = 'Reject';
+    rejectBtn.addEventListener('click', () => void resolveSuggestion(s.sid, 'reject'));
+    actions.append(acceptBtn, rejectBtn);
+    el.appendChild(actions);
+    return el;
+  }
+
+  function buildCollapsedDel(group: DeletionGroup): HTMLElement {
+    const el = document.createElement('div');
+    el.className = 'lf-balloon lf-balloon-del lf-balloon-collapsed';
+    el.dataset.expandKey = `d:${group.blockKey}`;
+    const label = document.createElement('span');
+    label.className = 'lf-balloon-label';
+    label.textContent = 'Deleted';
+    const preview = document.createElement('span');
+    preview.className = 'lf-collapsed-preview';
+    // First non-empty line only; plain text (untrusted doc content). A
+    // multi-line deletion (a whole table, a section) shows how much more is
+    // behind the click — without it, a clamped first row reads as though
+    // only that fragment was deleted.
+    const lines = group.deletedMarkdown.split('\n').filter((l) => l.trim() !== '');
+    preview.textContent = lines[0] ?? '';
+    el.append(label, preview);
+    if (lines.length > 1) {
+      const count = document.createElement('span');
+      count.className = 'lf-collapsed-count';
+      count.textContent = `+${lines.length - 1}`;
+      count.title = `${lines.length - 1} more line${lines.length === 2 ? '' : 's'}`;
+      el.appendChild(count);
+    }
+    return el;
+  }
+
   function buildDelBalloon(group: DeletionGroup): HTMLElement {
     const el = document.createElement('div');
     el.className = 'lf-balloon lf-balloon-del';
@@ -465,11 +608,17 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
     suggestions: suggestOps.SuggestionSummary[],
   ): void {
     const activeId = opts.chrome?.threadsPanel.getActive() ?? null;
-    const delKeys = delGroups.map((g) => `del|${g.blockKey}|${g.deletedMarkdown}`);
-    const commentKeys = openThreads.map(
-      (t) => `comment|${t.id}|${t.status}|${t.commentCount}|${t.lastActivity}|${activeId === t.id}`,
+    // Expanded state is part of the render key so toggling rebuilds the card.
+    const delKeys = delGroups.map(
+      (g) => `del|${g.blockKey}|${g.deletedMarkdown}|${isExpanded(`d:${g.blockKey}`)}`,
     );
-    const suggestionKeys = suggestions.map((s) => `suggest|${s.sid}|${s.kind}`);
+    const commentKeys = openThreads.map(
+      (t) =>
+        `comment|${t.id}|${t.status}|${t.commentCount}|${t.lastActivity}|${activeId === t.id}|${isExpanded(`c:${t.id}`)}`,
+    );
+    const suggestionKeys = suggestions.map(
+      (s) => `suggest|${s.sid}|${s.kind}|${isExpanded(`s:${s.sid}`)}`,
+    );
     const keys = [...delKeys, ...commentKeys, ...suggestionKeys];
     if (keys.length === rendered.length && keys.every((k, i) => k === rendered[i].key)) {
       // Nothing display-relevant changed — refresh the live group refs
@@ -493,17 +642,25 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
 
     marginEl.textContent = '';
     const nextDel: RenderedDelBalloon[] = delGroups.map((group, i) => {
-      const el = buildDelBalloon(group);
+      const expanded = isExpanded(`d:${group.blockKey}`);
+      const el = expanded ? buildDelBalloon(group) : buildCollapsedDel(group);
+      if (expanded) addCollapseButton(el);
       marginEl.appendChild(el);
       return { kind: 'del', key: delKeys[i], group, el };
     });
     const nextComments: RenderedCommentBalloon[] = openThreads.map((thread, i) => {
-      const el = buildCommentBalloon(thread, pendingReplies.get(thread.id));
+      const expanded = isExpanded(`c:${thread.id}`);
+      const el = expanded
+        ? buildCommentBalloon(thread, pendingReplies.get(thread.id))
+        : buildCollapsedComment(thread);
+      if (expanded) addCollapseButton(el);
       marginEl.appendChild(el);
       return { kind: 'comment', key: commentKeys[i], thread, el };
     });
     const nextSuggestions: RenderedSuggestionBalloon[] = suggestions.map((summary, i) => {
-      const el = buildSuggestionBalloon(summary);
+      const expanded = isExpanded(`s:${summary.sid}`);
+      const el = expanded ? buildSuggestionBalloon(summary) : buildCollapsedSuggestion(summary);
+      if (expanded) addCollapseButton(el);
       marginEl.appendChild(el);
       return { kind: 'suggestion', key: suggestionKeys[i], summary, el };
     });
@@ -622,10 +779,19 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
     // no-op would eat the caller's drawer/thread-view fallback (the 901–
     // 1100px gap is a real iPad-portrait width, not an edge case).
     if (marginHidden()) return false;
-    const found = rendered.find(
+    let found = rendered.find(
       (r): r is RenderedCommentBalloon => r.kind === 'comment' && r.thread.id === id,
     );
     if (!found) return false;
+    // Revealing means engaging — expand the balloon (which rebuilds
+    // `rendered`, so re-find the element before scrolling to it).
+    if (!isExpanded(`c:${id}`)) {
+      expandBalloon(`c:${id}`);
+      found =
+        rendered.find(
+          (r): r is RenderedCommentBalloon => r.kind === 'comment' && r.thread.id === id,
+        ) ?? found;
+    }
     try {
       found.el.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
     } catch {
@@ -644,8 +810,25 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
     }, RELAYOUT_DEBOUNCE_MS);
   }
 
-  // Expand/collapse via one delegated listener — balloons rebuild on content
-  // changes, so per-balloon listeners would leak or vanish.
+  // Balloon expand/collapse (the Word-style one-at-a-time state) via one
+  // delegated listener — balloons rebuild on content changes, so per-balloon
+  // listeners would leak or vanish.
+  scope.listen(marginEl, 'click', (ev) => {
+    const target = ev.target as HTMLElement;
+    if (target.closest?.('.lf-balloon-collapse')) {
+      expandedKey = null;
+      relayout();
+      return;
+    }
+    const collapsed = target.closest?.('.lf-balloon-collapsed') as HTMLElement | null;
+    if (!collapsed) return;
+    // The compact ✓/✕ on a collapsed suggestion act without expanding.
+    if (target.closest('button')) return;
+    const key = collapsed.dataset.expandKey;
+    if (key) expandBalloon(key);
+  });
+
+  // "Show more" toggle inside an expanded deletion balloon (text clamp).
   scope.listen(marginEl, 'click', (ev) => {
     const toggle = (ev.target as HTMLElement).closest?.('.lf-balloon-expand');
     if (!toggle) return;
