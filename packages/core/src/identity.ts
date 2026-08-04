@@ -41,27 +41,85 @@ function randomAnonId(): string {
   return Math.random().toString(36).slice(2, 8);
 }
 
-/** Resolve a user given a query-param hint and a storage backend (localStorage in the browser). */
-export function resolveUser(
-  asParam: string | null | undefined,
-  storage: { get(k: string): string | null; set(k: string, v: string): void } | null,
-): User {
-  if (asParam && KNOWN_USERS[asParam.toLowerCase()]) {
-    const k = asParam.toLowerCase();
-    const meta = KNOWN_USERS[k];
-    if (!meta) {
-      // unreachable — the guard above proves k is in KNOWN_USERS
-      throw new Error('invariant: known-user lookup');
-    }
-    const id = `known-${k}`;
-    return { id, kind: 'known', name: meta.name, color: meta.color };
-  }
-  const storageKey = 'feedback-anon-id';
-  let anon = storage?.get(storageKey) ?? null;
+type IdentityStorage = { get(k: string): string | null; set(k: string, v: string): void };
+
+const ANON_ID_KEY = 'feedback-anon-id';
+const NAME_KEY = 'feedback-user-name';
+const PROMPT_DISMISSED_KEY = 'feedback-name-prompt-dismissed';
+
+function storedName(storage: IdentityStorage | null): string | null {
+  const raw = storage?.get(NAME_KEY)?.trim();
+  return raw ? raw : null;
+}
+
+function stableAnonId(storage: IdentityStorage | null): string {
+  let anon = storage?.get(ANON_ID_KEY) ?? null;
   if (!anon) {
     anon = randomAnonId();
-    storage?.set(storageKey, anon);
+    storage?.set(ANON_ID_KEY, anon);
   }
+  return anon;
+}
+
+/** The full known identity for a name/key (`bryan`, `Agent`, …), or null. */
+export function knownUserForName(nameOrKey: string): User | null {
+  const key = nameOrKey.toLowerCase();
+  const meta = KNOWN_USERS[key];
+  if (!meta) return null;
+  return { id: `known-${key}`, kind: 'known', name: meta.name, color: meta.color };
+}
+
+/** Persist the user's chosen display name (first-arrival prompt, or seeded from
+ *  `?as=`). Hard 40-char cap — the prompt's maxlength is advisory; the name is
+ *  broadcast in every awareness packet and stored on every comment. */
+export function storeUserName(storage: IdentityStorage | null, name: string): void {
+  storage?.set(NAME_KEY, name.trim().slice(0, 40));
+}
+
+/** Record that the user chose to stay anonymous — the prompt won't re-ask this browser. */
+export function dismissNamePrompt(storage: IdentityStorage | null): void {
+  storage?.set(PROMPT_DISMISSED_KEY, '1');
+}
+
+/** Whether the first-arrival name prompt should be shown. */
+export function needsNamePrompt(
+  asParam: string | null | undefined,
+  storage: IdentityStorage | null,
+): boolean {
+  if (asParam && KNOWN_USERS[asParam.toLowerCase()]) return false;
+  if (storedName(storage)) return false;
+  return storage?.get(PROMPT_DISMISSED_KEY) !== '1';
+}
+
+/**
+ * Resolve a user from (in precedence order) a `?as=` query-param hint, the
+ * stored display name, or a stable per-browser anonymous identity. A known
+ * `?as=` hit seeds the stored name so the param is a one-time bootstrap. Named
+ * users keep the stable anon id (identity continuity with their earlier
+ * comments) but derive color from the NAME, so the same person on another
+ * device gets the same color.
+ */
+export function resolveUser(
+  asParam: string | null | undefined,
+  storage: IdentityStorage | null,
+): User {
+  if (asParam) {
+    const known = knownUserForName(asParam);
+    if (known) {
+      // Seed only when nothing is stored: the param bootstraps a fresh
+      // browser but must never rebrand someone who already named themselves
+      // (review URLs get shared, and the server emits ?as= links).
+      if (!storedName(storage)) storeUserName(storage, known.name);
+      return known;
+    }
+  }
+  const name = storedName(storage);
+  if (name) {
+    const known = knownUserForName(name);
+    if (known) return known;
+    return { id: `anon-${stableAnonId(storage)}`, kind: 'known', name, color: hashToColor(name) };
+  }
+  const anon = stableAnonId(storage);
   return {
     id: `anon-${anon}`,
     kind: 'anon',
