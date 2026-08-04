@@ -23,7 +23,7 @@ afterEach(() => {
   }
 });
 
-function mount(baseText: string, md: string, debounceMs = 0) {
+function mount(baseText: string, md: string, debounceMs = 0, isAdded = false) {
   const ydoc = new Y.Doc();
   const fragment = prose.getProseFragment(ydoc);
   if (md !== '') fragment.push(prose.parseMarkdownBlocks(md));
@@ -34,6 +34,7 @@ function mount(baseText: string, md: string, debounceMs = 0) {
     ydoc,
     awareness: new Awareness(ydoc),
     baseText,
+    isAdded,
     debounceMs,
   });
   open.push({ surface, parent });
@@ -113,13 +114,19 @@ describe('createLiveRedlineEditor — live ins markup', () => {
   });
 });
 
-describe('createLiveRedlineEditor — added file (empty base)', () => {
+describe('createLiveRedlineEditor — added file (isAdded)', () => {
   it('renders clean with no ins markup and no deletions', async () => {
-    const { parent, surface } = mount('', '# New file\n\nBody.\n');
+    const { parent, surface } = mount('', '# New file\n\nBody.\n', 0, true);
     await tick();
     expect(parent.textContent).toContain('New file');
     expect(parent.querySelector('ins.lf-ins')).toBeNull();
     expect(surface.getDeletions()).toEqual([]);
+  });
+
+  it('a MODIFIED file whose base blob is empty still gets markup (added ≠ empty base)', async () => {
+    const { parent } = mount('', 'Fresh content.\n');
+    await tick();
+    expect(parent.querySelector('ins.lf-ins')).not.toBeNull();
   });
 });
 

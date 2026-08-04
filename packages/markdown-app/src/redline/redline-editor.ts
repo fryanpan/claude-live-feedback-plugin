@@ -35,6 +35,9 @@ export interface CreateRedlineEditorOpts {
   ydoc: Y.Doc;
   /** File content at the pinned base commit. Immutable for the review's life. */
   baseText: string;
+  /** True only for diff status 'added' — clean render, no markup. Never
+   *  inferred from an empty baseText (modified files can have empty bases). */
+  isAdded?: boolean;
   onSelectionChange?: () => void;
 }
 
@@ -116,12 +119,14 @@ export function createRedlineEditor(opts: CreateRedlineEditorOpts): RedlineSurfa
 
   function render(): void {
     const current = content.toString();
-    // Added file (empty base): render clean instead of underlining the whole
-    // document — whole-file markup tells the reviewer nothing. The mount
-    // shows a "New file in this diff" banner instead. Diffing current
-    // against itself keeps every block's provenance intact for anchoring.
+    // ADDED file: render clean instead of underlining the whole document —
+    // whole-file markup tells the reviewer nothing. The mount shows a "New
+    // file in this diff" banner instead. Diffing current against itself
+    // keeps every block's provenance intact for anchoring. Keyed on the diff
+    // STATUS, not an empty baseText: a modified file with an empty base blob
+    // must still show its content as inserted.
     const html = renderRedlineHtml(
-      computeRedline(opts.baseText === '' ? current : opts.baseText, current),
+      computeRedline(opts.isAdded ? current : opts.baseText, current),
       toHtml,
     );
     // setContent resets the selection, so skip a no-op re-render. In
