@@ -1602,7 +1602,8 @@ body.composer-open #editor .ProseMirror ::selection {
    code surface shows only the comment affordances. */
 body.code-mode #format-bar,
 body.code-mode #toggle-format,
-body.code-mode #toggle-edit-mode {
+body.code-mode #toggle-edit-mode,
+body.code-mode #toggle-suggest-mode {
   display: none !important;
 }
 
@@ -2113,6 +2114,55 @@ body.redline-mode .ProseMirror .lf-block-del {
 body.redline-mode .ProseMirror ins.lf-ins,
 body.redline-mode .ProseMirror del.lf-del {
   overflow-wrap: anywhere;
+}
+
+/* ---------------------------------------------------------------------------
+   Suggested edits (Phase 2). A pending proposal must NEVER be invisible, so
+   these rules are NOT scoped to a lens or body mode — they apply wherever the
+   prose editor renders (plain markdown surface AND the redline lens).
+
+   Each span carries its author's color as an inline `--lf-suggest-color`
+   custom property (set by suggest-marks.ts from the mark's authorColor attr).
+   As with the redline marks, color never carries the meaning alone: the
+   underline (proposed insert) and strikethrough (proposed delete) do.
+   --------------------------------------------------------------------------- */
+
+.ProseMirror .lf-suggest-ins {
+  --lf-suggest-tint: color-mix(in srgb, var(--lf-suggest-color, var(--accent)) 14%, transparent);
+  background: var(--lf-suggest-tint);
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 2px;
+  text-decoration-color: var(--lf-suggest-color, var(--accent));
+  border-radius: 2px;
+  padding: 0 1px;
+  overflow-wrap: anywhere;
+}
+
+.ProseMirror .lf-suggest-del {
+  --lf-suggest-tint: color-mix(in srgb, var(--lf-suggest-color, var(--accent)) 10%, transparent);
+  background: var(--lf-suggest-tint);
+  color: inherit;
+  text-decoration: line-through;
+  text-decoration-thickness: 2px;
+  text-decoration-color: var(--lf-suggest-color, var(--accent));
+  border-radius: 2px;
+  padding: 0 1px;
+  overflow-wrap: anywhere;
+}
+
+/* The Suggesting toggle reads as "engaged" while the mode is on. */
+#toggle-suggest-mode[aria-pressed="true"] {
+  background: var(--accent-subtle, rgba(46, 125, 215, 0.1));
+  color: var(--accent, #2e7dd7);
+}
+
+/* The Suggesting toggle is wired by the markdown mount only — hide it on the
+   redline surface until its chrome learns the mode (commit 5). Suggestions
+   authored elsewhere still RENDER there (the rules above are unscoped). */
+body.redline-mode #toggle-suggest-mode {
+  display: none !important;
 }
 
 /* The three-way toggle must not overflow a 430px viewport. */

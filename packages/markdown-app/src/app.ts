@@ -23,6 +23,7 @@ import {
   setSidebarSignature,
   sidebarShowsSignature,
 } from './sidebar-nav-key.ts';
+import { readSuggestModePref, setSuggesting, writeSuggestModePref } from './suggest-input.ts';
 import { registerMarkdownMount } from './surface-registry.ts';
 import { type TableMenuItem, tableMenuItems } from './table-menu.ts';
 import { renderWorkspaceTree } from './workspace-tree.ts';
@@ -847,6 +848,45 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     editMode = editMode === 'edit' ? 'view' : 'edit';
     localStorage.setItem(EDIT_MODE_KEY, editMode);
     applyEditMode(editMode);
+  });
+
+  // =========================================================================
+  // SUGGESTING MODE — Google-Docs-style proposals. While ON, the suggest-input
+  //   plugin turns typing/deleting into attributed suggestInsert/suggestDelete
+  //   marks; nothing reaches disk until accepted (the serializer emits the
+  //   accepted state). Persisted per doc (localStorage is per-browser, so the
+  //   doc key already scopes it to this user).
+  // =========================================================================
+  const toggleSuggestMode = el<HTMLButtonElement>('toggle-suggest-mode');
+  let suggesting = readSuggestModePref(docId);
+  function applySuggestMode(on: boolean): void {
+    setSuggesting(editor.editor.view, {
+      on,
+      author: { id: user.id, name: user.name, color: user.color },
+    });
+    document.body.classList.toggle('suggest-mode', on);
+    toggleSuggestMode.setAttribute('aria-pressed', String(on));
+    toggleSuggestMode.title = on
+      ? 'Suggesting — edits become proposals. Tap for direct editing'
+      : 'Tap to switch to Suggesting — edits become proposals';
+    toggleSuggestMode.setAttribute(
+      'aria-label',
+      on
+        ? 'Suggesting on — your edits become proposals. Tap for direct editing'
+        : 'Suggesting off — tap to propose edits instead of making them',
+    );
+  }
+  applySuggestMode(suggesting);
+  scope.listen(toggleSuggestMode, 'click', () => {
+    suggesting = !suggesting;
+    writeSuggestModePref(docId, suggesting);
+    // Suggesting implies an editable surface — proposing requires typing.
+    if (suggesting && editMode !== 'edit') {
+      editMode = 'edit';
+      localStorage.setItem(EDIT_MODE_KEY, editMode);
+      applyEditMode(editMode);
+    }
+    applySuggestMode(suggesting);
   });
 
   // =========================================================================
