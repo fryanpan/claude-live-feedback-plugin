@@ -33,6 +33,22 @@ land surgically and the reviewer sees the change appear in place.
 3. If you don't find one (or the live-feedback MCP isn't available),
    normal file edits are fine — the file isn't under review.
 
+## Direct edits vs suggestions
+
+**Edit directly by default — even while Bryan is in the doc.** Concurrent
+human + agent edits CRDT-merge safely; that real-time co-editing is the
+product's whole point, and Bryan has said explicitly he prefers it. Every
+`suggest: true` proposal puts an accept/reject task on his plate, so
+defaulting to suggestions trades a non-problem (rare conflicts) for
+guaranteed extra work.
+
+Reserve `suggest: true` (on `find_and_replace` / `rewrite_thread_region`)
+for genuine judgment calls — the edits you would otherwise ask about first:
+his voice or framing, a decision he owns, a claim you're unsure of. A
+rejected suggestion returns cleanly; a pending one never reaches disk. If
+accept/reject returns `not-found`, the region changed under the proposal —
+re-read and re-suggest, don't retry.
+
 ## How to edit via MCP
 
 Pick the smallest tool that does the job:
