@@ -19,7 +19,7 @@ import {
 import { Markdown } from 'tiptap-markdown';
 import type { Awareness } from 'y-protocols/awareness';
 import * as Y from 'yjs';
-import { safeLinkHref } from './link-open.ts';
+import { resolveDocLink, safeLinkHref } from './link-open.ts';
 import { MermaidCodeBlock } from './mermaid-code-block.ts';
 import { SuggestionChips } from './redline/suggestion-chips.ts';
 import { SuggestInput } from './suggest-input.ts';
@@ -60,6 +60,10 @@ export interface CreateEditorOpts {
   /** Surface-specific extensions appended to the standard list (e.g. the
    *  redline surface's live-markup decorations). */
   extraExtensions?: AnyExtension[];
+  /** When the doc belongs to a workspace, Cmd/Ctrl+Click on a relative link
+   *  to a sibling file navigates in-SPA (via `navigate`) instead of opening
+   *  a raw relative URL that 404s. Omit for standalone docs. */
+  docLink?: { workspaceId: string; relPath: string; navigate: (url: string) => void };
 }
 
 export function createEditor(opts: CreateEditorOpts): EditorHandle {
@@ -143,6 +147,19 @@ export function createEditor(opts: CreateEditorOpts): EditorHandle {
     if (!href) return;
     ev.preventDefault();
     ev.stopPropagation();
+    // A relative link to a sibling workspace doc navigates in-app (same
+    // tab — it's the same review session); everything else opens externally.
+    const inApp = opts.docLink
+      ? resolveDocLink({
+          href,
+          workspaceId: opts.docLink.workspaceId,
+          relPath: opts.docLink.relPath,
+        })
+      : null;
+    if (inApp && opts.docLink) {
+      opts.docLink.navigate(inApp);
+      return;
+    }
     window.open(href, '_blank', 'noopener,noreferrer');
   };
   editor.view.dom.addEventListener('click', onLinkClick);

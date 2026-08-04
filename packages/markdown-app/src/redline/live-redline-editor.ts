@@ -45,6 +45,8 @@ export interface CreateLiveRedlineEditorOpts {
   user?: { name: string; color: string };
   /** Markup recompute delay after a doc change. Tests pass 0. */
   debounceMs?: number;
+  /** In-app navigation for relative sibling links (see CreateEditorOpts). */
+  docLink?: { workspaceId: string; relPath: string; navigate: (url: string) => void };
 }
 
 export function createLiveRedlineEditor(opts: CreateLiveRedlineEditorOpts): LiveRedlineSurface {
@@ -54,6 +56,7 @@ export function createLiveRedlineEditor(opts: CreateLiveRedlineEditorOpts): Live
     awareness: opts.awareness,
     onSelectionChange: opts.onSelectionChange,
     user: opts.user,
+    docLink: opts.docLink,
     extraExtensions: [
       LiveMarkup.configure({
         baseText: opts.baseText,

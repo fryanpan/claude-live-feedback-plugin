@@ -26,3 +26,52 @@ export function safeLinkHref(href: string | null | undefined): string | null {
   if (UNSAFE_SCHEME.test(forSchemeCheck)) return null;
   return trimmed;
 }
+
+/**
+ * Map a RELATIVE link inside a workspace-bound doc to the sibling doc's
+ * in-SPA review URL, so "main doc links to secondary research doc" navigates
+ * inside the app instead of 404ing on a raw relative URL.
+ *
+ * Member docIds are `${workspaceId}:${relPath.replaceAll('/', '~')}` (see
+ * rooms.ts) — resolution is pure path math against the current doc's
+ * repo-relative path. Returns null for anything that isn't an in-workspace
+ * relative path (external URLs, absolute paths, anchor-only links, paths
+ * escaping the workspace root, or paths containing the `~` separator, which
+ * the encoding cannot represent) — callers fall back to window.open.
+ */
+export function resolveDocLink(opts: {
+  href: string | null | undefined;
+  workspaceId: string | null | undefined;
+  relPath: string | null | undefined;
+}): string | null {
+  const { href, workspaceId, relPath } = opts;
+  if (!href || !workspaceId || !relPath) return null;
+  const trimmed = href.trim();
+  if (!trimmed) return null;
+  // Scheme-ful (`https:`, `mailto:`), protocol-relative, absolute, and
+  // anchor-only links are not workspace-relative.
+  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return null;
+  if (trimmed.startsWith('//') || trimmed.startsWith('/') || trimmed.startsWith('#')) return null;
+  const pathPart = trimmed.split(/[?#]/, 1)[0];
+  if (!pathPart) return null;
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(pathPart);
+  } catch {
+    return null; // malformed %-escape
+  }
+  const segs = relPath.split('/').slice(0, -1);
+  for (const seg of decoded.split('/')) {
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') {
+      if (segs.length === 0) return null; // would escape the workspace root
+      segs.pop();
+      continue;
+    }
+    if (seg.includes('~')) return null; // '~' is the docId path separator
+    segs.push(seg);
+  }
+  if (segs.length === 0) return null;
+  const memberDocId = `${workspaceId}:${segs.join('~')}`;
+  return `/review/${encodeURIComponent(memberDocId)}`;
+}
