@@ -12,7 +12,7 @@ import {
   wireThreadRangeClicks,
 } from '../review-chrome.ts';
 import type { ReviewSurface } from '../review-surface.ts';
-import { remountCurrent } from '../router.ts';
+import { navigateTo, remountCurrent } from '../router.ts';
 import { getMarkdownMount } from '../surface-registry.ts';
 import { createLiveRedlineEditor } from './live-redline-editor.ts';
 import { type MarkupMarginHandle, mountMarkupMargin } from './markup-margin.ts';
@@ -208,6 +208,9 @@ export async function mountRedline(ctx: MountContext): Promise<void> {
         baseText,
         isAdded,
         onSelectionChange,
+        docLink: ctx.workspaceId
+          ? { workspaceId: ctx.workspaceId, relPath: ctx.relPath, navigate: navigateTo }
+          : undefined,
       })
     : null;
   const surface: ReviewSurface & { getSelectionRel: () => ChromeSelection | null } =
