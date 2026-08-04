@@ -1,7 +1,9 @@
-import { prose } from '@feedback/core';
+import { type Thread, type User, createThread, prose } from '@feedback/core';
+import type { EditorView } from '@tiptap/pm/view';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Awareness } from 'y-protocols/awareness';
 import * as Y from 'yjs';
+import { type EditorHandle, createEditor } from '../src/editor.ts';
 import { MountScope } from '../src/mount-scope.ts';
 import type { RedlineDeletion } from '../src/redline/live-markup.ts';
 import {
@@ -9,11 +11,15 @@ import {
   createLiveRedlineEditor,
 } from '../src/redline/live-redline-editor.ts';
 import { groupDeletions, mountMarkupMargin } from '../src/redline/markup-margin.ts';
+import { mountReviewChrome } from '../src/review-chrome.ts';
 
 /**
- * The markup margin: Word's balloon column for deletions. jsdom/happy-dom
- * can't do real layout, so these tests assert DOM structure and classes —
- * the pixel math lives in layoutBalloons (unit-tested separately).
+ * The markup margin: Word's balloon column for deletions AND open comment
+ * threads. jsdom/happy-dom can't do real layout, so these tests assert DOM
+ * structure, classes, and (where the test cares about ordering) explicitly
+ * mocked measurements — the pixel math itself lives in layoutBalloons
+ * (unit-tested separately, and the real-browser pass is a manual step per
+ * the plan).
  */
 
 const open: Array<() => void> = [];
@@ -56,6 +62,132 @@ function mountMargin(
   });
   open.push(() => scope.dispose());
   return { scope, margin };
+}
+
+// --- comment-balloon fixtures: a real mountReviewChrome + real ThreadPanel,
+// so "reuses the drawer card" and "dispatches to chrome handlers" are
+// exercised against the actual chrome, not a stand-in. ---------------------
+
+function mountChromeDom(): void {
+  document.body.innerHTML = `
+    <div id="shell">
+      <aside id="set-pane"></aside>
+      <main id="editor-pane"><div id="editor"></div></main>
+      <aside id="threads-pane">
+        <div class="threads-tabs">
+          <button class="tab active" data-tab="open">Open</button>
+          <button class="tab" data-tab="resolved">Resolved</button>
+        </div>
+        <button id="toggle-threads">☰</button>
+        <span id="threads-count"></span>
+        <button id="close-threads">×</button>
+        <ol id="threads-list"></ol>
+      </aside>
+      <div id="threads-scrim"></div>
+      <div id="doc-title"></div>
+      <div id="composer" class="hidden">
+        <div id="composer-avatar"></div>
+        <div id="composer-quote"></div>
+        <textarea id="composer-text"></textarea>
+        <button id="composer-submit">Post</button>
+      </div>
+      <div id="composer-scrim" class="hidden"></div>
+      <div id="thread-view" class="hidden">
+        <button id="thread-view-close">×</button>
+        <div id="thread-view-body"></div>
+        <textarea id="thread-view-reply-text"></textarea>
+        <button id="thread-view-reply-submit">Reply</button>
+      </div>
+      <div id="toast" class="hidden"></div>
+    </div>`;
+}
+
+const testUser: User = { id: 'u1', name: 'Alice', kind: 'known', color: '#2e7dd7' };
+
+/** The editable redline surface (deletions + comments) wired to a real chrome. */
+function mountRedlineWithChrome(baseText: string, md: string) {
+  mountChromeDom();
+  const parent = document.getElementById('editor') as HTMLElement;
+  const ydoc = new Y.Doc();
+  const fragment = prose.getProseFragment(ydoc);
+  if (md !== '') fragment.push(prose.parseMarkdownBlocks(md));
+  const surface = createLiveRedlineEditor({
+    parent,
+    ydoc,
+    awareness: new Awareness(ydoc),
+    baseText,
+    debounceMs: 0,
+  });
+  const scope = new MountScope();
+  const chrome = mountReviewChrome({
+    docId: 'd1',
+    user: testUser,
+    ydoc,
+    surface,
+    scope,
+    selectHint: '',
+    reanchorHint: '',
+    getSelection: () => surface.getSelectionRel(),
+  });
+  open.push(() => {
+    scope.dispose();
+    surface.destroy();
+  });
+  return { ydoc, fragment, parent, surface, chrome, scope };
+}
+
+/** The plain markdown surface (no deletions, no baseText) wired to a real
+ *  chrome — matches how app.ts mounts the margin on a non-diff review doc. */
+function mountPlainWithChrome(md: string) {
+  mountChromeDom();
+  const parent = document.getElementById('editor') as HTMLElement;
+  const ydoc = new Y.Doc();
+  const fragment = prose.getProseFragment(ydoc);
+  if (md !== '') fragment.push(prose.parseMarkdownBlocks(md));
+  const editor: EditorHandle = createEditor({ parent, ydoc, awareness: new Awareness(ydoc) });
+  const scope = new MountScope();
+  const chrome = mountReviewChrome({
+    docId: 'd1',
+    user: testUser,
+    ydoc,
+    surface: editor,
+    scope,
+    selectHint: '',
+    reanchorHint: '',
+    getSelection: () => editor.getSelectionRel(),
+  });
+  open.push(() => {
+    scope.dispose();
+    editor.destroy();
+  });
+  return { ydoc, fragment, parent, editor, chrome, scope };
+}
+
+/** Select a range, then create a real open thread anchored to it (same shape
+ *  the server's REST route builds) — synchronously updates the ThreadPanel
+ *  and the ThreadDecorations DOM via the ydoc's threads-map observer. */
+function openThreadAt(
+  ydoc: Y.Doc,
+  tiptapEditor: { commands: { setTextSelection: (range: { from: number; to: number }) => void } },
+  getSelectionRel: () => { start: Uint8Array; end: Uint8Array; snippet: string } | null,
+  range: { from: number; to: number },
+  text: string,
+  threadId = `t-${Math.random().toString(36).slice(2)}`,
+): Thread {
+  tiptapEditor.commands.setTextSelection(range);
+  const sel = getSelectionRel();
+  if (!sel) throw new Error('selection did not resolve — check the range');
+  return createThread(ydoc, {
+    threadId,
+    anchor: {
+      kind: 'text-range',
+      startRel: sel.start,
+      endRel: sel.end,
+      snippet: { text: sel.snippet },
+    },
+    createdBy: { id: 'u2', name: 'Bob', kind: 'known', color: '#c0392b' },
+    firstComment: { id: `${threadId}-c1`, text },
+  });
 }
 
 /** Let the (0ms in tests) markup debounce fire and the view repaint. */
@@ -243,5 +375,253 @@ describe('mountMarkupMargin — teardown', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe('mountMarkupMargin — comment balloons', () => {
+  it('renders an open thread as the drawer card, and its Resolve button dispatches through chrome', async () => {
+    const { parent, surface, ydoc, chrome, scope } = mountRedlineWithChrome(
+      '',
+      'Alpha bravo gamma.\n',
+    );
+    await tick();
+    const thread = openThreadAt(
+      ydoc,
+      surface.handle.editor,
+      () => surface.getSelectionRel(),
+      { from: 1, to: 6 },
+      'Please clarify this.',
+    );
+
+    const margin = mountMarkupMargin({
+      editorEl: parent,
+      view: surface.handle.editor.view,
+      getDeletions: () => [],
+      threads: () => chrome.collectThreads(),
+      chrome,
+      scope,
+    });
+    margin.relayout();
+
+    const balloon = parent.querySelector('.lf-balloon.lf-balloon-comment') as HTMLElement;
+    expect(balloon).not.toBeNull();
+    // It IS the drawer's thread card (ThreadPanel.renderThread), not a copy.
+    expect(balloon.classList.contains('thread')).toBe(true);
+    expect(balloon.getAttribute('data-thread-id')).toBe(thread.id);
+    expect(balloon.textContent).toContain('Please clarify this.');
+    expect(balloon.textContent).toContain('Bob'); // the comment's author
+
+    const fetchSpy = vi.fn(() => Promise.resolve({ ok: true }) as unknown as Promise<Response>);
+    vi.stubGlobal('fetch', fetchSpy);
+    try {
+      const resolveBtn = Array.from(balloon.querySelectorAll('button')).find(
+        (b) => b.textContent === 'Resolve',
+      );
+      expect(resolveBtn).toBeTruthy();
+      resolveBtn?.click();
+      expect(fetchSpy).toHaveBeenCalledWith(
+        expect.stringContaining(`/api/docs/d1/threads/${thread.id}/resolve`),
+        expect.objectContaining({ method: 'POST' }),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('replies from the balloon post through the SAME chrome fetch call the drawer uses', async () => {
+    const { parent, surface, ydoc, chrome, scope } = mountRedlineWithChrome(
+      '',
+      'Alpha bravo gamma.\n',
+    );
+    await tick();
+    const thread = openThreadAt(
+      ydoc,
+      surface.handle.editor,
+      () => surface.getSelectionRel(),
+      { from: 1, to: 6 },
+      'Original comment.',
+    );
+
+    const margin = mountMarkupMargin({
+      editorEl: parent,
+      view: surface.handle.editor.view,
+      getDeletions: () => [],
+      threads: () => chrome.collectThreads(),
+      chrome,
+      scope,
+    });
+    margin.relayout();
+
+    const balloon = parent.querySelector('.lf-balloon.lf-balloon-comment') as HTMLElement;
+    const textarea = balloon.querySelector('textarea') as HTMLTextAreaElement;
+    textarea.value = 'A reply from the balloon';
+    const fetchSpy = vi.fn(() => Promise.resolve({ ok: true }) as unknown as Promise<Response>);
+    vi.stubGlobal('fetch', fetchSpy);
+    try {
+      const replyBtn = Array.from(balloon.querySelectorAll('button')).find(
+        (b) => b.textContent === 'Reply',
+      );
+      replyBtn?.click();
+      expect(fetchSpy).toHaveBeenCalledWith(
+        expect.stringContaining(`/api/docs/d1/threads/${thread.id}/comments`),
+        expect.objectContaining({
+          method: 'POST',
+          body: expect.stringContaining('A reply from the balloon'),
+        }),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('does not render a balloon for a resolved thread', async () => {
+    const { parent, surface, ydoc, chrome, scope } = mountRedlineWithChrome(
+      '',
+      'Alpha bravo gamma.\n',
+    );
+    await tick();
+    const thread = openThreadAt(
+      ydoc,
+      surface.handle.editor,
+      () => surface.getSelectionRel(),
+      { from: 1, to: 6 },
+      'Already handled.',
+    );
+    (ydoc.getMap('threads').get(thread.id) as Y.Map<unknown>).set('status', 'resolved');
+
+    const margin = mountMarkupMargin({
+      editorEl: parent,
+      view: surface.handle.editor.view,
+      getDeletions: () => [],
+      threads: () => chrome.collectThreads(),
+      chrome,
+      scope,
+    });
+    margin.relayout();
+
+    expect(parent.querySelectorAll('.lf-balloon-comment')).toHaveLength(0);
+  });
+});
+
+describe('mountMarkupMargin — mixed deletion + comment ordering', () => {
+  it('shares one layoutBalloons pass: a comment anchored above a deletion gets a smaller top offset', async () => {
+    const { parent, surface, ydoc, chrome, scope } = mountRedlineWithChrome(
+      'Alpha.\n\nRemoved paragraph.\n\nBravo.\n',
+      'Alpha.\n\nBravo.\n',
+    );
+    await tick();
+    const thread = openThreadAt(
+      ydoc,
+      surface.handle.editor,
+      () => surface.getSelectionRel(),
+      { from: 1, to: 6 },
+      'Comment near the top.',
+    );
+
+    const view = surface.handle.editor.view;
+    // The deletion's anchor comes from coordsAtPos — pin it well below the
+    // comment's decoration span regardless of happy-dom's (nonexistent) real
+    // layout, so the assertion below tests ORDERING, not pixel geometry.
+    vi.spyOn(view, 'coordsAtPos').mockReturnValue({
+      top: 200,
+      bottom: 210,
+      left: 0,
+      right: 0,
+    } as ReturnType<EditorView['coordsAtPos']>);
+    const span = parent.querySelector(`[data-thread-id="${thread.id}"]`) as HTMLElement;
+    expect(span).not.toBeNull();
+    vi.spyOn(span, 'getBoundingClientRect').mockReturnValue({
+      top: 10,
+      bottom: 20,
+      left: 0,
+      right: 0,
+      width: 0,
+      height: 10,
+      x: 0,
+      y: 10,
+      toJSON() {},
+    } as DOMRect);
+
+    const margin = mountMarkupMargin({
+      editorEl: parent,
+      view,
+      getDeletions: () => surface.getDeletions(),
+      threads: () => chrome.collectThreads(),
+      chrome,
+      scope,
+    });
+    margin.relayout();
+
+    const commentEl = parent.querySelector('.lf-balloon-comment') as HTMLElement;
+    const delEl = parent.querySelector('.lf-balloon-del') as HTMLElement;
+    expect(commentEl).not.toBeNull();
+    expect(delEl).not.toBeNull();
+    // Both balloons live in the same margin column, positioned by one
+    // combined layoutBalloons() call sorted by anchor Y.
+    expect(commentEl.parentElement).toBe(delEl.parentElement);
+    expect(Number.parseFloat(commentEl.style.top)).toBeLessThan(Number.parseFloat(delEl.style.top));
+  });
+});
+
+describe('mountMarkupMargin — plain markdown doc (comments only, no deletions)', () => {
+  it('shows comment balloons but never deletion balloons when there is no diff base', async () => {
+    const { parent, editor, ydoc, chrome, scope } = mountPlainWithChrome('Alpha bravo gamma.\n');
+    await tick();
+    openThreadAt(
+      ydoc,
+      editor.editor,
+      () => editor.getSelectionRel(),
+      { from: 1, to: 6 },
+      'A note on Alpha.',
+    );
+
+    const margin = mountMarkupMargin({
+      editorEl: parent,
+      view: editor.editor.view,
+      getDeletions: () => [], // matches app.ts's plain-markdown wiring
+      threads: () => chrome.collectThreads(),
+      chrome,
+      scope,
+    });
+    margin.relayout();
+
+    expect(parent.classList.contains('redline-layout')).toBe(true);
+    expect(parent.querySelectorAll('.lf-balloon-del')).toHaveLength(0);
+    expect(parent.querySelectorAll('.lf-balloon-comment')).toHaveLength(1);
+  });
+});
+
+describe('mountMarkupMargin — revealThreadBalloon', () => {
+  it('scrolls a rendered comment balloon into view and returns true; false when not found', async () => {
+    const { parent, surface, ydoc, chrome, scope } = mountRedlineWithChrome(
+      '',
+      'Alpha bravo gamma.\n',
+    );
+    await tick();
+    const thread = openThreadAt(
+      ydoc,
+      surface.handle.editor,
+      () => surface.getSelectionRel(),
+      { from: 1, to: 6 },
+      'Find me.',
+    );
+
+    const margin = mountMarkupMargin({
+      editorEl: parent,
+      view: surface.handle.editor.view,
+      getDeletions: () => [],
+      threads: () => chrome.collectThreads(),
+      chrome,
+      scope,
+    });
+    margin.relayout();
+
+    const balloon = parent.querySelector('.lf-balloon-comment') as HTMLElement;
+    const scrollSpy = vi.fn();
+    balloon.scrollIntoView = scrollSpy;
+
+    expect(margin.revealThreadBalloon(thread.id)).toBe(true);
+    expect(scrollSpy).toHaveBeenCalled();
+    expect(margin.revealThreadBalloon('no-such-thread')).toBe(false);
   });
 });

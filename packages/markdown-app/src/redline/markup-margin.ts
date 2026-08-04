@@ -6,22 +6,36 @@ import { layoutBalloons } from './balloon-layout.ts';
 import type { RedlineDeletion } from './live-markup.ts';
 
 /**
- * The markup margin: Word's balloon column for the redline surface.
+ * The markup margin: Word's balloon column for the redline surface — and,
+ * since comment balloons are shared chrome, for plain markdown review docs
+ * too (no deletions there; `getDeletions` returns `[]`).
  *
  * Owns a right-hand column next to the prose (`.redline-layout` grid on the
  * editor element — `minmax(0, 1fr) 300px`, the `minmax(0,…)` guarding against
  * the CSS Grid overflow trap in docs/process/learnings.md). Each deletion vs
  * base renders as a balloon (deleted markdown as plain text, clamped to ~6
  * lines with an expand toggle; consecutive deletions in the same paragraph
- * collapse into one balloon). Anchor Y positions are measured from the live
- * editor DOM, stacked with `layoutBalloons`, and joined to their anchors by
- * leader lines drawn in ONE absolutely-positioned SVG overlay.
+ * collapse into one balloon). Every OPEN comment thread with a resolvable
+ * anchor renders as a balloon too — literally the same card the threads
+ * drawer renders (`ThreadPanel.renderThread`, reused rather than
+ * reimplemented, so reply/resolve/reopen/re-anchor behave identically
+ * everywhere). Deletion and comment balloons share ONE `layoutBalloons` pass
+ * sorted by anchor Y, so they stack against each other, not just within type.
+ *
+ * Anchor Y for a deletion comes from `view.coordsAtPos` on its live-doc
+ * position; anchor Y for a comment comes from the live DOM position of its
+ * `ThreadDecorations` highlight span (`.thread-range[data-thread-id]` —
+ * thread-decorations.ts) — the rendered highlight IS the anchor, so reading
+ * its own rect avoids re-deriving position math the decoration plugin
+ * already did.
  *
  * Re-layout triggers: editor transactions (the mount forwards them, debounced
- * here), window resize, and content-size changes via a ResizeObserver on the
- * ProseMirror element — mermaid diagrams render asynchronously with no
- * completion event, and the SVG landing changes the content height, which the
- * observer sees. Everything registers on the passed MountScope for teardown.
+ * here — this also covers thread state changes, since posting/resolving/
+ * activating a thread dispatches a decorations transaction), window resize,
+ * and content-size changes via a ResizeObserver on the ProseMirror element —
+ * mermaid diagrams render asynchronously with no completion event, and the
+ * SVG landing changes the content height, which the observer sees.
+ * Everything registers on the passed MountScope for teardown.
  *
  * Below 1100px the column is hidden via media query (the mobile treatment —
  * inline chips + drawer — is a separate commit).
@@ -64,10 +78,13 @@ export interface MarkupMarginOpts {
    *  coordinates and paragraph keys. */
   view: EditorView;
   getDeletions: () => RedlineDeletion[];
-  /** Open threads for comment balloons — consumed by the comment-balloon
-   *  commit (plan commit 4); accepted now so the mount signature is stable. */
+  /** All threads on the doc (open + resolved) — filtered here to open ones
+   *  with a resolvable anchor. Pass `chrome.collectThreads`. Omit (or pass
+   *  without `chrome`) to render deletion balloons only. */
   threads?: () => Thread[];
-  /** Thread actions for comment balloons — same follow-up commit. */
+  /** Thread actions for comment balloons — the margin calls into
+   *  `chrome.threadsPanel.renderThread` (reply/resolve/reopen/re-anchor,
+   *  active-state) rather than reimplementing the card. */
   chrome?: ReviewChrome | null;
   scope: MountScope;
 }
@@ -77,6 +94,14 @@ export interface MarkupMarginHandle {
   relayout: () => void;
   /** Debounced relayout — wire this to editor transactions. */
   scheduleRelayout: () => void;
+  /**
+   * Scroll a thread's balloon into view and pulse it — the balloon-side half
+   * of "click an anchored range, see its comment" (the editor-side click
+   * already highlights via `refreshThreadDecorations`). Returns false when
+   * the thread has no rendered balloon (resolved, orphaned, or the column is
+   * hidden below 1100px) so the caller can fall back to the drawer.
+   */
+  revealThreadBalloon: (id: string) => boolean;
 }
 
 const GAP = 8;
@@ -91,11 +116,26 @@ function needsClamp(md: string): boolean {
   return md.split('\n').length > CLAMP_LINES || md.length > CLAMP_CHARS;
 }
 
-interface RenderedBalloon {
+/** `CSS.escape` guarded — happy-dom (and very old browsers) may not have it. */
+function cssEscape(id: string): string {
+  return typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(id) : id;
+}
+
+interface RenderedDelBalloon {
+  kind: 'del';
   key: string;
   group: DeletionGroup;
   el: HTMLElement;
 }
+
+interface RenderedCommentBalloon {
+  kind: 'comment';
+  key: string;
+  thread: Thread;
+  el: HTMLElement;
+}
+
+type RenderedBalloon = RenderedDelBalloon | RenderedCommentBalloon;
 
 export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
   const { editorEl, view, getDeletions, scope } = opts;
@@ -119,7 +159,7 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
     return doc.resolve(p).index(0);
   };
 
-  function buildBalloon(group: DeletionGroup): HTMLElement {
+  function buildDelBalloon(group: DeletionGroup): HTMLElement {
     const el = document.createElement('div');
     el.className = 'lf-balloon lf-balloon-del';
     const label = document.createElement('div');
@@ -142,20 +182,74 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
     return el;
   }
 
-  /** Rebuild the balloon list only when the groups actually changed, so
-   *  expand state survives position-only relayouts. */
-  function renderBalloons(groups: DeletionGroup[]): void {
-    const keys = groups.map((g) => `${g.blockKey}|${g.deletedMarkdown}`);
+  /** A thread's live-doc anchor position, from its own rendered highlight —
+   *  the ThreadDecorations plugin already stamped `data-thread-id` on the
+   *  span it decorated (thread-decorations.ts). Absent for resolved/orphaned
+   *  threads, which don't get a decoration span at all. */
+  function threadSpan(id: string): Element | null {
+    return view.dom.querySelector(`.thread-range[data-thread-id="${cssEscape(id)}"]`);
+  }
+
+  /** Open threads with a resolvable, currently-decorated anchor — resolved
+   *  and orphaned threads have nowhere to anchor a balloon. */
+  function eligibleThreads(): Thread[] {
+    if (!opts.threads || !opts.chrome) return [];
+    return opts.threads().filter((t) => t.status === 'open' && threadSpan(t.id) != null);
+  }
+
+  function buildCommentBalloon(thread: Thread, pendingReply?: string): HTMLElement {
+    // Reuse the drawer's own card verbatim — reply/resolve/reopen/re-anchor
+    // are ITS click handlers dispatching to the chrome's fetch calls, not a
+    // second implementation. Positioning classes are additive.
+    const el = opts.chrome?.threadsPanel.renderThread(thread, pendingReply);
+    if (!el) throw new Error('buildCommentBalloon requires opts.chrome');
+    el.classList.add('lf-balloon', 'lf-balloon-comment');
+    return el;
+  }
+
+  /** Rebuild the balloon list only when the underlying data actually
+   *  changed, so expand/reply state and DOM focus survive relayouts
+   *  triggered by unrelated activity (typing elsewhere in the doc dispatches
+   *  a transaction on every keystroke). */
+  function renderBalloons(delGroups: DeletionGroup[], openThreads: Thread[]): void {
+    const activeId = opts.chrome?.threadsPanel.getActive() ?? null;
+    const delKeys = delGroups.map((g) => `del|${g.blockKey}|${g.deletedMarkdown}`);
+    const commentKeys = openThreads.map(
+      (t) => `comment|${t.id}|${t.status}|${t.commentCount}|${t.lastActivity}|${activeId === t.id}`,
+    );
+    const keys = [...delKeys, ...commentKeys];
     if (keys.length === rendered.length && keys.every((k, i) => k === rendered[i].key)) {
-      for (let i = 0; i < groups.length; i++) rendered[i].group = groups[i];
+      // Nothing display-relevant changed — refresh the live group refs
+      // (anchor position may have moved) without touching any DOM.
+      let di = 0;
+      for (const r of rendered) {
+        if (r.kind === 'del') r.group = delGroups[di++];
+      }
       return;
     }
+
+    // Preserve in-progress reply drafts across the rebuild — the same trick
+    // ThreadPanel.render() uses for the drawer, needed here because the
+    // margin can rebuild far more often (any editor transaction).
+    const pendingReplies = new Map<string, string>();
+    for (const r of rendered) {
+      if (r.kind !== 'comment') continue;
+      const ta = r.el.querySelector<HTMLTextAreaElement>('textarea');
+      if (ta?.value) pendingReplies.set(r.thread.id, ta.value);
+    }
+
     marginEl.textContent = '';
-    rendered = groups.map((group, i) => {
-      const el = buildBalloon(group);
+    const nextDel: RenderedDelBalloon[] = delGroups.map((group, i) => {
+      const el = buildDelBalloon(group);
       marginEl.appendChild(el);
-      return { key: keys[i], group, el };
+      return { kind: 'del', key: delKeys[i], group, el };
     });
+    const nextComments: RenderedCommentBalloon[] = openThreads.map((thread, i) => {
+      const el = buildCommentBalloon(thread, pendingReplies.get(thread.id));
+      marginEl.appendChild(el);
+      return { kind: 'comment', key: commentKeys[i], thread, el };
+    });
+    rendered = [...nextDel, ...nextComments];
   }
 
   /** Y of a client-rect top in the editor's scrolled content space. */
@@ -174,8 +268,13 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
     const items = rendered.map((b) => {
       let anchorY = 0;
       try {
-        const pos = Math.max(0, Math.min(b.group.pos, doc.content.size));
-        anchorY = contentY(view.coordsAtPos(pos).top, editorRect);
+        if (b.kind === 'del') {
+          const pos = Math.max(0, Math.min(b.group.pos, doc.content.size));
+          anchorY = contentY(view.coordsAtPos(pos).top, editorRect);
+        } else {
+          const span = threadSpan(b.thread.id);
+          if (span) anchorY = contentY(span.getBoundingClientRect().top, editorRect);
+        }
       } catch {
         // happy-dom / positions without layout info — stack from the top.
       }
@@ -199,7 +298,10 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
       maxBottom = Math.max(maxBottom, y + items[i].height);
 
       const line = document.createElementNS(SVG_NS, 'line');
-      line.setAttribute('class', 'lf-leader');
+      line.setAttribute(
+        'class',
+        rendered[i].kind === 'comment' ? 'lf-leader lf-leader-comment' : 'lf-leader',
+      );
       line.setAttribute('x1', String(anchorX));
       line.setAttribute('y1', String(items[i].anchorY - overlayOffsetY));
       line.setAttribute('x2', String(balloonX));
@@ -213,8 +315,22 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
 
   function relayout(): void {
     if (scope.disposed) return;
-    renderBalloons(groupDeletions(getDeletions(), blockKeyForPos));
+    renderBalloons(groupDeletions(getDeletions(), blockKeyForPos), eligibleThreads());
     positionBalloons();
+  }
+
+  function revealThreadBalloon(id: string): boolean {
+    const found = rendered.find(
+      (r): r is RenderedCommentBalloon => r.kind === 'comment' && r.thread.id === id,
+    );
+    if (!found) return false;
+    try {
+      found.el.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+    } catch {
+      // scrollIntoView can throw in some test/embedded environments — the
+      // highlight in the editor already happened, this is a nice-to-have.
+    }
+    return true;
   }
 
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -260,5 +376,5 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
   });
 
   relayout();
-  return { relayout, scheduleRelayout };
+  return { relayout, scheduleRelayout, revealThreadBalloon };
 }
