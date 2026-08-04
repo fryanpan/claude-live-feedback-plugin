@@ -4,9 +4,9 @@ import { initialDrawerOpen } from '../src/review-chrome.ts';
 describe('initialDrawerOpen', () => {
   it('never opens on mobile', () => {
     expect(initialDrawerOpen({ isDesktop: false, marginVisible: false, stored: null })).toBe(false);
-    expect(
-      initialDrawerOpen({ isDesktop: false, marginVisible: false, stored: 'open' }),
-    ).toBe(false);
+    expect(initialDrawerOpen({ isDesktop: false, marginVisible: false, stored: 'open' })).toBe(
+      false,
+    );
   });
 
   it('opens on desktop when no balloon margin is visible (code surface, 901–1100px)', () => {
@@ -19,9 +19,9 @@ describe('initialDrawerOpen', () => {
 
   it('an explicit user toggle overrides the balloon default in both directions', () => {
     expect(initialDrawerOpen({ isDesktop: true, marginVisible: true, stored: 'open' })).toBe(true);
-    expect(
-      initialDrawerOpen({ isDesktop: true, marginVisible: false, stored: 'closed' }),
-    ).toBe(false);
+    expect(initialDrawerOpen({ isDesktop: true, marginVisible: false, stored: 'closed' })).toBe(
+      false,
+    );
   });
 
   it('ignores garbage stored values', () => {
