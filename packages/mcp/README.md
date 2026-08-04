@@ -62,7 +62,8 @@ See [`src/mcp.ts`](https://github.com/fryanpan/claude-live-feedback-plugin/blob/
 ## Environment
 
 - `FEEDBACK_BASE_URL` — defaults to discovery via `~/.claude/live-feedback/server.json` (written by the supervisor on startup), then `http://localhost:8787` as a last resort.
-- `FEEDBACK_AUTHOR` — `bryan`, `agent`, or any free-form id used as the reply author.
+- `FEEDBACK_AGENT_NAME` — this agent's display name (e.g. `Quick Build`). Set it in the agent's own environment; it wins over `FEEDBACK_AUTHOR` (which the plugin's `.mcp.json` pins to `agent`), so each fleet peer shows up under its own name and color instead of the shared "Agent" identity.
+- `FEEDBACK_AUTHOR` — fallback author key/name (`bryan`, `agent`, or any free-form name). Default: `agent`.
 
 ## Channel capability
 
