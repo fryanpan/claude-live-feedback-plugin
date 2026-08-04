@@ -1,6 +1,6 @@
 import { SUGGEST_DELETE_MARK, SUGGEST_INSERT_MARK, type SuggestionAttrs } from '@feedback/core';
 import { Extension } from '@tiptap/core';
-import type { MarkType, Node as PMNode } from '@tiptap/pm/model';
+import type { MarkType, Node as PMNode, Slice } from '@tiptap/pm/model';
 import {
   type EditorState,
   Plugin,
@@ -25,14 +25,24 @@ import { ySyncPluginKey } from '@tiptap/y-tiptap';
  *   deleting pending `suggestInsert` text really deletes it (shrinking the
  *   proposal), and Backspace/Delete over already-`suggestDelete` text just
  *   steps the caret past it;
- * - IME composition and paste bypass `handleTextInput`, so an
- *   appended-transaction backstop marks any UNMARKED text a local
- *   transaction inserted. Remote (Yjs/agent/undo) transactions carry the
- *   ySync meta and are never rewritten;
+ * - paste is intercepted (`handlePaste`): the selection is marked deleted and
+ *   the slice's text inserted as a flattened `suggestInsert` proposal under
+ *   one sid — the default `replaceSelection` would REALLY delete the
+ *   selected accepted text and a multi-block slice would split the host
+ *   block. Drops are suppressed outright (a drag-move deletes its source for
+ *   real; a "move" has no mark-model representation);
+ * - IME composition bypasses `handleTextInput`, so an appended-transaction
+ *   backstop marks any UNMARKED text a local transaction inserted. Remote
+ *   (Yjs/agent/undo) transactions carry the ySync meta and are never
+ *   rewritten;
  * - Enter is suppressed: a block split cannot be represented as a text mark
  *   and would leak a structural direct edit to disk, violating proposal
  *   isolation. (Whole-block proposals arrive via the agent tools / commit-5
  *   chrome instead.)
+ *
+ * With the mode OFF the plugin still does one thing: it strips suggestion
+ * marks that default input INHERITED by typing inside a pending span, so a
+ * normal-mode keystroke is always a direct edit (see appendBackstop).
  *
  * A contiguous burst of typing (or of backspaces) shares one sid — one
  * proposal per gesture, matching how the agent-side `suggestReplace` groups a
@@ -312,6 +322,63 @@ export function handleSuggestCut(view: EditorView, event: ClipboardEvent): boole
   return handleDeleteKey(view, false);
 }
 
+/**
+ * The paste handler. Without it, pasting over a non-empty selection runs
+ * ProseMirror's default `replaceSelection`, which REALLY deletes the selected
+ * accepted text — the appended-transaction backstop can only mark insertions,
+ * it cannot un-delete, so the deletion would flush to disk as a direct edit
+ * (and rejecting the resulting "suggestion" would remove the pasted text too,
+ * restoring neither side). A multi-block paste would additionally split the
+ * host block — a structural direct edit, same leak Enter suppression closes.
+ *
+ * So: route the selection through markRangeDeleted and insert the slice's
+ * text FLATTENED (block breaks become spaces — block splits can't be
+ * proposals in the mark model), all under one sid, mirroring how typing over
+ * a selection forms a replace. Exported for direct testing.
+ */
+export function handleSuggestPaste(
+  view: EditorView,
+  _event: ClipboardEvent,
+  slice: Slice,
+): boolean {
+  const st = suggestInputKey.getState(view.state);
+  if (!st?.on || !st.author) return false;
+  const types = markTypes(view.state);
+  if (!types) return false;
+  const sel = view.state.selection;
+  // Contexts that don't allow the mark (code blocks) stay direct edits.
+  if (!view.state.doc.resolve(sel.from).parent.type.allowsMarkType(types.ins)) return false;
+  const text = slice.content.textBetween(0, slice.content.size, ' ', ' ');
+  // Nothing textual to propose and nothing selected: swallow the paste rather
+  // than let a node-only slice land as a direct structural edit.
+  if (text.length === 0 && sel.empty) return true;
+
+  const sid = newSid();
+  const ts = Date.now();
+  const attrs = attrsFor(st.author, sid, ts);
+  const tr = view.state.tr;
+  if (!sel.empty) markRangeDeleted(tr, sel.from, sel.to, attrs, types);
+  const insPos = tr.mapping.map(sel.to, -1);
+  if (text.length > 0) tr.insert(insPos, view.state.schema.text(text, [types.ins.create(attrs)]));
+  const end = insPos + text.length;
+  tr.setSelection(TextSelection.create(tr.doc, end));
+  tr.setMeta(suggestInputKey, {
+    handled: true,
+    burst: { sid, ts, from: insPos, to: end },
+  } satisfies SuggestInputMeta);
+  view.dispatch(tr.scrollIntoView());
+  return true;
+}
+
+/** Drops are suppressed while Suggesting: an internal drag-move deletes the
+ *  dragged text at its source FOR REAL (the backstop cannot un-delete), and a
+ *  "move" has no clean representation in the mark model. Blocking the gesture
+ *  beats leaking a destructive direct edit to disk. */
+function handleSuggestDrop(view: EditorView): boolean {
+  const st = suggestInputKey.getState(view.state);
+  return !!(st?.on && st.author);
+}
+
 // --- appended-transaction backstop (IME commits, paste, programmatic input) ---
 
 function insertedRanges(tr: Transaction): Array<{ from: number; to: number }> {
@@ -330,7 +397,6 @@ function insertedRanges(tr: Transaction): Array<{ from: number; to: number }> {
 
 function appendBackstop(trs: readonly Transaction[], newState: EditorState): Transaction | null {
   const st = suggestInputKey.getState(newState);
-  if (!st?.on || !st.author) return null;
   const types = markTypes(newState);
   if (!types) return null;
 
@@ -346,27 +412,50 @@ function appendBackstop(trs: readonly Transaction[], newState: EditorState): Tra
   }
   if (ranges.length === 0) return null;
 
-  const sid = newSid();
-  const ts = Date.now();
-  const attrs = attrsFor(st.author, sid, ts);
-  let appended: Transaction | null = null;
-  let last: { from: number; to: number } | null = null;
+  if (st?.on && st.author) {
+    const sid = newSid();
+    const ts = Date.now();
+    const attrs = attrsFor(st.author, sid, ts);
+    let appended: Transaction | null = null;
+    let last: { from: number; to: number } | null = null;
+    for (const range of ranges) {
+      for (const seg of collectSegments(newState.doc, range.from, range.to, types)) {
+        if (seg.kind !== 'plain') continue;
+        const $seg = newState.doc.resolve(seg.from);
+        if (!$seg.parent.type.allowsMarkType(types.ins)) continue;
+        appended = appended ?? newState.tr;
+        appended.addMark(seg.from, seg.to, types.ins.create(attrs));
+        last = { from: seg.from, to: seg.to };
+      }
+    }
+    if (!appended || !last) return null;
+    appended.setMeta(suggestInputKey, {
+      handled: true,
+      burst: { sid, ts, from: last.from, to: last.to },
+    } satisfies SuggestInputMeta);
+    return appended;
+  }
+
+  // Suggesting OFF: default input INHERITS the marks at the caret when it
+  // sits inside a pending span (`inclusive: false` only guards the
+  // boundaries — PM's $pos.marks() returns a text node's own marks mid-node,
+  // and tr.insertText applies them to the typed text). Inherited
+  // suggestInsert makes the human's real keystrokes invisible on disk and
+  // deletes them outright if the proposal is rejected; inherited
+  // suggestDelete strikes them through and deletes them on accept. Strip
+  // both marks from any locally-inserted text so a normal-mode edit is
+  // always a direct edit. (Remote/agent transactions carry the ySync meta
+  // and are skipped above, so agent-authored proposals are untouched.)
+  let stripped: Transaction | null = null;
   for (const range of ranges) {
     for (const seg of collectSegments(newState.doc, range.from, range.to, types)) {
-      if (seg.kind !== 'plain') continue;
-      const $seg = newState.doc.resolve(seg.from);
-      if (!$seg.parent.type.allowsMarkType(types.ins)) continue;
-      appended = appended ?? newState.tr;
-      appended.addMark(seg.from, seg.to, types.ins.create(attrs));
-      last = { from: seg.from, to: seg.to };
+      if (seg.kind === 'plain') continue;
+      stripped = stripped ?? newState.tr;
+      stripped.removeMark(seg.from, seg.to, seg.kind === 'ins' ? types.ins : types.del);
     }
   }
-  if (!appended || !last) return null;
-  appended.setMeta(suggestInputKey, {
-    handled: true,
-    burst: { sid, ts, from: last.from, to: last.to },
-  } satisfies SuggestInputMeta);
-  return appended;
+  if (stripped) stripped.setMeta(suggestInputKey, { handled: true } satisfies SuggestInputMeta);
+  return stripped;
 }
 
 // --- the plugin ---
@@ -399,6 +488,8 @@ function createSuggestInputPlugin(): Plugin<SuggestInputState> {
     props: {
       handleTextInput,
       handleKeyDown,
+      handlePaste: handleSuggestPaste,
+      handleDrop: handleSuggestDrop,
       handleDOMEvents: {
         cut: (view, event) => handleSuggestCut(view, event),
       },
