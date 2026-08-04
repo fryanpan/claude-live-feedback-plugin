@@ -2235,6 +2235,11 @@ body.redline-mode .ProseMirror del.lf-del {
   cursor: pointer;
 }
 
+.lf-balloon-expand:hover,
+.lf-balloon-expand:focus-visible {
+  text-decoration: underline;
+}
+
 /* Comment balloons ARE the drawer's `.thread` card (ThreadPanel.renderThread,
    reused) plus these positioning/colour overrides — `.lf-balloon` gives it
    the absolute-positioned box, this gives it an accent (not red) edge so it
@@ -2243,6 +2248,20 @@ body.redline-mode .ProseMirror del.lf-del {
 .lf-balloon-comment {
   border-left-color: var(--accent);
   cursor: pointer;
+}
+
+/* Balloon hover/focus: a subtle lift so the margin reads as a column of
+   interactive cards, matching the drawer's own :hover treatment. Keyed off
+   `.lf-balloon` (not `.lf-balloon-del`, which has no click target of its
+   own — only its nested Show more/expand button and the sheet chip do). */
+.lf-balloon-comment:hover,
+.lf-balloon-comment:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+}
+.lf-balloon-comment:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 /* The drawer only shows a thread's reply box + actions once it's the active
@@ -2258,9 +2277,10 @@ body.redline-mode .ProseMirror del.lf-del {
 }
 
 /* Balloons are desktop-only. Below 1100px the column and leader lines
-   disappear; the mobile treatment (inline chips + drawer) is a separate
-   commit. `display: block` restores the single-column flow — no 300px track
-   means no horizontal scroll at 430px. */
+   disappear; `.lf-del-chip` (built in live-markup.ts, one per deletion group
+   — same grouping as the balloon) takes over as the mobile fallback, shown
+   only in this breakpoint. `display: block` restores the single-column flow
+   — no 300px track means no horizontal scroll at 430px. */
 @media (max-width: 1100px) {
   #editor.redline-layout {
     display: block;
@@ -2269,6 +2289,79 @@ body.redline-mode .ProseMirror del.lf-del {
   .markup-margin,
   .lf-leader-overlay {
     display: none;
+  }
+
+  .lf-del-chip {
+    display: inline-flex;
+  }
+}
+
+/* Mobile deletion chip (`.lf-del-chip`, live-markup.ts widget decoration) —
+   a compact, tappable inline marker standing in for the balloon that's
+   hidden at this width. Hidden by default (desktop shows the balloon
+   instead); the media query above is what actually reveals it ≤1100px, so
+   this rule alone never introduces markup on wide screens. Padding — not a
+   fixed 36px box — gives the tap target room without blowing out the
+   surrounding line's height; see docs/product/design-mobile.md's tap-target
+   guidance, relaxed here because this chip sits inline in flowing prose. */
+.lf-del-chip {
+  display: none;
+  align-items: center;
+  gap: 3px;
+  margin: 0 2px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-panel);
+  color: #cf222e;
+  font: 600 12px / 1.4 var(--sans);
+  cursor: pointer;
+  vertical-align: baseline;
+  white-space: nowrap;
+}
+
+.lf-del-chip:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+.lf-del-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* The mobile deletion sheet (mountDeletionSheet, markup-margin.ts) — opened
+   by tapping a `.lf-del-chip`. `.thread-view` (styles.css, FULL-SCREEN THREAD
+   VIEW section above) supplies the fixed slide-up sheet, header, drag handle,
+   and close button for free; `.lf-del-sheet` adds nothing positional, only
+   marks this as a distinct instance from the comment thread-view. The text
+   itself wraps rather than overflowing — same long-unbreakable-token rule as
+   the balloon (`.lf-balloon-text`) and docs/product/design-mobile.md. */
+.lf-del-sheet-text {
+  font-family: var(--prose);
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--fg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* The balloon column is a screen-only affordance: a printed page has no
+   hover/tap interaction to reveal a chip's content either, so both are
+   hidden and the prose reclaims the full page width. Scoped to the redline
+   layout classes only — the code/diff surface never carries them (see
+   docs/process/learnings.md, minmax(0,1fr) footgun note above), so this
+   cannot affect the code surface's print output. */
+@media print {
+  #editor.redline-layout {
+    display: block;
+  }
+
+  .markup-margin,
+  .lf-leader-overlay,
+  .lf-del-chip,
+  .lf-del-sheet {
+    display: none !important;
   }
 }
 
@@ -2288,6 +2381,10 @@ body.redline-mode .ProseMirror del.lf-del {
 
   .lf-leader {
     stroke: #f85149;
+  }
+
+  .lf-del-chip {
+    color: #f85149;
   }
 
   /* --accent is not theme-varying (styles.css defines it once at :root), so

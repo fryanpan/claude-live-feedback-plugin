@@ -17,7 +17,10 @@ import * as Y from 'yjs';
  * Insertions render inline (`<ins class="lf-ins">` decorations — same CSS as
  * the read-only surface). Deletions are NOT rendered inline on wide screens:
  * they're extracted as a list (`pos` in the live doc + the deleted markdown)
- * for the margin balloons (plan commit 3) to consume.
+ * for the margin balloons (markup-margin.ts) to consume, AND rendered as a
+ * grouped, compact "⌫ N lines" widget decoration (`buildDeletionChip`) that
+ * only styles.css shows — hidden ≥1100px, where the balloon carries the same
+ * content; visible ≤1100px, where the balloon column collapses.
  *
  * Reuses `computeRedline` from @feedback/core: the live doc is serialized
  * per-block (prose.serializeBlockToMarkdown — the same serializer the disk
@@ -31,6 +34,44 @@ export interface RedlineDeletion {
    *  blocks; the word boundary for inline deletions). */
   pos: number;
   deletedMarkdown: string;
+}
+
+export interface DeletionGroup {
+  /** Live-doc position of the group's first deletion. */
+  pos: number;
+  /** Top-level block index the group anchors in (grouping key). */
+  blockKey: number;
+  deletedMarkdown: string;
+}
+
+/** The top-level block index containing `pos` — the grouping key for both the
+ *  margin balloon and the mobile chip, so they always agree on what counts as
+ *  "one deletion". Pure over the PM doc; no view needed. */
+export function blockIndexForPos(doc: ProseNode, pos: number): number {
+  const p = Math.max(0, Math.min(pos, doc.content.size));
+  return doc.resolve(p).index(0);
+}
+
+/**
+ * Collapse consecutive deletions that anchor in the same top-level block into
+ * one group, joining their markdown line-by-line. Pure — the caller supplies
+ * the pos→block mapping.
+ */
+export function groupDeletions(
+  deletions: RedlineDeletion[],
+  blockKeyForPos: (pos: number) => number,
+): DeletionGroup[] {
+  const groups: DeletionGroup[] = [];
+  for (const d of deletions) {
+    const blockKey = blockKeyForPos(d.pos);
+    const last = groups[groups.length - 1];
+    if (last && last.blockKey === blockKey) {
+      last.deletedMarkdown += `\n${d.deletedMarkdown}`;
+    } else {
+      groups.push({ pos: d.pos, blockKey, deletedMarkdown: d.deletedMarkdown });
+    }
+  }
+  return groups;
 }
 
 export interface LiveMarkupResult {
@@ -224,11 +265,44 @@ interface LiveMarkupState {
 
 export const liveMarkupKey = new PluginKey<LiveMarkupState>('lf-live-markup');
 
+/**
+ * The mobile chip's DOM (styles.css: `.lf-del-chip`, shown only ≤1100px —
+ * the balloon margin shows the same content on wide screens). Always built
+ * regardless of viewport, same as every other decoration here — CSS alone
+ * decides which of the two (balloon vs chip) is visible, so there's no JS
+ * branching on window width to keep in sync with the stylesheet's breakpoint.
+ *
+ * `contentEditable = 'false'` per ProseMirror's own guidance for widget
+ * decorations: they're excluded from the document's content model, but
+ * nothing stops native editing INSIDE the injected DOM unless the widget
+ * opts out itself. The deleted markdown rides along as a `data-*` attribute
+ * — the margin's click handler (markup-margin.ts) reads it back to fill the
+ * mobile sheet, so this module stays free of DOM-mounting concerns (scope,
+ * listeners) it doesn't otherwise need.
+ */
+function buildDeletionChip(group: DeletionGroup): HTMLElement {
+  const chip = document.createElement('button');
+  chip.type = 'button';
+  chip.className = 'lf-del-chip';
+  chip.contentEditable = 'false';
+  const lines = group.deletedMarkdown.split('\n').length;
+  const label = lines === 1 ? '1 line' : `${lines} lines`;
+  chip.textContent = `⌫ ${label}`;
+  chip.setAttribute('aria-label', `View ${label} of deleted text`);
+  chip.dataset.lfDelText = group.deletedMarkdown;
+  return chip;
+}
+
 function toState(doc: ProseNode, result: LiveMarkupResult): LiveMarkupState {
-  const decos = result.insRanges
+  const insDecos = result.insRanges
     .filter((r) => r.to > r.from)
     .map((r) => Decoration.inline(r.from, r.to, { nodeName: 'ins', class: 'lf-ins' }));
-  return { decorations: DecorationSet.create(doc, decos), deletions: result.deletions };
+  const delGroups = groupDeletions(result.deletions, (pos) => blockIndexForPos(doc, pos));
+  const chipDecos = delGroups.map((g) => Decoration.widget(g.pos, () => buildDeletionChip(g)));
+  return {
+    decorations: DecorationSet.create(doc, [...insDecos, ...chipDecos]),
+    deletions: result.deletions,
+  };
 }
 
 export interface LiveMarkupOptions {

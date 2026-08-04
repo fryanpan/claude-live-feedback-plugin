@@ -366,12 +366,14 @@ describe('mountMarkupMargin — teardown', () => {
       margin.relayout();
       expect(parent.querySelector('.markup-margin')).not.toBeNull();
       expect(observed.length).toBeGreaterThan(0);
+      expect(document.querySelector('.lf-del-sheet')).not.toBeNull();
 
       scope.dispose();
       expect(parent.querySelector('.markup-margin')).toBeNull();
       expect(parent.querySelector('svg.lf-leader-overlay')).toBeNull();
       expect(parent.classList.contains('redline-layout')).toBe(false);
       expect(disconnected.length).toBeGreaterThan(0);
+      expect(document.querySelector('.lf-del-sheet')).toBeNull();
     } finally {
       vi.unstubAllGlobals();
     }
@@ -588,6 +590,46 @@ describe('mountMarkupMargin — plain markdown doc (comments only, no deletions)
     expect(parent.classList.contains('redline-layout')).toBe(true);
     expect(parent.querySelectorAll('.lf-balloon-del')).toHaveLength(0);
     expect(parent.querySelectorAll('.lf-balloon-comment')).toHaveLength(1);
+  });
+});
+
+describe('mountMarkupMargin — mobile deletion chip opens the bottom sheet', () => {
+  it('tapping a chip opens the sheet with the deleted markdown; the close button hides it again', async () => {
+    const { parent, surface } = mountSurface(
+      'Alpha.\n\nRemoved paragraph.\n\nBravo.\n',
+      'Alpha.\n\nBravo.\n',
+    );
+    await tick();
+    mountMargin(parent, surface); // wires the chip → sheet click delegation
+
+    const chip = parent.querySelector('.lf-del-chip') as HTMLElement;
+    expect(chip).not.toBeNull();
+    const sheet = document.querySelector('.lf-del-sheet') as HTMLElement;
+    expect(sheet).not.toBeNull();
+    expect(sheet.classList.contains('hidden')).toBe(true);
+
+    chip.click();
+    expect(sheet.classList.contains('hidden')).toBe(false);
+    expect(sheet.getAttribute('aria-hidden')).toBe('false');
+    expect(sheet.querySelector('.lf-del-sheet-text')?.textContent).toContain('Removed paragraph.');
+
+    (sheet.querySelector('.thread-view-close') as HTMLElement).click();
+    expect(sheet.classList.contains('hidden')).toBe(true);
+    expect(sheet.getAttribute('aria-hidden')).toBe('true');
+  });
+
+  it('a click elsewhere in the editor does not open the sheet', async () => {
+    const { parent, surface } = mountSurface(
+      'Alpha.\n\nRemoved paragraph.\n\nBravo.\n',
+      'Alpha.\n\nBravo.\n',
+    );
+    await tick();
+    mountMargin(parent, surface);
+
+    const sheet = document.querySelector('.lf-del-sheet') as HTMLElement;
+    const pm = parent.querySelector('.ProseMirror') as HTMLElement;
+    pm.click();
+    expect(sheet.classList.contains('hidden')).toBe(true);
   });
 });
 
