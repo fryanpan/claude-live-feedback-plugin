@@ -101,6 +101,16 @@ const CLAMP_LINES = 6;
 const CLAMP_CHARS = 480;
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
+/** Mirrors the styles.css breakpoint that hides `.markup-margin` (and the
+ *  leader overlay) — `rendered[]` is populated regardless of viewport, so
+ *  anything answering "is this balloon actually visible?" must consult this,
+ *  not the DOM. Same query app.ts uses for its mobile checks. */
+const MARGIN_HIDDEN_QUERY = '(max-width: 1100px)';
+
+function marginHidden(): boolean {
+  return window.matchMedia(MARGIN_HIDDEN_QUERY).matches;
+}
+
 /** Long enough to clamp? Text-based so the decision is testable without
  *  layout; the CSS line-clamp does the visual truncation. */
 function needsClamp(md: string): boolean {
@@ -304,6 +314,25 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
     return clientTop - editorRect.top + editorEl.scrollTop;
   }
 
+  /**
+   * Content-space floor keeping balloons clear of the floating view toggle.
+   * `body.diff-mode #view-toggle` is absolutely positioned over the editor
+   * pane's top-right at z-index 5 (opaque, non-scrolling) — exactly where
+   * the margin column's grid track starts — so a balloon anchored at the top
+   * of the doc would render underneath it. Measured live (not hardcoded) so
+   * format-bar height and toggle wrapping can't drift out of sync. The
+   * clearance is viewport-relative to the editor's top, which equals content
+   * space at scroll-top — the only scroll position where the floor matters;
+   * scrolled content passing under the pill is normal floating-control UX.
+   */
+  function toggleClearanceY(editorRect: DOMRect): number {
+    const toggle = document.getElementById('view-toggle');
+    if (!toggle || toggle.classList.contains('hidden')) return 0;
+    const r = toggle.getBoundingClientRect();
+    if (r.height === 0 || r.bottom <= editorRect.top) return 0;
+    return r.bottom - editorRect.top + GAP;
+  }
+
   function positionBalloons(): void {
     const editorRect = editorEl.getBoundingClientRect();
     const marginRect = marginEl.getBoundingClientRect();
@@ -327,7 +356,15 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
       }
       return { anchorY: Math.max(0, anchorY), height: b.el.offsetHeight };
     });
-    const ys = layoutBalloons(items, GAP);
+    // Floor stacking positions below the floating toggle, but keep the TRUE
+    // anchor for the leader lines — the line should still point at the
+    // deletion/highlight, only the card slides down. max() is monotonic, so
+    // the anchor-sorted stacking order is preserved.
+    const minY = toggleClearanceY(editorRect);
+    const ys = layoutBalloons(
+      items.map((it) => ({ anchorY: Math.max(minY, it.anchorY), height: it.height })),
+      GAP,
+    );
 
     // Size the overlay to the scrolled content so lines aren't clipped.
     overlay.setAttribute('width', String(Math.max(0, editorEl.scrollWidth)));
@@ -367,6 +404,11 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
   }
 
   function revealThreadBalloon(id: string): boolean {
+    // Below the breakpoint the column is display:none — the balloon exists
+    // in `rendered[]` but the user can't see it, and a silent scrollIntoView
+    // no-op would eat the caller's drawer/thread-view fallback (the 901–
+    // 1100px gap is a real iPad-portrait width, not an edge case).
+    if (marginHidden()) return false;
     const found = rendered.find(
       (r): r is RenderedCommentBalloon => r.kind === 'comment' && r.thread.id === id,
     );

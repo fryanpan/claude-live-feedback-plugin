@@ -11,7 +11,7 @@ import {
   createLiveRedlineEditor,
 } from '../src/redline/live-redline-editor.ts';
 import { groupDeletions, mountMarkupMargin } from '../src/redline/markup-margin.ts';
-import { mountReviewChrome } from '../src/review-chrome.ts';
+import { mountReviewChrome, wireThreadRangeClicks } from '../src/review-chrome.ts';
 
 /**
  * The markup margin: Word's balloon column for deletions AND open comment
@@ -192,6 +192,17 @@ function openThreadAt(
 
 /** Let the (0ms in tests) markup debounce fire and the view repaint. */
 const tick = () => new Promise((r) => setTimeout(r, 25));
+
+/** happy-dom's viewport width drives `window.matchMedia` — the same query
+ *  the source uses to mirror the styles.css `max-width: 1100px` breakpoint
+ *  that hides the balloon column. Default is 1024px, i.e. BELOW the
+ *  breakpoint, so any test about visible balloons must widen it. */
+function setViewportWidth(w: number): void {
+  (
+    window as unknown as { happyDOM: { setInnerWidth: (w: number) => void } }
+  ).happyDOM.setInnerWidth(w);
+}
+afterEach(() => setViewportWidth(1024));
 
 describe('groupDeletions — consecutive same-paragraph deletions collapse', () => {
   it('returns an empty list for no deletions', () => {
@@ -635,6 +646,7 @@ describe('mountMarkupMargin — mobile deletion chip opens the bottom sheet', ()
 
 describe('mountMarkupMargin — revealThreadBalloon', () => {
   it('scrolls a rendered comment balloon into view and returns true; false when not found', async () => {
+    setViewportWidth(1440); // balloon column visible (>1100px)
     const { parent, surface, ydoc, chrome, scope } = mountRedlineWithChrome(
       '',
       'Alpha bravo gamma.\n',
@@ -665,5 +677,155 @@ describe('mountMarkupMargin — revealThreadBalloon', () => {
     expect(margin.revealThreadBalloon(thread.id)).toBe(true);
     expect(scrollSpy).toHaveBeenCalled();
     expect(margin.revealThreadBalloon('no-such-thread')).toBe(false);
+  });
+
+  it('returns false at or below the 1100px breakpoint that hides the column (even though the thread is rendered)', async () => {
+    setViewportWidth(1440);
+    const { parent, surface, ydoc, chrome, scope } = mountRedlineWithChrome(
+      '',
+      'Alpha bravo gamma.\n',
+    );
+    await tick();
+    const thread = openThreadAt(
+      ydoc,
+      surface.handle.editor,
+      () => surface.getSelectionRel(),
+      { from: 1, to: 6 },
+      'Hidden with the column.',
+    );
+
+    const margin = mountMarkupMargin({
+      editorEl: parent,
+      view: surface.handle.editor.view,
+      getDeletions: () => [],
+      threads: () => chrome.collectThreads(),
+      chrome,
+      scope,
+    });
+    margin.relayout();
+    // The balloon IS in the DOM — CSS (display:none on .markup-margin) is
+    // what hides it below the breakpoint, so `rendered[]` membership alone
+    // must not count as "revealed".
+    expect(parent.querySelector('.lf-balloon-comment')).not.toBeNull();
+
+    // 901–1100px: the iPad-portrait gap where chrome.isMobile() is false
+    // but the balloon column is hidden — the width the original bug ate.
+    setViewportWidth(1000);
+    expect(margin.revealThreadBalloon(thread.id)).toBe(false);
+  });
+
+  it('click on a highlight in the 901–1100px gap falls through to the drawer instead of dead-ending', async () => {
+    setViewportWidth(1000); // column hidden, but not chrome.isMobile()
+    const { parent, surface, ydoc, chrome, scope } = mountRedlineWithChrome(
+      '',
+      'Alpha bravo gamma.\n',
+    );
+    await tick();
+    const thread = openThreadAt(
+      ydoc,
+      surface.handle.editor,
+      () => surface.getSelectionRel(),
+      { from: 1, to: 6 },
+      'Reach me via the drawer.',
+    );
+
+    const margin = mountMarkupMargin({
+      editorEl: parent,
+      view: surface.handle.editor.view,
+      getDeletions: () => [],
+      threads: () => chrome.collectThreads(),
+      chrome,
+      scope,
+    });
+    margin.relayout();
+    wireThreadRangeClicks({
+      editorMount: parent,
+      chrome,
+      surface,
+      scope,
+      revealBalloon: (id) => margin.revealThreadBalloon(id),
+    });
+
+    chrome.closeDrawer();
+    const span = parent.querySelector(`.thread-range[data-thread-id="${thread.id}"]`) as Element;
+    expect(span).not.toBeNull();
+    span.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    // The real revealThreadBalloon must decline so the shared wiring opens
+    // the drawer — the thread-focus tests only mock revealBalloon, so this
+    // is the one test that exercises the breakpoint end to end.
+    expect(
+      (document.getElementById('shell') as HTMLElement).classList.contains('threads-open'),
+    ).toBe(true);
+  });
+});
+
+describe('mountMarkupMargin — clearance under the floating view toggle', () => {
+  it('floors the topmost balloon below a visible floating #view-toggle; leader line keeps the true anchor', async () => {
+    setViewportWidth(1440);
+    const { parent, surface } = mountSurface('Kept.\n', 'Kept.\n');
+    await tick();
+
+    // The Redline|Diff|File pill floats over the editor's top-right
+    // (position:absolute, z-index:5 — styles.css) exactly where the margin
+    // column starts. Simulate its rect: happy-dom has no layout, so rects
+    // are zero unless mocked.
+    const toggle = document.createElement('div');
+    toggle.id = 'view-toggle';
+    toggle.className = 'view-toggle';
+    document.body.appendChild(toggle);
+    vi.spyOn(toggle, 'getBoundingClientRect').mockReturnValue({
+      top: 8,
+      bottom: 48,
+      left: 700,
+      right: 900,
+      width: 200,
+      height: 40,
+      x: 700,
+      y: 8,
+      toJSON() {},
+    } as DOMRect);
+    open.push(() => toggle.remove());
+
+    const { margin } = mountMargin(parent, surface, () => [
+      { pos: 1, deletedMarkdown: 'top-of-doc deletion' },
+    ]);
+    margin.relayout();
+
+    const balloon = parent.querySelector('.lf-balloon') as HTMLElement;
+    // Anchor Y is 0 (no layout) — without clearance the balloon would sit at
+    // top:0 underneath the opaque toggle (bottom edge 48px + 8px gap).
+    expect(Number.parseFloat(balloon.style.top)).toBeGreaterThanOrEqual(56);
+    // The leader line still points at the deletion's real anchor.
+    const line = parent.querySelector('svg.lf-leader-overlay .lf-leader') as SVGLineElement;
+    expect(Number(line.getAttribute('y1'))).toBe(0);
+  });
+
+  it('ignores a hidden #view-toggle (plain markdown docs never show it)', async () => {
+    setViewportWidth(1440);
+    const { parent, surface } = mountSurface('Kept.\n', 'Kept.\n');
+    await tick();
+
+    const toggle = document.createElement('div');
+    toggle.id = 'view-toggle';
+    toggle.className = 'view-toggle hidden';
+    document.body.appendChild(toggle);
+    vi.spyOn(toggle, 'getBoundingClientRect').mockReturnValue({
+      top: 8,
+      bottom: 48,
+      left: 700,
+      right: 900,
+      width: 200,
+      height: 40,
+      x: 700,
+      y: 8,
+      toJSON() {},
+    } as DOMRect);
+    open.push(() => toggle.remove());
+
+    const { margin } = mountMargin(parent, surface, () => [{ pos: 1, deletedMarkdown: 'gone' }]);
+    margin.relayout();
+
+    const balloon = parent.querySelector('.lf-balloon') as HTMLElement;
+    expect(Number.parseFloat(balloon.style.top)).toBe(0);
   });
 });
