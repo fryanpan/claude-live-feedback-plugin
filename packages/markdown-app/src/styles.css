@@ -2139,3 +2139,128 @@ body.redline-mode .ProseMirror del.lf-del {
     text-decoration-color: #f85149;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Markup margin — Word's balloon column for deletions (editable redline).
+
+   The grid MUST use minmax(0, 1fr): plain `1fr` is minmax(auto, 1fr), so a
+   long unbreakable string in the prose would push the 300px column (and the
+   page) sideways — the CSS Grid overflow trap in docs/process/learnings.md.
+   --------------------------------------------------------------------------- */
+
+body.redline-mode #editor.redline-layout {
+  position: relative; /* anchors the balloon column and the SVG overlay */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  column-gap: 16px;
+  align-items: start;
+}
+
+body.redline-mode #editor.redline-layout > .ProseMirror {
+  min-width: 0;
+}
+
+.markup-margin {
+  position: relative;
+  min-width: 0;
+}
+
+/* One overlay for every leader line; never intercepts clicks. */
+.lf-leader-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.lf-leader {
+  stroke: #cf222e;
+  stroke-width: 1.25;
+  fill: none;
+  opacity: 0.5;
+}
+
+.lf-balloon {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  box-sizing: border-box;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-left: 3px solid #cf222e;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--fg);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.lf-balloon-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #cf222e;
+  margin-bottom: 4px;
+}
+
+/* Deleted markdown shown verbatim; long tokens wrap instead of overflowing. */
+.lf-balloon-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: #57606a;
+}
+
+.lf-balloon-text.is-clamped {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+  line-clamp: 6;
+  overflow: hidden;
+}
+
+.lf-balloon-expand {
+  margin-top: 4px;
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 12px;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+/* Balloons are desktop-only. Below 1100px the column and leader lines
+   disappear; the mobile treatment (inline chips + drawer) is a separate
+   commit. `display: block` restores the single-column flow — no 300px track
+   means no horizontal scroll at 430px. */
+@media (max-width: 1100px) {
+  body.redline-mode #editor.redline-layout {
+    display: block;
+  }
+
+  .markup-margin,
+  .lf-leader-overlay {
+    display: none;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .lf-balloon {
+    border-left-color: #f85149;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  }
+
+  .lf-balloon-label {
+    color: #f85149;
+  }
+
+  .lf-balloon-text {
+    color: #8b949e;
+  }
+
+  .lf-leader {
+    stroke: #f85149;
+  }
+}

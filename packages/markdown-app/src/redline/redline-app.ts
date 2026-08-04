@@ -10,6 +10,7 @@ import type { ReviewSurface } from '../review-surface.ts';
 import { remountCurrent } from '../router.ts';
 import { getMarkdownMount } from '../surface-registry.ts';
 import { createLiveRedlineEditor } from './live-redline-editor.ts';
+import { mountMarkupMargin } from './markup-margin.ts';
 import { createRedlineEditor } from './redline-editor.ts';
 
 /**
@@ -192,7 +193,7 @@ export async function mountRedline(ctx: MountContext): Promise<void> {
     }
   };
 
-  const surface: ReviewSurface & { getSelectionRel: () => ChromeSelection | null } = companion
+  const liveSurface = companion
     ? createLiveRedlineEditor({
         parent: editorMount,
         ydoc: companion.client.ydoc,
@@ -200,7 +201,10 @@ export async function mountRedline(ctx: MountContext): Promise<void> {
         baseText,
         onSelectionChange,
       })
-    : createRedlineEditor({ parent: editorMount, ydoc: client.ydoc, baseText, onSelectionChange });
+    : null;
+  const surface: ReviewSurface & { getSelectionRel: () => ChromeSelection | null } =
+    liveSurface ??
+    createRedlineEditor({ parent: editorMount, ydoc: client.ydoc, baseText, onSelectionChange });
   surfaceReady = true;
   scope.onCleanup(() => surface.destroy());
 
@@ -223,6 +227,24 @@ export async function mountRedline(ctx: MountContext): Promise<void> {
     getSelection: () => surface.getSelectionRel() ?? selection,
     hidePill,
   });
+
+  // The balloon margin renders deletions extracted by the editable surface;
+  // the read-only fallback keeps its inline <del> rendering instead.
+  if (liveSurface) {
+    const margin = mountMarkupMargin({
+      editorEl: editorMount,
+      view: liveSurface.handle.editor.view,
+      getDeletions: () => liveSurface.getDeletions(),
+      threads: () => chrome.collectThreads(),
+      chrome,
+      scope,
+    });
+    // Every transaction (typing, remote edits, the debounced markup recompute
+    // dispatching its meta) can move anchors or change the deletions list.
+    const onTransaction = (): void => margin.scheduleRelayout();
+    liveSurface.handle.editor.on('transaction', onTransaction);
+    scope.onCleanup(() => liveSurface.handle.editor.off('transaction', onTransaction));
+  }
 
   scope.onCleanup(startReadingTracker({ docId, user, scrollEl: editorMount }));
   wireToggle(docId, 'redline', scope);
