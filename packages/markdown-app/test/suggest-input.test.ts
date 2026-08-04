@@ -4,6 +4,7 @@ import {
   type SuggestionAttrs,
   prose,
 } from '@feedback/core';
+import { Fragment, Slice } from '@tiptap/pm/model';
 import type { EditorView } from '@tiptap/pm/view';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Awareness } from 'y-protocols/awareness';
@@ -68,6 +69,19 @@ function press(view: EditorView, key: string): boolean {
   return (
     view.someProp('handleKeyDown', (f) => f(view, new KeyboardEvent('keydown', { key }))) ?? false
   );
+}
+
+/** Simulate a paste through the view's prop chain (our plugin first). */
+function pasteAt(view: EditorView, slice: Slice): boolean {
+  return (
+    view.someProp('handlePaste', (f) =>
+      f(view, { preventDefault: vi.fn() } as unknown as ClipboardEvent, slice),
+    ) ?? false
+  );
+}
+
+function textSlice(view: EditorView, text: string): Slice {
+  return new Slice(Fragment.from(view.state.schema.text(text)), 0, 0);
 }
 
 type DeltaOp = { insert?: string; attributes?: Record<string, unknown> };
@@ -275,6 +289,103 @@ describe('Suggesting input mode — cut, composition backstop, toggle off', () =
     press(view, 'Backspace'); // falls through to the default keymap
     expect(opsWith(textDelta(fragment), SUGGEST_INSERT_MARK)).toHaveLength(0);
     expect(opsWith(textDelta(fragment), SUGGEST_DELETE_MARK)).toHaveLength(0);
+  });
+});
+
+describe('Suggesting input mode — paste and drop', () => {
+  it('pasting over a non-empty selection proposes a REPLACE — the selected accepted text is NOT deleted', () => {
+    const { fragment, handle, view } = mountEditor('Alpha beta gamma.\n');
+    suggestOn(view);
+    handle.editor.commands.setTextSelection({ from: 7, to: 11 }); // 'beta'
+    expect(pasteAt(view, textSlice(view, 'delta'))).toBe(true);
+    // Both old and new text visible in the live doc…
+    expect(docText(handle)).toBe('Alpha betadelta gamma.');
+    const delta = textDelta(fragment);
+    const del = opsWith(delta, SUGGEST_DELETE_MARK);
+    const ins = opsWith(delta, SUGGEST_INSERT_MARK);
+    expect(del).toHaveLength(1);
+    expect(del[0].insert).toBe('beta');
+    expect(ins).toHaveLength(1);
+    expect(ins[0].insert).toBe('delta');
+    // One sid across both ranges: a single "replace X with Y" proposal.
+    expect(attrsOf(del[0], SUGGEST_DELETE_MARK).sid).toBe(attrsOf(ins[0], SUGGEST_INSERT_MARK).sid);
+    // …and disk keeps the accepted state: nothing was really deleted.
+    expect(prose.serializeFragmentToMarkdown(fragment)).toBe('Alpha beta gamma.\n');
+  });
+
+  it('a multi-block paste mid-paragraph flattens into one text proposal — no block split leaks to disk', () => {
+    const { fragment, handle, view } = mountEditor('Alpha gamma.\n');
+    suggestOn(view);
+    handle.editor.commands.setTextSelection(7);
+    const schema = view.state.schema;
+    const twoParagraphs = new Slice(
+      Fragment.from([
+        schema.nodes.paragraph.create(null, schema.text('one')),
+        schema.nodes.paragraph.create(null, schema.text('two')),
+      ]),
+      1,
+      1,
+    );
+    expect(pasteAt(view, twoParagraphs)).toBe(true);
+    expect(fragment.length).toBe(1); // the host paragraph was NOT split
+    expect(docText(handle)).toBe('Alpha one twogamma.');
+    const ins = opsWith(textDelta(fragment), SUGGEST_INSERT_MARK);
+    expect(ins[0]?.insert).toBe('one two');
+    expect(prose.serializeFragmentToMarkdown(fragment)).toBe('Alpha gamma.\n');
+  });
+
+  it('drop is suppressed in Suggesting mode — a drag-move would really delete the source text', () => {
+    const { view } = mountEditor('Alpha gamma.\n');
+    const slice = textSlice(view, 'x');
+    const dropWhileOff =
+      view.someProp('handleDrop', (f) => f(view, {} as unknown as DragEvent, slice, true)) ?? false;
+    expect(dropWhileOff).toBe(false); // normal mode: default drop applies
+    suggestOn(view);
+    const dropWhileOn =
+      view.someProp('handleDrop', (f) => f(view, {} as unknown as DragEvent, slice, true)) ?? false;
+    expect(dropWhileOn).toBe(true); // Suggesting: blocked, nothing deleted
+  });
+});
+
+describe('Normal mode — no suggestion-mark inheritance', () => {
+  const AGENT_ATTRS: SuggestionAttrs = {
+    sid: 's-agent',
+    authorId: 'agent-1',
+    authorName: 'Docs Agent',
+    authorColor: '#7c5cff',
+    ts: 1754200000000,
+  };
+
+  it('typing inside a pending suggestInsert span stays a direct edit — the keystroke reaches disk', () => {
+    const { ydoc, fragment, handle, view } = mountEditor('Alpha gamma.\n');
+    const block = fragment.get(0) as Y.XmlElement;
+    const text = block.toArray()[0] as Y.XmlText;
+    ydoc.transact(() => text.insert(6, 'beta ', { [SUGGEST_INSERT_MARK]: AGENT_ATTRS }), 'agent');
+    expect(docText(handle)).toBe('Alpha beta gamma.');
+    // Suggesting mode is OFF (default). Type mid-span the way the default
+    // input path does — tr.insertText inherits the marks at the caret.
+    view.dispatch(view.state.tr.insertText('X', 9, 9));
+    expect(docText(handle)).toBe('Alpha beXta gamma.');
+    // The keystroke must NOT be swallowed into the pending proposal…
+    const ins = opsWith(textDelta(fragment), SUGGEST_INSERT_MARK);
+    expect(ins.map((op) => op.insert).join('')).toBe('beta ');
+    // …and it reaches disk like any direct edit.
+    expect(prose.serializeFragmentToMarkdown(fragment)).toBe('Alpha Xgamma.\n');
+  });
+
+  it('typing inside a pending suggestDelete span does not inherit the strikethrough proposal', () => {
+    const { ydoc, fragment, handle, view } = mountEditor('Alpha beta gamma.\n');
+    const block = fragment.get(0) as Y.XmlElement;
+    const text = block.toArray()[0] as Y.XmlText;
+    ydoc.transact(() => text.format(6, 5, { [SUGGEST_DELETE_MARK]: AGENT_ATTRS }), 'agent');
+    view.dispatch(view.state.tr.insertText('X', 9, 9));
+    expect(docText(handle)).toBe('Alpha beXta gamma.');
+    // The keystroke is not part of the proposed deletion (it would be
+    // destroyed on accept otherwise)…
+    const del = opsWith(textDelta(fragment), SUGGEST_DELETE_MARK);
+    expect(del.map((op) => op.insert).join('')).toBe('beta ');
+    // …and disk holds everything: del text serializes, the keystroke too.
+    expect(prose.serializeFragmentToMarkdown(fragment)).toBe('Alpha beXta gamma.\n');
   });
 });
 
