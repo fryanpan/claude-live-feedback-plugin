@@ -217,6 +217,20 @@ body.has-set #main {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+/* Desktop drawer state: `threads-open` historically only mattered in the
+   ≤900px overlay mode — above it the grid ALWAYS reserved the comments
+   column, so closeDrawer() was a visual no-op on desktop. Zeroing the
+   column var (scoped to #shell, which beats the :root inline value the
+   resize handle writes) lets the drawer genuinely collapse now that it
+   defaults closed when the balloon margin already shows every thread. */
+@media (min-width: 901px) {
+  #shell:not(.threads-open) {
+    --threads-w: 0px;
+  }
+  #shell:not(.threads-open) #threads-pane {
+    display: none;
+  }
+}
 
 /* ================= REVIEW-SET SIDEBAR + DROPDOWN ================= */
 
