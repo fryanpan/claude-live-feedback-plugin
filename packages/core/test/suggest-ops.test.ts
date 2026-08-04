@@ -127,10 +127,18 @@ describe('listSuggestions', () => {
     expect(replace.author).toEqual({ id: 'agent-1', name: 'Docs Agent', color: '#7c5cff' });
     expect(replace.blockContext).toContain('Alpha');
     expect(typeof replace.ts).toBe('number');
+    // Raw (untruncated, unjoined) old/new text — the redline chrome renders
+    // these as separate struck/underlined spans, which a single `snippet`
+    // string (already joined with " → " and independently truncated) can't
+    // support without re-parsing.
+    expect(replace.deletedText).toBe('beta');
+    expect(replace.insertedText).toBe('delta');
     const insert = list.find((s) => s.kind === 'insert')!;
     expect(insert.sid).toBe('ins-1');
     expect(insert.snippet).toContain('extra');
     expect(insert.blockContext).toContain('Second');
+    expect(insert.insertedText).toBe(' extra');
+    expect(insert.deletedText).toBe('');
     // Doc order: the replace (first paragraph) sorts before the insert.
     expect(list[0]!.kind).toBe('replace');
   });

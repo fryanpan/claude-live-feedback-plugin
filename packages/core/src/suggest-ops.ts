@@ -66,8 +66,15 @@ export interface SuggestionSummary {
   sid: string;
   author: SuggestionAuthor;
   kind: SuggestionKind;
-  /** Human-readable preview: inserted text, deleted text, or `old → new`. */
+  /** Human-readable preview: inserted text, deleted text, or `old → new`
+   *  (truncated, single joined string — agent/MCP-facing). */
   snippet: string;
+  /** Full (untruncated) inserted text — '' for a pure delete. UI chrome that
+   *  needs to render struck-old / underlined-new as separate spans reads
+   *  this and `deletedText` rather than re-parsing `snippet`. */
+  insertedText: string;
+  /** Full (untruncated) deleted text — '' for a pure insert. */
+  deletedText: string;
   /** Accepted-state preview of the containing block. */
   blockContext: string;
   /** Creation time, epoch ms. */
@@ -155,19 +162,22 @@ function kindOf(entry: SuggestionScanEntry): SuggestionKind {
   return hasInsert ? 'insert' : 'delete';
 }
 
+/** Full (untruncated) text of one kind's ranges, joined in doc order. */
+function joinedText(entry: SuggestionScanEntry, kind: 'insert' | 'delete'): string {
+  return entry.ranges
+    .filter((r) => r.kind === kind)
+    .map((r) => r.text)
+    .join('');
+}
+
 function snippetOf(entry: SuggestionScanEntry): string {
-  const joined = (kind: 'insert' | 'delete'): string =>
-    entry.ranges
-      .filter((r) => r.kind === kind)
-      .map((r) => r.text)
-      .join('');
   switch (kindOf(entry)) {
     case 'insert':
-      return truncate(joined('insert'));
+      return truncate(joinedText(entry, 'insert'));
     case 'delete':
-      return truncate(joined('delete'));
+      return truncate(joinedText(entry, 'delete'));
     case 'replace':
-      return `${truncate(joined('delete'), 40)} → ${truncate(joined('insert'), 40)}`;
+      return `${truncate(joinedText(entry, 'delete'), 40)} → ${truncate(joinedText(entry, 'insert'), 40)}`;
   }
 }
 
@@ -186,6 +196,8 @@ export function listSuggestions(doc: Y.Doc): SuggestionSummary[] {
       },
       kind: kindOf(entry),
       snippet: snippetOf(entry),
+      insertedText: joinedText(entry, 'insert'),
+      deletedText: joinedText(entry, 'delete'),
       blockContext: blockContextOf(first),
       ts: entry.attrs.ts,
       order: first?.docOffset ?? 0,

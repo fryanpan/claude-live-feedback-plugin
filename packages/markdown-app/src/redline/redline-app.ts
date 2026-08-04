@@ -1,4 +1,4 @@
-import { type FeedbackClient, connect } from '@feedback/core';
+import { type FeedbackClient, connect, suggestOps } from '@feedback/core';
 import { mountCode } from '../code/code-app.ts';
 import { isEditableRedlineMember } from '../code/editable-policy.ts';
 import { renderDiffNav, wireDiffNavRefresh } from '../diff-nav.ts';
@@ -17,6 +17,7 @@ import { getMarkdownMount } from '../surface-registry.ts';
 import { createLiveRedlineEditor } from './live-redline-editor.ts';
 import { type MarkupMarginHandle, mountMarkupMargin } from './markup-margin.ts';
 import { createRedlineEditor } from './redline-editor.ts';
+import { mountSuggestionsSummary } from './suggestions-summary.ts';
 
 /**
  * Mount the Word-style redline surface for a markdown file in a diff review.
@@ -252,12 +253,25 @@ export async function mountRedline(ctx: MountContext): Promise<void> {
       getDeletions: () => liveSurface.getDeletions(),
       threads: () => chrome.collectThreads(),
       chrome,
+      getSuggestions: () => suggestOps.listSuggestions(chromeYdoc),
+      docId: chromeDocId,
+      scope,
+    });
+    // Doc-level "N pending suggestions" topbar badge — same affordance the
+    // plain markdown surface mounts (app.ts), wired to the companion doc so
+    // it tracks the SAME suggestions the balloons above render.
+    const suggestionsSummary = mountSuggestionsSummary({
+      docId: chromeDocId,
+      ydoc: chromeYdoc,
       scope,
     });
     // Every transaction (typing, remote edits, the debounced markup recompute
     // dispatching its meta, thread activation/decoration changes) can move
-    // anchors or change the deletions/threads list.
-    const onTransaction = (): void => margin?.scheduleRelayout();
+    // anchors or change the deletions/threads/suggestions list.
+    const onTransaction = (): void => {
+      margin?.scheduleRelayout();
+      suggestionsSummary.scheduleRefresh();
+    };
     liveSurface.handle.editor.on('transaction', onTransaction);
     scope.onCleanup(() => liveSurface.handle.editor.off('transaction', onTransaction));
   }

@@ -21,6 +21,7 @@ import type { Awareness } from 'y-protocols/awareness';
 import * as Y from 'yjs';
 import { safeLinkHref } from './link-open.ts';
 import { MermaidCodeBlock } from './mermaid-code-block.ts';
+import { SuggestionChips } from './redline/suggestion-chips.ts';
 import { SuggestInput } from './suggest-input.ts';
 import { SuggestDelete, SuggestInsert } from './suggest-marks.ts';
 import { ThreadDecorations, type ThreadRange, setThreadDecorations } from './thread-decorations.ts';
@@ -110,6 +111,9 @@ export function createEditor(opts: CreateEditorOpts): EditorHandle {
       // direct edits. Registered in the base list so every prose surface
       // (plain markdown AND the redline lens) gets the same behavior.
       SuggestInput,
+      // Mobile "✎ suggestion" chip decoration (commit 5) — same base-schema
+      // reasoning as the marks above.
+      SuggestionChips,
       Collaboration.configure({
         document: opts.ydoc,
         field: fragmentName,

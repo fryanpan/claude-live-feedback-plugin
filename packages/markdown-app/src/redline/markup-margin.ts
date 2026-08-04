@@ -1,7 +1,7 @@
-import type { Thread } from '@feedback/core';
+import { type Thread, formatTime, suggestOps } from '@feedback/core';
 import type { EditorView } from '@tiptap/pm/view';
 import type { MountScope } from '../mount-scope.ts';
-import type { ReviewChrome } from '../review-chrome.ts';
+import { type ReviewChrome, showToast } from '../review-chrome.ts';
 import { layoutBalloons } from './balloon-layout.ts';
 import {
   type DeletionGroup,
@@ -77,6 +77,13 @@ export interface MarkupMarginOpts {
    *  `chrome.threadsPanel.renderThread` (reply/resolve/reopen/re-anchor,
    *  active-state) rather than reimplementing the card. */
   chrome?: ReviewChrome | null;
+  /** All pending suggestions in the doc — pass `() =>
+   *  suggestOps.listSuggestions(ydoc)`. Recomputed every relayout, same
+   *  pattern as `threads`. Requires `docId` (below) to render Accept/Reject;
+   *  omit both to render no suggestion balloons. */
+  getSuggestions?: () => suggestOps.SuggestionSummary[];
+  /** Doc id for the suggestion accept/reject fetch calls. */
+  docId?: string;
   scope: MountScope;
 }
 
@@ -136,7 +143,22 @@ interface RenderedCommentBalloon {
   el: HTMLElement;
 }
 
-type RenderedBalloon = RenderedDelBalloon | RenderedCommentBalloon;
+interface RenderedSuggestionBalloon {
+  kind: 'suggestion';
+  key: string;
+  summary: suggestOps.SuggestionSummary;
+  el: HTMLElement;
+}
+
+type RenderedBalloon = RenderedDelBalloon | RenderedCommentBalloon | RenderedSuggestionBalloon;
+
+/** `authorColor` round-trips through an inline `style` attribute (the same
+ *  guard suggest-marks.ts applies to the live-doc marks) — only a literal
+ *  hex color is allowed through so an arbitrary string can't smuggle extra
+ *  CSS declarations into the card. */
+function suggestColorStyle(color: string): string {
+  return /^#[0-9a-fA-F]{3,8}$/.test(color) ? `--lf-suggest-color: ${color}` : '';
+}
 
 /**
  * The mobile fallback for a deletion balloon: a bottom sheet showing the
@@ -186,6 +208,55 @@ function mountDeletionSheet(scope: MountScope): { open: (text: string) => void }
   return { open };
 }
 
+/**
+ * The mobile fallback for a suggestion balloon: a bottom sheet showing the
+ * SAME card the balloon renders (author, age, "replace X with Y", Accept /
+ * Reject), opened by tapping a `.lf-suggest-chip` (suggestion-chips.ts).
+ * `render` builds that card — passed in rather than duplicated, so
+ * accept/reject wire to the identical fetch calls the balloon uses.
+ * Structurally identical to `mountDeletionSheet` above.
+ */
+function mountSuggestionSheet(
+  scope: MountScope,
+  render: (s: suggestOps.SuggestionSummary) => HTMLElement,
+): { open: (s: suggestOps.SuggestionSummary) => void; closeIfShowing: (sid: string) => void } {
+  const sheet = document.createElement('div');
+  sheet.className = 'thread-view lf-suggest-sheet hidden';
+  sheet.setAttribute('role', 'dialog');
+  sheet.setAttribute('aria-label', 'Suggested edit');
+  sheet.setAttribute('aria-hidden', 'true');
+  sheet.innerHTML = `
+    <header class="thread-view-header">
+      <span class="drag-handle" aria-hidden="true"></span>
+      <h2 class="thread-view-title">Suggestion</h2>
+      <button type="button" class="icon-btn thread-view-close" aria-label="Close" title="Close">×</button>
+    </header>
+    <div class="thread-view-body"><div class="lf-suggest-sheet-body"></div></div>
+  `;
+  document.body.appendChild(sheet);
+  const bodyEl = sheet.querySelector('.lf-suggest-sheet-body') as HTMLElement;
+
+  let openSid: string | null = null;
+  function close(): void {
+    openSid = null;
+    sheet.classList.add('hidden');
+    sheet.setAttribute('aria-hidden', 'true');
+  }
+  function open(s: suggestOps.SuggestionSummary): void {
+    openSid = s.sid;
+    bodyEl.textContent = '';
+    bodyEl.appendChild(render(s));
+    sheet.classList.remove('hidden');
+    sheet.setAttribute('aria-hidden', 'false');
+  }
+  function closeIfShowing(sid: string): void {
+    if (openSid === sid) close();
+  }
+  scope.listen(sheet.querySelector('.thread-view-close') as HTMLElement, 'click', close);
+  scope.onCleanup(() => sheet.remove());
+  return { open, closeIfShowing };
+}
+
 export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
   const { editorEl, view, getDeletions, scope } = opts;
 
@@ -215,6 +286,126 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
     ev.preventDefault();
     deletionSheet.open((chip as HTMLElement).dataset.lfDelText ?? '');
   });
+
+  // Mobile fallback for suggestions: same pattern, a distinct sheet (the
+  // deletion sheet shows plain text; this one shows the full accept/reject
+  // card — see mountSuggestionSheet above).
+  const suggestionSheet = mountSuggestionSheet(scope, buildSuggestionBalloon);
+  scope.listen(editorEl, 'click', (ev) => {
+    const chip = (ev.target as HTMLElement).closest?.('.lf-suggest-chip');
+    if (!chip) return;
+    ev.preventDefault();
+    const sid = (chip as HTMLElement).dataset.lfSuggestSid ?? '';
+    const summary = eligibleSuggestions().find((s) => s.sid === sid);
+    if (summary) suggestionSheet.open(summary);
+  });
+
+  /** A suggestion's live-doc anchor + reveal target — the mark's own
+   *  rendered span already carries `data-sid` (suggest-marks.ts), so no
+   *  separate position bookkeeping is needed (mirrors `threadSpan` below). A
+   *  "replace" proposal has two spans (del + ins) sharing one sid; either is
+   *  fine as the anchor/reveal target — `querySelector` returns the first. */
+  function suggestionSpan(sid: string): Element | null {
+    return view.dom.querySelector(`[data-sid="${cssEscape(sid)}"]`);
+  }
+
+  /** Pending proposals with a resolvable anchor, minus ones this client has
+   *  already optimistically resolved (see `resolveSuggestion`) — a real
+   *  accept/reject also removes the mark from the doc, which would drop the
+   *  sid here on its own once Yjs sync lands; the local set just makes the
+   *  card disappear immediately instead of waiting for the round trip (and
+   *  covers the case where the server call actually failed). */
+  const dismissedSids = new Set<string>();
+  function eligibleSuggestions(): suggestOps.SuggestionSummary[] {
+    if (!opts.getSuggestions || !opts.docId) return [];
+    return opts
+      .getSuggestions()
+      .filter((s) => !dismissedSids.has(s.sid) && suggestionSpan(s.sid) != null);
+  }
+
+  async function resolveSuggestion(sid: string, action: 'accept' | 'reject'): Promise<void> {
+    const docId = opts.docId;
+    if (!docId) return;
+    // Optimistic: the card disappears on click, not on the round trip —
+    // both because that's the responsive thing to do, and because it's the
+    // only way to make a `{ ok:false, error:'not-found' }` response (someone
+    // else already resolved it) actually clear the stale card, since the
+    // server made no doc change for THIS client to sync.
+    dismissedSids.add(sid);
+    suggestionSheet.closeIfShowing(sid);
+    relayout();
+    try {
+      const res = await fetch(
+        `/api/docs/${encodeURIComponent(docId)}/suggestions/${encodeURIComponent(sid)}/${action}`,
+        { method: 'POST' },
+      );
+      if (!res.ok) {
+        showToast('That suggestion is no longer available');
+        return;
+      }
+      showToast(action === 'accept' ? '✓ Suggestion accepted' : '✓ Suggestion rejected');
+    } catch {
+      showToast(`Failed to ${action} — try again`);
+    }
+  }
+
+  function buildSuggestionBalloon(s: suggestOps.SuggestionSummary): HTMLElement {
+    const el = document.createElement('div');
+    el.className = 'lf-balloon lf-balloon-suggestion';
+    el.dataset.sid = s.sid;
+    const style = suggestColorStyle(s.author.color);
+    if (style) el.setAttribute('style', style);
+
+    const header = document.createElement('div');
+    header.className = 'lf-suggest-header';
+    const swatch = document.createElement('span');
+    swatch.className = 'lf-suggest-swatch';
+    swatch.style.background = s.author.color;
+    const authorEl = document.createElement('span');
+    authorEl.className = 'lf-suggest-author';
+    // Plain text, never HTML: an author name is untrusted (agent-supplied).
+    authorEl.textContent = s.author.name;
+    const ageEl = document.createElement('span');
+    ageEl.className = 'lf-suggest-age';
+    ageEl.textContent = formatTime(s.ts);
+    header.append(swatch, authorEl, ageEl);
+    el.appendChild(header);
+
+    const preview = document.createElement('div');
+    preview.className = 'lf-balloon-text lf-suggest-preview';
+    // Old struck / new underlined — plain textContent on each span, never
+    // innerHTML interpolation (both are untrusted doc/agent content).
+    if (s.kind === 'delete' || s.kind === 'replace') {
+      const oldEl = document.createElement('span');
+      oldEl.className = 'lf-suggest-old';
+      oldEl.textContent = s.deletedText;
+      preview.appendChild(oldEl);
+    }
+    if (s.kind === 'insert' || s.kind === 'replace') {
+      if (s.kind === 'replace') preview.appendChild(document.createTextNode(' → '));
+      const newEl = document.createElement('span');
+      newEl.className = 'lf-suggest-new';
+      newEl.textContent = s.insertedText;
+      preview.appendChild(newEl);
+    }
+    el.appendChild(preview);
+
+    const actions = document.createElement('div');
+    actions.className = 'lf-suggest-actions';
+    const acceptBtn = document.createElement('button');
+    acceptBtn.type = 'button';
+    acceptBtn.className = 'lf-suggest-accept';
+    acceptBtn.textContent = 'Accept';
+    acceptBtn.addEventListener('click', () => void resolveSuggestion(s.sid, 'accept'));
+    const rejectBtn = document.createElement('button');
+    rejectBtn.type = 'button';
+    rejectBtn.className = 'lf-suggest-reject';
+    rejectBtn.textContent = 'Reject';
+    rejectBtn.addEventListener('click', () => void resolveSuggestion(s.sid, 'reject'));
+    actions.append(acceptBtn, rejectBtn);
+    el.appendChild(actions);
+    return el;
+  }
 
   function buildDelBalloon(group: DeletionGroup): HTMLElement {
     const el = document.createElement('div');
@@ -268,13 +459,18 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
    *  changed, so expand/reply state and DOM focus survive relayouts
    *  triggered by unrelated activity (typing elsewhere in the doc dispatches
    *  a transaction on every keystroke). */
-  function renderBalloons(delGroups: DeletionGroup[], openThreads: Thread[]): void {
+  function renderBalloons(
+    delGroups: DeletionGroup[],
+    openThreads: Thread[],
+    suggestions: suggestOps.SuggestionSummary[],
+  ): void {
     const activeId = opts.chrome?.threadsPanel.getActive() ?? null;
     const delKeys = delGroups.map((g) => `del|${g.blockKey}|${g.deletedMarkdown}`);
     const commentKeys = openThreads.map(
       (t) => `comment|${t.id}|${t.status}|${t.commentCount}|${t.lastActivity}|${activeId === t.id}`,
     );
-    const keys = [...delKeys, ...commentKeys];
+    const suggestionKeys = suggestions.map((s) => `suggest|${s.sid}|${s.kind}`);
+    const keys = [...delKeys, ...commentKeys, ...suggestionKeys];
     if (keys.length === rendered.length && keys.every((k, i) => k === rendered[i].key)) {
       // Nothing display-relevant changed — refresh the live group refs
       // (anchor position may have moved) without touching any DOM.
@@ -306,7 +502,12 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
       marginEl.appendChild(el);
       return { kind: 'comment', key: commentKeys[i], thread, el };
     });
-    rendered = [...nextDel, ...nextComments];
+    const nextSuggestions: RenderedSuggestionBalloon[] = suggestions.map((summary, i) => {
+      const el = buildSuggestionBalloon(summary);
+      marginEl.appendChild(el);
+      return { kind: 'suggestion', key: suggestionKeys[i], summary, el };
+    });
+    rendered = [...nextDel, ...nextComments, ...nextSuggestions];
   }
 
   /** Y of a client-rect top in the editor's scrolled content space. */
@@ -347,8 +548,11 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
         if (b.kind === 'del') {
           const pos = Math.max(0, Math.min(b.group.pos, doc.content.size));
           anchorY = contentY(view.coordsAtPos(pos).top, editorRect);
-        } else {
+        } else if (b.kind === 'comment') {
           const span = threadSpan(b.thread.id);
+          if (span) anchorY = contentY(span.getBoundingClientRect().top, editorRect);
+        } else {
+          const span = suggestionSpan(b.summary.sid);
           if (span) anchorY = contentY(span.getBoundingClientRect().top, editorRect);
         }
       } catch {
@@ -381,10 +585,15 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
       rendered[i].el.style.top = `${y - marginOffsetY}px`;
       maxBottom = Math.max(maxBottom, y + items[i].height);
 
+      const leaderKind = rendered[i].kind;
       const line = document.createElementNS(SVG_NS, 'line');
       line.setAttribute(
         'class',
-        rendered[i].kind === 'comment' ? 'lf-leader lf-leader-comment' : 'lf-leader',
+        leaderKind === 'comment'
+          ? 'lf-leader lf-leader-comment'
+          : leaderKind === 'suggestion'
+            ? 'lf-leader lf-leader-suggestion'
+            : 'lf-leader',
       );
       line.setAttribute('x1', String(anchorX));
       line.setAttribute('y1', String(items[i].anchorY - overlayOffsetY));
@@ -399,7 +608,11 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
 
   function relayout(): void {
     if (scope.disposed) return;
-    renderBalloons(groupDeletions(getDeletions(), blockKeyForPos), eligibleThreads());
+    renderBalloons(
+      groupDeletions(getDeletions(), blockKeyForPos),
+      eligibleThreads(),
+      eligibleSuggestions(),
+    );
     positionBalloons();
   }
 

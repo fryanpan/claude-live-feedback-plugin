@@ -70,8 +70,35 @@
             💬
             <span id="threads-count" class="badge">0</span>
           </button>
+          <!-- Doc-level pending-suggestions affordance (redline-suggestions
+               Phase 2). Hidden by default; mountSuggestionsSummary shows it
+               once the doc has ≥1 pending proposal. Per-suggestion
+               Accept/Reject lives on the balloon/chip card instead — this
+               is Accept all / Reject all across every author. -->
+          <button
+            type="button"
+            id="toggle-suggestions"
+            class="icon-btn suggestions-toggle hidden"
+            title="Pending suggestions"
+            aria-haspopup="true"
+            aria-expanded="false"
+            aria-label="Pending suggestions"
+          >
+            ✎
+            <span id="suggestions-count" class="badge">0</span>
+          </button>
         </div>
       </header>
+      <div
+        id="suggestions-menu"
+        class="suggestions-menu hidden"
+        role="menu"
+        aria-label="Pending suggestions"
+        aria-hidden="true"
+      >
+        <button type="button" id="suggestions-accept-all" role="menuitem">Accept all</button>
+        <button type="button" id="suggestions-reject-all" role="menuitem">Reject all</button>
+      </div>
       <!-- Dropdown listing all docs in the current set. Anchored under
            the topbar; only shown when the doc has a setId. The same data
            also renders into #set-pane on desktop. -->
