@@ -20,3 +20,19 @@ export function isEditableFileMember(opts: {
     opts.diffStatus !== 'deleted'
   );
 }
+
+/**
+ * Mirror of the rule above for the REDLINE surface of a `.md` diff member:
+ * the redline mount may only become the editable companion editor when the
+ * diff targets the live working tree (empty diffTarget — that's when the
+ * server binds the companion doc with write-back), the member isn't deleted
+ * (nothing on disk to write to), and there is a workspace to open the
+ * companion through. Pinned reviews keep the read-only derived redline.
+ */
+export function isEditableRedlineMember(opts: {
+  diffTarget: string;
+  workspaceId: string;
+  diffStatus?: string;
+}): boolean {
+  return !opts.diffTarget && opts.workspaceId !== '' && opts.diffStatus !== 'deleted';
+}
