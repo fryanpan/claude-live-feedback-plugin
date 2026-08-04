@@ -154,15 +154,15 @@ function matchTokens(
  *
  * Pure over its inputs (the PM doc and the Yjs fragment it mirrors), so tests
  * can drive it through a real Collaboration editor. Returns the empty result
- * for an added file (empty base — nothing to mark, per the plan) and while
- * the editor and fragment are transiently out of step mid-sync.
+ * while the editor and fragment are transiently out of step mid-sync. Callers
+ * handle the added-file case (LiveMarkupOptions.isAdded) — an empty baseText
+ * here legitimately means "everything is inserted".
  */
 export function computeLiveMarkup(
   baseText: string,
   doc: ProseNode,
   fragment: Y.XmlFragment,
 ): LiveMarkupResult {
-  if (baseText === '') return EMPTY_RESULT;
   const children = fragment.toArray();
   if (children.length !== doc.childCount) return EMPTY_RESULT;
 
@@ -306,8 +306,14 @@ function toState(doc: ProseNode, result: LiveMarkupResult): LiveMarkupState {
 }
 
 export interface LiveMarkupOptions {
-  /** File content at the base commit. Empty string = added file (no markup). */
+  /** File content at the base commit. */
   baseText: string;
+  /** True only when the diff reports the file as ADDED — suppresses all
+   *  markup (a clean render + banner beats a fully-underlined document).
+   *  NOT inferred from an empty baseText: a tracked file can have an empty
+   *  base blob and still be modified/renamed, and that file's changes must
+   *  show as insertions. */
+  isAdded: boolean;
   /** The companion Y.Doc the editor collaborates on. */
   ydoc: Y.Doc | null;
   /** Recompute delay after a doc change. */
@@ -323,13 +329,13 @@ export const LiveMarkup = Extension.create<LiveMarkupOptions>({
   name: 'liveMarkup',
 
   addOptions() {
-    return { baseText: '', ydoc: null, debounceMs: 300 };
+    return { baseText: '', isAdded: false, ydoc: null, debounceMs: 300 };
   },
 
   addProseMirrorPlugins() {
     const opts = this.options;
     const compute = (doc: ProseNode): LiveMarkupResult => {
-      if (!opts.ydoc) return EMPTY_RESULT;
+      if (!opts.ydoc || opts.isAdded) return EMPTY_RESULT;
       return computeLiveMarkup(opts.baseText, doc, prose.getProseFragment(opts.ydoc));
     };
     let timer: ReturnType<typeof setTimeout> | null = null;

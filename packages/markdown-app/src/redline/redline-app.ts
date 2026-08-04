@@ -198,18 +198,26 @@ export async function mountRedline(ctx: MountContext): Promise<void> {
     }
   };
 
+  const isAdded = diffInfo.status === 'added';
   const liveSurface = companion
     ? createLiveRedlineEditor({
         parent: editorMount,
         ydoc: companion.client.ydoc,
         awareness: companion.client.awareness,
         baseText,
+        isAdded,
         onSelectionChange,
       })
     : null;
   const surface: ReviewSurface & { getSelectionRel: () => ChromeSelection | null } =
     liveSurface ??
-    createRedlineEditor({ parent: editorMount, ydoc: client.ydoc, baseText, onSelectionChange });
+    createRedlineEditor({
+      parent: editorMount,
+      ydoc: client.ydoc,
+      baseText,
+      isAdded,
+      onSelectionChange,
+    });
   surfaceReady = true;
   scope.onCleanup(() => surface.destroy());
 
@@ -270,7 +278,7 @@ export async function mountRedline(ctx: MountContext): Promise<void> {
   scope.onCleanup(startReadingTracker({ docId, user, scrollEl: editorMount }));
   wireToggle(docId, 'redline', scope);
 
-  if (baseText === '') {
+  if (isAdded) {
     // Added file: nothing to mark up — render clean instead of underlining
     // the whole document.
     showBanner('New file in this diff');

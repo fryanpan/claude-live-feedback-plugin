@@ -38,6 +38,9 @@ export interface CreateLiveRedlineEditorOpts {
   awareness: Awareness;
   /** File content at the base commit. Empty string = added file: no markup. */
   baseText: string;
+  /** True only for diff status 'added' — clean render, no markup. Never
+   *  inferred from an empty baseText (modified files can have empty bases). */
+  isAdded?: boolean;
   onSelectionChange?: () => void;
   user?: { name: string; color: string };
   /** Markup recompute delay after a doc change. Tests pass 0. */
@@ -54,6 +57,7 @@ export function createLiveRedlineEditor(opts: CreateLiveRedlineEditorOpts): Live
     extraExtensions: [
       LiveMarkup.configure({
         baseText: opts.baseText,
+        isAdded: opts.isAdded ?? false,
         ydoc: opts.ydoc,
         debounceMs: opts.debounceMs ?? 300,
       }),
@@ -69,7 +73,9 @@ export function createLiveRedlineEditor(opts: CreateLiveRedlineEditorOpts): Live
     getDeletions: () => liveMarkupKey.getState(handle.editor.state)?.deletions ?? [],
     refresh: () => {
       const { state, view } = handle.editor;
-      const result = computeLiveMarkup(opts.baseText, state.doc, prose.getProseFragment(opts.ydoc));
+      const result = opts.isAdded
+        ? { insRanges: [], deletions: [] }
+        : computeLiveMarkup(opts.baseText, state.doc, prose.getProseFragment(opts.ydoc));
       view.dispatch(state.tr.setMeta(liveMarkupKey, result));
     },
     destroy: () => handle.destroy(),
