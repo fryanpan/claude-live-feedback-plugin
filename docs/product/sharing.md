@@ -110,7 +110,7 @@ The agent will:
 You can also drive it manually with the CLI:
 
 ```sh
-bun share doc <docId> --allow-domain @appdevforall.org --ttl 72h
+bun share doc <docId> --allow-domain @partner-org.example --ttl 72h
 bun share list
 bun share revoke <shareId>
 ```

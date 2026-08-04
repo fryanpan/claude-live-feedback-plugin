@@ -1,6 +1,6 @@
 ---
 name: live-review-meeting
-description: Use when Bryan announces a synchronous review meeting over a set of docs (e.g. "reviewing these with the team at 3pm", "live review session") — turns this session into the meeting's watcher, with fast in-thread answers, subagent research, task capture, and durable-doc clarity edits.
+description: Use when Bryan announces a synchronous review meeting over a set of docs (e.g. "reviewing these docs with the team at 3pm", "live review session") — turns this session into the meeting's watcher, with fast in-thread answers, subagent research, task capture, and durable-doc clarity edits.
 ---
 
 # Live review meeting — watcher protocol

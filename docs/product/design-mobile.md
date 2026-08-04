@@ -53,7 +53,7 @@ Minimum 36×36px for any interactive element. The format-bar buttons drop to ico
 ## Verifying mobile changes
 
 1. Resize the browser to 430px wide (matches iPhone 16 Pro Max viewport).
-2. Open a markdown doc with a `setId` (so the dropdown logic is exercised) and inline code or long file paths in the content (so wrap behavior is exercised). Currently `ADFA-2433-plan` works.
+2. Open a markdown doc with a `setId` (so the dropdown logic is exercised) and inline code or long file paths in the content (so wrap behavior is exercised). Currently `a partner project-2433-plan` works.
 3. Check: no horizontal overflow at any scroll position, dropdown opens by default, scrolling closes it, headings fit within viewport.
 4. Hard reload (Cmd+Shift+R) — the markdown-app bundle and CSS are cached aggressively.
 
