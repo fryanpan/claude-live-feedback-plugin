@@ -123,14 +123,16 @@ export function payloadDigest(input: string | undefined | null): string {
 }
 
 /**
- * Classify a comment author as `person` or `agent`. The generic agent author
- * is the live-feedback "known-agent" identity: `author.id === 'known-agent'`,
- * `author.name === 'Agent'`, or an author whose `kind` is missing entirely.
- * Everyone else is a person. Agent events are still recorded (so WR can filter
- * them) but person events are the ones that must never be dropped.
+ * Classify a comment author as `person` or `agent`. Agent identities are the
+ * generic "known-agent" one, per-agent MCP identities (`agent-<slug>` ids
+ * from FEEDBACK_AGENT_NAME), a literal "Agent" name, or an author whose
+ * `kind` is missing entirely. Everyone else is a person. Agent events are
+ * still recorded (so WR can filter them) but person events are the ones that
+ * must never be dropped.
  */
 export function classifyActor(author: Pick<User, 'id' | 'name'> & { kind?: string }): ActorKind {
   if (author.id === 'known-agent') return 'agent';
+  if (author.id.startsWith('agent-')) return 'agent';
   if (author.name === 'Agent') return 'agent';
   if (author.kind == null) return 'agent';
   return 'person';
