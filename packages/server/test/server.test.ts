@@ -70,7 +70,7 @@ describe('server REST', () => {
   });
 
   it('serves a bound mockup HTML at /mockup/<docId> with reviewUrl in meta', async () => {
-    // Reproduces ADFA's friction report: pre-bind_mock-serve, agents had to
+    // Reproduces a partner team's friction report: pre-bind_mock-serve, agents had to
     // symlink each new HTML into the plugin's demos/ to make the URL serve.
     // With the route the symlink dance disappears.
     const file = join(dataDir, 'served-mockup.html');

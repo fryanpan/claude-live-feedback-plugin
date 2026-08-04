@@ -95,7 +95,7 @@ describe('share REST endpoints', () => {
     const r = await fetch(`${base}/api/share/doc`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ docId: 'no-such-doc', allowDomains: ['@appdevforall.org'] }),
+      body: JSON.stringify({ docId: 'no-such-doc', allowDomains: ['@partner-org.example'] }),
     });
     expect(r.status).toBe(404);
   });
@@ -125,7 +125,7 @@ describe('share REST endpoints', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         docId: 'real-1',
-        allowDomains: ['@appdevforall.org'],
+        allowDomains: ['@partner-org.example'],
         name: 'fixed-slug',
       }),
     });

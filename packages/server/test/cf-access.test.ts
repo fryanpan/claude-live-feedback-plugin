@@ -30,7 +30,7 @@ describe('Cloudflare Access JWT verification', () => {
 
     signValidJwt = async (overrides = {}) => {
       const exp = overrides.expSec ?? Math.floor(Date.now() / 1000) + 600;
-      return await new SignJWT({ email: 'alice@appdevforall.org' })
+      return await new SignJWT({ email: 'alice@partner-org.example' })
         .setProtectedHeader({ alg: 'RS256', kid: KID })
         .setIssuer(overrides.iss ?? `https://${TEAM_DOMAIN}`)
         .setAudience(overrides.aud ?? AUDIENCE)

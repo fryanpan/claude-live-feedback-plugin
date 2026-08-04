@@ -12,7 +12,7 @@
 
 ## Context
 
-Bryan wants to review git diffs (repo path + base..target hashes) through live-feedback instead of GitHub: a PR-style diff UI grouped by file, with hunks and old/new line numbers, live line-anchored comment threads that the producing agent watches and resolves, and a per-file toggle between the diff and the whole file at the target hash (commentable in both views). Driver: four real ADFA diffs to dogfood immediately (smallest: 1 file +33/−6; largest: ~65 files +4303/−1367).
+Bryan wants to review git diffs (repo path + base..target hashes) through live-feedback instead of GitHub: a PR-style diff UI grouped by file, with hunks and old/new line numbers, live line-anchored comment threads that the producing agent watches and resolves, and a per-file toggle between the diff and the whole file at the target hash (commentable in both views). Driver: four real a partner project diffs to dogfood immediately (smallest: 1 file +33/−6; largest: ~65 files +4303/−1367).
 
 **Measurable outcomes**
 
@@ -116,12 +116,12 @@ Single session, this worktree, one PR on `feature/diff-review` (per "one big PR 
 4. **mcp + plugin**: `create_diff_review` tool + instructions + rebuild bundled `packages/plugin/mcp/index.js`; `skills/diff-review/SKILL.md` + README.
 5. **verification + fixes** as separate commits.
 
-Sequential (each layer feeds the next); no subagent fan-out needed for implementation. Risk notes: dual-gutter is the only genuinely new UI machinery — validate `getChunks` line math early with the ADFA-3945 diff; `collapseUnchanged` + widgets vs. comment-pill positioning needs a real-browser pass.
+Sequential (each layer feeds the next); no subagent fan-out needed for implementation. Risk notes: dual-gutter is the only genuinely new UI machinery — validate `getChunks` line math early with the partner-3945 diff; `collapseUnchanged` + widgets vs. comment-pill positioning needs a real-browser pass.
 
 ## Testing & verification
 
 - **Unit/server**: fixture git repo (init, two commits) in test tmp; `bindDiff` file list/status/rename/guardrails/idempotency; diff endpoint baseText + added/deleted cases; docId encoding; reviewUrl. Core: schema fields round-trip. Pure line-number mapping helper (chunks → old/new gutter numbers) unit-tested.
-- **E2E (isolated)**: run `bun packages/server/src/bin.ts --port 8891 --data-dir <scratchpad>/lf-diff-data` from THIS worktree (never :8787). Create a diff review for ADFA-3945 (`5273a7717..cb178fa02`), open in Chrome: verify per-file render, hunks, old/new numbers, line comment round-trip (create in browser → SSE event → `post_reply` → appears live → `resolve_thread`), toggle both views + comment in full-file view, 430px pass.
+- **E2E (isolated)**: run `bun packages/server/src/bin.ts --port 8891 --data-dir <scratchpad>/lf-diff-data` from THIS worktree (never :8787). Create a diff review for a partner project-3945 (`5273a7717..cb178fa02`), open in Chrome: verify per-file render, hunks, old/new numbers, line comment round-trip (create in browser → SSE event → `post_reply` → appears live → `resolve_thread`), toggle both views + comment in full-file view, 430px pass.
 - **Scale**: Maps diff (`e8c6e64..37ea03a`, ~65 files) binds < a few seconds, tree navigates, biggest file renders.
 - Full `bun run test` + `typecheck` + `lint`; build all bundles.
 - After merge: production server restart is Bryan/Team-Lead's call (isolation rule).
