@@ -326,6 +326,10 @@ Technical discoveries that should persist across sessions for this project.
 - Backlog (peer request): emit a `syncError` event on the doc's watch
   channel (docId, relPath, dropped sids) so a lost write announces itself
   the way comment events do.
+- `FEEDBACK_AGENT_NAME` is read ONCE at MCP-child start from the session's
+  LAUNCH environment — an MCP reconnect picks up new tool schemas but never
+  a new name. Attribution changes require a full session restart with the
+  env set (launcher config, not an agent-side action).
 
 ## Multi-agent workflow implementation (balloons + suggestions pattern)
 
