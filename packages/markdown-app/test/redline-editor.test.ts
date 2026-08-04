@@ -11,12 +11,12 @@ afterEach(() => {
   }
 });
 
-function mount(baseText: string, newText: string) {
+function mount(baseText: string, newText: string, isAdded = false) {
   const ydoc = new Y.Doc();
   if (newText) getContent(ydoc).insert(0, newText);
   const parent = document.createElement('div');
   document.body.appendChild(parent);
-  const surface = createRedlineEditor({ parent, ydoc, baseText });
+  const surface = createRedlineEditor({ parent, ydoc, baseText, isAdded });
   open.push({ surface, parent });
   return { ydoc, parent, surface, content: getContent(ydoc) };
 }
@@ -122,10 +122,20 @@ describe('createRedlineEditor', () => {
     expect(parent.textContent ?? '').toContain('Arrived late');
   });
 
-  it('renders a whole-file insertion when the base is empty (added file)', () => {
-    const { parent } = mount('', '# New file\n\nBody.\n');
-    expect(parent.innerHTML).toContain('lf-ins');
+  it('renders an added file CLEAN, with no ins markup', () => {
+    // Whole-document underline told the reviewer nothing; the mount shows a
+    // "New file in this diff" banner instead and the content renders plain.
+    const { parent, surface, content } = mount('', '# New file\n\nBody.\n', true);
+    expect(parent.innerHTML).not.toContain('lf-ins');
     expect(parent.textContent).toContain('New file');
+    // Provenance still resolves, so comments on an added file keep working.
+    const range = surface.resolveRel(...anchorFor(content, 0, 3));
+    expect(range).not.toBeNull();
+  });
+
+  it('a MODIFIED file with an empty base blob still shows ins markup (added ≠ empty base)', () => {
+    const { parent } = mount('', 'Fresh content.\n');
+    expect(parent.innerHTML).toContain('lf-ins');
   });
 
   it('keeps deleted blocks visible with a snap target', () => {

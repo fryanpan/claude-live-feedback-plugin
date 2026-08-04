@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isEditableFileMember } from '../src/code/editable-policy.ts';
+import { isEditableFileMember, isEditableRedlineMember } from '../src/code/editable-policy.ts';
 
 /**
  * Which docs get a WRITABLE File view. The editor must only unlock when the
@@ -31,5 +31,33 @@ describe('isEditableFileMember', () => {
 
   it('non-diff docs: read-only', () => {
     expect(isEditableFileMember({ ...live, isDiff: false })).toBe(false);
+  });
+});
+
+/**
+ * The redline surface's mirror of the same rule: the redline mount may only
+ * become the editable companion editor when the diff targets the LIVE working
+ * tree (the companion write-back path exists), the member isn't deleted, and
+ * there is a workspace to open the companion through.
+ */
+describe('isEditableRedlineMember', () => {
+  const live = { diffTarget: '', workspaceId: 'ws1' };
+
+  it('live working-tree .md member: editable', () => {
+    expect(isEditableRedlineMember({ ...live, diffStatus: 'modified' })).toBe(true);
+    expect(isEditableRedlineMember({ ...live, diffStatus: 'added' })).toBe(true);
+    expect(isEditableRedlineMember({ ...live })).toBe(true); // status unknown
+  });
+
+  it('pinned review (diffTarget set): read-only', () => {
+    expect(isEditableRedlineMember({ ...live, diffTarget: 'abc123' })).toBe(false);
+  });
+
+  it('deleted member: read-only (nothing on disk to write back to)', () => {
+    expect(isEditableRedlineMember({ ...live, diffStatus: 'deleted' })).toBe(false);
+  });
+
+  it('no workspace: read-only (no companion doc to open)', () => {
+    expect(isEditableRedlineMember({ ...live, workspaceId: '' })).toBe(false);
   });
 });
