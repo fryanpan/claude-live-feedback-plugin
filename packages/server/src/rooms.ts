@@ -25,6 +25,7 @@ import {
   postReply as schemaPostReply,
   replaceAnchor as schemaReplaceAnchor,
   setStatus as schemaSetStatus,
+  suggestOps,
 } from '@feedback/core';
 import type { ServerWebSocket } from 'bun';
 import * as awarenessProtocol from 'y-protocols/awareness';
@@ -1719,9 +1720,19 @@ export class Rooms {
     // changed are replaced, so anchors on untouched blocks keep resolving.
     // Anchors inside a rewritten block still break — auto-reanchor's
     // snippet-match sweep catches that case on the next tick.
+    //
+    // Suggestions ride the same block-granularity rule: marks in untouched
+    // blocks survive (identity preserved), but an external rewrite of a
+    // block CARRYING suggestions replaces the block and its proposals are
+    // dropped — accepted-and-surfaced, not silently swallowed. Snapshot the
+    // pending sids so the drop can be recorded below (syncError pattern; a
+    // snippet-match re-anchor sweep for suggestions is out of scope for v1).
+    const sidsBefore = new Set(suggestOps.scanSuggestions(fragment).keys());
     room.ydoc.transact(() => {
       prose.applyMarkdownToFragment(fragment, md);
     }, 'file-watch');
+    const sidsAfter = new Set(suggestOps.scanSuggestions(fragment).keys());
+    const droppedSids = [...sidsBefore].filter((sid) => !sidsAfter.has(sid));
     // Same as reparseFromDisk: a block whose only defect is a legacy string
     // heading level serializes identically, so the diff keeps it and the
     // attribute has to be repaired separately. Idempotent and cheap.
@@ -1731,7 +1742,21 @@ export class Rooms {
     // lastWritten` forever after — and the NEXT external edit was misjudged
     // a conflict and clobbered by the reassert.
     binding.lastWritten = prose.serializeFragmentToMarkdown(fragment);
-    binding.lastSyncError = undefined;
+    if (droppedSids.length > 0) {
+      // Same recoverability philosophy as the conflict backups: the reconcile
+      // SUCCEEDED, but pending proposals living in a rewritten block were
+      // dropped — record which, so agents/UI can report the loss instead of
+      // the suggestions just vanishing. Cleared by the next clean reconcile.
+      binding.lastSyncError = {
+        message: `external edit dropped pending suggestion(s): ${droppedSids.join(', ')}`,
+        at: Date.now(),
+      };
+      console.warn(
+        `[rooms] ${room.docId}: external edit to ${binding.path} dropped suggestion(s) ${droppedSids.join(', ')}`,
+      );
+    } else {
+      binding.lastSyncError = undefined;
+    }
     console.log(
       `[rooms] ${room.docId}: applied external edit from ${binding.path} (${blocks.length} blocks)`,
     );
@@ -1979,6 +2004,81 @@ export class Rooms {
     const room = this.rooms.get(docId);
     if (!room) return false;
     return prose.deleteAgentAnchor(room.ydoc, anchorId);
+  }
+
+  // =========================================================================
+  // Suggested edits (redline-suggestions phase 2). Thin wrappers over the
+  // core suggest-ops: suggestions ARE marks in the prose fragment, so every
+  // operation rescans at execution time — no registry to keep in sync, and a
+  // sid that raced away (double-accept, external rewrite) reports not-found.
+  // All mutations run under the same 'agent' transaction origin the other
+  // agent edit tools use: the write-back observer flushes results to disk;
+  // a browser UndoManager never tracks them.
+  // =========================================================================
+
+  /** All pending proposals on the doc, in doc order. Empty for unknown docs
+   *  and for flat (code/diff) docs, whose prose fragment has no content. */
+  listSuggestions(docId: string): suggestOps.SuggestionSummary[] {
+    const room = this.rooms.get(docId);
+    if (!room) return [];
+    return suggestOps.listSuggestions(room.ydoc);
+  }
+
+  /**
+   * The suggestion-creation primitive: same find/context/occurrence matching
+   * as findAndReplace, but the replacement is written AS A PROPOSAL — the
+   * matched text marked suggestDelete, the new text inserted with
+   * suggestInsert, one shared sid, author from the caller. The doc's
+   * accepted state (and therefore disk) is unchanged until accepted.
+   */
+  createSuggestion(
+    docId: string,
+    opts: {
+      find: string;
+      replace: string;
+      contextBefore?: string;
+      contextAfter?: string;
+      occurrence?: number;
+      author: suggestOps.SuggestionAuthor;
+    },
+  ):
+    | { ok: true; suggestionId: string }
+    | {
+        ok: false;
+        error: 'not-found' | 'no-match' | 'ambiguous';
+        candidates?: Array<{ docOffset: number; preview: string }>;
+      } {
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'not-found' };
+    const res = suggestOps.suggestReplace(room.ydoc, opts);
+    if (!res.ok) return res;
+    return { ok: true, suggestionId: res.sid };
+  }
+
+  /** Accept a proposal: it becomes real content and flows to disk via the
+   *  normal debounced write-back. Missing sid (or doc) → not-found — also
+   *  the correct answer to the double-accept race. */
+  acceptSuggestion(docId: string, sid: string): suggestOps.SuggestionOpResult {
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'not-found' };
+    return suggestOps.acceptSuggestion(room.ydoc, sid);
+  }
+
+  /** Reject a proposal: restores exactly the pre-suggestion text. */
+  rejectSuggestion(docId: string, sid: string): suggestOps.SuggestionOpResult {
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'not-found' };
+    return suggestOps.rejectSuggestion(room.ydoc, sid);
+  }
+
+  /** Accept or reject every pending proposal (optionally one author's). */
+  resolveAllSuggestions(
+    docId: string,
+    opts: { action: 'accept' | 'reject'; authorId?: string },
+  ): { ok: true; resolved: number; sids: string[] } | { ok: false; error: 'not-found' } {
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'not-found' };
+    return suggestOps.resolveAllSuggestions(room.ydoc, opts);
   }
 
   /**

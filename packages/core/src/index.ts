@@ -9,3 +9,4 @@ export * from './ui-shared.ts';
 export * from './ws-client.ts';
 export * as anchors from './anchor/index.ts';
 export * as prose from './prose.ts';
+export * as suggestOps from './suggest-ops.ts';
