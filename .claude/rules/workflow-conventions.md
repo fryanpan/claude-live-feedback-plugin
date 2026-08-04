@@ -29,11 +29,13 @@ After planning, choose an execution approach. Present these options to the user:
 | **Executing Plans** (default) | Most tasks. You want human checkpoints at the end. | `superpowers:executing-plans` — creates a worktree, executes all tasks in a single pass, then reports for review. Do NOT batch into groups of 3 — execute everything, then pause. |
 | **Subagent-Driven Development** | Tasks are independent. You want fast iteration with automated review. | `superpowers:subagent-driven-development` — stays in current session, dispatches a fresh subagent per task with two-stage review (spec compliance, then code quality). |
 | **Agent Team** (experimental) | Highly parallel work where 3+ tasks can run simultaneously with no shared state. | `TeamCreate` + spawn teammates — named agents coordinate via task list and messages, work in true parallel. Requires `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` env var. |
+| **Workflow pipeline** (proven here) | An approved plan with ordered commits, where the user has opted into multi-agent orchestration. | `Workflow` tool: one persistent worktree; sequential TDD implement-agents (one per planned commit, structured results chained); parallel review lenses tailored to the feature's risks; verify-then-fix agent. Follow with an independent `codex review` and orchestrator re-verification before the PR. See "Multi-agent workflow implementation" in docs/process/learnings.md. |
 
 **Decision flow:**
-1. Are tasks mostly independent with no shared state? If no → **Executing Plans**
-2. Can 3+ tasks genuinely run in parallel? If yes → **Agent Team**
-3. Otherwise → **Subagent-Driven Development** (sequential but automated)
+1. Did the user ask for a workflow / multi-agent orchestration, and is there an approved plan with ordered commits? If yes → **Workflow pipeline** (two production runs shipped the balloons + suggested-edits features with 8 pre-merge bugs caught by the layered reviews)
+2. Are tasks mostly independent with no shared state? If no → **Executing Plans**
+3. Can 3+ tasks genuinely run in parallel? If yes → **Agent Team**
+4. Otherwise → **Subagent-Driven Development** (sequential but automated)
 
 If unsure, default to **Executing Plans** — it's the most predictable.
 
