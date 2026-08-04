@@ -1,4 +1,4 @@
-import { Editor } from '@tiptap/core';
+import { type AnyExtension, Editor } from '@tiptap/core';
 import Collaboration from '@tiptap/extension-collaboration';
 import { Image } from '@tiptap/extension-image';
 import { Table } from '@tiptap/extension-table';
@@ -54,6 +54,9 @@ export interface CreateEditorOpts {
   onUpdate?: () => void;
   user?: { name: string; color: string };
   seedMarkdown?: string;
+  /** Surface-specific extensions appended to the standard list (e.g. the
+   *  redline surface's live-markup decorations). */
+  extraExtensions?: AnyExtension[];
 }
 
 export function createEditor(opts: CreateEditorOpts): EditorHandle {
@@ -100,6 +103,7 @@ export function createEditor(opts: CreateEditorOpts): EditorHandle {
         field: fragmentName,
       }),
       ThreadDecorations,
+      ...(opts.extraExtensions ?? []),
     ],
     onSelectionUpdate: () => opts.onSelectionChange?.(),
     onUpdate: () => opts.onUpdate?.(),
