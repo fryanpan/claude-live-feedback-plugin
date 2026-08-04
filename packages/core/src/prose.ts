@@ -12,6 +12,7 @@
  */
 import * as Y from 'yjs';
 import { LCS_CELL_BUDGET, lcsKept } from './lcs.ts';
+import { SUGGEST_INSERT_MARK } from './suggest.ts';
 
 export const PROSE_FRAGMENT_KEY = 'prose';
 
@@ -139,6 +140,28 @@ export interface LocatedMatch {
 }
 
 /**
+ * Doc-offset spans covered by `suggestInsert` — i.e. text that exists in the
+ * live doc but is NOT part of the accepted state. a reviewerf-open [start, end).
+ */
+function pendingInsertSpans(segments: TextSegment[]): Array<[number, number]> {
+  const spans: Array<[number, number]> = [];
+  for (const seg of segments) {
+    let offset = 0;
+    for (const op of seg.node.toDelta() as Array<{
+      insert?: string;
+      attributes?: Record<string, unknown>;
+    }>) {
+      if (typeof op.insert !== 'string') continue;
+      if (op.attributes?.[SUGGEST_INSERT_MARK] != null) {
+        spans.push([seg.docOffset + offset, seg.docOffset + offset + op.insert.length]);
+      }
+      offset += op.insert.length;
+    }
+  }
+  return spans;
+}
+
+/**
  * Locate `find` in the flattened doc text, optionally requiring a
  * surrounding context. Returns all match positions mapped back to
  * (Y.XmlText, local offset) so the caller can mutate in place.
@@ -146,6 +169,13 @@ export interface LocatedMatch {
  * Matches that straddle two Y.XmlText nodes are omitted and returned as
  * a separate `crossNode` count so the caller can report a meaningful
  * error without silently skipping content.
+ *
+ * `excludePendingSuggestions` drops matches that overlap text marked
+ * `suggestInsert` — text a human hasn't accepted yet. A caller creating a
+ * NEW proposal must not anchor onto an unaccepted one (rejecting the first
+ * would take the second's target with it); the dropped count comes back as
+ * `pendingSkipped` so the caller can say so instead of reporting a bare
+ * no-match. `suggestDelete` text is still accepted state and stays matchable.
  */
 export function locateMatches(
   fragment: Y.XmlFragment,
@@ -153,11 +183,12 @@ export function locateMatches(
     find: string;
     contextBefore?: string;
     contextAfter?: string;
+    excludePendingSuggestions?: boolean;
   },
-): { matches: LocatedMatch[]; crossNode: number; plainText: string } {
+): { matches: LocatedMatch[]; crossNode: number; pendingSkipped: number; plainText: string } {
   const { plainText, segments } = walkProse(fragment);
   const find = opts.find;
-  if (find.length === 0) return { matches: [], crossNode: 0, plainText };
+  if (find.length === 0) return { matches: [], crossNode: 0, pendingSkipped: 0, plainText };
 
   const before = opts.contextBefore ?? '';
   const after = opts.contextAfter ?? '';
@@ -172,8 +203,11 @@ export function locateMatches(
     i = idx + 1; // allow overlapping contexts
   }
 
+  const pending = opts.excludePendingSuggestions === true ? pendingInsertSpans(segments) : [];
+
   const matches: LocatedMatch[] = [];
   let crossNode = 0;
+  let pendingSkipped = 0;
   for (const r of raw) {
     const seg = findSegmentForOffset(segments, r.docOffset);
     if (!seg) continue;
@@ -183,6 +217,11 @@ export function locateMatches(
       crossNode++;
       continue;
     }
+    const end = r.docOffset + find.length;
+    if (pending.some(([ps, pe]) => r.docOffset < pe && ps < end)) {
+      pendingSkipped++;
+      continue;
+    }
     matches.push({
       segment: seg,
       offsetInNode,
@@ -190,7 +229,7 @@ export function locateMatches(
       docOffset: r.docOffset,
     });
   }
-  return { matches, crossNode, plainText };
+  return { matches, crossNode, pendingSkipped, plainText };
 }
 
 function findSegmentForOffset(segments: TextSegment[], offset: number): TextSegment | null {
@@ -221,19 +260,31 @@ export interface ReplaceResult {
  * a subsequent unmarked `insert(cursor, plain)` then picks up the prior
  * marks and bleeds them into surrounding text. `applyDelta` treats each
  * op's attributes as scoped to that op's insert.
+ *
+ * `attributes` force marks onto the inserted text. Callers that want the
+ * plain-insert inheritance MUST omit it — passing explicit attributes to
+ * `Y.XmlText.insert` REPLACES what would have been inherited, so a caller
+ * with its own mark to add (the suggestion path's `suggestInsert`) has to
+ * merge the surrounding marks in itself. Per-op marks parsed out of the
+ * text win over `attributes` on a key collision: explicit beats inherited.
  */
-function insertWithOptionalMarks(
+export function insertTextWithMarks(
   node: Y.XmlText,
   offset: number,
   text: string,
-  parseInlineMarks: boolean,
+  opts?: { parseInlineMarks?: boolean; attributes?: Record<string, unknown> },
 ): void {
   if (text.length === 0) return;
-  if (!parseInlineMarks) {
-    node.insert(offset, text);
+  const extra =
+    opts?.attributes && Object.keys(opts.attributes).length > 0 ? opts.attributes : undefined;
+  if (opts?.parseInlineMarks !== true) {
+    if (extra) node.insert(offset, text, extra);
+    else node.insert(offset, text);
     return;
   }
-  const delta = inlineMarksToDelta(text);
+  const delta = inlineMarksToDelta(text).map((op) =>
+    extra ? { ...op, attributes: { ...extra, ...(op.attributes ?? {}) } } : op,
+  );
   const positioned: Array<{
     retain?: number;
     insert?: string;
@@ -241,6 +292,15 @@ function insertWithOptionalMarks(
   }> = offset > 0 ? [{ retain: offset }, ...delta] : [...delta];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   node.applyDelta(positioned as any);
+}
+
+function insertWithOptionalMarks(
+  node: Y.XmlText,
+  offset: number,
+  text: string,
+  parseInlineMarks: boolean,
+): void {
+  insertTextWithMarks(node, offset, text, { parseInlineMarks });
 }
 
 /**
@@ -674,7 +734,18 @@ export function applyMarkdownToFragment(fragment: Y.XmlFragment, markdown: strin
     if (!(node instanceof Y.XmlElement)) return `__empty_text_${i}__`;
     return `__empty_${node.nodeName}_${JSON.stringify(node.getAttributes())}__`;
   };
-  const prevKeys = prev.map(key);
+  // Blocks whose entire text is a pending insert-suggestion serialize to
+  // NOTHING, so they have no key in disk space — an LCS over them would
+  // delete a pending proposal on any external disk change, even one that
+  // never touched its neighborhood. Treat them as transparent instead: they
+  // are excluded from the diff, never deleted, and new blocks are positioned
+  // relative to the accepted blocks only.
+  const suggestedPrev = prev.map((b) => b instanceof Y.XmlElement && isEntirelySuggestedInsert(b));
+  const acceptedIdx: number[] = [];
+  for (let i = 0; i < prev.length; i++) {
+    if (!suggestedPrev[i]) acceptedIdx.push(i);
+  }
+  const prevKeys = acceptedIdx.map((i) => key(prev[i]!, i));
   const nextKeys = markdownBlockKeys(markdown, key);
   // Keyed separately from the blocks we insert: reading a prelim block's
   // content requires integrating it into a doc, and an integrated Yjs type
@@ -708,17 +779,35 @@ export function applyMarkdownToFragment(fragment: Y.XmlFragment, markdown: strin
   const { keptA: keptOld, keptB: keptNew } = lcsKept(prevKeys, nextKeys);
   if (keptOld.size === n && keptNew.size === m) return false;
 
-  // Deletions first, right-to-left so earlier indices stay valid.
-  for (let i = n - 1; i >= 0; i--) {
-    if (!keptOld.has(i)) fragment.delete(i, 1);
+  // Deletions first, right-to-left so earlier indices stay valid. `keptOld`
+  // indexes the ACCEPTED (non-suggested) blocks; map back through acceptedIdx
+  // so fully-suggested blocks are never deleted.
+  for (let a = n - 1; a >= 0; a--) {
+    if (!keptOld.has(a)) fragment.delete(acceptedIdx[a]!, 1);
   }
-  // The fragment now holds exactly the kept blocks, in order. Filling the gaps
-  // left-to-right, every index < j is already final — so j IS the insert
-  // position for the new block j.
+  // The fragment now holds the kept accepted blocks in order, interleaved
+  // with any surviving fully-suggested blocks. Insert new block j where the
+  // j-th accepted block sits (append past the end), counting suggested
+  // blocks as transparent — so a proposal stays attached to its preceding
+  // accepted neighbor.
   for (let j = 0; j < m; j++) {
-    if (!keptNew.has(j)) fragment.insert(j, [next[j]]);
+    if (!keptNew.has(j)) fragment.insert(acceptedInsertPos(fragment, j), [next[j]]);
   }
   return true;
+}
+
+/** Index in `fragment` of the j-th accepted (non-fully-suggested) block, or
+ *  fragment.length when there are fewer than j+1 accepted blocks. */
+function acceptedInsertPos(fragment: Y.XmlFragment, j: number): number {
+  const kids = fragment.toArray() as (Y.XmlElement | Y.XmlText)[];
+  let accepted = 0;
+  for (let i = 0; i < kids.length; i++) {
+    const k = kids[i]!;
+    if (k instanceof Y.XmlElement && isEntirelySuggestedInsert(k)) continue;
+    if (accepted === j) return i;
+    accepted++;
+  }
+  return kids.length;
 }
 
 export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
@@ -1113,6 +1202,11 @@ function serializeBlock(node: Y.XmlElement | Y.XmlText): string | null {
     return s.length > 0 ? s : null;
   }
   if (!(node instanceof Y.XmlElement)) return null;
+  // A block whose entire text is a pending insert-suggestion has no accepted
+  // content — it contributes nothing (no empty paragraph line, no empty
+  // fence). Blocks with no text at all (horizontalRule, image, a genuinely
+  // empty codeBlock) are unaffected: the whole-block rule requires text.
+  if (isEntirelySuggestedInsert(node)) return null;
   switch (node.nodeName) {
     case 'paragraph':
       return textContent(node);
@@ -1156,7 +1250,10 @@ function serializeBlock(node: Y.XmlElement | Y.XmlText): string | null {
 function serializeTable(table: Y.XmlElement): string {
   const rows = table
     .toArray()
-    .filter((n): n is Y.XmlElement => n instanceof Y.XmlElement && n.nodeName === 'tableRow');
+    .filter((n): n is Y.XmlElement => n instanceof Y.XmlElement && n.nodeName === 'tableRow')
+    // A fully-suggested row would otherwise serialize as an all-empty `| |`
+    // line — it has no accepted content, so it contributes nothing.
+    .filter((r) => !isEntirelySuggestedInsert(r));
   if (rows.length === 0) return '';
   const cells: string[][] = rows.map((r) =>
     r
@@ -1209,9 +1306,49 @@ function textWithMarks(xmlText: Y.XmlText): string {
   let out = '';
   for (const op of delta) {
     if (typeof op.insert !== 'string') continue;
+    // THE SERIALIZER RULE (suggested edits): disk always holds the ACCEPTED
+    // state. Text carrying a pending insert-suggestion is omitted here — and
+    // ONLY here, because every doc→disk path (write-back, reconcile's
+    // currentSerialized, lastWritten, normalizeMarkdown) funnels through this
+    // function. Text carrying `suggestDelete` falls through and is emitted
+    // WITHOUT the mark: wrapMarks only re-emits the real inline marks
+    // (bold/italic/code/strike/link) and ignores suggestion attributes.
+    if (op.attributes?.[SUGGEST_INSERT_MARK] != null) continue;
     out += wrapMarks(op.insert, op.attributes);
   }
   return out;
+}
+
+/**
+ * True when a block's ENTIRE text is a pending insert-suggestion (and it has
+ * at least one character of text). Such a block does not exist in the
+ * accepted state: it must contribute nothing to serialization — not even an
+ * empty shell (`- ` marker, empty code fence) — and a disk-driven reconcile
+ * must treat it as transparent (it has no key in disk space to match).
+ */
+function isEntirelySuggestedInsert(node: Y.XmlElement): boolean {
+  let sawText = false;
+  const visit = (n: Y.XmlElement | Y.XmlText | Y.XmlHook): boolean => {
+    if (n instanceof Y.XmlText) {
+      const delta = n.toDelta() as Array<{
+        insert?: string;
+        attributes?: Record<string, unknown>;
+      }>;
+      for (const op of delta) {
+        if (typeof op.insert !== 'string' || op.insert.length === 0) continue;
+        sawText = true;
+        if (op.attributes?.[SUGGEST_INSERT_MARK] == null) return false;
+      }
+      return true;
+    }
+    if (n instanceof Y.XmlElement) {
+      for (const child of n.toArray()) {
+        if (!visit(child as Y.XmlElement | Y.XmlText)) return false;
+      }
+    }
+    return true;
+  };
+  return visit(node) && sawText;
 }
 
 function wrapMarks(text: string, attrs: Record<string, unknown> | undefined): string {
@@ -1250,6 +1387,9 @@ function serializeList(list: Y.XmlElement, depth: number): string {
   let n = 0;
   for (const li of list.toArray()) {
     if (!(li instanceof Y.XmlElement) || li.nodeName !== 'listItem') continue;
+    // A fully-suggested item is not part of the accepted list — skipping it
+    // here (not just via serializeBlock) avoids emitting an empty `- ` marker.
+    if (isEntirelySuggestedInsert(li)) continue;
     n++;
     const marker = ordered ? `${n}. ` : '- ';
     const children = li.toArray().filter((c): c is Y.XmlElement => c instanceof Y.XmlElement);
@@ -1902,23 +2042,36 @@ export function deleteSection(
 
 /** Resolve a single find with the same disambiguation as findAndReplace,
  *  returning the chosen LocatedMatch or a typed error.  */
-function resolveSingleFind(
+/**
+ * Shared "choose exactly one match" resolution used by the block-deletion API
+ * and the suggestion-creation primitive (suggest-ops.ts) — the same
+ * find/context/occurrence machinery findAndReplace applies, extracted so
+ * callers don't re-implement (and drift from) the disambiguation rules.
+ */
+export function resolveSingleFind(
   fragment: Y.XmlFragment,
   opts: {
     find: string;
     contextBefore?: string;
     contextAfter?: string;
     occurrence?: number;
+    /** Refuse to match inside pending `suggestInsert` text — see locateMatches. */
+    excludePendingSuggestions?: boolean;
   },
 ):
   | { ok: true; match: LocatedMatch }
   | {
       ok: false;
-      error: 'no-match' | 'ambiguous';
+      error: 'no-match' | 'ambiguous' | 'match-in-pending-suggestion';
       candidates?: Array<{ docOffset: number; preview: string }>;
     } {
-  const { matches, plainText } = locateMatches(fragment, opts);
-  if (matches.length === 0) return { ok: false, error: 'no-match' };
+  const { matches, pendingSkipped, plainText } = locateMatches(fragment, opts);
+  if (matches.length === 0) {
+    // Distinguish "the string isn't there" from "the only place it appears is
+    // somebody's unaccepted proposal" — the second is actionable advice.
+    if (pendingSkipped > 0) return { ok: false, error: 'match-in-pending-suggestion' };
+    return { ok: false, error: 'no-match' };
+  }
   if (opts.occurrence != null) {
     if (opts.occurrence < 1 || opts.occurrence > matches.length) {
       return { ok: false, error: 'no-match' };
@@ -1939,7 +2092,7 @@ function resolveSingleFind(
 }
 
 function mapFindError(
-  error: 'no-match' | 'ambiguous',
+  error: 'no-match' | 'ambiguous' | 'match-in-pending-suggestion',
   candidates: Array<{ docOffset: number; preview: string }> | undefined,
   which: 'start' | 'end',
 ): DeleteBlocksInRangeResult {

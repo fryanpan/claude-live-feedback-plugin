@@ -623,6 +623,15 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
       threadsListEl.innerHTML = '';
       hideComposer();
       closeThreadView();
+      // The doc-level suggestions badge (suggestions-summary.ts) is only
+      // mounted by the markdown/redline surfaces, not the code surface — if
+      // the next document's mount doesn't call mountSuggestionsSummary at
+      // all (navigating to a code file), nothing else resets this, so the
+      // badge would otherwise keep showing the PREVIOUS doc's stale count.
+      // Optional lookup: older/lighter test fixtures don't include this
+      // element, and this must be a no-op there.
+      document.getElementById('toggle-suggestions')?.classList.add('hidden');
+      document.getElementById('suggestions-menu')?.classList.add('hidden');
     },
   };
   // The router only calls scope.dispose(); make the visual teardown part of it.
