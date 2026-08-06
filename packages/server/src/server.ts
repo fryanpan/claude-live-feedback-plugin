@@ -164,7 +164,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // stamps cf-ray on everything it proxies (overwriting any the
           // client sent), so its presence means "not from our LAN".
           viaProxy: req.headers.has('cf-ray'),
-          lookupShare: (h) => shares?.findByHostname(h)?.docId ?? null,
+          lookupShare: (h) => {
+            const s = shares?.findByHostname(h);
+            if (!s) return null;
+            return s.workspaceId
+              ? { docId: s.docId, workspaceId: s.workspaceId }
+              : { docId: s.docId };
+          },
         });
         if (decision.kind === 'deny') {
           return j(403, { error: 'unknown_host' });
@@ -181,7 +187,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // visitor's email domain, not what they may touch. Scope them to
           // the shared doc: no doc enumeration, no workspace/diff creation,
           // no share administration.
-          if (!shareScopeAllows(pathname, req.method, decision.docId)) {
+          if (
+            !shareScopeAllows(
+              pathname,
+              req.method,
+              decision.target,
+              (docId) => rooms.get(docId)?.meta.workspaceId ?? null,
+            )
+          ) {
             return j(403, { error: 'out_of_share_scope' });
           }
         } else if (cfAccessVerifier && !shares) {
@@ -218,6 +231,42 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             name: typeof body?.name === 'string' ? body.name : undefined,
           });
           return j(200, { share });
+        } catch (err) {
+          const error = err instanceof Error ? err.message : 'create_share_failed';
+          return j(502, { error });
+        }
+      }
+      // Share a whole workspace (folder bind / diff review) rather than one
+      // doc: the visitor gets the file tree and every member, so the set
+      // browses as a set. Scope is enforced in middleware/host-guard.ts.
+      if (pathname === '/api/share/workspace' && req.method === 'POST') {
+        if (!shares) return j(404, { error: 'sharing not enabled' });
+        const body = await safeJson(req);
+        const workspaceId = (body?.workspaceId as string) ?? '';
+        const allowDomains = (body?.allowDomains as string[]) ?? [];
+        if (!workspaceId) return j(400, { error: 'workspaceId required' });
+        if (!Array.isArray(allowDomains) || allowDomains.length === 0) {
+          return j(400, { error: 'allowDomains must be a non-empty array' });
+        }
+        const members = rooms.list().filter((m) => m.workspaceId === workspaceId);
+        if (members.length === 0) return j(404, { error: 'workspace not found', workspaceId });
+        // Entry doc: caller's choice, else the first member. Must belong to
+        // the workspace — otherwise the URL would open an out-of-scope doc
+        // and the visitor would land on a 403.
+        const requested = body?.entryDocId as string | undefined;
+        if (requested && !members.some((m) => m.docId === requested)) {
+          return j(400, { error: 'entryDocId is not a member of this workspace' });
+        }
+        const entryDocId = requested ?? members[0]?.docId ?? '';
+        try {
+          const share = await shares.createShareWorkspace({
+            workspaceId,
+            entryDocId,
+            allowDomains,
+            ttlSeconds: typeof body?.ttlSeconds === 'number' ? body.ttlSeconds : undefined,
+            name: typeof body?.name === 'string' ? body.name : undefined,
+          });
+          return j(200, { share, memberCount: members.length });
         } catch (err) {
           const error = err instanceof Error ? err.message : 'create_share_failed';
           return j(502, { error });

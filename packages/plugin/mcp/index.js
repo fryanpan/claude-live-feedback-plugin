@@ -14355,6 +14355,28 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       }
     },
     {
+      name: "share_workspace",
+      description: "Publish a WHOLE workspace (a folder bind or diff review, created by bind_folder / create_diff_review) behind a Cloudflare Access gate, so external reviewers can browse the set — file tree, every member doc, cross-doc links, and per-file comment threads. Use this instead of share_doc whenever the reviewer needs to move between files; a share_doc share covers exactly one doc and renders without the sidebar. Returns { share: {...}, memberCount }. Read .claude/live-feedback.json's `share.defaultAllowDomains` first; if a repo has no config, ASK THE USER which domain(s) to allow before calling — never default to 'anyone'. Default ttlSeconds is 72h. Visitors can read, comment on, and co-edit members through the live editor — but cannot delete docs, replace a doc wholesale, reparse from disk, list other workspaces or docs, open files outside the workspace root, or manage shares.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          workspaceId: { type: "string" },
+          allowDomains: {
+            type: "array",
+            items: { type: "string" },
+            description: "Email domains, e.g. ['@partner-org.example']"
+          },
+          entryDocId: {
+            type: "string",
+            description: "Doc the share URL opens. Defaults to the first member."
+          },
+          ttlSeconds: { type: "number" },
+          name: { type: "string", description: "Optional slug override for the subdomain" }
+        },
+        required: ["workspaceId", "allowDomains"]
+      }
+    },
+    {
       name: "list_shares",
       description: "List currently active shares with their hostnames, allowed domains, and expiry.",
       inputSchema: { type: "object", properties: {} }
@@ -14680,6 +14702,23 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const res = await http("POST", "/api/share/doc", {
           docId,
           allowDomains,
+          ttlSeconds,
+          name: slug
+        });
+        return ok(res);
+      }
+      case "share_workspace": {
+        const {
+          workspaceId,
+          allowDomains,
+          entryDocId,
+          ttlSeconds,
+          name: slug
+        } = a;
+        const res = await http("POST", "/api/share/workspace", {
+          workspaceId,
+          allowDomains,
+          entryDocId,
           ttlSeconds,
           name: slug
         });
