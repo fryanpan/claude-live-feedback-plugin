@@ -3,10 +3,17 @@ import { extname, join } from 'node:path';
 import { type Anchor, type DocType, type User, contentKind, suggestOps } from '@feedback/core';
 import { showFile } from './git-diff.ts';
 import { type CfAccessOptions, createCfAccessVerifier } from './middleware/cf-access.ts';
-import { classifyHost, shareScopeAllows } from './middleware/host-guard.ts';
+import { type ShareTarget, classifyHost, shareScopeAllows } from './middleware/host-guard.ts';
 import { lanHostnames, publicBaseUrl, tailscaleHost } from './public-host.ts';
 import { type FeedbackWs, Rooms, type WorkspaceDirNode, type WorkspaceFileNode } from './rooms.ts';
 import { CfApi } from './share/cf-api.ts';
+import {
+  SHARE_COOKIE,
+  loadCookieKey,
+  readCookie,
+  sessionCookieHeader,
+  verifySession,
+} from './share/link-session.ts';
 import { Shares } from './share/shares.ts';
 import type { ShareConfig } from './share/types.ts';
 import { SseHub, openSseStream } from './sse.ts';
@@ -86,18 +93,40 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
 
   let shares: Shares | null = null;
   if (opts.share) {
+    // Only build a Cloudflare client when Access mode is actually
+    // configured. Link-mode sharing needs no Cloudflare credentials at all.
+    const accountId = opts.share.config.cfAccountId;
     const cfApi =
       opts.share.cfApi ??
-      new CfApi({
-        accountId: opts.share.config.cfAccountId,
-        token: opts.share.cfApiToken ?? '',
-      });
+      (accountId ? new CfApi({ accountId, token: opts.share.cfApiToken ?? '' }) : undefined);
     shares = new Shares({
       dataDir,
       cfApi,
       config: opts.share.config,
     });
   }
+
+  // HMAC key for link-mode session cookies. Generated on first use, mode
+  // 600 — whoever can read it can mint a session for any share.
+  let cookieKeyCache: string | null = null;
+  const cookieKey = (): string => {
+    cookieKeyCache ??= loadCookieKey(dataDir);
+    return cookieKeyCache;
+  };
+
+  /** Resolve a link-mode session cookie to what it may reach, or null. */
+  const linkSessionTarget = (req: Request): ShareTarget | null => {
+    if (!shares) return null;
+    const shareId = verifySession(readCookie(req.headers.get('cookie'), SHARE_COOKIE), cookieKey());
+    if (!shareId) return null;
+    // Re-checked every request, so revoking or expiring a share takes
+    // effect immediately rather than when a browser's cookie lapses.
+    const share = shares.findLive(shareId);
+    if (!share || share.mode !== 'link') return null;
+    return share.workspaceId
+      ? { docId: share.docId, workspaceId: share.workspaceId }
+      : { docId: share.docId };
+  };
 
   // When shares is wired, automatically derive the cf-access audience from
   // the registry so each share-<slug> host can use its own AUD. Callers
@@ -171,6 +200,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               ? { docId: s.docId, workspaceId: s.workspaceId }
               : { docId: s.docId };
           },
+          linkHost: shares?.publicHostname ?? null,
         });
         if (decision.kind === 'deny') {
           return j(403, { error: 'unknown_host' });
@@ -196,6 +226,24 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             )
           ) {
             return j(403, { error: 'out_of_share_scope' });
+          }
+        } else if (decision.kind === 'link') {
+          // Redeeming a link is the ONLY thing reachable here without a
+          // session — that request is what mints one.
+          const redeeming = req.method === 'GET' && pathname.startsWith('/s/');
+          if (!redeeming) {
+            const target = linkSessionTarget(req);
+            if (!target) return j(401, { error: 'no_share_session' });
+            if (
+              !shareScopeAllows(
+                pathname,
+                req.method,
+                target,
+                (docId) => rooms.get(docId)?.meta.workspaceId ?? null,
+              )
+            ) {
+              return j(403, { error: 'out_of_share_scope' });
+            }
           }
         } else if (cfAccessVerifier && !shares) {
           // Legacy whole-server mode: cfAccess configured WITHOUT per-share
@@ -236,6 +284,86 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           return j(502, { error });
         }
       }
+      // --- Redeem a share link ---
+      // The slug is a bearer credential: exchange it for a signed session
+      // cookie, then redirect to the doc. Deliberately gives nothing away
+      // on failure — an unknown, expired, or malformed slug all look alike.
+      const redeemMatch = pathname.match(/^\/s\/([^/]+)$/);
+      if (redeemMatch && req.method === 'GET') {
+        const slug = decodeURIComponent(redeemMatch[1] ?? '');
+        const share = shares?.findBySlug(slug) ?? null;
+        if (!share) {
+          return new Response(renderLinkNotFound(), {
+            status: 404,
+            headers: { 'content-type': 'text/html; charset=utf-8' },
+          });
+        }
+        const maxAge = Math.floor((share.expiresAt - Date.now()) / 1000);
+        return new Response(null, {
+          status: 302,
+          headers: {
+            location: `/review/${encodeURIComponent(share.docId)}`,
+            'set-cookie': sessionCookieHeader(share.shareId, cookieKey(), maxAge),
+            // Keep the slug out of any downstream Referer header.
+            'referrer-policy': 'no-referrer',
+          },
+        });
+      }
+
+      // Mint a share link. Local-only: /api/share* is out of scope for a
+      // visitor, so this can only be called from the machine or the tailnet.
+      if (pathname === '/api/share/link' && req.method === 'POST') {
+        if (!shares) return j(404, { error: 'sharing not enabled' });
+        const body = await safeJson(req);
+        const docId = body?.docId as string | undefined;
+        const workspaceId = body?.workspaceId as string | undefined;
+        if (!docId && !workspaceId) return j(400, { error: 'docId or workspaceId required' });
+        if (docId && workspaceId) return j(400, { error: 'pass docId OR workspaceId, not both' });
+
+        let entryDocId = body?.entryDocId as string | undefined;
+        let memberCount: number | undefined;
+        if (workspaceId) {
+          const members = rooms.list().filter((m) => m.workspaceId === workspaceId);
+          if (members.length === 0) return j(404, { error: 'workspace not found', workspaceId });
+          if (entryDocId && !members.some((m) => m.docId === entryDocId)) {
+            return j(400, { error: 'entryDocId is not a member of this workspace' });
+          }
+          entryDocId = entryDocId ?? members[0]?.docId;
+          memberCount = members.length;
+        } else if (!rooms.get(docId ?? '')) {
+          return j(404, { error: 'doc not found' });
+        }
+        try {
+          const share = shares.createShareLink({
+            docId,
+            workspaceId,
+            entryDocId,
+            ttlSeconds: typeof body?.ttlSeconds === 'number' ? body.ttlSeconds : undefined,
+            label: typeof body?.label === 'string' ? body.label : undefined,
+          });
+          return j(200, { share, ...(memberCount ? { memberCount } : {}) });
+        } catch (err) {
+          const error = err instanceof Error ? err.message : 'create_share_failed';
+          return j(400, { error });
+        }
+      }
+
+      // Extend or shorten a live share. Local-only, same as creation.
+      const ttlMatch = pathname.match(/^\/api\/share\/([^/]+)\/ttl$/);
+      if (ttlMatch && req.method === 'POST') {
+        if (!shares) return j(404, { error: 'sharing not enabled' });
+        const shareId = decodeURIComponent(ttlMatch[1] ?? '');
+        const body = await safeJson(req);
+        const ttlSeconds = body?.ttlSeconds;
+        if (typeof ttlSeconds !== 'number') return j(400, { error: 'ttlSeconds required' });
+        try {
+          const share = shares.setTtl(shareId, ttlSeconds);
+          return share ? j(200, { share }) : j(404, { error: 'share not found' });
+        } catch (err) {
+          return j(400, { error: err instanceof Error ? err.message : 'bad ttl' });
+        }
+      }
+
       // Share a whole workspace (folder bind / diff review) rather than one
       // doc: the visitor gets the file tree and every member, so the set
       // browses as a set. Scope is enforced in middleware/host-guard.ts.
@@ -1186,6 +1314,20 @@ small{color:#777}</style>
 Mockups are bound by an agent calling <code>bind_mock</code> with an absolute path
 to an HTML file. Once bound, the file is served here without any symlink dance.</p>
 <p>Ask the agent who shared this URL to call <code>bind_mock(docId, sourceHtmlPath)</code>, then refresh.</p>`;
+}
+
+/**
+ * Shown when a share link doesn't resolve. Says nothing about WHY — unknown,
+ * expired, and malformed all render the same page, so the endpoint can't be
+ * used to probe which slugs exist.
+ */
+function renderLinkNotFound(): string {
+  return `<!doctype html><meta charset="utf-8"><title>Link not available</title>
+<style>body{font:16px/1.5 system-ui,sans-serif;max-width:32rem;margin:12vh auto;padding:0 1.5rem;color:#222}
+h1{font-size:1.25rem;margin:0 0 .5rem}p{color:#555;margin:0}
+@media(prefers-color-scheme:dark){body{background:#111;color:#eee}p{color:#aaa}}</style>
+<h1>This link isn't available</h1>
+<p>It may have expired or been revoked. Ask whoever shared it for a new one.</p>`;
 }
 
 function renderReviewNotFound(docId: string): string {

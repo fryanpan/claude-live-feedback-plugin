@@ -43,21 +43,38 @@ const cfAccess = cfAccessTeam
   ? { teamDomain: cfAccessTeam, audience: cfAccessAud ?? 'placeholder-overridden-by-shares' }
   : undefined;
 
-// Sharing — instantiated when CF_SHARE_BASE_HOSTNAME + CF_ACCOUNT_ID are
-// set. Token comes from macOS Keychain via the share module's keychain
-// reader (bin.ts doesn't read it directly).
+// Sharing.
+//
+// LINK mode needs only CF_SHARE_PUBLIC_HOSTNAME — the single hostname the
+// tunnel serves. No Cloudflare account, no Zero Trust team, no API token.
+//
+// ACCESS mode (per-share hostnames behind Cloudflare Access) additionally
+// needs CF_SHARE_BASE_HOSTNAME + CF_ACCOUNT_ID + CF_ACCESS_TEAM_DOMAIN; the
+// API token comes from the macOS Keychain via the share module's reader.
+const accessShareConfigured = Boolean(
+  process.env.CF_SHARE_BASE_HOSTNAME && process.env.CF_ACCOUNT_ID && cfAccessTeam,
+);
+const publicHostname = process.env.CF_SHARE_PUBLIC_HOSTNAME;
 const shareConfig =
-  process.env.CF_SHARE_BASE_HOSTNAME && process.env.CF_ACCOUNT_ID && cfAccessTeam
+  accessShareConfigured || publicHostname
     ? {
-        cfAccountId: process.env.CF_ACCOUNT_ID,
-        cfTeamDomain: cfAccessTeam,
-        baseHostname: process.env.CF_SHARE_BASE_HOSTNAME,
+        ...(process.env.CF_ACCOUNT_ID ? { cfAccountId: process.env.CF_ACCOUNT_ID } : {}),
+        ...(cfAccessTeam ? { cfTeamDomain: cfAccessTeam } : {}),
+        ...(process.env.CF_SHARE_BASE_HOSTNAME
+          ? { baseHostname: process.env.CF_SHARE_BASE_HOSTNAME }
+          : {}),
+        ...(publicHostname ? { publicHostname } : {}),
       }
     : null;
 const share = shareConfig
   ? {
       config: shareConfig,
-      cfApiToken: readKeychainPassword('cloudflare-api-token'),
+      // Only read the Keychain when Access mode is actually configured —
+      // the reader throws when the entry is missing, and a link-only
+      // deployment has no reason to hold a Cloudflare token at all.
+      ...(accessShareConfigured
+        ? { cfApiToken: readKeychainPassword('cloudflare-api-token') }
+        : {}),
     }
   : undefined;
 
@@ -103,9 +120,12 @@ if (cfAccess) {
     typeof cfAccess.audience === 'string' ? cfAccess.audience.slice(0, 8) : 'auto-from-shares';
   console.log(`[feedback]   cf-access:  team=${cfAccess.teamDomain} aud=${audDisplay}…`);
 }
-if (share) {
+if (share?.config.publicHostname) {
+  console.log(`[feedback]   share-link: https://${share.config.publicHostname}/s/<slug>`);
+}
+if (share?.config.baseHostname && share.config.cfAccountId) {
   console.log(
-    `[feedback]   share:      base=${share.config.baseHostname} account=${share.config.cfAccountId.slice(0, 8)}…`,
+    `[feedback]   share-cf:   base=${share.config.baseHostname} account=${share.config.cfAccountId.slice(0, 8)}…`,
   );
 }
 if (!widgetDist)
