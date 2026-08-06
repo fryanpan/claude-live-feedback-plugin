@@ -177,6 +177,20 @@ describe('link shares over HTTP', () => {
       ).toBe(404);
     });
 
+    it('refuses a nonsense TTL rather than minting a dead link', async () => {
+      // NaN / Infinity can't get this far — JSON.stringify turns both into
+      // null, which reads as "not supplied". They're covered against the
+      // registry directly in shares-ttl.test.ts.
+      for (const ttlSeconds of [0, -60]) {
+        const r = await local('/api/share/link', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ docId: SOLO, ttlSeconds }),
+        });
+        expect(r.status, String(ttlSeconds)).toBe(400);
+      }
+    });
+
     it('refuses a doc or workspace that does not exist', async () => {
       const a = await local('/api/share/link', {
         method: 'POST',
@@ -343,6 +357,28 @@ describe('link shares over HTTP', () => {
       if (live) live.expiresAt = Date.now() - 1000;
 
       expect((await pub(`/api/docs/${SOLO}`, cookie)).status).toBe(401);
+      expect((await pub(`/s/${share.slug}`)).status).toBe(404);
+    });
+  });
+
+  describe('an expired share cannot be resurrected', () => {
+    it('refuses to extend it — a leaked URL must not come back to life', async () => {
+      const mk = await local('/api/share/link', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ docId: SOLO }),
+      });
+      const { share } = (await mk.json()) as { share: { shareId: string; slug: string } };
+      const live = handle.shares?.list().find((s) => s.shareId === share.shareId);
+      if (live) live.expiresAt = Date.now() - 1000;
+
+      const r = await local(`/api/share/${share.shareId}/ttl`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ttlSeconds: 7 * 24 * 3600 }),
+      });
+      expect(r.status).toBe(404);
+      // The old slug stays dead.
       expect((await pub(`/s/${share.slug}`)).status).toBe(404);
     });
   });

@@ -13,6 +13,19 @@ import {
 } from './types.ts';
 
 const REGISTRY_FILENAME = 'shares.json';
+
+/**
+ * A TTL must be a positive, finite number of seconds. Zero, negative, NaN
+ * and Infinity all produce a share that is broken on arrival (already
+ * expired, or with a nonsense expiresAt) — refuse them at the door rather
+ * than hand back a 200 and a dead URL.
+ */
+function assertTtl(ttlSeconds: number): number {
+  if (!Number.isFinite(ttlSeconds) || ttlSeconds <= 0) {
+    throw new Error('ttlSeconds must be a positive, finite number of seconds');
+  }
+  return ttlSeconds;
+}
 /** 128 bits — unguessable in practice, and short enough to paste. */
 const SLUG_BYTES = 16;
 
@@ -76,7 +89,7 @@ export class Shares {
 
     const slug = randomBytes(SLUG_BYTES).toString('hex');
     const hostname = this.config.publicHostname;
-    const ttl = req.ttlSeconds ?? this.config.defaultTtlSeconds ?? DEFAULT_TTL_SECONDS;
+    const ttl = assertTtl(req.ttlSeconds ?? this.config.defaultTtlSeconds ?? DEFAULT_TTL_SECONDS);
     const share: Share = {
       shareId: randomHex(8),
       surface: req.workspaceId ? 'workspace' : 'doc',
@@ -109,14 +122,19 @@ export class Shares {
     return s.expiresAt > now ? s : null;
   }
 
-  /** Change a share's expiry. `ttlSeconds` is measured from now. */
+  /**
+   * Change a LIVE share's expiry. `ttlSeconds` is measured from now.
+   *
+   * An already-expired share is deliberately NOT extendable: its URL may
+   * have been forwarded or archived in the meantime, and reviving it would
+   * silently hand access back to everyone who kept a copy. Mint a fresh
+   * link instead — that rotates the slug.
+   */
   setTtl(shareId: string, ttlSeconds: number): Share | null {
-    const s = this.shares.find((x) => x.shareId === shareId);
+    const ttl = assertTtl(ttlSeconds);
+    const s = this.findLive(shareId);
     if (!s) return null;
-    if (!Number.isFinite(ttlSeconds) || ttlSeconds <= 0) {
-      throw new Error('ttlSeconds must be a positive number');
-    }
-    s.expiresAt = Date.now() + ttlSeconds * 1000;
+    s.expiresAt = Date.now() + ttl * 1000;
     this.save();
     return s;
   }
