@@ -24,6 +24,15 @@ const widgetDist = pathOrNull(join(repoRoot, 'packages', 'widget', 'dist'));
 const markdownAppDist = pathOrNull(join(repoRoot, 'packages', 'markdown-app', 'dist'));
 const demosDir = pathOrNull(join(repoRoot, 'demos'));
 
+// Extra hostnames to treat as LOCAL. Loopback, the tailnet name, this
+// machine's LAN names, and private IPv4 ranges are detected automatically;
+// this covers anything we can't detect (a reverse proxy in front, a custom
+// /etc/hosts alias). Everything else is denied — see middleware/host-guard.ts.
+const trustedHosts = (process.env.TRUSTED_HOSTS ?? '')
+  .split(',')
+  .map((h) => h.trim())
+  .filter((h) => h !== '');
+
 // Cloudflare Access gate. When `share` is also configured, this gate
 // is wired to the shares registry so each share-<slug> hostname uses
 // its own AUD; the env-var AUD is then a static fallback for legacy
@@ -66,6 +75,7 @@ for (let i = 0; i < 20 && !handle; i++) {
       widgetDistDir: widgetDist,
       markdownAppDistDir: markdownAppDist,
       demosDir,
+      trustedHosts,
       cfAccess,
       share,
     });
@@ -86,6 +96,7 @@ console.log(`[feedback] listening on :${port}`);
 console.log(`[feedback]   local:      http://localhost:${port}`);
 if (ts) console.log(`[feedback]   tailscale:  http://${ts}:${port}`);
 for (const h of lan) console.log(`[feedback]   lan:        http://${h}:${port}`);
+if (trustedHosts.length) console.log(`[feedback]   trusted:    ${trustedHosts.join(', ')}`);
 console.log('[feedback]   routes:     /  /review/<docId>  /widget.iife.js  /demos/mockup');
 if (cfAccess) {
   const audDisplay =
