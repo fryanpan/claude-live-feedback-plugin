@@ -3,7 +3,8 @@ import { extname, join } from 'node:path';
 import { type Anchor, type DocType, type User, contentKind, suggestOps } from '@feedback/core';
 import { showFile } from './git-diff.ts';
 import { type CfAccessOptions, createCfAccessVerifier } from './middleware/cf-access.ts';
-import { publicBaseUrl } from './public-host.ts';
+import { classifyHost, shareScopeAllows } from './middleware/host-guard.ts';
+import { lanHostnames, publicBaseUrl, tailscaleHost } from './public-host.ts';
 import { type FeedbackWs, Rooms, type WorkspaceDirNode, type WorkspaceFileNode } from './rooms.ts';
 import { CfApi } from './share/cf-api.ts';
 import { Shares } from './share/shares.ts';
@@ -23,6 +24,13 @@ export interface ServerOptions {
   markdownAppDistDir?: string | null;
   /** Absolute path to the demos dir (static HTML). */
   demosDir?: string | null;
+  /**
+   * Extra hostnames treated as LOCAL (bypass the host gate) beyond loopback,
+   * the tailnet name, and this machine's LAN names. Requests arriving on any
+   * other hostname are denied unless an active share owns that hostname —
+   * see middleware/host-guard.ts. Tests use this to simulate a local caller.
+   */
+  trustedHosts?: string[];
   /**
    * Cloudflare Access JWT verification config. When set, every non-OPTIONS
    * request must carry a valid `Cf-Access-Jwt-Assertion` header (or
@@ -139,11 +147,49 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       //     stays unauthenticated, so the agent's MCP tools can still
       //     hit /api/share over loopback.
       //   - Without shares: gate everything (legacy/test mode).
-      if (cfAccessVerifier) {
-        const host = req.headers.get('host')?.toLowerCase() ?? '';
-        const isShareHost = shares ? shares.findByHostname(host) !== null : false;
-        const shouldGate = shares ? isShareHost : true;
-        if (shouldGate) {
+      // DEFAULT-DENY BY HOST. The tunnel forwards every hostname under the
+      // share wildcard here, so "not a known share host" must mean REFUSE,
+      // never "skip the gate" (which is what it used to mean — an unknown
+      // tunnel hostname reached the whole API unauthenticated). Only our own
+      // local names bypass; a share host is gated AND scoped; anything else
+      // is denied even when Access isn't configured, so a half-configured
+      // deployment fails closed instead of publishing the API.
+      {
+        const decision = classifyHost(req.headers.get('host'), {
+          tailscaleHost: tailscaleHost(),
+          lanHosts: lanHostnames(),
+          extraHosts: opts.trustedHosts ?? [],
+          // cloudflared forwards the visitor's Host verbatim, so a tunnel
+          // visitor could otherwise claim `Host: localhost`. Cloudflare
+          // stamps cf-ray on everything it proxies (overwriting any the
+          // client sent), so its presence means "not from our LAN".
+          viaProxy: req.headers.has('cf-ray'),
+          lookupShare: (h) => shares?.findByHostname(h)?.docId ?? null,
+        });
+        if (decision.kind === 'deny') {
+          return j(403, { error: 'unknown_host' });
+        }
+        if (decision.kind === 'share') {
+          if (!cfAccessVerifier) {
+            // A share exists but we cannot verify Access tokens — refuse
+            // rather than serve the doc to an unauthenticated visitor.
+            return j(503, { error: 'access_not_configured' });
+          }
+          const result = await cfAccessVerifier(req);
+          if (!result.ok) return j(result.status, { error: result.error });
+          // Authenticated for THIS share — but Access only proves the
+          // visitor's email domain, not what they may touch. Scope them to
+          // the shared doc: no doc enumeration, no workspace/diff creation,
+          // no share administration.
+          if (!shareScopeAllows(pathname, req.method, decision.docId)) {
+            return j(403, { error: 'out_of_share_scope' });
+          }
+        } else if (cfAccessVerifier && !shares) {
+          // Legacy whole-server mode: cfAccess configured WITHOUT per-share
+          // hostnames means the entire deployment sits behind Access, so
+          // even a local-looking Host must present a token. (With shares
+          // wired, local traffic is the agent's own MCP calls over loopback
+          // and stays unauthenticated.)
           const result = await cfAccessVerifier(req);
           if (!result.ok) return j(result.status, { error: result.error });
         }
