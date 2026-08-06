@@ -158,11 +158,14 @@ export function shareScopeAllows(
   if (pathname.startsWith('/y/')) return inScope(pathname.slice('/y/'.length));
   if (pathname.startsWith('/events/')) return inScope(pathname.slice('/events/'.length));
 
-  // Doc REST surface: /api/docs/<id> and everything under it (threads,
-  // comments, anchors…). NOT bare /api/docs, which lists every doc.
+  // Doc REST surface: /api/docs/<id> and the subroutes the review UI uses.
+  // NOT bare /api/docs, which lists every doc.
   if (pathname.startsWith('/api/docs/')) {
     const rest = pathname.slice('/api/docs/'.length);
-    return inScope(rest.split('/', 1)[0] ?? '');
+    const slash = rest.indexOf('/');
+    const docSeg = slash < 0 ? rest : rest.slice(0, slash);
+    if (!inScope(docSeg)) return false;
+    return docSubrouteAllowed(slash < 0 ? '' : rest.slice(slash + 1), method);
   }
 
   // Workspace navigation — ONLY for a workspace share, and only its own
@@ -203,6 +206,33 @@ export function shareScopeAllows(
 
   // Everything else — /api/share*, /api/docs (list), /api/workspaces (list
   // + create), /api/diffs, /demos, /mockup … — is out of scope.
+  return false;
+}
+
+/**
+ * Which `/api/docs/<id>/<sub>` calls may a share visitor make?
+ *
+ * A visitor is a reviewer, not an operator. They co-edit through the Yjs
+ * websocket (that's the point of a live review) and comment through the
+ * thread routes — but the doc's OPERATOR verbs stay local-only:
+ *
+ *   DELETE <doc>        destroys the review doc
+ *   POST content        replaces the whole document in one call
+ *   POST reparse_from_disk  discards live state, including others' edits
+ *   POST threads/<id>/{rewrite_region,insert_after,insert_blocks_after}
+ *                       agent-side document surgery, not a review action
+ *
+ * Anything not named here is refused, so a subroute added later is closed
+ * until someone decides a visitor should have it.
+ */
+function docSubrouteAllowed(sub: string, method: string): boolean {
+  if (sub === '') return method === 'GET'; // meta; DELETE refused
+  if (sub === 'diff' || sub === 'content') return method === 'GET';
+  if (sub === 'activity') return method === 'POST'; // reading tracker
+  if (sub === 'threads' || sub.startsWith('threads/')) {
+    return !/\/(rewrite_region|insert_after|insert_blocks_after)$/.test(sub);
+  }
+  if (sub === 'suggestions' || sub.startsWith('suggestions/')) return true;
   return false;
 }
 

@@ -286,6 +286,19 @@ describe('host gate + share scoping over HTTP', () => {
       expect(diff.status).toBe(403);
     });
 
+    it('CANNOT delete the shared doc or replace its content', async () => {
+      expect((await asVisitor(`/api/docs/${SHARED}`, { method: 'DELETE' })).status).toBe(403);
+      const rewrite = await asVisitor(`/api/docs/${SHARED}/content`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ markdown: '# Wiped\n' }),
+      });
+      expect(rewrite.status).toBe(403);
+      expect(
+        (await asVisitor(`/api/docs/${SHARED}/reparse_from_disk`, { method: 'POST' })).status,
+      ).toBe(403);
+    });
+
     it('CANNOT create a doc bound to an arbitrary path', async () => {
       const r = await asVisitor('/api/docs', {
         method: 'POST',
@@ -461,6 +474,24 @@ describe('workspace share over HTTP', () => {
     expect((await asVisitor('/api/docs')).status).toBe(403);
     expect((await asVisitor('/api/workspaces')).status).toBe(403);
     expect((await asVisitor('/api/share')).status).toBe(403);
+  });
+
+  it('CANNOT delete a member doc or rewrite it wholesale', async () => {
+    expect(
+      (await asVisitor(`/api/docs/${encodeURIComponent(entryDocId)}`, { method: 'DELETE' })).status,
+    ).toBe(403);
+    const rewrite = await asVisitor(`/api/docs/${encodeURIComponent(entryDocId)}/content`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ markdown: '# Wiped\n' }),
+    });
+    expect(rewrite.status).toBe(403);
+    // …and the doc is intact.
+    const still = await req(
+      `/api/docs/${encodeURIComponent(entryDocId)}`,
+      `localhost:${handle.port}`,
+    );
+    expect(still.status).toBe(200);
   });
 
   it('CANNOT delete the workspace', async () => {

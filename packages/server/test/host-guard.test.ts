@@ -278,3 +278,45 @@ describe('shareScopeAllows (workspace share)', () => {
     expect(shareScopeAllows('/api/workspaces/ws-1/tree', 'GET', docShare, workspaceOf)).toBe(false);
   });
 });
+
+describe('shareScopeAllows — a visitor is a reviewer, not an operator', () => {
+  const DOC = { docId: 'auth-rfc' };
+  const WS = { docId: 'ws-1:index.md', workspaceId: 'ws-1' };
+  const workspaceOf = (d: string) => (d.startsWith('ws-1:') ? 'ws-1' : null);
+
+  it('allows what the review UI actually calls', () => {
+    expect(shareScopeAllows('/api/docs/auth-rfc', 'GET', DOC)).toBe(true);
+    expect(shareScopeAllows('/api/docs/auth-rfc/diff', 'GET', DOC)).toBe(true);
+    expect(shareScopeAllows('/api/docs/auth-rfc/content', 'GET', DOC)).toBe(true);
+    expect(shareScopeAllows('/api/docs/auth-rfc/activity', 'POST', DOC)).toBe(true);
+    expect(shareScopeAllows('/api/docs/auth-rfc/threads', 'POST', DOC)).toBe(true);
+    expect(shareScopeAllows('/api/docs/auth-rfc/threads/by_find', 'POST', DOC)).toBe(true);
+    expect(shareScopeAllows('/api/docs/auth-rfc/threads/t1/comments', 'POST', DOC)).toBe(true);
+    expect(shareScopeAllows('/api/docs/auth-rfc/threads/t1/resolve', 'POST', DOC)).toBe(true);
+    expect(shareScopeAllows('/api/docs/auth-rfc/threads/t1/reanchor', 'POST', DOC)).toBe(true);
+    expect(shareScopeAllows('/api/docs/auth-rfc/suggestions/s1/accept', 'POST', DOC)).toBe(true);
+  });
+
+  it('BLOCKS deleting the doc', () => {
+    expect(shareScopeAllows('/api/docs/auth-rfc', 'DELETE', DOC)).toBe(false);
+    expect(shareScopeAllows('/api/docs/ws-1%3Aindex.md', 'DELETE', WS, workspaceOf)).toBe(false);
+  });
+
+  it('BLOCKS whole-doc replacement and disk reparse', () => {
+    expect(shareScopeAllows('/api/docs/auth-rfc/content', 'POST', DOC)).toBe(false);
+    expect(shareScopeAllows('/api/docs/auth-rfc/reparse_from_disk', 'POST', DOC)).toBe(false);
+  });
+
+  it('BLOCKS the agent-side document-surgery verbs hung off a thread', () => {
+    for (const verb of ['rewrite_region', 'insert_after', 'insert_blocks_after']) {
+      expect(shareScopeAllows(`/api/docs/auth-rfc/threads/t1/${verb}`, 'POST', DOC), verb).toBe(
+        false,
+      );
+    }
+  });
+
+  it('BLOCKS a doc subroute added later (closed by default)', () => {
+    expect(shareScopeAllows('/api/docs/auth-rfc/export', 'GET', DOC)).toBe(false);
+    expect(shareScopeAllows('/api/docs/auth-rfc/rename', 'POST', DOC)).toBe(false);
+  });
+});
