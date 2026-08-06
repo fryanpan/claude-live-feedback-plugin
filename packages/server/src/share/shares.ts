@@ -1,7 +1,13 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CfApi } from './cf-api.ts';
-import type { CreateShareDocReq, Share, ShareConfig } from './types.ts';
+import type {
+  CreateShareDocReq,
+  CreateShareWorkspaceReq,
+  Share,
+  ShareConfig,
+  ShareSurface,
+} from './types.ts';
 
 const DEFAULT_TTL_SECONDS = 72 * 60 * 60;
 const REGISTRY_FILENAME = 'shares.json';
@@ -26,7 +32,34 @@ export class Shares {
     this.load();
   }
 
+  /** Share ONE doc: the visitor reaches that doc and nothing else. */
   async createShareDoc(req: CreateShareDocReq): Promise<Share> {
+    return this.create({ ...req, surface: 'doc', docId: req.docId });
+  }
+
+  /**
+   * Share a whole workspace (folder bind / diff review). The visitor reaches
+   * every member doc plus the navigation endpoints, so the set browses with
+   * its sidebar intact — see middleware/host-guard.ts for the exact scope.
+   * The URL opens `entryDocId`.
+   */
+  async createShareWorkspace(req: CreateShareWorkspaceReq): Promise<Share> {
+    return this.create({
+      ...req,
+      surface: 'workspace',
+      docId: req.entryDocId,
+      workspaceId: req.workspaceId,
+    });
+  }
+
+  private async create(req: {
+    surface: ShareSurface;
+    docId: string;
+    workspaceId?: string;
+    allowDomains: string[];
+    ttlSeconds?: number;
+    name?: string;
+  }): Promise<Share> {
     if (!req.allowDomains || req.allowDomains.length === 0) {
       throw new Error('allowDomains must be a non-empty array');
     }
@@ -34,7 +67,7 @@ export class Shares {
     const shareId = randomHex(8);
     const slug = req.name ?? `${dateSlug(new Date())}-${randomHex(3)}`;
     const hostname = `share-${slug}.${this.config.baseHostname}`;
-    const url = `https://${hostname}/review/${req.docId}`;
+    const url = `https://${hostname}/review/${encodeURIComponent(req.docId)}`;
     const ttl = req.ttlSeconds ?? this.config.defaultTtlSeconds ?? DEFAULT_TTL_SECONDS;
     const expiresAt = Date.now() + ttl * 1000;
 
@@ -54,8 +87,9 @@ export class Shares {
 
     const share: Share = {
       shareId,
-      surface: 'doc',
+      surface: req.surface,
       docId: req.docId,
+      ...(req.workspaceId ? { workspaceId: req.workspaceId } : {}),
       hostname,
       url,
       audience: app.aud,
