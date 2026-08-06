@@ -90,22 +90,34 @@ export function isTrustedLocalHost(
   return candidates.includes(h);
 }
 
+/** What a share hostname grants access to. */
+export interface ShareTarget {
+  /** The doc the share URL opens. Always in scope. */
+  docId: string;
+  /**
+   * Set when the share covers a whole workspace (folder bind / diff
+   * review) rather than a single doc. Every member doc is then in scope,
+   * along with the navigation endpoints that make the set browsable.
+   */
+  workspaceId?: string;
+}
+
 export type HostDecision =
   | { kind: 'local' } // trusted local caller: no gate
-  | { kind: 'share'; docId: string } // active share host: gate + scope
+  | { kind: 'share'; target: ShareTarget } // active share host: gate + scope
   | { kind: 'deny'; reason: 'unknown_host' }; // anything else: refuse
 
 /**
- * Classify a request's Host. `lookupShare` returns the shared docId for a
- * hostname, or null when no active share owns it.
+ * Classify a request's Host. `lookupShare` returns what the hostname's
+ * active share grants, or null when no active share owns it.
  */
 export function classifyHost(
   host: string | null | undefined,
-  opts: TrustedHostOpts & { lookupShare: (host: string) => string | null },
+  opts: TrustedHostOpts & { lookupShare: (host: string) => ShareTarget | null },
 ): HostDecision {
   if (isTrustedLocalHost(host, opts)) return { kind: 'local' };
-  const docId = opts.lookupShare(normalizeHost(host));
-  if (docId) return { kind: 'share', docId };
+  const target = opts.lookupShare(normalizeHost(host));
+  if (target) return { kind: 'share', target };
   return { kind: 'deny', reason: 'unknown_host' };
 }
 
@@ -116,44 +128,111 @@ export function classifyHost(
  * Anything unlisted is refused, so a route added later is closed by default
  * rather than silently exposed to external reviewers.
  */
-export function shareScopeAllows(pathname: string, method: string, sharedDocId: string): boolean {
+export function shareScopeAllows(
+  pathname: string,
+  method: string,
+  target: ShareTarget,
+  /**
+   * Resolves a docId to the workspace it belongs to (null when it belongs
+   * to none). Only consulted for workspace shares — a doc share never
+   * widens past its one doc, whatever this returns.
+   */
+  workspaceOf?: (docId: string) => string | null,
+): boolean {
   // Static app shell + assets (needed to render the review at all).
   if (pathname === '/app' || pathname.startsWith('/app/')) return true;
   if (pathname === '/widget.js' || pathname === '/widget.iife.js') return true;
   if (pathname === '/widget.esm.js' || pathname.startsWith('/widget/')) return true;
   if (pathname === '/favicon.ico') return true;
 
-  const enc = encodeURIComponent(sharedDocId);
-  const matchesDoc = (segment: string): boolean =>
-    segment === sharedDocId || segment === enc || safeDecode(segment) === sharedDocId;
+  /** Is this path segment a doc the share covers? */
+  const inScope = (segment: string): boolean => {
+    const id = safeDecode(segment);
+    if (id === target.docId || segment === target.docId) return true;
+    if (!target.workspaceId) return false;
+    return workspaceOf?.(id) === target.workspaceId;
+  };
 
-  // The review page for exactly this doc.
-  if (pathname.startsWith('/review/')) return matchesDoc(pathname.slice('/review/'.length));
+  // Review page / Yjs websocket / SSE for an in-scope doc.
+  if (pathname.startsWith('/review/')) return inScope(pathname.slice('/review/'.length));
+  if (pathname.startsWith('/y/')) return inScope(pathname.slice('/y/'.length));
+  if (pathname.startsWith('/events/')) return inScope(pathname.slice('/events/'.length));
 
-  // Yjs websocket + SSE for exactly this doc.
-  if (pathname.startsWith('/y/')) return matchesDoc(pathname.slice('/y/'.length));
-  if (pathname.startsWith('/events/')) return matchesDoc(pathname.slice('/events/'.length));
-
-  // Doc REST surface: /api/docs/<id> and everything under it (threads,
-  // comments, anchors…). NOT bare /api/docs, which lists every doc.
+  // Doc REST surface: /api/docs/<id> and the subroutes the review UI uses.
+  // NOT bare /api/docs, which lists every doc.
   if (pathname.startsWith('/api/docs/')) {
     const rest = pathname.slice('/api/docs/'.length);
-    const first = rest.split('/', 1)[0] ?? '';
-    return matchesDoc(first);
+    const slash = rest.indexOf('/');
+    const docSeg = slash < 0 ? rest : rest.slice(0, slash);
+    if (!inScope(docSeg)) return false;
+    return docSubrouteAllowed(slash < 0 ? '' : rest.slice(slash + 1), method);
   }
 
-  // Everything else — /api/share*, /api/docs (list), /api/workspaces,
-  // /api/diffs, /demos, /mockup … — is out of scope for a share visitor.
+  // Workspace navigation — ONLY for a workspace share, and only its own
+  // workspace. The shared unit is the workspace, so the visitor gets the
+  // endpoints that make it browsable:
+  //   tree / grouped   — the sidebar (bound folder, or diff file groups)
+  //   threads          — every thread in the set, for the comments panel
+  //   files            — the workspace's file list
+  //   context-file     — open a member lazily, read-only
+  //   editable-file    — open a member lazily, editable
   //
-  // KNOWN LIMITATION, deliberate: a shared doc that belongs to a workspace
-  // (folder bind / diff review) renders WITHOUT its file-tree sidebar,
-  // because the app builds that from /api/workspaces/<id>/{tree,grouped,
-  // files}. Allowing those would hand a visitor shared ONE file the whole
-  // workspace listing — every sibling path on disk — which is exactly the
-  // enumeration this scoping exists to prevent. `share_doc` shares one doc;
-  // sharing a folder needs its own scope model (a workspace-level share),
-  // not a hole punched in this one.
-  void method;
+  // The last three matter because members bind LAZILY: `bind_folder` binds
+  // only the entry doc, and everything else in the tree comes into being
+  // through these calls. Block them and a shared folder shows one file.
+  // They are bounded by the workspace root — rooms.openContextFile /
+  // openEditableFile reject any relPath that escapes it ('bad-path').
+  //
+  // Two things stay closed: a different workspace, and DELETE (bare
+  // /api/workspaces/<id>), which would let a visitor destroy the review.
+  //
+  // Worth knowing when you share a DIFF review rather than a folder: the
+  // workspace root is the whole repo, so `files` lists every repo file and
+  // `context-file` can open any of them for context — the same "Show All
+  // Files" surface you see locally. Share a folder bind when you want the
+  // visitor confined to a directory.
+  if (pathname.startsWith('/api/workspaces/')) {
+    if (!target.workspaceId) return false;
+    const rest = pathname.slice('/api/workspaces/'.length);
+    const slash = rest.indexOf('/');
+    if (slash < 0) return false; // bare /api/workspaces/<id> is DELETE-only
+    if (safeDecode(rest.slice(0, slash)) !== target.workspaceId) return false;
+    const sub = rest.slice(slash + 1);
+    if (method === 'GET')
+      return sub === 'tree' || sub === 'grouped' || sub === 'threads' || sub === 'files';
+    if (method === 'POST') return sub === 'context-file' || sub === 'editable-file';
+    return false;
+  }
+
+  // Everything else — /api/share*, /api/docs (list), /api/workspaces (list
+  // + create), /api/diffs, /demos, /mockup … — is out of scope.
+  return false;
+}
+
+/**
+ * Which `/api/docs/<id>/<sub>` calls may a share visitor make?
+ *
+ * A visitor is a reviewer, not an operator. They co-edit through the Yjs
+ * websocket (that's the point of a live review) and comment through the
+ * thread routes — but the doc's OPERATOR verbs stay local-only:
+ *
+ *   DELETE <doc>        destroys the review doc
+ *   POST content        replaces the whole document in one call
+ *   POST reparse_from_disk  discards live state, including others' edits
+ *   POST threads/<id>/{rewrite_region,insert_after,insert_blocks_after}
+ *                       agent-side document surgery, not a review action
+ *
+ * Anything not named here is refused, so a subroute added later is closed
+ * until someone decides a visitor should have it.
+ */
+function docSubrouteAllowed(sub: string, method: string): boolean {
+  if (sub === '') return method === 'GET'; // meta; DELETE refused
+  if (sub === 'diff' || sub === 'content') return method === 'GET';
+  if (sub === 'activity') return method === 'POST'; // reading tracker
+  if (sub === 'threads' || sub.startsWith('threads/')) {
+    return !/\/(rewrite_region|insert_after|insert_blocks_after)$/.test(sub);
+  }
+  if (sub === 'suggestions' || sub.startsWith('suggestions/')) return true;
   return false;
 }
 
