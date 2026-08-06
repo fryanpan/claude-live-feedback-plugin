@@ -104,20 +104,32 @@ export interface ShareTarget {
 
 export type HostDecision =
   | { kind: 'local' } // trusted local caller: no gate
-  | { kind: 'share'; target: ShareTarget } // active share host: gate + scope
+  | { kind: 'share'; target: ShareTarget } // per-share Access host: JWT + scope
+  | { kind: 'link' } // public link host: authorize from the session cookie
   | { kind: 'deny'; reason: 'unknown_host' }; // anything else: refuse
 
 /**
- * Classify a request's Host. `lookupShare` returns what the hostname's
- * active share grants, or null when no active share owns it.
+ * Classify a request's Host.
+ *
+ * Order matters: our own names win, then a per-share Access hostname, then
+ * the single public hostname that link shares live on. Anything else is
+ * refused — the tunnel forwards every hostname under its ingress here, so
+ * "unrecognised" must mean refuse, never "skip the gate".
  */
 export function classifyHost(
   host: string | null | undefined,
-  opts: TrustedHostOpts & { lookupShare: (host: string) => ShareTarget | null },
+  opts: TrustedHostOpts & {
+    lookupShare: (host: string) => ShareTarget | null;
+    /** The one hostname link-mode shares are served from, if configured. */
+    linkHost?: string | null;
+  },
 ): HostDecision {
   if (isTrustedLocalHost(host, opts)) return { kind: 'local' };
-  const target = opts.lookupShare(normalizeHost(host));
+  const h = normalizeHost(host);
+  const target = opts.lookupShare(h);
   if (target) return { kind: 'share', target };
+  const linkHost = normalizeHost(opts.linkHost ?? '');
+  if (linkHost !== '' && h === linkHost) return { kind: 'link' };
   return { kind: 'deny', reason: 'unknown_host' };
 }
 
