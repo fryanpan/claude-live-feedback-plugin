@@ -159,6 +159,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           tailscaleHost: tailscaleHost(),
           lanHosts: lanHostnames(),
           extraHosts: opts.trustedHosts ?? [],
+          // cloudflared forwards the visitor's Host verbatim, so a tunnel
+          // visitor could otherwise claim `Host: localhost`. Cloudflare
+          // stamps cf-ray on everything it proxies (overwriting any the
+          // client sent), so its presence means "not from our LAN".
+          viaProxy: req.headers.has('cf-ray'),
           lookupShare: (h) => shares?.findByHostname(h)?.docId ?? null,
         });
         if (decision.kind === 'deny') {

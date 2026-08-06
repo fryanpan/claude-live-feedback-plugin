@@ -189,6 +189,22 @@ describe('host gate + share scoping over HTTP', () => {
       expect(r.status).toBe(200);
     });
 
+    it('refuses a proxied request that claims a local Host', async () => {
+      // The tunnel forwards the visitor's Host verbatim, so "Host: localhost"
+      // from the outside must not read as loopback. cf-ray marks the hop.
+      for (const host of ['localhost', '127.0.0.1', '192.168.50.227', LOCAL_ALIAS]) {
+        const r = await req('/api/docs', host, { headers: { 'cf-ray': '8a1b2c3d4e5f-SJC' } });
+        expect(r.status, host).toBe(403);
+      }
+    });
+
+    it('a proxied request to a real share host is still gated, not denied', async () => {
+      const r = await req(`/api/docs/${SHARED}`, shareHost, {
+        headers: { 'cf-ray': '8a1b2c3d4e5f-SJC', 'cf-access-jwt-assertion': shareJwt },
+      });
+      expect(r.status).toBe(200);
+    });
+
     it('lets OPTIONS preflight through from any host (CORS runs first)', async () => {
       const r = await req('/api/docs', 'attacker.example.com', { method: 'OPTIONS' });
       expect(r.status).toBe(204);
@@ -277,6 +293,15 @@ describe('host gate + share scoping over HTTP', () => {
         body: JSON.stringify({ docId: 'evil', type: 'markdown', sourceUrl: '/etc/hosts' }),
       });
       expect(r.status).toBe(403);
+    });
+
+    it('CANNOT list a workspace tree — deliberate, and it costs the sidebar', async () => {
+      // A shared doc that belongs to a folder bind / diff review renders
+      // without its file-tree sidebar. That is the intended trade: the tree
+      // is every sibling path on disk, and share_doc shares ONE doc.
+      expect((await asVisitor('/api/workspaces/ws-1/tree')).status).toBe(403);
+      expect((await asVisitor('/api/workspaces/ws-1/grouped')).status).toBe(403);
+      expect((await asVisitor('/api/workspaces/ws-1/files')).status).toBe(403);
     });
 
     it('can load the app shell it needs to render the review', async () => {

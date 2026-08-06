@@ -63,13 +63,27 @@ describe('isTrustedLocalHost', () => {
     expect(isTrustedLocalHost('mac-mini.tailb53801.ts.net.evil.com', LOCAL)).toBe(false);
   });
 
-  it('trusts private IPv4 ranges (LAN + tailnet CGNAT) but not public IPs', () => {
-    expect(isTrustedLocalHost('10.0.0.4', LOCAL)).toBe(true);
-    expect(isTrustedLocalHost('172.16.3.9', LOCAL)).toBe(true);
-    expect(isTrustedLocalHost('100.101.102.103', LOCAL)).toBe(true);
+  it('trusts only THIS machine’s addresses — not private ranges in general', () => {
+    // Host is client-controlled. Trusting the whole 10/8, 192.168/16,
+    // 172.16/12 and CGNAT ranges would let any caller self-classify as
+    // local by sending `Host: 10.0.0.4`, reopening the very hole this
+    // guard closes. The machine's real addresses are enumerated (LAN
+    // interfaces AND the tailnet utun address), so nothing is lost.
+    expect(isTrustedLocalHost('192.168.50.227', LOCAL)).toBe(true); // in lanHosts
+    expect(isTrustedLocalHost('10.0.0.4', LOCAL)).toBe(false);
+    expect(isTrustedLocalHost('172.16.3.9', LOCAL)).toBe(false);
+    expect(isTrustedLocalHost('100.101.102.103', LOCAL)).toBe(false);
     expect(isTrustedLocalHost('8.8.8.8', LOCAL)).toBe(false);
-    expect(isTrustedLocalHost('172.32.0.1', LOCAL)).toBe(false);
-    expect(isTrustedLocalHost('999.1.1.1', LOCAL)).toBe(false);
+  });
+
+  it('never trusts a request that arrived through the Cloudflare edge', () => {
+    // cloudflared forwards the visitor's Host verbatim, so a tunnel
+    // visitor could otherwise send `Host: localhost`. Cloudflare stamps
+    // its own cf-ray on everything it proxies; a request carrying one
+    // did not originate on our LAN, whatever its Host claims.
+    expect(isTrustedLocalHost('localhost', { ...LOCAL, viaProxy: true })).toBe(false);
+    expect(isTrustedLocalHost('192.168.50.227', { ...LOCAL, viaProxy: true })).toBe(false);
+    expect(isTrustedLocalHost('mac-mini.local', { ...LOCAL, viaProxy: true })).toBe(false);
   });
 });
 
@@ -96,6 +110,17 @@ describe('classifyHost', () => {
       kind: 'deny',
       reason: 'unknown_host',
     });
+  });
+
+  it('a proxied request claiming a local Host is denied, not trusted', () => {
+    expect(classifyHost('localhost', { ...LOCAL, lookupShare, viaProxy: true })).toEqual({
+      kind: 'deny',
+      reason: 'unknown_host',
+    });
+    // …but a proxied request to a real share host is still a share.
+    expect(
+      classifyHost('share-abc.tunnel.example.com', { ...LOCAL, lookupShare, viaProxy: true }),
+    ).toEqual({ kind: 'share', docId: 'shared-doc' });
   });
 });
 

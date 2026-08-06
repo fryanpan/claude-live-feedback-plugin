@@ -49,6 +49,15 @@ export interface TrustedHostOpts {
   lanHosts?: string[];
   /** Extra hostnames an operator explicitly marks local. */
   extraHosts?: string[];
+  /**
+   * True when the request came through the Cloudflare edge (it carries a
+   * `cf-ray`, which Cloudflare stamps on everything it proxies and
+   * overwrites if a client sends its own). cloudflared forwards the
+   * visitor's Host verbatim, so without this a tunnel visitor could send
+   * `Host: localhost` and be classified local. A proxied request is never
+   * local, whatever its Host claims.
+   */
+  viaProxy?: boolean;
 }
 
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '::1', '0.0.0.0']);
@@ -64,9 +73,13 @@ export function isTrustedLocalHost(
 ): boolean {
   const h = normalizeHost(host);
   if (h === '') return false; // HTTP/1.1 requires Host; absent = not trusted
+  if (opts.viaProxy) return false; // arrived via Cloudflare — not our LAN
   if (LOOPBACK.has(h)) return true;
-  // A bare IPv4 on a private range is this machine on the LAN.
-  if (isPrivateIpv4(h)) return true;
+  // NOTE: deliberately no "any private IPv4 is local" rule. Host is
+  // client-controlled, so trusting 10/8, 192.168/16, 172.16/12 or CGNAT
+  // wholesale would let a caller self-classify as local. This machine's
+  // real addresses — including the tailnet utun address — are enumerated
+  // into `lanHosts`, so exact matching costs nothing.
   const candidates = [
     opts.tailscaleHost ?? '',
     ...(opts.lanHosts ?? []),
@@ -75,18 +88,6 @@ export function isTrustedLocalHost(
     .map((c) => normalizeHost(c))
     .filter((c) => c !== '');
   return candidates.includes(h);
-}
-
-function isPrivateIpv4(h: string): boolean {
-  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
-  if (!m) return false;
-  const [a, b] = [Number(m[1]), Number(m[2])];
-  if ([a, Number(m[3]), Number(m[4])].some((n) => n > 255) || b > 255) return false;
-  if (a === 10) return true;
-  if (a === 192 && b === 168) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT — Tailscale range
-  return false;
 }
 
 export type HostDecision =
@@ -143,6 +144,15 @@ export function shareScopeAllows(pathname: string, method: string, sharedDocId: 
 
   // Everything else — /api/share*, /api/docs (list), /api/workspaces,
   // /api/diffs, /demos, /mockup … — is out of scope for a share visitor.
+  //
+  // KNOWN LIMITATION, deliberate: a shared doc that belongs to a workspace
+  // (folder bind / diff review) renders WITHOUT its file-tree sidebar,
+  // because the app builds that from /api/workspaces/<id>/{tree,grouped,
+  // files}. Allowing those would hand a visitor shared ONE file the whole
+  // workspace listing — every sibling path on disk — which is exactly the
+  // enumeration this scoping exists to prevent. `share_doc` shares one doc;
+  // sharing a folder needs its own scope model (a workspace-level share),
+  // not a hole punched in this one.
   void method;
   return false;
 }
