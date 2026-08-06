@@ -1,32 +1,37 @@
+import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CfApi } from './cf-api.ts';
-import type {
-  CreateShareDocReq,
-  CreateShareWorkspaceReq,
-  Share,
-  ShareConfig,
-  ShareSurface,
+import {
+  type CreateShareDocReq,
+  type CreateShareLinkReq,
+  type CreateShareWorkspaceReq,
+  DEFAULT_TTL_SECONDS,
+  type Share,
+  type ShareConfig,
+  type ShareSurface,
 } from './types.ts';
 
-const DEFAULT_TTL_SECONDS = 72 * 60 * 60;
 const REGISTRY_FILENAME = 'shares.json';
+/** 128 bits — unguessable in practice, and short enough to paste. */
+const SLUG_BYTES = 16;
 
 export interface SharesOptions {
   dataDir: string;
-  cfApi: CfApi;
+  /** Only needed for `access` mode; link mode makes no Cloudflare calls. */
+  cfApi?: CfApi;
   config: ShareConfig;
 }
 
 export class Shares {
   private readonly dataDir: string;
-  private readonly cfApi: CfApi;
+  private readonly cfApi: CfApi | null;
   private readonly config: ShareConfig;
   private shares: Share[] = [];
 
   constructor(opts: SharesOptions) {
     this.dataDir = opts.dataDir;
-    this.cfApi = opts.cfApi;
+    this.cfApi = opts.cfApi ?? null;
     this.config = opts.config;
     if (!existsSync(opts.dataDir)) mkdirSync(opts.dataDir, { recursive: true });
     this.load();
@@ -52,6 +57,70 @@ export class Shares {
     });
   }
 
+  /**
+   * Share by unguessable link. No Cloudflare Access app, no email policy —
+   * possession of the slug is the credential until `expiresAt`. Pass either
+   * `docId` (one doc) or `workspaceId` (+ `entryDocId`, the whole set).
+   */
+  createShareLink(req: CreateShareLinkReq): Share {
+    if (!this.config.publicHostname) {
+      throw new Error(
+        'link shares need config.publicHostname (the single hostname the tunnel serves)',
+      );
+    }
+    const docId = req.workspaceId ? (req.entryDocId ?? '') : (req.docId ?? '');
+    if (!docId) throw new Error('docId (or entryDocId for a workspace) is required');
+    if (req.docId && req.workspaceId) {
+      throw new Error('pass docId OR workspaceId, not both');
+    }
+
+    const slug = randomBytes(SLUG_BYTES).toString('hex');
+    const hostname = this.config.publicHostname;
+    const ttl = req.ttlSeconds ?? this.config.defaultTtlSeconds ?? DEFAULT_TTL_SECONDS;
+    const share: Share = {
+      shareId: randomHex(8),
+      surface: req.workspaceId ? 'workspace' : 'doc',
+      mode: 'link',
+      docId,
+      ...(req.workspaceId ? { workspaceId: req.workspaceId } : {}),
+      slug,
+      hostname,
+      url: `https://${hostname}/s/${slug}`,
+      ...(req.label ? { label: req.label } : {}),
+      createdAt: Date.now(),
+      expiresAt: Date.now() + ttl * 1000,
+    };
+    this.shares.push(share);
+    this.save();
+    return share;
+  }
+
+  /** Look up a live link share by its slug. Expired slugs resolve to null. */
+  findBySlug(slug: string, now: number = Date.now()): Share | null {
+    const s = this.shares.find((x) => x.mode === 'link' && x.slug === slug);
+    if (!s) return null;
+    return s.expiresAt > now ? s : null;
+  }
+
+  /** Look up a live share by id. Expired shares resolve to null. */
+  findLive(shareId: string, now: number = Date.now()): Share | null {
+    const s = this.shares.find((x) => x.shareId === shareId);
+    if (!s) return null;
+    return s.expiresAt > now ? s : null;
+  }
+
+  /** Change a share's expiry. `ttlSeconds` is measured from now. */
+  setTtl(shareId: string, ttlSeconds: number): Share | null {
+    const s = this.shares.find((x) => x.shareId === shareId);
+    if (!s) return null;
+    if (!Number.isFinite(ttlSeconds) || ttlSeconds <= 0) {
+      throw new Error('ttlSeconds must be a positive number');
+    }
+    s.expiresAt = Date.now() + ttlSeconds * 1000;
+    this.save();
+    return s;
+  }
+
   private async create(req: {
     surface: ShareSurface;
     docId: string;
@@ -71,6 +140,7 @@ export class Shares {
     const ttl = req.ttlSeconds ?? this.config.defaultTtlSeconds ?? DEFAULT_TTL_SECONDS;
     const expiresAt = Date.now() + ttl * 1000;
 
+    if (!this.cfApi) throw new Error('Cloudflare API not configured — use a link share instead');
     const app = await this.cfApi.createApp({
       name: `live-feedback-share-${slug}`,
       domain: hostname,
@@ -109,7 +179,10 @@ export class Shares {
     if (idx < 0) return { ok: false };
     const share = this.shares[idx]!;
     try {
-      await this.cfApi.deleteApp(share.appId);
+      // Link shares have no Cloudflare app to tear down — dropping the
+      // registry entry is the revocation, and it takes effect immediately
+      // because every request re-checks the share.
+      if (share.appId && this.cfApi) await this.cfApi.deleteApp(share.appId);
     } catch (err) {
       // If the CF app is already gone, drop the registry entry anyway.
       // Re-throw on real errors so the caller knows.
@@ -124,9 +197,15 @@ export class Shares {
     return this.shares.slice();
   }
 
+  /** The single hostname link shares are served from, if configured. */
+  get publicHostname(): string | null {
+    return this.config.publicHostname ?? null;
+  }
+
+  /** An `access`-mode share owning this hostname (link shares all share one). */
   findByHostname(host: string): Share | null {
     const h = host.toLowerCase();
-    return this.shares.find((s) => s.hostname.toLowerCase() === h) ?? null;
+    return this.shares.find((s) => s.mode !== 'link' && s.hostname.toLowerCase() === h) ?? null;
   }
 
   /** Resolver for the cf-access middleware's `audience` option. */
