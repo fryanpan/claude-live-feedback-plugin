@@ -12,7 +12,7 @@
  * a route that already answered, would still pass the unit tests.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type JSONWebKeySet, type JWK, SignJWT, exportJWK, generateKeyPair } from 'jose';
@@ -295,10 +295,9 @@ describe('host gate + share scoping over HTTP', () => {
       expect(r.status).toBe(403);
     });
 
-    it('CANNOT list a workspace tree — deliberate, and it costs the sidebar', async () => {
-      // A shared doc that belongs to a folder bind / diff review renders
-      // without its file-tree sidebar. That is the intended trade: the tree
-      // is every sibling path on disk, and share_doc shares ONE doc.
+    it('CANNOT list a workspace tree — a DOC share stays one doc', async () => {
+      // Sharing one doc never widens to its workspace. share_workspace
+      // (below) is the way to let a reviewer browse the whole set.
       expect((await asVisitor('/api/workspaces/ws-1/tree')).status).toBe(403);
       expect((await asVisitor('/api/workspaces/ws-1/grouped')).status).toBe(403);
       expect((await asVisitor('/api/workspaces/ws-1/files')).status).toBe(403);
@@ -307,5 +306,191 @@ describe('host gate + share scoping over HTTP', () => {
     it('can load the app shell it needs to render the review', async () => {
       expect((await asVisitor('/app/app.js')).status).not.toBe(403);
     });
+  });
+});
+
+/**
+ * Workspace shares: the reviewer gets the whole folder — tree, every member,
+ * lazy opens — and nothing outside it.
+ */
+describe('workspace share over HTTP', () => {
+  let handle: ServerHandle;
+  let dataDir: string;
+  let folder: string;
+  let base: string;
+  let shareHost: string;
+  let shareJwt: string;
+  let workspaceId: string;
+  let entryDocId: string;
+  let outsideDocId: string;
+
+  const req = (path: string, host: string, init: RequestInit = {}) =>
+    fetch(`${base}${path}`, {
+      ...init,
+      headers: { host, ...((init.headers as Record<string, string>) ?? {}) },
+    });
+  const asVisitor = (path: string, init: RequestInit = {}) =>
+    req(path, shareHost, {
+      ...init,
+      headers: {
+        'cf-access-jwt-assertion': shareJwt,
+        ...((init.headers as Record<string, string>) ?? {}),
+      },
+    });
+
+  beforeAll(async () => {
+    const { publicKey, privateKey } = await generateKeyPair('RS256');
+    const publicJwk = (await exportJWK(publicKey)) as JWK;
+    publicJwk.kid = KID;
+    publicJwk.alg = 'RS256';
+    publicJwk.use = 'sig';
+    const jwks: JSONWebKeySet = { keys: [publicJwk] };
+
+    dataDir = mkdtempSync(join(tmpdir(), 'ws-share-data-'));
+    folder = mkdtempSync(join(tmpdir(), 'ws-share-folder-'));
+    mkdirSync(join(folder, 'sub'), { recursive: true });
+    writeFileSync(join(folder, 'README.md'), '# Entry\n\nRead me.\n');
+    writeFileSync(join(folder, 'design.md'), '# Design\n\nThe plan.\n');
+    writeFileSync(join(folder, 'sub', 'notes.md'), '# Notes\n\nDetail.\n');
+
+    handle = createServer({
+      port: 0,
+      dataDir,
+      cfAccess: { teamDomain: TEAM_DOMAIN, audience: 'unused', jwks },
+      share: { config: SHARE_CONFIG, cfApi: makeMockCfApi({ apps: [], policies: [] }) },
+    });
+    base = `http://localhost:${handle.port}`;
+
+    const bind = await fetch(`${base}/api/workspaces`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ folderPath: folder }),
+    });
+    expect(bind.status).toBe(200);
+    const bound = (await bind.json()) as {
+      workspaceId: string;
+      files: Array<{ docId: string; relPath: string }>;
+    };
+    workspaceId = bound.workspaceId;
+    entryDocId = bound.files[0]?.docId ?? '';
+    expect(entryDocId).not.toBe('');
+
+    // A doc that is NOT part of the workspace — the thing scoping must hide.
+    outsideDocId = 'private-doc';
+    const outsidePath = join(dataDir, 'private.md');
+    writeFileSync(outsidePath, '# Private\n\nNot shared.\n');
+    await fetch(`${base}/api/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId: outsideDocId, type: 'markdown', sourceUrl: outsidePath }),
+    });
+
+    const sr = await fetch(`${base}/api/share/workspace`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ workspaceId, allowDomains: ['partner.example'] }),
+    });
+    expect(sr.status).toBe(200);
+    const shareBody = (await sr.json()) as {
+      share: { hostname: string; audience: string; url: string; workspaceId?: string };
+    };
+    shareHost = shareBody.share.hostname;
+    expect(shareBody.share.workspaceId).toBe(workspaceId);
+    shareJwt = await new SignJWT({ email: 'reviewer@partner.example' })
+      .setProtectedHeader({ alg: 'RS256', kid: KID })
+      .setIssuer(`https://${TEAM_DOMAIN}`)
+      .setAudience(shareBody.share.audience)
+      .setIssuedAt()
+      .setExpirationTime(Math.floor(Date.now() / 1000) + 600)
+      .setSubject('cf-access-user-2')
+      .sign(privateKey);
+  });
+
+  afterAll(async () => {
+    await handle.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+    rmSync(folder, { recursive: true, force: true });
+  });
+
+  it('still demands a token', async () => {
+    expect((await req(`/api/docs/${entryDocId}`, shareHost)).status).toBe(401);
+  });
+
+  it('can read the entry doc and the workspace tree', async () => {
+    expect((await asVisitor(`/api/docs/${encodeURIComponent(entryDocId)}`)).status).toBe(200);
+    const tree = await asVisitor(`/api/workspaces/${encodeURIComponent(workspaceId)}/tree`);
+    expect(tree.status).toBe(200);
+  });
+
+  it('can open a sibling lazily and then read it — the whole point', async () => {
+    // bind_folder binds only the entry; this is how the rest come into being.
+    const opened = await asVisitor(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/editable-file`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ relPath: 'design.md' }),
+      },
+    );
+    expect(opened.status).toBe(200);
+    const { docId } = (await opened.json()) as { docId: string };
+    expect(docId).not.toBe(entryDocId);
+    // …and the newly-bound member is in scope for reading + commenting.
+    expect((await asVisitor(`/api/docs/${encodeURIComponent(docId)}`)).status).toBe(200);
+    expect((await asVisitor(`/review/${encodeURIComponent(docId)}`)).status).not.toBe(403);
+    expect((await asVisitor(`/api/docs/${encodeURIComponent(docId)}/threads`)).status).toBe(200);
+  });
+
+  it('cannot escape the workspace root via relPath', async () => {
+    const r = await asVisitor(`/api/workspaces/${encodeURIComponent(workspaceId)}/context-file`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ relPath: '../../etc/hosts' }),
+    });
+    expect(r.status).toBe(400);
+    expect(await r.json()).toMatchObject({ error: 'bad-path' });
+  });
+
+  it('CANNOT reach a doc outside the workspace', async () => {
+    expect((await asVisitor(`/api/docs/${outsideDocId}`)).status).toBe(403);
+    expect((await asVisitor(`/review/${outsideDocId}`)).status).toBe(403);
+    expect((await asVisitor(`/y/${outsideDocId}`)).status).toBe(403);
+  });
+
+  it('CANNOT enumerate docs or workspaces, or manage shares', async () => {
+    expect((await asVisitor('/api/docs')).status).toBe(403);
+    expect((await asVisitor('/api/workspaces')).status).toBe(403);
+    expect((await asVisitor('/api/share')).status).toBe(403);
+  });
+
+  it('CANNOT delete the workspace', async () => {
+    const r = await asVisitor(`/api/workspaces/${encodeURIComponent(workspaceId)}`, {
+      method: 'DELETE',
+    });
+    expect(r.status).toBe(403);
+    // …and it really is still there.
+    expect((await req('/api/workspaces', `localhost:${handle.port}`)).status).toBe(200);
+  });
+
+  it('rejects an entryDocId that belongs to another workspace', async () => {
+    const r = await fetch(`${base}/api/share/workspace`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId,
+        entryDocId: outsideDocId,
+        allowDomains: ['partner.example'],
+      }),
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it('404s on an unknown workspace', async () => {
+    const r = await fetch(`${base}/api/share/workspace`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ workspaceId: 'no-such-ws', allowDomains: ['partner.example'] }),
+    });
+    expect(r.status).toBe(404);
   });
 });

@@ -88,17 +88,25 @@ describe('isTrustedLocalHost', () => {
 });
 
 describe('classifyHost', () => {
-  const lookupShare = (h: string) => (h === 'share-abc.tunnel.example.com' ? 'shared-doc' : null);
+  const lookupShare = (h: string) =>
+    h === 'share-abc.tunnel.example.com' ? { docId: 'shared-doc' } : null;
 
   it('local → no gate', () => {
     expect(classifyHost('localhost:8787', { ...LOCAL, lookupShare })).toEqual({ kind: 'local' });
   });
 
-  it('active share host → gate + the doc it is scoped to', () => {
+  it('active share host → gate + what it is scoped to', () => {
     expect(classifyHost('share-abc.tunnel.example.com', { ...LOCAL, lookupShare })).toEqual({
       kind: 'share',
-      docId: 'shared-doc',
+      target: { docId: 'shared-doc' },
     });
+  });
+
+  it('carries the workspaceId through for a workspace share', () => {
+    const wsLookup = () => ({ docId: 'ws-1:index.md', workspaceId: 'ws-1' });
+    expect(
+      classifyHost('share-ws.tunnel.example.com', { ...LOCAL, lookupShare: wsLookup }),
+    ).toEqual({ kind: 'share', target: { docId: 'ws-1:index.md', workspaceId: 'ws-1' } });
   });
 
   it('unknown host → DENY (previously this fell through to the open API)', () => {
@@ -120,12 +128,12 @@ describe('classifyHost', () => {
     // …but a proxied request to a real share host is still a share.
     expect(
       classifyHost('share-abc.tunnel.example.com', { ...LOCAL, lookupShare, viaProxy: true }),
-    ).toEqual({ kind: 'share', docId: 'shared-doc' });
+    ).toEqual({ kind: 'share', target: { docId: 'shared-doc' } });
   });
 });
 
-describe('shareScopeAllows', () => {
-  const DOC = 'auth-rfc';
+describe('shareScopeAllows (doc share)', () => {
+  const DOC = { docId: 'auth-rfc' };
 
   it('allows the app shell and assets', () => {
     expect(shareScopeAllows('/app/app.js', 'GET', DOC)).toBe(true);
@@ -134,19 +142,21 @@ describe('shareScopeAllows', () => {
   });
 
   it('allows the shared doc’s own surfaces', () => {
-    expect(shareScopeAllows(`/review/${DOC}`, 'GET', DOC)).toBe(true);
-    expect(shareScopeAllows(`/y/${DOC}`, 'GET', DOC)).toBe(true);
-    expect(shareScopeAllows(`/events/${DOC}`, 'GET', DOC)).toBe(true);
-    expect(shareScopeAllows(`/api/docs/${DOC}`, 'GET', DOC)).toBe(true);
-    expect(shareScopeAllows(`/api/docs/${DOC}/threads`, 'POST', DOC)).toBe(true);
-    expect(shareScopeAllows(`/api/docs/${DOC}/threads/t1/comments`, 'POST', DOC)).toBe(true);
+    expect(shareScopeAllows(`/review/${DOC.docId}`, 'GET', DOC)).toBe(true);
+    expect(shareScopeAllows(`/y/${DOC.docId}`, 'GET', DOC)).toBe(true);
+    expect(shareScopeAllows(`/events/${DOC.docId}`, 'GET', DOC)).toBe(true);
+    expect(shareScopeAllows(`/api/docs/${DOC.docId}`, 'GET', DOC)).toBe(true);
+    expect(shareScopeAllows(`/api/docs/${DOC.docId}/threads`, 'POST', DOC)).toBe(true);
+    expect(shareScopeAllows(`/api/docs/${DOC.docId}/threads/t1/comments`, 'POST', DOC)).toBe(true);
   });
 
   it('matches a percent-encoded docId (workspace members encode `:` and `~`)', () => {
-    const member = 'rev-1:docs~main.md';
-    expect(shareScopeAllows(`/review/${encodeURIComponent(member)}`, 'GET', member)).toBe(true);
+    const member = { docId: 'rev-1:docs~main.md' };
+    expect(shareScopeAllows(`/review/${encodeURIComponent(member.docId)}`, 'GET', member)).toBe(
+      true,
+    );
     expect(
-      shareScopeAllows(`/api/docs/${encodeURIComponent(member)}/threads`, 'POST', member),
+      shareScopeAllows(`/api/docs/${encodeURIComponent(member.docId)}/threads`, 'POST', member),
     ).toBe(true);
   });
 
@@ -179,7 +189,92 @@ describe('shareScopeAllows', () => {
   });
 
   it('is not fooled by a prefix that merely starts with the shared id', () => {
-    expect(shareScopeAllows(`/review/${DOC}-other`, 'GET', DOC)).toBe(false);
-    expect(shareScopeAllows(`/api/docs/${DOC}-other/threads`, 'GET', DOC)).toBe(false);
+    expect(shareScopeAllows(`/review/${DOC.docId}-other`, 'GET', DOC)).toBe(false);
+    expect(shareScopeAllows(`/api/docs/${DOC.docId}-other/threads`, 'GET', DOC)).toBe(false);
+  });
+});
+
+describe('shareScopeAllows (workspace share)', () => {
+  const WS = { docId: 'ws-1:index.md', workspaceId: 'ws-1' };
+  // Members of ws-1, plus a doc that belongs to a DIFFERENT workspace and
+  // one that belongs to none — the two things scoping has to keep out.
+  const MEMBERS: Record<string, string> = {
+    'ws-1:index.md': 'ws-1',
+    'ws-1:docs~design.md': 'ws-1',
+    'ws-2:secrets.md': 'ws-2',
+  };
+  const workspaceOf = (docId: string) => MEMBERS[docId] ?? null;
+
+  it('covers every member doc of the shared workspace', () => {
+    for (const p of [
+      '/review/ws-1%3Adocs~design.md',
+      '/y/ws-1%3Adocs~design.md',
+      '/events/ws-1%3Adocs~design.md',
+      '/api/docs/ws-1%3Adocs~design.md',
+      '/api/docs/ws-1%3Adocs~design.md/threads',
+    ]) {
+      expect(shareScopeAllows(p, 'GET', WS, workspaceOf), p).toBe(true);
+    }
+  });
+
+  it('allows the navigation endpoints the sidebar needs', () => {
+    expect(shareScopeAllows('/api/workspaces/ws-1/tree', 'GET', WS, workspaceOf)).toBe(true);
+    expect(shareScopeAllows('/api/workspaces/ws-1/grouped', 'GET', WS, workspaceOf)).toBe(true);
+    expect(shareScopeAllows('/api/workspaces/ws-1/threads', 'GET', WS, workspaceOf)).toBe(true);
+  });
+
+  it('allows the LAZY-OPEN endpoints — without them a shared folder shows one file', () => {
+    // bind_folder binds only the entry doc; every other member comes into
+    // being through these calls. Bounded by the workspace root (rooms
+    // rejects an escaping relPath with 'bad-path').
+    expect(shareScopeAllows('/api/workspaces/ws-1/files', 'GET', WS, workspaceOf)).toBe(true);
+    expect(shareScopeAllows('/api/workspaces/ws-1/context-file', 'POST', WS, workspaceOf)).toBe(
+      true,
+    );
+    expect(shareScopeAllows('/api/workspaces/ws-1/editable-file', 'POST', WS, workspaceOf)).toBe(
+      true,
+    );
+  });
+
+  it('BLOCKS a method the endpoint does not offer', () => {
+    expect(shareScopeAllows('/api/workspaces/ws-1/tree', 'POST', WS, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/api/workspaces/ws-1/context-file', 'GET', WS, workspaceOf)).toBe(
+      false,
+    );
+    expect(shareScopeAllows('/api/workspaces/ws-1/anything-new', 'GET', WS, workspaceOf)).toBe(
+      false,
+    );
+  });
+
+  it('BLOCKS destroying the workspace', () => {
+    expect(shareScopeAllows('/api/workspaces/ws-1', 'DELETE', WS, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/api/workspaces/ws-1/tree', 'DELETE', WS, workspaceOf)).toBe(false);
+  });
+
+  it('BLOCKS another workspace and its docs', () => {
+    expect(shareScopeAllows('/api/workspaces/ws-2/tree', 'GET', WS, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/api/workspaces/ws-2/context-file', 'POST', WS, workspaceOf)).toBe(
+      false,
+    );
+    expect(shareScopeAllows('/review/ws-2%3Asecrets.md', 'GET', WS, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/api/docs/ws-2%3Asecrets.md', 'GET', WS, workspaceOf)).toBe(false);
+  });
+
+  it('BLOCKS a doc that belongs to no workspace', () => {
+    expect(shareScopeAllows('/review/loose-doc', 'GET', WS, workspaceOf)).toBe(false);
+  });
+
+  it('BLOCKS workspace listing and share admin, same as a doc share', () => {
+    expect(shareScopeAllows('/api/workspaces', 'GET', WS, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/api/docs', 'GET', WS, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/api/share', 'GET', WS, workspaceOf)).toBe(false);
+  });
+
+  it('a DOC share never widens to the workspace, even with a resolver', () => {
+    const docShare = { docId: 'ws-1:index.md' }; // no workspaceId
+    expect(shareScopeAllows('/review/ws-1%3Adocs~design.md', 'GET', docShare, workspaceOf)).toBe(
+      false,
+    );
+    expect(shareScopeAllows('/api/workspaces/ws-1/tree', 'GET', docShare, workspaceOf)).toBe(false);
   });
 });
