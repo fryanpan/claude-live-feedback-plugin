@@ -1,18 +1,43 @@
 /**
- * Cloudflare Access share — types shared across the share module.
+ * Share types — how a review surface is published to someone outside the
+ * tailnet, and what they're allowed to reach.
  *
- * Supports `surface: 'doc'` (one markdown doc) and `surface: 'workspace'`
- * (a folder bind or diff review, browsable as a set). Dev server and mockup
- * surfaces are scoped for a follow-up — they need additional
- * cloudflared ingress wiring + (for mockup) a small static-file server.
+ * Two auth modes:
+ *
+ * - `link` — an unguessable slug IS the credential (a capability URL).
+ *   Needs no Cloudflare Zero Trust at all: no team domain, no account id,
+ *   no API token. Opening `/s/<slug>` exchanges the slug for a signed
+ *   session cookie; every later request is authorized from that cookie.
+ *   Anyone holding the link is in, so TTLs are short and the scope check
+ *   (middleware/host-guard.ts) is what bounds a leak.
+ *
+ * - `access` — Cloudflare Access in front of a per-share hostname. The
+ *   visitor proves an email address, and the per-app AUD means a token
+ *   minted for one share is rejected at another. Use when the content is
+ *   sensitive, the audience is more than a couple of people, or you need
+ *   attribution and per-person revocation.
+ *
+ * Both modes share one scope engine — the mode only decides how we answer
+ * "which share is this request for?".
+ *
+ * Dev server and mockup surfaces are scoped for a follow-up: they need
+ * additional cloudflared ingress wiring + a small static-file server.
  */
 
 export type ShareSurface = 'doc' | 'workspace' | 'site' | 'mockup';
+
+export type ShareMode = 'link' | 'access';
+
+/** A week. Long enough for a review to sit over a weekend, short enough
+ *  that a forgotten link doesn't live forever. Callers may override. */
+export const DEFAULT_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 export interface Share {
   /** Random 8-hex id used as the registry primary key. */
   shareId: string;
   surface: ShareSurface;
+  /** How a visitor is authorized. Absent on pre-link-mode records = 'access'. */
+  mode?: ShareMode;
   /**
    * The live-feedback docId this share opens. For a workspace share this
    * is the entry doc — the whole workspace is in scope, see `workspaceId`.
@@ -24,20 +49,40 @@ export interface Share {
    * review browses as a set. Absent on a single-doc share.
    */
   workspaceId?: string;
-  /** Public hostname e.g. `share-2026-05-07-a3f.tunnel.fryanpan.com`. */
+  /**
+   * `link` mode only: the unguessable capability slug (128 bits of CSPRNG).
+   * Possession of this grants access until `expiresAt`, so treat it like a
+   * password — never log it, never put it in an error message.
+   */
+  slug?: string;
+  /** Public hostname the reviewer visits. */
   hostname: string;
-  /** Full review URL the reviewer clicks. */
+  /** Full URL the reviewer clicks. */
   url: string;
-  /** Cloudflare Access AUD tag for this app — what the JWT middleware verifies against. */
-  audience: string;
-  /** Cloudflare Access app id (used to revoke). */
-  appId: string;
-  /** Cloudflare Access policy id (sibling to appId). */
-  policyId: string;
-  /** Allowed email domains, e.g. `["@partner-org.example"]`. */
-  allowDomains: string[];
+  /** `access` mode only: Cloudflare Access AUD tag the JWT must match. */
+  audience?: string;
+  /** `access` mode only: Cloudflare Access app id (used to revoke). */
+  appId?: string;
+  /** `access` mode only: Cloudflare Access policy id (sibling to appId). */
+  policyId?: string;
+  /** `access` mode only: allowed email domains, e.g. `["@partner.example"]`. */
+  allowDomains?: string[];
+  /** Optional human label, e.g. what the review is for. */
+  label?: string;
   createdAt: number;
   expiresAt: number;
+}
+
+export interface CreateShareLinkReq {
+  /** One of these two decides the scope. */
+  docId?: string;
+  workspaceId?: string;
+  /** Doc the link opens. Required for a workspace share. */
+  entryDocId?: string;
+  /** Defaults to DEFAULT_TTL_SECONDS (one week). */
+  ttlSeconds?: number;
+  /** Optional human label shown in list_shares. */
+  label?: string;
 }
 
 export interface CreateShareWorkspaceReq {
@@ -59,14 +104,22 @@ export interface CreateShareDocReq {
 }
 
 export interface ShareConfig {
-  cfAccountId: string;
-  cfTeamDomain: string;
+  /** `access` mode only. */
+  cfAccountId?: string;
+  /** `access` mode only. */
+  cfTeamDomain?: string;
   /**
-   * Base hostname used for share subdomains. Share hostnames will be
-   * `share-<slug>.<baseHostname>`. Must match the cloudflared tunnel's
-   * wildcard ingress rule (e.g. `*.tunnel.fryanpan.com`).
+   * Base hostname used for per-share Access subdomains. Share hostnames
+   * will be `share-<slug>.<baseHostname>`, which must match the cloudflared
+   * tunnel's wildcard ingress rule. `access` mode only.
    */
-  baseHostname: string;
-  /** Default TTL for new shares in seconds. Defaults to 72h. */
+  baseHostname?: string;
+  /**
+   * The single public hostname link-mode shares are served from, e.g.
+   * `feedback.example.com`. Requests arriving on it are authorized by the
+   * session cookie rather than by hostname. Required for `link` mode.
+   */
+  publicHostname?: string;
+  /** Default TTL for new shares in seconds. Defaults to one week. */
   defaultTtlSeconds?: number;
 }

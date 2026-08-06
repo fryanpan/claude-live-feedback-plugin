@@ -14377,6 +14377,38 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       }
     },
     {
+      name: "share_link",
+      description: "Publish a review doc or workspace as an UNGUESSABLE LINK — no sign-in, no Cloudflare Access, no email allow-list. Anyone holding the URL can read, comment, and co-edit until it expires; the scope is identical to an Access share (their own doc or workspace only — no doc enumeration, no deleting, no wholesale rewrite, no share administration). This is the default way to share with someone outside the tailnet. Pass docId for ONE doc, or workspaceId for a whole folder bind / diff review (browsable with its file tree). Default TTL is one week; pass ttlSeconds to change it, or set_share_ttl later. Returns { share: { shareId, url, slug, expiresAt, ... } } — give the human the bare `url` on its own line. Because the link IS the credential, treat it like a password: don't post it anywhere durable, and prefer a short ttlSeconds for anything sensitive. Use share_doc / share_workspace instead when you need verified identities, per-person revocation, or attribution.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          docId: { type: "string", description: "Share exactly this doc." },
+          workspaceId: {
+            type: "string",
+            description: "Share a whole folder bind / diff review. Mutually exclusive with docId."
+          },
+          entryDocId: {
+            type: "string",
+            description: "Doc the link opens for a workspace share. Defaults to the first member."
+          },
+          ttlSeconds: { type: "number", description: "Defaults to one week (604800)." },
+          label: { type: "string", description: "Human label shown in list_shares." }
+        }
+      }
+    },
+    {
+      name: "set_share_ttl",
+      description: "Extend or shorten a live share. `ttlSeconds` is measured from now, so passing 3600 makes it expire an hour from this call regardless of when it was created. Takes effect immediately — an already-open browser is refused on its next request once the share lapses.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          shareId: { type: "string" },
+          ttlSeconds: { type: "number" }
+        },
+        required: ["shareId", "ttlSeconds"]
+      }
+    },
+    {
       name: "list_shares",
       description: "List currently active shares with their hostnames, allowed domains, and expiry.",
       inputSchema: { type: "object", properties: {} }
@@ -14721,6 +14753,24 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           entryDocId,
           ttlSeconds,
           name: slug
+        });
+        return ok(res);
+      }
+      case "share_link": {
+        const { docId, workspaceId, entryDocId, ttlSeconds, label } = a;
+        const res = await http("POST", "/api/share/link", {
+          docId,
+          workspaceId,
+          entryDocId,
+          ttlSeconds,
+          label
+        });
+        return ok(res);
+      }
+      case "set_share_ttl": {
+        const { shareId, ttlSeconds } = a;
+        const res = await http("POST", `/api/share/${encodeURIComponent(shareId)}/ttl`, {
+          ttlSeconds
         });
         return ok(res);
       }
