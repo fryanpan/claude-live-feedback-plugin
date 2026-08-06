@@ -78,6 +78,26 @@ export const ThreadDecorations = Extension.create({
             let ranges = prev.ranges;
             let activeId = prev.activeId;
             let pulseId = prev.pulseId;
+            // Map stored positions through the change BEFORE rebuilding.
+            // `ranges` are absolute positions captured when they were last
+            // computed from thread anchors; the anchors themselves are Yjs
+            // RelativePositions and stay correct, but these cached numbers do
+            // not. Without mapping, every character typed at or before a
+            // range left its highlight rendered N positions off — drifting
+            // further with each keystroke, and only re-syncing on the next
+            // full refresh. Same contract live-markup.ts already keeps for
+            // the redline marks.
+            //
+            // assoc: `from` +1 and `to` -1 so text typed exactly at either
+            // edge falls OUTSIDE the highlight (it keeps covering the words
+            // the comment was left on), while typing INSIDE grows it.
+            if (tr.docChanged && ranges.length > 0) {
+              ranges = ranges.map((r) => ({
+                ...r,
+                from: tr.mapping.map(r.from, 1),
+                to: tr.mapping.map(r.to, -1),
+              }));
+            }
             if (meta) {
               if (meta.ranges) ranges = meta.ranges;
               if ('activeId' in meta) activeId = meta.activeId ?? null;
