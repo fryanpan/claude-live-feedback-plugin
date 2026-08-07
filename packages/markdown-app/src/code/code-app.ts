@@ -1,4 +1,3 @@
-import { readDocMeta } from '@feedback/core';
 import { renderDiffNav, wireDiffNavRefresh } from '../diff-nav.ts';
 import type { MountContext } from '../mount-context.ts';
 import { startReadingTracker } from '../reading-tracker.ts';
@@ -87,11 +86,13 @@ export async function mountCode(
   const editorMount = el<HTMLElement>('editor');
   const commentPill = el<HTMLButtonElement>('comment-pill');
 
-  // Prefer the sourceUrl from the REST meta (available immediately) over the
-  // Yjs meta map, which hasn't synced yet at boot — otherwise the language
-  // extension is chosen from an empty path and the file renders unhighlighted.
-  // Diff docs may have no sourceUrl; their relPath serves the same purpose.
-  const sourceUrl = ctx.sourceUrl || ctx.relPath || (readDocMeta(ydoc).sourceUrl ?? '');
+  // Only used to pick a syntax-highlighting language. It comes from the REST
+  // meta, which is available immediately at boot. There used to be a fallback
+  // to the Yjs meta map; sourceUrl no longer lives in the CRDT (it named a
+  // path on the host, and the CRDT syncs to share visitors), so that branch
+  // is gone. A share visitor gets relPath — a bare filename for a standalone
+  // doc — which is all the language lookup needs.
+  const sourceUrl = ctx.sourceUrl || ctx.relPath || '';
 
   let selection: { start: Uint8Array; end: Uint8Array; snippet: string } | null = null;
 
@@ -129,6 +130,7 @@ export async function mountCode(
     ydoc,
     surface,
     scope,
+    labelHint: ctx.sourceUrl || ctx.relPath || undefined,
     selectHint: 'Click a line number, or select some lines, to leave a comment.',
     reanchorHint: 'Select new lines first, then click Re-anchor.',
     getSelection: () => surface.getSelectionRel() ?? selection,

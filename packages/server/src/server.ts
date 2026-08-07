@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { extname, join } from 'node:path';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { extname, join, sep } from 'node:path';
 import {
   type Anchor,
   type DocMeta,
@@ -22,13 +22,25 @@ import {
   sessionCookieHeader,
   verifySession,
 } from './share/link-session.ts';
+import { redactMetaForVisitor, relativeReviewUrl } from './share/redact-meta.ts';
 import { Shares } from './share/shares.ts';
 import type { ShareConfig } from './share/types.ts';
+import { sanitizeVisitorAuthor } from './share/visitor-identity.ts';
 import { SseHub, openSseStream } from './sse.ts';
 import { type WebhookLogEntry, createWebhookDispatcher } from './webhooks.ts';
 import { onClose, onMessage, onOpen } from './yjs-protocol.ts';
 
 const DEFAULT_PORT = Number(process.env.PORT ?? 8787);
+
+/** Attribution for a write that arrived with no author at all. Deliberately
+ *  NOT Bryan: an unattributed action must never gain his authority just
+ *  because a field was missing. */
+const ANONYMOUS_ACTOR: User = {
+  id: 'anon-unattributed',
+  name: 'Anonymous',
+  kind: 'anon',
+  color: '#8a8a8a',
+};
 
 export interface ServerOptions {
   port?: number;
@@ -88,6 +100,9 @@ export interface ServerHandle {
   port: number;
   rooms: Rooms;
   shares: Shares | null;
+  /** Hang up every websocket and SSE stream whose share is no longer live.
+   *  Runs on a 60s interval; exposed so tests exercise the real sweep. */
+  sweepDeadShares: () => void;
   webhookLog: WebhookLogEntry[];
   stop: () => Promise<void>;
 }
@@ -120,6 +135,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const cookieKey = (): string => {
     cookieKeyCache ??= loadCookieKey(dataDir);
     return cookieKeyCache;
+  };
+
+  /** The shareId behind a link-mode session cookie, or null. */
+  const linkSessionShareId = (req: Request): string | null => {
+    if (!shares) return null;
+    const shareId = verifySession(readCookie(req.headers.get('cookie'), SHARE_COOKIE), cookieKey());
+    if (!shareId) return null;
+    return shares.findLive(shareId)?.shareId ?? null;
   };
 
   /** Resolve a link-mode session cookie to what it may reach, or null. */
@@ -295,6 +318,52 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // local names bypass; a share host is gated AND scoped; anything else
       // is denied even when Access isn't configured, so a half-configured
       // deployment fails closed instead of publishing the API.
+      /**
+       * Doc metadata as this caller may see it. On the tailnet that's all of
+       * it; a share visitor gets an allowlisted subset — the full DocMeta
+       * carries absolute paths on Bryan's machine and a tailnet hostname,
+       * none of which is needed to render a review.
+       */
+      const metaFor = <T extends DocMeta>(meta: T): Record<string, unknown> => {
+        const decorated = withReviewUrl(meta);
+        if (!visitor) return decorated as unknown as Record<string, unknown>;
+        return {
+          ...redactMetaForVisitor(decorated, {
+            workspaceScoped: Boolean(visitor.workspaceId),
+          }),
+          // Same path, no host — correct for every share mode.
+          ...(relativeReviewUrl(decorated.reviewUrl) !== undefined
+            ? { reviewUrl: relativeReviewUrl(decorated.reviewUrl) }
+            : {}),
+        };
+      };
+
+      /**
+       * The author to attribute a write to. On the tailnet the body is
+       * trusted (it's Bryan's browser or his own agents). From a share
+       * visitor it is NOT: their claimed identity is rewritten into the
+       * `guest-` namespace so nobody can post as a member of the fleet.
+       */
+      const authorFor = (claimed: unknown): User | undefined => {
+        if (visitor) {
+          return sanitizeVisitorAuthor(claimed, {
+            // The SHARE, not the doc: two links to the same doc are two
+            // different audiences, and seeding from the doc id would give a
+            // returning browser the same guest identity on both — attributing
+            // comments on a freshly minted link to the old one's visitor.
+            shareKey: visitorShareId ?? visitor.workspaceId ?? visitor.docId,
+          });
+        }
+        return claimed as User | undefined;
+      };
+
+      // Set when this request comes from a SHARE visitor (either mode).
+      // Everything below treats a non-null value as "untrusted outsider":
+      // their claimed identity is rewritten and doc metadata is redacted.
+      let visitor: ShareTarget | null = null;
+      /** The share that authorized this request, stamped onto any websocket
+       *  it upgrades so revocation can find and close it later. */
+      let visitorShareId: string | null = null;
       {
         const decision = classifyHost(req.headers.get('host'), {
           tailscaleHost: tailscaleHost(),
@@ -306,7 +375,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // client sent), so its presence means "not from our LAN".
           viaProxy: req.headers.has('cf-ray'),
           lookupShare: (h) => {
-            const s = shares?.findByHostname(h);
+            // LIVE, not merely known: an expired share's hostname must stop
+            // being a share hostname, or expiry never takes effect for
+            // Access mode (see Shares.findLiveByHostname).
+            const s = shares?.findLiveByHostname(h);
             if (!s) return null;
             return s.workspaceId
               ? { docId: s.docId, workspaceId: s.workspaceId }
@@ -346,6 +418,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           ) {
             return j(403, { error: 'out_of_share_scope' });
           }
+          visitor = decision.target;
+          visitorShareId =
+            shares?.findLiveByHostname(req.headers.get('host') ?? '')?.shareId ?? null;
         } else if (decision.kind === 'link') {
           // Redeeming a link is the ONLY thing reachable here without a
           // session — that request is what mints one.
@@ -365,6 +440,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             ) {
               return j(403, { error: 'out_of_share_scope' });
             }
+            visitor = target;
+            visitorShareId = linkSessionShareId(req);
           }
         } else if (cfAccessVerifier && !shares) {
           // Legacy whole-server mode: cfAccess configured WITHOUT per-share
@@ -542,7 +619,22 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         const shareId = decodeURIComponent(shareIdMatch[1] ?? '');
         try {
           const result = await shares.deleteShare(shareId);
-          return result.ok ? j(200, { ok: true }) : j(404, { error: 'share not found' });
+          // Authorization is checked per HTTP request, but a websocket is
+          // authorized once at its upgrade — so without this, a visitor who
+          // already had the doc open kept reading and writing it after the
+          // share was revoked.
+          const closed = result.ok ? rooms.closeSocketsForShare(shareId) : 0;
+          // The SSE stream has the same "authorized once, then long-lived"
+          // shape: a visitor with the review page still open would otherwise
+          // keep receiving every new comment on a doc they can no longer load.
+          const closedStreams = result.ok ? sse.closeForShare(shareId) : 0;
+          return result.ok
+            ? j(200, {
+                ok: true,
+                ...(closed ? { closedSockets: closed } : {}),
+                ...(closedStreams ? { closedStreams } : {}),
+              })
+            : j(404, { error: 'share not found' });
         } catch (err) {
           const error = err instanceof Error ? err.message : 'delete_share_failed';
           return j(502, { error });
@@ -568,7 +660,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             return j(404, { error: 'doc not found' });
           }
         }
-        const upgraded = server.upgrade(req, { data: { docId } });
+        const upgraded = server.upgrade(req, {
+          data: { docId, ...(visitorShareId ? { shareId: visitorShareId } : {}) },
+        });
         if (!upgraded) return new Response('upgrade required', { status: 426 });
         return undefined;
       }
@@ -582,14 +676,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         if (!isValidDocId(workspaceId)) return j(400, { error: 'bad workspaceId' });
         const exists = rooms.list().some((m) => m.workspaceId === workspaceId);
         if (!exists) return j(404, { error: 'workspace not found' });
-        return openSseStream(sse, `ws~${workspaceId}`);
+        return openSseStream(sse, `ws~${workspaceId}`, visitorShareId ?? undefined);
       }
       // --- SSE ---
       if (pathname.startsWith('/events/')) {
         const docId = decodeURIComponent(pathname.slice('/events/'.length));
         if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
         if (!rooms.get(docId)) return j(404, { error: 'doc not found' });
-        return openSseStream(sse, docId);
+        return openSseStream(sse, docId, visitorShareId ?? undefined);
       }
 
       // --- REST: docs ---
@@ -838,7 +932,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         if (!relPath) return j(400, { error: 'relPath required' });
         const res = rooms.openContextFile(workspaceId, relPath);
         if (!res.ok) return j(res.error === 'bad-path' ? 400 : 404, res);
-        return j(200, { docId: res.docId, meta: withReviewUrl(res.meta) });
+        return j(200, { docId: res.docId, meta: metaFor(res.meta) });
       }
       const wsEditMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/editable-file$/);
       if (wsEditMatch && req.method === 'POST') {
@@ -856,7 +950,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                 : 404;
           return j(status, res);
         }
-        return j(200, { docId: res.docId, meta: withReviewUrl(res.meta) });
+        return j(200, { docId: res.docId, meta: metaFor(res.meta) });
       }
       const wsTreeMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/tree$/);
       if (wsTreeMatch && req.method === 'GET') {
@@ -875,7 +969,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         const room = rooms.get(docId);
         if (!room) return j(404, { error: 'doc not found' });
         if (rest === '' && req.method === 'GET') {
-          return j(200, { meta: withReviewUrl(room.meta) });
+          return j(200, { meta: metaFor(room.meta) });
         }
         if (rest === '' && req.method === 'DELETE') {
           const force = url.searchParams.get('force') === 'true';
@@ -899,7 +993,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           if (threadRest === '/comments' && req.method === 'POST') {
             const body = await safeJson(req);
-            const user = body?.author as User | undefined;
+            const user = authorFor(body?.author);
             const text = body?.text as string | undefined;
             if (!user || !text) return j(400, { error: 'author + text required' });
             const t = await rooms.postComment(docId, threadId, user, text);
@@ -907,13 +1001,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           if (threadRest === '/resolve' && req.method === 'POST') {
             const body = await safeJson(req);
-            const author = body?.author as User | undefined;
+            const author = authorFor(body?.author);
             const t = rooms.resolve(docId, threadId, author);
             return t ? j(200, { thread: t }) : j(404, { error: 'thread not found' });
           }
           if (threadRest === '/reopen' && req.method === 'POST') {
             const body = await safeJson(req);
-            const author = body?.author as User | undefined;
+            const author = authorFor(body?.author);
             const t = rooms.reopen(docId, threadId, author);
             return t ? j(200, { thread: t }) : j(404, { error: 'thread not found' });
           }
@@ -929,7 +1023,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             const replacement = String(body?.replacement ?? '');
             const parseInlineMarks = body?.parseInlineMarks === true;
             if (body?.suggest === true) {
-              const author = parseSuggestionAuthor(body);
+              const author = parseSuggestionAuthor(
+                visitor ? { author: authorFor(body?.author) } : body,
+              );
               if (!author) return j(400, { error: 'author required when suggest is true' });
               const res = rooms.createSuggestionForThread(docId, threadId, {
                 replacement,
@@ -958,7 +1054,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         }
         if (rest === 'threads' && req.method === 'POST') {
           const body = await safeJson(req);
-          const user = body?.author as User | undefined;
+          const user = authorFor(body?.author);
           const text = body?.text as string | undefined;
           const anchor = body?.anchor as Anchor | undefined;
           if (!user || !text || !anchor) {
@@ -969,7 +1065,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         }
         if (rest === 'threads/by_find' && req.method === 'POST') {
           const body = await safeJson(req);
-          const author = body?.author as User | undefined;
+          const author = authorFor(body?.author);
           const text = body?.text as string | undefined;
           const find = body?.find ? String(body.find) : '';
           if (!author || !text || find.length === 0) {
@@ -1050,12 +1146,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             return j(400, { error: 'type must be read_session or doc_open' });
           }
           const payload = (body?.payload as Record<string, unknown> | undefined) ?? {};
-          const author = (body?.author as User | undefined) ?? {
-            id: 'known-bryan',
-            name: 'Bryan',
-            kind: 'known' as const,
-            color: '#2e7dd7',
-          };
+          // Never DEFAULT to Bryan. This endpoint is in a share visitor's
+          // scope, so an omitted author used to record their reading
+          // activity as his — the one identity on the server that carries
+          // any weight. An unattributed read is now unattributed.
+          const author = authorFor(body?.author) ?? ANONYMOUS_ACTOR;
           const res = rooms.recordReadEvent(docId, type, payload, author);
           return res.ok ? j(200, { ok: true }) : j(404, res);
         }
@@ -1108,7 +1203,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const occurrence =
             typeof body?.occurrence === 'number' ? Number(body.occurrence) : undefined;
           if (body?.suggest === true) {
-            const author = parseSuggestionAuthor(body);
+            const author = parseSuggestionAuthor(
+              visitor ? { author: authorFor(body?.author) } : body,
+            );
             if (!author) return j(400, { error: 'author required when suggest is true' });
             const res = rooms.createSuggestion(docId, {
               find,
@@ -1280,7 +1377,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       }
       if (markdownAppDist && pathname.startsWith('/app/')) {
         const p = join(markdownAppDist, pathname.slice('/app/'.length));
-        const resp = serveStatic(p);
+        const resp = serveStaticUnder(markdownAppDist, p);
         if (resp) return resp;
       }
 
@@ -1320,7 +1417,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       if (demosDir && pathname.startsWith('/demos/')) {
         let p = join(demosDir, pathname.slice('/demos/'.length));
         if (!extname(p)) p = join(p, 'index.html');
-        const resp = serveStatic(p);
+        const resp = serveStaticUnder(demosDir, p);
         if (resp) return resp;
       }
 
@@ -1384,12 +1481,43 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     return meta;
   }
 
+  // A share can also lapse without anyone revoking it. Revocation hangs up
+  // immediately (see DELETE /api/share/:id); expiry has no such moment, so
+  // sweep. 60s means a lapsed visitor keeps their socket for at most a
+  // minute — HTTP already refuses them the whole time, so nothing new is
+  // reachable, they just haven't been hung up on yet.
+  const SHARE_SWEEP_MS = 60_000;
+  /** Exactly what the interval does, named so tests drive the real thing
+   *  rather than a re-implementation of it. */
+  const sweepDeadShares = (): void => {
+    if (!shares) return;
+    const isLive = (id: string) => shares.findLive(id) !== null;
+    rooms.closeSocketsForDeadShares(isLive);
+    // Websockets aren't the only long-lived grant — an SSE stream is
+    // authorized once at open too, and would otherwise keep delivering
+    // comments to a visitor whose share has lapsed.
+    sse.closeForDeadShares(isLive);
+  };
+  const shareSweep = shares
+    ? setInterval(() => {
+        try {
+          sweepDeadShares();
+        } catch {
+          // A sweep failure must never take the server down with it.
+        }
+      }, SHARE_SWEEP_MS)
+    : null;
+  // Never hold the process (or a test runner) open.
+  shareSweep?.unref?.();
+
   return {
     port: server.port ?? port,
     rooms,
     shares,
+    sweepDeadShares,
     webhookLog,
     stop: async () => {
+      if (shareSweep) clearInterval(shareSweep);
       server.stop();
     },
   };
@@ -1464,6 +1592,37 @@ async function safeJson(req: Request): Promise<Record<string, unknown> | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * Serve a file only if it really sits under `root`.
+ *
+ * `/app/*` and `/demos/*` build their path out of the request URL. Today
+ * that is safe by accident rather than by design — `new URL()` collapses
+ * `..` segments before we ever see the pathname — but nothing in this file
+ * says so, and one future caller that decodes or rewrites a path would turn
+ * a static route into an arbitrary-file read on a host that is now publicly
+ * reachable. Assert the containment where the read happens.
+ */
+export function serveStaticUnder(root: string, p: string): Response | null {
+  // realpath, not resolve: `path.resolve` is purely LEXICAL, so a symlink
+  // inside the root pointing anywhere on disk sails straight through a
+  // string-prefix check. `demos/` in particular is a directory of Bryan's
+  // own files, where a convenience symlink is entirely plausible.
+  let base: string;
+  let target: string;
+  try {
+    base = realpathSync(root);
+    target = realpathSync(p);
+  } catch {
+    // Missing file, or a dangling link — nothing to serve either way.
+    return null;
+  }
+  // The `${base}${sep}` suffix matters: a sibling directory whose name
+  // merely STARTS with the root's (`dist-evil` next to `dist`) would pass a
+  // bare startsWith.
+  if (target !== base && !target.startsWith(`${base}${sep}`)) return null;
+  return serveStatic(target);
 }
 
 function serveStatic(p: string): Response | null {

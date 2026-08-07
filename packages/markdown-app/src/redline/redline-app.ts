@@ -237,6 +237,7 @@ export async function mountRedline(ctx: MountContext): Promise<void> {
     ydoc: chromeYdoc,
     surface,
     scope,
+    labelHint: ctx.sourceUrl || ctx.relPath || undefined,
     selectHint: 'Select some text first to leave a comment.',
     reanchorHint: 'Select new text first, then click Re-anchor.',
     // The cached selection covers iOS blurring the surface between the pill
