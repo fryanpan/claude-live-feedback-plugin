@@ -107,6 +107,55 @@ Technical discoveries that should persist across sessions for this project.
   sometimes caller-authored need an explicit precedence rule (explicit
   wins; refresh only fills gaps).
 
+## A negative test needs a positive control or it proves nothing
+
+- **A probe that asserts "the secret isn't there" is worthless until you've
+  shown the probe can see anything at all.** Checking whether `/y/<docId>`
+  leaks doc metadata to a share visitor, a raw `WebSocket` reported clean on
+  every field — because a raw socket never completes the Yjs sync handshake.
+  20 bytes arrived and the doc's own text never did, so every "false" was
+  vacuous. Adding one line (`WS has doc text?`) flipped the result: the
+  leak was real and total. Reuse the repo's own client (`connectDoc` in
+  `packages/server/test/ws.test.ts`: `lib0/encoding`, `lib0/decoding`,
+  `y-protocols/sync`) rather than hand-rolling a protocol client.
+- Same failure mode caught twice more in one session: a traversal test with
+  `expect()` inside a `try` whose `catch` swallowed the failure (a test that
+  could never fail — the escape genuinely leaked), and two "the fix changed
+  the ordering" tests that passed by alphabetical accident. **Rule: every
+  test whose assertion is an absence must first assert a presence** — the
+  socket synced, the stream delivered an event while access was live, the
+  owner's copy still has the field. Then prove non-vacuity by breaking the
+  fix and watching it fail.
+
+## Anything in the Yjs doc is readable by every peer, including share visitors
+
+- **Redacting a REST payload closes one door out of two.** `DocMeta`'s
+  `sourceUrl` / `owner` / `workspaceRoot` / `producedBy` describe the host
+  machine, and `redactMetaForVisitor` stripped them from
+  `GET /api/docs/<id>` — but they also lived in the ydoc `meta` map, and Yjs
+  sync is a **state exchange, not a per-connection projection**. There is no
+  supported way to withhold part of a doc from one peer, so a field that
+  must not reach a visitor cannot live in the CRDT at all. Those four keys
+  now live in a `<docId>.private.json` sidecar
+  (`packages/server/src/private-meta.ts`).
+- **Check who actually READS a value before assuming it has to be synced.**
+  All four were server-only; the one client reader (`code-app.ts`'s
+  syntax-highlighting fallback) already preferred the REST payload. The
+  client only *observed* the meta map as a change signal.
+- Two things the move needed that are easy to miss: (1) the sidecar rides
+  the SAME debounced write as the `.ydoc` (`saveToDisk`), because two
+  persistence paths drift and a doc that loses its `sourceUrl` stops
+  writing back to disk **silently**; (2) every already-persisted `.ydoc`
+  carries the keys, so loading a room must LIFT them out — reading alone
+  leaves them in the state the next visitor syncs — and force a snapshot,
+  since the lift's transaction runs before `wireEvents` is listening.
+- **A long-lived grant needs a revocation path per transport.** Websockets
+  were covered; SSE (`/events/<docId>`) was not, and Access-mode shares
+  never enforced their TTL at all (`findByHostname` ignores `expiresAt`
+  where link mode's `findLive` doesn't). When auditing "what can a revoked
+  visitor still reach", enumerate every connection that is authorized ONCE
+  at open, not per request.
+
 ## Diff review (type='diff') — immutable content changes the rules
 
 - **A diff review is "bind_folder where the file list comes from `git diff`
