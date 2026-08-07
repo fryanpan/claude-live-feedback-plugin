@@ -494,6 +494,19 @@ describe('workspace share over HTTP', () => {
     expect(still.status).toBe(200);
   });
 
+  it("CANNOT reshape the workspace — refresh and regroup are the owner's calls", async () => {
+    // A visitor reads and comments. Deciding which files are under review,
+    // and how the sidebar organizes them, stays with whoever shared it.
+    for (const sub of ['refresh', 'groups']) {
+      const r = await asVisitor(`/api/workspaces/${encodeURIComponent(workspaceId)}/${sub}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ groups: [] }),
+      });
+      expect(r.status).toBe(403);
+    }
+  });
+
   it('CANNOT delete the workspace', async () => {
     const r = await asVisitor(`/api/workspaces/${encodeURIComponent(workspaceId)}`, {
       method: 'DELETE',
