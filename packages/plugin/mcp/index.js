@@ -13804,7 +13804,7 @@ var server = new Server({
     "unless you pass new ones). Share the returned entryUrl with the human",
     "(bare URL on its own line); the file tree navigates the rest. Thread",
     "events arrive per file via the auto-watch; resolve threads as you address",
-    "them; delete_workspace(reviewId) when the review is done.",
+    "them; refresh_workspace(reviewId) to re-sync membership and groupings as files move (threads survive); delete_workspace(reviewId) when the review is done.",
     "",
     "SUGGEST: pass suggest: true on find_and_replace or rewrite_thread_region to",
     "PROPOSE a change instead of applying it — the match is marked pending and",
@@ -14024,7 +14024,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "create_diff_review",
-      description: "Create a GitHub-PR-style review of a git diff: point it at a local repo and a base ref, and the server creates one review doc per changed file, grouped as a workspace — the reviewer gets a file tree with per-file A/M/D/R + line-count badges, a unified diff view with old/new line numbers and collapsed unchanged regions, a per-file Diff ↔ whole-File toggle, and line-anchored comment threads in both views. DEFAULT MODE (no `target`): diff base → the WORKING TREE, i.e. the folder as it is right now, uncommitted edits and untracked files included. The docs bind to the live files on disk, so as you keep editing the code the reviewer's diff re-renders within ~1s — this is the live-loop mode. Comments stay anchored to their lines through edits (snippet-based auto-reanchor); if an anchored line disappears, the thread lands in the existing Orphaned/outdated section where the reviewer can re-anchor it. Re-run the tool after changing a file that wasn't in the diff before — re-binding is idempotent (same docIds, threads survive) and refreshes the file list + badges. PINNED MODE (pass `target`): content is frozen at the target commit; anchors can never drift; same reviewId with a different range is rejected. `repo` is an absolute path to a local checkout/worktree; `base`/`target` are any refs git can resolve (hashes, branches, HEAD~2). Binary files and files over 512 KB are skipped and reported in skipped[]. Pass `exclude` (path prefixes, e.g. ['src/main/assets/vendored-repo']) to keep vendored or generated directories out of the review. GUARDRAIL: more than `maxFiles` (default 300) changed files → error 'too-many-files'; narrow with `exclude` or raise `maxFiles`. The caller is auto-subscribed to thread events on every file doc (pass subscribe:false to skip). Returns {reviewId, entryUrl, files[{docId, relPath, status, additions, deletions, reviewUrl}], skipped[]} — hand `entryUrl` to the human (the file tree navigates to the rest). Clean up with delete_workspace(reviewId) when the review is done. Comments on DELETED lines aren't supported yet — ask the reviewer to comment on an adjacent kept line.",
+      description: "Create a GitHub-PR-style review of a git diff: point it at a local repo and a base ref, and the server creates one review doc per changed file, grouped as a workspace — the reviewer gets a file tree with per-file A/M/D/R + line-count badges, a unified diff view with old/new line numbers and collapsed unchanged regions, a per-file Diff ↔ whole-File toggle, and line-anchored comment threads in both views. DEFAULT MODE (no `target`): diff base → the WORKING TREE, i.e. the folder as it is right now, uncommitted edits and untracked files included. The docs bind to the live files on disk, so as you keep editing the code the reviewer's diff re-renders within ~1s — this is the live-loop mode. Comments stay anchored to their lines through edits (snippet-based auto-reanchor); if an anchored line disappears, the thread lands in the existing Orphaned/outdated section where the reviewer can re-anchor it. Once the review EXISTS, prefer refresh_workspace(reviewId) over re-running this tool: it re-reads the diff from the stored base (no need to remember the ref), picks up files that changed since, and flags members whose change was reverted — all without re-minting a docId. Re-running this tool is still idempotent (same docIds, threads survive). PINNED MODE (pass `target`): content is frozen at the target commit; anchors can never drift; same reviewId with a different range is rejected. `repo` is an absolute path to a local checkout/worktree; `base`/`target` are any refs git can resolve (hashes, branches, HEAD~2). Binary files and files over 512 KB are skipped and reported in skipped[]. Pass `exclude` (path prefixes, e.g. ['src/main/assets/vendored-repo']) to keep vendored or generated directories out of the review. GUARDRAIL: more than `maxFiles` (default 300) changed files → error 'too-many-files'; narrow with `exclude` or raise `maxFiles`. The caller is auto-subscribed to thread events on every file doc (pass subscribe:false to skip). Returns {reviewId, entryUrl, files[{docId, relPath, status, additions, deletions, reviewUrl}], skipped[]} — hand `entryUrl` to the human (the file tree navigates to the rest). Clean up with delete_workspace(reviewId) when the review is done. Comments on DELETED lines aren't supported yet — ask the reviewer to comment on an adjacent kept line.",
       inputSchema: {
         type: "object",
         properties: {
@@ -14087,6 +14087,47 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           }
         },
         required: ["workspaceId"]
+      }
+    },
+    {
+      name: "refresh_workspace",
+      description: "Re-reconcile a workspace or diff review against what's on disk RIGHT NOW, WITHOUT re-minting any docId — so every existing comment thread survives. Use this instead of re-running create_diff_review / bind_folder when the review already exists and the files have moved under it. For a DIFF REVIEW it re-runs the diff from the stored base, so files you changed after creating the review join it and per-file status/line counts refresh; a member whose change you reverted is marked stale rather than deleted (its comments are still someone's feedback, and the change may come back). For a BROWSE workspace members bind lazily, so what refresh adds is the reverse sweep: members whose file was deleted or renamed away get marked stale. Stale is always reversible — the next refresh that finds the file clears it and lists it under restored. PINNED diff reviews (created with a `target`) are refused with error:'pinned': their content is a commit, so there is nothing to re-read. Returns {ok, kind:'diff'|'browse', added[], stale[{docId, relPath, openThreads}], restored[], fileCount}. Read `stale` after a rename: those threads are now stranded on a file nobody will open, so re-anchor or resolve them. Errors: 'not-found' (no such workspace), 'root-missing' (the folder itself is gone).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          workspaceId: {
+            type: "string",
+            description: "Workspace id from bind_folder, or reviewId from create_diff_review."
+          }
+        },
+        required: ["workspaceId"]
+      }
+    },
+    {
+      name: "set_workspace_groups",
+      description: "Re-group an EXISTING diff review's sidebar in place — same grouping model as create_diff_review's `groups`, but applied to a review that already has comments on it, so you don't have to tear the review down (and lose every thread) just to organize it better. A group's `paths` claim a file exactly or as a directory prefix, first group in the array wins, and anything unclaimed lands in an \"Other\" group listed last (returned in `ungrouped` so you can see what you missed). Optional per-group `details` renders as a short intro under the group title; over 500 chars is REJECTED, not truncated — write a 1–2 sentence intro, don't paste a commit body. Re-setting a group WITHOUT details clears the old one. Pass an EMPTY groups array to fall back to the built-in Tests/Docs/Build + module heuristic. Returns {ok, groups:[{title, fileCount}], ungrouped:[relPath]}. Errors: 'not-found' (no such workspace), 'no-diff-members' (a browse-only workspace has no changed files to group — groups organize a diff), 'group-details-too-long'.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          workspaceId: {
+            type: "string",
+            description: "reviewId from create_diff_review."
+          },
+          groups: {
+            type: "array",
+            description: "Ordered groups. Empty array = fall back to the heuristic.",
+            items: {
+              type: "object",
+              properties: {
+                title: { type: "string" },
+                paths: { type: "array", items: { type: "string" } },
+                details: { type: "string" }
+              },
+              required: ["title", "paths"]
+            }
+          }
+        },
+        required: ["workspaceId", "groups"]
       }
     },
     {
@@ -14581,6 +14622,18 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const { workspaceId, force } = a;
         const qs = force ? "?force=true" : "";
         const res = await http("DELETE", `/api/workspaces/${encodeURIComponent(workspaceId)}${qs}`);
+        return ok(res);
+      }
+      case "refresh_workspace": {
+        const { workspaceId } = a;
+        const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/refresh`, {});
+        return ok(res);
+      }
+      case "set_workspace_groups": {
+        const { workspaceId, groups } = a;
+        const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/groups`, {
+          groups
+        });
         return ok(res);
       }
       case "find_and_replace": {
