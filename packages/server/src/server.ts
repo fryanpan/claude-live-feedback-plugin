@@ -319,8 +319,22 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // Scheme matters (http://x and https://x are different browser origins),
     // and behind cloudflared the socket is plain http while the browser is on
     // https — so trust the forwarded scheme when the proxy sets one.
+    // ALLOWLISTED, not interpolated. This value is concatenated into a URL
+    // string, so an unvalidated one rewrites the origin we compare against:
+    // `x-forwarded-proto: https://evil.example.com#` makes
+    // `new URL('https://evil.example.com#://feedback.example.com').origin`
+    // the ATTACKER's origin, originMatch returns 'same-origin', and on the
+    // share host — where same-origin is the only rule left — that is the
+    // whole boundary gone. A proxy appending to an existing header
+    // (`https://evil.example.com#, https`) does it too.
+    //
+    // Note the asymmetry this fixes: host-guard requires `cf-ray` before it
+    // believes a proxy claim, while this trusted a bare header.
+    const forwarded = req.headers.get('x-forwarded-proto');
     const scheme =
-      req.headers.get('x-forwarded-proto') ?? new URL(req.url).protocol.replace(':', '');
+      forwarded === 'http' || forwarded === 'https'
+        ? forwarded
+        : new URL(req.url).protocol.replace(':', '');
     const host = req.headers.get('host') ?? '';
     // The dev-server allowances belong to the LOCAL surface, where nothing is
     // cookie-authenticated. A share host is not that: the visitor carries a
@@ -534,7 +548,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           } else if (decision.kind === 'link') {
             // Redeeming a link is the ONLY thing reachable here without a
             // session — that request is what mints one.
-            const redeeming = req.method === 'GET' && pathname.startsWith('/s/');
+            // Matched with the SAME regex the redeem route uses. A `startsWith`
+            // prefix let any GET under /s/ skip the session check — inert today
+            // because nothing else is mounted there and URL normalizes `..`,
+            // but it becomes a hole the moment something is.
+            const redeeming = req.method === 'GET' && /^\/s\/[^/]+$/.test(pathname);
             if (!redeeming) {
               const target = linkSessionTarget(req);
               if (!target) return j(401, { error: 'no_share_session' });
