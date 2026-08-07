@@ -69,3 +69,24 @@ export function publicHost(): string {
 export function publicBaseUrl(port: number): string {
   return `http://${publicHost()}:${port}`;
 }
+
+/**
+ * Every hostname that resolves to THIS machine — loopback aside — cached the
+ * same way and for the same reason as `publicHost()`: `tailscaleHost()` shells
+ * out to `tailscale status --json`, and the host gate and the browser-origin
+ * policy both need this on every request, including every websocket handshake.
+ * Uncached it meant two or three subprocess spawns before any real work.
+ *
+ * Same 60s TTL, so a server that started before the tailscale daemon still
+ * picks up the MagicDNS name without a restart.
+ */
+let cachedLocalNames: string[] | undefined;
+let localNamesAt = 0;
+export function localHostnames(): string[] {
+  const now = Date.now();
+  if (cachedLocalNames !== undefined && now - localNamesAt < HOST_TTL_MS) return cachedLocalNames;
+  const ts = tailscaleHost();
+  cachedLocalNames = [...(ts ? [ts] : []), ...lanHostnames()];
+  localNamesAt = now;
+  return cachedLocalNames;
+}
