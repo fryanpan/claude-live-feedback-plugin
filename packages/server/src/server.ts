@@ -301,11 +301,30 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * `Access-Control-Allow-Origin: *` on everything. See
    * middleware/browser-origin.ts for why that wildcard was a hole.
    */
-  const applyCors = (req: Request, res: Response): Response => {
-    const headers = corsHeadersFor(req.headers.get('origin'), {
-      requestHost: req.headers.get('host') ?? '',
+  /**
+   * The origin policy for a request. `localHostnames` mirrors the host gate's
+   * own notion of "this machine", so a dev server reached over the tailnet or
+   * the LAN — not just loopback — can still embed the widget.
+   */
+  const policyFor = (req: Request) => {
+    // Scheme matters (http://x and https://x are different browser origins),
+    // and behind cloudflared the socket is plain http while the browser is on
+    // https — so trust the forwarded scheme when the proxy sets one.
+    const scheme =
+      req.headers.get('x-forwarded-proto') ?? new URL(req.url).protocol.replace(':', '');
+    return {
+      requestOrigin: `${scheme}://${req.headers.get('host') ?? ''}`,
+      localHostnames: [
+        tailscaleHost() ?? '',
+        ...lanHostnames(),
+        ...(opts.trustedHosts ?? []),
+      ].filter((h) => h !== ''),
       allowedOrigins: opts.allowedOrigins ?? [],
-    });
+    };
+  };
+
+  const applyCors = (req: Request, res: Response): Response => {
+    const headers = corsHeadersFor(req.headers.get('origin'), policyFor(req));
     if (!headers) return res;
     const merged = new Headers(res.headers);
     for (const [k, v] of Object.entries(headers)) merged.set(k, v);
@@ -691,12 +710,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // Origin check has to happen HERE, or any page the user visits can
           // sync (and mutate) any doc. Reproduced before this existed: a socket
           // sent with `Origin: https://evil.example.com` synced a real document.
-          if (
-            !isAllowedBrowserOrigin(req.headers.get('origin'), {
-              requestHost: req.headers.get('host') ?? '',
-              allowedOrigins: opts.allowedOrigins ?? [],
-            })
-          ) {
+          if (!isAllowedBrowserOrigin(req.headers.get('origin'), policyFor(req))) {
             return j(403, { error: 'origin_not_allowed' });
           }
           const docId = decodeURIComponent(pathname.slice(3));

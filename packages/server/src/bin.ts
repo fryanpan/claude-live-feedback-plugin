@@ -28,6 +28,18 @@ const demosDir = pathOrNull(join(repoRoot, 'demos'));
 // machine's LAN names, and private IPv4 ranges are detected automatically;
 // this covers anything we can't detect (a reverse proxy in front, a custom
 // /etc/hosts alias). Everything else is denied — see middleware/host-guard.ts.
+/**
+ * Browser origins allowed to call the API cross-origin, beyond this machine's
+ * own names — which are allowed automatically, so the widget on a local dev
+ * server needs no configuration. Set this only for a dev server on a DIFFERENT
+ * machine. Without it the option would be unreachable from the shipped binary,
+ * and a config knob nobody can turn is the same bug as not having one.
+ */
+const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
 const trustedHosts = (process.env.TRUSTED_HOSTS ?? '')
   .split(',')
   .map((h) => h.trim())
@@ -93,6 +105,7 @@ for (let i = 0; i < 20 && !handle; i++) {
       markdownAppDistDir: markdownAppDist,
       demosDir,
       trustedHosts,
+      allowedOrigins,
       cfAccess,
       share,
     });
@@ -114,6 +127,7 @@ console.log(`[feedback]   local:      http://localhost:${port}`);
 if (ts) console.log(`[feedback]   tailscale:  http://${ts}:${port}`);
 for (const h of lan) console.log(`[feedback]   lan:        http://${h}:${port}`);
 if (trustedHosts.length) console.log(`[feedback]   trusted:    ${trustedHosts.join(', ')}`);
+if (allowedOrigins.length) console.log(`[feedback]   origins:    ${allowedOrigins.join(', ')}`);
 console.log('[feedback]   routes:     /  /review/<docId>  /widget.iife.js  /demos/mockup');
 if (cfAccess) {
   const audDisplay =
