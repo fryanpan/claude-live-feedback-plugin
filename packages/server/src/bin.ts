@@ -49,6 +49,20 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? '')
   .map((s) => s.trim())
   .filter(Boolean);
 
+/**
+ * LF_SHARING_DISABLED=1 — external sharing starts OFF and the runtime toggle
+ * (`POST /api/share/enabled`, the `set_sharing_enabled` MCP tool) refuses to
+ * reopen it. Use this while a security review is in flight: it is the one
+ * setting nothing the server exposes can undo, so a compromised or
+ * misbehaving caller cannot reopen the door.
+ *
+ * For an ordinary on/off, leave this unset and use the runtime toggle — that
+ * state persists in <dataDir>/sharing.json across restarts.
+ */
+const sharingEnvLocked = ['1', 'true', 'yes'].includes(
+  (process.env.LF_SHARING_DISABLED ?? '').trim().toLowerCase(),
+);
+
 const trustedHosts = (process.env.TRUSTED_HOSTS ?? '')
   .split(',')
   .map((h) => h.trim())
@@ -115,6 +129,7 @@ for (let i = 0; i < 20 && !handle; i++) {
       demosDir,
       trustedHosts,
       allowedOrigins,
+      sharingEnvLocked,
       cfAccess,
       share,
     });
@@ -142,6 +157,14 @@ if (cfAccess) {
   const audDisplay =
     typeof cfAccess.audience === 'string' ? cfAccess.audience.slice(0, 8) : 'auto-from-shares';
   console.log(`[feedback]   cf-access:  team=${cfAccess.teamDomain} aud=${audDisplay}…`);
+}
+if (share) {
+  const st = handle.sharingGate.status();
+  console.log(
+    `[feedback]   sharing:    ${st.enabled ? 'ON — external share hosts are served' : 'OFF — every external host gets 403'}` +
+      `${st.locked ? ' (LOCKED by LF_SHARING_DISABLED)' : ''}` +
+      `${st.loadError ? ` (failed closed: ${st.loadError})` : ''}`,
+  );
 }
 if (share?.config.publicHostname) {
   console.log(`[feedback]   share-link: https://${share.config.publicHostname}/s/<slug>`);
