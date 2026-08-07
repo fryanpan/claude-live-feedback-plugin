@@ -164,6 +164,34 @@ describe('corsHeadersFor', () => {
     ).toBeNull();
   });
 
+  it('grants Private Network Access ONLY to an explicitly configured origin', () => {
+    // Chromium preflights a public origin reaching a private address with
+    // `Access-Control-Request-Private-Network` and fails the request without
+    // this header — so the cross-machine ALLOWED_ORIGINS flow needs it. It is
+    // a grant for a public site to reach into the private network, so it is
+    // deliberately NOT extended to the automatic allowances.
+    const configured = corsHeadersFor('https://mockups.example.com', {
+      requestOrigin: SELF,
+      localHostnames: LOCAL_NAMES,
+      allowedOrigins: ['https://mockups.example.com'],
+    });
+    expect(configured?.['access-control-allow-private-network']).toBe('true');
+
+    const loopback = corsHeadersFor('http://localhost:3000', {
+      requestOrigin: SELF,
+      localHostnames: LOCAL_NAMES,
+      allowedOrigins: [],
+    });
+    expect(loopback?.['access-control-allow-private-network']).toBeUndefined();
+
+    const sameOrigin = corsHeadersFor(SELF, {
+      requestOrigin: SELF,
+      localHostnames: LOCAL_NAMES,
+      allowedOrigins: [],
+    });
+    expect(sameOrigin?.['access-control-allow-private-network']).toBeUndefined();
+  });
+
   it('never grants credentials cross-origin', () => {
     // The share session is a cookie. The review app is served from the same
     // origin it talks to, so credentialed cross-origin requests are never

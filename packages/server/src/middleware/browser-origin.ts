@@ -66,26 +66,34 @@ export const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '0.0.0.0', '::1', '[::1
  * `file://` page or a sandboxed iframe sends, and it is refused.
  */
 export function isAllowedBrowserOrigin(origin: string | null, policy: OriginPolicy): boolean {
-  if (origin === null) return true; // not a browser
-  if (!origin || origin === 'null') return false;
+  return originMatch(origin, policy) !== null;
+}
+
+/** Why an origin was allowed — `null` when it wasn't. The distinction matters
+ *  for Private Network Access (see corsHeadersFor). */
+type MatchKind = 'not-a-browser' | 'configured' | 'same-origin' | 'local';
+
+function originMatch(origin: string | null, policy: OriginPolicy): MatchKind | null {
+  if (origin === null) return 'not-a-browser';
+  if (!origin || origin === 'null') return null;
 
   // Exact match against operator configuration first — cheapest and most
   // explicit. Compared as raw strings so it can't widen to a sibling host.
-  if (policy.allowedOrigins.includes(origin)) return true;
+  if (policy.allowedOrigins.includes(origin)) return 'configured';
 
   let url: URL;
   try {
     url = new URL(origin);
   } catch {
-    return false; // unparseable — refuse rather than guess
+    return null; // unparseable — refuse rather than guess
   }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
 
   // Same origin as the app itself: the review UI, the mockup pages, the share
   // host. Full origin comparison — scheme, hostname and port — so neither
   // `evil-<host>`, `<host>.evil.example.com`, nor a plain-http page on an
   // https host slips through.
-  if (url.origin === policy.requestOrigin) return true;
+  if (url.origin === policy.requestOrigin) return 'same-origin';
 
   // A dev server running on THIS machine — the widget's whole reason for
   // being cross-origin. It may be on loopback, or reached over the tailnet or
@@ -104,9 +112,9 @@ export function isAllowedBrowserOrigin(origin: string | null, policy: OriginPoli
   // allowed origin that happened to be same-SITE with the share host would
   // otherwise carry that cookie into /y/<docId> and read and write the doc.
   const host = url.hostname.toLowerCase();
-  if (policy.localHostnames.some((n) => n.toLowerCase() === host)) return true;
+  if (policy.localHostnames.some((n) => n.toLowerCase() === host)) return 'local';
 
-  return false;
+  return null;
 }
 
 /**
@@ -124,7 +132,8 @@ export function corsHeadersFor(
   // No Origin means no browser is applying CORS to this response; headers
   // would be inert. Send none rather than echo something meaningless.
   if (!origin) return null;
-  if (!isAllowedBrowserOrigin(origin, policy)) return null;
+  const match = originMatch(origin, policy);
+  if (match === null) return null;
   return {
     'access-control-allow-origin': origin,
     'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS',
@@ -133,5 +142,17 @@ export function corsHeadersFor(
     // The response body differs by origin. Without this a shared cache could
     // hand one origin's allowed response to another.
     vary: 'Origin',
+    // Chromium's Private Network Access: a page on a PUBLIC origin reaching a
+    // private/loopback address gets an extra preflight carrying
+    // `Access-Control-Request-Private-Network`, and the request fails unless
+    // we answer with this. It applies only to the cross-machine
+    // ALLOWED_ORIGINS flow — the automatic allowances are private-to-private,
+    // which needs no such grant.
+    //
+    // Scoped to `configured` on purpose. This header tells a browser that a
+    // public website may reach into the private network, which is precisely
+    // the thing PNA exists to prevent; it's defensible only because the
+    // operator named that exact origin themselves.
+    ...(match === 'configured' ? { 'access-control-allow-private-network': 'true' } : {}),
   };
 }
