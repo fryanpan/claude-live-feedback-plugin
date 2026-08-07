@@ -529,6 +529,41 @@ describe('workspace share over HTTP', () => {
     expect(r.status).toBe(403);
   });
 
+  it('is not shown the absolute paths or the tailnet host', async () => {
+    // GET /api/docs/<id> is IN a visitor's scope — they need it to render —
+    // but the full DocMeta describes Bryan's machine, not the document.
+    const opened = await asVisitor(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/editable-file`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ relPath: 'design.md' }),
+      },
+    );
+    const target = ((await opened.json()) as { docId: string }).docId;
+    const r = await asVisitor(`/api/docs/${encodeURIComponent(target)}`);
+    expect(r.status).toBe(200);
+    const raw = await r.text();
+    expect(raw).not.toContain('/Volumes/');
+    expect(raw).not.toContain('tailb53801');
+    expect(raw).not.toContain('.ts.net');
+    const { meta } = JSON.parse(raw) as { meta: Record<string, unknown> };
+    expect(meta.sourceUrl).toBeUndefined();
+    expect(meta.owner).toBeUndefined();
+    expect(meta.workspaceRoot).toBeUndefined();
+    // …while still carrying what the editor needs.
+    expect(meta.docId).toBe(target);
+    expect(meta.relPath).toBe('design.md');
+  });
+
+  it('still gives the OWNER the full metadata over the tailnet', async () => {
+    const r = await req(`/api/docs/${encodeURIComponent(entryDocId)}`, `localhost:${handle.port}`);
+    if (r.status === 200) {
+      const { meta } = (await r.json()) as { meta: Record<string, unknown> };
+      expect(meta.sourceUrl).toBeDefined();
+    }
+  });
+
   it('CANNOT post a comment signed as Bryan', async () => {
     // The write endpoints take `author` straight from the body. On the
     // tailnet that's fine; from a share link it means a stranger could sign
