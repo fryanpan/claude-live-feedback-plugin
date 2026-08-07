@@ -7,6 +7,7 @@ import { type ShareTarget, classifyHost, shareScopeAllows } from './middleware/h
 import { lanHostnames, publicBaseUrl, tailscaleHost } from './public-host.ts';
 import { type FeedbackWs, Rooms, type WorkspaceDirNode, type WorkspaceFileNode } from './rooms.ts';
 import { CfApi } from './share/cf-api.ts';
+import { resolveShareEntry } from './share/entry-resolve.ts';
 import {
   SHARE_COOKIE,
   loadCookieKey,
@@ -298,11 +299,36 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             headers: { 'content-type': 'text/html; charset=utf-8' },
           });
         }
+        // Where to land is resolved NOW, not when the share was minted: a
+        // member docId encodes the file's relPath, so renaming or deleting
+        // the entry file used to 404 the link with no way to repoint it.
+        // A single-doc share has exactly one answer and skips this.
+        let target = share.docId;
+        if (share.workspaceId) {
+          const members = rooms
+            .list()
+            .filter((m) => m.workspaceId === share.workspaceId)
+            .map((m) => ({
+              docId: m.docId,
+              ...(m.relPath ? { relPath: m.relPath } : {}),
+              ...(m.stale ? { stale: true } : {}),
+            }));
+          const resolved = resolveShareEntry(share.docId, members);
+          // An emptied-out workspace has nothing to show; say no more than
+          // an unknown slug would.
+          if (!resolved) {
+            return new Response(renderLinkNotFound(), {
+              status: 404,
+              headers: { 'content-type': 'text/html; charset=utf-8' },
+            });
+          }
+          target = resolved;
+        }
         const maxAge = Math.floor((share.expiresAt - Date.now()) / 1000);
         return new Response(null, {
           status: 302,
           headers: {
-            location: `/review/${encodeURIComponent(share.docId)}`,
+            location: `/review/${encodeURIComponent(target)}`,
             'set-cookie': sessionCookieHeader(share.shareId, cookieKey(), maxAge),
             // Keep the slug out of any downstream Referer header.
             'referrer-policy': 'no-referrer',
@@ -649,6 +675,32 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           return j(404, { error: 'no diff review found', workspaceId });
         }
         return j(200, grouped);
+      }
+      // Re-reconcile a workspace against disk: pick up files that changed
+      // since the bind, flag members whose file is gone. Never re-mints a
+      // docId, so every comment thread survives.
+      const wsRefreshMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/refresh$/);
+      if (wsRefreshMatch && req.method === 'POST') {
+        const workspaceId = decodeURIComponent(wsRefreshMatch[1] ?? '');
+        const res = rooms.refreshWorkspace(workspaceId);
+        if (res.ok) return j(200, res);
+        return j(res.error === 'not-found' ? 404 : 400, res);
+      }
+      // Re-group a diff review's sidebar in place. An empty `groups` array
+      // is meaningful (fall back to the heuristic); a MISSING one is a
+      // caller mistake, so it 400s rather than silently regrouping.
+      const wsGroupsMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/groups$/);
+      if (wsGroupsMatch && req.method === 'POST') {
+        const workspaceId = decodeURIComponent(wsGroupsMatch[1] ?? '');
+        const body = await safeJson(req);
+        const groups = body?.groups;
+        if (!Array.isArray(groups)) return j(400, { error: 'groups array required' });
+        const res = rooms.setWorkspaceGroups(
+          workspaceId,
+          groups as Array<{ title: string; paths: string[]; details?: string }>,
+        );
+        if (res.ok) return j(200, res);
+        return j(res.error === 'not-found' ? 404 : 400, res);
       }
       // Every file in the workspace's repo (changed ones marked) — the
       // "Show All Files" context view.
