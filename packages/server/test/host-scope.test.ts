@@ -494,6 +494,54 @@ describe('workspace share over HTTP', () => {
     expect(still.status).toBe(200);
   });
 
+  it('repairs a share URL whose entry doc is gone', async () => {
+    // An Access share hands out /review/<entryDocId> directly and is never
+    // redeemed, so there is no other moment to re-resolve it. Renaming the
+    // entry file used to leave that emailed URL pointing at nothing.
+    // Give the workspace a survivor, then drop the entry doc — the same
+    // "entry is gone" state a renamed entry file produces, reachable here
+    // without the folder (setup deletes it).
+    const opened = await asVisitor(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/editable-file`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ relPath: 'design.md' }),
+      },
+    );
+    const survivor = ((await opened.json()) as { docId: string }).docId;
+    await fetch(`${base}/api/docs/${encodeURIComponent(entryDocId)}?force=true`, {
+      method: 'DELETE',
+      headers: { host: `localhost:${handle.port}` },
+    });
+
+    const r = await asVisitor(`/review/${encodeURIComponent(entryDocId)}`, { redirect: 'manual' });
+    expect(r.status).toBe(302);
+    expect(r.headers.get('location')).toBe(`/review/${encodeURIComponent(survivor)}`);
+  });
+
+  it('does not turn the repair into an oracle for docs outside the share', async () => {
+    // A docId that EXISTS elsewhere must stay a 403, not a redirect —
+    // otherwise the repair would confirm which ids are real.
+    const r = await asVisitor(`/review/${encodeURIComponent(outsideDocId)}`, {
+      redirect: 'manual',
+    });
+    expect(r.status).toBe(403);
+  });
+
+  it("CANNOT reshape the workspace — refresh and regroup are the owner's calls", async () => {
+    // A visitor reads and comments. Deciding which files are under review,
+    // and how the sidebar organizes them, stays with whoever shared it.
+    for (const sub of ['refresh', 'groups']) {
+      const r = await asVisitor(`/api/workspaces/${encodeURIComponent(workspaceId)}/${sub}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ groups: [] }),
+      });
+      expect(r.status).toBe(403);
+    }
+  });
+
   it('CANNOT delete the workspace', async () => {
     const r = await asVisitor(`/api/workspaces/${encodeURIComponent(workspaceId)}`, {
       method: 'DELETE',

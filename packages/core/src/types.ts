@@ -78,6 +78,27 @@ export interface DocMeta {
    */
   workspaceRoot?: string;
   /**
+   * The workspace's own bind-time configuration, replicated onto every
+   * member the same way `workspaceRoot` is — there is no workspace registry,
+   * so the members ARE the record. `refresh_workspace` reads these back and
+   * re-applies them, which is what stops a refresh from silently widening
+   * the review's scope (an excluded vendored file walking back in the moment
+   * it starts differing) or scattering newly-changed files into heuristic
+   * buckets when the caller had organized the sidebar by hand.
+   */
+  workspaceExclude?: string[];
+  workspaceGroups?: Array<{ title: string; paths: string[]; details?: string }>;
+  workspaceMaxFiles?: number;
+  /**
+   * Set by `refresh_workspace` when this member is no longer part of the
+   * review: its file was deleted (browse workspace), or its change was
+   * reverted so it no longer differs from the diff base. The doc is kept —
+   * it still holds its comment threads, and the file may well come back —
+   * but the tree renders it dimmed so nobody reviews a ghost. Cleared by
+   * the next refresh that finds it again. Absent = live.
+   */
+  stale?: boolean;
+  /**
    * Optional provenance passthrough captured at create/bind time, so the
    * activity event stream can attribute a doc to the agent + session that
    * produced it. `agentId` / `sessionId` are best-effort: supplied by the
