@@ -77,11 +77,11 @@ async function closeCodeWithin(conn: Conn, ms = 2000): Promise<number | 'still-o
   ]);
 }
 
-/** The exact call the server's sweep interval makes. */
-function sweep(handle: ServerHandle): string[] {
-  const shares = handle.shares;
-  if (!shares) throw new Error('sharing not configured');
-  return handle.rooms.closeSocketsForDeadShares((id) => shares.findLive(id) !== null);
+/** The server's own sweep — the function its 60s interval calls. Tests drive
+ *  the real thing so a change to what the sweep covers can't pass here while
+ *  failing in production. */
+function sweep(handle: ServerHandle): void {
+  handle.sweepDeadShares();
 }
 
 describe('expired shares lose their sockets', () => {
@@ -151,7 +151,8 @@ describe('expired shares lose their sockets', () => {
 
     // A sweep while the share is live must leave it alone — otherwise the
     // next assertion proves nothing about expiry.
-    expect(sweep(handle as ServerHandle)).toEqual([]);
+    sweep(handle as ServerHandle);
+    await new Promise((r) => setTimeout(r, 100));
     expect(conn.closeCode).toBeNull();
 
     // Expire it the way time does: the share record's own deadline.
@@ -159,7 +160,7 @@ describe('expired shares lose their sockets', () => {
     expect(share).toBeTruthy();
     if (share) share.expiresAt = Date.now() - 1;
 
-    expect(sweep(handle as ServerHandle)).toEqual([shareId]);
+    sweep(handle as ServerHandle);
     // 1008 = policy violation, which is what an expired grant is.
     expect(await closeCodeWithin(conn)).toBe(1008);
     void base;

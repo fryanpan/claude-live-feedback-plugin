@@ -320,6 +320,38 @@ describe('host gate + share scoping over HTTP', () => {
       expect((await asVisitor('/app/app.js')).status).not.toBe(403);
     });
   });
+
+  describe('C. an expired share host stops being a share host', () => {
+    // Link mode re-checks liveness on every request (linkSessionTarget uses
+    // findLive). Access mode resolved the host with findByHostname, which does
+    // not look at expiresAt — so a share past its TTL still classified as a
+    // share, still passed the Access gate, and served the doc. Closing its
+    // websockets (the sweep) didn't help: the visitor just reconnected.
+    it('serves the doc while the share is live', async () => {
+      // POSITIVE CONTROL for the assertion below.
+      expect((await asVisitor(`/api/docs/${SHARED}`)).status).toBe(200);
+    });
+
+    it('refuses every request on the hostname once the TTL has passed', async () => {
+      const share = handle.shares?.list().find((s) => s.hostname === shareHost);
+      expect(share).toBeTruthy();
+      const restore = share?.expiresAt ?? 0;
+      if (share) share.expiresAt = Date.now() - 1;
+      try {
+        const r = await asVisitor(`/api/docs/${SHARED}`);
+        expect(r.status).toBe(403);
+        expect(await r.json()).toEqual({ error: 'unknown_host' });
+        // ...and it can't reconnect its websocket either.
+        expect((await asVisitor(`/review/${SHARED}`)).status).toBe(403);
+      } finally {
+        if (share) share.expiresAt = restore;
+      }
+    });
+
+    it('works again once the share is live — the host itself is not blacklisted', async () => {
+      expect((await asVisitor(`/api/docs/${SHARED}`)).status).toBe(200);
+    });
+  });
 });
 
 /**
