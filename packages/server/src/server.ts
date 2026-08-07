@@ -336,7 +336,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       viaProxy: req.headers.has('cf-ray'),
     });
     return {
-      requestOrigin: `${scheme}://${host}`,
+      // Canonicalized, not concatenated. A proxy may forward Host with an
+      // explicit default port (`feedback.example.com:443`) while the browser
+      // sends `Origin: https://feedback.example.com` — a raw string compare
+      // would then treat every legitimate request on the share host as
+      // foreign and 403 its websocket. URL.origin drops the default port.
+      requestOrigin: canonicalOrigin(scheme, host),
       localHostnames: isLocalSurface
         ? [
             ...LOOPBACK_HOSTS,
@@ -1654,6 +1659,16 @@ function isValidDocId(s: string): boolean {
   // valid filename char, matching the .ydoc-on-disk naming.
   if (!s || s.startsWith('.')) return false;
   return /^[a-zA-Z0-9_.:~\-]{1,100}$/.test(s);
+}
+
+/** `scheme://host` with the default port normalized away, or the raw
+ *  concatenation when it doesn't parse (which then simply matches nothing). */
+function canonicalOrigin(scheme: string, host: string): string {
+  try {
+    return new URL(`${scheme}://${host}`).origin;
+  } catch {
+    return `${scheme}://${host}`;
+  }
 }
 
 function j(status: number, body: unknown): Response {

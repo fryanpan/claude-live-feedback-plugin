@@ -90,6 +90,14 @@ describe('cross-origin access to the trusted host', () => {
       expect(r.headers.get('vary')).toBe('Origin');
     });
 
+    it('grants a dev server on 0.0.0.0 — what Vite prints for all-interfaces', async () => {
+      // host-guard already treats 0.0.0.0 as local; the origin policy is meant
+      // to mirror it, and dropping it would refuse a widget the host gate
+      // considers local.
+      const r = await req('/api/docs', 'http://0.0.0.0:5173');
+      expect(r.headers.get('access-control-allow-origin')).toBe('http://0.0.0.0:5173');
+    });
+
     it('grants a dev server on one of this machine’s own hostnames', async () => {
       // codex flagged this: restricting cross-origin to loopback would have
       // broken the documented setup where the reviewed app is served from the
@@ -323,6 +331,22 @@ describe('the public share host is same-origin only', () => {
     // https; a page served over http on that name must not be trusted.
     const r = await asVisitor('/api/docs/shared', `http://${PUBLIC_HOST}`);
     expect(r.headers.get('access-control-allow-origin')).toBeNull();
+  });
+
+  it('matches when a proxy forwards Host with the default port', async () => {
+    // cloudflared (or any proxy) may forward `feedback.example.com:443` while
+    // the browser sends `Origin: https://feedback.example.com`. A raw string
+    // compare would treat every legitimate request as foreign and 403 the
+    // websocket — an outage, not a hardening.
+    const r = await fetch(`${base}/api/docs/shared`, {
+      headers: {
+        host: `${PUBLIC_HOST}:443`,
+        'x-forwarded-proto': 'https',
+        cookie: `lf_share=${cookie}`,
+        origin: `https://${PUBLIC_HOST}`,
+      },
+    });
+    expect(r.headers.get('access-control-allow-origin')).toBe(`https://${PUBLIC_HOST}`);
   });
 
   it('does NOT honour ALLOWED_ORIGINS on the share host', async () => {
