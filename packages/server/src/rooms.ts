@@ -878,7 +878,8 @@ export class Rooms {
       if (!prev || (prev.type !== 'diff' && m.type === 'diff')) byRel.set(key, m);
     }
     const MAX_FILES = 10_000;
-    const scanned = scanFolderPaths(root);
+    const excluded = workspaceExcludes(members);
+    const scanned = scanFolderPaths(root).filter((rel) => !isExcludedPath(rel, excluded));
     const truncated = scanned.length > MAX_FILES;
     const files = scanned.slice(0, MAX_FILES).map((relPath) => {
       const member = byRel.get(relPath);
@@ -914,6 +915,12 @@ export class Rooms {
     const abs = join(root, clean);
     // Traversal guard: the resolved path must stay under the root.
     if (clean.split('/').includes('..') || !`${abs}/`.startsWith(`${root}/`)) {
+      return { ok: false, error: 'bad-path' };
+    }
+    // The workspace's exclude is a scope, not a display filter: a path the
+    // caller kept out must not be bindable on demand either, or "excluded"
+    // would only mean "not listed by default".
+    if (isExcludedPath(clean, workspaceExcludes(members))) {
       return { ok: false, error: 'bad-path' };
     }
     if (!existsSync(abs)) return { ok: false, error: 'not-found' };
@@ -964,6 +971,9 @@ export class Rooms {
     const clean = relPath.replace(/^\/+/, '');
     const abs = join(root, clean);
     if (clean.split('/').includes('..') || !`${abs}/`.startsWith(`${root}/`)) {
+      return { ok: false, error: 'bad-path' };
+    }
+    if (isExcludedPath(clean, workspaceExcludes(members))) {
       return { ok: false, error: 'bad-path' };
     }
     if (!clean.toLowerCase().endsWith('.md')) return { ok: false, error: 'not-markdown' };
@@ -2583,6 +2593,17 @@ const DEFAULT_REVIEWER: User = {
  * first, then by open-count descending (attention floats up), then by name
  * ascending. Mirrors the landing page's "what needs my review?" ordering.
  */
+/** The workspace's stored exclude prefixes, normalized. Replicated on every
+ *  member (there is no workspace registry), so any member answers. */
+function workspaceExcludes(members: DocMeta[]): string[] {
+  const raw = members.find((m) => m.workspaceExclude)?.workspaceExclude ?? [];
+  return raw.map((p) => p.replace(/^\/+/, '').replace(/\/+$/, '')).filter(Boolean);
+}
+
+function isExcludedPath(relPath: string, excludes: string[]): boolean {
+  return excludes.some((p) => relPath === p || relPath.startsWith(`${p}/`));
+}
+
 function sortTreeChildren(node: WorkspaceDirNode): void {
   node.children.sort((a, b) => {
     if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;

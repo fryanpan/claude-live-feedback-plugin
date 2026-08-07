@@ -161,6 +161,26 @@ describe('Rooms.refreshWorkspace — browse workspace', () => {
     expect(rooms.get(docId)?.meta.stale).toBeUndefined();
   });
 
+  it('keeps excluded paths out of the all-files view AND out of lazy opens', () => {
+    // exclude is a SCOPE, not a display filter — a path the caller kept out
+    // must not be bindable on demand either, or a share visitor could pull it
+    // into the workspace by clicking it in "Show All Files".
+    mkdirSync(join(folder, 'vendor'));
+    writeFileSync(join(folder, 'vendor', 'lib.md'), 'vendored\n');
+    const bound = rooms.bindFolder({ folderPath: folder, exclude: ['vendor'] });
+    if (!bound.ok) throw new Error('bind failed');
+
+    const listed = rooms.listRepoFiles(bound.workspaceId);
+    expect(listed.ok).toBe(true);
+    expect(listed.files?.map((f) => f.relPath)).not.toContain('vendor/lib.md');
+
+    const opened = rooms.openContextFile(bound.workspaceId, 'vendor/lib.md');
+    expect(opened.ok).toBe(false);
+    if (!opened.ok) expect(opened.error).toBe('bad-path');
+    const editable = rooms.openEditableFile(bound.workspaceId, 'vendor/lib.md');
+    expect(editable.ok).toBe(false);
+  });
+
   it('reports the current scan count so a caller sees new files exist', () => {
     const bound = rooms.bindFolder({ folderPath: folder });
     if (!bound.ok) throw new Error('bind failed');

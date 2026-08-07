@@ -201,7 +201,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * pointing at nothing. Redirect to the workspace's current entry instead —
    * which also repairs every URL already in someone's inbox.
    *
-   * Fires for the share's OWN entry doc, in two states: gone entirely, or
+   * Fires for the share's own entry doc, in two states: gone entirely, or
    * kept as a stale tombstone (the usual rename outcome — the doc survives so
    * its threads do). Deliberately NOT for any other stale member: those are
    * listed in the tree precisely so a stranded thread stays readable, and
@@ -218,9 +218,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     if (method !== 'GET' || !target.workspaceId) return null;
     if (!pathname.startsWith('/review/')) return null;
     const docId = decodeURIComponent(pathname.slice('/review/'.length));
-    if (!docId) return null;
+    // ONLY the share's own entry. Repairing an arbitrary docId would answer
+    // a question the scope check deliberately refuses: a missing id would
+    // redirect while a real id belonging to someone else's workspace 403s,
+    // handing a visitor an existence oracle they never had before. Every
+    // docId other than this share's entry gets the same 403 it always did.
+    if (docId !== target.docId) return null;
     const room = rooms.get(docId);
-    if (room && !(docId === target.docId && room.meta.stale)) return null;
+    if (room && !room.meta.stale) return null;
     const entry = currentWorkspaceEntry(target.workspaceId);
     if (!entry || entry === docId) return null;
     return new Response(null, {

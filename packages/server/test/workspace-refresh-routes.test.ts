@@ -241,7 +241,8 @@ describe('workspace refresh routes', () => {
         writeFileSync(join(src, 'other.md'), '# Other\n\nhi\n');
         const bind = await post('/api/workspaces', { folderPath: src });
         const wsId = ((await bind.json()) as { workspaceId: string }).workspaceId;
-        await post(`/api/workspaces/${wsId}/context-file`, { relPath: 'other.md' });
+        const opened = await post(`/api/workspaces/${wsId}/context-file`, { relPath: 'other.md' });
+        const otherDocId = ((await opened.json()) as { docId: string }).docId;
         const mint = await post('/api/share/link', { workspaceId: wsId });
         const share = ((await mint.json()) as { share: { slug: string; docId: string } }).share;
 
@@ -254,16 +255,13 @@ describe('workspace refresh routes', () => {
         )?.[1];
 
         renameSync(join(src, 'README.md'), join(src, 'INTRO.md'));
-        // The doc still EXISTS until it's cleaned up, so simulate the harder
-        // case: a bookmark naming a member docId that is truly gone.
-        const gone = `${wsId}:deleted-file.md`;
-        const visit = await fetch(`${base}/review/${encodeURIComponent(gone)}`, {
+        await post(`/api/workspaces/${wsId}/refresh`, {});
+        const visit = await fetch(`${base}/review/${encodeURIComponent(share.docId)}`, {
           redirect: 'manual',
           headers: { host: PUBLIC_HOST, cookie: `${SHARE_COOKIE}=${cookie}` },
         });
         expect(visit.status).toBe(302);
-        expect(visit.headers.get('location')).toMatch(/^\/review\//);
-        expect(visit.headers.get('location')).not.toContain('deleted-file');
+        expect(visit.headers.get('location')).toBe(`/review/${encodeURIComponent(otherDocId)}`);
       } finally {
         rmSync(src, { recursive: true, force: true });
       }
@@ -409,6 +407,29 @@ describe('workspace refresh routes', () => {
       } finally {
         rmSync(src, { recursive: true, force: true });
       }
+    });
+
+    it('gives the same answer for a missing docId as for a real out-of-scope one', async () => {
+      // The repair must not become an existence oracle: probing an id that
+      // does not exist has to look exactly like probing one that does.
+      const mint = await post('/api/share/link', { workspaceId });
+      const share = ((await mint.json()) as { share: { slug: string } }).share;
+      const r = await fetch(`${base}/s/${share.slug}`, {
+        redirect: 'manual',
+        headers: { host: PUBLIC_HOST },
+      });
+      const cookie = (r.headers.get('set-cookie') ?? '').match(
+        new RegExp(`${SHARE_COOKIE}=([^;]+)`),
+      )?.[1];
+      const probe = (id: string) =>
+        fetch(`${base}/review/${encodeURIComponent(id)}`, {
+          redirect: 'manual',
+          headers: { host: PUBLIC_HOST, cookie: `${SHARE_COOKIE}=${cookie}` },
+        });
+      const missing = await probe(`${workspaceId}:no-such-file.md`);
+      const realElsewhere = await probe(`${reviewId}:src~a.ts`);
+      expect(missing.status).toBe(403);
+      expect(realElsewhere.status).toBe(missing.status);
     });
 
     it('does NOT redirect a probe for a doc in a different workspace', async () => {

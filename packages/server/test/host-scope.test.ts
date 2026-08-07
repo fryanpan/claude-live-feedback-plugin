@@ -498,12 +498,26 @@ describe('workspace share over HTTP', () => {
     // An Access share hands out /review/<entryDocId> directly and is never
     // redeemed, so there is no other moment to re-resolve it. Renaming the
     // entry file used to leave that emailed URL pointing at nothing.
-    const gone = `${workspaceId}:renamed-away.md`;
-    const r = await asVisitor(`/review/${encodeURIComponent(gone)}`, { redirect: 'manual' });
+    // Give the workspace a survivor, then drop the entry doc — the same
+    // "entry is gone" state a renamed entry file produces, reachable here
+    // without the folder (setup deletes it).
+    const opened = await asVisitor(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/editable-file`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ relPath: 'design.md' }),
+      },
+    );
+    const survivor = ((await opened.json()) as { docId: string }).docId;
+    await fetch(`${base}/api/docs/${encodeURIComponent(entryDocId)}?force=true`, {
+      method: 'DELETE',
+      headers: { host: `localhost:${handle.port}` },
+    });
+
+    const r = await asVisitor(`/review/${encodeURIComponent(entryDocId)}`, { redirect: 'manual' });
     expect(r.status).toBe(302);
-    const location = r.headers.get('location') ?? '';
-    expect(location).toMatch(/^\/review\//);
-    expect(location).not.toContain('renamed-away');
+    expect(r.headers.get('location')).toBe(`/review/${encodeURIComponent(survivor)}`);
   });
 
   it('does not turn the repair into an oracle for docs outside the share', async () => {
