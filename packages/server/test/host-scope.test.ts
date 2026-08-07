@@ -529,6 +529,74 @@ describe('workspace share over HTTP', () => {
     expect(r.status).toBe(403);
   });
 
+  it('CANNOT post a comment signed as Bryan', async () => {
+    // The write endpoints take `author` straight from the body. On the
+    // tailnet that's fine; from a share link it means a stranger could sign
+    // feedback as the person who asked for it.
+    // Its own doc, not the shared entry — a sibling test deletes that one.
+    const opened = await asVisitor(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/editable-file`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ relPath: 'design.md' }),
+      },
+    );
+    const target = ((await opened.json()) as { docId: string }).docId;
+    const r = await asVisitor(`/api/docs/${encodeURIComponent(target)}/threads/by_find`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        author: { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' },
+        text: 'looks great, ship it',
+        find: 'plan',
+      }),
+    });
+    expect(r.status).toBe(200);
+    const listed = await req(
+      `/api/docs/${encodeURIComponent(target)}/threads`,
+      `localhost:${handle.port}`,
+    );
+    const { threads } = (await listed.json()) as {
+      threads: Array<{ comments: Array<{ author: { id: string; name: string } }> }>;
+    };
+    const authors = threads.flatMap((t) => t.comments.map((c) => c.author));
+    expect(authors.length).toBeGreaterThan(0);
+    for (const a of authors) {
+      expect(a.id).not.toBe('known-bryan');
+      expect(a.id).toStartWith('guest-');
+      expect(a.name).not.toBe('Bryan');
+    }
+  });
+
+  it('CANNOT record reading activity as Bryan by omitting the author', async () => {
+    // /activity used to DEFAULT to Bryan when no author was sent.
+    const opened = await asVisitor(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/editable-file`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ relPath: 'design.md' }),
+      },
+    );
+    const target = ((await opened.json()) as { docId: string }).docId;
+    const r = await asVisitor(`/api/docs/${encodeURIComponent(target)}/activity`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'doc_open', payload: {} }),
+    });
+    expect(r.status).toBe(200);
+    const feed = await req('/api/activity', `localhost:${handle.port}`);
+    if (feed.status === 200) {
+      const body = (await feed.json()) as {
+        events?: Array<{ actor?: { id?: string; name?: string } }>;
+      };
+      for (const e of body.events ?? []) {
+        expect(e.actor?.id).not.toBe('known-bryan');
+      }
+    }
+  });
+
   it("CANNOT reshape the workspace — refresh and regroup are the owner's calls", async () => {
     // A visitor reads and comments. Deciding which files are under review,
     // and how the sidebar organizes them, stays with whoever shared it.

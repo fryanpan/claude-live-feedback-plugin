@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { dismissNamePrompt, needsNamePrompt, resolveUser, storeUserName } from '../src/identity.ts';
+import {
+  GUEST_ANIMALS,
+  dismissNamePrompt,
+  guestNameFor,
+  needsNamePrompt,
+  resolveUser,
+  storeUserName,
+} from '../src/identity.ts';
 
 function mockStorage() {
   const m = new Map<string, string>();
@@ -30,7 +37,8 @@ describe('resolveUser', () => {
     const u2 = resolveUser(null, s);
     expect(u1.kind).toBe('anon');
     expect(u1.id).toBe(u2.id);
-    expect(u1.name).toMatch(/^Anon-/);
+    expect(u1.name).toMatch(/^Anonymous [A-Z]/);
+    expect(u1.name).toBe(u2.name);
   });
 
   it('anon has a deterministic color per id', () => {
@@ -99,6 +107,51 @@ describe('resolveUser', () => {
     const s = mockStorage();
     storeUserName(s, 'x'.repeat(500));
     expect(resolveUser(null, s).name.length).toBeLessThanOrEqual(40);
+  });
+});
+
+describe('guest names', () => {
+  // A guest who lands and doesn't pick a name still needs to be referable —
+  // "Anon-a3f9k2" is an id with a human-readable costume on, and nobody can
+  // say it out loud in a review. An animal is memorable and pronounceable.
+  it('gives an unnamed guest a readable animal name', () => {
+    const u = resolveUser(null, mockStorage());
+    expect(u.kind).toBe('anon');
+    expect(u.name).toMatch(/^Anonymous [A-Z][a-z]+$/);
+  });
+
+  it('keeps the SAME animal for the same browser across visits', () => {
+    // The anon id is already stable and their earlier comments hang off it;
+    // a name that reshuffled on reload would make one person look like many.
+    const s = mockStorage();
+    const first = resolveUser(null, s);
+    const second = resolveUser(null, s);
+    expect(second.name).toBe(first.name);
+    expect(guestNameFor('abc123')).toBe(guestNameFor('abc123'));
+  });
+
+  it('gives different ids different animals often enough to be useful', () => {
+    const names = new Set(Array.from({ length: 200 }, (_, i) => guestNameFor(`id-${i}`)));
+    // Not a uniqueness guarantee — a hash over a finite list collides — but a
+    // handful of concurrent guests should almost never clash.
+    expect(names.size).toBeGreaterThan(GUEST_ANIMALS.length / 2);
+  });
+
+  it('every animal in the list is a single capitalized word', () => {
+    for (const a of GUEST_ANIMALS) expect(a).toMatch(/^[A-Z][a-z]+$/);
+    expect(new Set(GUEST_ANIMALS).size).toBe(GUEST_ANIMALS.length);
+    expect(GUEST_ANIMALS.length).toBeGreaterThanOrEqual(24);
+  });
+
+  it('a guest who then names themselves drops the animal', () => {
+    const s = mockStorage();
+    expect(resolveUser(null, s).name).toMatch(/^Anonymous /);
+    storeUserName(s, 'Casey');
+    expect(resolveUser(null, s).name).toBe('Casey');
+  });
+
+  it('handles an empty id without throwing', () => {
+    expect(guestNameFor('')).toMatch(/^Anonymous [A-Z][a-z]+$/);
   });
 });
 

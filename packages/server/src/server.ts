@@ -24,11 +24,22 @@ import {
 } from './share/link-session.ts';
 import { Shares } from './share/shares.ts';
 import type { ShareConfig } from './share/types.ts';
+import { sanitizeVisitorAuthor } from './share/visitor-identity.ts';
 import { SseHub, openSseStream } from './sse.ts';
 import { type WebhookLogEntry, createWebhookDispatcher } from './webhooks.ts';
 import { onClose, onMessage, onOpen } from './yjs-protocol.ts';
 
 const DEFAULT_PORT = Number(process.env.PORT ?? 8787);
+
+/** Attribution for a write that arrived with no author at all. Deliberately
+ *  NOT Bryan: an unattributed action must never gain his authority just
+ *  because a field was missing. */
+const ANONYMOUS_ACTOR: User = {
+  id: 'anon-unattributed',
+  name: 'Anonymous',
+  kind: 'anon',
+  color: '#8a8a8a',
+};
 
 export interface ServerOptions {
   port?: number;
@@ -295,6 +306,25 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // local names bypass; a share host is gated AND scoped; anything else
       // is denied even when Access isn't configured, so a half-configured
       // deployment fails closed instead of publishing the API.
+      /**
+       * The author to attribute a write to. On the tailnet the body is
+       * trusted (it's Bryan's browser or his own agents). From a share
+       * visitor it is NOT: their claimed identity is rewritten into the
+       * `guest-` namespace so nobody can post as a member of the fleet.
+       */
+      const authorFor = (claimed: unknown): User | undefined => {
+        if (visitor) {
+          return sanitizeVisitorAuthor(claimed, {
+            shareKey: visitor.workspaceId ?? visitor.docId,
+          });
+        }
+        return claimed as User | undefined;
+      };
+
+      // Set when this request comes from a SHARE visitor (either mode).
+      // Everything below treats a non-null value as "untrusted outsider":
+      // their claimed identity is rewritten and doc metadata is redacted.
+      let visitor: ShareTarget | null = null;
       {
         const decision = classifyHost(req.headers.get('host'), {
           tailscaleHost: tailscaleHost(),
@@ -346,6 +376,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           ) {
             return j(403, { error: 'out_of_share_scope' });
           }
+          visitor = decision.target;
         } else if (decision.kind === 'link') {
           // Redeeming a link is the ONLY thing reachable here without a
           // session — that request is what mints one.
@@ -365,6 +396,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             ) {
               return j(403, { error: 'out_of_share_scope' });
             }
+            visitor = target;
           }
         } else if (cfAccessVerifier && !shares) {
           // Legacy whole-server mode: cfAccess configured WITHOUT per-share
@@ -899,7 +931,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           if (threadRest === '/comments' && req.method === 'POST') {
             const body = await safeJson(req);
-            const user = body?.author as User | undefined;
+            const user = authorFor(body?.author);
             const text = body?.text as string | undefined;
             if (!user || !text) return j(400, { error: 'author + text required' });
             const t = await rooms.postComment(docId, threadId, user, text);
@@ -907,13 +939,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           if (threadRest === '/resolve' && req.method === 'POST') {
             const body = await safeJson(req);
-            const author = body?.author as User | undefined;
+            const author = authorFor(body?.author);
             const t = rooms.resolve(docId, threadId, author);
             return t ? j(200, { thread: t }) : j(404, { error: 'thread not found' });
           }
           if (threadRest === '/reopen' && req.method === 'POST') {
             const body = await safeJson(req);
-            const author = body?.author as User | undefined;
+            const author = authorFor(body?.author);
             const t = rooms.reopen(docId, threadId, author);
             return t ? j(200, { thread: t }) : j(404, { error: 'thread not found' });
           }
@@ -929,7 +961,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             const replacement = String(body?.replacement ?? '');
             const parseInlineMarks = body?.parseInlineMarks === true;
             if (body?.suggest === true) {
-              const author = parseSuggestionAuthor(body);
+              const author = parseSuggestionAuthor(
+                visitor ? { author: authorFor(body?.author) } : body,
+              );
               if (!author) return j(400, { error: 'author required when suggest is true' });
               const res = rooms.createSuggestionForThread(docId, threadId, {
                 replacement,
@@ -958,7 +992,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         }
         if (rest === 'threads' && req.method === 'POST') {
           const body = await safeJson(req);
-          const user = body?.author as User | undefined;
+          const user = authorFor(body?.author);
           const text = body?.text as string | undefined;
           const anchor = body?.anchor as Anchor | undefined;
           if (!user || !text || !anchor) {
@@ -969,7 +1003,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         }
         if (rest === 'threads/by_find' && req.method === 'POST') {
           const body = await safeJson(req);
-          const author = body?.author as User | undefined;
+          const author = authorFor(body?.author);
           const text = body?.text as string | undefined;
           const find = body?.find ? String(body.find) : '';
           if (!author || !text || find.length === 0) {
@@ -1050,12 +1084,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             return j(400, { error: 'type must be read_session or doc_open' });
           }
           const payload = (body?.payload as Record<string, unknown> | undefined) ?? {};
-          const author = (body?.author as User | undefined) ?? {
-            id: 'known-bryan',
-            name: 'Bryan',
-            kind: 'known' as const,
-            color: '#2e7dd7',
-          };
+          // Never DEFAULT to Bryan. This endpoint is in a share visitor's
+          // scope, so an omitted author used to record their reading
+          // activity as his — the one identity on the server that carries
+          // any weight. An unattributed read is now unattributed.
+          const author = authorFor(body?.author) ?? ANONYMOUS_ACTOR;
           const res = rooms.recordReadEvent(docId, type, payload, author);
           return res.ok ? j(200, { ok: true }) : j(404, res);
         }
@@ -1108,7 +1141,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const occurrence =
             typeof body?.occurrence === 'number' ? Number(body.occurrence) : undefined;
           if (body?.suggest === true) {
-            const author = parseSuggestionAuthor(body);
+            const author = parseSuggestionAuthor(
+              visitor ? { author: authorFor(body?.author) } : body,
+            );
             if (!author) return j(400, { error: 'author required when suggest is true' });
             const res = rooms.createSuggestion(docId, {
               find,
