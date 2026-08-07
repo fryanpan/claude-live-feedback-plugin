@@ -308,6 +308,40 @@ describe('workspace refresh routes', () => {
       }
     });
 
+    it('binds a live file when the ONLY bound doc is the renamed entry', async () => {
+      // The common browse case: bind_folder binds just the entry, so renaming
+      // that one file leaves nothing but a tombstone. The folder is still full
+      // of files one lazy open away — land on one instead of on the ghost.
+      const src = mkdtempSync(join(tmpdir(), 'wsr-solo-'));
+      try {
+        writeFileSync(join(src, 'README.md'), '# Landing\n\nhi\n');
+        writeFileSync(join(src, 'guide.md'), '# Guide\n\nhi\n');
+        const bind = await post('/api/workspaces', { folderPath: src });
+        const body = (await bind.json()) as {
+          workspaceId: string;
+          files: Array<{ docId: string }>;
+        };
+        expect(body.files).toHaveLength(1); // only the entry is bound
+        const mint = await post('/api/share/link', { workspaceId: body.workspaceId });
+        const share = ((await mint.json()) as { share: { slug: string; docId: string } }).share;
+
+        renameSync(join(src, 'README.md'), join(src, 'INTRO.md'));
+        await post(`/api/workspaces/${body.workspaceId}/refresh`, {});
+
+        const r = await fetch(`${base}/s/${share.slug}`, {
+          redirect: 'manual',
+          headers: { host: PUBLIC_HOST },
+        });
+        expect(r.status).toBe(302);
+        const location = r.headers.get('location') ?? '';
+        expect(location).not.toContain('README');
+        // Landed on a file that actually exists — INTRO.md or guide.md.
+        expect(location).toMatch(/INTRO\.md|guide\.md/);
+      } finally {
+        rmSync(src, { recursive: true, force: true });
+      }
+    });
+
     it('still lets a visitor OPEN a stale file that is not the entry', async () => {
       // Stale members are listed in the tree so stranded threads stay
       // readable. Bouncing a visitor off one would defeat that.

@@ -1,6 +1,13 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { extname, join } from 'node:path';
-import { type Anchor, type DocType, type User, contentKind, suggestOps } from '@feedback/core';
+import {
+  type Anchor,
+  type DocMeta,
+  type DocType,
+  type User,
+  contentKind,
+  suggestOps,
+} from '@feedback/core';
 import { showFile } from './git-diff.ts';
 import { type CfAccessOptions, createCfAccessVerifier } from './middleware/cf-access.ts';
 import { type ShareTarget, classifyHost, shareScopeAllows } from './middleware/host-guard.ts';
@@ -135,19 +142,43 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * because a member docId encodes the file's relPath — renaming the entry
    * file changes its docId.
    */
-  const currentWorkspaceEntry = (workspaceId: string, preferred?: string): string | null =>
-    resolveShareEntry(
+  const currentWorkspaceEntry = (workspaceId: string, preferred?: string): string | null => {
+    const members = rooms.list().filter((m) => m.workspaceId === workspaceId);
+    const resolved = resolveShareEntry(
       preferred,
-      rooms
-        .list()
-        .filter((m) => m.workspaceId === workspaceId)
-        .map((m) => ({
-          docId: m.docId,
-          ...(m.relPath ? { relPath: m.relPath } : {}),
-          ...(m.stale ? { stale: true } : {}),
-          ...(m.type === 'diff' ? { isChangedFile: true } : {}),
-        })),
+      members.map((m) => ({
+        docId: m.docId,
+        ...(m.relPath ? { relPath: m.relPath } : {}),
+        ...(m.stale ? { stale: true } : {}),
+        ...(m.type === 'diff' ? { isChangedFile: true } : {}),
+      })),
     );
+    // Everything bound is a tombstone. A BROWSE workspace usually has exactly
+    // one bound doc — its entry — so renaming that one file is the common
+    // case, and there is no survivor to fall back to. But the folder is full
+    // of files that are one lazy open away; the sidebar lists them already.
+    // Bind the best of them rather than land the visitor on a ghost.
+    const winner = resolved ? members.find((m) => m.docId === resolved) : undefined;
+    if (!resolved || winner?.stale) {
+      const live = liveFileEntry(workspaceId, members);
+      if (live) return live;
+    }
+    return resolved;
+  };
+
+  /** Lazily bind the best on-disk file of a workspace as a landing doc. */
+  const liveFileEntry = (workspaceId: string, members: DocMeta[]): string | null => {
+    const listed = rooms.listRepoFiles(workspaceId);
+    if (!listed.ok || !listed.files) return null;
+    const bound = new Set(members.map((m) => m.relPath));
+    const candidates = listed.files
+      .filter((f) => !bound.has(f.relPath))
+      .map((f) => ({ docId: f.relPath, relPath: f.relPath }));
+    const pick = resolveShareEntry(undefined, candidates);
+    if (!pick) return null;
+    const opened = rooms.openContextFile(workspaceId, pick);
+    return opened.ok ? opened.docId : null;
+  };
 
   /**
    * Repair a share visitor's `/review/<docId>` when that doc is gone.

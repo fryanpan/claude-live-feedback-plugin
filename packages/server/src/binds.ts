@@ -306,7 +306,7 @@ export function bindDiff(host: BindHost, opts: BindDiffOpts): BindDiffResult {
     const entryDocId = memberDocId(reviewId, entryRel);
     // The workspace has no registry — its members ARE the record, so the
     // bind-time config rides along on them for refreshWorkspace to read back.
-    rememberWorkspaceConfig(host, entryDocId, opts);
+    rememberWorkspaceConfig(host, reviewId, opts);
     return {
       ok: true,
       reviewId,
@@ -447,7 +447,6 @@ export function bindDiff(host: BindHost, opts: BindDiffOpts): BindDiffResult {
     const groupAssignment =
       opts.groups || room.meta.diffGroup === undefined ? groupOf.get(entry.relPath) : undefined;
     refreshDiffMeta(room, entry, groupAssignment);
-    rememberWorkspaceConfig(host, docId, opts);
     // Being accepted here IS being part of the diff, so a member that had
     // gone stale stops rendering as a ghost. Re-running create_diff_review is
     // documented as an idempotent refresh path; leaving the flag set would
@@ -481,6 +480,13 @@ export function bindDiff(host: BindHost, opts: BindDiffOpts): BindDiffResult {
       group: groupOf.get(entry.relPath)?.group,
     });
   }
+
+  // AFTER the loop, and across EVERY member — not just the ones this bind
+  // accepted. Narrowing a review leaves the newly-excluded members untouched,
+  // so writing config only to accepted files would leave them holding the old
+  // exclude/groups/maxFiles — and refreshWorkspace, which reads the config off
+  // whichever member it finds first, would replay that obsolete scope.
+  rememberWorkspaceConfig(host, reviewId, opts);
 
   return {
     ok: true,
@@ -841,7 +847,7 @@ export function setWorkspaceGroups(
  */
 function rememberWorkspaceConfig(
   host: BindHost,
-  docId: string,
+  workspaceId: string,
   opts: { exclude?: string[]; groups?: BindDiffOpts['groups']; maxFiles?: number },
 ): void {
   const next: Array<[keyof DocMeta, unknown]> = [];
@@ -849,7 +855,9 @@ function rememberWorkspaceConfig(
   if (opts.groups !== undefined) next.push(['workspaceGroups', opts.groups]);
   if (opts.maxFiles !== undefined) next.push(['workspaceMaxFiles', opts.maxFiles]);
   if (next.length === 0) return;
-  writeMeta(host, docId, next);
+  for (const m of host.list()) {
+    if (m.workspaceId === workspaceId) writeMeta(host, m.docId, next);
+  }
 }
 
 /** Set (or, for an undefined value, DELETE) meta keys on a room, skipping

@@ -233,6 +233,27 @@ describe('Rooms.refreshWorkspace — diff review', () => {
     expect(rooms.list().some((m) => m.relPath === 'src/b.ts')).toBe(false);
   });
 
+  it('replays the NEWEST exclude, not one left on an untouched member', () => {
+    // Narrowing a review leaves the newly-excluded member untouched, so if
+    // config were written only to accepted files that member would still hold
+    // the old exclude — and refresh, which reads config off whichever member
+    // it finds first, could replay the obsolete scope and re-include it.
+    writeFileSync(join(repo, 'src', 'b.ts'), 'const b = 2;\n');
+    const first = rooms.bindDiff({ repoPath: repo, base, exclude: ['nothing'] });
+    if (!first.ok) throw new Error('bind failed');
+    expect(first.files).toHaveLength(2);
+
+    // Narrow to drop src/a.ts — which is the FIRST member in insertion order,
+    // so a config read that stops at the first match would find the member
+    // this bind never touched, still holding exclude ['nothing'].
+    rooms.bindDiff({ repoPath: repo, base, exclude: ['nothing', 'src/a.ts'] });
+    const res = rooms.refreshWorkspace(first.reviewId);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.stale.map((x) => x.relPath)).toEqual(['src/a.ts']);
+    expect(res.added).toEqual([]);
+  });
+
   it("files a newly-added file into the caller's groups, not the heuristic", () => {
     const bound = rooms.bindDiff({
       repoPath: repo,
