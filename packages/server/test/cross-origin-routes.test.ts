@@ -26,6 +26,7 @@ describe('cross-origin access to the trusted host', () => {
   let dataDir: string;
   let base: string;
   let host: string;
+  let docPath: string;
 
   const req = (path: string, origin: string | null, init: RequestInit = {}) =>
     fetch(`${base}${path}`, {
@@ -40,7 +41,7 @@ describe('cross-origin access to the trusted host', () => {
 
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'cross-origin-'));
-    const docPath = join(dataDir, 'notes.md');
+    docPath = join(dataDir, 'notes.md');
     writeFileSync(docPath, `# Notes\n\n${CANARY}.\n`);
     handle = createServer({
       port: 0,
@@ -122,6 +123,55 @@ describe('cross-origin access to the trusted host', () => {
       });
       expect(ok.headers.get('access-control-allow-origin')).toBe('http://localhost:3000');
       expect(ok.status).toBe(204);
+    });
+
+    it('REFUSES a simple-request write from a disallowed origin', async () => {
+      // CORS only withholds the RESPONSE. A `text/plain` POST is a "simple
+      // request", so it is never preflighted — the browser sends it and the
+      // write lands, the page just can't read the reply. safeJson() parses the
+      // body regardless of content-type, so this was a working CSRF write:
+      // post comments, or create a doc bound to any file on the machine.
+      const r = await req('/api/docs', EVIL, {
+        method: 'POST',
+        headers: { 'content-type': 'text/plain' },
+        body: JSON.stringify({ docId: 'csrf-made-this', type: 'markdown', sourceUrl: docPath }),
+      });
+      expect(r.status).toBe(403);
+      // The write must not have happened. Fetched as a non-browser caller so
+      // this checks the SERVER's state, not what CORS let us see.
+      expect((await req('/api/docs/csrf-made-this', null)).status).toBe(404);
+    });
+
+    it('refuses a DELETE from a disallowed origin', async () => {
+      const r = await req('/api/docs/doc-1', EVIL, { method: 'DELETE' });
+      expect(r.status).toBe(403);
+      expect((await req('/api/docs/doc-1', null)).status).toBe(200);
+    });
+
+    it('still allows writes from an allowed origin — POSITIVE CONTROL', async () => {
+      // Otherwise the two assertions above would pass on a server that refuses
+      // every write from everyone.
+      const r = await req('/api/docs', 'http://localhost:3000', {
+        method: 'POST',
+        body: JSON.stringify({ docId: 'widget-made-this', type: 'markdown', sourceUrl: docPath }),
+      });
+      expect(r.status).toBe(200);
+      expect((await req('/api/docs/widget-made-this', null)).status).toBe(200);
+    });
+
+    it('still allows writes from a non-browser caller — agents and MCP', async () => {
+      const r = await req('/api/docs', null, {
+        method: 'POST',
+        body: JSON.stringify({ docId: 'agent-made-this', type: 'markdown', sourceUrl: docPath }),
+      });
+      expect(r.status).toBe(200);
+    });
+
+    it('still lets a disallowed origin issue a GET — CORS withholds the body', async () => {
+      // Blocking reads outright isn't the job here: the response simply never
+      // reaches the page. Keeping GET working avoids breaking <script>/<img>
+      // style loads of the widget bundle from arbitrary dev sites.
+      expect((await req('/api/docs/doc-1', EVIL)).status).toBe(200);
     });
 
     it('still serves same-origin and non-browser callers normally', async () => {
