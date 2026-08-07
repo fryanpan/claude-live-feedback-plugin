@@ -320,6 +320,38 @@ describe('host gate + share scoping over HTTP', () => {
       expect((await asVisitor('/app/app.js')).status).not.toBe(403);
     });
   });
+
+  describe('C. an expired share host stops being a share host', () => {
+    // Link mode re-checks liveness on every request (linkSessionTarget uses
+    // findLive). Access mode resolved the host with findByHostname, which does
+    // not look at expiresAt — so a share past its TTL still classified as a
+    // share, still passed the Access gate, and served the doc. Closing its
+    // websockets (the sweep) didn't help: the visitor just reconnected.
+    it('serves the doc while the share is live', async () => {
+      // POSITIVE CONTROL for the assertion below.
+      expect((await asVisitor(`/api/docs/${SHARED}`)).status).toBe(200);
+    });
+
+    it('refuses every request on the hostname once the TTL has passed', async () => {
+      const share = handle.shares?.list().find((s) => s.hostname === shareHost);
+      expect(share).toBeTruthy();
+      const restore = share?.expiresAt ?? 0;
+      if (share) share.expiresAt = Date.now() - 1;
+      try {
+        const r = await asVisitor(`/api/docs/${SHARED}`);
+        expect(r.status).toBe(403);
+        expect(await r.json()).toEqual({ error: 'unknown_host' });
+        // ...and it can't reconnect its websocket either.
+        expect((await asVisitor(`/review/${SHARED}`)).status).toBe(403);
+      } finally {
+        if (share) share.expiresAt = restore;
+      }
+    });
+
+    it('works again once the share is live — the host itself is not blacklisted', async () => {
+      expect((await asVisitor(`/api/docs/${SHARED}`)).status).toBe(200);
+    });
+  });
 });
 
 /**
@@ -527,6 +559,109 @@ describe('workspace share over HTTP', () => {
       redirect: 'manual',
     });
     expect(r.status).toBe(403);
+  });
+
+  it('is not shown the absolute paths or the tailnet host', async () => {
+    // GET /api/docs/<id> is IN a visitor's scope — they need it to render —
+    // but the full DocMeta describes Bryan's machine, not the document.
+    const opened = await asVisitor(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/editable-file`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ relPath: 'design.md' }),
+      },
+    );
+    const target = ((await opened.json()) as { docId: string }).docId;
+    const r = await asVisitor(`/api/docs/${encodeURIComponent(target)}`);
+    expect(r.status).toBe(200);
+    const raw = await r.text();
+    expect(raw).not.toContain('/Volumes/');
+    expect(raw).not.toContain('tailb53801');
+    expect(raw).not.toContain('.ts.net');
+    const { meta } = JSON.parse(raw) as { meta: Record<string, unknown> };
+    expect(meta.sourceUrl).toBeUndefined();
+    expect(meta.owner).toBeUndefined();
+    expect(meta.workspaceRoot).toBeUndefined();
+    // …while still carrying what the editor needs.
+    expect(meta.docId).toBe(target);
+    expect(meta.relPath).toBe('design.md');
+  });
+
+  it('still gives the OWNER the full metadata over the tailnet', async () => {
+    const r = await req(`/api/docs/${encodeURIComponent(entryDocId)}`, `localhost:${handle.port}`);
+    if (r.status === 200) {
+      const { meta } = (await r.json()) as { meta: Record<string, unknown> };
+      expect(meta.sourceUrl).toBeDefined();
+    }
+  });
+
+  it('CANNOT post a comment signed as Bryan', async () => {
+    // The write endpoints take `author` straight from the body. On the
+    // tailnet that's fine; from a share link it means a stranger could sign
+    // feedback as the person who asked for it.
+    // Its own doc, not the shared entry — a sibling test deletes that one.
+    const opened = await asVisitor(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/editable-file`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ relPath: 'design.md' }),
+      },
+    );
+    const target = ((await opened.json()) as { docId: string }).docId;
+    const r = await asVisitor(`/api/docs/${encodeURIComponent(target)}/threads/by_find`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        author: { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' },
+        text: 'looks great, ship it',
+        find: 'plan',
+      }),
+    });
+    expect(r.status).toBe(200);
+    const listed = await req(
+      `/api/docs/${encodeURIComponent(target)}/threads`,
+      `localhost:${handle.port}`,
+    );
+    const { threads } = (await listed.json()) as {
+      threads: Array<{ comments: Array<{ author: { id: string; name: string } }> }>;
+    };
+    const authors = threads.flatMap((t) => t.comments.map((c) => c.author));
+    expect(authors.length).toBeGreaterThan(0);
+    for (const a of authors) {
+      expect(a.id).not.toBe('known-bryan');
+      expect(a.id).toStartWith('guest-');
+      expect(a.name).not.toBe('Bryan');
+    }
+  });
+
+  it('CANNOT record reading activity as Bryan by omitting the author', async () => {
+    // /activity used to DEFAULT to Bryan when no author was sent.
+    const opened = await asVisitor(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/editable-file`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ relPath: 'design.md' }),
+      },
+    );
+    const target = ((await opened.json()) as { docId: string }).docId;
+    const r = await asVisitor(`/api/docs/${encodeURIComponent(target)}/activity`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'doc_open', payload: {} }),
+    });
+    expect(r.status).toBe(200);
+    const feed = await req('/api/activity', `localhost:${handle.port}`);
+    if (feed.status === 200) {
+      const body = (await feed.json()) as {
+        events?: Array<{ actor?: { id?: string; name?: string } }>;
+      };
+      for (const e of body.events ?? []) {
+        expect(e.actor?.id).not.toBe('known-bryan');
+      }
+    }
   });
 
   it("CANNOT reshape the workspace — refresh and regroup are the owner's calls", async () => {

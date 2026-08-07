@@ -41,6 +41,87 @@ function randomAnonId(): string {
   return Math.random().toString(36).slice(2, 8);
 }
 
+/**
+ * Names for guests who land on a share link and don't pick one.
+ *
+ * A raw id ("Anon-a3f9k2") is unusable in a review: nobody can say it out
+ * loud, and two of them are indistinguishable at a glance. An animal is
+ * pronounceable, memorable, and obviously a placeholder rather than a
+ * claim to be someone.
+ *
+ * Kept to single common words so "Anonymous <X>" always reads naturally,
+ * and deliberately free of anything that could land as a jab at the person
+ * it gets assigned to.
+ */
+export const GUEST_ANIMALS = [
+  'Turtle',
+  'Otter',
+  'Badger',
+  'Heron',
+  'Falcon',
+  'Panda',
+  'Walrus',
+  'Ibex',
+  'Lemur',
+  'Marmot',
+  'Narwhal',
+  'Ocelot',
+  'Puffin',
+  'Quokka',
+  'Raccoon',
+  'Tapir',
+  'Wombat',
+  'Yak',
+  'Zebra',
+  'Antelope',
+  'Bison',
+  'Capybara',
+  'Dolphin',
+  'Egret',
+  'Ferret',
+  'Gecko',
+  'Hedgehog',
+  'Iguana',
+  'Kestrel',
+  'Lynx',
+  'Manatee',
+  'Newt',
+  'Osprey',
+  'Pelican',
+  'Salamander',
+  'Toucan',
+  'Vole',
+  'Weasel',
+  'Albatross',
+  'Beaver',
+  'Cormorant',
+  'Dormouse',
+  'Elk',
+  'Finch',
+  'Gopher',
+  'Hare',
+  'Jackdaw',
+  'Kingfisher',
+] as const;
+
+/**
+ * The guest name for a stable anon id — DERIVED, not drawn at random, so a
+ * guest keeps the same animal across reloads. Their comments already hang
+ * off this id; a name that reshuffled on every load would make one person
+ * look like a crowd.
+ *
+ * A hash over a finite list collides, so this is not a uniqueness
+ * guarantee. Two guests who draw the same animal still get different
+ * colors (both derive from the id, and the color space is far larger).
+ */
+export function guestNameFor(anonId: string): string {
+  let h = 0;
+  for (let i = 0; i < anonId.length; i++) {
+    h = (h * 31 + anonId.charCodeAt(i)) >>> 0;
+  }
+  return `Anonymous ${GUEST_ANIMALS[h % GUEST_ANIMALS.length]}`;
+}
+
 type IdentityStorage = { get(k: string): string | null; set(k: string, v: string): void };
 
 const ANON_ID_KEY = 'feedback-anon-id';
@@ -123,7 +204,7 @@ export function resolveUser(
   return {
     id: `anon-${anon}`,
     kind: 'anon',
-    name: `Anon-${anon}`,
+    name: guestNameFor(anon),
     color: hashToColor(anon),
   };
 }

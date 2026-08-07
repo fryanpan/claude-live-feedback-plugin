@@ -60,12 +60,26 @@ import {
 } from './binds.ts';
 import { scanFolderPaths } from './fs-scan.ts';
 import { showFile } from './git-diff.ts';
+import {
+  deletePrivateMeta,
+  liftPrivateMetaFromYdoc,
+  readPrivateMeta,
+  writePrivateMeta,
+} from './private-meta.ts';
 import type { SseHub } from './sse.ts';
 import type { WebhookDispatcher } from './webhooks.ts';
 
 export type WsCtx = {
   docId: string;
   isAwarenessOrigin: symbol;
+  /**
+   * The share that authorized this socket, when it came from a share
+   * visitor. Authorization is checked at the HTTP upgrade and then never
+   * again for the life of the connection — so without this, revoking a
+   * share left every socket it had opened still connected and still
+   * writable. Absent for a socket opened over the tailnet.
+   */
+  shareId?: string;
 };
 
 export type FeedbackWs = ServerWebSocket<WsCtx>;
@@ -274,6 +288,7 @@ export class Rooms {
     try {
       const p = this.pathFor(docId);
       if (existsSync(p)) rmSync(p);
+      deletePrivateMeta(this.cfg.dataDir, docId);
     } catch (err) {
       console.error(`[rooms] failed to remove persisted ${docId}:`, err);
     }
@@ -373,7 +388,14 @@ export class Rooms {
     }
     const ydoc = new Y.Doc();
     this.loadFromDisk(docId, ydoc);
-    const restored = readDocMeta(ydoc);
+    // Private fields live in a sidecar, not the CRDT (see private-meta.ts).
+    // A `.ydoc` written before that change still carries them: lift them out
+    // — which also DELETES them from the doc, so the next share visitor to
+    // sync this room doesn't receive them — and let the sidecar win where
+    // both exist, since the sidecar is the one being maintained.
+    const legacyPrivate = liftPrivateMetaFromYdoc(ydoc);
+    const storedPrivate = { ...legacyPrivate, ...readPrivateMeta(this.cfg.dataDir, docId) };
+    const restored = { ...readDocMeta(ydoc), ...storedPrivate };
     const isNew = !restored.docId;
     const meta: DocMeta = (() => {
       if (!isNew) {
@@ -425,12 +447,24 @@ export class Rooms {
     // mutation by the next supervisor restart. Force a snapshot now so a
     // create_review_doc immediately followed by a `bun --watch` reload
     // doesn't lose the doc.
-    if (isNew) this.saveToDisk(room);
+    //
+    // A migrated legacy doc needs the same forced snapshot for the same
+    // reason — the lift's transaction also ran before wireEvents listened, so
+    // without this the private keys would still be in the `.ydoc` on disk and
+    // would come straight back on the next restart.
+    if (isNew || Object.keys(legacyPrivate).length > 0) this.saveToDisk(room);
     return room;
   }
 
   get(docId: string): DocRoom | undefined {
     return this.rooms.get(docId);
+  }
+
+  /** Schedule a persistence pass for a doc whose in-memory meta changed with
+   *  no accompanying CRDT update (the private sidecar keys). */
+  persistMeta(docId: string): void {
+    const room = this.rooms.get(docId);
+    if (room) this.saveToDisk(room);
   }
 
   async postComment(
@@ -1107,6 +1141,50 @@ export class Rooms {
     return bindDiffImpl(this, opts);
   }
 
+  /**
+   * Close every websocket a given share opened. Revocation and expiry are
+   * enforced per HTTP request, but a websocket is authorized ONCE at its
+   * upgrade — so an already-connected visitor kept reading and writing the
+   * doc after the share was revoked. Verified: the socket stayed open and
+   * writable while HTTP returned 401.
+   *
+   * 1008 is the "policy violation" close code, which is what this is.
+   */
+  closeSocketsForShare(shareId: string): number {
+    let closed = 0;
+    for (const meta of this.list()) {
+      const room = this.get(meta.docId);
+      if (!room) continue;
+      for (const ws of room.conns) {
+        if (ws.data?.shareId !== shareId) continue;
+        try {
+          ws.close(1008, 'share revoked');
+        } catch {
+          // Already gone — the close handler does the bookkeeping.
+        }
+        closed += 1;
+      }
+    }
+    return closed;
+  }
+
+  /** Close sockets whose authorizing share is no longer live (revoked or
+   *  expired). Returns the shareIds that were swept. */
+  closeSocketsForDeadShares(isLive: (shareId: string) => boolean): string[] {
+    const dead = new Set<string>();
+    for (const meta of this.list()) {
+      const room = this.get(meta.docId);
+      if (!room) continue;
+      for (const ws of room.conns) {
+        const id = ws.data?.shareId;
+        if (!id || isLive(id)) continue;
+        dead.add(id);
+      }
+    }
+    for (const id of dead) this.closeSocketsForShare(id);
+    return Array.from(dead);
+  }
+
   /** Re-reconcile a workspace against disk, keeping docIds (and therefore
    *  threads) stable — see binds.ts. */
   refreshWorkspace(workspaceId: string): RefreshWorkspaceResult {
@@ -1291,11 +1369,12 @@ export class Rooms {
     if (existing?.observer) fragment.unobserveDeep(existing.observer);
     const binding: FileBinding = { path: abs, lastMtimeMs: existing?.lastMtimeMs };
     this.fileBindings.set(docId, binding);
-    // sourceUrl mirrors the path so UI headers can show "Editing: <path>"
+    // sourceUrl records the bound path. It stays OUT of the CRDT (an absolute
+    // host path is exactly what a share visitor must not sync) — the sidecar
+    // is its home, and saveToDisk is what persists it.
     if (!room.meta.sourceUrl) {
-      const m = room.ydoc.getMap('meta');
-      room.ydoc.transact(() => m.set('sourceUrl', abs));
       room.meta.sourceUrl = abs;
+      this.saveToDisk(room);
     }
 
     // Attaching a NON-empty fragment (hydrate after a restart, or a re-run
@@ -1472,9 +1551,9 @@ export class Rooms {
     };
     this.fileBindings.set(docId, binding);
     if (!room.meta.sourceUrl) {
-      const m = room.ydoc.getMap('meta');
-      room.ydoc.transact(() => m.set('sourceUrl', abs));
+      // Sidecar, not CRDT — see attachFile above.
       room.meta.sourceUrl = abs;
+      this.saveToDisk(room);
     }
     if (opts.writeBack) {
       // doc → disk: same origin-guarded debounced writer as prose docs —
@@ -2570,6 +2649,11 @@ export class Rooms {
         try {
           const update = Y.encodeStateAsUpdate(room.ydoc);
           writeFileSync(this.pathFor(room.docId), update);
+          // The sidecar rides the SAME debounced write as the `.ydoc`. Two
+          // persistence paths would eventually disagree, and a doc whose
+          // sourceUrl went missing stops writing back to disk silently —
+          // the failure mode this whole change must not introduce.
+          writePrivateMeta(this.cfg.dataDir, room.docId, room.meta);
         } catch (err) {
           console.error(`[rooms] failed to persist ${room.docId}:`, err);
         }

@@ -36,7 +36,33 @@ describe('schema', () => {
     const m = readDocMeta(doc);
     expect(m.docId).toBe('d1');
     expect(m.type).toBe('markdown');
-    expect(m.sourceUrl).toBe('/x.md');
+    // sourceUrl is deliberately NOT persisted into the CRDT: the whole doc
+    // syncs to every client, share visitors included, and an absolute host
+    // path is exactly what they must not receive. The server keeps it in a
+    // sidecar (server/src/private-meta.ts).
+    expect(m.sourceUrl).toBeUndefined();
+  });
+
+  it('keeps host-describing fields out of the CRDT entirely', () => {
+    const doc = new Y.Doc();
+    initDocMeta(doc, {
+      docId: 'd2',
+      type: 'markdown',
+      createdAt: 1,
+      title: 'Public title',
+      relPath: 'notes.md',
+      sourceUrl: '/Volumes/Data/private/notes.md',
+      owner: '/Volumes/Data/private',
+      workspaceRoot: '/Volumes/Data/private',
+      producedBy: { agentId: 'some-agent', sessionId: 's1' },
+    });
+    const raw = JSON.stringify((doc.getMap('meta') as Y.Map<unknown>).toJSON());
+    expect(raw).not.toContain('/Volumes/');
+    expect(raw).not.toContain('some-agent');
+    // ...while everything that describes the DOCUMENT still round-trips.
+    const m = readDocMeta(doc);
+    expect(m.title).toBe('Public title');
+    expect(m.relPath).toBe('notes.md');
   });
 
   it('persists code-doc workspace fields', () => {
@@ -55,7 +81,8 @@ describe('schema', () => {
     expect(m.type).toBe('code');
     expect(m.workspaceId).toBe('ws1');
     expect(m.relPath).toBe('src/a.ts');
-    expect(m.workspaceRoot).toBe('/repo');
+    // workspaceRoot is private (see above) — it names a directory on the host.
+    expect(m.workspaceRoot).toBeUndefined();
   });
 
   it('persists diff-doc fields', () => {

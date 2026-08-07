@@ -226,6 +226,22 @@ export class Shares {
     return this.shares.find((s) => s.mode !== 'link' && s.hostname.toLowerCase() === h) ?? null;
   }
 
+  /**
+   * The same lookup, but only while the share is still live.
+   *
+   * This is what the host gate must use. Link mode has always re-checked
+   * liveness per request (linkSessionTarget → findLive), so an expired link
+   * stops working the moment it lapses. Access mode resolved its host with
+   * `findByHostname`, which ignores `expiresAt` — so a share past its TTL kept
+   * classifying as a share, kept passing the Access gate, and kept serving the
+   * doc. Closing its websockets didn't help; the visitor simply reconnected.
+   */
+  findLiveByHostname(host: string, now: number = Date.now()): Share | null {
+    const s = this.findByHostname(host);
+    if (!s) return null;
+    return s.expiresAt > now ? s : null;
+  }
+
   /** Resolver for the cf-access middleware's `audience` option. */
   audienceResolver = (host: string): string | null => {
     return this.findByHostname(host)?.audience ?? null;

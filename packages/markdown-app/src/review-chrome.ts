@@ -52,6 +52,13 @@ export interface ChromeOpts {
   user: User;
   ydoc: Y.Doc;
   surface: ReviewSurface;
+  /** Fallback for the topbar label, from the REST meta the router already
+   *  fetched. The Yjs meta map no longer carries `sourceUrl` — it named a path
+   *  on the host and the CRDT syncs to share visitors — so the label can't come
+   *  from there any more. The owner gets the full path exactly as before; a
+   *  share visitor gets the basename `relPath` the redacted payload supplies,
+   *  which beats the opaque docId they'd otherwise fall back to. */
+  labelHint?: string;
   /** Toast shown when the composer opens without a usable selection. */
   selectHint: string;
   /** Toast shown when re-anchor is clicked without a selection. */
@@ -629,9 +636,13 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
   // --- doc label --------------------------------------------------------------
   function renderDocLabel(): void {
     const m = readDocMeta(ydoc);
-    // Diff docs label with the repo-relative path — the absolute worktree
-    // path (their sourceUrl in live mode) is noise for a reviewer.
-    const full = (m.type === 'diff' ? m.relPath : undefined) ?? m.sourceUrl ?? m.title ?? m.docId;
+    const full = docLabel({
+      type: m.type,
+      relPath: m.relPath,
+      title: m.title,
+      docId: m.docId,
+      labelHint: opts.labelHint,
+    });
     // On mobile the full path eats the topbar — show just the basename
     // truncated to ~32 chars, full path in `title` for tap-and-hold.
     const mobile = window.matchMedia('(max-width: 720px)').matches;
@@ -859,6 +870,35 @@ export function makeBtn(label: string, onClick: () => void, primary = false): HT
   b.textContent = label;
   b.addEventListener('click', onClick);
   return b;
+}
+
+/**
+ * The topbar label for a doc.
+ *
+ * Diff docs label with the repo-relative path — the absolute worktree path
+ * (their sourceUrl in live mode) is noise for a reviewer.
+ *
+ * Everything else used to read `sourceUrl` straight off the Yjs meta map. That
+ * key is gone from the CRDT (it named a path on the host, and the CRDT syncs
+ * to share visitors), so the path now arrives as `labelHint` from the REST
+ * meta the router already fetched: the owner sees the same full path as
+ * before, and a share visitor sees the basename `relPath` the redacted payload
+ * carries rather than the opaque docId.
+ */
+export function docLabel(opts: {
+  type?: string;
+  relPath?: string;
+  title?: string;
+  docId?: string;
+  labelHint?: string;
+}): string {
+  return (
+    (opts.type === 'diff' ? opts.relPath : undefined) ??
+    opts.labelHint ??
+    opts.title ??
+    opts.docId ??
+    ''
+  );
 }
 
 export function mobileLabel(full: string): string {
