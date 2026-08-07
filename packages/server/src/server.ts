@@ -391,6 +391,25 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           return new Response(null, { status: 204 });
         }
 
+        // --- Cross-origin WRITE gate ---
+        // Withholding CORS headers only hides the RESPONSE. A "simple request"
+        // — POST with content-type text/plain — is never preflighted, so the
+        // browser sends it and the write lands; the page just can't read the
+        // reply. safeJson() parses the body whatever the content-type says, so
+        // that was a working CSRF write: post comments as someone else, or
+        // create a doc bound to any file on the machine.
+        //
+        // GET stays open on purpose. Its response is already withheld by CORS,
+        // and refusing it would break <script>/<img>-style loads of the widget
+        // bundle from arbitrary dev sites (those send no Origin at all).
+        if (
+          req.method !== 'GET' &&
+          req.method !== 'HEAD' &&
+          !isAllowedBrowserOrigin(req.headers.get('origin'), policyFor(req))
+        ) {
+          return j(403, { error: 'origin_not_allowed' });
+        }
+
         // --- Cloudflare Access gate ---
         // When cfAccess is configured (server is reachable via a public
         // tunnel), gate the request. Two modes:
