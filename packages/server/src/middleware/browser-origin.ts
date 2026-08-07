@@ -133,7 +133,10 @@ export function corsHeadersFor(
   // would be inert. Send none rather than echo something meaningless.
   if (!origin) return null;
   const match = originMatch(origin, policy);
-  if (match === null) return null;
+  // Rejected, but the response still VARIES by origin: without this a shared
+  // cache could store the header-less reply and replay it to an origin we do
+  // allow, breaking legitimate widget calls intermittently.
+  if (match === null) return { vary: 'Origin' };
   return {
     'access-control-allow-origin': origin,
     'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS',
