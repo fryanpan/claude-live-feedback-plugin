@@ -16,7 +16,19 @@ import type { DocMeta } from '@feedback/core';
  * Allowlist, not denylist: a field added later is redacted by default rather
  * than leaking until somebody notices.
  */
-export function redactMetaForVisitor(meta: DocMeta & { reviewUrl?: string }): Partial<DocMeta> {
+export function redactMetaForVisitor(
+  meta: DocMeta & { reviewUrl?: string },
+  opts?: {
+    /** True when the SHARE covers a whole workspace. A doc-scoped share of a
+     *  workspace member must not advertise its `workspaceId`: the client reads
+     *  a non-empty one as permission to render workspace navigation and starts
+     *  polling /api/workspaces/<id>/…, which `shareScopeAllows` refuses for a
+     *  doc share (`if (!target.workspaceId) return false`). The visitor gets a
+     *  broken sidebar and a 30s loop of 403s. The doc renders fine without it —
+     *  a single-doc share has no sibling files to navigate to. */
+    workspaceScoped?: boolean;
+  },
+): Partial<DocMeta> {
   return {
     docId: meta.docId,
     type: meta.type,
@@ -34,8 +46,12 @@ export function redactMetaForVisitor(meta: DocMeta & { reviewUrl?: string }): Pa
       : meta.sourceUrl
         ? { relPath: basename(meta.sourceUrl) }
         : {}),
-    ...(meta.workspaceId !== undefined ? { workspaceId: meta.workspaceId } : {}),
-    ...(meta.setId !== undefined ? { setId: meta.setId } : {}),
+    ...(opts?.workspaceScoped && meta.workspaceId !== undefined
+      ? { workspaceId: meta.workspaceId }
+      : {}),
+    // setId drives the legacy flat sibling nav, which fetches the whole
+    // /api/docs list — also out of a visitor's scope. Same reasoning.
+    ...(opts?.workspaceScoped && meta.setId !== undefined ? { setId: meta.setId } : {}),
     ...(meta.lastActivityAt !== undefined ? { lastActivityAt: meta.lastActivityAt } : {}),
     ...(meta.stale !== undefined ? { stale: meta.stale } : {}),
     // Diff presentation — line counts and status drive the badges the

@@ -325,7 +325,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         const decorated = withReviewUrl(meta);
         if (!visitor) return decorated as unknown as Record<string, unknown>;
         return {
-          ...redactMetaForVisitor(decorated),
+          ...redactMetaForVisitor(decorated, {
+            workspaceScoped: Boolean(visitor.workspaceId),
+          }),
           // Same path, no host — correct for every share mode.
           ...(relativeReviewUrl(decorated.reviewUrl) !== undefined
             ? { reviewUrl: relativeReviewUrl(decorated.reviewUrl) }
