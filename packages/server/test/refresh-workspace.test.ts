@@ -259,6 +259,56 @@ describe('Rooms.refreshWorkspace — diff review', () => {
     expect(grouped.groups[0]?.files).toHaveLength(2);
   });
 
+  it('keeps following the heuristic on later refreshes after a reset', () => {
+    // Deleting the stored spec would make the reset a one-off: refresh
+    // preserves existing diffGroup values (so a group-less refresh can't
+    // clobber agent-set groups), so old members would keep the ranks from
+    // the reset while new ones got freshly-computed ones. Storing the empty
+    // array records "the heuristic IS the choice here" and re-applies it.
+    const bound = rooms.bindDiff({
+      repoPath: repo,
+      base,
+      groups: [{ title: 'Everything', paths: ['src'] }],
+    });
+    if (!bound.ok) throw new Error('bind failed');
+    rooms.setWorkspaceGroups(bound.reviewId, []);
+    writeFileSync(join(repo, 'src', 'b.ts'), 'const b = 2;\n');
+    rooms.refreshWorkspace(bound.reviewId);
+    const grouped = rooms.listGroupedDiff(bound.reviewId);
+    // Both files land in the same heuristic bucket ("src"), not one in a
+    // leftover "Everything" and one in a fresh bucket.
+    expect(grouped.groups.map((g) => g.title)).not.toContain('Everything');
+    expect(grouped.groups).toHaveLength(1);
+    expect(grouped.groups[0]?.files).toHaveLength(2);
+  });
+
+  it('re-ranks heuristic groups by CURRENT churn after a reset', () => {
+    // The sharp edge of the same problem: heuristic bucket membership is
+    // per-file, but group ORDER is churn-ranked across the whole review. A
+    // reset that didn't survive would leave old members frozen at the ranks
+    // they had when it ran, so the sidebar ordering stops meaning anything.
+    // Names chosen so a stale rank would WIN the alphabetical tiebreak:
+    // 'alpha' is the low-churn incumbent, 'zeta' the high-churn newcomer.
+    // With ranks frozen they tie at 0 and alpha sorts first — wrongly.
+    for (const d of ['alpha', 'zeta']) {
+      mkdirSync(join(repo, d));
+      writeFileSync(join(repo, d, 'x.ts'), 'x\n');
+    }
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-q', '-m', 'add dirs');
+    const b2 = git(repo, 'rev-parse', 'HEAD');
+    writeFileSync(join(repo, 'alpha', 'x.ts'), `${'x\n'.repeat(40)}`);
+    const bound = rooms.bindDiff({ repoPath: repo, base: b2 });
+    if (!bound.ok) throw new Error('bind failed');
+    rooms.setWorkspaceGroups(bound.reviewId, []);
+    expect(rooms.listGroupedDiff(bound.reviewId).groups[0]?.title).toBe('alpha');
+
+    // zeta now churns 10x more — a live heuristic must put it first.
+    writeFileSync(join(repo, 'zeta', 'x.ts'), `${'y\n'.repeat(400)}`);
+    rooms.refreshWorkspace(bound.reviewId);
+    expect(rooms.listGroupedDiff(bound.reviewId).groups[0]?.title).toBe('zeta');
+  });
+
   it('stops re-applying a group spec once it is reset to the heuristic', () => {
     const bound = rooms.bindDiff({
       repoPath: repo,

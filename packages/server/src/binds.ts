@@ -792,9 +792,17 @@ export function setWorkspaceGroups(
   // Only now, with a spec proven to assign cleanly, persist it. Storing the
   // SPEC rather than just the resulting per-file assignment is what lets a
   // later refresh file newly-changed files into the right group instead of a
-  // heuristic bucket; resetting to the heuristic (empty array) deletes it.
+  // heuristic bucket.
+  //
+  // An EMPTY array is stored as an empty array, not deleted: "the heuristic
+  // is the choice here" is itself a decision, and it has to survive. Deleting
+  // it would make the reset a one-off — a group-less refresh preserves each
+  // member's existing diffGroup (so it can't clobber agent-set groups), so
+  // old members would stay frozen at the ranks they held at reset time while
+  // new ones got freshly-computed ones, and the churn ordering would stop
+  // meaning anything.
   for (const m of members) {
-    writeMeta(host, m.docId, [['workspaceGroups', explicit]]);
+    writeMeta(host, m.docId, [['workspaceGroups', groups]]);
   }
 
   // Unmatched files get the sentinel rank assignGroups reserves for them —

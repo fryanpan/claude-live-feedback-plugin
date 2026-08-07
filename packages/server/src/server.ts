@@ -159,6 +159,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * pointing at nothing. Redirect to the workspace's current entry instead —
    * which also repairs every URL already in someone's inbox.
    *
+   * Fires for the share's OWN entry doc, in two states: gone entirely, or
+   * kept as a stale tombstone (the usual rename outcome — the doc survives so
+   * its threads do). Deliberately NOT for any other stale member: those are
+   * listed in the tree precisely so a stranded thread stays readable, and
+   * bouncing a visitor away from one would make it unreachable.
+   *
    * Only for workspace shares: a single-doc share has nowhere else to go, and
    * silently moving it would be wrong. Returns null when nothing to do.
    */
@@ -170,7 +176,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     if (method !== 'GET' || !target.workspaceId) return null;
     if (!pathname.startsWith('/review/')) return null;
     const docId = decodeURIComponent(pathname.slice('/review/'.length));
-    if (!docId || rooms.get(docId)) return null;
+    if (!docId) return null;
+    const room = rooms.get(docId);
+    if (room && !(docId === target.docId && room.meta.stale)) return null;
     const entry = currentWorkspaceEntry(target.workspaceId);
     if (!entry || entry === docId) return null;
     return new Response(null, {

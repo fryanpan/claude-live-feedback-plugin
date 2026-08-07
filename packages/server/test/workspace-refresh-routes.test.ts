@@ -269,6 +269,79 @@ describe('workspace refresh routes', () => {
       }
     });
 
+    it('repairs the entry URL when the entry doc is a stale tombstone', async () => {
+      // The usual rename outcome: refresh KEEPS the doc so its threads
+      // survive, so the old URL still resolves — to a struck-through ghost.
+      // A share URL means "open the review", not "open this dead file".
+      const src = mkdtempSync(join(tmpdir(), 'wsr-tomb-'));
+      try {
+        writeFileSync(join(src, 'README.md'), '# Landing\n\nhi\n');
+        writeFileSync(join(src, 'other.md'), '# Other\n\nhi\n');
+        const bind = await post('/api/workspaces', { folderPath: src });
+        const wsId = ((await bind.json()) as { workspaceId: string }).workspaceId;
+        const opened = await post(`/api/workspaces/${wsId}/context-file`, { relPath: 'other.md' });
+        const otherDocId = ((await opened.json()) as { docId: string }).docId;
+        const mint = await post('/api/share/link', { workspaceId: wsId });
+        const share = ((await mint.json()) as { share: { slug: string; docId: string } }).share;
+        const r = await fetch(`${base}/s/${share.slug}`, {
+          redirect: 'manual',
+          headers: { host: PUBLIC_HOST },
+        });
+        const cookie = (r.headers.get('set-cookie') ?? '').match(
+          new RegExp(`${SHARE_COOKIE}=([^;]+)`),
+        )?.[1];
+
+        renameSync(join(src, 'README.md'), join(src, 'INTRO.md'));
+        await post(`/api/workspaces/${wsId}/refresh`, {});
+        // The entry doc is still there, just stale.
+        const meta = await local(`/api/docs/${encodeURIComponent(share.docId)}`);
+        expect(((await meta.json()) as { meta: { stale?: boolean } }).meta.stale).toBe(true);
+
+        const visit = await fetch(`${base}/review/${encodeURIComponent(share.docId)}`, {
+          redirect: 'manual',
+          headers: { host: PUBLIC_HOST, cookie: `${SHARE_COOKIE}=${cookie}` },
+        });
+        expect(visit.status).toBe(302);
+        expect(visit.headers.get('location')).toBe(`/review/${encodeURIComponent(otherDocId)}`);
+      } finally {
+        rmSync(src, { recursive: true, force: true });
+      }
+    });
+
+    it('still lets a visitor OPEN a stale file that is not the entry', async () => {
+      // Stale members are listed in the tree so stranded threads stay
+      // readable. Bouncing a visitor off one would defeat that.
+      const src = mkdtempSync(join(tmpdir(), 'wsr-openstale-'));
+      try {
+        writeFileSync(join(src, 'README.md'), '# Landing\n\nhi\n');
+        writeFileSync(join(src, 'doomed.md'), '# Doomed\n\nhi\n');
+        const bind = await post('/api/workspaces', { folderPath: src });
+        const wsId = ((await bind.json()) as { workspaceId: string }).workspaceId;
+        const opened = await post(`/api/workspaces/${wsId}/context-file`, { relPath: 'doomed.md' });
+        const doomedDocId = ((await opened.json()) as { docId: string }).docId;
+        const mint = await post('/api/share/link', { workspaceId: wsId });
+        const share = ((await mint.json()) as { share: { slug: string } }).share;
+        const r = await fetch(`${base}/s/${share.slug}`, {
+          redirect: 'manual',
+          headers: { host: PUBLIC_HOST },
+        });
+        const cookie = (r.headers.get('set-cookie') ?? '').match(
+          new RegExp(`${SHARE_COOKIE}=([^;]+)`),
+        )?.[1];
+
+        rmSync(join(src, 'doomed.md'));
+        await post(`/api/workspaces/${wsId}/refresh`, {});
+
+        const visit = await fetch(`${base}/api/docs/${encodeURIComponent(doomedDocId)}`, {
+          redirect: 'manual',
+          headers: { host: PUBLIC_HOST, cookie: `${SHARE_COOKIE}=${cookie}` },
+        });
+        expect(visit.status).toBe(200);
+      } finally {
+        rmSync(src, { recursive: true, force: true });
+      }
+    });
+
     it('does NOT redirect a probe for a doc in a different workspace', async () => {
       // The repair must not become an oracle: a docId that exists elsewhere
       // is left alone and still gets the out-of-scope 403.
