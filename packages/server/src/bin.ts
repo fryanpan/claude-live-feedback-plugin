@@ -34,6 +34,15 @@ const demosDir = pathOrNull(join(repoRoot, 'demos'));
  * server needs no configuration. Set this only for a dev server on a DIFFERENT
  * machine. Without it the option would be unreachable from the shipped binary,
  * and a config knob nobody can turn is the same bug as not having one.
+ *
+ * UNDERSTAND WHAT THIS GRANTS: an origin listed here can read ANY FILE this
+ * process can read. A page on an allowed origin may open
+ * `/y/<id>?type=mockup&sourceUrl=/abs/path`, which auto-creates the doc, then
+ * fetch `/mockup/<id>`. That is inherent to the local trust model — loopback
+ * already has it — but this knob hands the same primitive to another machine,
+ * and those origins are also the only ones granted
+ * Access-Control-Allow-Private-Network. List an origin only if you would
+ * equally trust it with your home directory.
  */
 const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? '')
   .split(',')

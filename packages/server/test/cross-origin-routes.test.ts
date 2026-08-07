@@ -349,6 +349,71 @@ describe('the public share host is same-origin only', () => {
     expect(r.headers.get('access-control-allow-origin')).toBe(`https://${PUBLIC_HOST}`);
   });
 
+  it('refuses a forged x-forwarded-proto that rewrites the origin', async () => {
+    // The scheme is concatenated into a URL string, so an unvalidated value
+    // rewrites the origin we compare against: this one parses as
+    // `https://evil.example.com#://feedback.example.com`, whose .origin is the
+    // ATTACKER's. On the share host, same-origin is the only rule left, so
+    // that was the entire boundary. Found by an independent review pass after
+    // three codex rounds missed it.
+    for (const forged of [
+      'https://evil.example.com#',
+      'https://evil.example.com#, https',
+      'https://evil.example.com/',
+    ]) {
+      const r = await fetch(`${base}/api/docs/shared`, {
+        headers: {
+          host: PUBLIC_HOST,
+          'x-forwarded-proto': forged,
+          cookie: `lf_share=${cookie}`,
+          origin: 'https://evil.example.com',
+        },
+      });
+      expect(r.headers.get('access-control-allow-origin')).toBeNull();
+    }
+  });
+
+  it('refuses a forged x-forwarded-proto on the WEBSOCKET too', async () => {
+    // The socket is where this actually paid out: the reviewer synced a whole
+    // document through it.
+    const ws = new WebSocket(`ws://localhost:${handle.port}/y/shared`, {
+      headers: {
+        host: PUBLIC_HOST,
+        'x-forwarded-proto': 'https://evil.example.com#',
+        cookie: `lf_share=${cookie}`,
+        origin: 'https://evil.example.com',
+      },
+    } as unknown as string[]);
+    const ydoc = new Y.Doc();
+    ws.binaryType = 'arraybuffer';
+    ws.addEventListener('open', () => {
+      const enc = encoding.createEncoder();
+      encoding.writeVarUint(enc, 0);
+      syncProtocol.writeSyncStep1(enc, ydoc);
+      ws.send(encoding.toUint8Array(enc));
+    });
+    ws.addEventListener('message', (ev) => {
+      const dec = decoding.createDecoder(new Uint8Array(ev.data as ArrayBuffer));
+      if (decoding.readVarUint(dec) !== 0) return;
+      const enc = encoding.createEncoder();
+      encoding.writeVarUint(enc, 0);
+      syncProtocol.readSyncMessage(dec, enc, ydoc, ws);
+      if (encoding.length(enc) > 1) ws.send(encoding.toUint8Array(enc));
+    });
+    await new Promise((r) => setTimeout(r, 1200));
+    expect(ydoc.getXmlFragment('prose').toString()).toBe('');
+    try {
+      ws.close();
+    } catch {}
+  });
+
+  it('still honours a LEGITIMATE x-forwarded-proto — POSITIVE CONTROL', async () => {
+    // Rejecting every forwarded scheme would pass the tests above and take
+    // every share websocket down with it.
+    const r = await asVisitor('/api/docs/shared', `https://${PUBLIC_HOST}`);
+    expect(r.headers.get('access-control-allow-origin')).toBe(`https://${PUBLIC_HOST}`);
+  });
+
   it('does NOT honour ALLOWED_ORIGINS on the share host', async () => {
     const r = await asVisitor('/api/docs/shared', 'https://mockups.example.com');
     expect(r.headers.get('access-control-allow-origin')).toBeNull();
