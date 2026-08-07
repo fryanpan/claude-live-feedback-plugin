@@ -41,10 +41,25 @@ describe('redactMetaForVisitor', () => {
     expect(JSON.stringify(out)).not.toContain('tailnet');
   });
 
-  it('drops provenance and the commit range', () => {
+  it('drops provenance', () => {
     expect(out.producedBy).toBeUndefined();
-    expect(out.diffBase).toBeUndefined();
-    expect(out.diffTarget).toBeUndefined();
+  });
+
+  it('KEEPS diffTarget — the client reads it as "this review is pinned"', () => {
+    // editable-policy.ts unlocks the editor when diffTarget is empty. Dropping
+    // it made every shared pinned review look live and let a visitor type into
+    // immutable content — no write-back, but the Yjs doc mutates for everyone.
+    // The hashes cost nothing: a visitor is already reading the diff itself.
+    expect(out.diffTarget).toBe(FULL.diffTarget);
+    expect(out.diffBase).toBe(FULL.diffBase);
+  });
+
+  it('leaves a working-tree review looking editable', () => {
+    const live = redactMetaForVisitor({ ...FULL, diffTarget: undefined }) as Record<
+      string,
+      unknown
+    >;
+    expect(live.diffTarget).toBeUndefined();
   });
 
   it('keeps what the reviewer actually needs to render the doc', () => {

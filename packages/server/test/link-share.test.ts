@@ -462,4 +462,40 @@ describe('link shares over HTTP', () => {
       ws.close();
     });
   });
+
+  describe('guest identity is scoped to the SHARE', () => {
+    it('gives the same browser different guest ids on two links to one doc', async () => {
+      // Two links to the same doc are two audiences. Seeding the guest id
+      // from the doc would attribute comments on a freshly minted link to
+      // the previous link's visitor.
+      const ids: string[] = [];
+      for (const label of ['first', 'second']) {
+        const mint = await local('/api/share/link', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ docId: SOLO, label }),
+        });
+        const share = ((await mint.json()) as { share: { shareId: string; slug: string } }).share;
+        const cookie = await redeem(share.slug);
+        const r = await pub(`/api/docs/${SOLO}/threads/by_find`, cookie, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            author: { id: 'same-browser', name: 'Casey', kind: 'anon', color: '#123456' },
+            text: `from the ${label} link`,
+            find: 'Body',
+          }),
+        });
+        expect(r.status).toBe(200);
+        const { thread } = (await r.json()) as {
+          thread: { comments: Array<{ author: { id: string } }> };
+        };
+        ids.push(thread.comments[0]?.author.id ?? '');
+        await local(`/api/share/${share.shareId}`, { method: 'DELETE' });
+      }
+      expect(ids[0]).toStartWith('guest-');
+      expect(ids[1]).toStartWith('guest-');
+      expect(ids[0]).not.toBe(ids[1]);
+    });
+  });
 });
