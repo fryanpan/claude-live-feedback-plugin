@@ -22,7 +22,7 @@ import {
   isTrustedLocalHost,
   shareScopeAllows,
 } from './middleware/host-guard.ts';
-import { lanHostnames, publicBaseUrl, tailscaleHost } from './public-host.ts';
+import { localHostnames, publicBaseUrl } from './public-host.ts';
 import { type FeedbackWs, Rooms, type WorkspaceDirNode, type WorkspaceFileNode } from './rooms.ts';
 import { CfApi } from './share/cf-api.ts';
 import { resolveShareEntry } from './share/entry-resolve.ts';
@@ -329,9 +329,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // carry that cookie into /y/<docId> and act as a logged-in visitor. A
     // share visitor loads the app FROM the share host, so same-origin is all
     // they ever need, and it's all they get.
+    // Cached (60s TTL) — tailscaleHost() shells out, and this runs on every
+    // write and every websocket handshake.
+    const ourNames = localHostnames();
     const isLocalSurface = isTrustedLocalHost(host, {
-      tailscaleHost: tailscaleHost(),
-      lanHosts: lanHostnames(),
+      lanHosts: ourNames,
       extraHosts: opts.trustedHosts ?? [],
       viaProxy: req.headers.has('cf-ray'),
     });
@@ -343,12 +345,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // foreign and 403 its websocket. URL.origin drops the default port.
       requestOrigin: canonicalOrigin(scheme, host),
       localHostnames: isLocalSurface
-        ? [
-            ...LOOPBACK_HOSTS,
-            tailscaleHost() ?? '',
-            ...lanHostnames(),
-            ...(opts.trustedHosts ?? []),
-          ].filter((h) => h !== '')
+        ? [...LOOPBACK_HOSTS, ...ourNames, ...(opts.trustedHosts ?? [])].filter((h) => h !== '')
         : [],
       allowedOrigins: isLocalSurface ? (opts.allowedOrigins ?? []) : [],
     };
@@ -478,8 +475,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         let visitorShareId: string | null = null;
         {
           const decision = classifyHost(req.headers.get('host'), {
-            tailscaleHost: tailscaleHost(),
-            lanHosts: lanHostnames(),
+            // Cached (60s TTL) — this used to spawn `tailscale status` on
+            // every single request.
+            lanHosts: localHostnames(),
             extraHosts: opts.trustedHosts ?? [],
             // cloudflared forwards the visitor's Host verbatim, so a tunnel
             // visitor could otherwise claim `Host: localhost`. Cloudflare
