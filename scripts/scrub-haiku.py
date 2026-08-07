@@ -73,13 +73,53 @@ LEAKS:
 Be conservative — when borderline, flag it. The human can override with SCRUB_SKIP=1 after reviewing your reasoning."""
 
 
+KEYCHAIN_SERVICE = "scrub-haiku-api-key"
+
+
+def read_keychain(service: str) -> str | None:
+    """Read a generic-password entry from the macOS Keychain.
+
+    Mirrors packages/server/src/share/keychain.ts, which does the same for the
+    Cloudflare token. The Keychain is preferred over an exported env var
+    because every Claude Code session on this machine runs as the same user
+    and inherits the same environment — an exported key is readable by every
+    agent in the fleet, and this one is billed.
+
+    Returns None (never raises) on any failure: a missing entry, a locked
+    Keychain, or a non-Darwin machine all mean "fall through to the env vars",
+    and a scrub layer must never be the reason a push dies.
+    """
+    try:
+        proc = subprocess.run(
+            ["security", "find-generic-password", "-a", os.environ.get("USER", ""),
+             "-s", service, "-w"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip() or None
+
+
 def call_haiku(diff_content: str) -> int:
-    # Prefer SCRUB_HAIKU_API_KEY so this layer can use a key separate from
-    # general-purpose Anthropic usage (better audit + isolated billing).
-    api_key = os.environ.get("SCRUB_HAIKU_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+    # Keychain first, then the env vars. SCRUB_HAIKU_API_KEY is preferred over
+    # ANTHROPIC_API_KEY so this layer can use a key separate from
+    # general-purpose Anthropic usage (better audit + isolated billing); the
+    # env forms stay supported for CI and one-off runs.
+    api_key = (
+        read_keychain(KEYCHAIN_SERVICE)
+        or os.environ.get("SCRUB_HAIKU_API_KEY")
+        or os.environ.get("ANTHROPIC_API_KEY")
+    )
     if not api_key:
         print(
-            "[scrub-haiku] no API key (SCRUB_HAIKU_API_KEY or ANTHROPIC_API_KEY) — skipping Haiku check.",
+            "[scrub-haiku] no API key — skipping Haiku check. Store one with:\n"
+            f'  security add-generic-password -a "$USER" -s {KEYCHAIN_SERVICE} -w\n'
+            "  (omit the value after -w; it prompts, so the key stays out of shell history)\n"
+            "  ...or set SCRUB_HAIKU_API_KEY / ANTHROPIC_API_KEY.",
             file=sys.stderr,
         )
         return 2
