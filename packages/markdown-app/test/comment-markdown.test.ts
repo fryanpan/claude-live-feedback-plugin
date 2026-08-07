@@ -45,3 +45,83 @@ describe('renderCommentMarkdown', () => {
     expect(out.match(/<p>/g)?.length).toBe(2);
   });
 });
+
+/**
+ * A payload battery, kept because this renderer is the ONE place untrusted
+ * text reaches `innerHTML` (threads.ts: `body.innerHTML =
+ * renderCommentMarkdown(c.text)`), and anyone with a review link can post a
+ * comment. Author names go through `textContent` and are not at risk.
+ *
+ * The assertion is on what the renderer EMITS, not on what the text contains.
+ * A first pass at this grepped the output for `onerror=` / `javascript:` and
+ * reported ten holes that did not exist — `&lt;img src=x onerror=alert(1)&gt;`
+ * is inert text, and a rejected link is left as literal markdown. Checking the
+ * emitted markup instead is what makes the result mean anything.
+ */
+describe('renderCommentMarkdown — XSS payload battery', () => {
+  const ALLOWED = new Set(['p', 'br', 'ul', 'li', 'code', 'strong', 'em', 'del', 'a']);
+
+  /** Tags outside the allowlist, inline event handlers, executable hrefs. */
+  function findings(out: string): string[] {
+    const bad: string[] = [];
+    for (const m of out.matchAll(/<(\/?)([a-zA-Z][^\s/>]*)([^>]*)>/g)) {
+      const tag = (m[2] ?? '').toLowerCase();
+      if (!ALLOWED.has(tag)) bad.push(`tag <${tag}>`);
+      if (/\son[a-z]+\s*=/i.test(m[3] ?? '')) bad.push(`handler <${tag}${m[3]}>`);
+    }
+    for (const m of out.matchAll(/href="([^"]*)"/g)) {
+      const v = (m[1] ?? '').toLowerCase().trim();
+      if (!/^(https?:|mailto:)/.test(v)) bad.push(`href ${m[1]}`);
+    }
+    return bad;
+  }
+
+  it('has a detector that can actually see a problem', () => {
+    // Without this the battery below would pass on a blind detector.
+    expect(
+      findings('<img src=x onerror=alert(1)><a href="javascript:alert(1)">x</a>').length,
+    ).toBeGreaterThanOrEqual(2);
+    expect(findings('<p><strong>ok</strong></p>')).toEqual([]);
+  });
+
+  const PAYLOADS = [
+    '<script>alert(1)</script>',
+    '<img src=x onerror=alert(1)>',
+    '<svg/onload=alert(1)>',
+    "<a href='javascript:alert(1)'>x</a>",
+    '[click](javascript:alert(1))',
+    '[click](JaVaScRiPt:alert(1))',
+    `[click](java${String.fromCharCode(9)}script:alert(1))`,
+    `[click](java${String.fromCharCode(10)}script:alert(1))`,
+    '[click](data:text/html;base64,PHN2Zz4=)',
+    '[click](vbscript:msgbox(1))',
+    '[x](%6a%61%76%61script:alert(1))',
+    '[x](  javascript:alert(1))',
+    '[x](jAvAsCrIpT&colon;alert(1))',
+    '[`code`](javascript:alert(1))',
+    // Attribute-breakout attempts against the href we do emit.
+    '[x](http://a" onmouseover="alert(1))',
+    '[x](http://a onclick=alert(1))',
+    '[x](https://ok.example.com"onmouseover="alert(1))',
+    '[x](https://a.example/?q=<script>)',
+    // Payloads wrapped in each transform, in case escaping order slips.
+    '`<script>alert(1)</script>`',
+    '**<img src=x onerror=alert(1)>**',
+    '~~<img src=x onerror=alert(1)>~~',
+    '- <script>alert(1)</script>',
+  ];
+
+  for (const payload of PAYLOADS) {
+    it(`neutralises ${JSON.stringify(payload)}`, () => {
+      expect(findings(renderCommentMarkdown(payload))).toEqual([]);
+    });
+  }
+
+  it('still renders the markup it is supposed to', () => {
+    // The cheapest way to pass the battery would be to emit nothing at all.
+    const out = renderCommentMarkdown('**hi** [a](https://example.com) `c`');
+    expect(out).toContain('<strong>hi</strong>');
+    expect(out).toContain('href="https://example.com/"');
+    expect(out).toContain('<code>c</code>');
+  });
+});
