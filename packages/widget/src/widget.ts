@@ -13,6 +13,7 @@ import {
   type FeedbackClient,
   STATUS_COLORS,
   connect,
+  cssColor,
   escapeHtml as escape,
   formatTime,
 } from '@feedback/core';
@@ -301,7 +302,7 @@ class FeedbackWidgetEl extends HTMLElement {
     this.statusEl = panel.querySelector('.status') as HTMLElement;
     const me = panel.querySelector('.me') as HTMLElement;
     if (this.user) {
-      me.innerHTML = `<span class="swatch" style="background:${this.user.color}"></span>${escape(this.user.name)}`;
+      me.innerHTML = `<span class="swatch" style="background:${cssColor(this.user.color)}"></span>${escape(this.user.name)}`;
     }
 
     panel.querySelector('.close-panel')?.addEventListener('click', () => this.togglePanel(false));
@@ -709,7 +710,7 @@ class FeedbackWidgetEl extends HTMLElement {
       const row = document.createElement('div');
       row.className = 'comment';
       row.innerHTML = `
-        <div class="author"><span class="swatch" style="background:${c.author.color}"></span>${escape(c.author.name)} <span class="time">${formatTime(c.ts)}</span></div>
+        <div class="author"><span class="swatch" style="background:${cssColor(c.author.color)}"></span>${escape(c.author.name)} <span class="time">${formatTime(c.ts)}</span></div>
         <div class="body">${escape(c.text)}</div>
       `;
       cList.appendChild(row);

@@ -24,6 +24,25 @@ export function escapeHtml(s: string): string {
 }
 
 /**
+ * A color that is safe to interpolate into a quoted HTML `style="…"`.
+ *
+ * Author colors ride along with comments, and they are only constrained for
+ * SHARE VISITORS (share/visitor-identity.ts pins those to `#rrggbb`). A
+ * comment posted from the local surface — by an agent, or by anything else
+ * that can reach the API — carries whatever string the caller sent. The
+ * widget renders OTHER people's colors, so an unvalidated one there is an
+ * attribute break rather than a bad swatch: a `"` ends the attribute and the
+ * rest of the value becomes markup.
+ *
+ * Same shape as the SPA's `suggestColorStyle` check. The SPA otherwise
+ * assigns colors via `element.style.background`, where the CSS parser simply
+ * drops anything invalid — only string-built markup needs this.
+ */
+export function cssColor(color: string | undefined | null, fallback = '#888888'): string {
+  return color && /^#[0-9a-fA-F]{3,8}$/.test(color) ? color : fallback;
+}
+
+/**
  * The one thread-status palette. The widget interpolates these into its
  * shadow-DOM styles; the SPA mirrors them as CSS custom properties in
  * styles.css (--green / --yellow / --orange) — change them together.

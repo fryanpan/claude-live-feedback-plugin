@@ -1,5 +1,5 @@
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
-import { extname, join, sep } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { extname, join } from 'node:path';
 import {
   type Anchor,
   type DocMeta,
@@ -13,6 +13,7 @@ import { type CfAccessOptions, createCfAccessVerifier } from './middleware/cf-ac
 import { type ShareTarget, classifyHost, shareScopeAllows } from './middleware/host-guard.ts';
 import { lanHostnames, publicBaseUrl, tailscaleHost } from './public-host.ts';
 import { type FeedbackWs, Rooms, type WorkspaceDirNode, type WorkspaceFileNode } from './rooms.ts';
+import { isWithinRoot } from './safe-path.ts';
 import { CfApi } from './share/cf-api.ts';
 import { resolveShareEntry } from './share/entry-resolve.ts';
 import {
@@ -1327,7 +1328,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // --- Static: widget ---
       if (widgetDist && pathname.startsWith('/widget/')) {
         const p = join(widgetDist, pathname.slice('/widget/'.length));
-        const resp = serveStatic(p);
+        // serveStaticUnder, like /app/ and /demos/ — this was the one static
+        // root built from the request path that skipped the containment
+        // check. Inert today (URL normalizes `..` before we see it, and we
+        // never decode the remainder), but /widget/ is on the SHARE visitor's
+        // allowlist, so it is the last of the three that should be relying
+        // on that.
+        const resp = serveStaticUnder(widgetDist, p);
         if (resp) return resp;
       }
       if (
@@ -1605,24 +1612,13 @@ async function safeJson(req: Request): Promise<Record<string, unknown> | null> {
  * reachable. Assert the containment where the read happens.
  */
 export function serveStaticUnder(root: string, p: string): Response | null {
-  // realpath, not resolve: `path.resolve` is purely LEXICAL, so a symlink
-  // inside the root pointing anywhere on disk sails straight through a
-  // string-prefix check. `demos/` in particular is a directory of Bryan's
-  // own files, where a convenience symlink is entirely plausible.
-  let base: string;
-  let target: string;
-  try {
-    base = realpathSync(root);
-    target = realpathSync(p);
-  } catch {
-    // Missing file, or a dangling link — nothing to serve either way.
-    return null;
-  }
-  // The `${base}${sep}` suffix matters: a sibling directory whose name
-  // merely STARTS with the root's (`dist-evil` next to `dist`) would pass a
-  // bare startsWith.
-  if (target !== base && !target.startsWith(`${base}${sep}`)) return null;
-  return serveStatic(target);
+  // isWithinRoot realpaths both sides: `path.resolve` is purely LEXICAL, so a
+  // symlink inside the root pointing anywhere on disk sails straight through a
+  // string-prefix check. `demos/` in particular is a directory of Bryan's own
+  // files, where a convenience symlink is entirely plausible. It answers
+  // closed for a missing file or a dangling link — nothing to serve either way.
+  if (!isWithinRoot(root, p)) return null;
+  return serveStatic(p);
 }
 
 function serveStatic(p: string): Response | null {
