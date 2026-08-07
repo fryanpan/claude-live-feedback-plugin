@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { extname, join } from 'node:path';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { extname, join, sep } from 'node:path';
 import {
   type Anchor,
   type DocMeta,
@@ -132,6 +132,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const cookieKey = (): string => {
     cookieKeyCache ??= loadCookieKey(dataDir);
     return cookieKeyCache;
+  };
+
+  /** The shareId behind a link-mode session cookie, or null. */
+  const linkSessionShareId = (req: Request): string | null => {
+    if (!shares) return null;
+    const shareId = verifySession(readCookie(req.headers.get('cookie'), SHARE_COOKIE), cookieKey());
+    if (!shareId) return null;
+    return shares.findLive(shareId)?.shareId ?? null;
   };
 
   /** Resolve a link-mode session cookie to what it may reach, or null. */
@@ -344,6 +352,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // Everything below treats a non-null value as "untrusted outsider":
       // their claimed identity is rewritten and doc metadata is redacted.
       let visitor: ShareTarget | null = null;
+      /** The share that authorized this request, stamped onto any websocket
+       *  it upgrades so revocation can find and close it later. */
+      let visitorShareId: string | null = null;
       {
         const decision = classifyHost(req.headers.get('host'), {
           tailscaleHost: tailscaleHost(),
@@ -396,6 +407,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             return j(403, { error: 'out_of_share_scope' });
           }
           visitor = decision.target;
+          visitorShareId = shares?.findByHostname(req.headers.get('host') ?? '')?.shareId ?? null;
         } else if (decision.kind === 'link') {
           // Redeeming a link is the ONLY thing reachable here without a
           // session — that request is what mints one.
@@ -416,6 +428,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               return j(403, { error: 'out_of_share_scope' });
             }
             visitor = target;
+            visitorShareId = linkSessionShareId(req);
           }
         } else if (cfAccessVerifier && !shares) {
           // Legacy whole-server mode: cfAccess configured WITHOUT per-share
@@ -593,7 +606,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         const shareId = decodeURIComponent(shareIdMatch[1] ?? '');
         try {
           const result = await shares.deleteShare(shareId);
-          return result.ok ? j(200, { ok: true }) : j(404, { error: 'share not found' });
+          // Authorization is checked per HTTP request, but a websocket is
+          // authorized once at its upgrade — so without this, a visitor who
+          // already had the doc open kept reading and writing it after the
+          // share was revoked.
+          const closed = result.ok ? rooms.closeSocketsForShare(shareId) : 0;
+          return result.ok
+            ? j(200, { ok: true, ...(closed ? { closedSockets: closed } : {}) })
+            : j(404, { error: 'share not found' });
         } catch (err) {
           const error = err instanceof Error ? err.message : 'delete_share_failed';
           return j(502, { error });
@@ -619,7 +639,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             return j(404, { error: 'doc not found' });
           }
         }
-        const upgraded = server.upgrade(req, { data: { docId } });
+        const upgraded = server.upgrade(req, {
+          data: { docId, ...(visitorShareId ? { shareId: visitorShareId } : {}) },
+        });
         if (!upgraded) return new Response('upgrade required', { status: 426 });
         return undefined;
       }
@@ -1334,7 +1356,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       }
       if (markdownAppDist && pathname.startsWith('/app/')) {
         const p = join(markdownAppDist, pathname.slice('/app/'.length));
-        const resp = serveStatic(p);
+        const resp = serveStaticUnder(markdownAppDist, p);
         if (resp) return resp;
       }
 
@@ -1374,7 +1396,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       if (demosDir && pathname.startsWith('/demos/')) {
         let p = join(demosDir, pathname.slice('/demos/'.length));
         if (!extname(p)) p = join(p, 'index.html');
-        const resp = serveStatic(p);
+        const resp = serveStaticUnder(demosDir, p);
         if (resp) return resp;
       }
 
@@ -1438,12 +1460,31 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     return meta;
   }
 
+  // A share can also lapse without anyone revoking it. Revocation hangs up
+  // immediately (see DELETE /api/share/:id); expiry has no such moment, so
+  // sweep. 60s means a lapsed visitor keeps their socket for at most a
+  // minute — HTTP already refuses them the whole time, so nothing new is
+  // reachable, they just haven't been hung up on yet.
+  const SHARE_SWEEP_MS = 60_000;
+  const shareSweep = shares
+    ? setInterval(() => {
+        try {
+          rooms.closeSocketsForDeadShares((id) => shares.findLive(id) !== null);
+        } catch {
+          // A sweep failure must never take the server down with it.
+        }
+      }, SHARE_SWEEP_MS)
+    : null;
+  // Never hold the process (or a test runner) open.
+  shareSweep?.unref?.();
+
   return {
     port: server.port ?? port,
     rooms,
     shares,
     webhookLog,
     stop: async () => {
+      if (shareSweep) clearInterval(shareSweep);
       server.stop();
     },
   };
@@ -1518,6 +1559,37 @@ async function safeJson(req: Request): Promise<Record<string, unknown> | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * Serve a file only if it really sits under `root`.
+ *
+ * `/app/*` and `/demos/*` build their path out of the request URL. Today
+ * that is safe by accident rather than by design — `new URL()` collapses
+ * `..` segments before we ever see the pathname — but nothing in this file
+ * says so, and one future caller that decodes or rewrites a path would turn
+ * a static route into an arbitrary-file read on a host that is now publicly
+ * reachable. Assert the containment where the read happens.
+ */
+export function serveStaticUnder(root: string, p: string): Response | null {
+  // realpath, not resolve: `path.resolve` is purely LEXICAL, so a symlink
+  // inside the root pointing anywhere on disk sails straight through a
+  // string-prefix check. `demos/` in particular is a directory of Bryan's
+  // own files, where a convenience symlink is entirely plausible.
+  let base: string;
+  let target: string;
+  try {
+    base = realpathSync(root);
+    target = realpathSync(p);
+  } catch {
+    // Missing file, or a dangling link — nothing to serve either way.
+    return null;
+  }
+  // The `${base}${sep}` suffix matters: a sibling directory whose name
+  // merely STARTS with the root's (`dist-evil` next to `dist`) would pass a
+  // bare startsWith.
+  if (target !== base && !target.startsWith(`${base}${sep}`)) return null;
+  return serveStatic(target);
 }
 
 function serveStatic(p: string): Response | null {

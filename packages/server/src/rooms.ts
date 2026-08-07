@@ -66,6 +66,14 @@ import type { WebhookDispatcher } from './webhooks.ts';
 export type WsCtx = {
   docId: string;
   isAwarenessOrigin: symbol;
+  /**
+   * The share that authorized this socket, when it came from a share
+   * visitor. Authorization is checked at the HTTP upgrade and then never
+   * again for the life of the connection — so without this, revoking a
+   * share left every socket it had opened still connected and still
+   * writable. Absent for a socket opened over the tailnet.
+   */
+  shareId?: string;
 };
 
 export type FeedbackWs = ServerWebSocket<WsCtx>;
@@ -1105,6 +1113,50 @@ export class Rooms {
   /** Bind a git diff (working-tree or pinned) for review — see binds.ts. */
   bindDiff(opts: BindDiffOpts): BindDiffResult {
     return bindDiffImpl(this, opts);
+  }
+
+  /**
+   * Close every websocket a given share opened. Revocation and expiry are
+   * enforced per HTTP request, but a websocket is authorized ONCE at its
+   * upgrade — so an already-connected visitor kept reading and writing the
+   * doc after the share was revoked. Verified: the socket stayed open and
+   * writable while HTTP returned 401.
+   *
+   * 1008 is the "policy violation" close code, which is what this is.
+   */
+  closeSocketsForShare(shareId: string): number {
+    let closed = 0;
+    for (const meta of this.list()) {
+      const room = this.get(meta.docId);
+      if (!room) continue;
+      for (const ws of room.conns) {
+        if (ws.data?.shareId !== shareId) continue;
+        try {
+          ws.close(1008, 'share revoked');
+        } catch {
+          // Already gone — the close handler does the bookkeeping.
+        }
+        closed += 1;
+      }
+    }
+    return closed;
+  }
+
+  /** Close sockets whose authorizing share is no longer live (revoked or
+   *  expired). Returns the shareIds that were swept. */
+  closeSocketsForDeadShares(isLive: (shareId: string) => boolean): string[] {
+    const dead = new Set<string>();
+    for (const meta of this.list()) {
+      const room = this.get(meta.docId);
+      if (!room) continue;
+      for (const ws of room.conns) {
+        const id = ws.data?.shareId;
+        if (!id || isLive(id)) continue;
+        dead.add(id);
+      }
+    }
+    for (const id of dead) this.closeSocketsForShare(id);
+    return Array.from(dead);
   }
 
   /** Re-reconcile a workspace against disk, keeping docIds (and therefore
