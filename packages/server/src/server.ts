@@ -166,13 +166,24 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     return resolved;
   };
 
-  /** Lazily bind the best on-disk file of a workspace as a landing doc. */
+  /**
+   * Lazily bind the best on-disk file of a workspace as a landing doc.
+   *
+   * Honours the workspace's stored `exclude`: listRepoFiles powers the
+   * all-files sidebar and deliberately scans everything, so picking from it
+   * unfiltered would land a reviewer on a vendored or generated file the
+   * caller explicitly kept out — and bind it into the workspace on the way.
+   */
   const liveFileEntry = (workspaceId: string, members: DocMeta[]): string | null => {
     const listed = rooms.listRepoFiles(workspaceId);
     if (!listed.ok || !listed.files) return null;
     const bound = new Set(members.map((m) => m.relPath));
+    const excluded = (members.find((m) => m.workspaceExclude)?.workspaceExclude ?? []).map((p) =>
+      p.replace(/^\/+/, '').replace(/\/+$/, ''),
+    );
     const candidates = listed.files
       .filter((f) => !bound.has(f.relPath))
+      .filter((f) => !excluded.some((p) => f.relPath === p || f.relPath.startsWith(`${p}/`)))
       .map((f) => ({ docId: f.relPath, relPath: f.relPath }));
     const pick = resolveShareEntry(undefined, candidates);
     if (!pick) return null;
@@ -639,6 +650,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           workspaceId: body?.workspaceId as string | undefined,
           title: body?.title as string | undefined,
           include: Array.isArray(body?.include) ? (body.include as string[]) : undefined,
+          // Accepted by bindFolder and honoured by the scan since forever,
+          // but this route never forwarded it — so bind_folder's exclude had
+          // no effect end-to-end. It matters more now: refresh_workspace
+          // persists and replays the exclude, which is meaningless if the
+          // bind could never set one. (/api/diffs already forwarded it.)
+          exclude: Array.isArray(body?.exclude) ? (body.exclude as string[]) : undefined,
           maxFiles: typeof body?.maxFiles === 'number' ? Number(body.maxFiles) : undefined,
           owner: body?.owner as string | undefined,
           producedBy: body?.producedBy as { agentId?: string; sessionId?: string } | undefined,

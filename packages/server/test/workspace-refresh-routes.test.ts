@@ -342,6 +342,41 @@ describe('workspace refresh routes', () => {
       }
     });
 
+    it('never lands on an EXCLUDED file when rebuilding the entry', async () => {
+      // The fallback picks from the all-files scan, which deliberately lists
+      // everything — so it has to re-apply the workspace's exclude, or the
+      // rescue would quietly widen the review past what the caller set.
+      const src = mkdtempSync(join(tmpdir(), 'wsr-excl-'));
+      try {
+        mkdirSync(join(src, 'vendor'), { recursive: true });
+        writeFileSync(join(src, 'README.md'), '# Landing\n\nhi\n');
+        // Named README so it OUTRANKS every survivor (README beats plain
+        // markdown before depth is even considered) — without the exclude
+        // filter the fallback lands squarely on it.
+        writeFileSync(join(src, 'vendor', 'README.md'), '# Vendored\n\nhi\n');
+        writeFileSync(join(src, 'zz-real.md'), '# Real\n\nhi\n');
+        const bind = await post('/api/workspaces', {
+          folderPath: src,
+          exclude: ['vendor'],
+        });
+        const wsId = ((await bind.json()) as { workspaceId: string }).workspaceId;
+        const mint = await post('/api/share/link', { workspaceId: wsId });
+        const share = ((await mint.json()) as { share: { slug: string } }).share;
+
+        renameSync(join(src, 'README.md'), join(src, 'INTRO.md'));
+        await post(`/api/workspaces/${wsId}/refresh`, {});
+
+        const r = await fetch(`${base}/s/${share.slug}`, {
+          redirect: 'manual',
+          headers: { host: PUBLIC_HOST },
+        });
+        expect(r.status).toBe(302);
+        expect(r.headers.get('location') ?? '').not.toContain('vendor');
+      } finally {
+        rmSync(src, { recursive: true, force: true });
+      }
+    });
+
     it('still lets a visitor OPEN a stale file that is not the entry', async () => {
       // Stale members are listed in the tree so stranded threads stay
       // readable. Bouncing a visitor off one would defeat that.

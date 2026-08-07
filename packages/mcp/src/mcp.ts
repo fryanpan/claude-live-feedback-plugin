@@ -333,6 +333,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         type: 'object',
         properties: {
           folderPath: { type: 'string' },
+          exclude: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              "Path prefixes (relative to the folder) to keep out of the workspace, e.g. ['node_modules', 'vendor']. Persisted, so refresh_workspace replays it.",
+          },
           workspaceId: { type: 'string' },
           title: { type: 'string' },
           include: { type: 'array', items: { type: 'string' } },
@@ -989,11 +995,21 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok(res);
       }
       case 'bind_folder': {
-        const { folderPath, workspaceId, title, include, maxFiles, subscribe, producedBy } = a as {
+        const {
+          folderPath,
+          workspaceId,
+          title,
+          include,
+          exclude,
+          maxFiles,
+          subscribe,
+          producedBy,
+        } = a as {
           folderPath: string;
           workspaceId?: string;
           title?: string;
           include?: string[];
+          exclude?: string[];
           maxFiles?: number;
           subscribe?: boolean;
           producedBy?: { agentId?: string; sessionId?: string };
@@ -1004,6 +1020,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...(workspaceId ? { workspaceId } : {}),
           ...(title ? { title } : {}),
           ...(include ? { include } : {}),
+          ...(exclude ? { exclude } : {}),
           ...(maxFiles !== undefined ? { maxFiles } : {}),
           ...(producedBy ? { producedBy } : {}),
         })) as { ok?: boolean; files?: Array<{ docId: string }> };
