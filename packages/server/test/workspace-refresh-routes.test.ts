@@ -340,6 +340,42 @@ describe('workspace refresh routes', () => {
       }
     });
 
+    it('keeps an emptied diff review on its own member, not a random file', async () => {
+      // Every changed file reverted means the review is EMPTY. Binding some
+      // untouched repo file would present it as a review of a file nobody
+      // changed; the tombstone at least still holds the comments.
+      const r2 = mkdtempSync(join(tmpdir(), 'wsr-empty-'));
+      try {
+        execFileSync('git', ['-C', r2, 'init', '-q']);
+        mkdirSync(join(r2, 'src'));
+        writeFileSync(join(r2, 'README.md'), '# Untouched\n');
+        writeFileSync(join(r2, 'src', 'a.ts'), 'const a = 1;\n');
+        git(r2, 'add', '-A');
+        git(r2, 'commit', '-q', '-m', 'base');
+        const b = git(r2, 'rev-parse', 'HEAD');
+        writeFileSync(join(r2, 'src', 'a.ts'), 'const a = 2;\n');
+
+        const diff = await post('/api/diffs', { repo: r2, base: b });
+        const rid = ((await diff.json()) as { reviewId: string }).reviewId;
+        const mint = await post('/api/share/link', { workspaceId: rid });
+        const share = ((await mint.json()) as { share: { slug: string; docId: string } }).share;
+
+        writeFileSync(join(r2, 'src', 'a.ts'), 'const a = 1;\n'); // revert
+        await post(`/api/workspaces/${rid}/refresh`, {});
+
+        const visit = await fetch(`${base}/s/${share.slug}`, {
+          redirect: 'manual',
+          headers: { host: PUBLIC_HOST },
+        });
+        expect(visit.status).toBe(302);
+        const location = visit.headers.get('location') ?? '';
+        expect(location).toContain('a.ts');
+        expect(location).not.toContain('README');
+      } finally {
+        rmSync(r2, { recursive: true, force: true });
+      }
+    });
+
     it('never lands on an EXCLUDED file when rebuilding the entry', async () => {
       // The fallback picks from the all-files scan, which deliberately lists
       // everything — so it has to re-apply the workspace's exclude, or the

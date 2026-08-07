@@ -158,8 +158,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // case, and there is no survivor to fall back to. But the folder is full
     // of files that are one lazy open away; the sidebar lists them already.
     // Bind the best of them rather than land the visitor on a ghost.
+    //
+    // NOT for a diff review: there, every member stale means every reviewed
+    // change was reverted, i.e. the review is empty. Binding some arbitrary
+    // unchanged file would misrepresent that as a review of a file nobody
+    // touched. Land on the tombstone — it still holds the comments.
+    const isDiffReview = members.some((m) => m.type === 'diff');
     const winner = resolved ? members.find((m) => m.docId === resolved) : undefined;
-    if (!resolved || winner?.stale) {
+    if (!isDiffReview && (!resolved || winner?.stale)) {
       const live = liveFileEntry(workspaceId, members);
       if (live) return live;
     }
