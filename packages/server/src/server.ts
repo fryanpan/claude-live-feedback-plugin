@@ -100,6 +100,9 @@ export interface ServerHandle {
   port: number;
   rooms: Rooms;
   shares: Shares | null;
+  /** Hang up every websocket and SSE stream whose share is no longer live.
+   *  Runs on a 60s interval; exposed so tests exercise the real sweep. */
+  sweepDeadShares: () => void;
   webhookLog: WebhookLogEntry[];
   stop: () => Promise<void>;
 }
@@ -372,7 +375,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // client sent), so its presence means "not from our LAN".
           viaProxy: req.headers.has('cf-ray'),
           lookupShare: (h) => {
-            const s = shares?.findByHostname(h);
+            // LIVE, not merely known: an expired share's hostname must stop
+            // being a share hostname, or expiry never takes effect for
+            // Access mode (see Shares.findLiveByHostname).
+            const s = shares?.findLiveByHostname(h);
             if (!s) return null;
             return s.workspaceId
               ? { docId: s.docId, workspaceId: s.workspaceId }
@@ -413,7 +419,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             return j(403, { error: 'out_of_share_scope' });
           }
           visitor = decision.target;
-          visitorShareId = shares?.findByHostname(req.headers.get('host') ?? '')?.shareId ?? null;
+          visitorShareId =
+            shares?.findLiveByHostname(req.headers.get('host') ?? '')?.shareId ?? null;
         } else if (decision.kind === 'link') {
           // Redeeming a link is the ONLY thing reachable here without a
           // session — that request is what mints one.
@@ -617,8 +624,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // already had the doc open kept reading and writing it after the
           // share was revoked.
           const closed = result.ok ? rooms.closeSocketsForShare(shareId) : 0;
+          // The SSE stream has the same "authorized once, then long-lived"
+          // shape: a visitor with the review page still open would otherwise
+          // keep receiving every new comment on a doc they can no longer load.
+          const closedStreams = result.ok ? sse.closeForShare(shareId) : 0;
           return result.ok
-            ? j(200, { ok: true, ...(closed ? { closedSockets: closed } : {}) })
+            ? j(200, {
+                ok: true,
+                ...(closed ? { closedSockets: closed } : {}),
+                ...(closedStreams ? { closedStreams } : {}),
+              })
             : j(404, { error: 'share not found' });
         } catch (err) {
           const error = err instanceof Error ? err.message : 'delete_share_failed';
@@ -661,14 +676,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         if (!isValidDocId(workspaceId)) return j(400, { error: 'bad workspaceId' });
         const exists = rooms.list().some((m) => m.workspaceId === workspaceId);
         if (!exists) return j(404, { error: 'workspace not found' });
-        return openSseStream(sse, `ws~${workspaceId}`);
+        return openSseStream(sse, `ws~${workspaceId}`, visitorShareId ?? undefined);
       }
       // --- SSE ---
       if (pathname.startsWith('/events/')) {
         const docId = decodeURIComponent(pathname.slice('/events/'.length));
         if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
         if (!rooms.get(docId)) return j(404, { error: 'doc not found' });
-        return openSseStream(sse, docId);
+        return openSseStream(sse, docId, visitorShareId ?? undefined);
       }
 
       // --- REST: docs ---
@@ -1472,10 +1487,21 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // minute — HTTP already refuses them the whole time, so nothing new is
   // reachable, they just haven't been hung up on yet.
   const SHARE_SWEEP_MS = 60_000;
+  /** Exactly what the interval does, named so tests drive the real thing
+   *  rather than a re-implementation of it. */
+  const sweepDeadShares = (): void => {
+    if (!shares) return;
+    const isLive = (id: string) => shares.findLive(id) !== null;
+    rooms.closeSocketsForDeadShares(isLive);
+    // Websockets aren't the only long-lived grant — an SSE stream is
+    // authorized once at open too, and would otherwise keep delivering
+    // comments to a visitor whose share has lapsed.
+    sse.closeForDeadShares(isLive);
+  };
   const shareSweep = shares
     ? setInterval(() => {
         try {
-          rooms.closeSocketsForDeadShares((id) => shares.findLive(id) !== null);
+          sweepDeadShares();
         } catch {
           // A sweep failure must never take the server down with it.
         }
@@ -1488,6 +1514,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     port: server.port ?? port,
     rooms,
     shares,
+    sweepDeadShares,
     webhookLog,
     stop: async () => {
       if (shareSweep) clearInterval(shareSweep);
