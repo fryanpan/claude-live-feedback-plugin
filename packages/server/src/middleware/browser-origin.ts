@@ -46,8 +46,13 @@ export interface OriginPolicy {
  * can fold them into `localHostnames` for the LOCAL surface — the predicate
  * itself grants no implicit trust, because the share surface must be able to
  * say "same origin, nothing else" and mean it.
+ *
+ * Kept in step with host-guard.ts's LOOPBACK, including `0.0.0.0`: Vite and
+ * Bun both print that address when a dev server binds all interfaces, and a
+ * developer who opens it would otherwise be refused by a policy that is
+ * supposed to mirror what the host gate already trusts.
  */
-export const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '::1', '[::1]'];
+export const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '0.0.0.0', '::1', '[::1]'];
 
 /**
  * `true` when a browser at `origin` may read our responses.
