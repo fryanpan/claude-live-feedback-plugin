@@ -394,4 +394,72 @@ describe('link shares over HTTP', () => {
       expect((await local('/api/share')).status).toBe(200);
     });
   });
+
+  describe('revocation hangs up, it does not just refuse', () => {
+    it('closes a websocket the share had already opened', async () => {
+      // The original audit finding: authorization is re-checked on every
+      // HTTP request, but a websocket is authorized ONCE at its upgrade.
+      // Probing the deployed server showed the socket stayed open and
+      // WRITABLE after unshare while HTTP correctly returned 401.
+      const mint = await local('/api/share/link', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ docId: SOLO }),
+      });
+      const share = ((await mint.json()) as { share: { shareId: string; slug: string } }).share;
+      const cookie = await redeem(share.slug);
+
+      const ws = new WebSocket(`ws://localhost:${handle.port}/y/${SOLO}`, {
+        headers: { host: PUBLIC_HOST, cookie: `${SHARE_COOKIE}=${cookie}` },
+      } as unknown as string[]);
+      const opened = await new Promise<boolean>((resolve) => {
+        ws.addEventListener('open', () => resolve(true));
+        ws.addEventListener('error', () => resolve(false));
+        setTimeout(() => resolve(false), 3000);
+      });
+      expect(opened).toBe(true);
+
+      const closedCode = new Promise<number>((resolve) => {
+        ws.addEventListener('close', (e) => resolve((e as CloseEvent).code));
+        setTimeout(() => resolve(-1), 5000);
+      });
+
+      const del = await local(`/api/share/${share.shareId}`, { method: 'DELETE' });
+      expect(del.status).toBe(200);
+      expect((await del.json()) as { closedSockets?: number }).toMatchObject({
+        closedSockets: 1,
+      });
+
+      // 1008 = policy violation, which is exactly what a revoked share is.
+      expect(await closedCode).toBe(1008);
+    });
+
+    it('leaves a tailnet socket alone when a share is revoked', async () => {
+      // Bryan's own editor is not authorized by any share and must not be
+      // hung up on because someone else's link was revoked.
+      const mint = await local('/api/share/link', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ docId: SOLO }),
+      });
+      const share = ((await mint.json()) as { share: { shareId: string } }).share;
+
+      const ws = new WebSocket(`ws://localhost:${handle.port}/y/${SOLO}`);
+      const opened = await new Promise<boolean>((resolve) => {
+        ws.addEventListener('open', () => resolve(true));
+        ws.addEventListener('error', () => resolve(false));
+        setTimeout(() => resolve(false), 3000);
+      });
+      expect(opened).toBe(true);
+
+      let closed = false;
+      ws.addEventListener('close', () => {
+        closed = true;
+      });
+      await local(`/api/share/${share.shareId}`, { method: 'DELETE' });
+      await new Promise((r) => setTimeout(r, 300));
+      expect(closed).toBe(false);
+      ws.close();
+    });
+  });
 });
