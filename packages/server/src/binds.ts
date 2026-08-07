@@ -289,6 +289,9 @@ export function bindDiff(host: BindHost, opts: BindDiffOpts): BindDiffResult {
       else host.attachReadonlyFile(docId, abs);
     }
     const entryDocId = memberDocId(reviewId, entryRel);
+    // The workspace has no registry — its members ARE the record, so the
+    // bind-time config rides along on them for refreshWorkspace to read back.
+    rememberWorkspaceConfig(host, entryDocId, opts);
     return {
       ok: true,
       reviewId,
@@ -429,6 +432,7 @@ export function bindDiff(host: BindHost, opts: BindDiffOpts): BindDiffResult {
     const groupAssignment =
       opts.groups || room.meta.diffGroup === undefined ? groupOf.get(entry.relPath) : undefined;
     refreshDiffMeta(room, entry, groupAssignment);
+    rememberWorkspaceConfig(host, docId, opts);
     if (target) {
       // Pinned mode: seed the target-commit content once; no file
       // binding, no poll — content can't change underneath us.
@@ -558,9 +562,19 @@ export type RefreshWorkspaceResult =
  */
 export function refreshWorkspace(host: BindHost, workspaceId: string): RefreshWorkspaceResult {
   const members = host.list().filter((m) => m.workspaceId === workspaceId);
-  if (members.length === 0) return { ok: false, error: 'not-found' };
+  // No members means nothing is bound — which is also the state a folder
+  // bound while EMPTY is left in (a documented degenerate success that
+  // creates no docs). The root can't be recovered from the hashed
+  // workspaceId, so point the caller at the operation that can.
+  const noRoot = {
+    ok: false,
+    error: 'not-found',
+    detail:
+      'no bound members for this workspace — re-run bind_folder / create_diff_review on the folder. It is idempotent and derives the same workspaceId, so shares and threads survive.',
+  } as const;
+  if (members.length === 0) return noRoot;
   const root = members.find((m) => m.workspaceRoot)?.workspaceRoot;
-  if (!root) return { ok: false, error: 'not-found', detail: 'workspace has no root' };
+  if (!root) return noRoot;
   if (!existsSync(root)) return { ok: false, error: 'root-missing', detail: root };
 
   const diffMember = members.find((m) => m.type === 'diff');
@@ -568,6 +582,12 @@ export function refreshWorkspace(host: BindHost, workspaceId: string): RefreshWo
 
   const before = new Set(members.map((m) => m.docId));
   const owner = members.find((m) => m.owner)?.owner;
+  // Re-apply what the workspace was BOUND with. Without the exclude list a
+  // refresh silently widens the review's scope; without the group spec every
+  // newly-changed file lands in a heuristic bucket, so a sidebar the caller
+  // organized by hand decays a little on each refresh.
+  const exclude = members.find((m) => m.workspaceExclude)?.workspaceExclude;
+  const groups = members.find((m) => m.workspaceGroups)?.workspaceGroups;
   // Which relPaths the DIFF currently covers. Null for a browse workspace,
   // where "is it still there?" is answered by the filesystem instead.
   let liveRelPaths: Set<string> | null = null;
@@ -576,7 +596,14 @@ export function refreshWorkspace(host: BindHost, workspaceId: string): RefreshWo
   if (diffMember) {
     const base = diffMember.diffBase;
     if (!base) return { ok: false, error: 'rebind-failed', detail: 'diff member has no base ref' };
-    const res = bindDiff(host, { repoPath: root, base, reviewId: workspaceId, owner });
+    const res = bindDiff(host, {
+      repoPath: root,
+      base,
+      reviewId: workspaceId,
+      owner,
+      ...(exclude ? { exclude } : {}),
+      ...(groups ? { groups } : {}),
+    });
     if (res.ok) {
       liveRelPaths = new Set(res.files.map((f) => f.relPath));
       fileCount = res.fileCount;
@@ -588,7 +615,10 @@ export function refreshWorkspace(host: BindHost, workspaceId: string): RefreshWo
       return { ok: false, error: 'rebind-failed', detail: res.detail ?? res.error };
     }
   } else {
-    fileCount = scanFolder(root).length;
+    const excludes = normalizeExcludes(exclude);
+    fileCount = scanFolder(root)
+      .map((abs) => relative(root, abs).split(sep).join('/'))
+      .filter((rel) => !isExcluded(rel, excludes)).length;
   }
 
   const added: WorkspaceMemberRef[] = [];
@@ -691,6 +721,13 @@ export function setWorkspaceGroups(
   }
 
   const explicit = groups.length > 0 ? groups : undefined;
+  // Persist the SPEC, not just the resulting per-file assignment: a later
+  // refresh re-applies it so files that start differing after this call land
+  // in the right group instead of a heuristic bucket. Resetting to the
+  // heuristic (empty array) deletes it, so refresh stops re-applying it.
+  for (const m of members) {
+    writeMeta(host, m.docId, [['workspaceGroups', explicit]]);
+  }
   const assignment = assignGroups(
     diffMembers.map((m) => ({
       relPath: m.relPath,
@@ -727,6 +764,45 @@ export function setWorkspaceGroups(
   };
 }
 
+/**
+ * Replicate the workspace's bind-time config onto a member. Only writes what
+ * the caller actually SUPPLIED: a group-less refresh must not erase the spec
+ * it is in the middle of re-applying (same explicit-wins rule the diff group
+ * assignment follows). Compared by value, so a repeat bind is a no-op rather
+ * than a doc update.
+ */
+function rememberWorkspaceConfig(
+  host: BindHost,
+  docId: string,
+  opts: { exclude?: string[]; groups?: BindDiffOpts['groups'] },
+): void {
+  const next: Array<[keyof DocMeta, unknown]> = [];
+  if (opts.exclude !== undefined) next.push(['workspaceExclude', normalizeExcludes(opts.exclude)]);
+  if (opts.groups !== undefined) next.push(['workspaceGroups', opts.groups]);
+  if (next.length === 0) return;
+  writeMeta(host, docId, next);
+}
+
+/** Set (or, for an undefined value, DELETE) meta keys on a room, skipping
+ *  keys already at the target value. Compares by JSON so array/object values
+ *  don't rewrite on every bind. */
+function writeMeta(host: BindHost, docId: string, entries: Array<[keyof DocMeta, unknown]>): void {
+  const room = host.get(docId);
+  if (!room) return;
+  const changed = entries.filter(([k, v]) => JSON.stringify(room.meta[k]) !== JSON.stringify(v));
+  if (changed.length === 0) return;
+  const m = room.ydoc.getMap('meta');
+  room.ydoc.transact(() => {
+    for (const [k, v] of changed) {
+      if (v === undefined) m.delete(k as string);
+      else m.set(k as string, v);
+    }
+  });
+  for (const [k, v] of changed) {
+    (room.meta as unknown as Record<string, unknown>)[k] = v;
+  }
+}
+
 /** Flip a member's `stale` marker. Clearing DELETES the key rather than
  *  writing `false`, so a live member's meta looks the same as it did before
  *  this feature existed. */
@@ -751,25 +827,11 @@ function setGroupMeta(
   docId: string,
   assignment: { group: string; rank: number; details?: string },
 ): void {
-  const room = host.get(docId);
-  if (!room) return;
-  const next: Array<[keyof DocMeta, unknown]> = [
+  writeMeta(host, docId, [
     ['diffGroup', assignment.group],
     ['diffGroupRank', assignment.rank],
     ['diffGroupDetails', assignment.details],
-  ];
-  const changed = next.filter(([k, v]) => room.meta[k] !== v);
-  if (changed.length === 0) return;
-  const m = room.ydoc.getMap('meta');
-  room.ydoc.transact(() => {
-    for (const [k, v] of changed) {
-      if (v === undefined) m.delete(k as string);
-      else m.set(k as string, v);
-    }
-  });
-  for (const [k, v] of changed) {
-    (room.meta as unknown as Record<string, unknown>)[k] = v;
-  }
+  ]);
 }
 
 /** Deterministic workspace id: folder basename + 6-char hash of the

@@ -66,6 +66,35 @@ describe('Rooms.refreshWorkspace — browse workspace', () => {
     if (!res.ok) expect(res.error).toBe('not-found');
   });
 
+  it('says how to recover a workspace bound from an empty folder', () => {
+    // Binding an empty folder is a documented degenerate success that creates
+    // NO docs — so there is nothing on the server to refresh, and the root
+    // can't be recovered from the (hashed) workspaceId. re-running bind_folder
+    // is the real fix, and it is safe: the id is derived from the absolute
+    // path, so the workspace (and any share pointing at it) keeps its identity.
+    const empty = mkdtempSync(join(tmpdir(), 'rw-empty-'));
+    try {
+      const first = rooms.bindFolder({ folderPath: empty });
+      if (!first.ok) throw new Error('bind failed');
+      expect(first.files).toEqual([]);
+
+      const res = rooms.refreshWorkspace(first.workspaceId);
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        expect(res.error).toBe('not-found');
+        expect(res.detail).toContain('bind_folder');
+      }
+
+      writeFileSync(join(empty, 'now.md'), '# arrived late\n');
+      const second = rooms.bindFolder({ folderPath: empty });
+      if (!second.ok) throw new Error('rebind failed');
+      expect(second.workspaceId).toBe(first.workspaceId);
+      expect(rooms.refreshWorkspace(first.workspaceId).ok).toBe(true);
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+
   it('errors root-missing when the folder itself is gone', () => {
     const bound = rooms.bindFolder({ folderPath: folder });
     expect(bound.ok).toBe(true);
@@ -185,6 +214,60 @@ describe('Rooms.refreshWorkspace — diff review', () => {
     expect(res.kind).toBe('diff');
     expect(res.added.map((a) => a.relPath)).toEqual(['src/b.ts']);
     expect(res.fileCount).toBe(2);
+  });
+
+  it('keeps honouring the exclude list the review was created with', () => {
+    // Otherwise a refresh silently widens the review's scope: a vendored or
+    // generated file the caller deliberately hid walks back in the moment it
+    // starts differing from the base.
+    const bound = rooms.bindDiff({ repoPath: repo, base, exclude: ['src/b.ts'] });
+    if (!bound.ok) throw new Error('bind failed');
+    writeFileSync(join(repo, 'src', 'b.ts'), 'const b = 2;\n');
+    const res = rooms.refreshWorkspace(bound.reviewId);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.added).toEqual([]);
+    expect(rooms.list().some((m) => m.relPath === 'src/b.ts')).toBe(false);
+  });
+
+  it("files a newly-added file into the caller's groups, not the heuristic", () => {
+    const bound = rooms.bindDiff({
+      repoPath: repo,
+      base,
+      groups: [{ title: 'Everything', paths: ['src'] }],
+    });
+    if (!bound.ok) throw new Error('bind failed');
+    writeFileSync(join(repo, 'src', 'b.ts'), 'const b = 2;\n');
+    rooms.refreshWorkspace(bound.reviewId);
+    const grouped = rooms.listGroupedDiff(bound.reviewId);
+    // One group, both files — not "Everything" plus a heuristic bucket.
+    expect(grouped.groups.map((g) => g.title)).toEqual(['Everything']);
+    expect(grouped.groups[0]?.files).toHaveLength(2);
+  });
+
+  it('keeps groups set AFTER the bind across a later refresh', () => {
+    const bound = rooms.bindDiff({ repoPath: repo, base });
+    if (!bound.ok) throw new Error('bind failed');
+    rooms.setWorkspaceGroups(bound.reviewId, [{ title: 'Reviewed', paths: ['src'] }]);
+    writeFileSync(join(repo, 'src', 'b.ts'), 'const b = 2;\n');
+    rooms.refreshWorkspace(bound.reviewId);
+    const grouped = rooms.listGroupedDiff(bound.reviewId);
+    expect(grouped.groups.map((g) => g.title)).toEqual(['Reviewed']);
+    expect(grouped.groups[0]?.files).toHaveLength(2);
+  });
+
+  it('stops re-applying a group spec once it is reset to the heuristic', () => {
+    const bound = rooms.bindDiff({
+      repoPath: repo,
+      base,
+      groups: [{ title: 'Everything', paths: ['src'] }],
+    });
+    if (!bound.ok) throw new Error('bind failed');
+    rooms.setWorkspaceGroups(bound.reviewId, []);
+    writeFileSync(join(repo, 'src', 'b.ts'), 'const b = 2;\n');
+    rooms.refreshWorkspace(bound.reviewId);
+    const grouped = rooms.listGroupedDiff(bound.reviewId);
+    expect(grouped.groups.map((g) => g.title)).not.toContain('Everything');
   });
 
   it('keeps docIds and threads stable across a refresh', async () => {
