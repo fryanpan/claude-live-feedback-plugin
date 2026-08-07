@@ -15,14 +15,40 @@ import { corsHeadersFor, isAllowedBrowserOrigin } from '../src/middleware/browse
  */
 
 const HOST = 'mac-mini.example.ts.net:8787';
+const SELF = `http://${HOST}`;
+const LOCAL_NAMES = ['mac-mini.example.ts.net', 'mac-mini.local', '192.168.1.42'];
 
-const allow = (origin: string | null, extra: string[] = []) =>
-  isAllowedBrowserOrigin(origin, { requestHost: HOST, allowedOrigins: extra });
+const allow = (origin: string | null, extra: string[] = [], self = SELF) =>
+  isAllowedBrowserOrigin(origin, {
+    requestOrigin: self,
+    localHostnames: LOCAL_NAMES,
+    allowedOrigins: extra,
+  });
 
 describe('isAllowedBrowserOrigin', () => {
   it('allows the review app itself (same origin)', () => {
-    expect(allow(`http://${HOST}`)).toBe(true);
-    expect(allow(`https://${HOST}`)).toBe(true);
+    expect(allow(SELF)).toBe(true);
+  });
+
+  it('compares the SCHEME too — http and https are different origins', () => {
+    // Only matters for a hostname that isn't one of ours: for our own names
+    // the rule below allows either scheme deliberately. A share host served
+    // over https must not trust a plain-http page on the same name.
+    const shareSelf = 'https://share.example.com';
+    const p = { requestOrigin: shareSelf, localHostnames: [], allowedOrigins: [] };
+    expect(isAllowedBrowserOrigin('https://share.example.com', p)).toBe(true);
+    expect(isAllowedBrowserOrigin('http://share.example.com', p)).toBe(false);
+  });
+
+  it('allows a dev server on any of THIS machine’s own hostnames', () => {
+    // The widget is embedded in a dev server that may be reached over the
+    // tailnet or the LAN, not just loopback — pointing back at this server.
+    // Those names resolve only to this machine, so a remote attacker's page
+    // cannot be served from them. Any port: dev servers pick their own.
+    expect(allow('http://mac-mini.example.ts.net:3000')).toBe(true);
+    expect(allow('http://mac-mini.local:4321')).toBe(true);
+    expect(allow('http://192.168.1.42:5173')).toBe(true);
+    expect(allow('https://mac-mini.local:3000')).toBe(true);
   });
 
   it('allows a loopback dev server — that is the widget’s whole use case', () => {
@@ -51,6 +77,19 @@ describe('isAllowedBrowserOrigin', () => {
     expect(allow(`http://evil-${HOST}`)).toBe(false);
   });
 
+  it('refuses a lookalike of a local hostname', () => {
+    expect(allow('http://mac-mini.local.evil.example.com')).toBe(false);
+    expect(allow('http://evil-mac-mini.local')).toBe(false);
+    expect(allow('http://192.168.1.42.evil.example.com')).toBe(false);
+  });
+
+  it('does not trust private IPs wholesale — only the ones we enumerated', () => {
+    // Origin is attacker-controlled text. Trusting 192.168/16 as a class
+    // would let any page claim to be on the LAN.
+    expect(allow('http://192.168.1.99:3000')).toBe(false);
+    expect(allow('http://10.0.0.5:3000')).toBe(false);
+  });
+
   it('refuses the opaque `null` origin (file://, sandboxed iframe)', () => {
     expect(allow('null')).toBe(false);
   });
@@ -77,7 +116,8 @@ describe('isAllowedBrowserOrigin', () => {
 describe('corsHeadersFor', () => {
   it('reflects one specific origin and never a wildcard', () => {
     const h = corsHeadersFor('http://localhost:3000', {
-      requestHost: HOST,
+      requestOrigin: SELF,
+      localHostnames: LOCAL_NAMES,
       allowedOrigins: [],
     });
     expect(h?.['access-control-allow-origin']).toBe('http://localhost:3000');
@@ -85,18 +125,32 @@ describe('corsHeadersFor', () => {
   });
 
   it('varies on Origin so a proxy cannot serve one origin’s response to another', () => {
-    const h = corsHeadersFor('http://localhost:3000', { requestHost: HOST, allowedOrigins: [] });
+    const h = corsHeadersFor('http://localhost:3000', {
+      requestOrigin: SELF,
+      localHostnames: LOCAL_NAMES,
+      allowedOrigins: [],
+    });
     expect(h?.vary).toBe('Origin');
   });
 
   it('returns nothing for a disallowed origin, so the browser blocks the read', () => {
     expect(
-      corsHeadersFor('https://evil.example.com', { requestHost: HOST, allowedOrigins: [] }),
+      corsHeadersFor('https://evil.example.com', {
+        requestOrigin: SELF,
+        localHostnames: LOCAL_NAMES,
+        allowedOrigins: [],
+      }),
     ).toBeNull();
   });
 
   it('returns nothing when there is no Origin — CORS headers are meaningless there', () => {
-    expect(corsHeadersFor(null, { requestHost: HOST, allowedOrigins: [] })).toBeNull();
+    expect(
+      corsHeadersFor(null, {
+        requestOrigin: SELF,
+        localHostnames: LOCAL_NAMES,
+        allowedOrigins: [],
+      }),
+    ).toBeNull();
   });
 
   it('never grants credentials cross-origin', () => {
@@ -104,7 +158,11 @@ describe('corsHeadersFor', () => {
     // origin it talks to, so credentialed cross-origin requests are never
     // needed — and granting them would hand a visitor's session to any
     // allowed origin.
-    const h = corsHeadersFor('http://localhost:3000', { requestHost: HOST, allowedOrigins: [] });
+    const h = corsHeadersFor('http://localhost:3000', {
+      requestOrigin: SELF,
+      localHostnames: LOCAL_NAMES,
+      allowedOrigins: [],
+    });
     expect(h?.['access-control-allow-credentials']).toBeUndefined();
   });
 });

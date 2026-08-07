@@ -21,8 +21,22 @@
  */
 
 export interface OriginPolicy {
-  /** The request's own Host header — the origin the app is served from. */
-  requestHost: string;
+  /**
+   * The origin this request was served on, SCHEME INCLUDED
+   * (`https://share.example.com`). Scheme matters: `http://x` and `https://x`
+   * are different browser origins, and a share host reached over https must
+   * not trust a plain-http page on the same name.
+   */
+  requestOrigin: string;
+  /**
+   * This machine's own hostnames — the same set the host gate trusts
+   * (tailnet name, LAN names, operator-configured extras). A dev server on
+   * one of these, on any port, is running on this machine, so a remote
+   * attacker's page cannot be served from it. Matched EXACTLY: `Origin` is
+   * attacker-controlled text, and suffix matching would let
+   * `mac-mini.local.evil.example.com` through.
+   */
+  localHostnames: string[];
   /** Extra origins the operator has explicitly allowed. Matched exactly. */
   allowedOrigins: string[];
 }
@@ -58,15 +72,24 @@ export function isAllowedBrowserOrigin(origin: string | null, policy: OriginPoli
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
 
   // Same origin as the app itself: the review UI, the mockup pages, the share
-  // host. Compared on HOST (hostname + port), which is what `Origin` carries,
-  // so `evil-<host>` and `<host>.evil.example.com` both fail.
-  if (url.host === policy.requestHost) return true;
+  // host. Full origin comparison — scheme, hostname and port — so neither
+  // `evil-<host>`, `<host>.evil.example.com`, nor a plain-http page on an
+  // https host slips through.
+  if (url.origin === policy.requestOrigin) return true;
 
-  // A loopback dev server — the widget's whole reason for being cross-origin.
-  // An attacker's page cannot be served from loopback, so this is far narrower
-  // than the wildcard it replaces. Any port, because dev servers pick their
-  // own. `url.hostname` is already normalized, so no substring matching.
-  if (LOOPBACK_HOSTS.has(url.hostname)) return true;
+  // A dev server running on THIS machine — the widget's whole reason for
+  // being cross-origin. It may be on loopback, or reached over the tailnet or
+  // the LAN and pointed back at this server, so accept any of the names the
+  // host gate already treats as ours. Any port (dev servers pick their own)
+  // and either scheme (a local dev server is usually plain http).
+  //
+  // Exact hostname match only. Deliberately NO "any private IP is local"
+  // rule: `Origin` is attacker-controlled, so trusting 192.168/16 wholesale
+  // would let any page self-classify onto the LAN — the same reasoning as
+  // isTrustedLocalHost in host-guard.ts.
+  const host = url.hostname.toLowerCase();
+  if (LOOPBACK_HOSTS.has(host)) return true;
+  if (policy.localHostnames.some((n) => n.toLowerCase() === host)) return true;
 
   return false;
 }

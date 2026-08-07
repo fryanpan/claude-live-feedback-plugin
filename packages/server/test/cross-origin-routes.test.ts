@@ -42,7 +42,15 @@ describe('cross-origin access to the trusted host', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'cross-origin-'));
     const docPath = join(dataDir, 'notes.md');
     writeFileSync(docPath, `# Notes\n\n${CANARY}.\n`);
-    handle = createServer({ port: 0, dataDir, allowedOrigins: ['https://mockups.example.com'] });
+    handle = createServer({
+      port: 0,
+      dataDir,
+      // trustedHosts feeds BOTH the host gate and the origin policy's notion
+      // of "this machine" — a dev server on the tailnet/LAN embeds the widget
+      // from one of these names.
+      trustedHosts: ['mac-mini.example.ts.net'],
+      allowedOrigins: ['https://mockups.example.com'],
+    });
     base = `http://localhost:${handle.port}`;
     host = `localhost:${handle.port}`;
     await req('/api/docs', null, {
@@ -79,6 +87,21 @@ describe('cross-origin access to the trusted host', () => {
       const r = await req('/api/docs', 'http://localhost:3000');
       expect(r.headers.get('access-control-allow-origin')).toBe('http://localhost:3000');
       expect(r.headers.get('vary')).toBe('Origin');
+    });
+
+    it('grants a dev server on one of this machine’s own hostnames', async () => {
+      // codex flagged this: restricting cross-origin to loopback would have
+      // broken the documented setup where the reviewed app is served from the
+      // tailnet/LAN and points back at this server.
+      const r = await req('/api/docs', 'http://mac-mini.example.ts.net:3000');
+      expect(r.headers.get('access-control-allow-origin')).toBe(
+        'http://mac-mini.example.ts.net:3000',
+      );
+    });
+
+    it('still refuses a lookalike of that hostname', async () => {
+      const r = await req('/api/docs', 'http://mac-mini.example.ts.net.evil.example.com');
+      expect(r.headers.get('access-control-allow-origin')).toBeNull();
     });
 
     it('grants an explicitly configured origin', async () => {
@@ -154,6 +177,11 @@ describe('cross-origin access to the trusted host', () => {
 
     it('lets a loopback dev server sync — the widget', async () => {
       const ok = await sync('http://localhost:3000');
+      expect(ok.text).toContain(CANARY);
+    });
+
+    it('lets a dev server on this machine’s tailnet name sync', async () => {
+      const ok = await sync('http://mac-mini.example.ts.net:3000');
       expect(ok.text).toContain(CANARY);
     });
 
