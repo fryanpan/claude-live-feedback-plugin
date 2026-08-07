@@ -144,14 +144,16 @@ describe('corsHeadersFor', () => {
     expect(h?.vary).toBe('Origin');
   });
 
-  it('returns nothing for a disallowed origin, so the browser blocks the read', () => {
-    expect(
-      corsHeadersFor('https://evil.example.com', {
-        requestOrigin: SELF,
-        localHostnames: LOCAL_NAMES,
-        allowedOrigins: [],
-      }),
-    ).toBeNull();
+  it('grants nothing to a disallowed origin, so the browser blocks the read', () => {
+    const h = corsHeadersFor('https://evil.example.com', {
+      requestOrigin: SELF,
+      localHostnames: LOCAL_NAMES,
+      allowedOrigins: [],
+    });
+    expect(h?.['access-control-allow-origin']).toBeUndefined();
+    // ...but the reply still varies by origin, or a shared cache could store
+    // this header-less response and replay it to an origin we DO allow.
+    expect(h?.vary).toBe('Origin');
   });
 
   it('returns nothing when there is no Origin — CORS headers are meaningless there', () => {
