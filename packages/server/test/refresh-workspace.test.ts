@@ -189,6 +189,9 @@ describe('Rooms.refreshWorkspace — diff review', () => {
     mkdirSync(join(repo, 'src'));
     writeFileSync(join(repo, 'src', 'a.ts'), 'const a = 1;\n');
     writeFileSync(join(repo, 'src', 'b.ts'), 'const b = 1;\n');
+    // Unchanged in the working tree, so it stays OUT of the diff — it exists
+    // so a test can change it and then revert it.
+    writeFileSync(join(repo, 'notes.md'), '# notes\n\noriginal\n');
     git(repo, 'add', '-A');
     git(repo, 'commit', '-q', '-m', 'base');
     base = git(repo, 'rev-parse', 'HEAD');
@@ -341,6 +344,42 @@ describe('Rooms.refreshWorkspace — diff review', () => {
     writeFileSync(join(repo, 'src', 'b.ts'), 'const b = 3;\n');
     rooms.bindDiff({ repoPath: repo, base });
     expect(rooms.get(docId)?.meta.stale).toBeUndefined();
+  });
+
+  it("takes a .md file's companion editor doc stale along with its member", () => {
+    // A changed .md has TWO docs on one relPath: the diff member and the
+    // editable companion. If only the member goes stale the workspace is
+    // half-stale for that path — and because the companion isn't a diff
+    // member, a share would start landing on the editor for a file that is
+    // no longer under review.
+    writeFileSync(join(repo, 'notes.md'), '# notes\n\nedited\n');
+    const bound = rooms.bindDiff({ repoPath: repo, base });
+    if (!bound.ok) throw new Error('bind failed');
+    const companion = rooms.openEditableFile(bound.reviewId, 'notes.md');
+    expect(companion.ok).toBe(true);
+    if (!companion.ok) return;
+    const memberDoc = rooms.list().find((m) => m.relPath === 'notes.md' && m.type === 'diff');
+    expect(companion.docId).not.toBe(memberDoc?.docId); // really two docs
+
+    // REVERT — the file still exists, it just no longer differs from base.
+    // existsSync would call both of these live; only following the member
+    // gets it right.
+    writeFileSync(join(repo, 'notes.md'), '# notes\n\noriginal\n');
+    rooms.refreshWorkspace(bound.reviewId);
+    expect(rooms.get(memberDoc?.docId ?? '')?.meta.stale).toBe(true);
+    expect(rooms.get(companion.docId)?.meta.stale).toBe(true);
+  });
+
+  it('leaves a CONTEXT file alone — it was never in the diff', () => {
+    const bound = rooms.bindDiff({ repoPath: repo, base });
+    if (!bound.ok) throw new Error('bind failed');
+    // src/b.ts is unchanged, so it is context, not a review member.
+    const ctx = rooms.openContextFile(bound.reviewId, 'src/b.ts');
+    expect(ctx.ok).toBe(true);
+    if (!ctx.ok) return;
+    const res = rooms.refreshWorkspace(bound.reviewId);
+    expect(res.ok).toBe(true);
+    expect(rooms.get(ctx.docId)?.meta.stale).toBeUndefined();
   });
 
   it('does not mark a deleted-in-diff file stale — being gone IS the change', () => {

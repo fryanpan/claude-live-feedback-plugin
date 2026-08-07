@@ -130,9 +130,18 @@ function diffNavSignature(
       .join(',');
     return `diff:${workspaceId}:all:${f}`;
   }
+  // Group TITLES, ORDER and DETAILS are part of the signature, not just the
+  // files: set_workspace_groups can rewrite the whole sidebar while every
+  // docId and status stays identical, and a signature blind to that would
+  // leave the old headings on screen until a hard reload.
   const f = model.groups
-    .flatMap((g) => g.files.map((x) => `${x.docId}:${x.diffStatus ?? ''}:${x.stale ? 's' : ''}`))
-    .join(',');
+    .map(
+      (g) =>
+        `${g.title}|${g.details ?? ''}|${g.files
+          .map((x) => `${x.docId}:${x.diffStatus ?? ''}:${x.stale ? 's' : ''}`)
+          .join(',')}`,
+    )
+    .join(';');
   return `diff:${workspaceId}:grouped:${f}`;
 }
 

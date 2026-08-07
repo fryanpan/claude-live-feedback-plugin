@@ -657,6 +657,22 @@ export function refreshWorkspace(host: BindHost, workspaceId: string): RefreshWo
       .filter((rel) => !isExcluded(rel, excludes)).length;
   }
 
+  // A `.md` diff member can have a companion EDITOR doc on the same relPath
+  // (openEditableFile). It must follow its member out of the review, or the
+  // workspace ends up half-stale for one path — and, because the companion
+  // isn't a diff member, a share would start landing on the editor for a file
+  // that is no longer under review. Context files (openContextFile) are a
+  // different case: they were never in the diff, so only their file's absence
+  // makes them stale.
+  const staleDiffPaths = new Set<string>();
+  if (liveRelPaths) {
+    for (const meta of members) {
+      if (meta.type === 'diff' && meta.relPath && !liveRelPaths.has(meta.relPath)) {
+        staleDiffPaths.add(meta.relPath);
+      }
+    }
+  }
+
   const added: WorkspaceMemberRef[] = [];
   const stale: Array<WorkspaceMemberRef & { openThreads: number }> = [];
   const restored: WorkspaceMemberRef[] = [];
@@ -678,7 +694,7 @@ export function refreshWorkspace(host: BindHost, workspaceId: string): RefreshWo
     const gone =
       meta.type === 'diff' && liveRelPaths
         ? !liveRelPaths.has(meta.relPath)
-        : !existsSync(join(root, meta.relPath));
+        : staleDiffPaths.has(meta.relPath) || !existsSync(join(root, meta.relPath));
     if (gone) {
       setStaleFlag(host, meta.docId, true);
       stale.push({ ...ref, openThreads: host.listThreads(meta.docId, { status: 'open' }).length });
