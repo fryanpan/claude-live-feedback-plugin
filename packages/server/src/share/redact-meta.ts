@@ -95,3 +95,66 @@ export function relativeReviewUrl(reviewUrl: string | undefined): string | undef
     return reviewUrl.startsWith('/') ? reviewUrl : undefined;
   }
 }
+
+/**
+ * Strip a workspace TREE down to what a share visitor may see.
+ *
+ * `GET /api/workspaces/<id>/tree` and `/files` are in a workspace visitor's
+ * scope — they're what makes the set browsable — but unlike `/api/docs/<id>`
+ * they never passed through any redaction, because they build their payload
+ * themselves rather than returning a DocMeta. Two things leaked to anyone
+ * holding a workspace link:
+ *
+ *   - `root`, the ABSOLUTE filesystem path of the shared directory on the
+ *     host. Directory names routinely encode a client or project, so this is
+ *     the same class of disclosure the private-meta sidecar exists to prevent.
+ *   - `reviewUrl` on every node, carrying the tailnet hostname AND port —
+ *     an internal name the visitor has no business learning, and one they
+ *     cannot use anyway.
+ *
+ * Both are dropped/relativized here. `relPath` deliberately stays: it is the
+ * path WITHIN the review, which is the thing being reviewed and is already
+ * visible in the sidebar.
+ *
+ * Verified live against the running server before the fix: an external
+ * visitor on a workspace link received both.
+ */
+export function redactWorkspaceTreeForVisitor<T extends { root?: string; tree?: unknown }>(
+  payload: T,
+): Omit<T, 'root'> {
+  const { root: _dropped, ...rest } = payload;
+  return { ...rest, ...(payload.tree ? { tree: redactNode(payload.tree) } : {}) } as Omit<
+    T,
+    'root'
+  >;
+}
+
+/** Recursively relativize `reviewUrl` on every node of a workspace tree. */
+function redactNode(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(redactNode);
+  if (!node || typeof node !== 'object') return node;
+  const { reviewUrl, ...base } = node as Record<string, unknown>;
+  const out: Record<string, unknown> = { ...base };
+  // Absent rather than absolute: an unparseable reviewUrl is dropped outright
+  // instead of passed through, so a future URL shape can't leak by default.
+  if (typeof reviewUrl === 'string') {
+    const rel = relativeReviewUrl(reviewUrl);
+    if (rel !== undefined) out.reviewUrl = rel;
+  }
+  if (Array.isArray(out.children)) out.children = out.children.map(redactNode);
+  return out;
+}
+
+/**
+ * Same treatment for `GET /api/workspaces/<id>/files`, whose payload is a
+ * flat `files` array rather than a tree.
+ */
+export function redactWorkspaceFilesForVisitor<T extends { root?: string; files?: unknown[] }>(
+  payload: T,
+): Omit<T, 'root'> {
+  const { root: _dropped, ...rest } = payload;
+  return {
+    ...rest,
+    ...(payload.files ? { files: payload.files.map(redactNode) } : {}),
+  } as Omit<T, 'root'>;
+}

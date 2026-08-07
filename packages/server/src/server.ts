@@ -34,7 +34,12 @@ import {
   sessionCookieHeader,
   verifySession,
 } from './share/link-session.ts';
-import { redactMetaForVisitor, relativeReviewUrl } from './share/redact-meta.ts';
+import {
+  redactMetaForVisitor,
+  redactWorkspaceFilesForVisitor,
+  redactWorkspaceTreeForVisitor,
+  relativeReviewUrl,
+} from './share/redact-meta.ts';
 import { Shares } from './share/shares.ts';
 import { SharingGate } from './share/sharing-gate.ts';
 import type { ShareConfig } from './share/types.ts';
@@ -1123,7 +1128,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         if (wsFilesMatch && req.method === 'GET') {
           const workspaceId = decodeURIComponent(wsFilesMatch[1] ?? '');
           const res = rooms.listRepoFiles(workspaceId);
-          return res.ok ? j(200, res) : j(404, res);
+          if (!res.ok) return j(404, res);
+          // `root` is an absolute host path and every reviewUrl carries the
+          // tailnet hostname — neither belongs in a visitor's copy.
+          return j(200, visitor ? redactWorkspaceFilesForVisitor(res) : res);
         }
         // Lazily open an unchanged repo file for context (read-only code doc
         // in the same workspace).
@@ -1162,7 +1170,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (tree.tree.children.length === 0) {
             return j(404, { error: 'workspace not found', workspaceId });
           }
-          return j(200, tree);
+          // Same redaction as /files — see redactWorkspaceTreeForVisitor.
+          return j(200, visitor ? redactWorkspaceTreeForVisitor(tree) : tree);
         }
         const docMatch = pathname.match(/^\/api\/docs\/([^/]+)(?:\/(.*))?$/);
         if (docMatch) {
