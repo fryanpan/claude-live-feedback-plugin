@@ -265,12 +265,22 @@ export class Shares {
   }
 }
 
+/**
+ * `bytes` random bytes, hex-encoded — so 2*bytes characters.
+ *
+ * It used to `.slice(0, bytes)` the encoded string, throwing away half the
+ * entropy it had just generated: `randomHex(8)` returned 32 bits, not 64, and
+ * `randomHex(3)` returned 12 bits — 4096 possibilities for the date-suffixed
+ * Access share slug, which is also its public hostname. Neither value is a
+ * bearer credential (link slugs use their own full-width `randomBytes(16)`,
+ * and an Access hostname is gated by a JWT), so this was a collision bug
+ * rather than a guessing one — but a function named for a byte count should
+ * return that many bytes.
+ */
 function randomHex(bytes: number): string {
   const arr = new Uint8Array(bytes);
   crypto.getRandomValues(arr);
-  return Array.from(arr, (b) => b.toString(16).padStart(2, '0'))
-    .join('')
-    .slice(0, bytes);
+  return Array.from(arr, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 function dateSlug(d: Date): string {
