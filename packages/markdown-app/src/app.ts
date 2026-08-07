@@ -235,6 +235,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     ydoc,
     surface: editor,
     scope,
+    labelHint: ctx.sourceUrl || ctx.relPath || undefined,
     selectHint: 'Select some text first to leave a comment.',
     reanchorHint: 'Select new text first, then click Re-anchor.',
     // The cached `selection` covers iOS blurring the editor between the

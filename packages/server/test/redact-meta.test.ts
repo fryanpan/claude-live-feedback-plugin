@@ -26,7 +26,7 @@ const FULL: DocMeta & { reviewUrl?: string } = {
 };
 
 describe('redactMetaForVisitor', () => {
-  const out = redactMetaForVisitor(FULL) as Record<string, unknown>;
+  const out = redactMetaForVisitor(FULL, { workspaceScoped: true }) as Record<string, unknown>;
 
   it('drops every path that describes the host machine', () => {
     for (const k of ['sourceUrl', 'owner', 'workspaceRoot']) {
@@ -55,10 +55,10 @@ describe('redactMetaForVisitor', () => {
   });
 
   it('leaves a working-tree review looking editable', () => {
-    const live = redactMetaForVisitor({ ...FULL, diffTarget: undefined }) as Record<
-      string,
-      unknown
-    >;
+    const live = redactMetaForVisitor(
+      { ...FULL, diffTarget: undefined },
+      { workspaceScoped: true },
+    ) as Record<string, unknown>;
     expect(live.diffTarget).toBeUndefined();
   });
 
@@ -74,8 +74,25 @@ describe('redactMetaForVisitor', () => {
 
   it('is an ALLOWLIST — a field added later is redacted by default', () => {
     const withNewField = { ...FULL, someFutureSecret: '/Volumes/secret' } as unknown as DocMeta;
-    const res = redactMetaForVisitor(res_in(withNewField)) as Record<string, unknown>;
+    const res = redactMetaForVisitor(res_in(withNewField), { workspaceScoped: true }) as Record<
+      string,
+      unknown
+    >;
     expect(res.someFutureSecret).toBeUndefined();
+  });
+
+  it('withholds workspaceId from a DOC-scoped share of a workspace member', () => {
+    // The client reads any non-empty workspaceId as permission to render
+    // workspace nav and poll /api/workspaces/<id>/… every 30s — which
+    // shareScopeAllows refuses for a doc share. Advertising it buys the
+    // visitor a broken sidebar and a loop of 403s.
+    const solo = redactMetaForVisitor(FULL) as Record<string, unknown>;
+    expect(solo.workspaceId).toBeUndefined();
+    expect(solo.setId).toBeUndefined();
+    // ...and the doc itself still renders.
+    expect(solo.docId).toBe(FULL.docId);
+    expect(solo.relPath).toBe('src/a.ts');
+    expect(solo.diffStatus).toBe('modified');
   });
 
   it('keeps a filename so a shared code doc still highlights', () => {

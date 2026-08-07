@@ -130,6 +130,7 @@ export async function mountCode(
     ydoc,
     surface,
     scope,
+    labelHint: ctx.sourceUrl || ctx.relPath || undefined,
     selectHint: 'Click a line number, or select some lines, to leave a comment.',
     reanchorHint: 'Select new lines first, then click Re-anchor.',
     getSelection: () => surface.getSelectionRel() ?? selection,

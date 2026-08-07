@@ -317,6 +317,60 @@ describe('link shares over HTTP', () => {
     });
   });
 
+  describe('a DOC link to a workspace member does not advertise the workspace', () => {
+    // The client treats a non-empty workspaceId as permission to render
+    // workspace nav and re-poll /api/workspaces/<id>/… every 30s. A doc share
+    // is refused those routes, so leaving the id in the payload buys the
+    // visitor a broken sidebar and a steady loop of 403s.
+    let cookie: string;
+    beforeAll(async () => {
+      const r = await local('/api/share/link', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ docId: entryDocId }),
+      });
+      const { share } = (await r.json()) as { share: { slug: string } };
+      cookie = await redeem(share.slug);
+    });
+
+    it('serves the doc but withholds workspaceId and setId', async () => {
+      const res = await pub(`/api/docs/${encodeURIComponent(entryDocId)}`, cookie);
+      expect(res.status).toBe(200);
+      const { meta } = (await res.json()) as { meta: Record<string, unknown> };
+      // Positive control: this IS the workspace member, and the tailnet view
+      // of the same doc does carry the ids.
+      const owner = (await (await local(`/api/docs/${encodeURIComponent(entryDocId)}`)).json()) as {
+        meta: Record<string, unknown>;
+      };
+      expect(owner.meta.workspaceId).toBe(workspaceId);
+      expect(meta.docId).toBe(entryDocId);
+      expect(meta.workspaceId).toBeUndefined();
+      expect(meta.setId).toBeUndefined();
+    });
+
+    it('and the workspace routes stay closed to it either way', async () => {
+      expect(
+        (await pub(`/api/workspaces/${encodeURIComponent(workspaceId)}/tree`, cookie)).status,
+      ).toBe(403);
+    });
+
+    it('a WORKSPACE link still gets the id it needs to render the sidebar', async () => {
+      const wsCookie = await redeem((await mintWorkspaceLink()).slug);
+      const res = await pub(`/api/docs/${encodeURIComponent(entryDocId)}`, wsCookie);
+      const { meta } = (await res.json()) as { meta: Record<string, unknown> };
+      expect(meta.workspaceId).toBe(workspaceId);
+    });
+
+    const mintWorkspaceLink = async (): Promise<{ slug: string }> => {
+      const r = await local('/api/share/link', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId }),
+      });
+      return ((await r.json()) as { share: { slug: string } }).share;
+    };
+  });
+
   describe('revocation and expiry are immediate', () => {
     it('a revoked share kills a session already in a browser', async () => {
       const mk = await local('/api/share/link', {
