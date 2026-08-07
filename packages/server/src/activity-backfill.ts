@@ -14,6 +14,7 @@ import {
   toUtcIso,
   wordCount,
 } from './activity.ts';
+import { readPrivateMeta } from './private-meta.ts';
 
 /**
  * Backfill the hands-on activity stream from persisted .ydoc files.
@@ -181,6 +182,12 @@ export function runBackfill(opts: BackfillOptions): BackfillStats {
       const base = path.split('/').pop() ?? '';
       meta.docId = base.replace(/\.ydoc$/, '');
     }
+    // `owner` / `workspaceRoot` / `producedBy` moved out of the CRDT into a
+    // sidecar (they described the host, and the CRDT syncs to share
+    // visitors). This reads .ydoc files directly rather than through a room,
+    // so it has to merge the sidecar itself or every event loses its repo
+    // and its producedBy attribution.
+    Object.assign(meta, readPrivateMeta(opts.dataDir, meta.docId));
     const threads = listThreads(ydoc);
     if (threads.length === 0) {
       ydoc.destroy();

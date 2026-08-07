@@ -6,15 +6,24 @@ type Sink = {
 };
 
 export class SseHub {
-  private byDoc = new Map<string, Set<Sink>>();
+  /**
+   * docId → (sink → the share that authorized it, if any).
+   *
+   * The shareId is what makes revocation reach this layer. An SSE stream has
+   * the same shape of problem as a websocket — authorized once at open, then
+   * long-lived — so pulling a visitor's access has to hang up their stream as
+   * well, or they keep receiving every new comment on a review they can no
+   * longer load. Owner streams carry no shareId and are never swept.
+   */
+  private byDoc = new Map<string, Map<Sink, string | undefined>>();
 
-  add(docId: string, sink: Sink): () => void {
+  add(docId: string, sink: Sink, shareId?: string): () => void {
     let set = this.byDoc.get(docId);
     if (!set) {
-      set = new Set();
+      set = new Map();
       this.byDoc.set(docId, set);
     }
-    set.add(sink);
+    set.set(sink, shareId);
     return () => this.remove(docId, sink);
   }
 
@@ -28,7 +37,7 @@ export class SseHub {
   broadcast(docId: string, payload: WebhookPayload): void {
     const set = this.byDoc.get(docId);
     if (!set) return;
-    for (const sink of set) {
+    for (const sink of set.keys()) {
       try {
         sink.write(payload.event, payload);
       } catch (err) {
@@ -40,10 +49,43 @@ export class SseHub {
   count(docId: string): number {
     return this.byDoc.get(docId)?.size ?? 0;
   }
+
+  /** Close every stream a given share opened. Returns how many. */
+  closeForShare(shareId: string): number {
+    let closed = 0;
+    for (const [docId, set] of this.byDoc) {
+      for (const [sink, id] of set) {
+        if (id !== shareId) continue;
+        try {
+          sink.close();
+        } catch {
+          // Already gone; the remove below is the bookkeeping either way.
+        }
+        this.remove(docId, sink);
+        closed += 1;
+      }
+    }
+    return closed;
+  }
+
+  /** Close streams whose authorizing share is no longer live (revoked or
+   *  expired). Returns the shareIds swept. */
+  closeForDeadShares(isLive: (shareId: string) => boolean): string[] {
+    const dead = new Set<string>();
+    for (const set of this.byDoc.values()) {
+      for (const id of set.values()) {
+        if (id && !isLive(id)) dead.add(id);
+      }
+    }
+    for (const id of dead) this.closeForShare(id);
+    return Array.from(dead);
+  }
 }
 
-/** Produce a ReadableStream that emits SSE lines, and register with the hub. */
-export function openSseStream(hub: SseHub, docId: string): Response {
+/** Produce a ReadableStream that emits SSE lines, and register with the hub.
+ *  `shareId` tags the stream with the share that authorized it so revocation
+ *  and expiry can hang it up. */
+export function openSseStream(hub: SseHub, docId: string, shareId?: string): Response {
   let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
   const encoder = new TextEncoder();
   let remove: (() => void) | null = null;
@@ -65,7 +107,7 @@ export function openSseStream(hub: SseHub, docId: string): Response {
       };
       // initial comment so proxies flush headers
       c.enqueue(encoder.encode(':ok\n\n'));
-      remove = hub.add(docId, sink);
+      remove = hub.add(docId, sink, shareId);
       // periodic keepalive
       const keepalive = setInterval(() => {
         try {

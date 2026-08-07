@@ -84,16 +84,17 @@ export function initDocMeta(doc: Y.Doc, meta: DocMeta): void {
     if (!m.has('docId')) m.set('docId', meta.docId);
     if (!m.has('type')) m.set('type', meta.type);
     if (!m.has('createdAt')) m.set('createdAt', meta.createdAt);
-    if (meta.sourceUrl !== undefined) m.set('sourceUrl', meta.sourceUrl);
+    // sourceUrl / owner / workspaceRoot / producedBy are deliberately NOT
+    // written here. They describe the host machine rather than the document,
+    // nothing on the client reads their values, and the Yjs doc is handed
+    // whole to every connected client — share visitors included — so a key in
+    // this map is a key the person holding a share link can read. The server
+    // keeps them in a sidecar instead (server/src/private-meta.ts).
     if (meta.title !== undefined) m.set('title', meta.title);
     if (meta.setId !== undefined) m.set('setId', meta.setId);
-    if (meta.owner !== undefined && !m.has('owner')) m.set('owner', meta.owner);
     if (meta.workspaceId !== undefined && !m.has('workspaceId'))
       m.set('workspaceId', meta.workspaceId);
     if (meta.relPath !== undefined && !m.has('relPath')) m.set('relPath', meta.relPath);
-    if (meta.workspaceRoot !== undefined && !m.has('workspaceRoot'))
-      m.set('workspaceRoot', meta.workspaceRoot);
-    if (meta.producedBy !== undefined && !m.has('producedBy')) m.set('producedBy', meta.producedBy);
     if (meta.diffBase !== undefined && !m.has('diffBase')) m.set('diffBase', meta.diffBase);
     if (meta.diffTarget !== undefined && !m.has('diffTarget')) m.set('diffTarget', meta.diffTarget);
     if (meta.diffStatus !== undefined && !m.has('diffStatus')) m.set('diffStatus', meta.diffStatus);

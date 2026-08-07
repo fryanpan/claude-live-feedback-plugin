@@ -16,6 +16,7 @@ import {
   showFile,
   textLooksBinary,
 } from './git-diff.ts';
+import { isPrivateMetaKey } from './private-meta.ts';
 import type { DocRoom } from './rooms.ts';
 
 /**
@@ -30,6 +31,9 @@ import type { DocRoom } from './rooms.ts';
  *  circular import; Rooms passes itself). */
 export interface BindHost {
   get(docId: string): DocRoom | undefined;
+  /** Force a persistence pass for a doc whose in-memory meta changed without
+   *  a CRDT update — the private sidecar keys have no Yjs write to ride. */
+  persistMeta(docId: string): void;
   listThreads(docId: string, opts?: { status?: 'open' | 'resolved' }): Array<unknown>;
   getOrCreate(
     docId: string,
@@ -871,6 +875,12 @@ function writeMeta(host: BindHost, docId: string, entries: Array<[keyof DocMeta,
   const m = room.ydoc.getMap('meta');
   room.ydoc.transact(() => {
     for (const [k, v] of changed) {
+      // Host-describing keys never enter the CRDT — the sync channel hands
+      // the whole doc to share visitors. They live in the sidecar, which
+      // saveToDisk writes from `room.meta`, so updating the in-memory copy
+      // below is the whole write. No call site passes one today; the guard
+      // is here so a future one can't reopen the hole by accident.
+      if (isPrivateMetaKey(k as string)) continue;
       if (v === undefined) m.delete(k as string);
       else m.set(k as string, v);
     }
@@ -878,6 +888,9 @@ function writeMeta(host: BindHost, docId: string, entries: Array<[keyof DocMeta,
   for (const [k, v] of changed) {
     (room.meta as unknown as Record<string, unknown>)[k] = v;
   }
+  // A private-only change makes no CRDT update, so nothing would schedule the
+  // write that persists the sidecar. Ask for one explicitly.
+  if (changed.some(([k]) => isPrivateMetaKey(k as string))) host.persistMeta(docId);
 }
 
 /** Flip a member's `stale` marker. Clearing DELETES the key rather than
