@@ -494,6 +494,27 @@ describe('workspace share over HTTP', () => {
     expect(still.status).toBe(200);
   });
 
+  it('repairs a share URL whose entry doc is gone', async () => {
+    // An Access share hands out /review/<entryDocId> directly and is never
+    // redeemed, so there is no other moment to re-resolve it. Renaming the
+    // entry file used to leave that emailed URL pointing at nothing.
+    const gone = `${workspaceId}:renamed-away.md`;
+    const r = await asVisitor(`/review/${encodeURIComponent(gone)}`, { redirect: 'manual' });
+    expect(r.status).toBe(302);
+    const location = r.headers.get('location') ?? '';
+    expect(location).toMatch(/^\/review\//);
+    expect(location).not.toContain('renamed-away');
+  });
+
+  it('does not turn the repair into an oracle for docs outside the share', async () => {
+    // A docId that EXISTS elsewhere must stay a 403, not a redirect —
+    // otherwise the repair would confirm which ids are real.
+    const r = await asVisitor(`/review/${encodeURIComponent(outsideDocId)}`, {
+      redirect: 'manual',
+    });
+    expect(r.status).toBe(403);
+  });
+
   it("CANNOT reshape the workspace — refresh and regroup are the owner's calls", async () => {
     // A visitor reads and comments. Deciding which files are under review,
     // and how the sidebar organizes them, stays with whoever shared it.

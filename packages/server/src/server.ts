@@ -129,6 +129,56 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       : { docId: share.docId };
   };
 
+  /**
+   * The doc a workspace share should open right now, or null when the
+   * workspace has no members left. Resolved per request rather than stored,
+   * because a member docId encodes the file's relPath — renaming the entry
+   * file changes its docId.
+   */
+  const currentWorkspaceEntry = (workspaceId: string, preferred?: string): string | null =>
+    resolveShareEntry(
+      preferred,
+      rooms
+        .list()
+        .filter((m) => m.workspaceId === workspaceId)
+        .map((m) => ({
+          docId: m.docId,
+          ...(m.relPath ? { relPath: m.relPath } : {}),
+          ...(m.stale ? { stale: true } : {}),
+          ...(m.type === 'diff' ? { isChangedFile: true } : {}),
+        })),
+    );
+
+  /**
+   * Repair a share visitor's `/review/<docId>` when that doc is gone.
+   *
+   * Link shares resolve their landing doc at redemption, but the URL the
+   * visitor ends up with (and bookmarks, and is sent by email in the case of
+   * an Access share, whose URL is handed out directly and never redeemed)
+   * still names a specific docId. Renaming the file behind it leaves that URL
+   * pointing at nothing. Redirect to the workspace's current entry instead —
+   * which also repairs every URL already in someone's inbox.
+   *
+   * Only for workspace shares: a single-doc share has nowhere else to go, and
+   * silently moving it would be wrong. Returns null when nothing to do.
+   */
+  const repairStaleReviewUrl = (
+    pathname: string,
+    method: string,
+    target: ShareTarget,
+  ): Response | null => {
+    if (method !== 'GET' || !target.workspaceId) return null;
+    if (!pathname.startsWith('/review/')) return null;
+    const docId = decodeURIComponent(pathname.slice('/review/'.length));
+    if (!docId || rooms.get(docId)) return null;
+    const entry = currentWorkspaceEntry(target.workspaceId);
+    if (!entry || entry === docId) return null;
+    return new Response(null, {
+      status: 302,
+      headers: { location: `/review/${encodeURIComponent(entry)}` },
+    });
+  };
+
   // When shares is wired, automatically derive the cf-access audience from
   // the registry so each share-<slug> host can use its own AUD. Callers
   // can still override by passing cfAccess.audience explicitly.
@@ -218,6 +268,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // visitor's email domain, not what they may touch. Scope them to
           // the shared doc: no doc enumeration, no workspace/diff creation,
           // no share administration.
+          // Ahead of the scope check on purpose: a /review/<docId> for a doc
+          // that does NOT exist can't pass scope (there's no workspace to
+          // match), so the repair would be unreachable behind it. It leaks
+          // nothing — a docId that exists elsewhere is left alone and still
+          // gets the 403 below.
+          const repaired = repairStaleReviewUrl(pathname, req.method, decision.target);
+          if (repaired) return repaired;
           if (
             !shareScopeAllows(
               pathname,
@@ -235,6 +292,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!redeeming) {
             const target = linkSessionTarget(req);
             if (!target) return j(401, { error: 'no_share_session' });
+            const repaired = repairStaleReviewUrl(pathname, req.method, target);
+            if (repaired) return repaired;
             if (
               !shareScopeAllows(
                 pathname,
@@ -303,27 +362,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // member docId encodes the file's relPath, so renaming or deleting
         // the entry file used to 404 the link with no way to repoint it.
         // A single-doc share has exactly one answer and skips this.
-        let target = share.docId;
-        if (share.workspaceId) {
-          const members = rooms
-            .list()
-            .filter((m) => m.workspaceId === share.workspaceId)
-            .map((m) => ({
-              docId: m.docId,
-              ...(m.relPath ? { relPath: m.relPath } : {}),
-              ...(m.stale ? { stale: true } : {}),
-              ...(m.type === 'diff' ? { isChangedFile: true } : {}),
-            }));
-          const resolved = resolveShareEntry(share.docId, members);
-          // An emptied-out workspace has nothing to show; say no more than
-          // an unknown slug would.
-          if (!resolved) {
-            return new Response(renderLinkNotFound(), {
-              status: 404,
-              headers: { 'content-type': 'text/html; charset=utf-8' },
-            });
-          }
-          target = resolved;
+        const target = share.workspaceId
+          ? currentWorkspaceEntry(share.workspaceId, share.docId)
+          : share.docId;
+        // An emptied-out workspace has nothing to show; say no more than an
+        // unknown slug would.
+        if (!target) {
+          return new Response(renderLinkNotFound(), {
+            status: 404,
+            headers: { 'content-type': 'text/html; charset=utf-8' },
+          });
         }
         const maxAge = Math.floor((share.expiresAt - Date.now()) / 1000);
         return new Response(null, {

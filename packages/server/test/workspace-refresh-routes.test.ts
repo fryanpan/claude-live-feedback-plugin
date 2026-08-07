@@ -231,6 +231,72 @@ describe('workspace refresh routes', () => {
       }
     });
 
+    it('repairs a bookmarked /review/<docId> after the file is renamed', async () => {
+      // The URL a visitor ends up with (or is emailed, for an Access share
+      // whose URL is never redeemed) names a specific docId. Renaming the
+      // file behind it leaves the bookmark pointing at nothing.
+      const src = mkdtempSync(join(tmpdir(), 'wsr-book-'));
+      try {
+        writeFileSync(join(src, 'README.md'), '# Landing\n\nhi\n');
+        writeFileSync(join(src, 'other.md'), '# Other\n\nhi\n');
+        const bind = await post('/api/workspaces', { folderPath: src });
+        const wsId = ((await bind.json()) as { workspaceId: string }).workspaceId;
+        await post(`/api/workspaces/${wsId}/context-file`, { relPath: 'other.md' });
+        const mint = await post('/api/share/link', { workspaceId: wsId });
+        const share = ((await mint.json()) as { share: { slug: string; docId: string } }).share;
+
+        const r = await fetch(`${base}/s/${share.slug}`, {
+          redirect: 'manual',
+          headers: { host: PUBLIC_HOST },
+        });
+        const cookie = (r.headers.get('set-cookie') ?? '').match(
+          new RegExp(`${SHARE_COOKIE}=([^;]+)`),
+        )?.[1];
+
+        renameSync(join(src, 'README.md'), join(src, 'INTRO.md'));
+        // The doc still EXISTS until it's cleaned up, so simulate the harder
+        // case: a bookmark naming a member docId that is truly gone.
+        const gone = `${wsId}:deleted-file.md`;
+        const visit = await fetch(`${base}/review/${encodeURIComponent(gone)}`, {
+          redirect: 'manual',
+          headers: { host: PUBLIC_HOST, cookie: `${SHARE_COOKIE}=${cookie}` },
+        });
+        expect(visit.status).toBe(302);
+        expect(visit.headers.get('location')).toMatch(/^\/review\//);
+        expect(visit.headers.get('location')).not.toContain('deleted-file');
+      } finally {
+        rmSync(src, { recursive: true, force: true });
+      }
+    });
+
+    it('does NOT redirect a probe for a doc in a different workspace', async () => {
+      // The repair must not become an oracle: a docId that exists elsewhere
+      // is left alone and still gets the out-of-scope 403.
+      const mint = await post('/api/share/link', { workspaceId });
+      const share = ((await mint.json()) as { share: { slug: string } }).share;
+      const r = await fetch(`${base}/s/${share.slug}`, {
+        redirect: 'manual',
+        headers: { host: PUBLIC_HOST },
+      });
+      const cookie = (r.headers.get('set-cookie') ?? '').match(
+        new RegExp(`${SHARE_COOKIE}=([^;]+)`),
+      )?.[1];
+
+      // A real doc, but in the diff review — a different workspace.
+      const outsider = (await (await local(`/api/workspaces/${reviewId}/tree`)).json()) as {
+        tree: { children: Array<{ docId?: string; children?: Array<{ docId?: string }> }> };
+      };
+      const outsiderDocId =
+        outsider.tree.children[0]?.docId ?? outsider.tree.children[0]?.children?.[0]?.docId ?? '';
+      expect(outsiderDocId).not.toBe('');
+
+      const probe = await fetch(`${base}/review/${encodeURIComponent(outsiderDocId)}`, {
+        redirect: 'manual',
+        headers: { host: PUBLIC_HOST, cookie: `${SHARE_COOKIE}=${cookie}` },
+      });
+      expect(probe.status).toBe(403);
+    });
+
     it('leaves a single-doc share pointing at exactly its doc', async () => {
       const path = join(dataDir, 'solo.md');
       writeFileSync(path, '# Solo\n\nBody.\n');
