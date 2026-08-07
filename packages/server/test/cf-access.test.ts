@@ -104,9 +104,25 @@ describe('Cloudflare Access JWT verification', () => {
   });
 
   it('lets OPTIONS preflight through without a JWT', async () => {
+    // The point of this test is the Access gate, not CORS: a preflight must
+    // not require a JWT, because the browser sends it without credentials and
+    // a 401 here would break every cross-origin call before it started.
     const r = await fetch(`${base}/api/docs`, { method: 'OPTIONS' });
     expect(r.status).toBe(204);
-    expect(r.headers.get('access-control-allow-origin')).toBe('*');
+  });
+
+  it('grants the preflight to an allowed origin, and nothing to a stranger', async () => {
+    // CORS is no longer a blanket `*` — see middleware/browser-origin.ts.
+    const ok = await fetch(`${base}/api/docs`, {
+      method: 'OPTIONS',
+      headers: { origin: 'http://localhost:3000' },
+    });
+    expect(ok.headers.get('access-control-allow-origin')).toBe('http://localhost:3000');
+    const evil = await fetch(`${base}/api/docs`, {
+      method: 'OPTIONS',
+      headers: { origin: 'https://evil.example.com' },
+    });
+    expect(evil.headers.get('access-control-allow-origin')).toBeNull();
   });
 });
 

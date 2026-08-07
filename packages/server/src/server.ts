@@ -8,7 +8,9 @@ import {
   contentKind,
   suggestOps,
 } from '@feedback/core';
+import type { Server as BunServer } from 'bun';
 import { showFile } from './git-diff.ts';
+import { corsHeadersFor, isAllowedBrowserOrigin } from './middleware/browser-origin.ts';
 import { type CfAccessOptions, createCfAccessVerifier } from './middleware/cf-access.ts';
 import { type ShareTarget, classifyHost, shareScopeAllows } from './middleware/host-guard.ts';
 import { lanHostnames, publicBaseUrl, tailscaleHost } from './public-host.ts';
@@ -58,6 +60,13 @@ export interface ServerOptions {
    * see middleware/host-guard.ts. Tests use this to simulate a local caller.
    */
   trustedHosts?: string[];
+  /**
+   * Browser origins allowed to call the API cross-origin, beyond the server's
+   * own origin and loopback (which the widget on a dev server needs). Matched
+   * exactly. Anything else gets no CORS headers, so the browser blocks it —
+   * see middleware/browser-origin.ts.
+   */
+  allowedOrigins?: string[];
   /**
    * Cloudflare Access JWT verification config. When set, every non-OPTIONS
    * request must carry a valid `Cf-Access-Jwt-Assertion` header (or
@@ -286,1149 +295,1202 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // webhook payloads via the Rooms decorator.
   const rooms = new Rooms({ dataDir, sse, webhooks, decorateDocMeta: withReviewUrl });
 
+  /**
+   * CORS is decided once, here, for every response the handler produces,
+   * rather than by `j()` — which has no request context and used to stamp
+   * `Access-Control-Allow-Origin: *` on everything. See
+   * middleware/browser-origin.ts for why that wildcard was a hole.
+   */
+  const applyCors = (req: Request, res: Response): Response => {
+    const headers = corsHeadersFor(req.headers.get('origin'), {
+      requestHost: req.headers.get('host') ?? '',
+      allowedOrigins: opts.allowedOrigins ?? [],
+    });
+    if (!headers) return res;
+    const merged = new Headers(res.headers);
+    for (const [k, v] of Object.entries(headers)) merged.set(k, v);
+    return new Response(res.body, {
+      status: res.status,
+      statusText: res.statusText,
+      headers: merged,
+    });
+  };
+
   const server = Bun.serve<{ docId: string }>({
     port,
     async fetch(req, server) {
-      const url = new URL(req.url);
-      const { pathname } = url;
+      // `undefined` means the request became a websocket — nothing to decorate.
+      const routed = await route(req, server);
+      return routed === undefined ? undefined : applyCors(req, routed);
 
-      // --- CORS preflight ---
-      // The canonical embed loads the widget bundle from this server but
-      // runs on a different origin (e.g. an Astro dev server on :4321).
-      // Every REST call from the widget is therefore cross-origin and
-      // browsers preflight non-simple requests (POST + JSON body) with an
-      // OPTIONS. Reply once here so we don't have to thread the response
-      // through every route handler.
-      if (req.method === 'OPTIONS') {
-        return withCors(req, new Response(null, { status: 204 }));
-      }
+      // Hoisted, so the wrapper above can call it first. The whole route
+      // table lives in here unchanged.
+      // biome-ignore lint/correctness/noInnerDeclarations: hoisting is the point
+      async function route(
+        req: Request,
+        server: BunServer<{ docId: string }>,
+      ): Promise<Response | undefined> {
+        const url = new URL(req.url);
+        const { pathname } = url;
 
-      // --- Cloudflare Access gate ---
-      // When cfAccess is configured (server is reachable via a public
-      // tunnel), gate the request. Two modes:
-      //   - With shares wired: gate ONLY requests whose Host matches an
-      //     active share. Tailscale/LAN traffic to the canonical hostname
-      //     stays unauthenticated, so the agent's MCP tools can still
-      //     hit /api/share over loopback.
-      //   - Without shares: gate everything (legacy/test mode).
-      // DEFAULT-DENY BY HOST. The tunnel forwards every hostname under the
-      // share wildcard here, so "not a known share host" must mean REFUSE,
-      // never "skip the gate" (which is what it used to mean — an unknown
-      // tunnel hostname reached the whole API unauthenticated). Only our own
-      // local names bypass; a share host is gated AND scoped; anything else
-      // is denied even when Access isn't configured, so a half-configured
-      // deployment fails closed instead of publishing the API.
-      /**
-       * Doc metadata as this caller may see it. On the tailnet that's all of
-       * it; a share visitor gets an allowlisted subset — the full DocMeta
-       * carries absolute paths on Bryan's machine and a tailnet hostname,
-       * none of which is needed to render a review.
-       */
-      const metaFor = <T extends DocMeta>(meta: T): Record<string, unknown> => {
-        const decorated = withReviewUrl(meta);
-        if (!visitor) return decorated as unknown as Record<string, unknown>;
-        return {
-          ...redactMetaForVisitor(decorated, {
-            workspaceScoped: Boolean(visitor.workspaceId),
-          }),
-          // Same path, no host — correct for every share mode.
-          ...(relativeReviewUrl(decorated.reviewUrl) !== undefined
-            ? { reviewUrl: relativeReviewUrl(decorated.reviewUrl) }
-            : {}),
+        // --- CORS preflight ---
+        // The canonical embed loads the widget bundle from this server but
+        // runs on a different origin (e.g. an Astro dev server on :4321).
+        // Every REST call from the widget is therefore cross-origin and
+        // browsers preflight non-simple requests (POST + JSON body) with an
+        // OPTIONS. Reply once here so we don't have to thread the response
+        // through every route handler.
+        // The wrapper above attaches the CORS headers when the origin is
+        // allowed. A disallowed origin gets a bare 204 with no
+        // Access-Control-Allow-* — which is exactly how the browser learns no.
+        if (req.method === 'OPTIONS') {
+          return new Response(null, { status: 204 });
+        }
+
+        // --- Cloudflare Access gate ---
+        // When cfAccess is configured (server is reachable via a public
+        // tunnel), gate the request. Two modes:
+        //   - With shares wired: gate ONLY requests whose Host matches an
+        //     active share. Tailscale/LAN traffic to the canonical hostname
+        //     stays unauthenticated, so the agent's MCP tools can still
+        //     hit /api/share over loopback.
+        //   - Without shares: gate everything (legacy/test mode).
+        // DEFAULT-DENY BY HOST. The tunnel forwards every hostname under the
+        // share wildcard here, so "not a known share host" must mean REFUSE,
+        // never "skip the gate" (which is what it used to mean — an unknown
+        // tunnel hostname reached the whole API unauthenticated). Only our own
+        // local names bypass; a share host is gated AND scoped; anything else
+        // is denied even when Access isn't configured, so a half-configured
+        // deployment fails closed instead of publishing the API.
+        /**
+         * Doc metadata as this caller may see it. On the tailnet that's all of
+         * it; a share visitor gets an allowlisted subset — the full DocMeta
+         * carries absolute paths on Bryan's machine and a tailnet hostname,
+         * none of which is needed to render a review.
+         */
+        const metaFor = <T extends DocMeta>(meta: T): Record<string, unknown> => {
+          const decorated = withReviewUrl(meta);
+          if (!visitor) return decorated as unknown as Record<string, unknown>;
+          return {
+            ...redactMetaForVisitor(decorated, {
+              workspaceScoped: Boolean(visitor.workspaceId),
+            }),
+            // Same path, no host — correct for every share mode.
+            ...(relativeReviewUrl(decorated.reviewUrl) !== undefined
+              ? { reviewUrl: relativeReviewUrl(decorated.reviewUrl) }
+              : {}),
+          };
         };
-      };
 
-      /**
-       * The author to attribute a write to. On the tailnet the body is
-       * trusted (it's Bryan's browser or his own agents). From a share
-       * visitor it is NOT: their claimed identity is rewritten into the
-       * `guest-` namespace so nobody can post as a member of the fleet.
-       */
-      const authorFor = (claimed: unknown): User | undefined => {
-        if (visitor) {
-          return sanitizeVisitorAuthor(claimed, {
-            // The SHARE, not the doc: two links to the same doc are two
-            // different audiences, and seeding from the doc id would give a
-            // returning browser the same guest identity on both — attributing
-            // comments on a freshly minted link to the old one's visitor.
-            shareKey: visitorShareId ?? visitor.workspaceId ?? visitor.docId,
+        /**
+         * The author to attribute a write to. On the tailnet the body is
+         * trusted (it's Bryan's browser or his own agents). From a share
+         * visitor it is NOT: their claimed identity is rewritten into the
+         * `guest-` namespace so nobody can post as a member of the fleet.
+         */
+        const authorFor = (claimed: unknown): User | undefined => {
+          if (visitor) {
+            return sanitizeVisitorAuthor(claimed, {
+              // The SHARE, not the doc: two links to the same doc are two
+              // different audiences, and seeding from the doc id would give a
+              // returning browser the same guest identity on both — attributing
+              // comments on a freshly minted link to the old one's visitor.
+              shareKey: visitorShareId ?? visitor.workspaceId ?? visitor.docId,
+            });
+          }
+          return claimed as User | undefined;
+        };
+
+        // Set when this request comes from a SHARE visitor (either mode).
+        // Everything below treats a non-null value as "untrusted outsider":
+        // their claimed identity is rewritten and doc metadata is redacted.
+        let visitor: ShareTarget | null = null;
+        /** The share that authorized this request, stamped onto any websocket
+         *  it upgrades so revocation can find and close it later. */
+        let visitorShareId: string | null = null;
+        {
+          const decision = classifyHost(req.headers.get('host'), {
+            tailscaleHost: tailscaleHost(),
+            lanHosts: lanHostnames(),
+            extraHosts: opts.trustedHosts ?? [],
+            // cloudflared forwards the visitor's Host verbatim, so a tunnel
+            // visitor could otherwise claim `Host: localhost`. Cloudflare
+            // stamps cf-ray on everything it proxies (overwriting any the
+            // client sent), so its presence means "not from our LAN".
+            viaProxy: req.headers.has('cf-ray'),
+            lookupShare: (h) => {
+              // LIVE, not merely known: an expired share's hostname must stop
+              // being a share hostname, or expiry never takes effect for
+              // Access mode (see Shares.findLiveByHostname).
+              const s = shares?.findLiveByHostname(h);
+              if (!s) return null;
+              return s.workspaceId
+                ? { docId: s.docId, workspaceId: s.workspaceId }
+                : { docId: s.docId };
+            },
+            linkHost: shares?.publicHostname ?? null,
           });
-        }
-        return claimed as User | undefined;
-      };
-
-      // Set when this request comes from a SHARE visitor (either mode).
-      // Everything below treats a non-null value as "untrusted outsider":
-      // their claimed identity is rewritten and doc metadata is redacted.
-      let visitor: ShareTarget | null = null;
-      /** The share that authorized this request, stamped onto any websocket
-       *  it upgrades so revocation can find and close it later. */
-      let visitorShareId: string | null = null;
-      {
-        const decision = classifyHost(req.headers.get('host'), {
-          tailscaleHost: tailscaleHost(),
-          lanHosts: lanHostnames(),
-          extraHosts: opts.trustedHosts ?? [],
-          // cloudflared forwards the visitor's Host verbatim, so a tunnel
-          // visitor could otherwise claim `Host: localhost`. Cloudflare
-          // stamps cf-ray on everything it proxies (overwriting any the
-          // client sent), so its presence means "not from our LAN".
-          viaProxy: req.headers.has('cf-ray'),
-          lookupShare: (h) => {
-            // LIVE, not merely known: an expired share's hostname must stop
-            // being a share hostname, or expiry never takes effect for
-            // Access mode (see Shares.findLiveByHostname).
-            const s = shares?.findLiveByHostname(h);
-            if (!s) return null;
-            return s.workspaceId
-              ? { docId: s.docId, workspaceId: s.workspaceId }
-              : { docId: s.docId };
-          },
-          linkHost: shares?.publicHostname ?? null,
-        });
-        if (decision.kind === 'deny') {
-          return j(403, { error: 'unknown_host' });
-        }
-        if (decision.kind === 'share') {
-          if (!cfAccessVerifier) {
-            // A share exists but we cannot verify Access tokens — refuse
-            // rather than serve the doc to an unauthenticated visitor.
-            return j(503, { error: 'access_not_configured' });
+          if (decision.kind === 'deny') {
+            return j(403, { error: 'unknown_host' });
           }
-          const result = await cfAccessVerifier(req);
-          if (!result.ok) return j(result.status, { error: result.error });
-          // Authenticated for THIS share — but Access only proves the
-          // visitor's email domain, not what they may touch. Scope them to
-          // the shared doc: no doc enumeration, no workspace/diff creation,
-          // no share administration.
-          // Ahead of the scope check on purpose: a /review/<docId> for a doc
-          // that does NOT exist can't pass scope (there's no workspace to
-          // match), so the repair would be unreachable behind it. It leaks
-          // nothing — a docId that exists elsewhere is left alone and still
-          // gets the 403 below.
-          const repaired = repairStaleReviewUrl(pathname, req.method, decision.target);
-          if (repaired) return repaired;
-          if (
-            !shareScopeAllows(
-              pathname,
-              req.method,
-              decision.target,
-              (docId) => rooms.get(docId)?.meta.workspaceId ?? null,
-            )
-          ) {
-            return j(403, { error: 'out_of_share_scope' });
-          }
-          visitor = decision.target;
-          visitorShareId =
-            shares?.findLiveByHostname(req.headers.get('host') ?? '')?.shareId ?? null;
-        } else if (decision.kind === 'link') {
-          // Redeeming a link is the ONLY thing reachable here without a
-          // session — that request is what mints one.
-          const redeeming = req.method === 'GET' && pathname.startsWith('/s/');
-          if (!redeeming) {
-            const target = linkSessionTarget(req);
-            if (!target) return j(401, { error: 'no_share_session' });
-            const repaired = repairStaleReviewUrl(pathname, req.method, target);
+          if (decision.kind === 'share') {
+            if (!cfAccessVerifier) {
+              // A share exists but we cannot verify Access tokens — refuse
+              // rather than serve the doc to an unauthenticated visitor.
+              return j(503, { error: 'access_not_configured' });
+            }
+            const result = await cfAccessVerifier(req);
+            if (!result.ok) return j(result.status, { error: result.error });
+            // Authenticated for THIS share — but Access only proves the
+            // visitor's email domain, not what they may touch. Scope them to
+            // the shared doc: no doc enumeration, no workspace/diff creation,
+            // no share administration.
+            // Ahead of the scope check on purpose: a /review/<docId> for a doc
+            // that does NOT exist can't pass scope (there's no workspace to
+            // match), so the repair would be unreachable behind it. It leaks
+            // nothing — a docId that exists elsewhere is left alone and still
+            // gets the 403 below.
+            const repaired = repairStaleReviewUrl(pathname, req.method, decision.target);
             if (repaired) return repaired;
             if (
               !shareScopeAllows(
                 pathname,
                 req.method,
-                target,
+                decision.target,
                 (docId) => rooms.get(docId)?.meta.workspaceId ?? null,
               )
             ) {
               return j(403, { error: 'out_of_share_scope' });
             }
-            visitor = target;
-            visitorShareId = linkSessionShareId(req);
+            visitor = decision.target;
+            visitorShareId =
+              shares?.findLiveByHostname(req.headers.get('host') ?? '')?.shareId ?? null;
+          } else if (decision.kind === 'link') {
+            // Redeeming a link is the ONLY thing reachable here without a
+            // session — that request is what mints one.
+            const redeeming = req.method === 'GET' && pathname.startsWith('/s/');
+            if (!redeeming) {
+              const target = linkSessionTarget(req);
+              if (!target) return j(401, { error: 'no_share_session' });
+              const repaired = repairStaleReviewUrl(pathname, req.method, target);
+              if (repaired) return repaired;
+              if (
+                !shareScopeAllows(
+                  pathname,
+                  req.method,
+                  target,
+                  (docId) => rooms.get(docId)?.meta.workspaceId ?? null,
+                )
+              ) {
+                return j(403, { error: 'out_of_share_scope' });
+              }
+              visitor = target;
+              visitorShareId = linkSessionShareId(req);
+            }
+          } else if (cfAccessVerifier && !shares) {
+            // Legacy whole-server mode: cfAccess configured WITHOUT per-share
+            // hostnames means the entire deployment sits behind Access, so
+            // even a local-looking Host must present a token. (With shares
+            // wired, local traffic is the agent's own MCP calls over loopback
+            // and stays unauthenticated.)
+            const result = await cfAccessVerifier(req);
+            if (!result.ok) return j(result.status, { error: result.error });
           }
-        } else if (cfAccessVerifier && !shares) {
-          // Legacy whole-server mode: cfAccess configured WITHOUT per-share
-          // hostnames means the entire deployment sits behind Access, so
-          // even a local-looking Host must present a token. (With shares
-          // wired, local traffic is the agent's own MCP calls over loopback
-          // and stays unauthenticated.)
-          const result = await cfAccessVerifier(req);
-          if (!result.ok) return j(result.status, { error: result.error });
         }
-      }
 
-      // --- REST: shares ---
-      if (pathname === '/api/share' && req.method === 'GET') {
-        if (!shares) return j(404, { error: 'sharing not enabled' });
-        return j(200, { shares: shares.list() });
-      }
-      if (pathname === '/api/share/doc' && req.method === 'POST') {
-        if (!shares) return j(404, { error: 'sharing not enabled' });
-        const body = await safeJson(req);
-        const docId = (body?.docId as string) ?? '';
-        const allowDomains = (body?.allowDomains as string[]) ?? [];
-        if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
-        if (!rooms.get(docId)) return j(404, { error: 'doc not found' });
-        if (!Array.isArray(allowDomains) || allowDomains.length === 0) {
-          return j(400, { error: 'allowDomains must be a non-empty array' });
+        // --- REST: shares ---
+        if (pathname === '/api/share' && req.method === 'GET') {
+          if (!shares) return j(404, { error: 'sharing not enabled' });
+          return j(200, { shares: shares.list() });
         }
-        try {
-          const share = await shares.createShareDoc({
-            docId,
-            allowDomains,
-            ttlSeconds: typeof body?.ttlSeconds === 'number' ? body.ttlSeconds : undefined,
-            name: typeof body?.name === 'string' ? body.name : undefined,
-          });
-          return j(200, { share });
-        } catch (err) {
-          const error = err instanceof Error ? err.message : 'create_share_failed';
-          return j(502, { error });
-        }
-      }
-      // --- Redeem a share link ---
-      // The slug is a bearer credential: exchange it for a signed session
-      // cookie, then redirect to the doc. Deliberately gives nothing away
-      // on failure — an unknown, expired, or malformed slug all look alike.
-      const redeemMatch = pathname.match(/^\/s\/([^/]+)$/);
-      if (redeemMatch && req.method === 'GET') {
-        const slug = decodeURIComponent(redeemMatch[1] ?? '');
-        const share = shares?.findBySlug(slug) ?? null;
-        if (!share) {
-          return new Response(renderLinkNotFound(), {
-            status: 404,
-            headers: { 'content-type': 'text/html; charset=utf-8' },
-          });
-        }
-        // Where to land is resolved NOW, not when the share was minted: a
-        // member docId encodes the file's relPath, so renaming or deleting
-        // the entry file used to 404 the link with no way to repoint it.
-        // A single-doc share has exactly one answer and skips this.
-        const target = share.workspaceId
-          ? currentWorkspaceEntry(share.workspaceId, share.docId)
-          : share.docId;
-        // An emptied-out workspace has nothing to show; say no more than an
-        // unknown slug would.
-        if (!target) {
-          return new Response(renderLinkNotFound(), {
-            status: 404,
-            headers: { 'content-type': 'text/html; charset=utf-8' },
-          });
-        }
-        const maxAge = Math.floor((share.expiresAt - Date.now()) / 1000);
-        return new Response(null, {
-          status: 302,
-          headers: {
-            location: `/review/${encodeURIComponent(target)}`,
-            'set-cookie': sessionCookieHeader(share.shareId, cookieKey(), maxAge),
-            // Keep the slug out of any downstream Referer header.
-            'referrer-policy': 'no-referrer',
-          },
-        });
-      }
-
-      // Mint a share link. Local-only: /api/share* is out of scope for a
-      // visitor, so this can only be called from the machine or the tailnet.
-      if (pathname === '/api/share/link' && req.method === 'POST') {
-        if (!shares) return j(404, { error: 'sharing not enabled' });
-        const body = await safeJson(req);
-        const docId = body?.docId as string | undefined;
-        const workspaceId = body?.workspaceId as string | undefined;
-        if (!docId && !workspaceId) return j(400, { error: 'docId or workspaceId required' });
-        if (docId && workspaceId) return j(400, { error: 'pass docId OR workspaceId, not both' });
-
-        let entryDocId = body?.entryDocId as string | undefined;
-        let memberCount: number | undefined;
-        if (workspaceId) {
-          const members = rooms.list().filter((m) => m.workspaceId === workspaceId);
-          if (members.length === 0) return j(404, { error: 'workspace not found', workspaceId });
-          if (entryDocId && !members.some((m) => m.docId === entryDocId)) {
-            return j(400, { error: 'entryDocId is not a member of this workspace' });
+        if (pathname === '/api/share/doc' && req.method === 'POST') {
+          if (!shares) return j(404, { error: 'sharing not enabled' });
+          const body = await safeJson(req);
+          const docId = (body?.docId as string) ?? '';
+          const allowDomains = (body?.allowDomains as string[]) ?? [];
+          if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
+          if (!rooms.get(docId)) return j(404, { error: 'doc not found' });
+          if (!Array.isArray(allowDomains) || allowDomains.length === 0) {
+            return j(400, { error: 'allowDomains must be a non-empty array' });
           }
-          entryDocId = entryDocId ?? members[0]?.docId;
-          memberCount = members.length;
-        } else if (!rooms.get(docId ?? '')) {
-          return j(404, { error: 'doc not found' });
+          try {
+            const share = await shares.createShareDoc({
+              docId,
+              allowDomains,
+              ttlSeconds: typeof body?.ttlSeconds === 'number' ? body.ttlSeconds : undefined,
+              name: typeof body?.name === 'string' ? body.name : undefined,
+            });
+            return j(200, { share });
+          } catch (err) {
+            const error = err instanceof Error ? err.message : 'create_share_failed';
+            return j(502, { error });
+          }
         }
-        try {
-          const share = shares.createShareLink({
-            docId,
-            workspaceId,
-            entryDocId,
-            ttlSeconds: typeof body?.ttlSeconds === 'number' ? body.ttlSeconds : undefined,
-            label: typeof body?.label === 'string' ? body.label : undefined,
+        // --- Redeem a share link ---
+        // The slug is a bearer credential: exchange it for a signed session
+        // cookie, then redirect to the doc. Deliberately gives nothing away
+        // on failure — an unknown, expired, or malformed slug all look alike.
+        const redeemMatch = pathname.match(/^\/s\/([^/]+)$/);
+        if (redeemMatch && req.method === 'GET') {
+          const slug = decodeURIComponent(redeemMatch[1] ?? '');
+          const share = shares?.findBySlug(slug) ?? null;
+          if (!share) {
+            return new Response(renderLinkNotFound(), {
+              status: 404,
+              headers: { 'content-type': 'text/html; charset=utf-8' },
+            });
+          }
+          // Where to land is resolved NOW, not when the share was minted: a
+          // member docId encodes the file's relPath, so renaming or deleting
+          // the entry file used to 404 the link with no way to repoint it.
+          // A single-doc share has exactly one answer and skips this.
+          const target = share.workspaceId
+            ? currentWorkspaceEntry(share.workspaceId, share.docId)
+            : share.docId;
+          // An emptied-out workspace has nothing to show; say no more than an
+          // unknown slug would.
+          if (!target) {
+            return new Response(renderLinkNotFound(), {
+              status: 404,
+              headers: { 'content-type': 'text/html; charset=utf-8' },
+            });
+          }
+          const maxAge = Math.floor((share.expiresAt - Date.now()) / 1000);
+          return new Response(null, {
+            status: 302,
+            headers: {
+              location: `/review/${encodeURIComponent(target)}`,
+              'set-cookie': sessionCookieHeader(share.shareId, cookieKey(), maxAge),
+              // Keep the slug out of any downstream Referer header.
+              'referrer-policy': 'no-referrer',
+            },
           });
-          return j(200, { share, ...(memberCount ? { memberCount } : {}) });
-        } catch (err) {
-          const error = err instanceof Error ? err.message : 'create_share_failed';
-          return j(400, { error });
         }
-      }
 
-      // Extend or shorten a live share. Local-only, same as creation.
-      const ttlMatch = pathname.match(/^\/api\/share\/([^/]+)\/ttl$/);
-      if (ttlMatch && req.method === 'POST') {
-        if (!shares) return j(404, { error: 'sharing not enabled' });
-        const shareId = decodeURIComponent(ttlMatch[1] ?? '');
-        const body = await safeJson(req);
-        const ttlSeconds = body?.ttlSeconds;
-        if (typeof ttlSeconds !== 'number') return j(400, { error: 'ttlSeconds required' });
-        try {
-          const share = shares.setTtl(shareId, ttlSeconds);
-          return share ? j(200, { share }) : j(404, { error: 'share not found' });
-        } catch (err) {
-          return j(400, { error: err instanceof Error ? err.message : 'bad ttl' });
-        }
-      }
+        // Mint a share link. Local-only: /api/share* is out of scope for a
+        // visitor, so this can only be called from the machine or the tailnet.
+        if (pathname === '/api/share/link' && req.method === 'POST') {
+          if (!shares) return j(404, { error: 'sharing not enabled' });
+          const body = await safeJson(req);
+          const docId = body?.docId as string | undefined;
+          const workspaceId = body?.workspaceId as string | undefined;
+          if (!docId && !workspaceId) return j(400, { error: 'docId or workspaceId required' });
+          if (docId && workspaceId) return j(400, { error: 'pass docId OR workspaceId, not both' });
 
-      // Share a whole workspace (folder bind / diff review) rather than one
-      // doc: the visitor gets the file tree and every member, so the set
-      // browses as a set. Scope is enforced in middleware/host-guard.ts.
-      if (pathname === '/api/share/workspace' && req.method === 'POST') {
-        if (!shares) return j(404, { error: 'sharing not enabled' });
-        const body = await safeJson(req);
-        const workspaceId = (body?.workspaceId as string) ?? '';
-        const allowDomains = (body?.allowDomains as string[]) ?? [];
-        if (!workspaceId) return j(400, { error: 'workspaceId required' });
-        if (!Array.isArray(allowDomains) || allowDomains.length === 0) {
-          return j(400, { error: 'allowDomains must be a non-empty array' });
-        }
-        const members = rooms.list().filter((m) => m.workspaceId === workspaceId);
-        if (members.length === 0) return j(404, { error: 'workspace not found', workspaceId });
-        // Entry doc: caller's choice, else the first member. Must belong to
-        // the workspace — otherwise the URL would open an out-of-scope doc
-        // and the visitor would land on a 403.
-        const requested = body?.entryDocId as string | undefined;
-        if (requested && !members.some((m) => m.docId === requested)) {
-          return j(400, { error: 'entryDocId is not a member of this workspace' });
-        }
-        const entryDocId = requested ?? members[0]?.docId ?? '';
-        try {
-          const share = await shares.createShareWorkspace({
-            workspaceId,
-            entryDocId,
-            allowDomains,
-            ttlSeconds: typeof body?.ttlSeconds === 'number' ? body.ttlSeconds : undefined,
-            name: typeof body?.name === 'string' ? body.name : undefined,
-          });
-          return j(200, { share, memberCount: members.length });
-        } catch (err) {
-          const error = err instanceof Error ? err.message : 'create_share_failed';
-          return j(502, { error });
-        }
-      }
-      const shareIdMatch = pathname.match(/^\/api\/share\/([^/]+)$/);
-      if (shareIdMatch && req.method === 'DELETE') {
-        if (!shares) return j(404, { error: 'sharing not enabled' });
-        const shareId = decodeURIComponent(shareIdMatch[1] ?? '');
-        try {
-          const result = await shares.deleteShare(shareId);
-          // Authorization is checked per HTTP request, but a websocket is
-          // authorized once at its upgrade — so without this, a visitor who
-          // already had the doc open kept reading and writing it after the
-          // share was revoked.
-          const closed = result.ok ? rooms.closeSocketsForShare(shareId) : 0;
-          // The SSE stream has the same "authorized once, then long-lived"
-          // shape: a visitor with the review page still open would otherwise
-          // keep receiving every new comment on a doc they can no longer load.
-          const closedStreams = result.ok ? sse.closeForShare(shareId) : 0;
-          return result.ok
-            ? j(200, {
-                ok: true,
-                ...(closed ? { closedSockets: closed } : {}),
-                ...(closedStreams ? { closedStreams } : {}),
-              })
-            : j(404, { error: 'share not found' });
-        } catch (err) {
-          const error = err instanceof Error ? err.message : 'delete_share_failed';
-          return j(502, { error });
-        }
-      }
-
-      // --- WebSocket upgrade ---
-      if (pathname.startsWith('/y/')) {
-        const docId = decodeURIComponent(pathname.slice(3));
-        if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
-        const type = url.searchParams.get('type') as DocType | null;
-        const sourceUrl = url.searchParams.get('sourceUrl') ?? undefined;
-        // Mockup docs auto-create on WS — the widget connects first with a
-        // known type + sourceUrl (this covers the dev-server surface too;
-        // the widget always identifies as 'mockup'). Markdown docs MUST be
-        // created upfront via POST /api/docs (which auto-attaches a file).
-        // The browser navigating to /review/<docId> before the agent has
-        // created the doc gets a clean 404 from /review's own handler.
-        if (!rooms.get(docId)) {
-          if (type === 'mockup') {
-            rooms.getOrCreate(docId, { type, sourceUrl });
-          } else {
+          let entryDocId = body?.entryDocId as string | undefined;
+          let memberCount: number | undefined;
+          if (workspaceId) {
+            const members = rooms.list().filter((m) => m.workspaceId === workspaceId);
+            if (members.length === 0) return j(404, { error: 'workspace not found', workspaceId });
+            if (entryDocId && !members.some((m) => m.docId === entryDocId)) {
+              return j(400, { error: 'entryDocId is not a member of this workspace' });
+            }
+            entryDocId = entryDocId ?? members[0]?.docId;
+            memberCount = members.length;
+          } else if (!rooms.get(docId ?? '')) {
             return j(404, { error: 'doc not found' });
           }
+          try {
+            const share = shares.createShareLink({
+              docId,
+              workspaceId,
+              entryDocId,
+              ttlSeconds: typeof body?.ttlSeconds === 'number' ? body.ttlSeconds : undefined,
+              label: typeof body?.label === 'string' ? body.label : undefined,
+            });
+            return j(200, { share, ...(memberCount ? { memberCount } : {}) });
+          } catch (err) {
+            const error = err instanceof Error ? err.message : 'create_share_failed';
+            return j(400, { error });
+          }
         }
-        const upgraded = server.upgrade(req, {
-          data: { docId, ...(visitorShareId ? { shareId: visitorShareId } : {}) },
-        });
-        if (!upgraded) return new Response('upgrade required', { status: 426 });
-        return undefined;
-      }
 
-      // --- SSE (workspace-level): every thread event on any member doc of a
-      // workspace/diff review, one stream — agents watch this instead of one
-      // stream per file. ---
-      const wsEventsMatch = pathname.match(/^\/events\/workspace\/([^/]+)$/);
-      if (wsEventsMatch) {
-        const workspaceId = decodeURIComponent(wsEventsMatch[1] ?? '');
-        if (!isValidDocId(workspaceId)) return j(400, { error: 'bad workspaceId' });
-        const exists = rooms.list().some((m) => m.workspaceId === workspaceId);
-        if (!exists) return j(404, { error: 'workspace not found' });
-        return openSseStream(sse, `ws~${workspaceId}`, visitorShareId ?? undefined);
-      }
-      // --- SSE ---
-      if (pathname.startsWith('/events/')) {
-        const docId = decodeURIComponent(pathname.slice('/events/'.length));
-        if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
-        if (!rooms.get(docId)) return j(404, { error: 'doc not found' });
-        return openSseStream(sse, docId, visitorShareId ?? undefined);
-      }
+        // Extend or shorten a live share. Local-only, same as creation.
+        const ttlMatch = pathname.match(/^\/api\/share\/([^/]+)\/ttl$/);
+        if (ttlMatch && req.method === 'POST') {
+          if (!shares) return j(404, { error: 'sharing not enabled' });
+          const shareId = decodeURIComponent(ttlMatch[1] ?? '');
+          const body = await safeJson(req);
+          const ttlSeconds = body?.ttlSeconds;
+          if (typeof ttlSeconds !== 'number') return j(400, { error: 'ttlSeconds required' });
+          try {
+            const share = shares.setTtl(shareId, ttlSeconds);
+            return share ? j(200, { share }) : j(404, { error: 'share not found' });
+          } catch (err) {
+            return j(400, { error: err instanceof Error ? err.message : 'bad ttl' });
+          }
+        }
 
-      // --- REST: docs ---
-      if (pathname === '/api/docs' && req.method === 'POST') {
-        const body = await safeJson(req);
-        const docId = (body?.docId as string) ?? '';
-        if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
-        const type = (body?.type as DocType) ?? 'markdown';
-        const sourceUrl = body?.sourceUrl as string | undefined;
-        // Every markdown doc is file-backed. POST /api/docs is the sole
-        // creation path for markdown — sourceUrl is required, and the
-        // server attaches the file (loads content + sets up bidirectional
-        // disk sync) before returning. Mockup/dev docs are about
-        // commenting on running surfaces, not about a markdown buffer,
-        // so they don't need a file.
-        // Diff docs are created only via POST /api/diffs, which resolves the
-        // range and seeds content from git — a bare create can't do that.
-        if (type === 'diff') {
-          return j(400, {
-            error: 'use /api/diffs',
-            hint: 'Diff review docs are created per changed file by POST /api/diffs {repo, base, target}.',
+        // Share a whole workspace (folder bind / diff review) rather than one
+        // doc: the visitor gets the file tree and every member, so the set
+        // browses as a set. Scope is enforced in middleware/host-guard.ts.
+        if (pathname === '/api/share/workspace' && req.method === 'POST') {
+          if (!shares) return j(404, { error: 'sharing not enabled' });
+          const body = await safeJson(req);
+          const workspaceId = (body?.workspaceId as string) ?? '';
+          const allowDomains = (body?.allowDomains as string[]) ?? [];
+          if (!workspaceId) return j(400, { error: 'workspaceId required' });
+          if (!Array.isArray(allowDomains) || allowDomains.length === 0) {
+            return j(400, { error: 'allowDomains must be a non-empty array' });
+          }
+          const members = rooms.list().filter((m) => m.workspaceId === workspaceId);
+          if (members.length === 0) return j(404, { error: 'workspace not found', workspaceId });
+          // Entry doc: caller's choice, else the first member. Must belong to
+          // the workspace — otherwise the URL would open an out-of-scope doc
+          // and the visitor would land on a 403.
+          const requested = body?.entryDocId as string | undefined;
+          if (requested && !members.some((m) => m.docId === requested)) {
+            return j(400, { error: 'entryDocId is not a member of this workspace' });
+          }
+          const entryDocId = requested ?? members[0]?.docId ?? '';
+          try {
+            const share = await shares.createShareWorkspace({
+              workspaceId,
+              entryDocId,
+              allowDomains,
+              ttlSeconds: typeof body?.ttlSeconds === 'number' ? body.ttlSeconds : undefined,
+              name: typeof body?.name === 'string' ? body.name : undefined,
+            });
+            return j(200, { share, memberCount: members.length });
+          } catch (err) {
+            const error = err instanceof Error ? err.message : 'create_share_failed';
+            return j(502, { error });
+          }
+        }
+        const shareIdMatch = pathname.match(/^\/api\/share\/([^/]+)$/);
+        if (shareIdMatch && req.method === 'DELETE') {
+          if (!shares) return j(404, { error: 'sharing not enabled' });
+          const shareId = decodeURIComponent(shareIdMatch[1] ?? '');
+          try {
+            const result = await shares.deleteShare(shareId);
+            // Authorization is checked per HTTP request, but a websocket is
+            // authorized once at its upgrade — so without this, a visitor who
+            // already had the doc open kept reading and writing it after the
+            // share was revoked.
+            const closed = result.ok ? rooms.closeSocketsForShare(shareId) : 0;
+            // The SSE stream has the same "authorized once, then long-lived"
+            // shape: a visitor with the review page still open would otherwise
+            // keep receiving every new comment on a doc they can no longer load.
+            const closedStreams = result.ok ? sse.closeForShare(shareId) : 0;
+            return result.ok
+              ? j(200, {
+                  ok: true,
+                  ...(closed ? { closedSockets: closed } : {}),
+                  ...(closedStreams ? { closedStreams } : {}),
+                })
+              : j(404, { error: 'share not found' });
+          } catch (err) {
+            const error = err instanceof Error ? err.message : 'delete_share_failed';
+            return j(502, { error });
+          }
+        }
+
+        // --- WebSocket upgrade ---
+        if (pathname.startsWith('/y/')) {
+          // CORS does not apply to websockets — the browser opens the socket and
+          // hands the page the data regardless of what headers we set. So the
+          // Origin check has to happen HERE, or any page the user visits can
+          // sync (and mutate) any doc. Reproduced before this existed: a socket
+          // sent with `Origin: https://evil.example.com` synced a real document.
+          if (
+            !isAllowedBrowserOrigin(req.headers.get('origin'), {
+              requestHost: req.headers.get('host') ?? '',
+              allowedOrigins: opts.allowedOrigins ?? [],
+            })
+          ) {
+            return j(403, { error: 'origin_not_allowed' });
+          }
+          const docId = decodeURIComponent(pathname.slice(3));
+          if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
+          const type = url.searchParams.get('type') as DocType | null;
+          const sourceUrl = url.searchParams.get('sourceUrl') ?? undefined;
+          // Mockup docs auto-create on WS — the widget connects first with a
+          // known type + sourceUrl (this covers the dev-server surface too;
+          // the widget always identifies as 'mockup'). Markdown docs MUST be
+          // created upfront via POST /api/docs (which auto-attaches a file).
+          // The browser navigating to /review/<docId> before the agent has
+          // created the doc gets a clean 404 from /review's own handler.
+          if (!rooms.get(docId)) {
+            if (type === 'mockup') {
+              rooms.getOrCreate(docId, { type, sourceUrl });
+            } else {
+              return j(404, { error: 'doc not found' });
+            }
+          }
+          const upgraded = server.upgrade(req, {
+            data: { docId, ...(visitorShareId ? { shareId: visitorShareId } : {}) },
+          });
+          if (!upgraded) return new Response('upgrade required', { status: 426 });
+          return undefined;
+        }
+
+        // --- SSE (workspace-level): every thread event on any member doc of a
+        // workspace/diff review, one stream — agents watch this instead of one
+        // stream per file. ---
+        const wsEventsMatch = pathname.match(/^\/events\/workspace\/([^/]+)$/);
+        if (wsEventsMatch) {
+          const workspaceId = decodeURIComponent(wsEventsMatch[1] ?? '');
+          if (!isValidDocId(workspaceId)) return j(400, { error: 'bad workspaceId' });
+          const exists = rooms.list().some((m) => m.workspaceId === workspaceId);
+          if (!exists) return j(404, { error: 'workspace not found' });
+          return openSseStream(sse, `ws~${workspaceId}`, visitorShareId ?? undefined);
+        }
+        // --- SSE ---
+        if (pathname.startsWith('/events/')) {
+          const docId = decodeURIComponent(pathname.slice('/events/'.length));
+          if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
+          if (!rooms.get(docId)) return j(404, { error: 'doc not found' });
+          return openSseStream(sse, docId, visitorShareId ?? undefined);
+        }
+
+        // --- REST: docs ---
+        if (pathname === '/api/docs' && req.method === 'POST') {
+          const body = await safeJson(req);
+          const docId = (body?.docId as string) ?? '';
+          if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
+          const type = (body?.type as DocType) ?? 'markdown';
+          const sourceUrl = body?.sourceUrl as string | undefined;
+          // Every markdown doc is file-backed. POST /api/docs is the sole
+          // creation path for markdown — sourceUrl is required, and the
+          // server attaches the file (loads content + sets up bidirectional
+          // disk sync) before returning. Mockup/dev docs are about
+          // commenting on running surfaces, not about a markdown buffer,
+          // so they don't need a file.
+          // Diff docs are created only via POST /api/diffs, which resolves the
+          // range and seeds content from git — a bare create can't do that.
+          if (type === 'diff') {
+            return j(400, {
+              error: 'use /api/diffs',
+              hint: 'Diff review docs are created per changed file by POST /api/diffs {repo, base, target}.',
+            });
+          }
+          if ((type === 'markdown' || type === 'code') && !sourceUrl) {
+            return j(400, {
+              error: 'sourceUrl required',
+              hint: 'Markdown and code review docs are backed by a file on disk. Pass sourceUrl: "/abs/path/to/file" in the POST body.',
+            });
+          }
+          const room = rooms.getOrCreate(docId, {
+            type,
+            sourceUrl,
+            title: body?.title as string | undefined,
+            setId: body?.setId as string | undefined,
+            webhookUrl: body?.webhookUrl as string | undefined,
+            owner: body?.owner as string | undefined,
+            workspaceId: body?.workspaceId as string | undefined,
+            relPath: body?.relPath as string | undefined,
+            workspaceRoot: body?.workspaceRoot as string | undefined,
+            producedBy: body?.producedBy as { agentId?: string; sessionId?: string } | undefined,
+          });
+          let attached: ReturnType<typeof rooms.attachFile> | undefined;
+          if (type === 'markdown' && sourceUrl) {
+            attached = rooms.attachFile(docId, sourceUrl);
+            if (!attached.ok) return j(409, { error: 'attach_failed', attached });
+          } else if (type === 'code' && sourceUrl) {
+            attached = rooms.attachReadonlyFile(docId, sourceUrl);
+            if (!attached.ok) return j(409, { error: 'attach_failed', attached });
+          }
+          return j(200, {
+            docId: room.docId,
+            meta: withReviewUrl(room.meta),
+            ...(attached ? { attached } : {}),
           });
         }
-        if ((type === 'markdown' || type === 'code') && !sourceUrl) {
-          return j(400, {
-            error: 'sourceUrl required',
-            hint: 'Markdown and code review docs are backed by a file on disk. Pass sourceUrl: "/abs/path/to/file" in the POST body.',
+        if (pathname === '/api/docs' && req.method === 'GET') {
+          return j(200, { docs: rooms.list().map(withReviewUrl) });
+        }
+
+        // --- REST: workspaces (folder bind) ---
+        if (pathname === '/api/workspaces' && req.method === 'POST') {
+          const body = await safeJson(req);
+          const folderPath = body?.folderPath as string | undefined;
+          if (!folderPath || typeof folderPath !== 'string') {
+            return j(400, { error: 'folderPath required' });
+          }
+          const res = rooms.bindFolder({
+            folderPath,
+            workspaceId: body?.workspaceId as string | undefined,
+            title: body?.title as string | undefined,
+            include: Array.isArray(body?.include) ? (body.include as string[]) : undefined,
+            // Accepted by bindFolder and honoured by the scan since forever,
+            // but this route never forwarded it — so bind_folder's exclude had
+            // no effect end-to-end. It matters more now: refresh_workspace
+            // persists and replays the exclude, which is meaningless if the
+            // bind could never set one. (/api/diffs already forwarded it.)
+            exclude: Array.isArray(body?.exclude) ? (body.exclude as string[]) : undefined,
+            maxFiles: typeof body?.maxFiles === 'number' ? Number(body.maxFiles) : undefined,
+            owner: body?.owner as string | undefined,
+            producedBy: body?.producedBy as { agentId?: string; sessionId?: string } | undefined,
+          });
+          if (!res.ok) {
+            // not-found → 404; too-many-files → 409 (guardrail, caller must
+            // narrow the folder or raise maxFiles).
+            return j(res.error === 'not-found' ? 404 : 409, res);
+          }
+          return j(200, {
+            ...res,
+            files: res.files.map((f) => ({
+              ...f,
+              reviewUrl: withReviewUrl({ docId: f.docId, type: f.type }).reviewUrl,
+            })),
           });
         }
-        const room = rooms.getOrCreate(docId, {
-          type,
-          sourceUrl,
-          title: body?.title as string | undefined,
-          setId: body?.setId as string | undefined,
-          webhookUrl: body?.webhookUrl as string | undefined,
-          owner: body?.owner as string | undefined,
-          workspaceId: body?.workspaceId as string | undefined,
-          relPath: body?.relPath as string | undefined,
-          workspaceRoot: body?.workspaceRoot as string | undefined,
-          producedBy: body?.producedBy as { agentId?: string; sessionId?: string } | undefined,
-        });
-        let attached: ReturnType<typeof rooms.attachFile> | undefined;
-        if (type === 'markdown' && sourceUrl) {
-          attached = rooms.attachFile(docId, sourceUrl);
-          if (!attached.ok) return j(409, { error: 'attach_failed', attached });
-        } else if (type === 'code' && sourceUrl) {
-          attached = rooms.attachReadonlyFile(docId, sourceUrl);
-          if (!attached.ok) return j(409, { error: 'attach_failed', attached });
-        }
-        return j(200, {
-          docId: room.docId,
-          meta: withReviewUrl(room.meta),
-          ...(attached ? { attached } : {}),
-        });
-      }
-      if (pathname === '/api/docs' && req.method === 'GET') {
-        return j(200, { docs: rooms.list().map(withReviewUrl) });
-      }
-
-      // --- REST: workspaces (folder bind) ---
-      if (pathname === '/api/workspaces' && req.method === 'POST') {
-        const body = await safeJson(req);
-        const folderPath = body?.folderPath as string | undefined;
-        if (!folderPath || typeof folderPath !== 'string') {
-          return j(400, { error: 'folderPath required' });
-        }
-        const res = rooms.bindFolder({
-          folderPath,
-          workspaceId: body?.workspaceId as string | undefined,
-          title: body?.title as string | undefined,
-          include: Array.isArray(body?.include) ? (body.include as string[]) : undefined,
-          // Accepted by bindFolder and honoured by the scan since forever,
-          // but this route never forwarded it — so bind_folder's exclude had
-          // no effect end-to-end. It matters more now: refresh_workspace
-          // persists and replays the exclude, which is meaningless if the
-          // bind could never set one. (/api/diffs already forwarded it.)
-          exclude: Array.isArray(body?.exclude) ? (body.exclude as string[]) : undefined,
-          maxFiles: typeof body?.maxFiles === 'number' ? Number(body.maxFiles) : undefined,
-          owner: body?.owner as string | undefined,
-          producedBy: body?.producedBy as { agentId?: string; sessionId?: string } | undefined,
-        });
-        if (!res.ok) {
-          // not-found → 404; too-many-files → 409 (guardrail, caller must
-          // narrow the folder or raise maxFiles).
-          return j(res.error === 'not-found' ? 404 : 409, res);
-        }
-        return j(200, {
-          ...res,
-          files: res.files.map((f) => ({
+        // --- REST: diff reviews ---
+        // One doc per changed file, grouped as a workspace (= the review id).
+        // Default mode diffs base → the WORKING TREE (live: docs bind to the
+        // files on disk and re-render as the agent edits); pass `target` for a
+        // review pinned to a commit. Returns per-file reviewUrls plus an
+        // entryUrl (first changed file) the agent can hand to a human.
+        if (pathname === '/api/diffs' && req.method === 'POST') {
+          const body = await safeJson(req);
+          const repoPath = body?.repo as string | undefined;
+          const base = body?.base as string | undefined;
+          const target = body?.target as string | undefined;
+          if (!repoPath) {
+            return j(400, {
+              error:
+                'repo is required. base optional: omit for a BROWSE workspace (no diff); pass base to diff against the working tree; base+target for a pinned range.',
+            });
+          }
+          if (target && !base) {
+            return j(400, { error: 'target requires base' });
+          }
+          const reviewId = body?.reviewId as string | undefined;
+          if (reviewId !== undefined && !isValidDocId(reviewId)) {
+            return j(400, { error: 'bad reviewId' });
+          }
+          const res = rooms.bindDiff({
+            repoPath,
+            base,
+            target,
+            reviewId,
+            title: body?.title as string | undefined,
+            exclude: Array.isArray(body?.exclude) ? (body.exclude as string[]) : undefined,
+            groups: Array.isArray(body?.groups)
+              ? (body.groups as Array<{ title: string; paths: string[]; details?: string }>)
+              : undefined,
+            maxFiles: typeof body?.maxFiles === 'number' ? Number(body.maxFiles) : undefined,
+            owner: body?.owner as string | undefined,
+            producedBy: body?.producedBy as { agentId?: string; sessionId?: string } | undefined,
+          });
+          if (!res.ok) {
+            const status =
+              res.error === 'not-found' || res.error === 'bad-ref'
+                ? 404
+                : res.error === 'empty-diff' ||
+                    res.error === 'group-details-too-long' ||
+                    res.error === 'bad-groups'
+                  ? 400
+                  : 409;
+            return j(status, res);
+          }
+          const files = res.files.map((f) => ({
             ...f,
             reviewUrl: withReviewUrl({ docId: f.docId, type: f.type }).reviewUrl,
-          })),
-        });
-      }
-      // --- REST: diff reviews ---
-      // One doc per changed file, grouped as a workspace (= the review id).
-      // Default mode diffs base → the WORKING TREE (live: docs bind to the
-      // files on disk and re-render as the agent edits); pass `target` for a
-      // review pinned to a commit. Returns per-file reviewUrls plus an
-      // entryUrl (first changed file) the agent can hand to a human.
-      if (pathname === '/api/diffs' && req.method === 'POST') {
-        const body = await safeJson(req);
-        const repoPath = body?.repo as string | undefined;
-        const base = body?.base as string | undefined;
-        const target = body?.target as string | undefined;
-        if (!repoPath) {
-          return j(400, {
-            error:
-              'repo is required. base optional: omit for a BROWSE workspace (no diff); pass base to diff against the working tree; base+target for a pinned range.',
-          });
+          }));
+          // Land the reviewer on the MEATIEST change, not the first file
+          // alphabetically (which is usually dotfile/config noise on a big
+          // review). The in-page tree navigates to everything else.
+          const entry = files.reduce(
+            (best, f) =>
+              (f.additions ?? 0) + (f.deletions ?? 0) >
+              (best.additions ?? 0) + (best.deletions ?? 0)
+                ? f
+                : best,
+            files[0],
+          );
+          return j(200, { ...res, files, entryUrl: entry?.reviewUrl });
         }
-        if (target && !base) {
-          return j(400, { error: 'target requires base' });
+        // List bound workspaces with rolled-up triage signals (fileCount,
+        // openThreads, allIdle, owner, lastActivityAt). The daily triage uses
+        // this to treat a folder bind as one cleanup unit.
+        if (pathname === '/api/workspaces' && req.method === 'GET') {
+          return j(200, { workspaces: rooms.listWorkspaces() });
         }
-        const reviewId = body?.reviewId as string | undefined;
-        if (reviewId !== undefined && !isValidDocId(reviewId)) {
-          return j(400, { error: 'bad reviewId' });
-        }
-        const res = rooms.bindDiff({
-          repoPath,
-          base,
-          target,
-          reviewId,
-          title: body?.title as string | undefined,
-          exclude: Array.isArray(body?.exclude) ? (body.exclude as string[]) : undefined,
-          groups: Array.isArray(body?.groups)
-            ? (body.groups as Array<{ title: string; paths: string[]; details?: string }>)
-            : undefined,
-          maxFiles: typeof body?.maxFiles === 'number' ? Number(body.maxFiles) : undefined,
-          owner: body?.owner as string | undefined,
-          producedBy: body?.producedBy as { agentId?: string; sessionId?: string } | undefined,
-        });
-        if (!res.ok) {
-          const status =
-            res.error === 'not-found' || res.error === 'bad-ref'
-              ? 404
-              : res.error === 'empty-diff' ||
-                  res.error === 'group-details-too-long' ||
-                  res.error === 'bad-groups'
-                ? 400
-                : 409;
-          return j(status, res);
-        }
-        const files = res.files.map((f) => ({
-          ...f,
-          reviewUrl: withReviewUrl({ docId: f.docId, type: f.type }).reviewUrl,
-        }));
-        // Land the reviewer on the MEATIEST change, not the first file
-        // alphabetically (which is usually dotfile/config noise on a big
-        // review). The in-page tree navigates to everything else.
-        const entry = files.reduce(
-          (best, f) =>
-            (f.additions ?? 0) + (f.deletions ?? 0) > (best.additions ?? 0) + (best.deletions ?? 0)
-              ? f
-              : best,
-          files[0],
-        );
-        return j(200, { ...res, files, entryUrl: entry?.reviewUrl });
-      }
-      // List bound workspaces with rolled-up triage signals (fileCount,
-      // openThreads, allIdle, owner, lastActivityAt). The daily triage uses
-      // this to treat a folder bind as one cleanup unit.
-      if (pathname === '/api/workspaces' && req.method === 'GET') {
-        return j(200, { workspaces: rooms.listWorkspaces() });
-      }
-      // Delete a whole workspace as one unit (all-or-nothing open-thread
-      // guardrail; ?force=true to override). Member SOURCE files are left
-      // untouched, same as DELETE /api/docs/:id.
-      const wsDeleteMatch = pathname.match(/^\/api\/workspaces\/([^/]+)$/);
-      if (wsDeleteMatch && req.method === 'DELETE') {
-        const workspaceId = decodeURIComponent(wsDeleteMatch[1] ?? '');
-        const force = url.searchParams.get('force') === 'true';
-        const res = rooms.deleteWorkspace(workspaceId, { force });
-        if (res.ok) return j(200, res);
-        return j(res.error === 'has-open-threads' ? 409 : 404, res);
-      }
-      // File-tree view for a bound workspace: nested directory tree with
-      // per-file unresolved-comment counts + folder roll-ups. Files are
-      // decorated with reviewUrl by the rooms decorator (withReviewUrl).
-      // All threads across a workspace (folder bind or diff review) in one
-      // call — lets a watching agent poll a single endpoint per review
-      // instead of one per member file. ?status=open|resolved filters.
-      const wsThreadsMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/threads$/);
-      if (wsThreadsMatch && req.method === 'GET') {
-        const workspaceId = decodeURIComponent(wsThreadsMatch[1] ?? '');
-        if (!rooms.list().some((m) => m.workspaceId === workspaceId)) {
-          return j(404, { error: 'workspace not found', workspaceId });
-        }
-        const status = url.searchParams.get('status') as 'open' | 'resolved' | null;
-        const threads = rooms.listWorkspaceThreads(workspaceId, status ? { status } : undefined);
-        return j(200, { workspaceId, threads });
-      }
-      // Grouped-diff sidebar model: changed files organized into logical
-      // groups (agent-supplied or heuristic). The default nav for diff
-      // reviews.
-      const wsGroupedMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/grouped$/);
-      if (wsGroupedMatch && req.method === 'GET') {
-        const workspaceId = decodeURIComponent(wsGroupedMatch[1] ?? '');
-        const grouped = rooms.listGroupedDiff(workspaceId);
-        if (grouped.groups.length === 0) {
-          return j(404, { error: 'no diff review found', workspaceId });
-        }
-        return j(200, grouped);
-      }
-      // Re-reconcile a workspace against disk: pick up files that changed
-      // since the bind, flag members whose file is gone. Never re-mints a
-      // docId, so every comment thread survives.
-      const wsRefreshMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/refresh$/);
-      if (wsRefreshMatch && req.method === 'POST') {
-        const workspaceId = decodeURIComponent(wsRefreshMatch[1] ?? '');
-        const res = rooms.refreshWorkspace(workspaceId);
-        if (res.ok) return j(200, res);
-        return j(res.error === 'not-found' ? 404 : 400, res);
-      }
-      // Re-group a diff review's sidebar in place. An empty `groups` array
-      // is meaningful (fall back to the heuristic); a MISSING one is a
-      // caller mistake, so it 400s rather than silently regrouping.
-      const wsGroupsMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/groups$/);
-      if (wsGroupsMatch && req.method === 'POST') {
-        const workspaceId = decodeURIComponent(wsGroupsMatch[1] ?? '');
-        const body = await safeJson(req);
-        const groups = body?.groups;
-        if (!Array.isArray(groups)) return j(400, { error: 'groups array required' });
-        const res = rooms.setWorkspaceGroups(
-          workspaceId,
-          groups as Array<{ title: string; paths: string[]; details?: string }>,
-        );
-        if (res.ok) return j(200, res);
-        return j(res.error === 'not-found' ? 404 : 400, res);
-      }
-      // Every file in the workspace's repo (changed ones marked) — the
-      // "Show All Files" context view.
-      const wsFilesMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/files$/);
-      if (wsFilesMatch && req.method === 'GET') {
-        const workspaceId = decodeURIComponent(wsFilesMatch[1] ?? '');
-        const res = rooms.listRepoFiles(workspaceId);
-        return res.ok ? j(200, res) : j(404, res);
-      }
-      // Lazily open an unchanged repo file for context (read-only code doc
-      // in the same workspace).
-      const wsCtxMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/context-file$/);
-      if (wsCtxMatch && req.method === 'POST') {
-        const workspaceId = decodeURIComponent(wsCtxMatch[1] ?? '');
-        const body = await safeJson(req);
-        const relPath = body?.relPath as string | undefined;
-        if (!relPath) return j(400, { error: 'relPath required' });
-        const res = rooms.openContextFile(workspaceId, relPath);
-        if (!res.ok) return j(res.error === 'bad-path' ? 400 : 404, res);
-        return j(200, { docId: res.docId, meta: metaFor(res.meta) });
-      }
-      const wsEditMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/editable-file$/);
-      if (wsEditMatch && req.method === 'POST') {
-        const workspaceId = decodeURIComponent(wsEditMatch[1] ?? '');
-        const body = await safeJson(req);
-        const relPath = body?.relPath as string | undefined;
-        if (!relPath) return j(400, { error: 'relPath required' });
-        const res = rooms.openEditableFile(workspaceId, relPath);
-        if (!res.ok) {
-          const status =
-            res.error === 'bad-path' || res.error === 'not-markdown'
-              ? 400
-              : res.error === 'pinned'
-                ? 409
-                : 404;
-          return j(status, res);
-        }
-        return j(200, { docId: res.docId, meta: metaFor(res.meta) });
-      }
-      const wsTreeMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/tree$/);
-      if (wsTreeMatch && req.method === 'GET') {
-        const workspaceId = decodeURIComponent(wsTreeMatch[1] ?? '');
-        const tree = rooms.buildWorkspaceTree(workspaceId);
-        if (tree.tree.children.length === 0) {
-          return j(404, { error: 'workspace not found', workspaceId });
-        }
-        return j(200, tree);
-      }
-      const docMatch = pathname.match(/^\/api\/docs\/([^/]+)(?:\/(.*))?$/);
-      if (docMatch) {
-        const docId = decodeURIComponent(docMatch[1] ?? '');
-        const rest = docMatch[2] ?? '';
-        if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
-        const room = rooms.get(docId);
-        if (!room) return j(404, { error: 'doc not found' });
-        if (rest === '' && req.method === 'GET') {
-          return j(200, { meta: metaFor(room.meta) });
-        }
-        if (rest === '' && req.method === 'DELETE') {
+        // Delete a whole workspace as one unit (all-or-nothing open-thread
+        // guardrail; ?force=true to override). Member SOURCE files are left
+        // untouched, same as DELETE /api/docs/:id.
+        const wsDeleteMatch = pathname.match(/^\/api\/workspaces\/([^/]+)$/);
+        if (wsDeleteMatch && req.method === 'DELETE') {
+          const workspaceId = decodeURIComponent(wsDeleteMatch[1] ?? '');
           const force = url.searchParams.get('force') === 'true';
-          const res = rooms.deleteDoc(docId, { force });
+          const res = rooms.deleteWorkspace(workspaceId, { force });
           if (res.ok) return j(200, res);
           return j(res.error === 'has-open-threads' ? 409 : 404, res);
         }
-        if (rest === 'threads' && req.method === 'GET') {
-          const status = url.searchParams.get('status') as 'open' | 'resolved' | null;
-          return j(200, {
-            threads: rooms.listThreads(docId, status ? { status } : undefined),
-          });
-        }
-        const threadIdMatch = rest.match(/^threads\/([^/]+)(\/.*)?$/);
-        if (threadIdMatch) {
-          const threadId = decodeURIComponent(threadIdMatch[1] ?? '');
-          const threadRest = threadIdMatch[2] ?? '';
-          if (threadRest === '' && req.method === 'GET') {
-            const t = rooms.getThread(docId, threadId);
-            return t ? j(200, { thread: t }) : j(404, { error: 'thread not found' });
+        // File-tree view for a bound workspace: nested directory tree with
+        // per-file unresolved-comment counts + folder roll-ups. Files are
+        // decorated with reviewUrl by the rooms decorator (withReviewUrl).
+        // All threads across a workspace (folder bind or diff review) in one
+        // call — lets a watching agent poll a single endpoint per review
+        // instead of one per member file. ?status=open|resolved filters.
+        const wsThreadsMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/threads$/);
+        if (wsThreadsMatch && req.method === 'GET') {
+          const workspaceId = decodeURIComponent(wsThreadsMatch[1] ?? '');
+          if (!rooms.list().some((m) => m.workspaceId === workspaceId)) {
+            return j(404, { error: 'workspace not found', workspaceId });
           }
-          if (threadRest === '/comments' && req.method === 'POST') {
+          const status = url.searchParams.get('status') as 'open' | 'resolved' | null;
+          const threads = rooms.listWorkspaceThreads(workspaceId, status ? { status } : undefined);
+          return j(200, { workspaceId, threads });
+        }
+        // Grouped-diff sidebar model: changed files organized into logical
+        // groups (agent-supplied or heuristic). The default nav for diff
+        // reviews.
+        const wsGroupedMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/grouped$/);
+        if (wsGroupedMatch && req.method === 'GET') {
+          const workspaceId = decodeURIComponent(wsGroupedMatch[1] ?? '');
+          const grouped = rooms.listGroupedDiff(workspaceId);
+          if (grouped.groups.length === 0) {
+            return j(404, { error: 'no diff review found', workspaceId });
+          }
+          return j(200, grouped);
+        }
+        // Re-reconcile a workspace against disk: pick up files that changed
+        // since the bind, flag members whose file is gone. Never re-mints a
+        // docId, so every comment thread survives.
+        const wsRefreshMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/refresh$/);
+        if (wsRefreshMatch && req.method === 'POST') {
+          const workspaceId = decodeURIComponent(wsRefreshMatch[1] ?? '');
+          const res = rooms.refreshWorkspace(workspaceId);
+          if (res.ok) return j(200, res);
+          return j(res.error === 'not-found' ? 404 : 400, res);
+        }
+        // Re-group a diff review's sidebar in place. An empty `groups` array
+        // is meaningful (fall back to the heuristic); a MISSING one is a
+        // caller mistake, so it 400s rather than silently regrouping.
+        const wsGroupsMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/groups$/);
+        if (wsGroupsMatch && req.method === 'POST') {
+          const workspaceId = decodeURIComponent(wsGroupsMatch[1] ?? '');
+          const body = await safeJson(req);
+          const groups = body?.groups;
+          if (!Array.isArray(groups)) return j(400, { error: 'groups array required' });
+          const res = rooms.setWorkspaceGroups(
+            workspaceId,
+            groups as Array<{ title: string; paths: string[]; details?: string }>,
+          );
+          if (res.ok) return j(200, res);
+          return j(res.error === 'not-found' ? 404 : 400, res);
+        }
+        // Every file in the workspace's repo (changed ones marked) — the
+        // "Show All Files" context view.
+        const wsFilesMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/files$/);
+        if (wsFilesMatch && req.method === 'GET') {
+          const workspaceId = decodeURIComponent(wsFilesMatch[1] ?? '');
+          const res = rooms.listRepoFiles(workspaceId);
+          return res.ok ? j(200, res) : j(404, res);
+        }
+        // Lazily open an unchanged repo file for context (read-only code doc
+        // in the same workspace).
+        const wsCtxMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/context-file$/);
+        if (wsCtxMatch && req.method === 'POST') {
+          const workspaceId = decodeURIComponent(wsCtxMatch[1] ?? '');
+          const body = await safeJson(req);
+          const relPath = body?.relPath as string | undefined;
+          if (!relPath) return j(400, { error: 'relPath required' });
+          const res = rooms.openContextFile(workspaceId, relPath);
+          if (!res.ok) return j(res.error === 'bad-path' ? 400 : 404, res);
+          return j(200, { docId: res.docId, meta: metaFor(res.meta) });
+        }
+        const wsEditMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/editable-file$/);
+        if (wsEditMatch && req.method === 'POST') {
+          const workspaceId = decodeURIComponent(wsEditMatch[1] ?? '');
+          const body = await safeJson(req);
+          const relPath = body?.relPath as string | undefined;
+          if (!relPath) return j(400, { error: 'relPath required' });
+          const res = rooms.openEditableFile(workspaceId, relPath);
+          if (!res.ok) {
+            const status =
+              res.error === 'bad-path' || res.error === 'not-markdown'
+                ? 400
+                : res.error === 'pinned'
+                  ? 409
+                  : 404;
+            return j(status, res);
+          }
+          return j(200, { docId: res.docId, meta: metaFor(res.meta) });
+        }
+        const wsTreeMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/tree$/);
+        if (wsTreeMatch && req.method === 'GET') {
+          const workspaceId = decodeURIComponent(wsTreeMatch[1] ?? '');
+          const tree = rooms.buildWorkspaceTree(workspaceId);
+          if (tree.tree.children.length === 0) {
+            return j(404, { error: 'workspace not found', workspaceId });
+          }
+          return j(200, tree);
+        }
+        const docMatch = pathname.match(/^\/api\/docs\/([^/]+)(?:\/(.*))?$/);
+        if (docMatch) {
+          const docId = decodeURIComponent(docMatch[1] ?? '');
+          const rest = docMatch[2] ?? '';
+          if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
+          const room = rooms.get(docId);
+          if (!room) return j(404, { error: 'doc not found' });
+          if (rest === '' && req.method === 'GET') {
+            return j(200, { meta: metaFor(room.meta) });
+          }
+          if (rest === '' && req.method === 'DELETE') {
+            const force = url.searchParams.get('force') === 'true';
+            const res = rooms.deleteDoc(docId, { force });
+            if (res.ok) return j(200, res);
+            return j(res.error === 'has-open-threads' ? 409 : 404, res);
+          }
+          if (rest === 'threads' && req.method === 'GET') {
+            const status = url.searchParams.get('status') as 'open' | 'resolved' | null;
+            return j(200, {
+              threads: rooms.listThreads(docId, status ? { status } : undefined),
+            });
+          }
+          const threadIdMatch = rest.match(/^threads\/([^/]+)(\/.*)?$/);
+          if (threadIdMatch) {
+            const threadId = decodeURIComponent(threadIdMatch[1] ?? '');
+            const threadRest = threadIdMatch[2] ?? '';
+            if (threadRest === '' && req.method === 'GET') {
+              const t = rooms.getThread(docId, threadId);
+              return t ? j(200, { thread: t }) : j(404, { error: 'thread not found' });
+            }
+            if (threadRest === '/comments' && req.method === 'POST') {
+              const body = await safeJson(req);
+              const user = authorFor(body?.author);
+              const text = body?.text as string | undefined;
+              if (!user || !text) return j(400, { error: 'author + text required' });
+              const t = await rooms.postComment(docId, threadId, user, text);
+              return t ? j(200, { thread: t }) : j(404, { error: 'thread not found' });
+            }
+            if (threadRest === '/resolve' && req.method === 'POST') {
+              const body = await safeJson(req);
+              const author = authorFor(body?.author);
+              const t = rooms.resolve(docId, threadId, author);
+              return t ? j(200, { thread: t }) : j(404, { error: 'thread not found' });
+            }
+            if (threadRest === '/reopen' && req.method === 'POST') {
+              const body = await safeJson(req);
+              const author = authorFor(body?.author);
+              const t = rooms.reopen(docId, threadId, author);
+              return t ? j(200, { thread: t }) : j(404, { error: 'thread not found' });
+            }
+            if (threadRest === '/reanchor' && req.method === 'POST') {
+              const body = await safeJson(req);
+              const anchor = body?.anchor as Anchor | undefined;
+              if (!anchor) return j(400, { error: 'anchor required' });
+              const t = rooms.reanchor(docId, threadId, anchor);
+              return t ? j(200, { thread: t }) : j(404, { error: 'thread not found' });
+            }
+            if (threadRest === '/rewrite_region' && req.method === 'POST') {
+              const body = await safeJson(req);
+              const replacement = String(body?.replacement ?? '');
+              const parseInlineMarks = body?.parseInlineMarks === true;
+              if (body?.suggest === true) {
+                const author = parseSuggestionAuthor(
+                  visitor ? { author: authorFor(body?.author) } : body,
+                );
+                if (!author) return j(400, { error: 'author required when suggest is true' });
+                const res = rooms.createSuggestionForThread(docId, threadId, {
+                  replacement,
+                  parseInlineMarks,
+                  author,
+                });
+                return res.ok ? j(200, res) : j(409, res);
+              }
+              const res = rooms.rewriteThreadRegion(docId, threadId, replacement, {
+                parseInlineMarks,
+              });
+              return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
+            }
+            if (threadRest === '/insert_after' && req.method === 'POST') {
+              const body = await safeJson(req);
+              const text = String(body?.text ?? '');
+              const res = rooms.insertAfterThread(docId, threadId, text);
+              return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
+            }
+            if (threadRest === '/insert_blocks_after' && req.method === 'POST') {
+              const body = await safeJson(req);
+              const markdown = String(body?.markdown ?? '');
+              const res = rooms.insertBlocksAfterThread(docId, threadId, markdown);
+              return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
+            }
+          }
+          if (rest === 'threads' && req.method === 'POST') {
             const body = await safeJson(req);
             const user = authorFor(body?.author);
             const text = body?.text as string | undefined;
-            if (!user || !text) return j(400, { error: 'author + text required' });
-            const t = await rooms.postComment(docId, threadId, user, text);
-            return t ? j(200, { thread: t }) : j(404, { error: 'thread not found' });
-          }
-          if (threadRest === '/resolve' && req.method === 'POST') {
-            const body = await safeJson(req);
-            const author = authorFor(body?.author);
-            const t = rooms.resolve(docId, threadId, author);
-            return t ? j(200, { thread: t }) : j(404, { error: 'thread not found' });
-          }
-          if (threadRest === '/reopen' && req.method === 'POST') {
-            const body = await safeJson(req);
-            const author = authorFor(body?.author);
-            const t = rooms.reopen(docId, threadId, author);
-            return t ? j(200, { thread: t }) : j(404, { error: 'thread not found' });
-          }
-          if (threadRest === '/reanchor' && req.method === 'POST') {
-            const body = await safeJson(req);
             const anchor = body?.anchor as Anchor | undefined;
-            if (!anchor) return j(400, { error: 'anchor required' });
-            const t = rooms.reanchor(docId, threadId, anchor);
-            return t ? j(200, { thread: t }) : j(404, { error: 'thread not found' });
+            if (!user || !text || !anchor) {
+              return j(400, { error: 'author + text + anchor required' });
+            }
+            const t = await rooms.postComment(docId, null, user, text, anchor);
+            return t ? j(200, { thread: t }) : j(500, { error: 'could not create thread' });
           }
-          if (threadRest === '/rewrite_region' && req.method === 'POST') {
+          if (rest === 'threads/by_find' && req.method === 'POST') {
             const body = await safeJson(req);
-            const replacement = String(body?.replacement ?? '');
-            const parseInlineMarks = body?.parseInlineMarks === true;
+            const author = authorFor(body?.author);
+            const text = body?.text as string | undefined;
+            const find = body?.find ? String(body.find) : '';
+            if (!author || !text || find.length === 0) {
+              return j(400, { error: 'author + text + find required' });
+            }
+            const res = await rooms.createThreadByFind(
+              docId,
+              {
+                find,
+                contextBefore: body?.contextBefore ? String(body.contextBefore) : undefined,
+                contextAfter: body?.contextAfter ? String(body.contextAfter) : undefined,
+                occurrence:
+                  typeof body?.occurrence === 'number' ? Number(body.occurrence) : undefined,
+              },
+              author,
+              text,
+            );
+            return res.ok ? j(200, { thread: res.thread }) : j(409, res);
+          }
+          if (rest === 'content' && req.method === 'GET') {
+            const doc = rooms.getDoc(docId);
+            if (!doc) return j(404, { error: 'doc not found' });
+            return j(200, doc);
+          }
+          // Whole-doc rewrite through the live doc — the safe replacement for
+          // Write-the-bound-file + reparse_from_disk, which raced the
+          // write-back and clobbered (see docs/research/2026-08-03 review).
+          if (rest === 'content' && req.method === 'POST') {
+            const body = await safeJson(req);
+            const markdown = String(body?.markdown ?? '');
+            if (markdown.length === 0) return j(400, { error: 'markdown is required' });
+            const res = rooms.setDocContent(docId, markdown);
+            return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
+          }
+          if (rest === 'reparse_from_disk' && req.method === 'POST') {
+            const res = rooms.reparseFromDisk(docId);
+            return res.ok ? j(200, res) : j(409, res);
+          }
+          // Diff-review rendering data: the file's text at the BASE commit
+          // (the target text is the doc's own content, streamed over Yjs).
+          // Computed on demand from the repo; if the worktree has since been
+          // cleaned up, baseText comes back null and the client falls back to
+          // the full-file view, which needs nothing beyond the ydoc.
+          if (rest === 'diff' && req.method === 'GET') {
+            const meta = room.meta;
+            if (meta.type !== 'diff') return j(400, { error: 'not a diff doc' });
+            const { workspaceRoot, diffBase, diffTarget, relPath } = meta;
+            const basePath = meta.diffOldPath ?? relPath;
+            let baseText: string | null = null;
+            let error: string | undefined;
+            if (meta.diffStatus === 'added') {
+              baseText = '';
+            } else if (workspaceRoot && diffBase && basePath) {
+              baseText = showFile(workspaceRoot, diffBase, basePath);
+              if (baseText === null) error = 'base content unavailable (repo moved or pruned?)';
+            } else {
+              error = 'diff metadata incomplete';
+            }
+            return j(200, {
+              baseText,
+              status: meta.diffStatus,
+              oldPath: meta.diffOldPath,
+              base: diffBase,
+              target: diffTarget,
+              additions: meta.diffAdditions,
+              deletions: meta.diffDeletions,
+              ...(error ? { error } : {}),
+            });
+          }
+          // Browser-originated reading activity (read_session / doc_open). The
+          // markdown/code review surfaces POST interaction-bounded reading
+          // sessions here; the server resolves doc/repo/producedBy and stamps
+          // actor=person. Unknown types are ignored (400). See activity.ts.
+          if (rest === 'activity' && req.method === 'POST') {
+            const body = await safeJson(req);
+            const type = body?.type as 'read_session' | 'doc_open' | undefined;
+            if (type !== 'read_session' && type !== 'doc_open') {
+              return j(400, { error: 'type must be read_session or doc_open' });
+            }
+            const payload = (body?.payload as Record<string, unknown> | undefined) ?? {};
+            // Never DEFAULT to Bryan. This endpoint is in a share visitor's
+            // scope, so an omitted author used to record their reading
+            // activity as his — the one identity on the server that carries
+            // any weight. An unattributed read is now unattributed.
+            const author = authorFor(body?.author) ?? ANONYMOUS_ACTOR;
+            const res = rooms.recordReadEvent(docId, type, payload, author);
+            return res.ok ? j(200, { ok: true }) : j(404, res);
+          }
+          if (rest === 'agent_anchors' && req.method === 'POST') {
+            const body = await safeJson(req);
+            const find = String(body?.find ?? '');
+            if (find.length === 0) return j(400, { error: 'find is required' });
+            const res = rooms.createAgentAnchor(docId, {
+              find,
+              contextBefore: body?.contextBefore ? String(body.contextBefore) : undefined,
+              contextAfter: body?.contextAfter ? String(body.contextAfter) : undefined,
+              occurrence: typeof body?.occurrence === 'number' ? body.occurrence : undefined,
+              label: body?.label ? String(body.label) : undefined,
+            });
+            return res.ok ? j(200, res) : j(409, res);
+          }
+          const anchorMatch = rest.match(/^agent_anchors\/([^/]+)(\/.*)?$/);
+          if (anchorMatch) {
+            const anchorId = decodeURIComponent(anchorMatch[1] ?? '');
+            const anchorRest = anchorMatch[2] ?? '';
+            if (anchorRest === '/edit' && req.method === 'POST') {
+              const body = await safeJson(req);
+              const kind = body?.kind as 'replace' | 'insert_after' | undefined;
+              const text = String(body?.text ?? '');
+              if (kind !== 'replace' && kind !== 'insert_after') {
+                return j(400, { error: 'kind must be replace or insert_after' });
+              }
+              const res = rooms.editAtAgentAnchor(docId, anchorId, { kind, text });
+              return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
+            }
+            if (anchorRest === '/insert_blocks' && req.method === 'POST') {
+              const body = await safeJson(req);
+              const markdown = String(body?.markdown ?? '');
+              if (markdown.length === 0) return j(400, { error: 'markdown is required' });
+              const res = rooms.insertBlocksAtAnchor(docId, anchorId, markdown);
+              return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
+            }
+            if (anchorRest === '' && req.method === 'DELETE') {
+              const removed = rooms.deleteAgentAnchor(docId, anchorId);
+              return removed ? j(200, { ok: true }) : j(404, { error: 'anchor not found' });
+            }
+          }
+          if (rest === 'find_and_replace' && req.method === 'POST') {
+            const body = await safeJson(req);
+            const find = String(body?.find ?? '');
+            const replace = String(body?.replace ?? '');
+            if (find.length === 0) return j(400, { error: 'find is required' });
+            const contextBefore = body?.contextBefore ? String(body.contextBefore) : undefined;
+            const contextAfter = body?.contextAfter ? String(body.contextAfter) : undefined;
+            const occurrence =
+              typeof body?.occurrence === 'number' ? Number(body.occurrence) : undefined;
             if (body?.suggest === true) {
               const author = parseSuggestionAuthor(
                 visitor ? { author: authorFor(body?.author) } : body,
               );
               if (!author) return j(400, { error: 'author required when suggest is true' });
-              const res = rooms.createSuggestionForThread(docId, threadId, {
-                replacement,
-                parseInlineMarks,
+              const res = rooms.createSuggestion(docId, {
+                find,
+                replace,
+                contextBefore,
+                contextAfter,
+                occurrence,
+                parseInlineMarks: body?.parseInlineMarks === true,
                 author,
               });
               return res.ok ? j(200, res) : j(409, res);
             }
-            const res = rooms.rewriteThreadRegion(docId, threadId, replacement, {
-              parseInlineMarks,
-            });
-            return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
-          }
-          if (threadRest === '/insert_after' && req.method === 'POST') {
-            const body = await safeJson(req);
-            const text = String(body?.text ?? '');
-            const res = rooms.insertAfterThread(docId, threadId, text);
-            return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
-          }
-          if (threadRest === '/insert_blocks_after' && req.method === 'POST') {
-            const body = await safeJson(req);
-            const markdown = String(body?.markdown ?? '');
-            const res = rooms.insertBlocksAfterThread(docId, threadId, markdown);
-            return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
-          }
-        }
-        if (rest === 'threads' && req.method === 'POST') {
-          const body = await safeJson(req);
-          const user = authorFor(body?.author);
-          const text = body?.text as string | undefined;
-          const anchor = body?.anchor as Anchor | undefined;
-          if (!user || !text || !anchor) {
-            return j(400, { error: 'author + text + anchor required' });
-          }
-          const t = await rooms.postComment(docId, null, user, text, anchor);
-          return t ? j(200, { thread: t }) : j(500, { error: 'could not create thread' });
-        }
-        if (rest === 'threads/by_find' && req.method === 'POST') {
-          const body = await safeJson(req);
-          const author = authorFor(body?.author);
-          const text = body?.text as string | undefined;
-          const find = body?.find ? String(body.find) : '';
-          if (!author || !text || find.length === 0) {
-            return j(400, { error: 'author + text + find required' });
-          }
-          const res = await rooms.createThreadByFind(
-            docId,
-            {
-              find,
-              contextBefore: body?.contextBefore ? String(body.contextBefore) : undefined,
-              contextAfter: body?.contextAfter ? String(body.contextAfter) : undefined,
-              occurrence:
-                typeof body?.occurrence === 'number' ? Number(body.occurrence) : undefined,
-            },
-            author,
-            text,
-          );
-          return res.ok ? j(200, { thread: res.thread }) : j(409, res);
-        }
-        if (rest === 'content' && req.method === 'GET') {
-          const doc = rooms.getDoc(docId);
-          if (!doc) return j(404, { error: 'doc not found' });
-          return j(200, doc);
-        }
-        // Whole-doc rewrite through the live doc — the safe replacement for
-        // Write-the-bound-file + reparse_from_disk, which raced the
-        // write-back and clobbered (see docs/research/2026-08-03 review).
-        if (rest === 'content' && req.method === 'POST') {
-          const body = await safeJson(req);
-          const markdown = String(body?.markdown ?? '');
-          if (markdown.length === 0) return j(400, { error: 'markdown is required' });
-          const res = rooms.setDocContent(docId, markdown);
-          return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
-        }
-        if (rest === 'reparse_from_disk' && req.method === 'POST') {
-          const res = rooms.reparseFromDisk(docId);
-          return res.ok ? j(200, res) : j(409, res);
-        }
-        // Diff-review rendering data: the file's text at the BASE commit
-        // (the target text is the doc's own content, streamed over Yjs).
-        // Computed on demand from the repo; if the worktree has since been
-        // cleaned up, baseText comes back null and the client falls back to
-        // the full-file view, which needs nothing beyond the ydoc.
-        if (rest === 'diff' && req.method === 'GET') {
-          const meta = room.meta;
-          if (meta.type !== 'diff') return j(400, { error: 'not a diff doc' });
-          const { workspaceRoot, diffBase, diffTarget, relPath } = meta;
-          const basePath = meta.diffOldPath ?? relPath;
-          let baseText: string | null = null;
-          let error: string | undefined;
-          if (meta.diffStatus === 'added') {
-            baseText = '';
-          } else if (workspaceRoot && diffBase && basePath) {
-            baseText = showFile(workspaceRoot, diffBase, basePath);
-            if (baseText === null) error = 'base content unavailable (repo moved or pruned?)';
-          } else {
-            error = 'diff metadata incomplete';
-          }
-          return j(200, {
-            baseText,
-            status: meta.diffStatus,
-            oldPath: meta.diffOldPath,
-            base: diffBase,
-            target: diffTarget,
-            additions: meta.diffAdditions,
-            deletions: meta.diffDeletions,
-            ...(error ? { error } : {}),
-          });
-        }
-        // Browser-originated reading activity (read_session / doc_open). The
-        // markdown/code review surfaces POST interaction-bounded reading
-        // sessions here; the server resolves doc/repo/producedBy and stamps
-        // actor=person. Unknown types are ignored (400). See activity.ts.
-        if (rest === 'activity' && req.method === 'POST') {
-          const body = await safeJson(req);
-          const type = body?.type as 'read_session' | 'doc_open' | undefined;
-          if (type !== 'read_session' && type !== 'doc_open') {
-            return j(400, { error: 'type must be read_session or doc_open' });
-          }
-          const payload = (body?.payload as Record<string, unknown> | undefined) ?? {};
-          // Never DEFAULT to Bryan. This endpoint is in a share visitor's
-          // scope, so an omitted author used to record their reading
-          // activity as his — the one identity on the server that carries
-          // any weight. An unattributed read is now unattributed.
-          const author = authorFor(body?.author) ?? ANONYMOUS_ACTOR;
-          const res = rooms.recordReadEvent(docId, type, payload, author);
-          return res.ok ? j(200, { ok: true }) : j(404, res);
-        }
-        if (rest === 'agent_anchors' && req.method === 'POST') {
-          const body = await safeJson(req);
-          const find = String(body?.find ?? '');
-          if (find.length === 0) return j(400, { error: 'find is required' });
-          const res = rooms.createAgentAnchor(docId, {
-            find,
-            contextBefore: body?.contextBefore ? String(body.contextBefore) : undefined,
-            contextAfter: body?.contextAfter ? String(body.contextAfter) : undefined,
-            occurrence: typeof body?.occurrence === 'number' ? body.occurrence : undefined,
-            label: body?.label ? String(body.label) : undefined,
-          });
-          return res.ok ? j(200, res) : j(409, res);
-        }
-        const anchorMatch = rest.match(/^agent_anchors\/([^/]+)(\/.*)?$/);
-        if (anchorMatch) {
-          const anchorId = decodeURIComponent(anchorMatch[1] ?? '');
-          const anchorRest = anchorMatch[2] ?? '';
-          if (anchorRest === '/edit' && req.method === 'POST') {
-            const body = await safeJson(req);
-            const kind = body?.kind as 'replace' | 'insert_after' | undefined;
-            const text = String(body?.text ?? '');
-            if (kind !== 'replace' && kind !== 'insert_after') {
-              return j(400, { error: 'kind must be replace or insert_after' });
-            }
-            const res = rooms.editAtAgentAnchor(docId, anchorId, { kind, text });
-            return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
-          }
-          if (anchorRest === '/insert_blocks' && req.method === 'POST') {
-            const body = await safeJson(req);
-            const markdown = String(body?.markdown ?? '');
-            if (markdown.length === 0) return j(400, { error: 'markdown is required' });
-            const res = rooms.insertBlocksAtAnchor(docId, anchorId, markdown);
-            return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
-          }
-          if (anchorRest === '' && req.method === 'DELETE') {
-            const removed = rooms.deleteAgentAnchor(docId, anchorId);
-            return removed ? j(200, { ok: true }) : j(404, { error: 'anchor not found' });
-          }
-        }
-        if (rest === 'find_and_replace' && req.method === 'POST') {
-          const body = await safeJson(req);
-          const find = String(body?.find ?? '');
-          const replace = String(body?.replace ?? '');
-          if (find.length === 0) return j(400, { error: 'find is required' });
-          const contextBefore = body?.contextBefore ? String(body.contextBefore) : undefined;
-          const contextAfter = body?.contextAfter ? String(body.contextAfter) : undefined;
-          const occurrence =
-            typeof body?.occurrence === 'number' ? Number(body.occurrence) : undefined;
-          if (body?.suggest === true) {
-            const author = parseSuggestionAuthor(
-              visitor ? { author: authorFor(body?.author) } : body,
-            );
-            if (!author) return j(400, { error: 'author required when suggest is true' });
-            const res = rooms.createSuggestion(docId, {
+            const res = rooms.findAndReplace(docId, {
               find,
               replace,
               contextBefore,
               contextAfter,
               occurrence,
               parseInlineMarks: body?.parseInlineMarks === true,
-              author,
+            });
+            // Piggy-back any pending sync trouble on the response: agents act
+            // on edit results, not on get_doc, so this is where a conflict
+            // actually gets seen.
+            return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
+          }
+          // Suggested edits (redline-suggestions phase 2, commit 3): list/
+          // accept/reject/resolve-all over the doc's pending proposals. See
+          // `suggest: true` on find_and_replace / rewrite_region above for
+          // creation.
+          if (rest === 'suggestions' && req.method === 'GET') {
+            return j(200, { suggestions: rooms.listSuggestions(docId) });
+          }
+          if (rest === 'suggestions/resolve_all' && req.method === 'POST') {
+            const body = await safeJson(req);
+            const action = body?.action as 'accept' | 'reject' | undefined;
+            if (action !== 'accept' && action !== 'reject') {
+              return j(400, { error: 'action must be accept or reject' });
+            }
+            const authorId = body?.authorId ? String(body.authorId) : undefined;
+            const res = rooms.resolveAllSuggestions(docId, { action, authorId });
+            return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(404, res);
+          }
+          const suggestionMatch = rest.match(/^suggestions\/([^/]+)\/(accept|reject)$/);
+          if (suggestionMatch && req.method === 'POST') {
+            const sid = decodeURIComponent(suggestionMatch[1] ?? '');
+            const action = suggestionMatch[2];
+            const res =
+              action === 'accept'
+                ? rooms.acceptSuggestion(docId, sid)
+                : rooms.rejectSuggestion(docId, sid);
+            return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(404, res);
+          }
+          if (rest === 'delete_block_at_anchor' && req.method === 'POST') {
+            const body = await safeJson(req);
+            const threadId = body?.threadId ? String(body.threadId) : undefined;
+            const anchorId = body?.anchorId ? String(body.anchorId) : undefined;
+            if ((threadId && anchorId) || (!threadId && !anchorId)) {
+              return j(400, { error: 'exactly one of threadId or anchorId required' });
+            }
+            const res = threadId
+              ? rooms.deleteBlockAtThread(docId, threadId)
+              : rooms.deleteBlockAtAgentAnchor(docId, anchorId!);
+            return res.ok ? j(200, res) : j(409, res);
+          }
+          if (rest === 'delete_blocks_in_range' && req.method === 'POST') {
+            const body = await safeJson(req);
+            const startFind = String(body?.startFind ?? '');
+            const endFind = String(body?.endFind ?? '');
+            if (startFind.length === 0 || endFind.length === 0) {
+              return j(400, { error: 'startFind and endFind are required' });
+            }
+            const res = rooms.deleteBlocksInRange(docId, {
+              startFind,
+              endFind,
+              contextBefore: body?.contextBefore ? String(body.contextBefore) : undefined,
+              contextAfter: body?.contextAfter ? String(body.contextAfter) : undefined,
+              startOccurrence:
+                typeof body?.startOccurrence === 'number'
+                  ? Number(body.startOccurrence)
+                  : undefined,
+              endOccurrence:
+                typeof body?.endOccurrence === 'number' ? Number(body.endOccurrence) : undefined,
             });
             return res.ok ? j(200, res) : j(409, res);
           }
-          const res = rooms.findAndReplace(docId, {
-            find,
-            replace,
-            contextBefore,
-            contextAfter,
-            occurrence,
-            parseInlineMarks: body?.parseInlineMarks === true,
-          });
-          // Piggy-back any pending sync trouble on the response: agents act
-          // on edit results, not on get_doc, so this is where a conflict
-          // actually gets seen.
-          return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
-        }
-        // Suggested edits (redline-suggestions phase 2, commit 3): list/
-        // accept/reject/resolve-all over the doc's pending proposals. See
-        // `suggest: true` on find_and_replace / rewrite_region above for
-        // creation.
-        if (rest === 'suggestions' && req.method === 'GET') {
-          return j(200, { suggestions: rooms.listSuggestions(docId) });
-        }
-        if (rest === 'suggestions/resolve_all' && req.method === 'POST') {
-          const body = await safeJson(req);
-          const action = body?.action as 'accept' | 'reject' | undefined;
-          if (action !== 'accept' && action !== 'reject') {
-            return j(400, { error: 'action must be accept or reject' });
+          if (rest === 'delete_section' && req.method === 'POST') {
+            const body = await safeJson(req);
+            const heading = String(body?.heading ?? '');
+            if (heading.length === 0) return j(400, { error: 'heading is required' });
+            const res = rooms.deleteSection(docId, {
+              heading,
+              level: typeof body?.level === 'number' ? Number(body.level) : undefined,
+              occurrence:
+                typeof body?.occurrence === 'number' ? Number(body.occurrence) : undefined,
+            });
+            return res.ok ? j(200, res) : j(409, res);
           }
-          const authorId = body?.authorId ? String(body.authorId) : undefined;
-          const res = rooms.resolveAllSuggestions(docId, { action, authorId });
-          return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(404, res);
-        }
-        const suggestionMatch = rest.match(/^suggestions\/([^/]+)\/(accept|reject)$/);
-        if (suggestionMatch && req.method === 'POST') {
-          const sid = decodeURIComponent(suggestionMatch[1] ?? '');
-          const action = suggestionMatch[2];
-          const res =
-            action === 'accept'
-              ? rooms.acceptSuggestion(docId, sid)
-              : rooms.rejectSuggestion(docId, sid);
-          return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(404, res);
-        }
-        if (rest === 'delete_block_at_anchor' && req.method === 'POST') {
-          const body = await safeJson(req);
-          const threadId = body?.threadId ? String(body.threadId) : undefined;
-          const anchorId = body?.anchorId ? String(body.anchorId) : undefined;
-          if ((threadId && anchorId) || (!threadId && !anchorId)) {
-            return j(400, { error: 'exactly one of threadId or anchorId required' });
+          if (rest === 'hooks/fire' && req.method === 'POST') {
+            // debug-fires the last thread update again
+            const ts = rooms.listThreads(docId);
+            if (ts.length === 0) return j(404, { error: 'no threads' });
+            const last = ts[ts.length - 1]!;
+            if (room.webhookUrl) {
+              await webhooks.send(room.webhookUrl, {
+                event: 'thread.replied',
+                docId,
+                threadId: last.id,
+                thread: last,
+                doc: withReviewUrl(room.meta),
+                seq: ++room.seq,
+              });
+            }
+            return j(200, { fired: !!room.webhookUrl });
           }
-          const res = threadId
-            ? rooms.deleteBlockAtThread(docId, threadId)
-            : rooms.deleteBlockAtAgentAnchor(docId, anchorId!);
-          return res.ok ? j(200, res) : j(409, res);
         }
-        if (rest === 'delete_blocks_in_range' && req.method === 'POST') {
-          const body = await safeJson(req);
-          const startFind = String(body?.startFind ?? '');
-          const endFind = String(body?.endFind ?? '');
-          if (startFind.length === 0 || endFind.length === 0) {
-            return j(400, { error: 'startFind and endFind are required' });
-          }
-          const res = rooms.deleteBlocksInRange(docId, {
-            startFind,
-            endFind,
-            contextBefore: body?.contextBefore ? String(body.contextBefore) : undefined,
-            contextAfter: body?.contextAfter ? String(body.contextAfter) : undefined,
-            startOccurrence:
-              typeof body?.startOccurrence === 'number' ? Number(body.startOccurrence) : undefined,
-            endOccurrence:
-              typeof body?.endOccurrence === 'number' ? Number(body.endOccurrence) : undefined,
-          });
-          return res.ok ? j(200, res) : j(409, res);
+
+        // --- Web log ---
+        if (pathname === '/api/webhooks/log') {
+          return j(200, { log: webhookLog.slice(-100) });
         }
-        if (rest === 'delete_section' && req.method === 'POST') {
-          const body = await safeJson(req);
-          const heading = String(body?.heading ?? '');
-          if (heading.length === 0) return j(400, { error: 'heading is required' });
-          const res = rooms.deleteSection(docId, {
-            heading,
-            level: typeof body?.level === 'number' ? Number(body.level) : undefined,
-            occurrence: typeof body?.occurrence === 'number' ? Number(body.occurrence) : undefined,
-          });
-          return res.ok ? j(200, res) : j(409, res);
+
+        // --- Static: widget ---
+        if (widgetDist && pathname.startsWith('/widget/')) {
+          const p = join(widgetDist, pathname.slice('/widget/'.length));
+          const resp = serveStatic(p);
+          if (resp) return resp;
         }
-        if (rest === 'hooks/fire' && req.method === 'POST') {
-          // debug-fires the last thread update again
-          const ts = rooms.listThreads(docId);
-          if (ts.length === 0) return j(404, { error: 'no threads' });
-          const last = ts[ts.length - 1]!;
-          if (room.webhookUrl) {
-            await webhooks.send(room.webhookUrl, {
-              event: 'thread.replied',
-              docId,
-              threadId: last.id,
-              thread: last,
-              doc: withReviewUrl(room.meta),
-              seq: ++room.seq,
+        if (
+          widgetDist &&
+          (pathname === '/widget.js' ||
+            pathname === '/widget.iife.js' ||
+            pathname === '/widget.esm.js')
+        ) {
+          const map: Record<string, string> = {
+            '/widget.js': 'widget.esm.js',
+            '/widget.esm.js': 'widget.esm.js',
+            '/widget.iife.js': 'widget.iife.js',
+          };
+          const file = map[pathname]!;
+          const p = join(widgetDist, file);
+          const resp = serveStatic(p);
+          if (resp) return resp;
+        }
+
+        // --- Markdown app (surface 1) ---
+        if (markdownAppDist && pathname.startsWith('/review/')) {
+          const docId = decodeURIComponent(pathname.slice('/review/'.length));
+          if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
+          // Markdown docs are file-backed and must be created upfront via
+          // POST /api/docs with sourceUrl. Navigating here before the
+          // agent has done that gets a clean 404 — the markdown app
+          // can't render anything useful for a doc that doesn't exist.
+          if (!rooms.get(docId)) {
+            return new Response(renderReviewNotFound(docId), {
+              status: 404,
+              headers: { 'content-type': 'text/html; charset=utf-8' },
             });
           }
-          return j(200, { fired: !!room.webhookUrl });
+          // Device-frame simulation: when ?mobile=<preset> is on the URL,
+          // return an HTML shell that hosts the real page in an iframe sized
+          // to the preset's viewport. Media queries inside the iframe see
+          // the small width correctly.
+          const mobilePreset = url.searchParams.get('mobile');
+          if (mobilePreset) {
+            return new Response(renderDeviceFrame(mobilePreset, url), {
+              headers: { 'content-type': 'text/html; charset=utf-8' },
+            });
+          }
+          const p = join(markdownAppDist, 'index.html');
+          const resp = serveStatic(p);
+          if (resp) return resp;
         }
-      }
-
-      // --- Web log ---
-      if (pathname === '/api/webhooks/log') {
-        return j(200, { log: webhookLog.slice(-100) });
-      }
-
-      // --- Static: widget ---
-      if (widgetDist && pathname.startsWith('/widget/')) {
-        const p = join(widgetDist, pathname.slice('/widget/'.length));
-        const resp = serveStatic(p);
-        if (resp) return resp;
-      }
-      if (
-        widgetDist &&
-        (pathname === '/widget.js' ||
-          pathname === '/widget.iife.js' ||
-          pathname === '/widget.esm.js')
-      ) {
-        const map: Record<string, string> = {
-          '/widget.js': 'widget.esm.js',
-          '/widget.esm.js': 'widget.esm.js',
-          '/widget.iife.js': 'widget.iife.js',
-        };
-        const file = map[pathname]!;
-        const p = join(widgetDist, file);
-        const resp = serveStatic(p);
-        if (resp) return resp;
-      }
-
-      // --- Markdown app (surface 1) ---
-      if (markdownAppDist && pathname.startsWith('/review/')) {
-        const docId = decodeURIComponent(pathname.slice('/review/'.length));
-        if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
-        // Markdown docs are file-backed and must be created upfront via
-        // POST /api/docs with sourceUrl. Navigating here before the
-        // agent has done that gets a clean 404 — the markdown app
-        // can't render anything useful for a doc that doesn't exist.
-        if (!rooms.get(docId)) {
-          return new Response(renderReviewNotFound(docId), {
-            status: 404,
-            headers: { 'content-type': 'text/html; charset=utf-8' },
-          });
+        if (markdownAppDist && pathname.startsWith('/app/')) {
+          const p = join(markdownAppDist, pathname.slice('/app/'.length));
+          const resp = serveStaticUnder(markdownAppDist, p);
+          if (resp) return resp;
         }
-        // Device-frame simulation: when ?mobile=<preset> is on the URL,
-        // return an HTML shell that hosts the real page in an iframe sized
-        // to the preset's viewport. Media queries inside the iframe see
-        // the small width correctly.
-        const mobilePreset = url.searchParams.get('mobile');
-        if (mobilePreset) {
-          return new Response(renderDeviceFrame(mobilePreset, url), {
-            headers: { 'content-type': 'text/html; charset=utf-8' },
-          });
-        }
-        const p = join(markdownAppDist, 'index.html');
-        const resp = serveStatic(p);
-        if (resp) return resp;
-      }
-      if (markdownAppDist && pathname.startsWith('/app/')) {
-        const p = join(markdownAppDist, pathname.slice('/app/'.length));
-        const resp = serveStaticUnder(markdownAppDist, p);
-        if (resp) return resp;
-      }
 
-      // --- Mockup HTML — bound to a docId via bind_mock / POST /api/docs
-      //     with type='mockup'. Reads the file at the room's sourceUrl
-      //     (any absolute path on disk) and streams it as text/html. The
-      //     pre-bind_mock workflow required symlinking each new HTML
-      //     into <plugin-repo>/demos/ — `/mockup/<docId>` replaces that
-      //     dance and matches the contract of `/review/<docId>` for
-      //     markdown docs: one MCP call, one URL, no filesystem juggling.
-      //     Single-file mockups only — assets the HTML references via
-      //     relative paths won't resolve since we don't serve the source
-      //     directory. Use the existing /demos/ multi-page path for
-      //     mockups that ship with sibling files.
-      if (pathname.startsWith('/mockup/')) {
-        const slug = decodeURIComponent(pathname.slice('/mockup/'.length));
-        // Tolerate `/mockup/<docId>.html` AND `/mockup/<docId>` — agents
-        // share whichever URL feels natural.
-        const docId = slug.replace(/\.html?$/i, '');
-        if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
-        const room = rooms.get(docId);
-        if (!room || room.meta.type !== 'mockup' || !room.meta.sourceUrl) {
+        // --- Mockup HTML — bound to a docId via bind_mock / POST /api/docs
+        //     with type='mockup'. Reads the file at the room's sourceUrl
+        //     (any absolute path on disk) and streams it as text/html. The
+        //     pre-bind_mock workflow required symlinking each new HTML
+        //     into <plugin-repo>/demos/ — `/mockup/<docId>` replaces that
+        //     dance and matches the contract of `/review/<docId>` for
+        //     markdown docs: one MCP call, one URL, no filesystem juggling.
+        //     Single-file mockups only — assets the HTML references via
+        //     relative paths won't resolve since we don't serve the source
+        //     directory. Use the existing /demos/ multi-page path for
+        //     mockups that ship with sibling files.
+        if (pathname.startsWith('/mockup/')) {
+          const slug = decodeURIComponent(pathname.slice('/mockup/'.length));
+          // Tolerate `/mockup/<docId>.html` AND `/mockup/<docId>` — agents
+          // share whichever URL feels natural.
+          const docId = slug.replace(/\.html?$/i, '');
+          if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
+          const room = rooms.get(docId);
+          if (!room || room.meta.type !== 'mockup' || !room.meta.sourceUrl) {
+            return new Response(renderMockupNotFound(docId), {
+              status: 404,
+              headers: { 'content-type': 'text/html; charset=utf-8' },
+            });
+          }
+          const resp = serveStatic(room.meta.sourceUrl);
+          if (resp) return resp;
           return new Response(renderMockupNotFound(docId), {
             status: 404,
             headers: { 'content-type': 'text/html; charset=utf-8' },
           });
         }
-        const resp = serveStatic(room.meta.sourceUrl);
-        if (resp) return resp;
-        return new Response(renderMockupNotFound(docId), {
-          status: 404,
-          headers: { 'content-type': 'text/html; charset=utf-8' },
-        });
-      }
 
-      // --- Demos ---
-      if (demosDir && pathname.startsWith('/demos/')) {
-        let p = join(demosDir, pathname.slice('/demos/'.length));
-        if (!extname(p)) p = join(p, 'index.html');
-        const resp = serveStaticUnder(demosDir, p);
-        if (resp) return resp;
-      }
+        // --- Demos ---
+        if (demosDir && pathname.startsWith('/demos/')) {
+          let p = join(demosDir, pathname.slice('/demos/'.length));
+          if (!extname(p)) p = join(p, 'index.html');
+          const resp = serveStaticUnder(demosDir, p);
+          if (resp) return resp;
+        }
 
-      // --- Landing ---
-      if (pathname === '/') {
-        return new Response(renderLanding(buildLandingModel(rooms, withReviewUrl)), {
-          headers: { 'content-type': 'text/html; charset=utf-8' },
-        });
-      }
+        // --- Landing ---
+        if (pathname === '/') {
+          return new Response(renderLanding(buildLandingModel(rooms, withReviewUrl)), {
+            headers: { 'content-type': 'text/html; charset=utf-8' },
+          });
+        }
 
-      return new Response('not found', { status: 404 });
+        return new Response('not found', { status: 404 });
+      }
     },
     websocket: {
       open(ws) {
@@ -1539,7 +1601,9 @@ function isValidDocId(s: string): boolean {
 function j(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'content-type': 'application/json', ...CORS_HEADERS },
+    // CORS is added by the per-request wrapper in createServer, which knows
+    // the Origin. This used to stamp a wildcard `*` origin on every reply.
+    headers: { 'content-type': 'application/json' },
   });
 }
 
@@ -1570,22 +1634,6 @@ function parseSuggestionAuthor(
 // CORS. The widget posts comments without credentials (auth is via the
 // request body's `author` field, not cookies), so `*` is safe and avoids
 // the per-request-Origin echo dance.
-const CORS_HEADERS = {
-  'access-control-allow-origin': '*',
-  'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS',
-  'access-control-allow-headers': 'content-type, authorization',
-  'access-control-max-age': '600',
-} as const;
-
-// withCors is still useful for non-j() responses (preflight 204, static
-// bundle response when the consumer wants to fetch() it instead of using a
-// script tag). Cheap to merge headers — no body copy.
-function withCors(_req: Request, res: Response): Response {
-  const headers = new Headers(res.headers);
-  for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v);
-  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
-}
-
 async function safeJson(req: Request): Promise<Record<string, unknown> | null> {
   try {
     return (await req.json()) as Record<string, unknown>;
