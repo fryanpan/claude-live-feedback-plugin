@@ -27,6 +27,9 @@ export interface GroupedFile {
   diffStatus?: 'added' | 'modified' | 'deleted' | 'renamed';
   diffAdditions?: number;
   diffDeletions?: number;
+  /** No longer part of the review as of the last refresh — kept because it
+   *  still holds comments, shown dimmed so nobody reviews a ghost. */
+  stale?: boolean;
 }
 export interface GroupedModel {
   groups: Array<{ title: string; openCount: number; details?: string; files: GroupedFile[] }>;
@@ -36,6 +39,8 @@ interface RepoFile {
   changed: boolean;
   docId?: string;
   reviewUrl?: string;
+  /** Left the review; kept because it still holds comments. */
+  stale?: boolean;
   status?: 'added' | 'modified' | 'deleted' | 'renamed';
 }
 
@@ -123,13 +128,25 @@ function diffNavSignature(
 ): string {
   if (view === 'all') {
     const f = (files?.files ?? [])
-      .map((x) => `${x.relPath}:${x.status ?? ''}:${x.changed ? '1' : '0'}:${x.docId ?? ''}`)
+      .map(
+        (x) =>
+          `${x.relPath}:${x.status ?? ''}:${x.changed ? '1' : '0'}:${x.stale ? 's' : ''}:${x.docId ?? ''}`,
+      )
       .join(',');
     return `diff:${workspaceId}:all:${f}`;
   }
+  // Group TITLES, ORDER and DETAILS are part of the signature, not just the
+  // files: set_workspace_groups can rewrite the whole sidebar while every
+  // docId and status stays identical, and a signature blind to that would
+  // leave the old headings on screen until a hard reload.
   const f = model.groups
-    .flatMap((g) => g.files.map((x) => `${x.docId}:${x.diffStatus ?? ''}`))
-    .join(',');
+    .map(
+      (g) =>
+        `${g.title}|${g.details ?? ''}|${g.files
+          .map((x) => `${x.docId}:${x.diffStatus ?? ''}:${x.stale ? 's' : ''}`)
+          .join(',')}`,
+    )
+    .join(';');
   return `diff:${workspaceId}:grouped:${f}`;
 }
 
@@ -306,9 +323,13 @@ function fileRow(f: GroupedFile, activeDocId: string): string {
       ? `<span class="tree-diff-counts"><span class="add">+${f.diffAdditions ?? 0}</span> <span class="del">−${f.diffDeletions ?? 0}</span></span>`
       : '';
   const open = f.openCount > 0 ? `<span class="tree-badge badge-open">${f.openCount}</span>` : '';
-  return `<li class="diff-file"><a href="${href}" class="${isActive ? 'active' : ''}"${
+  const cls = [isActive ? 'active' : '', f.stale ? 'stale' : ''].filter(Boolean).join(' ');
+  const hint = f.stale
+    ? `${escapeHtml(f.relPath)} — no longer in this review; comments kept`
+    : escapeHtml(f.relPath);
+  return `<li class="diff-file"><a href="${href}" class="${cls}"${
     isActive ? ' aria-current="page"' : ''
-  } title="${escapeHtml(f.relPath)}"><span class="tree-diff-status tree-diff-${letter}">${letter}</span><span class="diff-file-name">${escapeHtml(
+  } title="${hint}"><span class="tree-diff-status tree-diff-${letter}">${letter}</span><span class="diff-file-name">${escapeHtml(
     f.name,
   )}</span>${open}${counts}</a></li>`;
 }
