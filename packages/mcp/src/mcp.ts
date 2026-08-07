@@ -831,6 +831,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ['shareId'],
       },
     },
+    {
+      name: 'set_sharing_enabled',
+      description:
+        'Master switch for ALL external access. Turning it off makes every share host and link host answer 403 before authentication, and hangs up websockets and SSE streams that are already open — one call, rather than revoking shares individually. Existing shares are preserved and resume when it is turned back on. The local/tailnet surface is unaffected. Call with no argument to just read the current state. Refuses with env_locked when LF_SHARING_DISABLED is set in the service environment.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          enabled: {
+            type: 'boolean',
+            description: 'Omit to read the current state without changing it.',
+          },
+        },
+      },
+    },
   ],
 }));
 
@@ -1419,6 +1433,18 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       case 'unshare': {
         const { shareId } = a as { shareId: string };
         const res = await http('DELETE', `/api/share/${encodeURIComponent(shareId)}`);
+        return ok(res);
+      }
+      case 'set_sharing_enabled': {
+        const { enabled } = a as { enabled?: boolean };
+        // No argument = read-only. GET /api/share carries the same `sharing`
+        // object the POST returns, so a status check costs nothing and can't
+        // change anything by accident.
+        if (typeof enabled !== 'boolean') {
+          const res = await http('GET', '/api/share');
+          return ok(res);
+        }
+        const res = await http('POST', '/api/share/enabled', { enabled });
         return ok(res);
       }
       default:
