@@ -66,6 +66,7 @@ import {
   readPrivateMeta,
   writePrivateMeta,
 } from './private-meta.ts';
+import { isWithinRoot } from './safe-path.ts';
 import type { SseHub } from './sse.ts';
 import type { WebhookDispatcher } from './webhooks.ts';
 
@@ -963,6 +964,12 @@ export class Rooms {
       return { ok: false, error: 'bad-path' };
     }
     if (!existsSync(abs)) return { ok: false, error: 'not-found' };
+    // The guard above is lexical, so a symlink INSIDE the root that points
+    // outside it passes: `join` never touches the filesystem. Resolve what
+    // the path really points at before reading it — this endpoint is
+    // reachable by a share visitor, and a diff review's root is a whole repo.
+    // Ordered after existsSync so a missing file still reads 'not-found'.
+    if (!isWithinRoot(root, abs)) return { ok: false, error: 'bad-path' };
     const existing = members.find((m) => m.relPath === clean);
     if (existing) return { ok: true, docId: existing.docId, meta: existing };
     const owner = members.find((m) => m.owner)?.owner;
@@ -1021,6 +1028,10 @@ export class Rooms {
     if (member.type !== 'diff') return { ok: true, docId: member.docId, meta: member };
     if (member.diffTarget) return { ok: false, error: 'pinned' };
     if (!existsSync(abs)) return { ok: false, error: 'not-found' };
+    // Same symlink escape as openContextFile — see the note there. A member's
+    // relPath is git-derived rather than caller-supplied, but git tracks
+    // symlinks, so the member path is not self-evidently safe either.
+    if (!isWithinRoot(root, abs)) return { ok: false, error: 'bad-path' };
     const owner = members.find((m) => m.owner)?.owner;
     const companionId = memberDocId(`${workspaceId}:edit`, clean);
     const room = this.getOrCreate(companionId, {
