@@ -166,6 +166,20 @@ describe('workspace refresh routes', () => {
       expect(view.groups[0]?.details).toBe('what actually moved');
     });
 
+    it('400s a malformed group WITHOUT poisoning the workspace', async () => {
+      // The route only knows `groups` is an array — everything about what is
+      // inside it is checked below it. A bad spec used to be persisted before
+      // the assignment threw, which left refresh permanently broken.
+      const r = await post(`/api/workspaces/${reviewId}/groups`, {
+        groups: [{ title: 'No paths' }],
+      });
+      expect(r.status).toBe(400);
+      expect(((await r.json()) as { error: string }).error).toBe('bad-groups');
+      // …and the review still refreshes.
+      const after = await post(`/api/workspaces/${reviewId}/refresh`, {});
+      expect(after.status).toBe(200);
+    });
+
     it('rejects an over-long details intro', async () => {
       const r = await post(`/api/workspaces/${reviewId}/groups`, {
         groups: [{ title: 'Long', paths: ['src'], details: 'x'.repeat(501) }],

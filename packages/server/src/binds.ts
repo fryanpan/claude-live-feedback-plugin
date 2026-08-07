@@ -2,7 +2,12 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join, relative, resolve as resolvePath, sep } from 'node:path';
 import type { DocMeta, DocType } from '@feedback/core';
-import { MAX_GROUP_DETAILS, assignGroups, findOverlongGroupDetails } from './diff-groups.ts';
+import {
+  MAX_GROUP_DETAILS,
+  assignGroups,
+  findMalformedGroups,
+  findOverlongGroupDetails,
+} from './diff-groups.ts';
 import { scanFolder } from './fs-scan.ts';
 import {
   type DiffFileEntry,
@@ -209,6 +214,7 @@ export type BindDiffResult =
         | 'empty-diff'
         | 'too-many-files'
         | 'group-details-too-long'
+        | 'bad-groups'
         | 'review-exists-different-range';
       detail?: string;
       fileCount?: number;
@@ -235,6 +241,15 @@ export type BindDiffResult =
 export function bindDiff(host: BindHost, opts: BindDiffOpts): BindDiffResult {
   const root = resolvePath(opts.repoPath);
   if (!existsSync(root)) return { ok: false, error: 'not-found' };
+
+  // Shape first: a spec is PERSISTED on the members for refreshWorkspace to
+  // replay, so one that would blow up assignGroups must never be written.
+  if (opts.groups !== undefined) {
+    const malformed = findMalformedGroups(opts.groups);
+    if (malformed.length > 0) {
+      return { ok: false, error: 'bad-groups', detail: malformed.join('; ') };
+    }
+  }
 
   // A group's `details` intro is capped HARD at MAX_GROUP_DETAILS and rejected
   // (not truncated) when over — this deliberately forces the caller to write a
@@ -532,8 +547,9 @@ export type RefreshWorkspaceResult =
     }
   | {
       ok: false;
-      error: 'not-found' | 'root-missing' | 'pinned' | 'rebind-failed';
+      error: 'not-found' | 'root-missing' | 'pinned' | 'too-many-files' | 'rebind-failed';
       detail?: string;
+      fileCount?: number;
     };
 
 /**
@@ -588,6 +604,7 @@ export function refreshWorkspace(host: BindHost, workspaceId: string): RefreshWo
   // organized by hand decays a little on each refresh.
   const exclude = members.find((m) => m.workspaceExclude)?.workspaceExclude;
   const groups = members.find((m) => m.workspaceGroups)?.workspaceGroups;
+  const maxFiles = members.find((m) => m.workspaceMaxFiles !== undefined)?.workspaceMaxFiles;
   // Which relPaths the DIFF currently covers. Null for a browse workspace,
   // where "is it still there?" is answered by the filesystem instead.
   let liveRelPaths: Set<string> | null = null;
@@ -603,6 +620,7 @@ export function refreshWorkspace(host: BindHost, workspaceId: string): RefreshWo
       owner,
       ...(exclude ? { exclude } : {}),
       ...(groups ? { groups } : {}),
+      ...(maxFiles !== undefined ? { maxFiles } : {}),
     });
     if (res.ok) {
       liveRelPaths = new Set(res.files.map((f) => f.relPath));
@@ -611,6 +629,15 @@ export function refreshWorkspace(host: BindHost, workspaceId: string): RefreshWo
       // Every change reverted. Not an error — every member goes stale.
       liveRelPaths = new Set();
       fileCount = 0;
+    } else if (res.error === 'too-many-files') {
+      // Distinct from a generic failure: the caller can act on it by raising
+      // maxFiles (re-run the bind) or narrowing with exclude.
+      return {
+        ok: false,
+        error: 'too-many-files',
+        ...(res.fileCount !== undefined ? { fileCount: res.fileCount } : {}),
+        detail: `the review now covers more files than its cap (${maxFiles ?? DEFAULT_MAX_FILES}) — raise maxFiles by re-running the bind, or narrow it with exclude`,
+      };
     } else {
       return { ok: false, error: 'rebind-failed', detail: res.detail ?? res.error };
     }
@@ -679,7 +706,7 @@ export type SetWorkspaceGroupsResult =
     }
   | {
       ok: false;
-      error: 'not-found' | 'no-diff-members' | 'group-details-too-long';
+      error: 'not-found' | 'no-diff-members' | 'bad-groups' | 'group-details-too-long';
       detail?: string;
     };
 
@@ -710,6 +737,14 @@ export function setWorkspaceGroups(
       detail: 'groups organize a diff review; this workspace has no changed-file members',
     };
   }
+  // Validate the SHAPE before anything is written. The spec is persisted for
+  // refreshWorkspace to replay, so a malformed one written before
+  // assignGroups threw on it would leave the workspace permanently
+  // un-refreshable — refresh would read it back and throw again.
+  const malformed = findMalformedGroups(groups);
+  if (malformed.length > 0) {
+    return { ok: false, error: 'bad-groups', detail: malformed.join('; ') };
+  }
   const overlong = findOverlongGroupDetails(groups);
   if (overlong.length > 0) {
     const which = overlong.map((g) => `"${g.title}" is ${g.length} chars`).join('; ');
@@ -721,13 +756,6 @@ export function setWorkspaceGroups(
   }
 
   const explicit = groups.length > 0 ? groups : undefined;
-  // Persist the SPEC, not just the resulting per-file assignment: a later
-  // refresh re-applies it so files that start differing after this call land
-  // in the right group instead of a heuristic bucket. Resetting to the
-  // heuristic (empty array) deletes it, so refresh stops re-applying it.
-  for (const m of members) {
-    writeMeta(host, m.docId, [['workspaceGroups', explicit]]);
-  }
   const assignment = assignGroups(
     diffMembers.map((m) => ({
       relPath: m.relPath,
@@ -736,6 +764,13 @@ export function setWorkspaceGroups(
     })),
     explicit,
   );
+  // Only now, with a spec proven to assign cleanly, persist it. Storing the
+  // SPEC rather than just the resulting per-file assignment is what lets a
+  // later refresh file newly-changed files into the right group instead of a
+  // heuristic bucket; resetting to the heuristic (empty array) deletes it.
+  for (const m of members) {
+    writeMeta(host, m.docId, [['workspaceGroups', explicit]]);
+  }
 
   // Unmatched files get the sentinel rank assignGroups reserves for them —
   // read that rather than the title, so a group the caller actually named
@@ -774,11 +809,12 @@ export function setWorkspaceGroups(
 function rememberWorkspaceConfig(
   host: BindHost,
   docId: string,
-  opts: { exclude?: string[]; groups?: BindDiffOpts['groups'] },
+  opts: { exclude?: string[]; groups?: BindDiffOpts['groups']; maxFiles?: number },
 ): void {
   const next: Array<[keyof DocMeta, unknown]> = [];
   if (opts.exclude !== undefined) next.push(['workspaceExclude', normalizeExcludes(opts.exclude)]);
   if (opts.groups !== undefined) next.push(['workspaceGroups', opts.groups]);
+  if (opts.maxFiles !== undefined) next.push(['workspaceMaxFiles', opts.maxFiles]);
   if (next.length === 0) return;
   writeMeta(host, docId, next);
 }

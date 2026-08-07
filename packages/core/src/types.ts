@@ -88,6 +88,7 @@ export interface DocMeta {
    */
   workspaceExclude?: string[];
   workspaceGroups?: Array<{ title: string; paths: string[]; details?: string }>;
+  workspaceMaxFiles?: number;
   /**
    * Set by `refresh_workspace` when this member is no longer part of the
    * review: its file was deleted (browse workspace), or its change was

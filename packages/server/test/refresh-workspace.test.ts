@@ -270,6 +270,22 @@ describe('Rooms.refreshWorkspace — diff review', () => {
     expect(grouped.groups.map((g) => g.title)).not.toContain('Everything');
   });
 
+  it('keeps honouring a raised maxFiles across a refresh', () => {
+    // Without the cap replayed, a review deliberately bound above the
+    // default would start failing to refresh the moment it grew — the
+    // original bind said this many files is fine.
+    const bound = rooms.bindDiff({ repoPath: repo, base, maxFiles: 1 });
+    if (!bound.ok) throw new Error('bind failed');
+    writeFileSync(join(repo, 'src', 'b.ts'), 'const b = 2;\n');
+    const res = rooms.refreshWorkspace(bound.reviewId);
+    // The stored cap of 1 is what rejects this — proving it round-tripped.
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error).toBe('too-many-files');
+      expect(res.fileCount).toBe(2);
+    }
+  });
+
   it('keeps docIds and threads stable across a refresh', async () => {
     const bound = rooms.bindDiff({ repoPath: repo, base });
     if (!bound.ok) throw new Error('bind failed');
@@ -406,6 +422,47 @@ describe('Rooms.setWorkspaceGroups', () => {
       { title: 'Src only', fileCount: 1 },
       { title: 'Other', fileCount: 1 },
     ]);
+  });
+
+  it('rejects a group with no paths WITHOUT persisting it', () => {
+    // A malformed spec used to be written to every member before the
+    // assignment blew up on it — which left the workspace permanently
+    // un-refreshable, because refresh reads that spec back and re-throws.
+    const bound = rooms.bindDiff({ repoPath: repo, base });
+    if (!bound.ok) throw new Error('bind failed');
+    const res = rooms.setWorkspaceGroups(bound.reviewId, [{ title: 'X' } as never]);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toBe('bad-groups');
+    expect(rooms.list().every((m) => m.workspaceGroups === undefined)).toBe(true);
+    // …and the review is still usable.
+    expect(rooms.refreshWorkspace(bound.reviewId).ok).toBe(true);
+  });
+
+  it('rejects a group with a blank title or non-string paths', () => {
+    const bound = rooms.bindDiff({ repoPath: repo, base });
+    if (!bound.ok) throw new Error('bind failed');
+    for (const bad of [
+      [{ title: '  ', paths: ['src'] }],
+      [{ title: 'X', paths: 'src' }],
+      [{ title: 'X', paths: [1] }],
+      ['nope'],
+    ]) {
+      const res = rooms.setWorkspaceGroups(bound.reviewId, bad as never);
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.error).toBe('bad-groups');
+    }
+    expect(rooms.refreshWorkspace(bound.reviewId).ok).toBe(true);
+  });
+
+  it('rejects a malformed group spec at BIND time too', () => {
+    const res = rooms.bindDiff({
+      repoPath: repo,
+      base,
+      reviewId: 'bind-validate',
+      groups: [{ title: 'X' } as never],
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toBe('bad-groups');
   });
 
   it('rejects an over-long details intro rather than truncating it', () => {
