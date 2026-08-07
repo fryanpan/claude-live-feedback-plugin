@@ -342,7 +342,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       const authorFor = (claimed: unknown): User | undefined => {
         if (visitor) {
           return sanitizeVisitorAuthor(claimed, {
-            shareKey: visitor.workspaceId ?? visitor.docId,
+            // The SHARE, not the doc: two links to the same doc are two
+            // different audiences, and seeding from the doc id would give a
+            // returning browser the same guest identity on both — attributing
+            // comments on a freshly minted link to the old one's visitor.
+            shareKey: visitorShareId ?? visitor.workspaceId ?? visitor.docId,
           });
         }
         return claimed as User | undefined;

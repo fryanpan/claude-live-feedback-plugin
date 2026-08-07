@@ -39,8 +39,20 @@ export function redactMetaForVisitor(meta: DocMeta & { reviewUrl?: string }): Pa
     ...(meta.lastActivityAt !== undefined ? { lastActivityAt: meta.lastActivityAt } : {}),
     ...(meta.stale !== undefined ? { stale: meta.stale } : {}),
     // Diff presentation — line counts and status drive the badges the
-    // visitor is looking at. The base/target COMMIT HASHES are omitted:
-    // they say nothing useful in the UI and identify the private history.
+    // visitor is looking at.
+    //
+    // diffTarget is LOAD-BEARING, not decoration: the client reads "pinned"
+    // as "diffTarget is non-empty" (see code/editable-policy.ts), so dropping
+    // it made every shared pinned review look like a live working-tree one
+    // and UNLOCKED its editor. A visitor could then type into content that is
+    // supposed to be immutable — no write-back to disk, but the Yjs doc
+    // mutates and broadcasts to everyone else on the review.
+    //
+    // Keeping the hashes costs nothing worth protecting: a visitor holding
+    // this link is already reading the diff's full contents, so the commit
+    // ids they came from add no information.
+    ...(meta.diffBase !== undefined ? { diffBase: meta.diffBase } : {}),
+    ...(meta.diffTarget !== undefined ? { diffTarget: meta.diffTarget } : {}),
     ...(meta.diffStatus !== undefined ? { diffStatus: meta.diffStatus } : {}),
     ...(meta.diffAdditions !== undefined ? { diffAdditions: meta.diffAdditions } : {}),
     ...(meta.diffDeletions !== undefined ? { diffDeletions: meta.diffDeletions } : {}),
