@@ -312,6 +312,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               docId: m.docId,
               ...(m.relPath ? { relPath: m.relPath } : {}),
               ...(m.stale ? { stale: true } : {}),
+              ...(m.type === 'diff' ? { isChangedFile: true } : {}),
             }));
           const resolved = resolveShareEntry(share.docId, members);
           // An emptied-out workspace has nothing to show; say no more than

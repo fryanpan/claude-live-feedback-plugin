@@ -448,6 +448,11 @@ export function bindDiff(host: BindHost, opts: BindDiffOpts): BindDiffResult {
       opts.groups || room.meta.diffGroup === undefined ? groupOf.get(entry.relPath) : undefined;
     refreshDiffMeta(room, entry, groupAssignment);
     rememberWorkspaceConfig(host, docId, opts);
+    // Being accepted here IS being part of the diff, so a member that had
+    // gone stale stops rendering as a ghost. Re-running create_diff_review is
+    // documented as an idempotent refresh path; leaving the flag set would
+    // make it a half-refresh that needs refresh_workspace to finish.
+    setStaleFlag(host, docId, false);
     if (target) {
       // Pinned mode: seed the target-commit content once; no file
       // binding, no poll — content can't change underneath us.
@@ -597,6 +602,10 @@ export function refreshWorkspace(host: BindHost, workspaceId: string): RefreshWo
   if (diffMember?.diffTarget) return { ok: false, error: 'pinned' };
 
   const before = new Set(members.map((m) => m.docId));
+  // Snapshot staleness BEFORE the re-bind, which clears the flag on every
+  // file it accepts — reading meta.stale afterwards would report nothing as
+  // restored.
+  const staleBefore = new Set(members.filter((m) => m.stale).map((m) => m.docId));
   const owner = members.find((m) => m.owner)?.owner;
   // Re-apply what the workspace was BOUND with. Without the exclude list a
   // refresh silently widens the review's scope; without the group spec every
@@ -673,7 +682,7 @@ export function refreshWorkspace(host: BindHost, workspaceId: string): RefreshWo
     if (gone) {
       setStaleFlag(host, meta.docId, true);
       stale.push({ ...ref, openThreads: host.listThreads(meta.docId, { status: 'open' }).length });
-    } else if (meta.stale) {
+    } else if (staleBefore.has(meta.docId)) {
       setStaleFlag(host, meta.docId, false);
       restored.push(ref);
     }

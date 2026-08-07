@@ -50,6 +50,33 @@ describe('resolveShareEntry', () => {
     expect(resolveShareEntry('gone', [m('w:b'), m('w:a')])).toBe('w:a');
   });
 
+  it('lands on a CHANGED file, not a context file someone opened', () => {
+    // A diff review's landing page is the review. Opening README.md for
+    // context shouldn't make it the front door once the entry goes stale.
+    const members: EntryCandidate[] = [
+      { docId: 'w:README.md', relPath: 'README.md' },
+      { docId: 'w:src~a.ts', relPath: 'src/a.ts', isChangedFile: true },
+      { docId: 'w:src~b.ts', relPath: 'src/b.ts', isChangedFile: true },
+    ];
+    expect(resolveShareEntry('gone', members)).toBe('w:src~a.ts');
+  });
+
+  it('still prefers a live changed file over a stale one', () => {
+    const members: EntryCandidate[] = [
+      { docId: 'w:src~a.ts', relPath: 'src/a.ts', isChangedFile: true, stale: true },
+      { docId: 'w:src~b.ts', relPath: 'src/b.ts', isChangedFile: true },
+    ];
+    expect(resolveShareEntry('w:src~a.ts', members)).toBe('w:src~b.ts');
+  });
+
+  it('falls back to a context file when every changed file is stale', () => {
+    const members: EntryCandidate[] = [
+      { docId: 'w:README.md', relPath: 'README.md' },
+      { docId: 'w:src~a.ts', relPath: 'src/a.ts', isChangedFile: true, stale: true },
+    ];
+    expect(resolveShareEntry('gone', members)).toBe('w:README.md');
+  });
+
   it('returns null for an empty workspace', () => {
     expect(resolveShareEntry('w:a.md', [])).toBeNull();
   });

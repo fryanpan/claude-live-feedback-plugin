@@ -325,6 +325,24 @@ describe('Rooms.refreshWorkspace — diff review', () => {
     expect(rooms.get(docId)?.meta.stale).toBeUndefined();
   });
 
+  it('clears stale on a plain re-bind too, not only on refresh', () => {
+    // create_diff_review is documented as an idempotent refresh path, so a
+    // file that is back in the diff must stop rendering as a ghost without
+    // needing a separate refresh_workspace call.
+    writeFileSync(join(repo, 'src', 'b.ts'), 'const b = 2;\n');
+    const bound = rooms.bindDiff({ repoPath: repo, base });
+    if (!bound.ok) throw new Error('bind failed');
+    const docId = bound.files.find((f) => f.relPath === 'src/b.ts')?.docId ?? '';
+
+    writeFileSync(join(repo, 'src', 'b.ts'), 'const b = 1;\n');
+    rooms.refreshWorkspace(bound.reviewId);
+    expect(rooms.get(docId)?.meta.stale).toBe(true);
+
+    writeFileSync(join(repo, 'src', 'b.ts'), 'const b = 3;\n');
+    rooms.bindDiff({ repoPath: repo, base });
+    expect(rooms.get(docId)?.meta.stale).toBeUndefined();
+  });
+
   it('does not mark a deleted-in-diff file stale — being gone IS the change', () => {
     rmSync(join(repo, 'src', 'b.ts'));
     const bound = rooms.bindDiff({ repoPath: repo, base });

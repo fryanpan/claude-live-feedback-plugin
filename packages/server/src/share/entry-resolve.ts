@@ -10,10 +10,13 @@
  *
  * Order of preference:
  *   1. the doc the sharer picked, if it is still a member
- *   2. a root README (the conventional landing page)
- *   3. any README, deepest-path last
- *   4. the first markdown file
- *   5. the first member of any kind
+ *   2. a CHANGED file, when the workspace is a diff review — the review IS
+ *      the changed files, so a context file someone opened to read alongside
+ *      them must not become the front door
+ *   3. a root README (the conventional landing page)
+ *   4. any README, deepest-path last
+ *   5. the first markdown file
+ *   6. the first member of any kind
  *
  * Stale members (file gone — see Rooms.refreshWorkspace) still hold their
  * threads and stay reachable, but they lose every tiebreak: landing a
@@ -28,6 +31,10 @@ export interface EntryCandidate {
   docId: string;
   relPath?: string;
   stale?: boolean;
+  /** A diff review's changed-file member, as opposed to a context file
+   *  opened alongside it. Uniformly false on a browse workspace, where the
+   *  distinction doesn't exist. */
+  isChangedFile?: boolean;
 }
 
 export function resolveShareEntry(
@@ -44,6 +51,8 @@ export function resolveShareEntry(
   const ranked = members.slice().sort((a, b) => {
     const staleDelta = Number(a.stale ?? false) - Number(b.stale ?? false);
     if (staleDelta !== 0) return staleDelta;
+    const changedDelta = Number(b.isChangedFile ?? false) - Number(a.isChangedFile ?? false);
+    if (changedDelta !== 0) return changedDelta;
     const kindDelta = kindRank(a) - kindRank(b);
     if (kindDelta !== 0) return kindDelta;
     const depthDelta = depth(a) - depth(b);
