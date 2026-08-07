@@ -325,7 +325,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
 
       // Hoisted, so the wrapper above can call it first. The whole route
       // table lives in here unchanged.
-      // biome-ignore lint/correctness/noInnerDeclarations: hoisting is the point
       async function route(
         req: Request,
         server: BunServer<{ docId: string }>,
