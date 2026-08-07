@@ -19,8 +19,20 @@ Dispatch **both** as background agents simultaneously:
 - Return a list of issues (blocking vs. advisory)
 
 **Agent B — Codex review:**
-- Run: `codex review -c 'model="gpt-5.4"' --base <base-branch>`
+- Run: `codex review -c 'model="gpt-5.6-sol"' --base <base-branch>`
 - Capture output
+
+  Use the **quality-first** tier, not the fast one — this is the adversarial
+  pass, and latency doesn't matter here. In the GPT-5.6 family that's `sol`
+  (`terra` is balanced, `luna` is low-latency); there is no plain `gpt-5.6`
+  slug. This pin goes stale: it sat on `gpt-5.4` well past two newer releases.
+  If a review turns up nothing on a change you expected findings on, check for
+  a newer tier before trusting the all-clear:
+
+  ```bash
+  brew upgrade --cask codex
+  strings "$(readlink -f "$(which codex)")" | grep -oE '"gpt-[0-9][^"]{0,20}"' | sort -u
+  ```
 
 Wait for both to complete. Merge findings. Fix **blocking** issues. Re-run reviewers only if fixes were non-trivial (>10 lines changed).
 
