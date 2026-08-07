@@ -36,6 +36,7 @@ import {
 } from './share/link-session.ts';
 import { redactMetaForVisitor, relativeReviewUrl } from './share/redact-meta.ts';
 import { Shares } from './share/shares.ts';
+import { SharingGate } from './share/sharing-gate.ts';
 import type { ShareConfig } from './share/types.ts';
 import { sanitizeVisitorAuthor } from './share/visitor-identity.ts';
 import { SseHub, openSseStream } from './sse.ts';
@@ -55,6 +56,12 @@ const ANONYMOUS_ACTOR: User = {
 };
 
 export interface ServerOptions {
+  /**
+   * LF_SHARING_DISABLED was set: external sharing starts OFF and the runtime
+   * toggle refuses to reopen it. The switch to reach for while a security
+   * review is in flight — nothing this process exposes can undo it.
+   */
+  sharingEnvLocked?: boolean;
   port?: number;
   dataDir?: string;
   /** Absolute path to the built widget dist dir, or null to skip. */
@@ -122,6 +129,8 @@ export interface ServerHandle {
   /** Hang up every websocket and SSE stream whose share is no longer live.
    *  Runs on a 60s interval; exposed so tests exercise the real sweep. */
   sweepDeadShares: () => void;
+  /** The external-access master switch — read/flip it without HTTP. */
+  sharingGate: SharingGate;
   webhookLog: WebhookLogEntry[];
   stop: () => Promise<void>;
 }
@@ -147,6 +156,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       config: opts.share.config,
     });
   }
+
+  /**
+   * The master switch for external access. Consulted on every request whose
+   * Host is a share or link host, AHEAD of authentication — see the host
+   * decision block below.
+   */
+  const sharingGate = new SharingGate({
+    dataDir,
+    envLocked: opts.sharingEnvLocked ?? false,
+  });
 
   // HMAC key for link-mode session cookies. Generated on first use, mode
   // 600 — whoever can read it can mint a session for any share.
@@ -514,6 +533,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (decision.kind === 'deny') {
             return j(403, { error: 'unknown_host' });
           }
+          // --- External-access master switch ---
+          // AHEAD of both auth paths on purpose: while sharing is off, a live
+          // Access JWT, an unexpired session cookie and no credential at all
+          // must be indistinguishable. Gating after auth would leak which
+          // slugs are real to anyone still holding one.
+          //
+          // Only external hosts pass through here — `local` returned above
+          // this point untouched, so the agent's MCP calls over loopback and
+          // Bryan's own browser keep working while the outside door is shut.
+          if ((decision.kind === 'share' || decision.kind === 'link') && !sharingGate.isEnabled()) {
+            return j(403, { error: 'sharing_disabled' });
+          }
           if (decision.kind === 'share') {
             if (!cfAccessVerifier) {
               // A share exists but we cannot verify Access tokens — refuse
@@ -586,7 +617,41 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // --- REST: shares ---
         if (pathname === '/api/share' && req.method === 'GET') {
           if (!shares) return j(404, { error: 'sharing not enabled' });
-          return j(200, { shares: shares.list() });
+          return j(200, { shares: shares.list(), sharing: sharingGate.status() });
+        }
+        // Flip the master switch. Local-only, like the rest of /api/share*.
+        // Turning it OFF also hangs up what is already connected: a websocket
+        // and an SSE stream are authorized ONCE at open, so a visitor mid-review
+        // would otherwise keep syncing and keep receiving comments on a doc
+        // that is no longer reachable. Same lesson as share revocation.
+        if (pathname === '/api/share/enabled' && req.method === 'POST') {
+          if (!shares) return j(404, { error: 'sharing not enabled' });
+          const body = await safeJson(req);
+          const enabled = body?.enabled;
+          if (typeof enabled !== 'boolean') {
+            return j(400, { error: 'enabled must be a boolean' });
+          }
+          const res = sharingGate.setEnabled(enabled);
+          if (!res.ok) {
+            return j(409, {
+              error: res.error,
+              hint: 'LF_SHARING_DISABLED is set in the environment. Remove it from the service definition and restart to allow runtime control.',
+            });
+          }
+          let closedSockets = 0;
+          let closedStreams = 0;
+          if (!enabled) {
+            for (const share of shares.list()) {
+              closedSockets += rooms.closeSocketsForShare(share.shareId);
+              closedStreams += sse.closeForShare(share.shareId);
+            }
+          }
+          return j(200, {
+            ok: true,
+            sharing: sharingGate.status(),
+            ...(closedSockets ? { closedSockets } : {}),
+            ...(closedStreams ? { closedStreams } : {}),
+          });
         }
         if (pathname === '/api/share/doc' && req.method === 'POST') {
           if (!shares) return j(404, { error: 'sharing not enabled' });
@@ -1663,6 +1728,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     rooms,
     shares,
     sweepDeadShares,
+    sharingGate,
     webhookLog,
     stop: async () => {
       if (shareSweep) clearInterval(shareSweep);
