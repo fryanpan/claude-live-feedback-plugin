@@ -860,6 +860,7 @@ export class Rooms {
       changed: boolean;
       docId?: string;
       reviewUrl?: string;
+      stale?: boolean;
       status?: DocMeta['diffStatus'];
     }>;
     error?: 'not-found';
@@ -887,9 +888,13 @@ export class Rooms {
       const decorated = decorate ? decorate(member) : member;
       return {
         relPath,
-        changed: member.type === 'diff',
+        // A STALE diff member is no longer changed — its change was reverted
+        // or the file left the review. Still reporting it as changed here
+        // would contradict the grouped view, which already dims it.
+        changed: member.type === 'diff' && !member.stale,
         docId: member.docId,
         reviewUrl: (decorated as { reviewUrl?: string }).reviewUrl,
+        ...(member.stale ? { stale: true } : {}),
         ...(member.diffStatus !== undefined ? { status: member.diffStatus } : {}),
       };
     });

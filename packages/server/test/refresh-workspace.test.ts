@@ -473,6 +473,23 @@ describe('Rooms.refreshWorkspace — diff review', () => {
     expect(rooms.get(ctx.docId)?.meta.stale).toBeUndefined();
   });
 
+  it('stops calling a reverted file "changed" in the all-files view', () => {
+    // Otherwise the two sidebars disagree after every refresh: the grouped
+    // view dims it, "Show All Files" still badges it as changed.
+    writeFileSync(join(repo, 'src', 'b.ts'), 'const b = 2;\n');
+    const bound = rooms.bindDiff({ repoPath: repo, base });
+    if (!bound.ok) throw new Error('bind failed');
+    expect(
+      rooms.listRepoFiles(bound.reviewId).files?.find((f) => f.relPath === 'src/b.ts')?.changed,
+    ).toBe(true);
+
+    writeFileSync(join(repo, 'src', 'b.ts'), 'const b = 1;\n');
+    rooms.refreshWorkspace(bound.reviewId);
+    const row = rooms.listRepoFiles(bound.reviewId).files?.find((f) => f.relPath === 'src/b.ts');
+    expect(row?.changed).toBe(false);
+    expect(row?.stale).toBe(true);
+  });
+
   it('does not mark a deleted-in-diff file stale — being gone IS the change', () => {
     rmSync(join(repo, 'src', 'b.ts'));
     const bound = rooms.bindDiff({ repoPath: repo, base });

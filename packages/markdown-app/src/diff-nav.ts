@@ -39,6 +39,8 @@ interface RepoFile {
   changed: boolean;
   docId?: string;
   reviewUrl?: string;
+  /** Left the review; kept because it still holds comments. */
+  stale?: boolean;
   status?: 'added' | 'modified' | 'deleted' | 'renamed';
 }
 
@@ -126,7 +128,10 @@ function diffNavSignature(
 ): string {
   if (view === 'all') {
     const f = (files?.files ?? [])
-      .map((x) => `${x.relPath}:${x.status ?? ''}:${x.changed ? '1' : '0'}:${x.docId ?? ''}`)
+      .map(
+        (x) =>
+          `${x.relPath}:${x.status ?? ''}:${x.changed ? '1' : '0'}:${x.stale ? 's' : ''}:${x.docId ?? ''}`,
+      )
       .join(',');
     return `diff:${workspaceId}:all:${f}`;
   }
