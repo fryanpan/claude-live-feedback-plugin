@@ -356,6 +356,19 @@ body.has-set #main {
   color: var(--accent, #2e7dd7);
   font-weight: 600;
 }
+/* Left the review (file deleted, or its change reverted) but kept because it
+   still holds comments. Dimmed and struck through, never hidden — a stranded
+   thread you can't see is a thread that gets lost. Stays fully clickable, and
+   the active state still reads as active. */
+.tree-file a.stale .tree-name,
+.diff-file a.stale .diff-file-name {
+  opacity: 0.5;
+  text-decoration: line-through;
+}
+.tree-file a.stale:hover .tree-name,
+.diff-file a.stale:hover .diff-file-name {
+  opacity: 0.8;
+}
 .tree-name {
   flex: 1;
   min-width: 0;
@@ -1955,6 +1968,8 @@ body.diff-mode .cm-collapsedLines {
   background: var(--bg-hover);
   border-left-color: var(--accent);
 }
+/* Stale rows keep their status letter and counts at full strength — the
+   dimming is on the name only (see WORKSPACE FILE TREE). */
 .diff-file-name {
   flex: 1;
   min-width: 0;

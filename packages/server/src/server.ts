@@ -1,12 +1,20 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { extname, join } from 'node:path';
-import { type Anchor, type DocType, type User, contentKind, suggestOps } from '@feedback/core';
+import {
+  type Anchor,
+  type DocMeta,
+  type DocType,
+  type User,
+  contentKind,
+  suggestOps,
+} from '@feedback/core';
 import { showFile } from './git-diff.ts';
 import { type CfAccessOptions, createCfAccessVerifier } from './middleware/cf-access.ts';
 import { type ShareTarget, classifyHost, shareScopeAllows } from './middleware/host-guard.ts';
 import { lanHostnames, publicBaseUrl, tailscaleHost } from './public-host.ts';
 import { type FeedbackWs, Rooms, type WorkspaceDirNode, type WorkspaceFileNode } from './rooms.ts';
 import { CfApi } from './share/cf-api.ts';
+import { resolveShareEntry } from './share/entry-resolve.ts';
 import {
   SHARE_COOKIE,
   loadCookieKey,
@@ -128,6 +136,110 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       : { docId: share.docId };
   };
 
+  /**
+   * The doc a workspace share should open right now, or null when the
+   * workspace has no members left. Resolved per request rather than stored,
+   * because a member docId encodes the file's relPath — renaming the entry
+   * file changes its docId.
+   */
+  const currentWorkspaceEntry = (workspaceId: string, preferred?: string): string | null => {
+    const members = rooms.list().filter((m) => m.workspaceId === workspaceId);
+    const resolved = resolveShareEntry(
+      preferred,
+      members.map((m) => ({
+        docId: m.docId,
+        ...(m.relPath ? { relPath: m.relPath } : {}),
+        ...(m.stale ? { stale: true } : {}),
+        ...(m.type === 'diff' ? { isChangedFile: true } : {}),
+      })),
+    );
+    // Everything bound is a tombstone. A BROWSE workspace usually has exactly
+    // one bound doc — its entry — so renaming that one file is the common
+    // case, and there is no survivor to fall back to. But the folder is full
+    // of files that are one lazy open away; the sidebar lists them already.
+    // Bind the best of them rather than land the visitor on a ghost.
+    //
+    // NOT for a diff review: there, every member stale means every reviewed
+    // change was reverted, i.e. the review is empty. Binding some arbitrary
+    // unchanged file would misrepresent that as a review of a file nobody
+    // touched. Land on the tombstone — it still holds the comments.
+    const isDiffReview = members.some((m) => m.type === 'diff');
+    const winner = resolved ? members.find((m) => m.docId === resolved) : undefined;
+    if (!isDiffReview && (!resolved || winner?.stale)) {
+      const live = liveFileEntry(workspaceId, members);
+      if (live) return live;
+    }
+    return resolved;
+  };
+
+  /**
+   * Lazily bind the best on-disk file of a workspace as a landing doc.
+   *
+   * Honours the workspace's stored `exclude`: listRepoFiles powers the
+   * all-files sidebar and deliberately scans everything, so picking from it
+   * unfiltered would land a reviewer on a vendored or generated file the
+   * caller explicitly kept out — and bind it into the workspace on the way.
+   */
+  const liveFileEntry = (workspaceId: string, members: DocMeta[]): string | null => {
+    const listed = rooms.listRepoFiles(workspaceId);
+    if (!listed.ok || !listed.files) return null;
+    const bound = new Set(members.map((m) => m.relPath));
+    const excluded = (members.find((m) => m.workspaceExclude)?.workspaceExclude ?? []).map((p) =>
+      p.replace(/^\/+/, '').replace(/\/+$/, ''),
+    );
+    const candidates = listed.files
+      .filter((f) => !bound.has(f.relPath))
+      .filter((f) => !excluded.some((p) => f.relPath === p || f.relPath.startsWith(`${p}/`)))
+      .map((f) => ({ docId: f.relPath, relPath: f.relPath }));
+    const pick = resolveShareEntry(undefined, candidates);
+    if (!pick) return null;
+    const opened = rooms.openContextFile(workspaceId, pick);
+    return opened.ok ? opened.docId : null;
+  };
+
+  /**
+   * Repair a share visitor's `/review/<docId>` when that doc is gone.
+   *
+   * Link shares resolve their landing doc at redemption, but the URL the
+   * visitor ends up with (and bookmarks, and is sent by email in the case of
+   * an Access share, whose URL is handed out directly and never redeemed)
+   * still names a specific docId. Renaming the file behind it leaves that URL
+   * pointing at nothing. Redirect to the workspace's current entry instead —
+   * which also repairs every URL already in someone's inbox.
+   *
+   * Fires for the share's own entry doc, in two states: gone entirely, or
+   * kept as a stale tombstone (the usual rename outcome — the doc survives so
+   * its threads do). Deliberately NOT for any other stale member: those are
+   * listed in the tree precisely so a stranded thread stays readable, and
+   * bouncing a visitor away from one would make it unreachable.
+   *
+   * Only for workspace shares: a single-doc share has nowhere else to go, and
+   * silently moving it would be wrong. Returns null when nothing to do.
+   */
+  const repairStaleReviewUrl = (
+    pathname: string,
+    method: string,
+    target: ShareTarget,
+  ): Response | null => {
+    if (method !== 'GET' || !target.workspaceId) return null;
+    if (!pathname.startsWith('/review/')) return null;
+    const docId = decodeURIComponent(pathname.slice('/review/'.length));
+    // ONLY the share's own entry. Repairing an arbitrary docId would answer
+    // a question the scope check deliberately refuses: a missing id would
+    // redirect while a real id belonging to someone else's workspace 403s,
+    // handing a visitor an existence oracle they never had before. Every
+    // docId other than this share's entry gets the same 403 it always did.
+    if (docId !== target.docId) return null;
+    const room = rooms.get(docId);
+    if (room && !room.meta.stale) return null;
+    const entry = currentWorkspaceEntry(target.workspaceId);
+    if (!entry || entry === docId) return null;
+    return new Response(null, {
+      status: 302,
+      headers: { location: `/review/${encodeURIComponent(entry)}` },
+    });
+  };
+
   // When shares is wired, automatically derive the cf-access audience from
   // the registry so each share-<slug> host can use its own AUD. Callers
   // can still override by passing cfAccess.audience explicitly.
@@ -217,6 +329,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // visitor's email domain, not what they may touch. Scope them to
           // the shared doc: no doc enumeration, no workspace/diff creation,
           // no share administration.
+          // Ahead of the scope check on purpose: a /review/<docId> for a doc
+          // that does NOT exist can't pass scope (there's no workspace to
+          // match), so the repair would be unreachable behind it. It leaks
+          // nothing — a docId that exists elsewhere is left alone and still
+          // gets the 403 below.
+          const repaired = repairStaleReviewUrl(pathname, req.method, decision.target);
+          if (repaired) return repaired;
           if (
             !shareScopeAllows(
               pathname,
@@ -234,6 +353,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!redeeming) {
             const target = linkSessionTarget(req);
             if (!target) return j(401, { error: 'no_share_session' });
+            const repaired = repairStaleReviewUrl(pathname, req.method, target);
+            if (repaired) return repaired;
             if (
               !shareScopeAllows(
                 pathname,
@@ -298,11 +419,26 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             headers: { 'content-type': 'text/html; charset=utf-8' },
           });
         }
+        // Where to land is resolved NOW, not when the share was minted: a
+        // member docId encodes the file's relPath, so renaming or deleting
+        // the entry file used to 404 the link with no way to repoint it.
+        // A single-doc share has exactly one answer and skips this.
+        const target = share.workspaceId
+          ? currentWorkspaceEntry(share.workspaceId, share.docId)
+          : share.docId;
+        // An emptied-out workspace has nothing to show; say no more than an
+        // unknown slug would.
+        if (!target) {
+          return new Response(renderLinkNotFound(), {
+            status: 404,
+            headers: { 'content-type': 'text/html; charset=utf-8' },
+          });
+        }
         const maxAge = Math.floor((share.expiresAt - Date.now()) / 1000);
         return new Response(null, {
           status: 302,
           headers: {
-            location: `/review/${encodeURIComponent(share.docId)}`,
+            location: `/review/${encodeURIComponent(target)}`,
             'set-cookie': sessionCookieHeader(share.shareId, cookieKey(), maxAge),
             // Keep the slug out of any downstream Referer header.
             'referrer-policy': 'no-referrer',
@@ -525,6 +661,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           workspaceId: body?.workspaceId as string | undefined,
           title: body?.title as string | undefined,
           include: Array.isArray(body?.include) ? (body.include as string[]) : undefined,
+          // Accepted by bindFolder and honoured by the scan since forever,
+          // but this route never forwarded it — so bind_folder's exclude had
+          // no effect end-to-end. It matters more now: refresh_workspace
+          // persists and replays the exclude, which is meaningless if the
+          // bind could never set one. (/api/diffs already forwarded it.)
+          exclude: Array.isArray(body?.exclude) ? (body.exclude as string[]) : undefined,
           maxFiles: typeof body?.maxFiles === 'number' ? Number(body.maxFiles) : undefined,
           owner: body?.owner as string | undefined,
           producedBy: body?.producedBy as { agentId?: string; sessionId?: string } | undefined,
@@ -584,7 +726,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const status =
             res.error === 'not-found' || res.error === 'bad-ref'
               ? 404
-              : res.error === 'empty-diff' || res.error === 'group-details-too-long'
+              : res.error === 'empty-diff' ||
+                  res.error === 'group-details-too-long' ||
+                  res.error === 'bad-groups'
                 ? 400
                 : 409;
           return j(status, res);
@@ -649,6 +793,32 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           return j(404, { error: 'no diff review found', workspaceId });
         }
         return j(200, grouped);
+      }
+      // Re-reconcile a workspace against disk: pick up files that changed
+      // since the bind, flag members whose file is gone. Never re-mints a
+      // docId, so every comment thread survives.
+      const wsRefreshMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/refresh$/);
+      if (wsRefreshMatch && req.method === 'POST') {
+        const workspaceId = decodeURIComponent(wsRefreshMatch[1] ?? '');
+        const res = rooms.refreshWorkspace(workspaceId);
+        if (res.ok) return j(200, res);
+        return j(res.error === 'not-found' ? 404 : 400, res);
+      }
+      // Re-group a diff review's sidebar in place. An empty `groups` array
+      // is meaningful (fall back to the heuristic); a MISSING one is a
+      // caller mistake, so it 400s rather than silently regrouping.
+      const wsGroupsMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/groups$/);
+      if (wsGroupsMatch && req.method === 'POST') {
+        const workspaceId = decodeURIComponent(wsGroupsMatch[1] ?? '');
+        const body = await safeJson(req);
+        const groups = body?.groups;
+        if (!Array.isArray(groups)) return j(400, { error: 'groups array required' });
+        const res = rooms.setWorkspaceGroups(
+          workspaceId,
+          groups as Array<{ title: string; paths: string[]; details?: string }>,
+        );
+        if (res.ok) return j(200, res);
+        return j(res.error === 'not-found' ? 404 : 400, res);
       }
       // Every file in the workspace's repo (changed ones marked) — the
       // "Show All Files" context view.

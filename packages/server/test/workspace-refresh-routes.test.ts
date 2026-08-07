@@ -1,0 +1,512 @@
+/**
+ * The workspace-refresh surface, driven through the real route table.
+ *
+ * These three routes exist so a review can OUTLIVE the churn inside it: a
+ * share URL that still resolves after the entry file is renamed, a refresh
+ * that reconciles membership without re-minting docIds, and a regroup that
+ * doesn't require tearing the review down. The route layer is the one that
+ * nothing type-checks (it hand-copies body fields), so each one gets an
+ * HTTP-level test, not just a unit test against Rooms.
+ */
+import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { type ServerHandle, createServer } from '../src/server.ts';
+import { SHARE_COOKIE } from '../src/share/link-session.ts';
+
+const PUBLIC_HOST = 'feedback.example.com';
+
+function git(repo: string, ...args: string[]): string {
+  return execFileSync('git', ['-C', repo, ...args], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: 't',
+      GIT_AUTHOR_EMAIL: 't@t',
+      GIT_COMMITTER_NAME: 't',
+      GIT_COMMITTER_EMAIL: 't@t',
+    },
+  }).trim();
+}
+
+describe('workspace refresh routes', () => {
+  let handle: ServerHandle;
+  let dataDir: string;
+  let folder: string;
+  let repo: string;
+  let repoBase: string;
+  let base: string;
+  let workspaceId: string;
+  let reviewId: string;
+
+  const local = (path: string, init: RequestInit = {}) =>
+    fetch(`${base}${path}`, {
+      ...init,
+      headers: {
+        host: `localhost:${handle.port}`,
+        ...((init.headers as Record<string, string>) ?? {}),
+      },
+    });
+
+  const post = (path: string, body: unknown) =>
+    local(path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  beforeAll(async () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'wsr-data-'));
+    folder = mkdtempSync(join(tmpdir(), 'wsr-folder-'));
+    repo = mkdtempSync(join(tmpdir(), 'wsr-repo-'));
+    writeFileSync(join(folder, 'README.md'), '# Entry\n\nRead me.\n');
+    writeFileSync(join(folder, 'design.md'), '# Design\n\nThe plan.\n');
+
+    git(repo, 'init', '-q');
+    mkdirSync(join(repo, 'src'));
+    mkdirSync(join(repo, 'test'));
+    writeFileSync(join(repo, 'src', 'a.ts'), 'const a = 1;\n');
+    writeFileSync(join(repo, 'test', 'a.test.ts'), 'check a\n');
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-q', '-m', 'base');
+    repoBase = git(repo, 'rev-parse', 'HEAD');
+    writeFileSync(join(repo, 'src', 'a.ts'), 'const a = 2;\n');
+
+    handle = createServer({
+      port: 0,
+      dataDir,
+      share: { config: { publicHostname: PUBLIC_HOST } },
+    });
+    base = `http://localhost:${handle.port}`;
+
+    const bind = await post('/api/workspaces', { folderPath: folder });
+    workspaceId = ((await bind.json()) as { workspaceId: string }).workspaceId;
+
+    const diff = await post('/api/diffs', { repo, base: repoBase });
+    reviewId = ((await diff.json()) as { reviewId: string }).reviewId;
+  });
+
+  afterAll(async () => {
+    await handle.stop();
+    for (const d of [dataDir, folder, repo]) rmSync(d, { recursive: true, force: true });
+  });
+
+  describe('POST /api/workspaces/:id/refresh', () => {
+    it('404s an unknown workspace', async () => {
+      const r = await post('/api/workspaces/nope/refresh', {});
+      expect(r.status).toBe(404);
+    });
+
+    it('reports a renamed browse member as stale and keeps its doc', async () => {
+      const opened = await post(`/api/workspaces/${workspaceId}/context-file`, {
+        relPath: 'design.md',
+      });
+      expect(opened.status).toBe(200);
+      const docId = ((await opened.json()) as { docId: string }).docId;
+
+      renameSync(join(folder, 'design.md'), join(folder, 'design-v2.md'));
+      const r = await post(`/api/workspaces/${workspaceId}/refresh`, {});
+      expect(r.status).toBe(200);
+      const body = (await r.json()) as {
+        kind: string;
+        stale: Array<{ docId: string; relPath: string; openThreads: number }>;
+      };
+      expect(body.kind).toBe('browse');
+      expect(body.stale).toEqual([{ docId, relPath: 'design.md', openThreads: 0 }]);
+
+      // The doc survives — only the marker changed.
+      const doc = await local(`/api/docs/${encodeURIComponent(docId)}`);
+      expect(doc.status).toBe(200);
+      expect(((await doc.json()) as { meta: { stale?: boolean } }).meta.stale).toBe(true);
+
+      renameSync(join(folder, 'design-v2.md'), join(folder, 'design.md'));
+      const back = await post(`/api/workspaces/${workspaceId}/refresh`, {});
+      expect(((await back.json()) as { restored: unknown[] }).restored).toHaveLength(1);
+    });
+
+    it('adds a file that changed after the diff review was created', async () => {
+      writeFileSync(join(repo, 'test', 'a.test.ts'), 'check a harder\n');
+      const r = await post(`/api/workspaces/${reviewId}/refresh`, {});
+      expect(r.status).toBe(200);
+      const body = (await r.json()) as {
+        kind: string;
+        added: Array<{ relPath: string }>;
+        fileCount: number;
+      };
+      expect(body.kind).toBe('diff');
+      expect(body.added.map((a) => a.relPath)).toEqual(['test/a.test.ts']);
+      expect(body.fileCount).toBe(2);
+    });
+  });
+
+  describe('POST /api/workspaces/:id/groups', () => {
+    it('rejects a missing groups array rather than silently regrouping', async () => {
+      const r = await post(`/api/workspaces/${reviewId}/groups`, {});
+      expect(r.status).toBe(400);
+    });
+
+    it('regroups in place and the grouped view reflects it', async () => {
+      const r = await post(`/api/workspaces/${reviewId}/groups`, {
+        groups: [
+          { title: 'The change', paths: ['src'], details: 'what actually moved' },
+          { title: 'Coverage', paths: ['test'] },
+        ],
+      });
+      expect(r.status).toBe(200);
+      const body = (await r.json()) as { groups: Array<{ title: string; fileCount: number }> };
+      expect(body.groups.map((g) => g.title)).toEqual(['The change', 'Coverage']);
+
+      const grouped = await local(`/api/workspaces/${reviewId}/grouped`);
+      const view = (await grouped.json()) as {
+        groups: Array<{ title: string; details?: string }>;
+      };
+      expect(view.groups.map((g) => g.title)).toEqual(['The change', 'Coverage']);
+      expect(view.groups[0]?.details).toBe('what actually moved');
+    });
+
+    it('400s a malformed group WITHOUT poisoning the workspace', async () => {
+      // The route only knows `groups` is an array — everything about what is
+      // inside it is checked below it. A bad spec used to be persisted before
+      // the assignment threw, which left refresh permanently broken.
+      const r = await post(`/api/workspaces/${reviewId}/groups`, {
+        groups: [{ title: 'No paths' }],
+      });
+      expect(r.status).toBe(400);
+      expect(((await r.json()) as { error: string }).error).toBe('bad-groups');
+      // …and the review still refreshes.
+      const after = await post(`/api/workspaces/${reviewId}/refresh`, {});
+      expect(after.status).toBe(200);
+    });
+
+    it('rejects an over-long details intro', async () => {
+      const r = await post(`/api/workspaces/${reviewId}/groups`, {
+        groups: [{ title: 'Long', paths: ['src'], details: 'x'.repeat(501) }],
+      });
+      expect(r.status).toBe(400);
+      expect(((await r.json()) as { error: string }).error).toBe('group-details-too-long');
+    });
+  });
+
+  describe('GET /s/:slug resolves the entry at redemption time', () => {
+    it('lands on a live member after the entry file is renamed away', async () => {
+      // A fresh workspace so the rename can target its bound entry doc.
+      const src = mkdtempSync(join(tmpdir(), 'wsr-entry-'));
+      try {
+        writeFileSync(join(src, 'README.md'), '# Landing\n\nhi\n');
+        writeFileSync(join(src, 'other.md'), '# Other\n\nhi\n');
+        const bind = await post('/api/workspaces', { folderPath: src });
+        const wsId = ((await bind.json()) as { workspaceId: string }).workspaceId;
+        const mint = await post('/api/share/link', { workspaceId: wsId });
+        const share = ((await mint.json()) as { share: { slug: string; docId: string } }).share;
+
+        // Sanity: before any churn the link opens the doc it was minted for.
+        const first = await fetch(`${base}/s/${share.slug}`, {
+          redirect: 'manual',
+          headers: { host: PUBLIC_HOST },
+        });
+        expect(first.status).toBe(302);
+        expect(first.headers.get('location')).toBe(`/review/${encodeURIComponent(share.docId)}`);
+
+        // Rename the entry file and open the survivor, so the workspace has a
+        // member that isn't the (now stale) entry doc.
+        renameSync(join(src, 'README.md'), join(src, 'INTRO.md'));
+        const opened = await post(`/api/workspaces/${wsId}/context-file`, {
+          relPath: 'other.md',
+        });
+        const otherDocId = ((await opened.json()) as { docId: string }).docId;
+        await post(`/api/workspaces/${wsId}/refresh`, {});
+
+        const after = await fetch(`${base}/s/${share.slug}`, {
+          redirect: 'manual',
+          headers: { host: PUBLIC_HOST },
+        });
+        expect(after.status).toBe(302);
+        expect(after.headers.get('location')).toBe(`/review/${encodeURIComponent(otherDocId)}`);
+        // Still a real session, not a downgraded one.
+        expect(after.headers.get('set-cookie') ?? '').toContain(`${SHARE_COOKIE}=`);
+      } finally {
+        rmSync(src, { recursive: true, force: true });
+      }
+    });
+
+    it('repairs a bookmarked /review/<docId> after the file is renamed', async () => {
+      // The URL a visitor ends up with (or is emailed, for an Access share
+      // whose URL is never redeemed) names a specific docId. Renaming the
+      // file behind it leaves the bookmark pointing at nothing.
+      const src = mkdtempSync(join(tmpdir(), 'wsr-book-'));
+      try {
+        writeFileSync(join(src, 'README.md'), '# Landing\n\nhi\n');
+        writeFileSync(join(src, 'other.md'), '# Other\n\nhi\n');
+        const bind = await post('/api/workspaces', { folderPath: src });
+        const wsId = ((await bind.json()) as { workspaceId: string }).workspaceId;
+        const opened = await post(`/api/workspaces/${wsId}/context-file`, { relPath: 'other.md' });
+        const otherDocId = ((await opened.json()) as { docId: string }).docId;
+        const mint = await post('/api/share/link', { workspaceId: wsId });
+        const share = ((await mint.json()) as { share: { slug: string; docId: string } }).share;
+
+        const r = await fetch(`${base}/s/${share.slug}`, {
+          redirect: 'manual',
+          headers: { host: PUBLIC_HOST },
+        });
+        const cookie = (r.headers.get('set-cookie') ?? '').match(
+          new RegExp(`${SHARE_COOKIE}=([^;]+)`),
+        )?.[1];
+
+        renameSync(join(src, 'README.md'), join(src, 'INTRO.md'));
+        await post(`/api/workspaces/${wsId}/refresh`, {});
+        const visit = await fetch(`${base}/review/${encodeURIComponent(share.docId)}`, {
+          redirect: 'manual',
+          headers: { host: PUBLIC_HOST, cookie: `${SHARE_COOKIE}=${cookie}` },
+        });
+        expect(visit.status).toBe(302);
+        expect(visit.headers.get('location')).toBe(`/review/${encodeURIComponent(otherDocId)}`);
+      } finally {
+        rmSync(src, { recursive: true, force: true });
+      }
+    });
+
+    it('repairs the entry URL when the entry doc is a stale tombstone', async () => {
+      // The usual rename outcome: refresh KEEPS the doc so its threads
+      // survive, so the old URL still resolves — to a struck-through ghost.
+      // A share URL means "open the review", not "open this dead file".
+      const src = mkdtempSync(join(tmpdir(), 'wsr-tomb-'));
+      try {
+        writeFileSync(join(src, 'README.md'), '# Landing\n\nhi\n');
+        writeFileSync(join(src, 'other.md'), '# Other\n\nhi\n');
+        const bind = await post('/api/workspaces', { folderPath: src });
+        const wsId = ((await bind.json()) as { workspaceId: string }).workspaceId;
+        const opened = await post(`/api/workspaces/${wsId}/context-file`, { relPath: 'other.md' });
+        const otherDocId = ((await opened.json()) as { docId: string }).docId;
+        const mint = await post('/api/share/link', { workspaceId: wsId });
+        const share = ((await mint.json()) as { share: { slug: string; docId: string } }).share;
+        const r = await fetch(`${base}/s/${share.slug}`, {
+          redirect: 'manual',
+          headers: { host: PUBLIC_HOST },
+        });
+        const cookie = (r.headers.get('set-cookie') ?? '').match(
+          new RegExp(`${SHARE_COOKIE}=([^;]+)`),
+        )?.[1];
+
+        renameSync(join(src, 'README.md'), join(src, 'INTRO.md'));
+        await post(`/api/workspaces/${wsId}/refresh`, {});
+        // The entry doc is still there, just stale.
+        const meta = await local(`/api/docs/${encodeURIComponent(share.docId)}`);
+        expect(((await meta.json()) as { meta: { stale?: boolean } }).meta.stale).toBe(true);
+
+        const visit = await fetch(`${base}/review/${encodeURIComponent(share.docId)}`, {
+          redirect: 'manual',
+          headers: { host: PUBLIC_HOST, cookie: `${SHARE_COOKIE}=${cookie}` },
+        });
+        expect(visit.status).toBe(302);
+        expect(visit.headers.get('location')).toBe(`/review/${encodeURIComponent(otherDocId)}`);
+      } finally {
+        rmSync(src, { recursive: true, force: true });
+      }
+    });
+
+    it('binds a live file when the ONLY bound doc is the renamed entry', async () => {
+      // The common browse case: bind_folder binds just the entry, so renaming
+      // that one file leaves nothing but a tombstone. The folder is still full
+      // of files one lazy open away — land on one instead of on the ghost.
+      const src = mkdtempSync(join(tmpdir(), 'wsr-solo-'));
+      try {
+        writeFileSync(join(src, 'README.md'), '# Landing\n\nhi\n');
+        writeFileSync(join(src, 'guide.md'), '# Guide\n\nhi\n');
+        const bind = await post('/api/workspaces', { folderPath: src });
+        const body = (await bind.json()) as {
+          workspaceId: string;
+          files: Array<{ docId: string }>;
+        };
+        expect(body.files).toHaveLength(1); // only the entry is bound
+        const mint = await post('/api/share/link', { workspaceId: body.workspaceId });
+        const share = ((await mint.json()) as { share: { slug: string; docId: string } }).share;
+
+        renameSync(join(src, 'README.md'), join(src, 'INTRO.md'));
+        await post(`/api/workspaces/${body.workspaceId}/refresh`, {});
+
+        const r = await fetch(`${base}/s/${share.slug}`, {
+          redirect: 'manual',
+          headers: { host: PUBLIC_HOST },
+        });
+        expect(r.status).toBe(302);
+        const location = r.headers.get('location') ?? '';
+        expect(location).not.toContain('README');
+        // Landed on a file that actually exists — INTRO.md or guide.md.
+        expect(location).toMatch(/INTRO\.md|guide\.md/);
+      } finally {
+        rmSync(src, { recursive: true, force: true });
+      }
+    });
+
+    it('keeps an emptied diff review on its own member, not a random file', async () => {
+      // Every changed file reverted means the review is EMPTY. Binding some
+      // untouched repo file would present it as a review of a file nobody
+      // changed; the tombstone at least still holds the comments.
+      const r2 = mkdtempSync(join(tmpdir(), 'wsr-empty-'));
+      try {
+        execFileSync('git', ['-C', r2, 'init', '-q']);
+        mkdirSync(join(r2, 'src'));
+        writeFileSync(join(r2, 'README.md'), '# Untouched\n');
+        writeFileSync(join(r2, 'src', 'a.ts'), 'const a = 1;\n');
+        git(r2, 'add', '-A');
+        git(r2, 'commit', '-q', '-m', 'base');
+        const b = git(r2, 'rev-parse', 'HEAD');
+        writeFileSync(join(r2, 'src', 'a.ts'), 'const a = 2;\n');
+
+        const diff = await post('/api/diffs', { repo: r2, base: b });
+        const rid = ((await diff.json()) as { reviewId: string }).reviewId;
+        const mint = await post('/api/share/link', { workspaceId: rid });
+        const share = ((await mint.json()) as { share: { slug: string; docId: string } }).share;
+
+        writeFileSync(join(r2, 'src', 'a.ts'), 'const a = 1;\n'); // revert
+        await post(`/api/workspaces/${rid}/refresh`, {});
+
+        const visit = await fetch(`${base}/s/${share.slug}`, {
+          redirect: 'manual',
+          headers: { host: PUBLIC_HOST },
+        });
+        expect(visit.status).toBe(302);
+        const location = visit.headers.get('location') ?? '';
+        expect(location).toContain('a.ts');
+        expect(location).not.toContain('README');
+      } finally {
+        rmSync(r2, { recursive: true, force: true });
+      }
+    });
+
+    it('never lands on an EXCLUDED file when rebuilding the entry', async () => {
+      // The fallback picks from the all-files scan, which deliberately lists
+      // everything — so it has to re-apply the workspace's exclude, or the
+      // rescue would quietly widen the review past what the caller set.
+      const src = mkdtempSync(join(tmpdir(), 'wsr-excl-'));
+      try {
+        mkdirSync(join(src, 'vendor'), { recursive: true });
+        writeFileSync(join(src, 'README.md'), '# Landing\n\nhi\n');
+        // Named README so it OUTRANKS every survivor (README beats plain
+        // markdown before depth is even considered) — without the exclude
+        // filter the fallback lands squarely on it.
+        writeFileSync(join(src, 'vendor', 'README.md'), '# Vendored\n\nhi\n');
+        writeFileSync(join(src, 'zz-real.md'), '# Real\n\nhi\n');
+        const bind = await post('/api/workspaces', {
+          folderPath: src,
+          exclude: ['vendor'],
+        });
+        const wsId = ((await bind.json()) as { workspaceId: string }).workspaceId;
+        const mint = await post('/api/share/link', { workspaceId: wsId });
+        const share = ((await mint.json()) as { share: { slug: string } }).share;
+
+        renameSync(join(src, 'README.md'), join(src, 'INTRO.md'));
+        await post(`/api/workspaces/${wsId}/refresh`, {});
+
+        const r = await fetch(`${base}/s/${share.slug}`, {
+          redirect: 'manual',
+          headers: { host: PUBLIC_HOST },
+        });
+        expect(r.status).toBe(302);
+        expect(r.headers.get('location') ?? '').not.toContain('vendor');
+      } finally {
+        rmSync(src, { recursive: true, force: true });
+      }
+    });
+
+    it('still lets a visitor OPEN a stale file that is not the entry', async () => {
+      // Stale members are listed in the tree so stranded threads stay
+      // readable. Bouncing a visitor off one would defeat that.
+      const src = mkdtempSync(join(tmpdir(), 'wsr-openstale-'));
+      try {
+        writeFileSync(join(src, 'README.md'), '# Landing\n\nhi\n');
+        writeFileSync(join(src, 'doomed.md'), '# Doomed\n\nhi\n');
+        const bind = await post('/api/workspaces', { folderPath: src });
+        const wsId = ((await bind.json()) as { workspaceId: string }).workspaceId;
+        const opened = await post(`/api/workspaces/${wsId}/context-file`, { relPath: 'doomed.md' });
+        const doomedDocId = ((await opened.json()) as { docId: string }).docId;
+        const mint = await post('/api/share/link', { workspaceId: wsId });
+        const share = ((await mint.json()) as { share: { slug: string } }).share;
+        const r = await fetch(`${base}/s/${share.slug}`, {
+          redirect: 'manual',
+          headers: { host: PUBLIC_HOST },
+        });
+        const cookie = (r.headers.get('set-cookie') ?? '').match(
+          new RegExp(`${SHARE_COOKIE}=([^;]+)`),
+        )?.[1];
+
+        rmSync(join(src, 'doomed.md'));
+        await post(`/api/workspaces/${wsId}/refresh`, {});
+
+        const visit = await fetch(`${base}/api/docs/${encodeURIComponent(doomedDocId)}`, {
+          redirect: 'manual',
+          headers: { host: PUBLIC_HOST, cookie: `${SHARE_COOKIE}=${cookie}` },
+        });
+        expect(visit.status).toBe(200);
+      } finally {
+        rmSync(src, { recursive: true, force: true });
+      }
+    });
+
+    it('gives the same answer for a missing docId as for a real out-of-scope one', async () => {
+      // The repair must not become an existence oracle: probing an id that
+      // does not exist has to look exactly like probing one that does.
+      const mint = await post('/api/share/link', { workspaceId });
+      const share = ((await mint.json()) as { share: { slug: string } }).share;
+      const r = await fetch(`${base}/s/${share.slug}`, {
+        redirect: 'manual',
+        headers: { host: PUBLIC_HOST },
+      });
+      const cookie = (r.headers.get('set-cookie') ?? '').match(
+        new RegExp(`${SHARE_COOKIE}=([^;]+)`),
+      )?.[1];
+      const probe = (id: string) =>
+        fetch(`${base}/review/${encodeURIComponent(id)}`, {
+          redirect: 'manual',
+          headers: { host: PUBLIC_HOST, cookie: `${SHARE_COOKIE}=${cookie}` },
+        });
+      const missing = await probe(`${workspaceId}:no-such-file.md`);
+      const realElsewhere = await probe(`${reviewId}:src~a.ts`);
+      expect(missing.status).toBe(403);
+      expect(realElsewhere.status).toBe(missing.status);
+    });
+
+    it('does NOT redirect a probe for a doc in a different workspace', async () => {
+      // The repair must not become an oracle: a docId that exists elsewhere
+      // is left alone and still gets the out-of-scope 403.
+      const mint = await post('/api/share/link', { workspaceId });
+      const share = ((await mint.json()) as { share: { slug: string } }).share;
+      const r = await fetch(`${base}/s/${share.slug}`, {
+        redirect: 'manual',
+        headers: { host: PUBLIC_HOST },
+      });
+      const cookie = (r.headers.get('set-cookie') ?? '').match(
+        new RegExp(`${SHARE_COOKIE}=([^;]+)`),
+      )?.[1];
+
+      // A real doc, but in the diff review — a different workspace.
+      const outsider = (await (await local(`/api/workspaces/${reviewId}/tree`)).json()) as {
+        tree: { children: Array<{ docId?: string; children?: Array<{ docId?: string }> }> };
+      };
+      const outsiderDocId =
+        outsider.tree.children[0]?.docId ?? outsider.tree.children[0]?.children?.[0]?.docId ?? '';
+      expect(outsiderDocId).not.toBe('');
+
+      const probe = await fetch(`${base}/review/${encodeURIComponent(outsiderDocId)}`, {
+        redirect: 'manual',
+        headers: { host: PUBLIC_HOST, cookie: `${SHARE_COOKIE}=${cookie}` },
+      });
+      expect(probe.status).toBe(403);
+    });
+
+    it('leaves a single-doc share pointing at exactly its doc', async () => {
+      const path = join(dataDir, 'solo.md');
+      writeFileSync(path, '# Solo\n\nBody.\n');
+      await post('/api/docs', { docId: 'solo-doc', type: 'markdown', sourceUrl: path });
+      const mint = await post('/api/share/link', { docId: 'solo-doc' });
+      const share = ((await mint.json()) as { share: { slug: string } }).share;
+      const r = await fetch(`${base}/s/${share.slug}`, {
+        redirect: 'manual',
+        headers: { host: PUBLIC_HOST },
+      });
+      expect(r.headers.get('location')).toBe('/review/solo-doc');
+    });
+  });
+});

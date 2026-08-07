@@ -50,9 +50,13 @@ import {
   type BindDiffResult,
   type BindFolderOpts,
   type BindFolderResult,
+  type RefreshWorkspaceResult,
+  type SetWorkspaceGroupsResult,
   bindDiff as bindDiffImpl,
   bindFolder as bindFolderImpl,
   memberDocId,
+  refreshWorkspace as refreshWorkspaceImpl,
+  setWorkspaceGroups as setWorkspaceGroupsImpl,
 } from './binds.ts';
 import { scanFolderPaths } from './fs-scan.ts';
 import { showFile } from './git-diff.ts';
@@ -91,6 +95,10 @@ export interface WorkspaceFileNode {
   threadCount: number;
   reviewUrl?: string;
   lastActivityAt?: number;
+  /** No longer part of the review (file deleted, or its change reverted) as
+   *  of the last `refresh_workspace`. Still listed — it holds comments —
+   *  but rendered dimmed so nobody reviews a ghost. */
+  stale?: boolean;
   /** Diff-review extras (present only on `type:'diff'` members). */
   diffStatus?: DocMeta['diffStatus'];
   diffAdditions?: number;
@@ -805,6 +813,7 @@ export class Rooms {
         threadCount,
         reviewUrl: (decorated as { reviewUrl?: string }).reviewUrl,
         lastActivityAt: meta.lastActivityAt,
+        ...(meta.stale ? { stale: true } : {}),
         ...(meta.diffStatus !== undefined ? { diffStatus: meta.diffStatus } : {}),
         ...(meta.diffAdditions !== undefined ? { diffAdditions: meta.diffAdditions } : {}),
         ...(meta.diffDeletions !== undefined ? { diffDeletions: meta.diffDeletions } : {}),
@@ -851,6 +860,7 @@ export class Rooms {
       changed: boolean;
       docId?: string;
       reviewUrl?: string;
+      stale?: boolean;
       status?: DocMeta['diffStatus'];
     }>;
     error?: 'not-found';
@@ -869,7 +879,8 @@ export class Rooms {
       if (!prev || (prev.type !== 'diff' && m.type === 'diff')) byRel.set(key, m);
     }
     const MAX_FILES = 10_000;
-    const scanned = scanFolderPaths(root);
+    const excluded = workspaceExcludes(members);
+    const scanned = scanFolderPaths(root).filter((rel) => !isExcludedPath(rel, excluded));
     const truncated = scanned.length > MAX_FILES;
     const files = scanned.slice(0, MAX_FILES).map((relPath) => {
       const member = byRel.get(relPath);
@@ -877,9 +888,13 @@ export class Rooms {
       const decorated = decorate ? decorate(member) : member;
       return {
         relPath,
-        changed: member.type === 'diff',
+        // A STALE diff member is no longer changed — its change was reverted
+        // or the file left the review. Still reporting it as changed here
+        // would contradict the grouped view, which already dims it.
+        changed: member.type === 'diff' && !member.stale,
         docId: member.docId,
         reviewUrl: (decorated as { reviewUrl?: string }).reviewUrl,
+        ...(member.stale ? { stale: true } : {}),
         ...(member.diffStatus !== undefined ? { status: member.diffStatus } : {}),
       };
     });
@@ -905,6 +920,12 @@ export class Rooms {
     const abs = join(root, clean);
     // Traversal guard: the resolved path must stay under the root.
     if (clean.split('/').includes('..') || !`${abs}/`.startsWith(`${root}/`)) {
+      return { ok: false, error: 'bad-path' };
+    }
+    // The workspace's exclude is a scope, not a display filter: a path the
+    // caller kept out must not be bindable on demand either, or "excluded"
+    // would only mean "not listed by default".
+    if (isExcludedPath(clean, workspaceExcludes(members))) {
       return { ok: false, error: 'bad-path' };
     }
     if (!existsSync(abs)) return { ok: false, error: 'not-found' };
@@ -955,6 +976,9 @@ export class Rooms {
     const clean = relPath.replace(/^\/+/, '');
     const abs = join(root, clean);
     if (clean.split('/').includes('..') || !`${abs}/`.startsWith(`${root}/`)) {
+      return { ok: false, error: 'bad-path' };
+    }
+    if (isExcludedPath(clean, workspaceExcludes(members))) {
       return { ok: false, error: 'bad-path' };
     }
     if (!clean.toLowerCase().endsWith('.md')) return { ok: false, error: 'not-markdown' };
@@ -1022,6 +1046,7 @@ export class Rooms {
         threadCount,
         reviewUrl: (decorated as { reviewUrl?: string }).reviewUrl,
         lastActivityAt: meta.lastActivityAt,
+        ...(meta.stale ? { stale: true } : {}),
         ...(meta.diffStatus !== undefined ? { diffStatus: meta.diffStatus } : {}),
         ...(meta.diffAdditions !== undefined ? { diffAdditions: meta.diffAdditions } : {}),
         ...(meta.diffDeletions !== undefined ? { diffDeletions: meta.diffDeletions } : {}),
@@ -1080,6 +1105,20 @@ export class Rooms {
   /** Bind a git diff (working-tree or pinned) for review — see binds.ts. */
   bindDiff(opts: BindDiffOpts): BindDiffResult {
     return bindDiffImpl(this, opts);
+  }
+
+  /** Re-reconcile a workspace against disk, keeping docIds (and therefore
+   *  threads) stable — see binds.ts. */
+  refreshWorkspace(workspaceId: string): RefreshWorkspaceResult {
+    return refreshWorkspaceImpl(this, workspaceId);
+  }
+
+  /** Re-group a diff review's sidebar in place — see binds.ts. */
+  setWorkspaceGroups(
+    workspaceId: string,
+    groups: Array<{ title: string; paths: string[]; details?: string }>,
+  ): SetWorkspaceGroupsResult {
+    return setWorkspaceGroupsImpl(this, workspaceId, groups);
   }
 
   /**
@@ -2559,6 +2598,17 @@ const DEFAULT_REVIEWER: User = {
  * first, then by open-count descending (attention floats up), then by name
  * ascending. Mirrors the landing page's "what needs my review?" ordering.
  */
+/** The workspace's stored exclude prefixes, normalized. Replicated on every
+ *  member (there is no workspace registry), so any member answers. */
+function workspaceExcludes(members: DocMeta[]): string[] {
+  const raw = members.find((m) => m.workspaceExclude)?.workspaceExclude ?? [];
+  return raw.map((p) => p.replace(/^\/+/, '').replace(/\/+$/, '')).filter(Boolean);
+}
+
+function isExcludedPath(relPath: string, excludes: string[]): boolean {
+  return excludes.some((p) => relPath === p || relPath.startsWith(`${p}/`));
+}
+
 function sortTreeChildren(node: WorkspaceDirNode): void {
   node.children.sort((a, b) => {
     if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;

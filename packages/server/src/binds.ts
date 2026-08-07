@@ -2,7 +2,12 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join, relative, resolve as resolvePath, sep } from 'node:path';
 import type { DocMeta, DocType } from '@feedback/core';
-import { MAX_GROUP_DETAILS, assignGroups, findOverlongGroupDetails } from './diff-groups.ts';
+import {
+  MAX_GROUP_DETAILS,
+  assignGroups,
+  findMalformedGroups,
+  findOverlongGroupDetails,
+} from './diff-groups.ts';
 import { scanFolder } from './fs-scan.ts';
 import {
   type DiffFileEntry,
@@ -24,6 +29,8 @@ import type { DocRoom } from './rooms.ts';
 /** The slice of Rooms the bind flows actually need (avoids a runtime
  *  circular import; Rooms passes itself). */
 export interface BindHost {
+  get(docId: string): DocRoom | undefined;
+  listThreads(docId: string, opts?: { status?: 'open' | 'resolved' }): Array<unknown>;
   getOrCreate(
     docId: string,
     init?: {
@@ -207,6 +214,7 @@ export type BindDiffResult =
         | 'empty-diff'
         | 'too-many-files'
         | 'group-details-too-long'
+        | 'bad-groups'
         | 'review-exists-different-range';
       detail?: string;
       fileCount?: number;
@@ -233,6 +241,15 @@ export type BindDiffResult =
 export function bindDiff(host: BindHost, opts: BindDiffOpts): BindDiffResult {
   const root = resolvePath(opts.repoPath);
   if (!existsSync(root)) return { ok: false, error: 'not-found' };
+
+  // Shape first: a spec is PERSISTED on the members for refreshWorkspace to
+  // replay, so one that would blow up assignGroups must never be written.
+  if (opts.groups !== undefined) {
+    const malformed = findMalformedGroups(opts.groups);
+    if (malformed.length > 0) {
+      return { ok: false, error: 'bad-groups', detail: malformed.join('; ') };
+    }
+  }
 
   // A group's `details` intro is capped HARD at MAX_GROUP_DETAILS and rejected
   // (not truncated) when over — this deliberately forces the caller to write a
@@ -287,6 +304,9 @@ export function bindDiff(host: BindHost, opts: BindDiffOpts): BindDiffResult {
       else host.attachReadonlyFile(docId, abs);
     }
     const entryDocId = memberDocId(reviewId, entryRel);
+    // The workspace has no registry — its members ARE the record, so the
+    // bind-time config rides along on them for refreshWorkspace to read back.
+    rememberWorkspaceConfig(host, reviewId, opts);
     return {
       ok: true,
       reviewId,
@@ -427,6 +447,11 @@ export function bindDiff(host: BindHost, opts: BindDiffOpts): BindDiffResult {
     const groupAssignment =
       opts.groups || room.meta.diffGroup === undefined ? groupOf.get(entry.relPath) : undefined;
     refreshDiffMeta(room, entry, groupAssignment);
+    // Being accepted here IS being part of the diff, so a member that had
+    // gone stale stops rendering as a ghost. Re-running create_diff_review is
+    // documented as an idempotent refresh path; leaving the flag set would
+    // make it a half-refresh that needs refresh_workspace to finish.
+    setStaleFlag(host, docId, false);
     if (target) {
       // Pinned mode: seed the target-commit content once; no file
       // binding, no poll — content can't change underneath us.
@@ -455,6 +480,13 @@ export function bindDiff(host: BindHost, opts: BindDiffOpts): BindDiffResult {
       group: groupOf.get(entry.relPath)?.group,
     });
   }
+
+  // AFTER the loop, and across EVERY member — not just the ones this bind
+  // accepted. Narrowing a review leaves the newly-excluded members untouched,
+  // so writing config only to accepted files would leave them holding the old
+  // exclude/groups/maxFiles — and refreshWorkspace, which reads the config off
+  // whichever member it finds first, would replay that obsolete scope.
+  rememberWorkspaceConfig(host, reviewId, opts);
 
   return {
     ok: true,
@@ -500,6 +532,383 @@ function refreshDiffMeta(
   for (const [k, v] of changed) {
     (room.meta as unknown as Record<string, unknown>)[k] = v;
   }
+}
+
+export interface WorkspaceMemberRef {
+  docId: string;
+  relPath?: string;
+}
+
+export type RefreshWorkspaceResult =
+  | {
+      ok: true;
+      workspaceId: string;
+      root: string;
+      kind: 'diff' | 'browse';
+      /** Files that became review members on THIS refresh. */
+      added: WorkspaceMemberRef[];
+      /** Members no longer part of the review, with the comments stranded on
+       *  them. Reported every refresh while they stay stale, not just the
+       *  first — a caller polling this needs the current picture. */
+      stale: Array<WorkspaceMemberRef & { openThreads: number }>;
+      /** Members that were stale and are back. */
+      restored: WorkspaceMemberRef[];
+      /** Diff: changed files. Browse: files the sidebar can open. */
+      fileCount: number;
+    }
+  | {
+      ok: false;
+      error: 'not-found' | 'root-missing' | 'pinned' | 'too-many-files' | 'rebind-failed';
+      detail?: string;
+      fileCount?: number;
+    };
+
+/**
+ * Re-reconcile a workspace against what's on disk RIGHT NOW, without
+ * re-minting a single docId — which is the whole point, since a docId is
+ * what every comment thread hangs off.
+ *
+ * A review's membership used to be decided once, at bind time. A file
+ * changed afterwards stayed invisible to the sidebar unless someone
+ * remembered the original base ref and re-ran the bind by hand; a file
+ * deleted afterwards stayed listed forever, pointing at nothing.
+ *
+ * Two flavours, one contract:
+ *   - DIFF review — re-runs the diff from the stored base, so files that
+ *     changed since the bind join the review, and per-file status/line
+ *     counts refresh. A member whose change was reverted is marked `stale`,
+ *     NOT deleted: its threads are still someone's feedback, and the change
+ *     may well come back. Pinned reviews refuse — their content is a
+ *     commit, so there is nothing to re-read.
+ *   - BROWSE workspace — members bind lazily (openContextFile), so there is
+ *     nothing new to bind here; what refresh adds is the reverse sweep,
+ *     flagging members whose file has since been deleted or renamed away.
+ *
+ * `stale` is always reversible: the next refresh that finds the file clears
+ * the flag and reports it under `restored`.
+ */
+export function refreshWorkspace(host: BindHost, workspaceId: string): RefreshWorkspaceResult {
+  const members = host.list().filter((m) => m.workspaceId === workspaceId);
+  // No members means nothing is bound — which is also the state a folder
+  // bound while EMPTY is left in (a documented degenerate success that
+  // creates no docs). The root can't be recovered from the hashed
+  // workspaceId, so point the caller at the operation that can.
+  const noRoot = {
+    ok: false,
+    error: 'not-found',
+    detail:
+      'no bound members for this workspace — re-run bind_folder / create_diff_review on the folder. It is idempotent and derives the same workspaceId, so shares and threads survive.',
+  } as const;
+  if (members.length === 0) return noRoot;
+  const root = members.find((m) => m.workspaceRoot)?.workspaceRoot;
+  if (!root) return noRoot;
+  if (!existsSync(root)) return { ok: false, error: 'root-missing', detail: root };
+
+  const diffMember = members.find((m) => m.type === 'diff');
+  if (diffMember?.diffTarget) return { ok: false, error: 'pinned' };
+
+  const before = new Set(members.map((m) => m.docId));
+  // Snapshot staleness BEFORE the re-bind, which clears the flag on every
+  // file it accepts — reading meta.stale afterwards would report nothing as
+  // restored.
+  const staleBefore = new Set(members.filter((m) => m.stale).map((m) => m.docId));
+  const owner = members.find((m) => m.owner)?.owner;
+  // Re-apply what the workspace was BOUND with. Without the exclude list a
+  // refresh silently widens the review's scope; without the group spec every
+  // newly-changed file lands in a heuristic bucket, so a sidebar the caller
+  // organized by hand decays a little on each refresh.
+  const exclude = members.find((m) => m.workspaceExclude)?.workspaceExclude;
+  const groups = members.find((m) => m.workspaceGroups)?.workspaceGroups;
+  const maxFiles = members.find((m) => m.workspaceMaxFiles !== undefined)?.workspaceMaxFiles;
+  // Which relPaths the DIFF currently covers. Null for a browse workspace,
+  // where "is it still there?" is answered by the filesystem instead.
+  let liveRelPaths: Set<string> | null = null;
+  let fileCount: number;
+
+  if (diffMember) {
+    const base = diffMember.diffBase;
+    if (!base) return { ok: false, error: 'rebind-failed', detail: 'diff member has no base ref' };
+    const res = bindDiff(host, {
+      repoPath: root,
+      base,
+      reviewId: workspaceId,
+      owner,
+      ...(exclude ? { exclude } : {}),
+      ...(groups ? { groups } : {}),
+      ...(maxFiles !== undefined ? { maxFiles } : {}),
+    });
+    if (res.ok) {
+      liveRelPaths = new Set(res.files.map((f) => f.relPath));
+      fileCount = res.fileCount;
+    } else if (res.error === 'empty-diff') {
+      // Every change reverted. Not an error — every member goes stale.
+      liveRelPaths = new Set();
+      fileCount = 0;
+    } else if (res.error === 'too-many-files') {
+      // Distinct from a generic failure: the caller can act on it by raising
+      // maxFiles (re-run the bind) or narrowing with exclude.
+      return {
+        ok: false,
+        error: 'too-many-files',
+        ...(res.fileCount !== undefined ? { fileCount: res.fileCount } : {}),
+        detail: `the review now covers more files than its cap (${maxFiles ?? DEFAULT_MAX_FILES}) — raise maxFiles by re-running the bind, or narrow it with exclude`,
+      };
+    } else {
+      return { ok: false, error: 'rebind-failed', detail: res.detail ?? res.error };
+    }
+  } else {
+    const excludes = normalizeExcludes(exclude);
+    fileCount = scanFolder(root)
+      .map((abs) => relative(root, abs).split(sep).join('/'))
+      .filter((rel) => !isExcluded(rel, excludes)).length;
+  }
+
+  // A `.md` diff member can have a companion EDITOR doc on the same relPath
+  // (openEditableFile). It must follow its member out of the review, or the
+  // workspace ends up half-stale for one path — and, because the companion
+  // isn't a diff member, a share would start landing on the editor for a file
+  // that is no longer under review. Context files (openContextFile) are a
+  // different case: they were never in the diff, so only their file's absence
+  // makes them stale.
+  const staleDiffPaths = new Set<string>();
+  if (liveRelPaths) {
+    for (const meta of members) {
+      if (meta.type === 'diff' && meta.relPath && !liveRelPaths.has(meta.relPath)) {
+        staleDiffPaths.add(meta.relPath);
+      }
+    }
+  }
+
+  const added: WorkspaceMemberRef[] = [];
+  const stale: Array<WorkspaceMemberRef & { openThreads: number }> = [];
+  const restored: WorkspaceMemberRef[] = [];
+  for (const meta of host.list()) {
+    if (meta.workspaceId !== workspaceId) continue;
+    const ref: WorkspaceMemberRef = {
+      docId: meta.docId,
+      ...(meta.relPath ? { relPath: meta.relPath } : {}),
+    };
+    if (!before.has(meta.docId)) {
+      // Bound moments ago by the re-diff above, so it is live by construction.
+      added.push(ref);
+      continue;
+    }
+    if (!meta.relPath) continue;
+    // A diff member is judged by the diff (a DELETED file is legitimately
+    // absent from disk — being gone IS its change); everything else by
+    // whether the file is still there.
+    const gone =
+      meta.type === 'diff' && liveRelPaths
+        ? !liveRelPaths.has(meta.relPath)
+        : staleDiffPaths.has(meta.relPath) || !existsSync(join(root, meta.relPath));
+    if (gone) {
+      setStaleFlag(host, meta.docId, true);
+      stale.push({ ...ref, openThreads: host.listThreads(meta.docId, { status: 'open' }).length });
+    } else if (staleBefore.has(meta.docId)) {
+      setStaleFlag(host, meta.docId, false);
+      restored.push(ref);
+    }
+  }
+  const bySortKey = (a: WorkspaceMemberRef, b: WorkspaceMemberRef) =>
+    (a.relPath ?? a.docId).localeCompare(b.relPath ?? b.docId);
+  added.sort(bySortKey);
+  stale.sort(bySortKey);
+  restored.sort(bySortKey);
+
+  return {
+    ok: true,
+    workspaceId,
+    root,
+    kind: diffMember ? 'diff' : 'browse',
+    added,
+    stale,
+    restored,
+    fileCount,
+  };
+}
+
+export type SetWorkspaceGroupsResult =
+  | {
+      ok: true;
+      workspaceId: string;
+      groups: Array<{ title: string; fileCount: number }>;
+      /** Files no supplied group claimed — they land in "Other". */
+      ungrouped: string[];
+    }
+  | {
+      ok: false;
+      error: 'not-found' | 'no-diff-members' | 'bad-groups' | 'group-details-too-long';
+      detail?: string;
+    };
+
+/**
+ * Re-group a diff review's sidebar in place. Grouping used to be decided
+ * once, at bind time, so improving it meant tearing the review down and
+ * rebuilding it — which throws away every thread.
+ *
+ * Pass an EMPTY array to fall back to the churn/bucket heuristic. Same
+ * matching rules and the same hard `details` limit as bind time: a path
+ * claims a file exactly or as a directory prefix, first group wins, and an
+ * over-long intro is rejected rather than truncated.
+ */
+export function setWorkspaceGroups(
+  host: BindHost,
+  workspaceId: string,
+  groups: Array<{ title: string; paths: string[]; details?: string }>,
+): SetWorkspaceGroupsResult {
+  const members = host.list().filter((m) => m.workspaceId === workspaceId);
+  if (members.length === 0) return { ok: false, error: 'not-found' };
+  const diffMembers = members.filter(
+    (m): m is typeof m & { relPath: string } => m.type === 'diff' && !!m.relPath,
+  );
+  if (diffMembers.length === 0) {
+    return {
+      ok: false,
+      error: 'no-diff-members',
+      detail: 'groups organize a diff review; this workspace has no changed-file members',
+    };
+  }
+  // Validate the SHAPE before anything is written. The spec is persisted for
+  // refreshWorkspace to replay, so a malformed one written before
+  // assignGroups threw on it would leave the workspace permanently
+  // un-refreshable — refresh would read it back and throw again.
+  const malformed = findMalformedGroups(groups);
+  if (malformed.length > 0) {
+    return { ok: false, error: 'bad-groups', detail: malformed.join('; ') };
+  }
+  const overlong = findOverlongGroupDetails(groups);
+  if (overlong.length > 0) {
+    const which = overlong.map((g) => `"${g.title}" is ${g.length} chars`).join('; ');
+    return {
+      ok: false,
+      error: 'group-details-too-long',
+      detail: `${which} — max ${MAX_GROUP_DETAILS}. Write a short 1–2 sentence intro; don't paste the full commit body.`,
+    };
+  }
+
+  const explicit = groups.length > 0 ? groups : undefined;
+  const assignment = assignGroups(
+    diffMembers.map((m) => ({
+      relPath: m.relPath,
+      additions: m.diffAdditions,
+      deletions: m.diffDeletions,
+    })),
+    explicit,
+  );
+  // Only now, with a spec proven to assign cleanly, persist it. Storing the
+  // SPEC rather than just the resulting per-file assignment is what lets a
+  // later refresh file newly-changed files into the right group instead of a
+  // heuristic bucket.
+  //
+  // An EMPTY array is stored as an empty array, not deleted: "the heuristic
+  // is the choice here" is itself a decision, and it has to survive. Deleting
+  // it would make the reset a one-off — a group-less refresh preserves each
+  // member's existing diffGroup (so it can't clobber agent-set groups), so
+  // old members would stay frozen at the ranks they held at reset time while
+  // new ones got freshly-computed ones, and the churn ordering would stop
+  // meaning anything.
+  for (const m of members) {
+    writeMeta(host, m.docId, [['workspaceGroups', groups]]);
+  }
+
+  // Unmatched files get the sentinel rank assignGroups reserves for them —
+  // read that rather than the title, so a group the caller actually named
+  // "Other" isn't misreported as ungrouped.
+  const ungroupedRank = explicit?.length ?? -1;
+  const ungrouped: string[] = [];
+  const summary = new Map<string, { rank: number; fileCount: number }>();
+  for (const m of diffMembers) {
+    const a = assignment.get(m.relPath);
+    if (!a) continue;
+    setGroupMeta(host, m.docId, a);
+    if (a.rank === ungroupedRank) ungrouped.push(m.relPath);
+    const prev = summary.get(a.group);
+    if (prev) prev.fileCount += 1;
+    else summary.set(a.group, { rank: a.rank, fileCount: 1 });
+  }
+  ungrouped.sort();
+
+  return {
+    ok: true,
+    workspaceId,
+    groups: Array.from(summary.entries())
+      .sort((a, b) => a[1].rank - b[1].rank || a[0].localeCompare(b[0]))
+      .map(([title, g]) => ({ title, fileCount: g.fileCount })),
+    ungrouped,
+  };
+}
+
+/**
+ * Replicate the workspace's bind-time config onto a member. Only writes what
+ * the caller actually SUPPLIED: a group-less refresh must not erase the spec
+ * it is in the middle of re-applying (same explicit-wins rule the diff group
+ * assignment follows). Compared by value, so a repeat bind is a no-op rather
+ * than a doc update.
+ */
+function rememberWorkspaceConfig(
+  host: BindHost,
+  workspaceId: string,
+  opts: { exclude?: string[]; groups?: BindDiffOpts['groups']; maxFiles?: number },
+): void {
+  const next: Array<[keyof DocMeta, unknown]> = [];
+  if (opts.exclude !== undefined) next.push(['workspaceExclude', normalizeExcludes(opts.exclude)]);
+  if (opts.groups !== undefined) next.push(['workspaceGroups', opts.groups]);
+  if (opts.maxFiles !== undefined) next.push(['workspaceMaxFiles', opts.maxFiles]);
+  if (next.length === 0) return;
+  for (const m of host.list()) {
+    if (m.workspaceId === workspaceId) writeMeta(host, m.docId, next);
+  }
+}
+
+/** Set (or, for an undefined value, DELETE) meta keys on a room, skipping
+ *  keys already at the target value. Compares by JSON so array/object values
+ *  don't rewrite on every bind. */
+function writeMeta(host: BindHost, docId: string, entries: Array<[keyof DocMeta, unknown]>): void {
+  const room = host.get(docId);
+  if (!room) return;
+  const changed = entries.filter(([k, v]) => JSON.stringify(room.meta[k]) !== JSON.stringify(v));
+  if (changed.length === 0) return;
+  const m = room.ydoc.getMap('meta');
+  room.ydoc.transact(() => {
+    for (const [k, v] of changed) {
+      if (v === undefined) m.delete(k as string);
+      else m.set(k as string, v);
+    }
+  });
+  for (const [k, v] of changed) {
+    (room.meta as unknown as Record<string, unknown>)[k] = v;
+  }
+}
+
+/** Flip a member's `stale` marker. Clearing DELETES the key rather than
+ *  writing `false`, so a live member's meta looks the same as it did before
+ *  this feature existed. */
+function setStaleFlag(host: BindHost, docId: string, stale: boolean): void {
+  const room = host.get(docId);
+  if (!room) return;
+  if (stale === (room.meta.stale === true)) return;
+  const m = room.ydoc.getMap('meta');
+  room.ydoc.transact(() => {
+    if (stale) m.set('stale', true);
+    else m.delete('stale');
+  });
+  if (stale) room.meta.stale = true;
+  else room.meta.stale = undefined;
+}
+
+/** Write a group assignment onto a member, DELETING keys the new assignment
+ *  doesn't carry — unlike refreshDiffMeta, which skips undefined. Re-grouping
+ *  without a `details` intro must actually drop the old one. */
+function setGroupMeta(
+  host: BindHost,
+  docId: string,
+  assignment: { group: string; rank: number; details?: string },
+): void {
+  writeMeta(host, docId, [
+    ['diffGroup', assignment.group],
+    ['diffGroupRank', assignment.rank],
+    ['diffGroupDetails', assignment.details],
+  ]);
 }
 
 /** Deterministic workspace id: folder basename + 6-char hash of the

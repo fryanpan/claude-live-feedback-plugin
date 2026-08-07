@@ -59,6 +59,43 @@ export function findOverlongGroupDetails(
   return over;
 }
 
+/**
+ * Structural validation of a caller-supplied group spec, returning a list of
+ * human-readable problems (empty = fine).
+ *
+ * This runs BEFORE anything is persisted, and that ordering is the point: a
+ * spec is stored on the workspace's members so a later refresh can re-apply
+ * it, so a malformed one that got written before {@link assignGroups} threw
+ * on it would poison the workspace — every subsequent refresh would read the
+ * bad spec back and throw again, with no way to recover but deleting the
+ * review. The route layer can't do this job: `groups` arrives as JSON and
+ * `Array.isArray` says nothing about what is inside it.
+ */
+export function findMalformedGroups(groups: unknown): string[] {
+  if (!Array.isArray(groups)) return ['groups must be an array'];
+  const problems: string[] = [];
+  groups.forEach((g, i) => {
+    const where = `groups[${i}]`;
+    if (typeof g !== 'object' || g === null || Array.isArray(g)) {
+      problems.push(`${where} must be an object`);
+      return;
+    }
+    const { title, paths, details } = g as Record<string, unknown>;
+    if (typeof title !== 'string' || title.trim() === '') {
+      problems.push(`${where}.title must be a non-empty string`);
+    }
+    if (!Array.isArray(paths) || paths.length === 0) {
+      problems.push(`${where}.paths must be a non-empty array of strings`);
+    } else if (paths.some((p) => typeof p !== 'string' || p.trim() === '')) {
+      problems.push(`${where}.paths must contain only non-empty strings`);
+    }
+    if (details !== undefined && typeof details !== 'string') {
+      problems.push(`${where}.details must be a string when present`);
+    }
+  });
+  return problems;
+}
+
 const TEST_RE = /(^|\/)(tests?|spec|__tests__|androidTest|testFixtures)(\/|$)|\.(test|spec)\.\w+$/i;
 const DOC_RE = /(^|\/)docs?(\/|$)|\.(md|mdx|adoc|rst)$/i;
 const CONFIG_RE =

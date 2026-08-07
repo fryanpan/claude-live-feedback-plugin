@@ -29,6 +29,9 @@ interface TreeFile {
   threadCount: number;
   reviewUrl?: string;
   lastActivityAt?: number;
+  /** No longer part of the review as of the last refresh — kept because it
+   *  still holds comments, shown dimmed so nobody reviews a ghost. */
+  stale?: boolean;
   /** Diff-review members: change status + line counts for badges. */
   diffStatus?: 'added' | 'modified' | 'deleted' | 'renamed';
   diffAdditions?: number;
@@ -80,9 +83,13 @@ function renderTreeNode(
           : '';
       diffBadge = `<span class="tree-diff-status tree-diff-${letter}" title="${escapeHtml(node.diffStatus)}">${letter}</span>${counts}`;
     }
-    return `<li class="tree-file"><a href="${href}" class="${isActive ? 'active' : ''}"${
+    const cls = [isActive ? 'active' : '', node.stale ? 'stale' : ''].filter(Boolean).join(' ');
+    const staleHint = node.stale
+      ? ' title="No longer in this review — the file was removed or its change reverted. Existing comments are kept."'
+      : '';
+    return `<li class="tree-file"><a href="${href}" class="${cls}"${
       isActive ? ' aria-current="page"' : ''
-    }><span class="tree-name">${escapeHtml(node.name)}</span>${diffBadge}${badge}</a></li>`;
+    }${staleHint}><span class="tree-name">${escapeHtml(node.name)}</span>${diffBadge}${badge}</a></li>`;
   }
   const relPath = prefix ? `${prefix}/${node.name}` : node.name;
   let open = true;
@@ -102,14 +109,14 @@ function renderTreeNode(
 }
 
 /** Structural signature of a folder tree: renderer namespace + workspace + the
- *  file identities (relPath + docId + diff status). Excludes open-comment counts
+ *  file identities (relPath + docId + diff status + staleness). Excludes counts
  *  so a new comment doesn't force a scroll-resetting rebuild on navigation; a
  *  file added/removed or a status change flips the signature and rebuilds. */
 function treeSignature(workspaceId: string, tree: TreeDir): string {
   const files: string[] = [];
   const walk = (node: TreeDir | TreeFile): void => {
     if (node.type === 'file') {
-      files.push(`${node.relPath}:${node.docId}:${node.diffStatus ?? ''}`);
+      files.push(`${node.relPath}:${node.docId}:${node.diffStatus ?? ''}:${node.stale ? 's' : ''}`);
       return;
     }
     for (const c of node.children) walk(c);
