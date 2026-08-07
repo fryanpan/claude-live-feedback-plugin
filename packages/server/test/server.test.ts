@@ -468,24 +468,40 @@ describe('server REST', () => {
     }
   });
 
-  it('returns CORS headers on /api/* responses', async () => {
-    const res = await fetch(`${base}/api/docs`, { method: 'GET' });
-    expect(res.headers.get('access-control-allow-origin')).toBe('*');
+  it('returns CORS headers to an allowed origin — and only the one that asked', async () => {
+    // Used to be an unconditional `*` on every response, which let any page
+    // the user visited read every doc. Now the origin is reflected, and only
+    // when it's the server's own, a loopback dev server (the widget), or
+    // explicitly configured. See middleware/browser-origin.ts.
+    const res = await fetch(`${base}/api/docs`, {
+      method: 'GET',
+      headers: { origin: 'http://localhost:3000' },
+    });
+    expect(res.headers.get('access-control-allow-origin')).toBe('http://localhost:3000');
     expect(res.headers.get('access-control-allow-methods')).toContain('POST');
     expect(res.headers.get('access-control-allow-headers')).toContain('content-type');
+    expect(res.headers.get('vary')).toBe('Origin');
+  });
+
+  it('returns no CORS headers to an unknown origin', async () => {
+    const res = await fetch(`${base}/api/docs`, {
+      method: 'GET',
+      headers: { origin: 'https://evil.example.com' },
+    });
+    expect(res.headers.get('access-control-allow-origin')).toBeNull();
   });
 
   it('handles OPTIONS preflight', async () => {
     const res = await fetch(`${base}/api/docs`, {
       method: 'OPTIONS',
       headers: {
-        origin: 'http://example.test',
+        origin: 'http://localhost:4321',
         'access-control-request-method': 'POST',
         'access-control-request-headers': 'content-type',
       },
     });
     expect(res.status).toBe(204);
-    expect(res.headers.get('access-control-allow-origin')).toBe('*');
+    expect(res.headers.get('access-control-allow-origin')).toBe('http://localhost:4321');
     expect(res.headers.get('access-control-allow-methods')).toContain('POST');
   });
 
