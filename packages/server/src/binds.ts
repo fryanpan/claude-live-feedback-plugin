@@ -24,6 +24,8 @@ import type { DocRoom } from './rooms.ts';
 /** The slice of Rooms the bind flows actually need (avoids a runtime
  *  circular import; Rooms passes itself). */
 export interface BindHost {
+  get(docId: string): DocRoom | undefined;
+  listThreads(docId: string, opts?: { status?: 'open' | 'resolved' }): Array<unknown>;
   getOrCreate(
     docId: string,
     init?: {
@@ -496,6 +498,274 @@ function refreshDiffMeta(
   if (changed.length === 0) return;
   room.ydoc.transact(() => {
     for (const [k, v] of changed) m.set(k, v);
+  });
+  for (const [k, v] of changed) {
+    (room.meta as unknown as Record<string, unknown>)[k] = v;
+  }
+}
+
+export interface WorkspaceMemberRef {
+  docId: string;
+  relPath?: string;
+}
+
+export type RefreshWorkspaceResult =
+  | {
+      ok: true;
+      workspaceId: string;
+      root: string;
+      kind: 'diff' | 'browse';
+      /** Files that became review members on THIS refresh. */
+      added: WorkspaceMemberRef[];
+      /** Members no longer part of the review, with the comments stranded on
+       *  them. Reported every refresh while they stay stale, not just the
+       *  first — a caller polling this needs the current picture. */
+      stale: Array<WorkspaceMemberRef & { openThreads: number }>;
+      /** Members that were stale and are back. */
+      restored: WorkspaceMemberRef[];
+      /** Diff: changed files. Browse: files the sidebar can open. */
+      fileCount: number;
+    }
+  | {
+      ok: false;
+      error: 'not-found' | 'root-missing' | 'pinned' | 'rebind-failed';
+      detail?: string;
+    };
+
+/**
+ * Re-reconcile a workspace against what's on disk RIGHT NOW, without
+ * re-minting a single docId — which is the whole point, since a docId is
+ * what every comment thread hangs off.
+ *
+ * A review's membership used to be decided once, at bind time. A file
+ * changed afterwards stayed invisible to the sidebar unless someone
+ * remembered the original base ref and re-ran the bind by hand; a file
+ * deleted afterwards stayed listed forever, pointing at nothing.
+ *
+ * Two flavours, one contract:
+ *   - DIFF review — re-runs the diff from the stored base, so files that
+ *     changed since the bind join the review, and per-file status/line
+ *     counts refresh. A member whose change was reverted is marked `stale`,
+ *     NOT deleted: its threads are still someone's feedback, and the change
+ *     may well come back. Pinned reviews refuse — their content is a
+ *     commit, so there is nothing to re-read.
+ *   - BROWSE workspace — members bind lazily (openContextFile), so there is
+ *     nothing new to bind here; what refresh adds is the reverse sweep,
+ *     flagging members whose file has since been deleted or renamed away.
+ *
+ * `stale` is always reversible: the next refresh that finds the file clears
+ * the flag and reports it under `restored`.
+ */
+export function refreshWorkspace(host: BindHost, workspaceId: string): RefreshWorkspaceResult {
+  const members = host.list().filter((m) => m.workspaceId === workspaceId);
+  if (members.length === 0) return { ok: false, error: 'not-found' };
+  const root = members.find((m) => m.workspaceRoot)?.workspaceRoot;
+  if (!root) return { ok: false, error: 'not-found', detail: 'workspace has no root' };
+  if (!existsSync(root)) return { ok: false, error: 'root-missing', detail: root };
+
+  const diffMember = members.find((m) => m.type === 'diff');
+  if (diffMember?.diffTarget) return { ok: false, error: 'pinned' };
+
+  const before = new Set(members.map((m) => m.docId));
+  const owner = members.find((m) => m.owner)?.owner;
+  // Which relPaths the DIFF currently covers. Null for a browse workspace,
+  // where "is it still there?" is answered by the filesystem instead.
+  let liveRelPaths: Set<string> | null = null;
+  let fileCount: number;
+
+  if (diffMember) {
+    const base = diffMember.diffBase;
+    if (!base) return { ok: false, error: 'rebind-failed', detail: 'diff member has no base ref' };
+    const res = bindDiff(host, { repoPath: root, base, reviewId: workspaceId, owner });
+    if (res.ok) {
+      liveRelPaths = new Set(res.files.map((f) => f.relPath));
+      fileCount = res.fileCount;
+    } else if (res.error === 'empty-diff') {
+      // Every change reverted. Not an error — every member goes stale.
+      liveRelPaths = new Set();
+      fileCount = 0;
+    } else {
+      return { ok: false, error: 'rebind-failed', detail: res.detail ?? res.error };
+    }
+  } else {
+    fileCount = scanFolder(root).length;
+  }
+
+  const added: WorkspaceMemberRef[] = [];
+  const stale: Array<WorkspaceMemberRef & { openThreads: number }> = [];
+  const restored: WorkspaceMemberRef[] = [];
+  for (const meta of host.list()) {
+    if (meta.workspaceId !== workspaceId) continue;
+    const ref: WorkspaceMemberRef = {
+      docId: meta.docId,
+      ...(meta.relPath ? { relPath: meta.relPath } : {}),
+    };
+    if (!before.has(meta.docId)) {
+      // Bound moments ago by the re-diff above, so it is live by construction.
+      added.push(ref);
+      continue;
+    }
+    if (!meta.relPath) continue;
+    // A diff member is judged by the diff (a DELETED file is legitimately
+    // absent from disk — being gone IS its change); everything else by
+    // whether the file is still there.
+    const gone =
+      meta.type === 'diff' && liveRelPaths
+        ? !liveRelPaths.has(meta.relPath)
+        : !existsSync(join(root, meta.relPath));
+    if (gone) {
+      setStaleFlag(host, meta.docId, true);
+      stale.push({ ...ref, openThreads: host.listThreads(meta.docId, { status: 'open' }).length });
+    } else if (meta.stale) {
+      setStaleFlag(host, meta.docId, false);
+      restored.push(ref);
+    }
+  }
+  const bySortKey = (a: WorkspaceMemberRef, b: WorkspaceMemberRef) =>
+    (a.relPath ?? a.docId).localeCompare(b.relPath ?? b.docId);
+  added.sort(bySortKey);
+  stale.sort(bySortKey);
+  restored.sort(bySortKey);
+
+  return {
+    ok: true,
+    workspaceId,
+    root,
+    kind: diffMember ? 'diff' : 'browse',
+    added,
+    stale,
+    restored,
+    fileCount,
+  };
+}
+
+export type SetWorkspaceGroupsResult =
+  | {
+      ok: true;
+      workspaceId: string;
+      groups: Array<{ title: string; fileCount: number }>;
+      /** Files no supplied group claimed — they land in "Other". */
+      ungrouped: string[];
+    }
+  | {
+      ok: false;
+      error: 'not-found' | 'no-diff-members' | 'group-details-too-long';
+      detail?: string;
+    };
+
+/**
+ * Re-group a diff review's sidebar in place. Grouping used to be decided
+ * once, at bind time, so improving it meant tearing the review down and
+ * rebuilding it — which throws away every thread.
+ *
+ * Pass an EMPTY array to fall back to the churn/bucket heuristic. Same
+ * matching rules and the same hard `details` limit as bind time: a path
+ * claims a file exactly or as a directory prefix, first group wins, and an
+ * over-long intro is rejected rather than truncated.
+ */
+export function setWorkspaceGroups(
+  host: BindHost,
+  workspaceId: string,
+  groups: Array<{ title: string; paths: string[]; details?: string }>,
+): SetWorkspaceGroupsResult {
+  const members = host.list().filter((m) => m.workspaceId === workspaceId);
+  if (members.length === 0) return { ok: false, error: 'not-found' };
+  const diffMembers = members.filter(
+    (m): m is typeof m & { relPath: string } => m.type === 'diff' && !!m.relPath,
+  );
+  if (diffMembers.length === 0) {
+    return {
+      ok: false,
+      error: 'no-diff-members',
+      detail: 'groups organize a diff review; this workspace has no changed-file members',
+    };
+  }
+  const overlong = findOverlongGroupDetails(groups);
+  if (overlong.length > 0) {
+    const which = overlong.map((g) => `"${g.title}" is ${g.length} chars`).join('; ');
+    return {
+      ok: false,
+      error: 'group-details-too-long',
+      detail: `${which} — max ${MAX_GROUP_DETAILS}. Write a short 1–2 sentence intro; don't paste the full commit body.`,
+    };
+  }
+
+  const explicit = groups.length > 0 ? groups : undefined;
+  const assignment = assignGroups(
+    diffMembers.map((m) => ({
+      relPath: m.relPath,
+      additions: m.diffAdditions,
+      deletions: m.diffDeletions,
+    })),
+    explicit,
+  );
+
+  // Unmatched files get the sentinel rank assignGroups reserves for them —
+  // read that rather than the title, so a group the caller actually named
+  // "Other" isn't misreported as ungrouped.
+  const ungroupedRank = explicit?.length ?? -1;
+  const ungrouped: string[] = [];
+  const summary = new Map<string, { rank: number; fileCount: number }>();
+  for (const m of diffMembers) {
+    const a = assignment.get(m.relPath);
+    if (!a) continue;
+    setGroupMeta(host, m.docId, a);
+    if (a.rank === ungroupedRank) ungrouped.push(m.relPath);
+    const prev = summary.get(a.group);
+    if (prev) prev.fileCount += 1;
+    else summary.set(a.group, { rank: a.rank, fileCount: 1 });
+  }
+  ungrouped.sort();
+
+  return {
+    ok: true,
+    workspaceId,
+    groups: Array.from(summary.entries())
+      .sort((a, b) => a[1].rank - b[1].rank || a[0].localeCompare(b[0]))
+      .map(([title, g]) => ({ title, fileCount: g.fileCount })),
+    ungrouped,
+  };
+}
+
+/** Flip a member's `stale` marker. Clearing DELETES the key rather than
+ *  writing `false`, so a live member's meta looks the same as it did before
+ *  this feature existed. */
+function setStaleFlag(host: BindHost, docId: string, stale: boolean): void {
+  const room = host.get(docId);
+  if (!room) return;
+  if (stale === (room.meta.stale === true)) return;
+  const m = room.ydoc.getMap('meta');
+  room.ydoc.transact(() => {
+    if (stale) m.set('stale', true);
+    else m.delete('stale');
+  });
+  if (stale) room.meta.stale = true;
+  else room.meta.stale = undefined;
+}
+
+/** Write a group assignment onto a member, DELETING keys the new assignment
+ *  doesn't carry — unlike refreshDiffMeta, which skips undefined. Re-grouping
+ *  without a `details` intro must actually drop the old one. */
+function setGroupMeta(
+  host: BindHost,
+  docId: string,
+  assignment: { group: string; rank: number; details?: string },
+): void {
+  const room = host.get(docId);
+  if (!room) return;
+  const next: Array<[keyof DocMeta, unknown]> = [
+    ['diffGroup', assignment.group],
+    ['diffGroupRank', assignment.rank],
+    ['diffGroupDetails', assignment.details],
+  ];
+  const changed = next.filter(([k, v]) => room.meta[k] !== v);
+  if (changed.length === 0) return;
+  const m = room.ydoc.getMap('meta');
+  room.ydoc.transact(() => {
+    for (const [k, v] of changed) {
+      if (v === undefined) m.delete(k as string);
+      else m.set(k as string, v);
+    }
   });
   for (const [k, v] of changed) {
     (room.meta as unknown as Record<string, unknown>)[k] = v;

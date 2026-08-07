@@ -50,9 +50,13 @@ import {
   type BindDiffResult,
   type BindFolderOpts,
   type BindFolderResult,
+  type RefreshWorkspaceResult,
+  type SetWorkspaceGroupsResult,
   bindDiff as bindDiffImpl,
   bindFolder as bindFolderImpl,
   memberDocId,
+  refreshWorkspace as refreshWorkspaceImpl,
+  setWorkspaceGroups as setWorkspaceGroupsImpl,
 } from './binds.ts';
 import { scanFolderPaths } from './fs-scan.ts';
 import { showFile } from './git-diff.ts';
@@ -91,6 +95,10 @@ export interface WorkspaceFileNode {
   threadCount: number;
   reviewUrl?: string;
   lastActivityAt?: number;
+  /** No longer part of the review (file deleted, or its change reverted) as
+   *  of the last `refresh_workspace`. Still listed — it holds comments —
+   *  but rendered dimmed so nobody reviews a ghost. */
+  stale?: boolean;
   /** Diff-review extras (present only on `type:'diff'` members). */
   diffStatus?: DocMeta['diffStatus'];
   diffAdditions?: number;
@@ -805,6 +813,7 @@ export class Rooms {
         threadCount,
         reviewUrl: (decorated as { reviewUrl?: string }).reviewUrl,
         lastActivityAt: meta.lastActivityAt,
+        ...(meta.stale ? { stale: true } : {}),
         ...(meta.diffStatus !== undefined ? { diffStatus: meta.diffStatus } : {}),
         ...(meta.diffAdditions !== undefined ? { diffAdditions: meta.diffAdditions } : {}),
         ...(meta.diffDeletions !== undefined ? { diffDeletions: meta.diffDeletions } : {}),
@@ -1022,6 +1031,7 @@ export class Rooms {
         threadCount,
         reviewUrl: (decorated as { reviewUrl?: string }).reviewUrl,
         lastActivityAt: meta.lastActivityAt,
+        ...(meta.stale ? { stale: true } : {}),
         ...(meta.diffStatus !== undefined ? { diffStatus: meta.diffStatus } : {}),
         ...(meta.diffAdditions !== undefined ? { diffAdditions: meta.diffAdditions } : {}),
         ...(meta.diffDeletions !== undefined ? { diffDeletions: meta.diffDeletions } : {}),
@@ -1080,6 +1090,20 @@ export class Rooms {
   /** Bind a git diff (working-tree or pinned) for review — see binds.ts. */
   bindDiff(opts: BindDiffOpts): BindDiffResult {
     return bindDiffImpl(this, opts);
+  }
+
+  /** Re-reconcile a workspace against disk, keeping docIds (and therefore
+   *  threads) stable — see binds.ts. */
+  refreshWorkspace(workspaceId: string): RefreshWorkspaceResult {
+    return refreshWorkspaceImpl(this, workspaceId);
+  }
+
+  /** Re-group a diff review's sidebar in place — see binds.ts. */
+  setWorkspaceGroups(
+    workspaceId: string,
+    groups: Array<{ title: string; paths: string[]; details?: string }>,
+  ): SetWorkspaceGroupsResult {
+    return setWorkspaceGroupsImpl(this, workspaceId, groups);
   }
 
   /**

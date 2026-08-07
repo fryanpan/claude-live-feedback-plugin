@@ -78,6 +78,15 @@ export interface DocMeta {
    */
   workspaceRoot?: string;
   /**
+   * Set by `refresh_workspace` when this member is no longer part of the
+   * review: its file was deleted (browse workspace), or its change was
+   * reverted so it no longer differs from the diff base. The doc is kept —
+   * it still holds its comment threads, and the file may well come back —
+   * but the tree renders it dimmed so nobody reviews a ghost. Cleared by
+   * the next refresh that finds it again. Absent = live.
+   */
+  stale?: boolean;
+  /**
    * Optional provenance passthrough captured at create/bind time, so the
    * activity event stream can attribute a doc to the agent + session that
    * produced it. `agentId` / `sessionId` are best-effort: supplied by the
