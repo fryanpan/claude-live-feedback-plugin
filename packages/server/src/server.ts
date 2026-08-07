@@ -22,6 +22,7 @@ import {
   sessionCookieHeader,
   verifySession,
 } from './share/link-session.ts';
+import { redactMetaForVisitor, relativeReviewUrl } from './share/redact-meta.ts';
 import { Shares } from './share/shares.ts';
 import type { ShareConfig } from './share/types.ts';
 import { sanitizeVisitorAuthor } from './share/visitor-identity.ts';
@@ -306,6 +307,24 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // local names bypass; a share host is gated AND scoped; anything else
       // is denied even when Access isn't configured, so a half-configured
       // deployment fails closed instead of publishing the API.
+      /**
+       * Doc metadata as this caller may see it. On the tailnet that's all of
+       * it; a share visitor gets an allowlisted subset — the full DocMeta
+       * carries absolute paths on Bryan's machine and a tailnet hostname,
+       * none of which is needed to render a review.
+       */
+      const metaFor = <T extends DocMeta>(meta: T): Record<string, unknown> => {
+        const decorated = withReviewUrl(meta);
+        if (!visitor) return decorated as unknown as Record<string, unknown>;
+        return {
+          ...redactMetaForVisitor(decorated),
+          // Same path, no host — correct for every share mode.
+          ...(relativeReviewUrl(decorated.reviewUrl) !== undefined
+            ? { reviewUrl: relativeReviewUrl(decorated.reviewUrl) }
+            : {}),
+        };
+      };
+
       /**
        * The author to attribute a write to. On the tailnet the body is
        * trusted (it's Bryan's browser or his own agents). From a share
@@ -870,7 +889,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         if (!relPath) return j(400, { error: 'relPath required' });
         const res = rooms.openContextFile(workspaceId, relPath);
         if (!res.ok) return j(res.error === 'bad-path' ? 400 : 404, res);
-        return j(200, { docId: res.docId, meta: withReviewUrl(res.meta) });
+        return j(200, { docId: res.docId, meta: metaFor(res.meta) });
       }
       const wsEditMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/editable-file$/);
       if (wsEditMatch && req.method === 'POST') {
@@ -888,7 +907,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                 : 404;
           return j(status, res);
         }
-        return j(200, { docId: res.docId, meta: withReviewUrl(res.meta) });
+        return j(200, { docId: res.docId, meta: metaFor(res.meta) });
       }
       const wsTreeMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/tree$/);
       if (wsTreeMatch && req.method === 'GET') {
@@ -907,7 +926,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         const room = rooms.get(docId);
         if (!room) return j(404, { error: 'doc not found' });
         if (rest === '' && req.method === 'GET') {
-          return j(200, { meta: withReviewUrl(room.meta) });
+          return j(200, { meta: metaFor(room.meta) });
         }
         if (rest === '' && req.method === 'DELETE') {
           const force = url.searchParams.get('force') === 'true';
