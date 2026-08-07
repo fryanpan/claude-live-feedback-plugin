@@ -41,8 +41,13 @@ export interface OriginPolicy {
   allowedOrigins: string[];
 }
 
-/** Hostnames that can only ever be the machine itself. */
-const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+/**
+ * Hostnames that can only ever be the machine itself. Exported so the caller
+ * can fold them into `localHostnames` for the LOCAL surface — the predicate
+ * itself grants no implicit trust, because the share surface must be able to
+ * say "same origin, nothing else" and mean it.
+ */
+export const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '::1', '[::1]'];
 
 /**
  * `true` when a browser at `origin` may read our responses.
@@ -79,16 +84,21 @@ export function isAllowedBrowserOrigin(origin: string | null, policy: OriginPoli
 
   // A dev server running on THIS machine — the widget's whole reason for
   // being cross-origin. It may be on loopback, or reached over the tailnet or
-  // the LAN and pointed back at this server, so accept any of the names the
-  // host gate already treats as ours. Any port (dev servers pick their own)
-  // and either scheme (a local dev server is usually plain http).
+  // the LAN and pointed back at this server, so the caller passes every name
+  // the host gate treats as ours. Any port (dev servers pick their own) and
+  // either scheme (a local dev server is usually plain http).
   //
   // Exact hostname match only. Deliberately NO "any private IP is local"
   // rule: `Origin` is attacker-controlled, so trusting 192.168/16 wholesale
   // would let any page self-classify onto the LAN — the same reasoning as
   // isTrustedLocalHost in host-guard.ts.
+  //
+  // On the SHARE surface the caller passes none of this, leaving same-origin
+  // as the only way through. That matters because a share visitor holds a
+  // SameSite=Lax session cookie and websockets ignore CORS entirely: an
+  // allowed origin that happened to be same-SITE with the share host would
+  // otherwise carry that cookie into /y/<docId> and read and write the doc.
   const host = url.hostname.toLowerCase();
-  if (LOOPBACK_HOSTS.has(host)) return true;
   if (policy.localHostnames.some((n) => n.toLowerCase() === host)) return true;
 
   return false;
