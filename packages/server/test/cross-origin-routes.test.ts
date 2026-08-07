@@ -197,3 +197,125 @@ describe('cross-origin access to the trusted host', () => {
     });
   });
 });
+
+/**
+ * The share surface must not honour the dev-server allowances. A share
+ * visitor holds a SameSite=Lax cookie, and websockets ignore CORS entirely,
+ * so an allowed origin that is same-SITE with the share host would carry that
+ * cookie into /y/<docId> and act as a logged-in visitor.
+ */
+describe('the public share host is same-origin only', () => {
+  const PUBLIC_HOST = 'feedback.example.com';
+  let handle: ServerHandle;
+  let dataDir: string;
+  let base: string;
+  let cookie: string;
+
+  beforeAll(async () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'share-origin-'));
+    const docPath = join(dataDir, 'notes.md');
+    writeFileSync(docPath, `# Notes\n\n${CANARY}.\n`);
+    handle = createServer({
+      port: 0,
+      dataDir,
+      allowedOrigins: ['https://mockups.example.com'],
+      share: { config: { publicHostname: PUBLIC_HOST } },
+    });
+    base = `http://localhost:${handle.port}`;
+    const local = (p: string, i: RequestInit = {}) =>
+      fetch(`${base}${p}`, {
+        ...i,
+        headers: { host: `localhost:${handle.port}`, 'content-type': 'application/json' },
+      });
+    await local('/api/docs', {
+      method: 'POST',
+      body: JSON.stringify({ docId: 'shared', type: 'markdown', sourceUrl: docPath }),
+    });
+    const mint = await local('/api/share/link', {
+      method: 'POST',
+      body: JSON.stringify({ docId: 'shared' }),
+    });
+    const { share } = (await mint.json()) as { share: { slug: string } };
+    const redeemed = await fetch(`${base}/s/${share.slug}`, {
+      redirect: 'manual',
+      headers: { host: PUBLIC_HOST },
+    });
+    cookie = (redeemed.headers.get('set-cookie') ?? '').match(/lf_share=([^;]+)/)?.[1] ?? '';
+    expect(cookie).not.toBe('');
+  });
+
+  afterAll(async () => {
+    await handle.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  // cloudflared terminates TLS and forwards plain http, stamping the original
+  // scheme — so the browser's origin is https even though our socket is http.
+  // Sending it here is what makes the same-origin comparison realistic.
+  const asVisitor = (path: string, origin: string | null) =>
+    fetch(`${base}${path}`, {
+      headers: {
+        host: PUBLIC_HOST,
+        'x-forwarded-proto': 'https',
+        cookie: `lf_share=${cookie}`,
+        ...(origin ? { origin } : {}),
+      },
+    });
+
+  it('grants the share host its own origin — POSITIVE CONTROL', async () => {
+    const r = await asVisitor('/api/docs/shared', `https://${PUBLIC_HOST}`);
+    expect(r.status).toBe(200);
+    expect(r.headers.get('access-control-allow-origin')).toBe(`https://${PUBLIC_HOST}`);
+  });
+
+  it('refuses a plain-http page on the same hostname', async () => {
+    // http://x and https://x are different browser origins. The share host is
+    // https; a page served over http on that name must not be trusted.
+    const r = await asVisitor('/api/docs/shared', `http://${PUBLIC_HOST}`);
+    expect(r.headers.get('access-control-allow-origin')).toBeNull();
+  });
+
+  it('does NOT honour ALLOWED_ORIGINS on the share host', async () => {
+    const r = await asVisitor('/api/docs/shared', 'https://mockups.example.com');
+    expect(r.headers.get('access-control-allow-origin')).toBeNull();
+  });
+
+  it('does NOT honour loopback on the share host', async () => {
+    const r = await asVisitor('/api/docs/shared', 'http://localhost:3000');
+    expect(r.headers.get('access-control-allow-origin')).toBeNull();
+  });
+
+  it('refuses a websocket from an allowlisted origin on the share host', async () => {
+    // The one CORS genuinely cannot protect: the browser would send the
+    // SameSite=Lax cookie and hand the page the doc regardless of headers.
+    const ws = new WebSocket(`ws://localhost:${handle.port}/y/shared`, {
+      headers: {
+        host: PUBLIC_HOST,
+        'x-forwarded-proto': 'https',
+        cookie: `lf_share=${cookie}`,
+        origin: 'https://mockups.example.com',
+      },
+    } as unknown as string[]);
+    const ydoc = new Y.Doc();
+    ws.binaryType = 'arraybuffer';
+    ws.addEventListener('open', () => {
+      const enc = encoding.createEncoder();
+      encoding.writeVarUint(enc, 0);
+      syncProtocol.writeSyncStep1(enc, ydoc);
+      ws.send(encoding.toUint8Array(enc));
+    });
+    ws.addEventListener('message', (ev) => {
+      const dec = decoding.createDecoder(new Uint8Array(ev.data as ArrayBuffer));
+      if (decoding.readVarUint(dec) !== 0) return;
+      const enc = encoding.createEncoder();
+      encoding.writeVarUint(enc, 0);
+      syncProtocol.readSyncMessage(dec, enc, ydoc, ws);
+      if (encoding.length(enc) > 1) ws.send(encoding.toUint8Array(enc));
+    });
+    await new Promise((r) => setTimeout(r, 1200));
+    expect(ydoc.getXmlFragment('prose').toString()).toBe('');
+    try {
+      ws.close();
+    } catch {}
+  });
+});

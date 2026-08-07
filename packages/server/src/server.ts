@@ -10,9 +10,18 @@ import {
 } from '@feedback/core';
 import type { Server as BunServer } from 'bun';
 import { showFile } from './git-diff.ts';
-import { corsHeadersFor, isAllowedBrowserOrigin } from './middleware/browser-origin.ts';
+import {
+  LOOPBACK_HOSTS,
+  corsHeadersFor,
+  isAllowedBrowserOrigin,
+} from './middleware/browser-origin.ts';
 import { type CfAccessOptions, createCfAccessVerifier } from './middleware/cf-access.ts';
-import { type ShareTarget, classifyHost, shareScopeAllows } from './middleware/host-guard.ts';
+import {
+  type ShareTarget,
+  classifyHost,
+  isTrustedLocalHost,
+  shareScopeAllows,
+} from './middleware/host-guard.ts';
 import { lanHostnames, publicBaseUrl, tailscaleHost } from './public-host.ts';
 import { type FeedbackWs, Rooms, type WorkspaceDirNode, type WorkspaceFileNode } from './rooms.ts';
 import { CfApi } from './share/cf-api.ts';
@@ -312,14 +321,31 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // https — so trust the forwarded scheme when the proxy sets one.
     const scheme =
       req.headers.get('x-forwarded-proto') ?? new URL(req.url).protocol.replace(':', '');
+    const host = req.headers.get('host') ?? '';
+    // The dev-server allowances belong to the LOCAL surface, where nothing is
+    // cookie-authenticated. A share host is not that: the visitor carries a
+    // SameSite=Lax session cookie, and websockets ignore CORS entirely — so an
+    // allowed origin that happened to be same-SITE with the share host would
+    // carry that cookie into /y/<docId> and act as a logged-in visitor. A
+    // share visitor loads the app FROM the share host, so same-origin is all
+    // they ever need, and it's all they get.
+    const isLocalSurface = isTrustedLocalHost(host, {
+      tailscaleHost: tailscaleHost(),
+      lanHosts: lanHostnames(),
+      extraHosts: opts.trustedHosts ?? [],
+      viaProxy: req.headers.has('cf-ray'),
+    });
     return {
-      requestOrigin: `${scheme}://${req.headers.get('host') ?? ''}`,
-      localHostnames: [
-        tailscaleHost() ?? '',
-        ...lanHostnames(),
-        ...(opts.trustedHosts ?? []),
-      ].filter((h) => h !== ''),
-      allowedOrigins: opts.allowedOrigins ?? [],
+      requestOrigin: `${scheme}://${host}`,
+      localHostnames: isLocalSurface
+        ? [
+            ...LOOPBACK_HOSTS,
+            tailscaleHost() ?? '',
+            ...lanHostnames(),
+            ...(opts.trustedHosts ?? []),
+          ].filter((h) => h !== '')
+        : [],
+      allowedOrigins: isLocalSurface ? (opts.allowedOrigins ?? []) : [],
     };
   };
 

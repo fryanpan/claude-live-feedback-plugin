@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'bun:test';
-import { corsHeadersFor, isAllowedBrowserOrigin } from '../src/middleware/browser-origin.ts';
+import {
+  LOOPBACK_HOSTS,
+  corsHeadersFor,
+  isAllowedBrowserOrigin,
+} from '../src/middleware/browser-origin.ts';
 
 /**
  * Every JSON response used to carry `Access-Control-Allow-Origin: *`, and the
@@ -16,7 +20,14 @@ import { corsHeadersFor, isAllowedBrowserOrigin } from '../src/middleware/browse
 
 const HOST = 'mac-mini.example.ts.net:8787';
 const SELF = `http://${HOST}`;
-const LOCAL_NAMES = ['mac-mini.example.ts.net', 'mac-mini.local', '192.168.1.42'];
+// What the server folds together for the LOCAL surface: loopback plus this
+// machine's own names. See policyFor in server.ts.
+const LOCAL_NAMES = [
+  ...LOOPBACK_HOSTS,
+  'mac-mini.example.ts.net',
+  'mac-mini.local',
+  '192.168.1.42',
+];
 
 const allow = (origin: string | null, extra: string[] = [], self = SELF) =>
   isAllowedBrowserOrigin(origin, {
@@ -164,5 +175,39 @@ describe('corsHeadersFor', () => {
       allowedOrigins: [],
     });
     expect(h?.['access-control-allow-credentials']).toBeUndefined();
+  });
+});
+
+describe('the public share surface is same-origin only', () => {
+  /**
+   * The dev-server allowances (loopback, this machine's hostnames,
+   * ALLOWED_ORIGINS) exist for the LOCAL surface, where nothing is
+   * cookie-authenticated. A share host is different: the visitor holds a
+   * `SameSite=Lax` session cookie, and CORS does not govern websockets at all
+   * — so an allowlisted origin that happens to be same-SITE with the share
+   * host would carry that cookie into `/y/<docId>` and read and write the doc
+   * as a logged-in visitor. (The REST path is already blocked, because we
+   * never send Access-Control-Allow-Credentials and a credentialed JSON POST
+   * fails its preflight — but the socket has no such protection.)
+   *
+   * A share visitor loads the app FROM the share host, so same-origin is all
+   * they ever need.
+   */
+  const sharePolicy = {
+    requestOrigin: 'https://feedback.example.com',
+    localHostnames: [],
+    allowedOrigins: [],
+  };
+
+  it('allows the share host itself', () => {
+    expect(isAllowedBrowserOrigin('https://feedback.example.com', sharePolicy)).toBe(true);
+  });
+
+  it('refuses a same-site sibling that would carry the session cookie', () => {
+    expect(isAllowedBrowserOrigin('https://mockups.example.com', sharePolicy)).toBe(false);
+  });
+
+  it('refuses loopback on the share surface', () => {
+    expect(isAllowedBrowserOrigin('http://localhost:3000', sharePolicy)).toBe(false);
   });
 });
