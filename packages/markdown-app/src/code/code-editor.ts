@@ -25,9 +25,11 @@ import * as Y from 'yjs';
 import type { ReviewSurface, SurfaceThreadRange } from '../review-surface.ts';
 import { encodeOffsetRel, resolveRelOffset, snapToLines } from './code-anchor.ts';
 import {
+  DIFF_SCAN_LIMIT,
   type DiffViewConfig,
   diffMergeExtensions,
   oldLineNumberGutter,
+  whitespaceFilter,
 } from './diff-extensions.ts';
 import { languageExtensionFor } from './languages.ts';
 
@@ -52,6 +54,14 @@ export interface CreateCodeEditorOpts {
    *  the File button active while the surface still shows the unified diff.
    *  Ignored without `diff`: a plain code doc is always whole-file. */
   initialViewMode?: CodeViewMode;
+  /** Start with whitespace-only changes hidden. Defaults to true — a
+   *  reformatted file is otherwise all noise. Pass a persisted reviewer
+   *  choice to honour it across files. */
+  ignoreWhitespace?: boolean;
+  /** Called whenever the number of suppressed whitespace changes can have
+   *  moved, so the chrome can offer to show them. Hiding diff content
+   *  without saying so is how a real one-character change goes unread. */
+  onWhitespaceChange?: (hidden: number, ignoring: boolean) => void;
   /** Make the file view a live collaborative editor: the CM doc binds
    *  two-way to the `content` Y.Text (y-codemirror.next), so edits reach
    *  every peer and — for working-tree diff members — the file on disk via
@@ -67,6 +77,12 @@ export interface CreateCodeEditorOpts {
 export interface CodeSurface extends ReviewSurface {
   setViewMode: (mode: CodeViewMode) => void;
   getViewMode: () => CodeViewMode;
+  /** Hide changes that are only whitespace. On by default: a reformatted
+   *  file is otherwise unreadable, and the reviewer is told the count. */
+  setIgnoreWhitespace: (on: boolean) => void;
+  getIgnoreWhitespace: () => boolean;
+  /** How many changes the last diff suppressed. 0 when the toggle is off. */
+  getHiddenWhitespaceCount: () => number;
   /** The whole line under the cursor as a line-snapped anchor selection —
    *  lets a bare click (empty selection) comment on its line. */
   getCursorLineRel: () => { start: Uint8Array; end: Uint8Array; snippet: string } | null;
@@ -185,6 +201,13 @@ export function createCodeEditor(opts: CreateCodeEditorOpts): CodeSurface {
   // whole-file view anyway).
   const viewModeComp = new Compartment();
   let viewMode: CodeViewMode = opts.diff ? (opts.initialViewMode ?? 'diff') : 'file';
+  // Default ON. A formatter run otherwise buries the real change; the count
+  // is reported through onWhitespaceChange so the hiding is never silent.
+  let ignoreWhitespace = opts.ignoreWhitespace ?? true;
+  // The filter in force for the CURRENT extension set. Rebuilt by
+  // modeExtensions and read back for the count, so both the merge view and
+  // the old-line gutter share one instance (they must — see its doc).
+  let filter = whitespaceFilter({ scanLimit: DIFF_SCAN_LIMIT, enabled: false });
   // Select the line on mousedown (so the user sees it), open the composer
   // on the completed CLICK — opening mid-mousedown races the browser's
   // remaining mouseup/click dispatch against the composer's scrim/focus.
@@ -215,14 +238,19 @@ export function createCodeEditor(opts: CreateCodeEditorOpts): CodeSurface {
       EditorView.editable.of(writable),
     ];
     if (!opts.diff) return [...access, lineNumbersExt()];
+    filter = whitespaceFilter({ scanLimit: DIFF_SCAN_LIMIT, enabled: ignoreWhitespace });
     return mode === 'diff'
       ? [
           ...access,
-          oldLineNumberGutter(),
+          oldLineNumberGutter(filter),
           lineNumbersExt(),
-          ...diffMergeExtensions({ ...opts.diff, collapse: true }),
+          ...diffMergeExtensions({ ...opts.diff, collapse: true, filter }),
         ]
-      : [...access, lineNumbersExt(), ...diffMergeExtensions({ ...opts.diff, collapse: false })];
+      : [
+          ...access,
+          lineNumbersExt(),
+          ...diffMergeExtensions({ ...opts.diff, collapse: false, filter }),
+        ];
   };
 
   function selectWholeLine(v: EditorView, pos: number): void {
@@ -284,6 +312,18 @@ export function createCodeEditor(opts: CreateCodeEditorOpts): CodeSurface {
   });
   view.dom.classList.toggle('cm-file-mode', viewMode === 'file');
 
+  // Push the suppressed-change count to the caller whenever it can have
+  // moved. Chunks are computed synchronously inside the state reconfigure,
+  // so `filter.hidden` is already populated by the time this runs.
+  let lastReported = -1;
+  const reportWhitespace = () => {
+    const n = filter.hidden.length;
+    if (n === lastReported) return;
+    lastReported = n;
+    opts.onWhitespaceChange?.(n, ignoreWhitespace);
+  };
+  reportWhitespace();
+
   // Read-only surfaces: one-way bind — when the agent edits the source file,
   // the server applies it to `content`; mirror it into the CM doc by
   // replacing the whole text. Editable surfaces skip this (yCollab owns the
@@ -314,6 +354,9 @@ export function createCodeEditor(opts: CreateCodeEditorOpts): CodeSurface {
         view.dispatch({ effects: viewModeComp.reconfigure(modeExtensions('diff')) });
       }
     }
+    // The count is only knowable after a diff has run, and the first real
+    // run is the one above — reporting at mount would always say zero.
+    reportWhitespace();
   };
   content.observe(onContentChange);
 
@@ -361,6 +404,20 @@ export function createCodeEditor(opts: CreateCodeEditorOpts): CodeSurface {
       viewMode = mode;
       view.dispatch({ effects: viewModeComp.reconfigure(modeExtensions(mode)) });
       view.dom.classList.toggle('cm-file-mode', mode === 'file');
+      reportWhitespace();
+    },
+    setIgnoreWhitespace(on: boolean) {
+      if (on === ignoreWhitespace) return;
+      ignoreWhitespace = on;
+      if (!opts.diff) return;
+      view.dispatch({ effects: viewModeComp.reconfigure(modeExtensions(viewMode)) });
+      reportWhitespace();
+    },
+    getIgnoreWhitespace() {
+      return ignoreWhitespace;
+    },
+    getHiddenWhitespaceCount() {
+      return filter.hidden.length;
     },
     getViewMode() {
       return viewMode;

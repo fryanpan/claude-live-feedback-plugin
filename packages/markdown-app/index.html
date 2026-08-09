@@ -124,20 +124,39 @@
                (live). Floats top-right of the editor; hidden except on diff
                docs (code-app / redline-app show it once the base text is
                available). Redline is markdown-only — hidden on other files. -->
-          <div id="view-toggle" class="view-toggle hidden" role="group" aria-label="View mode">
+          <div id="view-controls" class="view-controls">
+            <div id="view-toggle" class="view-toggle hidden" role="group" aria-label="View mode">
+              <button
+                type="button"
+                id="view-redline"
+                class="view-toggle-btn hidden"
+                aria-pressed="false"
+              >
+                Redline
+              </button>
+              <button
+                type="button"
+                id="view-diff"
+                class="view-toggle-btn active"
+                aria-pressed="true"
+              >
+                Diff
+              </button>
+              <button type="button" id="view-file" class="view-toggle-btn" aria-pressed="false">
+                File
+              </button>
+            </div>
+            <!-- Whitespace suppression. Not a view MODE, so it sits outside the
+                 radio group above: it's an independent toggle, and it appears
+                 only when this file actually has whitespace-only changes to
+                 hide (or they're currently being shown). -->
             <button
               type="button"
-              id="view-redline"
-              class="view-toggle-btn hidden"
+              id="view-whitespace"
+              class="view-toggle-btn ws-toggle hidden"
               aria-pressed="false"
             >
-              Redline
-            </button>
-            <button type="button" id="view-diff" class="view-toggle-btn active" aria-pressed="true">
-              Diff
-            </button>
-            <button type="button" id="view-file" class="view-toggle-btn" aria-pressed="false">
-              File
+              Whitespace
             </button>
           </div>
           <div
