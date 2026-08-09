@@ -44,23 +44,47 @@ export interface HiddenRegion {
 const squashWhitespace = (s: string): string => s.replace(/\s+/g, ' ').trim();
 
 /**
- * Whether a change is only a reflow — indentation, trailing space, blank
- * lines, CRLF. Note this is deliberately whitespace-INSENSITIVE, not
- * whitespace-BLIND: `a b` → `ab` removes a space that separates two tokens
- * and is reported as a real change.
+ * Whether two texts differ only in layout — indentation, trailing space,
+ * blank lines, CRLF.
+ *
+ * Whitespace-INSENSITIVE, not whitespace-BLIND: `a b` → `ab` removes a space
+ * that separates two tokens, and comes back false. That distinction only
+ * holds if callers pass whole LINES — see `expandToLines`.
  */
 export function isWhitespaceOnlyChange(a: string, b: string): boolean {
   return squashWhitespace(a) === squashWhitespace(b);
+}
+
+/**
+ * The full lines a character range touches.
+ *
+ * Classification MUST happen on these, never on the raw change slice.
+ * `presentableDiff` reports `foo bar` → `foobar` as a change whose slices
+ * are exactly `' '` and `''` — both of which squash to empty, so a
+ * slice-level test calls a real code edit "whitespace" and the line vanishes
+ * from the diff entirely. Verified: it rendered zero chunks before this.
+ * The enclosing lines squash to `foo bar` vs `foobar`, which differ.
+ *
+ * Widening is also conservative in the right direction: when one line holds
+ * both a real edit and a reindent, the line reads as changed and stays
+ * visible. Showing noise is a nuisance; hiding a change is a bug.
+ */
+function expandToLines(s: string, from: number, to: number): string {
+  const start = s.lastIndexOf('\n', Math.max(0, from - 1)) + 1;
+  const nl = s.indexOf('\n', to);
+  return s.slice(start, nl === -1 ? s.length : nl);
 }
 
 export interface WhitespaceFilter {
   /** Hand to `unifiedMergeView`/`Chunk.build` in place of a bare config. */
   diffConfig: DiffConfig;
   /**
-   * Changes withheld on the last run, in document order. Rewritten in place
-   * on every recompute, so hold the filter — not a copy of this array.
+   * Changes withheld on the last run, in document order. Each recompute
+   * REPLACES this array rather than mutating it, so its identity is a valid
+   * cache key (`oldLineForPos` memoizes on exactly that). Read it through the
+   * filter; don't hold a reference across a recompute.
    */
-  readonly hidden: HiddenRegion[];
+  readonly hidden: readonly HiddenRegion[];
 }
 
 /**
@@ -79,21 +103,61 @@ export function whitespaceFilter(opts: {
   scanLimit: number;
   enabled: boolean;
 }): WhitespaceFilter {
-  const hidden: HiddenRegion[] = [];
-  if (!opts.enabled) return { diffConfig: { scanLimit: opts.scanLimit }, hidden };
+  let hidden: readonly HiddenRegion[] = [];
+  if (!opts.enabled) {
+    return { diffConfig: { scanLimit: opts.scanLimit }, hidden };
+  }
   const override = (a: string, b: string): readonly Change[] => {
-    hidden.length = 0;
+    const next: HiddenRegion[] = [];
     const kept: Change[] = [];
     for (const c of presentableDiff(a, b, { scanLimit: opts.scanLimit })) {
-      if (isWhitespaceOnlyChange(a.slice(c.fromA, c.toA), b.slice(c.fromB, c.toB))) {
-        hidden.push({ fromA: c.fromA, toA: c.toA, fromB: c.fromB, toB: c.toB });
-      } else {
-        kept.push(c);
-      }
+      // Whole lines, not the slice — see expandToLines.
+      const ok = isWhitespaceOnlyChange(
+        expandToLines(a, c.fromA, c.toA),
+        expandToLines(b, c.fromB, c.toB),
+      );
+      if (ok) next.push({ fromA: c.fromA, toA: c.toA, fromB: c.fromB, toB: c.toB });
+      else kept.push(c);
     }
+    hidden = next;
     return kept;
   };
-  return { diffConfig: { scanLimit: opts.scanLimit, override }, hidden };
+  return {
+    diffConfig: { scanLimit: opts.scanLimit, override },
+    get hidden() {
+      return hidden;
+    },
+  };
+}
+
+type Region = HiddenRegion & { hidden: boolean };
+
+const EMPTY_HIDDEN: readonly HiddenRegion[] = [];
+
+// One-entry memo, keyed on the two source arrays by identity. The gutter
+// calls oldLineForPos once PER VISIBLE LINE with the same arrays, and a
+// reformatted file can carry thousands of suppressed regions — rebuilding
+// and re-sorting that list per line is a per-frame cliff. Safe as an
+// identity key because whitespaceFilter REPLACES `hidden` on each
+// recompute rather than mutating it in place.
+let memoChunks: readonly Chunk[] | null = null;
+let memoHidden: readonly HiddenRegion[] | null = null;
+let memoRegions: Region[] = [];
+
+function mergedRegions(chunks: readonly Chunk[], hidden: readonly HiddenRegion[]): Region[] {
+  if (chunks === memoChunks && hidden === memoHidden) return memoRegions;
+  const regions: Region[] = [];
+  for (const c of chunks) {
+    regions.push({ fromA: c.fromA, toA: c.toA, fromB: c.fromB, toB: c.toB, hidden: false });
+  }
+  for (const h of hidden) {
+    regions.push({ fromA: h.fromA, toA: h.toA, fromB: h.fromB, toB: h.toB, hidden: true });
+  }
+  regions.sort((x, y) => x.fromB - y.fromB);
+  memoChunks = chunks;
+  memoHidden = hidden;
+  memoRegions = regions;
+  return regions;
 }
 
 /** How many line breaks a character range covers in a document. */
@@ -124,16 +188,7 @@ export function oldLineForPos(
   pos: number,
   opts?: { hidden?: readonly HiddenRegion[]; doc?: Text },
 ): number | null {
-  const regions: Array<HiddenRegion & { hidden: boolean }> = [
-    ...chunks.map((c) => ({
-      fromA: c.fromA,
-      toA: c.toA,
-      fromB: c.fromB,
-      toB: c.toB,
-      hidden: false,
-    })),
-    ...(opts?.hidden ?? []).map((h) => ({ ...h, hidden: true })),
-  ].sort((x, y) => x.fromB - y.fromB);
+  const regions = mergedRegions(chunks, opts?.hidden ?? EMPTY_HIDDEN);
 
   let delta = 0;
   for (const r of regions) {

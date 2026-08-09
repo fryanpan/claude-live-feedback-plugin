@@ -315,11 +315,15 @@ export function createCodeEditor(opts: CreateCodeEditorOpts): CodeSurface {
   // Push the suppressed-change count to the caller whenever it can have
   // moved. Chunks are computed synchronously inside the state reconfigure,
   // so `filter.hidden` is already populated by the time this runs.
-  let lastReported = -1;
+  let lastReported: string | null = null;
   const reportWhitespace = () => {
     const n = filter.hidden.length;
-    if (n === lastReported) return;
-    lastReported = n;
+    // Keyed on the MODE too, not just the count: toggling on a file with
+    // nothing to hide leaves the count at 0 both times, and a count-only
+    // guard would swallow the notification that the mode changed.
+    const key = `${n}:${ignoreWhitespace}`;
+    if (key === lastReported) return;
+    lastReported = key;
     opts.onWhitespaceChange?.(n, ignoreWhitespace);
   };
   reportWhitespace();

@@ -63,7 +63,10 @@ function resetSurfaceChrome(): void {
     'composer-open',
     'thread-view-open',
   );
-  for (const id of ['view-toggle', 'view-redline']) {
+  // view-whitespace joins these: it is shown per-FILE (only when that file
+  // has whitespace-only changes), so without a reset it would linger with the
+  // previous file's count over a doc that has none — or over a markdown doc.
+  for (const id of ['view-toggle', 'view-redline', 'view-whitespace']) {
     document.getElementById(id)?.classList.add('hidden');
   }
   document.getElementById('diff-banner')?.remove();

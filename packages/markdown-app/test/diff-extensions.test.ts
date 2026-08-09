@@ -69,6 +69,42 @@ describe('oldLineForPos', () => {
   });
 });
 
+/**
+ * The bug an adversarial review caught, and the reason classification runs
+ * on whole lines. `presentableDiff` reports `foo bar` → `foobar` as a change
+ * whose two slices are `' '` and `''`; both squash to empty, so classifying
+ * the SLICE hid a real code edit completely — zero chunks, the line simply
+ * gone from the diff. The unit test for `isWhitespaceOnlyChange('a b','ab')`
+ * passed the whole time, because nothing ever called it that way.
+ */
+describe('token-boundary whitespace is a REAL change', () => {
+  const renders = (a: string, b: string) => {
+    const f = whitespaceFilter({ scanLimit: 2000, enabled: true });
+    return Chunk.build(Text.of(a.split('\n')), Text.of(b.split('\n')), f.diffConfig).length;
+  };
+
+  it('shows a space removed between two tokens', () => {
+    expect(renders('const x = foo bar;\ny = 1;\n', 'const x = foobar;\ny = 1;\n')).toBeGreaterThan(
+      0,
+    );
+  });
+
+  it('shows a space added inside a token', () => {
+    expect(renders('let ab = 2;\n', 'let a b = 2;\n')).toBeGreaterThan(0);
+  });
+
+  it('CONTROL: still hides a pure reindent of the same line', () => {
+    // Without this, "everything renders" would satisfy the two above.
+    expect(renders('let ab = 2;\n', '    let ab = 2;\n')).toBe(0);
+  });
+
+  it('shows a real edit that shares a line with a reindent', () => {
+    // Conservative by design: widening to the line means a line carrying both
+    // reads as changed. Noise is a nuisance; a hidden change is a bug.
+    expect(renders('let ab = 2;\n', '    let ab = 3;\n')).toBeGreaterThan(0);
+  });
+});
+
 describe('isWhitespaceOnlyChange', () => {
   it('is true for indentation, trailing space, and blank lines', () => {
     expect(isWhitespaceOnlyChange('', '    ')).toBe(true);
