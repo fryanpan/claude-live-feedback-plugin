@@ -5,6 +5,7 @@ import { el, mountReviewChrome } from '../review-chrome.ts';
 import { renderWorkspaceTree, wireWorkspaceTreeRefresh } from '../workspace-tree.ts';
 import { createCodeEditor } from './code-editor.ts';
 import { isEditableFileMember } from './editable-policy.ts';
+import { isWhitespaceSignificant } from './languages.ts';
 
 /**
  * The reviewer's whitespace choice, remembered across files and reloads.
@@ -133,7 +134,10 @@ export async function mountCode(
     sourceUrl,
     diff: diffInfo?.baseText != null ? { baseText: diffInfo.baseText } : undefined,
     initialViewMode,
-    ignoreWhitespace: getIgnoreWhitespacePref(),
+    // Off by default where indentation is syntax (Python, YAML, Makefiles):
+    // there, a suppressed reindent is a suppressed behaviour change. Still
+    // reachable via the toggle — opt-in rather than unavailable.
+    ignoreWhitespace: getIgnoreWhitespacePref() && !isWhitespaceSignificant(sourceUrl),
     onWhitespaceChange: (hidden, ignoring) => repaintWhitespace?.(hidden, ignoring),
     editable,
     awareness,
