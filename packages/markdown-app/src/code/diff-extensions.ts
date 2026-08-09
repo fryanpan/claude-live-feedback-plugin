@@ -75,6 +75,31 @@ function expandToLines(s: string, from: number, to: number): string {
   return s.slice(start, nl === -1 ? s.length : nl);
 }
 
+/**
+ * Does a change begin inside a quoted span on its line?
+ *
+ * Whitespace inside a string literal is CONTENT — `"hello  world"` →
+ * `"hello world"` changes what the program prints, and squashing runs makes
+ * the two lines compare equal, so line expansion alone would hide it.
+ * Telling a literal from formatting properly needs a parser per language;
+ * this counts quote characters before the change instead.
+ *
+ * A heuristic, and deliberately a one-directional one: it can only ever
+ * classify a change as NOT-whitespace, so its failure mode is showing a
+ * reindent we could have hidden. Escaped quotes and apostrophes in prose
+ * both land on that side. (git's own `-w`, and every "hide whitespace" diff
+ * view built on it, simply gets this case wrong.)
+ */
+function startsInsideQuotes(s: string, at: number): boolean {
+  const start = s.lastIndexOf('\n', Math.max(0, at - 1)) + 1;
+  let quotes = 0;
+  for (let i = start; i < at; i++) {
+    const ch = s[i];
+    if (ch === '"' || ch === "'" || ch === '`') quotes++;
+  }
+  return quotes % 2 === 1;
+}
+
 export interface WhitespaceFilter {
   /** Hand to `unifiedMergeView`/`Chunk.build` in place of a bare config. */
   diffConfig: DiffConfig;
@@ -111,11 +136,15 @@ export function whitespaceFilter(opts: {
     const next: HiddenRegion[] = [];
     const kept: Change[] = [];
     for (const c of presentableDiff(a, b, { scanLimit: opts.scanLimit })) {
-      // Whole lines, not the slice — see expandToLines.
-      const ok = isWhitespaceOnlyChange(
-        expandToLines(a, c.fromA, c.toA),
-        expandToLines(b, c.fromB, c.toB),
-      );
+      // Whole lines, not the slice — see expandToLines. Then the literal
+      // guard, because inside a string a space IS content.
+      const ok =
+        isWhitespaceOnlyChange(
+          expandToLines(a, c.fromA, c.toA),
+          expandToLines(b, c.fromB, c.toB),
+        ) &&
+        !startsInsideQuotes(a, c.fromA) &&
+        !startsInsideQuotes(b, c.fromB);
       if (ok) next.push({ fromA: c.fromA, toA: c.toA, fromB: c.fromB, toB: c.toB });
       else kept.push(c);
     }

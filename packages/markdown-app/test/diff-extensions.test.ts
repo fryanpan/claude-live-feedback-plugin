@@ -103,6 +103,20 @@ describe('token-boundary whitespace is a REAL change', () => {
     // reads as changed. Noise is a nuisance; a hidden change is a bug.
     expect(renders('let ab = 2;\n', '    let ab = 3;\n')).toBeGreaterThan(0);
   });
+
+  it('shows whitespace changed INSIDE a string literal', () => {
+    // A space in a literal is content — this changes what the program prints.
+    expect(renders('const m = "hello  world";\n', 'const m = "hello world";\n')).toBeGreaterThan(0);
+    expect(renders("const m = 'a  b';\n", "const m = 'a b';\n")).toBeGreaterThan(0);
+    expect(renders('const m = `a  b`;\n', 'const m = `a b`;\n')).toBeGreaterThan(0);
+  });
+
+  it('CONTROL: still hides a reindent of a line that CONTAINS a literal', () => {
+    // The guard keys on where the CHANGE starts, not on whether the line has
+    // quotes anywhere — otherwise every import and log line would stay noisy.
+    expect(renders("import x from 'y';\n", "    import x from 'y';\n")).toBe(0);
+    expect(renders('log("hi");\n', '    log("hi");\n')).toBe(0);
+  });
 });
 
 describe('isWhitespaceOnlyChange', () => {
