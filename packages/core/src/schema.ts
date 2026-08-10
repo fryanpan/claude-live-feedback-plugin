@@ -51,6 +51,7 @@ export function readDocMeta(doc: Y.Doc): DocMeta {
   const diffOldPath = m.get('diffOldPath') as string | undefined;
   const diffAdditions = m.get('diffAdditions') as number | undefined;
   const diffDeletions = m.get('diffDeletions') as number | undefined;
+  const diffWhitespaceOnly = m.get('diffWhitespaceOnly') as boolean | undefined;
   const diffGroup = m.get('diffGroup') as string | undefined;
   const diffGroupRank = m.get('diffGroupRank') as number | undefined;
   const diffGroupDetails = m.get('diffGroupDetails') as string | undefined;
@@ -72,6 +73,7 @@ export function readDocMeta(doc: Y.Doc): DocMeta {
     diffOldPath,
     diffAdditions,
     diffDeletions,
+    diffWhitespaceOnly,
     diffGroup,
     diffGroupRank,
     diffGroupDetails,
@@ -104,6 +106,8 @@ export function initDocMeta(doc: Y.Doc, meta: DocMeta): void {
       m.set('diffAdditions', meta.diffAdditions);
     if (meta.diffDeletions !== undefined && !m.has('diffDeletions'))
       m.set('diffDeletions', meta.diffDeletions);
+    if (meta.diffWhitespaceOnly !== undefined && !m.has('diffWhitespaceOnly'))
+      m.set('diffWhitespaceOnly', meta.diffWhitespaceOnly);
     if (meta.diffGroup !== undefined && !m.has('diffGroup')) m.set('diffGroup', meta.diffGroup);
     if (meta.diffGroupRank !== undefined && !m.has('diffGroupRank'))
       m.set('diffGroupRank', meta.diffGroupRank);

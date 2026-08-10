@@ -53,6 +53,7 @@ export interface BindHost {
       diffOldPath?: string;
       diffAdditions?: number;
       diffDeletions?: number;
+      diffWhitespaceOnly?: boolean;
       diffGroup?: string;
       diffGroupRank?: number;
       diffGroupDetails?: string;
@@ -408,6 +409,7 @@ export function bindDiff(host: BindHost, opts: BindDiffOpts): BindDiffResult {
       relPath: entry.relPath,
       additions: entry.additions,
       deletions: entry.deletions,
+      whitespaceOnly: entry.whitespaceOnly,
     })),
     opts.groups,
   );
@@ -439,6 +441,7 @@ export function bindDiff(host: BindHost, opts: BindDiffOpts): BindDiffResult {
       diffOldPath: entry.oldPath,
       diffAdditions: entry.additions,
       diffDeletions: entry.deletions,
+      diffWhitespaceOnly: entry.whitespaceOnly,
       diffGroup: groupOf.get(entry.relPath)?.group,
       diffGroupRank: groupOf.get(entry.relPath)?.rank,
       diffGroupDetails: groupOf.get(entry.relPath)?.details,
@@ -521,6 +524,10 @@ function refreshDiffMeta(
     diffOldPath: entry.oldPath,
     diffAdditions: entry.additions,
     diffDeletions: entry.deletions,
+    // Explicitly false, not undefined: a file that STOPS being whitespace-only
+    // (the agent added a real edit on a working-tree review) must clear the
+    // flag, and refreshDiffMeta skips undefined values.
+    diffWhitespaceOnly: entry.whitespaceOnly === true,
     diffGroup: group?.group,
     diffGroupRank: group?.rank,
     diffGroupDetails: group?.details,
@@ -796,6 +803,7 @@ export function setWorkspaceGroups(
       relPath: m.relPath,
       additions: m.diffAdditions,
       deletions: m.diffDeletions,
+      whitespaceOnly: m.diffWhitespaceOnly,
     })),
     explicit,
   );

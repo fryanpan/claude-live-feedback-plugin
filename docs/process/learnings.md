@@ -192,6 +192,59 @@ Technical discoveries that should persist across sessions for this project.
   extension order: the old-number gutter must precede `lineNumbers()` in
   the same extension list to render on the left.
 
+## A unit test can be true and still prove nothing about the caller
+
+- **`isWhitespaceOnlyChange('a b', 'ab') === false` passed from the first
+  commit, and the feature still hid a real code change.** Nothing ever
+  called the function with whole strings: `presentableDiff` reports
+  `foo bar` → `foobar` as a change whose two slices are exactly `' '` and
+  `''`, and both squash to empty. The classifier said "whitespace", the
+  filter suppressed it, and the line vanished from the diff entirely with
+  the default-on toggle. The assertion was TRUE and USELESS — it tested an
+  input shape production never produces. Rule: when a predicate is applied
+  to *slices of* something, test it through the thing that slices, not on
+  hand-written whole values. The fix classifies the enclosing LINES.
+- **Three adversarial rounds each found a distinct real defect**, all of
+  the same family (whitespace-insensitive diffing is lossy) but at
+  different layers: slice-vs-line, whitespace inside a string literal
+  (`"a  b"` → `"a b"` changes what the program prints), and
+  indentation-significant languages (reindenting a Python statement moves
+  it into an `if` block). `git diff -w` and every hide-whitespace view
+  built on it get the last two wrong. Guards: classify on lines; skip
+  changes starting inside a quoted span; default the whole feature OFF for
+  `.py`/`.yaml`/`Makefile`-class files. Each guard is deliberately
+  ONE-DIRECTIONAL — it can only keep MORE visible, so its failure mode is
+  noise rather than a hidden change.
+- **Don't stop at the first clean-looking review.** Rounds 2 and 3 only
+  existed because round 1's fix was non-trivial. Conversely, know when to
+  stop: round 4 would restate the inherent limitation, which is now
+  handled where it actually bites and documented where it doesn't.
+
+## Suppressing a diff chunk silently breaks anything that counts chunks
+
+- **`oldLineForPos` reconstructs base line numbers by accumulating the size
+  delta of every chunk before a position** — so a change the whitespace
+  filter drops contributes no delta, and every old line number after a
+  reindent is wrong by the width of the indent. Silently: the gutter keeps
+  rendering plausible numbers. Suppressed changes must be RECORDED and fed
+  back into the mapping, not discarded.
+- Three distinct cases, only found by checking every line of a realistic
+  fixture against the base text: (1) reindent — same line count, maps 1:1;
+  (2) blank line added — line counts differ, so NO base number (repeating
+  the line above asserts an identity that doesn't exist); (3) the line
+  *after* an insertion — maps into the MIDDLE of a base line, which is the
+  tell that it has no counterpart. Guard: only claim a base line when the
+  mapped position IS that line's start.
+- **The test that caught (2) and (3) asserts a relationship, not values**:
+  for every line, if the gutter shows a number, the base line at that
+  number must be the same line of code. Per-line expected-value assertions
+  would have been written to match the buggy output.
+- `hidden` regions are read once per VISIBLE LINE by the gutter, so
+  rebuilding + sorting the merged region list there is a per-frame cliff on
+  a large reformatted file. Memoized on the source arrays by identity —
+  which only works because the filter REPLACES the array each recompute
+  instead of mutating it in place. Mutating a cache key is a trap.
+
 ## Concurrent agent+human edits are CRDT-safe; disk reconcile was not
 
 - **Agent edits don't clobber a live human editor — the in-memory path is

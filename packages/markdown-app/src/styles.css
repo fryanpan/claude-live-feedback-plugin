@@ -1759,6 +1759,33 @@ body.code-mode #editor .cm-content {
   color: #fff;
 }
 
+/* Wrapper for the floating view controls. `display: contents` by default so
+   a non-diff doc's grid rows are unchanged — #editor-pane is a two-row grid
+   and a real box here would claim one of them. Diff mode turns it into the
+   positioned flex row (see the DIFF REVIEW positioning block below). */
+.view-controls {
+  display: contents;
+}
+
+/* Whitespace suppression toggle. Standalone, not part of the segmented
+   group: it's an independent switch, so it gets its own border and sits
+   apart from the Diff/File radio pair. `.active` = whitespace is SHOWING,
+   i.e. the noise is deliberately visible. */
+.ws-toggle {
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  min-width: 0;
+  /* The label carries a per-file count; keep it from reflowing the row. */
+  max-width: 42vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-toggle.hidden {
+  display: none;
+}
+
 /* Old-line-number gutter (base commit). Sits LEFT of the target numbers;
    blank on added/changed lines, like GitHub's left column. */
 .cm-old-line-gutter {
@@ -1842,6 +1869,14 @@ body.diff-mode .cm-collapsedLines {
   .view-toggle-btn {
     min-width: 42px;
     padding: 0 8px;
+  }
+  /* Narrow screens: keep the row inside the viewport next to Diff|File. */
+  .ws-toggle {
+    max-width: 30vw;
+  }
+  body.diff-mode #view-controls {
+    gap: 4px;
+    right: 8px;
   }
   /* Tighter deleted-line number column on narrow screens. */
   body.diff-mode .cm-deletedChunk .cm-deletedLine {
@@ -2005,14 +2040,28 @@ body.diff-mode .cm-collapsedLines {
   pointer-events: none;
 }
 
-/* The Diff|File toggle floats top-right INSIDE the editor pane. */
-body.diff-mode #view-toggle {
+/* The view controls float top-right INSIDE the editor pane. The wrapper owns
+   the positioning so the Diff|File group and the whitespace toggle sit on one
+   row without either needing to know the other's width. */
+body.diff-mode #view-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   position: absolute;
   top: 8px;
   right: 16px;
   z-index: 5;
+}
+body.diff-mode #view-toggle,
+body.diff-mode .ws-toggle {
   background: var(--bg);
   box-shadow: var(--shadow);
+}
+/* Must out-specify the rule above, which would otherwise repaint the pressed
+   button's background back to --bg and leave .active's white text on white. */
+body.diff-mode .ws-toggle.active {
+  background: var(--accent);
+  color: #fff;
 }
 
 /* File mode on a diff doc: whole live file with added/changed lines still

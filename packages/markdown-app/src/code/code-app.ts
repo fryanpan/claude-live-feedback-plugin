@@ -5,6 +5,30 @@ import { el, mountReviewChrome } from '../review-chrome.ts';
 import { renderWorkspaceTree, wireWorkspaceTreeRefresh } from '../workspace-tree.ts';
 import { createCodeEditor } from './code-editor.ts';
 import { isEditableFileMember } from './editable-policy.ts';
+import { isWhitespaceSignificant } from './languages.ts';
+
+/**
+ * The reviewer's whitespace choice, remembered across files and reloads.
+ * A 50-file formatter review is exactly the case this feature exists for,
+ * and re-toggling on every file would undo the point. Defaults to hiding.
+ */
+const WS_PREF_KEY = 'lf.diff.ignoreWhitespace';
+
+function getIgnoreWhitespacePref(): boolean {
+  try {
+    return localStorage.getItem(WS_PREF_KEY) !== 'false';
+  } catch {
+    return true; // private mode / storage disabled — the default still holds
+  }
+}
+
+function setIgnoreWhitespacePref(on: boolean): void {
+  try {
+    localStorage.setItem(WS_PREF_KEY, String(on));
+  } catch {
+    // Preference is a convenience; failing to persist must not break the toggle.
+  }
+}
 
 /**
  * Mount the read-only code / diff review surface. All thread/composer/drawer
@@ -100,12 +124,21 @@ export async function mountCode(
   // are user-triggered so the guard never fires in practice.
   // biome-ignore lint/style/useConst: assigned after createCodeEditor so its callbacks can close over it
   let chromeRef: import('../review-chrome.ts').ReviewChrome | undefined;
+  // Assigned further down, once the toggle's DOM is wired. Same
+  // forward-reference shape as chromeRef: the surface is constructed first
+  // because the toggle reads its state.
+  let repaintWhitespace: ((hidden: number, ignoring: boolean) => void) | undefined;
   const surface = createCodeEditor({
     parent: editorMount,
     ydoc,
     sourceUrl,
     diff: diffInfo?.baseText != null ? { baseText: diffInfo.baseText } : undefined,
     initialViewMode,
+    // Off by default where indentation is syntax (Python, YAML, Makefiles):
+    // there, a suppressed reindent is a suppressed behaviour change. Still
+    // reachable via the toggle — opt-in rather than unavailable.
+    ignoreWhitespace: getIgnoreWhitespacePref() && !isWhitespaceSignificant(sourceUrl),
+    onWhitespaceChange: (hidden, ignoring) => repaintWhitespace?.(hidden, ignoring),
     editable,
     awareness,
     onSelectionChange: () => {
@@ -196,6 +229,36 @@ export async function mountCode(
       // doesn't touch these buttons, so after SPA nav they'd keep the previous
       // file's active/aria-pressed state (finding #6) — repaint unconditionally.
       applyMode(initialViewMode === 'file' ? 'file' : 'diff');
+    }
+
+    // --- whitespace suppression toggle ------------------------------------
+    const btnWs = document.getElementById('view-whitespace') as HTMLButtonElement | null;
+    if (btnWs && diffInfo?.baseText != null) {
+      // Repainted on every surface callback, and unconditionally on mount for
+      // the same reason applyMode() is: SPA nav leaves the previous file's
+      // label and pressed state on the button.
+      const paint = (hidden: number, ignoring: boolean) => {
+        // Nothing suppressed and nothing being shown = nothing to say. Once
+        // the reviewer has chosen to SHOW whitespace the button has to stay,
+        // or there'd be no way back.
+        const relevant = hidden > 0 || !ignoring;
+        btnWs.classList.toggle('hidden', !relevant);
+        if (!relevant) return;
+        btnWs.textContent = ignoring ? `Whitespace (${hidden})` : 'Whitespace';
+        btnWs.classList.toggle('active', !ignoring);
+        btnWs.setAttribute('aria-pressed', String(!ignoring));
+        btnWs.title = ignoring
+          ? `${hidden} whitespace-only ${hidden === 1 ? 'change' : 'changes'} hidden — click to show`
+          : 'Showing whitespace-only changes — click to hide them';
+      };
+      scope.listen(btnWs, 'click', () => {
+        const next = !surface.getIgnoreWhitespace();
+        surface.setIgnoreWhitespace(next);
+        setIgnoreWhitespacePref(next);
+        paint(surface.getHiddenWhitespaceCount(), next);
+      });
+      paint(surface.getHiddenWhitespaceCount(), surface.getIgnoreWhitespace());
+      repaintWhitespace = paint;
     }
     if (diffInfo?.status === 'deleted') {
       showBanner('This file was deleted in this diff — the content shown is the base version.');
