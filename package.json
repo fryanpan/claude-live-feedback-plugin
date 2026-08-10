@@ -20,6 +20,7 @@
     "build:all": "bun run build:widget && bun run build:markdown-app && bun run build:mcp",
     "publish:mcp": "cd packages/mcp && npm publish",
     "check:widget-size": "bun run scripts/check-widget-size.ts",
+    "check:plugin-version": "bun run scripts/check-plugin-version.ts",
     "share": "bun run scripts/share.ts",
     "activity:backfill": "bun run packages/server/src/activity-backfill.ts"
   },
