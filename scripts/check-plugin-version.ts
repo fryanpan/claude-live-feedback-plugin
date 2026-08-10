@@ -41,7 +41,8 @@ function git(...a: string[]): string {
 
 function tryGit(...a: string[]): string | null {
   try {
-    return git(...a);
+    // stderr piped: a missing ref is an expected outcome here, not console noise.
+    return execFileSync('git', a, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
   } catch {
     return null;
   }
@@ -69,9 +70,7 @@ function pluginVersionOf(source: string, label: string): string {
 
 function marketplaceVersionOf(source: string, label: string): string {
   const manifest = JSON.parse(source);
-  const entry = (manifest.plugins ?? []).find(
-    (p: { name?: string }) => p.name === 'live-feedback',
-  );
+  const entry = (manifest.plugins ?? []).find((p: { name?: string }) => p.name === 'live-feedback');
   if (!entry) fail(`${label} has no plugins[] entry named "live-feedback".`);
   if (typeof entry.version !== 'string') fail(`${label}'s live-feedback entry has no "version".`);
   return entry.version;
@@ -89,11 +88,11 @@ parseSemver(marketVersion, MARKETPLACE_MANIFEST);
 
 if (pluginVersion !== marketVersion) {
   fail(
-    `The two manifests disagree:\n` +
+    'The two manifests disagree:\n' +
       `  ${PLUGIN_MANIFEST}      ${pluginVersion}\n` +
       `  ${MARKETPLACE_MANIFEST}  ${marketVersion}\n\n` +
-      `They must be identical — one is what an installed copy reports, the other\n` +
-      `is what the marketplace advertises.`,
+      'They must be identical — one is what an installed copy reports, the other\n' +
+      'is what the marketplace advertises.',
   );
 }
 
@@ -106,7 +105,7 @@ if (!baseExists) {
   // is unknowable, and a silent pass is exactly the failure this gate exists for.
   const msg =
     `Base ref "${base}" is not available, so the changed-file check cannot run.\n` +
-    `In CI, fetch it (actions/checkout with fetch-depth: 0).`;
+    'In CI, fetch it (actions/checkout with fetch-depth: 0).';
   if (process.env.CI) fail(msg);
   console.warn(`⚠ ${msg}\n  Skipping locally. Manifests agree at ${pluginVersion}.`);
   process.exit(0);
@@ -138,10 +137,10 @@ if (compare(current, parseSemver(baseVersion, `${mergeBase}:${PLUGIN_MANIFEST}`)
       (pluginChanges.length > shown.length
         ? `\n    …and ${pluginChanges.length - shown.length} more`
         : '') +
-      `\n\n` +
+      '\n\n' +
       `Peers install by version. Unbumped, "claude plugin update" copies nothing\n` +
-      `and still reports success — the change reaches nobody.\n\n` +
-      `Bump the patch version in BOTH manifests:\n` +
+      'and still reports success — the change reaches nobody.\n\n' +
+      'Bump the patch version in BOTH manifests:\n' +
       `    ${PLUGIN_MANIFEST}\n` +
       `    ${MARKETPLACE_MANIFEST}`,
   );
