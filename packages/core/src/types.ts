@@ -123,6 +123,17 @@ export interface DocMeta {
   diffAdditions?: number;
   diffDeletions?: number;
   /**
+   * True when every changed line in this file differs only in whitespace —
+   * a formatter run, a reindent. Derived at bind time by diffing twice, the
+   * second time with `-w --ignore-blank-lines`.
+   *
+   * Persisted rather than recomputed on demand because `setWorkspaceGroups`
+   * re-runs the grouping heuristic from stored metadata alone, with no repo
+   * in hand; without this the file would silently climb back out of the
+   * "Whitespace only" group the next time an agent set groups.
+   */
+  diffWhitespaceOnly?: boolean;
+  /**
    * Logical group for the sidebar's grouped-diff view (e.g. "Routing",
    * "Tests"). Supplied by the creating agent or derived heuristically at
    * bind time; refreshed on re-bind. `diffGroupRank` orders groups.

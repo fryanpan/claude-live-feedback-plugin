@@ -44,6 +44,51 @@ export interface DiffFileEntry {
   additions?: number;
   deletions?: number;
   binary: boolean;
+  /**
+   * True when the file's every changed line differs only in whitespace —
+   * a formatter run, a reindent, trailing-space cleanup. Derived by asking
+   * git the same question twice, once with `-w`: a file the plain pass
+   * reports and the `-w` pass drops has nothing to read.
+   *
+   * The file is NOT withheld from the review; the sidebar ranks it last.
+   */
+  whitespaceOnly?: boolean;
+}
+
+/** Parsed `--numstat -z` record, keyed by the file's path at the target. */
+type NumstatEntry = { additions?: number; deletions?: number; binary: boolean };
+
+/**
+ * Parse `git diff --numstat -z` output.
+ *
+ * The -z form is "add\tdel\tpath\0" normally, but for renames and copies the
+ * path field is EMPTY and followed by two extra NUL-terminated fields:
+ * "add\tdel\t\0old\0new\0".
+ */
+function parseNumstat(stdout: string): Map<string, NumstatEntry> {
+  const counts = new Map<string, NumstatEntry>();
+  const t = stdout.split('\0');
+  for (let i = 0; i < t.length; ) {
+    const rec = t[i];
+    if (!rec) break;
+    const m = rec.match(/^(-|\d+)\t(-|\d+)\t(.*)$/s);
+    if (!m) break;
+    const binary = m[1] === '-';
+    const entry: NumstatEntry = {
+      additions: binary ? undefined : Number(m[1]),
+      deletions: binary ? undefined : Number(m[2]),
+      binary,
+    };
+    if (m[3] === '') {
+      const newPath = t[i + 2];
+      i += 3;
+      if (newPath) counts.set(newPath, entry);
+    } else {
+      counts.set(m[3] as string, entry);
+      i += 1;
+    }
+  }
+  return counts;
 }
 
 /**
@@ -105,37 +150,40 @@ export function diffFiles(
   // Join in line counts; numstat reports "-\t-" for binary files.
   const num = git(repo, ['diff', '--numstat', '-z', '-M', ...range, '--']);
   if (num.ok) {
-    const counts = new Map<string, { additions?: number; deletions?: number; binary: boolean }>();
-    // -z numstat: "add\tdel\tpath\0" normally; for renames/copies the path
-    // field is EMPTY and followed by two extra NUL-terminated fields:
-    // "add\tdel\t\0old\0new\0".
-    const t = num.stdout.split('\0');
-    for (let i = 0; i < t.length; ) {
-      const rec = t[i];
-      if (!rec) break;
-      const m = rec.match(/^(-|\d+)\t(-|\d+)\t(.*)$/s);
-      if (!m) break;
-      const binary = m[1] === '-';
-      const entry = {
-        additions: binary ? undefined : Number(m[1]),
-        deletions: binary ? undefined : Number(m[2]),
-        binary,
-      };
-      if (m[3] === '') {
-        const newPath = t[i + 2];
-        i += 3;
-        if (newPath) counts.set(newPath, entry);
-      } else {
-        counts.set(m[3] as string, entry);
-        i += 1;
-      }
-    }
+    const counts = parseNumstat(num.stdout);
     for (const f of files) {
       const c = counts.get(f.relPath);
       if (c) {
         f.additions = c.additions;
         f.deletions = c.deletions;
         f.binary = c.binary;
+      }
+    }
+
+    // Second pass, whitespace-insensitive. Every file the plain pass listed
+    // that this one drops changed only in whitespace. Restricted to files
+    // that were MODIFIED: an add or a delete is never "only whitespace" in
+    // any useful sense, and an untracked file appears in neither numstat.
+    // `-w` covers indentation and trailing space but NOT added/removed blank
+    // lines, which every formatter also produces — `--ignore-blank-lines` is
+    // a separate flag and both are needed to describe "a formatter ran".
+    const ws = git(repo, [
+      'diff',
+      '-w',
+      '--ignore-blank-lines',
+      '--numstat',
+      '-z',
+      '-M',
+      ...range,
+      '--',
+    ]);
+    if (ws.ok) {
+      const survives = parseNumstat(ws.stdout);
+      for (const f of files) {
+        if (f.binary) continue;
+        if (f.status !== 'modified' && f.status !== 'renamed') continue;
+        if (!counts.has(f.relPath)) continue; // not in the plain pass either
+        if (!survives.has(f.relPath)) f.whitespaceOnly = true;
       }
     }
   }

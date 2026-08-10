@@ -373,6 +373,7 @@ export class Rooms {
       diffOldPath?: string;
       diffAdditions?: number;
       diffDeletions?: number;
+      diffWhitespaceOnly?: boolean;
     },
   ): DocRoom {
     const existing = this.rooms.get(docId);

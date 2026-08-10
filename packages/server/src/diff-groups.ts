@@ -7,13 +7,24 @@
  *
  *   1. cross-cutting buckets first — Tests, Docs, Build & config
  *   2. remaining source grouped by its top path segment (the module)
- *   3. groups ordered by total churn (biggest change first), buckets last
+ *   3. groups ordered by total churn (biggest change first), buckets last,
+ *      and whitespace-only files dead last
  */
+
+/** The group whitespace-only files land in, always ranked last. */
+export const WHITESPACE_GROUP = 'Whitespace only';
 
 export interface GroupableFile {
   relPath: string;
   additions?: number;
   deletions?: number;
+  /**
+   * Set by `diffFiles` when every changed line differs only in whitespace.
+   * Such a file has the churn of a real rewrite and none of the content, so
+   * ranking by churn alone floats a formatter run to the top of the review —
+   * exactly backwards. It gets its own group at the bottom instead.
+   */
+  whitespaceOnly?: boolean;
 }
 
 export interface FileGroupAssignment {
@@ -149,24 +160,28 @@ export function assignGroups(
     return out;
   }
 
-  // Heuristic: bucket or module (top path segment).
-  const groups = new Map<string, { files: GroupableFile[]; bucket: boolean }>();
+  // Heuristic: bucket or module (top path segment). Tier decides ordering:
+  // 0 = source module, 1 = cross-cutting bucket, 2 = whitespace-only.
+  const groups = new Map<string, { files: GroupableFile[]; tier: number }>();
   for (const f of files) {
     const bucket = heuristicBucket(f.relPath);
-    const name =
-      bucket ?? (f.relPath.includes('/') ? (f.relPath.split('/')[0] as string) : '(root)');
+    const name = f.whitespaceOnly
+      ? WHITESPACE_GROUP
+      : (bucket ?? (f.relPath.includes('/') ? (f.relPath.split('/')[0] as string) : '(root)'));
     let g = groups.get(name);
     if (!g) {
-      g = { files: [], bucket: bucket !== null };
+      g = { files: [], tier: f.whitespaceOnly ? 2 : bucket !== null ? 1 : 0 };
       groups.set(name, g);
     }
     g.files.push(f);
   }
 
   // Order: source modules by churn desc, then buckets (Tests/Docs/config) by
-  // churn desc — reviewers read the meat first, housekeeping last.
+  // churn desc — reviewers read the meat first, housekeeping last, and files
+  // with nothing to read after that. Churn can't break the tie between tiers:
+  // a formatter run outweighs every real change by line count.
   const ordered = Array.from(groups.entries()).sort((a, b) => {
-    if (a[1].bucket !== b[1].bucket) return a[1].bucket ? 1 : -1;
+    if (a[1].tier !== b[1].tier) return a[1].tier - b[1].tier;
     const ca = a[1].files.reduce((s, f) => s + churn(f), 0);
     const cb = b[1].files.reduce((s, f) => s + churn(f), 0);
     return cb - ca;
