@@ -1,143 +1,201 @@
-# streamlined_review — collapsed thread cards you can read at a glance
+# streamlined_review — thread cards you can read at a glance
 
-**Status:** design, awaiting approval
-**Date:** 2026-08-10
-**Scope:** the collapsed comment balloon only. Read/unread awareness is a
-separate spec (see *Out of scope*).
+**Status:** design, awaiting approval · **Date:** 2026-08-10
 
 ## The problem
 
-The collapsed view made the review surface calmer, and that was the right
-call — but it collapsed away the information needed to triage. Today a
-collapsed comment card renders exactly four things (`markup-margin.ts`,
-`buildCollapsedComment`):
+Collapsing thread cards made the review surface calmer. It also collapsed away
+what you need to triage.
+
+A collapsed card today renders four things — author swatch, author name, the
+text of the **first** comment, and a reply count. It shows how a thread
+*started* and never what it *became*. So triaging means expanding every card
+to find the two that still need you.
+
+**Goal:** tell what a thread is about, where it got to, and whether it still
+needs you — without expanding it. And close it in one click.
+
+## What you're approving
+
+| | |
+|---|---|
+| **Surfaces** | desktop margin **and** the mobile thread drawer |
+| **Cost** | ~$0.05/month estimated — see *Cost* below. **Unmeasured**; measure before build |
+| **Latency** | summary appears ~5s after the last reply (3s debounce + ~2s call) |
+| **Opt-out** | `LF_SUMMARIES=0` disables generation; cards fall back, nothing breaks |
+| **Tradeoff** | comment text is sent to an external API |
+
+## The card
+
+Desktop margin (open threads only — see *Status*):
 
 ```
-[swatch] [author name] [text of the FIRST comment] [reply count]
-```
-
-So it shows how a thread *started* and never what it *became*. On a review
-with dozens of threads, the reviewer must expand each one to learn whether it
-still needs them. The collapse saved screen space and cost triage.
-
-**Goal:** a reader scanning collapsed cards can tell, without expanding, what
-each thread is about, where it got to, and whether it is still open — and can
-close it in one click.
-
-## Design
-
-### Card layout
-
-Four lines, against a six-line budget:
-
-```
-● Alex · open · +2 others
-"the retry loop swallows the underlying error"
+● Alex · +2 others
+↳ Error handling in the retry helper
 ↳ Debating whether to keep the fallback path
 3 replies · 2h ago                            [✓]
 ```
 
-| Line | Content | Source |
-|---|---|---|
-| 1 | author swatch + name · status · other participants | existing meta |
-| 2 | topic, ≤10 words | generated from the anchor snippet |
-| 3 | thread state, ≤10 words | generated from the comments |
-| 4 | reply count · relative time · resolve button | existing meta |
+Mobile drawer adds status, because there it varies:
 
-Each line truncates with ellipsis rather than wrapping, so the card cannot
-grow past four lines at any viewport.
+```
+● Alex · orphan · +2 others
+↳ Error handling in the retry helper
+↳ Debating whether to keep the fallback path
+3 replies · 2h ago                            [✓]
+```
+
+Lines truncate with ellipsis rather than wrapping, so a card cannot exceed
+four lines at any width.
+
+**A thread with no replies stays one line** — today's card, unchanged. The
+four-line card appears only at `commentCount > 1`. Otherwise the most common
+thread would quadruple in height to restate its single comment three ways.
+
+### One implementation, two surfaces
+
+`ThreadPanel.renderThread` is already shared between the drawer and the
+margin — its own comment says a balloon "is literally this same card (plus
+positioning classes), so reply/resolve/reopen/re-anchor behave identically
+everywhere instead of a second implementation drifting out of sync."
+
+The summary lines follow that rule: one builder produces the summary block,
+consumed by both `renderThread` (drawer) and `buildCollapsedComment` (margin).
+Do not fork it.
 
 ### Status
 
-`open | resolved` only — the two states the model actually stores. An earlier
-draft derived a third "replied" state from `commentCount > 1`; it was cut as
-redundant, because line 4 already shows the reply count. Nothing new is
-persisted for status.
+The margin renders **only open threads** — `markup-margin.ts:588` filters on
+`status === 'open'`, because resolved and orphaned threads have no anchor to
+hang a balloon from. Printing `· open ·` there would be a constant. So the
+margin card omits status.
 
-### Other participants
+The drawer carries all three states (`open | resolved | orphan`) and already
+heads a section *"Orphaned (N) — re-anchor needed"*. **Orphan is the state
+that demands action**, so the drawer card shows status. This is the main
+reason mobile is in scope rather than deferred.
 
-Distinct comment authors minus the thread's first author, rendered as
-`+N others`. Names are rendered as text, never HTML — author names are
-untrusted (agent-supplied), matching the existing `collapsedIdentity` handling.
+### Participants
 
-### Resolve button
+Distinct comment authors minus the thread's first author, as `+N others`.
+Rendered as text, never HTML — author names are agent-supplied and untrusted
+(`markup-margin.ts:451` holds this invariant today).
 
-A `✓` on line 4, right of the card body, wired to the same resolve path the
-expanded card uses — mirroring how collapsed *suggestions* already put a
-compact `✓/✕` next to the same `resolveSuggestion` the full card calls
-(`.lf-collapsed-actions`). Reusing that class keeps the icon identical between
-collapsed and expanded by construction rather than by discipline.
+### The resolve button
 
-**Collapsed suggestion cards do not get a resolve button.** Accept/reject is
-already their resolution; a third checkmark beside `✓/✕` would be ambiguous.
+A `✓` on line 4, wired to the same resolve path the expanded card uses,
+reusing `.lf-collapsed-actions`. Needs an explicit `aria-label` ("Resolve
+thread"), matching the existing collapsed accept/reject buttons.
 
-## Summary generation
+Collapsed *suggestion* cards get no resolve button — accept/reject is already
+their resolution, and a third checkmark beside `✓/✕` would be ambiguous.
 
-### Where it runs
+## How summaries are produced
 
-Server-side. The server holds the API key; a client-side call would expose it.
-Model: `claude-haiku-4-5-20251001`, matching `scripts/scrub-haiku.py`.
+One call per thread returns both lines: `{topic, summary}`, 10 words each,
+on `claude-haiku-4-5-20251001`.
 
-### One call, both lines
+Generating the topic is a **deliberate choice, not a necessity**: anchor
+snippets are capped at 80 chars (`SNIPPET_MAX`, ~12 words) and would fit
+as-is, but a raw snippet is often a mid-sentence code fragment that reads
+poorly as a topic. We accept ~2× the cost for a topic line that reads as
+prose.
 
-A single request per thread returns `{topic, summary}`, each capped at 10
-words. The anchor snippet is frequently multi-line, so the topic needs
-compressing too — generating both together costs one call instead of two.
+**The server generates; clients only read.** Generation is triggered
+server-side on thread change, one in-flight call per thread, deduped — so
+three browsers open on one doc cause one call, not three. **Share visitors
+never trigger generation**; a public tunnel URL must not be able to spend the
+key.
 
-### Caching and invalidation
+```mermaid
+flowchart TD
+    T[Thread changes] --> H{Stored hash matches<br/>comments + snippet?}
+    H -->|match| N[Nothing to do]
+    H -->|mismatch| D[Debounce 3s]
+    D --> A[Haiku call<br/>one in-flight per thread]
+    A -->|ok| S[Store topic + summary + hash<br/>in the ydoc]
+    A -->|no key, offline, error| K[Leave fallback in place]
+    S --> C[Syncs to every client]
 
-The result is stored on the thread in the ydoc, alongside a hash of the
-comment content it was generated from. On render, a hash mismatch schedules
-regeneration; a match reuses the stored value. Consequences:
+    style K fill:#fff3cd
+    style N fill:#d4edda
+    style S fill:#d4edda
+```
 
-- cost is per **thread change**, not per render
-- the summary syncs to every connected client for free, with no client-side
-  API access
-- a burst of replies debounces into one call
+**The hash covers comment texts *and* the anchor snippet.** The snippet feeds
+the topic line and changes when the doc is edited, independently of the
+comments — hashing comments alone would leave an edited anchor with a stale
+topic forever.
 
-Storing derived text in the CRDT is acceptable here specifically because a
-thread summary is no more sensitive than the comments it summarizes, and
-share visitors already receive those comments. This does **not** generalize —
-see the `private-meta.ts` precedent for fields that must not reach visitors.
+**The stored hash joins the balloon render key.** Today that key is
+`comment|id|status|commentCount|lastActivity|active|expanded`
+(`markup-margin.ts:615`); a summary arriving in the ydoc changes none of those,
+so without this the fallback would stay on screen until an unrelated repaint.
 
-### Degradation
+**The fallback is a working card, not a blank one.** Line 2 falls back to the
+anchor snippet as stored, line 3 to the latest comment's opening words. The
+generated summary improves a card that is already useful without it.
 
-No API key, no network, or a failed call falls back to deterministic
-truncation: the opening words of the latest comment for line 3, and of the
-anchor snippet for line 2. The card always renders. The generated summary is
-an enhancement to a card that is already useful without it.
+### Cost
 
-### Accepted tradeoff
+Estimate, stated so it can be checked: ~26 threads on a large live review,
+~3 regenerations per thread per day, ~500 input + ~30 output tokens per call
+≈ 40k tokens/day ≈ **$0.05/month** at Haiku pricing. **This is unmeasured.**
+Whoever builds this logs actual call volume for the first week and reports
+back before it is treated as free.
 
-This sends comment text to an external API. Flagged explicitly and accepted;
-`scrub-haiku.py` establishes the precedent of sending repo content to the same
-vendor. Recorded here so the decision is visible rather than implicit.
+## What you're accepting
 
-## Interfaces
+**Comment text goes to an external API.** `scrub-haiku.py` sets the precedent
+of sending repo content to the same vendor, but that is a git hook — **there
+is no Anthropic client in `packages/server/src` today**. This feature adds
+outbound API access to the server for the first time. Key from Keychain
+(`lf-summary-api-key`), falling back to `ANTHROPIC_API_KEY`; absent key means
+fallback cards, not an error.
 
-| Unit | Responsibility |
+**Summaries live in the ydoc.** Acceptable *here* because a summary is no more
+sensitive than the comments it summarizes, and share visitors already receive
+those. This does not generalize — `private-meta.ts` exists precisely for
+fields that must never reach a visitor.
+
+## Interface
+
+| | |
 |---|---|
-| `summarizeThread(anchor, comments)` | pure prompt construction + response parsing; no I/O |
-| thread-summary cache | hash, store, invalidate; owns the debounce |
-| `buildCollapsedComment` | render four lines from meta + cached summary |
-| resolve action | reuse existing resolve path; no new server route |
+| Route | `POST /api/docs/:docId/threads/:threadId/summary` |
+| Request | `{}` — server reads the thread it already holds |
+| Response | `{topic, summary, hash}` |
+| Failures | `503` when the key is absent or the call fails → client keeps fallback |
+| MCP | wrap as `summarize_thread` in the same change — a server route meant for agents that ships without its MCP tool is a documented failure mode in this repo |
 
-The first two are unit-testable without DOM or network.
+## Layout
+
+Four-line cards displace each other further in the margin's shared
+anchor-sorted layout pass, lengthening leader lines. That is accepted: no cap,
+no scroll container, no new overflow behavior. Cards displace exactly as they
+do today.
 
 ## Testing
 
-- status rendering for both states
-- participant list: dedup, self-exclusion, `+N others` formatting
-- hash invalidation: changed comments regenerate, unchanged reuse
-- fallback path: missing key and failed call both produce a usable card
-- word caps enforced on both generated lines
-- **browser check at 430px** before this is called done — four lines must
-  survive mobile without becoming eight (`design-mobile.md` is load-bearing)
+- margin card omits status; drawer card renders all three states including orphan
+- single-comment threads stay one line; the four-line card appears at `commentCount > 1`
+- participants: dedup, self-exclusion, `+N others`
+- hash invalidation: changed comments regenerate; changed **snippet** regenerates; unchanged reuses
+- an arriving summary repaints the card (render-key regression test)
+- fallback: missing key and failed call each still produce a usable card
+- share visitor cannot trigger generation
+- 10-word caps enforced on both lines
+- browser check at **430px and >1100px** — both surfaces, four lines each
 
 ## Out of scope
 
-Read/unread awareness — per-file "viewed" markers that auto-invalidate when a
-file changes, unread markers on threads, and "changes since my last review" —
-is a separate, larger feature needing per-user server-side state. It gets its
-own spec, opening with research into how Word, Google Docs, and GitHub model
-per-reader review state.
+Read/unread awareness — per-file "viewed" markers that auto-invalidate on
+change, unread markers, "changes since my last review" — needs per-user
+server-side state and gets its own spec, opening with research into how Word,
+Google Docs, and GitHub model per-reader review state.
+
+## To approve
+
+1. The four-line card, on both desktop margin and mobile drawer
+2. Sending comment text to Haiku, and giving the server outbound API access
+3. The cost estimate is unmeasured — approving means accepting a measure-first-week condition
