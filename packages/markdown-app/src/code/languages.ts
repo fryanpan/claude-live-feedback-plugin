@@ -119,6 +119,44 @@ export function languageExtensionFor(pathOrExt: string): Extension | null {
   }
 }
 
+/**
+ * Languages where INDENTATION IS SYNTAX — changing it changes what the
+ * program means. Reindenting a Python statement moves it into or out of a
+ * block; a YAML key's depth is its position in the tree.
+ *
+ * Whitespace suppression must not be on by default for these: a diff view
+ * that hides an indentation change here is hiding a behaviour change. (This
+ * is a real gap in `git diff -w` and every hide-whitespace view built on it.)
+ * The reviewer can still opt in per file with the toggle.
+ */
+const WHITESPACE_SIGNIFICANT = new Set([
+  'py',
+  'pyi',
+  'yaml',
+  'yml',
+  'sass',
+  'styl',
+  'haml',
+  'slim',
+  'pug',
+  'jade',
+  'nim',
+  'coffee',
+  'fs',
+  'fsx',
+  'hs',
+  'lhs',
+  'elm',
+  'mk',
+  'makefile',
+  'mak',
+]);
+
+/** True when this file's indentation carries meaning — see the set above. */
+export function isWhitespaceSignificant(pathOrExt: string): boolean {
+  return WHITESPACE_SIGNIFICANT.has(extOf(pathOrExt));
+}
+
 /** Lowercased final extension of a path or bare extension string. */
 function extOf(pathOrExt: string): string {
   const base = pathOrExt.split(/[\\/]/).pop() ?? pathOrExt;

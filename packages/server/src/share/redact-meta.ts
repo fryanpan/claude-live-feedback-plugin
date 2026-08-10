@@ -72,6 +72,12 @@ export function redactMetaForVisitor(
     ...(meta.diffStatus !== undefined ? { diffStatus: meta.diffStatus } : {}),
     ...(meta.diffAdditions !== undefined ? { diffAdditions: meta.diffAdditions } : {}),
     ...(meta.diffDeletions !== undefined ? { diffDeletions: meta.diffDeletions } : {}),
+    // Describes the FILE's content, not the host — same class as the line
+    // counts above. Listed so the sidebar's whitespace grouping renders the
+    // same for a visitor as for the owner.
+    ...(meta.diffWhitespaceOnly !== undefined
+      ? { diffWhitespaceOnly: meta.diffWhitespaceOnly }
+      : {}),
     ...(meta.diffOldPath !== undefined ? { diffOldPath: meta.diffOldPath } : {}),
     ...(meta.diffGroup !== undefined ? { diffGroup: meta.diffGroup } : {}),
     ...(meta.diffGroupRank !== undefined ? { diffGroupRank: meta.diffGroupRank } : {}),
