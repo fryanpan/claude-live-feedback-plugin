@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>streamlined_review — mobile thread drawer</title>
+<style>
+  :root {
+    --fg: #1b1f23;
+    --fg-muted: #6e7781;
+    --bg: #ffffff;
+    --bg-panel: #f6f8fa;
+    --border: #d1d5da;
+    --border-strong: #afb8c1;
+    --accent: #2e7dd7;
+    --green: #2da44e;
+    --yellow: #bf8700;
+    --radius: 6px;
+    --sans: -apple-system, BlinkMacSystemFont, "Inter", "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+    --serif: Charter, "Iowan Old Style", "Source Serif Pro", Georgia, "Times New Roman", serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: var(--sans);
+    color: var(--fg);
+    background: #eef1f4;
+    padding: 16px;
+    -webkit-text-size-adjust: 100%;
+  }
+  h1 { font-size: 19px; margin: 0 0 4px; }
+  .sub { color: var(--fg-muted); font-size: 13px; margin: 0 0 20px; line-height: 1.5; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--fg-muted);
+       margin: 26px 0 8px; font-weight: 600; }
+  .note { font-size: 12.5px; color: var(--fg-muted); line-height: 1.55; margin: 8px 2px 0; }
+  .note b { color: var(--fg); font-weight: 600; }
+
+  /* ---- phone frame: the drawer is full-bleed at 430px ---- */
+  .phone {
+    max-width: 430px;
+    margin: 0 auto;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .drawer-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 12px 14px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+  }
+  .drawer-head .title { font-weight: 600; font-size: 14px; flex: 1; }
+  .tab { font-size: 12px; color: var(--fg-muted); padding: 3px 9px; border-radius: 99px; }
+  .tab.on { background: var(--accent); color: #fff; }
+  .section-heading {
+    font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--fg-muted); font-weight: 600;
+    padding: 14px 14px 6px;
+  }
+  .list { padding: 0 10px 12px; }
+
+  /* ---- the thread card ---- */
+  .thread {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    margin-bottom: 8px;
+    position: relative;
+  }
+  .thread.orphan { border-left: 3px solid var(--yellow); }
+  .thread.resolved { opacity: .72; }
+
+  .row1 { display: flex; align-items: center; gap: 6px; font-size: 12.5px; min-width: 0; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: 0 0 auto; }
+  .resolved .status-dot { background: var(--green); }
+  .orphan .status-dot { background: var(--yellow); }
+  .swatch { width: 10px; height: 10px; border-radius: 2px; flex: 0 0 auto; }
+  .who { font-weight: 600; }
+  .dim { color: var(--fg-muted); }
+
+  /* every line is single-line + ellipsis: the card can never exceed 4 lines */
+  .clip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+
+  .topic {
+    font-family: var(--serif); font-style: italic; font-size: 13px;
+    color: var(--fg-muted);
+    border-left: 3px solid var(--border);
+    padding: 1px 8px; margin: 7px 0 0;
+  }
+  .state { font-size: 13px; margin: 5px 0 0; line-height: 1.35; }
+  .state::before { content: "↳ "; color: var(--fg-muted); }
+
+  .row4 { display: flex; align-items: center; gap: 8px; margin-top: 7px; }
+  .meta { font-size: 12px; color: var(--fg-muted); flex: 1; }
+  .resolve {
+    flex: 0 0 auto; width: 30px; height: 30px; border-radius: var(--radius);
+    border: 1px solid var(--border); background: var(--bg); color: var(--fg-muted);
+    font-size: 15px; line-height: 1; cursor: pointer;
+  }
+  .resolve:hover { border-color: var(--green); color: var(--green); background: #f2fbf5; }
+  .thread.resolved .resolve { border-color: var(--green); color: #fff; background: var(--green); }
+
+  /* ---- the "today" comparison card ---- */
+  .today .thread { color: var(--fg); }
+  .oneline { display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
+  .oneline .preview { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+                      color: var(--fg-muted); }
+  .count { font-size: 11px; color: var(--fg-muted); background: var(--bg-panel);
+           border: 1px solid var(--border); border-radius: 99px; padding: 1px 6px; }
+  .callout {
+    max-width: 430px; margin: 10px auto 0; padding: 10px 12px;
+    border-left: 3px solid var(--accent); background: #f2f7fd;
+    font-size: 12.5px; line-height: 1.55; border-radius: 0 var(--radius) var(--radius) 0;
+  }
+</style>
+</head>
+<body>
+
+<h1>streamlined_review — mobile</h1>
+<p class="sub">The thread drawer at 430&nbsp;px. This is the surface you triage on.
+Each card is four lines, hard-capped: every line clips with an ellipsis rather than wrapping.</p>
+
+<h2>Today</h2>
+<div class="phone today">
+  <div class="drawer-head">
+    <span class="title">Comments</span>
+    <span class="tab on">Open</span><span class="tab">All</span>
+  </div>
+  <div class="section-heading">Open (3)</div>
+  <div class="list">
+    <div class="thread">
+      <div class="oneline">
+        <span class="swatch" style="background:#2e7dd7"></span>
+        <span class="who">Alex</span>
+        <span class="preview">the retry loop swallows the underlying error so we…</span>
+        <span class="count">2</span>
+      </div>
+    </div>
+    <div class="thread">
+      <div class="oneline">
+        <span class="swatch" style="background:#e36f1e"></span>
+        <span class="who">Sam</span>
+        <span class="preview">can we confirm the timeout is actually applied on…</span>
+        <span class="count">4</span>
+      </div>
+    </div>
+    <div class="thread">
+      <div class="oneline">
+        <span class="swatch" style="background:#2da44e"></span>
+        <span class="who">Jordan</span>
+        <span class="preview">typo: "recieve"</span>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="note">Every card shows the <b>first</b> comment. A thread with four replies looks
+exactly like a thread with none — so you open all three to find the one that needs you.</p>
+
+<h2>Proposed</h2>
+<div class="phone">
+  <div class="drawer-head">
+    <span class="title">Comments</span>
+    <span class="tab on">Open</span><span class="tab">All</span>
+  </div>
+
+  <div class="section-heading">Open (2)</div>
+  <div class="list">
+
+    <!-- 4-line card: has replies -->
+    <div class="thread">
+      <div class="row1 clip">
+        <span class="status-dot"></span>
+        <span class="swatch" style="background:#2e7dd7"></span>
+        <span class="who">Alex</span>
+        <span class="dim">· +2 others</span>
+      </div>
+      <div class="topic clip">Error handling in the retry helper</div>
+      <div class="state clip">Debating whether to keep the fallback path</div>
+      <div class="row4">
+        <span class="meta">3 replies · 2h ago</span>
+        <button class="resolve" aria-label="Resolve thread" title="Resolve">✓</button>
+      </div>
+    </div>
+
+    <!-- 4-line card: more voices -->
+    <div class="thread">
+      <div class="row1 clip">
+        <span class="status-dot"></span>
+        <span class="swatch" style="background:#e36f1e"></span>
+        <span class="who">Sam</span>
+        <span class="dim">· +1 other</span>
+      </div>
+      <div class="topic clip">Timeout applied to the outer request only</div>
+      <div class="state clip">Agreed to move it into the client wrapper</div>
+      <div class="row4">
+        <span class="meta">4 replies · 25m ago</span>
+        <button class="resolve" aria-label="Resolve thread" title="Resolve">✓</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-heading">Orphaned (1) — re-anchor needed</div>
+  <div class="list">
+    <div class="thread orphan">
+      <div class="row1 clip">
+        <span class="status-dot"></span>
+        <span class="swatch" style="background:#8957e5"></span>
+        <span class="who">Alex</span>
+        <span class="dim">· orphan · +1 other</span>
+      </div>
+      <div class="topic clip">Retry budget shared across both call sites</div>
+      <div class="state clip">Unresolved — the anchored line was deleted</div>
+      <div class="row4">
+        <span class="meta">2 replies · yesterday</span>
+        <button class="resolve" aria-label="Resolve thread" title="Resolve">✓</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-heading">No replies — unchanged</div>
+  <div class="list">
+    <div class="thread">
+      <div class="oneline">
+        <span class="status-dot"></span>
+        <span class="swatch" style="background:#2da44e"></span>
+        <span class="who">Jordan</span>
+        <span class="preview">typo: "recieve"</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-heading">Resolved</div>
+  <div class="list">
+    <div class="thread resolved">
+      <div class="row1 clip">
+        <span class="status-dot"></span>
+        <span class="swatch" style="background:#2e7dd7"></span>
+        <span class="who">Alex</span>
+        <span class="dim">· resolved</span>
+      </div>
+      <div class="topic clip">Log line leaked the request body</div>
+      <div class="state clip">Fixed — body redacted before logging</div>
+      <div class="row4">
+        <span class="meta">2 replies · 3h ago</span>
+        <button class="resolve" aria-label="Reopen thread" title="Resolved">✓</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="callout">
+  <b>Three things to look at.</b><br />
+  1. <b>Orphan is visible.</b> On the desktop margin it can't be — orphaned threads have no
+  anchor to hang a balloon from, so the margin only ever shows open ones. This drawer is the
+  only place the state that needs action can appear.<br />
+  2. <b>A no-reply thread stays one line.</b> Its single comment already says everything a
+  summary would; four lines would be three restatements.<br />
+  3. <b>Resolve without opening.</b> Same ✓ as the expanded card, same handler.
+</div>
+
+<p class="note" style="max-width:430px;margin:18px auto 40px;">
+  Tap the bubble to comment on any part of this mockup.
+</p>
+
+<claude-feedback-widget doc-id="streamlined-review-mobile" user="bryan"></claude-feedback-widget>
+<script src="/widget.iife.js"></script>
+</body>
+</html>
