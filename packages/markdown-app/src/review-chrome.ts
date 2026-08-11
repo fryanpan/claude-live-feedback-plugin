@@ -90,22 +90,41 @@ export interface ChromeOpts {
 }
 
 /**
+ * The width at or below which comment cards sit inline in the document.
+ *
+ * The SAME boundary the balloon margin hides at (`markup-margin.ts`), and
+ * deliberately so: one always-on comment surface at every width, never two
+ * and never none. 901–1100px used to fall between them — the margin had
+ * already collapsed and inline cards had not yet started — which left the
+ * drawer as the only way to see a comment.
+ */
+export const INLINE_CARDS_QUERY = '(max-width: 1100px)';
+
+export function inlineCardsVisible(): boolean {
+  return window.matchMedia(INLINE_CARDS_QUERY).matches;
+}
+
+/**
  * Should the threads drawer start open for this mount? Pure so the
  * drawer-default policy is unit-testable without a DOM.
  *  - mobile: never (it's an overlay there)
  *  - user toggled it this session: their choice wins
- *  - balloon margin visible: closed (balloons ARE the comment surface)
- *  - otherwise (code surface, or 901–1100px where the margin collapses): open
+ *  - an always-on surface is showing (balloon margin, or inline cards):
+ *    closed, because that surface already shows every comment and the drawer
+ *    would be a second copy of the same threads
+ *  - otherwise (a code doc above 1100px, which has neither): open
  */
 export function initialDrawerOpen(opts: {
   isDesktop: boolean;
   marginVisible: boolean;
+  /** Inline cards cover this width — see `INLINE_CARDS_QUERY`. */
+  inlineVisible: boolean;
   stored: string | null;
 }): boolean {
   if (!opts.isDesktop) return false;
   if (opts.stored === 'open') return true;
   if (opts.stored === 'closed') return false;
-  return !opts.marginVisible;
+  return !opts.marginVisible && !opts.inlineVisible;
 }
 
 const DRAWER_PREF_KEY = 'lf:drawer';
@@ -250,6 +269,7 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     initialDrawerOpen({
       isDesktop: window.matchMedia('(min-width: 901px)').matches,
       marginVisible,
+      inlineVisible: inlineCardsVisible(),
       stored: storedPref,
     })
   )
@@ -446,7 +466,7 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
   // sheet when the app bar's comment badge is tapped (CSS owns that shape;
   // the open/close state is the drawer's, unchanged).
   const mobile = mountMobileReview({
-    isMobile,
+    inlineVisible: inlineCardsVisible,
     threads: collectThreads,
     resolveRange: resolveThreadRange,
     renderCard: (t, pendingReply) => threadsPanel.renderThread(t, pendingReply),
@@ -465,7 +485,7 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
   // Crossing the phone breakpoint changes which surface owns the comments —
   // inline cards must appear (or be handed back) at the same width the
   // stylesheet swaps the drawer for a sheet.
-  on(window.matchMedia('(max-width: 900px)'), 'change', () => mobile.refresh());
+  on(window.matchMedia(INLINE_CARDS_QUERY), 'change', () => mobile.refresh());
 
   // A card's folding slots hold a height we MEASURED, so anything that
   // changes text metrics after first paint — a reflow, a webfont landing —
