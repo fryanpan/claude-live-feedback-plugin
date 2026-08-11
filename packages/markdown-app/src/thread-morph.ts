@@ -64,7 +64,11 @@ export function morphTiming(open: boolean, reduce: boolean): MorphTiming {
     : { a: { duration, delay: MORPH_LAG_MS }, b: { duration, delay: 0 } };
 }
 
-function prefersReducedMotion(): boolean {
+/** Exported because the morph is not the only motion the card produces: the
+ *  ‹ › nav scrolls the doc, and on that path the scroll is the ONLY motion,
+ *  so an unguarded `behavior: 'smooth'` is the whole animation to someone who
+ *  asked for none. */
+export function prefersReducedMotion(): boolean {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
   return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
@@ -295,10 +299,35 @@ function slide(
     easing: EASE,
     fill: 'backwards',
   };
-  slot.animate([{ height: `${from}px` }, { height: `${to}px` }], opts);
-  arriving.animate([{ opacity: 0 }, { opacity: 1 }], opts);
-  leaving.animate([{ opacity: 1 }, { opacity: 0 }], {
+  // An interrupted journey has to be TORN DOWN, not merely stacked under the
+  // new one. These have a backwards fill and no forwards fill, so each stops
+  // contributing the moment its active phase ends — and an interrupting fold
+  // is usually the shorter of the two. It finishes first, drops out of the
+  // effect stack, and hands the element back to the journey it replaced,
+  // which is still inside its own active phase: the card visibly replays the
+  // rest of a fold the user already cancelled. `from` was measured before the
+  // class flip, so the replacement starts from wherever the cancelled one had
+  // got to.
+  play(slot, [{ height: `${from}px` }, { height: `${to}px` }], opts);
+  play(arriving, [{ opacity: 0 }, { opacity: 1 }], opts);
+  play(leaving, [{ opacity: 1 }, { opacity: 0 }], {
     ...opts,
     duration: timing.duration * LEAVING_FRACTION,
   });
+}
+
+/** Animations this module started, per element — never anything else's. */
+const running = new WeakMap<HTMLElement, Animation[]>();
+
+/**
+ * Replace this element's morph animations.
+ *
+ * Deliberately not `el.getAnimations()`: that would also cancel CSS
+ * transitions and anything a host page put on the same node, and it does not
+ * exist in the test environment. We cancel only what we started.
+ */
+function play(el: HTMLElement, keyframes: Keyframe[], opts: KeyframeAnimationOptions): void {
+  for (const a of running.get(el) ?? []) a.cancel();
+  const anim = el.animate(keyframes, opts);
+  running.set(el, anim ? [anim] : []);
 }

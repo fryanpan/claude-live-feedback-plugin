@@ -35,6 +35,9 @@ interface RecordedAnimation {
   el: HTMLElement;
   keyframes: Keyframe[];
   opts: KeyframeAnimationOptions;
+  /** Set by the fake's `cancel()`, so a test can assert the interrupted
+   *  journey was actually torn down and not merely stacked under a new one. */
+  cancelled?: boolean;
 }
 
 /** Install a recording `animate()` on one element subtree. */
@@ -45,8 +48,14 @@ function recordAnimations(root: HTMLElement): RecordedAnimation[] {
       keyframes: Keyframe[],
       opts: KeyframeAnimationOptions,
     ) => {
-      log.push({ el, keyframes, opts });
-      return { cancel() {}, finish() {} };
+      const rec: RecordedAnimation = { el, keyframes, opts, cancelled: false };
+      log.push(rec);
+      return {
+        cancel() {
+          rec.cancelled = true;
+        },
+        finish() {},
+      };
     };
   };
   install(root);
@@ -628,5 +637,36 @@ describe('sizeThreadSlots refuses a zero measurement', () => {
     Object.defineProperty(face, 'offsetHeight', { get: () => 31, configurable: true });
     sizeThreadSlots(container);
     expect(slotA.style.height).toBe('31px');
+  });
+});
+
+describe('an interrupted morph', () => {
+  /*
+   * The animations use `fill: 'backwards'` and no forwards fill, so each one
+   * stops contributing the moment its active phase ends. Stack a short close
+   * on top of a long open and the close finishes FIRST — at which point the
+   * open animation, still inside its own active phase, becomes the top of the
+   * effect stack again and replays the rest of a journey the user cancelled.
+   * On screen: double-tap a card and the replies flash back in and vanish.
+   */
+  it('tears down the journey it interrupted, on every element it animated', () => {
+    stubReducedMotion(false);
+    const { card } = mountCard();
+    const log = recordAnimations(card);
+
+    morphCard(card, true);
+    const opening = log.length;
+    // POSITIVE CONTROL: opening really did animate something, so the
+    // assertion below is about cancellation and not about an empty log.
+    expect(opening).toBeGreaterThan(0);
+    expect(log.some((a) => a.cancelled)).toBe(false);
+
+    morphCard(card, false);
+
+    // Everything the open scheduled is cancelled...
+    for (const a of log.slice(0, opening)) expect(a.cancelled).toBe(true);
+    // ...and nothing the close scheduled is.
+    expect(log.slice(opening).length).toBeGreaterThan(0);
+    for (const a of log.slice(opening)) expect(a.cancelled).toBe(false);
   });
 });
