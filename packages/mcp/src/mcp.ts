@@ -70,7 +70,7 @@ const server = new Server(
     // Must match packages/plugin/.claude-plugin/plugin.json — this is the version
     // a client sees in the initialize handshake, and it had drifted three minor
     // releases behind. Asserted in packages/mcp/test/launcher.test.ts.
-    version: '0.1.2',
+    version: '0.1.3',
   },
   {
     capabilities: {
@@ -218,6 +218,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'resolve_thread',
       description: 'Mark a thread as resolved.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          docId: { type: 'string' },
+          threadId: { type: 'string' },
+        },
+        required: ['docId', 'threadId'],
+      },
+    },
+    {
+      name: 'summarize_thread',
+      description:
+        "Generate the two summary lines (topic + discussion) shown on a thread's collapsed card, and store them on the thread so every open browser picks them up immediately. Normally you do NOT need this: the server generates a summary automatically ~3s after any thread change. Reach for it when you want a summary right now — e.g. you just posted a long reply and want the card to read correctly before you hand the review URL to someone. Returns ok:false with error:'summaries disabled' (503) when no API key is configured or LF_SUMMARIES=0, in which case the card keeps its deterministic lines and nothing is broken. Returns 409 'thread changed during generation' when a reply landed mid-call — the summary would have described the older thread; just call it again.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -940,6 +953,14 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const res = await http(
           'POST',
           `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/resolve`,
+        );
+        return ok(res);
+      }
+      case 'summarize_thread': {
+        const { docId, threadId } = a as { docId: string; threadId: string };
+        const res = await http(
+          'POST',
+          `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/summary`,
         );
         return ok(res);
       }
