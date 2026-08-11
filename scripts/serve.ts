@@ -26,7 +26,7 @@
  *
  * Stops cleanly on Ctrl+C.
  */
-import { type ChildProcess, spawn } from 'node:child_process';
+import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { connect as netConnect, createServer as netServer } from 'node:net';
 import { homedir } from 'node:os';
@@ -81,6 +81,26 @@ function isPortListening(port: number, host = '127.0.0.1'): Promise<boolean> {
 }
 
 const port = await pickFreePort(requestedPort);
+
+// PROD: the served bundles are whatever the last deploy left in dist/ — and
+// nothing enforced that a deploy rebuilt them. 2026-08-11: generated thread
+// summaries merged, the server restarted, and every browser kept loading a
+// pre-feature app.js because dist predated the merge — the server generated
+// summaries no client could display. Rebuild both served bundles here, once,
+// before the server starts, so restart == deploy. A failed build falls back
+// to the existing dist (stale beats down), loudly.
+if (noWatch) {
+  for (const pkg of ['widget', 'markdown-app']) {
+    const r = spawnSync('bun', ['run', join(repoRoot, 'packages', pkg, 'scripts', 'build.ts')], {
+      stdio: 'inherit',
+    });
+    if (r.status !== 0) {
+      console.error(
+        `[supervisor] ${pkg} build FAILED — serving the existing (possibly stale) dist`,
+      );
+    }
+  }
+}
 
 // DEV supervises two processes so code is never stale:
 //   1. The HTTP/WS server via `bun --watch` — restarts on any imported
