@@ -2,7 +2,7 @@ import { type Thread, formatTime, suggestOps, threadLines } from '@feedback/core
 import type { EditorView } from '@tiptap/pm/view';
 import type { MountScope } from '../mount-scope.ts';
 import { type ReviewChrome, showToast } from '../review-chrome.ts';
-import { isFoldingTap, sizeThreadSlots } from '../thread-morph.ts';
+import { MORPH_MS, isFoldingTap, sizeThreadSlots } from '../thread-morph.ts';
 import { layoutBalloons } from './balloon-layout.ts';
 import {
   type DeletionGroup,
@@ -308,8 +308,9 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
       // setActive folds the card in place (no rebuild) on every copy.
       opts.chrome?.threadsPanel.setActive(id);
       opts.chrome?.refreshThreadDecorations(id);
-      // Heights changed without a rebuild, so the column still has to restack.
-      positionBalloons();
+      // Heights change over the next 150ms without a rebuild, so the column
+      // has to restack all the way through the fold — not once, at the start.
+      restackThroughMorph();
       return;
     }
     expandedKey = key;
@@ -820,6 +821,48 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
     return true;
   }
 
+  /**
+   * Restack the column for the whole 150ms a card takes to fold.
+   *
+   * `positionBalloons` measures `el.offsetHeight`, and while the morph runs
+   * that is the height a Web Animation is INTERPOLATING — a WAAPI `height`
+   * animation overrides the inline height the morph engine wrote, so a single
+   * pass at t=0 stacks the column against the height the card is LEAVING and
+   * nothing ever corrects it: an expanded balloon overlaps the one below it,
+   * a collapsed one leaves a permanent gap. (The debounced relayout the
+   * decoration transaction schedules lands at 100ms, still mid-morph, so it
+   * is not the missing pass either.) One frame at a time so the balloons below
+   * travel with the card, and one final pass a tick after the animation is
+   * over, when the slot reports its resting height again.
+   */
+  let morphRaf: number | null = null;
+  let morphTimer: ReturnType<typeof setTimeout> | null = null;
+  function stopMorphRestack(): void {
+    if (morphRaf != null && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(morphRaf);
+    }
+    morphRaf = null;
+    if (morphTimer != null) clearTimeout(morphTimer);
+    morphTimer = null;
+  }
+  function restackThroughMorph(): void {
+    positionBalloons();
+    stopMorphRestack();
+    const step = (): void => {
+      morphRaf = null;
+      if (scope.disposed) return;
+      positionBalloons();
+      if (typeof requestAnimationFrame === 'function') morphRaf = requestAnimationFrame(step);
+    };
+    if (typeof requestAnimationFrame === 'function') morphRaf = requestAnimationFrame(step);
+    morphTimer = setTimeout(() => {
+      morphTimer = null;
+      stopMorphRestack();
+      if (!scope.disposed) positionBalloons();
+    }, MORPH_MS + 1);
+  }
+  scope.onCleanup(stopMorphRestack);
+
   let timer: ReturnType<typeof setTimeout> | null = null;
   function scheduleRelayout(): void {
     if (timer != null) clearTimeout(timer);
@@ -846,9 +889,11 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
         // The comment took the one open slot from a deletion/suggestion.
         expandedKey = null;
         relayout();
-      } else {
-        positionBalloons();
       }
+      // The card is mid-fold: its height is being interpolated for the next
+      // 150ms, so one pass now would stack the column against the height it
+      // is leaving.
+      restackThroughMorph();
       return;
     }
     if (target.closest?.('.lf-balloon-collapse')) {

@@ -106,3 +106,41 @@ describe('editable code surface', () => {
     expect(view.state.doc.toString()).toContain('// agent save');
   });
 });
+
+/**
+ * Inline comment cards on the code surface.
+ *
+ * The code editor does NOT wrap lines, so `.cm-content` is as wide as the
+ * file's longest line — a block widget inside it inherits that width, and so
+ * does a CSS `max-width: 100%`. On a phone reading a file with one 200-column
+ * line, the card's `✓ Resolve` would sit off the right edge of the screen with
+ * no way to reach it but a horizontal scroll of the code. The visible width
+ * therefore has to be measured and published; CSS cannot see the scroller.
+ */
+describe('inline card width on the code surface', () => {
+  const frame = () => new Promise((r) => setTimeout(r, 20));
+
+  it('sizes the card against the SCROLLER, not the unwrapped content width', async () => {
+    const { view, surface } = mount();
+    // Let the mount's own measure drain FIRST, against the zero-size layout
+    // happy-dom gives it — otherwise it is still queued when the stubs below
+    // land and this test passes without the card ever asking for a width.
+    await frame();
+    expect(view.dom.style.getPropertyValue('--lf-inline-card-w')).toBe('');
+
+    // Stand in for the layout happy-dom has none of: a 390px phone scroller
+    // with a 40px line-number gutter, over content far wider than either.
+    Object.defineProperty(view.scrollDOM, 'clientWidth', { configurable: true, value: 390 });
+    const gutters = view.dom.querySelector('.cm-gutters') as HTMLElement;
+    expect(gutters).not.toBeNull(); // positive control: there IS a gutter to subtract
+    Object.defineProperty(gutters, 'offsetWidth', { configurable: true, value: 40 });
+
+    const card = document.createElement('div');
+    card.className = 'thread lf-inline-card';
+    surface.setInlineCards?.([{ id: 't1', from: 0, to: 3, el: card }]);
+    await frame();
+
+    // 390 scroller − 40 gutter − 8 of the card's own horizontal margins.
+    expect(view.dom.style.getPropertyValue('--lf-inline-card-w')).toBe('342px');
+  });
+});

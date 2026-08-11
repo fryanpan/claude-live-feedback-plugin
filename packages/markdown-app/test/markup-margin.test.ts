@@ -12,6 +12,7 @@ import {
 } from '../src/redline/live-redline-editor.ts';
 import { groupDeletions, mountMarkupMargin } from '../src/redline/markup-margin.ts';
 import { mountReviewChrome, wireThreadRangeClicks } from '../src/review-chrome.ts';
+import { MORPH_MS } from '../src/thread-morph.ts';
 
 /**
  * The markup margin: Word's balloon column for deletions AND open comment
@@ -695,6 +696,56 @@ describe('mountMarkupMargin — collapsed balloons (Word-style)', () => {
     expect(chrome.threadsPanel.getActive()).not.toBe(t1.id);
     clickToExpand(balloonFor(parent, t1.id) as HTMLElement);
     expect(chrome.threadsPanel.getActive()).toBe(t1.id);
+  });
+
+  /* The column stacks from `el.offsetHeight`, and a folding card's height is
+     INTERPOLATED by a Web Animation for 150ms — a WAAPI height animation
+     overrides the inline height the morph engine wrote. So a single layout
+     pass at the moment of the tap measures the height the card is LEAVING,
+     and the balloon below ends up overlapping the expanded card (or, on
+     collapse, sitting under a permanent gap). The debounced relayout the
+     decoration transaction schedules lands at 100ms — still mid-morph, and
+     with slot B less than half grown — so it is not the missing pass either.
+     Simulated here because happy-dom has no layout and no animations: the
+     card's height is driven by hand exactly as the animation would drive it. */
+  it('re-stacks the column after the fold finishes, not only when it starts', async () => {
+    const { parent, t1, t2 } = mountTwoThreads();
+    await tick();
+
+    const b1 = balloonFor(parent, t1.id) as HTMLElement;
+    const b2 = balloonFor(parent, t2.id) as HTMLElement;
+    // The two heights the morph travels between. `heights` stands in for what
+    // the animation reports at whatever instant something measures.
+    const heights = new Map<HTMLElement, number>([
+      [b1, 30],
+      [b2, 30],
+    ]);
+    for (const el of [b1, b2]) {
+      Object.defineProperty(el, 'offsetHeight', {
+        configurable: true,
+        get: () => heights.get(el) ?? 0,
+      });
+    }
+
+    vi.useFakeTimers({
+      toFake: ['setTimeout', 'clearTimeout', 'requestAnimationFrame', 'cancelAnimationFrame'],
+    });
+    try {
+      clickToExpand(b1);
+      // t≈0: the animation still reports (nearly) the pre-expansion height,
+      // so this first pass CANNOT be the one that gets it right.
+      const atStart = Number.parseFloat(b2.style.top);
+      expect(atStart).toBeGreaterThan(0); // positive control: it did stack
+
+      // The card finishes growing.
+      heights.set(b1, 260);
+      vi.advanceTimersByTime(MORPH_MS + 8);
+
+      const atEnd = Number.parseFloat(b2.style.top);
+      expect(atEnd).toBe(atStart + (260 - 30));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('a collapsed multi-line deletion (e.g. a whole table) shows one bubble with a +N lines badge', async () => {

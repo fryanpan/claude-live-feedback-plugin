@@ -1501,10 +1501,16 @@ body.threads-resizing {
     top: auto;
     right: 0;
     left: 0;
-    bottom: 0;
+    /* Ride above the iOS keyboard via --kb-bottom (published by app.ts). The
+       sheet's cards carry the reply box now — the full-screen thread view no
+       longer does — and `position: fixed` is layout-viewport-relative on iOS,
+       so a plain `bottom: 0` puts the textarea being typed into, and the
+       Reply button under it, behind the keyboard. Cap the height against the
+       same variable or the sheet grows off the top of the screen instead. */
+    bottom: var(--kb-bottom, 0px);
     width: auto;
     max-width: 100%;
-    max-height: 82vh;
+    max-height: min(82vh, calc(100vh - var(--kb-bottom, 0px) - 56px));
     z-index: 950;
     transform: translateY(100%);
     transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -3065,6 +3071,17 @@ body.redline-mode #toggle-suggest-mode {
   tab-size: initial;
   margin-left: 4px;
   margin-right: 4px;
+  /* The code surface does NOT wrap lines, so `.cm-content` is as wide as the
+     file's longest line and `max-width: 100%` resolves against THAT — on a
+     file with one 200-column line the card's ✓ Resolve and its caret render
+     hundreds of pixels off the right edge of a phone. Size against the
+     scroller instead (published by code-editor.ts as it measures), and stick
+     to the left edge so the card stays put while the code scrolls under it. */
+  position: sticky;
+  left: 0;
+  box-sizing: border-box;
+  width: var(--lf-inline-card-w, 100%);
+  max-width: var(--lf-inline-card-w, 100%);
 }
 /* Where the ‹ › nav just landed. Deliberately brief and colour-only: the
    card has already been scrolled to the middle of the screen, so this only

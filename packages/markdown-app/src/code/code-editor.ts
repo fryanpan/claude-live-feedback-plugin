@@ -157,6 +157,11 @@ const markerField = StateField.define<RangeSet<GutterMarker>>({
 const setInlineCardsEffect =
   StateEffect.define<Array<{ from: number; to: number; el: HTMLElement }>>();
 
+/** The card's own left+right margin inside `.cm-content` (see styles.css,
+ *  INLINE THREAD CARDS). Subtracted from the width published to CSS so the
+ *  card plus its margins fit the scroller exactly. */
+const CARD_MARGIN_X = 8;
+
 class InlineCardWidget extends WidgetType {
   constructor(readonly el: HTMLElement) {
     super();
@@ -366,6 +371,7 @@ export function createCodeEditor(opts: CreateCodeEditorOpts): CodeSurface {
       // number we WROTE, not something the browser maintains. Without this
       // an off-screen card arrives as a header and a footer.
       if (update.viewportChanged) sizeThreadSlots(view.dom);
+      if (update.geometryChanged) publishInlineCardWidth();
     }),
   ];
   if (langExt) extensions.push(langExt);
@@ -376,6 +382,31 @@ export function createCodeEditor(opts: CreateCodeEditorOpts): CodeSurface {
     extensions,
   });
   view.dom.classList.toggle('cm-file-mode', viewMode === 'file');
+
+  /**
+   * How wide an inline comment card may be.
+   *
+   * The code surface does not wrap lines, so `.cm-content` is as wide as the
+   * file's longest line — a block widget inside it inherits THAT width, and a
+   * CSS `max-width: 100%` resolves against it too. On a file with one long
+   * line the card's `✓ Resolve` would sit hundreds of pixels off the right of
+   * a phone screen. The visible width is the scroller's, less the sticky
+   * gutters and the card's own horizontal margins; measured through
+   * `requestMeasure` so the read and the write land in CodeMirror's own
+   * measure phase rather than forcing a synchronous reflow mid-update.
+   */
+  function publishInlineCardWidth(): void {
+    view.requestMeasure({
+      read: (v) => {
+        const gutters = v.dom.querySelector<HTMLElement>('.cm-gutters');
+        return Math.max(0, v.scrollDOM.clientWidth - (gutters?.offsetWidth ?? 0) - CARD_MARGIN_X);
+      },
+      write: (w: number) => {
+        if (w > 0) view.dom.style.setProperty('--lf-inline-card-w', `${w}px`);
+      },
+    });
+  }
+  publishInlineCardWidth();
 
   // Push the suppressed-change count to the caller whenever it can have
   // moved. Chunks are computed synchronously inside the state reconfigure,
@@ -472,6 +503,9 @@ export function createCodeEditor(opts: CreateCodeEditorOpts): CodeSurface {
       view.dispatch({
         effects: setInlineCardsEffect.of(cards.map((c) => ({ from: c.from, to: c.to, el: c.el }))),
       });
+      // A card arriving is the first moment the width matters, and a doc with
+      // no cards never triggers a geometry change that would publish it.
+      publishInlineCardWidth();
     },
     setViewMode(mode: CodeViewMode) {
       if (mode === viewMode) return;

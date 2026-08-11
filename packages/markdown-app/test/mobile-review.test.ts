@@ -452,3 +452,31 @@ describe('showThread for a thread with no line to sit beside', () => {
     expect(h.sheetOpen()).toBe(false);
   });
 });
+
+/**
+ * The over-doc sheet has to ride the iOS keyboard.
+ *
+ * This branch moved the mobile reply box OUT of `#thread-view` (which is
+ * pinned with `bottom: var(--kb-bottom, 0px)` and carries the comment
+ * explaining why) and INTO the card, which on a phone lives inline and again
+ * inside the sheet. A `position: fixed` sheet is layout-viewport-relative on
+ * iOS, so with a plain `bottom: 0` the keyboard covers the textarea being
+ * typed into and the Reply button under it — and nothing else in the suite
+ * can see that, because it is entirely a stylesheet fact.
+ */
+describe('the mobile sheet rides the keyboard', () => {
+  it('pins #threads-pane to --kb-bottom, and caps its height against it too', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    // vitest runs from the repo root (vitest.config.ts lives there).
+    const css = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
+    const phone = css.slice(
+      css.indexOf('/* ========== Over-doc bottom sheet on mobile =========='),
+    );
+    const rule = phone.match(/#threads-pane\s*\{([^}]*)\}/);
+    // Positive control: the block this asserts about really was found.
+    expect(rule?.[1]).toContain('position: fixed');
+    expect(rule?.[1]).toMatch(/bottom:\s*var\(--kb-bottom/);
+    expect(rule?.[1]).toMatch(/max-height:[^;]*--kb-bottom/);
+  });
+});
