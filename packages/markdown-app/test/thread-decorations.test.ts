@@ -8,7 +8,10 @@ import {
 } from '../src/thread-decorations.ts';
 
 function mount(content: string): Editor {
+  const element = document.createElement('div');
+  document.body.appendChild(element);
   const editor = new Editor({
+    element,
     extensions: [StarterKit.configure({ undoRedo: false }), ThreadDecorations],
     content,
   });
@@ -103,6 +106,89 @@ describe('thread highlights track edits', () => {
       ranges: [{ id: 't1', from: 1, to: 4, status: 'open' }],
     });
     expect(highlighted(editor, 't1')).toBe('Oh!');
+    editor.destroy();
+  });
+});
+
+/**
+ * Inline comment cards — the mobile surface. The card is the CALLER's node,
+ * placed after the block its thread is anchored in; ProseMirror compares
+ * widgets by that node's identity, which is what lets a card keep animating
+ * through an unrelated transaction instead of being rebuilt mid-morph.
+ */
+describe('inline comment cards', () => {
+  const CONTENT = '<p>Hello brave world</p><p>Second paragraph here</p>';
+
+  function card(id: string): HTMLElement {
+    const el = document.createElement('div');
+    el.className = 'thread';
+    el.setAttribute('data-thread-id', id);
+    el.textContent = `card ${id}`;
+    return el;
+  }
+
+  function mountWithCard(): { editor: Editor; el: HTMLElement } {
+    const editor = mount(CONTENT);
+    const el = card('t1');
+    setThreadDecorations(editor.view, {
+      ranges: [{ id: 't1', from: 7, to: 12, status: 'open' }],
+      inlineCards: [{ id: 't1', el }],
+    });
+    return { editor, el };
+  }
+
+  it('puts the card in the document, AFTER the block it is anchored in', () => {
+    const { editor, el } = mountWithCard();
+    expect(el.isConnected).toBe(true);
+    const paragraphs = Array.from(editor.view.dom.querySelectorAll('p'));
+    // Between the two paragraphs — the GitHub PR-comment position, not
+    // spliced into the middle of the sentence it points at.
+    expect(el.previousElementSibling).toBe(paragraphs[0]);
+    expect(el.nextElementSibling).toBe(paragraphs[1]);
+    editor.destroy();
+  });
+
+  it('keeps the SAME node through an unrelated edit', () => {
+    const { editor, el } = mountWithCard();
+    editor.chain().focus().insertContentAt(1, 'Oh! ').run();
+    // Not just "a card is still there" — the very element handed in, still
+    // attached. A replacement here would mount at its final height mid-morph.
+    expect(el.isConnected).toBe(true);
+    // `.thread` and not `[data-thread-id]` alone: the HIGHLIGHT span carries
+    // that attribute too, so the loose selector would count two and pass
+    // whatever happened to the card.
+    expect(editor.view.dom.querySelectorAll('.thread[data-thread-id="t1"]')).toHaveLength(1);
+    editor.destroy();
+  });
+
+  it('travels with its anchor when the anchor moves to another block', () => {
+    const { editor, el } = mountWithCard();
+    // Re-point the thread at the SECOND paragraph.
+    const secondStart = editor.state.doc.content.size - 22;
+    setThreadDecorations(editor.view, {
+      ranges: [{ id: 't1', from: secondStart, to: secondStart + 6, status: 'open' }],
+    });
+    const paragraphs = Array.from(editor.view.dom.querySelectorAll('p'));
+    expect(el.previousElementSibling).toBe(paragraphs[1]);
+    editor.destroy();
+  });
+
+  it('drops the card when its thread stops being rendered', () => {
+    const { editor, el } = mountWithCard();
+    expect(el.isConnected).toBe(true); // positive control
+    setThreadDecorations(editor.view, { inlineCards: [] });
+    expect(el.isConnected).toBe(false);
+    editor.destroy();
+  });
+
+  it('renders no card for a resolved thread — it has no highlight to sit under', () => {
+    const editor = mount(CONTENT);
+    const el = card('t1');
+    setThreadDecorations(editor.view, {
+      ranges: [{ id: 't1', from: 7, to: 12, status: 'resolved' }],
+      inlineCards: [{ id: 't1', el }],
+    });
+    expect(el.isConnected).toBe(false);
     editor.destroy();
   });
 });

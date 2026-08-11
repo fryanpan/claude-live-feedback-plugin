@@ -160,3 +160,62 @@ describe('wireThreadRangeClicks', () => {
     expect(isOpen()).toBe(false);
   });
 });
+
+/**
+ * The panel owns which thread is selected; the editor owns the highlight that
+ * shows it. Every path that changes the first has to move the second, and the
+ * one with no click handler of its own — a tap folding the open card shut —
+ * is the one that got missed. Asserted through the real chrome, because the
+ * defect was in the WIRING: the panel-level callback fired correctly the whole
+ * time, with nobody subscribed to it.
+ */
+describe('the anchor highlight follows the panel selection', () => {
+  function seedThread(ydoc: Y.Doc, id: string): void {
+    const t = new Y.Map<unknown>();
+    // Element anchors always carry a snippet — `createAnchor` falls back to
+    // `<tag>` when the element has no text — and the card's topic line reads it.
+    t.set('anchor', {
+      kind: 'element',
+      fingerprint: { tag: 'P', classes: [], text: 'anchored here', path: 'P[0]', dataAttrs: {} },
+      snippet: { text: 'anchored here' },
+    });
+    t.set('status', 'open');
+    t.set('createdBy', { id: 'u', name: 'U', kind: 'known', color: '#000' });
+    const comments = new Y.Array<Y.Map<unknown>>();
+    const c = new Y.Map<unknown>();
+    c.set('id', 'c1');
+    c.set('author', { id: 'u', name: 'U', kind: 'known', color: '#000' });
+    c.set('text', 'the opening message');
+    c.set('ts', 1);
+    comments.push([c]);
+    t.set('comments', comments);
+    ydoc.getMap('threads').set(id, t);
+  }
+
+  it('goes dark when a tap folds the open card, and lights up when one opens', () => {
+    mountChromeDom();
+    const scope = new MountScope();
+    const setThreadRanges = vi.fn();
+    const base = opts(scope);
+    const chrome = mountReviewChrome({
+      ...base,
+      surface: { ...fakeSurface(), setThreadRanges },
+    });
+    seedThread(base.ydoc, 't1');
+    chrome.redrawThreads();
+
+    const card = document.querySelector('.thread[data-thread-id="t1"]') as HTMLElement;
+    expect(card, 'no card rendered — the rest of this test would be vacuous').toBeTruthy();
+
+    // Positive control: opening a thread DOES reach the editor.
+    chrome.threadsPanel.setActive('t1');
+    expect(setThreadRanges.mock.calls.at(-1)?.[1]).toBe('t1');
+
+    // …and folding it back shut says so, rather than leaving the old range lit.
+    const body = document.querySelector<HTMLElement>('.thread[data-thread-id="t1"] .face-detail');
+    expect(body, 'no detail face to tap — the assertion below would be vacuous').toBeTruthy();
+    body?.click();
+    expect(chrome.threadsPanel.getActive()).toBeNull();
+    expect(setThreadRanges.mock.calls.at(-1)?.[1]).toBeNull();
+  });
+});

@@ -12,6 +12,7 @@ import {
 } from '../src/redline/live-redline-editor.ts';
 import { groupDeletions, mountMarkupMargin } from '../src/redline/markup-margin.ts';
 import { mountReviewChrome, wireThreadRangeClicks } from '../src/review-chrome.ts';
+import { MORPH_MS } from '../src/thread-morph.ts';
 
 /**
  * The markup margin: Word's balloon column for deletions AND open comment
@@ -453,29 +454,40 @@ describe('mountMarkupMargin — comment balloons', () => {
     });
     margin.relayout();
 
-    // Rests collapsed: author + one-line preview, no card chrome yet.
-    let balloon = parent.querySelector('.lf-balloon.lf-balloon-comment') as HTMLElement;
+    // Rests collapsed — but as the SAME node it will be expanded as. Both
+    // faces are already built, because the morph cross-fades between two
+    // things that both have to exist.
+    const balloon = parent.querySelector('.lf-balloon.lf-balloon-comment') as HTMLElement;
     expect(balloon).not.toBeNull();
-    expect(balloon.classList.contains('lf-balloon-collapsed')).toBe(true);
+    expect(balloon.classList.contains('expanded')).toBe(false);
+    expect(balloon.querySelector('.thread-topic')?.textContent).toBeTruthy();
     expect(balloon.textContent).toContain('Please clarify this.');
     expect(balloon.textContent).toContain('Bob');
-    expect(balloon.querySelector('textarea')).toBeNull();
 
     clickToExpand(balloon);
-    balloon = parent.querySelector('.lf-balloon.lf-balloon-comment') as HTMLElement;
-    // Expanded, it IS the drawer's thread card (ThreadPanel.renderThread).
+    // Expanding MUTATES that node — a rebuilt card mounts at its final
+    // height and has nothing to morph out of.
+    expect(parent.querySelector('.lf-balloon.lf-balloon-comment')).toBe(balloon);
+    // It IS the drawer's thread card (ThreadPanel.renderThread).
     expect(balloon.classList.contains('thread')).toBe(true);
     expect(balloon.getAttribute('data-thread-id')).toBe(thread.id);
     expect(balloon.textContent).toContain('Please clarify this.');
     expect(balloon.textContent).toContain('Bob'); // the comment's author
+    // ...with the streamlined card's own shape: both folding slots present,
+    // the opening message in slot A, and the reply box in slot B.
+    expect(balloon.classList.contains('expanded')).toBe(true);
+    expect(balloon.querySelector('.slot-a .face-detail .thread-message')?.textContent).toContain(
+      'Please clarify this.',
+    );
+    expect(balloon.querySelector('.slot-b .face-detail textarea')).not.toBeNull();
 
     const fetchSpy = vi.fn(() => Promise.resolve({ ok: true }) as unknown as Promise<Response>);
     vi.stubGlobal('fetch', fetchSpy);
     try {
-      const resolveBtn = Array.from(balloon.querySelectorAll('button')).find(
-        (b) => b.textContent === 'Resolve',
-      );
-      expect(resolveBtn).toBeTruthy();
+      // ONE resolve control, in the foot, outside both slots.
+      const resolveBtn = balloon.querySelector<HTMLButtonElement>('.thread-foot .thread-resolve');
+      expect(balloon.querySelectorAll('.thread-resolve')).toHaveLength(1);
+      expect(resolveBtn?.getAttribute('aria-label')).toBe('Resolve thread');
       resolveBtn?.click();
       expect(fetchSpy).toHaveBeenCalledWith(
         expect.stringContaining(`/api/docs/d1/threads/${thread.id}/resolve`),
@@ -531,6 +543,46 @@ describe('mountMarkupMargin — comment balloons', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it('repaints when only the anchor snippet moved — the topic line is keyed on it', async () => {
+    const { parent, surface, ydoc, chrome, scope } = mountRedlineWithChrome(
+      '',
+      'Alpha bravo gamma.\n',
+    );
+    await tick();
+    const thread = openThreadAt(
+      ydoc,
+      surface.handle.editor,
+      () => surface.getSelectionRel(),
+      { from: 1, to: 6 },
+      'Please clarify this.',
+    );
+
+    const margin = mountMarkupMargin({
+      editorEl: parent,
+      view: surface.handle.editor.view,
+      getDeletions: () => [],
+      threads: () => chrome.collectThreads(),
+      chrome,
+      scope,
+    });
+    margin.relayout();
+    clickToExpand(parent.querySelector('.lf-balloon.lf-balloon-comment') as HTMLElement);
+
+    const topic = () =>
+      (parent.querySelector('.lf-balloon-comment .thread-topic')?.textContent ?? '').trim();
+    // Positive control: the topic line really is the anchor snippet.
+    expect(topic()).toBe('Alpha');
+
+    // A doc edit moves the snippet without touching status, commentCount,
+    // lastActivity or the active/expanded flags — every other term in the key.
+    const map = ydoc.getMap('threads').get(thread.id) as Y.Map<unknown>;
+    const anchor = map.get('anchor') as Record<string, unknown>;
+    map.set('anchor', { ...anchor, snippet: { text: 'Alpha bravo' } });
+    margin.relayout();
+
+    expect(topic()).toBe('Alpha bravo');
   });
 
   it('does not render a balloon for a resolved thread', async () => {
@@ -600,35 +652,41 @@ describe('mountMarkupMargin — collapsed balloons (Word-style)', () => {
     return null;
   };
 
-  it('expanding one balloon collapses the previously expanded one', async () => {
+  it('expanding one balloon collapses the previously expanded one, in place', async () => {
     const { parent, t1, t2 } = mountTwoThreads();
     await tick();
 
-    const b1 = balloonFor(parent, t1.id);
-    const b2 = balloonFor(parent, t2.id);
-    expect(b1?.classList.contains('lf-balloon-collapsed')).toBe(true);
-    expect(b2?.classList.contains('lf-balloon-collapsed')).toBe(true);
+    const b1 = balloonFor(parent, t1.id) as HTMLElement;
+    const b2 = balloonFor(parent, t2.id) as HTMLElement;
+    expect(b1.classList.contains('expanded')).toBe(false);
+    expect(b2.classList.contains('expanded')).toBe(false);
 
-    clickToExpand(b1 as HTMLElement);
-    expect(balloonFor(parent, t1.id)?.classList.contains('lf-balloon-collapsed')).toBe(false);
-    expect(balloonFor(parent, t2.id)?.classList.contains('lf-balloon-collapsed')).toBe(true);
+    clickToExpand(b1);
+    expect(b1.classList.contains('expanded')).toBe(true);
+    expect(b2.classList.contains('expanded')).toBe(false);
 
-    clickToExpand(balloonFor(parent, t2.id) as HTMLElement);
-    expect(balloonFor(parent, t1.id)?.classList.contains('lf-balloon-collapsed')).toBe(true);
-    expect(balloonFor(parent, t2.id)?.classList.contains('lf-balloon-collapsed')).toBe(false);
+    clickToExpand(b2);
+    expect(b1.classList.contains('expanded')).toBe(false);
+    expect(b2.classList.contains('expanded')).toBe(true);
+    // Same two nodes throughout — expanding never rebuilds the column.
+    expect(balloonFor(parent, t1.id)).toBe(b1);
+    expect(balloonFor(parent, t2.id)).toBe(b2);
   });
 
-  it('the − button collapses an expanded balloon back to one line', async () => {
-    const { parent, t1 } = mountTwoThreads();
+  it('tapping an expanded balloon again folds it back into its two lines', async () => {
+    const { parent, chrome, t1 } = mountTwoThreads();
     await tick();
 
-    clickToExpand(balloonFor(parent, t1.id) as HTMLElement);
-    const expanded = balloonFor(parent, t1.id) as HTMLElement;
-    const collapseBtn = expanded.querySelector('.lf-balloon-collapse') as HTMLButtonElement;
-    expect(collapseBtn).not.toBeNull();
+    const card = balloonFor(parent, t1.id) as HTMLElement;
+    clickToExpand(card);
+    expect(card.classList.contains('expanded')).toBe(true);
+    // There is no − button any more: the whole card is the tap target and
+    // `✓ Resolve` is the only control in the footer.
+    expect(card.querySelector('.lf-balloon-collapse')).toBeNull();
 
-    collapseBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-    expect(balloonFor(parent, t1.id)?.classList.contains('lf-balloon-collapsed')).toBe(true);
+    clickToExpand(card);
+    expect(card.classList.contains('expanded')).toBe(false);
+    expect(chrome.threadsPanel.getActive()).toBeNull();
   });
 
   it('expanding a comment balloon makes it the active thread', async () => {
@@ -638,6 +696,56 @@ describe('mountMarkupMargin — collapsed balloons (Word-style)', () => {
     expect(chrome.threadsPanel.getActive()).not.toBe(t1.id);
     clickToExpand(balloonFor(parent, t1.id) as HTMLElement);
     expect(chrome.threadsPanel.getActive()).toBe(t1.id);
+  });
+
+  /* The column stacks from `el.offsetHeight`, and a folding card's height is
+     INTERPOLATED by a Web Animation for 150ms — a WAAPI height animation
+     overrides the inline height the morph engine wrote. So a single layout
+     pass at the moment of the tap measures the height the card is LEAVING,
+     and the balloon below ends up overlapping the expanded card (or, on
+     collapse, sitting under a permanent gap). The debounced relayout the
+     decoration transaction schedules lands at 100ms — still mid-morph, and
+     with slot B less than half grown — so it is not the missing pass either.
+     Simulated here because happy-dom has no layout and no animations: the
+     card's height is driven by hand exactly as the animation would drive it. */
+  it('re-stacks the column after the fold finishes, not only when it starts', async () => {
+    const { parent, t1, t2 } = mountTwoThreads();
+    await tick();
+
+    const b1 = balloonFor(parent, t1.id) as HTMLElement;
+    const b2 = balloonFor(parent, t2.id) as HTMLElement;
+    // The two heights the morph travels between. `heights` stands in for what
+    // the animation reports at whatever instant something measures.
+    const heights = new Map<HTMLElement, number>([
+      [b1, 30],
+      [b2, 30],
+    ]);
+    for (const el of [b1, b2]) {
+      Object.defineProperty(el, 'offsetHeight', {
+        configurable: true,
+        get: () => heights.get(el) ?? 0,
+      });
+    }
+
+    vi.useFakeTimers({
+      toFake: ['setTimeout', 'clearTimeout', 'requestAnimationFrame', 'cancelAnimationFrame'],
+    });
+    try {
+      clickToExpand(b1);
+      // t≈0: the animation still reports (nearly) the pre-expansion height,
+      // so this first pass CANNOT be the one that gets it right.
+      const atStart = Number.parseFloat(b2.style.top);
+      expect(atStart).toBeGreaterThan(0); // positive control: it did stack
+
+      // The card finishes growing.
+      heights.set(b1, 260);
+      vi.advanceTimersByTime(MORPH_MS + 8);
+
+      const atEnd = Number.parseFloat(b2.style.top);
+      expect(atEnd).toBe(atStart + (260 - 30));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('a collapsed multi-line deletion (e.g. a whole table) shows one bubble with a +N lines badge', async () => {
@@ -657,7 +765,7 @@ describe('mountMarkupMargin — collapsed balloons (Word-style)', () => {
     expect(badge.title).toBe('3 more lines');
   });
 
-  it('a collapsed comment with replies shows the reply count badge', async () => {
+  it('a collapsed comment shows its reply count in the foot, beside the one resolve control', async () => {
     const fixture = mountRedlineWithChrome('', 'Alpha bravo gamma.\n');
     const { parent, surface, ydoc, chrome, scope } = fixture;
     const t = openThreadAt(
@@ -689,8 +797,11 @@ describe('mountMarkupMargin — collapsed balloons (Word-style)', () => {
     await tick();
 
     const balloon = parent.querySelector('.lf-balloon-comment') as HTMLElement;
-    expect(balloon.classList.contains('lf-balloon-collapsed')).toBe(true);
-    expect(balloon.querySelector('.lf-collapsed-count')?.textContent).toBe('1');
+    expect(balloon.classList.contains('expanded')).toBe(false);
+    expect(balloon.querySelector('.thread-foot .thread-meta')?.textContent).toContain('1 reply');
+    // The count lives in the foot, OUTSIDE both folding slots, so expanding
+    // neither moves nor rebuilds it.
+    expect(balloon.querySelector('.thread-foot')?.closest('.thread-slot')).toBeNull();
   });
 });
 
@@ -857,7 +968,7 @@ describe('mountMarkupMargin — revealThreadBalloon', () => {
       expect(margin.revealThreadBalloon(thread.id)).toBe(true);
       expect(scrollSpy).toHaveBeenCalled();
       const balloon = parent.querySelector('.lf-balloon-comment') as HTMLElement;
-      expect(balloon.classList.contains('lf-balloon-collapsed')).toBe(false);
+      expect(balloon.classList.contains('expanded')).toBe(true);
       expect(balloon.classList.contains('thread')).toBe(true);
       expect(margin.revealThreadBalloon('no-such-thread')).toBe(false);
     } finally {
