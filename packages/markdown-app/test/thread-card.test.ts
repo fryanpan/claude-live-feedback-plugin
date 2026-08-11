@@ -224,10 +224,57 @@ describe('thread card — caret and resolve control', () => {
 
     const head = card.querySelector('.thread-head') as HTMLElement;
     expect(head.lastElementChild?.classList.contains('thread-caret')).toBe(true);
-    // The caret is a hint, not a control: it must not swallow the card tap.
-    expect(card.querySelector('.thread-caret')?.tagName).not.toBe('BUTTON');
     // Caret at the top, resolve at the bottom — not adjacent.
     expect(card.querySelector('.thread-foot .thread-resolve')).not.toBeNull();
+  });
+
+  /* The whole card is the tap target — but a tap is not a gesture a keyboard
+     or a screen reader has, and the detail face is `inert` while the card is
+     folded. Without one real control there is NO way to open a thread without
+     a pointer, and the opening message and every reply are unreachable. The
+     caret is that control; it stays a hint rather than the hit area because
+     it has no handler of its own (its click rides the card's — see the
+     tap-target suite below). */
+  it('makes the caret a real, named control so a keyboard can open the card', () => {
+    const t = makeThread({ comments: [comment(alice, 'Open.'), comment(bob, 'Re.')] });
+    const { panel, cardFor } = mountPanel();
+    panel.setThreads([t]);
+
+    const caret = cardFor(t).querySelector('.thread-caret') as HTMLElement;
+    expect(caret.tagName).toBe('BUTTON');
+    expect(caret.getAttribute('aria-label')).toBeTruthy();
+    // ...and it SAYS which way the card is folded: the rotation conveys that
+    // to sighted users only, and the announced content changes underneath.
+    expect(caret.getAttribute('aria-expanded')).toBe('false');
+    expect(caret.hasAttribute('aria-hidden')).toBe(false);
+
+    panel.setActive(t.id);
+    expect(
+      (cardFor(t).querySelector('.thread-caret') as HTMLElement).getAttribute('aria-expanded'),
+    ).toBe('true');
+
+    // Every path that folds a card has to keep it honest, including the one
+    // that mutates an existing node (setActive folds in place).
+    panel.setActive(null);
+    expect(
+      (cardFor(t).querySelector('.thread-caret') as HTMLElement).getAttribute('aria-expanded'),
+    ).toBe('false');
+  });
+
+  it('reaches the conversation once open: the detail face leaves the tab order only while folded', () => {
+    const t = makeThread({ comments: [comment(alice, 'Open.'), comment(bob, 'Re.')] });
+    const { panel, cardFor } = mountPanel();
+    panel.setThreads([t]);
+
+    const replyBox = () =>
+      cardFor(t).querySelector('.slot-b .face-detail textarea') as HTMLTextAreaElement;
+    expect(replyBox().closest('[inert]')).not.toBeNull();
+
+    // Activating the caret is a plain click — which is exactly what Enter and
+    // Space raise on a <button>, so this is the keyboard path.
+    click(cardFor(t).querySelector('.thread-caret') as HTMLElement);
+    panel.setActive(t.id); // what onThreadClick does in the real chrome
+    expect(replyBox().closest('[inert]')).toBeNull();
   });
 
   it('has ONE resolve control, outside both folding slots, identical in both states', () => {

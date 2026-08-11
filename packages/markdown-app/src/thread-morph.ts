@@ -103,7 +103,12 @@ export function threadCards(id: string, root: ParentNode = document): HTMLElemen
  */
 export function isFoldingTap(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
-  if (el?.closest?.('input, textarea, select, button, a, label')) return false;
+  const control = el?.closest?.('input, textarea, select, button, a, label');
+  // The caret is the ONE control that means "fold this card" — it is a real
+  // button so a keyboard can reach it (Enter/Space raise a click, which is
+  // this same path), and it deliberately has no handler of its own: it does
+  // not swallow the tap, it rides the card's.
+  if (control && !control.classList.contains('thread-caret')) return false;
   const sel = typeof window.getSelection === 'function' ? window.getSelection() : null;
   if (sel && !sel.isCollapsed) return false;
   return true;
@@ -124,6 +129,11 @@ export function isFoldingTap(target: EventTarget | null): boolean {
  * existing card must call this too.
  */
 export function syncFaceVisibility(card: HTMLElement, expanded: boolean): void {
+  // The caret is the card's disclosure control, so it is the thing that has
+  // to SAY which way the card is folded. The rotation conveys it visually and
+  // to nobody else; without this the announced content changes from the topic
+  // line to the whole conversation with no state change announced at all.
+  card.querySelector('.thread-caret')?.setAttribute('aria-expanded', String(expanded));
   const showing = expanded ? 'face-detail' : 'face-summary';
   for (const face of Array.from(card.querySelectorAll<HTMLElement>('.thread-face'))) {
     if (face.classList.contains(showing)) {

@@ -1185,13 +1185,27 @@ body.threads-resizing {
 }
 /* Top right, deliberately as far from ✓ Resolve as the card allows: the two
    were a thumb-width apart on one row, and the misfire that costs you is the
-   one that resolves a thread by accident. A hint, not the hit target. */
+   one that resolves a thread by accident. A hint, not the hit target — but a
+   real button underneath, because it is the only way a keyboard can open the
+   card at all. Stripped back to the glyph so it reads as a hint. */
 .thread-caret {
   flex: 0 0 auto;
   color: var(--fg-muted);
   font-size: 16px;
   line-height: 1;
   transition: transform 0.15s ease;
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0 2px;
+  margin: 0;
+  font-family: inherit;
+  cursor: pointer;
+}
+.thread-caret:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
 }
 .thread.expanded .thread-caret {
   transform: rotate(90deg);

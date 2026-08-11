@@ -370,8 +370,19 @@ export class ThreadPanel {
 
     // Top right, as far from ✓ Resolve as the card allows: the two were a
     // thumb-width apart, and the misfire that costs you resolves a thread.
-    const caret = span('thread-caret');
-    caret.setAttribute('aria-hidden', 'true');
+    //
+    // A real <button>, and the ONLY focusable thing on a collapsed card: the
+    // whole card is the tap target, but a tap is not a gesture a keyboard or
+    // a screen reader has, and the detail face is `inert` while folded — so
+    // without this the opening message and every reply are unreachable. It
+    // stays a HINT rather than the hit area because it has no handler of its
+    // own: its click bubbles to the card's toggle like any other tap on the
+    // card (`isFoldingTap` lets exactly this one control through).
+    const caret = document.createElement('button');
+    caret.type = 'button';
+    caret.className = 'thread-caret';
+    caret.setAttribute('aria-label', 'Toggle comment thread');
+    caret.setAttribute('aria-expanded', String(this.activeId === t.id));
     caret.textContent = '›';
     head.appendChild(caret);
     return head;
