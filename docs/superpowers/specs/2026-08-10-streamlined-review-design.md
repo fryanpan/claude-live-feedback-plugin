@@ -1,7 +1,8 @@
 # streamlined_review — thread cards you can read at a glance
 
 **Status:** UX approved 2026-08-10 (mockup: `demos/streamlined-review-mobile.html`).
-Summary *generation* is **not approved** and is out of scope — see *How the two
+Summary *generation* was approved separately, later the same day, and is a
+**separate build** — nothing in the first build calls a model. See *How the two
 lines are produced*. · **Date:** 2026-08-10
 
 ## The problem
@@ -25,8 +26,8 @@ one, have it *become* the conversation rather than being replaced by it.
 | **Surfaces** | desktop margin balloons **and** mobile — inline in the document/source, plus an over-doc sheet |
 | **The card** | one shape for every thread: topic line + discussion line, always both |
 | **The morph** | 150 ms two-phase expand/collapse, content-preserving — see *Expanding* |
-| **What ships** | the **deterministic** topic/discussion lines (anchor snippet + latest comment). No model call. |
-| **Not approved** | generating the two lines with a model: outbound API access from `packages/server`, comment text leaving the machine, an unmeasured cost |
+| **What ships first** | the **deterministic** topic/discussion lines (anchor snippet + latest comment). No model call. |
+| **Approved, second build** | generating the two lines with a model — outbound API access from `packages/server` and comment text leaving the machine, both approved 2026-08-10, carrying a measure-the-first-week condition on the unmeasured cost |
 
 ## The card
 
@@ -340,7 +341,7 @@ Both lines come from **one pure function** —
 builder and by nothing else. It is the single place that decides what the two
 lines say.
 
-Generation, if it is ever approved, changes *only* that function: it prefers
+Generation changes *only* that function: it prefers
 stored generated text when present and falls back to the deterministic result
 otherwise. No UI, no card builder, and no CSS changes. Keep the function pure
 and unit-tested against thread fixtures, so the fallback stays provably
@@ -363,11 +364,13 @@ stored hash joins the key for exactly the same reason.
 The key gains what the card actually displays and loses what it merely
 animates.)
 
-### NOT YET APPROVED — generating the lines with a model
+### APPROVED 2026-08-10, and out of scope for THIS build — generating the lines with a model
 
-Recorded so the decision is not re-litigated from scratch. **None of this is in
-scope for this build.** Do not add an Anthropic client to `packages/server`, do
-not add outbound HTTP, do not read an API key.
+Bryan approved the outbound access and the comment text leaving the machine on
+2026-08-10, a few minutes after approving the UX. It is a **separate build**:
+nothing in this branch adds an Anthropic client to `packages/server`, opens an
+outbound connection, or reads an API key. The design below is what that build
+implements.
 
 The shape it would take: one call per thread returning `{topic, summary}`, ~10
 words each, on a small fast model; triggered server-side on thread change, 3 s
@@ -394,7 +397,7 @@ flowchart TD
     style S fill:#d4edda
 ```
 
-What approving it would mean:
+What the approval carries:
 
 - **Comment text goes to an external API.** `scrub-haiku.py` sets the
   precedent of sending repo content to the same vendor, but that is a git
@@ -491,9 +494,9 @@ Two the mockup could not settle:
    disappear inline too?
 2. Whether the sheet should remember its Open/All filter across opens.
 
-## To approve
+## What was approved, and in what order
 
-Already approved — build it:
+Build one — the card itself, approved first and shipped in this branch:
 
 1. The card shape, both lines on every thread, participants above the
    discussion line
@@ -501,9 +504,10 @@ Already approved — build it:
    the single `✓ Resolve` control
 3. Mobile as inline + over-doc sheet with prev/next nav — no standalone drawer
 
-Still **not** approved — do not build:
+Build two — generation, approved the same day, deliberately not in this branch:
 
 4. Giving `packages/server` outbound API access
 5. Sending comment text to an external model
-6. The cost, which remains unmeasured — approving it carries a
-   measure-the-first-week condition
+6. The cost, which remains **unmeasured** — the approval carries a
+   measure-the-first-week condition, so log real call volume before anyone
+   describes it as free
