@@ -69,6 +69,7 @@
   .thread.expanded{border-color:var(--border-strong);box-shadow:0 1px 3px rgba(20,24,28,.07)}
   .thread.flash{box-shadow:0 0 0 3px rgba(46,125,215,.35)}
   .row1{display:flex;align-items:center;gap:6px;font-size:12.5px;min-width:0}
+  .wholine{flex:1;min-width:0}
   .status-dot{width:8px;height:8px;border-radius:50%;background:var(--accent);flex:0 0 auto}
   .resolved .status-dot{background:var(--green)}
   .orphan .status-dot{background:var(--yellow)}
@@ -118,6 +119,8 @@
     transition:background var(--t) ease,color var(--t) ease,border-color var(--t) ease}
   .resolve:hover{border-color:var(--green);color:var(--green);background:#f2fbf5}
   .thread.resolved .resolve{border-color:var(--green);background:var(--green);color:#fff}
+  /* Top right, as far from ✓ Resolve as the card allows — they were a thumb-width apart
+     on the same row, and the tap that costs you is the one that resolves by accident. */
   .chev{flex:0 0 auto;color:var(--fg-muted);font-size:16px;line-height:1;
         transition:transform var(--t) ease}
   .thread.expanded .chev{transform:rotate(90deg);color:var(--fg)}
@@ -245,7 +248,7 @@ function card(t) {
   const n = t.comments.length;
   const others = new Set(t.comments.map((c) => c.who));
   others.delete(t.author);
-  const tag = st === 'orphan' ? '· orphan' : st === 'resolved' ? '· resolved' : '';
+  const tag = st === 'orphan' ? ' · orphan' : st === 'resolved' ? ' · resolved' : '';
   const who = others.size ? ` · +${others.size} other${others.size > 1 ? 's' : ''}` : '';
 
   // Two generated lines, always both, everywhere — what the thread is ABOUT, then where
@@ -280,14 +283,14 @@ function card(t) {
 
   return `<div class="thread ${st} ${isOpen ? 'expanded' : ''} ${flashId === t.id ? 'flash' : ''}"
     data-id="${t.id}">
-    <div class="row1 clip"><span class="status-dot"></span>
+    <div class="row1"><span class="status-dot"></span>
       <span class="swatch" style="background:${t.color}"></span>
-      <span class="who">${esc(t.author)}</span><span class="dim">${tag}${who}</span></div>
+      <span class="wholine clip"><span class="who">${esc(t.author)}</span><span class="dim">${tag}${who}</span></span>
+      <span class="chev">›</span></div>
     ${slotA}${slotB}
     <div class="row4">
       <span class="meta">${n > 1 ? `${n - 1} repl${n - 1 === 1 ? 'y' : 'ies'} · ` : ''}${t.when}</span>
       <button class="resolve" data-resolve="${t.id}">✓ ${st === 'resolved' ? 'Resolved' : 'Resolve'}</button>
-      <span class="chev">›</span>
     </div></div>`;
 }
 
@@ -454,10 +457,16 @@ document.addEventListener('click', (e) => {
   }
 
   if (e.target.closest('[data-send]')) return post(e.target.closest('[data-send]').dataset.send);
-  if (e.target.closest('.replybox')) return; // don't collapse while typing
 
+  // Anywhere on the card toggles it — the caret is a hint, not the hit target. The only
+  // exclusions are things you can tap FOR something else: a field, a button, a link, or
+  // a text selection you're dragging out. Everything else, including the comments
+  // themselves, is fair game.
   const t = e.target.closest('.thread');
-  if (t) toggle(t.dataset.id);
+  if (!t) return;
+  if (e.target.closest('input, textarea, select, button, a, label')) return;
+  if (!getSelection()?.isCollapsed) return;
+  toggle(t.dataset.id);
 });
 
 document.addEventListener('keydown', (e) => {
