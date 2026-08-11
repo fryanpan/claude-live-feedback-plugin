@@ -366,6 +366,11 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     container: threadsListEl,
     currentUser: user,
     threadLineLabel,
+    // The anchor highlight follows the panel's selection from here, once,
+    // instead of at each of the half-dozen places that change it. Folding an
+    // open card had no such place — it selects nothing, from inside the card's
+    // own tap handler — so the highlight used to stay lit with no card open.
+    onActiveChange: (id) => refreshThreadDecorations(id),
     onThreadClick: (id) => {
       const range = resolveThreadRange(id);
       if (range) {
@@ -373,7 +378,6 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
         surface.pulseRange(range.from, range.to);
       }
       threadsPanel.setActive(id);
-      refreshThreadDecorations(id);
       // Nothing extra on mobile: setActive has already unfolded EVERY copy
       // of this card, so a tap in the sheet expands the sheet's copy in
       // place (and the inline one underneath it) rather than launching a
@@ -449,7 +453,6 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     surface,
     setActive: (id) => {
       threadsPanel.setActive(id);
-      refreshThreadDecorations(id);
     },
     getActive: () => threadsPanel.getActive(),
     revealInSheet: (id) => requestAnimationFrame(() => threadsPanel.revealThread(id)),
@@ -659,7 +662,6 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
   function openThreadView(id: string): void {
     threadViewId = id;
     threadsPanel.setActive(id);
-    refreshThreadDecorations(id);
     renderThreadView(id);
     opts.hidePill?.();
     threadView.classList.remove('hidden');

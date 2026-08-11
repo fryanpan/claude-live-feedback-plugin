@@ -377,6 +377,24 @@ describe('thread card — the whole card is the tap target', () => {
     click(body);
     expect(calls.click).toEqual([t.id]);
   });
+
+  it('announces every selection change, so the anchor highlight can follow the fold', () => {
+    const t = openThread();
+    const active: Array<string | null> = [];
+    const { panel, cardFor } = mountPanel({ onActiveChange: (id) => active.push(id) });
+    panel.setThreads([t]);
+
+    // Positive control: selecting DOES announce, so the null below is about
+    // the collapse and not about a callback that never fires at all.
+    panel.setActive(t.id);
+    expect(active).toEqual([t.id]);
+
+    // Tapping the open card folds it. Nothing else tells the editor that no
+    // thread is selected any more, so without this the anchor stays lit.
+    click(cardFor(t).querySelector('.face-detail .comments .body') as HTMLElement);
+    expect(active).toEqual([t.id, null]);
+    expect(panel.getActive()).toBeNull();
+  });
 });
 
 describe('thread card — the resting face is hidden, not just transparent', () => {

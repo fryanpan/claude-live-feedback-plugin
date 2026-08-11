@@ -305,9 +305,9 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
         relayout();
       }
       const id = key.slice(2);
-      // setActive folds the card in place (no rebuild) on every copy.
+      // setActive folds the card in place (no rebuild) on every copy, and
+      // carries the anchor highlight with it.
       opts.chrome?.threadsPanel.setActive(id);
-      opts.chrome?.refreshThreadDecorations(id);
       // Heights change over the next 150ms without a rebuild, so the column
       // has to restack all the way through the fold — not once, at the start.
       restackThroughMorph();

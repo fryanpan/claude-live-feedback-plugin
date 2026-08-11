@@ -31,6 +31,13 @@ export interface ThreadPanelOpts {
   onResolve: (threadId: string) => void;
   onReopen: (threadId: string) => void;
   onReanchor: (threadId: string) => void;
+  /**
+   * The selection changed — including to nothing, when a tap folds the open
+   * card shut. The surface's active-anchor highlight is downstream of this
+   * panel's state, and folding is the one transition with no click handler
+   * of its own to carry it, so it has to be announced from in here.
+   */
+  onActiveChange?: (threadId: string | null) => void;
   /** "L293" / "L293–301" label for line-oriented surfaces; null hides it. */
   threadLineLabel?: (threadId: string) => string | null;
 }
@@ -67,20 +74,25 @@ export class ThreadPanel {
    * all (a different tab, an empty drawer).
    */
   setActive(id: string | null): void {
-    if (this.activeId === id) return;
-    const previous = this.activeId;
-    this.activeId = id;
-    this.foldInPlace(previous, id);
-    // Rebuild the drawer list ONLY when its own copy of the incoming card
-    // isn't there to fold — a different tab, or a list that has never
-    // rendered. Every other case has just been mutated in place, so all that
-    // is left is to re-stamp the fingerprint.
-    if (id && threadCards(id, this.opts.container).length === 0) {
-      this.lastRenderKey = '';
-      this.render();
-    } else {
-      this.lastRenderKey = this.computeKey();
+    if (this.activeId !== id) {
+      const previous = this.activeId;
+      this.activeId = id;
+      this.foldInPlace(previous, id);
+      // Rebuild the drawer list ONLY when its own copy of the incoming card
+      // isn't there to fold — a different tab, or a list that has never
+      // rendered. Every other case has just been mutated in place, so all that
+      // is left is to re-stamp the fingerprint.
+      if (id && threadCards(id, this.opts.container).length === 0) {
+        this.lastRenderKey = '';
+        this.render();
+      } else {
+        this.lastRenderKey = this.computeKey();
+      }
     }
+    // Announced on every call, not only on a change: a caller re-asserting
+    // the current selection is asking for the surface to match it, and the
+    // decoration is recomputed from live ranges that may have moved since.
+    this.opts.onActiveChange?.(id);
   }
 
   /**
@@ -126,6 +138,7 @@ export class ThreadPanel {
       this.activeId = id;
       this.lastRenderKey = '';
       this.render();
+      this.opts.onActiveChange?.(id);
     } else {
       // The card is already on screen: fold it in place rather than rebuild
       // the list out from under a morph that is about to run.
