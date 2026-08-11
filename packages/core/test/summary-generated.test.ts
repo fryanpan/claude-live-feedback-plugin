@@ -191,12 +191,16 @@ describe('parseSummaryResponse', () => {
     });
   });
 
-  it('clamps an over-long line to the row rather than letting it overflow', () => {
+  it('leaves an over-long line intact for the browser to ellipsize', () => {
+    // We used to cut at 80/120 chars and append our own "…", which put a
+    // literal ellipsis in the STORED text at a width unrelated to the row it
+    // renders in — and then the row's `text-overflow: ellipsis` truncated it
+    // again. One truncation, at the real width, done by the browser.
     const long = 'word '.repeat(60).trim();
     const out = parseSummaryResponse(JSON.stringify({ topic: long, discussion: long }));
-    expect(out?.topic.length).toBeLessThanOrEqual(80);
-    expect(out?.discussion.length).toBeLessThanOrEqual(120);
-    expect(out?.topic.endsWith('…')).toBe(true);
+    expect(out?.topic).toBe(long);
+    expect(out?.discussion).toBe(long);
+    expect(out?.topic.includes('…')).toBe(false);
   });
 
   it('returns null on anything that is not a usable summary', () => {
