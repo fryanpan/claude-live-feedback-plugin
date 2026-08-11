@@ -26,12 +26,14 @@ import {
   postReply as schemaPostReply,
   replaceAnchor as schemaReplaceAnchor,
   setStatus as schemaSetStatus,
+  setThreadSummary,
   suggestOps,
 } from '@feedback/core';
 import type { ServerWebSocket } from 'bun';
 import * as awarenessProtocol from 'y-protocols/awareness';
 import * as Y from 'yjs';
 
+import { type StoredSummary, needsCall } from '@feedback/core/summary-prompt';
 import {
   type ActivityType,
   type Event,
@@ -68,6 +70,7 @@ import {
 } from './private-meta.ts';
 import { isWithinRoot } from './safe-path.ts';
 import type { SseHub } from './sse.ts';
+import type { ScheduleArgs, ThreadSummarizer } from './summarize.ts';
 import type { WebhookDispatcher } from './webhooks.ts';
 
 export type WsCtx = {
@@ -146,6 +149,11 @@ export interface RoomsConfig {
   webhooks: WebhookDispatcher;
   /** Decorate doc metadata on the way out (e.g. with a reachable reviewUrl). */
   decorateDocMeta?: (meta: DocMeta) => DocMeta & { reviewUrl?: string };
+  /**
+   * Generates thread summary lines. Optional on purpose: without it every
+   * card falls back to its deterministic lines and nothing else changes.
+   */
+  summarizer?: ThreadSummarizer;
 }
 
 /**
@@ -475,6 +483,13 @@ export class Rooms {
     author: User,
     text: string,
     anchor?: Anchor,
+    /**
+     * May this write spend the summary API key? Routes pass `false` for share
+     * visitors: a public tunnel URL must not be able to run up a bill, and a
+     * summary is not worth granting an outsider an outbound call. Defaults to
+     * true so local editors and agents keep working unchanged.
+     */
+    opts?: { generate?: boolean },
   ): Promise<Thread | null> {
     const room = this.rooms.get(docId);
     if (!room) return null;
@@ -487,7 +502,7 @@ export class Rooms {
         createdBy: author,
         firstComment: { id: randomId(), text },
       });
-      this.fireEvent(room, 'thread.created', t);
+      this.fireEvent(room, 'thread.created', t, undefined, opts);
       // Hash the activity event with the comment's PERSISTED ts (not a fresh
       // Date.now()), so a later backfill — which reconstructs this event from
       // the same stored ts — produces an IDENTICAL eventId and dedupes
@@ -505,7 +520,7 @@ export class Rooms {
     });
     if (!comment) return null;
     const thread = this.getThread(docId, threadId);
-    if (thread) this.fireEvent(room, 'thread.replied', thread, comment);
+    if (thread) this.fireEvent(room, 'thread.replied', thread, comment, opts);
     this.recordActivity(room, 'reply', author, threadId, { text, tsMs: comment.ts });
     return thread;
   }
@@ -530,6 +545,13 @@ export class Rooms {
     },
     author: User,
     text: string,
+    /**
+     * Forwarded verbatim to both `postComment` calls below. Share visitors
+     * can reach this route, and the text they post becomes the WHOLE prompt
+     * — the worst of the gate's holes, because it needs no pre-existing
+     * thread. Defaults to generating, like every other local caller.
+     */
+    writeOpts?: { generate?: boolean },
   ): Promise<
     | { ok: true; thread: Thread }
     | {
@@ -584,7 +606,7 @@ export class Rooms {
         endRel: enc(lineEnd),
         snippet: { text: hay.slice(lineStart, lineEnd).slice(0, 120) },
       };
-      const thread = await this.postComment(docId, null, author, text, anchor);
+      const thread = await this.postComment(docId, null, author, text, anchor, writeOpts);
       if (!thread) return { ok: false, error: 'no-doc' };
       return { ok: true, thread };
     }
@@ -620,17 +642,30 @@ export class Rooms {
       endRel: endRelArr,
       snippet: { text: resolved.snippetText },
     };
-    const thread = await this.postComment(docId, null, author, text, anchor);
+    const thread = await this.postComment(docId, null, author, text, anchor, writeOpts);
     if (!thread) return { ok: false, error: 'no-doc' };
     return { ok: true, thread };
   }
 
-  resolve(docId: string, threadId: string, author?: User): Thread | null {
+  /**
+   * `opts.generate` is the same visitor gate `postComment` carries, and it is
+   * here for the same reason: a resolve is a thread CHANGE, so it schedules a
+   * summary, so a share visitor clicking Resolve would otherwise spend the
+   * host's API key on a prompt containing their own comment text. Gating only
+   * the comment routes gated nothing — every visitor comment moves
+   * `summaryHash`, and the next Resolve click cashes it in.
+   */
+  resolve(
+    docId: string,
+    threadId: string,
+    author?: User,
+    opts?: { generate?: boolean },
+  ): Thread | null {
     const room = this.rooms.get(docId);
     if (!room) return null;
     const t = schemaSetStatus(room.ydoc, threadId, 'resolved');
     if (t) {
-      this.fireEvent(room, 'thread.resolved', t);
+      this.fireEvent(room, 'thread.resolved', t, undefined, opts);
       this.recordActivity(room, 'resolve', author ?? DEFAULT_REVIEWER, threadId, {
         tsMs: Date.now(),
       });
@@ -638,12 +673,18 @@ export class Rooms {
     return t;
   }
 
-  reopen(docId: string, threadId: string, author?: User): Thread | null {
+  /** See `resolve` — `opts.generate` is the same visitor gate. */
+  reopen(
+    docId: string,
+    threadId: string,
+    author?: User,
+    opts?: { generate?: boolean },
+  ): Thread | null {
     const room = this.rooms.get(docId);
     if (!room) return null;
     const t = schemaSetStatus(room.ydoc, threadId, 'open');
     if (t) {
-      this.fireEvent(room, 'thread.reopened', t);
+      this.fireEvent(room, 'thread.reopened', t, undefined, opts);
       this.recordActivity(room, 'reopen', author ?? DEFAULT_REVIEWER, threadId, {
         tsMs: Date.now(),
       });
@@ -2508,8 +2549,14 @@ export class Rooms {
     event: 'thread.created' | 'thread.replied' | 'thread.resolved' | 'thread.reopened',
     thread: Thread,
     comment?: { id: string; author: User; text: string; ts: number },
+    opts?: { generate?: boolean },
   ): void {
     room.seq++;
+    // Every thread change funnels through here, which is exactly why the
+    // summary trigger lives here and not at the four call sites: a fifth
+    // event added later gets summarization for free rather than silently
+    // going without it.
+    if (opts?.generate !== false) this.scheduleSummary(room, thread.id);
     const decorate = this.cfg.decorateDocMeta ?? ((m) => m);
     this.broadcastToRoom(room, {
       event,
@@ -2547,6 +2594,107 @@ export class Rooms {
       suggestion: summary,
       doc: decorate(room.meta),
       seq: room.seq,
+    });
+  }
+
+  /**
+   * Summarize every already-existing thread that has no current summary.
+   *
+   * Generation is triggered by thread CHANGES, so nothing that was written
+   * before this feature shipped would ever get a summary — the docs with the
+   * worst deterministic topic lines are exactly the old ones. This walks the
+   * hydrated rooms once and hands the backlog to the summarizer, which paces
+   * it over `windowMs`.
+   *
+   * Resolved threads are included: their cards still render both lines in the
+   * all-threads panel and the outdated-comments flow, and a summary is the
+   * whole point there too. They are counted separately so the operator sees
+   * what they are agreeing to pay for rather than one opaque total.
+   *
+   * Returns immediately with the count queued; the drain runs in the
+   * background. Never automatic — the caller (bin.ts) decides, because a
+   * backfill spends real money and must not fire in a test or a short-lived
+   * process.
+   */
+  backfillSummaries(opts: { windowMs?: number } = {}): {
+    queued: number;
+    open: number;
+    resolved: number;
+  } {
+    const summarizer = this.cfg.summarizer;
+    if (!summarizer?.enabled) return { queued: 0, open: 0, resolved: 0 };
+    const tasks: ScheduleArgs[] = [];
+    let open = 0;
+    let resolved = 0;
+    for (const [docId, room] of this.rooms) {
+      for (const t of listThreads(room.ydoc)) {
+        // Ask the same question the live path asks, so a thread summarized a
+        // second ago is not paid for twice.
+        if (!needsCall(t, t.summary)) continue;
+        if (t.status === 'open') open++;
+        else resolved++;
+        tasks.push({
+          docId,
+          threadId: t.id,
+          getThread: () => this.getThread(docId, t.id),
+          apply: (summary) => {
+            setThreadSummary(room.ydoc, t.id, summary);
+            this.saveToDisk(room);
+          },
+        });
+      }
+    }
+    if (tasks.length > 0) {
+      void summarizer
+        .backfill(tasks, {
+          ...(opts.windowMs !== undefined ? { windowMs: opts.windowMs } : {}),
+        })
+        .then(({ attempted, stored }) => {
+          console.log(`[summarize] backfill done: ${stored} stored of ${attempted} attempted`);
+        })
+        // Nothing observes this promise. Every throw inside `backfill` is
+        // caught today, so this cannot fire — but it is one refactor away
+        // from being an unhandled rejection on a fire-and-forget path.
+        .catch((err) => {
+          console.error('[summarize] backfill failed:', err instanceof Error ? err.message : err);
+        });
+    }
+    return { queued: tasks.length, open, resolved };
+  }
+
+  /**
+   * Store a summary that was generated on demand (REST route / MCP tool).
+   * Same write and same persistence as the scheduled path — one way in, so
+   * an on-demand summary cannot end up in the doc but not on disk.
+   */
+  applyThreadSummary(docId: string, threadId: string, summary: StoredSummary): Thread | null {
+    const room = this.rooms.get(docId);
+    if (!room) return null;
+    const t = setThreadSummary(room.ydoc, threadId, summary);
+    if (t) this.saveToDisk(room);
+    return t;
+  }
+
+  /**
+   * Ask for a generated summary for one thread, if generation is configured.
+   *
+   * Reads the thread fresh at call time rather than capturing it: three
+   * seconds of debounce is long enough for two more replies to land, and the
+   * summary must describe the thread as it will be, not as it was.
+   */
+  private scheduleSummary(room: DocRoom, threadId: string): void {
+    const summarizer = this.cfg.summarizer;
+    if (!summarizer) return;
+    summarizer.schedule({
+      docId: room.docId,
+      threadId,
+      getThread: () => this.getThread(room.docId, threadId),
+      apply: (summary) => {
+        // Writes into the SAME ydoc the browsers are synced to, so the new
+        // lines appear on every open card without a reload.
+        setThreadSummary(room.ydoc, threadId, summary);
+        this.saveToDisk(room);
+      },
     });
   }
 
