@@ -2606,20 +2606,33 @@ export class Rooms {
    * hydrated rooms once and hands the backlog to the summarizer, which paces
    * it over `windowMs`.
    *
+   * Resolved threads are included: their cards still render both lines in the
+   * all-threads panel and the outdated-comments flow, and a summary is the
+   * whole point there too. They are counted separately so the operator sees
+   * what they are agreeing to pay for rather than one opaque total.
+   *
    * Returns immediately with the count queued; the drain runs in the
    * background. Never automatic — the caller (bin.ts) decides, because a
    * backfill spends real money and must not fire in a test or a short-lived
    * process.
    */
-  backfillSummaries(opts: { windowMs?: number } = {}): { queued: number } {
+  backfillSummaries(opts: { windowMs?: number } = {}): {
+    queued: number;
+    open: number;
+    resolved: number;
+  } {
     const summarizer = this.cfg.summarizer;
-    if (!summarizer?.enabled) return { queued: 0 };
+    if (!summarizer?.enabled) return { queued: 0, open: 0, resolved: 0 };
     const tasks: ScheduleArgs[] = [];
+    let open = 0;
+    let resolved = 0;
     for (const [docId, room] of this.rooms) {
       for (const t of listThreads(room.ydoc)) {
         // Ask the same question the live path asks, so a thread summarized a
         // second ago is not paid for twice.
         if (!needsCall(t, t.summary)) continue;
+        if (t.status === 'open') open++;
+        else resolved++;
         tasks.push({
           docId,
           threadId: t.id,
@@ -2638,9 +2651,15 @@ export class Rooms {
         })
         .then(({ attempted, stored }) => {
           console.log(`[summarize] backfill done: ${stored} stored of ${attempted} attempted`);
+        })
+        // Nothing observes this promise. Every throw inside `backfill` is
+        // caught today, so this cannot fire — but it is one refactor away
+        // from being an unhandled rejection on a fire-and-forget path.
+        .catch((err) => {
+          console.error('[summarize] backfill failed:', err instanceof Error ? err.message : err);
         });
     }
-    return { queued: tasks.length };
+    return { queued: tasks.length, open, resolved };
   }
 
   /**

@@ -7,10 +7,13 @@
  * alone rather than blanking them.
  */
 
+// `bun:test`, not `vitest`: vitest.config.ts EXCLUDES packages/server/test/**,
+// so this file is only ever run by `bun test`. Importing vitest here worked by
+// accident and made the file read as if the vitest run covered it.
+import { afterEach, describe, expect, it } from 'bun:test';
 import { summaryHash } from '@feedback/core';
 import type { StoredSummary } from '@feedback/core/summary-prompt';
 import type { Thread, User } from '@feedback/core/types';
-import { afterEach, describe, expect, it } from 'vitest';
 import { ThreadSummarizer } from '../src/summarize.ts';
 
 const alice: User = { id: 'u1', name: 'Alice', kind: 'known', color: '#111111' };
@@ -275,14 +278,40 @@ describe('ThreadSummarizer.backfill', () => {
     const { impl, calls } = fakeFetch();
     s = new ThreadSummarizer({ apiKey: 'k', fetchImpl: impl });
     const start = Date.now();
-    // 4 tasks over 120ms → a 30ms gap after each. Three gaps are unavoidable
-    // before the last call returns; the fourth is inside the wall time too.
-    await s.backfill(tasks(4), { windowMs: 120, minIntervalMs: 0 });
+    // 4 tasks over 200ms → a 50ms gap BETWEEN calls, three of them.
+    await s.backfill(tasks(4), { windowMs: 200, minIntervalMs: 0 });
     const elapsed = Date.now() - start;
     expect(calls).toHaveLength(4);
     // Positive control on the clock: an unpaced drain of the same 4 tasks
     // finishes in single-digit ms, so this bound really is measuring pacing.
-    expect(elapsed).toBeGreaterThanOrEqual(90);
+    expect(elapsed).toBeGreaterThanOrEqual(120);
+    // And it does NOT wait after the last call. A trailing gap would delay
+    // the result — and the "backfill done" line — by a whole interval, which
+    // at the real 15-minute window is minutes of silence that looks like a
+    // drain still running.
+    expect(elapsed).toBeLessThan(200);
+  });
+
+  it('ignores a second drain while one is running', async () => {
+    // `backfilling` and `cancelWait` are single fields. Two overlapping
+    // drains corrupt each other: whichever finishes first clears the flag and
+    // truncates the other mid-queue, and clearing the shared canceller loses
+    // the other's wait — which is the shutdown-hangs-for-an-interval bug the
+    // cancellable wait exists to prevent.
+    const { impl, calls } = fakeFetch();
+    s = new ThreadSummarizer({ apiKey: 'k', fetchImpl: impl });
+    const first = s.backfill(tasks(3), { windowMs: 60, minIntervalMs: 0 });
+    const second = await s.backfill(tasks(3), { windowMs: 60, minIntervalMs: 0 });
+    expect(second).toEqual({ attempted: 0, stored: 0 });
+    // The first drain is untouched by the second's arrival and completes in
+    // full — the positive control that makes the zero above meaningful.
+    expect(await first).toEqual({ attempted: 3, stored: 3 });
+    expect(calls).toHaveLength(3);
+
+    // And once it is done, a later drain runs normally: this is a no-op, not
+    // a latch that switches backfilling off for good.
+    const later = await s.backfill(tasks(2), { windowMs: 0, minIntervalMs: 0 });
+    expect(later.attempted).toBe(2);
   });
 
   it('spends nothing on threads whose stored summary is already current', async () => {

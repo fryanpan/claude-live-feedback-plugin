@@ -157,16 +157,6 @@ export class ThreadSummarizer {
       }
       return;
     }
-    // The mirror image of the hint above, and the more important half: the
-    // operator used to see output only in the case where NOTHING is
-    // transmitted, and silence in the case where everything is.
-    if (!announcedOn) {
-      announcedOn = true;
-      console.log(
-        '[summarize] thread summaries ON: comment text and the anchored line ' +
-          'are sent to api.anthropic.com. Turn off with LF_SUMMARIES=0.',
-      );
-    }
     const key = `${args.docId}\u0000${args.threadId}`;
     // A call is already out for this thread: don't start a second one, just
     // remember that what it is about to store is already out of date.
@@ -238,6 +228,21 @@ export class ThreadSummarizer {
    */
   async generate(thread: Thread): Promise<StoredSummary | null> {
     if (!this.enabled || !this.key) return null;
+    // The mirror image of the no-key hint, and the more important half: the
+    // operator used to see output only in the case where NOTHING is
+    // transmitted, and silence in the case where everything is.
+    //
+    // It lives HERE, not in `schedule()`, because the backfill reaches the
+    // network without going through the debounced path — so the single
+    // largest transmission this feature ever makes was the one that printed
+    // no disclosure at all.
+    if (!announcedOn) {
+      announcedOn = true;
+      console.log(
+        '[summarize] thread summaries ON: comment text and the anchored line ' +
+          'are sent to api.anthropic.com. Turn off with LF_SUMMARIES=0.',
+      );
+    }
     // Hash the state we are about to describe, BEFORE the call, so a reply
     // that lands mid-flight invalidates this summary instead of being
     // silently attributed to it.
@@ -304,6 +309,14 @@ export class ThreadSummarizer {
    * current, so an interrupted backfill resumes where it stopped and a repeat
    * run costs nothing. Live edits win — a thread already being generated for
    * by the debounced path is skipped rather than duplicated.
+   *
+   * ONE AT A TIME per summarizer. `backfilling` and `cancelWait` are single
+   * fields, so two overlapping drains would corrupt each other: the first to
+   * finish clears the flag and truncates the other mid-queue, and clearing the
+   * shared canceller loses the other's wait — reinstating exactly the
+   * shutdown-hangs-for-one-interval failure the cancellable wait exists to
+   * prevent. A second call while one is draining is a no-op, and since the
+   * sweep is idempotent, "run it again after this one" costs nothing.
    */
   async backfill(
     tasks: ScheduleArgs[],
@@ -314,13 +327,14 @@ export class ThreadSummarizer {
     } = {},
   ): Promise<{ attempted: number; stored: number }> {
     if (!this.enabled || tasks.length === 0) return { attempted: 0, stored: 0 };
+    if (this.backfilling) return { attempted: 0, stored: 0 };
     const windowMs = opts.windowMs ?? 15 * 60 * 1000;
     const minIntervalMs = opts.minIntervalMs ?? 250;
     const intervalMs = Math.max(minIntervalMs, Math.floor(windowMs / tasks.length));
     this.backfilling = true;
     let attempted = 0;
     let stored = 0;
-    for (const args of tasks) {
+    for (const [i, args] of tasks.entries()) {
       // dispose() during a 15-minute drain: stop, don't finish the queue.
       if (!this.backfilling) break;
       const key = `${args.docId}\u0000${args.threadId}`;
@@ -330,13 +344,17 @@ export class ThreadSummarizer {
       attempted++;
       if (await this.generateAndApply(args)) stored++;
       opts.onProgress?.(attempted, tasks.length);
-      if (!this.backfilling) break;
+      // N tasks need N-1 gaps. Waiting after the LAST one delays nothing but
+      // the result and the "backfill done" line — by a whole interval, which
+      // at the default window is minutes of apparently-still-running silence.
+      if (!this.backfilling || i === tasks.length - 1) break;
       const w = wait(intervalMs);
       this.cancelWait = w.cancel;
       await w.done;
       this.cancelWait = null;
     }
     this.backfilling = false;
+    this.cancelWait = null;
     return { attempted, stored };
   }
 

@@ -187,7 +187,8 @@ if (!widgetDist)
 if (!markdownAppDist)
   console.log('[feedback] (markdown app not built yet — run: bun run build:markdown-app)');
 
-// One-shot backfill of every already-open thread, spread over a window.
+// One-shot backfill of every thread that has no current summary, open or
+// resolved, spread over a window.
 //
 // Deliberately OPT-IN per start. Threads written before generation shipped
 // have no summary, and nothing in the live path ever revisits them — but the
@@ -202,10 +203,11 @@ if (!markdownAppDist)
 if (['1', 'true', 'yes'].includes((process.env.LF_SUMMARY_BACKFILL ?? '').trim().toLowerCase())) {
   const minutes = Number(process.env.LF_SUMMARY_BACKFILL_MINUTES ?? '15');
   const windowMs = (Number.isFinite(minutes) && minutes > 0 ? minutes : 15) * 60_000;
-  const { queued } = handle.rooms.backfillSummaries({ windowMs });
+  const { queued, open, resolved } = handle.rooms.backfillSummaries({ windowMs });
   console.log(
     queued > 0
-      ? `[feedback]   backfill:   ${queued} threads over ~${Math.round(windowMs / 60_000)} min`
+      ? `[feedback]   backfill:   ${queued} threads (${open} open, ${resolved} resolved) ` +
+          `over ~${Math.round(windowMs / 60_000)} min`
       : '[feedback]   backfill:   nothing to do (no unsummarized threads, or summaries are off)',
   );
 }

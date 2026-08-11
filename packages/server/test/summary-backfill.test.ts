@@ -180,12 +180,43 @@ describe('rooms.backfillSummaries', () => {
     expect(calls.length).toBe(0);
   });
 
+  it('includes resolved threads, and says how many of the bill they are', async () => {
+    // Their cards still render both lines in the all-threads panel and the
+    // outdated-comments flow. But an operator agreeing to spend on "N
+    // threads" should be told what the N is made of, not handed one opaque
+    // total dominated by months of resolved history.
+    const docId = 'bf-resolved';
+    const threadId = await seed(docId, ['agreed, real bug']);
+    await j(
+      await fetch(`${base}/api/docs/${docId}/threads/${threadId}/resolve`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      }),
+    );
+    // Positive control on the setup: it really is resolved and unsummarized.
+    const before = await getThread(docId, threadId);
+    expect(before.status).toBe('resolved');
+    expect(before.summary).toBeUndefined();
+
+    process.env.LF_SUMMARIES = '1';
+    const { queued, open, resolved } = handle.rooms.backfillSummaries({ windowMs: 0 });
+    expect(resolved).toBeGreaterThanOrEqual(1);
+    expect(open + resolved).toBe(queued);
+    await settle(queued);
+    expect((await getThread(docId, threadId)).summary).toBeDefined();
+  });
+
   it('queues nothing while generation is switched off', async () => {
     const docId = 'bf-off';
     const threadId = await seed(docId, ['agreed, real bug']);
 
     // Off — the state `beforeEach` left us in.
-    expect(handle.rooms.backfillSummaries({ windowMs: 0 })).toEqual({ queued: 0 });
+    expect(handle.rooms.backfillSummaries({ windowMs: 0 })).toEqual({
+      queued: 0,
+      open: 0,
+      resolved: 0,
+    });
     await new Promise((r) => setTimeout(r, 20));
     expect(calls.length).toBe(0);
     expect((await getThread(docId, threadId)).summary).toBeUndefined();
