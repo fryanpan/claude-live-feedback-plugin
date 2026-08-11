@@ -351,6 +351,25 @@ Technical discoveries that should persist across sessions for this project.
   `*italic*` / `[link](url)` syntax land as literal characters, not marks.
   Backlog: a dedicated `apply_mark` tool.
 
+## A prod restart reloads server code but NOT the served app bundle
+
+- **A feature can be fully merged, the server restarted, and every browser
+  still runs the pre-feature client.** The markdown-app is served from
+  `packages/markdown-app/dist` (untracked, minified); prod
+  (`serve.ts --no-watch`) deliberately runs no bundler, on the assumption
+  "dist is built once at deploy time" — but nothing enforced that a deploy
+  rebuilt it. Generated thread summaries (PR #105) merged at 12:39; dist was
+  last built 11:37; the 1:46 restart reloaded the SERVER (which generated and
+  stored summaries) while every card kept rendering raw snippets, because the
+  served `app.js` had no summary code at all. Diagnosis tell: server REST
+  state is correct, browser behavior is pre-feature → compare
+  `dist/BUILD_INFO.txt` against the merge time FIRST. Note the bundle is
+  minified, so grepping dist for source identifiers proves nothing — grep for
+  string literals (`get("summary")`) or trust BUILD_INFO.
+- Fix (this PR): prod `serve.ts` rebuilds the widget + markdown-app bundles
+  once at startup, before the server spawns — restart == deploy. A failed
+  build logs loudly and serves the existing dist (stale beats down).
+
 ## Server lifecycle on the Mac Mini
 
 - The live-feedback server has no auto-restart story today. If it crashes
