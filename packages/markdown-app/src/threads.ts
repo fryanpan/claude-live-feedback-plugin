@@ -1,4 +1,12 @@
-import { type Thread, type User, formatTime } from '@feedback/core';
+import {
+  type Comment,
+  type Participants,
+  type Thread,
+  type User,
+  formatTime,
+  threadLines,
+  threadSummary,
+} from '@feedback/core';
 import { renderCommentMarkdown } from './comment-markdown.ts';
 
 export type ThreadTab = 'open' | 'resolved' | 'all';
@@ -105,11 +113,18 @@ export class ThreadPanel {
     return { open, resolved, orphan };
   }
 
-  /** Cheap fingerprint used to short-circuit renders when nothing user-visible changed. */
+  /** Cheap fingerprint used to short-circuit renders when nothing user-visible changed.
+   *
+   *  The topic line is derived from the anchor snippet, which moves when the
+   *  doc is edited — independently of every other term here. Leave it out and
+   *  an edited anchor keeps a stale topic on screen until some unrelated
+   *  change happens to force a repaint. Whatever `threadSummary` reads has to
+   *  be in the key; today that is the snippet, via the line it produces. */
   private computeKey(): string {
     const parts: string[] = [];
     for (const t of this.threads) {
-      parts.push(`${t.id}:${this.statusMap.get(t.id)}:${t.commentCount}:${t.lastActivity}`);
+      const status = this.statusMap.get(t.id);
+      parts.push(`${t.id}:${status}:${t.commentCount}:${t.lastActivity}:${threadLines(t).topic}`);
     }
     return `${this.tab}|${this.activeId ?? ''}|${parts.join('|')}`;
   }
@@ -175,6 +190,7 @@ export class ThreadPanel {
       for (const t of sortByActivity(visible))
         c.appendChild(this.renderThread(t, pendingReplies.get(t.id)));
     }
+    sizeThreadSlots(c);
     this.lastRenderKey = key;
   }
 
@@ -191,70 +207,142 @@ export class ThreadPanel {
    * balloon is literally this same card (plus positioning classes), so
    * reply/resolve/reopen/re-anchor behave identically everywhere instead of
    * a second implementation drifting out of sync. Public on purpose.
+   *
+   * Four rows, and the middle two are *slots* holding two faces each:
+   *
+   * ```
+   * .thread-head    ● Alice · orphan                              ›
+   * .thread-slot.slot-a   topic line          ⇄  the opening message
+   * .thread-slot.slot-b   who + discussion    ⇄  the replies + reply box
+   * .thread-foot    3 replies · 2h                     [ ✓ Resolve ]
+   * ```
+   *
+   * Each summary line is paired with what it BECOMES, and both faces are
+   * built here, together, always — the expand animation cross-fades between
+   * two faces that already exist in the same box, so neither may be built
+   * lazily and neither may be omitted. The head and the foot sit outside
+   * both slots so expanding never rebuilds or moves them.
    */
   renderThread(t: Thread, pendingReply?: string): HTMLElement {
     const status = this.statusMap.get(t.id) ?? 'open';
+    const summary = threadSummary(t);
     const el = document.createElement('div');
     el.className = `thread status-${status}`;
     if (status === 'resolved') el.classList.add('resolved');
     if (status === 'orphan') el.classList.add('orphan');
-    if (this.activeId === t.id) el.classList.add('active');
+    // `expanded` is the class the two slots read; `active` is the drawer's
+    // own selection styling. They coincide today (expanded == active), but
+    // the slots key off `expanded` so the two can separate later without
+    // touching the CSS that folds the card.
+    if (this.activeId === t.id) el.classList.add('active', 'expanded');
+    // The lookup key for every copy of this thread on screen. A thread can be
+    // rendered twice (inline in the doc AND in the mobile sheet), so nothing
+    // may address a card by a document-unique id — drive them all from this.
     el.setAttribute('data-thread-id', t.id);
 
-    const snippet = document.createElement('div');
-    snippet.className = 'snippet';
-    snippet.textContent = snippetText(t);
+    el.appendChild(this.head(t, status));
+    el.appendChild(this.slotA(t, summary.topic));
+    el.appendChild(this.slotB(t, summary, status, pendingReply));
+    el.appendChild(this.foot(t, status));
+    syncFaceVisibility(el, this.activeId === t.id);
+
+    // The whole card is the tap target; the caret is a hint, not the hit
+    // area. The only exclusions are things you tap FOR something else — a
+    // field, a button, a link — and a text selection being dragged out, which
+    // must not collapse the comment out from under the reader.
+    el.addEventListener('click', (ev) => {
+      const target = ev.target as HTMLElement | null;
+      if (target?.closest?.('input, textarea, select, button, a, label')) return;
+      const sel = typeof window.getSelection === 'function' ? window.getSelection() : null;
+      if (sel && !sel.isCollapsed) return;
+      this.opts.onThreadClick(t.id);
+    });
+
+    return el;
+  }
+
+  /** Row 1: identity. The attribution for the OPENING MESSAGE and nothing
+   *  else — which is why the opening message never repeats the name. */
+  private head(t: Thread, status: 'open' | 'resolved' | 'orphan'): HTMLElement {
+    const head = div('thread-head');
+    head.appendChild(div('status-dot'));
+
+    const author = t.comments[0]?.author ?? t.createdBy;
+    const swatch = span('swatch');
+    // Assigning a style PROPERTY can't smuggle extra declarations the way an
+    // interpolated style ATTRIBUTE can — the CSS parser drops the whole value
+    // if it isn't a colour. Same treatment every author swatch already gets.
+    swatch.style.background = author.color;
+    head.appendChild(swatch);
+
+    const who = span('thread-who clip');
+    const name = span('name');
+    // Plain text, never HTML: author names are agent-supplied and untrusted.
+    name.textContent = author.name;
+    who.appendChild(name);
+    // Status only varies where resolved/orphaned threads can appear at all —
+    // the margin renders open threads exclusively, so this is empty there.
+    if (status !== 'open') {
+      const tag = span('thread-tag');
+      tag.textContent = ` · ${status}`;
+      who.appendChild(tag);
+    }
+    head.appendChild(who);
+
     const lineLabel = this.opts.threadLineLabel?.(t.id);
     if (lineLabel) {
-      const chip = document.createElement('span');
-      chip.className = 'thread-line';
+      const chip = span('thread-line');
       chip.textContent = lineLabel;
-      snippet.prepend(chip);
+      head.appendChild(chip);
     }
-    el.appendChild(snippet);
 
-    const comments = document.createElement('div');
-    comments.className = 'comments';
-    t.comments.forEach((c, idx) => {
-      const row = document.createElement('div');
-      row.className = 'comment';
-      if (idx === 0) row.classList.add('first');
+    // Top right, as far from ✓ Resolve as the card allows: the two were a
+    // thumb-width apart, and the misfire that costs you resolves a thread.
+    const caret = span('thread-caret');
+    caret.setAttribute('aria-hidden', 'true');
+    caret.textContent = '›';
+    head.appendChild(caret);
+    return head;
+  }
 
-      const authorRow = document.createElement('div');
-      authorRow.className = 'author';
-      if (idx === 0) {
-        const dot = document.createElement('span');
-        dot.className = 'status-dot';
-        authorRow.appendChild(dot);
-      }
-      const swatch = document.createElement('span');
-      swatch.className = 'swatch';
-      swatch.style.background = c.author.color;
-      authorRow.appendChild(swatch);
-      const name = document.createElement('span');
-      name.className = 'name';
-      name.textContent = c.author.name;
-      authorRow.appendChild(name);
-      const time = document.createElement('span');
-      time.className = 'time';
-      time.textContent = formatTime(c.ts);
-      authorRow.appendChild(time);
+  /** Slot A: the topic line becomes the opening message, in place. */
+  private slotA(t: Thread, topic: string): HTMLElement {
+    const topicEl = div('thread-topic clip');
+    // Plain text, never HTML: the snippet is doc content, untrusted.
+    topicEl.textContent = topic;
 
-      const body = document.createElement('div');
-      body.className = 'body';
-      // Comments are untrusted input; renderCommentMarkdown escapes first and
-      // only emits a fixed safe tag set, so innerHTML is safe here.
-      body.innerHTML = renderCommentMarkdown(c.text);
+    const msg = div('thread-message body');
+    // Comments are untrusted input; renderCommentMarkdown escapes first and
+    // only emits a fixed safe tag set, so innerHTML is safe here.
+    msg.innerHTML = renderCommentMarkdown(t.comments[0]?.text ?? '');
 
-      row.appendChild(authorRow);
-      row.appendChild(body);
-      comments.appendChild(row);
-    });
-    el.appendChild(comments);
+    return slot('slot-a', [topicEl], [msg]);
+  }
 
-    // Reply area (shown only when this thread is active)
-    const reply = document.createElement('div');
-    reply.className = 'thread-reply';
+  /** Slot B: who spoke + where it got to becomes the replies + the reply box. */
+  private slotB(
+    t: Thread,
+    summary: {
+      discussion: string;
+      discussionKind: 'replies' | 'none';
+      participants: Participants | null;
+    },
+    status: 'open' | 'resolved' | 'orphan',
+    pendingReply?: string,
+  ): HTMLElement {
+    const summaryFace: HTMLElement[] = [];
+    // The only row that comes and goes — with nobody but the author in the
+    // thread there is nobody to list. Both LINES are always rendered.
+    if (summary.participants) summaryFace.push(participantsRow(summary.participants));
+    const discussion = div('thread-discussion clip');
+    if (summary.discussionKind === 'none') discussion.classList.add('none');
+    discussion.textContent = summary.discussion;
+    summaryFace.push(discussion);
+
+    const comments = div('comments');
+    for (const c of t.comments.slice(1)) comments.appendChild(commentRow(c));
+
+    const reply = div('thread-reply');
     const ta = document.createElement('textarea');
     ta.rows = 2;
     ta.placeholder = `Reply as ${this.opts.currentUser.name}…`;
@@ -272,28 +360,161 @@ export class ThreadPanel {
       }
     });
     reply.appendChild(ta);
-    const actions = document.createElement('div');
-    actions.className = 'thread-actions';
+    const actions = div('thread-actions');
     actions.appendChild(btn('Reply', 'primary', submitReply));
-    if (status === 'resolved') {
-      actions.appendChild(btn('Reopen', '', () => this.opts.onReopen(t.id)));
-    } else {
-      actions.appendChild(btn('Resolve', '', () => this.opts.onResolve(t.id)));
-    }
+    // Resolve/Reopen is NOT here — one control, in the foot, outside the
+    // slots. Re-anchoring is a repair, not a reply, and belongs with the
+    // conversation it is repairing.
     if (status === 'orphan') {
       actions.appendChild(btn('Re-anchor…', '', () => this.opts.onReanchor(t.id)));
     }
     reply.appendChild(actions);
-    el.appendChild(reply);
 
-    el.addEventListener('click', (ev) => {
-      const tag = (ev.target as HTMLElement).tagName;
-      if (tag === 'TEXTAREA' || tag === 'BUTTON') return;
-      this.opts.onThreadClick(t.id);
-    });
-
-    return el;
+    return slot('slot-b', summaryFace, [comments, reply]);
   }
+
+  /** Row 4: how much conversation there is, and the one resolve control. */
+  private foot(t: Thread, status: 'open' | 'resolved' | 'orphan'): HTMLElement {
+    const foot = div('thread-foot');
+    const meta = span('thread-meta');
+    const replies = Math.max(0, t.commentCount - 1);
+    const count = replies > 0 ? `${replies} ${replies === 1 ? 'reply' : 'replies'} · ` : '';
+    meta.textContent = `${count}${formatTime(t.lastActivity)}`;
+    foot.appendChild(meta);
+
+    // ONE control, same element and same class in both states, so expanding
+    // never swaps it for a different button. It reads as an action before you
+    // take it — never icon-only, never green-only-once-resolved.
+    const resolved = status === 'resolved';
+    const b = btn(resolved ? '✓ Resolved' : '✓ Resolve', 'thread-resolve', () =>
+      resolved ? this.opts.onReopen(t.id) : this.opts.onResolve(t.id),
+    );
+    b.setAttribute('aria-label', resolved ? 'Reopen thread' : 'Resolve thread');
+    foot.appendChild(b);
+    return foot;
+  }
+}
+
+/**
+ * Hide the face that is not showing from assistive tech and from the tab
+ * order.
+ *
+ * Both faces of a slot are in the DOM at once — that is what the morph
+ * cross-fades between — and the resting one is hidden only by `opacity: 0`,
+ * which hides nothing from a screen reader and removes nothing from the tab
+ * order. Without this, a collapsed card reads its topic line AND its opening
+ * message, and tabbing through the drawer lands in an invisible reply box.
+ *
+ * `opacity` is what animates, so visibility can't be expressed in CSS here;
+ * it rides the class flip instead. Anything that toggles `expanded` on an
+ * existing card must call this too.
+ */
+export function syncFaceVisibility(card: HTMLElement, expanded: boolean): void {
+  const showing = expanded ? 'face-detail' : 'face-summary';
+  for (const face of Array.from(card.querySelectorAll<HTMLElement>('.thread-face'))) {
+    if (face.classList.contains(showing)) {
+      face.removeAttribute('inert');
+      face.removeAttribute('aria-hidden');
+    } else {
+      face.setAttribute('inert', '');
+      face.setAttribute('aria-hidden', 'true');
+    }
+  }
+}
+
+/**
+ * Give every slot under `root` the height of the face that is currently
+ * showing.
+ *
+ * A slot's faces are absolutely positioned, so the slot has no height of its
+ * own — without this the card renders as a header and a footer with nothing
+ * between them. Nothing ever collapses to zero, because a slot is never
+ * empty: one face is always resting at its measured height.
+ *
+ * This is the RESTING half of the morph. The animated half (the two-phase
+ * tween, and re-measuring on `resize` / after `document.fonts.ready`, without
+ * which a card holds a height computed against the fallback font) belongs
+ * with the toggle. Must run before anything reads the card's own height —
+ * the balloon margin's layout pass does exactly that.
+ */
+export function sizeThreadSlots(root: ParentNode): void {
+  for (const slot of Array.from(root.querySelectorAll<HTMLElement>('.thread-slot'))) {
+    const expanded = slot.closest('.thread')?.classList.contains('expanded') ?? false;
+    const face = slot.querySelector<HTMLElement>(expanded ? '.face-detail' : '.face-summary');
+    if (face) slot.style.height = `${face.offsetHeight}px`;
+  }
+}
+
+function div(cls: string): HTMLElement {
+  const el = document.createElement('div');
+  el.className = cls;
+  return el;
+}
+
+function span(cls: string): HTMLElement {
+  const el = document.createElement('span');
+  el.className = cls;
+  return el;
+}
+
+/**
+ * A folding slot: two faces stacked in the same box, the summary one and the
+ * one it morphs into. Both are absolutely positioned at `top: 0` by CSS, so
+ * the slot has no intrinsic height — the morph engine measures the visible
+ * face and sets it. That is what lets the opening message land on the exact
+ * pixel row the topic line occupied.
+ */
+function slot(cls: string, summaryFace: Node[], detailFace: Node[]): HTMLElement {
+  const el = div(`thread-slot ${cls}`);
+  const a = div('thread-face face-summary');
+  a.append(...summaryFace);
+  const b = div('thread-face face-detail');
+  b.append(...detailFace);
+  el.append(a, b);
+  return el;
+}
+
+/** Who else is in the thread, sitting with the discussion line it describes. */
+function participantsRow(p: Participants): HTMLElement {
+  const row = div('thread-participants clip');
+  for (const u of p.repliers) {
+    const sw = span('swatch');
+    sw.style.background = u.color;
+    row.appendChild(sw);
+  }
+  if (p.label.kind === 'named' && p.label.text.startsWith(p.label.name)) {
+    // Style the name, but take the wording from the builder — the seam owns
+    // what the row SAYS; this only decides how it looks.
+    const nameEl = span('name');
+    // Plain text, never HTML: names are untrusted (agent-supplied).
+    nameEl.textContent = p.label.name;
+    row.append(nameEl, document.createTextNode(p.label.text.slice(p.label.name.length)));
+  } else {
+    row.appendChild(document.createTextNode(p.label.text));
+  }
+  return row;
+}
+
+/** One reply, in slot B's detail face. The opening message is slot A's. */
+function commentRow(c: Comment): HTMLElement {
+  const row = div('comment');
+  const authorRow = div('author');
+  const swatch = span('swatch');
+  swatch.style.background = c.author.color;
+  const name = span('name');
+  // Plain text, never HTML: names are untrusted (agent-supplied).
+  name.textContent = c.author.name;
+  const time = span('time');
+  time.textContent = formatTime(c.ts);
+  authorRow.append(swatch, name, time);
+
+  const body = div('body');
+  // Comments are untrusted input; renderCommentMarkdown escapes first and
+  // only emits a fixed safe tag set, so innerHTML is safe here.
+  body.innerHTML = renderCommentMarkdown(c.text);
+
+  row.append(authorRow, body);
+  return row;
 }
 
 function btn(label: string, cls: string, on: () => void): HTMLButtonElement {
@@ -303,13 +524,6 @@ function btn(label: string, cls: string, on: () => void): HTMLButtonElement {
   b.textContent = label;
   b.addEventListener('click', on);
   return b;
-}
-
-function snippetText(t: Thread): string {
-  if (t.anchor.kind === 'orphan') {
-    return t.anchor.original.snippet.text;
-  }
-  return t.anchor.snippet.text;
 }
 
 function sortByActivity(ts: Thread[]): Thread[] {

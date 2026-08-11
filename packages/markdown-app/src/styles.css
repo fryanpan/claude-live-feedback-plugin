@@ -1099,6 +1099,7 @@ body.threads-resizing {
   padding: 10px 12px;
   margin-bottom: 8px;
   cursor: pointer;
+  position: relative;
 }
 .thread:hover {
   border-color: var(--border-strong);
@@ -1122,20 +1123,192 @@ body.threads-resizing {
 .thread.orphan .status-dot {
   background: var(--yellow);
 }
-/* The snippet quotes the anchored text — use the same serif family as
-   the doc so the quote looks like it was lifted straight from the page. */
-.thread .snippet {
+
+/* ---------- the card: head, two folding slots, foot ---------- */
+
+/* Row 1 is the attribution for the OPENING MESSAGE and nothing else — which
+   is why the opening message never repeats the name when the card expands. */
+.thread-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  min-width: 0;
+  font-family: var(--sans);
+}
+.thread-head .swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex: 0 0 auto;
+}
+.thread-who {
+  flex: 1;
+  min-width: 0;
+}
+.thread-who .name {
+  font-weight: 600;
+}
+.thread-tag {
+  color: var(--fg-muted);
+}
+/* Lines truncate rather than wrap, so a card cannot exceed its rows at any
+   width. Shared by every one-line row on the card. */
+.thread .clip {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+/* Top right, deliberately as far from ✓ Resolve as the card allows: the two
+   were a thumb-width apart on one row, and the misfire that costs you is the
+   one that resolves a thread by accident. A hint, not the hit target. */
+.thread-caret {
+  flex: 0 0 auto;
+  color: var(--fg-muted);
+  font-size: 16px;
+  line-height: 1;
+  transition: transform 0.15s ease;
+}
+.thread.expanded .thread-caret {
+  transform: rotate(90deg);
+  color: var(--fg);
+}
+
+/* Each slot holds two faces stacked in the same box: the summary line and
+   what it becomes. Both faces sit at top:0, so the opening message lands on
+   the exact pixel row the topic line occupied and the slot has NO intrinsic
+   height — the morph engine measures the visible face and sets it. */
+.thread-slot {
+  position: relative;
+  overflow: hidden;
+  margin-top: 7px;
+}
+.thread-slot > .thread-face {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+}
+.thread-face.face-detail {
+  opacity: 0;
+  pointer-events: none;
+}
+.thread.expanded .thread-face.face-summary {
+  opacity: 0;
+  pointer-events: none;
+}
+.thread.expanded .thread-face.face-detail {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Same face, size and leading as the message it morphs into — a font change
+   mid-cross-fade reads as two things swapping rather than one becoming the
+   other. The thin left rule and the muted colour carry the distinction
+   instead: properties that fade without moving a glyph. */
+.thread-topic,
+.thread-message {
   font-family: var(--prose);
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 14.5px;
+  line-height: 1.55;
+}
+.thread-topic {
+  color: var(--fg-muted);
+  border-left: 3px solid var(--border);
+  padding: 0 8px;
+  margin: 0;
+}
+/* Who else is in the thread — with the discussion line it describes, not up
+   in the header. */
+.thread-participants {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--fg-muted);
+  margin: 0 0 3px;
+  min-width: 0;
+  font-family: var(--sans);
+}
+.thread-participants .swatch {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  flex: 0 0 auto;
+}
+.thread-participants .name {
+  font-weight: 600;
+  color: var(--fg);
+}
+.thread-discussion {
+  font-family: var(--prose);
+  font-size: 13.5px;
+  line-height: 1.4;
+  margin: 0;
+}
+.thread-discussion::before {
+  content: "↳ ";
+  color: var(--fg-muted);
+}
+/* Nobody has replied yet: muted italic, and no arrow to a place we haven't
+   gone. The LINE still renders — the card keeps one shape everywhere. */
+.thread-discussion.none {
   color: var(--fg-muted);
   font-style: italic;
-  border-left: 3px solid var(--border);
-  padding: 2px 8px;
-  margin-bottom: 10px;
-  max-height: 3em;
-  overflow: hidden;
 }
+.thread-discussion.none::before {
+  content: "";
+}
+
+/* Row 4: how much conversation there is, and the one resolve control. Lives
+   outside both slots, so expanding never rebuilds or moves it. */
+.thread-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 9px;
+}
+.thread-meta {
+  font-size: 12px;
+  color: var(--fg-muted);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--sans);
+}
+/* The same element with the same colour in both states — not icon-only, and
+   not a control that only turns green once the thread is resolved. It reads
+   as an action before you take it. */
+.thread-resolve {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 10px;
+  min-height: 32px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.thread-resolve:hover {
+  border-color: var(--green);
+  color: var(--green);
+}
+.thread.resolved .thread-resolve {
+  border-color: var(--green);
+  background: var(--green);
+  color: #fff;
+}
+
 .thread .comments {
   margin-top: 2px;
   display: flex;
@@ -1174,7 +1347,7 @@ body.threads-resizing {
 }
 /* Comment body is the thing people read — apply the same serif reading
    stack as the editor, slightly smaller to fit the narrower panel. */
-.thread .comment .body {
+.thread .body {
   color: var(--fg);
   font-family: var(--prose);
   font-feature-settings: "kern", "liga";
@@ -1184,24 +1357,24 @@ body.threads-resizing {
 }
 /* Rendered markdown inside a comment (renderCommentMarkdown). Tight margins
    so a comment still reads as a comment, not a document. */
-.thread .comment .body p {
+.thread .body p {
   margin: 0 0 0.4em;
   white-space: pre-wrap;
 }
-.thread .comment .body p:last-child {
+.thread .body p:last-child {
   margin-bottom: 0;
 }
-.thread .comment .body ul.cm-list {
+.thread .body ul.cm-list {
   margin: 0.2em 0 0.4em;
   padding-left: 1.2em;
 }
-.thread .comment .body ul.cm-list:last-child {
+.thread .body ul.cm-list:last-child {
   margin-bottom: 0;
 }
-.thread .comment .body li {
+.thread .body li {
   margin: 0.1em 0;
 }
-.thread .comment .body code {
+.thread .body code {
   font-family: var(--mono, ui-monospace, monospace);
   font-size: 0.92em;
   background: var(--code-bg, rgba(127, 127, 127, 0.14));
@@ -1209,23 +1382,23 @@ body.threads-resizing {
   border-radius: 4px;
   word-break: break-word;
 }
-.thread .comment .body a {
+.thread .body a {
   color: var(--accent, #2e7dd7);
   text-decoration: underline;
 }
-.thread .comment .body strong {
+.thread .body strong {
   font-weight: 650;
 }
+/* Always laid out: the reply box lives inside slot B's detail face, so the
+   face's own opacity/pointer-events decide whether it is reachable. Hiding it
+   with `display` as well would give the slot nothing to measure. */
 .thread-reply {
-  display: none;
+  display: flex;
   margin-top: 10px;
   flex-direction: column;
   gap: 6px;
   padding-top: 10px;
   border-top: 1px solid var(--border);
-}
-.thread.active .thread-reply {
-  display: flex;
 }
 .thread-reply textarea {
   resize: vertical;
@@ -2433,14 +2606,6 @@ body.redline-mode #toggle-suggest-mode {
 .lf-balloon-comment:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
-}
-
-/* The drawer only shows a thread's reply box + actions once it's the active
-   thread (saves vertical space in a long list); a balloon has no such list to
-   save space in, and "reply / resolve / re-anchor work from the balloon" is
-   the point — so always show them here regardless of active state. */
-.thread.lf-balloon-comment .thread-reply {
-  display: flex;
 }
 
 .lf-leader-comment {

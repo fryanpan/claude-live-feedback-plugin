@@ -1,7 +1,8 @@
-import { type Thread, formatTime, suggestOps } from '@feedback/core';
+import { type Thread, formatTime, suggestOps, threadLines } from '@feedback/core';
 import type { EditorView } from '@tiptap/pm/view';
 import type { MountScope } from '../mount-scope.ts';
 import { type ReviewChrome, showToast } from '../review-chrome.ts';
+import { sizeThreadSlots } from '../threads.ts';
 import { layoutBalloons } from './balloon-layout.ts';
 import {
   type DeletionGroup,
@@ -595,6 +596,11 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
     const el = opts.chrome?.threadsPanel.renderThread(thread, pendingReply);
     if (!el) throw new Error('buildCommentBalloon requires opts.chrome');
     el.classList.add('lf-balloon', 'lf-balloon-comment');
+    // This IS the expanded builder — the margin's expand state (`expandedKey`)
+    // is the authority here, not the drawer's active thread. They agree today
+    // because expandBalloon sets both, but a drawer click that moves `active`
+    // elsewhere must not fold an expanded balloon back to its summary lines.
+    el.classList.add('expanded');
     return el;
   }
 
@@ -612,20 +618,28 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
     const delKeys = delGroups.map(
       (g) => `del|${g.blockKey}|${g.deletedMarkdown}|${isExpanded(`d:${g.blockKey}`)}`,
     );
+    // The topic line comes from the anchor snippet, which moves whenever the
+    // doc is edited — independently of every other term here. Without it, an
+    // edited anchor keeps a stale topic on the card until some unrelated
+    // change forces a repaint. Key on the line the card actually shows.
     const commentKeys = openThreads.map(
       (t) =>
-        `comment|${t.id}|${t.status}|${t.commentCount}|${t.lastActivity}|${activeId === t.id}|${isExpanded(`c:${t.id}`)}`,
+        `comment|${t.id}|${t.status}|${t.commentCount}|${t.lastActivity}|${activeId === t.id}|${isExpanded(`c:${t.id}`)}|${threadLines(t).topic}`,
     );
     const suggestionKeys = suggestions.map(
       (s) => `suggest|${s.sid}|${s.kind}|${isExpanded(`s:${s.sid}`)}`,
     );
     const keys = [...delKeys, ...commentKeys, ...suggestionKeys];
     if (keys.length === rendered.length && keys.every((k, i) => k === rendered[i].key)) {
-      // Nothing display-relevant changed — refresh the live group refs
-      // (anchor position may have moved) without touching any DOM.
+      // Nothing display-relevant changed — refresh the live refs (an anchor
+      // position may have moved) without touching any DOM. Both kinds that
+      // hold one: a retained `thread` object goes stale exactly as a `group`
+      // does, and anything reading `r.thread` later would get old data.
       let di = 0;
+      let ci = 0;
       for (const r of rendered) {
         if (r.kind === 'del') r.group = delGroups[di++];
+        else if (r.kind === 'comment') r.thread = openThreads[ci++] ?? r.thread;
       }
       return;
     }
@@ -665,6 +679,10 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
       return { kind: 'suggestion', key: suggestionKeys[i], summary, el };
     });
     rendered = [...nextDel, ...nextComments, ...nextSuggestions];
+    // A card's folding slots have no intrinsic height — measure them now the
+    // balloons are in the document, BEFORE layoutBalloons reads `offsetHeight`
+    // off the cards, or every comment balloon stacks as a header and a footer.
+    sizeThreadSlots(marginEl);
   }
 
   /** Y of a client-rect top in the editor's scrolled content space. */

@@ -468,14 +468,21 @@ describe('mountMarkupMargin — comment balloons', () => {
     expect(balloon.getAttribute('data-thread-id')).toBe(thread.id);
     expect(balloon.textContent).toContain('Please clarify this.');
     expect(balloon.textContent).toContain('Bob'); // the comment's author
+    // ...with the streamlined card's own shape: both folding slots present,
+    // the opening message in slot A, and the reply box in slot B.
+    expect(balloon.classList.contains('expanded')).toBe(true);
+    expect(balloon.querySelector('.slot-a .face-detail .thread-message')?.textContent).toContain(
+      'Please clarify this.',
+    );
+    expect(balloon.querySelector('.slot-b .face-detail textarea')).not.toBeNull();
 
     const fetchSpy = vi.fn(() => Promise.resolve({ ok: true }) as unknown as Promise<Response>);
     vi.stubGlobal('fetch', fetchSpy);
     try {
-      const resolveBtn = Array.from(balloon.querySelectorAll('button')).find(
-        (b) => b.textContent === 'Resolve',
-      );
-      expect(resolveBtn).toBeTruthy();
+      // ONE resolve control, in the foot, outside both slots.
+      const resolveBtn = balloon.querySelector<HTMLButtonElement>('.thread-foot .thread-resolve');
+      expect(balloon.querySelectorAll('.thread-resolve')).toHaveLength(1);
+      expect(resolveBtn?.getAttribute('aria-label')).toBe('Resolve thread');
       resolveBtn?.click();
       expect(fetchSpy).toHaveBeenCalledWith(
         expect.stringContaining(`/api/docs/d1/threads/${thread.id}/resolve`),
@@ -531,6 +538,46 @@ describe('mountMarkupMargin — comment balloons', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it('repaints when only the anchor snippet moved — the topic line is keyed on it', async () => {
+    const { parent, surface, ydoc, chrome, scope } = mountRedlineWithChrome(
+      '',
+      'Alpha bravo gamma.\n',
+    );
+    await tick();
+    const thread = openThreadAt(
+      ydoc,
+      surface.handle.editor,
+      () => surface.getSelectionRel(),
+      { from: 1, to: 6 },
+      'Please clarify this.',
+    );
+
+    const margin = mountMarkupMargin({
+      editorEl: parent,
+      view: surface.handle.editor.view,
+      getDeletions: () => [],
+      threads: () => chrome.collectThreads(),
+      chrome,
+      scope,
+    });
+    margin.relayout();
+    clickToExpand(parent.querySelector('.lf-balloon.lf-balloon-comment') as HTMLElement);
+
+    const topic = () =>
+      (parent.querySelector('.lf-balloon-comment .thread-topic')?.textContent ?? '').trim();
+    // Positive control: the topic line really is the anchor snippet.
+    expect(topic()).toBe('Alpha');
+
+    // A doc edit moves the snippet without touching status, commentCount,
+    // lastActivity or the active/expanded flags — every other term in the key.
+    const map = ydoc.getMap('threads').get(thread.id) as Y.Map<unknown>;
+    const anchor = map.get('anchor') as Record<string, unknown>;
+    map.set('anchor', { ...anchor, snippet: { text: 'Alpha bravo' } });
+    margin.relayout();
+
+    expect(topic()).toBe('Alpha bravo');
   });
 
   it('does not render a balloon for a resolved thread', async () => {
