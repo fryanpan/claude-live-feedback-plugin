@@ -1,3 +1,4 @@
+import { createThread } from '@feedback/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import { MountScope } from '../src/mount-scope.ts';
@@ -161,5 +162,48 @@ describe('mountReviewChrome drawer default', () => {
     (document.getElementById('shell') as HTMLElement).classList.add('threads-open');
     mountReviewChrome(opts(new MountScope(), { hasBalloonMargin: true }));
     expect(shellOpen()).toBe(false);
+  });
+
+  /* The card's folding slots have no intrinsic height — the morph engine
+     measures the showing face and writes it. A drawer that defaults CLOSED is
+     `display: none` on desktop (styles.css, `#shell:not(.threads-open)
+     #threads-pane`), so every card rendered into it while it was closed
+     measured zero. Opening the drawer only flips a class: unless it also
+     re-measures, the drawer opens showing an author row and a ✓ Resolve with
+     nothing at all in between. */
+  it('re-measures the cards when the drawer opens (they were rendered hidden)', () => {
+    setViewportWidth(1400);
+    mountChromeDom();
+    const ydoc = new Y.Doc();
+    createThread(ydoc, {
+      threadId: 't1',
+      anchor: { kind: 'element', fingerprint: 'x' as never, snippet: { text: 'the anchor' } },
+      createdBy: { id: 'u2', name: 'Bob', kind: 'known', color: '#c0392b' },
+      firstComment: { id: 'c1', text: 'Please clarify this.' },
+    });
+    const chrome = mountReviewChrome(opts(new MountScope(), { ydoc, hasBalloonMargin: true }));
+    expect(shellOpen()).toBe(false);
+    chrome.redrawThreads();
+
+    const card = document.querySelector('#threads-list .thread') as HTMLElement;
+    expect(card).not.toBeNull(); // positive control: there IS a card to measure
+    const slots = Array.from(card.querySelectorAll<HTMLElement>('.thread-slot'));
+    expect(slots).toHaveLength(2);
+
+    // Stand in for the layout happy-dom doesn't have: a subtree inside a
+    // `display: none` pane measures 0, and measures for real once it isn't.
+    const shell = document.getElementById('shell') as HTMLElement;
+    for (const face of Array.from(card.querySelectorAll<HTMLElement>('.thread-face'))) {
+      Object.defineProperty(face, 'offsetHeight', {
+        configurable: true,
+        get: () => (shell.classList.contains('threads-open') ? 24 : 0),
+      });
+    }
+    chrome.redrawThreads();
+    // Nothing believable was measurable while it was closed.
+    for (const s of slots) expect(s.style.height).toBe('');
+
+    chrome.openDrawer();
+    for (const s of slots) expect(s.style.height).toBe('24px');
   });
 });

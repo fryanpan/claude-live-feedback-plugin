@@ -149,12 +149,23 @@ function faceOf(slot: HTMLElement, expanded: boolean): HTMLElement | null {
  * because the balloon margin's layout pass does exactly that — and again
  * whenever text metrics change underneath a measurement that has already been
  * taken (see `installSlotRemeasure`).
+ *
+ * A zero measurement is REFUSED, never written. The showing face always has
+ * content (both lines render on every card, always), so zero can only mean
+ * "this subtree isn't being laid out" — the drawer is `display: none` while
+ * closed on desktop, and the cards inside it are rendered anyway. Writing
+ * that zero pins every slot shut with nothing left to reopen it: the card
+ * keeps its head and its foot and loses everything in between. Skipping
+ * leaves the last good height in place until the drawer opens and someone
+ * re-measures for real (`ReviewChrome.openDrawer`).
  */
 export function sizeThreadSlots(root: ParentNode): void {
   for (const slot of Array.from(root.querySelectorAll<HTMLElement>('.thread-slot'))) {
     const expanded = slot.closest('.thread')?.classList.contains('expanded') ?? false;
     const face = faceOf(slot, expanded);
-    if (face) slot.style.height = `${face.offsetHeight}px`;
+    if (!face) continue;
+    const h = face.offsetHeight;
+    if (h > 0) slot.style.height = `${h}px`;
   }
 }
 
@@ -166,16 +177,45 @@ export function sizeThreadSlots(root: ParentNode): void {
  * first paint leaves every card holding a height computed against the fallback
  * face — in both cases the card keeps a height that no longer matches its
  * content until something else happens to re-render it.
+ *
+ * `window resize` is not enough on its own: dragging the comments panel's
+ * resize handle rewrites `--threads-w` and reflows every card WITHOUT any
+ * window event, so `containers` (the panel, the editor) are watched for their
+ * own width changes too. Deliberately width-only — a height change is what
+ * this function CAUSES, and reacting to it would be a feedback loop.
  */
-export function installSlotRemeasure(scope: {
-  listen: (target: EventTarget, type: string, handler: EventListenerOrEventListenerObject) => void;
-  disposed?: boolean;
-}): void {
+export function installSlotRemeasure(
+  scope: {
+    listen: (
+      target: EventTarget,
+      type: string,
+      handler: EventListenerOrEventListenerObject,
+    ) => void;
+    disposed?: boolean;
+    onCleanup?: (fn: () => void) => void;
+  },
+  containers: Array<Element | null | undefined> = [],
+): void {
   scope.listen(window, 'resize', () => sizeThreadSlots(document));
   document.fonts?.ready.then(() => {
     if (scope.disposed) return;
     sizeThreadSlots(document);
   });
+  if (typeof ResizeObserver !== 'function') return;
+  const widths = new WeakMap<Element, number>();
+  const ro = new ResizeObserver((entries) => {
+    let widthChanged = false;
+    for (const e of entries) {
+      const w = e.contentRect.width;
+      if (widths.get(e.target) !== w) {
+        widths.set(e.target, w);
+        widthChanged = true;
+      }
+    }
+    if (widthChanged && !scope.disposed) sizeThreadSlots(document);
+  });
+  for (const el of containers) if (el) ro.observe(el);
+  scope.onCleanup?.(() => ro.disconnect());
 }
 
 /**
@@ -229,6 +269,12 @@ function slide(
   const leaving = faceOf(slot, !expanded);
   if (!arriving || !leaving) return;
   const to = arriving.offsetHeight;
+  // Same refusal as `sizeThreadSlots`: zero means this card is not being laid
+  // out, not that its face is empty. A card folds on EVERY copy at once, and
+  // one of those copies is routinely in a closed (`display: none`) drawer —
+  // writing that zero would outlive the fold and open the drawer on a card
+  // clipped to its head and its foot. The class flip above already landed.
+  if (to <= 0) return;
   // The resting state lands immediately; the tween below replays the journey.
   slot.style.height = `${to}px`;
   if (!timing.duration || typeof slot.animate !== 'function') return;

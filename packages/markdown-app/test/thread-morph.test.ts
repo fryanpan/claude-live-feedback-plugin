@@ -561,4 +561,72 @@ describe('installSlotRemeasure', () => {
     await Promise.resolve();
     expect(slotA.style.height).toBe('66px');
   });
+
+  /* The comments panel is resized by dragging its handle, which rewrites a
+     CSS variable — no `resize` fires on the window, and the cards inside it
+     reflow anyway. Without a width watcher an expanded card keeps the height
+     it was measured at when it was wider, and `overflow: hidden` silently
+     eats the bottom of the message. */
+  it('re-measures when a container changes WIDTH without a window resize', () => {
+    const { card, container } = mountCard();
+    const slotA = card.querySelector<HTMLElement>('.slot-a') as HTMLElement;
+    const face = card.querySelector<HTMLElement>('.slot-a > .face-summary') as HTMLElement;
+
+    type RoEntry = { target: Element; contentRect: { width: number } };
+    const observed: Element[] = [];
+    const callbacks: Array<(entries: RoEntry[]) => void> = [];
+    class FakeResizeObserver {
+      constructor(cb: (entries: RoEntry[]) => void) {
+        callbacks.push(cb);
+      }
+      observe(el: Element) {
+        observed.push(el);
+      }
+      disconnect() {}
+    }
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+
+    installSlotRemeasure(scopeSpy(), [container]);
+    expect(observed).toContain(container);
+    const fire = (entries: RoEntry[]) => {
+      for (const cb of callbacks) cb(entries);
+    };
+
+    Object.defineProperty(face, 'offsetHeight', { get: () => 48, configurable: true });
+    // POSITIVE CONTROL: nothing has re-measured yet.
+    expect(slotA.style.height).toBe('22px');
+
+    fire([{ target: container, contentRect: { width: 280 } }]);
+    expect(slotA.style.height).toBe('48px');
+
+    // A HEIGHT-only report is ignored: growing a slot changes the panel's own
+    // content height, and reacting to that would loop.
+    Object.defineProperty(face, 'offsetHeight', { get: () => 99, configurable: true });
+    fire([{ target: container, contentRect: { width: 280 } }]);
+    expect(slotA.style.height).toBe('48px');
+  });
+});
+
+describe('sizeThreadSlots refuses a zero measurement', () => {
+  /* A slot's height is a number we WRITE, and both faces are absolutely
+     positioned, so a zero written into it is a card clipped to nothing. The
+     drawer renders its cards while `#threads-pane` is `display: none` on
+     desktop — every face measures 0 there, and that must not be believed. */
+  it('leaves the last good height alone when the card is not being laid out', () => {
+    const { card, container } = mountCard();
+    const slotA = card.querySelector<HTMLElement>('.slot-a') as HTMLElement;
+    const face = card.querySelector<HTMLElement>('.slot-a > .face-summary') as HTMLElement;
+    expect(slotA.style.height).toBe('22px');
+
+    // The pane is display:none: every offsetHeight in the subtree reads 0.
+    Object.defineProperty(face, 'offsetHeight', { get: () => 0, configurable: true });
+    sizeThreadSlots(container);
+    expect(slotA.style.height).toBe('22px');
+
+    // POSITIVE CONTROL: a real measurement still lands, so the assertion
+    // above is about the zero and not about a function that stopped working.
+    Object.defineProperty(face, 'offsetHeight', { get: () => 31, configurable: true });
+    sizeThreadSlots(container);
+    expect(slotA.style.height).toBe('31px');
+  });
 });

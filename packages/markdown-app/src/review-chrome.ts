@@ -3,7 +3,7 @@ import type * as Y from 'yjs';
 import { type MobileReview, mountMobileReview } from './mobile-review.ts';
 import type { MountScope } from './mount-scope.ts';
 import type { ReviewSurface } from './review-surface.ts';
-import { installSlotRemeasure } from './thread-morph.ts';
+import { installSlotRemeasure, sizeThreadSlots } from './thread-morph.ts';
 import { ThreadPanel, type ThreadTab } from './threads.ts';
 
 /**
@@ -177,6 +177,11 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     shell.classList.add('threads-open');
     toggleThreads.setAttribute('aria-pressed', 'true');
     document.getElementById('threads-pane')?.setAttribute('aria-hidden', 'false');
+    // The pane is `display: none` while closed on desktop, and every card in
+    // it was still rendered — against a subtree with no layout, where a
+    // folding slot cannot be measured. Measure now, or the drawer opens
+    // showing an author row and a ✓ Resolve with nothing in between.
+    sizeThreadSlots(threadsListEl);
   }
   function closeDrawer(): void {
     shell.classList.remove('threads-open');
@@ -462,12 +467,21 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
   // A card's folding slots hold a height we MEASURED, so anything that
   // changes text metrics after first paint — a reflow, a webfont landing —
   // strands every card on screen at a height that no longer fits its content.
-  installSlotRemeasure({
-    listen: on,
-    get disposed() {
-      return opts.scope?.disposed ?? false;
+  installSlotRemeasure(
+    {
+      listen: on,
+      get disposed() {
+        return opts.scope?.disposed ?? false;
+      },
+      // Only when there IS a scope: a mount without one never tears down, so
+      // running the cleanup instead would disconnect the observer on the spot.
+      onCleanup: opts.scope ? (fn) => opts.scope?.onCleanup(fn) : undefined,
     },
-  });
+    // …including the two that resize WITHOUT a window event: dragging the
+    // comments panel's handle rewrites `--threads-w`, and that reflows every
+    // card in it and every inline card beside it.
+    [document.getElementById('threads-pane'), document.getElementById('editor')],
+  );
 
   function revealThread(id: string): void {
     refreshThreadDecorations(id);
