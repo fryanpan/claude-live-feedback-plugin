@@ -15,7 +15,7 @@
  * `renderCommentMarkdown`, which escapes first).
  */
 
-import type { Thread, User } from './types.ts';
+import type { StoredSummary, Thread, User } from './types.ts';
 
 /** Discussion line for a thread nobody has replied to. Rendered muted italic. */
 export const NO_REPLIES_TEXT = 'No replies yet';
@@ -69,18 +69,91 @@ export interface ThreadSummaryBlock extends ThreadLines {
 /**
  * THE SEAM. The single place that decides what the two lines say.
  *
- * Today both lines are derived deterministically from data the thread already
- * carries: topic from the anchor snippet, discussion from the latest comment's
- * opening words. If generated summaries are ever approved, they change only
- * this function — prefer the stored generated text when present, fall back to
- * the deterministic result otherwise. No caller, no card builder and no CSS
- * changes.
+ * Both lines are derived deterministically from data the thread already
+ * carries — topic from the anchor snippet, discussion from the latest
+ * comment's opening words — UNLESS a generated summary is stored on the thread
+ * and still matches what it was generated from. Generation was added here and
+ * nowhere else: no caller, no card builder and no CSS changed, and every
+ * surface plus `summaryKey` inherits it for free.
  *
- * The no-replies branch is deliberately outside that: a thread with no replies
- * has no discussion to summarize, generated or otherwise.
+ * A stored summary whose hash no longer matches is IGNORED rather than
+ * deleted. The thread has moved on since it was written, the regenerated one
+ * will arrive in a few seconds, and a stale sentence about a superseded state
+ * is worse than the raw comment it replaced.
+ *
+ * The no-replies branch is deliberately outside all of that: a thread with no
+ * replies has no discussion to summarize, generated or otherwise, so the model
+ * is never allowed to invent a conversation that has not happened.
  */
 export function threadLines(t: Thread): ThreadLines {
-  return { topic: deriveTopic(t), ...deriveDiscussion(t) };
+  const base = { topic: deriveTopic(t), ...deriveDiscussion(t) };
+  const stored = t.summary;
+  if (!stored || stored.hash !== summaryHash(t)) return base;
+  return {
+    topic: stored.topic || base.topic,
+    discussion:
+      base.discussionKind === 'none' ? base.discussion : stored.discussion || base.discussion,
+    discussionKind: base.discussionKind,
+  };
+}
+
+/**
+ * Lift a `summary` value out of untrusted storage.
+ *
+ * THE ONLY WAY a summary should enter a `Thread`. Every field is checked,
+ * because the value arrives as opaque JSON out of a Yjs map — and Yjs sync is
+ * a full state exchange with no server-side write authority, so any synced
+ * peer (a share visitor included) can put an arbitrary shape there. Checking
+ * `topic` and `hash` but not `discussion` was not enough: a non-string
+ * `discussion` is truthy, wins the `stored.discussion || base.discussion`
+ * choice in `threadLines`, and reaches a card row declared `string` — which
+ * renders as `[object Object]`.
+ *
+ * Returns a fresh, three-field object so nothing else riding on the stored
+ * value travels with it.
+ */
+export function readStoredSummary(value: unknown): StoredSummary | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const s = value as Record<string, unknown>;
+  if (typeof s.topic !== 'string') return undefined;
+  if (typeof s.discussion !== 'string') return undefined;
+  if (typeof s.hash !== 'string') return undefined;
+  return { topic: s.topic, discussion: s.discussion, hash: s.hash };
+}
+
+/**
+ * The anchor's own text, whatever kind of anchor it is. Shared by the topic
+ * line, the hash, and the prompt so all three agree on what "the anchored
+ * text" means.
+ */
+export function anchorText(t: Thread): string {
+  const a = t.anchor;
+  const raw = a.kind === 'orphan' ? a.original?.snippet?.text : a.snippet?.text;
+  return oneLine(raw ?? '');
+}
+
+/**
+ * Fingerprint of everything a summary is derived from.
+ *
+ * Covers the comment texts AND the anchor snippet. Hashing the comments alone
+ * would strand an edited anchor with a topic line describing text that is no
+ * longer there — the snippet moves independently of the comments, which is the
+ * same reason `summaryKey` exists on the render side.
+ *
+ * FNV-1a: a change-detector, not a security primitive. It has to run
+ * identically in the server, the browser and a test without pulling in a
+ * crypto import.
+ */
+export function summaryHash(t: Thread): string {
+  const input = [anchorText(t), ...t.comments.map((c) => `${c.author?.name ?? ''} ${c.text}`)]
+    .join('\u0000')
+    .normalize('NFC');
+  let h = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    h ^= input.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
 }
 
 /** The full collapsed-card block: both lines plus the participants descriptor. */
@@ -107,14 +180,12 @@ export function summaryKey(t: Thread): string {
 }
 
 function deriveTopic(t: Thread): string {
-  const a = t.anchor;
   // Anchors arrive as opaque JSON out of the ydoc and are never validated on
   // the way in. Every constructor we own writes a snippet, so this is belt
   // and braces — but the blast radius changed when this function joined the
   // render key: one malformed anchor used to break its own card, and would
   // now throw inside the key and take down the whole panel render.
-  const raw = a.kind === 'orphan' ? a.original?.snippet?.text : a.snippet?.text;
-  const snippet = oneLine(raw ?? '');
+  const snippet = anchorText(t);
   // An anchor can legitimately carry an empty snippet (a collapsed range, an
   // element with no text). A blank topic line would leave slot A with nothing
   // to morph out of, so fall back to what the thread opened with.
