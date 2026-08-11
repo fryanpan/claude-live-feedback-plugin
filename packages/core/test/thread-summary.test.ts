@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import { TextRange } from '../src/anchor/index.ts';
 import { createThread, getContent, listThreads, markOrphan, postReply } from '../src/schema.ts';
-import { DISCUSSION_MAX, NO_REPLIES_TEXT, threadSummary } from '../src/thread-summary.ts';
+import {
+  DISCUSSION_MAX,
+  NO_REPLIES_TEXT,
+  summaryKey,
+  threadSummary,
+} from '../src/thread-summary.ts';
 import type { Thread, User } from '../src/types.ts';
 
 const alex: User = { id: 'u-alex', name: 'Alex', kind: 'known', color: '#2e7dd7' };
@@ -280,5 +285,66 @@ describe('threadSummary', () => {
       expect(a).toEqual(b);
       expect(JSON.stringify(t)).toBe(before);
     });
+  });
+});
+
+/**
+ * Three surfaces cache a rendered card and repaint only when their key moves.
+ * Each of them used to key on `topic` alone, which was right only because the
+ * other values happen to move with the comment count today. The contract is
+ * the whole block: change anything the card SHOWS, and the key changes.
+ */
+describe('summaryKey', () => {
+  const base = {
+    docText: DOC,
+    range: [4, 14] as [number, number],
+    author: alex,
+    first: 'The error is swallowed here.',
+  };
+
+  it('moves when the topic does', () => {
+    const a = summaryKey(makeThread(base));
+    const b = summaryKey(makeThread({ ...base, range: [30, 45] }));
+    expect(b).not.toBe(a);
+  });
+
+  it('moves when the discussion line does, at an identical reply count', () => {
+    const a = makeThread({ ...base, replies: [{ author: sam, text: 'Keep the fallback.' }] });
+    const b = makeThread({ ...base, replies: [{ author: sam, text: 'Drop the fallback.' }] });
+    // The two threads are otherwise indistinguishable to a caller's key: same
+    // anchor, same author, same number of comments.
+    expect(b.commentCount).toBe(a.commentCount);
+    expect(summaryKey(b)).not.toBe(summaryKey(a));
+  });
+
+  it('moves when the participants row does, at an identical reply count', () => {
+    const a = makeThread({ ...base, replies: [{ author: sam, text: 'Agreed.' }] });
+    const b = makeThread({ ...base, replies: [{ author: jordan, text: 'Agreed.' }] });
+    expect(b.commentCount).toBe(a.commentCount);
+    expect(summaryKey(b)).not.toBe(summaryKey(a));
+  });
+
+  it('holds still when nothing the card shows has changed', () => {
+    const opts = { ...base, replies: [{ author: sam, text: 'Agreed.' }] };
+    expect(summaryKey(makeThread(opts))).toBe(summaryKey(makeThread(opts)));
+  });
+});
+
+describe('a malformed anchor', () => {
+  /* Anchors are read back out of the ydoc as opaque JSON — `collectThreads`
+     casts and does not validate. Since the topic line joined every surface's
+     render key, a throw in here stops being one broken card and becomes a
+     panel that renders nothing at all. */
+  it('falls back to the opening message instead of throwing', () => {
+    const t = makeThread({
+      docText: DOC,
+      range: [4, 14],
+      author: alex,
+      first: 'The error is swallowed here.',
+    });
+    const broken = { ...t, anchor: { kind: 'element' } as unknown as Thread['anchor'] };
+
+    expect(() => summaryKey(broken)).not.toThrow();
+    expect(threadSummary(broken).topic).toBe('The error is swallowed here.');
   });
 });

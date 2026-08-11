@@ -88,9 +88,33 @@ export function threadSummary(t: Thread): ThreadSummaryBlock {
   return { ...threadLines(t), participants: deriveParticipants(t) };
 }
 
+/**
+ * Everything this module makes a card display, flattened for a render key.
+ *
+ * Every surface that caches a rendered card keys on THIS and not on a field
+ * it picked out itself — three of them did, and all three picked `topic`.
+ * That was correct only by accident: the values they left out happen to move
+ * with `commentCount`/`lastActivity` today. Generation breaks the accident. A
+ * summary arriving from the seam above changes no term any surface compares,
+ * so the card never repaints and the new text is never seen.
+ *
+ * Add a field to the block and add it here, in the same edit.
+ */
+export function summaryKey(t: Thread): string {
+  const s = threadSummary(t);
+  const who = s.participants?.repliers.map((r) => r.id).join(',') ?? '';
+  return [s.topic, s.discussion, s.discussionKind, who].join('\u0001');
+}
+
 function deriveTopic(t: Thread): string {
   const a = t.anchor;
-  const snippet = oneLine(a.kind === 'orphan' ? a.original.snippet.text : a.snippet.text);
+  // Anchors arrive as opaque JSON out of the ydoc and are never validated on
+  // the way in. Every constructor we own writes a snippet, so this is belt
+  // and braces — but the blast radius changed when this function joined the
+  // render key: one malformed anchor used to break its own card, and would
+  // now throw inside the key and take down the whole panel render.
+  const raw = a.kind === 'orphan' ? a.original?.snippet?.text : a.snippet?.text;
+  const snippet = oneLine(raw ?? '');
   // An anchor can legitimately carry an empty snippet (a collapsed range, an
   // element with no text). A blank topic line would leave slot A with nothing
   // to morph out of, so fall back to what the thread opened with.

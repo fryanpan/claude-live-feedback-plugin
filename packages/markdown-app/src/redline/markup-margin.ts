@@ -1,4 +1,4 @@
-import { type Thread, formatTime, suggestOps, threadLines } from '@feedback/core';
+import { type Thread, formatTime, suggestOps, summaryKey } from '@feedback/core';
 import type { EditorView } from '@tiptap/pm/view';
 import type { MountScope } from '../mount-scope.ts';
 import { type ReviewChrome, showToast } from '../review-chrome.ts';
@@ -626,8 +626,7 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
     // a rebuild on expand would destroy the very node the morph is animating.
     // The key carries what the card DISPLAYS and not what it merely animates.
     const commentKeys = openThreads.map(
-      (t) =>
-        `comment|${t.id}|${t.status}|${t.commentCount}|${t.lastActivity}|${threadLines(t).topic}`,
+      (t) => `comment|${t.id}|${t.status}|${t.commentCount}|${t.lastActivity}|${summaryKey(t)}`,
     );
     const suggestionKeys = suggestions.map(
       (s) => `suggest|${s.sid}|${s.kind}|${isExpanded(`s:${s.sid}`)}`,

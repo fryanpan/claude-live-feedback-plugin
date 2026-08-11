@@ -4,13 +4,14 @@ import {
   type Thread,
   type User,
   formatTime,
-  threadLines,
+  summaryKey,
   threadSummary,
 } from '@feedback/core';
 import { renderCommentMarkdown } from './comment-markdown.ts';
 import {
   isFoldingTap,
   morphThread,
+  prefersReducedMotion,
   sizeThreadSlots,
   syncFaceVisibility,
   threadCards,
@@ -156,7 +157,10 @@ export class ThreadPanel {
     // and is often taller than the panel viewport — 'nearest' would land the
     // user on the reply box at the bottom. Align the top so they see the
     // comment from its start.
-    row?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    row?.scrollIntoView({
+      block: 'start',
+      behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+    });
   }
 
   setTab(tab: ThreadTab): void {
@@ -195,12 +199,14 @@ export class ThreadPanel {
    *  doc is edited — independently of every other term here. Leave it out and
    *  an edited anchor keeps a stale topic on screen until some unrelated
    *  change happens to force a repaint. Whatever `threadSummary` reads has to
-   *  be in the key; today that is the snippet, via the line it produces. */
+   *  be in the key, which is why the key comes from `summaryKey` and not from
+   *  a field picked out here — a generated summary would otherwise arrive
+   *  without moving any term this compares. */
   private computeKey(): string {
     const parts: string[] = [];
     for (const t of this.threads) {
       const status = this.statusMap.get(t.id);
-      parts.push(`${t.id}:${status}:${t.commentCount}:${t.lastActivity}:${threadLines(t).topic}`);
+      parts.push(`${t.id}:${status}:${t.commentCount}:${t.lastActivity}:${summaryKey(t)}`);
     }
     return `${this.tab}|${this.activeId ?? ''}|${parts.join('|')}`;
   }

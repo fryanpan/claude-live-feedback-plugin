@@ -1,6 +1,6 @@
-import { type Thread, threadLines } from '@feedback/core';
+import { type Thread, summaryKey } from '@feedback/core';
 import type { InlineThreadCard, ReviewSurface } from './review-surface.ts';
-import { sizeThreadSlots } from './thread-morph.ts';
+import { prefersReducedMotion, sizeThreadSlots } from './thread-morph.ts';
 
 /**
  * Mobile review navigation.
@@ -110,7 +110,7 @@ export interface MobileReview {
  * edited anchor keeps a stale topic until some unrelated change repaints.
  */
 function cardKey(t: Thread): string {
-  return `${t.status}|${t.commentCount}|${t.lastActivity}|${threadLines(t).topic}`;
+  return `${t.status}|${t.commentCount}|${t.lastActivity}|${summaryKey(t)}`;
 }
 
 /**
@@ -217,8 +217,14 @@ export function mountMobileReview(opts: MobileReviewOpts): MobileReview {
     // Scroll THIS container by hand. `scrollIntoView()` would walk up and
     // scroll every ancestor scroller too, dragging the page behind the
     // review surface along with it.
-    if (typeof sc.scrollTo === 'function') sc.scrollTo({ top, behavior: 'smooth' });
-    else sc.scrollTop = top;
+    // The morph and the anchor flash both honour reduced motion, and on this
+    // path they are already silent — which leaves this scroll as the only
+    // thing moving. Jump instead.
+    if (typeof sc.scrollTo === 'function') {
+      sc.scrollTo({ top, behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
+    } else {
+      sc.scrollTop = top;
+    }
   }
 
   function showThread(id: string): boolean {
