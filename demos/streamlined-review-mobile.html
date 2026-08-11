@@ -8,7 +8,7 @@
   :root {
     --fg:#1b1f23; --fg-muted:#6e7781; --bg:#fff; --bg-panel:#f6f8fa;
     --border:#d1d5da; --border-strong:#afb8c1; --accent:#2e7dd7;
-    --green:#2da44e; --yellow:#bf8700; --radius:6px;
+    --green:#2da44e; --yellow:#bf8700; --radius:6px; --t:250ms;
     --sans:-apple-system,BlinkMacSystemFont,"Inter","SF Pro Text","Segoe UI",system-ui,sans-serif;
     --serif:Charter,"Iowan Old Style","Source Serif Pro",Georgia,serif;
     --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
@@ -21,44 +21,53 @@
   .wrap{max-width:462px;margin:0 auto}
 
   /* ---------- mockup chrome (not part of the product) ---------- */
-  .controls{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px}
+  .controls{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px;align-items:center}
   .controls button{font:inherit;font-size:12px;padding:4px 11px;border-radius:99px;
     border:1px solid var(--border);background:var(--bg);color:var(--accent);cursor:pointer}
   .controls button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+  .controls .sep{font-size:11.5px;color:var(--fg-muted);margin-left:4px}
   .legend{font-size:12.5px;color:var(--fg-muted);line-height:1.55;margin:12px 0 0;min-height:52px}
   .legend b{color:var(--fg);font-weight:600}
 
   /* ---------- device ---------- */
   .device{background:#15181c;border-radius:40px;padding:11px;
           box-shadow:0 10px 34px rgba(15,20,26,.28);width:452px;max-width:100%}
-  .screen{position:relative;background:var(--bg-panel);border-radius:30px;overflow:hidden;
-          height:760px;width:100%}
+  .screen{position:relative;background:var(--bg);border-radius:30px;overflow:hidden;height:760px}
   .notch{position:absolute;top:0;left:50%;transform:translateX(-50%);width:118px;height:24px;
-         background:#15181c;border-radius:0 0 15px 15px;z-index:6}
+         background:#15181c;border-radius:0 0 15px 15px;z-index:9}
   .statusbar{display:flex;align-items:center;justify-content:space-between;padding:7px 22px 3px;
-             font-size:11.5px;font-weight:600;background:var(--bg);position:relative;z-index:5}
-  .scroll{position:absolute;top:0;left:0;right:0;bottom:0;padding-top:26px;overflow-y:auto;
-          -webkit-overflow-scrolling:touch}
-  .scroll>.statusbar{position:sticky;top:-26px;margin-top:-26px}
+             font-size:11.5px;font-weight:600;background:var(--bg)}
+  .scroll{position:absolute;inset:0;overflow-y:auto;-webkit-overflow-scrolling:touch}
 
-  .appbar,.drawer-head{display:flex;align-items:center;gap:8px;padding:11px 14px;
-    background:var(--bg);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:4}
-  .appbar .title,.drawer-head .title{font-weight:600;font-size:13.5px;flex:1;overflow:hidden;
+  .appbar{display:flex;align-items:center;gap:6px;padding:9px 12px;background:var(--bg);
+    border-bottom:1px solid var(--border);position:sticky;top:0;z-index:4}
+  .appbar .title{font-weight:600;font-size:13.5px;flex:1;overflow:hidden;
     text-overflow:ellipsis;white-space:nowrap}
-  .pill{font-size:11.5px;background:var(--accent);color:#fff;border-radius:99px;padding:2px 8px}
+  .navbtn{font:inherit;font-size:15px;line-height:1;width:30px;height:30px;border-radius:var(--radius);
+    border:1px solid var(--border);background:var(--bg);color:var(--fg-muted);cursor:pointer}
+  .navbtn:active{background:var(--bg-panel)}
+  .navbtn[disabled]{opacity:.35;cursor:default}
+  .badge{font:inherit;font-size:12px;font-weight:600;background:var(--accent);color:#fff;
+    border:0;border-radius:99px;padding:4px 11px;cursor:pointer;min-width:34px}
+  .badge:active{filter:brightness(.92)}
+
+  .drawer-head{display:flex;align-items:center;gap:8px;padding:4px 14px 11px;background:transparent}
+  .drawer-head .title{font-weight:600;font-size:13.5px;flex:1}
   .tab{font:inherit;font-size:11.5px;color:var(--fg-muted);padding:3px 9px;border-radius:99px;
        border:0;background:transparent;cursor:pointer}
   .tab.on{background:var(--accent);color:#fff}
   .section-heading{font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;
-    color:var(--fg-muted);font-weight:600;padding:13px 14px 5px}
+    color:var(--fg-muted);font-weight:600;padding:11px 14px 5px}
   .list{padding:0 10px 14px}
-  .empty{padding:14px;font-size:12.5px;color:var(--fg-muted)}
 
   /* ---------- card ---------- */
   .thread{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);
-          padding:9px 11px;margin-bottom:8px;position:relative}
+          padding:9px 11px;margin-bottom:8px;position:relative;cursor:pointer;
+          transition:border-color var(--t) ease, box-shadow var(--t) ease}
   .thread.orphan{border-left:3px solid var(--yellow)}
   .thread.resolved{opacity:.72}
+  .thread.expanded{border-color:var(--border-strong);box-shadow:0 1px 3px rgba(20,24,28,.07)}
+  .thread.flash{box-shadow:0 0 0 3px rgba(46,125,215,.35)}
   .row1{display:flex;align-items:center;gap:6px;font-size:12.5px;min-width:0}
   .status-dot{width:8px;height:8px;border-radius:50%;background:var(--accent);flex:0 0 auto}
   .resolved .status-dot{background:var(--green)}
@@ -70,30 +79,18 @@
          border-left:3px solid var(--border);padding:1px 8px;margin:7px 0 0}
   .state{font-size:13px;margin:5px 0 0;line-height:1.35}
   .state::before{content:"↳ ";color:var(--fg-muted)}
-  .row4{display:flex;align-items:center;gap:8px;margin-top:7px}
-  .meta{font-size:12px;color:var(--fg-muted);flex:1}
-  .resolve{flex:0 0 auto;width:28px;height:28px;border-radius:var(--radius);
-    border:1px solid var(--border);background:var(--bg);color:var(--fg-muted);font-size:14px;
-    line-height:1;cursor:pointer}
-  .resolve:active{transform:scale(.93)}
-  .thread.resolved .resolve{border-color:var(--green);color:#fff;background:var(--green)}
-  .oneline{display:flex;align-items:center;gap:6px;font-size:12.5px}
-  .oneline .preview{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-    color:var(--fg-muted)}
-  .count{font-size:11px;color:var(--fg-muted);background:var(--bg-panel);
-    border:1px solid var(--border);border-radius:99px;padding:1px 6px}
+  .state.none{color:var(--fg-muted);font-style:italic}
+  .state.none::before{content:""}
 
-  /* collapsed affordance — CSS-generated so it stays out of the text layer */
-  .proposed .thread{cursor:pointer;padding-right:26px}
-  .proposed .thread::after{content:"›";position:absolute;right:8px;top:7px;font-size:17px;
-    line-height:1;color:var(--fg-muted);transition:transform .13s ease}
-  .proposed .thread:active{background:#fafcff}
-  .proposed .thread.expanded::after{transform:rotate(90deg);color:var(--fg)}
-  .proposed .thread.expanded{border-color:var(--border-strong);
-    box-shadow:0 1px 3px rgba(20,24,28,.07)}
-  .comments{margin-top:9px;padding-top:9px;border-top:1px solid var(--border)}
-  .cmt{display:flex;gap:7px;margin-bottom:10px;font-size:13px;line-height:1.42}
-  .cmt:last-child{margin-bottom:0}
+  /* The 250ms morph: the summary block collapses as the thread block opens, so the
+     first comment lands where the topic line was rather than appearing below it. */
+  .fold{display:grid;grid-template-rows:0fr;opacity:0;
+        transition:grid-template-rows var(--t) ease, opacity calc(var(--t) * .7) ease}
+  .fold > .inner{overflow:hidden;min-height:0}
+  .fold.show{grid-template-rows:1fr;opacity:1}
+  .fold.show.detail{transition-delay:0ms,60ms}
+
+  .cmt{display:flex;gap:7px;margin-top:9px;font-size:13px;line-height:1.42}
   .cmt .swatch{margin-top:4px}
   .cmt .body{min-width:0}
   .cmt .name{font-weight:600;font-size:12.5px}
@@ -105,42 +102,59 @@
   .replybox button{font:inherit;font-size:12.5px;padding:0 12px;border-radius:var(--radius);
     border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer}
 
+  .row4{display:flex;align-items:center;gap:8px;margin-top:9px}
+  .meta{font-size:12px;color:var(--fg-muted);flex:1;overflow:hidden;text-overflow:ellipsis;
+        white-space:nowrap}
+  /* One resolve control, identical in summary and expanded. */
+  .resolve{flex:0 0 auto;display:inline-flex;align-items:center;gap:5px;font:inherit;font-size:12px;
+    padding:5px 10px;border-radius:var(--radius);border:1px solid var(--border);
+    background:var(--bg);color:var(--fg-muted);cursor:pointer;
+    transition:background var(--t) ease,color var(--t) ease,border-color var(--t) ease}
+  .resolve:hover{border-color:var(--green);color:var(--green);background:#f2fbf5}
+  .thread.resolved .resolve{border-color:var(--green);background:var(--green);color:#fff}
+  .chev{flex:0 0 auto;color:var(--fg-muted);font-size:16px;line-height:1;
+        transition:transform var(--t) ease}
+  .thread.expanded .chev{transform:rotate(90deg);color:var(--fg)}
+
   /* ---------- document + inline ---------- */
-  .doc{padding:14px 16px 24px;font-family:var(--serif);font-size:15px;line-height:1.62;
-       background:var(--bg);min-height:100%}
+  .doc{padding:14px 16px 40px;font-family:var(--serif);font-size:15px;line-height:1.62}
   .doc h3{font-family:var(--sans);font-size:15px;margin:0 0 10px}
   .doc p{margin:0 0 13px}
   .anchored{background:#fff6d9;box-shadow:0 1px 0 #e8c65a inset,0 -1px 0 #e8c65a inset;
     border-radius:2px}
   .anchored.two{background:#e9f2fd;box-shadow:0 1px 0 #b9d5f5 inset,0 -1px 0 #b9d5f5 inset}
+  .anchored.three{background:#eaf7ee;box-shadow:0 1px 0 #b4dfc2 inset,0 -1px 0 #b4dfc2 inset}
   .inline-wrap{margin:-4px 0 15px;padding-left:12px;border-left:2px solid #e8c65a;
     font-family:var(--sans)}
   .inline-wrap.two{border-left-color:#b9d5f5}
+  .inline-wrap.three{border-left-color:#b4dfc2}
   .inline-wrap .thread{margin-bottom:0}
 
-  /* ---------- sheet ---------- */
-  .scrim{position:absolute;inset:0;background:rgba(20,24,28,.34);z-index:7}
+  /* ---------- over-doc modal ---------- */
+  .scrim{position:absolute;inset:0;background:rgba(20,24,28,.34);z-index:7;
+         animation:fade var(--t) ease}
   .sheet{position:absolute;left:0;right:0;bottom:0;background:var(--bg-panel);z-index:8;
     border-top:1px solid var(--border-strong);border-radius:14px 14px 0 0;
-    box-shadow:0 -8px 30px rgba(0,0,0,.16);max-height:66%;overflow-y:auto}
+    box-shadow:0 -8px 30px rgba(0,0,0,.16);max-height:74%;overflow-y:auto;
+    animation:rise var(--t) cubic-bezier(.2,.8,.3,1)}
+  @keyframes fade{from{opacity:0}to{opacity:1}}
+  @keyframes rise{from{transform:translateY(100%)}to{transform:translateY(0)}}
   .grabber{width:36px;height:4px;border-radius:99px;background:var(--border-strong);
     margin:8px auto 2px;cursor:pointer}
-  .sheet .drawer-head{border-bottom:none;background:transparent}
-  .fab{position:absolute;right:14px;bottom:16px;z-index:6;width:48px;height:48px;
-    border-radius:50%;border:0;background:var(--accent);color:#fff;font-size:19px;cursor:pointer;
-    box-shadow:0 4px 14px rgba(46,125,215,.42)}
 
   /* ---------- code ---------- */
-  .code{font-family:var(--mono);font-size:12px;line-height:1.65;padding:10px 0 20px;
-    background:var(--bg);min-height:100%}
+  .code{font-family:var(--mono);font-size:12px;line-height:1.65;padding:10px 0 40px}
   .ln{display:flex;gap:10px;padding:0 12px;white-space:pre;overflow-x:auto}
   .ln .num{color:#b6bec6;min-width:22px;text-align:right;flex:0 0 auto;user-select:none}
   .ln.hit{background:#fff6d9}
+  .ln.hit.two{background:#e9f2fd}
   .k{color:#cf222e}.s{color:#0a3069}.c{color:#6e7781}.f{color:#8250df}
   .code .inline-wrap{margin:6px 10px 10px 34px;padding-left:10px}
 
   .callout{margin:16px 0 0;padding:10px 12px;border-left:3px solid var(--accent);
-    background:#f2f7fd;font-size:12.5px;line-height:1.55;border-radius:0 var(--radius) var(--radius) 0}
+    background:#f2f7fd;font-size:12.5px;line-height:1.55;
+    border-radius:0 var(--radius) var(--radius) 0}
+  .callout b{color:var(--fg)}
 </style>
 </head>
 <body>
@@ -153,202 +167,270 @@ Each card is four lines, hard-capped: every line clips with an ellipsis rather t
 <div class="controls" id="controls"></div>
 
 <div class="device">
-  <div class="screen" id="screen">
-    <div class="notch"></div>
-  </div>
+  <div class="screen" id="screen"><div class="notch"></div></div>
 </div>
 
 <p class="legend" id="legend"></p>
 
-<div class="callout">
-  <b>It's live — tap it.</b> Cards expand and collapse, <b>✓</b> resolves and reopens,
-  Open/All filters, and the reply box actually posts into the thread.<br /><br />
-  <b>What I'd want your call on.</b>
-  1. Inline and drawer may not be alternatives — an orphaned thread has no line left to sit
-  beside, so the drawer is the only place it can appear.
-  2. Does inline break reading? Three open threads on one screen interrupts the prose three
-  times.
-  3. Should the topic line be dropped inline, where the anchored text is highlighted right above it?
-</div>
+<div class="callout" id="callout"></div>
 
 </div>
 
 <script>
+/* Every card in every view is built by card() from this one array, so state is shared:
+   resolve something in the sheet and the inline card is resolved too. */
 const THREADS = [
-  { id:'t1', author:'Alex', color:'#2e7dd7', status:'open',
+  { id:'t1', file:'md', author:'Alex', color:'#2e7dd7', status:'open', hue:'',
     topic:'Error handling in the retry helper',
     state:'Debating whether to keep the fallback path', when:'2h ago',
     comments:[
       {who:'Alex',c:'#2e7dd7',when:'2h',text:'The retry loop swallows the underlying error, so a caller only ever sees the final timeout. We should rethrow on the last attempt.'},
       {who:'Sam',c:'#e36f1e',when:'2h',text:'Agreed. Do we keep the fallback path at all, or drop it?'},
       {who:'Jordan',c:'#8957e5',when:'1h',text:'Keep it — two callers still depend on the degraded response.'}]},
-  { id:'t2', author:'Sam', color:'#e36f1e', status:'open',
+  { id:'t2', file:'md', author:'Sam', color:'#e36f1e', status:'open', hue:'two',
     topic:'Timeout applied per attempt, not overall',
     state:'Agreed to move it into the client wrapper', when:'25m ago',
     comments:[
-      {who:'Sam',c:'#e36f1e',when:'40m',text:'Can we confirm the timeout is actually applied across the whole operation and not per attempt?'},
-      {who:'Alex',c:'#2e7dd7',when:'32m',text:'It is per attempt. Three retries can take 3× the budget.'},
+      {who:'Sam',c:'#e36f1e',when:'40m',text:'Is the timeout applied across the whole operation or per attempt?'},
+      {who:'Alex',c:'#2e7dd7',when:'32m',text:'Per attempt. Three retries can take 3× the budget.'},
       {who:'Sam',c:'#e36f1e',when:'28m',text:'That explains the p99. Move it into the client wrapper?'},
       {who:'Alex',c:'#2e7dd7',when:'25m',text:'Yes — wrapping is the smaller change.'}]},
-  { id:'t3', author:'Alex', color:'#8957e5', status:'orphan',
+  // No replies yet: a topic line, and no thread line to write.
+  { id:'t3', file:'md', author:'Jordan', color:'#2da44e', status:'open', hue:'three',
+    topic:'Jitter missing from the backoff', state:'', when:'8m ago',
+    comments:[{who:'Jordan',c:'#2da44e',when:'8m',text:'No jitter here, so simultaneous failures retry in lockstep and hit the service as one wave.'}]},
+  // Orphan and resolved have no line to sit beside — the sheet is the only place they appear.
+  { id:'t4', file:'md', author:'Alex', color:'#8957e5', status:'orphan',
     topic:'Retry budget shared across both call sites',
     state:'Unresolved — the anchored line was deleted', when:'yesterday',
     comments:[
       {who:'Alex',c:'#8957e5',when:'1d',text:'Both call sites share one budget, so a noisy caller starves the other.'},
       {who:'Jordan',c:'#2da44e',when:'1d',text:'Worth splitting per call site.'}]},
-  { id:'t4', author:'Jordan', color:'#2da44e', status:'open',
-    topic:'Spelling', state:'', when:'4h ago',
-    comments:[{who:'Jordan',c:'#2da44e',when:'4h',text:'typo: "recieve"'}]},
-  { id:'t5', author:'Alex', color:'#2e7dd7', status:'resolved',
+  { id:'t5', file:'md', author:'Alex', color:'#2e7dd7', status:'resolved',
     topic:'Log line leaked the request body',
     state:'Fixed — body redacted before logging', when:'3h ago',
     comments:[
       {who:'Alex',c:'#2e7dd7',when:'3h',text:'This log line prints the whole request body, including auth headers.'},
       {who:'Sam',c:'#e36f1e',when:'3h',text:'Redacted before logging now.'}]},
+  { id:'t6', file:'code', author:'Alex', color:'#2e7dd7', status:'open', hue:'',
+    topic:'Empty catch hides every failure',
+    state:'Settled on rethrowing the last error', when:'2h ago',
+    comments:[
+      {who:'Alex',c:'#2e7dd7',when:'2h',text:'This catch swallows the error — rethrow on the last attempt.'},
+      {who:'Sam',c:'#e36f1e',when:'1h',text:'Agreed, and keep the original stack.'}]},
+  { id:'t7', file:'code', author:'Sam', color:'#e36f1e', status:'open', hue:'two',
+    topic:'Fixed attempt count, not configurable', state:'', when:'12m ago',
+    comments:[{who:'Sam',c:'#e36f1e',when:'12m',text:'Three is hard-coded. Callers with a tighter budget cannot lower it.'}]},
 ];
 
-const VIEWS = [
-  ['today','Today'], ['drawer','Drawer'], ['over','Over doc'],
-  ['md','Inline in doc'], ['code','Inline in source'],
-];
-const LEGEND = {
-  today:'<b>Today.</b> Every card shows the <b>first</b> comment, so a thread with four replies looks exactly like one with none — and nothing signals that a card opens. You tap all of them to find the one that needs you.',
-  drawer:'<b>Proposed.</b> Collapsed by default, chevron on the right, whole card is the tap target. Expanding keeps the summary lines above the comments. <b>Orphan only exists here</b> — the desktop margin has no anchor to hang it from.',
-  over:'<b>Drawer over the document.</b> The sheet covers the text it refers to: you read a card, dismiss the sheet, then hunt for the line. The link between comment and content breaks exactly when you need it.',
-  md:'<b>Inline in the document.</b> The topic line disappears — it summarized the anchored text, and that text is highlighted right above. Inline cards are three lines with <b>one</b> generated line instead of two, which halves the model cost on this surface.',
-  code:'<b>Inline in source.</b> Same placement as a GitHub PR comment. Code scrolls sideways; <b>the card does not</b>, so it never needs a horizontal scroll to read.',
-};
-
-let view = 'drawer', filter = 'open', sheetOpen = true;
+let file = 'md', sheetOpen = false, filter = 'open', navIdx = -1, flashId = null;
 const expanded = new Set(), resolved = new Set(['t5']);
 
-const esc = s => s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const statusOf = t => resolved.has(t.id) ? 'resolved' : t.status;
+const esc = (s) => s.replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const statusOf = (t) => (resolved.has(t.id) ? 'resolved' : t.status);
+const inFile = () => THREADS.filter((t) => t.file === file);
+/* Inline-placeable = has a line to sit beside. Orphans and resolved do not. */
+const inlineThreads = () => inFile().filter((t) => statusOf(t) === 'open' && t.hue !== undefined);
+const openCount = () => inFile().filter((t) => statusOf(t) !== 'resolved').length;
 
-function card(t, {inline=false} = {}) {
-  const st = statusOf(t), isOpen = expanded.has(t.id), n = t.comments.length;
-  // one comment and never opened: today's single line already says everything a summary would
-  if (n === 1 && !isOpen) {
-    return `<div class="thread ${st}" data-id="${t.id}"><div class="oneline">
-      <span class="status-dot"></span><span class="swatch" style="background:${t.color}"></span>
-      <span class="who">${esc(t.author)}</span>
-      <span class="preview">${esc(t.comments[0].text)}</span></div></div>`;
-  }
-  const others = new Set(t.comments.map(c => c.who)); others.delete(t.author);
-  const nOthers = others.size;
-  const body = isOpen ? `<div class="comments">
-      ${t.comments.map(c => `<div class="cmt"><span class="swatch" style="background:${c.c}"></span>
-        <div class="body"><span class="name">${esc(c.who)}</span><span class="when">${c.when}</span>
-        <div>${esc(c.text)}</div></div></div>`).join('')}
+function card(t, { inline = false } = {}) {
+  const st = statusOf(t);
+  const isOpen = expanded.has(t.id);
+  const n = t.comments.length;
+  const others = new Set(t.comments.map((c) => c.who));
+  others.delete(t.author);
+  const tag = st === 'orphan' ? '· orphan' : st === 'resolved' ? '· resolved' : '';
+  const who = others.size ? ` · +${others.size} other${others.size > 1 ? 's' : ''}` : '';
+
+  // Two generated lines: the topic, and the state of the discussion. A thread with no
+  // replies has no discussion yet, so the second line says so instead of inventing one.
+  const summary = `
+    <div class="fold summary ${isOpen ? '' : 'show'}"><div class="inner">
+      ${inline ? '' : `<div class="topic clip">${esc(t.topic)}</div>`}
+      ${
+        n > 1
+          ? `<div class="state clip">${esc(t.state)}</div>`
+          : `<div class="state none clip">No replies yet</div>`
+      }
+    </div></div>`;
+
+  const detail = `
+    <div class="fold detail ${isOpen ? 'show' : ''}"><div class="inner">
+      ${t.comments
+        .map(
+          (c) => `<div class="cmt"><span class="swatch" style="background:${c.c}"></span>
+          <div class="body"><span class="name">${esc(c.who)}</span><span class="when">${c.when}</span>
+          <div>${esc(c.text)}</div></div></div>`,
+        )
+        .join('')}
       <div class="replybox"><input placeholder="Reply…" data-reply="${t.id}" />
-        <button data-send="${t.id}">Send</button></div></div>` : '';
-  return `<div class="thread ${st} ${isOpen ? 'expanded' : ''}" data-id="${t.id}">
+        <button data-send="${t.id}">Send</button></div>
+    </div></div>`;
+
+  return `<div class="thread ${st} ${isOpen ? 'expanded' : ''} ${flashId === t.id ? 'flash' : ''}"
+    data-id="${t.id}">
     <div class="row1 clip"><span class="status-dot"></span>
       <span class="swatch" style="background:${t.color}"></span>
-      <span class="who">${esc(t.author)}</span><span class="dim">${
-        st === 'orphan' ? '· orphan' : st === 'resolved' ? '· resolved' : ''}${
-        nOthers ? ` · +${nOthers} other${nOthers > 1 ? 's' : ''}` : ''}</span></div>
-    ${inline ? '' : `<div class="topic clip">${esc(t.topic)}</div>`}
-    <div class="state clip">${esc(t.state || t.comments[0].text)}</div>
-    ${body}
-    <div class="row4"><span class="meta">${n - 1} repl${n - 1 === 1 ? 'y' : 'ies'} · ${t.when}</span>
-      <button class="resolve" data-resolve="${t.id}"
-        aria-label="${st === 'resolved' ? 'Reopen' : 'Resolve'} thread">✓</button></div></div>`;
+      <span class="who">${esc(t.author)}</span><span class="dim">${tag}${who}</span></div>
+    ${summary}${detail}
+    <div class="row4">
+      <span class="meta">${n > 1 ? `${n - 1} repl${n - 1 === 1 ? 'y' : 'ies'} · ` : ''}${t.when}</span>
+      <button class="resolve" data-resolve="${t.id}">✓ ${st === 'resolved' ? 'Resolved' : 'Resolve'}</button>
+      <span class="chev">›</span>
+    </div></div>`;
 }
 
-function drawerBody() {
+function sheetBody() {
   const groups = [
-    ['Open', THREADS.filter(t => statusOf(t) === 'open')],
-    ['Orphaned — re-anchor needed', THREADS.filter(t => statusOf(t) === 'orphan')],
-    ['Resolved', filter === 'all' ? THREADS.filter(t => statusOf(t) === 'resolved') : []],
-  ];
-  const shown = groups.filter(([, ts]) => ts.length);
-  if (!shown.length) return '<div class="empty">Nothing here.</div>';
-  return shown.map(([name, ts]) =>
-    `<div class="section-heading">${name} (${ts.length})</div>
-     <div class="list">${ts.map(t => card(t)).join('')}</div>`).join('');
+    ['Open', inFile().filter((t) => statusOf(t) === 'open')],
+    ['Orphaned — no line to anchor to', inFile().filter((t) => statusOf(t) === 'orphan')],
+    ['Resolved', filter === 'all' ? inFile().filter((t) => statusOf(t) === 'resolved') : []],
+  ].filter(([, ts]) => ts.length);
+
+  return groups
+    .map(
+      ([name, ts]) => `<div class="section-heading">${name} (${ts.length})</div>
+      <div class="list">${ts.map((t) => card(t)).join('')}</div>`,
+    )
+    .join('');
 }
 
-const head = `<div class="drawer-head"><span class="title">Comments</span>
-  <button class="tab ${filter === 'open' ? 'on' : ''}" data-filter="open">Open</button>
-  <button class="tab ${filter === 'all' ? 'on' : ''}" data-filter="all">All</button></div>`;
+function docBody() {
+  const at = (id) => {
+    const t = THREADS.find((x) => x.id === id);
+    return `<div class="inline-wrap ${t.hue}">${card(t, { inline: true })}</div>`;
+  };
+  return `<div class="doc"><h3>Retry policy</h3>
+    <p>Requests are retried up to three times with exponential backoff.
+    <span class="anchored">The retry loop swallows the underlying error</span>, so a caller
+    sees only the final timeout.</p>
+    ${at('t1')}
+    <p>Only idempotent operations are retried. A write that has already been accepted by the
+    upstream is never re-sent, even when the response never arrives — the caller gets the
+    timeout and decides for itself.</p>
+    <p><span class="anchored two">The timeout is applied per attempt</span> rather than across
+    the whole operation, which means a slow endpoint can still exceed the budget.</p>
+    ${at('t2')}
+    <p>The budget is measured from the first attempt, not from the moment the request is
+    queued. Under load the queue wait is the larger term, and it is invisible here.</p>
+    <p>Failures are classified before they are retried: connection errors and 5xx responses
+    are retried, 4xx responses are not, and a 429 is retried only when the response carries a
+    Retry-After header we can honour.</p>
+    <p>Backoff starts at 200&nbsp;ms and doubles.
+    <span class="anchored three">Jitter is not applied</span>, so simultaneous failures retry
+    in lockstep.</p>
+    ${at('t3')}
+    <p>A caller that needs a hard deadline should wrap the whole operation rather than relying
+    on the per-attempt timeout.</p>
+    <p>Retries are counted per logical operation, not per socket. A connection that is
+    re-established mid-operation does not reset the count.</p></div>`;
+}
 
-const DOC = t1 => `<div class="doc"><h3>Retry policy</h3>
-  <p>Requests are retried up to three times with exponential backoff.
-  <span class="anchored">The retry loop swallows the underlying error</span>, so a caller
-  sees only the final timeout.</p>
-  ${t1}
-  <p><span class="anchored two">The timeout is applied per attempt</span> rather than across
-  the whole operation, which means a slow endpoint can still exceed the budget.</p>
-  ${view === 'md' ? `<div class="inline-wrap two">${card(THREADS[1], {inline:true})}</div>` : ''}
-  <p>Backoff starts at 200&nbsp;ms and doubles. Jitter is not applied, so simultaneous
-  failures retry in lockstep.</p></div>`;
+function codeBody() {
+  const at = (id) => {
+    const t = THREADS.find((x) => x.id === id);
+    return `<div class="inline-wrap ${t.hue}">${card(t, { inline: true })}</div>`;
+  };
+  const L = (n, html, hit) =>
+    `<div class="ln ${hit || ''}"><span class="num">${n}</span><span>${html}</span></div>`;
+  return `<div class="code">
+    ${L(34, '<span class="c">// Retries an idempotent operation with exponential backoff.</span>')}
+    ${L(35, '<span class="k">const</span> BASE_MS = 200;')}
+    ${L(36, '')}
+    ${L(37, '<span class="k">function</span> <span class="f">backoff</span>(attempt: <span class="f">number</span>) {')}
+    ${L(38, '  <span class="k">return</span> BASE_MS * 2 ** attempt;')}
+    ${L(39, '}')}
+    ${L(40, '')}
+    ${L(41, '<span class="k">async function</span> <span class="f">withRetry</span>&lt;T&gt;(fn: () =&gt; <span class="f">Promise</span>&lt;T&gt;) {')}
+    ${L(42, '  <span class="k">for</span> (<span class="k">let</span> i = 0; i &lt; 3; i++) {', 'hit two')}
+    ${at('t7')}
+    ${L(43, '    <span class="k">try</span> { <span class="k">return await</span> fn(); }')}
+    ${L(44, '    <span class="k">catch</span> { <span class="c">/* keep trying */</span> }', 'hit')}
+    ${at('t6')}
+    ${L(45, '    <span class="k">await</span> <span class="f">sleep</span>(<span class="f">backoff</span>(i));')}
+    ${L(46, '  }')}
+    ${L(47, '  <span class="k">throw new</span> <span class="f">Error</span>(<span class="s">\'retries exhausted\'</span>);')}
+    ${L(48, '}')}
+    ${L(49, '')}
+    ${L(50, '<span class="k">export</span> { withRetry, backoff };')}
+  </div>`;
+}
+
+const VIEWS = [
+  ['md', 'Markdown'],
+  ['code', 'Source'],
+];
+const LEGEND = {
+  md: '<b>Inline in the document.</b> Cards sit under the text they point at, collapsed. The topic line is dropped inline — the highlighted text is right above it, so restating it wastes a line. Tap the badge for the over-doc sheet, or ‹ › to walk comment to comment.',
+  code: '<b>Inline in source.</b> Same placement as a GitHub PR comment. Code scrolls sideways; the card does not, so it never needs a horizontal scroll to read.',
+};
 
 function render() {
-  const screen = document.getElementById('screen');
   const bar = `<div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ 100%</span></div>`;
-  const proposed = view !== 'today' ? 'proposed' : '';
-  let inner;
+  const title = file === 'md' ? 'retry-policy.md' : 'retry.ts';
+  const nav = inlineThreads();
+  const appbar = `<div class="appbar">
+      <span class="title">${title}</span>
+      <button class="navbtn" data-nav="-1" aria-label="Previous comment" ${nav.length < 2 ? 'disabled' : ''}>‹</button>
+      <button class="navbtn" data-nav="1" aria-label="Next comment" ${nav.length < 2 ? 'disabled' : ''}>›</button>
+      <button class="badge" data-sheet="open" aria-label="All comments">${openCount()}</button>
+    </div>`;
 
-  if (view === 'today' || view === 'drawer') {
-    const list = view === 'today'
-      ? `<div class="section-heading">Open (3)</div><div class="list">${
-          THREADS.filter(t => statusOf(t) === 'open').map(t =>
-            `<div class="thread" data-id="${t.id}"><div class="oneline">
-              <span class="swatch" style="background:${t.color}"></span>
-              <span class="who">${esc(t.author)}</span>
-              <span class="preview">${esc(t.comments[0].text)}</span>
-              ${t.comments.length > 1 ? `<span class="count">${t.comments.length}</span>` : ''}
-            </div></div>`).join('')}</div>`
-      : drawerBody();
-    inner = `<div class="scroll ${proposed}">${bar}${head}${list}</div>`;
+  document.getElementById('screen').innerHTML = `<div class="notch"></div>
+    <div class="scroll">${bar}${appbar}${file === 'md' ? docBody() : codeBody()}</div>
+    ${
+      sheetOpen
+        ? `<div class="scrim" data-sheet="close"></div>
+           <div class="sheet"><div class="grabber" data-sheet="close"></div>
+             <div class="drawer-head"><span class="title">${title}</span>
+               <button class="tab ${filter === 'open' ? 'on' : ''}" data-filter="open">Open</button>
+               <button class="tab ${filter === 'all' ? 'on' : ''}" data-filter="all">All</button>
+             </div>${sheetBody()}</div>`
+        : ''
+    }`;
 
-  } else if (view === 'over') {
-    inner = `<div class="scroll">${bar}
-        <div class="appbar"><span class="title">retry-policy.md</span><span class="pill">3</span></div>
-        ${DOC('')}</div>
-      <button class="fab" data-sheet="open" aria-label="Open comments">💬</button>
-      ${sheetOpen ? `<div class="scrim" data-sheet="close"></div>
-        <div class="sheet proposed"><div class="grabber" data-sheet="close"></div>
-          ${head}${drawerBody()}</div>` : ''}`;
-
-  } else if (view === 'md') {
-    inner = `<div class="scroll ${proposed}">${bar}
-      <div class="appbar"><span class="title">retry-policy.md</span><span class="pill">3</span></div>
-      ${DOC(`<div class="inline-wrap">${card(THREADS[0], {inline:true})}</div>`)}</div>`;
-
-  } else {
-    const L = (n, html, hit) => `<div class="ln ${hit ? 'hit' : ''}">
-      <span class="num">${n}</span><span>${html}</span></div>`;
-    inner = `<div class="scroll ${proposed}">${bar}
-      <div class="appbar"><span class="title">retry.ts</span><span class="pill">1</span></div>
-      <div class="code">
-        ${L(41, '<span class="k">async function</span> <span class="f">withRetry</span>&lt;T&gt;(fn: () =&gt; <span class="f">Promise</span>&lt;T&gt;) {')}
-        ${L(42, '  <span class="k">for</span> (<span class="k">let</span> i = 0; i &lt; 3; i++) {')}
-        ${L(43, '    <span class="k">try</span> { <span class="k">return await</span> fn(); }')}
-        ${L(44, '    <span class="k">catch</span> { <span class="c">/* keep trying */</span> }', true)}
-        ${L(45, '  }')}
-        <div class="inline-wrap">${card(THREADS[0], {inline:true})}</div>
-        ${L(46, '  <span class="k">throw new</span> <span class="f">Error</span>(<span class="s">\'retries exhausted\'</span>);')}
-        ${L(47, '}')}
-      </div></div>`;
-  }
-
-  screen.innerHTML = `<div class="notch"></div>${inner}`;
-  document.getElementById('legend').innerHTML = LEGEND[view];
-  document.getElementById('controls').innerHTML = VIEWS.map(([v, label]) =>
-    `<button data-view="${v}" class="${v === view ? 'on' : ''}">${label}</button>`).join('');
+  document.getElementById('legend').innerHTML = LEGEND[file];
+  document.getElementById('controls').innerHTML =
+    VIEWS.map(
+      ([v, label]) => `<button data-view="${v}" class="${v === file ? 'on' : ''}">${label}</button>`,
+    ).join('') + `<span class="sep">← which file you're reading (mockup control)</span>`;
+  document.getElementById('callout').innerHTML = CALLOUT;
 }
 
-document.addEventListener('click', e => {
+const CALLOUT = `<b>What changed from your comments.</b>
+  The standalone drawer view is gone — inline is the surface, and the sheet is what the badge
+  opens over it. ‹ › walk comment to comment. Expanding morphs the two summary lines into the
+  thread itself over 250&nbsp;ms rather than showing both. One <b>✓ Resolve</b> control, same
+  colour in summary and expanded.<br /><br />
+  <b>Two things I could not decide for you.</b>
+  A resolved thread still has a card inline, sitting in the middle of the prose — in the sheet it
+  simply leaves the Open list. Should it disappear inline?
+  And a real reply won't have its summary line for ~5s while the model runs, so the line is stale
+  for a moment after you speak; a pending state may be worth the flicker.`;
+
+document.addEventListener('click', (e) => {
   const v = e.target.closest('[data-view]');
-  if (v) { view = v.dataset.view; sheetOpen = true; return render(); }
+  if (v) {
+    file = v.dataset.view;
+    sheetOpen = false;
+    navIdx = -1;
+    return render();
+  }
 
   const f = e.target.closest('[data-filter]');
-  if (f) { filter = f.dataset.filter; return render(); }
+  if (f) {
+    filter = f.dataset.filter;
+    return render();
+  }
 
   const s = e.target.closest('[data-sheet]');
-  if (s) { sheetOpen = s.dataset.sheet === 'open'; return render(); }
+  if (s) {
+    sheetOpen = s.dataset.sheet === 'open';
+    return render();
+  }
+
+  const nv = e.target.closest('[data-nav]');
+  if (nv) return step(Number(nv.dataset.nav));
 
   const r = e.target.closest('[data-resolve]');
   if (r) {
@@ -358,29 +440,63 @@ document.addEventListener('click', e => {
     return render();
   }
 
-  const send = e.target.closest('[data-send]');
-  if (send) { return post(send.dataset.send); }
+  if (e.target.closest('[data-send]')) return post(e.target.closest('[data-send]').dataset.send);
+  if (e.target.closest('.replybox')) return; // don't collapse while typing
 
-  if (e.target.closest('.replybox')) return;          // don't collapse while typing
   const t = e.target.closest('.thread');
-  if (t && view !== 'today') {
-    const id = t.dataset.id;
-    expanded.has(id) ? expanded.delete(id) : expanded.add(id);
-    render();
-  }
+  if (t) toggle(t.dataset.id);
 });
 
-document.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && e.target.dataset && e.target.dataset.reply) post(e.target.dataset.reply);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && e.target.dataset?.reply) post(e.target.dataset.reply);
 });
+
+/* Toggle in place rather than re-rendering: a fresh node would start at its final
+   grid-template-rows and the 250ms morph would never animate. A thread can be on
+   screen twice (inline and in the sheet), so drive every copy from the id. */
+function toggle(id) {
+  const isOpen = expanded.has(id);
+  isOpen ? expanded.delete(id) : expanded.add(id);
+  for (const el of document.querySelectorAll(`.thread[data-id="${id}"]`)) {
+    el.classList.toggle('expanded', !isOpen);
+    el.querySelector('.fold.summary')?.classList.toggle('show', isOpen);
+    el.querySelector('.fold.detail')?.classList.toggle('show', !isOpen);
+  }
+}
+
+/* Where a card has to sit for the jump to feel like "go to that comment": centred in
+   the phone's own scroller, clamped to its range. Pure, so it can be checked. */
+function centreOn(sc, el) {
+  const max = Math.max(0, sc.scrollHeight - sc.clientHeight);
+  return Math.max(0, Math.min(max, el.offsetTop - sc.clientHeight / 2 + el.offsetHeight / 2));
+}
+
+function step(dir) {
+  const nav = inlineThreads();
+  if (!nav.length) return;
+  navIdx = (navIdx + dir + nav.length) % nav.length;
+  const t = nav[navIdx];
+  flashId = t.id;
+  render();
+  // scrollIntoView() would walk up and scroll the page behind the device frame too,
+  // so centre it inside the phone's own scroller by hand.
+  const sc = document.querySelector('.scroll');
+  const inlineCard = () => sc?.querySelector(`.thread[data-id="${t.id}"]`);
+  const el = inlineCard();
+  if (sc && el) sc.scrollTo({ top: centreOn(sc, el), behavior: 'smooth' });
+  setTimeout(() => {
+    flashId = null;
+    inlineCard()?.classList.remove('flash');
+  }, 900);
+}
 
 function post(id) {
   const input = document.querySelector(`[data-reply="${id}"]`);
-  const text = input && input.value.trim();
+  const text = input?.value.trim();
   if (!text) return;
-  const t = THREADS.find(x => x.id === id);
-  t.comments.push({ who:'Bryan', c:'#2e7dd7', when:'now', text });
-  t.state = text.length > 44 ? text.slice(0, 44) + '…' : text;   // stands in for the model line
+  const t = THREADS.find((x) => x.id === id);
+  t.comments.push({ who: 'Bryan', c: '#2e7dd7', when: 'now', text });
+  t.state = text.length > 44 ? `${text.slice(0, 44)}…` : text; // stands in for the model line
   t.when = 'just now';
   render();
 }
