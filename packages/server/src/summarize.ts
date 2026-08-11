@@ -226,8 +226,15 @@ export class ThreadSummarizer {
    * One call, no debounce. This is what the REST route and the MCP tool use,
    * where the caller has asked for a summary NOW and is waiting for it.
    *
-   * Returns null when generation is off, the thread needs no call, or anything
-   * at all goes wrong.
+   * Unconditional by design — it does NOT consult `needsCall`. This is the
+   * primitive that spends a call; deciding whether one is worth spending
+   * belongs to the caller, because the two callers want opposite defaults:
+   * the scheduled path and the backfill skip an up-to-date thread
+   * (`generateAndApply`), while the on-demand route has to be able to honour
+   * an explicit "that line is wrong, do it again". The route asks `needsCall`
+   * itself and only reaches here when the answer is yes or `force` was set.
+   *
+   * Returns null when generation is off or anything at all goes wrong.
    */
   async generate(thread: Thread): Promise<StoredSummary | null> {
     if (!this.enabled || !this.key) return null;
