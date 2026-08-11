@@ -102,6 +102,26 @@ describe('plugin MCP launcher', () => {
     expect(reply.result.serverInfo.version).toBe(pluginVersion);
   });
 
+  it('runs clean with no HOME and no PATH at all', async () => {
+    // cron and a sanitized launchd job hand over an environment with neither. A
+    // bare $HOME under `set -u` printed "HOME: unbound variable" here — the fixed
+    // locations were still searched, so it wasn't fatal, but it reads like a crash
+    // in exactly the situation this launcher exists to handle.
+    const stderr = await new Promise<string>((res) => {
+      const c = spawn('/bin/sh', [LAUNCHER, BUNDLE], {
+        env: {},
+        stdio: ['ignore', 'ignore', 'pipe'],
+      });
+      let out = '';
+      c.stderr.on('data', (d) => {
+        out += d.toString();
+      });
+      c.on('close', () => res(out));
+    });
+
+    expect(stderr).not.toMatch(/unbound variable|parameter not set/);
+  });
+
   it('fails loudly, not silently, when no node exists anywhere', async () => {
     // The fixed fallback locations are baked into the script, and a CI runner has
     // a real /usr/bin/node — so the environment alone cannot produce "no node

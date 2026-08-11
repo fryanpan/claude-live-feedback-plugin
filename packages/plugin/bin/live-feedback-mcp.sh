@@ -29,7 +29,17 @@ shift
 # Newest nvm version first: version dirs sort lexically, which is wrong across a
 # major boundary (v9 > v10), so compare numerically on each component.
 newest_nvm_node() {
-  nvm_root="${NVM_DIR:-$HOME/.nvm}/versions/node"
+  # HOME can be unset in the very environments this script exists for (cron, a
+  # sanitized launchd job). Under `set -u` a bare $HOME aborts this function's
+  # subshell and prints "HOME: unbound variable" — the fixed locations below are
+  # still tried, but that line reads like a crash to whoever is debugging. Default
+  # it, and skip the nvm search entirely when there's no root to derive.
+  nvm_dir="${NVM_DIR:-}"
+  if [ -z "$nvm_dir" ]; then
+    [ -n "${HOME:-}" ] || return 1
+    nvm_dir="$HOME/.nvm"
+  fi
+  nvm_root="$nvm_dir/versions/node"
   [ -d "$nvm_root" ] || return 1
   best=''
   best_key=''
