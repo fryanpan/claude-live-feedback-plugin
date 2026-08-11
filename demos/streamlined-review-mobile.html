@@ -233,7 +233,7 @@ const inFile = () => THREADS.filter((t) => t.file === file);
 const inlineThreads = () => inFile().filter((t) => statusOf(t) === 'open' && t.hue !== undefined);
 const openCount = () => inFile().filter((t) => statusOf(t) !== 'resolved').length;
 
-function card(t, { inline = false } = {}) {
+function card(t) {
   const st = statusOf(t);
   const isOpen = expanded.has(t.id);
   const n = t.comments.length;
@@ -242,11 +242,12 @@ function card(t, { inline = false } = {}) {
   const tag = st === 'orphan' ? '· orphan' : st === 'resolved' ? '· resolved' : '';
   const who = others.size ? ` · +${others.size} other${others.size > 1 ? 's' : ''}` : '';
 
-  // Two generated lines: the topic, and the state of the discussion. A thread with no
-  // replies has no discussion yet, so the second line says so instead of inventing one.
+  // Two generated lines, always both, everywhere — what the thread is ABOUT, then where
+  // the discussion GOT TO. A thread with no replies has no discussion yet, so the second
+  // line says so rather than inventing one or collapsing to a single line.
   const summary = `
     <div class="fold summary ${isOpen ? '' : 'show'}"><div class="inner">
-      ${inline ? '' : `<div class="topic clip">${esc(t.topic)}</div>`}
+      <div class="topic clip">${esc(t.topic)}</div>
       ${
         n > 1
           ? `<div class="state clip">${esc(t.state)}</div>`
@@ -298,7 +299,7 @@ function sheetBody() {
 function docBody() {
   const at = (id) => {
     const t = THREADS.find((x) => x.id === id);
-    return `<div class="inline-wrap ${t.hue}">${card(t, { inline: true })}</div>`;
+    return `<div class="inline-wrap ${t.hue}">${card(t)}</div>`;
   };
   return `<div class="doc"><h3>Retry policy</h3>
     <p>Requests are retried up to three times with exponential backoff.
@@ -329,7 +330,7 @@ function docBody() {
 function codeBody() {
   const at = (id) => {
     const t = THREADS.find((x) => x.id === id);
-    return `<div class="inline-wrap ${t.hue}">${card(t, { inline: true })}</div>`;
+    return `<div class="inline-wrap ${t.hue}">${card(t)}</div>`;
   };
   const L = (n, html, hit) =>
     `<div class="ln ${hit || ''}"><span class="num">${n}</span><span>${html}</span></div>`;
@@ -361,7 +362,7 @@ const VIEWS = [
   ['code', 'Source'],
 ];
 const LEGEND = {
-  md: '<b>Inline in the document.</b> Cards sit under the text they point at, collapsed. The topic line is dropped inline — the highlighted text is right above it, so restating it wastes a line. Tap the badge for the over-doc sheet, or ‹ › to walk comment to comment.',
+  md: '<b>Inline in the document.</b> Cards sit under the text they point at, collapsed: what the thread is about, then where the discussion got to. Tap the badge for the over-doc sheet, or ‹ › to walk comment to comment.',
   code: '<b>Inline in source.</b> Same placement as a GitHub PR comment. Code scrolls sideways; the card does not, so it never needs a horizontal scroll to read.',
 };
 
