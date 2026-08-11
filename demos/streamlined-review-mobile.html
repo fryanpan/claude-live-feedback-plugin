@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>streamlined_review — mobile thread drawer</title>
+<style>
+  :root {
+    --fg:#1b1f23; --fg-muted:#6e7781; --bg:#fff; --bg-panel:#f6f8fa;
+    --border:#d1d5da; --border-strong:#afb8c1; --accent:#2e7dd7;
+    --green:#2da44e; --yellow:#bf8700; --radius:6px;
+    --sans:-apple-system,BlinkMacSystemFont,"Inter","SF Pro Text","Segoe UI",system-ui,sans-serif;
+    --serif:Charter,"Iowan Old Style","Source Serif Pro",Georgia,serif;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:var(--sans);color:var(--fg);background:#e7ebef;padding:16px;
+       -webkit-text-size-adjust:100%}
+  h1{font-size:19px;margin:0 0 4px}
+  .sub{color:var(--fg-muted);font-size:13px;margin:0 0 14px;line-height:1.5}
+  .wrap{max-width:462px;margin:0 auto}
+
+  /* ---------- mockup chrome (not part of the product) ---------- */
+  .controls{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px}
+  .controls button{font:inherit;font-size:12px;padding:4px 11px;border-radius:99px;
+    border:1px solid var(--border);background:var(--bg);color:var(--accent);cursor:pointer}
+  .controls button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+  .legend{font-size:12.5px;color:var(--fg-muted);line-height:1.55;margin:12px 0 0;min-height:52px}
+  .legend b{color:var(--fg);font-weight:600}
+
+  /* ---------- device ---------- */
+  .device{background:#15181c;border-radius:40px;padding:11px;
+          box-shadow:0 10px 34px rgba(15,20,26,.28);width:452px;max-width:100%}
+  .screen{position:relative;background:var(--bg-panel);border-radius:30px;overflow:hidden;
+          height:760px;width:100%}
+  .notch{position:absolute;top:0;left:50%;transform:translateX(-50%);width:118px;height:24px;
+         background:#15181c;border-radius:0 0 15px 15px;z-index:6}
+  .statusbar{display:flex;align-items:center;justify-content:space-between;padding:7px 22px 3px;
+             font-size:11.5px;font-weight:600;background:var(--bg);position:relative;z-index:5}
+  .scroll{position:absolute;top:0;left:0;right:0;bottom:0;padding-top:26px;overflow-y:auto;
+          -webkit-overflow-scrolling:touch}
+  .scroll>.statusbar{position:sticky;top:-26px;margin-top:-26px}
+
+  .appbar,.drawer-head{display:flex;align-items:center;gap:8px;padding:11px 14px;
+    background:var(--bg);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:4}
+  .appbar .title,.drawer-head .title{font-weight:600;font-size:13.5px;flex:1;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
+  .pill{font-size:11.5px;background:var(--accent);color:#fff;border-radius:99px;padding:2px 8px}
+  .tab{font:inherit;font-size:11.5px;color:var(--fg-muted);padding:3px 9px;border-radius:99px;
+       border:0;background:transparent;cursor:pointer}
+  .tab.on{background:var(--accent);color:#fff}
+  .section-heading{font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;
+    color:var(--fg-muted);font-weight:600;padding:13px 14px 5px}
+  .list{padding:0 10px 14px}
+  .empty{padding:14px;font-size:12.5px;color:var(--fg-muted)}
+
+  /* ---------- card ---------- */
+  .thread{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);
+          padding:9px 11px;margin-bottom:8px;position:relative}
+  .thread.orphan{border-left:3px solid var(--yellow)}
+  .thread.resolved{opacity:.72}
+  .row1{display:flex;align-items:center;gap:6px;font-size:12.5px;min-width:0}
+  .status-dot{width:8px;height:8px;border-radius:50%;background:var(--accent);flex:0 0 auto}
+  .resolved .status-dot{background:var(--green)}
+  .orphan .status-dot{background:var(--yellow)}
+  .swatch{width:10px;height:10px;border-radius:2px;flex:0 0 auto}
+  .who{font-weight:600}.dim{color:var(--fg-muted)}
+  .clip{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+  .topic{font-family:var(--serif);font-style:italic;font-size:13px;color:var(--fg-muted);
+         border-left:3px solid var(--border);padding:1px 8px;margin:7px 0 0}
+  .state{font-size:13px;margin:5px 0 0;line-height:1.35}
+  .state::before{content:"↳ ";color:var(--fg-muted)}
+  .row4{display:flex;align-items:center;gap:8px;margin-top:7px}
+  .meta{font-size:12px;color:var(--fg-muted);flex:1}
+  .resolve{flex:0 0 auto;width:28px;height:28px;border-radius:var(--radius);
+    border:1px solid var(--border);background:var(--bg);color:var(--fg-muted);font-size:14px;
+    line-height:1;cursor:pointer}
+  .resolve:active{transform:scale(.93)}
+  .thread.resolved .resolve{border-color:var(--green);color:#fff;background:var(--green)}
+  .oneline{display:flex;align-items:center;gap:6px;font-size:12.5px}
+  .oneline .preview{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    color:var(--fg-muted)}
+  .count{font-size:11px;color:var(--fg-muted);background:var(--bg-panel);
+    border:1px solid var(--border);border-radius:99px;padding:1px 6px}
+
+  /* collapsed affordance — CSS-generated so it stays out of the text layer */
+  .proposed .thread{cursor:pointer;padding-right:26px}
+  .proposed .thread::after{content:"›";position:absolute;right:8px;top:7px;font-size:17px;
+    line-height:1;color:var(--fg-muted);transition:transform .13s ease}
+  .proposed .thread:active{background:#fafcff}
+  .proposed .thread.expanded::after{transform:rotate(90deg);color:var(--fg)}
+  .proposed .thread.expanded{border-color:var(--border-strong);
+    box-shadow:0 1px 3px rgba(20,24,28,.07)}
+  .comments{margin-top:9px;padding-top:9px;border-top:1px solid var(--border)}
+  .cmt{display:flex;gap:7px;margin-bottom:10px;font-size:13px;line-height:1.42}
+  .cmt:last-child{margin-bottom:0}
+  .cmt .swatch{margin-top:4px}
+  .cmt .body{min-width:0}
+  .cmt .name{font-weight:600;font-size:12.5px}
+  .cmt .when{color:var(--fg-muted);font-size:11.5px;margin-left:5px}
+  .replybox{display:flex;gap:6px;margin-top:10px}
+  .replybox input{flex:1;min-width:0;font:inherit;font-size:12.5px;padding:7px 9px;
+    border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-panel)}
+  .replybox input:focus{outline:none;border-color:var(--accent);background:var(--bg)}
+  .replybox button{font:inherit;font-size:12.5px;padding:0 12px;border-radius:var(--radius);
+    border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer}
+
+  /* ---------- document + inline ---------- */
+  .doc{padding:14px 16px 24px;font-family:var(--serif);font-size:15px;line-height:1.62;
+       background:var(--bg);min-height:100%}
+  .doc h3{font-family:var(--sans);font-size:15px;margin:0 0 10px}
+  .doc p{margin:0 0 13px}
+  .anchored{background:#fff6d9;box-shadow:0 1px 0 #e8c65a inset,0 -1px 0 #e8c65a inset;
+    border-radius:2px}
+  .anchored.two{background:#e9f2fd;box-shadow:0 1px 0 #b9d5f5 inset,0 -1px 0 #b9d5f5 inset}
+  .inline-wrap{margin:-4px 0 15px;padding-left:12px;border-left:2px solid #e8c65a;
+    font-family:var(--sans)}
+  .inline-wrap.two{border-left-color:#b9d5f5}
+  .inline-wrap .thread{margin-bottom:0}
+
+  /* ---------- sheet ---------- */
+  .scrim{position:absolute;inset:0;background:rgba(20,24,28,.34);z-index:7}
+  .sheet{position:absolute;left:0;right:0;bottom:0;background:var(--bg-panel);z-index:8;
+    border-top:1px solid var(--border-strong);border-radius:14px 14px 0 0;
+    box-shadow:0 -8px 30px rgba(0,0,0,.16);max-height:66%;overflow-y:auto}
+  .grabber{width:36px;height:4px;border-radius:99px;background:var(--border-strong);
+    margin:8px auto 2px;cursor:pointer}
+  .sheet .drawer-head{border-bottom:none;background:transparent}
+  .fab{position:absolute;right:14px;bottom:16px;z-index:6;width:48px;height:48px;
+    border-radius:50%;border:0;background:var(--accent);color:#fff;font-size:19px;cursor:pointer;
+    box-shadow:0 4px 14px rgba(46,125,215,.42)}
+
+  /* ---------- code ---------- */
+  .code{font-family:var(--mono);font-size:12px;line-height:1.65;padding:10px 0 20px;
+    background:var(--bg);min-height:100%}
+  .ln{display:flex;gap:10px;padding:0 12px;white-space:pre;overflow-x:auto}
+  .ln .num{color:#b6bec6;min-width:22px;text-align:right;flex:0 0 auto;user-select:none}
+  .ln.hit{background:#fff6d9}
+  .k{color:#cf222e}.s{color:#0a3069}.c{color:#6e7781}.f{color:#8250df}
+  .code .inline-wrap{margin:6px 10px 10px 34px;padding-left:10px}
+
+  .callout{margin:16px 0 0;padding:10px 12px;border-left:3px solid var(--accent);
+    background:#f2f7fd;font-size:12.5px;line-height:1.55;border-radius:0 var(--radius) var(--radius) 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>streamlined_review — mobile</h1>
+<p class="sub">The thread drawer at 430&nbsp;px. This is the surface you triage on.
+Each card is four lines, hard-capped: every line clips with an ellipsis rather than wrapping.</p>
+
+<div class="controls" id="controls"></div>
+
+<div class="device">
+  <div class="screen" id="screen">
+    <div class="notch"></div>
+  </div>
+</div>
+
+<p class="legend" id="legend"></p>
+
+<div class="callout">
+  <b>It's live — tap it.</b> Cards expand and collapse, <b>✓</b> resolves and reopens,
+  Open/All filters, and the reply box actually posts into the thread.<br /><br />
+  <b>What I'd want your call on.</b>
+  1. Inline and drawer may not be alternatives — an orphaned thread has no line left to sit
+  beside, so the drawer is the only place it can appear.
+  2. Does inline break reading? Three open threads on one screen interrupts the prose three
+  times.
+  3. Should the topic line be dropped inline, where the anchored text is highlighted right above it?
+</div>
+
+</div>
+
+<script>
+const THREADS = [
+  { id:'t1', author:'Alex', color:'#2e7dd7', status:'open',
+    topic:'Error handling in the retry helper',
+    state:'Debating whether to keep the fallback path', when:'2h ago',
+    comments:[
+      {who:'Alex',c:'#2e7dd7',when:'2h',text:'The retry loop swallows the underlying error, so a caller only ever sees the final timeout. We should rethrow on the last attempt.'},
+      {who:'Sam',c:'#e36f1e',when:'2h',text:'Agreed. Do we keep the fallback path at all, or drop it?'},
+      {who:'Jordan',c:'#8957e5',when:'1h',text:'Keep it — two callers still depend on the degraded response.'}]},
+  { id:'t2', author:'Sam', color:'#e36f1e', status:'open',
+    topic:'Timeout applied per attempt, not overall',
+    state:'Agreed to move it into the client wrapper', when:'25m ago',
+    comments:[
+      {who:'Sam',c:'#e36f1e',when:'40m',text:'Can we confirm the timeout is actually applied across the whole operation and not per attempt?'},
+      {who:'Alex',c:'#2e7dd7',when:'32m',text:'It is per attempt. Three retries can take 3× the budget.'},
+      {who:'Sam',c:'#e36f1e',when:'28m',text:'That explains the p99. Move it into the client wrapper?'},
+      {who:'Alex',c:'#2e7dd7',when:'25m',text:'Yes — wrapping is the smaller change.'}]},
+  { id:'t3', author:'Alex', color:'#8957e5', status:'orphan',
+    topic:'Retry budget shared across both call sites',
+    state:'Unresolved — the anchored line was deleted', when:'yesterday',
+    comments:[
+      {who:'Alex',c:'#8957e5',when:'1d',text:'Both call sites share one budget, so a noisy caller starves the other.'},
+      {who:'Jordan',c:'#2da44e',when:'1d',text:'Worth splitting per call site.'}]},
+  { id:'t4', author:'Jordan', color:'#2da44e', status:'open',
+    topic:'Spelling', state:'', when:'4h ago',
+    comments:[{who:'Jordan',c:'#2da44e',when:'4h',text:'typo: "recieve"'}]},
+  { id:'t5', author:'Alex', color:'#2e7dd7', status:'resolved',
+    topic:'Log line leaked the request body',
+    state:'Fixed — body redacted before logging', when:'3h ago',
+    comments:[
+      {who:'Alex',c:'#2e7dd7',when:'3h',text:'This log line prints the whole request body, including auth headers.'},
+      {who:'Sam',c:'#e36f1e',when:'3h',text:'Redacted before logging now.'}]},
+];
+
+const VIEWS = [
+  ['today','Today'], ['drawer','Drawer'], ['over','Over doc'],
+  ['md','Inline in doc'], ['code','Inline in source'],
+];
+const LEGEND = {
+  today:'<b>Today.</b> Every card shows the <b>first</b> comment, so a thread with four replies looks exactly like one with none — and nothing signals that a card opens. You tap all of them to find the one that needs you.',
+  drawer:'<b>Proposed.</b> Collapsed by default, chevron on the right, whole card is the tap target. Expanding keeps the summary lines above the comments. <b>Orphan only exists here</b> — the desktop margin has no anchor to hang it from.',
+  over:'<b>Drawer over the document.</b> The sheet covers the text it refers to: you read a card, dismiss the sheet, then hunt for the line. The link between comment and content breaks exactly when you need it.',
+  md:'<b>Inline in the document.</b> The topic line disappears — it summarized the anchored text, and that text is highlighted right above. Inline cards are three lines with <b>one</b> generated line instead of two, which halves the model cost on this surface.',
+  code:'<b>Inline in source.</b> Same placement as a GitHub PR comment. Code scrolls sideways; <b>the card does not</b>, so it never needs a horizontal scroll to read.',
+};
+
+let view = 'drawer', filter = 'open', sheetOpen = true;
+const expanded = new Set(), resolved = new Set(['t5']);
+
+const esc = s => s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const statusOf = t => resolved.has(t.id) ? 'resolved' : t.status;
+
+function card(t, {inline=false} = {}) {
+  const st = statusOf(t), isOpen = expanded.has(t.id), n = t.comments.length;
+  // one comment and never opened: today's single line already says everything a summary would
+  if (n === 1 && !isOpen) {
+    return `<div class="thread ${st}" data-id="${t.id}"><div class="oneline">
+      <span class="status-dot"></span><span class="swatch" style="background:${t.color}"></span>
+      <span class="who">${esc(t.author)}</span>
+      <span class="preview">${esc(t.comments[0].text)}</span></div></div>`;
+  }
+  const others = new Set(t.comments.map(c => c.who)); others.delete(t.author);
+  const nOthers = others.size;
+  const body = isOpen ? `<div class="comments">
+      ${t.comments.map(c => `<div class="cmt"><span class="swatch" style="background:${c.c}"></span>
+        <div class="body"><span class="name">${esc(c.who)}</span><span class="when">${c.when}</span>
+        <div>${esc(c.text)}</div></div></div>`).join('')}
+      <div class="replybox"><input placeholder="Reply…" data-reply="${t.id}" />
+        <button data-send="${t.id}">Send</button></div></div>` : '';
+  return `<div class="thread ${st} ${isOpen ? 'expanded' : ''}" data-id="${t.id}">
+    <div class="row1 clip"><span class="status-dot"></span>
+      <span class="swatch" style="background:${t.color}"></span>
+      <span class="who">${esc(t.author)}</span><span class="dim">${
+        st === 'orphan' ? '· orphan' : st === 'resolved' ? '· resolved' : ''}${
+        nOthers ? ` · +${nOthers} other${nOthers > 1 ? 's' : ''}` : ''}</span></div>
+    ${inline ? '' : `<div class="topic clip">${esc(t.topic)}</div>`}
+    <div class="state clip">${esc(t.state || t.comments[0].text)}</div>
+    ${body}
+    <div class="row4"><span class="meta">${n - 1} repl${n - 1 === 1 ? 'y' : 'ies'} · ${t.when}</span>
+      <button class="resolve" data-resolve="${t.id}"
+        aria-label="${st === 'resolved' ? 'Reopen' : 'Resolve'} thread">✓</button></div></div>`;
+}
+
+function drawerBody() {
+  const groups = [
+    ['Open', THREADS.filter(t => statusOf(t) === 'open')],
+    ['Orphaned — re-anchor needed', THREADS.filter(t => statusOf(t) === 'orphan')],
+    ['Resolved', filter === 'all' ? THREADS.filter(t => statusOf(t) === 'resolved') : []],
+  ];
+  const shown = groups.filter(([, ts]) => ts.length);
+  if (!shown.length) return '<div class="empty">Nothing here.</div>';
+  return shown.map(([name, ts]) =>
+    `<div class="section-heading">${name} (${ts.length})</div>
+     <div class="list">${ts.map(t => card(t)).join('')}</div>`).join('');
+}
+
+const head = `<div class="drawer-head"><span class="title">Comments</span>
+  <button class="tab ${filter === 'open' ? 'on' : ''}" data-filter="open">Open</button>
+  <button class="tab ${filter === 'all' ? 'on' : ''}" data-filter="all">All</button></div>`;
+
+const DOC = t1 => `<div class="doc"><h3>Retry policy</h3>
+  <p>Requests are retried up to three times with exponential backoff.
+  <span class="anchored">The retry loop swallows the underlying error</span>, so a caller
+  sees only the final timeout.</p>
+  ${t1}
+  <p><span class="anchored two">The timeout is applied per attempt</span> rather than across
+  the whole operation, which means a slow endpoint can still exceed the budget.</p>
+  ${view === 'md' ? `<div class="inline-wrap two">${card(THREADS[1], {inline:true})}</div>` : ''}
+  <p>Backoff starts at 200&nbsp;ms and doubles. Jitter is not applied, so simultaneous
+  failures retry in lockstep.</p></div>`;
+
+function render() {
+  const screen = document.getElementById('screen');
+  const bar = `<div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ 100%</span></div>`;
+  const proposed = view !== 'today' ? 'proposed' : '';
+  let inner;
+
+  if (view === 'today' || view === 'drawer') {
+    const list = view === 'today'
+      ? `<div class="section-heading">Open (3)</div><div class="list">${
+          THREADS.filter(t => statusOf(t) === 'open').map(t =>
+            `<div class="thread" data-id="${t.id}"><div class="oneline">
+              <span class="swatch" style="background:${t.color}"></span>
+              <span class="who">${esc(t.author)}</span>
+              <span class="preview">${esc(t.comments[0].text)}</span>
+              ${t.comments.length > 1 ? `<span class="count">${t.comments.length}</span>` : ''}
+            </div></div>`).join('')}</div>`
+      : drawerBody();
+    inner = `<div class="scroll ${proposed}">${bar}${head}${list}</div>`;
+
+  } else if (view === 'over') {
+    inner = `<div class="scroll">${bar}
+        <div class="appbar"><span class="title">retry-policy.md</span><span class="pill">3</span></div>
+        ${DOC('')}</div>
+      <button class="fab" data-sheet="open" aria-label="Open comments">💬</button>
+      ${sheetOpen ? `<div class="scrim" data-sheet="close"></div>
+        <div class="sheet proposed"><div class="grabber" data-sheet="close"></div>
+          ${head}${drawerBody()}</div>` : ''}`;
+
+  } else if (view === 'md') {
+    inner = `<div class="scroll ${proposed}">${bar}
+      <div class="appbar"><span class="title">retry-policy.md</span><span class="pill">3</span></div>
+      ${DOC(`<div class="inline-wrap">${card(THREADS[0], {inline:true})}</div>`)}</div>`;
+
+  } else {
+    const L = (n, html, hit) => `<div class="ln ${hit ? 'hit' : ''}">
+      <span class="num">${n}</span><span>${html}</span></div>`;
+    inner = `<div class="scroll ${proposed}">${bar}
+      <div class="appbar"><span class="title">retry.ts</span><span class="pill">1</span></div>
+      <div class="code">
+        ${L(41, '<span class="k">async function</span> <span class="f">withRetry</span>&lt;T&gt;(fn: () =&gt; <span class="f">Promise</span>&lt;T&gt;) {')}
+        ${L(42, '  <span class="k">for</span> (<span class="k">let</span> i = 0; i &lt; 3; i++) {')}
+        ${L(43, '    <span class="k">try</span> { <span class="k">return await</span> fn(); }')}
+        ${L(44, '    <span class="k">catch</span> { <span class="c">/* keep trying */</span> }', true)}
+        ${L(45, '  }')}
+        <div class="inline-wrap">${card(THREADS[0], {inline:true})}</div>
+        ${L(46, '  <span class="k">throw new</span> <span class="f">Error</span>(<span class="s">\'retries exhausted\'</span>);')}
+        ${L(47, '}')}
+      </div></div>`;
+  }
+
+  screen.innerHTML = `<div class="notch"></div>${inner}`;
+  document.getElementById('legend').innerHTML = LEGEND[view];
+  document.getElementById('controls').innerHTML = VIEWS.map(([v, label]) =>
+    `<button data-view="${v}" class="${v === view ? 'on' : ''}">${label}</button>`).join('');
+}
+
+document.addEventListener('click', e => {
+  const v = e.target.closest('[data-view]');
+  if (v) { view = v.dataset.view; sheetOpen = true; return render(); }
+
+  const f = e.target.closest('[data-filter]');
+  if (f) { filter = f.dataset.filter; return render(); }
+
+  const s = e.target.closest('[data-sheet]');
+  if (s) { sheetOpen = s.dataset.sheet === 'open'; return render(); }
+
+  const r = e.target.closest('[data-resolve]');
+  if (r) {
+    const id = r.dataset.resolve;
+    resolved.has(id) ? resolved.delete(id) : resolved.add(id);
+    expanded.delete(id);
+    return render();
+  }
+
+  const send = e.target.closest('[data-send]');
+  if (send) { return post(send.dataset.send); }
+
+  if (e.target.closest('.replybox')) return;          // don't collapse while typing
+  const t = e.target.closest('.thread');
+  if (t && view !== 'today') {
+    const id = t.dataset.id;
+    expanded.has(id) ? expanded.delete(id) : expanded.add(id);
+    render();
+  }
+});
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && e.target.dataset && e.target.dataset.reply) post(e.target.dataset.reply);
+});
+
+function post(id) {
+  const input = document.querySelector(`[data-reply="${id}"]`);
+  const text = input && input.value.trim();
+  if (!text) return;
+  const t = THREADS.find(x => x.id === id);
+  t.comments.push({ who:'Bryan', c:'#2e7dd7', when:'now', text });
+  t.state = text.length > 44 ? text.slice(0, 44) + '…' : text;   // stands in for the model line
+  t.when = 'just now';
+  render();
+}
+
+render();
+</script>
+
+<claude-feedback-widget doc-id="streamlined-review-mobile" user="bryan"></claude-feedback-widget>
+<script src="/widget.iife.js"></script>
+</body>
+</html>
