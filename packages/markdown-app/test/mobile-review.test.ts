@@ -110,7 +110,7 @@ function harness(
   const scrolledTo: number[] = [];
   const listeners: Array<() => void> = [];
   const mobile = mountMobileReview({
-    isMobile: () => true,
+    inlineVisible: () => true,
     threads: () => threads,
     resolveRange: (id) => {
       const t = threads.find((x) => x.id === id);
@@ -270,8 +270,8 @@ describe('inline placement', () => {
     expect(h.placed()[0].el.querySelector('.thread-topic')?.textContent).toBe('edited anchor');
   });
 
-  it('produces no inline cards at all above the phone breakpoint', () => {
-    const h = harness([thread('t1')], { isMobile: () => false });
+  it('produces no inline cards at all where the balloon margin owns the comments', () => {
+    const h = harness([thread('t1')], { inlineVisible: () => false });
     expect(h.placed()).toEqual([]);
   });
 

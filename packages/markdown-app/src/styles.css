@@ -185,9 +185,11 @@ body.view-mode #toggle-format {
   display: inline-block;
 }
 
-/* ‹ › comment nav. Phone-only: above 900px the balloon margin or the fixed
-   drawer already shows every comment at once, so stepping through them is a
-   solution to a problem that doesn't exist there. Narrower than the other
+/* ‹ › comment nav. Shown wherever the comments are INLINE (≤1100px): the
+   cards are spread through the document, so stepping between them is the
+   only way to walk the conversation. Above that the balloon margin shows
+   every comment at once beside the text, and stepping is a solution to a
+   problem that doesn't exist. Narrower than the other
    icon buttons (still ≥36px tall for the tap target) because two of them sit
    beside the badge in an already-crowded app bar. */
 .comment-nav {
@@ -201,7 +203,7 @@ body.view-mode #toggle-format {
   opacity: 0.35;
   cursor: default;
 }
-@media (max-width: 900px) {
+@media (max-width: 1100px) {
   .comment-nav {
     display: inline-flex;
   }
@@ -3103,10 +3105,12 @@ body.redline-mode #toggle-suggest-mode {
     outline: 2px solid var(--accent);
   }
 }
-/* Above the phone breakpoint the margin balloons / drawer own the comments;
-   inline cards are not produced there, but belt-and-braces so a stale card
-   left over from a resize can never sit in the middle of desktop prose. */
-@media (min-width: 901px) {
+/* Above 1100px the balloon margin owns the comments; inline cards are not
+   produced there, but belt-and-braces so a stale card left over from a
+   resize can never sit in the middle of desktop prose. The boundary matches
+   `INLINE_CARDS_QUERY` and the margin's own — exactly one always-on comment
+   surface at every width. */
+@media (min-width: 1101px) {
   .lf-inline-card {
     display: none;
   }
