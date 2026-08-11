@@ -4,6 +4,7 @@ import * as Y from 'yjs';
 import { MountScope } from '../src/mount-scope.ts';
 import { type ChromeOpts, initialDrawerOpen, mountReviewChrome } from '../src/review-chrome.ts';
 import type { ReviewSurface } from '../src/review-surface.ts';
+import { sizeThreadSlots } from '../src/thread-morph.ts';
 
 describe('initialDrawerOpen', () => {
   it('never opens on mobile', () => {
@@ -199,8 +200,14 @@ describe('mountReviewChrome drawer default', () => {
         get: () => (shell.classList.contains('threads-open') ? 24 : 0),
       });
     }
-    chrome.redrawThreads();
-    // Nothing believable was measurable while it was closed.
+    // Measure it while the pane is closed — directly, because a second
+    // `redrawThreads()` short-circuits on an unchanged render key and would
+    // never reach the measurement at all, leaving the assertion below true
+    // for the wrong reason.
+    sizeThreadSlots(document);
+    // Nothing believable was measurable while it was closed, so nothing was
+    // written: a slot pinned to `0px` here would survive the class flip and
+    // open the drawer on a card clipped to its head and its foot.
     for (const s of slots) expect(s.style.height).toBe('');
 
     chrome.openDrawer();
