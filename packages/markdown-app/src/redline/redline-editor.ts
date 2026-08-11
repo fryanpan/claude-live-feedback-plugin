@@ -278,6 +278,12 @@ export function createRedlineEditor(opts: CreateRedlineEditorOpts): RedlineSurfa
       setThreadDecorations(editor.view, { ranges, activeId });
     },
 
+    setInlineCards(cards) {
+      setThreadDecorations(editor.view, {
+        inlineCards: cards.map((c) => ({ id: c.id, el: c.el })),
+      });
+    },
+
     refresh: render,
 
     destroy() {

@@ -73,6 +73,7 @@ export function createLiveRedlineEditor(opts: CreateLiveRedlineEditorOpts): Live
     scrollToPos: (pos) => handle.scrollToPos(pos),
     pulseRange: (from, to) => handle.pulseRange(from, to),
     setThreadRanges: (ranges, activeId) => handle.setThreadRanges(ranges, activeId),
+    setInlineCards: (cards) => handle.setInlineCards(cards),
     getDeletions: () => liveMarkupKey.getState(handle.editor.state)?.deletions ?? [],
     refresh: () => {
       const { state, view } = handle.editor;

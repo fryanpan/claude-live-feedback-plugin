@@ -14,6 +14,7 @@ import {
   type DecorationSet,
   EditorView,
   GutterMarker,
+  WidgetType,
   gutter,
   keymap,
   lineNumbers,
@@ -22,7 +23,8 @@ import { getContent } from '@feedback/core';
 import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
 import type { Awareness } from 'y-protocols/awareness';
 import * as Y from 'yjs';
-import type { ReviewSurface, SurfaceThreadRange } from '../review-surface.ts';
+import type { InlineThreadCard, ReviewSurface, SurfaceThreadRange } from '../review-surface.ts';
+import { sizeThreadSlots } from '../thread-morph.ts';
 import { encodeOffsetRel, resolveRelOffset, snapToLines } from './code-anchor.ts';
 import {
   DIFF_SCAN_LIMIT,
@@ -145,6 +147,68 @@ const markerField = StateField.define<RangeSet<GutterMarker>>({
     }
     return next;
   },
+});
+
+// --- inline comment cards (mobile) ------------------------------------------
+// A block widget after the anchor's last line, where a GitHub PR comment
+// sits. The widget IS the caller's node — `eq` compares element identity, so
+// handing the same element back leaves the live card in place rather than
+// rebuilding it mid-morph.
+const setInlineCardsEffect =
+  StateEffect.define<Array<{ from: number; to: number; el: HTMLElement }>>();
+
+/** The card's own left+right margin inside `.cm-content` (see styles.css,
+ *  INLINE THREAD CARDS). Subtracted from the width published to CSS so the
+ *  card plus its margins fit the scroller exactly. */
+const CARD_MARGIN_X = 8;
+
+class InlineCardWidget extends WidgetType {
+  constructor(readonly el: HTMLElement) {
+    super();
+  }
+  override eq(other: InlineCardWidget): boolean {
+    return other.el === this.el;
+  }
+  override toDOM(): HTMLElement {
+    return this.el;
+  }
+  /** Everything inside the card — the reply box, Resolve, the fold tap — is
+   *  the card's business, never CodeMirror's. */
+  override ignoreEvent(): boolean {
+    return true;
+  }
+}
+
+const inlineCardField = StateField.define<DecorationSet>({
+  create() {
+    return Decoration.none;
+  },
+  update(value, tr) {
+    let next = value.map(tr.changes);
+    for (const e of tr.effects) {
+      if (!e.is(setInlineCardsEffect)) continue;
+      const docLen = tr.state.doc.length;
+      const rows = e.value
+        // End of the anchor's LAST line: a block widget mid-line would split
+        // the code it is commenting on.
+        .map((c) => ({
+          pos: tr.state.doc.lineAt(Math.max(0, Math.min(c.to - 1, docLen))).to,
+          el: c.el,
+        }))
+        .sort((a, b) => a.pos - b.pos);
+      const builder = new RangeSetBuilder<Decoration>();
+      for (const r of rows) {
+        builder.add(
+          r.pos,
+          r.pos,
+          Decoration.widget({ widget: new InlineCardWidget(r.el), block: true, side: 1 }),
+        );
+      }
+      next = builder.finish();
+    }
+    return next;
+  },
+  provide: (f) => EditorView.decorations.from(f),
 });
 
 // --- transient pulse line decoration ----------------------------------------
@@ -282,6 +346,7 @@ export function createCodeEditor(opts: CreateCodeEditorOpts): CodeSurface {
     syntaxHighlighting(defaultHighlightStyle),
     markerField,
     pulseField,
+    inlineCardField,
     gutter({
       class: 'cm-comment-gutter',
       markers: (view) => view.state.field(markerField),
@@ -301,6 +366,12 @@ export function createCodeEditor(opts: CreateCodeEditorOpts): CodeSurface {
     }),
     EditorView.updateListener.of((update) => {
       if (update.selectionSet) opts.onSelectionChange?.();
+      // CodeMirror renders only its viewport, so a card that scrolls into
+      // view is mounting for the first time — and a slot's height is a
+      // number we WROTE, not something the browser maintains. Without this
+      // an off-screen card arrives as a header and a footer.
+      if (update.viewportChanged) sizeThreadSlots(view.dom);
+      if (update.geometryChanged) publishInlineCardWidth();
     }),
   ];
   if (langExt) extensions.push(langExt);
@@ -311,6 +382,31 @@ export function createCodeEditor(opts: CreateCodeEditorOpts): CodeSurface {
     extensions,
   });
   view.dom.classList.toggle('cm-file-mode', viewMode === 'file');
+
+  /**
+   * How wide an inline comment card may be.
+   *
+   * The code surface does not wrap lines, so `.cm-content` is as wide as the
+   * file's longest line — a block widget inside it inherits THAT width, and a
+   * CSS `max-width: 100%` resolves against it too. On a file with one long
+   * line the card's `✓ Resolve` would sit hundreds of pixels off the right of
+   * a phone screen. The visible width is the scroller's, less the sticky
+   * gutters and the card's own horizontal margins; measured through
+   * `requestMeasure` so the read and the write land in CodeMirror's own
+   * measure phase rather than forcing a synchronous reflow mid-update.
+   */
+  function publishInlineCardWidth(): void {
+    view.requestMeasure({
+      read: (v) => {
+        const gutters = v.dom.querySelector<HTMLElement>('.cm-gutters');
+        return Math.max(0, v.scrollDOM.clientWidth - (gutters?.offsetWidth ?? 0) - CARD_MARGIN_X);
+      },
+      write: (w: number) => {
+        if (w > 0) view.dom.style.setProperty('--lf-inline-card-w', `${w}px`);
+      },
+    });
+  }
+  publishInlineCardWidth();
 
   // Push the suppressed-change count to the caller whenever it can have
   // moved. Chunks are computed synchronously inside the state reconfigure,
@@ -402,6 +498,14 @@ export function createCodeEditor(opts: CreateCodeEditorOpts): CodeSurface {
         .filter((r) => r.status !== 'resolved')
         .map((r) => ({ id: r.id, from: r.from, active: r.id === activeId }));
       view.dispatch({ effects: setMarkersEffect.of(markers) });
+    },
+    setInlineCards(cards: InlineThreadCard[]) {
+      view.dispatch({
+        effects: setInlineCardsEffect.of(cards.map((c) => ({ from: c.from, to: c.to, el: c.el }))),
+      });
+      // A card arriving is the first moment the width matters, and a doc with
+      // no cards never triggers a geometry change that would publish it.
+      publishInlineCardWidth();
     },
     setViewMode(mode: CodeViewMode) {
       if (mode === viewMode) return;

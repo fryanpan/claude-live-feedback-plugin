@@ -185,6 +185,28 @@ body.view-mode #toggle-format {
   display: inline-block;
 }
 
+/* ‹ › comment nav. Phone-only: above 900px the balloon margin or the fixed
+   drawer already shows every comment at once, so stepping through them is a
+   solution to a problem that doesn't exist there. Narrower than the other
+   icon buttons (still ≥36px tall for the tap target) because two of them sit
+   beside the badge in an already-crowded app bar. */
+.comment-nav {
+  display: none;
+  min-width: 32px;
+  padding: 6px;
+  font-size: 18px;
+  font-family: var(--sans);
+}
+.comment-nav:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+@media (max-width: 900px) {
+  .comment-nav {
+    display: inline-flex;
+  }
+}
+
 /* ================= MAIN LAYOUT ================= */
 
 #main {
@@ -1099,6 +1121,7 @@ body.threads-resizing {
   padding: 10px 12px;
   margin-bottom: 8px;
   cursor: pointer;
+  position: relative;
 }
 .thread:hover {
   border-color: var(--border-strong);
@@ -1122,20 +1145,214 @@ body.threads-resizing {
 .thread.orphan .status-dot {
   background: var(--yellow);
 }
-/* The snippet quotes the anchored text — use the same serif family as
-   the doc so the quote looks like it was lifted straight from the page. */
-.thread .snippet {
+
+/* ---------- the card: head, two folding slots, foot ---------- */
+
+/* Row 1 is the attribution for the OPENING MESSAGE and nothing else — which
+   is why the opening message never repeats the name when the card expands. */
+.thread-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  min-width: 0;
+  font-family: var(--sans);
+}
+.thread-head .swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex: 0 0 auto;
+}
+.thread-who {
+  flex: 1;
+  min-width: 0;
+}
+.thread-who .name {
+  font-weight: 600;
+}
+.thread-tag {
+  color: var(--fg-muted);
+}
+/* Lines truncate rather than wrap, so a card cannot exceed its rows at any
+   width. Shared by every one-line row on the card. */
+.thread .clip {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+/* Top right, deliberately as far from ✓ Resolve as the card allows: the two
+   were a thumb-width apart on one row, and the misfire that costs you is the
+   one that resolves a thread by accident. A hint, not the hit target — but a
+   real button underneath, because it is the only way a keyboard can open the
+   card at all. Stripped back to the glyph so it reads as a hint. */
+.thread-caret {
+  flex: 0 0 auto;
+  color: var(--fg-muted);
+  font-size: 16px;
+  line-height: 1;
+  transition: transform 0.15s ease;
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0 2px;
+  margin: 0;
+  font-family: inherit;
+  cursor: pointer;
+}
+.thread-caret:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+.thread.expanded .thread-caret {
+  transform: rotate(90deg);
+  color: var(--fg);
+}
+/* The morph zeroes its own durations in JS for reduced motion; this is the
+   one piece of the same gesture that animates in CSS, so it needs saying
+   twice. The caret still rotates — it just arrives instead of travelling. */
+@media (prefers-reduced-motion: reduce) {
+  .thread-caret {
+    transition: none;
+  }
+}
+
+/* Each slot holds two faces stacked in the same box: the summary line and
+   what it becomes. Both faces sit at top:0, so the opening message lands on
+   the exact pixel row the topic line occupied and the slot has NO intrinsic
+   height — the morph engine measures the visible face and sets it. */
+.thread-slot {
+  position: relative;
+  overflow: hidden;
+  margin-top: 7px;
+}
+.thread-slot > .thread-face {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+}
+.thread-face.face-detail {
+  opacity: 0;
+  pointer-events: none;
+}
+.thread.expanded .thread-face.face-summary {
+  opacity: 0;
+  pointer-events: none;
+}
+.thread.expanded .thread-face.face-detail {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Same face, size and leading as the message it morphs into — a font change
+   mid-cross-fade reads as two things swapping rather than one becoming the
+   other. The thin left rule and the muted colour carry the distinction
+   instead: properties that fade without moving a glyph. */
+.thread-topic,
+.thread-message {
   font-family: var(--prose);
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 14.5px;
+  line-height: 1.55;
+}
+.thread-topic {
+  color: var(--fg-muted);
+  border-left: 3px solid var(--border);
+  padding: 0 8px;
+  margin: 0;
+}
+/* Who else is in the thread — with the discussion line it describes, not up
+   in the header. */
+.thread-participants {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--fg-muted);
+  margin: 0 0 3px;
+  min-width: 0;
+  font-family: var(--sans);
+}
+.thread-participants .swatch {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  flex: 0 0 auto;
+}
+.thread-participants .name {
+  font-weight: 600;
+  color: var(--fg);
+}
+.thread-discussion {
+  font-family: var(--prose);
+  font-size: 13.5px;
+  line-height: 1.4;
+  margin: 0;
+}
+.thread-discussion::before {
+  content: "↳ ";
+  color: var(--fg-muted);
+}
+/* Nobody has replied yet: muted italic, and no arrow to a place we haven't
+   gone. The LINE still renders — the card keeps one shape everywhere. */
+.thread-discussion.none {
   color: var(--fg-muted);
   font-style: italic;
-  border-left: 3px solid var(--border);
-  padding: 2px 8px;
-  margin-bottom: 10px;
-  max-height: 3em;
-  overflow: hidden;
 }
+.thread-discussion.none::before {
+  content: "";
+}
+
+/* Row 4: how much conversation there is, and the one resolve control. Lives
+   outside both slots, so expanding never rebuilds or moves it. */
+.thread-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 9px;
+}
+.thread-meta {
+  font-size: 12px;
+  color: var(--fg-muted);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--sans);
+}
+/* The same element with the same colour in both states — not icon-only, and
+   not a control that only turns green once the thread is resolved. It reads
+   as an action before you take it. */
+.thread-resolve {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 10px;
+  min-height: 32px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.thread-resolve:hover {
+  border-color: var(--green);
+  color: var(--green);
+}
+.thread.resolved .thread-resolve {
+  border-color: var(--green);
+  background: var(--green);
+  color: #fff;
+}
+
 .thread .comments {
   margin-top: 2px;
   display: flex;
@@ -1174,7 +1391,7 @@ body.threads-resizing {
 }
 /* Comment body is the thing people read — apply the same serif reading
    stack as the editor, slightly smaller to fit the narrower panel. */
-.thread .comment .body {
+.thread .body {
   color: var(--fg);
   font-family: var(--prose);
   font-feature-settings: "kern", "liga";
@@ -1184,24 +1401,24 @@ body.threads-resizing {
 }
 /* Rendered markdown inside a comment (renderCommentMarkdown). Tight margins
    so a comment still reads as a comment, not a document. */
-.thread .comment .body p {
+.thread .body p {
   margin: 0 0 0.4em;
   white-space: pre-wrap;
 }
-.thread .comment .body p:last-child {
+.thread .body p:last-child {
   margin-bottom: 0;
 }
-.thread .comment .body ul.cm-list {
+.thread .body ul.cm-list {
   margin: 0.2em 0 0.4em;
   padding-left: 1.2em;
 }
-.thread .comment .body ul.cm-list:last-child {
+.thread .body ul.cm-list:last-child {
   margin-bottom: 0;
 }
-.thread .comment .body li {
+.thread .body li {
   margin: 0.1em 0;
 }
-.thread .comment .body code {
+.thread .body code {
   font-family: var(--mono, ui-monospace, monospace);
   font-size: 0.92em;
   background: var(--code-bg, rgba(127, 127, 127, 0.14));
@@ -1209,23 +1426,23 @@ body.threads-resizing {
   border-radius: 4px;
   word-break: break-word;
 }
-.thread .comment .body a {
+.thread .body a {
   color: var(--accent, #2e7dd7);
   text-decoration: underline;
 }
-.thread .comment .body strong {
+.thread .body strong {
   font-weight: 650;
 }
+/* Always laid out: the reply box lives inside slot B's detail face, so the
+   face's own opacity/pointer-events decide whether it is reachable. Hiding it
+   with `display` as well would give the slot nothing to measure. */
 .thread-reply {
-  display: none;
+  display: flex;
   margin-top: 10px;
   flex-direction: column;
   gap: 6px;
   padding-top: 10px;
   border-top: 1px solid var(--border);
-}
-.thread.active .thread-reply {
-  display: flex;
 }
 .thread-reply textarea {
   resize: vertical;
@@ -1270,28 +1487,63 @@ body.threads-resizing {
   line-height: 1.5;
 }
 
-/* ========== Off-canvas drawer on mobile ========== */
+/* ========== Over-doc bottom sheet on mobile ==========
+   Not a side drawer any more. On a phone the comments render INLINE in the
+   document (see INLINE THREAD CARDS below) and this pane is what the app
+   bar's comment badge raises OVER the doc: the grouped Open / Orphaned /
+   Resolved list, and the only place a thread with no line to sit beside
+   exists at all. Same open/close state (`.threads-open`) as the desktop
+   drawer — only the shape changes. */
 
 @media (max-width: 900px) {
   #threads-pane {
     position: fixed;
-    top: 0;
+    top: auto;
     right: 0;
-    bottom: 0;
-    width: min(420px, 86vw);
+    left: 0;
+    /* Ride above the iOS keyboard via --kb-bottom (published by app.ts). The
+       sheet's cards carry the reply box now — the full-screen thread view no
+       longer does — and `position: fixed` is layout-viewport-relative on iOS,
+       so a plain `bottom: 0` puts the textarea being typed into, and the
+       Reply button under it, behind the keyboard. Cap the height against the
+       same variable or the sheet grows off the top of the screen instead. */
+    bottom: var(--kb-bottom, 0px);
+    width: auto;
     max-width: 100%;
+    max-height: min(82vh, calc(100vh - var(--kb-bottom, 0px) - 56px));
     z-index: 950;
-    transform: translateX(100%);
-    transition: transform 220ms ease;
-    border-left: 1px solid var(--border);
-    box-shadow: -10px 0 40px rgba(0, 0, 0, 0.25);
-    padding-top: var(--safe-top);
+    transform: translateY(100%);
+    transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    border-left: none;
+    border-top: 1px solid var(--border);
+    border-radius: 16px 16px 0 0;
+    box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.25);
+    padding-top: 0;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  /* Grabber: the "drag me" affordance every bottom sheet in this app has.
+     Drawn on the header rather than added to the markup so the desktop
+     drawer, which shares this element, needs no matching change. */
+  #threads-pane .threads-header {
+    position: relative;
+    padding-top: 16px;
+  }
+  #threads-pane .threads-header::before {
+    content: "";
+    position: absolute;
+    top: 7px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 36px;
+    height: 4px;
+    border-radius: 999px;
+    background: var(--border);
   }
   .threads-open #threads-pane {
-    transform: translateX(0);
+    transform: translateY(0);
   }
   #threads-pane[aria-hidden="false"] {
-    transform: translateX(0);
+    transform: translateY(0);
   }
   .threads-close {
     display: inline-flex;
@@ -2435,14 +2687,6 @@ body.redline-mode #toggle-suggest-mode {
   outline-offset: 1px;
 }
 
-/* The drawer only shows a thread's reply box + actions once it's the active
-   thread (saves vertical space in a long list); a balloon has no such list to
-   save space in, and "reply / resolve / re-anchor work from the balloon" is
-   the point — so always show them here regardless of active state. */
-.thread.lf-balloon-comment .thread-reply {
-  display: flex;
-}
-
 .lf-leader-comment {
   stroke: var(--accent);
 }
@@ -2792,6 +3036,80 @@ body.redline-mode #toggle-suggest-mode {
      .lf-leader-suggestion / .lf-suggest-chip need no dark override — they
      already read var(--accent) (or the author's own --lf-suggest-color) via
      the base rules above. */
+}
+
+/* ================= INLINE THREAD CARDS (mobile) =================
+   The phone's comment surface: the same `.thread` card the drawer and the
+   balloon margin render, placed IN THE FLOW under the text (or the source
+   line) it points at — where a GitHub PR comment sits. Injected as a widget
+   decoration by the surface, so these rules must not assume a parent: they
+   style the card wrapper itself.
+
+   Only threads with a line to sit beside appear here (open, resolvable
+   anchor). Orphaned and resolved threads live in the bottom sheet, which is
+   the THREADS PANE block above. */
+.lf-inline-card {
+  margin: 10px 0 14px;
+  /* Code scrolls sideways; the card must not, or reading a comment on a long
+     line would need a horizontal scroll of its own. */
+  max-width: 100%;
+  white-space: normal;
+  cursor: default;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  padding: 10px 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+/* Inside CodeMirror the card is a block widget in a monospace, pre-wrapped
+   context — reset both, or the comment renders as code. */
+.cm-content .lf-inline-card {
+  font-family: var(--sans);
+  font-size: 14px;
+  white-space: normal;
+  tab-size: initial;
+  margin-left: 4px;
+  margin-right: 4px;
+  /* The code surface does NOT wrap lines, so `.cm-content` is as wide as the
+     file's longest line and `max-width: 100%` resolves against THAT — on a
+     file with one 200-column line the card's ✓ Resolve and its caret render
+     hundreds of pixels off the right edge of a phone. Size against the
+     scroller instead (published by code-editor.ts as it measures), and stick
+     to the left edge so the card stays put while the code scrolls under it. */
+  position: sticky;
+  left: 0;
+  box-sizing: border-box;
+  width: var(--lf-inline-card-w, 100%);
+  max-width: var(--lf-inline-card-w, 100%);
+}
+/* Where the ‹ › nav just landed. Deliberately brief and colour-only: the
+   card has already been scrolled to the middle of the screen, so this only
+   has to answer "which one". */
+.lf-inline-card.lf-nav-flash {
+  animation: lf-inline-flash 900ms ease-out;
+}
+@keyframes lf-inline-flash {
+  0% {
+    background: var(--accent-soft, rgba(46, 125, 215, 0.16));
+  }
+  100% {
+    background: var(--bg-panel);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lf-inline-card.lf-nav-flash {
+    animation: none;
+    outline: 2px solid var(--accent);
+  }
+}
+/* Above the phone breakpoint the margin balloons / drawer own the comments;
+   inline cards are not produced there, but belt-and-braces so a stale card
+   left over from a resize can never sit in the middle of desktop prose. */
+@media (min-width: 901px) {
+  .lf-inline-card {
+    display: none;
+  }
 }
 
 /* ================= FIRST-ARRIVAL IDENTITY PROMPT ================= */
