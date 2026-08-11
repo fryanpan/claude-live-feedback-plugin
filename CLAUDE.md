@@ -49,6 +49,28 @@ The feedback widget that ships Linear tickets in `~/dev/health-tool` and `~/dev/
 - **Edit Bryan's bound docs directly; don't default to `suggest: true`.** Concurrent editing is the norm — he's in the doc while you work and expects your changes to land. Reserve `suggest: true` for judgment calls where a one-tap approve/reject genuinely beats a silent rewrite (voice, framing, a claim you're unsure of). Mechanical fixes, typos, and anything he explicitly asked for go in as plain edits.
 - **Mobile UX is load-bearing.** Bryan reviews on his phone. Any UI change touching the editor, widget, or landing page must follow [docs/product/design-mobile.md](docs/product/design-mobile.md) — verify at 430px wide before shipping.
 
+## Releasing the plugin (bump the version on every PR)
+
+Peers install by version. `claude plugin update` compares the version string and
+copies nothing when it hasn't moved — **while still reporting success**. An
+unbumped change is invisible on both ends: green push here, unchanged plugin
+there. That is how 25 feature commits sat undelivered between 2026-05-09 and
+2026-08-10.
+
+- **Bump the patch version on every PR.** Both manifests, identical values:
+  `packages/plugin/.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`.
+  Minor/major bumps are Bryan's call; patch is the default and needs no discussion.
+- **CI enforces the dangerous half.** `bun run check:plugin-version` fails when a
+  PR touches `packages/plugin/**` without moving the version forward, or when the
+  two manifests disagree. It is not a warning — the build goes red.
+- **The MCP bundle is checked the same way.** CI rebuilds it and fails if the
+  committed `packages/plugin/mcp/index.js` differs from a fresh build, because
+  peers load that artifact rather than the TypeScript source. Any PR touching
+  `packages/mcp/src/**` must run `bun run build:mcp` and commit the result.
+  This is why CI pins its Bun version — bundler output moves between releases.
+- After merging a plugin change, `claude plugin update live-feedback@claude-live-feedback`
+  is what actually delivers it to a session.
+
 ## Pre-push leak gate
 
 This repo is **public**. `.githooks/pre-push` runs two scanners on every push and blocks the push if either flags a leak. The principle: once a push lands and a PR is opened, the content is public-record forever (PR descriptions and commits can't be removed) — so the gate fires before the push.
