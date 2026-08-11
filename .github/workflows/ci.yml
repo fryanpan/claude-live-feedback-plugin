@@ -10,9 +10,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The plugin-version gate diffs against the base branch, and the MCP
+          # bundle check needs history to compare. Shallow clones make both vacuous.
+          fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          # Pinned, not "latest": the MCP bundle check compares a fresh build byte
+          # for byte against the committed artifact, and bundler output moves
+          # between Bun releases. Bump this deliberately, alongside a rebuild.
+          bun-version: 1.3.10
       - run: bun install --frozen-lockfile
       - name: Typecheck
         run: bun run typecheck
@@ -24,3 +31,16 @@ jobs:
         run: bun run build:widget
       - name: Widget bundle size
         run: bun run check:widget-size
+      - name: Plugin version bumped
+        run: bun run check:plugin-version --base origin/${{ github.event.pull_request.base.ref || 'main' }}
+      - name: MCP bundle matches source
+        run: |
+          bun run build:mcp
+          if ! git diff --quiet -- packages/plugin/mcp/index.js; then
+            echo "::error::packages/plugin/mcp/index.js is stale — it does not match a fresh build of packages/mcp/src."
+            echo "Peers load the committed bundle, not the TypeScript source, so an unrebuilt bundle ships nothing."
+            echo "Fix: bun run build:mcp && git add packages/plugin/mcp/index.js"
+            git diff --stat -- packages/plugin/mcp/index.js
+            exit 1
+          fi
+          echo "packages/plugin/mcp/index.js matches a fresh build."
