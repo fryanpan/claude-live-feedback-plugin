@@ -20,7 +20,7 @@
  * worth re-adding without new evidence.
  */
 
-import { DISCUSSION_MAX, TOPIC_MAX, anchorText, summaryHash } from './thread-summary.ts';
+import { anchorText, summaryHash } from './thread-summary.ts';
 import type { Thread } from './types.ts';
 
 /** Word budgets. The card gives each line one ellipsized row. */
@@ -178,10 +178,10 @@ export function parseSummaryResponse(raw: string): GeneratedSummary | null {
   if (!obj || typeof obj !== 'object') return null;
   const o = obj as Record<string, unknown>;
   if (typeof o.topic !== 'string' || typeof o.discussion !== 'string') return null;
-  const topic = clamp(clean(o.topic), TOPIC_MAX);
+  const topic = clean(o.topic);
   // A blank topic is not a summary; a blank discussion is the no-replies case.
   if (!topic) return null;
-  return { topic, discussion: clamp(clean(o.discussion), DISCUSSION_MAX) };
+  return { topic, discussion: clean(o.discussion) };
 }
 
 /**
@@ -199,22 +199,28 @@ function clean(s: string): string {
   return unquoted.replace(/[.,;:]+$/, '').trim();
 }
 
-/**
- * The safety net under the prompt's word limits, in the SAME units the
- * deterministic path already clips to — a generated line and a fallback line
- * must not overflow the row differently.
+/*
+ * There is deliberately NO character clamp on a generated line.
  *
- * A backstop, not the mechanism: an ellipsis here means the model overran and
- * the reader is losing the end of the sentence. Measured at 3% of threads with
- * the shipped prompt, against 40% before the budget was made explicit.
+ * There used to be one, capping the topic at 80 chars and the discussion at
+ * 120 with an appended "…". It was a second truncation point, and the wrong
+ * one: the card rows are `overflow: hidden; text-overflow: ellipsis;
+ * white-space: nowrap`, so the browser already ellipsizes at the REAL width
+ * of the row — which is far narrower than 120 characters and varies by
+ * surface and viewport. A line cut at 120 arrived pre-truncated with a
+ * literal ellipsis in its stored text, and then got ellipsized again on
+ * screen. Measured on the first production corpus: 3% of lines carried our
+ * "…", none of which needed it more than the 18% that ran long without it.
+ *
+ * The card cannot grow either way — `nowrap` guarantees one row — and the
+ * output is bounded by `max_tokens` on the call, so nothing here is holding
+ * back an unbounded string. The word limits in the prompt are the real
+ * mechanism; the browser is the backstop.
+ *
+ * `TOPIC_MAX` / `DISCUSSION_MAX` still bound the DETERMINISTIC lines in
+ * `thread-summary.ts`, where the input is a raw comment that really can be
+ * 5,000 characters of prose poured into a one-line slot.
  */
-function clamp(s: string, max: number): string {
-  if (s.length <= max) return s;
-  const cut = s.slice(0, max - 1);
-  const lastSpace = cut.lastIndexOf(' ');
-  const head = lastSpace > max / 2 ? cut.slice(0, lastSpace) : cut;
-  return `${head.replace(/[\s,.;:!?-]+$/, '')}…`;
-}
 
 /**
  * Is this thread worth spending a call on?
