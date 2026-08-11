@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 /**
@@ -102,10 +103,27 @@ describe('plugin MCP launcher', () => {
   });
 
   it('fails loudly, not silently, when no node exists anywhere', async () => {
-    // HOME points at a directory with no .nvm, so every candidate misses.
+    // The fixed fallback locations are baked into the script, and a CI runner has
+    // a real /usr/bin/node — so the environment alone cannot produce "no node
+    // anywhere" portably. Run a copy with those paths redirected at nothing.
+    // Trade-off: this exercises the failure branch and its message, but not the
+    // literal contents of the candidate list.
+    const dir = mkdtempSync(join(tmpdir(), 'lf-launcher-'));
+    const stripped = readFileSync(LAUNCHER, 'utf8').replace(
+      /^(\s*)(\/opt\/homebrew|\/usr\/local|\/usr|\/snap)\/bin\/node(\s*\\?)$/gm,
+      '$1/nonexistent$2/bin/node$3',
+    );
+    const copy = join(dir, 'launcher.sh');
+    writeFileSync(copy, stripped);
+    // Non-vacuity: if the rewrite silently matched nothing, this test would be
+    // asserting against the unmodified script and could never fail for the right reason.
+    expect(stripped).not.toBe(readFileSync(LAUNCHER, 'utf8'));
+    expect(stripped).toContain('/nonexistent/usr/bin/node');
+
     const child = await new Promise<{ code: number | null; stderr: string }>((res) => {
-      const c = spawn('/bin/sh', [LAUNCHER, BUNDLE], {
-        env: { PATH: NODELESS_PATH, HOME: '/nonexistent-home-for-test' },
+      const c = spawn('/bin/sh', [copy, BUNDLE], {
+        // HOME has no .nvm, PATH has no node, and the fallbacks now point nowhere.
+        env: { PATH: join(dir, 'empty-bin'), HOME: dir },
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       let stderr = '';
