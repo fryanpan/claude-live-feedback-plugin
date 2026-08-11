@@ -13754,7 +13754,7 @@ function suggestionAuthor() {
 }
 var server = new Server({
   name: "claude-live-feedback",
-  version: "0.1.2"
+  version: "0.1.3"
 }, {
   capabilities: {
     tools: {},
@@ -13900,6 +13900,22 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         properties: {
           docId: { type: "string" },
           threadId: { type: "string" }
+        },
+        required: ["docId", "threadId"]
+      }
+    },
+    {
+      name: "summarize_thread",
+      description: "Generate the two summary lines (topic + discussion) shown on a thread's collapsed card, and store them on the thread so every open browser picks them up immediately. Normally you do NOT need this: the server generates a summary automatically ~3s after any thread change. Reach for it when you want a summary right now — e.g. you just posted a long reply and want the card to read correctly before you hand the review URL to someone. A thread whose stored summary already matches its current state is returned as-is with cached:true and costs nothing; pass force:true to regenerate anyway. Two expected failures come back as tool ERRORS, not as a result field — the error text carries the HTTP status. A 503 (summaries disabled) means no API key is configured or LF_SUMMARIES=0; the card keeps its deterministic lines, nothing is broken, and retrying will not help. A 409 (thread changed during generation) means a reply landed mid-call and the summary would have described the older thread — just call it again.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          docId: { type: "string" },
+          threadId: { type: "string" },
+          force: {
+            type: "boolean",
+            description: "Regenerate even when the stored summary is already current. Use when the existing line reads wrong, not routinely — it is a billed call."
+          }
         },
         required: ["docId", "threadId"]
       }
@@ -14536,6 +14552,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       case "resolve_thread": {
         const { docId, threadId } = a;
         const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/resolve`);
+        return ok(res);
+      }
+      case "summarize_thread": {
+        const { docId, threadId, force } = a;
+        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/summary`, force ? { force: true } : undefined);
         return ok(res);
       }
       case "reopen_thread": {

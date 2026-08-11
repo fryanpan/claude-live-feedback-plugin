@@ -7,7 +7,9 @@ import {
   type User,
   contentKind,
   suggestOps,
+  summaryHash,
 } from '@feedback/core';
+import { needsCall } from '@feedback/core/summary-prompt';
 import type { Server as BunServer } from 'bun';
 import { showFile } from './git-diff.ts';
 import {
@@ -45,6 +47,7 @@ import { SharingGate } from './share/sharing-gate.ts';
 import type { ShareConfig } from './share/types.ts';
 import { sanitizeVisitorAuthor } from './share/visitor-identity.ts';
 import { SseHub, openSseStream } from './sse.ts';
+import { KEYCHAIN_SERVICE, ThreadSummarizer } from './summarize.ts';
 import { type WebhookLogEntry, createWebhookDispatcher } from './webhooks.ts';
 import { onClose, onMessage, onOpen } from './yjs-protocol.ts';
 
@@ -113,6 +116,22 @@ export interface ServerOptions {
     cfApiToken?: string;
     cfApi?: CfApi;
   };
+  /**
+   * Thread summarizer. **No default.** Omitting it leaves generation off
+   * entirely: every card falls back to its deterministic lines and the
+   * on-demand route answers 503.
+   *
+   * It used to default to `new ThreadSummarizer()`, which resolves the real
+   * Keychain key and the real global `fetch` — so every one of the 40-odd
+   * server test files that creates a thread fired a live, billed
+   * api.anthropic.com call three seconds later, carrying its fixture comment
+   * text off the machine. Measured: 21 outbound calls across one
+   * `bun run test:server`, with the suite green throughout, because the
+   * scheduled path is fire-and-forget. The only caller that should have a
+   * summarizer is the one that starts the real server (`bin.ts`), so it is
+   * the one that constructs it.
+   */
+  summarizer?: ThreadSummarizer;
 }
 
 const CT: Record<string, string> = {
@@ -327,7 +346,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // `server` lazily and is only invoked during requests / thread events,
   // after Bun.serve has assigned. Same instance is reused for SSE +
   // webhook payloads via the Rooms decorator.
-  const rooms = new Rooms({ dataDir, sse, webhooks, decorateDocMeta: withReviewUrl });
+  // Generation is opt-IN at this seam: no summarizer, no outbound call, ever.
+  // See ServerOptions.summarizer for why constructing one here was wrong.
+  const summarizer = opts.summarizer ?? null;
+  const rooms = new Rooms({
+    dataDir,
+    sse,
+    webhooks,
+    decorateDocMeta: withReviewUrl,
+    ...(summarizer ? { summarizer } : {}),
+  });
 
   /**
    * CORS is decided once, here, for every response the handler produces,
@@ -1208,19 +1236,65 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               const user = authorFor(body?.author);
               const text = body?.text as string | undefined;
               if (!user || !text) return j(400, { error: 'author + text required' });
-              const t = await rooms.postComment(docId, threadId, user, text);
+              const t = await rooms.postComment(docId, threadId, user, text, undefined, {
+                // A share visitor must not be able to spend the API key.
+                generate: !visitor,
+              });
               return t ? j(200, { thread: t }) : j(404, { error: 'thread not found' });
+            }
+            if (threadRest === '/summary' && req.method === 'POST') {
+              // On-demand generation. The scheduled path is debounced and
+              // fire-and-forget; this one blocks and reports what happened,
+              // because an agent asked for it and is waiting.
+              if (visitor) return j(403, { error: 'not available to share visitors' });
+              const t = rooms.getThread(docId, threadId);
+              if (!t) return j(404, { error: 'thread not found' });
+              if (!summarizer?.enabled) {
+                return j(503, {
+                  error: 'summaries disabled',
+                  detail: `set LF_SUMMARIES=1 and add a key: security add-generic-password -a "$USER" -s ${KEYCHAIN_SERVICE} -w`,
+                });
+              }
+              // Already summarized as it stands: answer with what is stored
+              // rather than paying to regenerate the same two lines. The
+              // scheduled path and the backfill both ask this question through
+              // `needsCall`; an agent that polls this route was the one caller
+              // that could bill on every retry. `force` is the deliberate
+              // "that line is wrong, do it again" escape hatch.
+              const force = (await safeJson(req))?.force === true;
+              if (!force && !needsCall(t, t.summary)) {
+                return j(200, { thread: t, summary: t.summary, cached: true });
+              }
+              const summary = await summarizer.generate(t);
+              if (!summary) return j(503, { error: 'generation failed' });
+              // Re-read before storing, exactly as the scheduled path does.
+              // A reply that landed during the call moves `summaryHash`, so
+              // storing this one would (a) report success for a summary
+              // `threadLines` will ignore forever, and (b) overwrite a valid
+              // summary the scheduled path may have just landed for the NEW
+              // state — leaving nothing scheduled to repair it.
+              const now = rooms.getThread(docId, threadId);
+              if (!now) return j(404, { error: 'thread not found' });
+              if (summaryHash(now) !== summary.hash) {
+                return j(409, { error: 'thread changed during generation' });
+              }
+              const updated = rooms.applyThreadSummary(docId, threadId, summary);
+              return updated
+                ? j(200, { thread: updated, summary })
+                : j(404, { error: 'thread not found' });
             }
             if (threadRest === '/resolve' && req.method === 'POST') {
               const body = await safeJson(req);
               const author = authorFor(body?.author);
-              const t = rooms.resolve(docId, threadId, author);
+              // Resolve is a thread change, so it schedules a summary — and a
+              // visitor must not be able to spend the API key by clicking it.
+              const t = rooms.resolve(docId, threadId, author, { generate: !visitor });
               return t ? j(200, { thread: t }) : j(404, { error: 'thread not found' });
             }
             if (threadRest === '/reopen' && req.method === 'POST') {
               const body = await safeJson(req);
               const author = authorFor(body?.author);
-              const t = rooms.reopen(docId, threadId, author);
+              const t = rooms.reopen(docId, threadId, author, { generate: !visitor });
               return t ? j(200, { thread: t }) : j(404, { error: 'thread not found' });
             }
             if (threadRest === '/reanchor' && req.method === 'POST') {
@@ -1272,7 +1346,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             if (!user || !text || !anchor) {
               return j(400, { error: 'author + text + anchor required' });
             }
-            const t = await rooms.postComment(docId, null, user, text, anchor);
+            const t = await rooms.postComment(docId, null, user, text, anchor, {
+              generate: !visitor,
+            });
             return t ? j(200, { thread: t }) : j(500, { error: 'could not create thread' });
           }
           if (rest === 'threads/by_find' && req.method === 'POST') {
@@ -1294,6 +1370,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               },
               author,
               text,
+              // Visitor-authored text becomes the entire prompt on this route.
+              { generate: !visitor },
             );
             return res.ok ? j(200, { thread: res.thread }) : j(409, res);
           }

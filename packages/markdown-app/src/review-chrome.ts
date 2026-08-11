@@ -1,4 +1,4 @@
-import { type Thread, type User, formatTime, readDocMeta } from '@feedback/core';
+import { type Thread, type User, formatTime, readDocMeta, readStoredSummary } from '@feedback/core';
 import type * as Y from 'yjs';
 import { type MobileReview, mountMobileReview } from './mobile-review.ts';
 import type { MountScope } from './mount-scope.ts';
@@ -329,6 +329,14 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
         const r = resolveThreadRange(id);
         if (!r) displayAnchor = { kind: 'orphan', original: anchorRaw, lastSeenAt: Date.now() };
       }
+      // The generated summary is part of the thread, not a decoration on top
+      // of it: `threadLines` reads `t.summary`, so a Thread built without it
+      // silently renders the deterministic lines forever. This reader is the
+      // ONLY source of threads for the panel, the balloons and the mobile
+      // cards — the widget gets the lift for free via core's `readThread`,
+      // this surface does not. Same shape as the "route layer silently drops
+      // params" class in docs/process/learnings.md.
+      const summary = readStoredSummary(threadMap.get('summary'));
       out.push({
         id,
         status,
@@ -337,6 +345,7 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
         commentCount: comments.length,
         lastActivity: comments.length > 0 ? (comments[comments.length - 1]?.ts ?? 0) : 0,
         comments,
+        ...(summary ? { summary } : {}),
       });
     });
     return out;

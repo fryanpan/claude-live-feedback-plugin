@@ -270,6 +270,20 @@ export interface ThreadSummary {
 
 export interface Thread extends ThreadSummary {
   comments: Comment[];
+  /**
+   * Model-generated topic/discussion lines, with the fingerprint of the thread
+   * state they describe. Absent until the server has generated one, and
+   * ignored by `threadLines` once the fingerprint stops matching — the card
+   * falls back to the deterministic lines rather than showing a stale summary.
+   */
+  summary?: StoredSummary;
+}
+
+/** A generated summary as stored on a thread. Mirrors `summary-prompt.ts`. */
+export interface StoredSummary {
+  topic: string;
+  discussion: string;
+  hash: string;
 }
 
 /** Payload POSTed to a host integration webhook for a thread event. */

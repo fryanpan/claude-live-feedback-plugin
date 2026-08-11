@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { lanHostnames, tailscaleHost } from './public-host.ts';
 import { createServer } from './server.ts';
 import { readKeychainPassword } from './share/keychain.ts';
+import { ThreadSummarizer } from './summarize.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, '..', '..', '..');
@@ -113,6 +114,12 @@ const share = shareConfig
     }
   : undefined;
 
+// The ONLY place a real summarizer is constructed. `createServer` has no
+// default, so nothing that merely spins a server up — every test in
+// packages/server/test, every embedded use — can reach the network or the
+// key. An absent key or LF_SUMMARIES=0 makes every call on it a no-op.
+const summarizer = new ThreadSummarizer();
+
 // Try the requested port first; if it's taken (e.g. another agent owns it),
 // walk up to the next 20 ports. This keeps `bun run dev` working without
 // conflicts when multiple agents are on the same machine.
@@ -132,6 +139,7 @@ for (let i = 0; i < 20 && !handle; i++) {
       sharingEnvLocked,
       cfAccess,
       share,
+      summarizer,
     });
   } catch (err) {
     lastErr = err;
@@ -179,10 +187,38 @@ if (!widgetDist)
 if (!markdownAppDist)
   console.log('[feedback] (markdown app not built yet — run: bun run build:markdown-app)');
 
+// One-shot backfill of every thread that has no current summary, open or
+// resolved, spread over a window.
+//
+// Deliberately OPT-IN per start. Threads written before generation shipped
+// have no summary, and nothing in the live path ever revisits them — but the
+// backlog is hundreds of billed calls, so a restart (a crash loop, a launchd
+// respawn, a `bun run dev` while iterating) must never spend it by accident.
+// Run it once, on purpose:
+//
+//   LF_SUMMARY_BACKFILL=1 bun run dev
+//
+// Set the window in minutes with LF_SUMMARY_BACKFILL_MINUTES (default 15).
+// It is paced, skips anything already summarized, and stops on shutdown.
+if (['1', 'true', 'yes'].includes((process.env.LF_SUMMARY_BACKFILL ?? '').trim().toLowerCase())) {
+  const minutes = Number(process.env.LF_SUMMARY_BACKFILL_MINUTES ?? '15');
+  const windowMs = (Number.isFinite(minutes) && minutes > 0 ? minutes : 15) * 60_000;
+  const { queued, open, resolved } = handle.rooms.backfillSummaries({ windowMs });
+  console.log(
+    queued > 0
+      ? `[feedback]   backfill:   ${queued} threads (${open} open, ${resolved} resolved) ` +
+          `over ~${Math.round(windowMs / 60_000)} min`
+      : '[feedback]   backfill:   nothing to do (no unsummarized threads, or summaries are off)',
+  );
+}
+
 // Graceful shutdown
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, async () => {
     console.log(`[feedback] shutting down (${sig})`);
+    // Cancels an in-flight backfill; without it a paced drain keeps spending
+    // on a process that is on its way out.
+    summarizer.dispose();
     await handle.stop();
     process.exit(0);
   });
