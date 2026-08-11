@@ -5,7 +5,11 @@ import { createThread, getContent, listThreads, markOrphan, postReply } from '..
 import {
   DISCUSSION_MAX,
   NO_REPLIES_TEXT,
+  SUMMARY_PENDING_TEXT,
+  SUMMARY_PENDING_WINDOW_MS,
+  summaryHash,
   summaryKey,
+  summaryPending,
   threadSummary,
 } from '../src/thread-summary.ts';
 import type { Thread, User } from '../src/types.ts';
@@ -327,6 +331,74 @@ describe('summaryKey', () => {
   it('holds still when nothing the card shows has changed', () => {
     const opts = { ...base, replies: [{ author: sam, text: 'Agreed.' }] };
     expect(summaryKey(makeThread(opts))).toBe(summaryKey(makeThread(opts)));
+  });
+});
+
+/**
+ * The window between a comment landing and the regenerated summary syncing
+ * back used to flash the raw fallback lines, which read as the feature
+ * breaking. When a collector stamps `summaryPending`, the card says it is
+ * generating instead — and the stamp itself is time-bounded so a failed
+ * generation degrades back to the fallback lines rather than a stuck spinner.
+ */
+describe('summaryPending', () => {
+  const base = {
+    docText: DOC,
+    range: [4, 14] as [number, number],
+    author: alex,
+    first: 'The error is swallowed here.',
+  };
+  const NOW = 1_000_000;
+  const fresh = (t: Thread): Thread => ({ ...t, lastActivity: NOW - 1_000 });
+  const old = (t: Thread): Thread => ({ ...t, lastActivity: NOW - SUMMARY_PENDING_WINDOW_MS });
+
+  it('is pending right after activity on a thread with no current summary', () => {
+    expect(summaryPending(fresh(makeThread(base)), { enabled: true, now: NOW })).toBe(true);
+  });
+
+  it('never pends when generation is off — a summary that will never come', () => {
+    expect(summaryPending(fresh(makeThread(base)), { enabled: false, now: NOW })).toBe(false);
+  });
+
+  it('never pends when the stored summary is current', () => {
+    const t = fresh(makeThread(base));
+    t.summary = { topic: 'T', discussion: 'D', hash: summaryHash(t) };
+    expect(summaryPending(t, { enabled: true, now: NOW })).toBe(false);
+  });
+
+  it('pends when the stored summary went stale (a reply changed the hash)', () => {
+    const t = fresh(makeThread({ ...base, replies: [{ author: sam, text: 'New reply.' }] }));
+    t.summary = { topic: 'T', discussion: 'D', hash: 'deadbeef' };
+    expect(summaryPending(t, { enabled: true, now: NOW })).toBe(true);
+  });
+
+  it('expires: an old stale thread is NOT pending (failed call degrades, not spins)', () => {
+    expect(summaryPending(old(makeThread(base)), { enabled: true, now: NOW })).toBe(false);
+  });
+
+  it('renders the generating line: deterministic topic, pending discussion', () => {
+    const t = fresh(makeThread(base));
+    t.summaryPending = true;
+    const s = threadSummary(t);
+    expect(s.topic).toBe(threadSummary(makeThread(base)).topic); // topic unchanged
+    expect(s.discussion).toBe(SUMMARY_PENDING_TEXT);
+    expect(s.discussionKind).toBe('pending');
+  });
+
+  it('a CURRENT stored summary beats a (mistaken) pending stamp', () => {
+    const t = fresh(makeThread({ ...base, replies: [{ author: sam, text: 'Yes.' }] }));
+    t.summary = { topic: 'Real topic', discussion: 'Real state', hash: summaryHash(t) };
+    t.summaryPending = true;
+    const s = threadSummary(t);
+    expect(s.topic).toBe('Real topic');
+    expect(s.discussion).toBe('Real state');
+  });
+
+  it('moves summaryKey, so every cached card repaints on the flip', () => {
+    const t = makeThread(base);
+    const a = summaryKey(t);
+    const b = summaryKey({ ...t, summaryPending: true });
+    expect(b).not.toBe(a);
   });
 });
 

@@ -20,6 +20,18 @@ import type { StoredSummary, Thread, User } from './types.ts';
 /** Discussion line for a thread nobody has replied to. Rendered muted italic. */
 export const NO_REPLIES_TEXT = 'No replies yet';
 
+/** Discussion line while a regenerated summary is in flight. */
+export const SUMMARY_PENDING_TEXT = 'Generating summary…';
+
+/**
+ * How long after a thread's last activity a missing/stale summary still reads
+ * as "in flight". Generation normally lands in ~4–6s (3s debounce + one Haiku
+ * call); the window is deliberately generous because its expiry is the ONLY
+ * thing that turns a failed generation back into the fallback lines instead of
+ * a spinner that never resolves.
+ */
+export const SUMMARY_PENDING_WINDOW_MS = 30_000;
+
 /**
  * Hard cap on the topic line, matching `SNIPPET_MAX` in `anchor/text-range.ts`
  * — text-range snippets already arrive within it; element anchors and the
@@ -49,8 +61,11 @@ export interface Participants {
   label: ParticipantsLabel;
 }
 
-/** Where the discussion line came from. `none` is the no-replies state. */
-export type DiscussionKind = 'replies' | 'none';
+/**
+ * Where the discussion line came from. `none` is the no-replies state;
+ * `pending` is the generation-in-flight state.
+ */
+export type DiscussionKind = 'replies' | 'none' | 'pending';
 
 export interface ThreadLines {
   topic: string;
@@ -88,13 +103,37 @@ export interface ThreadSummaryBlock extends ThreadLines {
 export function threadLines(t: Thread): ThreadLines {
   const base = { topic: deriveTopic(t), ...deriveDiscussion(t) };
   const stored = t.summary;
-  if (!stored || stored.hash !== summaryHash(t)) return base;
-  return {
-    topic: stored.topic || base.topic,
-    discussion:
-      base.discussionKind === 'none' ? base.discussion : stored.discussion || base.discussion,
-    discussionKind: base.discussionKind,
-  };
+  if (stored && stored.hash === summaryHash(t)) {
+    // A current stored summary wins even over a pending stamp — if the
+    // regenerated summary has already synced, "generating" would be a lie.
+    return {
+      topic: stored.topic || base.topic,
+      discussion:
+        base.discussionKind === 'none' ? base.discussion : stored.discussion || base.discussion,
+      discussionKind: base.discussionKind,
+    };
+  }
+  if (t.summaryPending) {
+    // Topic stays deterministic (the anchor snippet is already right); only
+    // the discussion line announces the in-flight generation.
+    return { topic: base.topic, discussion: SUMMARY_PENDING_TEXT, discussionKind: 'pending' };
+  }
+  return base;
+}
+
+/**
+ * Should a collector stamp `summaryPending` on this thread?
+ *
+ * The client cannot see the server's Haiku call, so "in flight" is inferred:
+ * generation is enabled on this doc, the stored summary is absent or stale,
+ * and the thread changed recently enough that the regeneration debounce +
+ * call should still be running. Time-bounding on `lastActivity` is what lets
+ * a failed call degrade to the deterministic lines instead of spinning.
+ */
+export function summaryPending(t: Thread, opts: { enabled: boolean; now: number }): boolean {
+  if (!opts.enabled) return false;
+  if (t.summary && t.summary.hash === summaryHash(t)) return false;
+  return opts.now - t.lastActivity < SUMMARY_PENDING_WINDOW_MS;
 }
 
 /**

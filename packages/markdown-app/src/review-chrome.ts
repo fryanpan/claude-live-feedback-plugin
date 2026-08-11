@@ -1,4 +1,12 @@
-import { type Thread, type User, formatTime, readDocMeta, readStoredSummary } from '@feedback/core';
+import {
+  SUMMARY_PENDING_WINDOW_MS,
+  type Thread,
+  type User,
+  formatTime,
+  readDocMeta,
+  readStoredSummary,
+  summaryPending,
+} from '@feedback/core';
 import type * as Y from 'yjs';
 import { type MobileReview, mountMobileReview } from './mobile-review.ts';
 import type { MountScope } from './mount-scope.ts';
@@ -337,7 +345,7 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
       // this surface does not. Same shape as the "route layer silently drops
       // params" class in docs/process/learnings.md.
       const summary = readStoredSummary(threadMap.get('summary'));
-      out.push({
+      const t: Thread = {
         id,
         status,
         anchor: displayAnchor,
@@ -346,9 +354,35 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
         lastActivity: comments.length > 0 ? (comments[comments.length - 1]?.ts ?? 0) : 0,
         comments,
         ...(summary ? { summary } : {}),
-      });
+      };
+      // "A summary is being generated" is inferred, not observed — the server
+      // stamps `summariesEnabled` into the meta map (the client's only proof
+      // that generation exists), and `summaryPending` time-bounds the rest so
+      // a failed call degrades to the deterministic lines.
+      if (summaryPending(t, { enabled: summariesEnabled(), now: Date.now() })) {
+        t.summaryPending = true;
+        schedulePendingExpiry(t.lastActivity);
+      }
+      out.push(t);
     });
     return out;
+  }
+
+  function summariesEnabled(): boolean {
+    return ydoc.getMap('meta').get('summariesEnabled') === true;
+  }
+
+  // A pending card's ONLY exits are a summary syncing in (repaints via the
+  // ydoc observer) or its window expiring — and expiry is a clock event, not
+  // a doc event, so nothing would repaint the card without this timer.
+  let pendingExpiryTimer: ReturnType<typeof setTimeout> | null = null;
+  function schedulePendingExpiry(lastActivity: number): void {
+    const delay = lastActivity + SUMMARY_PENDING_WINDOW_MS - Date.now() + 250;
+    if (delay <= 0 || pendingExpiryTimer != null) return;
+    pendingExpiryTimer = setTimeout(() => {
+      pendingExpiryTimer = null;
+      redrawThreads();
+    }, delay);
   }
 
   let activeThreadId: string | null = null;

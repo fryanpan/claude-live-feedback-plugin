@@ -426,7 +426,7 @@ export class ThreadPanel {
     t: Thread,
     summary: {
       discussion: string;
-      discussionKind: 'replies' | 'none';
+      discussionKind: 'replies' | 'none' | 'pending';
       participants: Participants | null;
     },
     status: 'open' | 'resolved' | 'orphan',
@@ -438,6 +438,7 @@ export class ThreadPanel {
     if (summary.participants) summaryFace.push(participantsRow(summary.participants));
     const discussion = div('thread-discussion clip');
     if (summary.discussionKind === 'none') discussion.classList.add('none');
+    if (summary.discussionKind === 'pending') discussion.classList.add('pending');
     discussion.textContent = summary.discussion;
     summaryFace.push(discussion);
 

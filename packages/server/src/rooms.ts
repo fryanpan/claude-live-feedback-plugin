@@ -451,6 +451,18 @@ export class Rooms {
     };
     this.rooms.set(docId, room);
     this.wireEvents(room);
+    // Advertise generation to clients. A browser cannot see the server's
+    // summarizer, so this synced flag is what makes a card's "Generating
+    // summary…" state truthful — without it a client on a key-less server
+    // would promise summaries that never come. Written after wireEvents so
+    // the transaction schedules a disk flush; conditional so an unchanged
+    // value costs no update event. Covers restored docs too (this method is
+    // the single room-creation path, hydration included).
+    const summariesOn = this.cfg.summarizer?.enabled === true;
+    const metaMap = ydoc.getMap('meta');
+    if ((metaMap.get('summariesEnabled') === true) !== summariesOn) {
+      ydoc.transact(() => metaMap.set('summariesEnabled', summariesOn));
+    }
     // For freshly-created rooms (no on-disk state), the initDocMeta call
     // above fired its update event before wireEvents listened, so nothing
     // would ever flush this room to disk if the user hasn't done another
