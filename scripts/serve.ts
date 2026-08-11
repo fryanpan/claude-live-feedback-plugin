@@ -91,13 +91,13 @@ const port = await pickFreePort(requestedPort);
 // to the existing dist (stale beats down), loudly.
 if (noWatch) {
   for (const pkg of ['widget', 'markdown-app']) {
-    const r = spawnSync(
-      'bun',
-      ['run', join(repoRoot, 'packages', pkg, 'scripts', 'build.ts')],
-      { stdio: 'inherit' },
-    );
+    const r = spawnSync('bun', ['run', join(repoRoot, 'packages', pkg, 'scripts', 'build.ts')], {
+      stdio: 'inherit',
+    });
     if (r.status !== 0) {
-      console.error(`[supervisor] ${pkg} build FAILED — serving the existing (possibly stale) dist`);
+      console.error(
+        `[supervisor] ${pkg} build FAILED — serving the existing (possibly stale) dist`,
+      );
     }
   }
 }
