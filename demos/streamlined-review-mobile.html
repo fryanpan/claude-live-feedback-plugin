@@ -8,7 +8,7 @@
   :root {
     --fg:#1b1f23; --fg-muted:#6e7781; --bg:#fff; --bg-panel:#f6f8fa;
     --border:#d1d5da; --border-strong:#afb8c1; --accent:#2e7dd7;
-    --green:#2da44e; --yellow:#bf8700; --radius:6px; --t:250ms;
+    --green:#2da44e; --yellow:#bf8700; --radius:6px; --t:150ms;
     --sans:-apple-system,BlinkMacSystemFont,"Inter","SF Pro Text","Segoe UI",system-ui,sans-serif;
     --serif:Charter,"Iowan Old Style","Source Serif Pro",Georgia,serif;
     --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
@@ -76,8 +76,17 @@
   .swatch{width:10px;height:10px;border-radius:2px;flex:0 0 auto}
   .who{font-weight:600}.dim{color:var(--fg-muted)}
   .clip{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-  .topic{font-family:var(--serif);font-style:italic;font-size:13px;color:var(--fg-muted);
-         border-left:3px solid var(--border);padding:1px 8px;margin:0}
+  /* Same face, size and leading as .msg — it morphs INTO the opening message, so a font
+     change mid-cross-fade reads as two different things swapping rather than one becoming
+     the other. The left rule and the muted colour carry the distinction instead. */
+  .topic{font-size:13px;line-height:1.42;color:var(--fg-muted);
+         border-left:3px solid var(--border);padding:0 8px;margin:0}
+  /* Who is in the rest of the thread. Sits with the discussion line it describes, not up
+     in the header — the header is the opening message's attribution and nothing else. */
+  .whorest{display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--fg-muted);
+           margin:0 0 3px;min-width:0}
+  .whorest .swatch{width:9px;height:9px}
+  .whorest .nm{font-weight:600;color:var(--fg)}
   .state{font-size:13px;margin:0;line-height:1.35}
   .state::before{content:"↳ ";color:var(--fg-muted)}
   .state.none{color:var(--fg-muted);font-style:italic}
@@ -246,10 +255,24 @@ function card(t) {
   const st = statusOf(t);
   const isOpen = expanded.has(t.id);
   const n = t.comments.length;
-  const others = new Set(t.comments.map((c) => c.who));
-  others.delete(t.author);
   const tag = st === 'orphan' ? ' · orphan' : st === 'resolved' ? ' · resolved' : '';
-  const who = others.size ? ` · +${others.size} other${others.size > 1 ? 's' : ''}` : '';
+
+  // Who replied, in order of first appearance, excluding the thread's author — the
+  // header already speaks for them. One replier is worth naming; past that, count them.
+  const repliers = [];
+  for (const c of t.comments.slice(1)) {
+    if (c.who !== t.author && !repliers.some((r) => r.who === c.who)) repliers.push(c);
+  }
+  const whorest = !repliers.length
+    ? ''
+    : `<div class="whorest clip">
+        ${repliers.map((c) => `<span class="swatch" style="background:${c.c}"></span>`).join('')}
+        ${
+          repliers.length === 1
+            ? `<span class="nm">${esc(repliers[0].who)}</span> replied`
+            : `+${repliers.length} others`
+        }
+      </div>`;
 
   // Two generated lines, always both, everywhere — what the thread is ABOUT, then where
   // the discussion GOT TO. A thread with no replies has no discussion yet, so the second
@@ -269,7 +292,7 @@ function card(t) {
 
   const slotB = `
     <div class="slot b">
-      <div class="face summary">${
+      <div class="face summary">${whorest}${
         n > 1
           ? `<div class="state clip">${esc(t.state)}</div>`
           : `<div class="state none clip">No replies yet</div>`
@@ -285,7 +308,7 @@ function card(t) {
     data-id="${t.id}">
     <div class="row1"><span class="status-dot"></span>
       <span class="swatch" style="background:${t.color}"></span>
-      <span class="wholine clip"><span class="who">${esc(t.author)}</span><span class="dim">${tag}${who}</span></span>
+      <span class="wholine clip"><span class="who">${esc(t.author)}</span><span class="dim">${tag}</span></span>
       <span class="chev">›</span></div>
     ${slotA}${slotB}
     <div class="row4">
@@ -488,7 +511,7 @@ function sizeSlots(root = document) {
   }
 }
 
-const MS = 250;
+const MS = 150;
 const EASE = 'cubic-bezier(.22,.72,.24,1)';
 
 /* Toggle in place rather than re-rendering: a fresh node would mount at its final height
