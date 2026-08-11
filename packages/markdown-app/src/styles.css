@@ -1266,6 +1266,17 @@ body.threads-resizing {
   padding: 0 8px;
   margin: 0;
 }
+/* The summary lines show their FULL text, wrapping as many lines as the
+   width demands — a summary cut off mid-thought reads as broken, not brief.
+   Height stays bounded upstream: generated lines are word-capped (~12) by
+   the prompt, deterministic lines char-capped (80/120) in thread-summary.ts.
+   Overrides `.clip`'s one-row nowrap, which stays in force for every other
+   row (attribution, participants). */
+.thread-topic.clip,
+.thread-discussion.clip {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 /* Who else is in the thread — with the discussion line it describes, not up
    in the header. */
 .thread-participants {

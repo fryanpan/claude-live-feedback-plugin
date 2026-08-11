@@ -176,7 +176,9 @@ export const widgetStyles = `
   max-height: 2em;
   overflow: hidden;
 }
-.thread .last { font-size: 12px; color: #1b1f23; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Full summary line even on a narrow panel: wrap instead of ellipsizing —
+   same rule as the markdown-app card lines; length is bounded upstream. */
+.thread .last { font-size: 12px; color: #1b1f23; overflow-wrap: anywhere; }
 .empty {
   padding: 16px 12px;
   color: #6e7781;
