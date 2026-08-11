@@ -1,7 +1,8 @@
-import { type Thread, formatTime, suggestOps } from '@feedback/core';
+import { type Thread, formatTime, suggestOps, summaryKey } from '@feedback/core';
 import type { EditorView } from '@tiptap/pm/view';
 import type { MountScope } from '../mount-scope.ts';
 import { type ReviewChrome, showToast } from '../review-chrome.ts';
+import { MORPH_MS, isFoldingTap, sizeThreadSlots } from '../thread-morph.ts';
 import { layoutBalloons } from './balloon-layout.ts';
 import {
   type DeletionGroup,
@@ -283,16 +284,38 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
   let expandedKey: string | null = null;
   const isExpanded = (k: string): boolean => expandedKey === k;
 
+  /**
+   * A COMMENT balloon's expand state is not kept here — it is the drawer's
+   * active thread, and nothing else.
+   *
+   * The margin balloon and the drawer row are literally the same card, so two
+   * separate authorities would let a drawer click leave the balloon folded
+   * (or vice versa) and, worse, would put `expanded` back in the render key —
+   * which rebuilds the card, and a rebuilt node cannot morph. `expandedKey`
+   * still owns deletions and suggestions, which have no drawer counterpart.
+   */
+  const commentExpanded = (id: string): boolean => opts.chrome?.threadsPanel.getActive() === id;
+
   function expandBalloon(key: string): void {
-    expandedKey = key;
-    // Expanding a comment makes it the active thread — the expanded card is
-    // the drawer card, whose reply box / highlight styling key off active
-    // state, and "expand = engage with this thread" is the intent.
-    if (key.startsWith('c:') && opts.chrome) {
+    if (key.startsWith('c:')) {
+      // One card open at a time across all three kinds: a comment opening
+      // folds any expanded deletion/suggestion back down.
+      if (expandedKey) {
+        expandedKey = null;
+        relayout();
+      }
       const id = key.slice(2);
-      opts.chrome.threadsPanel.setActive(id);
-      opts.chrome.refreshThreadDecorations(id);
+      // setActive folds the card in place (no rebuild) on every copy, and
+      // carries the anchor highlight with it.
+      opts.chrome?.threadsPanel.setActive(id);
+      // Heights change over the next 150ms without a rebuild, so the column
+      // has to restack all the way through the fold — not once, at the start.
+      restackThroughMorph();
+      return;
     }
+    expandedKey = key;
+    // …and symmetrically, a deletion/suggestion opening folds the comment.
+    opts.chrome?.threadsPanel.setActive(null);
     relayout();
   }
 
@@ -453,28 +476,6 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
     el.append(swatch, nameEl);
   }
 
-  function buildCollapsedComment(t: Thread): HTMLElement {
-    const el = document.createElement('div');
-    el.className = 'lf-balloon lf-balloon-comment lf-balloon-collapsed';
-    el.dataset.expandKey = `c:${t.id}`;
-    const first = t.comments[0];
-    const author = first?.author ?? t.createdBy;
-    collapsedIdentity(el, author.name, author.color);
-    const preview = document.createElement('span');
-    preview.className = 'lf-collapsed-preview';
-    // Plain text, never HTML: comment bodies are untrusted input.
-    preview.textContent = first?.text ?? '';
-    el.appendChild(preview);
-    if (t.commentCount > 1) {
-      const count = document.createElement('span');
-      count.className = 'lf-collapsed-count';
-      count.textContent = String(t.commentCount - 1);
-      count.title = `${t.commentCount - 1} ${t.commentCount === 2 ? 'reply' : 'replies'}`;
-      el.appendChild(count);
-    }
-    return el;
-  }
-
   function buildCollapsedSuggestion(s: suggestOps.SuggestionSummary): HTMLElement {
     const el = document.createElement('div');
     el.className = 'lf-balloon lf-balloon-suggestion lf-balloon-collapsed';
@@ -595,6 +596,10 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
     const el = opts.chrome?.threadsPanel.renderThread(thread, pendingReply);
     if (!el) throw new Error('buildCommentBalloon requires opts.chrome');
     el.classList.add('lf-balloon', 'lf-balloon-comment');
+    // This is the ONLY comment builder: collapsed and expanded are the same
+    // node in two states, because the morph cross-fades between two faces
+    // that must both already exist. `renderThread` has already put the card
+    // in the right state — the drawer's active thread is the expand state.
     return el;
   }
 
@@ -607,25 +612,36 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
     openThreads: Thread[],
     suggestions: suggestOps.SuggestionSummary[],
   ): void {
-    const activeId = opts.chrome?.threadsPanel.getActive() ?? null;
-    // Expanded state is part of the render key so toggling rebuilds the card.
+    // Expanded state is part of the render key for deletions and suggestions,
+    // which still swap between two builders, so toggling rebuilds those cards.
     const delKeys = delGroups.map(
       (g) => `del|${g.blockKey}|${g.deletedMarkdown}|${isExpanded(`d:${g.blockKey}`)}`,
     );
+    // The topic line comes from the anchor snippet, which moves whenever the
+    // doc is edited — independently of every other term here. Without it, an
+    // edited anchor keeps a stale topic on the card until some unrelated
+    // change forces a repaint. Key on the line the card actually shows.
+    //
+    // Deliberately ABSENT: expanded/active. A comment card folds in place, so
+    // a rebuild on expand would destroy the very node the morph is animating.
+    // The key carries what the card DISPLAYS and not what it merely animates.
     const commentKeys = openThreads.map(
-      (t) =>
-        `comment|${t.id}|${t.status}|${t.commentCount}|${t.lastActivity}|${activeId === t.id}|${isExpanded(`c:${t.id}`)}`,
+      (t) => `comment|${t.id}|${t.status}|${t.commentCount}|${t.lastActivity}|${summaryKey(t)}`,
     );
     const suggestionKeys = suggestions.map(
       (s) => `suggest|${s.sid}|${s.kind}|${isExpanded(`s:${s.sid}`)}`,
     );
     const keys = [...delKeys, ...commentKeys, ...suggestionKeys];
     if (keys.length === rendered.length && keys.every((k, i) => k === rendered[i].key)) {
-      // Nothing display-relevant changed — refresh the live group refs
-      // (anchor position may have moved) without touching any DOM.
+      // Nothing display-relevant changed — refresh the live refs (an anchor
+      // position may have moved) without touching any DOM. Both kinds that
+      // hold one: a retained `thread` object goes stale exactly as a `group`
+      // does, and anything reading `r.thread` later would get old data.
       let di = 0;
+      let ci = 0;
       for (const r of rendered) {
         if (r.kind === 'del') r.group = delGroups[di++];
+        else if (r.kind === 'comment') r.thread = openThreads[ci++] ?? r.thread;
       }
       return;
     }
@@ -649,11 +665,9 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
       return { kind: 'del', key: delKeys[i], group, el };
     });
     const nextComments: RenderedCommentBalloon[] = openThreads.map((thread, i) => {
-      const expanded = isExpanded(`c:${thread.id}`);
-      const el = expanded
-        ? buildCommentBalloon(thread, pendingReplies.get(thread.id))
-        : buildCollapsedComment(thread);
-      if (expanded) addCollapseButton(el);
+      // No collapse button: the whole card is the tap target now, and
+      // `✓ Resolve` is the only control in the footer.
+      const el = buildCommentBalloon(thread, pendingReplies.get(thread.id));
       marginEl.appendChild(el);
       return { kind: 'comment', key: commentKeys[i], thread, el };
     });
@@ -665,6 +679,10 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
       return { kind: 'suggestion', key: suggestionKeys[i], summary, el };
     });
     rendered = [...nextDel, ...nextComments, ...nextSuggestions];
+    // A card's folding slots have no intrinsic height — measure them now the
+    // balloons are in the document, BEFORE layoutBalloons reads `offsetHeight`
+    // off the cards, or every comment balloon stacks as a header and a footer.
+    sizeThreadSlots(marginEl);
   }
 
   /** Y of a client-rect top in the editor's scrolled content space. */
@@ -783,9 +801,10 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
       (r): r is RenderedCommentBalloon => r.kind === 'comment' && r.thread.id === id,
     );
     if (!found) return false;
-    // Revealing means engaging — expand the balloon (which rebuilds
-    // `rendered`, so re-find the element before scrolling to it).
-    if (!isExpanded(`c:${id}`)) {
+    // Revealing means engaging — expand the balloon. The card folds in place,
+    // but a deletion/suggestion giving up the open slot still rebuilds
+    // `rendered`, so re-find the element before scrolling to it.
+    if (!commentExpanded(id)) {
       expandBalloon(`c:${id}`);
       found =
         rendered.find(
@@ -801,6 +820,48 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
     return true;
   }
 
+  /**
+   * Restack the column for the whole 150ms a card takes to fold.
+   *
+   * `positionBalloons` measures `el.offsetHeight`, and while the morph runs
+   * that is the height a Web Animation is INTERPOLATING — a WAAPI `height`
+   * animation overrides the inline height the morph engine wrote, so a single
+   * pass at t=0 stacks the column against the height the card is LEAVING and
+   * nothing ever corrects it: an expanded balloon overlaps the one below it,
+   * a collapsed one leaves a permanent gap. (The debounced relayout the
+   * decoration transaction schedules lands at 100ms, still mid-morph, so it
+   * is not the missing pass either.) One frame at a time so the balloons below
+   * travel with the card, and one final pass a tick after the animation is
+   * over, when the slot reports its resting height again.
+   */
+  let morphRaf: number | null = null;
+  let morphTimer: ReturnType<typeof setTimeout> | null = null;
+  function stopMorphRestack(): void {
+    if (morphRaf != null && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(morphRaf);
+    }
+    morphRaf = null;
+    if (morphTimer != null) clearTimeout(morphTimer);
+    morphTimer = null;
+  }
+  function restackThroughMorph(): void {
+    positionBalloons();
+    stopMorphRestack();
+    const step = (): void => {
+      morphRaf = null;
+      if (scope.disposed) return;
+      positionBalloons();
+      if (typeof requestAnimationFrame === 'function') morphRaf = requestAnimationFrame(step);
+    };
+    if (typeof requestAnimationFrame === 'function') morphRaf = requestAnimationFrame(step);
+    morphTimer = setTimeout(() => {
+      morphTimer = null;
+      stopMorphRestack();
+      if (!scope.disposed) positionBalloons();
+    }, MORPH_MS + 1);
+  }
+  scope.onCleanup(stopMorphRestack);
+
   let timer: ReturnType<typeof setTimeout> | null = null;
   function scheduleRelayout(): void {
     if (timer != null) clearTimeout(timer);
@@ -815,6 +876,25 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
   // listeners would leak or vanish.
   scope.listen(marginEl, 'click', (ev) => {
     const target = ev.target as HTMLElement;
+    // A comment card toggles ITSELF — the card's own handler (the whole card
+    // is the tap target) has already folded every copy in place by the time
+    // this bubbles up. All the column owes it is a restack: a card that just
+    // grew or shrank moves every card below it.
+    if (target.closest?.('.lf-balloon-comment')) {
+      // …but only when the tap actually folded something. The same exclusion
+      // list the card itself uses, shared rather than copied.
+      if (!isFoldingTap(target)) return;
+      if (expandedKey) {
+        // The comment took the one open slot from a deletion/suggestion.
+        expandedKey = null;
+        relayout();
+      }
+      // The card is mid-fold: its height is being interpolated for the next
+      // 150ms, so one pass now would stack the column against the height it
+      // is leaving.
+      restackThroughMorph();
+      return;
+    }
     if (target.closest?.('.lf-balloon-collapse')) {
       expandedKey = null;
       relayout();
