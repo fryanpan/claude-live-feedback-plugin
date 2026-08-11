@@ -76,19 +76,25 @@
   .who{font-weight:600}.dim{color:var(--fg-muted)}
   .clip{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
   .topic{font-family:var(--serif);font-style:italic;font-size:13px;color:var(--fg-muted);
-         border-left:3px solid var(--border);padding:1px 8px;margin:7px 0 0}
-  .state{font-size:13px;margin:5px 0 0;line-height:1.35}
+         border-left:3px solid var(--border);padding:1px 8px;margin:0}
+  .state{font-size:13px;margin:0;line-height:1.35}
   .state::before{content:"↳ ";color:var(--fg-muted)}
   .state.none{color:var(--fg-muted);font-style:italic}
   .state.none::before{content:""}
 
-  /* The 250ms morph: the summary block collapses as the thread block opens, so the
-     first comment lands where the topic line was rather than appearing below it. */
-  .fold{display:grid;grid-template-rows:0fr;opacity:0;
-        transition:grid-template-rows var(--t) ease, opacity calc(var(--t) * .7) ease}
-  .fold > .inner{overflow:hidden;min-height:0}
-  .fold.show{grid-template-rows:1fr;opacity:1}
-  .fold.show.detail{transition-delay:0ms,60ms}
+  /* The morph. Each slot holds two faces stacked in the same box; the slot's height is
+     measured and tweened in JS, so nothing ever collapses to zero and nothing above the
+     card moves. Slot A grows in place — the topic line becomes the first message where it
+     already sits. Slot B is carried down by that growth (the translation), keeps its line
+     intact for the whole trip, and only then cross-fades into the rest of the thread. */
+  .slot{position:relative;overflow:hidden;margin-top:7px}
+  .slot > .face{position:absolute;left:0;right:0;top:0}
+  .face.detail{opacity:0;pointer-events:none}
+  .thread.expanded .face.summary{opacity:0;pointer-events:none}
+  .thread.expanded .face.detail{opacity:1;pointer-events:auto}
+  /* The card header is the attribution for the opening message, so it isn't repeated. */
+  .msg{font-size:13px;line-height:1.42}
+  .face.detail > .cmt:first-child{margin-top:0}
 
   .cmt{display:flex;gap:7px;margin-top:9px;font-size:13px;line-height:1.42}
   .cmt .swatch{margin-top:4px}
@@ -245,35 +251,39 @@ function card(t) {
   // Two generated lines, always both, everywhere — what the thread is ABOUT, then where
   // the discussion GOT TO. A thread with no replies has no discussion yet, so the second
   // line says so rather than inventing one or collapsing to a single line.
-  const summary = `
-    <div class="fold summary ${isOpen ? '' : 'show'}"><div class="inner">
-      <div class="topic clip">${esc(t.topic)}</div>
-      ${
+  //
+  // Each line is paired with what it becomes: the topic with the opening message, the
+  // discussion line with the replies. That pairing is what the morph animates.
+  const cmt = (c) => `<div class="cmt"><span class="swatch" style="background:${c.c}"></span>
+    <div class="body"><span class="name">${esc(c.who)}</span><span class="when">${c.when}</span>
+    <div>${esc(c.text)}</div></div></div>`;
+
+  const slotA = `
+    <div class="slot a">
+      <div class="face summary"><div class="topic clip">${esc(t.topic)}</div></div>
+      <div class="face detail"><div class="msg">${esc(t.comments[0].text)}</div></div>
+    </div>`;
+
+  const slotB = `
+    <div class="slot b">
+      <div class="face summary">${
         n > 1
           ? `<div class="state clip">${esc(t.state)}</div>`
           : `<div class="state none clip">No replies yet</div>`
-      }
-    </div></div>`;
-
-  const detail = `
-    <div class="fold detail ${isOpen ? 'show' : ''}"><div class="inner">
-      ${t.comments
-        .map(
-          (c) => `<div class="cmt"><span class="swatch" style="background:${c.c}"></span>
-          <div class="body"><span class="name">${esc(c.who)}</span><span class="when">${c.when}</span>
-          <div>${esc(c.text)}</div></div></div>`,
-        )
-        .join('')}
-      <div class="replybox"><input placeholder="Reply…" data-reply="${t.id}" />
-        <button data-send="${t.id}">Send</button></div>
-    </div></div>`;
+      }</div>
+      <div class="face detail">
+        ${t.comments.slice(1).map(cmt).join('')}
+        <div class="replybox"><input placeholder="Reply…" data-reply="${t.id}" />
+          <button data-send="${t.id}">Send</button></div>
+      </div>
+    </div>`;
 
   return `<div class="thread ${st} ${isOpen ? 'expanded' : ''} ${flashId === t.id ? 'flash' : ''}"
     data-id="${t.id}">
     <div class="row1 clip"><span class="status-dot"></span>
       <span class="swatch" style="background:${t.color}"></span>
       <span class="who">${esc(t.author)}</span><span class="dim">${tag}${who}</span></div>
-    ${summary}${detail}
+    ${slotA}${slotB}
     <div class="row4">
       <span class="meta">${n > 1 ? `${n - 1} repl${n - 1 === 1 ? 'y' : 'ies'} · ` : ''}${t.when}</span>
       <button class="resolve" data-resolve="${t.id}">✓ ${st === 'resolved' ? 'Resolved' : 'Resolve'}</button>
@@ -396,12 +406,14 @@ function render() {
       ([v, label]) => `<button data-view="${v}" class="${v === file ? 'on' : ''}">${label}</button>`,
     ).join('') + `<span class="sep">← which file you're reading (mockup control)</span>`;
   document.getElementById('callout').innerHTML = CALLOUT;
+  sizeSlots();
 }
 
 const CALLOUT = `<b>What changed from your comments.</b>
   The standalone drawer view is gone — inline is the surface, and the sheet is what the badge
-  opens over it. ‹ › walk comment to comment. Expanding morphs the two summary lines into the
-  thread itself over 250&nbsp;ms rather than showing both. One <b>✓ Resolve</b> control, same
+  opens over it. ‹ › walk comment to comment. Expanding morphs in place over 250&nbsp;ms: the
+  topic line grows into the opening message where it already sits, and the discussion line
+  rides down ahead of it before cross-fading into the replies. One <b>✓ Resolve</b> control, same
   colour in summary and expanded.<br /><br />
   <b>Two things I could not decide for you.</b>
   A resolved thread still has a card inline, sitting in the middle of the prose — in the sheet it
@@ -452,17 +464,62 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && e.target.dataset?.reply) post(e.target.dataset.reply);
 });
 
-/* Toggle in place rather than re-rendering: a fresh node would start at its final
-   grid-template-rows and the 250ms morph would never animate. A thread can be on
-   screen twice (inline and in the sheet), so drive every copy from the id. */
-function toggle(id) {
-  const isOpen = expanded.has(id);
-  isOpen ? expanded.delete(id) : expanded.add(id);
-  for (const el of document.querySelectorAll(`.thread[data-id="${id}"]`)) {
-    el.classList.toggle('expanded', !isOpen);
-    el.querySelector('.fold.summary')?.classList.toggle('show', isOpen);
-    el.querySelector('.fold.detail')?.classList.toggle('show', !isOpen);
+/* Slots are absolutely positioned inside, so their height only exists because we set it.
+   Re-measure after every render, and again when the width changes (a reflow changes how
+   many lines a message takes). */
+function faceOf(slot) {
+  return slot.querySelector(
+    slot.closest('.thread').classList.contains('expanded') ? '.face.detail' : '.face.summary',
+  );
+}
+
+function sizeSlots(root = document) {
+  for (const slot of root.querySelectorAll('.slot')) {
+    slot.style.height = `${faceOf(slot).offsetHeight}px`;
   }
+}
+
+const MS = 250;
+const EASE = 'cubic-bezier(.22,.72,.24,1)';
+
+/* Toggle in place rather than re-rendering: a fresh node would mount at its final height
+   and never animate. A thread can be on screen twice (inline and in the sheet), so drive
+   every copy from the id. */
+function toggle(id) {
+  const open = !expanded.has(id);
+  open ? expanded.add(id) : expanded.delete(id);
+  for (const el of document.querySelectorAll(`.thread[data-id="${id}"]`)) morph(el, open);
+}
+
+/* Two phases, deliberately overlapping only slightly:
+     A (0 → 62%)    the topic line grows in place and cross-fades into the opening message
+     B (38% → 100%) the discussion line — which phase A has just carried downwards, intact —
+                    cross-fades into the replies
+   Reversed on collapse, so the thread retreats back into the two lines it came from. */
+function morph(card, open) {
+  card.classList.toggle('expanded', open);
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const span = reduce ? 0 : MS * 0.62;
+  const lag = reduce ? 0 : MS * 0.38;
+  slide(card.querySelector('.slot.a'), span, open ? 0 : lag);
+  slide(card.querySelector('.slot.b'), span, open ? lag : 0);
+}
+
+/* The class flip has already set the resting state; these keyframes hold the OLD values
+   through `delay` (fill: backwards) and then tween to the new ones, which is what lets
+   slot B sit still and simply travel while slot A is still growing. */
+function slide(slot, dur, delay) {
+  const from = slot.getBoundingClientRect().height;
+  const arriving = faceOf(slot);
+  const leaving = slot.querySelector(arriving.classList.contains('detail') ? '.face.summary' : '.face.detail');
+  const to = arriving.offsetHeight;
+  slot.style.height = `${to}px`;
+  if (!dur) return;
+  const opts = { duration: dur, delay, easing: EASE, fill: 'backwards' };
+  slot.animate([{ height: `${from}px` }, { height: `${to}px` }], opts);
+  arriving.animate([{ opacity: 0 }, { opacity: 1 }], opts);
+  // Out faster than in, so the two texts never read as one overlapping smear.
+  leaving.animate([{ opacity: 1 }, { opacity: 0 }], { ...opts, duration: dur * 0.6 });
 }
 
 /* Where a card has to sit for the jump to feel like "go to that comment": centred in
@@ -503,6 +560,10 @@ function post(id) {
 }
 
 render();
+// A slot's height is measured, so anything that changes text metrics after first paint
+// (a webfont landing, a rotation) has to re-measure or cards keep a stale height.
+addEventListener('resize', () => sizeSlots());
+document.fonts?.ready.then(() => sizeSlots());
 </script>
 
 <claude-feedback-widget doc-id="streamlined-review-mobile" user="bryan"></claude-feedback-widget>
