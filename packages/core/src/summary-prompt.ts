@@ -222,6 +222,34 @@ function clean(s: string): string {
  * 5,000 characters of prose poured into a one-line slot.
  */
 
+/** Words as the budget counts them: whitespace-separated tokens. */
+export function wordCount(s: string): number {
+  const t = s.trim();
+  return t === '' ? 0 : t.split(/\s+/).length;
+}
+
+/**
+ * The corrective follow-up for an over-budget answer, or null when it fits.
+ *
+ * The display side stopped truncating entirely (the card wraps the full
+ * line), so the word budgets in the prompt are now the ONLY thing keeping a
+ * card compact — and the model overruns them on ~18% of threads. One
+ * follow-up naming the actual overrun gets most of those back inside the
+ * limit; an answer that is still long after that ships in full, because a
+ * complete 15-word line beats a chopped 12-word one ("cap where possible").
+ */
+export function buildRetryNudge(s: GeneratedSummary): string | null {
+  const t = wordCount(s.topic);
+  const d = wordCount(s.discussion);
+  if (t <= TOPIC_WORDS && d <= DISCUSSION_WORDS) return null;
+  const parts: string[] = [];
+  if (t > TOPIC_WORDS) parts.push(`Your topic is ${t} words; the limit is ${TOPIC_WORDS}.`);
+  if (d > DISCUSSION_WORDS)
+    parts.push(`Your discussion is ${d} words; the limit is ${DISCUSSION_WORDS}.`);
+  parts.push('Rewrite to fit the limits. Answer with the same JSON shape and nothing else.');
+  return parts.join(' ');
+}
+
 /**
  * Is this thread worth spending a call on?
  *

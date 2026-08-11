@@ -26,6 +26,7 @@
 import { summaryHash } from '@feedback/core';
 import {
   type StoredSummary,
+  buildRetryNudge,
   buildSummaryPrompt,
   needsCall,
   parseSummaryResponse,
@@ -249,6 +250,39 @@ export class ThreadSummarizer {
     const hash = summaryHash(thread);
     const { system, user } = buildSummaryPrompt(thread);
 
+    const first = await this.post(system, [{ role: 'user', content: user }]);
+    if (first === null) return null;
+    const parsed = parseSummaryResponse(first);
+    if (!parsed) return null;
+
+    // The card shows a summary line IN FULL now — display truncation is gone
+    // — so an overrun reaches the reader verbatim. One corrective follow-up
+    // (with the conversation so far, so the model shortens ITS answer rather
+    // than starting over) recovers most overruns; if the retry is still long
+    // or fails, the first answer ships whole. Never truncate here: a
+    // complete 15-word line beats a chopped 12-word one.
+    const nudge = buildRetryNudge(parsed);
+    if (nudge) {
+      const retry = await this.post(system, [
+        { role: 'user', content: user },
+        { role: 'assistant', content: first },
+        { role: 'user', content: nudge },
+      ]);
+      const reparsed = retry === null ? null : parseSummaryResponse(retry);
+      if (reparsed && !buildRetryNudge(reparsed)) return { ...reparsed, hash };
+    }
+    return { ...parsed, hash };
+  }
+
+  /**
+   * One HTTP round trip: messages in, raw reply text out, null on ANY
+   * failure. The key stays in the header, never the logs.
+   */
+  private async post(
+    system: string,
+    messages: Array<{ role: 'user' | 'assistant'; content: string }>,
+  ): Promise<string | null> {
+    if (!this.key) return null;
     const ctl = new AbortController();
     const timeout = setTimeout(() => ctl.abort(), TIMEOUT_MS);
     try {
@@ -259,12 +293,7 @@ export class ThreadSummarizer {
           'x-api-key': this.key,
           'anthropic-version': '2023-06-01',
         },
-        body: JSON.stringify({
-          model: MODEL,
-          max_tokens: MAX_TOKENS,
-          system,
-          messages: [{ role: 'user', content: user }],
-        }),
+        body: JSON.stringify({ model: MODEL, max_tokens: MAX_TOKENS, system, messages }),
         signal: ctl.signal,
       });
       if (!res.ok) {
@@ -273,10 +302,7 @@ export class ThreadSummarizer {
         return null;
       }
       const body = (await res.json()) as { content?: Array<{ text?: string }> };
-      const text = body.content?.map((b) => b.text ?? '').join('') ?? '';
-      const parsed = parseSummaryResponse(text);
-      if (!parsed) return null;
-      return { ...parsed, hash };
+      return body.content?.map((b) => b.text ?? '').join('') ?? '';
     } catch (err) {
       // "Returns null on anything at all going wrong" has to include the
       // things that THROW: an offline machine, the 20s abort above, a 200

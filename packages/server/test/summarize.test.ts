@@ -154,6 +154,75 @@ describe('ThreadSummarizer.generate', () => {
   });
 });
 
+describe('ThreadSummarizer.generate — word budget retry', () => {
+  /** A fetch whose Nth call answers with the Nth reply text (last repeats). */
+  function sequencedFetch(replies: string[]) {
+    const calls: string[] = [];
+    const impl = (async (_url: string, init?: RequestInit) => {
+      calls.push(String(init?.body ?? ''));
+      const text = replies[Math.min(calls.length - 1, replies.length - 1)];
+      return new Response(JSON.stringify({ content: [{ text }] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+    return { impl, calls };
+  }
+
+  const LONG =
+    'The first answer runs long because it explains every detail of the fix in far too many words';
+  const over = `{"topic":"Retry loop swallows errors","discussion":"${LONG}"}`;
+  const short = '{"topic":"Retry loop swallows errors","discussion":"Fix underway now"}';
+
+  it('does not retry a within-budget answer', async () => {
+    const { impl, calls } = sequencedFetch([short]);
+    const s = new ThreadSummarizer({ apiKey: 'k', fetchImpl: impl });
+    const out = await s.generate(thread());
+    expect(out?.discussion).toBe('Fix underway now');
+    expect(calls).toHaveLength(1);
+  });
+
+  it('retries ONCE on an over-budget line and stores the compliant retry', async () => {
+    const { impl, calls } = sequencedFetch([over, short]);
+    const s = new ThreadSummarizer({ apiKey: 'k', fetchImpl: impl });
+    const t = thread();
+    const out = await s.generate(t);
+    expect(calls).toHaveLength(2);
+    // The retry request must carry the conversation so far, not restart it.
+    expect(calls[1]).toContain(LONG.slice(0, 30));
+    expect(out).toEqual({
+      topic: 'Retry loop swallows errors',
+      discussion: 'Fix underway now',
+      hash: summaryHash(t),
+    });
+  });
+
+  it('keeps the FULL first answer when the retry is still over — never truncates', async () => {
+    const { impl, calls } = sequencedFetch([over, over]);
+    const s = new ThreadSummarizer({ apiKey: 'k', fetchImpl: impl });
+    const out = await s.generate(thread());
+    expect(calls).toHaveLength(2); // one retry, not a loop
+    expect(out?.discussion).toBe(LONG); // full text, no '…', no word chop
+  });
+
+  it('keeps the first answer when the retry fails outright', async () => {
+    const calls: string[] = [];
+    const impl = (async (_url: string, init?: RequestInit) => {
+      calls.push(String(init?.body ?? ''));
+      if (calls.length === 1)
+        return new Response(JSON.stringify({ content: [{ text: over }] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      return new Response('rate limited', { status: 429 });
+    }) as unknown as typeof fetch;
+    const s = new ThreadSummarizer({ apiKey: 'k', fetchImpl: impl });
+    const out = await s.generate(thread());
+    expect(calls).toHaveLength(2);
+    expect(out?.discussion).toBe(LONG);
+  });
+});
+
 describe('ThreadSummarizer.schedule', () => {
   let s: ThreadSummarizer;
   afterEach(() => s?.dispose());
