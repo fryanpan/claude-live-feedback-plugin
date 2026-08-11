@@ -1,5 +1,14 @@
 import * as Y from 'yjs';
-import type { Anchor, Comment, DocMeta, Thread, ThreadStatus, User } from './types.ts';
+import { readStoredSummary } from './thread-summary.ts';
+import type {
+  Anchor,
+  Comment,
+  DocMeta,
+  StoredSummary,
+  Thread,
+  ThreadStatus,
+  User,
+} from './types.ts';
 
 /**
  * Yjs doc shape:
@@ -121,6 +130,7 @@ export function readThread(threadMap: Y.Map<unknown>, threadId: string): Thread 
   const status = threadMap.get('status') as ThreadStatus | undefined;
   const createdBy = threadMap.get('createdBy') as User | undefined;
   const createdAt = threadMap.get('createdAt') as number | undefined;
+  const summary = readStoredSummary(threadMap.get('summary'));
   const commentsArr = threadMap.get('comments') as Y.Array<Y.Map<unknown>> | undefined;
   if (!anchor || !status || !createdBy || createdAt === undefined) return null;
 
@@ -148,6 +158,11 @@ export function readThread(threadMap: Y.Map<unknown>, threadId: string): Thread 
     commentCount: comments.length,
     lastActivity,
     comments,
+    // Only a well-formed summary is surfaced — `readStoredSummary` checks
+    // every field, including `discussion`. This value is synced to every peer
+    // and no peer's write is authoritative, so a partial or mistyped object
+    // must not be able to reach `threadLines`.
+    ...(summary ? { summary } : {}),
   };
 }
 
@@ -216,6 +231,28 @@ export function postReply(
     comments.push([cm]);
   });
   return { id: reply.id, author: reply.author, text: reply.text, ts: now };
+}
+
+/**
+ * Store a generated summary on a thread.
+ *
+ * Written as ONE transaction on the same ydoc the browsers are synced to, so
+ * the new lines reach every open card the moment they land — no reload, no
+ * refetch. Returns null when the thread has gone (deleted mid-flight), which
+ * is a normal race, not an error.
+ */
+export function setThreadSummary(
+  doc: Y.Doc,
+  threadId: string,
+  summary: StoredSummary,
+): Thread | null {
+  const threads = getThreads(doc);
+  const threadMap = threads.get(threadId);
+  if (!threadMap) return null;
+  doc.transact(() => {
+    threadMap.set('summary', summary);
+  });
+  return readThread(threadMap, threadId);
 }
 
 export function setStatus(doc: Y.Doc, threadId: string, status: ThreadStatus): Thread | null {
