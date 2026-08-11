@@ -1175,6 +1175,14 @@ body.threads-resizing {
   transform: rotate(90deg);
   color: var(--fg);
 }
+/* The morph zeroes its own durations in JS for reduced motion; this is the
+   one piece of the same gesture that animates in CSS, so it needs saying
+   twice. The caret still rotates — it just arrives instead of travelling. */
+@media (prefers-reduced-motion: reduce) {
+  .thread-caret {
+    transition: none;
+  }
+}
 
 /* Each slot holds two faces stacked in the same box: the summary line and
    what it becomes. Both faces sit at top:0, so the opening message lands on

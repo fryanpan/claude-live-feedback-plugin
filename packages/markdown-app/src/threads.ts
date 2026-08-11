@@ -8,6 +8,18 @@ import {
   threadSummary,
 } from '@feedback/core';
 import { renderCommentMarkdown } from './comment-markdown.ts';
+import {
+  isFoldingTap,
+  morphThread,
+  sizeThreadSlots,
+  syncFaceVisibility,
+  threadCards,
+} from './thread-morph.ts';
+
+// The card's measurement/fold helpers live with the morph engine that owns
+// them; re-exported here because the card and its folding are one feature to
+// every caller.
+export { sizeThreadSlots, syncFaceVisibility };
 
 export type ThreadTab = 'open' | 'resolved' | 'all';
 
@@ -44,12 +56,52 @@ export class ThreadPanel {
     this.render();
   }
 
+  /**
+   * Select a thread — which is also what expands its card.
+   *
+   * Toggling must MUTATE the cards on screen, never rebuild them: a freshly
+   * built node mounts at its final height and cannot animate, there is no
+   * "from" to tween out of. So when the cards this affects are already in the
+   * DOM, fold them in place and simply re-stamp the render fingerprint. The
+   * full rebuild is the fallback for when the incoming card isn't rendered at
+   * all (a different tab, an empty drawer).
+   */
   setActive(id: string | null): void {
     if (this.activeId === id) return;
+    const previous = this.activeId;
     this.activeId = id;
-    // Force re-render regardless of fingerprint match
-    this.lastRenderKey = '';
-    this.render();
+    this.foldInPlace(previous, id);
+    // Rebuild the drawer list ONLY when its own copy of the incoming card
+    // isn't there to fold — a different tab, or a list that has never
+    // rendered. Every other case has just been mutated in place, so all that
+    // is left is to re-stamp the fingerprint.
+    if (id && threadCards(id, this.opts.container).length === 0) {
+      this.lastRenderKey = '';
+      this.render();
+    } else {
+      this.lastRenderKey = this.computeKey();
+    }
+  }
+
+  /**
+   * Fold the outgoing card shut and the incoming one open, wherever they are.
+   *
+   * Deliberately GLOBAL rather than scoped to this panel's container: one
+   * thread can be on screen more than once — the drawer row and the margin
+   * balloon are literally the same card, and on mobile a thread appears
+   * inline and again in the sheet — and every copy shares one expand state.
+   * A container-scoped (or `querySelector`-singular) fold animates one copy
+   * and leaves the others silently in the wrong state.
+   */
+  private foldInPlace(previous: string | null, next: string | null): void {
+    if (previous) {
+      morphThread(previous, false);
+      for (const el of threadCards(previous)) el.classList.remove('active');
+    }
+    if (next) {
+      morphThread(next, true);
+      for (const el of threadCards(next)) el.classList.add('active');
+    }
   }
 
   /**
@@ -61,13 +113,24 @@ export class ThreadPanel {
    */
   revealThread(id: string): void {
     const status = this.statusMap.get(id);
+    let tabChanged = false;
     if (status && this.tab !== 'all') {
       const wantTab: ThreadTab = status === 'resolved' ? 'resolved' : 'open';
-      if (this.tab !== wantTab) this.tab = wantTab;
+      if (this.tab !== wantTab) {
+        this.tab = wantTab;
+        tabChanged = true;
+      }
     }
-    this.activeId = id;
-    this.lastRenderKey = '';
-    this.render();
+    if (tabChanged) {
+      // A different tab is a different list — nothing to fold in place.
+      this.activeId = id;
+      this.lastRenderKey = '';
+      this.render();
+    } else {
+      // The card is already on screen: fold it in place rather than rebuild
+      // the list out from under a morph that is about to run.
+      this.setActive(id);
+    }
     this.scrollActiveIntoView();
   }
 
@@ -251,11 +314,13 @@ export class ThreadPanel {
     // field, a button, a link — and a text selection being dragged out, which
     // must not collapse the comment out from under the reader.
     el.addEventListener('click', (ev) => {
-      const target = ev.target as HTMLElement | null;
-      if (target?.closest?.('input, textarea, select, button, a, label')) return;
-      const sel = typeof window.getSelection === 'function' ? window.getSelection() : null;
-      if (sel && !sel.isCollapsed) return;
-      this.opts.onThreadClick(t.id);
+      if (!isFoldingTap(ev.target)) return;
+      // The tap TOGGLES. Tapping an open card folds it back into its two
+      // lines; `onThreadClick` is the "engage with this thread" path (scroll
+      // to it, pulse the anchor, open the mobile sheet) and would be wrong to
+      // re-run on the way down.
+      if (this.activeId === t.id) this.setActive(null);
+      else this.opts.onThreadClick(t.id);
     });
 
     return el;
@@ -392,56 +457,6 @@ export class ThreadPanel {
     b.setAttribute('aria-label', resolved ? 'Reopen thread' : 'Resolve thread');
     foot.appendChild(b);
     return foot;
-  }
-}
-
-/**
- * Hide the face that is not showing from assistive tech and from the tab
- * order.
- *
- * Both faces of a slot are in the DOM at once — that is what the morph
- * cross-fades between — and the resting one is hidden only by `opacity: 0`,
- * which hides nothing from a screen reader and removes nothing from the tab
- * order. Without this, a collapsed card reads its topic line AND its opening
- * message, and tabbing through the drawer lands in an invisible reply box.
- *
- * `opacity` is what animates, so visibility can't be expressed in CSS here;
- * it rides the class flip instead. Anything that toggles `expanded` on an
- * existing card must call this too.
- */
-export function syncFaceVisibility(card: HTMLElement, expanded: boolean): void {
-  const showing = expanded ? 'face-detail' : 'face-summary';
-  for (const face of Array.from(card.querySelectorAll<HTMLElement>('.thread-face'))) {
-    if (face.classList.contains(showing)) {
-      face.removeAttribute('inert');
-      face.removeAttribute('aria-hidden');
-    } else {
-      face.setAttribute('inert', '');
-      face.setAttribute('aria-hidden', 'true');
-    }
-  }
-}
-
-/**
- * Give every slot under `root` the height of the face that is currently
- * showing.
- *
- * A slot's faces are absolutely positioned, so the slot has no height of its
- * own — without this the card renders as a header and a footer with nothing
- * between them. Nothing ever collapses to zero, because a slot is never
- * empty: one face is always resting at its measured height.
- *
- * This is the RESTING half of the morph. The animated half (the two-phase
- * tween, and re-measuring on `resize` / after `document.fonts.ready`, without
- * which a card holds a height computed against the fallback font) belongs
- * with the toggle. Must run before anything reads the card's own height —
- * the balloon margin's layout pass does exactly that.
- */
-export function sizeThreadSlots(root: ParentNode): void {
-  for (const slot of Array.from(root.querySelectorAll<HTMLElement>('.thread-slot'))) {
-    const expanded = slot.closest('.thread')?.classList.contains('expanded') ?? false;
-    const face = slot.querySelector<HTMLElement>(expanded ? '.face-detail' : '.face-summary');
-    if (face) slot.style.height = `${face.offsetHeight}px`;
   }
 }
 

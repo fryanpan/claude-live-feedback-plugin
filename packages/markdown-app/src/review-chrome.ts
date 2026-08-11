@@ -2,6 +2,7 @@ import { type Thread, type User, formatTime, readDocMeta } from '@feedback/core'
 import type * as Y from 'yjs';
 import type { MountScope } from './mount-scope.ts';
 import type { ReviewSurface } from './review-surface.ts';
+import { installSlotRemeasure } from './thread-morph.ts';
 import { ThreadPanel, type ThreadTab } from './threads.ts';
 
 /**
@@ -422,6 +423,16 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
       } catch {
         showToast('Failed to re-anchor — try again');
       }
+    },
+  });
+
+  // A card's folding slots hold a height we MEASURED, so anything that
+  // changes text metrics after first paint — a reflow, a webfont landing —
+  // strands every card on screen at a height that no longer fits its content.
+  installSlotRemeasure({
+    listen: on,
+    get disposed() {
+      return opts.scope?.disposed ?? false;
     },
   });
 
