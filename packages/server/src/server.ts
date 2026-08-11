@@ -9,6 +9,7 @@ import {
   suggestOps,
   summaryHash,
 } from '@feedback/core';
+import { needsCall } from '@feedback/core/summary-prompt';
 import type { Server as BunServer } from 'bun';
 import { showFile } from './git-diff.ts';
 import {
@@ -1253,6 +1254,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                   error: 'summaries disabled',
                   detail: `set LF_SUMMARIES=1 and add a key: security add-generic-password -a "$USER" -s ${KEYCHAIN_SERVICE} -w`,
                 });
+              }
+              // Already summarized as it stands: answer with what is stored
+              // rather than paying to regenerate the same two lines. The
+              // scheduled path and the backfill both ask this question through
+              // `needsCall`; an agent that polls this route was the one caller
+              // that could bill on every retry. `force` is the deliberate
+              // "that line is wrong, do it again" escape hatch.
+              const force = (await safeJson(req))?.force === true;
+              if (!force && !needsCall(t, t.summary)) {
+                return j(200, { thread: t, summary: t.summary, cached: true });
               }
               const summary = await summarizer.generate(t);
               if (!summary) return j(503, { error: 'generation failed' });

@@ -167,9 +167,41 @@ describe('POST /api/docs/:docId/threads/:threadId/summary', () => {
     return thread;
   }
 
-  function postSummary(docId: string, threadId: string): Promise<Response> {
-    return fetch(`${base}/api/docs/${docId}/threads/${threadId}/summary`, { method: 'POST' });
+  function postSummary(docId: string, threadId: string, body?: unknown): Promise<Response> {
+    return fetch(`${base}/api/docs/${docId}/threads/${threadId}/summary`, {
+      method: 'POST',
+      ...(body === undefined
+        ? {}
+        : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+    });
   }
+
+  it('answers from the stored summary instead of paying twice for the same thread', async () => {
+    const docId = 'sum-cached';
+    const threadId = await seed(docId, ['agreed — real bug, fix not started']);
+    process.env.LF_SUMMARIES = '1';
+    nextReply = '{"topic": "swallowed retry error", "discussion": "agreed, not fixed"}';
+
+    // Positive control: the first call really does generate.
+    expect((await postSummary(docId, threadId)).status).toBe(200);
+    expect(calls.length).toBe(1);
+
+    // The thread has not moved, so a second ask is the same two lines. An
+    // agent that retries this route used to bill on every attempt.
+    const again = await postSummary(docId, threadId);
+    expect(again.status).toBe(200);
+    const body = (await again.json()) as { cached?: boolean; summary: { topic: string } };
+    expect(body.cached).toBe(true);
+    expect(body.summary.topic).toBe('swallowed retry error');
+    expect(calls.length).toBe(1);
+
+    // force:true is the escape hatch — "that line is wrong, do it again".
+    nextReply = '{"topic": "second attempt at the topic", "discussion": "still not fixed"}';
+    const forced = await postSummary(docId, threadId, { force: true });
+    expect(forced.status).toBe(200);
+    expect(calls.length).toBe(2);
+    expect((await getThread(docId, threadId)).summary?.topic).toBe('second attempt at the topic');
+  });
 
   it('503s with a how-to-enable hint when generation is switched off', async () => {
     const docId = 'sum-off';
