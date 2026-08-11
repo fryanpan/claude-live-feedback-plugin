@@ -1,5 +1,6 @@
 import { type Thread, type User, formatTime, readDocMeta } from '@feedback/core';
 import type * as Y from 'yjs';
+import { type MobileReview, mountMobileReview } from './mobile-review.ts';
 import type { MountScope } from './mount-scope.ts';
 import type { ReviewSurface } from './review-surface.ts';
 import { installSlotRemeasure } from './thread-morph.ts';
@@ -120,6 +121,8 @@ export interface ReviewChrome {
   refreshThreadDecorations: (activeId: string | null) => void;
   /** Scroll+pulse the thread's range and focus it in panel / thread view. */
   revealThread: (id: string) => void;
+  /** Mobile inline cards + over-doc sheet + the ‹ › comment nav. */
+  mobile: MobileReview;
   openThreadView: (id: string) => void;
   closeThreadView: () => void;
   openComposer: () => void;
@@ -323,6 +326,10 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     const openCount = counts.open + counts.orphan;
     threadsCount.textContent = String(openCount);
     threadsCount.classList.toggle('has-count', openCount > 0);
+    // The inline cards are a second rendering of the same threads. They go
+    // stale exactly when the drawer would, so they refresh from the same
+    // signal rather than a listener of their own.
+    mobile.refresh();
   }
   function refreshThreadDecorations(activeId: string | null): void {
     activeThreadId = activeId;
@@ -362,12 +369,10 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
       }
       threadsPanel.setActive(id);
       refreshThreadDecorations(id);
-      // On mobile, swap the drawer for a full-screen thread view (Notion
-      // pattern) — gives the conversation room to breathe on a small screen.
-      if (isMobile()) {
-        closeDrawer();
-        openThreadView(id);
-      }
+      // Nothing extra on mobile: setActive has already unfolded EVERY copy
+      // of this card, so a tap in the sheet expands the sheet's copy in
+      // place (and the inline one underneath it) rather than launching a
+      // third, separate full-screen view of the same conversation.
     },
     onReply: async (id, text) => {
       await fetch(
@@ -426,6 +431,34 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     },
   });
 
+  // --- mobile: inline cards + the over-doc sheet ---------------------------
+  // On a phone there is no standalone drawer. Comments render inline under
+  // the text they point at, and the same `#threads-pane` rises as a bottom
+  // sheet when the app bar's comment badge is tapped (CSS owns that shape;
+  // the open/close state is the drawer's, unchanged).
+  const mobile = mountMobileReview({
+    isMobile,
+    threads: collectThreads,
+    resolveRange: resolveThreadRange,
+    renderCard: (t, pendingReply) => threadsPanel.renderThread(t, pendingReply),
+    surface,
+    setActive: (id) => {
+      threadsPanel.setActive(id);
+      refreshThreadDecorations(id);
+    },
+    getActive: () => threadsPanel.getActive(),
+    revealInSheet: (id) => requestAnimationFrame(() => threadsPanel.revealThread(id)),
+    openSheet: openDrawer,
+    closeSheet: closeDrawer,
+    isSheetOpen: () => shell.classList.contains('threads-open'),
+    listen: on,
+    onCleanup: (fn) => opts.scope?.onCleanup(fn),
+  });
+  // Crossing the phone breakpoint changes which surface owns the comments —
+  // inline cards must appear (or be handed back) at the same width the
+  // stylesheet swaps the drawer for a sheet.
+  on(window.matchMedia('(max-width: 900px)'), 'change', () => mobile.refresh());
+
   // A card's folding slots hold a height we MEASURED, so anything that
   // changes text metrics after first paint — a reflow, a webfont landing —
   // strands every card on screen at a height that no longer fits its content.
@@ -444,8 +477,11 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
       surface.pulseRange(range.from, range.to);
     }
     if (isMobile()) {
-      threadsPanel.setActive(id);
-      openThreadView(id);
+      // The inline card IS the mobile comment surface: centre it in the
+      // doc's own scroller. A thread with no line to sit beside (orphaned,
+      // resolved) has no inline card at all — showThread opens the sheet,
+      // the only place it exists.
+      mobile.showThread(id);
     } else {
       // Open the drawer first, then (after layout) scroll the panel to the
       // thread — otherwise the active comment lands off-screen and the
@@ -535,7 +571,14 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     }
   }
 
-  // --- full-screen thread view (mobile) --------------------------------------
+  // --- full-screen thread view -----------------------------------------------
+  // No longer the mobile comment surface — inline cards + the over-doc sheet
+  // replaced it, and nothing routes a comment tap here any more. Retained
+  // because `#thread-view` is still a live element (its CSS block is what
+  // the deletion and suggestion sheets are built from) and because
+  // openThreadView remains on the chrome interface for callers outside this
+  // file. Do not add new comment routing to it: it is a forked comment DOM
+  // with no slots, so a card opened here cannot morph.
   let threadViewId: string | null = null;
   function renderThreadView(id: string): void {
     const t = collectThreads().find((x) => x.id === id);
@@ -696,6 +739,7 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     redrawThreads,
     refreshThreadDecorations,
     revealThread,
+    mobile,
     openThreadView,
     closeThreadView,
     openComposer,
@@ -766,8 +810,10 @@ export function wireThreadRangeClicks(opts: ThreadFocusOpts): void {
     if (range) surface.pulseRange(range.from, range.to);
     if (revealBalloon?.(threadId)) return;
     if (chrome.isMobile()) {
+      // The card is already inline, directly under the text just tapped —
+      // unfold it where it sits (every copy) instead of covering the doc
+      // with a separate view of the same thread.
       chrome.threadsPanel.setActive(threadId);
-      chrome.openThreadView(threadId);
     } else {
       chrome.openDrawer();
       requestAnimationFrame(() => chrome.threadsPanel.revealThread(threadId));

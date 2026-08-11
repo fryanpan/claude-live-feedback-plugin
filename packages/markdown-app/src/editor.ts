@@ -22,6 +22,7 @@ import * as Y from 'yjs';
 import { resolveDocLink, safeLinkHref } from './link-open.ts';
 import { MermaidCodeBlock } from './mermaid-code-block.ts';
 import { SuggestionChips } from './redline/suggestion-chips.ts';
+import type { InlineThreadCard } from './review-surface.ts';
 import { SuggestInput } from './suggest-input.ts';
 import { SuggestDelete, SuggestInsert } from './suggest-marks.ts';
 import { ThreadDecorations, type ThreadRange, setThreadDecorations } from './thread-decorations.ts';
@@ -42,6 +43,9 @@ export interface EditorHandle {
   pulseRange: (from: number, to: number) => void;
   /** Update which thread anchors should be highlighted in the editor. */
   setThreadRanges: (ranges: ThreadRange[], activeId: string | null) => void;
+  /** Place comment cards in the flow, under the block they are anchored in
+   *  (the mobile inline comment surface). Empty array clears them. */
+  setInlineCards: (cards: InlineThreadCard[]) => void;
   getText: () => string;
   setMarkdown: (md: string) => void;
   getMarkdown: () => string;
@@ -249,6 +253,11 @@ export function createEditor(opts: CreateEditorOpts): EditorHandle {
     },
     setThreadRanges(ranges, activeId) {
       setThreadDecorations(editor.view, { ranges, activeId });
+    },
+    setInlineCards(cards) {
+      setThreadDecorations(editor.view, {
+        inlineCards: cards.map((c) => ({ id: c.id, el: c.el })),
+      });
     },
     getText() {
       return editor.state.doc.textBetween(0, editor.state.doc.content.size, '\n');

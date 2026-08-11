@@ -233,20 +233,27 @@ export class ThreadPanel {
       return;
     }
 
-    // For the Open tab, split Open vs Orphaned as two sub-sections so the
-    // user can see broken anchors distinctly. Otherwise flat list ordered
-    // by most-recent activity.
-    if (this.tab === 'open') {
-      const open = visible.filter((t) => this.statusMap.get(t.id) === 'open');
-      const orphan = visible.filter((t) => this.statusMap.get(t.id) === 'orphan');
-      if (open.length > 0) {
-        c.appendChild(this.heading(`Open (${open.length})`));
-        for (const t of sortByActivity(open))
-          c.appendChild(this.renderThread(t, pendingReplies.get(t.id)));
-      }
-      if (orphan.length > 0) {
-        c.appendChild(this.heading(`Orphaned (${orphan.length}) — re-anchor needed`));
-        for (const t of sortByActivity(orphan))
+    // Open and All group by status. Orphaned is the group that demands an
+    // action, and on mobile this list IS the over-doc sheet — the only place
+    // an orphaned or resolved thread appears at all, because neither has a
+    // line to sit beside inline. The Resolved tab stays flat: a lone
+    // "Resolved (N)" heading under a tab already labelled Resolved is noise.
+    if (this.tab === 'open' || this.tab === 'all') {
+      const groups: Array<[string, Thread[]]> = [
+        ['Open', visible.filter((t) => this.statusMap.get(t.id) === 'open')],
+        ['Orphaned', visible.filter((t) => this.statusMap.get(t.id) === 'orphan')],
+        ['Resolved', visible.filter((t) => this.statusMap.get(t.id) === 'resolved')],
+      ];
+      for (const [name, ts] of groups) {
+        if (ts.length === 0) continue;
+        c.appendChild(
+          this.heading(
+            name === 'Orphaned'
+              ? `Orphaned (${ts.length}) — re-anchor needed`
+              : `${name} (${ts.length})`,
+          ),
+        );
+        for (const t of sortByActivity(ts))
           c.appendChild(this.renderThread(t, pendingReplies.get(t.id)));
       }
     } else {

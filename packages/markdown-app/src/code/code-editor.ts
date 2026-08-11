@@ -14,6 +14,7 @@ import {
   type DecorationSet,
   EditorView,
   GutterMarker,
+  WidgetType,
   gutter,
   keymap,
   lineNumbers,
@@ -22,7 +23,8 @@ import { getContent } from '@feedback/core';
 import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
 import type { Awareness } from 'y-protocols/awareness';
 import * as Y from 'yjs';
-import type { ReviewSurface, SurfaceThreadRange } from '../review-surface.ts';
+import type { InlineThreadCard, ReviewSurface, SurfaceThreadRange } from '../review-surface.ts';
+import { sizeThreadSlots } from '../thread-morph.ts';
 import { encodeOffsetRel, resolveRelOffset, snapToLines } from './code-anchor.ts';
 import {
   DIFF_SCAN_LIMIT,
@@ -145,6 +147,63 @@ const markerField = StateField.define<RangeSet<GutterMarker>>({
     }
     return next;
   },
+});
+
+// --- inline comment cards (mobile) ------------------------------------------
+// A block widget after the anchor's last line, where a GitHub PR comment
+// sits. The widget IS the caller's node — `eq` compares element identity, so
+// handing the same element back leaves the live card in place rather than
+// rebuilding it mid-morph.
+const setInlineCardsEffect =
+  StateEffect.define<Array<{ from: number; to: number; el: HTMLElement }>>();
+
+class InlineCardWidget extends WidgetType {
+  constructor(readonly el: HTMLElement) {
+    super();
+  }
+  override eq(other: InlineCardWidget): boolean {
+    return other.el === this.el;
+  }
+  override toDOM(): HTMLElement {
+    return this.el;
+  }
+  /** Everything inside the card — the reply box, Resolve, the fold tap — is
+   *  the card's business, never CodeMirror's. */
+  override ignoreEvent(): boolean {
+    return true;
+  }
+}
+
+const inlineCardField = StateField.define<DecorationSet>({
+  create() {
+    return Decoration.none;
+  },
+  update(value, tr) {
+    let next = value.map(tr.changes);
+    for (const e of tr.effects) {
+      if (!e.is(setInlineCardsEffect)) continue;
+      const docLen = tr.state.doc.length;
+      const rows = e.value
+        // End of the anchor's LAST line: a block widget mid-line would split
+        // the code it is commenting on.
+        .map((c) => ({
+          pos: tr.state.doc.lineAt(Math.max(0, Math.min(c.to - 1, docLen))).to,
+          el: c.el,
+        }))
+        .sort((a, b) => a.pos - b.pos);
+      const builder = new RangeSetBuilder<Decoration>();
+      for (const r of rows) {
+        builder.add(
+          r.pos,
+          r.pos,
+          Decoration.widget({ widget: new InlineCardWidget(r.el), block: true, side: 1 }),
+        );
+      }
+      next = builder.finish();
+    }
+    return next;
+  },
+  provide: (f) => EditorView.decorations.from(f),
 });
 
 // --- transient pulse line decoration ----------------------------------------
@@ -282,6 +341,7 @@ export function createCodeEditor(opts: CreateCodeEditorOpts): CodeSurface {
     syntaxHighlighting(defaultHighlightStyle),
     markerField,
     pulseField,
+    inlineCardField,
     gutter({
       class: 'cm-comment-gutter',
       markers: (view) => view.state.field(markerField),
@@ -301,6 +361,11 @@ export function createCodeEditor(opts: CreateCodeEditorOpts): CodeSurface {
     }),
     EditorView.updateListener.of((update) => {
       if (update.selectionSet) opts.onSelectionChange?.();
+      // CodeMirror renders only its viewport, so a card that scrolls into
+      // view is mounting for the first time — and a slot's height is a
+      // number we WROTE, not something the browser maintains. Without this
+      // an off-screen card arrives as a header and a footer.
+      if (update.viewportChanged) sizeThreadSlots(view.dom);
     }),
   ];
   if (langExt) extensions.push(langExt);
@@ -402,6 +467,11 @@ export function createCodeEditor(opts: CreateCodeEditorOpts): CodeSurface {
         .filter((r) => r.status !== 'resolved')
         .map((r) => ({ id: r.id, from: r.from, active: r.id === activeId }));
       view.dispatch({ effects: setMarkersEffect.of(markers) });
+    },
+    setInlineCards(cards: InlineThreadCard[]) {
+      view.dispatch({
+        effects: setInlineCardsEffect.of(cards.map((c) => ({ from: c.from, to: c.to, el: c.el }))),
+      });
     },
     setViewMode(mode: CodeViewMode) {
       if (mode === viewMode) return;

@@ -185,6 +185,28 @@ body.view-mode #toggle-format {
   display: inline-block;
 }
 
+/* ‹ › comment nav. Phone-only: above 900px the balloon margin or the fixed
+   drawer already shows every comment at once, so stepping through them is a
+   solution to a problem that doesn't exist there. Narrower than the other
+   icon buttons (still ≥36px tall for the tap target) because two of them sit
+   beside the badge in an already-crowded app bar. */
+.comment-nav {
+  display: none;
+  min-width: 32px;
+  padding: 6px;
+  font-size: 18px;
+  font-family: var(--sans);
+}
+.comment-nav:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+@media (max-width: 900px) {
+  .comment-nav {
+    display: inline-flex;
+  }
+}
+
 /* ================= MAIN LAYOUT ================= */
 
 #main {
@@ -1451,28 +1473,57 @@ body.threads-resizing {
   line-height: 1.5;
 }
 
-/* ========== Off-canvas drawer on mobile ========== */
+/* ========== Over-doc bottom sheet on mobile ==========
+   Not a side drawer any more. On a phone the comments render INLINE in the
+   document (see INLINE THREAD CARDS below) and this pane is what the app
+   bar's comment badge raises OVER the doc: the grouped Open / Orphaned /
+   Resolved list, and the only place a thread with no line to sit beside
+   exists at all. Same open/close state (`.threads-open`) as the desktop
+   drawer — only the shape changes. */
 
 @media (max-width: 900px) {
   #threads-pane {
     position: fixed;
-    top: 0;
+    top: auto;
     right: 0;
+    left: 0;
     bottom: 0;
-    width: min(420px, 86vw);
+    width: auto;
     max-width: 100%;
+    max-height: 82vh;
     z-index: 950;
-    transform: translateX(100%);
-    transition: transform 220ms ease;
-    border-left: 1px solid var(--border);
-    box-shadow: -10px 0 40px rgba(0, 0, 0, 0.25);
-    padding-top: var(--safe-top);
+    transform: translateY(100%);
+    transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    border-left: none;
+    border-top: 1px solid var(--border);
+    border-radius: 16px 16px 0 0;
+    box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.25);
+    padding-top: 0;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  /* Grabber: the "drag me" affordance every bottom sheet in this app has.
+     Drawn on the header rather than added to the markup so the desktop
+     drawer, which shares this element, needs no matching change. */
+  #threads-pane .threads-header {
+    position: relative;
+    padding-top: 16px;
+  }
+  #threads-pane .threads-header::before {
+    content: "";
+    position: absolute;
+    top: 7px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 36px;
+    height: 4px;
+    border-radius: 999px;
+    background: var(--border);
   }
   .threads-open #threads-pane {
-    transform: translateX(0);
+    transform: translateY(0);
   }
   #threads-pane[aria-hidden="false"] {
-    transform: translateX(0);
+    transform: translateY(0);
   }
   .threads-close {
     display: inline-flex;
@@ -2965,6 +3016,69 @@ body.redline-mode #toggle-suggest-mode {
      .lf-leader-suggestion / .lf-suggest-chip need no dark override — they
      already read var(--accent) (or the author's own --lf-suggest-color) via
      the base rules above. */
+}
+
+/* ================= INLINE THREAD CARDS (mobile) =================
+   The phone's comment surface: the same `.thread` card the drawer and the
+   balloon margin render, placed IN THE FLOW under the text (or the source
+   line) it points at — where a GitHub PR comment sits. Injected as a widget
+   decoration by the surface, so these rules must not assume a parent: they
+   style the card wrapper itself.
+
+   Only threads with a line to sit beside appear here (open, resolvable
+   anchor). Orphaned and resolved threads live in the bottom sheet, which is
+   the THREADS PANE block above. */
+.lf-inline-card {
+  margin: 10px 0 14px;
+  /* Code scrolls sideways; the card must not, or reading a comment on a long
+     line would need a horizontal scroll of its own. */
+  max-width: 100%;
+  white-space: normal;
+  cursor: default;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  padding: 10px 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+/* Inside CodeMirror the card is a block widget in a monospace, pre-wrapped
+   context — reset both, or the comment renders as code. */
+.cm-content .lf-inline-card {
+  font-family: var(--sans);
+  font-size: 14px;
+  white-space: normal;
+  tab-size: initial;
+  margin-left: 4px;
+  margin-right: 4px;
+}
+/* Where the ‹ › nav just landed. Deliberately brief and colour-only: the
+   card has already been scrolled to the middle of the screen, so this only
+   has to answer "which one". */
+.lf-inline-card.lf-nav-flash {
+  animation: lf-inline-flash 900ms ease-out;
+}
+@keyframes lf-inline-flash {
+  0% {
+    background: var(--accent-soft, rgba(46, 125, 215, 0.16));
+  }
+  100% {
+    background: var(--bg-panel);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lf-inline-card.lf-nav-flash {
+    animation: none;
+    outline: 2px solid var(--accent);
+  }
+}
+/* Above the phone breakpoint the margin balloons / drawer own the comments;
+   inline cards are not produced there, but belt-and-braces so a stale card
+   left over from a resize can never sit in the middle of desktop prose. */
+@media (min-width: 901px) {
+  .lf-inline-card {
+    display: none;
+  }
 }
 
 /* ================= FIRST-ARRIVAL IDENTITY PROMPT ================= */
