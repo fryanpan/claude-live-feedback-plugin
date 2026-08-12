@@ -2,6 +2,7 @@ import { type User, connect, escapeHtml, readDocMeta, suggestOps } from '@feedba
 import { mountCode } from './code/code-app.ts';
 import { renderDiffNav, setActiveFile } from './diff-nav.ts';
 import { type EditorHandle, createEditor } from './editor.ts';
+import { trackGesture } from './gesture.ts';
 import { ensureUserIdentity } from './identity-prompt.ts';
 import type { DocMeta, MountContext } from './mount-context.ts';
 import type { MountScope } from './mount-scope.ts';
@@ -322,7 +323,6 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
 
   let selection: Selection | null = null;
   let selectionSettled = false;
-  let isDragging = false;
   /** What the pill represents if clicked: a range selection, or expand
    *  to the paragraph containing the caret. */
   let pillMode: 'range' | 'caret' = 'range';
@@ -330,6 +330,37 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
    *  shown so the click handler doesn't depend on the editor still having
    *  the same selection (iOS blurs the editor when the pill is tapped). */
   let caretParaRange: { from: number; to: number } | null = null;
+
+  // A gesture on the document suppresses the pill until it ends, so the pill
+  // doesn't hop around under the finger mid-drag. Releasing is only ONE of
+  // the ways a touch ends — a cancelled one (scroll, iOS long-press takeover)
+  // delivers no pointerup at all, and treating that as "still dragging" left
+  // inline commenting dead for the rest of the page load. See gesture.ts.
+  let settleTimer: ReturnType<typeof setTimeout> | null = null;
+  const gesture = trackGesture({
+    dom: editor.editor.view.dom,
+    win: window,
+    onBegin: () => {
+      selectionSettled = false;
+      hidePill();
+    },
+    onEnd: () => {
+      if (settleTimer) clearTimeout(settleTimer);
+      settleTimer = setTimeout(() => {
+        settleTimer = null;
+        selectionSettled = true;
+        const sel = editor.getSelectionRel();
+        if (sel) selection = sel;
+        positionPill();
+      }, 50);
+    },
+  });
+  scope.onCleanup(() => {
+    gesture.dispose();
+    // Same reason the selectionchange timer is cleared below: this one would
+    // run positionPill() against the destroyed editor of the previous doc.
+    if (settleTimer) clearTimeout(settleTimer);
+  });
 
   function refreshSelectionState(): void {
     const sel = editor.getSelectionRel();
@@ -350,7 +381,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   }
 
   function positionPill(): void {
-    if (isDragging) {
+    if (gesture.active) {
       hidePill();
       return;
     }
@@ -485,22 +516,8 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     }
   });
 
-  // These live on the editor's own DOM, which is removed by editor.destroy()
-  // on teardown, so their listeners die with it — no scope binding needed.
-  editor.editor.view.dom.addEventListener('pointerdown', () => {
-    isDragging = true;
-    selectionSettled = false;
-    hidePill();
-  });
-  scope.listen(window, 'pointerup', () => {
-    isDragging = false;
-    setTimeout(() => {
-      selectionSettled = true;
-      const sel = editor.getSelectionRel();
-      if (sel) selection = sel;
-      positionPill();
-    }, 50);
-  });
+  // This lives on the editor's own DOM, which is removed by editor.destroy()
+  // on teardown, so its listener dies with it — no scope binding needed.
   editor.editor.view.dom.addEventListener('keyup', (ev) => {
     if (ev.shiftKey || ev.key.startsWith('Arrow') || ev.key === 'Home' || ev.key === 'End') {
       selectionSettled = true;
@@ -509,7 +526,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     }
   });
   editor.editor.on('selectionUpdate', () => {
-    if (!isDragging && selectionSettled) positionPill();
+    if (!gesture.active && selectionSettled) positionPill();
   });
   // Typing into the editor hides the caret-mode pill — it's a commenting
   // affordance, not something we want hovering mid-sentence. Range-mode
@@ -549,7 +566,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   let selChangeTimer: ReturnType<typeof setTimeout> | null = null;
   scope.listen(document, 'selectionchange', () => {
     if (!document.body.classList.contains('view-mode')) return;
-    if (isDragging) return; // wait for the drag to settle (pointerup path)
+    if (gesture.active) return; // wait for the gesture to settle (see gesture.ts)
     if (selChangeTimer) clearTimeout(selChangeTimer);
     selChangeTimer = setTimeout(() => {
       selectionSettled = true;
