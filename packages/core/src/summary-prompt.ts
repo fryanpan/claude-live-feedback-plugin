@@ -229,23 +229,42 @@ export function wordCount(s: string): number {
 }
 
 /**
- * The corrective follow-up for an over-budget answer, or null when it fits.
+ * The corrective follow-up for an answer that does not fit the card, or null
+ * when it does. Also the acceptance test for a retry's answer.
  *
- * The display side stopped truncating entirely (the card wraps the full
- * line), so the word budgets in the prompt are now the ONLY thing keeping a
- * card compact — and the model overruns them on ~18% of threads. One
+ * Two failure modes, opposite directions:
+ *
+ * OVER BUDGET. The display side stopped truncating entirely (the card wraps
+ * the full line), so the word budgets in the prompt are the ONLY thing keeping
+ * a card compact — and the model overruns them on ~18% of threads. One
  * follow-up naming the actual overrun gets most of those back inside the
  * limit; an answer that is still long after that ships in full, because a
  * complete 15-word line beats a chopped 12-word one ("cap where possible").
+ *
+ * EMPTY ON A REPLIED THREAD. A blank discussion is the legitimate no-replies
+ * answer, and it costs 0 words — so it also passes any budget check. On a
+ * thread that HAS replies it is not an answer at all: `threadLines` falls back
+ * to the raw latest comment, i.e. exactly the verbatim-snippet card generation
+ * exists to replace. Seen in production 2026-08-12 with a current hash, so it
+ * persisted rather than being retried. Asking once is cheap because it only
+ * fires on this rare shape.
  */
-export function buildRetryNudge(s: GeneratedSummary): string | null {
+export function buildRetryNudge(s: GeneratedSummary, opts: { hasReplies: boolean }): string | null {
   const t = wordCount(s.topic);
   const d = wordCount(s.discussion);
-  if (t <= TOPIC_WORDS && d <= DISCUSSION_WORDS) return null;
+  const emptyButShouldNotBe = opts.hasReplies && d === 0;
+  if (t <= TOPIC_WORDS && d <= DISCUSSION_WORDS && !emptyButShouldNotBe) return null;
   const parts: string[] = [];
   if (t > TOPIC_WORDS) parts.push(`Your topic is ${t} words; the limit is ${TOPIC_WORDS}.`);
   if (d > DISCUSSION_WORDS)
     parts.push(`Your discussion is ${d} words; the limit is ${DISCUSSION_WORDS}.`);
+  if (emptyButShouldNotBe) {
+    parts.push(
+      'Your discussion is empty, but this thread HAS replies. Say where the ' +
+        'conversation has got to — what was decided, what is still open, or ' +
+        'what is being asked.',
+    );
+  }
   parts.push('Rewrite to fit the limits. Answer with the same JSON shape and nothing else.');
   return parts.join(' ');
 }

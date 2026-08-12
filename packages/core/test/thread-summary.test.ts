@@ -5,7 +5,11 @@ import { createThread, getContent, listThreads, markOrphan, postReply } from '..
 import {
   DISCUSSION_MAX,
   NO_REPLIES_TEXT,
+  SUMMARY_PENDING_TEXT,
+  SUMMARY_PENDING_WINDOW_MS,
+  summaryHash,
   summaryKey,
+  summaryPending,
   threadSummary,
 } from '../src/thread-summary.ts';
 import type { Thread, User } from '../src/types.ts';
@@ -327,6 +331,175 @@ describe('summaryKey', () => {
   it('holds still when nothing the card shows has changed', () => {
     const opts = { ...base, replies: [{ author: sam, text: 'Agreed.' }] };
     expect(summaryKey(makeThread(opts))).toBe(summaryKey(makeThread(opts)));
+  });
+});
+
+/**
+ * The window between a comment landing and the regenerated summary syncing
+ * back used to flash the raw fallback lines, which read as the feature
+ * breaking. When a collector stamps `summaryPending`, the card says it is
+ * generating instead.
+ *
+ * The claim is grounded in a per-schedule marker: the server writes
+ * `summaryPendingTs` onto the thread at the moment it QUEUES a generation, so
+ * activity the server deliberately does not summarize (share-visitor writes
+ * pass `generate: false`) never pends. The window on the marker is what turns
+ * a failed generation back into the fallback lines rather than a stuck
+ * spinner; the lastActivity comparison retires a marker that predates newer,
+ * unsummarized activity.
+ */
+describe('summaryPending', () => {
+  // The discussion line is what generation replaces, so every case below needs
+  // a REPLY — a thread with none never pends (its own test, last in the block).
+  // Without the reply, half these assertions would read false for that reason
+  // instead of the one they name.
+  const base = {
+    docText: DOC,
+    range: [4, 14] as [number, number],
+    author: alex,
+    first: 'The error is swallowed here.',
+    replies: [{ author: sam, text: 'Agreed, fixing it now.' }],
+  };
+  const NOW = 1_000_000;
+  /** Activity + a generation queued for it just happened. */
+  const queued = (t: Thread): Thread => ({
+    ...t,
+    lastActivity: NOW - 1_000,
+    summaryPendingTs: NOW - 1_000,
+  });
+
+  it('pends while a queued generation is in flight and no current summary exists', () => {
+    expect(summaryPending(queued(makeThread(base)), { now: NOW })).toBe(true);
+  });
+
+  it('never pends without the marker — nothing was queued, nothing is coming', () => {
+    const t = { ...makeThread(base), lastActivity: NOW - 1_000 };
+    expect(summaryPending(t, { now: NOW })).toBe(false);
+    // Positive control: the same thread WITH a marker pends, so the false
+    // above is the missing marker and not the fixture.
+    expect(summaryPending(queued(makeThread(base)), { now: NOW })).toBe(true);
+  });
+
+  it('never pends when the stored summary is current', () => {
+    const t = queued(makeThread(base));
+    t.summary = { topic: 'T', discussion: 'D', hash: summaryHash(t) };
+    expect(summaryPending(t, { now: NOW })).toBe(false);
+  });
+
+  it('pends when the stored summary went stale (a reply re-queued generation)', () => {
+    const t = queued(makeThread(base));
+    t.summary = { topic: 'T', discussion: 'D', hash: 'deadbeef' };
+    expect(summaryPending(t, { now: NOW })).toBe(true);
+  });
+
+  it('expires: an old marker is NOT pending (failed call degrades, not spins)', () => {
+    const t = {
+      ...makeThread(base),
+      lastActivity: NOW - SUMMARY_PENDING_WINDOW_MS,
+      summaryPendingTs: NOW - SUMMARY_PENDING_WINDOW_MS,
+    };
+    expect(summaryPending(t, { now: NOW })).toBe(false);
+    // Positive control: one millisecond inside the window, it pends.
+    expect(summaryPending({ ...t, summaryPendingTs: t.lastActivity + 1 }, { now: NOW })).toBe(true);
+  });
+
+  /*
+   * The marker arrives out of a Yjs map, and Yjs sync is a state exchange with
+   * no server-side write authority — any synced peer, a share visitor
+   * included, can put any value there (same reason `readStoredSummary`
+   * validates every field). A marker in the FUTURE never leaves its window, so
+   * one hostile write turns a 30-second state into a permanent one on every
+   * client that syncs the doc.
+   */
+  it('rejects a marker from the future, which would pend forever', () => {
+    const t = { ...makeThread(base), lastActivity: NOW - 1_000 };
+    for (const hostile of [
+      NOW + 10 * SUMMARY_PENDING_WINDOW_MS,
+      Number.MAX_VALUE,
+      Number.POSITIVE_INFINITY,
+    ]) {
+      expect(summaryPending({ ...t, summaryPendingTs: hostile }, { now: NOW })).toBe(false);
+    }
+    // Positive control: an honest marker on the same thread does pend, so the
+    // falses above are the future timestamps and not the fixture.
+    expect(summaryPending({ ...t, summaryPendingTs: NOW - 1_000 }, { now: NOW })).toBe(true);
+  });
+
+  it('rejects a non-finite marker', () => {
+    const t = { ...makeThread(base), lastActivity: NOW - 1_000 };
+    expect(summaryPending({ ...t, summaryPendingTs: Number.NaN }, { now: NOW })).toBe(false);
+    expect(summaryPending({ ...t, summaryPendingTs: Number.NEGATIVE_INFINITY }, { now: NOW })).toBe(
+      false,
+    );
+  });
+
+  it('tolerates real clock skew — the marker is the SERVER clock, `now` is the browser', () => {
+    // The two clocks are not the same clock, so a marker a few seconds ahead
+    // of the reader is ordinary NTP drift, not an attack. Rejecting it would
+    // silently disable the feature for a device whose clock runs slow.
+    const t = { ...makeThread(base), lastActivity: NOW - 1_000 };
+    expect(summaryPending({ ...t, summaryPendingTs: NOW + 3_000 }, { now: NOW })).toBe(true);
+  });
+
+  it('retires a marker that predates newer activity (an unsummarized visitor reply)', () => {
+    // Generation ran for the state at ts=NOW-5000 and its summary landed;
+    // then a gated write (no re-queue) made the thread newer than the marker.
+    // Claiming "generating" here would promise a summary nobody scheduled.
+    const t = {
+      ...makeThread(base),
+      lastActivity: NOW - 1_000,
+      summaryPendingTs: NOW - 5_000,
+    };
+    expect(summaryPending(t, { now: NOW })).toBe(false);
+  });
+
+  it('never pends a thread with no replies — that line is not what is being generated', () => {
+    // The server DOES queue generation at thread creation (for the topic), so
+    // the marker is present and fresh. But `threadLines` deliberately keeps the
+    // no-replies line deterministic, so a pending claim here promises a
+    // discussion line that will never arrive: the card would say "Generating
+    // summary…" for ~5s and then fall back to "No replies yet".
+    const noReplies = queued(makeThread({ ...base, replies: [] }));
+    expect(summaryPending(noReplies, { now: NOW })).toBe(false);
+    // Positive control: the same thread with a reply does pend.
+    expect(summaryPending(queued(makeThread(base)), { now: NOW })).toBe(true);
+  });
+
+  it('renders the generating line: deterministic topic, pending discussion', () => {
+    const t = makeThread(base);
+    t.summaryPending = true;
+    const s = threadSummary(t);
+    expect(s.topic).toBe(threadSummary(makeThread(base)).topic); // topic unchanged
+    expect(s.discussion).toBe(SUMMARY_PENDING_TEXT);
+    expect(s.discussionKind).toBe('pending');
+  });
+
+  it('renders no-replies even if a caller mis-stamps pending on a reply-less thread', () => {
+    const t = makeThread({ ...base, replies: [] });
+    t.summaryPending = true;
+    const s = threadSummary(t);
+    expect(s.discussion).toBe(NO_REPLIES_TEXT);
+    expect(s.discussionKind).toBe('none');
+    // Positive control: the stamp DOES take effect once there is a reply.
+    const withReply = makeThread(base);
+    withReply.summaryPending = true;
+    expect(threadSummary(withReply).discussion).toBe(SUMMARY_PENDING_TEXT);
+  });
+
+  it('a CURRENT stored summary beats a (mistaken) pending stamp', () => {
+    const t = makeThread({ ...base, replies: [{ author: sam, text: 'Yes.' }] });
+    t.summary = { topic: 'Real topic', discussion: 'Real state', hash: summaryHash(t) };
+    t.summaryPending = true;
+    const s = threadSummary(t);
+    expect(s.topic).toBe('Real topic');
+    expect(s.discussion).toBe('Real state');
+  });
+
+  it('moves summaryKey, so every cached card repaints on the flip', () => {
+    const t = makeThread(base);
+    const a = summaryKey(t);
+    const b = summaryKey({ ...t, summaryPending: true });
+    expect(b).not.toBe(a);
   });
 });
 

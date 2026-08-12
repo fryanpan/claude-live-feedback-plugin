@@ -2685,6 +2685,18 @@ export class Rooms {
   private scheduleSummary(room: DocRoom, threadId: string): void {
     const summarizer = this.cfg.summarizer;
     if (!summarizer) return;
+    // Tell the clients a generation was QUEUED — the synced marker is what
+    // lets a card truthfully say "Generating summary…" for exactly the
+    // activity that scheduled one. Written per schedule, not per doc,
+    // because not all activity generates: share-visitor writes are gated
+    // (`generate: false` never reaches this method) and must not pend.
+    // Written only when enabled, so a key-less server promises nothing.
+    if (summarizer.enabled) {
+      const threadMap = (room.ydoc.getMap('threads') as Y.Map<Y.Map<unknown>>).get(threadId);
+      if (threadMap) {
+        room.ydoc.transact(() => threadMap.set('summaryPendingTs', Date.now()));
+      }
+    }
     summarizer.schedule({
       docId: room.docId,
       threadId,
