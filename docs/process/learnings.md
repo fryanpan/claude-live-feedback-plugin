@@ -396,6 +396,36 @@ Technical discoveries that should persist across sessions for this project.
   answer must still CONTAIN, not only what it must not exceed.** Any
   validation phrased purely as an upper bound is satisfied by emptiness.
 
+## A touch gesture has TWO endings, and `pointercancel` is the common one
+
+- **The comment pill was dead on mobile after the first scroll**, because
+  `isDragging` (set on `pointerdown` over the doc, and checked by every path
+  that can SHOW the pill — `positionPill`, prosemirror's `selectionUpdate`,
+  the view-mode `selectionchange` fallback) was cleared only by `pointerup`.
+  Mobile browsers fire **`pointercancel` instead of `pointerup`** whenever a
+  touch is taken over by a system gesture: scrolling with a finger on the
+  text (every session, within seconds), or iOS handing a long-press to its
+  own selection UI. One cancelled touch wedged the flag for the rest of the
+  page load, and nothing surfaced it — Bryan reported it as "no inline
+  comments on mobile?", i.e. as a MISSING FEATURE rather than a bug.
+- **Rule: if you set a flag on `pointerdown`, clear it on `pointerup` AND
+  `pointercancel`.** A `touchcancel` companion is unnecessary — a browser
+  without pointer events wouldn't have fired the `pointerdown` either.
+- **A flag that gates an affordance's only entry point needs a watchdog.**
+  The failure is silent and total, so `trackGesture` also self-settles after
+  6s if neither terminator arrives. Deliberately one-directional: settling
+  early can only SHOW the pill next to a real selection, where the
+  alternative is a dead affordance.
+- **A happy-dom unit test on the tracker cannot prove app.ts wires it** (the
+  bug was entirely in the wiring). What proved it: build the bundle in a
+  throwaway worktree, serve it on its own port + data dir, and run the same
+  probe against the pre-fix and fixed bundles — `pointerdown` +
+  `pointercancel` with no `pointerup`, then a selection. Pre-fix: pill
+  hidden, still hidden on retry. Fixed: visible both times. Never rebuild
+  `packages/markdown-app/dist` in the primary checkout to test an unmerged
+  change — prod serves that directory per-request, so the "test build" is a
+  deploy to the fleet.
+
 ## A prod restart reloads server code but NOT the served app bundle
 
 - **A feature can be fully merged, the server restarted, and every browser
