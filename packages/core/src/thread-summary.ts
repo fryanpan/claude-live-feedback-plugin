@@ -20,6 +20,18 @@ import type { StoredSummary, Thread, User } from './types.ts';
 /** Discussion line for a thread nobody has replied to. Rendered muted italic. */
 export const NO_REPLIES_TEXT = 'No replies yet';
 
+/** Discussion line while a regenerated summary is in flight. */
+export const SUMMARY_PENDING_TEXT = 'Generating summary…';
+
+/**
+ * How long after a thread's last activity a missing/stale summary still reads
+ * as "in flight". Generation normally lands in ~4–6s (3s debounce + one Haiku
+ * call); the window is deliberately generous because its expiry is the ONLY
+ * thing that turns a failed generation back into the fallback lines instead of
+ * a spinner that never resolves.
+ */
+export const SUMMARY_PENDING_WINDOW_MS = 30_000;
+
 /**
  * Hard cap on the topic line, matching `SNIPPET_MAX` in `anchor/text-range.ts`
  * — text-range snippets already arrive within it; element anchors and the
@@ -49,8 +61,11 @@ export interface Participants {
   label: ParticipantsLabel;
 }
 
-/** Where the discussion line came from. `none` is the no-replies state. */
-export type DiscussionKind = 'replies' | 'none';
+/**
+ * Where the discussion line came from. `none` is the no-replies state;
+ * `pending` is the generation-in-flight state.
+ */
+export type DiscussionKind = 'replies' | 'none' | 'pending';
 
 export interface ThreadLines {
   topic: string;
@@ -88,13 +103,63 @@ export interface ThreadSummaryBlock extends ThreadLines {
 export function threadLines(t: Thread): ThreadLines {
   const base = { topic: deriveTopic(t), ...deriveDiscussion(t) };
   const stored = t.summary;
-  if (!stored || stored.hash !== summaryHash(t)) return base;
-  return {
-    topic: stored.topic || base.topic,
-    discussion:
-      base.discussionKind === 'none' ? base.discussion : stored.discussion || base.discussion,
-    discussionKind: base.discussionKind,
-  };
+  if (stored && stored.hash === summaryHash(t)) {
+    // A current stored summary wins even over a pending stamp — if the
+    // regenerated summary has already synced, "generating" would be a lie.
+    return {
+      topic: stored.topic || base.topic,
+      discussion:
+        base.discussionKind === 'none' ? base.discussion : stored.discussion || base.discussion,
+      discussionKind: base.discussionKind,
+    };
+  }
+  if (t.summaryPending && base.discussionKind !== 'none') {
+    // Topic stays deterministic (the anchor snippet is already right); only
+    // the discussion line announces the in-flight generation. The no-replies
+    // guard is the same one the stored branch below applies, for the same
+    // reason: that line is never generated, so pending would promise a
+    // sentence that never arrives. `summaryPending` already refuses to stamp
+    // these — this is the layer that makes a mis-stamp harmless.
+    return { topic: base.topic, discussion: SUMMARY_PENDING_TEXT, discussionKind: 'pending' };
+  }
+  return base;
+}
+
+/**
+ * Should a collector stamp `summaryPending` on this thread?
+ *
+ * The claim rides on `summaryPendingTs`, written by the server at the moment
+ * it QUEUES a generation — not inferred from activity alone, because not all
+ * activity generates (share-visitor writes are gated with `generate: false`,
+ * and a key-less server never generates at all). Three ways the claim dies:
+ * the summary it promised arrives (hash current), newer activity outruns the
+ * marker (that activity queued nothing, or its own marker would be newer),
+ * or the window expires — which is what turns a failed call back into the
+ * deterministic lines instead of a spinner that never resolves.
+ *
+ * The marker comes out of a Yjs map, so it is UNTRUSTED in exactly the way
+ * `readStoredSummary`'s fields are: any synced peer can write any value. A
+ * timestamp in the future never leaves its window, which would turn a
+ * 30-second state into a permanent one for every client — hence the finite
+ * and not-far-ahead checks. `SKEW_MS` is there because the marker is the
+ * SERVER's clock and `now` is the reader's: a few seconds of NTP drift is
+ * ordinary, and rejecting it would silently disable the feature on a device
+ * whose clock runs slow.
+ */
+const SKEW_MS = 30_000;
+
+export function summaryPending(t: Thread, opts: { now: number }): boolean {
+  const ts = t.summaryPendingTs;
+  if (typeof ts !== 'number' || !Number.isFinite(ts)) return false;
+  if (ts > opts.now + SKEW_MS) return false;
+  if (t.summary && t.summary.hash === summaryHash(t)) return false;
+  if (ts < t.lastActivity) return false;
+  // Thread creation queues a generation too (for the topic), but the
+  // no-replies discussion line stays deterministic no matter what comes
+  // back — see `threadLines`. Pending here would promise a line that never
+  // arrives: "Generating summary…" for a few seconds, then "No replies yet".
+  if (deriveDiscussion(t).discussionKind === 'none') return false;
+  return opts.now - ts < SUMMARY_PENDING_WINDOW_MS;
 }
 
 /**

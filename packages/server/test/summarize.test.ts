@@ -205,6 +205,46 @@ describe('ThreadSummarizer.generate — word budget retry', () => {
     expect(out?.discussion).toBe(LONG); // full text, no '…', no word chop
   });
 
+  /*
+   * A blank line costs zero words, so it satisfies the very budget the retry
+   * was sent to satisfy. Production, 2026-08-12: a thread with a real reply
+   * ended up stored with `discussion: ""` and a CURRENT hash, so the card fell
+   * back to the raw latest comment — the verbatim-snippet card generation
+   * exists to replace — and the matching hash meant nothing ever retried it.
+   */
+  const emptyDiscussion = '{"topic":"Retry loop swallows errors","discussion":""}';
+
+  it('does not let a retry DELETE the discussion line it was asked to shorten', async () => {
+    const { impl, calls } = sequencedFetch([over, emptyDiscussion]);
+    const s = new ThreadSummarizer({ apiKey: 'k', fetchImpl: impl });
+    const out = await s.generate(thread());
+    expect(calls).toHaveLength(2);
+    // The long-but-real first answer beats a blank "compliant" one.
+    expect(out?.discussion).toBe(LONG);
+  });
+
+  it('retries an EMPTY discussion on a thread that has replies', async () => {
+    const { impl, calls } = sequencedFetch([emptyDiscussion, short]);
+    const s = new ThreadSummarizer({ apiKey: 'k', fetchImpl: impl });
+    const out = await s.generate(thread());
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.toLowerCase()).toContain('empty');
+    expect(out?.discussion).toBe('Fix underway now');
+  });
+
+  it('does NOT retry an empty discussion when the thread has no replies', async () => {
+    // Positive control for the case above: the same blank answer is correct
+    // here, and must not cost a second call.
+    const { impl, calls } = sequencedFetch([emptyDiscussion]);
+    const s = new ThreadSummarizer({ apiKey: 'k', fetchImpl: impl });
+    const opening = thread();
+    opening.comments = opening.comments.slice(0, 1);
+    opening.commentCount = 1;
+    const out = await s.generate(opening);
+    expect(calls).toHaveLength(1);
+    expect(out?.discussion).toBe('');
+  });
+
   it('keeps the first answer when the retry fails outright', async () => {
     const calls: string[] = [];
     const impl = (async (_url: string, init?: RequestInit) => {

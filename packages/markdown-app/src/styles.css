@@ -1319,6 +1319,32 @@ body.threads-resizing {
 .thread-discussion.none::before {
   content: "";
 }
+/* A regenerated summary is in flight: say so, muted italic with a gentle
+   pulse, no arrow (this line is status, not discussion). Swapped for the
+   summary when it syncs, or back to the fallback lines when the pending
+   window expires (see summaryPending in core/thread-summary.ts). */
+.thread-discussion.pending {
+  color: var(--fg-muted);
+  font-style: italic;
+  animation: summary-pending-pulse 1.6s ease-in-out infinite;
+}
+.thread-discussion.pending::before {
+  content: "";
+}
+@keyframes summary-pending-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .thread-discussion.pending {
+    animation: none;
+  }
+}
 
 /* Row 4: how much conversation there is, and the one resolve control. Lives
    outside both slots, so expanding never rebuilds or moves it. */
