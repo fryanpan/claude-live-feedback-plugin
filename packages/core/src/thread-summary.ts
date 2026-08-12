@@ -136,10 +136,22 @@ export function threadLines(t: Thread): ThreadLines {
  * marker (that activity queued nothing, or its own marker would be newer),
  * or the window expires — which is what turns a failed call back into the
  * deterministic lines instead of a spinner that never resolves.
+ *
+ * The marker comes out of a Yjs map, so it is UNTRUSTED in exactly the way
+ * `readStoredSummary`'s fields are: any synced peer can write any value. A
+ * timestamp in the future never leaves its window, which would turn a
+ * 30-second state into a permanent one for every client — hence the finite
+ * and not-far-ahead checks. `SKEW_MS` is there because the marker is the
+ * SERVER's clock and `now` is the reader's: a few seconds of NTP drift is
+ * ordinary, and rejecting it would silently disable the feature on a device
+ * whose clock runs slow.
  */
+const SKEW_MS = 30_000;
+
 export function summaryPending(t: Thread, opts: { now: number }): boolean {
   const ts = t.summaryPendingTs;
-  if (typeof ts !== 'number') return false;
+  if (typeof ts !== 'number' || !Number.isFinite(ts)) return false;
+  if (ts > opts.now + SKEW_MS) return false;
   if (t.summary && t.summary.hash === summaryHash(t)) return false;
   if (ts < t.lastActivity) return false;
   // Thread creation queues a generation too (for the topic), but the

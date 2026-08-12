@@ -403,6 +403,44 @@ describe('summaryPending', () => {
     expect(summaryPending({ ...t, summaryPendingTs: t.lastActivity + 1 }, { now: NOW })).toBe(true);
   });
 
+  /*
+   * The marker arrives out of a Yjs map, and Yjs sync is a state exchange with
+   * no server-side write authority — any synced peer, a share visitor
+   * included, can put any value there (same reason `readStoredSummary`
+   * validates every field). A marker in the FUTURE never leaves its window, so
+   * one hostile write turns a 30-second state into a permanent one on every
+   * client that syncs the doc.
+   */
+  it('rejects a marker from the future, which would pend forever', () => {
+    const t = { ...makeThread(base), lastActivity: NOW - 1_000 };
+    for (const hostile of [
+      NOW + 10 * SUMMARY_PENDING_WINDOW_MS,
+      Number.MAX_VALUE,
+      Number.POSITIVE_INFINITY,
+    ]) {
+      expect(summaryPending({ ...t, summaryPendingTs: hostile }, { now: NOW })).toBe(false);
+    }
+    // Positive control: an honest marker on the same thread does pend, so the
+    // falses above are the future timestamps and not the fixture.
+    expect(summaryPending({ ...t, summaryPendingTs: NOW - 1_000 }, { now: NOW })).toBe(true);
+  });
+
+  it('rejects a non-finite marker', () => {
+    const t = { ...makeThread(base), lastActivity: NOW - 1_000 };
+    expect(summaryPending({ ...t, summaryPendingTs: Number.NaN }, { now: NOW })).toBe(false);
+    expect(summaryPending({ ...t, summaryPendingTs: Number.NEGATIVE_INFINITY }, { now: NOW })).toBe(
+      false,
+    );
+  });
+
+  it('tolerates real clock skew — the marker is the SERVER clock, `now` is the browser', () => {
+    // The two clocks are not the same clock, so a marker a few seconds ahead
+    // of the reader is ordinary NTP drift, not an attack. Rejecting it would
+    // silently disable the feature for a device whose clock runs slow.
+    const t = { ...makeThread(base), lastActivity: NOW - 1_000 };
+    expect(summaryPending({ ...t, summaryPendingTs: NOW + 3_000 }, { now: NOW })).toBe(true);
+  });
+
   it('retires a marker that predates newer activity (an unsummarized visitor reply)', () => {
     // Generation ran for the state at ts=NOW-5000 and its summary landed;
     // then a gated write (no re-queue) made the thread newer than the marker.
