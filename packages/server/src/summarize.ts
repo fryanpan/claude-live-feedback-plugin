@@ -261,7 +261,8 @@ export class ThreadSummarizer {
     // than starting over) recovers most overruns; if the retry is still long
     // or fails, the first answer ships whole. Never truncate here: a
     // complete 15-word line beats a chopped 12-word one.
-    const nudge = buildRetryNudge(parsed);
+    const hasReplies = thread.comments.length > 1;
+    const nudge = buildRetryNudge(parsed, { hasReplies });
     if (nudge) {
       const retry = await this.post(system, [
         { role: 'user', content: user },
@@ -269,7 +270,16 @@ export class ThreadSummarizer {
         { role: 'user', content: nudge },
       ]);
       const reparsed = retry === null ? null : parseSummaryResponse(retry);
-      if (reparsed && !buildRetryNudge(reparsed)) return { ...reparsed, hash };
+      if (reparsed && !buildRetryNudge(reparsed, { hasReplies })) {
+        // A shortened answer must still be an ANSWER. A retry that empties a
+        // line the first answer had filled is a deletion, not a rewrite, and
+        // an empty line costs zero words — so it would pass the budget check
+        // above and take a good line off the card. Keep whichever answer has
+        // the line.
+        const keepsTopic = parsed.topic === '' || reparsed.topic !== '';
+        const keepsDiscussion = parsed.discussion === '' || reparsed.discussion !== '';
+        if (keepsTopic && keepsDiscussion) return { ...reparsed, hash };
+      }
     }
     return { ...parsed, hash };
   }

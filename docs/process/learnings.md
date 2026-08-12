@@ -351,6 +351,51 @@ Technical discoveries that should persist across sessions for this project.
   `*italic*` / `[link](url)` syntax land as literal characters, not marks.
   Backlog: a dedicated `apply_mark` tool.
 
+## A "we're working on it" UI state must be grounded in the work, not inferred
+
+- **A pending/loading state the client INFERS will lie, and the lie is
+  always in the direction of promising something that never arrives.** The
+  first cut of "Generating summary…" inferred in-flight generation from
+  three client-visible facts (a doc-wide `summariesEnabled` flag + stale
+  stored summary + recent `lastActivity`). Every one of those was true in
+  cases where NO generation was queued: share-visitor writes are gated
+  (`generate: !visitor`, so `scheduleSummary` is never reached), and thread
+  CREATION queues a call whose result can only change the topic — the
+  no-replies discussion line is deterministic by design, so the card
+  promised a sentence, waited 5s, and fell back to "No replies yet". Fix:
+  the server writes `summaryPendingTs` into the thread's Yjs map at the
+  exact point it QUEUES the call, and the client reads that. **Grain
+  matters: "this server does X" is not "X is happening for this item".**
+- **Time-bound the marker, and treat expiry as a clock event.** The window
+  is what turns a failed API call back into the deterministic lines instead
+  of a spinner nobody clears. But nothing in the ydoc changes at expiry, so
+  no observer fires — the card needs its own timer, that timer must always
+  be armed for the EARLIEST pending deadline (a first-come "one is already
+  scheduled" guard leaves a sooner-expiring card spinning), and it must be
+  cleared in `destroy()` or it repaints the previous doc's threads over the
+  next mount, which reuses the same DOM.
+- Also retire a marker older than `lastActivity`: newer activity that
+  queued nothing means the promised summary describes a state already gone.
+
+## A corrective retry can DELETE the thing it was asked to fix
+
+- **The word-cap retry was allowed to empty a summary line, because an
+  empty line costs zero words and therefore satisfies the budget the retry
+  was sent to satisfy.** `buildRetryNudge` returned null for
+  `discussion: ""`, so the "compliant" blank answer beat a long-but-real
+  first answer. Downstream, `threadLines` does `stored.discussion ||
+  base.discussion`, so the card fell back to the raw latest comment — the
+  verbatim snippet generation exists to REMOVE — and because the stored
+  hash was current, nothing ever retried it. Found in production with one
+  affected thread, three days after the retry shipped with four passing
+  tests.
+- Two guards, both one-directional: a retry may not blank a line the first
+  answer filled (keep whichever answer HAS the line), and an empty
+  discussion on a thread that has replies is itself a reason to ask again.
+- **General rule: when you add a "fix it" round trip, state what the second
+  answer must still CONTAIN, not only what it must not exceed.** Any
+  validation phrased purely as an upper bound is satisfied by emptiness.
+
 ## A prod restart reloads server code but NOT the served app bundle
 
 - **A feature can be fully merged, the server restarted, and every browser
