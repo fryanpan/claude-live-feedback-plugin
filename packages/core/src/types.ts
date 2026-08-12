@@ -278,6 +278,13 @@ export interface Thread extends ThreadSummary {
    */
   summary?: StoredSummary;
   /**
+   * When the server last QUEUED a generation for this thread (written into
+   * the thread's Yjs map by `scheduleSummary`, synced to every client).
+   * Absent on threads whose activity never scheduled one — a key-less
+   * server, or gated share-visitor writes.
+   */
+  summaryPendingTs?: number;
+  /**
    * Stamped by a collector (never persisted) when a regenerated summary is
    * believed to be in flight — see `summaryPending()` in thread-summary.ts.
    * Makes the card say "Generating summary…" instead of flashing the

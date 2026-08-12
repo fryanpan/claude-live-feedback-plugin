@@ -11,6 +11,7 @@
 
 import {
   PROMPT_CHARS_MAX,
+  buildRetryNudge,
   buildSummaryPrompt,
   needsCall,
   parseSummaryResponse,
@@ -155,6 +156,57 @@ describe('summaryKey covers generated text', () => {
     const t = thread();
     const stale = { topic: 'Something else', discussion: 'Something else', hash: 'deadbeef' };
     expect(summaryKey({ ...t, summary: stale })).toBe(summaryKey(t));
+  });
+});
+
+/**
+ * The word-budget follow-up, and the way it can make a card WORSE.
+ *
+ * Found in production (2026-08-12): a thread with a real reply stored
+ * `discussion: ""` with a current hash, so `threadLines` fell back to the raw
+ * comment text — the verbatim-snippet card that generation exists to remove.
+ * An empty line costs 0 words, so it satisfies the budget the retry was asked
+ * to meet: the corrective follow-up is allowed to DELETE the line it was only
+ * supposed to shorten.
+ */
+describe('buildRetryNudge', () => {
+  const hasReplies = { hasReplies: true };
+
+  it('is null when both lines already fit', () => {
+    expect(
+      buildRetryNudge(
+        { topic: 'Retry loop swallows errors', discussion: 'Fix underway' },
+        hasReplies,
+      ),
+    ).toBeNull();
+  });
+
+  it('names the actual overrun so the model shortens its own answer', () => {
+    const long = Array.from({ length: 20 }, (_, i) => `word${i}`).join(' ');
+    const nudge = buildRetryNudge({ topic: 'ok topic', discussion: long }, hasReplies);
+    expect(nudge).toContain('20 words');
+    expect(nudge).toContain('12');
+  });
+
+  it('asks again when the discussion is EMPTY on a thread that has replies', () => {
+    // Not a budget overrun — the opposite. Without this the answer is
+    // "compliant" and a card with a real conversation shows a raw comment.
+    const nudge = buildRetryNudge(
+      { topic: 'Retry loop swallows errors', discussion: '' },
+      hasReplies,
+    );
+    expect(nudge).not.toBeNull();
+    expect(nudge?.toLowerCase()).toContain('discussion');
+  });
+
+  it('accepts an empty discussion when the thread genuinely has no replies', () => {
+    // Positive control for the case above: same empty line, different thread.
+    expect(
+      buildRetryNudge(
+        { topic: 'Retry loop swallows errors', discussion: '' },
+        { hasReplies: false },
+      ),
+    ).toBeNull();
   });
 });
 

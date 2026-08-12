@@ -345,6 +345,7 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
       // this surface does not. Same shape as the "route layer silently drops
       // params" class in docs/process/learnings.md.
       const summary = readStoredSummary(threadMap.get('summary'));
+      const pendingTsRaw = threadMap.get('summaryPendingTs');
       const t: Thread = {
         id,
         status,
@@ -354,35 +355,46 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
         lastActivity: comments.length > 0 ? (comments[comments.length - 1]?.ts ?? 0) : 0,
         comments,
         ...(summary ? { summary } : {}),
+        ...(typeof pendingTsRaw === 'number' ? { summaryPendingTs: pendingTsRaw } : {}),
       };
-      // "A summary is being generated" is inferred, not observed — the server
-      // stamps `summariesEnabled` into the meta map (the client's only proof
-      // that generation exists), and `summaryPending` time-bounds the rest so
-      // a failed call degrades to the deterministic lines.
-      if (summaryPending(t, { enabled: summariesEnabled(), now: Date.now() })) {
+      // "A summary is being generated" is a server-written fact, not a guess:
+      // `summaryPendingTs` is stamped when a generation is QUEUED (gated
+      // visitor writes never stamp), and `summaryPending` time-bounds it so a
+      // failed call degrades to the deterministic lines.
+      if (summaryPending(t, { now: Date.now() })) {
         t.summaryPending = true;
-        schedulePendingExpiry(t.lastActivity);
+        schedulePendingExpiry((t.summaryPendingTs ?? 0) + SUMMARY_PENDING_WINDOW_MS);
       }
       out.push(t);
     });
     return out;
   }
 
-  function summariesEnabled(): boolean {
-    return ydoc.getMap('meta').get('summariesEnabled') === true;
-  }
-
   // A pending card's ONLY exits are a summary syncing in (repaints via the
   // ydoc observer) or its window expiring — and expiry is a clock event, not
-  // a doc event, so nothing would repaint the card without this timer.
+  // a doc event, so nothing would repaint the card without this timer. One
+  // timer, always armed for the EARLIEST expiry seen: a later `collect` may
+  // find a thread that expires sooner, so an earlier deadline retimes the
+  // timer rather than being swallowed by "one is already scheduled".
   let pendingExpiryTimer: ReturnType<typeof setTimeout> | null = null;
-  function schedulePendingExpiry(lastActivity: number): void {
-    const delay = lastActivity + SUMMARY_PENDING_WINDOW_MS - Date.now() + 250;
-    if (delay <= 0 || pendingExpiryTimer != null) return;
-    pendingExpiryTimer = setTimeout(() => {
-      pendingExpiryTimer = null;
-      redrawThreads();
-    }, delay);
+  let pendingExpiryAt = Number.POSITIVE_INFINITY;
+  function schedulePendingExpiry(expiresAt: number): void {
+    const fireAt = expiresAt + 250; // small slack so the redraw lands after expiry
+    if (fireAt >= pendingExpiryAt) return;
+    if (pendingExpiryTimer != null) clearTimeout(pendingExpiryTimer);
+    pendingExpiryAt = fireAt;
+    pendingExpiryTimer = setTimeout(
+      () => {
+        clearPendingExpiry();
+        redrawThreads();
+      },
+      Math.max(0, fireAt - Date.now()),
+    );
+  }
+  function clearPendingExpiry(): void {
+    if (pendingExpiryTimer != null) clearTimeout(pendingExpiryTimer);
+    pendingExpiryTimer = null;
+    pendingExpiryAt = Number.POSITIVE_INFINITY;
   }
 
   let activeThreadId: string | null = null;
@@ -828,6 +840,12 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
       // Signal-bound listeners are already gone via scope.dispose(); clear the
       // rendered UI so the next document's mount doesn't briefly show this
       // one's threads / open composer / open thread view.
+      //
+      // The pending-expiry timer is NOT signal-bound, so it would outlive this
+      // chrome and fire `redrawThreads` for the document we just left —
+      // repainting the previous doc's threads over the next mount, which
+      // reuses the same DOM.
+      clearPendingExpiry();
       threadsListEl.innerHTML = '';
       hideComposer();
       closeThreadView();

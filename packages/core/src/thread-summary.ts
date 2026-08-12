@@ -113,9 +113,13 @@ export function threadLines(t: Thread): ThreadLines {
       discussionKind: base.discussionKind,
     };
   }
-  if (t.summaryPending) {
+  if (t.summaryPending && base.discussionKind !== 'none') {
     // Topic stays deterministic (the anchor snippet is already right); only
-    // the discussion line announces the in-flight generation.
+    // the discussion line announces the in-flight generation. The no-replies
+    // guard is the same one the stored branch below applies, for the same
+    // reason: that line is never generated, so pending would promise a
+    // sentence that never arrives. `summaryPending` already refuses to stamp
+    // these — this is the layer that makes a mis-stamp harmless.
     return { topic: base.topic, discussion: SUMMARY_PENDING_TEXT, discussionKind: 'pending' };
   }
   return base;
@@ -124,16 +128,26 @@ export function threadLines(t: Thread): ThreadLines {
 /**
  * Should a collector stamp `summaryPending` on this thread?
  *
- * The client cannot see the server's Haiku call, so "in flight" is inferred:
- * generation is enabled on this doc, the stored summary is absent or stale,
- * and the thread changed recently enough that the regeneration debounce +
- * call should still be running. Time-bounding on `lastActivity` is what lets
- * a failed call degrade to the deterministic lines instead of spinning.
+ * The claim rides on `summaryPendingTs`, written by the server at the moment
+ * it QUEUES a generation — not inferred from activity alone, because not all
+ * activity generates (share-visitor writes are gated with `generate: false`,
+ * and a key-less server never generates at all). Three ways the claim dies:
+ * the summary it promised arrives (hash current), newer activity outruns the
+ * marker (that activity queued nothing, or its own marker would be newer),
+ * or the window expires — which is what turns a failed call back into the
+ * deterministic lines instead of a spinner that never resolves.
  */
-export function summaryPending(t: Thread, opts: { enabled: boolean; now: number }): boolean {
-  if (!opts.enabled) return false;
+export function summaryPending(t: Thread, opts: { now: number }): boolean {
+  const ts = t.summaryPendingTs;
+  if (typeof ts !== 'number') return false;
   if (t.summary && t.summary.hash === summaryHash(t)) return false;
-  return opts.now - t.lastActivity < SUMMARY_PENDING_WINDOW_MS;
+  if (ts < t.lastActivity) return false;
+  // Thread creation queues a generation too (for the topic), but the
+  // no-replies discussion line stays deterministic no matter what comes
+  // back — see `threadLines`. Pending here would promise a line that never
+  // arrives: "Generating summary…" for a few seconds, then "No replies yet".
+  if (deriveDiscussion(t).discussionKind === 'none') return false;
+  return opts.now - ts < SUMMARY_PENDING_WINDOW_MS;
 }
 
 /**

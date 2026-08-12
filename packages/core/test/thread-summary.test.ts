@@ -338,46 +338,97 @@ describe('summaryKey', () => {
  * The window between a comment landing and the regenerated summary syncing
  * back used to flash the raw fallback lines, which read as the feature
  * breaking. When a collector stamps `summaryPending`, the card says it is
- * generating instead — and the stamp itself is time-bounded so a failed
- * generation degrades back to the fallback lines rather than a stuck spinner.
+ * generating instead.
+ *
+ * The claim is grounded in a per-schedule marker: the server writes
+ * `summaryPendingTs` onto the thread at the moment it QUEUES a generation, so
+ * activity the server deliberately does not summarize (share-visitor writes
+ * pass `generate: false`) never pends. The window on the marker is what turns
+ * a failed generation back into the fallback lines rather than a stuck
+ * spinner; the lastActivity comparison retires a marker that predates newer,
+ * unsummarized activity.
  */
 describe('summaryPending', () => {
+  // The discussion line is what generation replaces, so every case below needs
+  // a REPLY — a thread with none never pends (its own test, last in the block).
+  // Without the reply, half these assertions would read false for that reason
+  // instead of the one they name.
   const base = {
     docText: DOC,
     range: [4, 14] as [number, number],
     author: alex,
     first: 'The error is swallowed here.',
+    replies: [{ author: sam, text: 'Agreed, fixing it now.' }],
   };
   const NOW = 1_000_000;
-  const fresh = (t: Thread): Thread => ({ ...t, lastActivity: NOW - 1_000 });
-  const old = (t: Thread): Thread => ({ ...t, lastActivity: NOW - SUMMARY_PENDING_WINDOW_MS });
-
-  it('is pending right after activity on a thread with no current summary', () => {
-    expect(summaryPending(fresh(makeThread(base)), { enabled: true, now: NOW })).toBe(true);
+  /** Activity + a generation queued for it just happened. */
+  const queued = (t: Thread): Thread => ({
+    ...t,
+    lastActivity: NOW - 1_000,
+    summaryPendingTs: NOW - 1_000,
   });
 
-  it('never pends when generation is off — a summary that will never come', () => {
-    expect(summaryPending(fresh(makeThread(base)), { enabled: false, now: NOW })).toBe(false);
+  it('pends while a queued generation is in flight and no current summary exists', () => {
+    expect(summaryPending(queued(makeThread(base)), { now: NOW })).toBe(true);
+  });
+
+  it('never pends without the marker — nothing was queued, nothing is coming', () => {
+    const t = { ...makeThread(base), lastActivity: NOW - 1_000 };
+    expect(summaryPending(t, { now: NOW })).toBe(false);
+    // Positive control: the same thread WITH a marker pends, so the false
+    // above is the missing marker and not the fixture.
+    expect(summaryPending(queued(makeThread(base)), { now: NOW })).toBe(true);
   });
 
   it('never pends when the stored summary is current', () => {
-    const t = fresh(makeThread(base));
+    const t = queued(makeThread(base));
     t.summary = { topic: 'T', discussion: 'D', hash: summaryHash(t) };
-    expect(summaryPending(t, { enabled: true, now: NOW })).toBe(false);
+    expect(summaryPending(t, { now: NOW })).toBe(false);
   });
 
-  it('pends when the stored summary went stale (a reply changed the hash)', () => {
-    const t = fresh(makeThread({ ...base, replies: [{ author: sam, text: 'New reply.' }] }));
+  it('pends when the stored summary went stale (a reply re-queued generation)', () => {
+    const t = queued(makeThread(base));
     t.summary = { topic: 'T', discussion: 'D', hash: 'deadbeef' };
-    expect(summaryPending(t, { enabled: true, now: NOW })).toBe(true);
+    expect(summaryPending(t, { now: NOW })).toBe(true);
   });
 
-  it('expires: an old stale thread is NOT pending (failed call degrades, not spins)', () => {
-    expect(summaryPending(old(makeThread(base)), { enabled: true, now: NOW })).toBe(false);
+  it('expires: an old marker is NOT pending (failed call degrades, not spins)', () => {
+    const t = {
+      ...makeThread(base),
+      lastActivity: NOW - SUMMARY_PENDING_WINDOW_MS,
+      summaryPendingTs: NOW - SUMMARY_PENDING_WINDOW_MS,
+    };
+    expect(summaryPending(t, { now: NOW })).toBe(false);
+    // Positive control: one millisecond inside the window, it pends.
+    expect(summaryPending({ ...t, summaryPendingTs: t.lastActivity + 1 }, { now: NOW })).toBe(true);
+  });
+
+  it('retires a marker that predates newer activity (an unsummarized visitor reply)', () => {
+    // Generation ran for the state at ts=NOW-5000 and its summary landed;
+    // then a gated write (no re-queue) made the thread newer than the marker.
+    // Claiming "generating" here would promise a summary nobody scheduled.
+    const t = {
+      ...makeThread(base),
+      lastActivity: NOW - 1_000,
+      summaryPendingTs: NOW - 5_000,
+    };
+    expect(summaryPending(t, { now: NOW })).toBe(false);
+  });
+
+  it('never pends a thread with no replies — that line is not what is being generated', () => {
+    // The server DOES queue generation at thread creation (for the topic), so
+    // the marker is present and fresh. But `threadLines` deliberately keeps the
+    // no-replies line deterministic, so a pending claim here promises a
+    // discussion line that will never arrive: the card would say "Generating
+    // summary…" for ~5s and then fall back to "No replies yet".
+    const noReplies = queued(makeThread({ ...base, replies: [] }));
+    expect(summaryPending(noReplies, { now: NOW })).toBe(false);
+    // Positive control: the same thread with a reply does pend.
+    expect(summaryPending(queued(makeThread(base)), { now: NOW })).toBe(true);
   });
 
   it('renders the generating line: deterministic topic, pending discussion', () => {
-    const t = fresh(makeThread(base));
+    const t = makeThread(base);
     t.summaryPending = true;
     const s = threadSummary(t);
     expect(s.topic).toBe(threadSummary(makeThread(base)).topic); // topic unchanged
@@ -385,8 +436,20 @@ describe('summaryPending', () => {
     expect(s.discussionKind).toBe('pending');
   });
 
+  it('renders no-replies even if a caller mis-stamps pending on a reply-less thread', () => {
+    const t = makeThread({ ...base, replies: [] });
+    t.summaryPending = true;
+    const s = threadSummary(t);
+    expect(s.discussion).toBe(NO_REPLIES_TEXT);
+    expect(s.discussionKind).toBe('none');
+    // Positive control: the stamp DOES take effect once there is a reply.
+    const withReply = makeThread(base);
+    withReply.summaryPending = true;
+    expect(threadSummary(withReply).discussion).toBe(SUMMARY_PENDING_TEXT);
+  });
+
   it('a CURRENT stored summary beats a (mistaken) pending stamp', () => {
-    const t = fresh(makeThread({ ...base, replies: [{ author: sam, text: 'Yes.' }] }));
+    const t = makeThread({ ...base, replies: [{ author: sam, text: 'Yes.' }] });
     t.summary = { topic: 'Real topic', discussion: 'Real state', hash: summaryHash(t) };
     t.summaryPending = true;
     const s = threadSummary(t);
