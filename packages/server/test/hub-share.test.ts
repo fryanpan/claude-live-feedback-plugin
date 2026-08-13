@@ -28,7 +28,7 @@ import * as decoding from 'lib0/decoding';
 import * as encoding from 'lib0/encoding';
 import * as syncProtocol from 'y-protocols/sync';
 import * as Y from 'yjs';
-import { type ServerHandle, createServer } from '../src/server.ts';
+import { HUB_FEEDBACK_DOC_ID, type ServerHandle, createServer } from '../src/server.ts';
 import { SHARE_COOKIE } from '../src/share/link-session.ts';
 
 const PUBLIC_HOST = 'feedback.example.com';
@@ -263,6 +263,24 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
     it('refuses it without a session, and to a DOC-scoped visitor (absence)', async () => {
       expect((await pub(`/workspaces/${hubId}`)).status).toBe(401);
       expect((await pub(`/workspaces/${hubId}`, docCookie)).status).toBe(403);
+    });
+
+    // The hub-feedback doc is SHARED BY EVERY WORKSPACE, and Yjs sync is a
+    // state exchange rather than a per-connection projection — so a visitor
+    // handed the widget would sync every other workspace's feedback threads,
+    // including the hub paths and quoted UI text they were anchored to. The
+    // widget is therefore owner-only, and the absence is asserted next to the
+    // owner's presence so it can't pass by the page simply being empty.
+    it('does not hand the shared feedback widget to a share visitor', async () => {
+      const visitorHtml = await (await pub(`/workspaces/${hubId}`, hubCookie)).text();
+      expect(visitorHtml).toContain('search-revamp'); // the real shell
+      expect(visitorHtml).not.toContain('claude-feedback-widget');
+      expect(visitorHtml).not.toContain(HUB_FEEDBACK_DOC_ID);
+
+      // Positive control: the SAME page, fetched as the owner, does carry it.
+      const ownerHtml = await (await local(`/workspaces/${hubId}`)).text();
+      expect(ownerHtml).toContain('claude-feedback-widget');
+      expect(ownerHtml).toContain(HUB_FEEDBACK_DOC_ID);
     });
   });
 
