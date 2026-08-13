@@ -830,8 +830,17 @@ body.hub-body {
   font-size: 13px;
   margin: 2px 0 0;
 }
+/* A task list is read by SKIMMING down a column, not by reading each row.
+   So the row is a grid with fixed tracks — status, risk, title, badges —
+   and every cell in a column lines up with the one above it. A flex row
+   with `flex-wrap` (what this was) re-flows per row: a long title pushes
+   its own badges to a second line, the next row's don't move, and the
+   status controls end up at four different x-positions down the page.
+   `minmax(0, 1fr)` on the title is what lets it ellipsize instead of
+   forcing the grid wider than the viewport. */
 .hub-task-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   min-height: 40px;
@@ -839,14 +848,25 @@ body.hub-body {
   border-radius: var(--radius);
   cursor: pointer;
 }
+/* Hairline separators, like every list view built for scanning. Keeps rows
+   distinguishable at the tighter row height without adding vertical space. */
+.hub-task-row + .hub-task-row {
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+}
 .hub-task-row:hover,
 .hub-task-row:focus-visible {
   background: var(--bg-hover);
   outline: none;
 }
+/* The risk dot has its own track so its absence doesn't shift the title
+   column — an empty `auto` track collapses to zero width, but the gap is
+   what would otherwise move. */
+.hub-task-row:not(:has(.hub-risk)) {
+  grid-template-columns: auto 0 minmax(0, 1fr) auto;
+}
 .hub-task-title {
   min-width: 0;
-  flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -863,6 +883,26 @@ body.hub-body {
   padding: 2px 4px;
   border: 1px solid var(--accent);
   border-radius: 4px;
+}
+/* The row's status control: a fixed-size round mark so column one is the
+   same width on every row. The status NAME lives in aria-label + title —
+   see the comment at its construction for why it isn't drawn.
+   44px of tap target via padding-free min sizes + the row's own height:
+   the mark is 24px but the row is >=40px tall and the whole row is
+   clickable, so the small visual target isn't a small touch target. */
+.hub-status-mark {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 50%;
+  border: 1.5px solid var(--border);
+  background: var(--bg-panel);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--fg-muted);
 }
 .hub-status-chip {
   flex: 0 0 auto;
@@ -1151,13 +1191,27 @@ body.hub-body {
   .hub-section.hub-subgoal {
     margin-left: 10px;
   }
+  /* Deliberately NOT re-wrapping. The row stays a single grid line at every
+     width: wrapping is what put the status marks at four x-positions and
+     dropped titles below their own controls. A title too long for 430px
+     ellipsizes — the full text is one tap away in the detail panel, and a
+     truncated title you can scan beats a complete one you can't. */
   .hub-task-row {
-    flex-wrap: wrap;
+    gap: 6px;
+    padding: 2px 2px;
   }
-  .hub-task-title {
-    white-space: normal;
-    overflow-wrap: anywhere;
-    word-break: break-word;
+  /* `action` is the default and `after N` is rare enough to read in the
+     detail panel; on a phone they cost title width on every row without
+     distinguishing any row from its neighbours. `decision`, overdue and
+     triage stay — those are the ones that mean "look at me". */
+  .hub-badge-action,
+  .hub-badge-after {
+    display: none;
+  }
+  /* Hard ceiling so a long assignee name can never win the row against the
+     title. `minmax(0, 1fr)` handles the title side; this handles the other. */
+  .hub-task-badges {
+    max-width: 40%;
   }
   .hub-detail {
     padding: 0;

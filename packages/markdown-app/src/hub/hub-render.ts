@@ -173,11 +173,21 @@ export function renderTaskRow(task: HubTask, handlers: BoardHandlers): HTMLEleme
   row.dataset.taskId = task.id;
   row.tabIndex = 0;
 
+  // A round mark, not a labelled pill. The pill was ~88px of every row's
+  // width spent restating a value the shape and colour already carry, and it
+  // was the reason the title had too little room to stay on one line. The
+  // status name moves to the accessible name and the tooltip, so nothing is
+  // lost for a screen reader or a hovering mouse — only for the skim, which
+  // is the thing that got better.
   const chip = document.createElement('button');
   chip.type = 'button';
-  chip.className = `hub-status-chip hub-chip-${task.status}`;
-  chip.textContent = STATUS_LABEL[task.status];
-  chip.title = 'Tap to change status';
+  chip.className = `hub-status-mark hub-chip-${task.status}`;
+  const glyph = document.createElement('span');
+  glyph.setAttribute('aria-hidden', 'true');
+  glyph.textContent = task.status === 'done' ? '✓' : task.status === 'in-progress' ? '◐' : '';
+  chip.append(glyph);
+  chip.setAttribute('aria-label', `${STATUS_LABEL[task.status]} — tap to change status`);
+  chip.title = `${STATUS_LABEL[task.status]} — tap to change status`;
   chip.addEventListener('click', (ev) => {
     ev.stopPropagation();
     handlers.onStatusTap(task);
