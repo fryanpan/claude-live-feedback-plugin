@@ -17,6 +17,26 @@ function docIdFromPath(): string | null {
   return m?.[1] ? decodeURIComponent(m[1]) : null;
 }
 
+/**
+ * docId → hub workspace id, memoized. Only ATTACHED answers are cached: a doc
+ * can be attached to a hub later in the same page load, and caching "not
+ * attached" would leave voice unroutable until a reload. A miss costs one
+ * round trip; the server re-resolves on every /voice call anyway.
+ */
+export function createWorkspaceResolver(
+  fetchDoc: (docId: string) => Promise<{ hubWorkspaceId?: string } | null>,
+): (docId: string) => Promise<string | null> {
+  const cache = new Map<string, string>();
+  return async (docId: string) => {
+    const cached = cache.get(docId);
+    if (cached !== undefined) return cached;
+    const data = await fetchDoc(docId).catch(() => null);
+    const ws = data?.hubWorkspaceId ?? null;
+    if (ws) cache.set(docId, ws);
+    return ws;
+  };
+}
+
 export function mountDocVoice(user: User): { destroy(): void } {
   const button = document.createElement('button');
   button.type = 'button';
@@ -31,24 +51,11 @@ export function mountDocVoice(user: User): { destroy(): void } {
   indicator.setAttribute('aria-live', 'polite');
   document.body.append(button, indicator);
 
-  // docId → hub workspace id (or null). Cached: the answer only changes on
-  // attach_doc, and a wrong cache miss costs one extra round trip, not
-  // correctness (the server re-resolves on every /voice call).
-  const wsCache = new Map<string, string | null>();
-  const hubWorkspaceOf = async (docId: string): Promise<string | null> => {
-    const cached = wsCache.get(docId);
-    if (cached !== undefined) return cached;
-    try {
-      const res = await fetch(`/api/docs/${encodeURIComponent(docId)}`);
-      if (!res.ok) return null;
-      const data = (await res.json()) as { hubWorkspaceId?: string };
-      const ws = data.hubWorkspaceId ?? null;
-      wsCache.set(docId, ws);
-      return ws;
-    } catch {
-      return null;
-    }
-  };
+  const hubWorkspaceOf = createWorkspaceResolver(async (docId) => {
+    const res = await fetch(`/api/docs/${encodeURIComponent(docId)}`);
+    if (!res.ok) return null;
+    return (await res.json()) as { hubWorkspaceId?: string };
+  });
 
   const capture = createVoiceCapture({
     button,

@@ -41,6 +41,7 @@ import {
   renderTaskDetail,
   renderThreadsSidebar,
 } from './hub-render.ts';
+import { sidebarEntriesFor } from './hub-sidebar.ts';
 
 interface HubState {
   info: HubWorkspaceInfo | null;
@@ -158,28 +159,6 @@ function buildShell(root: HTMLElement, name: string): void {
     doneSelect.append(opt);
   }
   doneSelect.value = DEFAULT_DONE_WINDOW;
-}
-
-function docLabelOf(meta: {
-  title?: string;
-  relPath?: string;
-  sourceUrl?: string;
-  docId: string;
-}): string {
-  if (meta.title) return meta.title;
-  if (meta.relPath) return meta.relPath;
-  if (meta.sourceUrl) return meta.sourceUrl.split('/').pop() ?? meta.docId;
-  return meta.docId;
-}
-
-function threadLabelOf(t: {
-  comments?: Array<{ text?: string }>;
-  anchor?: { snippet?: { text?: string } };
-}): string {
-  const first = t.comments?.[0]?.text?.trim();
-  const snippet = t.anchor?.snippet?.text?.trim();
-  const label = first || snippet || 'thread';
-  return label.length > 80 ? `${label.slice(0, 79)}…` : label;
 }
 
 async function main(): Promise<void> {
@@ -459,40 +438,13 @@ async function main(): Promise<void> {
     const docIds = state.info?.docIds ?? [];
     const docs: SidebarDoc[] = [];
     const threads: SidebarThread[] = [];
-    await Promise.all(
-      docIds.map(async (docId) => {
-        const meta = await fetchJson<{ meta: Record<string, unknown> }>(
-          `/api/docs/${encodeURIComponent(docId)}`,
-        );
-        if (meta?.meta) {
-          docs.push({
-            docId,
-            label: docLabelOf({ ...(meta.meta as { title?: string }), docId }),
-            url: `/review/${encodeURIComponent(docId)}`,
-          });
-        } else {
-          // A legacy grouping id (diff review / folder bind) attached as one
-          // unit — no doc room of its own.
-          docs.push({ docId, label: docId, url: `/review/${encodeURIComponent(docId)}` });
-        }
-        const docThreads = await fetchJson<{
-          threads: Array<{
-            id: string;
-            comments?: Array<{ text?: string }>;
-            anchor?: { snippet?: { text?: string } };
-          }>;
-        }>(`/api/docs/${encodeURIComponent(docId)}/threads?status=open`);
-        for (const t of docThreads?.threads ?? []) {
-          threads.push({
-            docId,
-            threadId: t.id,
-            label: threadLabelOf(t),
-            url: `/review/${encodeURIComponent(docId)}`,
-            commentCount: t.comments?.length ?? 0,
-          });
-        }
-      }),
+    const entries = await Promise.all(
+      docIds.map((docId) => sidebarEntriesFor(docId, (url) => fetchJson(url))),
     );
+    for (const entry of entries) {
+      docs.push(...entry.docs);
+      threads.push(...entry.threads);
+    }
     docs.sort((a, b) => a.label.localeCompare(b.label));
     state.docs = docs;
     state.threads = threads;
