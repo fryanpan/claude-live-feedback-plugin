@@ -163,6 +163,8 @@ const server = new Server(
       'minutes to stay live; triage requests only reach live agents). Workspace',
       'events (task.*, decision.answered, triage.requested, workspace.goal_updated)',
       'arrive on the same channel as thread events once you create/attach.',
+      'import_tasks_markdown moves an existing hand-maintained markdown tracker',
+      'onto the board (dry-run first — review the mapping before apply:true).',
     ].join(' '),
   },
 );
@@ -1099,6 +1101,23 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'import_tasks_markdown',
+      description:
+        'Import a hand-maintained markdown task tracker (group headings + status tables) into a hub workspace — adoption is not re-keying. THE DEFAULT IS A DRY-RUN: it returns the mapping (headings → board goals, table rows → tasks with normalized todo/in-progress/done status, plus what was skipped and which columns were ignored) and creates NOTHING. Review the mapping with the human, then call again with apply:true. Apply appends the new goals (existing goals matched by title are reused, never clobbered), creates the tasks as explicit placements (no triage), walks imported statuses through the transition gate, and STAMPS the source file with a banner + hub link so the old tracker cannot quietly stay a second source of truth — a stamped file refuses re-import (409). Headings map to goals; rows before any heading land in Chores; a leading H1 is the document title, not a group.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          workspaceId: { type: 'string', description: 'Hub workspace id from create_workspace.' },
+          path: { type: 'string', description: 'Absolute path to the tracker .md file.' },
+          apply: {
+            type: 'boolean',
+            description: 'Omit or false = dry-run (the mapping only). true = create + stamp.',
+          },
+        },
+        required: ['workspaceId', 'path'],
+      },
+    },
+    {
       name: 'link_refs',
       description:
         "Link a task to a doc, thread, another task, or a diff review. Stored one way on the task; the reverse direction is computed, so doc and thread payloads grow task chips automatically. ref shapes: {kind:'doc',docId} | {kind:'thread',docId,threadId} | {kind:'task',taskId} | {kind:'diff',workspaceId}. Idempotent — `changed:false` means it was already linked. Target existence is not checked (a dangling annotation is visible and harmless).",
@@ -2030,6 +2049,21 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           author: AUTHOR,
         })) as { task: TaskPayload };
         return ok({ taskId, recorded: true, links: res.task.links ?? [] });
+      }
+      case 'import_tasks_markdown': {
+        const { workspaceId, path, apply } = a as {
+          workspaceId: string;
+          path: string;
+          apply?: boolean;
+        };
+        // The route result is already the trimmed shape: the mapping on a
+        // dry-run; ids + titles + counts (never full task objects) on apply.
+        const res = await http(
+          'POST',
+          `/api/workspaces/${encodeURIComponent(workspaceId)}/import-tasks`,
+          { path, ...(apply !== undefined ? { apply } : {}), author: AUTHOR },
+        );
+        return ok(res);
       }
       case 'link_refs': {
         const { taskId, ref } = a as { taskId: string; ref: unknown };

@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { extname, join } from 'node:path';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { extname, join, resolve } from 'node:path';
 import {
   type Anchor,
   type DocMeta,
@@ -50,6 +50,7 @@ import type { ShareConfig } from './share/types.ts';
 import { sanitizeVisitorAuthor } from './share/visitor-identity.ts';
 import { SseHub, openSseStream } from './sse.ts';
 import { KEYCHAIN_SERVICE, ThreadSummarizer } from './summarize.ts';
+import { applyImport, importBanner, importMarkerFor, parseTrackerMarkdown } from './task-import.ts';
 import { TaskProjection } from './task-projection.ts';
 import {
   type Ref,
@@ -1381,6 +1382,76 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // attachDoc emits no store event; refresh the projection's docIds.
           taskProjection.ensureWorkspace(workspaceId);
           return j(200, { ok: true, workspace: taskStore.getWorkspace(workspaceId) });
+        }
+        // import_tasks_markdown (§3.10 / §3.12 commit 10): ingest a
+        // hand-maintained tracker (group headings + status tables). The
+        // DEFAULT is a dry-run that returns the mapping and touches nothing;
+        // apply:true creates the goals + tasks and stamps the source file
+        // with a banner + hub link so the old tracker can't quietly stay a
+        // second source of truth (a stamped file refuses re-import).
+        const wsImportMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/import-tasks$/);
+        if (wsImportMatch && req.method === 'POST') {
+          const workspaceId = decodeURIComponent(wsImportMatch[1] ?? '');
+          const body = await safeJson(req);
+          const path = body?.path;
+          if (typeof path !== 'string' || path.length === 0) {
+            return j(400, { error: 'path required' });
+          }
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const workspace = taskStore.getWorkspace(workspaceId);
+          if (!workspace) return j(404, { error: 'workspace not found' });
+          if (!existsSync(path)) return j(404, { error: 'file not found', path });
+          const markdown = readFileSync(path, 'utf8');
+          const alreadyImported = importMarkerFor(markdown);
+          const mapping = parseTrackerMarkdown(markdown, workspace);
+          if (body?.apply !== true) {
+            return j(200, {
+              dryRun: true,
+              workspaceId,
+              path,
+              ...(alreadyImported !== null ? { alreadyImported } : {}),
+              mapping,
+            });
+          }
+          if (alreadyImported !== null) {
+            return j(409, { error: 'already-imported', workspaceId: alreadyImported });
+          }
+          const res = applyImport(taskStore, workspaceId, mapping, { actor: author });
+          if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
+          // Stamp the source file. If the tracker is bound as a live doc,
+          // pull the banner into the live doc too — reparse right after our
+          // own write, so disk (which we just wrote) wins the race with the
+          // doc's debounced flush.
+          const hubUrl = `${publicBaseUrl(server.port ?? port)}/workspaces/${encodeURIComponent(workspaceId)}`;
+          writeFileSync(
+            path,
+            importBanner({
+              workspaceId,
+              hubUrl,
+              taskCount: res.tasksCreated.length,
+              ts: Date.now(),
+            }) + markdown,
+          );
+          const resolved = resolve(path);
+          const bound = rooms
+            .list()
+            .find((m) => m.sourceUrl !== undefined && resolve(m.sourceUrl) === resolved);
+          if (bound) rooms.reparseFromDisk(bound.docId);
+          // Task/goal events already refreshed the projection; this covers a
+          // mapping with zero new goals and zero tasks (nothing emitted).
+          taskProjection.ensureWorkspace(workspaceId);
+          return j(200, {
+            ok: true,
+            workspaceId,
+            hubUrl,
+            stamped: true,
+            goalsCreated: res.goalsCreated,
+            tasksCreated: res.tasksCreated,
+            failures: res.failures,
+            skipped: mapping.skipped,
+            ignoredColumns: mapping.ignoredColumns,
+          });
         }
         const wsTasksMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/tasks$/);
         if (wsTasksMatch && req.method === 'GET') {
