@@ -32,6 +32,7 @@ SCRUB = os.path.join(HERE, "scrub-check.py")
 # generic to match safely.
 PRIVATE_PROJECT = "zephyr-private-proj"
 PUBLIC_PROJECT = "zephyr-public-proj"
+MENTIONABLE_PROJECT = "zephyr-cleared-proj"
 DENY_TOKEN = "quokkaburra"
 
 REGISTRY = f"""\
@@ -41,6 +42,9 @@ projects:
   {PUBLIC_PROJECT}:
     path: ~/dev/{PUBLIC_PROJECT}
     public: true
+  {MENTIONABLE_PROJECT}:
+    path: ~/dev/{MENTIONABLE_PROJECT}
+    mentionable: true
 """
 
 DENYLIST = f"# fixture denylist\n{DENY_TOKEN}\n"
@@ -89,6 +93,7 @@ def main() -> int:
 
         leaky = fixture("leaky.md", f"We reuse the approach from {PRIVATE_PROJECT} here.\n")
         public_ref = fixture("public.md", f"Built on {PUBLIC_PROJECT}, which is public.\n")
+        mentionable_ref = fixture("cleared.md", f"A post about {MENTIONABLE_PROJECT}, cleared to name.\n")
         denied = fixture("denied.md", f"An aside mentioning {DENY_TOKEN} in passing.\n")
         clean = fixture("clean.md", "Nothing sensitive here at all.\n")
         allowed = fixture("allowed.md", f"{PRIVATE_PROJECT} <!-- scrub-allow: documenting the gate -->\n")
@@ -107,6 +112,13 @@ def main() -> int:
         # every push and trains people into SCRUB_SKIP=1.
         r = run([public_ref], registry, denylist)
         expect("ignores a project marked public: true", r.returncode, 0, r.stderr)
+
+        # mentionable: true means "cleared to say out loud, repo still private".
+        # It must suppress exactly like public does — the gate only ever asks
+        # whether a name is safe to say — without anyone having to assert a
+        # private repo is public to get that answer.
+        r = run([mentionable_ref], registry, denylist)
+        expect("ignores a project marked mentionable: true", r.returncode, 0, r.stderr)
 
         r = run([clean], registry, denylist)
         expect("passes a clean file", r.returncode, 0, r.stderr)
@@ -130,6 +142,12 @@ def main() -> int:
 
         r = run([clean], absent, absent, SCRUB_REQUIRE_SOURCES="1")
         expect("SCRUB_REQUIRE_SOURCES makes that case hard", r.returncode, 2, r.stderr)
+
+        # The third costume of the same bug: this tool does not read stdin, so
+        # piping a diff at it scanned nothing and exited 0. A clean result that
+        # established nothing is worse than an error.
+        r = run([], registry, denylist)
+        expect("refuses when given no files (does not read stdin)", r.returncode, 2, r.stderr)
 
     if failures:
         print(f"\n{len(failures)} self-test failure(s): {', '.join(failures)}")

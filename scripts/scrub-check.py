@@ -157,7 +157,7 @@ def load_project_names(registry_path: Optional[str]) -> Set[str]:
         README, CLAUDE.md, plugin metadata, etc).
     """
     names: Set[str] = set()
-    public: Set[str] = set()
+    cleared: Set[str] = set()
     if not registry_path:
         return names
     in_projects = False
@@ -174,8 +174,8 @@ def load_project_names(registry_path: Optional[str]) -> Set[str]:
                 current = m.group(1)
                 names.add(current)
                 continue
-            if current and re.match(r"^    public:\s*true\b", line):
-                public.add(current)
+            if current and re.match(r"^    (public|mentionable):\s*true\b", line):
+                cleared.add(current)
                 continue
             # Hit a non-indented line that isn't blank/comment — projects block ended.
             if line and not line[0].isspace() and not line.lstrip().startswith("#"):
@@ -184,14 +184,21 @@ def load_project_names(registry_path: Optional[str]) -> Set[str]:
     # Drop names that are too generic to safely match by themselves.
     names = {n for n in names if "-" in n or len(n) >= 6}
 
-    # Drop projects the registry marks `public: true`. A name that already
-    # lives in a public GitHub repo — or that the operator has cleared for
-    # public mention — is safe to say, so flagging it protects nothing while
-    # the cost is real: the fleet's own public tooling gets referenced in docs
-    # and learnings constantly, and a gate that fires on nearly every push
-    # trains people into SCRUB_SKIP=1. That is the same failure as a dead
-    # gate, arriving by a different door.
-    names -= public
+    # Drop projects the registry has cleared, under either of two keys. They
+    # mean different things and the difference is load-bearing:
+    #
+    #   public: true       — the GitHub repo is public TODAY. A fact other
+    #                        tooling relies on; it has to stay literally true.
+    #   mentionable: true  — the operator has cleared the name for public
+    #                        mention while the repo is still private (a flip is
+    #                        planned, or the name is going in a blog post first).
+    #
+    # The gate only ever asks "is this name safe to say", so both drop out. The
+    # split exists so answering that question never requires asserting a repo is
+    # public when it isn't. Not dropping them is its own failure: the fleet's
+    # public tooling gets referenced in docs and learnings constantly, and a gate
+    # that fires on nearly every push trains people into SCRUB_SKIP=1.
+    names -= cleared
 
     # Drop the current repo's own name — a repo's own README / CLAUDE.md / plugin
     # metadata legitimately mentions itself; we don't want to flag self-references.
@@ -331,6 +338,17 @@ def main() -> int:
         files = all_tracked_files()
     else:
         files = args
+        if not args:
+            # This tool does NOT read stdin. Piping a diff into it used to scan
+            # nothing and exit 0 — a clean-looking pass that established
+            # nothing, which is the same bug as a stale source path in a third
+            # costume. Silence is what let all of these run for weeks.
+            print(
+                "[scrub-check] no files given, and this tool does not read stdin.\n"
+                "  Pass file paths, or --diff-range A..B / --staged / --scan-all-tracked.",
+                file=sys.stderr,
+            )
+            return 2
 
     # Filter: keep only files we'd scan and that exist on disk.
     files = [f for f in files if should_scan(f) and os.path.isfile(f)]
