@@ -15,7 +15,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import type { Task } from '../src/tasks.ts';
+import type { Task, TaskStoreEvent, TriageRequest } from '../src/tasks.ts';
 
 const PERSON = { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' };
 const AGENT = { id: 'agent-search-revamp', name: 'Search Revamp', kind: 'known', color: '#888888' };
@@ -314,6 +314,91 @@ describe('hub workspace + task routes', () => {
       expect(noAuthor.status).toBe(400);
       const missing = await post('/api/tasks/t-ghost/transition', { to: 'done', author: AGENT });
       expect(missing.status).toBe(404);
+    });
+  });
+
+  describe('PUT /api/workspaces/:id/goal', () => {
+    let wsId: string;
+
+    beforeAll(async () => {
+      const r = await post('/api/workspaces', { name: 'goal-ws', goal: 'Original goal.' });
+      wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
+    });
+
+    const put = (path: string, body: unknown) =>
+      local(path, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+    it('forwards goal + author through the route: the goal changes and the event carries the attributed actor', async () => {
+      const events: TaskStoreEvent[] = [];
+      const off = handle.tasks.onEvent((e) => events.push(e));
+      try {
+        const r = await put(`/api/workspaces/${wsId}/goal`, {
+          goal: 'Revised goal.',
+          author: PERSON,
+        });
+        expect(r.status).toBe(200);
+        const body = (await r.json()) as {
+          workspace: { goal: string };
+          changed: boolean;
+          retriage: { requested: boolean; taskIds: string[] };
+        };
+        expect(body.changed).toBe(true);
+        expect(body.workspace.goal).toBe('Revised goal.');
+        expect(body.retriage.requested).toBe(false); // no live attachment here
+
+        // Read the stored effect back over HTTP (the groups lesson).
+        const got = await local(`/api/workspaces/${wsId}`);
+        const stored = (await got.json()) as { workspace: { goal: string } };
+        expect(stored.workspace.goal).toBe('Revised goal.');
+
+        // The author param was forwarded, not dropped: the emitted event
+        // names the actor and classifies them.
+        expect(events).toHaveLength(1);
+        expect(events[0]?.type).toBe('workspace.goal_updated');
+        expect(events[0]?.actor).toEqual({ id: 'known-bryan', name: 'Bryan', kind: 'person' });
+        expect(events[0]?.oldGoal).toBe('Original goal.');
+        expect(events[0]?.newGoal).toBe('Revised goal.');
+      } finally {
+        off();
+      }
+    });
+
+    it('a goal edit through the route reaches a live attachment as a re-triage of open tasks', async () => {
+      const tr = await post(`/api/workspaces/${wsId}/tasks`, { title: 'open task' });
+      const task = ((await tr.json()) as { task: Task }).task;
+
+      const requests: TriageRequest[] = [];
+      handle.tasks.setTriageDelivery((req) => {
+        requests.push(req);
+        return true;
+      });
+      try {
+        const r = await put(`/api/workspaces/${wsId}/goal`, {
+          goal: 'Re-triage everything.',
+          author: PERSON,
+        });
+        expect(r.status).toBe(200);
+        const body = (await r.json()) as { retriage: { requested: boolean; taskIds: string[] } };
+        expect(body.retriage.requested).toBe(true);
+        expect(body.retriage.taskIds).toContain(task.id);
+        expect(requests).toHaveLength(1);
+        expect(requests[0]?.kind).toBe('goal-retriage');
+      } finally {
+        handle.tasks.setTriageDelivery(undefined);
+      }
+    });
+
+    it('400s a missing goal, 400s a missing author, 404s an unknown workspace', async () => {
+      const noGoal = await put(`/api/workspaces/${wsId}/goal`, { author: PERSON });
+      expect(noGoal.status).toBe(400);
+      const noAuthor = await put(`/api/workspaces/${wsId}/goal`, { goal: 'x' });
+      expect(noAuthor.status).toBe(400);
+      const noWs = await put('/api/workspaces/w-nope/goal', { goal: 'x', author: PERSON });
+      expect(noWs.status).toBe(404);
     });
   });
 

@@ -134,6 +134,15 @@ export interface Task {
   answer?: { text: string; by: string; ts: number };
   /** Which goal (id + its text at the time) produced this placement. */
   triagedAgainst?: { goalId: string; goal: string; ts: number };
+  /**
+   * Triage-pending marker (§3.4). Stamped ONLY at the moment a triage
+   * request is actually emitted to a live attachment — the grounded-pending
+   * rule from the summaries incident: never promise work that isn't queued.
+   * No attachment → no marker; the task simply sits in Chores. Cleared on
+   * hydrate (a restart kills the emitted request, so the promise must not
+   * outlive it) and by the agent's eventual placement.
+   */
+  triagePendingTs?: number;
   /** Stamped by triage at placement time; keyed to the ACTION's damage. */
   riskTier?: 'green' | 'yellow' | 'red';
   /** Append-only audit trail. */
@@ -181,6 +190,71 @@ export type CreateTaskResult =
   | { ok: true; task: Task }
   | { ok: false; error: 'workspace-not-found' | 'unknown-goal' | 'unknown-after' };
 
+/**
+ * A triage request the server EMITS — triage itself executes in the attached
+ * agent, never here (§3.4: the server has no judgment about the goal; the
+ * Haiku fast path gets lookups only, changes belong to the attachment).
+ */
+export type TriageRequest =
+  | {
+      /** A freshly created task with no explicit goal needs placing. */
+      kind: 'task';
+      workspaceId: string;
+      taskId: string;
+      /** The workspace's north-star goal text at emission time — what the
+       *  agent triages against. */
+      goal: string;
+      ts: number;
+    }
+  | {
+      /** The workspace goal changed — re-triage the OPEN tasks (§3.4:
+       *  done stays put). */
+      kind: 'goal-retriage';
+      workspaceId: string;
+      oldGoal: string;
+      newGoal: string;
+      taskIds: string[];
+      actor: TaskActor;
+      ts: number;
+    };
+
+/**
+ * Bridge to whatever can carry a triage request to a live attached agent
+ * (the attachment registry arrives in a later commit; the MCP watch channel
+ * is the expected transport). MUST return true ONLY when the request was
+ * actually emitted to a live attachment — the return value is what grounds
+ * the task's triage-pending marker, so an optimistic true would promise
+ * work that isn't queued.
+ */
+export type TriageDelivery = (req: TriageRequest) => boolean;
+
+/** Store-level events. The SSE/channel transport and the events.jsonl audit
+ *  log (a later commit) subscribe via `onEvent`. */
+export interface TaskStoreEvent {
+  type: 'workspace.goal_updated';
+  workspaceId: string;
+  oldGoal: string;
+  newGoal: string;
+  actor: TaskActor;
+  ts: number;
+}
+
+export type SetWorkspaceGoalResult =
+  | {
+      ok: true;
+      workspace: HubWorkspace;
+      /** False when the new text equals the old — a no-op edit emits no
+       *  event and requests no re-triage (it would churn timestamps for a
+       *  change nobody made). */
+      changed: boolean;
+      /** `taskIds` = the open tasks a re-triage covers; `requested` = whether
+       *  the request actually reached a live attachment. With none attached
+       *  the re-triage honestly does not happen — placements stay as they
+       *  were (§3.4). */
+      retriage: { requested: boolean; taskIds: string[] };
+    }
+  | { ok: false; error: 'workspace-not-found' };
+
 export interface ListTasksFilter {
   goal?: string;
   status?: TaskStatus;
@@ -211,11 +285,50 @@ export class TaskStore {
   private saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private dataDir: string;
   private debounceMs: number;
+  private triageDelivery: TriageDelivery | undefined;
+  private eventListeners = new Set<(event: TaskStoreEvent) => void>();
 
   constructor(opts: { dataDir: string; debounceMs?: number }) {
     this.dataDir = opts.dataDir;
     this.debounceMs = opts.debounceMs ?? 200;
     this.hydrateFromDisk();
+  }
+
+  // ── Events + triage delivery ─────────────────────────────────────────────
+
+  /** Subscribe to store events; returns the unsubscribe. The SSE transport
+   *  and audit log (a later commit) hang off this. */
+  onEvent(listener: (event: TaskStoreEvent) => void): () => void {
+    this.eventListeners.add(listener);
+    return () => this.eventListeners.delete(listener);
+  }
+
+  /** Wire (or clear) the bridge that carries triage requests to a live
+   *  attached agent. The attachment registry commit installs the real one. */
+  setTriageDelivery(delivery: TriageDelivery | undefined): void {
+    this.triageDelivery = delivery;
+  }
+
+  private emit(event: TaskStoreEvent): void {
+    for (const listener of this.eventListeners) {
+      try {
+        listener(event);
+      } catch (err) {
+        console.error('[tasks] event listener threw:', err);
+      }
+    }
+  }
+
+  /** Emit a triage request. True ONLY if it reached a live attachment — a
+   *  throwing/absent delivery grounds to false, never to a broken caller. */
+  private requestTriage(req: TriageRequest): boolean {
+    if (!this.triageDelivery) return false;
+    try {
+      return this.triageDelivery(req) === true;
+    } catch (err) {
+      console.error('[tasks] triage delivery threw:', err);
+      return false;
+    }
   }
 
   // ── Workspaces ───────────────────────────────────────────────────────────
@@ -242,6 +355,60 @@ export class TaskStore {
 
   listWorkspaces(): HubWorkspace[] {
     return Array.from(this.workspaces.values()).map((s) => s.workspace);
+  }
+
+  /**
+   * Edit the workspace's north-star goal (§3.4: the input to every intake
+   * decision). Emits `workspace.goal_updated` (old goal, new goal, actor)
+   * and requests a re-triage of the OPEN tasks — done stays put. The
+   * re-triage EXECUTES in the attached agent; this method only emits the
+   * request, and with no live attachment it honestly does not happen.
+   */
+  setWorkspaceGoal(
+    workspaceId: string,
+    goal: string,
+    opts: { actor: { id: string; name: string; kind?: string } },
+  ): SetWorkspaceGoalResult {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return { ok: false, error: 'workspace-not-found' };
+    const workspace = state.workspace;
+
+    if (goal === workspace.goal) {
+      // Nothing changed, so nothing to announce and nothing to re-triage —
+      // every placement's triagedAgainst is still accurate.
+      return { ok: true, workspace, changed: false, retriage: { requested: false, taskIds: [] } };
+    }
+
+    const ts = Date.now();
+    const oldGoal = workspace.goal;
+    workspace.goal = goal;
+    workspace.goalUpdatedAt = ts;
+    this.scheduleSave(workspaceId);
+
+    const actor: TaskActor = {
+      id: opts.actor.id,
+      name: opts.actor.name,
+      kind: classifyActor(opts.actor),
+    };
+    this.emit({ type: 'workspace.goal_updated', workspaceId, oldGoal, newGoal: goal, actor, ts });
+
+    // Re-triage covers open tasks only (§3.4). One batched request, not one
+    // per task — delivery collapses to a single item in the agent's context.
+    const taskIds = Array.from(state.tasks.values())
+      .filter((t) => t.status !== 'done')
+      .map((t) => t.id);
+    const requested =
+      taskIds.length > 0 &&
+      this.requestTriage({
+        kind: 'goal-retriage',
+        workspaceId,
+        oldGoal,
+        newGoal: goal,
+        taskIds,
+        actor,
+        ts,
+      });
+    return { ok: true, workspace, changed: true, retriage: { requested, taskIds } };
   }
 
   /** Link an existing doc or review to a hub workspace. A link only — the
@@ -302,8 +469,38 @@ export class TaskStore {
     };
     state.tasks.set(task.id, task);
     this.taskIndex.set(task.id, workspaceId);
+
+    // Triage hook (§3.4): an OMITTED goal means "needs placing" — the task
+    // has already landed at the bottom of Chores (the resting state; the
+    // human is never blocked on placement), and the server emits a triage
+    // request for the attached agent to act on. The pending marker is
+    // stamped ONLY when that request actually reached a live attachment.
+    // An explicit goal — even an explicit 'chores' — is a placement by the
+    // caller, not a triage candidate.
+    if (opts.goal === undefined) {
+      const delivered = this.requestTriage({
+        kind: 'task',
+        workspaceId,
+        taskId: task.id,
+        goal: state.workspace.goal,
+        ts: now,
+      });
+      if (delivered) task.triagePendingTs = Date.now();
+    }
+
     this.scheduleSave(workspaceId);
     return { ok: true, task };
+  }
+
+  /**
+   * Open Chores tasks no triage has placed (`triagedAgainst` unset) — what
+   * an agent sweeps when it attaches to a workspace that had no attachment
+   * when the tasks arrived (§3.4).
+   */
+  listUntriaged(workspaceId: string): Task[] {
+    return this.listTasks(workspaceId, { goal: CHORES_GOAL_ID }).filter(
+      (t) => t.status !== 'done' && t.triagedAgainst === undefined,
+    );
   }
 
   getTask(taskId: string): Task | undefined {
@@ -491,6 +688,10 @@ export class TaskStore {
         const tasks = new Map<string, Task>();
         for (const task of parsed.tasks ?? []) {
           if (typeof task?.id !== 'string') continue;
+          // A restart killed any in-flight triage request, so its marker
+          // must not outlive it (grounded-pending, §3.4): the task goes back
+          // to plainly sitting in Chores until an agent attaches and sweeps.
+          task.triagePendingTs = undefined;
           tasks.set(task.id, task);
           this.taskIndex.set(task.id, workspace.id);
         }

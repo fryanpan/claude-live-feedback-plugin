@@ -1112,6 +1112,22 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!workspace) return j(404, { error: 'workspace not found' });
           return j(200, { workspace });
         }
+        // set_workspace_goal: edit the north-star goal (§3.10). The store
+        // emits workspace.goal_updated and requests a re-triage of open
+        // tasks; the response reports whether that request reached a live
+        // attachment (with none, the re-triage honestly does not happen).
+        const wsGoalMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/goal$/);
+        if (wsGoalMatch && req.method === 'PUT') {
+          const workspaceId = decodeURIComponent(wsGoalMatch[1] ?? '');
+          const body = await safeJson(req);
+          const goal = body?.goal;
+          if (typeof goal !== 'string') return j(400, { error: 'goal required' });
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const res = taskStore.setWorkspaceGoal(workspaceId, goal, { actor: author });
+          if (!res.ok) return j(404, res);
+          return j(200, res);
+        }
         // attach_doc: link an existing doc or review to a hub workspace.
         const wsAttachMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/docs$/);
         if (wsAttachMatch && req.method === 'POST') {
