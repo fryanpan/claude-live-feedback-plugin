@@ -8,6 +8,7 @@
  */
 import { type User, connect, escapeHtml } from '@feedback/core';
 import { ensureUserIdentity } from '../identity-prompt.ts';
+import { eventPath, typingInPath } from '../keyboard-target.ts';
 import { type VoiceAck, createVoiceCapture } from '../voice-capture.ts';
 import {
   type ActivityEvent,
@@ -25,7 +26,6 @@ import {
   type UptimeReport,
   boardSections,
   decisionRows,
-  nextStatus,
   presenceChips,
 } from './hub-model.ts';
 import {
@@ -142,7 +142,7 @@ function buildShell(root: HTMLElement, name: string): void {
         <dl>
           <dt>j / k</dt><dd>next / previous task</dd>
           <dt>o or Enter</dt><dd>open the focused task</dd>
-          <dt>s</dt><dd>cycle the focused task's status</dd>
+          <dt>s</dt><dd>open the focused task's status dropdown</dd>
           <dt>a</dt><dd>hand the focused task to the human / the agent</dd>
           <dt>?</dt><dd>toggle this help</dd>
         </dl>
@@ -225,8 +225,7 @@ async function main(): Promise<void> {
   const titleOf = (taskId: string) => state.tasks.get(taskId)?.title ?? taskId;
 
   const boardHandlers = {
-    onStatusTap: (task: HubTask) => void transitionTask(task, nextStatus(task.status)),
-    onTitleCommit: (task: HubTask, title: string) => void renameTask(task, title),
+    onStatusSet: (task: HubTask, to: HubTask['status']) => void transitionTask(task, to),
     onGoalTitleCommit: (sectionId: string, title: string) => void retitleGoal(sectionId, title),
     onOpenTask: (task: HubTask) => {
       state.detailTaskId = task.id;
@@ -595,11 +594,12 @@ async function main(): Promise<void> {
     },
   });
 
-  // Gmail-style shortcuts (§3.9): j/k walk rows, o/Enter opens, s cycles
-  // status, ? shows help. Never while typing.
+  // Gmail-style shortcuts (§3.9): j/k walk rows, o/Enter opens, s opens the
+  // status dropdown, ? shows help. Never while typing — including while typing
+  // inside an embedded component's shadow root, which `ev.target` cannot see
+  // (see hotkeysBlocked).
   document.addEventListener('keydown', (ev) => {
-    const target = ev.target as HTMLElement;
-    if (target.closest('input, textarea, select, [contenteditable]')) return;
+    if (typingInPath(eventPath(ev))) return;
     if (ev.key === '?') {
       el('hub-help').classList.toggle('hidden');
       return;
@@ -630,7 +630,10 @@ async function main(): Promise<void> {
       } else if (ev.key === 'a') {
         void assignTask(task, otherAssignee(task.assignee));
       } else {
-        void transitionTask(task, nextStatus(task.status));
+        // Focus the row's dropdown rather than picking a status for them —
+        // the keyboard path must not re-introduce the linear assumption the
+        // dropdown exists to remove.
+        rows[focusedIdx]?.querySelector<HTMLSelectElement>('.hub-status-select')?.focus();
       }
       ev.preventDefault();
     }

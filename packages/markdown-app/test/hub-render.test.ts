@@ -54,8 +54,7 @@ const filters: BoardFilters = {
 
 function handlers(): BoardHandlers {
   return {
-    onStatusTap: vi.fn(),
-    onTitleCommit: vi.fn(),
+    onStatusSet: vi.fn(),
     onGoalTitleCommit: vi.fn(),
     onOpenTask: vi.fn(),
   };
@@ -91,23 +90,37 @@ describe('renderBoard', () => {
     expect((rows[1] as HTMLElement).classList.contains('hub-done')).toBe(false);
   });
 
-  it('tapping the status chip fires onStatusTap without opening the task', () => {
+  // Every status is one gesture away — the point of replacing the cycle. A
+  // done → todo pick is the case the cycle got wrong: it cost two moves and
+  // wrote two audit events for something that happened once.
+  it('the status dropdown offers every status and reports the one picked', () => {
     const h = handlers();
-    const t = task({ goal: 'g-pr' });
-    renderBoard(root, boardSections(GOALS, [t], filters), h);
-    const chip = root.querySelector('.hub-status-mark') as HTMLElement;
-    chip.click();
-    expect(h.onStatusTap).toHaveBeenCalledTimes(1);
+    const t = task({ goal: 'g-pr', status: 'done' });
+    renderBoard(root, boardSections(GOALS, [t], { ...filters, doneWindow: 'all' }), h);
+    const select = root.querySelector('.hub-status-select') as HTMLSelectElement;
+    expect([...select.options].map((o) => o.value).sort()).toEqual(['done', 'in-progress', 'todo']);
+    expect(select.value).toBe('done');
+    select.value = 'todo';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(h.onStatusSet).toHaveBeenCalledWith(expect.objectContaining({ id: t.id }), 'todo');
     expect(h.onOpenTask).not.toHaveBeenCalled();
   });
 
-  // The status name is no longer drawn in the row, so the only thing left
-  // carrying it for a screen reader is the accessible name. A row control
-  // whose label is an empty string reads as "button" and nothing else.
-  it('the status mark still names its status for assistive tech', () => {
+  it('a change event that re-picks the current status writes nothing', () => {
     const h = handlers();
     renderBoard(root, boardSections(GOALS, [task({ goal: 'g-pr' })], filters), h);
-    const mark = root.querySelector('.hub-status-mark') as HTMLElement;
+    const select = root.querySelector('.hub-status-select') as HTMLSelectElement;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(h.onStatusSet).not.toHaveBeenCalled();
+  });
+
+  // The status name isn't drawn as body text in the row, so the accessible
+  // name is what carries it. A row control labelled '' reads as "combo box"
+  // and nothing else.
+  it('the status dropdown still names its status for assistive tech', () => {
+    const h = handlers();
+    renderBoard(root, boardSections(GOALS, [task({ goal: 'g-pr' })], filters), h);
+    const mark = root.querySelector('.hub-status-select') as HTMLElement;
     expect(mark.getAttribute('aria-label') ?? '').toContain('To do');
     expect(mark.title).toContain('To do');
   });
@@ -127,7 +140,7 @@ describe('renderBoard', () => {
     const row = root.querySelector('.hub-task-row') as HTMLElement;
     // Order is the contract the grid tracks are written against.
     expect([...row.children].map((c) => (c as HTMLElement).className.split(' ')[0])).toEqual([
-      'hub-status-mark',
+      'hub-status-select',
       'hub-risk-slot',
       'hub-task-title',
       'hub-task-badges',
@@ -168,34 +181,30 @@ describe('renderBoard', () => {
     expect(rows[1].querySelector('.hub-risk')).not.toBeNull();
   });
 
-  it('tapping the title edits in place; Enter commits the new value', () => {
+  // Reported as "I can't open a task to see what's inside". The title spans
+  // most of the row, and it used to stop propagation and swap itself for an
+  // input — so on a phone, where the title is nearly the whole row, tapping a
+  // task could only ever rename it. Renaming moved to the detail panel; the
+  // row's one gesture is open.
+  it('tapping the title opens the task rather than renaming it', () => {
     const h = handlers();
     const t = task({ goal: 'g-pr', title: 'Old title' });
     renderBoard(root, boardSections(GOALS, [t], filters), h);
     const title = root.querySelector('.hub-task-title') as HTMLElement;
     title.click();
-    const input = title.querySelector('input') as HTMLInputElement;
-    expect(input).toBeTruthy();
-    input.value = 'Sharper title';
-    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-    expect(h.onTitleCommit).toHaveBeenCalledWith(
-      expect.objectContaining({ id: t.id }),
-      'Sharper title',
-    );
-    expect(h.onOpenTask).not.toHaveBeenCalled();
+    expect(title.querySelector('input')).toBeNull();
+    expect(h.onOpenTask).toHaveBeenCalledWith(expect.objectContaining({ id: t.id }));
   });
 
-  it('Escape cancels the edit and restores the old title without committing', () => {
+  // The rest of the row was never the problem, but it is the positive control
+  // for the assertion above: if opening broke everywhere, the test above
+  // would pass for the wrong reason.
+  it('tapping the row anywhere else opens the task too', () => {
     const h = handlers();
-    const t = task({ goal: 'g-pr', title: 'Keep me' });
+    const t = task({ goal: 'g-pr' });
     renderBoard(root, boardSections(GOALS, [t], filters), h);
-    const title = root.querySelector('.hub-task-title') as HTMLElement;
-    title.click();
-    const input = title.querySelector('input') as HTMLInputElement;
-    input.value = 'Discarded';
-    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-    expect(h.onTitleCommit).not.toHaveBeenCalled();
-    expect(title.textContent).toBe('Keep me');
+    (root.querySelector('.hub-task-row') as HTMLElement).click();
+    expect(h.onOpenTask).toHaveBeenCalledWith(expect.objectContaining({ id: t.id }));
   });
 
   it('goal titles are editable in place too; Chores is not', () => {

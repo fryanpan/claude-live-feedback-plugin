@@ -114,12 +114,46 @@ const INDICATOR_LINGER_MS = 6_000;
  *  a dead engine must not eat the utterance. */
 const FINALIZE_WATCHDOG_MS = 1_500;
 
-function isTypingTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  const tag = target.tagName;
-  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
-  return target.isContentEditable || target.closest('[contenteditable="true"]') !== null;
+import { eventPath, typingInPath } from './keyboard-target.ts';
+
+/** The `error` code off a SpeechRecognition error event, if it carries one. */
+export function errorCodeOf(ev: unknown): string | null {
+  const code = (ev as { error?: unknown } | null)?.error;
+  return typeof code === 'string' && code.length > 0 ? code : null;
 }
+
+/**
+ * What to tell the person, per recognition error code.
+ *
+ * `not-allowed` / `service-not-allowed` is the one that matters here: Chrome
+ * gates the microphone on a SECURE CONTEXT, and the hubs are reached over
+ * plain http at a hostname (`http://<host>:8787/...`), which is not one —
+ * localhost is exempt, a Tailscale hostname is not. No permission prompt ever
+ * appears, so it reads as the feature simply not working. The message names
+ * the fix rather than the symptom.
+ */
+export function recognitionErrorMessage(code: string): string {
+  switch (code) {
+    case 'not-allowed':
+    case 'service-not-allowed':
+      return 'Microphone blocked. Chrome only allows it over https or on localhost — open this hub over https, or allow the mic for this site.';
+    case 'audio-capture':
+      return 'No microphone found.';
+    case 'network':
+      return 'Speech service unreachable — check the network.';
+    case 'no-speech':
+      return "Didn't catch anything.";
+    case 'aborted':
+      return 'Recording stopped.';
+    default:
+      return `Voice input failed (${code}).`;
+  }
+}
+
+/** Held Space starts a recording, so "am I typing?" has to be right through a
+ *  shadow boundary too — otherwise a space typed into the feedback widget's
+ *  comment box starts recording instead of typing a space. Same retargeting
+ *  bug as the board's hotkeys; same shared guard. */
 
 export function createVoiceCapture(opts: VoiceCaptureOpts): VoiceCapture {
   const { button, indicator } = opts;
@@ -131,6 +165,7 @@ export function createVoiceCapture(opts: VoiceCaptureOpts): VoiceCapture {
   let finalized = true;
   let clearTimer: ReturnType<typeof setTimeout> | null = null;
   let watchdog: ReturnType<typeof setTimeout> | null = null;
+  let lastError: string | null = null;
 
   const show = (text: string, opts2?: { linger?: boolean }): void => {
     if (clearTimer) {
@@ -169,9 +204,17 @@ export function createVoiceCapture(opts: VoiceCaptureOpts): VoiceCapture {
     }
     rec.onresult = readResults;
     rec.onend = () => finalize();
-    rec.onerror = () => {
-      // Errors surface at finalize time: an aborted engine still has
-      // whatever transcript it managed, and an empty one answers honestly.
+    rec.onerror = (ev: unknown) => {
+      // An aborted engine still has whatever transcript it managed, so the
+      // error does not stop the finalize path — but it must be NAMED. The
+      // old handler swallowed the reason entirely, which is why "voice is
+      // just broken" was the whole bug report available: holding the mic
+      // showed "Listening…", the engine refused, and the only visible
+      // outcome was an empty transcript indistinguishable from silence.
+      // `not-allowed` on a page served over plain http is the common one —
+      // Chrome gates the microphone on a secure context, so every hub
+      // reached by hostname (rather than localhost) fails exactly here.
+      lastError = errorCodeOf(ev);
     };
     show('Listening…');
     try {
@@ -210,9 +253,16 @@ export function createVoiceCapture(opts: VoiceCaptureOpts): VoiceCapture {
     rec = null;
     const text = transcript.trim();
     if (text.length === 0) {
-      show("Didn't catch anything.", { linger: true });
+      // An empty transcript with a recorded error is a refusal, not silence,
+      // and saying so is the difference between "voice is just broken" and a
+      // report someone can act on.
+      show(lastError ? recognitionErrorMessage(lastError) : "Didn't catch anything.", {
+        linger: true,
+      });
+      lastError = null;
       return;
     }
+    lastError = null;
     const context = opts.getContext();
     show('Routing…');
     void opts.send(text, context).then((ack) => {
@@ -228,7 +278,7 @@ export function createVoiceCapture(opts: VoiceCaptureOpts): VoiceCapture {
   const onKeyDown = (ev: KeyboardEvent): void => {
     if (ev.code !== 'Space' || ev.repeat) return;
     if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
-    if (isTypingTarget(ev.target)) return;
+    if (typingInPath(eventPath(ev))) return;
     ev.preventDefault();
     beginHold();
   };
