@@ -1127,7 +1127,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'attach_agent',
       description:
-        "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks') plus the untriaged task ids to sweep with set_task_goal. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments with a fresh heartbeat, and after ~5 minutes of silence the hub shows you as away and requests queue.",
+        "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep with set_task_goal, and queuedVoice — voice change-requests that arrived while no agent was live; act on each transcript verbatim. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments with a fresh heartbeat, and after ~5 minutes of silence the hub shows you as away and requests queue.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -2065,6 +2065,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           attachment?: { agentId?: string };
           gating?: unknown;
           untriaged?: string[];
+          queuedVoice?: Array<{ transcript: string; ts: number }>;
         };
         if (subscribe !== false) await watchWorkspace(workspaceId);
         return ok({
@@ -2072,6 +2073,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           agentId: res.attachment?.agentId ?? agentId ?? AUTHOR.id,
           gating: res.gating,
           untriaged: res.untriaged ?? [],
+          // Voice change-requests that arrived while no agent was live
+          // ("agent away — queued"): this attach is their delivery. Act on
+          // each transcript, verbatim.
+          queuedVoice: res.queuedVoice ?? [],
         });
       }
       case 'heartbeat': {
@@ -2224,7 +2229,7 @@ interface ChannelPayload {
 /** Hub/workspace event families formatted by emitHubChannelMessage. Thread
  *  and suggestion events on the same workspace stream keep the doc-shaped
  *  path below. */
-const HUB_EVENT_RE = /^(task|decision|workspace|agent|triage)\./;
+const HUB_EVENT_RE = /^(task|decision|workspace|agent|triage|voice)\./;
 
 interface HubEventPayload {
   workspaceId?: string;
@@ -2244,6 +2249,10 @@ interface HubEventPayload {
   kind?: string;
   movedToChores?: string[];
   agentId?: string;
+  transcript?: string;
+  ack?: string;
+  route?: string;
+  context?: { surface?: string; docId?: string; taskId?: string; visibleHeading?: string };
 }
 
 /**
@@ -2297,6 +2306,18 @@ async function emitHubChannelMessage(event: string, rawPayload: unknown): Promis
     case 'agent.detached':
       body = `[${event}] ${p.agentId ?? '?'}`;
       break;
+    case 'voice.request': {
+      // The speaker's words arrive VERBATIM (§3.8: changes carry the
+      // transcript verbatim); the context object says where they were.
+      if (p.route === 'fast-path') return; // a lookup the server already answered
+      const ctx = p.context
+        ? ` (at ${p.context.surface ?? '?'}${p.context.docId ? ` ${p.context.docId}` : ''}${
+            p.context.taskId ? ` ${p.context.taskId}` : ''
+          }${p.context.visibleHeading ? `, near "${p.context.visibleHeading}"` : ''})`
+        : '';
+      body = `[voice.request]${by}${ctx}: "${p.transcript ?? ''}" — act on it through the task/edit tools; the speaker was told: "${truncate(p.ack ?? '', 120)}"`;
+      break;
+    }
     default:
       body = `[${event}]${p.taskId ? ` task ${p.taskId}` : ''}`;
   }

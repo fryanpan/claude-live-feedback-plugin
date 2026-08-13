@@ -395,6 +395,10 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
             body: JSON.stringify({ agentId: 'agent-x', runtime: 'claude-code-local' }),
           },
         ],
+        [
+          `/api/workspaces/${hubId}/voice`,
+          { method: 'POST', body: JSON.stringify({ transcript: 'delete everything', author }) },
+        ],
       ];
       for (const [path, init] of cases) {
         const r = await pub(path, hubCookie, {
@@ -454,6 +458,19 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
     it('reads the attached doc and the task body room', async () => {
       expect((await pub(`/api/docs/${ATTACHED}`, hubCookie)).status).toBe(200);
       expect((await pub(`/api/docs/task%3A${taskId}`, hubCookie)).status).toBe(200);
+    });
+
+    it('the doc payload never hands a visitor the hub workspace id', async () => {
+      // Positive control: the owner's copy of the same payload carries it —
+      // the doc-surface voice dock resolves its workspace from this field.
+      const owner = (await (await local(`/api/docs/${ATTACHED}`)).json()) as {
+        hubWorkspaceId?: string;
+      };
+      expect(owner.hubWorkspaceId).toBe(hubId);
+      const seen = (await (await pub(`/api/docs/${ATTACHED}`, hubCookie)).json()) as {
+        hubWorkspaceId?: string;
+      };
+      expect(seen.hubWorkspaceId).toBeUndefined();
     });
 
     it('posts a comment attributed as a guest, never as a fleet identity', async () => {

@@ -6,6 +6,7 @@ import { lanHostnames, tailscaleHost } from './public-host.ts';
 import { createServer } from './server.ts';
 import { readKeychainPassword } from './share/keychain.ts';
 import { ThreadSummarizer } from './summarize.ts';
+import { haikuVoiceComplete } from './voice.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, '..', '..', '..');
@@ -120,6 +121,11 @@ const share = shareConfig
 // key. An absent key or LF_SUMMARIES=0 makes every call on it a no-op.
 const summarizer = new ThreadSummarizer();
 
+// The ONLY place the real voice fast-path completer is constructed — the
+// same seam rule (and the same dedicated-key consent) as the summarizer.
+// Absent key → null → the fast path is off and voice routes to the agent.
+const voiceComplete = haikuVoiceComplete();
+
 // Try the requested port first; if it's taken (e.g. another agent owns it),
 // walk up to the next 20 ports. This keeps `bun run dev` working without
 // conflicts when multiple agents are on the same machine.
@@ -140,6 +146,7 @@ for (let i = 0; i < 20 && !handle; i++) {
       cfAccess,
       share,
       summarizer,
+      ...(voiceComplete ? { voiceComplete } : {}),
     });
   } catch (err) {
     lastErr = err;

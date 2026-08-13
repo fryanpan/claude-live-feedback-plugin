@@ -62,6 +62,7 @@ import {
   isValidRef,
   taskChip,
 } from './tasks.ts';
+import { type VoiceComplete, VoiceRouter, parseVoiceContext } from './voice.ts';
 import { type WebhookLogEntry, createWebhookDispatcher } from './webhooks.ts';
 import { onClose, onMessage, onOpen } from './yjs-protocol.ts';
 
@@ -197,6 +198,14 @@ export interface ServerOptions {
    * the one that constructs it.
    */
   summarizer?: ThreadSummarizer;
+  /**
+   * Voice fast-path completer (§3.8). **No default**, same seam rule as the
+   * summarizer above: omitting it disables the Haiku fast path entirely —
+   * every voice utterance still gets an answer, routed to the attached agent
+   * — and nothing that merely spins a server up can reach the network. Only
+   * bin.ts constructs the real one (`haikuVoiceComplete`).
+   */
+  voiceComplete?: VoiceComplete;
 }
 
 const CT: Record<string, string> = {
@@ -455,6 +464,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // authoritative for gated fields on restart.
   const taskProjection = new TaskProjection({ rooms, tasks: taskStore });
   taskProjection.init();
+  // Voice routing (§3.8): lookups take the Haiku fast path when a completer
+  // was injected; changes go to the attached agent (or the on-disk queue).
+  const voiceRouter = new VoiceRouter({
+    tasks: taskStore,
+    ...(opts.voiceComplete ? { complete: opts.voiceComplete } : {}),
+  });
 
   /**
    * Which workspace a docId belongs to, for SHARE SCOPING (§3.12 commit 8).
@@ -1327,6 +1342,27 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!res.ok) return j(404, res);
           return j(200, res);
         }
+        // Voice (§3.8): transcript + per-surface context in, route decision +
+        // ack out. EVERY utterance gets an explicit ack naming what was heard
+        // and which route handles it — the router owns that invariant; this
+        // handler only validates and forwards (transcript VERBATIM).
+        const wsVoiceMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/voice$/);
+        if (wsVoiceMatch && req.method === 'POST') {
+          const workspaceId = decodeURIComponent(wsVoiceMatch[1] ?? '');
+          const body = await safeJson(req);
+          const transcript = typeof body?.transcript === 'string' ? body.transcript.trim() : '';
+          if (transcript.length === 0) return j(400, { error: 'transcript required' });
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const context = parseVoiceContext(body?.context);
+          const res = await voiceRouter.handle(workspaceId, {
+            transcript,
+            ...(context !== undefined ? { context } : {}),
+            actor: author,
+          });
+          if (!res.ok) return j(404, res);
+          return j(200, res);
+        }
         // attach_doc: link an existing doc or review to a hub workspace.
         const wsAttachMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/docs$/);
         if (wsAttachMatch && req.method === 'POST') {
@@ -1785,9 +1821,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // reference this doc — directly or via one of its threads.
             // Visitor-safe by construction (§3.3 rule 2); omitted when empty.
             const taskRefs = taskStore.tasksReferencingDoc(docId).map(taskChip);
+            // Which hub workspace this doc is attached to, so the doc surface
+            // can route voice utterances (§3.8: voice is not board-only).
+            // OWNER ONLY: a workspace id is an unguessable URL capability, and
+            // a doc-scoped visitor must not learn it from a member doc.
+            const hubWs = visitor ? null : taskStore.workspaceOfDoc(docId);
             return j(200, {
               meta: metaFor(room.meta),
               ...(taskRefs.length > 0 ? { tasks: taskRefs } : {}),
+              ...(hubWs ? { hubWorkspaceId: hubWs } : {}),
             });
           }
           if (rest === '' && req.method === 'DELETE') {

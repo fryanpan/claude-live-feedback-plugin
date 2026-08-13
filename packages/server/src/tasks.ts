@@ -412,6 +412,11 @@ export type AttachAgentResult =
       /** Open Chores tasks no triage has placed — what the agent sweeps
        *  after attaching (§3.4). */
       untriaged: string[];
+      /** Voice change-requests that arrived while no agent was live (§2.4
+       *  "agent away — queued"). Delivered HERE — in the attach result, the
+       *  one payload a fresh attachment is guaranteed to read — and drained:
+       *  a second attach gets an empty list. */
+      queuedVoice: QueuedVoiceRequest[];
     }
   | { ok: false; error: 'workspace-not-found' };
 
@@ -549,6 +554,26 @@ export interface AgentHeartbeatEvent {
   ts: number;
 }
 
+/** §3.6: every voice utterance emits `voice.request` — transcript, chosen
+ *  route, ack text — which is what makes "voice always answers" a checkable
+ *  artifact rather than a promise (§2.4). */
+export interface VoiceRequestEvent {
+  type: 'voice.request';
+  workspaceId: string;
+  /** The utterance VERBATIM. */
+  transcript: string;
+  /** Which route handled it. 'agent-queued' = no live attachment; the
+   *  request waits in the voice queue for the next attach. */
+  route: 'fast-path' | 'agent' | 'agent-queued';
+  /** The explicit reply the speaker saw — names what was heard and which
+   *  route handles it. */
+  ack: string;
+  /** The per-surface anchor the utterance carried (§3.8). */
+  context?: unknown;
+  actor: TaskActor;
+  ts: number;
+}
+
 export type TaskStoreEvent =
   | TaskCreatedEvent
   | TaskTransitionedEvent
@@ -558,7 +583,24 @@ export type TaskStoreEvent =
   | WorkspaceGoalsChangedEvent
   | AgentAttachedEvent
   | AgentDetachedEvent
-  | AgentHeartbeatEvent;
+  | AgentHeartbeatEvent
+  | VoiceRequestEvent;
+
+/** One change-utterance waiting for an agent to attach (§2.4: "agent away —
+ *  queued"). Persisted synchronously — "queued" is a promise, and a promise
+ *  that lives only in memory dies with the process (grounded-pending). */
+export interface QueuedVoiceRequest {
+  transcript: string;
+  context?: unknown;
+  actor: TaskActor;
+  ts: number;
+}
+
+/** Where a workspace's queued voice requests persist. Exported so tests
+ *  assert the real contract path. */
+export function voiceQueuePath(dataDir: string, workspaceId: string): string {
+  return join(dataDir, 'workspaces', `${workspaceId}.voice-queue.json`);
+}
 
 export type SetWorkspaceGoalResult =
   | {
@@ -1435,7 +1477,104 @@ export class TaskStore {
       attachment,
       gating: this.gatingSummary(workspaceId),
       untriaged: this.listUntriaged(workspaceId).map((t) => t.id),
+      queuedVoice: this.drainVoiceQueue(workspaceId),
     };
+  }
+
+  // ── Voice (§2.4 / §3.8) ──────────────────────────────────────────────────
+
+  /**
+   * Record a voice utterance + its routing outcome. This is the §3.6
+   * `voice.request` row: it reaches the audit log and every subscriber via
+   * the emit choke point, so "voice always answers" has a checkable
+   * artifact. Returns false (and emits nothing) for an unknown workspace.
+   */
+  recordVoiceRequest(
+    workspaceId: string,
+    req: {
+      transcript: string;
+      route: 'fast-path' | 'agent' | 'agent-queued';
+      ack: string;
+      context?: unknown;
+      actor: { id: string; name: string; kind?: string };
+    },
+  ): boolean {
+    if (!this.workspaces.has(workspaceId)) return false;
+    this.emit({
+      type: 'voice.request',
+      workspaceId,
+      transcript: req.transcript,
+      route: req.route,
+      ack: req.ack,
+      ...(req.context !== undefined ? { context: req.context } : {}),
+      actor: {
+        id: req.actor.id,
+        name: req.actor.name,
+        kind: classifyActor(req.actor),
+      },
+      ts: Date.now(),
+    });
+    return true;
+  }
+
+  /**
+   * Queue a change-utterance for the next agent attach. SYNCHRONOUS write,
+   * unlike every other sidecar: the caller is about to tell the speaker
+   * "queued", and an ack grounded in a debounce that a crash can drop would
+   * be the summaries-incident lie. Queue writes are rare (only while no
+   * agent is live), so the sync cost is nothing.
+   */
+  queueVoiceRequest(
+    workspaceId: string,
+    item: {
+      transcript: string;
+      context?: unknown;
+      actor: { id: string; name: string; kind?: string };
+    },
+  ): boolean {
+    if (!this.workspaces.has(workspaceId)) return false;
+    const queued: QueuedVoiceRequest = {
+      transcript: item.transcript,
+      ...(item.context !== undefined ? { context: item.context } : {}),
+      actor: { id: item.actor.id, name: item.actor.name, kind: classifyActor(item.actor) },
+      ts: Date.now(),
+    };
+    const path = voiceQueuePath(this.dataDir, workspaceId);
+    try {
+      const dir = join(this.dataDir, 'workspaces');
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      const existing = this.listQueuedVoice(workspaceId);
+      writeFileSync(path, `${JSON.stringify({ queue: [...existing, queued] }, null, 2)}\n`);
+      return true;
+    } catch (err) {
+      console.error(`[tasks] failed to queue voice request for ${workspaceId}:`, err);
+      return false;
+    }
+  }
+
+  /** Read the queue without draining it (the hub could render a badge). */
+  listQueuedVoice(workspaceId: string): QueuedVoiceRequest[] {
+    const path = voiceQueuePath(this.dataDir, workspaceId);
+    if (!existsSync(path)) return [];
+    try {
+      const parsed = JSON.parse(readFileSync(path, 'utf8')) as {
+        queue?: QueuedVoiceRequest[];
+      };
+      return (parsed.queue ?? []).filter((q) => typeof q?.transcript === 'string');
+    } catch (err) {
+      console.error(`[tasks] unreadable voice queue for ${workspaceId} — skipped:`, err);
+      return [];
+    }
+  }
+
+  /** Hand the queue over and clear it — called by attachAgent, whose result
+   *  is the delivery. */
+  private drainVoiceQueue(workspaceId: string): QueuedVoiceRequest[] {
+    const queued = this.listQueuedVoice(workspaceId);
+    try {
+      rmSync(voiceQueuePath(this.dataDir, workspaceId), { force: true });
+    } catch {}
+    return queued;
   }
 
   /**
