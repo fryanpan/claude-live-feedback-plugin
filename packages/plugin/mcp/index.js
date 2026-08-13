@@ -13754,7 +13754,7 @@ function suggestionAuthor() {
 }
 var server = new Server({
   name: "claude-live-feedback",
-  version: "0.1.8"
+  version: "0.1.9"
 }, {
   capabilities: {
     tools: {},
@@ -13829,7 +13829,20 @@ var server = new Server({
     "Don't leave stale docs piling up in list_docs.",
     "",
     "BEFORE YOU EDIT A .md FILE: call list_docs first. If a doc has sourceUrl",
-    "matching the path, route through the MCP. If not, normal file edits are fine."
+    "matching the path, route through the MCP. If not, normal file edits are fine.",
+    "",
+    "WORKSPACE HUB: a hub workspace is a goal + a task board + linked docs.",
+    "create_workspace mints one; attach_doc links existing docs/reviews to it;",
+    "create_task / promote_to_task add work (omit `goal` and the task lands in",
+    "Chores awaiting triage — placing it with set_task_goal IS the triage:",
+    "pick the goal AND the exact position, and pass riskTier for how dangerous",
+    "the ACTION is, not how important the task is). task_transition is the",
+    "single gate for status changes — blockers come back in the result, and",
+    "attach evidence ({commit} or {threadRef}) or the move is flagged unproven.",
+    "attach_agent registers you as the workspace agent (heartbeat every few",
+    "minutes to stay live; triage requests only reach live agents). Workspace",
+    "events (task.*, decision.answered, triage.requested, workspace.goal_updated)",
+    "arrive on the same channel as thread events once you create/attach."
   ].join(" ")
 });
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -14496,10 +14509,304 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           }
         }
       }
+    },
+    {
+      name: "create_workspace",
+      description: "Create a hub WORKSPACE — a goal + task board + linked docs, the unit Bryan reviews on the hub page (/workspaces/<id>). Distinct from a folder bind / diff review (those are doc groupings; link one to a hub workspace with attach_doc). `goal` is the north-star statement every triage decision is judged against — write it as a sentence or two of markdown, and keep it current with set_workspace_goal. Board sections come later via set_goal_list. Auto-subscribes this session to the workspace's event channel (task.*, decision.answered, triage.requested, …); pass subscribe:false to skip. Returns { workspaceId } — the id is crypto-random because URLs hang off it.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: 'Short handle, e.g. "search-revamp".' },
+          goal: { type: "string", description: "North-star goal statement (markdown)." },
+          subscribe: { type: "boolean" }
+        },
+        required: ["name"]
+      }
+    },
+    {
+      name: "attach_doc",
+      description: "Link an EXISTING review doc, diff review, or folder bind to a hub workspace so it shows in the hub's docs sidebar. A link only — the doc keeps its own URL and metadata, nothing is migrated. `docId` may be a doc id or a diff-review/folder workspaceId (the whole review attaches as one unit). Idempotent. Returns the workspace's updated docIds.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          workspaceId: { type: "string", description: "Hub workspace id from create_workspace." },
+          docId: { type: "string", description: "Doc id, or a diff-review/folder-bind id." }
+        },
+        required: ["workspaceId", "docId"]
+      }
+    },
+    {
+      name: "create_task",
+      description: 'Create a task on a hub workspace board. For chat-born asks pass `quote` — the human\'s VERBATIM words, kept forever on the task (for thread-born asks use promote_to_task, which captures the quote itself). OMIT `goal` when you have not judged placement yet: the task lands at the bottom of Chores and a triage request is emitted to the live workspace agent (that may be you — place it with set_task_goal). An explicit goal — even "chores" — is a placement and skips triage. `after` lists task ids this depends on ("don\'t start yet" is a dependency, not a status); `afterEnforce` names the subset whose open state hard-blocks transitions. Write the body like a small user story with falsifiable acceptance criteria when the task is for someone else or parked beyond today; a bare title is fine for work you\'ll do within the hour. Returns { taskId, goal, order, status, triagePending } — trimmed, read details back with list_tasks.',
+      inputSchema: {
+        type: "object",
+        properties: {
+          workspaceId: { type: "string" },
+          title: { type: "string" },
+          body: { type: "string", description: "Markdown description (small user story)." },
+          assignee: {
+            type: "string",
+            description: "'human' | 'agent' | a named identity. Default 'agent'."
+          },
+          needs: {
+            type: "string",
+            enum: ["action", "decision"],
+            description: "Only meaningful when assignee is a human. 'decision' makes it a decision task (answer_decision records the verbatim answer)."
+          },
+          goal: {
+            type: "string",
+            description: 'Goal/subgoal id, or "chores". OMIT to route through triage.'
+          },
+          order: { type: "number", description: "Fractional position within the goal." },
+          after: {
+            type: "array",
+            items: { type: "string" },
+            description: "Task ids this waits on."
+          },
+          afterEnforce: {
+            type: "array",
+            items: { type: "string" },
+            description: "Subset of `after` that hard-blocks transitions while open."
+          },
+          dueAt: {
+            type: "number",
+            description: "Epoch ms. Optional at every level — never invent one."
+          },
+          links: {
+            type: "array",
+            description: "Refs this task mentions: {kind:'doc',docId} | {kind:'thread',docId,threadId} | {kind:'task',taskId} | {kind:'diff',workspaceId}. Backlinks are computed.",
+            items: { type: "object" }
+          },
+          quote: { type: "string", description: "The human's verbatim words, for chat-born asks." }
+        },
+        required: ["workspaceId", "title"]
+      }
+    },
+    {
+      name: "promote_to_task",
+      description: "Promote a comment thread into a task. Captures the origin ref (the thread backlinks to the task automatically), the latest HUMAN comment as the verbatim `quote` (agent replies never become the quote), and drafts a title + body from the quote when you don't supply them. Same goal semantics as create_task: omit `goal` to route the placement through triage. Returns { taskId, title, goal, order, quote } — trimmed.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          docId: { type: "string" },
+          threadId: { type: "string" },
+          workspaceId: { type: "string", description: "Hub workspace the task lands in." },
+          title: { type: "string", description: "Override the drafted title." },
+          body: { type: "string", description: "Override the drafted body." },
+          assignee: { type: "string" },
+          needs: { type: "string", enum: ["action", "decision"] },
+          goal: { type: "string", description: "Goal/subgoal id. OMIT to route through triage." },
+          dueAt: { type: "number" },
+          links: { type: "array", items: { type: "object" } }
+        },
+        required: ["docId", "threadId", "workspaceId"]
+      }
+    },
+    {
+      name: "list_tasks",
+      description: `List a hub workspace's tasks, optionally filtered by goal / status / assignee / needs. Rows are trimmed (no body, no transition history — get specifics via the task board or the links routes). needs:"decision" + status filters give you the open-decisions strip; assignee:"human" is half of the "what needs a person" computation.`,
+      inputSchema: {
+        type: "object",
+        properties: {
+          workspaceId: { type: "string" },
+          goal: { type: "string" },
+          status: { type: "string", enum: ["todo", "in-progress", "done"] },
+          assignee: { type: "string" },
+          needs: { type: "string", enum: ["action", "decision"] }
+        },
+        required: ["workspaceId"]
+      }
+    },
+    {
+      name: "task_transition",
+      description: "The SINGLE gate for task status changes (todo | in-progress | done) — attributed to this agent, appended to the task's audit trail. Attach `evidence` ({commit} and/or {threadRef}) on forward moves or the move is flagged `unproven` (allowed, shaded on the board). Open `after` dependencies come back in `blockers` — an edge marked enforce REFUSES the transition (HTTP 409) until the blocking task closes; read the blocker message, it names what to unblock. `usage` ({inputTokens, outputTokens}) reports what the task cost at done. Moving back to todo is never blocked.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          taskId: { type: "string" },
+          to: { type: "string", enum: ["todo", "in-progress", "done"] },
+          note: { type: "string" },
+          evidence: {
+            type: "object",
+            properties: {
+              commit: { type: "string" },
+              threadRef: { type: "object" }
+            }
+          },
+          usage: {
+            type: "object",
+            properties: {
+              inputTokens: { type: "number" },
+              outputTokens: { type: "number" }
+            }
+          }
+        },
+        required: ["taskId", "to"]
+      }
+    },
+    {
+      name: "set_task_goal",
+      description: "Place a task under a goal (or subgoal) at an exact position — this IS triage's write half: pick the spot, not just the bucket. Stamps triagedAgainst with the goal text judged against and clears the triage-pending marker; every move is recorded and fires task.regrouped, so regroup freely — the safety is the record, not asking first. When a move would cross a human's earlier placement, leave a task comment referencing it. Pass `riskTier` for how dangerous EXECUTING the task is (green: reversible/contained; yellow: outward-facing or hard to reverse; red: irreversible/one-way) — keyed to the action's damage, never its importance. `position` is fractional — there is always room between two tasks; omitted = bottom of the goal.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          taskId: { type: "string" },
+          goal: { type: "string", description: 'Goal/subgoal id, or "chores".' },
+          position: { type: "number" },
+          riskTier: { type: "string", enum: ["green", "yellow", "red"] }
+        },
+        required: ["taskId", "goal"]
+      }
+    },
+    {
+      name: "set_goal_list",
+      description: `Replace a workspace's ORDERED goal list — the board's sections; order is priority, so reordering goals is the priority gesture (it fires workspace.goals_changed, never a re-triage). Each goal: {id, title, dueAt?, subgoals?: [{id, title, dueAt?}]} — one subgoal level max. "chores" is reserved (always rendered last, never in the list). DESTRUCTIVE EDGE: open tasks whose goal id disappears move to the bottom of Chores — the result reports movedToChores so you can re-place each with set_task_goal; do that rather than leaving them piled.`,
+      inputSchema: {
+        type: "object",
+        properties: {
+          workspaceId: { type: "string" },
+          goals: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                id: { type: "string" },
+                title: { type: "string" },
+                dueAt: { type: "number" },
+                subgoals: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      id: { type: "string" },
+                      title: { type: "string" },
+                      dueAt: { type: "number" }
+                    },
+                    required: ["id", "title"]
+                  }
+                }
+              },
+              required: ["id", "title"]
+            }
+          }
+        },
+        required: ["workspaceId", "goals"]
+      }
+    },
+    {
+      name: "set_workspace_goal",
+      description: "Edit the workspace's north-star goal statement — the text every triage decision is judged against. Emits workspace.goal_updated and requests a re-triage of all OPEN tasks from the live workspace agent (the result's `retriage.requested` says whether one was actually delivered — with no live agent attached the re-triage honestly does not happen and placements stay as they were). If the re-triage lands in YOUR channel, walk the taskIds with set_task_goal.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          workspaceId: { type: "string" },
+          goal: { type: "string", description: "The new north-star statement (markdown)." }
+        },
+        required: ["workspaceId", "goal"]
+      }
+    },
+    {
+      name: "answer_decision",
+      description: "Record the VERBATIM answer to a decision task (needs:'decision') on the human's behalf — use when they told you their answer in chat/voice and you're writing it down; in the UI they answer directly. Pass their exact words as `text`, never a paraphrase. Emits decision.answered carrying the answer plus the task's links — a ready-made propagation checklist: act on or create a task for each item, and prioritize them right away. Does NOT transition the task — close it with task_transition once the propagation is handled.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          taskId: { type: "string" },
+          text: { type: "string", description: "The human's verbatim answer." }
+        },
+        required: ["taskId", "text"]
+      }
+    },
+    {
+      name: "link_refs",
+      description: "Link a task to a doc, thread, another task, or a diff review. Stored one way on the task; the reverse direction is computed, so doc and thread payloads grow task chips automatically. ref shapes: {kind:'doc',docId} | {kind:'thread',docId,threadId} | {kind:'task',taskId} | {kind:'diff',workspaceId}. Idempotent — `changed:false` means it was already linked. Target existence is not checked (a dangling annotation is visible and harmless).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          taskId: { type: "string" },
+          ref: { type: "object", description: "The ref to link." }
+        },
+        required: ["taskId", "ref"]
+      }
+    },
+    {
+      name: "unlink_refs",
+      description: "Remove a stored ref from a task (the exact ref, same shapes as link_refs). Idempotent — `changed:false` means it was not linked. Cannot remove the `origin` ref a promotion recorded; origin is history, not a link.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          taskId: { type: "string" },
+          ref: { type: "object" }
+        },
+        required: ["taskId", "ref"]
+      }
+    },
+    {
+      name: "attach_agent",
+      description: "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks') plus the untriaged task ids to sweep with set_task_goal. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments with a fresh heartbeat, and after ~5 minutes of silence the hub shows you as away and requests queue.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          workspaceId: { type: "string" },
+          agentId: { type: "string", description: "Defaults to this agent's MCP identity." },
+          runtime: {
+            type: "string",
+            enum: ["claude-code-local", "managed-agent", "webhook"],
+            description: "Defaults to claude-code-local."
+          },
+          capabilities: {
+            type: "array",
+            items: { type: "string" },
+            description: "e.g. ['tasks.write', 'docs.edit']"
+          },
+          subscribe: { type: "boolean" }
+        },
+        required: ["workspaceId"]
+      }
+    },
+    {
+      name: "heartbeat",
+      description: 'Prove this attached agent is alive (and, implicitly, working — the call stamps lastToolCallAt now unless you pass an explicit earlier toolCallAt). Call every few minutes while attached to a workspace; a stale heartbeat (~5 min) marks you away and queues triage requests, and a fresh heartbeat with a 30-min-old toolCallAt renders as "process up, agent unresponsive".',
+      inputSchema: {
+        type: "object",
+        properties: {
+          workspaceId: { type: "string" },
+          agentId: { type: "string", description: "Defaults to this agent's MCP identity." },
+          toolCallAt: {
+            type: "number",
+            description: "Epoch ms of your last real tool call. Defaults to now."
+          }
+        },
+        required: ["workspaceId"]
+      }
+    },
+    {
+      name: "list_attachments",
+      description: "List the agents attached to a hub workspace with their derived state: active, 'process up, agent unresponsive' (fresh heartbeat, stale tool calls), or 'away — requests queue'. The ambient-awareness read: who is where, and is anyone wedged.",
+      inputSchema: {
+        type: "object",
+        properties: { workspaceId: { type: "string" } },
+        required: ["workspaceId"]
+      }
     }
   ]
 }));
-var NO_AUTO_WATCH_TOOLS = new Set(["unwatch_doc", "watch_doc", "observe_url"]);
+var NO_AUTO_WATCH_TOOLS = new Set([
+  "unwatch_doc",
+  "watch_doc",
+  "observe_url",
+  "attach_doc"
+]);
+function taskCreatedSummary(task) {
+  return {
+    taskId: task.id,
+    goal: task.goal,
+    order: task.order,
+    status: task.status,
+    assignee: task.assignee,
+    triagePending: task.triagePendingTs !== undefined
+  };
+}
 async function maybeAutoWatch(name, args) {
   if (NO_AUTO_WATCH_TOOLS.has(name))
     return;
@@ -14894,6 +15201,191 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const res = await http("POST", "/api/share/enabled", { enabled });
         return ok(res);
       }
+      case "create_workspace": {
+        const {
+          name: wsName,
+          goal,
+          subscribe
+        } = a;
+        const res = await http("POST", "/api/workspaces", {
+          name: wsName,
+          ...goal !== undefined ? { goal } : {}
+        });
+        if (subscribe !== false && res.workspace?.id) {
+          await watchWorkspace(res.workspace.id);
+        }
+        return ok({
+          workspaceId: res.workspace.id,
+          name: res.workspace.name,
+          goal: res.workspace.goal
+        });
+      }
+      case "attach_doc": {
+        const { workspaceId, docId } = a;
+        const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/docs`, {
+          docId
+        });
+        return ok({ ok: true, workspaceId, docIds: res.workspace?.docIds ?? [] });
+      }
+      case "create_task": {
+        const {
+          workspaceId,
+          title,
+          body,
+          assignee,
+          needs,
+          goal,
+          order,
+          after,
+          afterEnforce,
+          dueAt,
+          links,
+          quote
+        } = a;
+        const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/tasks`, {
+          title,
+          ...body !== undefined ? { body } : {},
+          ...assignee !== undefined ? { assignee } : {},
+          ...needs !== undefined ? { needs } : {},
+          ...goal !== undefined ? { goal } : {},
+          ...order !== undefined ? { order } : {},
+          ...after !== undefined ? { after } : {},
+          ...afterEnforce !== undefined ? { afterEnforce } : {},
+          ...dueAt !== undefined ? { dueAt } : {},
+          ...links !== undefined ? { links } : {},
+          ...quote !== undefined ? { quote } : {}
+        });
+        return ok(taskCreatedSummary(res.task));
+      }
+      case "promote_to_task": {
+        const { docId, threadId, workspaceId, title, body, assignee, needs, goal, dueAt, links } = a;
+        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/promote`, {
+          workspaceId,
+          ...title !== undefined ? { title } : {},
+          ...body !== undefined ? { body } : {},
+          ...assignee !== undefined ? { assignee } : {},
+          ...needs !== undefined ? { needs } : {},
+          ...goal !== undefined ? { goal } : {},
+          ...dueAt !== undefined ? { dueAt } : {},
+          ...links !== undefined ? { links } : {}
+        });
+        return ok({
+          ...taskCreatedSummary(res.task),
+          title: res.task.title,
+          quote: res.task.quote
+        });
+      }
+      case "list_tasks": {
+        const { workspaceId, goal, status, assignee, needs } = a;
+        const qs = new URLSearchParams;
+        if (goal !== undefined)
+          qs.set("goal", goal);
+        if (status !== undefined)
+          qs.set("status", status);
+        if (assignee !== undefined)
+          qs.set("assignee", assignee);
+        if (needs !== undefined)
+          qs.set("needs", needs);
+        const query = qs.size > 0 ? `?${qs.toString()}` : "";
+        const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/tasks${query}`);
+        return ok({
+          workspaceId,
+          tasks: res.tasks.map(({ body: _body, transitions, ...rest }) => ({
+            ...rest,
+            transitionCount: transitions?.length ?? 0
+          }))
+        });
+      }
+      case "task_transition": {
+        const { taskId, to, note, evidence, usage } = a;
+        const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/transition`, {
+          to,
+          author: AUTHOR,
+          ...note !== undefined ? { note } : {},
+          ...evidence !== undefined ? { evidence } : {},
+          ...usage !== undefined ? { usage } : {}
+        });
+        return ok({
+          taskId,
+          status: res.task.status,
+          blockers: res.blockers,
+          unproven: res.unproven
+        });
+      }
+      case "set_task_goal": {
+        const { taskId, goal, position, riskTier } = a;
+        const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/goal`, {
+          goal,
+          author: AUTHOR,
+          ...position !== undefined ? { position } : {},
+          ...riskTier !== undefined ? { riskTier } : {}
+        });
+        return ok({ taskId, goal: res.task.goal, order: res.task.order, changed: res.changed });
+      }
+      case "set_goal_list": {
+        const { workspaceId, goals } = a;
+        const res = await http("PUT", `/api/workspaces/${encodeURIComponent(workspaceId)}/goals`, {
+          goals,
+          author: AUTHOR
+        });
+        return ok({ workspaceId, changed: res.changed, movedToChores: res.movedToChores });
+      }
+      case "set_workspace_goal": {
+        const { workspaceId, goal } = a;
+        const res = await http("PUT", `/api/workspaces/${encodeURIComponent(workspaceId)}/goal`, {
+          goal,
+          author: AUTHOR
+        });
+        return ok({ workspaceId, changed: res.changed, retriage: res.retriage });
+      }
+      case "answer_decision": {
+        const { taskId, text } = a;
+        const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/answer`, {
+          text,
+          author: AUTHOR
+        });
+        return ok({ taskId, recorded: true, links: res.task.links ?? [] });
+      }
+      case "link_refs": {
+        const { taskId, ref } = a;
+        const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/links`, {
+          ref
+        });
+        return ok({ taskId, changed: res.changed });
+      }
+      case "unlink_refs": {
+        const { taskId, ref } = a;
+        const res = await http("DELETE", `/api/tasks/${encodeURIComponent(taskId)}/links`, {
+          ref
+        });
+        return ok({ taskId, changed: res.changed });
+      }
+      case "attach_agent": {
+        const { workspaceId, agentId, runtime, capabilities, subscribe } = a;
+        const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`, {
+          agentId: agentId ?? AUTHOR.id,
+          runtime: runtime ?? "claude-code-local",
+          ...capabilities !== undefined ? { capabilities } : {}
+        });
+        if (subscribe !== false)
+          await watchWorkspace(workspaceId);
+        return ok({
+          workspaceId,
+          agentId: res.attachment?.agentId ?? agentId ?? AUTHOR.id,
+          gating: res.gating,
+          untriaged: res.untriaged ?? []
+        });
+      }
+      case "heartbeat": {
+        const { workspaceId, agentId, toolCallAt } = a;
+        const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments/${encodeURIComponent(agentId ?? AUTHOR.id)}/heartbeat`, { toolCallAt: toolCallAt ?? Date.now() });
+        return ok({ workspaceId, agentId: agentId ?? AUTHOR.id, state: res.attachment?.state });
+      }
+      case "list_attachments": {
+        const { workspaceId } = a;
+        const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`);
+        return ok(res);
+      }
       default:
         return err(`unknown tool: ${name}`);
     }
@@ -14990,7 +15482,66 @@ async function handleFrame(raw) {
   }
   await emitChannelMessage(ev, payload);
 }
+var HUB_EVENT_RE = /^(task|decision|workspace|agent|triage)\./;
+async function emitHubChannelMessage(event, rawPayload) {
+  const p = rawPayload ?? {};
+  if (event === "agent.heartbeat")
+    return;
+  if (p.actor?.id === AUTHOR.id)
+    return;
+  const by = p.actor?.name ? ` by ${p.actor.name}` : "";
+  let body;
+  switch (event) {
+    case "task.created":
+      body = `[task.created] "${truncate(p.task?.title ?? p.taskId ?? "", 60)}" → ${p.goal ?? "?"}${p.assignee ? ` (assignee ${p.assignee})` : ""}`;
+      break;
+    case "task.transitioned":
+      body = `[task.transitioned] ${p.taskId}: ${p.from} → ${p.to}${by}${p.note ? ` — ${truncate(p.note, 80)}` : ""}`;
+      break;
+    case "task.regrouped":
+      body = `[task.regrouped] ${p.taskId}: ${p.fromGoal} → ${p.toGoal}${by}`;
+      break;
+    case "decision.answered":
+      body = `[decision.answered] ${p.taskId}${by}: "${truncate(p.answer ?? "", 120)}" — walk its links as the propagation checklist`;
+      break;
+    case "workspace.goal_updated":
+      body = `[workspace.goal_updated]${by}: "${truncate(p.newGoal ?? "", 120)}"`;
+      break;
+    case "workspace.goals_changed": {
+      const moved = p.movedToChores?.length ?? 0;
+      body = `[workspace.goals_changed] ${p.kind ?? "edit"}${by}${moved > 0 ? ` — ${moved} task(s) moved to Chores, re-place with set_task_goal` : ""}`;
+      break;
+    }
+    case "triage.requested":
+      body = p.kind === "goal-retriage" ? `[triage.requested] goal changed — re-triage ${p.taskIds?.length ?? "?"} open task(s) with set_task_goal` : `[triage.requested] place task ${p.taskId} against the goal (set_task_goal)`;
+      break;
+    case "agent.attached":
+    case "agent.detached":
+      body = `[${event}] ${p.agentId ?? "?"}`;
+      break;
+    default:
+      body = `[${event}]${p.taskId ? ` task ${p.taskId}` : ""}`;
+  }
+  await server.notification({
+    method: "notifications/claude/channel",
+    params: {
+      source: "live-feedback",
+      sent_at: new Date().toISOString(),
+      content: body,
+      meta: {
+        workspace_id: p.workspaceId ?? "unknown",
+        ...p.taskId ? { task_id: p.taskId } : {},
+        event,
+        ...p.actor?.name ? { author: p.actor.name } : {}
+      }
+    }
+  });
+}
 async function emitChannelMessage(event, rawPayload) {
+  if (HUB_EVENT_RE.test(event)) {
+    await emitHubChannelMessage(event, rawPayload);
+    return;
+  }
   const p = rawPayload ?? {};
   const docId = p.docId ?? "unknown";
   if (event.startsWith("suggestion.")) {
