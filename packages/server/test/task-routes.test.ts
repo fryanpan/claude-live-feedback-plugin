@@ -266,16 +266,10 @@ describe('hub workspace + task routes', () => {
       expect(refused.status).toBe(409);
     });
 
-    // Sibling routes validate the identical values (POST .../links runs
-    // isValidRef; .../goal validates riskTier), so the create route
-    // answering 200 to a malformed ref is the same field giving two answers.
-    it('validates links and needs on create the way the sibling routes do', async () => {
-      const badLink = await post(`/api/workspaces/${wsId}/tasks`, {
-        title: 'Bad ref',
-        links: [{ kind: 'thread', docId: 'plan-doc' }], // threadId missing
-      });
-      expect(badLink.status).toBe(400);
-
+    // `needs` still 400s on create: it changes what the task IS. `links` no
+    // longer does — see the partial-accept test below for why the two fields
+    // are now allowed to give different answers.
+    it('still refuses a malformed `needs` on create', async () => {
       const badNeeds = await post(`/api/workspaces/${wsId}/tasks`, {
         title: 'Approve the spend',
         assignee: 'human',
@@ -294,6 +288,157 @@ describe('hub workspace + task routes', () => {
       const task = ((await good.json()) as { task: Task }).task;
       expect(task.needs).toBe('decision');
       expect(task.links).toHaveLength(1);
+    });
+
+    // `origin` was a cast, not a check — so it skipped every rule `links`
+    // enforces one field away. Both halves of that are tested here because
+    // both were reachable from one unauthenticated POST.
+    it('refuses an unsafe scheme in `origin`, the same as in `links`', async () => {
+      const hostile = { kind: 'url', url: 'javascript:alert(1)' };
+
+      // Positive control FIRST: the identical ref in `links` is already
+      // rejected, so this asserts the two fields agree rather than asserting
+      // that nothing anywhere accepts it.
+      const viaLinks = await post(`/api/workspaces/${wsId}/tasks`, {
+        title: 'via links',
+        links: [hostile],
+      });
+      expect(viaLinks.status).toBe(200);
+      const kept = ((await viaLinks.json()) as { task: Task }).task;
+      expect(kept.links).toHaveLength(0);
+
+      const viaOrigin = await post(`/api/workspaces/${wsId}/tasks`, {
+        title: 'via origin',
+        origin: hostile,
+      });
+      expect(viaOrigin.status).toBe(400);
+
+      // A well-formed url origin still goes through — the check is on the
+      // scheme, not on the kind.
+      const good = await post(`/api/workspaces/${wsId}/tasks`, {
+        title: 'good origin',
+        origin: { kind: 'url', url: 'https://example.com/pr/1' },
+      });
+      expect(good.status).toBe(200);
+      expect(((await good.json()) as { task: Task }).task.origin).toEqual({
+        kind: 'url',
+        url: 'https://example.com/pr/1',
+      });
+    });
+
+    // The nastiest shape: it persists, so it outlives the request that
+    // created it and breaks readers on every subsequent boot.
+    it('a null `origin` cannot poison backlink queries', async () => {
+      const created = await post(`/api/workspaces/${wsId}/tasks`, {
+        title: 'null origin',
+        origin: null,
+      });
+      // Read as "no origin" rather than refused — clients spell an absent
+      // field this way, and dropping it costs nothing.
+      expect(created.status).toBe(200);
+      expect(((await created.json()) as { task: Task }).task.origin).toBeUndefined();
+
+      // The route that used to 500: `refKey` reads `ref.kind` and threw on
+      // null, across EVERY workspace, on the doc-open path.
+      const listed = await local(`/api/workspaces/${wsId}/tasks`);
+      expect(listed.status).toBe(200);
+      const tasks = ((await listed.json()) as { tasks: Task[] }).tasks;
+      expect(tasks.some((t) => t.title === 'null origin')).toBe(true);
+    });
+
+    // A weekly plan points OUTWARD — at a pull request, a decision page, a
+    // dashboard. Refs were closed to this server's own objects, so the links
+    // that mattered most to the first real port couldn't be links at all, and
+    // went into task bodies where nothing can render or count them.
+    it('accepts an external URL as a link and keys it for backlinks', async () => {
+      const pr = 'https://github.com/example-org/example-repo/pull/1669';
+      const r = await post(`/api/workspaces/${wsId}/tasks`, {
+        title: 'Land the watcher fix',
+        links: [{ kind: 'url', url: pr }],
+      });
+      expect(r.status).toBe(200);
+      const { task } = (await r.json()) as { task: Task };
+      expect(task.links).toEqual([{ kind: 'url', url: pr }]);
+
+      // Read the stored effect back through the OTHER route — the response
+      // body alone would pass even if the route dropped the field.
+      const listed = (await (await local(`/api/workspaces/${wsId}/tasks`)).json()) as {
+        tasks: Task[];
+      };
+      expect(listed.tasks.find((t) => t.id === task.id)?.links).toEqual([{ kind: 'url', url: pr }]);
+    });
+
+    // The hub renders links as clickable chips, so a ref is an href. Every
+    // other kind is an internal id and can't carry a scheme; `url` is the
+    // first that can, which makes it the first that can carry `javascript:`.
+    it('refuses a URL ref whose scheme is not http(s)', async () => {
+      for (const url of ['javascript:alert(1)', 'data:text/html,<script>x</script>', 'not a url']) {
+        const r = await post(`/api/workspaces/${wsId}/tasks`, {
+          title: 'Hostile link',
+          links: [{ kind: 'url', url }],
+        });
+        // Not a 400 — see partial-accept below. The task is created and the
+        // ref is dropped, which is what makes this safe rather than merely
+        // inconvenient: nothing downstream ever sees the scheme.
+        expect(r.status).toBe(200);
+        const { task, ignoredLinks } = (await r.json()) as {
+          task: Task;
+          ignoredLinks?: unknown[];
+        };
+        expect(task.links ?? []).toEqual([]);
+        expect(ignoredLinks).toEqual([{ kind: 'url', url }]);
+      }
+    });
+
+    // Refs are annotations, and existence is deliberately never checked —
+    // so a bad one already can't be trusted to point anywhere. Losing the
+    // title, body, goal and assignee over one is out of proportion to that.
+    it('drops a bad ref and creates the task, reporting it in ignoredLinks', async () => {
+      const r = await post(`/api/workspaces/${wsId}/tasks`, {
+        title: 'Cancel the trial',
+        body: 'Before the renewal date.',
+        assignee: 'human',
+        links: [
+          { kind: 'doc', docId: 'plan-doc' },
+          { kind: 'thread', docId: 'plan-doc' }, // threadId missing
+        ],
+      });
+      expect(r.status).toBe(200);
+      const { task, ignoredLinks } = (await r.json()) as { task: Task; ignoredLinks?: unknown[] };
+      // The rest of the task survived — that's the whole point of the change.
+      expect(task.title).toBe('Cancel the trial');
+      expect(task.body).toBe('Before the renewal date.');
+      expect(task.assignee).toBe('human');
+      expect(task.links).toEqual([{ kind: 'doc', docId: 'plan-doc' }]);
+      // Dropped, but never silently: the caller is told exactly what was lost.
+      expect(ignoredLinks).toEqual([{ kind: 'thread', docId: 'plan-doc' }]);
+
+      // Read back through the OTHER route — a response-only assertion would
+      // pass even if the good ref was never stored.
+      const listed = (await (await local(`/api/workspaces/${wsId}/tasks`)).json()) as {
+        tasks: Task[];
+      };
+      const stored = listed.tasks.find((t) => t.id === task.id);
+      expect(stored?.links).toEqual([{ kind: 'doc', docId: 'plan-doc' }]);
+    });
+
+    // The dedicated links route is the opposite case: the ref IS the request,
+    // so dropping it would mean answering 200 to a call that did nothing.
+    it('still 400s on the dedicated links route, and names the accepted kinds', async () => {
+      const created = await post(`/api/workspaces/${wsId}/tasks`, { title: 'Has links' });
+      const { task } = (await created.json()) as { task: Task };
+
+      const r = await post(`/api/tasks/${task.id}/links`, {
+        author: AGENT,
+        add: [{ kind: 'thread', docId: 'plan-doc' }],
+      });
+      expect(r.status).toBe(400);
+      const { error } = (await r.json()) as { error: string };
+      // The error a first-time caller is most likely to hit should not
+      // require reading the source to find out what `url` is spelled like.
+      for (const kind of ['doc', 'thread', 'task', 'diff', 'url']) {
+        expect(error).toContain(kind);
+      }
     });
   });
 
