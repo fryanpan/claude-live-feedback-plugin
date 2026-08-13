@@ -71,11 +71,27 @@ there. That is how 25 feature commits sat undelivered between 2026-05-09 and
 - After merging a plugin change, `claude plugin update live-feedback@claude-live-feedback`
   is what actually delivers it to a session.
 
+## Reviewing a branch before it merges (`bun run staging`)
+
+Peers and people can review an unmerged build without merging it. From a **linked worktree** (not the primary checkout):
+
+```bash
+bun run staging            # builds this worktree's bundles, serves :8788 with a throwaway data dir
+```
+
+Prod stays on 8787 with its own data throughout. The script refuses to run from the primary checkout, because prod serves `packages/markdown-app/dist` from there per-request — building bundles in the primary checkout is a deploy to the fleet, not a test build. It also starts the server via `bin.ts` rather than `scripts/serve.ts`, because `serve.ts` publishes the live port that the live-feedback MCP discovers, which would silently repoint every agent in the fleet at the staging build.
+
+To put an *agent* on staging: `FEEDBACK_BASE_URL=http://<host>:8788` in its launch env (read once at session start, so it needs a restart). Staging data never migrates to prod — evaluate pre-merge, do the real work once, after.
+
 ## Pre-push leak gate
 
 This repo is **public**. `.githooks/pre-push` runs two scanners on every push and blocks the push if either flags a leak. The principle: once a push lands and a PR is opened, the content is public-record forever (PR descriptions and commits can't be removed) — so the gate fires before the push.
 
-**Layer 1 — regex** (`scripts/scrub-check.py`): scans for hand-curated denylist patterns at `~/.config/conductor/scrub-denylist.txt` (family names, tax keywords, health specifics, etc.) and, if a `registry.yaml` exists at repo root or at `~/dev/ai-team-lead/`, for other project names from the registry.
+**Layer 1 — regex** (`scripts/scrub-check.py`): scans for hand-curated denylist patterns and, from `registry.yaml` (repo root, else the fleet copy), the names of projects the registry has not cleared. Two keys clear a name, and the difference matters: `public: true` means the GitHub repo is public *today* (a fact other tooling relies on — it must stay literally true), and `mentionable: true` means the operator has cleared the name for public mention while the repo is still private. The gate only ever asks "is this name safe to say", so both drop out; the split exists so answering that never requires asserting a repo is public when it isn't. Both sources resolve from a candidate list, current path first — `~/.config/team-lead/scrub-denylist.txt` then `~/.config/conductor/`, and `~/dev/ai-team-lead/registry.yaml` then the pre-rename path.
+
+**A missing source fails the push (exit 2) — it does not warn.** If either source resolves, this machine is expected to have both, so a missing one is a broken install rather than an absent config. If neither resolves (a stranger's clone), it skips cleanly; `SCRUB_REQUIRE_SOURCES=1` makes even that hard. This is deliberate: the registry half of this gate was dead for weeks because a renamed path made `find_registry()` return None while the denylist kept the pattern list non-empty, so the old "no patterns configured" guard never fired and every push passed the project-name check by not running it.
+
+**`bun run check:scrub-gate` proves the gate can still see** — nine cases against temp fixtures (`SCRUB_REGISTRY` / `SCRUB_DENYLIST` override authoritatively, so it never reads the real config). It runs in CI *and* at the top of the pre-push hook, because CI never runs the hook and the hook is where the gate lives. Note the scanner takes file paths, `--diff-range`, `--staged`, or `--scan-all-tracked`; it **ignores stdin**, so piping content at it scans nothing and exits 0.
 
 **Layer 2 — Haiku** (`scripts/scrub-haiku.py`): sends the diff to `claude-haiku-4-5-20251001` with a strict scanner prompt. Catches unrecognized real names, contextual identifiers, financial/health specifics in personal context, OAuth tokens, etc. Auto-runs only on pushes to `github.com/fryanpan/` remotes. Reads its key from the macOS Keychain (`scrub-haiku-api-key`), falling back to `SCRUB_HAIKU_API_KEY` or `ANTHROPIC_API_KEY`. Set up once with `security add-generic-password -a "$USER" -s scrub-haiku-api-key -w` (omit the value; it prompts, so the key stays out of shell history). API failure → warn + pass (regex layer still ran).
 

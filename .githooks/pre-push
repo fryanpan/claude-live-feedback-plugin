@@ -19,6 +19,20 @@ haiku_script="$repo_root/scripts/scrub-haiku.py"
 # Not installed in this repo — silently no-op so peer repos without the script aren't blocked.
 [ ! -f "$regex_script" ] && exit 0
 
+# Prove the gate can still see before trusting anything it says. The scanner's
+# real failure mode is scanning nothing and exiting 0 — that ran undetected for
+# weeks — and CI can't catch it because CI never runs this hook. ~1s.
+selftest="$repo_root/scripts/scrub-selftest.py"
+if [ -f "$selftest" ]; then
+  if ! python3 "$selftest" > /tmp/scrub-selftest.$$ 2>&1; then
+    cat /tmp/scrub-selftest.$$ >&2
+    rm -f /tmp/scrub-selftest.$$
+    echo "[scrub-check] self-test failed — the leak gate is not working. Push blocked." >&2
+    exit 1
+  fi
+  rm -f /tmp/scrub-selftest.$$
+fi
+
 # Haiku layer runs only when pushing to a fryanpan-owned remote (personal-account
 # isolation for the dedicated SCRUB_HAIKU_API_KEY billing). Other remotes get the
 # regex layer only. Override with SCRUB_HAIKU_FORCE=1 to enable Haiku on any push.

@@ -27,6 +27,8 @@ jobs:
         run: bun run lint
       - name: Test
         run: bun run test
+      - name: Leak gate can still see
+        run: bun run check:scrub-gate
       - name: Build widget
         run: bun run build:widget
       - name: Widget bundle size
