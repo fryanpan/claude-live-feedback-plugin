@@ -48,6 +48,7 @@ import type { ShareConfig } from './share/types.ts';
 import { sanitizeVisitorAuthor } from './share/visitor-identity.ts';
 import { SseHub, openSseStream } from './sse.ts';
 import { KEYCHAIN_SERVICE, ThreadSummarizer } from './summarize.ts';
+import { type Ref, type TaskStatus, TaskStore } from './tasks.ts';
 import { type WebhookLogEntry, createWebhookDispatcher } from './webhooks.ts';
 import { onClose, onMessage, onOpen } from './yjs-protocol.ts';
 
@@ -149,6 +150,8 @@ const CT: Record<string, string> = {
 export interface ServerHandle {
   port: number;
   rooms: Rooms;
+  /** The hub task store — workspaces, tasks, the transition gate. */
+  tasks: TaskStore;
   shares: Shares | null;
   /** Hang up every websocket and SSE stream whose share is no longer live.
    *  Runs on a 60s interval; exposed so tests exercise the real sweep. */
@@ -356,6 +359,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     decorateDocMeta: withReviewUrl,
     ...(summarizer ? { summarizer } : {}),
   });
+  // The hub task store (plan §3.2/§3.3): server-owned workspaces + tasks,
+  // persisted as per-workspace sidecars under <dataDir>/workspaces/.
+  const taskStore = new TaskStore({ dataDir });
 
   /**
    * CORS is decided once, here, for every response the handler produces,
@@ -978,12 +984,22 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           return j(200, { docs: rooms.list().map(withReviewUrl) });
         }
 
-        // --- REST: workspaces (folder bind) ---
+        // --- REST: workspaces (hub create OR folder bind) ---
+        // One resource, two shapes: `folderPath` binds a folder of files
+        // (the legacy grouping workspace), `name` creates a hub Workspace —
+        // a NEW first-class entity with a crypto-random id that tasks and
+        // goals hang off (plan §3.12 commit 1). Nothing is migrated between
+        // the two; attach_doc LINKS existing docs/reviews to a hub workspace.
         if (pathname === '/api/workspaces' && req.method === 'POST') {
           const body = await safeJson(req);
           const folderPath = body?.folderPath as string | undefined;
+          if (!folderPath && typeof body?.name === 'string' && body.name.trim().length > 0) {
+            const goal = typeof body?.goal === 'string' ? (body.goal as string) : undefined;
+            const workspace = taskStore.createWorkspace(body.name.trim(), goal);
+            return j(200, { workspace });
+          }
           if (!folderPath || typeof folderPath !== 'string') {
-            return j(400, { error: 'folderPath required' });
+            return j(400, { error: 'folderPath (folder bind) or name (hub workspace) required' });
           }
           const res = rooms.bindFolder({
             folderPath,
@@ -1084,6 +1100,100 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // this to treat a folder bind as one cleanup unit.
         if (pathname === '/api/workspaces' && req.method === 'GET') {
           return j(200, { workspaces: rooms.listWorkspaces() });
+        }
+        // --- REST: hub workspaces + tasks (plan §3.10) ---
+        // Every handler below hand-copies body fields into the store call.
+        // A field that isn't copied is silently discarded while the request
+        // still returns 200 — so every param here has an HTTP-level test in
+        // task-routes.test.ts (the `groups` lesson).
+        const hubWsMatch = pathname.match(/^\/api\/workspaces\/([^/]+)$/);
+        if (hubWsMatch && req.method === 'GET') {
+          const workspace = taskStore.getWorkspace(decodeURIComponent(hubWsMatch[1] ?? ''));
+          if (!workspace) return j(404, { error: 'workspace not found' });
+          return j(200, { workspace });
+        }
+        // attach_doc: link an existing doc or review to a hub workspace.
+        const wsAttachMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/docs$/);
+        if (wsAttachMatch && req.method === 'POST') {
+          const workspaceId = decodeURIComponent(wsAttachMatch[1] ?? '');
+          const body = await safeJson(req);
+          const docId = body?.docId as string | undefined;
+          if (!docId || typeof docId !== 'string') return j(400, { error: 'docId required' });
+          // The link target must exist: either a doc room, or a legacy
+          // grouping workspace id (a diff review / folder bind, attached as
+          // one unit).
+          const exists =
+            rooms.get(docId) !== undefined || rooms.list().some((m) => m.workspaceId === docId);
+          if (!exists) return j(404, { error: 'doc not found', docId });
+          const res = taskStore.attachDoc(workspaceId, docId);
+          if (!res.ok) return j(404, res);
+          return j(200, { ok: true, workspace: taskStore.getWorkspace(workspaceId) });
+        }
+        const wsTasksMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/tasks$/);
+        if (wsTasksMatch && req.method === 'GET') {
+          const workspaceId = decodeURIComponent(wsTasksMatch[1] ?? '');
+          if (!taskStore.getWorkspace(workspaceId)) {
+            return j(404, { error: 'workspace not found' });
+          }
+          const status = url.searchParams.get('status') as TaskStatus | null;
+          const tasks = taskStore.listTasks(workspaceId, {
+            ...(status ? { status } : {}),
+            ...(url.searchParams.get('goal') ? { goal: url.searchParams.get('goal') ?? '' } : {}),
+            ...(url.searchParams.get('assignee')
+              ? { assignee: url.searchParams.get('assignee') ?? '' }
+              : {}),
+            ...(url.searchParams.get('needs')
+              ? { needs: url.searchParams.get('needs') as 'action' | 'decision' }
+              : {}),
+          });
+          return j(200, { workspaceId, tasks });
+        }
+        if (wsTasksMatch && req.method === 'POST') {
+          const workspaceId = decodeURIComponent(wsTasksMatch[1] ?? '');
+          const body = await safeJson(req);
+          const title = body?.title as string | undefined;
+          if (!title || typeof title !== 'string' || title.trim().length === 0) {
+            return j(400, { error: 'title required' });
+          }
+          const res = taskStore.createTask(workspaceId, {
+            title: title.trim(),
+            body: body?.body as string | undefined,
+            assignee: body?.assignee as string | undefined,
+            needs: body?.needs as 'action' | 'decision' | undefined,
+            goal: body?.goal as string | undefined,
+            order: typeof body?.order === 'number' ? Number(body.order) : undefined,
+            after: Array.isArray(body?.after) ? (body.after as string[]) : undefined,
+            afterEnforce: Array.isArray(body?.afterEnforce)
+              ? (body.afterEnforce as string[])
+              : undefined,
+            dueAt: typeof body?.dueAt === 'number' ? Number(body.dueAt) : undefined,
+            links: Array.isArray(body?.links) ? (body.links as Ref[]) : undefined,
+            origin: body?.origin as Ref | undefined,
+            quote: body?.quote as string | undefined,
+          });
+          if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
+          return j(200, { task: res.task });
+        }
+        // The single gate for status changes: attributed, evidence-stamped,
+        // dependency-checked. 409 on an enforce-marked open dependency.
+        const taskTransitionMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/transition$/);
+        if (taskTransitionMatch && req.method === 'POST') {
+          const taskId = decodeURIComponent(taskTransitionMatch[1] ?? '');
+          const body = await safeJson(req);
+          const author = authorFor(body?.author);
+          const to = body?.to as TaskStatus | undefined;
+          if (!author || !to) return j(400, { error: 'author + to required' });
+          const res = taskStore.transition(taskId, to, {
+            actor: author,
+            note: body?.note as string | undefined,
+            evidence: body?.evidence as { commit?: string; threadRef?: Ref } | undefined,
+            usage: body?.usage as { inputTokens: number; outputTokens: number } | undefined,
+          });
+          if (!res.ok) {
+            const status = res.error === 'not-found' ? 404 : res.error === 'blocked' ? 409 : 400;
+            return j(status, res);
+          }
+          return j(200, res);
         }
         // Delete a whole workspace as one unit (all-or-nothing open-thread
         // guardrail; ?force=true to override). Member SOURCE files are left
@@ -1813,12 +1923,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   return {
     port: server.port ?? port,
     rooms,
+    tasks: taskStore,
     shares,
     sweepDeadShares,
     sharingGate,
     webhookLog,
     stop: async () => {
       if (shareSweep) clearInterval(shareSweep);
+      // Flush pending sidecar writes so a clean shutdown never loses board
+      // state that was still inside the debounce window.
+      taskStore.stop();
       server.stop();
     },
   };
