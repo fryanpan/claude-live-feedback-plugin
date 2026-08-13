@@ -473,6 +473,32 @@ Technical discoveries that should persist across sessions for this project.
   once at startup, before the server spawns — restart == deploy. A failed
   build logs loudly and serves the existing dist (stale beats down).
 
+## Reviewing an unmerged build: run a staging instance, never rebuild in the primary checkout
+
+- **`bun run staging`, from a linked worktree.** It builds the widget +
+  markdown-app bundles in that worktree and starts the server on port 8788
+  with a throwaway `data-staging/` dir. Prod keeps serving 8787 with its own
+  data the entire time. This is what makes "get feedback before the PR
+  merges" possible at all — previously the only way to see a branch's client
+  changes was to merge it.
+- **Two guardrails, both load-bearing, both encoded in the script rather than
+  in someone's memory.** (1) It refuses to run from the primary checkout,
+  because prod serves `packages/markdown-app/dist` from there *per request* —
+  building bundles in the primary checkout is a deploy to the whole fleet, not
+  a test build. Detection is `--git-dir == --git-common-dir`, which is true
+  only in the main checkout. (2) It starts the server via
+  `packages/server/src/bin.ts` (which takes `--port` / `--data-dir`) and NEVER
+  via `scripts/serve.ts`, because `serve.ts` publishes the live port to the
+  file the live-feedback MCP uses for discovery — running it would silently
+  repoint every agent in the fleet at the staging build.
+- **Pointing an agent at staging** needs `FEEDBACK_BASE_URL=http://<host>:8788`
+  in its launch environment; the MCP checks that override before discovery.
+  Read once at session start, so it needs a restart with the env set — same
+  constraint as `FEEDBACK_AGENT_NAME`.
+- **Staging data does not migrate.** Tasks and docs created there die with the
+  data dir. So the shape is: evaluate on staging pre-merge, then do the real
+  work once, after the merge. Don't ask a reviewer to enter real content twice.
+
 ## Server lifecycle on the Mac Mini
 
 - The live-feedback server has no auto-restart story today. If it crashes
@@ -573,6 +599,43 @@ Technical discoveries that should persist across sessions for this project.
   conflict at merge; merge main into the branch before the final
   commit/PR, and resolve both-appended-at-EOF conflicts by keeping both
   blocks and re-closing the braces (check `{`/`}` balance).
+
+## A leak gate that can't see still exits 0 — and reports it as a pass
+
+- **The pre-push scanner's registry half was dead for weeks and nothing said
+  so.** `FLEET_REGISTRY` pointed at a fleet repo path that a rename had
+  removed, so `find_registry()` returned None, zero project names compiled,
+  and every push passed the project-name check by not running it. The one
+  guard that existed printed "no patterns configured" only when the pattern
+  list was **completely** empty — and the 15 hand-curated denylist patterns
+  kept it non-empty, so the guard never fired. The canonical copy in the fleet
+  repo had the same bug mirrored: right registry path, denylist path pointing
+  at a file that didn't exist. Each half worked in exactly one copy.
+- **Rule: a missing source must fail, not warn.** A stderr line in a pre-push
+  hook scrolls past under normal push output. "Expected" is inferred rather
+  than declared — if *either* source resolved, this is a configured machine
+  and both are expected, so a missing one is exit 2; if *neither* resolved,
+  it's a stranger's clone with no config to be missing, so skip cleanly.
+- **Resolve moving paths from a candidate list, current first.** Both of these
+  paths moved once already. A candidate list turns the next rename into a
+  fallback instead of a silent no-op.
+- **An env override must be authoritative, never the head of the fallback
+  chain.** `SCRUB_REGISTRY=/fixture` falling back to the real machine config
+  would let a self-test pass against the wrong data — the same "I scanned
+  something, just not what you think" failure, one level up.
+- **`scripts/scrub-selftest.py` is the part that keeps it fixed.** Nine cases
+  against temp fixtures, each planting something the scanner MUST find or
+  asserting a specific refusal, wired into CI *and* into the hook itself
+  (CI never runs the hook, and the hook is where the gate actually lives).
+  Verified non-vacuous by mutation: deleting the `public: true` drop fails one
+  case, turning the refusal back into a pass fails three.
+- **How this was found is the reusable part:** the scan came back clean, and
+  instead of believing it I fed the scanner a pattern it was supposed to
+  catch. It didn't catch it. Same lesson as "a negative test needs a positive
+  control", now with a production instance — and note the earlier report of
+  "regex layer clean" was doubly wrong, because `scrub-check.py` takes file
+  paths or `--diff-range` and **ignores stdin**, so piping content at it
+  scans nothing and exits 0.
 
 ## gh pr merge --delete-branch switches your working copy to main
 
