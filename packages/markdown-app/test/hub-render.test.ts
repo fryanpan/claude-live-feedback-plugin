@@ -95,10 +95,42 @@ describe('renderBoard', () => {
     const h = handlers();
     const t = task({ goal: 'g-pr' });
     renderBoard(root, boardSections(GOALS, [t], filters), h);
-    const chip = root.querySelector('.hub-status-chip') as HTMLElement;
+    const chip = root.querySelector('.hub-status-mark') as HTMLElement;
     chip.click();
     expect(h.onStatusTap).toHaveBeenCalledTimes(1);
     expect(h.onOpenTask).not.toHaveBeenCalled();
+  });
+
+  // The status name is no longer drawn in the row, so the only thing left
+  // carrying it for a screen reader is the accessible name. A row control
+  // whose label is an empty string reads as "button" and nothing else.
+  it('the status mark still names its status for assistive tech', () => {
+    const h = handlers();
+    renderBoard(root, boardSections(GOALS, [task({ goal: 'g-pr' })], filters), h);
+    const mark = root.querySelector('.hub-status-mark') as HTMLElement;
+    expect(mark.getAttribute('aria-label') ?? '').toContain('To do');
+    expect(mark.title).toContain('To do');
+  });
+
+  // Every row is one grid line: the layout property the whole change is for.
+  it('keeps the title on one line so the status marks stay in a column', () => {
+    const h = handlers();
+    const long = task({
+      goal: 'g-pr',
+      title: 'B16: drop the 10s age bound; suppress the installer auto-launch on cold start',
+    });
+    renderBoard(root, boardSections(GOALS, [long], filters), h);
+    const title = root.querySelector('.hub-task-title') as HTMLElement;
+    // Not `white-space: normal` — that (plus flex-wrap) is what wrapped a
+    // long title under its own status control and misaligned the column.
+    expect(title.className).toContain('hub-task-title');
+    const row = root.querySelector('.hub-task-row') as HTMLElement;
+    // Order is the contract the grid tracks are written against.
+    expect([...row.children].map((c) => (c as HTMLElement).className.split(' ')[0])).toEqual([
+      'hub-status-mark',
+      'hub-task-title',
+      'hub-task-badges',
+    ]);
   });
 
   it('tapping the title edits in place; Enter commits the new value', () => {
