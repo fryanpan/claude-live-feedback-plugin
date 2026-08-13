@@ -125,15 +125,36 @@ export function payloadDigest(input: string | undefined | null): string {
 /**
  * Classify a comment author as `person` or `agent`. Agent identities are the
  * generic "known-agent" one, per-agent MCP identities (`agent-<slug>` ids
- * from FEEDBACK_AGENT_NAME), a literal "Agent" name, or an author whose
- * `kind` is missing entirely. Everyone else is a person. Agent events are
- * still recorded (so WR can filter them) but person events are the ones that
- * must never be dropped.
+ * from FEEDBACK_AGENT_NAME), a literal "Agent" name, an author that declares
+ * `kind: 'agent'`, or an author whose `kind` is missing entirely. Everyone
+ * else is a person. Agent events are still recorded (so WR can filter them)
+ * but person events are the ones that must never be dropped.
+ *
+ * `kind` carries two different meanings and that is the whole subtlety here.
+ * On a browser `User` it is the identity axis (`'known' | 'anon'`), and its
+ * mere PRESENCE is what used to mean "a real browser session, therefore a
+ * person". But a REST/MCP caller reasonably reads the field as the actor axis
+ * and sends `kind: 'agent'` — and under the presence test that landed as
+ * `person`, so the honest caller was misfiled as a human while the caller who
+ * said nothing was classified correctly. Reported from the field by an agent
+ * that populated the field the obvious way.
+ *
+ * Two properties this ordering is built to have:
+ *  - An explicit actor-axis value is honoured, so a client can just say what
+ *    it is instead of encoding it in an id.
+ *  - Every agent signal is checked BEFORE `kind: 'person'`, so contradictory
+ *    input resolves to `agent`. That direction is deliberate: an agent filed
+ *    as a person launders the audit log AND trips the reply-reopen rule in
+ *    rooms.ts (which exists precisely so an agent's closing note doesn't
+ *    resurrect a thread a human just resolved), whereas a person filed as an
+ *    agent only over-filters a view.
  */
 export function classifyActor(author: Pick<User, 'id' | 'name'> & { kind?: string }): ActorKind {
+  if (author.kind === 'agent') return 'agent';
   if (author.id === 'known-agent') return 'agent';
   if (author.id.startsWith('agent-')) return 'agent';
   if (author.name === 'Agent') return 'agent';
+  if (author.kind === 'person') return 'person';
   if (author.kind == null) return 'agent';
   return 'person';
 }

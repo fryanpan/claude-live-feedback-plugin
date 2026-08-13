@@ -347,4 +347,35 @@ describe('classifyActor', () => {
     expect(classifyActor({ id: 'anon-abc123', name: 'Casey', kind: 'known' })).toBe('person');
     expect(classifyActor({ id: 'known-bryan', name: 'Bryan', kind: 'known' })).toBe('person');
   });
+
+  // Both directions, deliberately. The bug this replaced passed in one
+  // direction — an author with no `kind` classified as 'agent' — which is
+  // exactly why it read as working. Asserting only the omitted-kind case
+  // would let the inverted case back in unnoticed.
+  it('honours an explicit actor-axis kind in BOTH directions', async () => {
+    const { classifyActor } = await import('../src/activity.ts');
+    // A caller that declares itself an agent must not be recorded as a human.
+    expect(classifyActor({ id: 'team-lead', name: 'Team Lead', kind: 'agent' })).toBe('agent');
+    // ...and a caller that declares itself a person keeps that.
+    expect(classifyActor({ id: 'team-lead', name: 'Team Lead', kind: 'person' })).toBe('person');
+  });
+
+  it('classifies a caller with no kind at all as an agent', async () => {
+    const { classifyActor } = await import('../src/activity.ts');
+    // Browser users always carry 'known' | 'anon'; a missing `kind` means the
+    // call came from somewhere that isn't a browser session.
+    expect(classifyActor({ id: 'team-lead', name: 'Team Lead' })).toBe('agent');
+  });
+
+  it('resolves a contradictory author to agent, never to person', async () => {
+    const { classifyActor } = await import('../src/activity.ts');
+    // `kind` is overloaded: on a browser User it means known-vs-anon, and a
+    // caller may also use it to declare the actor axis. When the two signals
+    // disagree, the tie goes to 'agent' on purpose — an agent misfiled as a
+    // person launders the audit log AND reopens threads it closes
+    // (rooms.ts reply-reopen rule), while the reverse only over-filters.
+    expect(classifyActor({ id: 'agent-quick-build', name: 'Quick Build', kind: 'person' })).toBe(
+      'agent',
+    );
+  });
 });
