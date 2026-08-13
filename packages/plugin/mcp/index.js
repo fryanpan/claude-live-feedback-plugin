@@ -14838,14 +14838,15 @@ var NO_AUTO_WATCH_TOOLS = new Set([
   "observe_url",
   "attach_doc"
 ]);
-function taskCreatedSummary(task) {
+function taskCreatedSummary(task, ignoredLinks) {
   return {
     taskId: task.id,
     goal: task.goal,
     order: task.order,
     status: task.status,
     assignee: task.assignee,
-    triagePending: task.triagePendingTs !== undefined
+    triagePending: task.triagePendingTs !== undefined,
+    ...ignoredLinks !== undefined && ignoredLinks.length > 0 ? { ignoredLinks } : {}
   };
 }
 async function maybeAutoWatch(name, args) {
@@ -15297,7 +15298,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...quote !== undefined ? { quote } : {},
           author: AUTHOR
         });
-        return ok(taskCreatedSummary(res.task));
+        return ok(taskCreatedSummary(res.task, res.ignoredLinks));
       }
       case "promote_to_task": {
         const { docId, threadId, workspaceId, title, body, assignee, needs, goal, dueAt, links } = a;
@@ -15313,7 +15314,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           author: AUTHOR
         });
         return ok({
-          ...taskCreatedSummary(res.task),
+          ...taskCreatedSummary(res.task, res.ignoredLinks),
           title: res.task.title,
           quote: res.task.quote
         });

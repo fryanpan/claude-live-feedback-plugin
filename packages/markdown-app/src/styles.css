@@ -1092,6 +1092,36 @@ body.hub-body {
 .hub-assignee-btn:hover {
   border-color: var(--border-strong);
 }
+/* Link chips: what a `url` ref is FOR. Wraps rather than scrolls — the
+   detail panel has vertical room and a hidden link is the bug this
+   replaced. */
+.hub-detail-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 12px;
+}
+.hub-link-chip {
+  max-width: 100%;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--accent);
+  text-decoration: none;
+}
+a.hub-link-chip:hover {
+  border-color: var(--accent);
+  text-decoration: underline;
+}
+/* Internal kinds are ids, not destinations — drawn muted so a chip that
+   can't be clicked doesn't look like one that can. */
+.hub-link-internal {
+  color: var(--fg-muted);
+}
 .hub-detail-quote {
   margin: 0 0 12px;
   padding: 6px 12px;

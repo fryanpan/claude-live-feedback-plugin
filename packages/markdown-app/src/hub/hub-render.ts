@@ -167,6 +167,64 @@ function taskBadges(task: HubTask): HTMLElement {
   return badges;
 }
 
+/**
+ * The task's `links`, as chips. Until this existed, a ref was stored, keyed
+ * and backlinked and then never drawn — the store had it and no surface
+ * could show it, which is the failure mode this codebase has already been
+ * bitten by once with resolved threads.
+ *
+ * Only `url` refs become anchors. The internal kinds (doc / thread / task /
+ * diff) are ids, and inventing hrefs for them here would be guessing at
+ * route shapes that live on the server; they render as labelled chips so
+ * their presence is at least visible. A ref of an unknown kind is skipped
+ * rather than thrown on — an older client must survive a newer server
+ * adding a kind, and a task that fails to open is worse than a missing chip.
+ */
+function renderTaskLinks(task: HubTask): HTMLElement | null {
+  const refs = Array.isArray(task.links) ? task.links : [];
+  if (refs.length === 0) return null;
+  const wrap = document.createElement('div');
+  wrap.className = 'hub-detail-links';
+  for (const raw of refs) {
+    if (typeof raw !== 'object' || raw === null) continue;
+    const ref = raw as Record<string, unknown>;
+    if (ref.kind === 'url' && typeof ref.url === 'string') {
+      // The server refuses any scheme but http(s) on the way in. Re-checking
+      // here anyway: this element is built from whatever the doc currently
+      // holds, and a ref persisted before that check existed would otherwise
+      // become a live `javascript:` href on click.
+      let safe = false;
+      try {
+        const u = new URL(ref.url);
+        safe = u.protocol === 'http:' || u.protocol === 'https:';
+      } catch {
+        safe = false;
+      }
+      if (!safe) continue;
+      const a = document.createElement('a');
+      a.className = 'hub-link-chip';
+      a.href = ref.url;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      // The host is what identifies a link at a glance; the full URL is the
+      // tooltip so a chip never grows to the width of a query string.
+      a.textContent = new URL(ref.url).host;
+      a.title = ref.url;
+      a.addEventListener('click', (ev) => ev.stopPropagation());
+      wrap.append(a);
+      continue;
+    }
+    const kind = typeof ref.kind === 'string' ? ref.kind : null;
+    if (kind === null) continue;
+    const id = ref.docId ?? ref.taskId ?? ref.workspaceId;
+    const chip = document.createElement('span');
+    chip.className = 'hub-link-chip hub-link-internal';
+    chip.textContent = typeof id === 'string' ? `${kind}: ${id}` : kind;
+    wrap.append(chip);
+  }
+  return wrap.childElementCount > 0 ? wrap : null;
+}
+
 export function renderTaskRow(task: HubTask, handlers: BoardHandlers): HTMLElement {
   const row = document.createElement('div');
   row.className = `hub-task-row hub-status-${task.status}${task.status === 'done' ? ' hub-done' : ''}`;
@@ -580,6 +638,9 @@ export function renderTaskDetail(
     addMeta('Triaged against', task.triagedAgainst.goal);
   }
   panel.append(meta);
+
+  const linkChips = renderTaskLinks(task);
+  if (linkChips) panel.append(linkChips);
 
   if (task.quote) {
     const q = document.createElement('blockquote');
