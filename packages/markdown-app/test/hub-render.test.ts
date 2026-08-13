@@ -95,10 +95,77 @@ describe('renderBoard', () => {
     const h = handlers();
     const t = task({ goal: 'g-pr' });
     renderBoard(root, boardSections(GOALS, [t], filters), h);
-    const chip = root.querySelector('.hub-status-chip') as HTMLElement;
+    const chip = root.querySelector('.hub-status-mark') as HTMLElement;
     chip.click();
     expect(h.onStatusTap).toHaveBeenCalledTimes(1);
     expect(h.onOpenTask).not.toHaveBeenCalled();
+  });
+
+  // The status name is no longer drawn in the row, so the only thing left
+  // carrying it for a screen reader is the accessible name. A row control
+  // whose label is an empty string reads as "button" and nothing else.
+  it('the status mark still names its status for assistive tech', () => {
+    const h = handlers();
+    renderBoard(root, boardSections(GOALS, [task({ goal: 'g-pr' })], filters), h);
+    const mark = root.querySelector('.hub-status-mark') as HTMLElement;
+    expect(mark.getAttribute('aria-label') ?? '').toContain('To do');
+    expect(mark.title).toContain('To do');
+  });
+
+  // Every row is one grid line: the layout property the whole change is for.
+  it('keeps the title on one line so the status marks stay in a column', () => {
+    const h = handlers();
+    const long = task({
+      goal: 'g-pr',
+      title: 'B16: drop the 10s age bound; suppress the installer auto-launch on cold start',
+    });
+    renderBoard(root, boardSections(GOALS, [long], filters), h);
+    const title = root.querySelector('.hub-task-title') as HTMLElement;
+    // Not `white-space: normal` — that (plus flex-wrap) is what wrapped a
+    // long title under its own status control and misaligned the column.
+    expect(title.className).toContain('hub-task-title');
+    const row = root.querySelector('.hub-task-row') as HTMLElement;
+    // Order is the contract the grid tracks are written against.
+    expect([...row.children].map((c) => (c as HTMLElement).className.split(' ')[0])).toEqual([
+      'hub-status-mark',
+      'hub-risk-slot',
+      'hub-task-title',
+      'hub-task-badges',
+    ]);
+  });
+
+  // The bug this pins: `grid-template-columns` names four tracks, and grid
+  // auto-placement fills them CONSECUTIVELY. A row that omitted the risk dot
+  // put its title in the dot's track — which a `:not(:has(.hub-risk))` rule
+  // had collapsed to `0` — so every title on a row without a risk tier
+  // rendered at zero width. happy-dom does no layout, so the assertion that
+  // catches it is the child SHAPE, identical either way. An earlier version
+  // of this test asserted the three-child order and therefore pinned the bug
+  // in place instead of catching it.
+  it('a row without a risk tier has the same grid children as one with', () => {
+    const h = handlers();
+    renderBoard(
+      root,
+      boardSections(
+        GOALS,
+        [
+          task({ goal: 'g-pr', id: 't-plain', title: 'no tier' }),
+          task({ goal: 'g-pr', id: 't-risky', title: 'has tier', riskTier: 'red' }),
+        ],
+        filters,
+      ),
+      h,
+    );
+    const rows = [...root.querySelectorAll('.hub-task-row')] as HTMLElement[];
+    expect(rows).toHaveLength(2);
+    const shape = (r: HTMLElement) =>
+      [...r.children].map((c) => (c as HTMLElement).className.split(' ')[0]);
+    expect(shape(rows[0])).toEqual(shape(rows[1]));
+    expect(shape(rows[0])).toHaveLength(4);
+    // Positive control: the tiers really do differ, so the shapes matching
+    // above is not two identically-empty rows agreeing about nothing.
+    expect(rows[0].querySelector('.hub-risk')).toBeNull();
+    expect(rows[1].querySelector('.hub-risk')).not.toBeNull();
   });
 
   it('tapping the title edits in place; Enter commits the new value', () => {
@@ -254,6 +321,69 @@ describe('renderActivity', () => {
 });
 
 describe('renderTaskDetail', () => {
+  const detailHandlers = () => ({
+    onClose: vi.fn(),
+    onStatusSet: vi.fn(),
+    onTitleCommit: vi.fn(),
+    onAnswer: vi.fn(),
+    onAssign: vi.fn(),
+  });
+
+  // The server accepted, keyed and backlinked `url` refs before anything
+  // drew them — stored and unreachable, which is the same failure this
+  // codebase already hit with resolved threads. So this asserts the SURFACE,
+  // not the model: a stored ref nothing renders is not a feature.
+  it('renders a url ref as a real anchor', () => {
+    const pr = 'https://github.com/example-org/example-repo/pull/1669';
+    renderTaskDetail(root, task({ links: [{ kind: 'url', url: pr }] }), detailHandlers());
+    const chip = root.querySelector('.hub-detail-links a') as HTMLAnchorElement;
+    expect(chip).toBeTruthy();
+    expect(chip.getAttribute('href')).toBe(pr);
+    // Opening someone else's link must not hand them this window.
+    expect(chip.rel).toContain('noopener');
+    // The host is the legible part; the full URL stays in the tooltip so a
+    // query string can't stretch the chip.
+    expect(chip.textContent).toBe('github.com');
+    expect(chip.title).toBe(pr);
+  });
+
+  it('never emits a non-http(s) href, even for a ref stored before the check existed', () => {
+    // The server refuses these on the way in now, but the panel is built
+    // from whatever the doc currently holds — including refs persisted
+    // earlier. Positive control first: the good one DOES render, so "no
+    // anchor" below means refused rather than "this test renders nothing".
+    renderTaskDetail(
+      root,
+      task({ links: [{ kind: 'url', url: 'https://example.com/ok' }] }),
+      detailHandlers(),
+    );
+    expect(root.querySelectorAll('.hub-detail-links a').length).toBe(1);
+
+    for (const url of ['javascript:alert(1)', 'data:text/html,<script>x</script>']) {
+      renderTaskDetail(root, task({ links: [{ kind: 'url', url }] }), detailHandlers());
+      expect(root.querySelectorAll('.hub-detail-links a').length).toBe(0);
+    }
+  });
+
+  it('survives a ref kind it has never heard of', () => {
+    // An older client must not break when a newer server adds a kind: a
+    // task that won't open is worse than a chip that isn't drawn.
+    expect(() =>
+      renderTaskDetail(
+        root,
+        task({
+          links: [
+            { kind: 'quasar', quasarId: 'q-1' },
+            { kind: 'doc', docId: 'd-1' },
+          ],
+        }),
+        detailHandlers(),
+      ),
+    ).not.toThrow();
+    // …and the ref it DOES understand still made it through.
+    expect(root.querySelector('.hub-detail-links')?.textContent).toContain('d-1');
+  });
+
   it('shows the answer form for an unanswered decision and records verbatim text', () => {
     const onAnswer = vi.fn();
     const d = task({ needs: 'decision', assignee: 'human' });

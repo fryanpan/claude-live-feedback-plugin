@@ -13754,7 +13754,7 @@ function suggestionAuthor() {
 }
 var server = new Server({
   name: "claude-live-feedback",
-  version: "0.1.10"
+  version: "0.1.11"
 }, {
   capabilities: {
     tools: {},
@@ -14576,7 +14576,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           links: {
             type: "array",
-            description: "Refs this task mentions: {kind:'doc',docId} | {kind:'thread',docId,threadId} | {kind:'task',taskId} | {kind:'diff',workspaceId}. Backlinks are computed.",
+            description: "Refs this task mentions: {kind:'doc',docId} | {kind:'thread',docId,threadId} | {kind:'task',taskId} | {kind:'diff',workspaceId} | {kind:'url',url}. Backlinks are computed. Use `url` for anything outside this server — a pull request, a decision page, a dashboard; http(s) only, since a ref is rendered as a clickable chip. Refs are NOT existence-checked, so a link that points nowhere is accepted and harmless. A malformed ref does not fail the call: it is dropped and returned in `ignoredLinks`, and the task is still created.",
             items: { type: "object" }
           },
           quote: { type: "string", description: "The human's verbatim words, for chat-born asks." }
@@ -14838,14 +14838,15 @@ var NO_AUTO_WATCH_TOOLS = new Set([
   "observe_url",
   "attach_doc"
 ]);
-function taskCreatedSummary(task) {
+function taskCreatedSummary(task, ignoredLinks) {
   return {
     taskId: task.id,
     goal: task.goal,
     order: task.order,
     status: task.status,
     assignee: task.assignee,
-    triagePending: task.triagePendingTs !== undefined
+    triagePending: task.triagePendingTs !== undefined,
+    ...ignoredLinks !== undefined && ignoredLinks.length > 0 ? { ignoredLinks } : {}
   };
 }
 async function maybeAutoWatch(name, args) {
@@ -15297,7 +15298,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...quote !== undefined ? { quote } : {},
           author: AUTHOR
         });
-        return ok(taskCreatedSummary(res.task));
+        return ok(taskCreatedSummary(res.task, res.ignoredLinks));
       }
       case "promote_to_task": {
         const { docId, threadId, workspaceId, title, body, assignee, needs, goal, dueAt, links } = a;
@@ -15313,7 +15314,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           author: AUTHOR
         });
         return ok({
-          ...taskCreatedSummary(res.task),
+          ...taskCreatedSummary(res.task, res.ignoredLinks),
           title: res.task.title,
           quote: res.task.quote
         });

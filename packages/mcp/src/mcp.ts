@@ -70,7 +70,7 @@ const server = new Server(
     // Must match packages/plugin/.claude-plugin/plugin.json — this is the version
     // a client sees in the initialize handshake, and it had drifted three minor
     // releases behind. Asserted in packages/mcp/test/launcher.test.ts.
-    version: '0.1.10',
+    version: '0.1.11',
   },
   {
     capabilities: {
@@ -951,7 +951,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           links: {
             type: 'array',
             description:
-              "Refs this task mentions: {kind:'doc',docId} | {kind:'thread',docId,threadId} | {kind:'task',taskId} | {kind:'diff',workspaceId}. Backlinks are computed.",
+              "Refs this task mentions: {kind:'doc',docId} | {kind:'thread',docId,threadId} | {kind:'task',taskId} | {kind:'diff',workspaceId} | {kind:'url',url}. Backlinks are computed. Use `url` for anything outside this server — a pull request, a decision page, a dashboard; http(s) only, since a ref is rendered as a clickable chip. Refs are NOT existence-checked, so a link that points nowhere is accepted and harmless. A malformed ref does not fail the call: it is dropped and returned in `ignoredLinks`, and the task is still created.",
             items: { type: 'object' },
           },
           quote: { type: 'string', description: "The human's verbatim words, for chat-born asks." },
@@ -1262,7 +1262,7 @@ interface TaskPayload {
 /** Trimmed create/promote result (§3.10: an edit returns ids + status, not
  *  the object the caller just wrote). `triagePending` tells the caller
  *  whether a triage request was actually delivered to a live agent. */
-function taskCreatedSummary(task: TaskPayload) {
+function taskCreatedSummary(task: TaskPayload, ignoredLinks?: unknown[]) {
   return {
     taskId: task.id,
     goal: task.goal,
@@ -1270,6 +1270,11 @@ function taskCreatedSummary(task: TaskPayload) {
     status: task.status,
     assignee: task.assignee,
     triagePending: task.triagePendingTs !== undefined,
+    // A dropped ref has to survive the trip back to the caller or the
+    // partial-accept is just a silent loss with extra steps. The route
+    // returns it; a summary that omits it is the same "one layer away"
+    // failure as a route that doesn't forward a param.
+    ...(ignoredLinks !== undefined && ignoredLinks.length > 0 ? { ignoredLinks } : {}),
   };
 }
 
@@ -1953,8 +1958,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             ...(quote !== undefined ? { quote } : {}),
             author: AUTHOR,
           },
-        )) as { task: TaskPayload };
-        return ok(taskCreatedSummary(res.task));
+        )) as { task: TaskPayload; ignoredLinks?: unknown[] };
+        return ok(taskCreatedSummary(res.task, res.ignoredLinks));
       }
       case 'promote_to_task': {
         const { docId, threadId, workspaceId, title, body, assignee, needs, goal, dueAt, links } =
@@ -1984,9 +1989,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             ...(links !== undefined ? { links } : {}),
             author: AUTHOR,
           },
-        )) as { task: TaskPayload };
+        )) as { task: TaskPayload; ignoredLinks?: unknown[] };
         return ok({
-          ...taskCreatedSummary(res.task),
+          ...taskCreatedSummary(res.task, res.ignoredLinks),
           title: res.task.title,
           quote: res.task.quote,
         });
