@@ -56,6 +56,7 @@ import {
   TaskStore,
   type WorkspaceGoal,
   type WorkspaceSubgoal,
+  eventsLogPath,
   isAttachmentRuntime,
   isValidRef,
   taskChip,
@@ -1224,6 +1225,36 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!workspace) return j(404, { error: 'workspace not found' });
           return j(200, { workspace });
         }
+        // Activity view (§3.9): the per-workspace events.jsonl audit log,
+        // read back as rows. This is the surface where the after-the-fact
+        // 80/95 review happens, built on the same file every subscriber saw
+        // (§3.6: the audit log can never disagree with what subscribers saw).
+        const wsAuditMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/events$/);
+        if (wsAuditMatch && req.method === 'GET') {
+          const workspaceId = decodeURIComponent(wsAuditMatch[1] ?? '');
+          if (!taskStore.getWorkspace(workspaceId)) {
+            return j(404, { error: 'workspace not found' });
+          }
+          const logPath = eventsLogPath(dataDir, workspaceId);
+          let events: unknown[] = [];
+          if (existsSync(logPath)) {
+            events = readFileSync(logPath, 'utf8')
+              .split('\n')
+              .filter((line) => line.trim().length > 0)
+              .flatMap((line) => {
+                try {
+                  return [JSON.parse(line)];
+                } catch {
+                  // A torn tail line (crash mid-append) must not take the
+                  // whole activity view down with it.
+                  return [];
+                }
+              });
+            // Cap the payload: the newest rows are the review's working set.
+            if (events.length > 1000) events = events.slice(-1000);
+          }
+          return j(200, { workspaceId, events });
+        }
         // set_workspace_goal: edit the north-star goal (§3.10). The store
         // emits workspace.goal_updated and requests a re-triage of open
         // tasks; the response reports whether that request reached a live
@@ -1404,6 +1435,22 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!author) return j(400, { error: 'author required' });
           const res = taskStore.answerDecision(taskId, text, { actor: author });
           if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
+          return j(200, res);
+        }
+        // In-place task title edit (§3.9: tap the title, Enter commits).
+        // Renames emit no store event (§3.6 has no task.renamed row), so the
+        // projection the board renders from is refreshed by hand.
+        const taskTitleMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/title$/);
+        if (taskTitleMatch && req.method === 'POST') {
+          const taskId = decodeURIComponent(taskTitleMatch[1] ?? '');
+          const body = await safeJson(req);
+          const title = typeof body?.title === 'string' ? body.title.trim() : '';
+          if (title.length === 0) return j(400, { error: 'title required' });
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const res = taskStore.renameTask(taskId, title, { actor: author });
+          if (!res.ok) return j(404, res);
+          taskProjection.ensureWorkspace(res.task.workspaceId);
           return j(200, res);
         }
         // set_goal_list (§3.2 edit contract): replace the ordered board
@@ -2126,6 +2173,25 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (resp) return resp;
         }
 
+        // --- Workspace hub (plan §3.9/§3.10: /workspaces/:workspaceId) ---
+        // The shell is server-rendered (like the landing page) so the route
+        // works — and 404s crisply — whether or not the app bundle has been
+        // built; the page's behavior all lives in /app/hub.js.
+        const hubPageMatch = pathname.match(/^\/workspaces\/([^/]+)$/);
+        if (hubPageMatch && req.method === 'GET') {
+          const workspaceId = decodeURIComponent(hubPageMatch[1] ?? '');
+          const workspace = taskStore.getWorkspace(workspaceId);
+          if (!workspace) {
+            return new Response(renderHubNotFound(workspaceId), {
+              status: 404,
+              headers: { 'content-type': 'text/html; charset=utf-8' },
+            });
+          }
+          return new Response(renderHubShell(workspace.id, workspace.name), {
+            headers: { 'content-type': 'text/html; charset=utf-8' },
+          });
+        }
+
         // --- Markdown app (surface 1) ---
         if (markdownAppDist && pathname.startsWith('/review/')) {
           const docId = decodeURIComponent(pathname.slice('/review/'.length));
@@ -2431,6 +2497,43 @@ h1{font-size:1.25rem;margin:0 0 .5rem}p{color:#555;margin:0}
 @media(prefers-color-scheme:dark){body{background:#111;color:#eee}p{color:#aaa}}</style>
 <h1>This link isn't available</h1>
 <p>It may have expired or been revoked. Ask whoever shared it for a new one.</p>`;
+}
+
+/**
+ * The hub page shell (§3.9). Tab title is `<workspace> · Workspace Hub` —
+ * the browser tab is a workspace switcher. Everything dynamic renders
+ * client-side from the ws:<id> ydoc projection + REST; the shell only names
+ * the workspace and loads the bundle.
+ */
+function renderHubShell(workspaceId: string, name: string): string {
+  const safeName = escape(name);
+  const safeId = escape(workspaceId);
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+    <title>${safeName} · Workspace Hub</title>
+    <link rel="stylesheet" href="/app/styles.css" />
+  </head>
+  <body class="hub-body">
+    <div id="hub-root" data-workspace-id="${safeId}"></div>
+    <script type="module" src="/app/hub.js"></script>
+  </body>
+</html>`;
+}
+
+function renderHubNotFound(workspaceId: string): string {
+  const safe = escape(workspaceId);
+  return `<!doctype html><meta charset="utf-8"><title>Workspace not found · Live Feedback</title>
+<style>body{font:15px/1.55 system-ui, sans-serif;margin:60px auto;max-width:560px;color:#222;padding:0 20px}
+h1{font-size:22px}code{background:#f3f3f3;padding:1px 5px;border-radius:3px;font-size:90%}
+small{color:#777}</style>
+<h1>Workspace not found</h1>
+<p>No hub workspace exists for <code>${safe}</code>. Hub workspaces are
+created by an agent calling <code>create_workspace</code> (or
+<code>POST /api/workspaces</code> with a name).</p>
+<p><small><a href="/">all docs</a></small></p>`;
 }
 
 function renderReviewNotFound(docId: string): string {

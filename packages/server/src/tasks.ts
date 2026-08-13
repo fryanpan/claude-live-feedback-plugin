@@ -580,6 +580,15 @@ export type AnswerDecisionResult =
   | { ok: true; task: Task }
   | { ok: false; error: 'not-found' | 'not-a-decision' };
 
+export type RenameTaskResult =
+  | {
+      ok: true;
+      task: Task;
+      /** False when the new title equals the old one — nothing was written. */
+      changed: boolean;
+    }
+  | { ok: false; error: 'not-found' };
+
 export type SetTaskGoalResult =
   | {
       ok: true;
@@ -1033,6 +1042,26 @@ export class TaskStore {
       ts,
     });
     return { ok: true, task };
+  }
+
+  /**
+   * Rename a task — the board's in-place title edit (§3.9: tap the title
+   * text, Enter commits). No event fires: §3.6's exhaustive table has no
+   * task.renamed row, so callers (the route) must refresh the projection by
+   * hand, the same pattern as attachDoc and a triage confirm-in-place.
+   */
+  renameTask(
+    taskId: string,
+    title: string,
+    _opts: { actor: { id: string; name: string } },
+  ): RenameTaskResult {
+    const task = this.getTask(taskId);
+    if (!task) return { ok: false, error: 'not-found' };
+    if (task.title === title) return { ok: true, task, changed: false };
+    task.title = title;
+    task.updatedAt = Date.now();
+    this.scheduleSave(task.workspaceId);
+    return { ok: true, task, changed: true };
   }
 
   /**
