@@ -254,9 +254,60 @@ export function activityRows(events: ActivityEvent[], filter: ActivityFilter): A
       ? DECISION_EVENTS.has(e.event)
       : // agent.heartbeat is a liveness signal, one row per beat — pure noise
         // in a review view whose job is to make the 80/95 read effortless.
-        e.event !== 'agent.heartbeat',
+        // server.tick is the same class (the server strips it before it ever
+        // reaches us; the guard here keeps that a server-side courtesy, not
+        // a load-bearing assumption).
+        e.event !== 'agent.heartbeat' && e.event !== 'server.tick',
   );
   return kept.sort((a, b) => b.ts - a.ts);
+}
+
+// ── Uptime (deploy readiness — §3.12 commit 11) ────────────────────────────
+
+/** Mirror of the server's UptimeReport (packages/server/src/uptime.ts) —
+ *  the client can't import server code, same as ActivityEvent. */
+export interface UptimeReport {
+  target: number;
+  windowMs: number;
+  measuredMs: number;
+  downMs: number;
+  uptimeRatio: number;
+  meetsTarget: boolean;
+  gaps: Array<{ from: number; to: number; downMs: number }>;
+  tickMs: number;
+}
+
+export interface UptimeSummary {
+  label: string;
+  detail: string;
+  ok: boolean;
+}
+
+function fmtDuration(ms: number): string {
+  // Same unit boundaries as timeAgo above, minus the "ago".
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h`;
+  return `${Math.round(h / 24)}d`;
+}
+
+/** One banner line for the activity view. The percentage is TRUNCATED to
+ *  one decimal, never rounded — display must not overstate uptime (98.99%
+ *  rounding up to "99.0%" would read as the target met while `ok` says
+ *  otherwise). */
+export function uptimeSummary(report: UptimeReport | null): UptimeSummary | null {
+  if (!report) return null;
+  const pct = Math.floor(report.uptimeRatio * 1000) / 10;
+  const pctStr = Number.isInteger(pct) ? String(pct) : pct.toFixed(1);
+  const down = report.downMs > 0 ? ` · down ${fmtDuration(report.downMs)}` : '';
+  return {
+    label: `Uptime ${pctStr}%`,
+    detail: `target ${report.target * 100}% over ${fmtDuration(report.measuredMs)}${down}`,
+    ok: report.meetsTarget,
+  };
 }
 
 interface EventActor {
@@ -302,6 +353,10 @@ export function describeEvent(ev: ActivityEvent, titleOf: (taskId: string) => st
       return `${String(ev.agentId)} attached`;
     case 'agent.detached':
       return `${String(ev.agentId)} detached`;
+    case 'server.started':
+      // The marker the uptime monitor stamps at boot (§3.12 commit 11) — a
+      // restart is honest activity, and it bounds the outage it just ended.
+      return 'server restarted';
     default:
       return `${ev.event}`;
   }

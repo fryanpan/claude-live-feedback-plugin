@@ -6,6 +6,7 @@ import {
   DEFAULT_DONE_WINDOW,
   type HubGoal,
   type HubTask,
+  type UptimeReport,
   activityRows,
   boardSections,
   decisionRows,
@@ -15,6 +16,7 @@ import {
   presenceChips,
   taskVisible,
   timeAgo,
+  uptimeSummary,
 } from '../src/hub/hub-model.ts';
 
 /** All fixtures are synthetic — invented names, jordan@partner.example register. */
@@ -197,6 +199,57 @@ describe('describeEvent', () => {
 
   it('falls back to the event name for unknown rows', () => {
     expect(describeEvent({ event: 'voice.request', ts: NOW }, titleOf)).toContain('voice.request');
+  });
+
+  it('names a server restart plainly', () => {
+    expect(describeEvent({ event: 'server.started', ts: NOW }, titleOf)).toBe('server restarted');
+  });
+});
+
+describe('uptimeSummary (deploy readiness — §3.12 commit 11)', () => {
+  const report = (over: Partial<UptimeReport> = {}): UptimeReport => ({
+    target: 0.99,
+    windowMs: 7 * 24 * 60 * 60_000,
+    measuredMs: 7 * 24 * 60 * 60_000,
+    downMs: 0,
+    uptimeRatio: 1,
+    meetsTarget: true,
+    gaps: [],
+    tickMs: 5 * 60_000,
+    ...over,
+  });
+
+  it('a clean week reads as 100%, meeting the target, with no down clause', () => {
+    const s = uptimeSummary(report());
+    expect(s).not.toBeNull();
+    expect(s?.label).toBe('Uptime 100%');
+    expect(s?.ok).toBe(true);
+    expect(s?.detail).toContain('target 99%');
+    expect(s?.detail).toContain('7d');
+    expect(s?.detail).not.toContain('down');
+  });
+
+  it('a miss shows the truncated percentage and the downtime', () => {
+    const s = uptimeSummary(
+      report({
+        uptimeRatio: 0.985,
+        meetsTarget: false,
+        downMs: 60 * 60_000,
+        gaps: [{ from: 0, to: 60 * 60_000, downMs: 60 * 60_000 }],
+      }),
+    );
+    expect(s?.label).toBe('Uptime 98.5%');
+    expect(s?.ok).toBe(false);
+    expect(s?.detail).toContain('down 1h');
+  });
+
+  it('truncates rather than rounds — 98.99% must not display as the target met', () => {
+    const s = uptimeSummary(report({ uptimeRatio: 0.98999, meetsTarget: false }));
+    expect(s?.label).toBe('Uptime 98.9%');
+  });
+
+  it('passes null through: no report, no banner', () => {
+    expect(uptimeSummary(null)).toBeNull();
   });
 });
 

@@ -13,9 +13,11 @@ import {
   type HubTask,
   type PresenceChip,
   type TaskStatus,
+  type UptimeReport,
   activityRows,
   describeEvent,
   timeAgo,
+  uptimeSummary,
 } from './hub-model.ts';
 
 const STATUS_LABEL: Record<TaskStatus, string> = {
@@ -340,8 +342,25 @@ export function renderActivity(
   filter: ActivityFilter,
   titleOf: (taskId: string) => string,
   onFilter: (f: ActivityFilter) => void,
+  uptime: UptimeReport | null = null,
 ): void {
   container.replaceChildren();
+  // Deploy readiness (§3.12 commit 11): the 99% availability target (goal
+  // 4.4) rendered where the after-the-fact review already happens. No report
+  // yet (young log) → no banner, not a fake 100%.
+  const summary = uptimeSummary(uptime);
+  if (summary) {
+    const banner = document.createElement('div');
+    banner.className = `hub-uptime ${summary.ok ? 'hub-uptime-ok' : 'hub-uptime-miss'}`;
+    const label = document.createElement('strong');
+    label.className = 'hub-uptime-label';
+    label.textContent = summary.label;
+    const detail = document.createElement('span');
+    detail.className = 'hub-uptime-detail';
+    detail.textContent = summary.detail;
+    banner.append(label, detail);
+    container.append(banner);
+  }
   const bar = document.createElement('div');
   bar.className = 'hub-activity-filters';
   for (const f of ['all', 'decisions'] as const) {

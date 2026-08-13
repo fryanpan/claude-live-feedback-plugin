@@ -5,6 +5,7 @@ import {
   DEFAULT_DONE_WINDOW,
   type HubGoal,
   type HubTask,
+  type UptimeReport,
   boardSections,
 } from '../src/hub/hub-model.ts';
 import {
@@ -209,6 +210,46 @@ describe('renderActivity', () => {
     const rows = Array.from(root.querySelectorAll('.hub-activity-row'));
     expect(rows).toHaveLength(1);
     expect(rows[0]?.textContent).toContain('created');
+  });
+
+  const uptime = (over: Partial<UptimeReport> = {}): UptimeReport => ({
+    target: 0.99,
+    windowMs: 7 * 24 * 60 * 60_000,
+    measuredMs: 7 * 24 * 60 * 60_000,
+    downMs: 0,
+    uptimeRatio: 1,
+    meetsTarget: true,
+    gaps: [],
+    tickMs: 5 * 60_000,
+    ...over,
+  });
+
+  it('renders the uptime banner — ok styling when the 99% target is met', () => {
+    renderActivity(root, events, 'all', () => 'A', vi.fn(), uptime());
+    const banner = root.querySelector('.hub-uptime');
+    expect(banner).not.toBeNull();
+    expect(banner?.classList.contains('hub-uptime-ok')).toBe(true);
+    expect(banner?.textContent).toContain('Uptime 100%');
+    expect(banner?.textContent).toContain('target 99%');
+  });
+
+  it('a missed target gets the miss styling and shows the downtime', () => {
+    renderActivity(
+      root,
+      events,
+      'all',
+      () => 'A',
+      vi.fn(),
+      uptime({ uptimeRatio: 0.97, meetsTarget: false, downMs: 5 * 60 * 60_000 }),
+    );
+    const banner = root.querySelector('.hub-uptime');
+    expect(banner?.classList.contains('hub-uptime-miss')).toBe(true);
+    expect(banner?.textContent).toContain('down 5h');
+  });
+
+  it('no report, no banner (the two tests above are the presence control)', () => {
+    renderActivity(root, events, 'all', () => 'A', vi.fn(), null);
+    expect(root.querySelector('.hub-uptime')).toBeNull();
   });
 });
 

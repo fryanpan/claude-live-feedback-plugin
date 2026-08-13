@@ -22,6 +22,7 @@ import {
   type PresenceAgent,
   type PresenceChip,
   type PresencePerson,
+  type UptimeReport,
   boardSections,
   decisionRows,
   nextStatus,
@@ -48,6 +49,8 @@ interface HubState {
   view: 'board' | 'activity';
   activityFilter: ActivityFilter;
   events: ActivityEvent[];
+  /** Deploy readiness (§3.12 commit 11) — null until the log has lines. */
+  uptime: UptimeReport | null;
   agents: PresenceAgent[];
   docs: SidebarDoc[];
   threads: SidebarThread[];
@@ -196,6 +199,7 @@ async function main(): Promise<void> {
     view: 'board',
     activityFilter: 'all',
     events: [],
+    uptime: null,
     agents: [],
     docs: [],
     threads: [],
@@ -282,10 +286,17 @@ async function main(): Promise<void> {
       board.classList.add('hidden');
       activity.classList.remove('hidden');
       toggle.textContent = 'Board';
-      renderActivity(activity, state.events, state.activityFilter, titleOf, (f) => {
-        state.activityFilter = f;
-        renderActivityRegion();
-      });
+      renderActivity(
+        activity,
+        state.events,
+        state.activityFilter,
+        titleOf,
+        (f) => {
+          state.activityFilter = f;
+          renderActivityRegion();
+        },
+        state.uptime,
+      );
     } else {
       board.classList.remove('hidden');
       activity.classList.add('hidden');
@@ -497,10 +508,11 @@ async function main(): Promise<void> {
   }
 
   async function loadEvents(): Promise<void> {
-    const res = await fetchJson<{ events: ActivityEvent[] }>(
+    const res = await fetchJson<{ events: ActivityEvent[]; uptime: UptimeReport | null }>(
       `/api/workspaces/${encodeURIComponent(workspaceId)}/events`,
     );
     state.events = res?.events ?? [];
+    state.uptime = res?.uptime ?? null;
     if (state.view === 'activity') renderActivityRegion();
   }
 

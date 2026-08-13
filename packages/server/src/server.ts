@@ -63,6 +63,7 @@ import {
   isValidRef,
   taskChip,
 } from './tasks.ts';
+import { SERVER_TICK_EVENT, UptimeMonitor, analyzeUptime } from './uptime.ts';
 import { type VoiceComplete, VoiceRouter, parseVoiceContext } from './voice.ts';
 import { type WebhookLogEntry, createWebhookDispatcher } from './webhooks.ts';
 import { onClose, onMessage, onOpen } from './yjs-protocol.ts';
@@ -207,6 +208,13 @@ export interface ServerOptions {
    * bin.ts constructs the real one (`haikuVoiceComplete`).
    */
   voiceComplete?: VoiceComplete;
+  /**
+   * Liveness-marker interval for the uptime measurement (§3.12 commit 11).
+   * The monitor appends `server.tick` lines to every hub workspace's
+   * events.jsonl so the gap analysis has density even on an idle board.
+   * Overridable so tests never wait real minutes; default 5 minutes.
+   */
+  uptimeTickMs?: number;
 }
 
 const CT: Record<string, string> = {
@@ -465,6 +473,19 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // authoritative for gated fields on restart.
   const taskProjection = new TaskProjection({ rooms, tasks: taskStore });
   taskProjection.init();
+  // Deploy readiness (§3.12 commit 11): uptime is measured from the same
+  // events.jsonl the audit trail lives in. The monitor stamps
+  // server.started now (bounding whatever outage this boot ended) and
+  // beats server.tick so an idle workspace's log still has gap-analysis
+  // density. Markers bypass taskStore.emit on purpose — §3.6's table has
+  // no server.* rows, and SSE/MCP subscribers must not see a beat every
+  // five minutes.
+  const uptimeMonitor = new UptimeMonitor({
+    dataDir,
+    tasks: taskStore,
+    ...(opts.uptimeTickMs !== undefined ? { tickMs: opts.uptimeTickMs } : {}),
+  });
+  uptimeMonitor.start();
   // Voice routing (§3.8): lookups take the Haiku fast path when a completer
   // was injected; changes go to the attached agent (or the on-disk queue).
   const voiceRouter = new VoiceRouter({
@@ -1308,24 +1329,39 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             return j(404, { error: 'workspace not found' });
           }
           const logPath = eventsLogPath(dataDir, workspaceId);
-          let events: unknown[] = [];
+          let rows: Array<{ event?: unknown; ts?: unknown }> = [];
           if (existsSync(logPath)) {
-            events = readFileSync(logPath, 'utf8')
+            rows = readFileSync(logPath, 'utf8')
               .split('\n')
               .filter((line) => line.trim().length > 0)
               .flatMap((line) => {
                 try {
-                  return [JSON.parse(line)];
+                  return [JSON.parse(line) as { event?: unknown; ts?: unknown }];
                 } catch {
                   // A torn tail line (crash mid-append) must not take the
                   // whole activity view down with it.
                   return [];
                 }
               });
-            // Cap the payload: the newest rows are the review's working set.
-            if (events.length > 1000) events = events.slice(-1000);
           }
-          return j(200, { workspaceId, events });
+          // Uptime (§3.12 commit 11): every line — real event or liveness
+          // marker — is proof the server was alive when it was written, so
+          // the gap analysis runs over ALL timestamps, before any filtering.
+          const uptime = analyzeUptime(
+            rows.map((r) => r.ts).filter((t): t is number => typeof t === 'number'),
+            {
+              now: Date.now(),
+              ...(opts.uptimeTickMs !== undefined ? { tickMs: opts.uptimeTickMs } : {}),
+            },
+          );
+          // Ticks are measurement substrate, not activity — strip them from
+          // the review list (BEFORE the cap, so a week of beats can't crowd
+          // real rows out of it). server.started stays: a restart is honest
+          // activity.
+          let events: unknown[] = rows.filter((r) => r.event !== SERVER_TICK_EVENT);
+          // Cap the payload: the newest rows are the review's working set.
+          if (events.length > 1000) events = events.slice(-1000);
+          return j(200, { workspaceId, events, uptime });
         }
         // set_workspace_goal: edit the north-star goal (§3.10). The store
         // emits workspace.goal_updated and requests a re-triage of open
@@ -2543,6 +2579,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     webhookLog,
     stop: async () => {
       if (shareSweep) clearInterval(shareSweep);
+      uptimeMonitor.stop();
       // Flush pending body snapshots into the store BEFORE the store's own
       // flush, so the last keystrokes in a task body reach the sidecar.
       taskProjection.stop();
