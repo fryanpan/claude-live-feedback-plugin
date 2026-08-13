@@ -580,6 +580,16 @@ export type AnswerDecisionResult =
   | { ok: true; task: Task }
   | { ok: false; error: 'not-found' | 'not-a-decision' };
 
+export type SetTaskGoalResult =
+  | {
+      ok: true;
+      task: Task;
+      /** False when the goal and position both stayed put — a triage confirm.
+       *  No task.regrouped fires for it, but the triage stamp still lands. */
+      changed: boolean;
+    }
+  | { ok: false; error: 'not-found' | 'unknown-goal' };
+
 export type SetGoalListResult =
   | {
       ok: true;
@@ -1023,6 +1033,84 @@ export class TaskStore {
       ts,
     });
     return { ok: true, task };
+  }
+
+  /**
+   * Place a task under a goal (or subgoal) at an exact position — the write
+   * half of triage (§3.4: the agent picks the exact spot, not just the
+   * bucket) and the board's regroup/rerank gesture (§3.3: open to everyone,
+   * Bryan AND agents; every move recorded).
+   *
+   * Placement IS triage, so every call — moved or confirmed in place —
+   * stamps `triagedAgainst` with the goal text it was judged against and
+   * clears the triage-pending marker; `riskTier` is stamped when supplied
+   * (§3.4: stored at decision time, so the after-the-fact review grades the
+   * agent against what it knew). A goal or position change emits
+   * `task.regrouped`; a pure confirm emits nothing — §3.6 has no
+   * task.triaged row, and a no-move event would be noise in every feed.
+   */
+  setTaskGoal(
+    taskId: string,
+    goal: string,
+    opts: {
+      actor: { id: string; name: string; kind?: string };
+      /** Fractional position within the goal. Omitted → bottom of the goal
+       *  (an unchanged goal keeps the current position). */
+      position?: number;
+      riskTier?: 'green' | 'yellow' | 'red';
+    },
+  ): SetTaskGoalResult {
+    const task = this.getTask(taskId);
+    if (!task) return { ok: false, error: 'not-found' };
+    const state = this.workspaces.get(task.workspaceId);
+    if (!state) return { ok: false, error: 'not-found' };
+    if (!this.goalIdExists(state.workspace, goal)) {
+      return { ok: false, error: 'unknown-goal' };
+    }
+
+    const ts = Date.now();
+    const actor: TaskActor = {
+      id: opts.actor.id,
+      name: opts.actor.name,
+      kind: classifyActor(opts.actor),
+    };
+    const fromGoal = task.goal;
+    const order =
+      opts.position ??
+      (goal === fromGoal
+        ? task.order
+        : Math.max(
+            0,
+            ...Array.from(state.tasks.values())
+              .filter((t) => t.goal === goal && t.id !== taskId)
+              .map((t) => t.order),
+          ) + 1);
+    const changed = goal !== fromGoal || order !== task.order;
+
+    task.goal = goal;
+    task.order = order;
+    task.triagedAgainst = { goalId: goal, goal: state.workspace.goal, ts };
+    // The placement fulfils whatever triage request stamped the marker.
+    // Assignment, not delete (biome noDelete); JSON.stringify drops it from
+    // the sidecar either way, same as the hydrate-time clear.
+    task.triagePendingTs = undefined;
+    if (opts.riskTier !== undefined) task.riskTier = opts.riskTier;
+    task.updatedAt = ts;
+    this.scheduleSave(task.workspaceId);
+
+    if (changed) {
+      this.emit({
+        type: 'task.regrouped',
+        workspaceId: task.workspaceId,
+        taskId: task.id,
+        fromGoal,
+        toGoal: goal,
+        order,
+        actor,
+        ts,
+      });
+    }
+    return { ok: true, task, changed };
   }
 
   /**

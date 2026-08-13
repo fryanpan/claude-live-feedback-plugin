@@ -11,6 +11,7 @@ import {
 } from '@feedback/core';
 import { needsCall } from '@feedback/core/summary-prompt';
 import type { Server as BunServer } from 'bun';
+import { classifyActor } from './activity.ts';
 import { showFile } from './git-diff.ts';
 import {
   LOOPBACK_HOSTS,
@@ -53,6 +54,8 @@ import {
   type Ref,
   type TaskStatus,
   TaskStore,
+  type WorkspaceGoal,
+  type WorkspaceSubgoal,
   isAttachmentRuntime,
   isValidRef,
   taskChip,
@@ -61,6 +64,57 @@ import { type WebhookLogEntry, createWebhookDispatcher } from './webhooks.ts';
 import { onClose, onMessage, onOpen } from './yjs-protocol.ts';
 
 const DEFAULT_PORT = Number(process.env.PORT ?? 8787);
+
+/**
+ * Structural validation for PUT /api/workspaces/:id/goals. Returns the
+ * sanitized list, or null if any entry is malformed. Unknown keys are
+ * dropped rather than persisted — the sidecar shape is a contract, not a
+ * junk drawer. ONE subgoal level max (§3.2); a subgoal with subgoals is
+ * malformed, not silently flattened.
+ */
+function parseGoalList(raw: unknown): WorkspaceGoal[] | null {
+  if (!Array.isArray(raw)) return null;
+  const goals: WorkspaceGoal[] = [];
+  for (const entry of raw) {
+    const g = entry as Record<string, unknown>;
+    if (typeof g?.id !== 'string' || g.id.length === 0) return null;
+    if (typeof g?.title !== 'string' || g.title.length === 0) return null;
+    if (g.dueAt !== undefined && typeof g.dueAt !== 'number') return null;
+    let subgoals: WorkspaceSubgoal[] | undefined;
+    if (g.subgoals !== undefined) {
+      if (!Array.isArray(g.subgoals)) return null;
+      subgoals = [];
+      for (const sub of g.subgoals) {
+        const s = sub as Record<string, unknown>;
+        if (typeof s?.id !== 'string' || s.id.length === 0) return null;
+        if (typeof s?.title !== 'string' || s.title.length === 0) return null;
+        if (s.dueAt !== undefined && typeof s.dueAt !== 'number') return null;
+        if (s.subgoals !== undefined) return null;
+        subgoals.push({
+          id: s.id,
+          title: s.title,
+          ...(s.dueAt !== undefined ? { dueAt: s.dueAt as number } : {}),
+        });
+      }
+    }
+    goals.push({
+      id: g.id,
+      title: g.title,
+      ...(g.dueAt !== undefined ? { dueAt: g.dueAt as number } : {}),
+      ...(subgoals !== undefined ? { subgoals } : {}),
+    });
+  }
+  return goals;
+}
+
+/** The anchor's display snippet, whichever anchor kind carries it — an
+ *  orphan keeps its original's snippet. */
+function anchorSnippetText(anchor: Anchor): string | undefined {
+  if (anchor.kind === 'orphan') {
+    return anchor.original.snippet?.text;
+  }
+  return anchor.snippet?.text;
+}
 
 /** Attribution for a write that arrived with no author at all. Deliberately
  *  NOT Bryan: an unattributed action must never gain his authority just
@@ -1300,6 +1354,133 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // pattern as createWorkspace/attachDoc above.
           taskProjection.ensureWorkspace(res.task.workspaceId);
           return j(200, { ok: true, changed: res.changed, task: res.task });
+        }
+        // set_task_goal (§3.10): goal/subgoal + exact position + riskTier —
+        // the write half of triage and the board's regroup gesture. Every
+        // field here is hand-copied; each has an HTTP-level test in
+        // task-tool-routes.test.ts.
+        const taskGoalMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/goal$/);
+        if (taskGoalMatch && req.method === 'POST') {
+          const taskId = decodeURIComponent(taskGoalMatch[1] ?? '');
+          const body = await safeJson(req);
+          const goal = body?.goal;
+          if (typeof goal !== 'string' || goal.length === 0) {
+            return j(400, { error: 'goal required' });
+          }
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const riskTier = body?.riskTier;
+          if (
+            riskTier !== undefined &&
+            riskTier !== 'green' &&
+            riskTier !== 'yellow' &&
+            riskTier !== 'red'
+          ) {
+            return j(400, { error: 'riskTier must be green | yellow | red' });
+          }
+          const res = taskStore.setTaskGoal(taskId, goal, {
+            actor: author,
+            position: typeof body?.position === 'number' ? Number(body.position) : undefined,
+            riskTier,
+          });
+          if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
+          // A confirm-in-place (changed:false) mutates gated fields
+          // (triagedAgainst, triagePendingTs, riskTier) without emitting an
+          // event — refresh the projection by hand, same as attachDoc.
+          if (!res.changed) taskProjection.ensureWorkspace(res.task.workspaceId);
+          return j(200, res);
+        }
+        // answer_decision (§3.10): record the VERBATIM answer. Does not
+        // transition the task — status changes stay with the single gate.
+        const taskAnswerMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/answer$/);
+        if (taskAnswerMatch && req.method === 'POST') {
+          const taskId = decodeURIComponent(taskAnswerMatch[1] ?? '');
+          const body = await safeJson(req);
+          const text = body?.text;
+          if (typeof text !== 'string' || text.length === 0) {
+            return j(400, { error: 'text required' });
+          }
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const res = taskStore.answerDecision(taskId, text, { actor: author });
+          if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
+          return j(200, res);
+        }
+        // set_goal_list (§3.2 edit contract): replace the ordered board
+        // sections. Structural validation happens HERE because the store
+        // trusts its callers with shapes — a junk entry that reached the
+        // sidecar would render as a broken section forever.
+        const wsGoalsMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/goals$/);
+        if (wsGoalsMatch && req.method === 'PUT') {
+          const workspaceId = decodeURIComponent(wsGoalsMatch[1] ?? '');
+          const body = await safeJson(req);
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const goals = parseGoalList(body?.goals);
+          if (!goals) {
+            return j(400, { error: 'goals must be [{id, title, dueAt?, subgoals?}]' });
+          }
+          const res = taskStore.setGoalList(workspaceId, goals, { actor: author });
+          if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
+          return j(200, res);
+        }
+        // promote_to_task (§3.10): thread → task. Captures the origin ref,
+        // the latest HUMAN comment as the verbatim quote (an agent's closing
+        // note must never become the quote), and drafts a title + body the
+        // caller didn't supply. classifyActor draws the person/agent line —
+        // the same one replies and transitions use.
+        const promoteMatch = pathname.match(/^\/api\/docs\/([^/]+)\/threads\/([^/]+)\/promote$/);
+        if (promoteMatch && req.method === 'POST') {
+          const docId = decodeURIComponent(promoteMatch[1] ?? '');
+          const threadId = decodeURIComponent(promoteMatch[2] ?? '');
+          const body = await safeJson(req);
+          const workspaceId = body?.workspaceId;
+          if (typeof workspaceId !== 'string' || workspaceId.length === 0) {
+            return j(400, { error: 'workspaceId required' });
+          }
+          if (!taskStore.getWorkspace(workspaceId)) {
+            return j(404, { error: 'workspace not found' });
+          }
+          const thread = rooms.getThread(docId, threadId);
+          if (!thread) return j(404, { error: 'thread not found' });
+          const humanComment = [...thread.comments]
+            .reverse()
+            .find((c) => classifyActor(c.author) === 'person');
+          const quote =
+            typeof body?.quote === 'string' && body.quote.length > 0
+              ? body.quote
+              : humanComment?.text;
+          const snippet = anchorSnippetText(thread.anchor);
+          const titleSource = (quote ?? snippet ?? 'Promoted thread').split('\n')[0] ?? '';
+          const title =
+            typeof body?.title === 'string' && body.title.trim().length > 0
+              ? body.title.trim()
+              : titleSource.length > 80
+                ? `${titleSource.slice(0, 79)}…`
+                : titleSource;
+          const draftBody =
+            typeof body?.body === 'string'
+              ? body.body
+              : [
+                  `Promoted from a comment thread${snippet ? ` on "${snippet}"` : ''}.`,
+                  ...(quote ? ['', `> ${quote}`] : []),
+                ].join('\n');
+          const res = taskStore.createTask(workspaceId, {
+            title,
+            body: draftBody,
+            assignee: body?.assignee as string | undefined,
+            needs: body?.needs as 'action' | 'decision' | undefined,
+            // Forward undefined untouched: an omitted goal is what routes the
+            // task through triage (an explicit 'chores' would skip it).
+            goal: body?.goal as string | undefined,
+            order: typeof body?.order === 'number' ? Number(body.order) : undefined,
+            dueAt: typeof body?.dueAt === 'number' ? Number(body.dueAt) : undefined,
+            links: Array.isArray(body?.links) ? (body.links as Ref[]) : undefined,
+            origin: { kind: 'thread', docId, threadId },
+            ...(quote !== undefined ? { quote } : {}),
+          });
+          if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
+          return j(200, { task: res.task });
         }
         // --- REST: agent attachments (§4) ---
         // AgentAttachment records live OUTSIDE every ydoc; this REST surface
