@@ -37,6 +37,7 @@ import {
   sessionCookieHeader,
   verifySession,
 } from './share/link-session.ts';
+import { redactHubEventForVisitor } from './share/redact-hub-events.ts';
 import {
   redactMetaForVisitor,
   redactWorkspaceFilesForVisitor,
@@ -456,6 +457,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   taskProjection.init();
 
   /**
+   * Which workspace a docId belongs to, for SHARE SCOPING (§3.12 commit 8).
+   * Legacy grouping tags (folder binds / diff reviews) answer from the doc's
+   * own metadata; hub workspaces answer from the store — docs linked via
+   * attachDoc plus each task's own `task:<id>` body room, which is what
+   * makes "visitors may post comments" true for a hub share (comments need
+   * an in-scope doc). Deliberately NOT the ws:<id> board room: its share
+   * allowance is spelled out in host-guard, never a resolver side effect.
+   */
+  const shareWorkspaceOf = (docId: string): string | null =>
+    rooms.get(docId)?.meta.workspaceId ?? taskStore.workspaceOfDoc(docId);
+
+  /**
    * CORS is decided once, here, for every response the handler produces,
    * rather than by `j()` — which has no request context and used to stamp
    * `Access-Control-Allow-Origin: *` on everything. See
@@ -707,14 +720,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // gets the 403 below.
             const repaired = repairStaleReviewUrl(pathname, req.method, decision.target);
             if (repaired) return repaired;
-            if (
-              !shareScopeAllows(
-                pathname,
-                req.method,
-                decision.target,
-                (docId) => rooms.get(docId)?.meta.workspaceId ?? null,
-              )
-            ) {
+            if (!shareScopeAllows(pathname, req.method, decision.target, shareWorkspaceOf)) {
               return j(403, { error: 'out_of_share_scope' });
             }
             visitor = decision.target;
@@ -733,14 +739,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               if (!target) return j(401, { error: 'no_share_session' });
               const repaired = repairStaleReviewUrl(pathname, req.method, target);
               if (repaired) return repaired;
-              if (
-                !shareScopeAllows(
-                  pathname,
-                  req.method,
-                  target,
-                  (docId) => rooms.get(docId)?.meta.workspaceId ?? null,
-                )
-              ) {
+              if (!shareScopeAllows(pathname, req.method, target, shareWorkspaceOf)) {
                 return j(403, { error: 'out_of_share_scope' });
               }
               visitor = target;
@@ -833,6 +832,21 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               headers: { 'content-type': 'text/html; charset=utf-8' },
             });
           }
+          // A HUB workspace share lands IN the hub — never a review URL,
+          // never a lobby (§2.5). Resolved at redemption like everything
+          // else, so a workspace deleted after minting falls through to the
+          // same not-found the legacy path gives.
+          if (share.workspaceId && taskStore.getWorkspace(share.workspaceId)) {
+            const maxAge = Math.floor((share.expiresAt - Date.now()) / 1000);
+            return new Response(null, {
+              status: 302,
+              headers: {
+                location: `/workspaces/${encodeURIComponent(share.workspaceId)}`,
+                'set-cookie': sessionCookieHeader(share.shareId, cookieKey(), maxAge),
+                'referrer-policy': 'no-referrer',
+              },
+            });
+          }
           // Where to land is resolved NOW, not when the share was minted: a
           // member docId encodes the file's relPath, so renaming or deleting
           // the entry file used to 404 the link with no way to repoint it.
@@ -872,7 +886,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
 
           let entryDocId = body?.entryDocId as string | undefined;
           let memberCount: number | undefined;
-          if (workspaceId) {
+          // A HUB workspace (§3.12 commit 8) is shareable with zero bound
+          // member docs — its entry is the hub page, not a review doc.
+          const isHubShare = workspaceId !== undefined && !!taskStore.getWorkspace(workspaceId);
+          if (isHubShare) {
+            if (entryDocId) {
+              return j(400, {
+                error: 'a hub workspace share opens the hub page — entryDocId is not supported',
+              });
+            }
+          } else if (workspaceId) {
             const members = rooms.list().filter((m) => m.workspaceId === workspaceId);
             if (members.length === 0) return j(404, { error: 'workspace not found', workspaceId });
             if (entryDocId && !members.some((m) => m.docId === entryDocId)) {
@@ -888,6 +911,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               docId,
               workspaceId,
               entryDocId,
+              hub: isHubShare,
               ttlSeconds: typeof body?.ttlSeconds === 'number' ? body.ttlSeconds : undefined,
               label: typeof body?.label === 'string' ? body.label : undefined,
             });
@@ -925,6 +949,29 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!workspaceId) return j(400, { error: 'workspaceId required' });
           if (!Array.isArray(allowDomains) || allowDomains.length === 0) {
             return j(400, { error: 'allowDomains must be a non-empty array' });
+          }
+          // A HUB workspace share (§3.12 commit 8): same email-share
+          // machinery, but the URL opens the hub page and there is no entry
+          // doc — the guard scopes by workspaceId alone.
+          if (taskStore.getWorkspace(workspaceId)) {
+            if (body?.entryDocId) {
+              return j(400, {
+                error: 'a hub workspace share opens the hub page — entryDocId is not supported',
+              });
+            }
+            try {
+              const share = await shares.createShareWorkspace({
+                workspaceId,
+                hub: true,
+                allowDomains,
+                ttlSeconds: typeof body?.ttlSeconds === 'number' ? body.ttlSeconds : undefined,
+                name: typeof body?.name === 'string' ? body.name : undefined,
+              });
+              return j(200, { share });
+            } catch (err) {
+              const error = err instanceof Error ? err.message : 'create_share_failed';
+              return j(502, { error });
+            }
           }
           const members = rooms.list().filter((m) => m.workspaceId === workspaceId);
           if (members.length === 0) return j(404, { error: 'workspace not found', workspaceId });
@@ -1026,7 +1073,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             rooms.list().some((m) => m.workspaceId === workspaceId) ||
             taskStore.getWorkspace(workspaceId) !== undefined;
           if (!exists) return j(404, { error: 'workspace not found' });
-          return openSseStream(sse, `ws~${workspaceId}`, visitorShareId ?? undefined);
+          // A share visitor's stream carries the §3.3 visitor-contract view
+          // of every hub event (display names, projected tasks) — the SSE
+          // feed is the second door next to the ws room, and redacting one
+          // transport but not the other is how the DocMeta leak shipped.
+          return openSseStream(
+            sse,
+            `ws~${workspaceId}`,
+            visitorShareId ?? undefined,
+            visitor ? redactHubEventForVisitor : undefined,
+          );
         }
         // --- SSE ---
         if (pathname.startsWith('/events/')) {
@@ -1747,6 +1803,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                 .listThreads(docId, status ? { status } : undefined)
                 .map((t) => withTaskChips(docId, t)),
             });
+          }
+          // Task-chip resolution (§3.3 rule 2): how a chip inside a doc
+          // resolves for a DOC-scoped invite, which never gets the workspace
+          // board room. The chip is the visitor-safe shape (id, title,
+          // status, assignee) — adding a field to it is a sharing decision.
+          if (rest === 'tasks' && req.method === 'GET') {
+            return j(200, { docId, tasks: taskStore.tasksReferencingDoc(docId).map(taskChip) });
           }
           const threadIdMatch = rest.match(/^threads\/([^/]+)(\/.*)?$/);
           if (threadIdMatch) {

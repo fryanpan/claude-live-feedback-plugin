@@ -165,6 +165,33 @@ export function shareScopeAllows(
     return workspaceOf?.(id) === target.workspaceId;
   };
 
+  // Workspace-hub surfaces (§3.12 commit 8) — three explicit allowances,
+  // ONLY for a workspace-scope share. A doc-scoped share never reaches the
+  // board: the ws:<id> room syncs every task in the workspace (§3.3 rule 2),
+  // so task chips inside a shared doc resolve through the REST endpoint
+  // below instead. The board room is deliberately NOT resolved through
+  // `workspaceOf` (it is not a member doc) — its allowance is spelled out
+  // here so granting it stays a decision, not a resolver side effect.
+  if (target.workspaceId) {
+    const wsId = target.workspaceId;
+    // The hub page itself: GET /workspaces/<id>, nothing nested.
+    if (method === 'GET' && pathname.startsWith('/workspaces/')) {
+      const seg = pathname.slice('/workspaces/'.length);
+      if (!seg.includes('/') && safeDecode(seg) === wsId) return true;
+    }
+    // The server-owned board room socket (/y/ws:<id>). Reads are the §3.3
+    // visitor-contract projection; foreign writes are reverted server-side.
+    if (pathname.startsWith('/y/') && safeDecode(pathname.slice('/y/'.length)) === `ws:${wsId}`) {
+      return true;
+    }
+    // The workspace SSE feed. Task events on it are redacted for visitors
+    // (actor display names only) before they reach the stream.
+    if (pathname.startsWith('/events/workspace/')) {
+      const seg = pathname.slice('/events/workspace/'.length);
+      if (!seg.includes('/') && safeDecode(seg) === wsId) return true;
+    }
+  }
+
   // Review page / Yjs websocket / SSE for an in-scope doc.
   if (pathname.startsWith('/review/')) return inScope(pathname.slice('/review/'.length));
   if (pathname.startsWith('/y/')) return inScope(pathname.slice('/y/'.length));
@@ -233,6 +260,12 @@ export function shareScopeAllows(
  *   POST reparse_from_disk  discards live state, including others' edits
  *   POST threads/<id>/{rewrite_region,insert_after,insert_blocks_after}
  *                       agent-side document surgery, not a review action
+ *   POST threads/<id>/promote  creates a TASK — visitors are read-only on
+ *                       the hub gate, comments are their only write
+ *
+ * `tasks` (GET) is the §3.3 rule-2 chip endpoint: how a task chip inside a
+ * shared doc resolves (id, title, status, assignee) without the visitor
+ * ever syncing the workspace board room.
  *
  * Anything not named here is refused, so a subroute added later is closed
  * until someone decides a visitor should have it.
@@ -240,9 +273,10 @@ export function shareScopeAllows(
 function docSubrouteAllowed(sub: string, method: string): boolean {
   if (sub === '') return method === 'GET'; // meta; DELETE refused
   if (sub === 'diff' || sub === 'content') return method === 'GET';
+  if (sub === 'tasks') return method === 'GET'; // task chips, visitor-safe shape
   if (sub === 'activity') return method === 'POST'; // reading tracker
   if (sub === 'threads' || sub.startsWith('threads/')) {
-    return !/\/(rewrite_region|insert_after|insert_blocks_after)$/.test(sub);
+    return !/\/(rewrite_region|insert_after|insert_blocks_after|promote)$/.test(sub);
   }
   if (sub === 'suggestions' || sub.startsWith('suggestions/')) return true;
   return false;

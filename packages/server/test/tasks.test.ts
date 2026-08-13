@@ -77,6 +77,32 @@ describe('TaskStore', () => {
     });
   });
 
+  describe('workspaceOfDoc (share-scope membership, §3.12 commit 8)', () => {
+    it('resolves an attached doc to its hub workspace', () => {
+      const ws = store.createWorkspace('ws');
+      store.attachDoc(ws.id, 'plan-doc');
+      expect(store.workspaceOfDoc('plan-doc')).toBe(ws.id);
+    });
+
+    it('resolves a task body room (task:<id>) to the task’s workspace', () => {
+      const ws = store.createWorkspace('ws');
+      const res = store.createTask(ws.id, { title: 'Wire the store' });
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      expect(store.workspaceOfDoc(`task:${res.task.id}`)).toBe(ws.id);
+    });
+
+    it('returns null for an unattached doc, an unknown task body, and the board room itself', () => {
+      const ws = store.createWorkspace('ws');
+      expect(store.workspaceOfDoc('loose-doc')).toBeNull();
+      expect(store.workspaceOfDoc('task:t-ghost')).toBeNull();
+      // The ws:<id> room is NOT a member doc — its share allowance is
+      // explicit in host-guard, never a resolver side effect (the plan
+      // states workspaceOf returns null for it; keep that true).
+      expect(store.workspaceOfDoc(`ws:${ws.id}`)).toBeNull();
+    });
+  });
+
   describe('createTask', () => {
     it('defaults to Chores, agent assignee, todo status, and an audit-ready shape', () => {
       const ws = store.createWorkspace('ws');
