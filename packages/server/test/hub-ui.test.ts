@@ -16,7 +16,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { User } from '@feedback/core';
-import { type ServerHandle, createServer } from '../src/server.ts';
+import { HUB_FEEDBACK_DOC_ID, type ServerHandle, createServer } from '../src/server.ts';
 import { workspaceRoomId } from '../src/task-projection.ts';
 import type { Task } from '../src/tasks.ts';
 
@@ -78,6 +78,48 @@ describe('hub UI routes (plan §3.12 commit 7)', () => {
       expect(html).toContain('/app/hub.js');
       // §3.9: the browser tab is a workspace switcher.
       expect(html).toContain('Workspace Hub');
+    });
+
+    // Every hub carries the widget, and every hub's widget writes to the SAME
+    // doc — feedback on the hub UI is about the product, not about whichever
+    // workspace you were standing in, so it must reach one place from all of
+    // them. Two workspaces asserted, because "the widget is present" would
+    // pass for a per-workspace doc too.
+    it('embeds the feedback widget on every hub, pointed at one shared doc', async () => {
+      const a = await seedWorkspace('alpha');
+      const b = await seedWorkspace('beta');
+      const htmlA = await (await fetch(`${base}/workspaces/${a}`)).text();
+      const htmlB = await (await fetch(`${base}/workspaces/${b}`)).text();
+
+      for (const html of [htmlA, htmlB]) {
+        expect(html).toContain('/widget.esm.js');
+        expect(html).toContain('<claude-feedback-widget');
+        expect(html).toContain(`doc-id="${HUB_FEEDBACK_DOC_ID}"`);
+      }
+      // The workspace name rides along as `view` so a thread reads without
+      // anyone resolving an id — and it differs per hub, which is the
+      // positive control that these two responses aren't the same page.
+      expect(htmlA).toContain('view="alpha"');
+      expect(htmlB).toContain('view="beta"');
+    });
+
+    // The doc must be findable by an agent that never opened a hub — a room
+    // conjured by the first `/y/<id>` connect has no title and no type.
+    it('materializes the shared feedback doc at startup', async () => {
+      const res = await fetch(`${base}/api/docs/${HUB_FEEDBACK_DOC_ID}`);
+      expect(res.status).toBe(200);
+      const meta = (await res.json()) as { meta?: { title?: string } };
+      expect(meta.meta?.title ?? '').toContain('Hub feedback');
+    });
+
+    // …but it is infrastructure, so it must not sit in the landing index
+    // forever as an ungrouped artifact. Absence asserted only after the
+    // presence above proves the doc actually exists to be hidden.
+    it('keeps the feedback doc out of the landing index', async () => {
+      const html = await (await fetch(`${base}/`)).text();
+      expect(html).toContain('Live Feedback'); // the real landing page
+      expect(html).not.toContain(HUB_FEEDBACK_DOC_ID);
+      expect(html).not.toContain('Hub feedback (all workspaces)');
     });
 
     it('404s (as a page, not JSON) for an unknown workspace id', async () => {
