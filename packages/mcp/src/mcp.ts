@@ -951,7 +951,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           links: {
             type: 'array',
             description:
-              "Refs this task mentions: {kind:'doc',docId} | {kind:'thread',docId,threadId} | {kind:'task',taskId} | {kind:'diff',workspaceId}. Backlinks are computed.",
+              "Refs this task mentions: {kind:'doc',docId} | {kind:'thread',docId,threadId} | {kind:'task',taskId} | {kind:'diff',workspaceId} | {kind:'url',url}. Backlinks are computed. Use `url` for anything outside this server — a pull request, a decision page, a dashboard; http(s) only, since a ref is rendered as a clickable chip. Refs are NOT existence-checked, so a link that points nowhere is accepted and harmless. A malformed ref does not fail the call: it is dropped and returned in `ignoredLinks`, and the task is still created.",
             items: { type: 'object' },
           },
           quote: { type: 'string', description: "The human's verbatim words, for chat-born asks." },
