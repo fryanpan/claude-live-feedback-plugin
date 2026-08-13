@@ -941,7 +941,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           afterEnforce: {
             type: 'array',
             items: { type: 'string' },
-            description: 'Subset of `after` that hard-blocks transitions while open.',
+            description:
+              'Subset of `after` that hard-blocks transitions while open. Every id here MUST also appear in `after` — the gate walks `after` and reads this as a lookup set, so an id in this array alone would gate nothing; the call is refused rather than silently widening `after`.',
           },
           dueAt: {
             type: 'number',
@@ -998,7 +999,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'task_transition',
       description:
-        "The SINGLE gate for task status changes (todo | in-progress | done) — attributed to this agent, appended to the task's audit trail. Attach `evidence` ({commit} and/or {threadRef}) on forward moves or the move is flagged `unproven` (allowed, shaded on the board). Open `after` dependencies come back in `blockers` — an edge marked enforce REFUSES the transition (HTTP 409) until the blocking task closes; read the blocker message, it names what to unblock. `usage` ({inputTokens, outputTokens}) reports what the task cost at done. Moving back to todo is never blocked.",
+        "The SINGLE gate for task status changes (todo | in-progress | done) — attributed to this agent, appended to the task's audit trail. Attach `evidence` ({commit} and/or {threadRef}) on forward moves or the move is flagged `unproven` (allowed, shaded on the board). Open `after` dependencies come back in `blockers` — an edge marked enforce REFUSES the transition (HTTP 409) until the blocking task closes; read the blocker message, it names what to unblock. The task's riskTier gates forward moves the same way: a RED task refuses outright (a person has to make the move), and a YELLOW one needs `confirmed: true` — which means the human said yes after you showed them the concrete effect, never a flag you set to get past the gate. `usage` ({inputTokens, outputTokens}) reports what the task cost at done. Moving back to todo is never blocked.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1018,6 +1019,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
               inputTokens: { type: 'number' },
               outputTokens: { type: 'number' },
             },
+          },
+          confirmed: {
+            type: 'boolean',
+            description:
+              "The human confirmed THIS move on a yellow-tier task, after being shown what it does. Not a retry flag — if they haven't answered, don't send it.",
           },
         },
         required: ['taskId', 'to'],
@@ -1990,12 +1996,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         });
       }
       case 'task_transition': {
-        const { taskId, to, note, evidence, usage } = a as {
+        const { taskId, to, note, evidence, usage, confirmed } = a as {
           taskId: string;
           to: string;
           note?: string;
           evidence?: { commit?: string; threadRef?: unknown };
           usage?: { inputTokens: number; outputTokens: number };
+          confirmed?: boolean;
         };
         const res = (await http('POST', `/api/tasks/${encodeURIComponent(taskId)}/transition`, {
           to,
@@ -2003,6 +2010,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...(note !== undefined ? { note } : {}),
           ...(evidence !== undefined ? { evidence } : {}),
           ...(usage !== undefined ? { usage } : {}),
+          ...(confirmed === true ? { confirmed } : {}),
         })) as { task: TaskPayload; blockers: unknown[]; unproven: boolean };
         return ok({
           taskId,
@@ -2283,6 +2291,8 @@ interface HubEventPayload {
   kind?: string;
   movedToChores?: string[];
   agentId?: string;
+  riskTier?: string;
+  reason?: string;
   transcript?: string;
   ack?: string;
   route?: string;
@@ -2316,6 +2326,9 @@ async function emitHubChannelMessage(event: string, rawPayload: unknown): Promis
       break;
     case 'task.regrouped':
       body = `[task.regrouped] ${p.taskId}: ${p.fromGoal} → ${p.toGoal}${by}`;
+      break;
+    case 'task.gate_refused':
+      body = `[task.gate_refused] ${p.taskId}: ${p.riskTier}-tier ${p.reason}${by} — → ${p.to} did NOT happen`;
       break;
     case 'decision.answered':
       body = `[decision.answered] ${p.taskId}${by}: "${truncate(p.answer ?? '', 120)}" — walk its links as the propagation checklist`;

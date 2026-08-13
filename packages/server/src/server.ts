@@ -112,6 +112,34 @@ function parseGoalList(raw: unknown): WorkspaceGoal[] | null {
   return goals;
 }
 
+/**
+ * `needs` for the two task-create routes. Validated HERE, the way `riskTier`
+ * and `runtime` already are on neighbouring routes: a capitalized
+ * `'Decision'` stored verbatim produces a task that is absent from the
+ * decisions strip, absent from `list_tasks(needs:'decision')`, and refused
+ * by `answer_decision` — while the create call answered 200.
+ */
+function parseNeeds(raw: unknown): { ok: true; needs?: 'action' | 'decision' } | { ok: false } {
+  if (raw === undefined) return { ok: true };
+  if (raw === 'action' || raw === 'decision') return { ok: true, needs: raw };
+  return { ok: false };
+}
+
+/**
+ * `links` for the two task-create routes: every element through the SAME
+ * `isValidRef` the dedicated links route runs. Without it the identical ref
+ * got two answers from two routes — 400 with an explanation from
+ * `POST /api/tasks/:id/links`, a silent 200 from create — and a malformed
+ * ref matches no backlink query, so the chip the link existed for never
+ * appears.
+ */
+function parseLinks(raw: unknown): { ok: true; links?: Ref[] } | { ok: false } {
+  if (raw === undefined) return { ok: true };
+  if (!Array.isArray(raw)) return { ok: false };
+  for (const ref of raw) if (!isValidRef(ref)) return { ok: false };
+  return { ok: true, links: raw as Ref[] };
+}
+
 /** The anchor's display snippet, whichever anchor kind carries it — an
  *  orphan keeps its original's snippet. */
 function anchorSnippetText(anchor: Anchor): string | undefined {
@@ -1515,11 +1543,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!title || typeof title !== 'string' || title.trim().length === 0) {
             return j(400, { error: 'title required' });
           }
+          const needs = parseNeeds(body?.needs);
+          if (!needs.ok) return j(400, { error: "needs must be 'action' | 'decision'" });
+          const links = parseLinks(body?.links);
+          if (!links.ok) return j(400, { error: 'links must be an array of valid refs' });
           const res = taskStore.createTask(workspaceId, {
             title: title.trim(),
             body: body?.body as string | undefined,
             assignee: body?.assignee as string | undefined,
-            needs: body?.needs as 'action' | 'decision' | undefined,
+            needs: needs.needs,
             goal: body?.goal as string | undefined,
             order: typeof body?.order === 'number' ? Number(body.order) : undefined,
             after: Array.isArray(body?.after) ? (body.after as string[]) : undefined,
@@ -1527,7 +1559,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               ? (body.afterEnforce as string[])
               : undefined,
             dueAt: typeof body?.dueAt === 'number' ? Number(body.dueAt) : undefined,
-            links: Array.isArray(body?.links) ? (body.links as Ref[]) : undefined,
+            links: links.links,
             origin: body?.origin as Ref | undefined,
             quote: body?.quote as string | undefined,
           });
@@ -1548,9 +1580,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             note: body?.note as string | undefined,
             evidence: body?.evidence as { commit?: string; threadRef?: Ref } | undefined,
             usage: body?.usage as { inputTokens: number; outputTokens: number } | undefined,
+            // The human's live confirmation for a yellow-tier move (§3.4).
+            confirmed: body?.confirmed === true,
           });
           if (!res.ok) {
-            const status = res.error === 'not-found' ? 404 : res.error === 'blocked' ? 409 : 400;
+            // A gate refusal is a refusal, not a malformed request: same 409
+            // an enforce-marked blocker returns, so callers have one shape
+            // for "the gate said no".
+            const refused =
+              res.error === 'blocked' ||
+              res.error === 'risk-refused' ||
+              res.error === 'needs-confirmation';
+            const status = res.error === 'not-found' ? 404 : refused ? 409 : 400;
             return j(status, res);
           }
           return j(200, res);
@@ -1711,17 +1752,21 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                   `Promoted from a comment thread${snippet ? ` on "${snippet}"` : ''}.`,
                   ...(quote ? ['', `> ${quote}`] : []),
                 ].join('\n');
+          const promoteNeeds = parseNeeds(body?.needs);
+          if (!promoteNeeds.ok) return j(400, { error: "needs must be 'action' | 'decision'" });
+          const promoteLinks = parseLinks(body?.links);
+          if (!promoteLinks.ok) return j(400, { error: 'links must be an array of valid refs' });
           const res = taskStore.createTask(workspaceId, {
             title,
             body: draftBody,
             assignee: body?.assignee as string | undefined,
-            needs: body?.needs as 'action' | 'decision' | undefined,
+            needs: promoteNeeds.needs,
             // Forward undefined untouched: an omitted goal is what routes the
             // task through triage (an explicit 'chores' would skip it).
             goal: body?.goal as string | undefined,
             order: typeof body?.order === 'number' ? Number(body.order) : undefined,
             dueAt: typeof body?.dueAt === 'number' ? Number(body.dueAt) : undefined,
-            links: Array.isArray(body?.links) ? (body.links as Ref[]) : undefined,
+            links: promoteLinks.links,
             origin: { kind: 'thread', docId, threadId },
             ...(quote !== undefined ? { quote } : {}),
           });
