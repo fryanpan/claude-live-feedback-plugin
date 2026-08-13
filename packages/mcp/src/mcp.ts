@@ -1262,7 +1262,7 @@ interface TaskPayload {
 /** Trimmed create/promote result (§3.10: an edit returns ids + status, not
  *  the object the caller just wrote). `triagePending` tells the caller
  *  whether a triage request was actually delivered to a live agent. */
-function taskCreatedSummary(task: TaskPayload) {
+function taskCreatedSummary(task: TaskPayload, ignoredLinks?: unknown[]) {
   return {
     taskId: task.id,
     goal: task.goal,
@@ -1270,6 +1270,11 @@ function taskCreatedSummary(task: TaskPayload) {
     status: task.status,
     assignee: task.assignee,
     triagePending: task.triagePendingTs !== undefined,
+    // A dropped ref has to survive the trip back to the caller or the
+    // partial-accept is just a silent loss with extra steps. The route
+    // returns it; a summary that omits it is the same "one layer away"
+    // failure as a route that doesn't forward a param.
+    ...(ignoredLinks !== undefined && ignoredLinks.length > 0 ? { ignoredLinks } : {}),
   };
 }
 
@@ -1953,8 +1958,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             ...(quote !== undefined ? { quote } : {}),
             author: AUTHOR,
           },
-        )) as { task: TaskPayload };
-        return ok(taskCreatedSummary(res.task));
+        )) as { task: TaskPayload; ignoredLinks?: unknown[] };
+        return ok(taskCreatedSummary(res.task, res.ignoredLinks));
       }
       case 'promote_to_task': {
         const { docId, threadId, workspaceId, title, body, assignee, needs, goal, dueAt, links } =
@@ -1984,9 +1989,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             ...(links !== undefined ? { links } : {}),
             author: AUTHOR,
           },
-        )) as { task: TaskPayload };
+        )) as { task: TaskPayload; ignoredLinks?: unknown[] };
         return ok({
-          ...taskCreatedSummary(res.task),
+          ...taskCreatedSummary(res.task, res.ignoredLinks),
           title: res.task.title,
           quote: res.task.quote,
         });

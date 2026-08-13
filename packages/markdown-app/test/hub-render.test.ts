@@ -286,6 +286,64 @@ describe('renderActivity', () => {
 });
 
 describe('renderTaskDetail', () => {
+  const detailHandlers = () => ({
+    onClose: vi.fn(),
+    onStatusSet: vi.fn(),
+    onTitleCommit: vi.fn(),
+    onAnswer: vi.fn(),
+    onAssign: vi.fn(),
+  });
+
+  // The server accepted, keyed and backlinked `url` refs before anything
+  // drew them — stored and unreachable, which is the same failure this
+  // codebase already hit with resolved threads. So this asserts the SURFACE,
+  // not the model: a stored ref nothing renders is not a feature.
+  it('renders a url ref as a real anchor', () => {
+    const pr = 'https://github.com/example-org/example-repo/pull/1669';
+    renderTaskDetail(root, task({ links: [{ kind: 'url', url: pr }] }), detailHandlers());
+    const chip = root.querySelector('.hub-detail-links a') as HTMLAnchorElement;
+    expect(chip).toBeTruthy();
+    expect(chip.getAttribute('href')).toBe(pr);
+    // Opening someone else's link must not hand them this window.
+    expect(chip.rel).toContain('noopener');
+    // The host is the legible part; the full URL stays in the tooltip so a
+    // query string can't stretch the chip.
+    expect(chip.textContent).toBe('github.com');
+    expect(chip.title).toBe(pr);
+  });
+
+  it('never emits a non-http(s) href, even for a ref stored before the check existed', () => {
+    // The server refuses these on the way in now, but the panel is built
+    // from whatever the doc currently holds — including refs persisted
+    // earlier. Positive control first: the good one DOES render, so "no
+    // anchor" below means refused rather than "this test renders nothing".
+    renderTaskDetail(
+      root,
+      task({ links: [{ kind: 'url', url: 'https://example.com/ok' }] }),
+      detailHandlers(),
+    );
+    expect(root.querySelectorAll('.hub-detail-links a').length).toBe(1);
+
+    for (const url of ['javascript:alert(1)', 'data:text/html,<script>x</script>']) {
+      renderTaskDetail(root, task({ links: [{ kind: 'url', url }] }), detailHandlers());
+      expect(root.querySelectorAll('.hub-detail-links a').length).toBe(0);
+    }
+  });
+
+  it('survives a ref kind it has never heard of', () => {
+    // An older client must not break when a newer server adds a kind: a
+    // task that won't open is worse than a chip that isn't drawn.
+    expect(() =>
+      renderTaskDetail(
+        root,
+        task({ links: [{ kind: 'quasar', quasarId: 'q-1' }, { kind: 'doc', docId: 'd-1' }] }),
+        detailHandlers(),
+      ),
+    ).not.toThrow();
+    // …and the ref it DOES understand still made it through.
+    expect(root.querySelector('.hub-detail-links')?.textContent).toContain('d-1');
+  });
+
   it('shows the answer form for an unanswered decision and records verbatim text', () => {
     const onAnswer = vi.fn();
     const d = task({ needs: 'decision', assignee: 'human' });
