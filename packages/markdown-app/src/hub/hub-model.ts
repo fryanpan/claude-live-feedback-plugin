@@ -339,6 +339,8 @@ export function describeEvent(ev: ActivityEvent, titleOf: (taskId: string) => st
     }
     case 'task.transitioned':
       return `${actorName(ev)} moved ${title()}: ${String(ev.from)} → ${String(ev.to)}`;
+    case 'task.assigned':
+      return `${actorName(ev)} assigned ${title()}: ${String(ev.from)} → ${String(ev.to)}`;
     case 'task.regrouped':
       return `${actorName(ev)} regrouped ${title()}: ${String(ev.fromGoal)} → ${String(ev.toGoal)}`;
     case 'task.gate_refused':

@@ -1035,6 +1035,23 @@ body.hub-body {
   margin: 0;
   overflow-wrap: anywhere;
 }
+/* The assignee row is a control, not a label — a hand-off is one tap. Sized
+   for a thumb (design-mobile.md's 44px target) without looking like a button
+   in a list of facts. */
+.hub-assignee-btn {
+  min-height: 44px;
+  margin: -10px 0;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-subtle, #fafafa);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.hub-assignee-btn:hover {
+  border-color: var(--border-strong);
+}
 .hub-detail-quote {
   margin: 0 0 12px;
   padding: 6px 12px;

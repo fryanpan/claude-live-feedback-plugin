@@ -14651,6 +14651,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       }
     },
     {
+      name: "assign_task",
+      description: "Hand a task to someone: 'human' (it needs Bryan), 'agent' (you or another agent will do it), or a named identity. This is the hand-off gesture — use it the moment you discover a task is not yours to finish, rather than leaving it parked in your column: an unassigned blocker looks like work in flight to everyone reading the board. Status is untouched (re-assigning is not progress), and the move is recorded as task.assigned with both ends, so the direction of every hand-off is reviewable.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          taskId: { type: "string" },
+          assignee: {
+            type: "string",
+            description: "'human', 'agent', or a named identity."
+          }
+        },
+        required: ["taskId", "assignee"]
+      }
+    },
+    {
       name: "set_task_goal",
       description: "Place a task under a goal (or subgoal) at an exact position — this IS triage's write half: pick the spot, not just the bucket. Stamps triagedAgainst with the goal text judged against and clears the triage-pending marker; every move is recorded and fires task.regrouped, so regroup freely — the safety is the record, not asking first. When a move would cross a human's earlier placement, leave a task comment referencing it. Pass `riskTier` for how dangerous EXECUTING the task is (green: reversible/contained; yellow: outward-facing or hard to reverse; red: irreversible/one-way) — keyed to the action's damage, never its importance. `position` is fractional — there is always room between two tasks; omitted = bottom of the goal.",
       inputSchema: {
@@ -15341,6 +15356,14 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           unproven: res.unproven
         });
       }
+      case "assign_task": {
+        const { taskId, assignee } = a;
+        const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/assignee`, {
+          assignee,
+          author: AUTHOR
+        });
+        return ok({ taskId, assignee: res.task.assignee, changed: res.changed });
+      }
       case "set_task_goal": {
         const { taskId, goal, position, riskTier, batchId } = a;
         const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/goal`, {
@@ -15533,6 +15556,9 @@ async function emitHubChannelMessage(event, rawPayload) {
       break;
     case "task.transitioned":
       body = `[task.transitioned] ${p.taskId}: ${p.from} → ${p.to}${by}${p.note ? ` — ${truncate(p.note, 80)}` : ""}`;
+      break;
+    case "task.assigned":
+      body = `[task.assigned] ${p.taskId}: ${p.from} → ${p.to}${by}`;
       break;
     case "task.regrouped":
       body = `[task.regrouped] ${p.taskId}: ${p.fromGoal} → ${p.toGoal}${by}`;
