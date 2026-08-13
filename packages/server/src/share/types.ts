@@ -77,8 +77,14 @@ export interface CreateShareLinkReq {
   /** One of these two decides the scope. */
   docId?: string;
   workspaceId?: string;
-  /** Doc the link opens. Required for a workspace share. */
+  /** Doc the link opens. Required for a workspace share, unless `hub`. */
   entryDocId?: string;
+  /**
+   * A HUB workspace share (§3.12 commit 8): the visitor lands on the hub
+   * page (`/workspaces/<id>`), not on a review doc, so there is no entry
+   * doc and `docId` stays empty. Scope comes entirely from `workspaceId`.
+   */
+  hub?: boolean;
   /** Defaults to DEFAULT_TTL_SECONDS (one week). */
   ttlSeconds?: number;
   /** Optional human label shown in list_shares. */
@@ -87,8 +93,11 @@ export interface CreateShareLinkReq {
 
 export interface CreateShareWorkspaceReq {
   workspaceId: string;
-  /** Doc the share URL opens. Callers usually pass the workspace entry. */
-  entryDocId: string;
+  /** Doc the share URL opens. Callers usually pass the workspace entry.
+   *  Omitted for a `hub` share, whose URL opens the hub page instead. */
+  entryDocId?: string;
+  /** See CreateShareLinkReq.hub — the visitor lands on `/workspaces/<id>`. */
+  hub?: boolean;
   allowDomains: string[];
   ttlSeconds?: number;
   /** Optional slug override. Default is `<YYYY-MM-DD>-<3hex>`. */

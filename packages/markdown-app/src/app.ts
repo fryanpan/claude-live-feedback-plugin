@@ -28,6 +28,7 @@ import {
 import { readSuggestModePref, setSuggesting, writeSuggestModePref } from './suggest-input.ts';
 import { registerMarkdownMount } from './surface-registry.ts';
 import { type TableMenuItem, tableMenuItems } from './table-menu.ts';
+import { mountDocVoice } from './voice-dock.ts';
 import { renderWorkspaceTree } from './workspace-tree.ts';
 
 const DEFAULT_WS_PATH = (docId: string, type: string) =>
@@ -170,6 +171,10 @@ async function main(): Promise<void> {
     get: (k) => localStorage.getItem(k),
     set: (k, v) => localStorage.setItem(k, v),
   });
+  // Voice on the doc surface (§3.8): one dock for the whole session; each
+  // utterance reads the CURRENT doc + topmost heading at release time, so
+  // the anchor follows navigation without remounting.
+  mountDocVoice(user);
   registerMarkdownMount(mountMarkdown);
   startRouter({
     user,

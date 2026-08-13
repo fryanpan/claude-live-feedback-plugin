@@ -64,6 +64,7 @@ import { scanFolderPaths } from './fs-scan.ts';
 import { showFile } from './git-diff.ts';
 import {
   deletePrivateMeta,
+  isPrivateMetaKey,
   liftPrivateMetaFromYdoc,
   readPrivateMeta,
   writePrivateMeta,
@@ -224,6 +225,22 @@ export function decideReconcile(args: {
   return 'apply';
 }
 
+/** Yjs origin for the private-meta guard's own deletes, so it never
+ *  re-enters on its own transaction. */
+const PRIVATE_META_GUARD_ORIGIN = 'private-meta-guard';
+
+/**
+ * Rooms the HUB owns rather than the filesystem: the `ws:<workspaceId>`
+ * board room and every `task:<taskId>` body room (§3.3). They are never
+ * bound to a file, so a `sourceUrl` on one is by construction not ours —
+ * and unlike a bound doc they have no private-meta sidecar to outvote a
+ * forged value. Kept as a local prefix test rather than an import from
+ * task-projection.ts, which imports this module.
+ */
+export function isHubOwnedRoom(docId: string): boolean {
+  return docId.startsWith('ws:') || docId.startsWith('task:');
+}
+
 export class Rooms {
   private rooms = new Map<string, DocRoom>();
   private fileBindings = new Map<string, FileBinding>();
@@ -333,6 +350,15 @@ export class Rooms {
         const room = this.getOrCreate(docId);
         count++;
         const src = room.meta.sourceUrl;
+        // A hub-owned room is never file-bound (§3.3), so a sourceUrl on one
+        // can only have arrived from a peer's ydoc write. Refusing to bind
+        // here is the second, independent stop behind `guardPrivateMeta` —
+        // binding is what turns a stray meta key into "read (then overwrite)
+        // any file this process can reach".
+        if (src && isHubOwnedRoom(docId)) {
+          console.error(`[rooms] ${docId}: ignoring a sourceUrl on a server-owned hub room`);
+          continue;
+        }
         if (src && existsSync(src)) {
           if (contentKind(room.meta.type) === 'prose') {
             if (this.attachFile(docId, src).ok) rebound++;
@@ -2744,10 +2770,46 @@ export class Rooms {
     }
   }
 
+  /**
+   * Delete any private meta key a CONNECTED PEER writes into the doc.
+   *
+   * `initDocMeta` deliberately never puts sourceUrl / owner / workspaceRoot
+   * / producedBy in the CRDT (they describe the host machine, and Yjs sync
+   * is all-or-nothing), so a private key appearing in this map arrived over
+   * a websocket — from a share visitor as easily as from Bryan's browser.
+   * Left standing it is not merely noise: `getOrCreate` lifts private keys
+   * out of a loaded `.ydoc` as LEGACY state, and a room with no sidecar —
+   * every `ws:<id>` board room, every `task:<id>` body room, any doc never
+   * bound to a file — has nothing to outvote it. On the next load
+   * `hydrateFromDisk` would bind the room to the injected path, seed the
+   * fragment with that file's bytes, and wire the debounced write-back.
+   *
+   * One-directional by construction: it can only remove keys the server
+   * never writes, so its worst failure is a genuinely legacy doc that needs
+   * an explicit re-bind — never a lost edit.
+   */
+  private guardPrivateMeta(room: DocRoom): void {
+    const meta = room.ydoc.getMap('meta');
+    meta.observe((event, tr) => {
+      if (tr.origin === PRIVATE_META_GUARD_ORIGIN) return;
+      const injected = Array.from(event.keysChanged).filter(
+        (key) => isPrivateMetaKey(key) && meta.has(key),
+      );
+      if (injected.length === 0) return;
+      room.ydoc.transact(() => {
+        for (const key of injected) meta.delete(key);
+      }, PRIVATE_META_GUARD_ORIGIN);
+      console.error(
+        `[rooms] ${room.docId}: dropped peer-written private meta key(s): ${injected.join(', ')}`,
+      );
+    });
+  }
+
   private wireEvents(room: DocRoom): void {
     room.ydoc.on('update', () => {
       this.saveToDisk(room);
     });
+    this.guardPrivateMeta(room);
     // Code and diff docs have no prose fragment — the prose-fragment
     // auto-reanchor sweep below would find nothing and orphan every thread.
     // Run the flat-text twin instead: observe the raw `content` Y.Text and
