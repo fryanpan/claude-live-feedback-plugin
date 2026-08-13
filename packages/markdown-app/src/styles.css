@@ -933,6 +933,31 @@ body.hub-body {
 }
 
 /* --- activity view (exactly two filters — §3.9) --- */
+/* Uptime banner (deploy readiness — §3.12 commit 11): the 99% target
+   rendered where the after-the-fact review happens. */
+.hub-uptime {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 10px;
+  margin: 0 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  font-size: 14px;
+}
+.hub-uptime-ok {
+  border-color: color-mix(in srgb, #2e8b57 40%, var(--border));
+}
+.hub-uptime-miss {
+  border-color: color-mix(in srgb, #c0392b 55%, var(--border));
+}
+.hub-uptime-miss .hub-uptime-label {
+  color: #c0392b;
+}
+.hub-uptime-detail {
+  color: var(--fg-muted);
+}
 .hub-activity-filters {
   display: flex;
   gap: 6px;
