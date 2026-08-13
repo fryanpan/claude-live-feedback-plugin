@@ -20,7 +20,9 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ElementAnchor, Thread, User } from '@feedback/core';
+
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { workspaceRoomId } from '../src/task-projection.ts';
 import type { Task, TaskStoreEvent } from '../src/tasks.ts';
 
 const PERSON: User = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
@@ -357,6 +359,91 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       ).toBe(400);
       expect((await post(`/api/tasks/${task.id}/goal`, { author: AGENT })).status).toBe(400);
       expect((await post(`/api/tasks/${task.id}/goal`, { goal: 'g1' })).status).toBe(400);
+    });
+  });
+
+  // ── POST /api/tasks/:id/assignee ──────────────────────────────────────────
+  //
+  // §3.6 lists `task.assigned`, and until this route existed nothing could
+  // ever emit it: `assignee` was writable only at creation, so handing a task
+  // between the human and the agent — the single most common move on a board
+  // whose whole premise is that both work it — was unrepresentable. "The
+  // store has it" was not even true here; there was no way in.
+
+  describe('POST /api/tasks/:id/assignee', () => {
+    it('forwards the assignee + author, emits task.assigned, and the projection follows', async () => {
+      const wsId = await seedWorkspace();
+      const task = await seedTask(wsId); // defaults to 'agent'
+      expect(task.assignee).toBe('agent');
+      const events: TaskStoreEvent[] = [];
+      const off = handle.tasks.onEvent((e) => events.push(e));
+      try {
+        const res = await jj<{ ok: true; task: Task; changed: boolean }>(
+          await post(`/api/tasks/${task.id}/assignee`, { assignee: 'human', author: PERSON }),
+        );
+        expect(res.changed).toBe(true);
+        expect(res.task.assignee).toBe('human');
+        // Read the STORED effect back, not just the response body.
+        expect((await getTasks(wsId)).find((t) => t.id === task.id)?.assignee).toBe('human');
+
+        const assigned = events.filter((e) => e.type === 'task.assigned');
+        expect(assigned.length).toBe(1);
+        const ev = assigned[0] as Extract<TaskStoreEvent, { type: 'task.assigned' }>;
+        expect(ev.taskId).toBe(task.id);
+        expect(ev.from).toBe('agent');
+        expect(ev.to).toBe('human');
+        expect(ev.actor).toEqual({ id: PERSON.id, name: PERSON.name, kind: 'person' });
+
+        // The board room is what every browser and share visitor reads; a
+        // store-only change would be invisible there (§3.3).
+        const board = handle.rooms.get(workspaceRoomId(wsId));
+        expect(board).toBeDefined(); // positive control: the room exists at all
+        const projected = board?.ydoc.getMap('tasks').get(task.id) as
+          | { assignee?: string; title?: string }
+          | undefined;
+        expect(projected?.title).toBe(task.title); // positive control
+        expect(projected?.assignee).toBe('human');
+      } finally {
+        off();
+      }
+    });
+
+    it('a re-assignment to the same name changes nothing and emits nothing', async () => {
+      const wsId = await seedWorkspace();
+      const task = await seedTask(wsId, { assignee: 'human' });
+      const events: TaskStoreEvent[] = [];
+      const off = handle.tasks.onEvent((e) => events.push(e));
+      try {
+        // Positive control: a real change on this task DOES emit…
+        const moved = await jj<{ changed: boolean }>(
+          await post(`/api/tasks/${task.id}/assignee`, { assignee: 'agent', author: AGENT }),
+        );
+        expect(moved.changed).toBe(true);
+        expect(events.filter((e) => e.type === 'task.assigned').length).toBe(1);
+        // …and the no-op that follows does not.
+        const same = await jj<{ changed: boolean }>(
+          await post(`/api/tasks/${task.id}/assignee`, { assignee: 'agent', author: AGENT }),
+        );
+        expect(same.changed).toBe(false);
+        expect(events.filter((e) => e.type === 'task.assigned').length).toBe(1);
+      } finally {
+        off();
+      }
+    });
+
+    it('rejects an unknown task and the missing fields', async () => {
+      const wsId = await seedWorkspace();
+      const task = await seedTask(wsId);
+      expect(
+        (await post('/api/tasks/t-missing/assignee', { assignee: 'human', author: PERSON })).status,
+      ).toBe(404);
+      expect((await post(`/api/tasks/${task.id}/assignee`, { author: PERSON })).status).toBe(400);
+      expect((await post(`/api/tasks/${task.id}/assignee`, { assignee: 'human' })).status).toBe(
+        400,
+      );
+      expect(
+        (await post(`/api/tasks/${task.id}/assignee`, { assignee: '  ', author: PERSON })).status,
+      ).toBe(400);
     });
   });
 

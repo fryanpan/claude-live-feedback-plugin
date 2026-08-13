@@ -478,6 +478,14 @@ export interface DetailHandlers {
   onStatusSet: (task: HubTask, to: TaskStatus) => void;
   onTitleCommit: (task: HubTask, title: string) => void;
   onAnswer: (task: HubTask, text: string) => void;
+  onAssign: (task: HubTask, assignee: string) => void;
+}
+
+/** The hand-off toggle's other end. Named assignees (a specific agent) are
+ *  set from the tools; the board's one-tap gesture is the human/agent flip,
+ *  which is the hand-off that actually happens minute to minute. */
+export function otherAssignee(assignee: string): string {
+  return assignee === 'human' ? 'agent' : 'human';
 }
 
 export function renderTaskDetail(
@@ -537,7 +545,23 @@ export function renderTaskDetail(
     dd.textContent = v;
     meta.append(dt, dd);
   };
-  addMeta('Assignee', task.assignee);
+  // Assignee is the one meta row that is also a control — handing a task over
+  // is a gesture, not a fact to read (§3.6 task.assigned).
+  {
+    const dt = document.createElement('dt');
+    dt.textContent = 'Assignee';
+    const dd = document.createElement('dd');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'hub-assignee-btn';
+    btn.textContent = task.assignee;
+    const to = otherAssignee(task.assignee);
+    btn.title = `Assign to ${to}`;
+    btn.setAttribute('aria-label', `Assignee ${task.assignee} — assign to ${to}`);
+    btn.addEventListener('click', () => handlers.onAssign(task, to));
+    dd.append(btn);
+    meta.append(dt, dd);
+  }
   addMeta('Goal', task.goal);
   if (task.riskTier) addMeta('Risk', task.riskTier);
   if (task.dueAt !== undefined) addMeta('Due', new Date(task.dueAt).toLocaleDateString());

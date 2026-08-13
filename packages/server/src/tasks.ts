@@ -465,9 +465,7 @@ export function attachmentsSidecarPath(dataDir: string, workspaceId: string): st
  *
  * The §3.6 list is exhaustive by contract — anything that subscribes to this
  * feed (mirrors, cloud agent runtimes) sees nothing at all for a change that
- * doesn't emit an event. One §3.6 row has no store mutation yet and is
- * deliberately absent from this union until its mutation lands:
- * `task.assigned` (there is no assignment mutation to emit from).
+ * doesn't emit an event, so every row in the table has a mutation here.
  */
 export interface TaskCreatedEvent {
   type: 'task.created';
@@ -525,6 +523,23 @@ export interface TaskGateRefusedEvent {
   to: TaskStatus;
   riskTier: 'green' | 'yellow' | 'red';
   reason: 'risk-refused' | 'needs-confirmation';
+  actor: TaskActor;
+  ts: number;
+}
+
+/**
+ * §3.6's hand-off row. `assignee` was writable only at task creation, so the
+ * most ordinary move on a board whose premise is that a human and an agent
+ * both work it — "you take this one" — had no mutation, and this row could
+ * never be emitted. Carries both ends because the interesting fact is the
+ * hand-off direction, not the destination.
+ */
+export interface TaskAssignedEvent {
+  type: 'task.assigned';
+  workspaceId: string;
+  taskId: string;
+  from: string;
+  to: string;
   actor: TaskActor;
   ts: number;
 }
@@ -659,6 +674,7 @@ export type TaskStoreEvent =
   | TaskCreatedEvent
   | TaskTransitionedEvent
   | TaskGateRefusedEvent
+  | TaskAssignedEvent
   | TaskRegroupedEvent
   | DecisionAnsweredEvent
   | WorkspaceGoalUpdatedEvent
@@ -710,6 +726,16 @@ export type RenameTaskResult =
       ok: true;
       task: Task;
       /** False when the new title equals the old one — nothing was written. */
+      changed: boolean;
+    }
+  | { ok: false; error: 'not-found' };
+
+export type SetAssigneeResult =
+  | {
+      ok: true;
+      task: Task;
+      /** False when the new assignee equals the old one — no write, no event.
+       *  A hand-off to whoever already holds it is not a hand-off. */
       changed: boolean;
     }
   | { ok: false; error: 'not-found' };
@@ -1268,6 +1294,38 @@ export class TaskStore {
     task.title = title;
     task.updatedAt = Date.now();
     this.scheduleSave(task.workspaceId);
+    return { ok: true, task, changed: true };
+  }
+
+  /**
+   * Hand a task to someone else — 'human', 'agent', or a named identity.
+   * Emits `task.assigned` (§3.6) with BOTH ends, because the reviewable fact
+   * is the direction of the hand-off. Deliberately does NOT touch status:
+   * re-assigning is not progress, and conflating the two would let a hand-off
+   * slip past the transition gate.
+   */
+  setAssignee(
+    taskId: string,
+    assignee: string,
+    opts: { actor: { id: string; name: string; kind?: string } },
+  ): SetAssigneeResult {
+    const task = this.getTask(taskId);
+    if (!task) return { ok: false, error: 'not-found' };
+    const from = task.assignee;
+    if (from === assignee) return { ok: true, task, changed: false };
+    const ts = Date.now();
+    task.assignee = assignee;
+    task.updatedAt = ts;
+    this.scheduleSave(task.workspaceId);
+    this.emit({
+      type: 'task.assigned',
+      workspaceId: task.workspaceId,
+      taskId: task.id,
+      from,
+      to: assignee,
+      actor: { id: opts.actor.id, name: opts.actor.name, kind: classifyActor(opts.actor) },
+      ts,
+    });
     return { ok: true, task, changed: true };
   }
 

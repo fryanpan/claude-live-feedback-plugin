@@ -31,6 +31,7 @@ import {
 import {
   type SidebarDoc,
   type SidebarThread,
+  otherAssignee,
   renderActivity,
   renderBoard,
   renderDecisions,
@@ -141,6 +142,7 @@ function buildShell(root: HTMLElement, name: string): void {
           <dt>j / k</dt><dd>next / previous task</dd>
           <dt>o or Enter</dt><dd>open the focused task</dd>
           <dt>s</dt><dd>cycle the focused task's status</dd>
+          <dt>a</dt><dd>hand the focused task to the human / the agent</dd>
           <dt>?</dt><dd>toggle this help</dd>
         </dl>
       </div>
@@ -314,6 +316,7 @@ async function main(): Promise<void> {
       onStatusSet: (t, to) => void transitionTask(t, to),
       onTitleCommit: (t, title) => void renameTask(t, title),
       onAnswer: (t, text) => void answerDecision(t, text),
+      onAssign: (t, assignee) => void assignTask(t, assignee),
     });
   }
 
@@ -383,6 +386,14 @@ async function main(): Promise<void> {
       const unproven = res.data?.unproven;
       if (unproven) showToast('Marked without evidence — attach a commit or thread when you can');
     }
+  }
+
+  async function assignTask(task: HubTask, assignee: string): Promise<void> {
+    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/assignee`, 'POST', {
+      assignee,
+      author,
+    });
+    if (!res.ok) showToast('Assignment failed');
   }
 
   async function renameTask(task: HubTask, title: string): Promise<void> {
@@ -657,13 +668,15 @@ async function main(): Promise<void> {
         ev.key === 'j' ? Math.min(rows.length - 1, focusedIdx + 1) : Math.max(0, focusedIdx - 1);
       rows[next]?.focus();
       ev.preventDefault();
-    } else if ((ev.key === 'o' || ev.key === 's') && focusedIdx >= 0) {
+    } else if ((ev.key === 'o' || ev.key === 's' || ev.key === 'a') && focusedIdx >= 0) {
       const taskId = rows[focusedIdx]?.dataset.taskId;
       const task = taskId ? state.tasks.get(taskId) : undefined;
       if (!task) return;
       if (ev.key === 'o') {
         state.detailTaskId = task.id;
         renderDetail();
+      } else if (ev.key === 'a') {
+        void assignTask(task, otherAssignee(task.assignee));
       } else {
         void transitionTask(task, nextStatus(task.status));
       }

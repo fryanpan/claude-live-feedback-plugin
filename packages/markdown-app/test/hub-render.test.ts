@@ -262,6 +262,7 @@ describe('renderTaskDetail', () => {
       onStatusSet: vi.fn(),
       onTitleCommit: vi.fn(),
       onAnswer,
+      onAssign: vi.fn(),
     });
     const ta = root.querySelector('.hub-answer-form textarea') as HTMLTextAreaElement;
     ta.value = 'Go with option B, ship Thursday.';
@@ -285,6 +286,7 @@ describe('renderTaskDetail', () => {
       onStatusSet: vi.fn(),
       onTitleCommit: vi.fn(),
       onAnswer: vi.fn(),
+      onAssign: vi.fn(),
     });
     expect(root.querySelector('.hub-answer-form')).toBeNull();
     expect(root.querySelector('.hub-detail-answer')?.textContent).toContain('Option B');
@@ -297,8 +299,25 @@ describe('renderTaskDetail', () => {
       onStatusSet: vi.fn(),
       onTitleCommit: vi.fn(),
       onAnswer: vi.fn(),
+      onAssign: vi.fn(),
     });
     const a = root.querySelector('.hub-detail-body-link a') as HTMLAnchorElement;
     expect(a.getAttribute('href')).toBe(`/review/${encodeURIComponent(t.bodyDocId)}`);
+  });
+
+  it('the assignee row hands the task the OTHER way — a one-tap hand-off', () => {
+    const onAssign = vi.fn();
+    const t = task({ assignee: 'agent' });
+    renderTaskDetail(root, t, {
+      onClose: vi.fn(),
+      onStatusSet: vi.fn(),
+      onTitleCommit: vi.fn(),
+      onAnswer: vi.fn(),
+      onAssign,
+    });
+    const btn = root.querySelector('.hub-assignee-btn') as HTMLButtonElement;
+    expect(btn.textContent).toBe('agent'); // it still READS as the current value
+    btn.dispatchEvent(new Event('click', { bubbles: true }));
+    expect(onAssign).toHaveBeenCalledWith(expect.objectContaining({ id: t.id }), 'human');
   });
 });

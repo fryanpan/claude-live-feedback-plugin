@@ -1702,6 +1702,26 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           taskProjection.ensureWorkspace(res.task.workspaceId);
           return j(200, res);
         }
+        // assign_task (§3.6 task.assigned): hand a task between the human and
+        // the agent (or a named identity). Status is untouched — a hand-off
+        // is not progress, and routing it through the transition gate would
+        // make "you take this" require evidence.
+        const taskAssigneeMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/assignee$/);
+        if (taskAssigneeMatch && req.method === 'POST') {
+          const taskId = decodeURIComponent(taskAssigneeMatch[1] ?? '');
+          const body = await safeJson(req);
+          const assignee = typeof body?.assignee === 'string' ? body.assignee.trim() : '';
+          if (assignee.length === 0) return j(400, { error: 'assignee required' });
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const res = taskStore.setAssignee(taskId, assignee, { actor: author });
+          if (!res.ok) return j(404, res);
+          // A no-op emits nothing, so nothing would refresh the board room —
+          // harmless here (nothing changed) but the changed path is covered
+          // by the task.assigned event's own projection hook.
+          if (!res.changed) taskProjection.ensureWorkspace(res.task.workspaceId);
+          return j(200, res);
+        }
         // set_goal_list (§3.2 edit contract): replace the ordered board
         // sections. Structural validation happens HERE because the store
         // trusts its callers with shapes — a junk entry that reached the
