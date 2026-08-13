@@ -162,10 +162,34 @@ function parseLinks(
   return { ok: true, links, ignored };
 }
 
+/**
+ * The promotion `origin`, validated rather than cast.
+ *
+ * It used to be `body?.origin as Ref | undefined` — a cast, which checks
+ * nothing at runtime. Two holes, both reachable from one unauthenticated
+ * POST: a `url` origin skipped the http(s) scheme check that the identical
+ * ref in `links` gets (the whole reason that check exists is that a url ref
+ * reaches the DOM as an href), and `origin: null` persisted to disk and then
+ * threw in `refKey` on every backlink query — including the doc-open path,
+ * for every workspace, until someone hand-edited the JSON.
+ *
+ * `null` is read as "no origin" because clients spell an absent field that
+ * way and dropping it is harmless. A present-but-malformed origin 400s: it's
+ * payload, not annotation — unlike `links`, there is no good half to keep.
+ */
+function parseOrigin(raw: unknown): { ok: true; origin?: Ref } | { ok: false } {
+  if (raw === undefined || raw === null) return { ok: true };
+  if (!isValidRef(raw)) return { ok: false };
+  return { ok: true, origin: raw };
+}
+
 /** The 400 body for a ref a route refuses. Naming the accepted kinds turns a
  *  source dive into a re-send — the first outside caller of these routes had
  *  to read tasks.ts to discover which spellings existed. */
 const BAD_REF_ERROR = `links must be an array of valid refs (kind: ${REF_KINDS.join(' | ')}); a url ref must be http(s)`;
+
+/** Same rules, one ref, named for the field so the caller knows where to look. */
+const BAD_ORIGIN_ERROR = `origin must be a valid ref (kind: ${REF_KINDS.join(' | ')}); a url ref must be http(s)`;
 
 /** The anchor's display snippet, whichever anchor kind carries it — an
  *  orphan keeps its original's snippet. */
@@ -1574,6 +1598,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!needs.ok) return j(400, { error: "needs must be 'action' | 'decision'" });
           const links = parseLinks(body?.links);
           if (!links.ok) return j(400, { error: BAD_REF_ERROR });
+          const origin = parseOrigin(body?.origin);
+          if (!origin.ok) return j(400, { error: BAD_ORIGIN_ERROR });
           const res = taskStore.createTask(workspaceId, {
             title: title.trim(),
             body: body?.body as string | undefined,
@@ -1587,7 +1613,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               : undefined,
             dueAt: typeof body?.dueAt === 'number' ? Number(body.dueAt) : undefined,
             links: links.links,
-            origin: body?.origin as Ref | undefined,
+            origin: origin.origin,
             quote: body?.quote as string | undefined,
             // Optional: a task can be created by a UI with no session yet.
             // When it IS supplied, the created row is attributed (§3.6) —

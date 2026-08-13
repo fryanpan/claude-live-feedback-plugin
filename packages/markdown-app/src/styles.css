@@ -859,11 +859,16 @@ body.hub-body {
   background: var(--bg-hover);
   outline: none;
 }
-/* The risk dot has its own track so its absence doesn't shift the title
-   column — an empty `auto` track collapses to zero width, but the gap is
-   what would otherwise move. */
-.hub-task-row:not(:has(.hub-risk)) {
-  grid-template-columns: auto 0 minmax(0, 1fr) auto;
+/* The risk dot always occupies its track, tier or no tier (see `riskDot`).
+   A previous attempt collapsed the track with
+   `:not(:has(.hub-risk)) { grid-template-columns: auto 0 ... }` and dropped
+   the child instead — but auto-placement fills consecutive tracks, so the
+   title slid into the collapsed 0 track and rendered at zero width on every
+   row without a risk tier, which is most of them. Fixed width, never
+   conditional. */
+.hub-risk-slot {
+  flex: 0 0 auto;
+  width: 10px;
 }
 .hub-task-title {
   min-width: 0;

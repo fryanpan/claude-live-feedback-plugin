@@ -360,6 +360,20 @@ describe('classifyActor', () => {
     expect(classifyActor({ id: 'team-lead', name: 'Team Lead', kind: 'person' })).toBe('person');
   });
 
+  // The field is hand-populated by outside callers, so its casing is not ours
+  // to assume. An unrecognized `kind` falls through to the 'person' default —
+  // so `'Agent'` matching nothing would misfile a caller that DID declare
+  // itself, which is the original bug wearing a capital letter.
+  it('reads a declared agent kind regardless of case', async () => {
+    const { classifyActor } = await import('../src/activity.ts');
+    for (const kind of ['Agent', 'AGENT', 'aGeNt']) {
+      expect(classifyActor({ id: 'team-lead', name: 'Team Lead', kind })).toBe('agent');
+    }
+    // Positive control: a genuinely unknown kind is still a person, so the
+    // case-folding above isn't just a blanket "everything is an agent".
+    expect(classifyActor({ id: 'team-lead', name: 'Team Lead', kind: 'known' })).toBe('person');
+  });
+
   it('classifies a caller with no kind at all as an agent', async () => {
     const { classifyActor } = await import('../src/activity.ts');
     // Browser users always carry 'known' | 'anon'; a missing `kind` means the

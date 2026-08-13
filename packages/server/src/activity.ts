@@ -150,11 +150,16 @@ export function payloadDigest(input: string | undefined | null): string {
  *    agent only over-filters a view.
  */
 export function classifyActor(author: Pick<User, 'id' | 'name'> & { kind?: string }): ActorKind {
-  if (author.kind === 'agent') return 'agent';
+  // Case-folded because the field is hand-populated by outside callers, and
+  // `kind: 'Agent'` matching nothing would fall all the way through to the
+  // `person` default — reintroducing the exact misfiling this function was
+  // changed to fix, for a caller who did declare itself.
+  const kind = author.kind?.toLowerCase();
+  if (kind === 'agent') return 'agent';
   if (author.id === 'known-agent') return 'agent';
   if (author.id.startsWith('agent-')) return 'agent';
   if (author.name === 'Agent') return 'agent';
-  if (author.kind === 'person') return 'person';
+  if (kind === 'person') return 'person';
   if (author.kind == null) return 'agent';
   return 'person';
 }
