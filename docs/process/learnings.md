@@ -396,6 +396,34 @@ Technical discoveries that should persist across sessions for this project.
   answer must still CONTAIN, not only what it must not exceed.** Any
   validation phrased purely as an upper bound is satisfied by emptiness.
 
+## "The store has it" is not "the surface can show it"
+
+- **A reply to a resolved thread left the thread resolved, and the drawer's
+  default Open tab drops resolved threads entirely** (`filtered()` in
+  `threads.ts`), so a reviewer's reply three minutes after an agent resolved
+  was invisible to them. It was reported as **"comments seem to be going
+  missing"** — and a peer's first instinct was to check for data loss, which
+  there wasn't: `list_threads` had all 26 threads with every word. Nothing is more
+  corrosive to trust in a review surface than content that exists in the
+  store and cannot be reached from the UI, because the failure presents as
+  the worst possible bug (loss) while every backend check comes back clean.
+- **The fix belongs at the one choke point**: `schemaPostReply` has exactly
+  one caller (`Rooms.postComment`), and all three reply paths — browser REST,
+  MCP `post_reply`, widget — funnel through it. A person's reply reopens; an
+  agent's does not, because agents post closing notes ("done, removed it in
+  <sha>") after a human resolves and resurrecting a just-closed thread is its
+  own bug. `classifyActor` (activity.ts) already draws that line — reuse it
+  rather than inventing a second notion of "is this an agent".
+- **Residual, deliberately not fixed: the reverse ordering.** If the person's
+  reply lands and the agent resolves *afterwards*, the reply is hidden again.
+  The tempting guard — "don't let an agent resolve when the newest comment is
+  a person's" — describes the NORMAL case (human asks, agent fixes, agent
+  resolves), so it would block almost every legitimate resolve. A real fix
+  needs a `resolvedAt` and an "activity since resolve" display rule.
+- Status fields that gate visibility need an explicit way back IN, and the
+  test for one belongs at the route layer: `postComment` is reachable three
+  ways and the route is the layer no unit test covers.
+
 ## A touch gesture has TWO endings, and `pointercancel` is the common one
 
 - **The comment pill was dead on mobile after the first scroll**, because
