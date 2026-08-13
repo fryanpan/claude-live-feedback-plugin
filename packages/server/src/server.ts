@@ -189,6 +189,16 @@ const BAD_REF_ERROR = `links must be an array of valid refs (kind: ${REF_KINDS.j
 /** Same rules, one ref, named for the field so the caller knows where to look. */
 const BAD_ORIGIN_ERROR = `origin must be a valid ref (kind: ${REF_KINDS.join(' | ')}); a url ref must be http(s)`;
 
+/**
+ * The one doc every hub's feedback widget writes to.
+ *
+ * Deliberately NOT per-workspace: a comment on the hub UI is about the
+ * product, so it should reach the same agent from every hub rather than
+ * whoever happens to own the workspace you were standing in. The anchor's
+ * url carries which hub it came from.
+ */
+export const HUB_FEEDBACK_DOC_ID = 'lf-hub-feedback';
+
 /** The anchor's display snippet, whichever anchor kind carries it — an
  *  orphan keeps its original's snippet. */
 function anchorSnippetText(anchor: Anchor): string | undefined {
@@ -520,6 +530,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     webhooks,
     decorateDocMeta: withReviewUrl,
     ...(summarizer ? { summarizer } : {}),
+  });
+  // Materialize the shared hub-feedback doc at startup rather than letting
+  // the first widget connection conjure it. A room created by a `/y/<id>`
+  // connect has no title and no type, so it reads as a ghost in list_docs —
+  // and this one is meant to be found and watched by an agent that never
+  // visited a hub.
+  rooms.getOrCreate(HUB_FEEDBACK_DOC_ID, {
+    type: 'mockup',
+    title: 'Hub feedback (all workspaces)',
   });
   // The hub task store (plan §3.2/§3.3): server-owned workspaces + tasks,
   // persisted as per-workspace sidecars under <dataDir>/workspaces/.
@@ -2533,9 +2552,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               headers: { 'content-type': 'text/html; charset=utf-8' },
             });
           }
-          return new Response(renderHubShell(workspace.id, workspace.name), {
-            headers: { 'content-type': 'text/html; charset=utf-8' },
-          });
+          return new Response(
+            renderHubShell(workspace.id, workspace.name, { feedback: !visitor }),
+            { headers: { 'content-type': 'text/html; charset=utf-8' } },
+          );
         }
 
         // --- Markdown app (surface 1) ---
@@ -2851,10 +2871,38 @@ h1{font-size:1.25rem;margin:0 0 .5rem}p{color:#555;margin:0}
  * the browser tab is a workspace switcher. Everything dynamic renders
  * client-side from the ws:<id> ydoc projection + REST; the shell only names
  * the workspace and loads the bundle.
+ *
+ * `feedback` embeds the comment widget, pointed at ONE well-known doc
+ * (`HUB_FEEDBACK_DOC_ID`) rather than at a per-workspace one — feedback about
+ * the hub UI is about the product, not about the workspace you happened to be
+ * standing in, so it should reach the same place from every hub. The widget
+ * auto-captures `location` as the anchor url, so the comment already says
+ * which hub it came from; `view` adds the workspace NAME so the thread reads
+ * without anyone resolving an id.
+ *
+ * Declarative `<claude-feedback-widget>` rather than `FeedbackWidget.init` on
+ * purpose: a module script is deferred, so a plain inline script calling
+ * `init` would run before the module that defines it. The element upgrades on
+ * parse and reads its own attributes.
  */
-function renderHubShell(workspaceId: string, name: string): string {
+function renderHubShell(
+  workspaceId: string,
+  name: string,
+  opts: { feedback: boolean } = { feedback: false },
+): string {
   const safeName = escape(name);
   const safeId = escape(workspaceId);
+  // Deliberately NOT rendered for a share visitor. Every peer on a Yjs doc
+  // syncs the whole doc, so one shared feedback doc would hand every hub
+  // visitor every other workspace's feedback threads — including the hub
+  // paths and quoted UI text they were anchored to. Same lesson as the
+  // DocMeta sidecar: a field that must not reach a visitor cannot live in a
+  // CRDT they sync. Keeping the widget off their page keeps them off the doc.
+  const widget = opts.feedback
+    ? `
+    <script type="module" src="/widget.esm.js"></script>
+    <claude-feedback-widget doc-id="${escape(HUB_FEEDBACK_DOC_ID)}" view="${safeName}"></claude-feedback-widget>`
+    : '';
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -2865,7 +2913,7 @@ function renderHubShell(workspaceId: string, name: string): string {
   </head>
   <body class="hub-body">
     <div id="hub-root" data-workspace-id="${safeId}"></div>
-    <script type="module" src="/app/hub.js"></script>
+    <script type="module" src="/app/hub.js"></script>${widget}
   </body>
 </html>`;
 }
@@ -2992,6 +3040,11 @@ function buildLandingModel(
   };
 
   for (const meta of rooms.list()) {
+    // The shared hub-feedback doc is infrastructure, not an artifact someone
+    // put up for review: it exists on every install, from startup, and it
+    // would sit in "Ungrouped" forever inflating the artifact count. Still
+    // reachable at /review/<id> — hidden from the index, not from the server.
+    if (meta.docId === HUB_FEEDBACK_DOC_ID) continue;
     const threads = rooms.listThreads(meta.docId);
     const openCount = threads.filter((t) => t.status === 'open').length;
     const lastActivity = Math.max(
