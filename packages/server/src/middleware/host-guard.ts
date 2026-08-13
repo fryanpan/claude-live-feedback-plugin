@@ -190,6 +190,25 @@ export function shareScopeAllows(
       const seg = pathname.slice('/events/workspace/'.length);
       if (!seg.includes('/') && safeDecode(seg) === wsId) return true;
     }
+    // The two REST reads the hub page makes on load. Both were closed while
+    // the SAME facts rode the SSE feed above, so a visitor's page titled
+    // itself with the raw workspace id and its §2.7 presence strip showed no
+    // agents — with the visitor-redaction branch built for `attachments`
+    // (endpoint stripped) unreachable. The transport and the surface have to
+    // agree; the client swallows a non-ok, so they disagreed silently.
+    //   GET <ws>              workspace name + goal text (§3.3 in-contract)
+    //   GET <ws>/attachments  agent presence, redacted to PublicAttachment
+    // Bare DELETE and every mutation stay closed (method-checked here, and
+    // refused again at the route).
+    if (method === 'GET' && pathname.startsWith('/api/workspaces/')) {
+      const rest = pathname.slice('/api/workspaces/'.length);
+      const slash = rest.indexOf('/');
+      const seg = slash < 0 ? rest : rest.slice(0, slash);
+      if (safeDecode(seg) === wsId) {
+        const sub = slash < 0 ? '' : rest.slice(slash + 1);
+        if (sub === '' || sub === 'attachments') return true;
+      }
+    }
   }
 
   // Review page / Yjs websocket / SSE for an in-scope doc.

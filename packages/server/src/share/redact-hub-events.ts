@@ -12,13 +12,29 @@
  * Pure and total: unknown events pass through untouched, so this can sit in
  * every visitor stream's write path without a maintained event list. Only
  * hub-shaped events (task.* / decision.* / workspace.* / agent.* /
- * triage.*) are rewritten, and only two fields carry ids: `actor`
- * (TaskActor) and `task` (a full Task).
+ * triage.* / voice.*) are rewritten. Two fields carry ids — `actor`
+ * (TaskActor) and `task` (a full Task) — and `voice.request` carries the
+ * one field the §3.3 enumeration never granted: the utterance itself.
  */
 import { projectTask } from '../task-projection.ts';
 import type { Task } from '../tasks.ts';
 
 const HUB_EVENT = /^(task|decision|workspace|agent|triage|voice)\./;
+
+/**
+ * Fields dropped outright from a visitor's copy of a `voice.*` event.
+ *
+ * §3.3's visitor enumeration is exhaustive by construction — task
+ * titles/status/order, transitions with display names, evidence hashes,
+ * token usage, goal text, verbatim quote/answer fields — and voice arrived
+ * after it. A transcript is unbounded free speech about whatever the
+ * speaker is thinking ("hold the release until legal clears the
+ * acquisition question"), which makes it the highest-variance field on the
+ * feed and the last one to grant by default. What survives is enough for a
+ * visitor to see that someone spoke and which route took it: event, route,
+ * ts, and the display actor.
+ */
+const VOICE_PRIVATE_FIELDS = ['transcript', 'ack', 'context'] as const;
 
 /** `{id, name, kind}` → `{name, kind}` — the §3.3 display-only actor. */
 function displayActor(actor: unknown): unknown {
@@ -51,5 +67,8 @@ export function redactHubEventForVisitor<T extends { event: string }>(payload: T
   const out: { event: string } & Record<string, unknown> = { ...p };
   if (p.actor !== undefined) out.actor = displayActor(p.actor);
   if (isTaskShape(p.task)) out.task = projectTask(p.task);
+  if (payload.event.startsWith('voice.')) {
+    for (const key of VOICE_PRIVATE_FIELDS) delete out[key];
+  }
   return out as unknown as T;
 }
