@@ -14659,7 +14659,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           taskId: { type: "string" },
           goal: { type: "string", description: 'Goal/subgoal id, or "chores".' },
           position: { type: "number" },
-          riskTier: { type: "string", enum: ["green", "yellow", "red"] }
+          riskTier: { type: "string", enum: ["green", "yellow", "red"] },
+          batchId: {
+            type: "string",
+            description: "Echo the batchId from a goal-change re-triage request. It ties this placement to the goal edit that asked for it, so the activity view reads N moves as one edit instead of N unexplained regroupings."
+          }
         },
         required: ["taskId", "goal"]
       }
@@ -14701,7 +14705,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "set_workspace_goal",
-      description: "Edit the workspace's north-star goal statement — the text every triage decision is judged against. Emits workspace.goal_updated and requests a re-triage of all OPEN tasks from the live workspace agent (the result's `retriage.requested` says whether one was actually delivered — with no live agent attached the re-triage honestly does not happen and placements stay as they were). If the re-triage lands in YOUR channel, walk the taskIds with set_task_goal.",
+      description: "Edit the workspace's north-star goal statement — the text every triage decision is judged against. Emits workspace.goal_updated and requests a re-triage of all OPEN tasks from the live workspace agent (the result's `retriage.requested` says whether one was actually delivered — with no live agent attached the re-triage honestly does not happen and placements stay as they were). If the re-triage lands in YOUR channel, walk the taskIds with set_task_goal, passing the request's batchId on each so the moves read as one goal edit.",
       inputSchema: {
         type: "object",
         properties: {
@@ -15275,7 +15279,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...afterEnforce !== undefined ? { afterEnforce } : {},
           ...dueAt !== undefined ? { dueAt } : {},
           ...links !== undefined ? { links } : {},
-          ...quote !== undefined ? { quote } : {}
+          ...quote !== undefined ? { quote } : {},
+          author: AUTHOR
         });
         return ok(taskCreatedSummary(res.task));
       }
@@ -15289,7 +15294,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...needs !== undefined ? { needs } : {},
           ...goal !== undefined ? { goal } : {},
           ...dueAt !== undefined ? { dueAt } : {},
-          ...links !== undefined ? { links } : {}
+          ...links !== undefined ? { links } : {},
+          author: AUTHOR
         });
         return ok({
           ...taskCreatedSummary(res.task),
@@ -15336,12 +15342,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         });
       }
       case "set_task_goal": {
-        const { taskId, goal, position, riskTier } = a;
+        const { taskId, goal, position, riskTier, batchId } = a;
         const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/goal`, {
           goal,
           author: AUTHOR,
           ...position !== undefined ? { position } : {},
-          ...riskTier !== undefined ? { riskTier } : {}
+          ...riskTier !== undefined ? { riskTier } : {},
+          ...batchId !== undefined ? { batchId } : {}
         });
         return ok({ taskId, goal: res.task.goal, order: res.task.order, changed: res.changed });
       }
@@ -15545,8 +15552,10 @@ async function emitHubChannelMessage(event, rawPayload) {
       break;
     }
     case "triage.requested":
-      body = p.kind === "goal-retriage" ? `[triage.requested] goal changed — re-triage ${p.taskIds?.length ?? "?"} open task(s) with set_task_goal` : `[triage.requested] place task ${p.taskId} against the goal (set_task_goal)`;
+      body = p.kind === "goal-retriage" ? `[triage.requested] goal changed — re-triage ${p.taskIds?.length ?? "?"} open task(s) with set_task_goal${p.batchId ? `, passing batchId "${p.batchId}" on each` : ""}` : `[triage.requested] place task ${p.taskId} against the goal (set_task_goal)`;
       break;
+    case "workspace.retriaged":
+      return;
     case "agent.attached":
     case "agent.detached":
       body = `[${event}] ${p.agentId ?? "?"}`;

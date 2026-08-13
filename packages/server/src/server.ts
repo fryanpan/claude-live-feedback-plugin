@@ -1562,6 +1562,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             links: links.links,
             origin: body?.origin as Ref | undefined,
             quote: body?.quote as string | undefined,
+            // Optional: a task can be created by a UI with no session yet.
+            // When it IS supplied, the created row is attributed (§3.6) —
+            // "who put this here" is the first question of every triage.
+            actor: authorFor(body?.author) ?? undefined,
           });
           if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
           return j(200, { task: res.task });
@@ -1649,10 +1653,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           ) {
             return j(400, { error: 'riskTier must be green | yellow | red' });
           }
+          const batchId = body?.batchId;
+          if (batchId !== undefined && typeof batchId !== 'string') {
+            return j(400, { error: 'batchId must be a string' });
+          }
           const res = taskStore.setTaskGoal(taskId, goal, {
             actor: author,
             position: typeof body?.position === 'number' ? Number(body.position) : undefined,
             riskTier,
+            batchId,
           });
           if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
           // A confirm-in-place (changed:false) mutates gated fields
@@ -1769,6 +1778,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             links: promoteLinks.links,
             origin: { kind: 'thread', docId, threadId },
             ...(quote !== undefined ? { quote } : {}),
+            actor: authorFor(body?.author) ?? undefined,
           });
           if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
           return j(200, { task: res.task });

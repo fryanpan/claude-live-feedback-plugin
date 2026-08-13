@@ -286,15 +286,19 @@ describe('task store events + audit log', () => {
       store.transition(created.task.id, 'in-progress', { actor: AGENT });
       store.setWorkspaceGoal(ws.id, 'Ship the search, fast.', { actor: PERSON });
       const lines = readAudit(dataDir, ws.id);
+      // A goal edit with an open task to re-place writes TWO rows: the edit
+      // itself, then the batched re-triage it asks for (the request rides
+      // SSE only, so the row is the log's only record that it happened).
       expect(lines.map((l) => l.event)).toEqual([
         'task.created',
         'task.transitioned',
         'workspace.goal_updated',
+        'workspace.retriaged',
       ]);
       // The audit line carries the same payload the subscriber saw.
       expect(lines[1]?.taskId).toBe(created.task.id);
       expect(lines[1]?.to).toBe('in-progress');
-      expect(events).toHaveLength(3);
+      expect(events).toHaveLength(4);
     });
 
     it('a refused mutation appends nothing (the creation lines are the positive control)', () => {
