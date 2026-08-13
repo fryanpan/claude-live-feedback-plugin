@@ -346,6 +346,91 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
       expect((await pub(`/events/workspace/${hubId}`, docCookie)).status).toBe(403);
       expect((await pub(`/events/workspace/${hubId}`)).status).toBe(401);
     });
+
+    // Voice landed AFTER the commit-8 share slice, and §3.3's enumeration of
+    // what a visitor may see is exhaustive by construction — it lists goal
+    // text and verbatim quote/answer fields, never the transcript of
+    // whatever Bryan happens to say into his own board. The utterance is
+    // unbounded free text about anything he is thinking; it does not get to
+    // extend the contract by arriving later.
+    it('never puts a voice transcript on a visitor stream (absence)', async () => {
+      const stream = await pub(`/events/workspace/${hubId}`, hubCookie);
+      expect(stream.status).toBe(200);
+      const trigger = post(`/api/workspaces/${hubId}/voice`, {
+        transcript: 'hold the release until legal clears the acquisition question',
+        author: PERSON,
+      });
+      const text = await readSseUntil(stream, (t) => t.includes('voice.request'));
+      expect((await trigger).status).toBe(200);
+      const payload = sseData(text, 'voice.request');
+      // Positive control: the event itself DOES reach the visitor — someone
+      // spoke, and the route is visible…
+      expect(payload).not.toBeNull();
+      expect(payload?.route).toBeDefined();
+      expect((payload?.actor as Record<string, unknown>).name).toBe('Jordan');
+      // …but the words are not.
+      expect(payload?.transcript).toBeUndefined();
+      expect(payload?.ack).toBeUndefined();
+      expect(payload?.context).toBeUndefined();
+    });
+
+    it('the OWNER stream still carries the transcript (positive control)', async () => {
+      const stream = await local(`/events/workspace/${hubId}`);
+      expect(stream.status).toBe(200);
+      const trigger = post(`/api/workspaces/${hubId}/voice`, {
+        transcript: 'open the task about the device re-run',
+        author: PERSON,
+      });
+      const text = await readSseUntil(stream, (t) => t.includes('voice.request'));
+      expect((await trigger).status).toBe(200);
+      const payload = sseData(text, 'voice.request');
+      expect(payload?.transcript).toBe('open the task about the device re-run');
+    });
+  });
+
+  // §2.7's ambient-awareness strip and the page title are the two REST reads
+  // the hub client makes on load. Both were outside share scope, so a
+  // visitor's page titled itself with the raw workspace id and showed no
+  // agents at all — while the same records rode their SSE feed. The two
+  // doors have to agree; `fetchJson` swallows a non-ok, so the disagreement
+  // was silent.
+  describe('the hub page’s own REST reads are in scope', () => {
+    it('serves the workspace record to a workspace visitor, refuses a doc visitor', async () => {
+      const r = await pub(`/api/workspaces/${hubId}`, hubCookie);
+      expect(r.status).toBe(200);
+      const { workspace } = (await r.json()) as { workspace: { name: string; goal: string } };
+      expect(workspace.name).toBe('search-revamp'); // the page title, not the id
+      expect(workspace.goal).toBe('Ship the new search.'); // goal text is in-contract
+      expect((await pub(`/api/workspaces/${hubId}`, docCookie)).status).toBe(403);
+      expect((await pub(`/api/workspaces/${hubId}`)).status).toBe(401);
+    });
+
+    it('serves agent presence redacted — no endpoint — with the owner’s copy as the control', async () => {
+      const att = await post(`/api/workspaces/${hubId}/attachments`, {
+        agentId: 'agent-search-revamp',
+        runtime: 'webhook',
+        endpoint: 'https://agents.internal.example/hooks/search-revamp',
+        capabilities: ['tasks.write'],
+      });
+      expect(att.status).toBe(200);
+
+      const owner = (await (await local(`/api/workspaces/${hubId}/attachments`)).json()) as {
+        attachments: Array<Record<string, unknown>>;
+      };
+      expect(owner.attachments[0]?.endpoint).toBe(
+        'https://agents.internal.example/hooks/search-revamp',
+      );
+
+      const r = await pub(`/api/workspaces/${hubId}/attachments`, hubCookie);
+      expect(r.status).toBe(200);
+      const seen = (await r.json()) as { attachments: Array<Record<string, unknown>> };
+      // Positive control: the visitor really sees the agent…
+      expect(seen.attachments[0]?.agentId).toBe('agent-search-revamp');
+      expect(seen.attachments[0]?.state).toBeDefined();
+      // …and never where it lives.
+      expect(seen.attachments[0]?.endpoint).toBeUndefined();
+      expect((await pub(`/api/workspaces/${hubId}/attachments`, docCookie)).status).toBe(403);
+    });
   });
 
   describe('visitors are READ-ONLY on the gate', () => {

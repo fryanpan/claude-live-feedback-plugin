@@ -85,24 +85,29 @@ describe('redactHubEventForVisitor', () => {
     expect(redactHubEventForVisitor(payload)).toBe(payload);
   });
 
-  it('redacts the voice.request actor (the transcript itself is in-contract)', () => {
+  it('drops the voice transcript, ack and context — §3.3 never enumerated them', () => {
     const out = redactHubEventForVisitor({
       event: 'voice.request',
       workspaceId: 'w-1',
-      transcript: 'rework these into different groupings',
+      transcript: 'hold the release until legal clears the acquisition question',
       route: 'agent',
-      ack: 'Heard: "rework these into different groupings". Sent to the workspace agent.',
+      ack: 'Heard: "hold the release…". Sent to the workspace agent.',
+      context: { surface: 'hub' },
       actor: { id: 'known-jordan', name: 'Jordan', kind: 'person' },
       ts: 11,
     });
-    // Positive control: the payload survives redaction intact…
+    // Positive control: a visitor still sees that someone spoke and which
+    // route took it, with a display-only actor like every other hub event.
     expect(out.event).toBe('voice.request');
-    expect(out.transcript).toBe('rework these into different groupings');
-    // …and the actor is display-only, like every other hub event.
+    expect(out.route).toBe('agent');
     expect(out.actor as unknown as Record<string, unknown>).toEqual({
       name: 'Jordan',
       kind: 'person',
     });
+    // The words themselves are not in the contract.
+    expect(out.transcript).toBeUndefined();
+    expect(out.ack).toBeUndefined();
+    expect(out.context).toBeUndefined();
   });
 
   it('redacts the goal-retriage actor on triage.requested', () => {
