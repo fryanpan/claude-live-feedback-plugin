@@ -7,18 +7,25 @@ content is public-record forever (PR descriptions and commits can't be removed).
 This gate fires at push time so a leak can be caught and fixed before that.
 
 Two sources of patterns:
-1. **Registry**: top-level keys under `projects:` in the repo's `registry.yaml`
-   (or, if not present, the fleet registry at `~/dev/ai-project-support/registry.yaml`).
-   When a new project is added to the registry, its name is automatically protected.
-2. **Denylist**: hand-curated patterns at `~/.config/conductor/scrub-denylist.txt`.
-   One pattern per line. Plain strings match literally (case-insensitive). Prefix
-   with `/` for a regex. Lines starting with `#` are comments.
+1. **Registry**: top-level keys under `projects:` in the repo's own
+   `registry.yaml`, else the fleet registry (see REGISTRY_CANDIDATES). When a
+   new project is added to the registry, its name is automatically protected.
+2. **Denylist**: hand-curated patterns (see DENYLIST_CANDIDATES). One pattern
+   per line. Plain strings match literally (case-insensitive). Prefix with `/`
+   for a regex. Lines starting with `#` are comments.
+
+`SCRUB_REGISTRY` / `SCRUB_DENYLIST` point either source elsewhere. They are
+AUTHORITATIVE: they replace the whole search for that source, including the
+repo-local registry.yaml. A source that was expected and did not resolve is a
+hard failure (exit 2) — see `decide_sources` for what "expected" means.
 
 Usage:
   scrub-check.py file [file...]            # scan named files
   scrub-check.py --diff-range A..B          # scan files changed in range
   scrub-check.py --staged                   # scan files in git index
   scrub-check.py --scan-all-tracked         # scan every tracked file (audit)
+
+This tool does NOT read stdin; piping a diff at it is an error, not a scan.
 
 Exit codes: 0 = clean, 1 = leaks found, 2 = setup error.
 
@@ -31,7 +38,7 @@ import os
 import re
 import subprocess
 import sys
-from typing import List, Optional, Set, Tuple
+from typing import Dict, List, NamedTuple, Optional, Set, Tuple
 
 # Both pattern sources are CANDIDATE LISTS, current location first.
 #
@@ -48,40 +55,49 @@ from typing import List, Optional, Set, Tuple
 # would let the self-test silently pass against the real fleet config, which
 # is the same "I scanned something, just not what you think" failure this
 # whole change exists to remove.
+REGISTRY_OVERRIDE = os.environ.get("SCRUB_REGISTRY")
+DENYLIST_OVERRIDE = os.environ.get("SCRUB_DENYLIST")
+
 REGISTRY_CANDIDATES = (
-    [os.environ["SCRUB_REGISTRY"]]
-    if os.environ.get("SCRUB_REGISTRY")
+    [REGISTRY_OVERRIDE]
+    if REGISTRY_OVERRIDE
     else [
         os.path.expanduser("~/dev/ai-team-lead/registry.yaml"),
         os.path.expanduser("~/dev/ai-project-support/registry.yaml"),
     ]
 )
 DENYLIST_CANDIDATES = (
-    [os.environ["SCRUB_DENYLIST"]]
-    if os.environ.get("SCRUB_DENYLIST")
+    [DENYLIST_OVERRIDE]
+    if DENYLIST_OVERRIDE
     else [
         os.path.expanduser("~/.config/team-lead/scrub-denylist.txt"),
         os.path.expanduser("~/.config/conductor/scrub-denylist.txt"),
     ]
 )
 
-# Collected at import, printed by main() — resolving at import keeps the
-# module-level constants other functions read, but a warning printed on
-# `--help` would be noise.
-_SOURCE_WARNINGS: List[str] = []
+# What each source tried, for the message when it comes up empty. NOT a
+# decision input: a source can fail to resolve and be irrelevant (the fleet
+# registry, in a repo that carries its own registry.yaml). Deciding off
+# "something warned" conflates "missing" with "not needed".
+_TRIED: Dict[str, List[str]] = {}
+
+# One spelling of "not found", everywhere: None. The first version of this
+# resolver had two — `None` from `_resolve_source` and "a path that doesn't
+# exist" from the old constants — and the two guards downstream each picked a
+# different one, which is how the stranger-clone escape hatch became
+# unreachable while looking correct.
 
 
 def _resolve_source(label: str, candidates: List[Optional[str]]) -> Optional[str]:
-    """First candidate that exists on disk, or None with a warning recorded."""
+    """First candidate that exists on disk, else None."""
     for path in candidates:
         if path and os.path.isfile(path):
             return path
-    tried = ", ".join(p for p in candidates if p) or "(nothing configured)"
-    _SOURCE_WARNINGS.append(f"no {label} found — tried: {tried}")
+    _TRIED[label] = [p for p in candidates if p]
     return None
 
 
-FLEET_REGISTRY = _resolve_source("fleet registry", REGISTRY_CANDIDATES)
+FLEET_REGISTRY = _resolve_source("registry", REGISTRY_CANDIDATES)
 DENYLIST_PATH = _resolve_source("denylist", DENYLIST_CANDIDATES)
 
 # Text file extensions we scan. Everything else is skipped (binaries, lockfiles).
@@ -136,14 +152,71 @@ def main_repo_name() -> Optional[str]:
 
 
 def find_registry() -> Optional[str]:
-    """Local registry.yaml at repo root, else fleet fallback."""
+    """The registry to scan against: override, else repo-local, else fleet.
+
+    The override comes FIRST, ahead of the repo-local `registry.yaml`.
+    Otherwise `SCRUB_REGISTRY` means "authoritative except in repos that carry
+    their own registry" — and those are exactly the repos where it matters.
+    A self-test that points at a fixture would silently read the real fleet
+    registry, find none of its planted names, and report clean: a positive
+    control scanning the wrong data, which is the failure the authoritative
+    override exists to prevent.
+    """
+    if REGISTRY_OVERRIDE:
+        return FLEET_REGISTRY  # already existence-checked by _resolve_source
     root = repo_root()
     if root:
         local = os.path.join(root, "registry.yaml")
         if os.path.isfile(local):
             return local
-    # Already existence-checked by _resolve_source.
     return FLEET_REGISTRY
+
+
+class SourceDecision(NamedTuple):
+    verdict: str          # "scan" | "skip" | "refuse"
+    missing: List[str]
+    strict: bool          # is this machine expected to be configured?
+
+
+def decide_sources(
+    registry: Optional[str],
+    fleet_registry: Optional[str],
+    denylist: Optional[str],
+    require_sources: bool,
+) -> SourceDecision:
+    """Whether we have enough to scan, told apart from whether we should refuse.
+
+    Pure, so the table test can reach every combination — including the ones no
+    env override can produce, because an authoritative override suppresses the
+    repo-local registry lookup by design. That gap is exactly where the second
+    resolver bug lived: a machine with no fleet config, in a repo that tracks
+    its own `registry.yaml`, had every push refused with a message about paths
+    that were never its owner's. Any branch reachable only in the field needs a
+    seam like this one, or it is untested by construction.
+
+    `strict` — "this machine is expected to be configured" — is inferred from
+    the MACHINE-level sources only. A repo-local registry.yaml deliberately does
+    not count: it arrives with the clone, so counting it would read every
+    stranger as a fleet machine with a broken install.
+    """
+    missing = []
+    if registry is None:
+        missing.append("registry")
+    if denylist is None:
+        missing.append("denylist")
+
+    strict = fleet_registry is not None or denylist is not None or require_sources
+
+    if not missing:
+        return SourceDecision("scan", missing, strict)
+    if strict:
+        return SourceDecision("refuse", missing, strict)
+    if registry is None:
+        # Nothing at all, and nothing was expected: a stranger's clone.
+        return SourceDecision("skip", missing, strict)
+    # A repo-local registry and nothing else: fewer patterns than a fleet
+    # machine has, but real ones. Scan with what we've got.
+    return SourceDecision("scan", missing, strict)
 
 
 def load_project_names(registry_path: Optional[str]) -> Set[str]:
@@ -356,46 +429,42 @@ def main() -> int:
     if not files:
         return 0
 
-    # A source that was EXPECTED and didn't resolve fails the push. The old
-    # guard checked "no patterns at all", which is one notch too low: with the
-    # registry path stale and the denylist present, the gate compiled 15
-    # patterns, looked configured, and never ran the project-name half.
-    #
-    # "Expected" is inferred rather than declared: if either source resolved,
-    # this is a fleet machine and both are expected, so a missing one is a
-    # broken install. If neither resolved, this is a stranger's clone of a
-    # public repo with no fleet config to be missing — say so and get out of
-    # the way. `SCRUB_REQUIRE_SOURCES=1` turns that soft case hard.
     registry = find_registry()
-    resolved = sum(1 for s in (registry, DENYLIST_PATH) if s)
+    decision = decide_sources(
+        registry=registry,
+        fleet_registry=FLEET_REGISTRY,
+        denylist=DENYLIST_PATH,
+        require_sources=os.environ.get("SCRUB_REQUIRE_SOURCES") == "1",
+    )
 
-    if resolved == 0 and os.environ.get("SCRUB_REQUIRE_SOURCES") != "1":
+    if decision.verdict == "refuse":
+        print("[scrub-check] pattern source missing — refusing to pass:", file=sys.stderr)
+        for label in decision.missing:
+            tried = ", ".join(_TRIED.get(label, [])) or "(nothing configured)"
+            print(f"  no {label} found — tried: {tried}", file=sys.stderr)
+        print(
+            "\n[scrub-check] Another source resolved, so this machine is expected to have\n"
+            "  them all. A half-configured gate scans with half its patterns and still\n"
+            "  exits 0, which is how this went unnoticed for weeks. Fix the path or\n"
+            "  restore the file. Override for one push with SCRUB_SKIP=1.",
+            file=sys.stderr,
+        )
+        return 2
+
+    if decision.verdict == "skip":
         print(
             "[scrub-check] no pattern sources on this machine — nothing to scan against.",
             file=sys.stderr,
         )
-        for w in _SOURCE_WARNINGS:
-            print(f"[scrub-check]   {w}", file=sys.stderr)
         return 0
-
-    if _SOURCE_WARNINGS:
-        print("[scrub-check] pattern source missing — refusing to pass:", file=sys.stderr)
-        for w in _SOURCE_WARNINGS:
-            print(f"  {w}", file=sys.stderr)
-        print(
-            "\n[scrub-check] The other source resolved, so this machine is expected to have\n"
-            "  both. A half-configured gate scans with half its patterns and still exits 0,\n"
-            "  which is how this went unnoticed for weeks. Fix the path or restore the file.\n"
-            "  Override for one push with SCRUB_SKIP=1.",
-            file=sys.stderr,
-        )
-        return 2
 
     project_names = load_project_names(registry)
     denylist = load_denylist()
     patterns = build_patterns(project_names, denylist)
 
     if not patterns:
+        if not decision.strict:
+            return 0
         print(
             "[scrub-check] sources resolved but compiled zero patterns — refusing to pass.",
             file=sys.stderr,
