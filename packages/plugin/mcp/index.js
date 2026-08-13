@@ -13754,7 +13754,7 @@ function suggestionAuthor() {
 }
 var server = new Server({
   name: "claude-live-feedback",
-  version: "0.1.7"
+  version: "0.1.8"
 }, {
   capabilities: {
     tools: {},
