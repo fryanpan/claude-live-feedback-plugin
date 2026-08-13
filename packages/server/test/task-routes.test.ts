@@ -358,10 +358,14 @@ describe('hub workspace + task routes', () => {
         // The author param was forwarded, not dropped: the emitted event
         // names the actor and classifies them.
         expect(events).toHaveLength(1);
-        expect(events[0]?.type).toBe('workspace.goal_updated');
-        expect(events[0]?.actor).toEqual({ id: 'known-bryan', name: 'Bryan', kind: 'person' });
-        expect(events[0]?.oldGoal).toBe('Original goal.');
-        expect(events[0]?.newGoal).toBe('Revised goal.');
+        const e = events[0];
+        // Narrow the union — the assertion is the same, the throw carries it.
+        if (e?.type !== 'workspace.goal_updated') {
+          throw new Error(`expected workspace.goal_updated, got ${e?.type}`);
+        }
+        expect(e.actor).toEqual({ id: 'known-bryan', name: 'Bryan', kind: 'person' });
+        expect(e.oldGoal).toBe('Original goal.');
+        expect(e.newGoal).toBe('Revised goal.');
       } finally {
         off();
       }

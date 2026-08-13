@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -228,9 +229,77 @@ export type TriageRequest =
  */
 export type TriageDelivery = (req: TriageRequest) => boolean;
 
-/** Store-level events. The SSE/channel transport and the events.jsonl audit
- *  log (a later commit) subscribe via `onEvent`. */
-export interface TaskStoreEvent {
+/**
+ * Store-level events (plan §3.6). The SSE transport subscribes via `onEvent`;
+ * every emitted event is ALSO appended to the per-workspace events.jsonl
+ * audit log at the emit choke point, so the audit log can never disagree
+ * with what subscribers saw.
+ *
+ * The §3.6 list is exhaustive by contract — anything that subscribes to this
+ * feed (mirrors, cloud agent runtimes) sees nothing at all for a change that
+ * doesn't emit an event. Two §3.6 rows have no store mutation yet and are
+ * deliberately absent from this union until their mutation lands:
+ * `task.assigned` (no assignment mutation until the MCP-tools commit) and
+ * `workspace.retriaged` (emitted when the attached agent's re-triage
+ * placements land, which needs set_task_goal).
+ */
+export interface TaskCreatedEvent {
+  type: 'task.created';
+  workspaceId: string;
+  taskId: string;
+  /** The full task at creation time (per §3.6: task, goal, assignee,
+   *  triagedAgainst — the latter three lifted out for cheap filtering). */
+  task: Task;
+  goal: string;
+  assignee: string;
+  triagedAgainst?: { goalId: string; goal: string; ts: number };
+  ts: number;
+}
+
+export interface TaskTransitionedEvent {
+  type: 'task.transitioned';
+  workspaceId: string;
+  taskId: string;
+  from: TaskStatus;
+  to: TaskStatus;
+  actor: TaskActor;
+  note?: string;
+  evidence?: TaskEvidence;
+  /** What the task cost in tokens (agent-reported at done). */
+  usage?: { inputTokens: number; outputTokens: number };
+  /** A forward move with no evidence attached — allowed, flagged (§7.1). */
+  unproven: boolean;
+  ts: number;
+}
+
+export interface TaskRegroupedEvent {
+  type: 'task.regrouped';
+  workspaceId: string;
+  taskId: string;
+  fromGoal: string;
+  toGoal: string;
+  /** The task's position in its new goal. */
+  order: number;
+  actor: TaskActor;
+  /** Set when this move is one member of a batched goal-list edit — it
+   *  references the parent workspace.goals_changed event's batchId. */
+  partOf?: string;
+  ts: number;
+}
+
+export interface DecisionAnsweredEvent {
+  type: 'decision.answered';
+  workspaceId: string;
+  taskId: string;
+  /** The VERBATIM answer text (§3.6). */
+  answer: string;
+  actor: TaskActor;
+  /** The decision task's links — a ready-made propagation checklist. */
+  links: Ref[];
+  ts: number;
+}
+
+export interface WorkspaceGoalUpdatedEvent {
   type: 'workspace.goal_updated';
   workspaceId: string;
   oldGoal: string;
@@ -238,6 +307,31 @@ export interface TaskStoreEvent {
   actor: TaskActor;
   ts: number;
 }
+
+export interface WorkspaceGoalsChangedEvent {
+  type: 'workspace.goals_changed';
+  workspaceId: string;
+  /** Batch key: member task.regrouped events carry it as `partOf`. */
+  batchId: string;
+  /** 'reorder' = same goals, new order (the largest single-gesture priority
+   *  change the board offers); 'edit' = add/remove/retitle/dueAt changes.
+   *  Deliberately NO re-triage fires either way (§3.2). */
+  kind: 'reorder' | 'edit';
+  oldGoals: WorkspaceGoal[];
+  newGoals: WorkspaceGoal[];
+  actor: TaskActor;
+  /** Open tasks whose goal id disappeared, moved to Chores. */
+  movedToChores: string[];
+  ts: number;
+}
+
+export type TaskStoreEvent =
+  | TaskCreatedEvent
+  | TaskTransitionedEvent
+  | TaskRegroupedEvent
+  | DecisionAnsweredEvent
+  | WorkspaceGoalUpdatedEvent
+  | WorkspaceGoalsChangedEvent;
 
 export type SetWorkspaceGoalResult =
   | {
@@ -255,6 +349,22 @@ export type SetWorkspaceGoalResult =
     }
   | { ok: false; error: 'workspace-not-found' };
 
+export type AnswerDecisionResult =
+  | { ok: true; task: Task }
+  | { ok: false; error: 'not-found' | 'not-a-decision' };
+
+export type SetGoalListResult =
+  | {
+      ok: true;
+      workspace: HubWorkspace;
+      /** False when the new list deep-equals the old — no event, no moves. */
+      changed: boolean;
+      /** Open tasks whose goal or subgoal id disappeared, moved to Chores —
+       *  reported so the caller can re-place them (§3.2 edit contract). */
+      movedToChores: string[];
+    }
+  | { ok: false; error: 'workspace-not-found' | 'reserved-goal-id' | 'duplicate-goal-id' };
+
 export interface ListTasksFilter {
   goal?: string;
   status?: TaskStatus;
@@ -271,6 +381,12 @@ interface WorkspaceState {
  *  contract path rather than a re-implementation of it. */
 export function tasksSidecarPath(dataDir: string, workspaceId: string): string {
   return join(dataDir, 'workspaces', `${workspaceId}.tasks.json`);
+}
+
+/** Where a workspace's append-only event audit log lives (plan §3.6: "the
+ *  event log is the audit trail"). Exported so tests assert the real path. */
+export function eventsLogPath(dataDir: string, workspaceId: string): string {
+  return join(dataDir, 'workspaces', `${workspaceId}.events.jsonl`);
 }
 
 function cryptoId(prefix: string): string {
@@ -310,12 +426,35 @@ export class TaskStore {
   }
 
   private emit(event: TaskStoreEvent): void {
+    // Audit FIRST, at the emit choke point: "an event was emitted" and "the
+    // audit log has it" are the same fact by construction (§3.6), so the log
+    // can never disagree with what subscribers saw.
+    this.appendAudit(event);
     for (const listener of this.eventListeners) {
       try {
         listener(event);
       } catch (err) {
         console.error('[tasks] event listener threw:', err);
       }
+    }
+  }
+
+  /** Append one JSON line to the per-workspace events.jsonl. Shaped exactly
+   *  like the SSE payload (`event` key, not `type`) so the two records are
+   *  the same bytes-modulo-transport. Synchronous append — an event either
+   *  reaches both the log and the listeners, or (I/O failure, logged loudly)
+   *  the listeners still fire: delivery beats bookkeeping. */
+  private appendAudit(event: TaskStoreEvent): void {
+    try {
+      const dir = join(this.dataDir, 'workspaces');
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      const { type, ...rest } = event;
+      appendFileSync(
+        eventsLogPath(this.dataDir, event.workspaceId),
+        `${JSON.stringify({ event: type, ...rest })}\n`,
+      );
+    } catch (err) {
+      console.error('[tasks] failed to append audit event:', err);
     }
   }
 
@@ -489,6 +628,16 @@ export class TaskStore {
     }
 
     this.scheduleSave(workspaceId);
+    this.emit({
+      type: 'task.created',
+      workspaceId,
+      taskId: task.id,
+      task,
+      goal: task.goal,
+      assignee: task.assignee,
+      ...(task.triagedAgainst !== undefined ? { triagedAgainst: task.triagedAgainst } : {}),
+      ts: now,
+    });
     return { ok: true, task };
   }
 
@@ -578,7 +727,171 @@ export class TaskStore {
     this.scheduleSave(task.workspaceId);
 
     const unproven = forward && opts.evidence === undefined;
+    this.emit({
+      type: 'task.transitioned',
+      workspaceId: task.workspaceId,
+      taskId: task.id,
+      from: entry.from,
+      to,
+      actor: by,
+      ...(opts.note !== undefined ? { note: opts.note } : {}),
+      ...(opts.evidence !== undefined ? { evidence: opts.evidence } : {}),
+      ...(opts.usage !== undefined ? { usage: opts.usage } : {}),
+      unproven,
+      ts: entry.ts,
+    });
     return { ok: true, task, blockers, unproven };
+  }
+
+  /**
+   * Record a decision's VERBATIM answer (§3.2: decisions keep the human's
+   * exact words) and emit `decision.answered` carrying the text, the actor,
+   * and the decision task's links — a ready-made propagation checklist for
+   * the attached agent (§3.6). Recording the answer does NOT transition the
+   * task: status changes stay with the single gate, and what the answer
+   * unblocks is the agent's next move, not this method's side effect.
+   */
+  answerDecision(
+    taskId: string,
+    text: string,
+    opts: { actor: { id: string; name: string; kind?: string } },
+  ): AnswerDecisionResult {
+    const task = this.getTask(taskId);
+    if (!task) return { ok: false, error: 'not-found' };
+    if (task.needs !== 'decision') return { ok: false, error: 'not-a-decision' };
+    const ts = Date.now();
+    const actor: TaskActor = {
+      id: opts.actor.id,
+      name: opts.actor.name,
+      kind: classifyActor(opts.actor),
+    };
+    // `by` is the display name — the projection ships display names, not ids
+    // (§3.3 visitor contract), and the event carries the full actor anyway.
+    task.answer = { text, by: actor.name, ts };
+    task.updatedAt = ts;
+    this.scheduleSave(task.workspaceId);
+    this.emit({
+      type: 'decision.answered',
+      workspaceId: task.workspaceId,
+      taskId: task.id,
+      answer: text,
+      actor,
+      links: task.links,
+      ts,
+    });
+    return { ok: true, task };
+  }
+
+  /**
+   * Replace the workspace's ordered goal list (§3.2 goal-list edit contract).
+   * 'chores' is reserved and never present in goals[]; open tasks whose goal
+   * or subgoal id disappears are moved to Chores, each emitting a
+   * `task.regrouped` batched (via `partOf`) under the one
+   * `workspace.goals_changed` event, and the result reports the moved ids so
+   * the caller can re-place them. Deliberately NO re-triage request fires —
+   * a reorder changes no placement's accuracy, and a removal already lands
+   * every affected task where the caller is told to look.
+   */
+  setGoalList(
+    workspaceId: string,
+    goals: WorkspaceGoal[],
+    opts: { actor: { id: string; name: string; kind?: string } },
+  ): SetGoalListResult {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return { ok: false, error: 'workspace-not-found' };
+    const workspace = state.workspace;
+
+    const ids: string[] = [];
+    for (const g of goals) {
+      ids.push(g.id);
+      for (const s of g.subgoals ?? []) ids.push(s.id);
+    }
+    if (ids.includes(CHORES_GOAL_ID)) return { ok: false, error: 'reserved-goal-id' };
+    if (new Set(ids).size !== ids.length) return { ok: false, error: 'duplicate-goal-id' };
+
+    const oldGoals = workspace.goals;
+    if (JSON.stringify(oldGoals) === JSON.stringify(goals)) {
+      return { ok: true, workspace, changed: false, movedToChores: [] };
+    }
+
+    // Same members in a different order = the priority gesture; anything
+    // else (add / remove / retitle / dueAt) = an edit. Sorting by id makes
+    // the comparison order-blind.
+    const sortById = (gs: WorkspaceGoal[]) =>
+      JSON.stringify([...gs].sort((a, b) => a.id.localeCompare(b.id)));
+    const kind: 'reorder' | 'edit' = sortById(oldGoals) === sortById(goals) ? 'reorder' : 'edit';
+
+    const ts = Date.now();
+    const actor: TaskActor = {
+      id: opts.actor.id,
+      name: opts.actor.name,
+      kind: classifyActor(opts.actor),
+    };
+    workspace.goals = goals;
+
+    // Open tasks whose goal id disappeared land at the bottom of Chores.
+    // Done tasks stay put — same rule as re-triage (§3.4), their placement
+    // is history, not a claim about current priorities.
+    const newIds = new Set([...ids, CHORES_GOAL_ID]);
+    const moved: Array<{ task: Task; fromGoal: string }> = [];
+    let choresMax = Math.max(
+      0,
+      ...Array.from(state.tasks.values())
+        .filter((t) => t.goal === CHORES_GOAL_ID)
+        .map((t) => t.order),
+    );
+    for (const task of state.tasks.values()) {
+      if (task.status === 'done' || newIds.has(task.goal)) continue;
+      moved.push({ task, fromGoal: task.goal });
+      choresMax += 1;
+      task.goal = CHORES_GOAL_ID;
+      task.order = choresMax;
+      task.updatedAt = ts;
+    }
+    this.scheduleSave(workspaceId);
+
+    const batchId = cryptoId('gc');
+    this.emit({
+      type: 'workspace.goals_changed',
+      workspaceId,
+      batchId,
+      kind,
+      oldGoals,
+      newGoals: goals,
+      actor,
+      movedToChores: moved.map((m) => m.task.id),
+      ts,
+    });
+    for (const { task, fromGoal } of moved) {
+      this.emit({
+        type: 'task.regrouped',
+        workspaceId,
+        taskId: task.id,
+        fromGoal,
+        toGoal: CHORES_GOAL_ID,
+        order: task.order,
+        actor,
+        partOf: batchId,
+        ts,
+      });
+    }
+    return { ok: true, workspace, changed: true, movedToChores: moved.map((m) => m.task.id) };
+  }
+
+  /**
+   * Refresh a task's markdown body snapshot from its live `task:<taskId>`
+   * doc room (the projection's debounced flush). The snapshot is for search
+   * and export only — it never re-seeds a live fragment (§3.3) — so this
+   * emits NO event and deliberately does not bump `updatedAt`: body typing
+   * is content activity, and the live doc room already announces it.
+   */
+  updateBodySnapshot(taskId: string, body: string): boolean {
+    const task = this.getTask(taskId);
+    if (!task) return false;
+    if (task.body === body) return true;
+    task.body = body;
+    this.scheduleSave(task.workspaceId);
+    return true;
   }
 
   /** Open (not-done) dependencies of a task, described so the message can

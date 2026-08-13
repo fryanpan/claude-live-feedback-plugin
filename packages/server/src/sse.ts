@@ -1,4 +1,9 @@
-import type { WebhookPayload } from '@feedback/core';
+/**
+ * Anything broadcast over SSE: thread/suggestion webhook payloads and the
+ * hub task events. The hub only needs the event name here — the whole
+ * object is serialized as the data line either way.
+ */
+type SsePayload = { event: string };
 
 type Sink = {
   write: (event: string, data: unknown) => void;
@@ -34,7 +39,7 @@ export class SseHub {
     if (set.size === 0) this.byDoc.delete(docId);
   }
 
-  broadcast(docId: string, payload: WebhookPayload): void {
+  broadcast(docId: string, payload: SsePayload): void {
     const set = this.byDoc.get(docId);
     if (!set) return;
     for (const sink of set.keys()) {

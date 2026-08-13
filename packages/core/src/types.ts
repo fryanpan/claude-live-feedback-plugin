@@ -6,8 +6,12 @@
  *  - diff: one changed file of a git diff review (base..target). Content is
  *    the file at the TARGET commit — immutable, so anchors never drift; the
  *    diff itself is a client-side rendering against the base text.
+ *  - workspace: a hub workspace's board room (`ws:<workspaceId>`). Carries
+ *    no LF-held content surface of its own — its `tasks`/`workspace` maps
+ *    are a server-written projection of the task store (see the server's
+ *    task-projection module), never edited through a content editor.
  */
-export type DocType = 'markdown' | 'mockup' | 'code' | 'diff';
+export type DocType = 'markdown' | 'mockup' | 'code' | 'diff' | 'workspace';
 
 /**
  * Which Yjs content surface a doc kind uses — THE derived concept most
