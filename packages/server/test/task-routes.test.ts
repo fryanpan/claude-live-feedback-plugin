@@ -290,6 +290,62 @@ describe('hub workspace + task routes', () => {
       expect(task.links).toHaveLength(1);
     });
 
+    // `origin` was a cast, not a check — so it skipped every rule `links`
+    // enforces one field away. Both halves of that are tested here because
+    // both were reachable from one unauthenticated POST.
+    it('refuses an unsafe scheme in `origin`, the same as in `links`', async () => {
+      const hostile = { kind: 'url', url: 'javascript:alert(1)' };
+
+      // Positive control FIRST: the identical ref in `links` is already
+      // rejected, so this asserts the two fields agree rather than asserting
+      // that nothing anywhere accepts it.
+      const viaLinks = await post(`/api/workspaces/${wsId}/tasks`, {
+        title: 'via links',
+        links: [hostile],
+      });
+      expect(viaLinks.status).toBe(200);
+      const kept = ((await viaLinks.json()) as { task: Task }).task;
+      expect(kept.links).toHaveLength(0);
+
+      const viaOrigin = await post(`/api/workspaces/${wsId}/tasks`, {
+        title: 'via origin',
+        origin: hostile,
+      });
+      expect(viaOrigin.status).toBe(400);
+
+      // A well-formed url origin still goes through — the check is on the
+      // scheme, not on the kind.
+      const good = await post(`/api/workspaces/${wsId}/tasks`, {
+        title: 'good origin',
+        origin: { kind: 'url', url: 'https://example.com/pr/1' },
+      });
+      expect(good.status).toBe(200);
+      expect(((await good.json()) as { task: Task }).task.origin).toEqual({
+        kind: 'url',
+        url: 'https://example.com/pr/1',
+      });
+    });
+
+    // The nastiest shape: it persists, so it outlives the request that
+    // created it and breaks readers on every subsequent boot.
+    it('a null `origin` cannot poison backlink queries', async () => {
+      const created = await post(`/api/workspaces/${wsId}/tasks`, {
+        title: 'null origin',
+        origin: null,
+      });
+      // Read as "no origin" rather than refused — clients spell an absent
+      // field this way, and dropping it costs nothing.
+      expect(created.status).toBe(200);
+      expect(((await created.json()) as { task: Task }).task.origin).toBeUndefined();
+
+      // The route that used to 500: `refKey` reads `ref.kind` and threw on
+      // null, across EVERY workspace, on the doc-open path.
+      const listed = await local(`/api/workspaces/${wsId}/tasks`);
+      expect(listed.status).toBe(200);
+      const tasks = ((await listed.json()) as { tasks: Task[] }).tasks;
+      expect(tasks.some((t) => t.title === 'null origin')).toBe(true);
+    });
+
     // A weekly plan points OUTWARD — at a pull request, a decision page, a
     // dashboard. Refs were closed to this server's own objects, so the links
     // that mattered most to the first real port couldn't be links at all, and

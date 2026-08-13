@@ -132,10 +132,21 @@ export interface BoardHandlers {
   onOpenTask: (task: HubTask) => void;
 }
 
-function riskDot(task: HubTask): HTMLElement | null {
-  if (!task.riskTier) return null;
+/* Always emits a slot, even with no tier to show. Grid auto-placement fills
+   CONSECUTIVE tracks — it does not leave a hole where a child is missing — so
+   a row that skipped the dot put its title in the dot's track and its badges
+   in the title's. With the title track at `minmax(0, 1fr)` and the dot track
+   collapsed, that rendered every title at zero width. Keeping the child count
+   fixed is also what makes titles line up across rows, which is the whole
+   point of the grid. */
+function riskDot(task: HubTask): HTMLElement {
   const dot = document.createElement('span');
-  dot.className = `hub-risk hub-risk-${task.riskTier}`;
+  if (!task.riskTier) {
+    dot.className = 'hub-risk-slot';
+    dot.setAttribute('aria-hidden', 'true');
+    return dot;
+  }
+  dot.className = `hub-risk-slot hub-risk hub-risk-${task.riskTier}`;
   dot.title = `risk: ${task.riskTier}`;
   return dot;
 }
@@ -262,7 +273,7 @@ export function renderTaskRow(task: HubTask, handlers: BoardHandlers): HTMLEleme
     (v) => handlers.onTitleCommit(task, v),
   );
 
-  row.append(chip, ...(dot ? [dot] : []), title, taskBadges(task));
+  row.append(chip, dot, title, taskBadges(task));
   row.addEventListener('click', () => handlers.onOpenTask(task));
   row.addEventListener('keydown', (ev) => {
     if (ev.key === 'Enter' && !(ev.target as HTMLElement).closest('input')) {

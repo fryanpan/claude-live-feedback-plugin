@@ -128,9 +128,44 @@ describe('renderBoard', () => {
     // Order is the contract the grid tracks are written against.
     expect([...row.children].map((c) => (c as HTMLElement).className.split(' ')[0])).toEqual([
       'hub-status-mark',
+      'hub-risk-slot',
       'hub-task-title',
       'hub-task-badges',
     ]);
+  });
+
+  // The bug this pins: `grid-template-columns` names four tracks, and grid
+  // auto-placement fills them CONSECUTIVELY. A row that omitted the risk dot
+  // put its title in the dot's track — which a `:not(:has(.hub-risk))` rule
+  // had collapsed to `0` — so every title on a row without a risk tier
+  // rendered at zero width. happy-dom does no layout, so the assertion that
+  // catches it is the child SHAPE, identical either way. An earlier version
+  // of this test asserted the three-child order and therefore pinned the bug
+  // in place instead of catching it.
+  it('a row without a risk tier has the same grid children as one with', () => {
+    const h = handlers();
+    renderBoard(
+      root,
+      boardSections(
+        GOALS,
+        [
+          task({ goal: 'g-pr', id: 't-plain', title: 'no tier' }),
+          task({ goal: 'g-pr', id: 't-risky', title: 'has tier', riskTier: 'red' }),
+        ],
+        filters,
+      ),
+      h,
+    );
+    const rows = [...root.querySelectorAll('.hub-task-row')] as HTMLElement[];
+    expect(rows).toHaveLength(2);
+    const shape = (r: HTMLElement) =>
+      [...r.children].map((c) => (c as HTMLElement).className.split(' ')[0]);
+    expect(shape(rows[0])).toEqual(shape(rows[1]));
+    expect(shape(rows[0])).toHaveLength(4);
+    // Positive control: the tiers really do differ, so the shapes matching
+    // above is not two identically-empty rows agreeing about nothing.
+    expect(rows[0].querySelector('.hub-risk')).toBeNull();
+    expect(rows[1].querySelector('.hub-risk')).not.toBeNull();
   });
 
   it('tapping the title edits in place; Enter commits the new value', () => {

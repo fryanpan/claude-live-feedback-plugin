@@ -1631,14 +1631,27 @@ export class TaskStore {
     return this.backlinksFor({ kind: 'thread', docId, threadId });
   }
 
-  /** Tasks whose `links` or `origin` contain a ref matching `pred`. */
+  /**
+   * Tasks whose `links` or `origin` contain a ref matching `pred`.
+   *
+   * Every ref is re-validated on the way past. `pred` is usually built on
+   * `refKey`, which reads `ref.kind` and throws on anything that isn't a
+   * ref — and this loop spans EVERY workspace, so one malformed ref stored
+   * anywhere took down every caller: `tasksReferencingDoc` sits on the
+   * doc-open path and on thread listing. `origin` used to be written to
+   * `<ws>.tasks.json` unvalidated (the route cast instead of checking), so
+   * `origin: null` persisted, survived restart, and made doc-open 500 —
+   * `task.origin !== undefined` is true for `null`. The route now validates;
+   * this guard is what keeps already-persisted junk from being fatal.
+   */
   private tasksMatching(pred: (ref: Ref) => boolean): Task[] {
     const out: Task[] = [];
     for (const state of this.workspaces.values()) {
       for (const task of state.tasks.values()) {
-        if (task.links.some(pred) || (task.origin !== undefined && pred(task.origin))) {
-          out.push(task);
-        }
+        const matches =
+          task.links.some((r) => isValidRef(r) && pred(r)) ||
+          (isValidRef(task.origin) && pred(task.origin));
+        if (matches) out.push(task);
       }
     }
     return out.sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));

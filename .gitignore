@@ -13,5 +13,9 @@ build/
 .worktrees/
 __pycache__/
 data/
+# `bun run staging` writes its throwaway data dir here. `data/` does not cover
+# it, so five commits on a branch once tracked live task content into a public
+# repo before anyone noticed.
+data-staging/
 coverage/
 .vitest-cache/

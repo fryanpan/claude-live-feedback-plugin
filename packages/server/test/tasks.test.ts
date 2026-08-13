@@ -509,4 +509,46 @@ describe('Ref: the url kind', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // The route validates `origin` now, but it did not always, and what it let
+  // through was WRITTEN TO DISK — so the malformed refs already out there
+  // outlive the fix. `tasksMatching` spans every workspace and is on the
+  // doc-open path, so one bad ref anywhere used to throw for everyone.
+  it('survives a malformed ref that is already in the store', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'feedback-badref-'));
+    const store = new TaskStore({ dataDir: dir, debounceMs: 5 });
+    try {
+      const ws = store.createWorkspace('legacy');
+      const pr = 'https://github.com/example-org/example-repo/pull/1669';
+      const good = store.createTask(ws.id, {
+        title: 'Reachable',
+        actor: AGENT,
+        links: [{ kind: 'url', url: pr }],
+      });
+      if (!good.ok) throw new Error('fixture task was not created');
+
+      // Positive control: the query works before the junk lands, so a later
+      // empty result can't be mistaken for "the query never worked".
+      expect(store.backlinksFor({ kind: 'url', url: pr }).map((t) => t.id)).toEqual([
+        good.task.id,
+      ]);
+
+      // Exactly the shapes the old cast admitted, planted the way a reload
+      // from `<ws>.tasks.json` would produce them.
+      const poisoned = store.createTask(ws.id, { title: 'Poisoned', actor: AGENT });
+      if (!poisoned.ok) throw new Error('fixture task was not created');
+      const stored = poisoned.task as { origin?: unknown; links: unknown[] };
+      stored.origin = null;
+      stored.links = [null, 'not-a-ref', { kind: 'nope' }];
+
+      expect(() => store.backlinksFor({ kind: 'url', url: pr })).not.toThrow();
+      expect(store.backlinksFor({ kind: 'url', url: pr }).map((t) => t.id)).toEqual([
+        good.task.id,
+      ]);
+      expect(() => store.tasksReferencingDoc('any-doc')).not.toThrow();
+    } finally {
+      store.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
