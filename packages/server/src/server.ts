@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { extname, join } from 'node:path';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { extname, join, resolve } from 'node:path';
 import {
   type Anchor,
   type DocMeta,
@@ -11,6 +11,7 @@ import {
 } from '@feedback/core';
 import { needsCall } from '@feedback/core/summary-prompt';
 import type { Server as BunServer } from 'bun';
+import { classifyActor } from './activity.ts';
 import { showFile } from './git-diff.ts';
 import {
   LOOPBACK_HOSTS,
@@ -36,6 +37,7 @@ import {
   sessionCookieHeader,
   verifySession,
 } from './share/link-session.ts';
+import { redactHubEventForVisitor } from './share/redact-hub-events.ts';
 import {
   redactMetaForVisitor,
   redactWorkspaceFilesForVisitor,
@@ -48,10 +50,104 @@ import type { ShareConfig } from './share/types.ts';
 import { sanitizeVisitorAuthor } from './share/visitor-identity.ts';
 import { SseHub, openSseStream } from './sse.ts';
 import { KEYCHAIN_SERVICE, ThreadSummarizer } from './summarize.ts';
+import { applyImport, importBanner, importMarkerFor, parseTrackerMarkdown } from './task-import.ts';
+import { TaskProjection } from './task-projection.ts';
+import {
+  type Ref,
+  type TaskStatus,
+  TaskStore,
+  type WorkspaceGoal,
+  type WorkspaceSubgoal,
+  eventsLogPath,
+  isAttachmentRuntime,
+  isValidRef,
+  taskChip,
+} from './tasks.ts';
+import { SERVER_TICK_EVENT, UptimeMonitor, analyzeUptime } from './uptime.ts';
+import { type VoiceComplete, VoiceRouter, parseVoiceContext } from './voice.ts';
 import { type WebhookLogEntry, createWebhookDispatcher } from './webhooks.ts';
 import { onClose, onMessage, onOpen } from './yjs-protocol.ts';
 
 const DEFAULT_PORT = Number(process.env.PORT ?? 8787);
+
+/**
+ * Structural validation for PUT /api/workspaces/:id/goals. Returns the
+ * sanitized list, or null if any entry is malformed. Unknown keys are
+ * dropped rather than persisted — the sidecar shape is a contract, not a
+ * junk drawer. ONE subgoal level max (§3.2); a subgoal with subgoals is
+ * malformed, not silently flattened.
+ */
+function parseGoalList(raw: unknown): WorkspaceGoal[] | null {
+  if (!Array.isArray(raw)) return null;
+  const goals: WorkspaceGoal[] = [];
+  for (const entry of raw) {
+    const g = entry as Record<string, unknown>;
+    if (typeof g?.id !== 'string' || g.id.length === 0) return null;
+    if (typeof g?.title !== 'string' || g.title.length === 0) return null;
+    if (g.dueAt !== undefined && typeof g.dueAt !== 'number') return null;
+    let subgoals: WorkspaceSubgoal[] | undefined;
+    if (g.subgoals !== undefined) {
+      if (!Array.isArray(g.subgoals)) return null;
+      subgoals = [];
+      for (const sub of g.subgoals) {
+        const s = sub as Record<string, unknown>;
+        if (typeof s?.id !== 'string' || s.id.length === 0) return null;
+        if (typeof s?.title !== 'string' || s.title.length === 0) return null;
+        if (s.dueAt !== undefined && typeof s.dueAt !== 'number') return null;
+        if (s.subgoals !== undefined) return null;
+        subgoals.push({
+          id: s.id,
+          title: s.title,
+          ...(s.dueAt !== undefined ? { dueAt: s.dueAt as number } : {}),
+        });
+      }
+    }
+    goals.push({
+      id: g.id,
+      title: g.title,
+      ...(g.dueAt !== undefined ? { dueAt: g.dueAt as number } : {}),
+      ...(subgoals !== undefined ? { subgoals } : {}),
+    });
+  }
+  return goals;
+}
+
+/**
+ * `needs` for the two task-create routes. Validated HERE, the way `riskTier`
+ * and `runtime` already are on neighbouring routes: a capitalized
+ * `'Decision'` stored verbatim produces a task that is absent from the
+ * decisions strip, absent from `list_tasks(needs:'decision')`, and refused
+ * by `answer_decision` — while the create call answered 200.
+ */
+function parseNeeds(raw: unknown): { ok: true; needs?: 'action' | 'decision' } | { ok: false } {
+  if (raw === undefined) return { ok: true };
+  if (raw === 'action' || raw === 'decision') return { ok: true, needs: raw };
+  return { ok: false };
+}
+
+/**
+ * `links` for the two task-create routes: every element through the SAME
+ * `isValidRef` the dedicated links route runs. Without it the identical ref
+ * got two answers from two routes — 400 with an explanation from
+ * `POST /api/tasks/:id/links`, a silent 200 from create — and a malformed
+ * ref matches no backlink query, so the chip the link existed for never
+ * appears.
+ */
+function parseLinks(raw: unknown): { ok: true; links?: Ref[] } | { ok: false } {
+  if (raw === undefined) return { ok: true };
+  if (!Array.isArray(raw)) return { ok: false };
+  for (const ref of raw) if (!isValidRef(ref)) return { ok: false };
+  return { ok: true, links: raw as Ref[] };
+}
+
+/** The anchor's display snippet, whichever anchor kind carries it — an
+ *  orphan keeps its original's snippet. */
+function anchorSnippetText(anchor: Anchor): string | undefined {
+  if (anchor.kind === 'orphan') {
+    return anchor.original.snippet?.text;
+  }
+  return anchor.snippet?.text;
+}
 
 /** Attribution for a write that arrived with no author at all. Deliberately
  *  NOT Bryan: an unattributed action must never gain his authority just
@@ -132,6 +228,21 @@ export interface ServerOptions {
    * the one that constructs it.
    */
   summarizer?: ThreadSummarizer;
+  /**
+   * Voice fast-path completer (§3.8). **No default**, same seam rule as the
+   * summarizer above: omitting it disables the Haiku fast path entirely —
+   * every voice utterance still gets an answer, routed to the attached agent
+   * — and nothing that merely spins a server up can reach the network. Only
+   * bin.ts constructs the real one (`haikuVoiceComplete`).
+   */
+  voiceComplete?: VoiceComplete;
+  /**
+   * Liveness-marker interval for the uptime measurement (§3.12 commit 11).
+   * The monitor appends `server.tick` lines to every hub workspace's
+   * events.jsonl so the gap analysis has density even on an idle board.
+   * Overridable so tests never wait real minutes; default 5 minutes.
+   */
+  uptimeTickMs?: number;
 }
 
 const CT: Record<string, string> = {
@@ -149,6 +260,11 @@ const CT: Record<string, string> = {
 export interface ServerHandle {
   port: number;
   rooms: Rooms;
+  /** The hub task store — workspaces, tasks, the transition gate. */
+  tasks: TaskStore;
+  /** The ydoc projection of the task store (ws:<id> board rooms + task
+   *  body rooms). Exposed so tests can force a reassert. */
+  projection: TaskProjection;
   shares: Shares | null;
   /** Hang up every websocket and SSE stream whose share is no longer live.
    *  Runs on a 60s interval; exposed so tests exercise the real sweep. */
@@ -356,6 +472,66 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     decorateDocMeta: withReviewUrl,
     ...(summarizer ? { summarizer } : {}),
   });
+  // The hub task store (plan §3.2/§3.3): server-owned workspaces + tasks,
+  // persisted as per-workspace sidecars under <dataDir>/workspaces/.
+  const taskStore = new TaskStore({ dataDir });
+  // Every store event rides the existing SSE pipeline on the workspace
+  // channel (`ws~<workspaceId>`, the same channel doc thread events use for
+  // legacy grouping workspaces) — no new transport (§3.6). The audit log
+  // append happens inside the store's emit, not here.
+  taskStore.onEvent((ev) => {
+    const { type, ...rest } = ev;
+    sse.broadcast(`ws~${ev.workspaceId}`, { event: type, ...rest });
+  });
+  // The real triage-delivery bridge (§3.4, grounded-pending): a request
+  // counts as delivered ONLY when the workspace has a live attachment to act
+  // on it — that check is what earns the task its triagePendingTs. The
+  // request rides the workspace SSE channel (the MCP watch transport) but
+  // deliberately NOT the store's emit: §3.6's table is the exhaustive
+  // subscriber/audit contract and has no triage.requested row, so requests
+  // never reach events.jsonl (they're a delivery, not a change).
+  taskStore.setTriageDelivery((req) => {
+    if (!taskStore.hasLiveAttachment(req.workspaceId)) return false;
+    sse.broadcast(`ws~${req.workspaceId}`, { event: 'triage.requested', ...req });
+    return true;
+  });
+  // The ydoc projection (§3.3): ws:<workspaceId> board rooms the server
+  // writes and defends (foreign writes reverted), plus task:<taskId> body
+  // rooms. init() runs after both stores hydrated, so the sidecar is
+  // authoritative for gated fields on restart.
+  const taskProjection = new TaskProjection({ rooms, tasks: taskStore });
+  taskProjection.init();
+  // Deploy readiness (§3.12 commit 11): uptime is measured from the same
+  // events.jsonl the audit trail lives in. The monitor stamps
+  // server.started now (bounding whatever outage this boot ended) and
+  // beats server.tick so an idle workspace's log still has gap-analysis
+  // density. Markers bypass taskStore.emit on purpose — §3.6's table has
+  // no server.* rows, and SSE/MCP subscribers must not see a beat every
+  // five minutes.
+  const uptimeMonitor = new UptimeMonitor({
+    dataDir,
+    tasks: taskStore,
+    ...(opts.uptimeTickMs !== undefined ? { tickMs: opts.uptimeTickMs } : {}),
+  });
+  uptimeMonitor.start();
+  // Voice routing (§3.8): lookups take the Haiku fast path when a completer
+  // was injected; changes go to the attached agent (or the on-disk queue).
+  const voiceRouter = new VoiceRouter({
+    tasks: taskStore,
+    ...(opts.voiceComplete ? { complete: opts.voiceComplete } : {}),
+  });
+
+  /**
+   * Which workspace a docId belongs to, for SHARE SCOPING (§3.12 commit 8).
+   * Legacy grouping tags (folder binds / diff reviews) answer from the doc's
+   * own metadata; hub workspaces answer from the store — docs linked via
+   * attachDoc plus each task's own `task:<id>` body room, which is what
+   * makes "visitors may post comments" true for a hub share (comments need
+   * an in-scope doc). Deliberately NOT the ws:<id> board room: its share
+   * allowance is spelled out in host-guard, never a resolver side effect.
+   */
+  const shareWorkspaceOf = (docId: string): string | null =>
+    rooms.get(docId)?.meta.workspaceId ?? taskStore.workspaceOfDoc(docId);
 
   /**
    * CORS is decided once, here, for every response the handler produces,
@@ -533,6 +709,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           return claimed as User | undefined;
         };
 
+        /**
+         * Thread→task surfacing (§3.12 commit 4): decorate a thread payload
+         * with chips for the tasks that reference it — via `links` or via a
+         * promotion `origin`. The chip is the §3.3 rule-2 visitor-safe shape,
+         * so visitors get the decoration too. Omitted when empty (trimmed
+         * results, §3.10) — every reader treats a missing `tasks` as none.
+         */
+        const withTaskChips = <T extends { id: string }>(docId: string, t: T): T => {
+          const chips = taskStore.tasksReferencingThread(docId, t.id).map(taskChip);
+          return chips.length > 0 ? { ...t, tasks: chips } : t;
+        };
+
         // Set when this request comes from a SHARE visitor (either mode).
         // Everything below treats a non-null value as "untrusted outsider":
         // their claimed identity is rewritten and doc metadata is redacted.
@@ -597,14 +785,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // gets the 403 below.
             const repaired = repairStaleReviewUrl(pathname, req.method, decision.target);
             if (repaired) return repaired;
-            if (
-              !shareScopeAllows(
-                pathname,
-                req.method,
-                decision.target,
-                (docId) => rooms.get(docId)?.meta.workspaceId ?? null,
-              )
-            ) {
+            if (!shareScopeAllows(pathname, req.method, decision.target, shareWorkspaceOf)) {
               return j(403, { error: 'out_of_share_scope' });
             }
             visitor = decision.target;
@@ -623,14 +804,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               if (!target) return j(401, { error: 'no_share_session' });
               const repaired = repairStaleReviewUrl(pathname, req.method, target);
               if (repaired) return repaired;
-              if (
-                !shareScopeAllows(
-                  pathname,
-                  req.method,
-                  target,
-                  (docId) => rooms.get(docId)?.meta.workspaceId ?? null,
-                )
-              ) {
+              if (!shareScopeAllows(pathname, req.method, target, shareWorkspaceOf)) {
                 return j(403, { error: 'out_of_share_scope' });
               }
               visitor = target;
@@ -723,6 +897,21 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               headers: { 'content-type': 'text/html; charset=utf-8' },
             });
           }
+          // A HUB workspace share lands IN the hub — never a review URL,
+          // never a lobby (§2.5). Resolved at redemption like everything
+          // else, so a workspace deleted after minting falls through to the
+          // same not-found the legacy path gives.
+          if (share.workspaceId && taskStore.getWorkspace(share.workspaceId)) {
+            const maxAge = Math.floor((share.expiresAt - Date.now()) / 1000);
+            return new Response(null, {
+              status: 302,
+              headers: {
+                location: `/workspaces/${encodeURIComponent(share.workspaceId)}`,
+                'set-cookie': sessionCookieHeader(share.shareId, cookieKey(), maxAge),
+                'referrer-policy': 'no-referrer',
+              },
+            });
+          }
           // Where to land is resolved NOW, not when the share was minted: a
           // member docId encodes the file's relPath, so renaming or deleting
           // the entry file used to 404 the link with no way to repoint it.
@@ -762,7 +951,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
 
           let entryDocId = body?.entryDocId as string | undefined;
           let memberCount: number | undefined;
-          if (workspaceId) {
+          // A HUB workspace (§3.12 commit 8) is shareable with zero bound
+          // member docs — its entry is the hub page, not a review doc.
+          const isHubShare = workspaceId !== undefined && !!taskStore.getWorkspace(workspaceId);
+          if (isHubShare) {
+            if (entryDocId) {
+              return j(400, {
+                error: 'a hub workspace share opens the hub page — entryDocId is not supported',
+              });
+            }
+          } else if (workspaceId) {
             const members = rooms.list().filter((m) => m.workspaceId === workspaceId);
             if (members.length === 0) return j(404, { error: 'workspace not found', workspaceId });
             if (entryDocId && !members.some((m) => m.docId === entryDocId)) {
@@ -778,6 +976,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               docId,
               workspaceId,
               entryDocId,
+              hub: isHubShare,
               ttlSeconds: typeof body?.ttlSeconds === 'number' ? body.ttlSeconds : undefined,
               label: typeof body?.label === 'string' ? body.label : undefined,
             });
@@ -815,6 +1014,29 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!workspaceId) return j(400, { error: 'workspaceId required' });
           if (!Array.isArray(allowDomains) || allowDomains.length === 0) {
             return j(400, { error: 'allowDomains must be a non-empty array' });
+          }
+          // A HUB workspace share (§3.12 commit 8): same email-share
+          // machinery, but the URL opens the hub page and there is no entry
+          // doc — the guard scopes by workspaceId alone.
+          if (taskStore.getWorkspace(workspaceId)) {
+            if (body?.entryDocId) {
+              return j(400, {
+                error: 'a hub workspace share opens the hub page — entryDocId is not supported',
+              });
+            }
+            try {
+              const share = await shares.createShareWorkspace({
+                workspaceId,
+                hub: true,
+                allowDomains,
+                ttlSeconds: typeof body?.ttlSeconds === 'number' ? body.ttlSeconds : undefined,
+                name: typeof body?.name === 'string' ? body.name : undefined,
+              });
+              return j(200, { share });
+            } catch (err) {
+              const error = err instanceof Error ? err.message : 'create_share_failed';
+              return j(502, { error });
+            }
           }
           const members = rooms.list().filter((m) => m.workspaceId === workspaceId);
           if (members.length === 0) return j(404, { error: 'workspace not found', workspaceId });
@@ -909,9 +1131,23 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         if (wsEventsMatch) {
           const workspaceId = decodeURIComponent(wsEventsMatch[1] ?? '');
           if (!isValidDocId(workspaceId)) return j(400, { error: 'bad workspaceId' });
-          const exists = rooms.list().some((m) => m.workspaceId === workspaceId);
+          // A workspace channel exists for legacy grouping workspaces (diff
+          // reviews / folder binds) AND for hub workspaces — task.* events
+          // broadcast on the same `ws~<id>` channel (§3.6).
+          const exists =
+            rooms.list().some((m) => m.workspaceId === workspaceId) ||
+            taskStore.getWorkspace(workspaceId) !== undefined;
           if (!exists) return j(404, { error: 'workspace not found' });
-          return openSseStream(sse, `ws~${workspaceId}`, visitorShareId ?? undefined);
+          // A share visitor's stream carries the §3.3 visitor-contract view
+          // of every hub event (display names, projected tasks) — the SSE
+          // feed is the second door next to the ws room, and redacting one
+          // transport but not the other is how the DocMeta leak shipped.
+          return openSseStream(
+            sse,
+            `ws~${workspaceId}`,
+            visitorShareId ?? undefined,
+            visitor ? redactHubEventForVisitor : undefined,
+          );
         }
         // --- SSE ---
         if (pathname.startsWith('/events/')) {
@@ -978,12 +1214,26 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           return j(200, { docs: rooms.list().map(withReviewUrl) });
         }
 
-        // --- REST: workspaces (folder bind) ---
+        // --- REST: workspaces (hub create OR folder bind) ---
+        // One resource, two shapes: `folderPath` binds a folder of files
+        // (the legacy grouping workspace), `name` creates a hub Workspace —
+        // a NEW first-class entity with a crypto-random id that tasks and
+        // goals hang off (plan §3.12 commit 1). Nothing is migrated between
+        // the two; attach_doc LINKS existing docs/reviews to a hub workspace.
         if (pathname === '/api/workspaces' && req.method === 'POST') {
           const body = await safeJson(req);
           const folderPath = body?.folderPath as string | undefined;
+          if (!folderPath && typeof body?.name === 'string' && body.name.trim().length > 0) {
+            const goal = typeof body?.goal === 'string' ? (body.goal as string) : undefined;
+            const workspace = taskStore.createWorkspace(body.name.trim(), goal);
+            // createWorkspace emits no event (nothing subscribes to a
+            // workspace that doesn't exist yet), so the route brings the
+            // board room up itself.
+            taskProjection.ensureWorkspace(workspace.id);
+            return j(200, { workspace });
+          }
           if (!folderPath || typeof folderPath !== 'string') {
-            return j(400, { error: 'folderPath required' });
+            return j(400, { error: 'folderPath (folder bind) or name (hub workspace) required' });
           }
           const res = rooms.bindFolder({
             folderPath,
@@ -1085,6 +1335,544 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         if (pathname === '/api/workspaces' && req.method === 'GET') {
           return j(200, { workspaces: rooms.listWorkspaces() });
         }
+        // --- REST: hub workspaces + tasks (plan §3.10) ---
+        // Every handler below hand-copies body fields into the store call.
+        // A field that isn't copied is silently discarded while the request
+        // still returns 200 — so every param here has an HTTP-level test in
+        // task-routes.test.ts (the `groups` lesson).
+        const hubWsMatch = pathname.match(/^\/api\/workspaces\/([^/]+)$/);
+        if (hubWsMatch && req.method === 'GET') {
+          const workspace = taskStore.getWorkspace(decodeURIComponent(hubWsMatch[1] ?? ''));
+          if (!workspace) return j(404, { error: 'workspace not found' });
+          return j(200, { workspace });
+        }
+        // Activity view (§3.9): the per-workspace events.jsonl audit log,
+        // read back as rows. This is the surface where the after-the-fact
+        // 80/95 review happens, built on the same file every subscriber saw
+        // (§3.6: the audit log can never disagree with what subscribers saw).
+        const wsAuditMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/events$/);
+        if (wsAuditMatch && req.method === 'GET') {
+          const workspaceId = decodeURIComponent(wsAuditMatch[1] ?? '');
+          if (!taskStore.getWorkspace(workspaceId)) {
+            return j(404, { error: 'workspace not found' });
+          }
+          const logPath = eventsLogPath(dataDir, workspaceId);
+          let rows: Array<{ event?: unknown; ts?: unknown }> = [];
+          if (existsSync(logPath)) {
+            rows = readFileSync(logPath, 'utf8')
+              .split('\n')
+              .filter((line) => line.trim().length > 0)
+              .flatMap((line) => {
+                try {
+                  return [JSON.parse(line) as { event?: unknown; ts?: unknown }];
+                } catch {
+                  // A torn tail line (crash mid-append) must not take the
+                  // whole activity view down with it.
+                  return [];
+                }
+              });
+          }
+          // Uptime (§3.12 commit 11): every line — real event or liveness
+          // marker — is proof the server was alive when it was written, so
+          // the gap analysis runs over ALL timestamps, before any filtering.
+          const uptime = analyzeUptime(
+            rows.map((r) => r.ts).filter((t): t is number => typeof t === 'number'),
+            {
+              now: Date.now(),
+              ...(opts.uptimeTickMs !== undefined ? { tickMs: opts.uptimeTickMs } : {}),
+            },
+          );
+          // Ticks are measurement substrate, not activity — strip them from
+          // the review list (BEFORE the cap, so a week of beats can't crowd
+          // real rows out of it). server.started stays: a restart is honest
+          // activity.
+          let events: unknown[] = rows.filter((r) => r.event !== SERVER_TICK_EVENT);
+          // Cap the payload: the newest rows are the review's working set.
+          if (events.length > 1000) events = events.slice(-1000);
+          return j(200, { workspaceId, events, uptime });
+        }
+        // set_workspace_goal: edit the north-star goal (§3.10). The store
+        // emits workspace.goal_updated and requests a re-triage of open
+        // tasks; the response reports whether that request reached a live
+        // attachment (with none, the re-triage honestly does not happen).
+        const wsGoalMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/goal$/);
+        if (wsGoalMatch && req.method === 'PUT') {
+          const workspaceId = decodeURIComponent(wsGoalMatch[1] ?? '');
+          const body = await safeJson(req);
+          const goal = body?.goal;
+          if (typeof goal !== 'string') return j(400, { error: 'goal required' });
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const res = taskStore.setWorkspaceGoal(workspaceId, goal, { actor: author });
+          if (!res.ok) return j(404, res);
+          return j(200, res);
+        }
+        // Voice (§3.8): transcript + per-surface context in, route decision +
+        // ack out. EVERY utterance gets an explicit ack naming what was heard
+        // and which route handles it — the router owns that invariant; this
+        // handler only validates and forwards (transcript VERBATIM).
+        const wsVoiceMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/voice$/);
+        if (wsVoiceMatch && req.method === 'POST') {
+          const workspaceId = decodeURIComponent(wsVoiceMatch[1] ?? '');
+          const body = await safeJson(req);
+          const transcript = typeof body?.transcript === 'string' ? body.transcript.trim() : '';
+          if (transcript.length === 0) return j(400, { error: 'transcript required' });
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const context = parseVoiceContext(body?.context);
+          const res = await voiceRouter.handle(workspaceId, {
+            transcript,
+            ...(context !== undefined ? { context } : {}),
+            actor: author,
+          });
+          if (!res.ok) return j(404, res);
+          return j(200, res);
+        }
+        // attach_doc: link an existing doc or review to a hub workspace.
+        const wsAttachMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/docs$/);
+        if (wsAttachMatch && req.method === 'POST') {
+          const workspaceId = decodeURIComponent(wsAttachMatch[1] ?? '');
+          const body = await safeJson(req);
+          const docId = body?.docId as string | undefined;
+          if (!docId || typeof docId !== 'string') return j(400, { error: 'docId required' });
+          // The link target must exist: either a doc room, or a legacy
+          // grouping workspace id (a diff review / folder bind, attached as
+          // one unit).
+          const exists =
+            rooms.get(docId) !== undefined || rooms.list().some((m) => m.workspaceId === docId);
+          if (!exists) return j(404, { error: 'doc not found', docId });
+          const res = taskStore.attachDoc(workspaceId, docId);
+          if (!res.ok) return j(404, res);
+          // attachDoc emits no store event; refresh the projection's docIds.
+          taskProjection.ensureWorkspace(workspaceId);
+          return j(200, { ok: true, workspace: taskStore.getWorkspace(workspaceId) });
+        }
+        // import_tasks_markdown (§3.10 / §3.12 commit 10): ingest a
+        // hand-maintained tracker (group headings + status tables). The
+        // DEFAULT is a dry-run that returns the mapping and touches nothing;
+        // apply:true creates the goals + tasks and stamps the source file
+        // with a banner + hub link so the old tracker can't quietly stay a
+        // second source of truth (a stamped file refuses re-import).
+        const wsImportMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/import-tasks$/);
+        if (wsImportMatch && req.method === 'POST') {
+          const workspaceId = decodeURIComponent(wsImportMatch[1] ?? '');
+          const body = await safeJson(req);
+          const path = body?.path;
+          if (typeof path !== 'string' || path.length === 0) {
+            return j(400, { error: 'path required' });
+          }
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const workspace = taskStore.getWorkspace(workspaceId);
+          if (!workspace) return j(404, { error: 'workspace not found' });
+          if (!existsSync(path)) return j(404, { error: 'file not found', path });
+          const markdown = readFileSync(path, 'utf8');
+          const alreadyImported = importMarkerFor(markdown);
+          const mapping = parseTrackerMarkdown(markdown, workspace);
+          if (body?.apply !== true) {
+            return j(200, {
+              dryRun: true,
+              workspaceId,
+              path,
+              ...(alreadyImported !== null ? { alreadyImported } : {}),
+              mapping,
+            });
+          }
+          if (alreadyImported !== null) {
+            return j(409, { error: 'already-imported', workspaceId: alreadyImported });
+          }
+          const res = applyImport(taskStore, workspaceId, mapping, { actor: author });
+          if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
+          // Stamp the source file. If the tracker is bound as a live doc,
+          // pull the banner into the live doc too — reparse right after our
+          // own write, so disk (which we just wrote) wins the race with the
+          // doc's debounced flush.
+          const hubUrl = `${publicBaseUrl(server.port ?? port)}/workspaces/${encodeURIComponent(workspaceId)}`;
+          writeFileSync(
+            path,
+            importBanner({
+              workspaceId,
+              hubUrl,
+              taskCount: res.tasksCreated.length,
+              ts: Date.now(),
+            }) + markdown,
+          );
+          const resolved = resolve(path);
+          const bound = rooms
+            .list()
+            .find((m) => m.sourceUrl !== undefined && resolve(m.sourceUrl) === resolved);
+          if (bound) rooms.reparseFromDisk(bound.docId);
+          // Task/goal events already refreshed the projection; this covers a
+          // mapping with zero new goals and zero tasks (nothing emitted).
+          taskProjection.ensureWorkspace(workspaceId);
+          return j(200, {
+            ok: true,
+            workspaceId,
+            hubUrl,
+            stamped: true,
+            goalsCreated: res.goalsCreated,
+            tasksCreated: res.tasksCreated,
+            failures: res.failures,
+            skipped: mapping.skipped,
+            ignoredColumns: mapping.ignoredColumns,
+          });
+        }
+        const wsTasksMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/tasks$/);
+        if (wsTasksMatch && req.method === 'GET') {
+          const workspaceId = decodeURIComponent(wsTasksMatch[1] ?? '');
+          if (!taskStore.getWorkspace(workspaceId)) {
+            return j(404, { error: 'workspace not found' });
+          }
+          const status = url.searchParams.get('status') as TaskStatus | null;
+          const tasks = taskStore.listTasks(workspaceId, {
+            ...(status ? { status } : {}),
+            ...(url.searchParams.get('goal') ? { goal: url.searchParams.get('goal') ?? '' } : {}),
+            ...(url.searchParams.get('assignee')
+              ? { assignee: url.searchParams.get('assignee') ?? '' }
+              : {}),
+            ...(url.searchParams.get('needs')
+              ? { needs: url.searchParams.get('needs') as 'action' | 'decision' }
+              : {}),
+          });
+          return j(200, { workspaceId, tasks });
+        }
+        if (wsTasksMatch && req.method === 'POST') {
+          const workspaceId = decodeURIComponent(wsTasksMatch[1] ?? '');
+          const body = await safeJson(req);
+          const title = body?.title as string | undefined;
+          if (!title || typeof title !== 'string' || title.trim().length === 0) {
+            return j(400, { error: 'title required' });
+          }
+          const needs = parseNeeds(body?.needs);
+          if (!needs.ok) return j(400, { error: "needs must be 'action' | 'decision'" });
+          const links = parseLinks(body?.links);
+          if (!links.ok) return j(400, { error: 'links must be an array of valid refs' });
+          const res = taskStore.createTask(workspaceId, {
+            title: title.trim(),
+            body: body?.body as string | undefined,
+            assignee: body?.assignee as string | undefined,
+            needs: needs.needs,
+            goal: body?.goal as string | undefined,
+            order: typeof body?.order === 'number' ? Number(body.order) : undefined,
+            after: Array.isArray(body?.after) ? (body.after as string[]) : undefined,
+            afterEnforce: Array.isArray(body?.afterEnforce)
+              ? (body.afterEnforce as string[])
+              : undefined,
+            dueAt: typeof body?.dueAt === 'number' ? Number(body.dueAt) : undefined,
+            links: links.links,
+            origin: body?.origin as Ref | undefined,
+            quote: body?.quote as string | undefined,
+            // Optional: a task can be created by a UI with no session yet.
+            // When it IS supplied, the created row is attributed (§3.6) —
+            // "who put this here" is the first question of every triage.
+            actor: authorFor(body?.author) ?? undefined,
+          });
+          if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
+          return j(200, { task: res.task });
+        }
+        // The single gate for status changes: attributed, evidence-stamped,
+        // dependency-checked. 409 on an enforce-marked open dependency.
+        const taskTransitionMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/transition$/);
+        if (taskTransitionMatch && req.method === 'POST') {
+          const taskId = decodeURIComponent(taskTransitionMatch[1] ?? '');
+          const body = await safeJson(req);
+          const author = authorFor(body?.author);
+          const to = body?.to as TaskStatus | undefined;
+          if (!author || !to) return j(400, { error: 'author + to required' });
+          const res = taskStore.transition(taskId, to, {
+            actor: author,
+            note: body?.note as string | undefined,
+            evidence: body?.evidence as { commit?: string; threadRef?: Ref } | undefined,
+            usage: body?.usage as { inputTokens: number; outputTokens: number } | undefined,
+            // The human's live confirmation for a yellow-tier move (§3.4).
+            confirmed: body?.confirmed === true,
+          });
+          if (!res.ok) {
+            // A gate refusal is a refusal, not a malformed request: same 409
+            // an enforce-marked blocker returns, so callers have one shape
+            // for "the gate said no".
+            const refused =
+              res.error === 'blocked' ||
+              res.error === 'risk-refused' ||
+              res.error === 'needs-confirmation';
+            const status = res.error === 'not-found' ? 404 : refused ? 409 : 400;
+            return j(status, res);
+          }
+          return j(200, res);
+        }
+        // Cross-references (§3.10 `.../links`): links are STORED on the
+        // task; backlinks are COMPUTED per read, never stored, so the two
+        // directions can't drift.
+        const taskLinksMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/links$/);
+        if (taskLinksMatch && req.method === 'GET') {
+          const taskId = decodeURIComponent(taskLinksMatch[1] ?? '');
+          const task = taskStore.getTask(taskId);
+          if (!task) return j(404, { error: 'task not found' });
+          return j(200, {
+            taskId,
+            links: task.links,
+            backlinks: taskStore.backlinksFor({ kind: 'task', taskId }).map(taskChip),
+          });
+        }
+        if (taskLinksMatch && (req.method === 'POST' || req.method === 'DELETE')) {
+          const taskId = decodeURIComponent(taskLinksMatch[1] ?? '');
+          const body = await safeJson(req);
+          const ref = body?.ref;
+          if (!isValidRef(ref)) return j(400, { error: 'valid ref required' });
+          const res =
+            req.method === 'POST'
+              ? taskStore.linkRef(taskId, ref)
+              : taskStore.unlinkRef(taskId, ref);
+          if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
+          // Link changes emit no store event (§3.6's exhaustive table has no
+          // row for them), so refresh the projection by hand — the same
+          // pattern as createWorkspace/attachDoc above.
+          taskProjection.ensureWorkspace(res.task.workspaceId);
+          return j(200, { ok: true, changed: res.changed, task: res.task });
+        }
+        // set_task_goal (§3.10): goal/subgoal + exact position + riskTier —
+        // the write half of triage and the board's regroup gesture. Every
+        // field here is hand-copied; each has an HTTP-level test in
+        // task-tool-routes.test.ts.
+        const taskGoalMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/goal$/);
+        if (taskGoalMatch && req.method === 'POST') {
+          const taskId = decodeURIComponent(taskGoalMatch[1] ?? '');
+          const body = await safeJson(req);
+          const goal = body?.goal;
+          if (typeof goal !== 'string' || goal.length === 0) {
+            return j(400, { error: 'goal required' });
+          }
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const riskTier = body?.riskTier;
+          if (
+            riskTier !== undefined &&
+            riskTier !== 'green' &&
+            riskTier !== 'yellow' &&
+            riskTier !== 'red'
+          ) {
+            return j(400, { error: 'riskTier must be green | yellow | red' });
+          }
+          const batchId = body?.batchId;
+          if (batchId !== undefined && typeof batchId !== 'string') {
+            return j(400, { error: 'batchId must be a string' });
+          }
+          const res = taskStore.setTaskGoal(taskId, goal, {
+            actor: author,
+            position: typeof body?.position === 'number' ? Number(body.position) : undefined,
+            riskTier,
+            batchId,
+          });
+          if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
+          // A confirm-in-place (changed:false) mutates gated fields
+          // (triagedAgainst, triagePendingTs, riskTier) without emitting an
+          // event — refresh the projection by hand, same as attachDoc.
+          if (!res.changed) taskProjection.ensureWorkspace(res.task.workspaceId);
+          return j(200, res);
+        }
+        // answer_decision (§3.10): record the VERBATIM answer. Does not
+        // transition the task — status changes stay with the single gate.
+        const taskAnswerMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/answer$/);
+        if (taskAnswerMatch && req.method === 'POST') {
+          const taskId = decodeURIComponent(taskAnswerMatch[1] ?? '');
+          const body = await safeJson(req);
+          const text = body?.text;
+          if (typeof text !== 'string' || text.length === 0) {
+            return j(400, { error: 'text required' });
+          }
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const res = taskStore.answerDecision(taskId, text, { actor: author });
+          if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
+          return j(200, res);
+        }
+        // In-place task title edit (§3.9: tap the title, Enter commits).
+        // Renames emit no store event (§3.6 has no task.renamed row), so the
+        // projection the board renders from is refreshed by hand.
+        const taskTitleMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/title$/);
+        if (taskTitleMatch && req.method === 'POST') {
+          const taskId = decodeURIComponent(taskTitleMatch[1] ?? '');
+          const body = await safeJson(req);
+          const title = typeof body?.title === 'string' ? body.title.trim() : '';
+          if (title.length === 0) return j(400, { error: 'title required' });
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const res = taskStore.renameTask(taskId, title, { actor: author });
+          if (!res.ok) return j(404, res);
+          taskProjection.ensureWorkspace(res.task.workspaceId);
+          return j(200, res);
+        }
+        // assign_task (§3.6 task.assigned): hand a task between the human and
+        // the agent (or a named identity). Status is untouched — a hand-off
+        // is not progress, and routing it through the transition gate would
+        // make "you take this" require evidence.
+        const taskAssigneeMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/assignee$/);
+        if (taskAssigneeMatch && req.method === 'POST') {
+          const taskId = decodeURIComponent(taskAssigneeMatch[1] ?? '');
+          const body = await safeJson(req);
+          const assignee = typeof body?.assignee === 'string' ? body.assignee.trim() : '';
+          if (assignee.length === 0) return j(400, { error: 'assignee required' });
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const res = taskStore.setAssignee(taskId, assignee, { actor: author });
+          if (!res.ok) return j(404, res);
+          // A no-op emits nothing, so nothing would refresh the board room —
+          // harmless here (nothing changed) but the changed path is covered
+          // by the task.assigned event's own projection hook.
+          if (!res.changed) taskProjection.ensureWorkspace(res.task.workspaceId);
+          return j(200, res);
+        }
+        // set_goal_list (§3.2 edit contract): replace the ordered board
+        // sections. Structural validation happens HERE because the store
+        // trusts its callers with shapes — a junk entry that reached the
+        // sidecar would render as a broken section forever.
+        const wsGoalsMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/goals$/);
+        if (wsGoalsMatch && req.method === 'PUT') {
+          const workspaceId = decodeURIComponent(wsGoalsMatch[1] ?? '');
+          const body = await safeJson(req);
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const goals = parseGoalList(body?.goals);
+          if (!goals) {
+            return j(400, { error: 'goals must be [{id, title, dueAt?, subgoals?}]' });
+          }
+          const res = taskStore.setGoalList(workspaceId, goals, { actor: author });
+          if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
+          return j(200, res);
+        }
+        // promote_to_task (§3.10): thread → task. Captures the origin ref,
+        // the latest HUMAN comment as the verbatim quote (an agent's closing
+        // note must never become the quote), and drafts a title + body the
+        // caller didn't supply. classifyActor draws the person/agent line —
+        // the same one replies and transitions use.
+        const promoteMatch = pathname.match(/^\/api\/docs\/([^/]+)\/threads\/([^/]+)\/promote$/);
+        if (promoteMatch && req.method === 'POST') {
+          const docId = decodeURIComponent(promoteMatch[1] ?? '');
+          const threadId = decodeURIComponent(promoteMatch[2] ?? '');
+          const body = await safeJson(req);
+          const workspaceId = body?.workspaceId;
+          if (typeof workspaceId !== 'string' || workspaceId.length === 0) {
+            return j(400, { error: 'workspaceId required' });
+          }
+          if (!taskStore.getWorkspace(workspaceId)) {
+            return j(404, { error: 'workspace not found' });
+          }
+          const thread = rooms.getThread(docId, threadId);
+          if (!thread) return j(404, { error: 'thread not found' });
+          const humanComment = [...thread.comments]
+            .reverse()
+            .find((c) => classifyActor(c.author) === 'person');
+          const quote =
+            typeof body?.quote === 'string' && body.quote.length > 0
+              ? body.quote
+              : humanComment?.text;
+          const snippet = anchorSnippetText(thread.anchor);
+          const titleSource = (quote ?? snippet ?? 'Promoted thread').split('\n')[0] ?? '';
+          const title =
+            typeof body?.title === 'string' && body.title.trim().length > 0
+              ? body.title.trim()
+              : titleSource.length > 80
+                ? `${titleSource.slice(0, 79)}…`
+                : titleSource;
+          const draftBody =
+            typeof body?.body === 'string'
+              ? body.body
+              : [
+                  `Promoted from a comment thread${snippet ? ` on "${snippet}"` : ''}.`,
+                  ...(quote ? ['', `> ${quote}`] : []),
+                ].join('\n');
+          const promoteNeeds = parseNeeds(body?.needs);
+          if (!promoteNeeds.ok) return j(400, { error: "needs must be 'action' | 'decision'" });
+          const promoteLinks = parseLinks(body?.links);
+          if (!promoteLinks.ok) return j(400, { error: 'links must be an array of valid refs' });
+          const res = taskStore.createTask(workspaceId, {
+            title,
+            body: draftBody,
+            assignee: body?.assignee as string | undefined,
+            needs: promoteNeeds.needs,
+            // Forward undefined untouched: an omitted goal is what routes the
+            // task through triage (an explicit 'chores' would skip it).
+            goal: body?.goal as string | undefined,
+            order: typeof body?.order === 'number' ? Number(body.order) : undefined,
+            dueAt: typeof body?.dueAt === 'number' ? Number(body.dueAt) : undefined,
+            links: promoteLinks.links,
+            origin: { kind: 'thread', docId, threadId },
+            ...(quote !== undefined ? { quote } : {}),
+            actor: authorFor(body?.author) ?? undefined,
+          });
+          if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
+          return j(200, { task: res.task });
+        }
+        // --- REST: agent attachments (§4) ---
+        // AgentAttachment records live OUTSIDE every ydoc; this REST surface
+        // is their only read path. `endpoint` is host-machine-describing, so
+        // a share visitor's read is redacted (the private-meta pattern) and
+        // the mutations are owner-only outright — a visitor attaching an
+        // agent or forging a heartbeat is never legitimate.
+        const wsAgentsMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/attachments$/);
+        if (wsAgentsMatch && req.method === 'GET') {
+          const workspaceId = decodeURIComponent(wsAgentsMatch[1] ?? '');
+          if (!taskStore.getWorkspace(workspaceId)) {
+            return j(404, { error: 'workspace not found' });
+          }
+          return j(200, {
+            workspaceId,
+            attachments: visitor
+              ? taskStore.listPublicAttachments(workspaceId)
+              : taskStore.listAttachments(workspaceId),
+          });
+        }
+        if (wsAgentsMatch && req.method === 'POST') {
+          if (visitor) return j(403, { error: 'not available to share visitors' });
+          const workspaceId = decodeURIComponent(wsAgentsMatch[1] ?? '');
+          const body = await safeJson(req);
+          const agentId = body?.agentId;
+          if (typeof agentId !== 'string' || agentId.trim().length === 0) {
+            return j(400, { error: 'agentId required' });
+          }
+          const runtime = body?.runtime;
+          if (!isAttachmentRuntime(runtime)) {
+            return j(400, { error: 'runtime must be claude-code-local | managed-agent | webhook' });
+          }
+          const res = taskStore.attachAgent(workspaceId, {
+            agentId: agentId.trim(),
+            runtime,
+            capabilities: Array.isArray(body?.capabilities)
+              ? (body.capabilities as unknown[]).filter((c): c is string => typeof c === 'string')
+              : undefined,
+            endpoint: typeof body?.endpoint === 'string' ? body.endpoint : undefined,
+          });
+          if (!res.ok) return j(404, res);
+          return j(200, res);
+        }
+        const wsAgentHeartbeatMatch = pathname.match(
+          /^\/api\/workspaces\/([^/]+)\/attachments\/([^/]+)\/heartbeat$/,
+        );
+        if (wsAgentHeartbeatMatch && req.method === 'POST') {
+          if (visitor) return j(403, { error: 'not available to share visitors' });
+          const workspaceId = decodeURIComponent(wsAgentHeartbeatMatch[1] ?? '');
+          const agentId = decodeURIComponent(wsAgentHeartbeatMatch[2] ?? '');
+          const body = await safeJson(req);
+          const res = taskStore.heartbeat(workspaceId, agentId, {
+            // Forwarded, not re-derived: the runtime knows when it last did
+            // work; the route's job is only to not drop the field.
+            toolCallAt: typeof body?.toolCallAt === 'number' ? Number(body.toolCallAt) : undefined,
+          });
+          if (!res.ok) return j(404, res);
+          return j(200, res);
+        }
+        const wsAgentDetachMatch = pathname.match(
+          /^\/api\/workspaces\/([^/]+)\/attachments\/([^/]+)$/,
+        );
+        if (wsAgentDetachMatch && req.method === 'DELETE') {
+          if (visitor) return j(403, { error: 'not available to share visitors' });
+          const workspaceId = decodeURIComponent(wsAgentDetachMatch[1] ?? '');
+          const agentId = decodeURIComponent(wsAgentDetachMatch[2] ?? '');
+          if (!taskStore.detachAgent(workspaceId, agentId)) {
+            return j(404, { error: 'attachment not found' });
+          }
+          return j(200, { ok: true });
+        }
         // Delete a whole workspace as one unit (all-or-nothing open-thread
         // guardrail; ?force=true to override). Member SOURCE files are left
         // untouched, same as DELETE /api/docs/:id.
@@ -1109,7 +1897,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             return j(404, { error: 'workspace not found', workspaceId });
           }
           const status = url.searchParams.get('status') as 'open' | 'resolved' | null;
-          const threads = rooms.listWorkspaceThreads(workspaceId, status ? { status } : undefined);
+          const threads = rooms
+            .listWorkspaceThreads(workspaceId, status ? { status } : undefined)
+            .map((t) => withTaskChips(t.docId, t));
           return j(200, { workspaceId, threads });
         }
         // Grouped-diff sidebar model: changed files organized into logical
@@ -1209,7 +1999,20 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const room = rooms.get(docId);
           if (!room) return j(404, { error: 'doc not found' });
           if (rest === '' && req.method === 'GET') {
-            return j(200, { meta: metaFor(room.meta) });
+            // Doc→task surfacing (§3.12 commit 4): chips for the tasks that
+            // reference this doc — directly or via one of its threads.
+            // Visitor-safe by construction (§3.3 rule 2); omitted when empty.
+            const taskRefs = taskStore.tasksReferencingDoc(docId).map(taskChip);
+            // Which hub workspace this doc is attached to, so the doc surface
+            // can route voice utterances (§3.8: voice is not board-only).
+            // OWNER ONLY: a workspace id is an unguessable URL capability, and
+            // a doc-scoped visitor must not learn it from a member doc.
+            const hubWs = visitor ? null : taskStore.workspaceOfDoc(docId);
+            return j(200, {
+              meta: metaFor(room.meta),
+              ...(taskRefs.length > 0 ? { tasks: taskRefs } : {}),
+              ...(hubWs ? { hubWorkspaceId: hubWs } : {}),
+            });
           }
           if (rest === '' && req.method === 'DELETE') {
             const force = url.searchParams.get('force') === 'true';
@@ -1220,8 +2023,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (rest === 'threads' && req.method === 'GET') {
             const status = url.searchParams.get('status') as 'open' | 'resolved' | null;
             return j(200, {
-              threads: rooms.listThreads(docId, status ? { status } : undefined),
+              threads: rooms
+                .listThreads(docId, status ? { status } : undefined)
+                .map((t) => withTaskChips(docId, t)),
             });
+          }
+          // Task-chip resolution (§3.3 rule 2): how a chip inside a doc
+          // resolves for a DOC-scoped invite, which never gets the workspace
+          // board room. The chip is the visitor-safe shape (id, title,
+          // status, assignee) — adding a field to it is a sharing decision.
+          if (rest === 'tasks' && req.method === 'GET') {
+            return j(200, { docId, tasks: taskStore.tasksReferencingDoc(docId).map(taskChip) });
           }
           const threadIdMatch = rest.match(/^threads\/([^/]+)(\/.*)?$/);
           if (threadIdMatch) {
@@ -1229,7 +2041,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             const threadRest = threadIdMatch[2] ?? '';
             if (threadRest === '' && req.method === 'GET') {
               const t = rooms.getThread(docId, threadId);
-              return t ? j(200, { thread: t }) : j(404, { error: 'thread not found' });
+              return t
+                ? j(200, { thread: withTaskChips(docId, t) })
+                : j(404, { error: 'thread not found' });
             }
             if (threadRest === '/comments' && req.method === 'POST') {
               const body = await safeJson(req);
@@ -1646,6 +2460,25 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (resp) return resp;
         }
 
+        // --- Workspace hub (plan §3.9/§3.10: /workspaces/:workspaceId) ---
+        // The shell is server-rendered (like the landing page) so the route
+        // works — and 404s crisply — whether or not the app bundle has been
+        // built; the page's behavior all lives in /app/hub.js.
+        const hubPageMatch = pathname.match(/^\/workspaces\/([^/]+)$/);
+        if (hubPageMatch && req.method === 'GET') {
+          const workspaceId = decodeURIComponent(hubPageMatch[1] ?? '');
+          const workspace = taskStore.getWorkspace(workspaceId);
+          if (!workspace) {
+            return new Response(renderHubNotFound(workspaceId), {
+              status: 404,
+              headers: { 'content-type': 'text/html; charset=utf-8' },
+            });
+          }
+          return new Response(renderHubShell(workspace.id, workspace.name), {
+            headers: { 'content-type': 'text/html; charset=utf-8' },
+          });
+        }
+
         // --- Markdown app (surface 1) ---
         if (markdownAppDist && pathname.startsWith('/review/')) {
           const docId = decodeURIComponent(pathname.slice('/review/'.length));
@@ -1813,12 +2646,21 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   return {
     port: server.port ?? port,
     rooms,
+    tasks: taskStore,
+    projection: taskProjection,
     shares,
     sweepDeadShares,
     sharingGate,
     webhookLog,
     stop: async () => {
       if (shareSweep) clearInterval(shareSweep);
+      uptimeMonitor.stop();
+      // Flush pending body snapshots into the store BEFORE the store's own
+      // flush, so the last keystrokes in a task body reach the sidecar.
+      taskProjection.stop();
+      // Flush pending sidecar writes so a clean shutdown never loses board
+      // state that was still inside the debounce window.
+      taskStore.stop();
       server.stop();
     },
   };
@@ -1943,6 +2785,43 @@ h1{font-size:1.25rem;margin:0 0 .5rem}p{color:#555;margin:0}
 @media(prefers-color-scheme:dark){body{background:#111;color:#eee}p{color:#aaa}}</style>
 <h1>This link isn't available</h1>
 <p>It may have expired or been revoked. Ask whoever shared it for a new one.</p>`;
+}
+
+/**
+ * The hub page shell (§3.9). Tab title is `<workspace> · Workspace Hub` —
+ * the browser tab is a workspace switcher. Everything dynamic renders
+ * client-side from the ws:<id> ydoc projection + REST; the shell only names
+ * the workspace and loads the bundle.
+ */
+function renderHubShell(workspaceId: string, name: string): string {
+  const safeName = escape(name);
+  const safeId = escape(workspaceId);
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+    <title>${safeName} · Workspace Hub</title>
+    <link rel="stylesheet" href="/app/styles.css" />
+  </head>
+  <body class="hub-body">
+    <div id="hub-root" data-workspace-id="${safeId}"></div>
+    <script type="module" src="/app/hub.js"></script>
+  </body>
+</html>`;
+}
+
+function renderHubNotFound(workspaceId: string): string {
+  const safe = escape(workspaceId);
+  return `<!doctype html><meta charset="utf-8"><title>Workspace not found · Live Feedback</title>
+<style>body{font:15px/1.55 system-ui, sans-serif;margin:60px auto;max-width:560px;color:#222;padding:0 20px}
+h1{font-size:22px}code{background:#f3f3f3;padding:1px 5px;border-radius:3px;font-size:90%}
+small{color:#777}</style>
+<h1>Workspace not found</h1>
+<p>No hub workspace exists for <code>${safe}</code>. Hub workspaces are
+created by an agent calling <code>create_workspace</code> (or
+<code>POST /api/workspaces</code> with a name).</p>
+<p><small><a href="/">all docs</a></small></p>`;
 }
 
 function renderReviewNotFound(docId: string): string {

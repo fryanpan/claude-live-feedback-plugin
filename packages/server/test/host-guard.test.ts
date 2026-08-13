@@ -320,3 +320,90 @@ describe('shareScopeAllows — a visitor is a reviewer, not an operator', () => 
     expect(shareScopeAllows('/api/docs/auth-rfc/rename', 'POST', DOC)).toBe(false);
   });
 });
+
+describe('shareScopeAllows (workspace-hub surfaces — §3.12 commit 8)', () => {
+  // A hub workspace share: the entry is the hub page, not a review doc, so
+  // docId is empty. Scope comes entirely from workspaceId.
+  const HUB = { docId: '', workspaceId: 'hub-1' };
+  const DOC = { docId: 'auth-rfc' };
+  const workspaceOf = (d: string) => (d.startsWith('hub-1:') ? 'hub-1' : null);
+
+  it('allows the hub page for a workspace-scope share', () => {
+    expect(shareScopeAllows('/workspaces/hub-1', 'GET', HUB)).toBe(true);
+    expect(shareScopeAllows(`/workspaces/${encodeURIComponent('hub-1')}`, 'GET', HUB)).toBe(true);
+  });
+
+  it('allows the ws:<id> board room socket (workspaceOf returns null for it)', () => {
+    // The room is not a member doc — its allowance is explicit, so pass a
+    // resolver that knows nothing about it and watch it still pass.
+    expect(shareScopeAllows('/y/ws%3Ahub-1', 'GET', HUB, () => null)).toBe(true);
+    expect(shareScopeAllows('/y/ws:hub-1', 'GET', HUB, () => null)).toBe(true);
+  });
+
+  it('allows the workspace SSE feed', () => {
+    expect(shareScopeAllows('/events/workspace/hub-1', 'GET', HUB, () => null)).toBe(true);
+  });
+
+  it('a DOC-scoped share gets NONE of the three (the §3.3 rule-2 boundary)', () => {
+    expect(shareScopeAllows('/workspaces/hub-1', 'GET', DOC, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/y/ws%3Ahub-1', 'GET', DOC, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/y/ws:hub-1', 'GET', DOC, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/events/workspace/hub-1', 'GET', DOC, workspaceOf)).toBe(false);
+  });
+
+  it('BLOCKS another workspace’s hub surfaces', () => {
+    expect(shareScopeAllows('/workspaces/hub-2', 'GET', HUB)).toBe(false);
+    expect(shareScopeAllows('/y/ws%3Ahub-2', 'GET', HUB)).toBe(false);
+    expect(shareScopeAllows('/events/workspace/hub-2', 'GET', HUB)).toBe(false);
+  });
+
+  it('BLOCKS non-GET on the hub page and anything nested under it', () => {
+    expect(shareScopeAllows('/workspaces/hub-1', 'POST', HUB)).toBe(false);
+    expect(shareScopeAllows('/workspaces/hub-1/extra', 'GET', HUB)).toBe(false);
+    expect(shareScopeAllows('/workspaces', 'GET', HUB)).toBe(false);
+  });
+
+  it('is not fooled by a prefix that merely starts with the workspace id', () => {
+    expect(shareScopeAllows('/workspaces/hub-1-other', 'GET', HUB)).toBe(false);
+    expect(shareScopeAllows('/y/ws%3Ahub-1-other', 'GET', HUB)).toBe(false);
+    expect(shareScopeAllows('/events/workspace/hub-1-other', 'GET', HUB)).toBe(false);
+  });
+
+  it('visitors are read-only on the gate: every task/goal/decision mutation route is out of scope', () => {
+    const cases: Array<[string, string]> = [
+      ['/api/tasks/t-1/transition', 'POST'],
+      ['/api/tasks/t-1/answer', 'POST'],
+      ['/api/tasks/t-1/goal', 'POST'],
+      ['/api/tasks/t-1/title', 'POST'],
+      ['/api/tasks/t-1/links', 'POST'],
+      ['/api/tasks/t-1/links', 'DELETE'],
+      ['/api/tasks/t-1/links', 'GET'],
+      ['/api/workspaces/hub-1/goal', 'PUT'],
+      ['/api/workspaces/hub-1/goals', 'PUT'],
+      ['/api/workspaces/hub-1/tasks', 'POST'],
+      ['/api/workspaces/hub-1/tasks', 'GET'],
+      ['/api/workspaces/hub-1/docs', 'POST'],
+      ['/api/workspaces/hub-1/attachments', 'POST'],
+      // The audit log carries actor IDs — owner-only (commit 7's flag).
+      ['/api/workspaces/hub-1/events', 'GET'],
+    ];
+    for (const [p, m] of cases) {
+      expect(
+        shareScopeAllows(p, m, HUB, () => null),
+        `${m} ${p}`,
+      ).toBe(false);
+    }
+  });
+
+  it('BLOCKS promoting a thread to a task — a mutation hiding under /api/docs', () => {
+    // threads/* is broadly allowed for commenting; promote creates a TASK
+    // and must stay owner-only like the other document-surgery verbs.
+    expect(shareScopeAllows('/api/docs/auth-rfc/threads/t1/promote', 'POST', DOC)).toBe(false);
+  });
+
+  it('allows the task-chip resolution endpoint (GET only) — §3.3 rule 2', () => {
+    expect(shareScopeAllows('/api/docs/auth-rfc/tasks', 'GET', DOC)).toBe(true);
+    expect(shareScopeAllows('/api/docs/auth-rfc/tasks', 'POST', DOC)).toBe(false);
+    expect(shareScopeAllows('/api/docs/other-doc/tasks', 'GET', DOC)).toBe(false);
+  });
+});

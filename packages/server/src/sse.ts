@@ -1,4 +1,9 @@
-import type { WebhookPayload } from '@feedback/core';
+/**
+ * Anything broadcast over SSE: thread/suggestion webhook payloads and the
+ * hub task events. The hub only needs the event name here — the whole
+ * object is serialized as the data line either way.
+ */
+type SsePayload = { event: string };
 
 type Sink = {
   write: (event: string, data: unknown) => void;
@@ -34,7 +39,7 @@ export class SseHub {
     if (set.size === 0) this.byDoc.delete(docId);
   }
 
-  broadcast(docId: string, payload: WebhookPayload): void {
+  broadcast(docId: string, payload: SsePayload): void {
     const set = this.byDoc.get(docId);
     if (!set) return;
     for (const sink of set.keys()) {
@@ -84,8 +89,16 @@ export class SseHub {
 
 /** Produce a ReadableStream that emits SSE lines, and register with the hub.
  *  `shareId` tags the stream with the share that authorized it so revocation
- *  and expiry can hang it up. */
-export function openSseStream(hub: SseHub, docId: string, shareId?: string): Response {
+ *  and expiry can hang it up. `transform` rewrites each payload before it is
+ *  serialized — how a share visitor's stream gets the redacted view of an
+ *  event every other subscriber receives raw. It must not change the event
+ *  name. */
+export function openSseStream(
+  hub: SseHub,
+  docId: string,
+  shareId?: string,
+  transform?: (payload: SsePayload & Record<string, unknown>) => SsePayload,
+): Response {
   let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
   const encoder = new TextEncoder();
   let remove: (() => void) | null = null;
@@ -96,7 +109,10 @@ export function openSseStream(hub: SseHub, docId: string, shareId?: string): Res
       const sink = {
         write: (event: string, data: unknown) => {
           if (!controller) return;
-          const body = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+          const payload = transform
+            ? transform(data as SsePayload & Record<string, unknown>)
+            : data;
+          const body = `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
           controller.enqueue(encoder.encode(body));
         },
         close: () => {

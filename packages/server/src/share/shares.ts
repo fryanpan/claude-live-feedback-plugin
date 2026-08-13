@@ -62,10 +62,14 @@ export class Shares {
    * The URL opens `entryDocId`.
    */
   async createShareWorkspace(req: CreateShareWorkspaceReq): Promise<Share> {
+    if (!req.hub && !req.entryDocId) {
+      throw new Error('entryDocId is required (or pass hub for a hub workspace share)');
+    }
     return this.create({
       ...req,
       surface: 'workspace',
-      docId: req.entryDocId,
+      // A hub share has no entry doc — its URL opens the hub page.
+      docId: req.entryDocId ?? '',
       workspaceId: req.workspaceId,
     });
   }
@@ -82,7 +86,11 @@ export class Shares {
       );
     }
     const docId = req.workspaceId ? (req.entryDocId ?? '') : (req.docId ?? '');
-    if (!docId) throw new Error('docId (or entryDocId for a workspace) is required');
+    // A hub workspace share deliberately has NO entry doc — redemption
+    // lands on the hub page, and the guard scopes by workspaceId alone.
+    if (!docId && !(req.workspaceId && req.hub)) {
+      throw new Error('docId (or entryDocId for a workspace) is required');
+    }
     if (req.docId && req.workspaceId) {
       throw new Error('pass docId OR workspaceId, not both');
     }
@@ -154,7 +162,10 @@ export class Shares {
     const shareId = randomHex(8);
     const slug = req.name ?? `${dateSlug(new Date())}-${randomHex(3)}`;
     const hostname = `share-${slug}.${this.config.baseHostname}`;
-    const url = `https://${hostname}/review/${encodeURIComponent(req.docId)}`;
+    // A hub workspace share (empty docId) opens the hub page directly.
+    const url = req.docId
+      ? `https://${hostname}/review/${encodeURIComponent(req.docId)}`
+      : `https://${hostname}/workspaces/${encodeURIComponent(req.workspaceId ?? '')}`;
     const ttl = req.ttlSeconds ?? this.config.defaultTtlSeconds ?? DEFAULT_TTL_SECONDS;
     const expiresAt = Date.now() + ttl * 1000;
 
