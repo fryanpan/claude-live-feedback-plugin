@@ -30,6 +30,16 @@ const reviewer: User = { id: 'known-reviewer', name: 'Reviewer', kind: 'known', 
 const visitor: User = { id: 'anon-7f3', name: 'Sam', kind: 'anon', color: '#7a5' };
 /** What `resolveAgentAuthor` builds from FEEDBACK_AGENT_NAME="Quick Build". */
 const agent: User = { id: 'agent-quick-build', name: 'Quick Build', kind: 'known', color: '#888' };
+/** An agent that DECLARES what it is instead of encoding it in the id — the
+ *  obvious thing for a REST caller or a hand-rolled MCP wrapper to send, and
+ *  the shape that used to be classified as a person. Its id and name are both
+ *  deliberately person-shaped so `kind` is the only agent signal present. */
+const declaredAgent: User = {
+  id: 'team-lead',
+  name: 'Team Lead',
+  kind: 'agent' as unknown as User['kind'],
+  color: '#888',
+};
 
 const anchor: ElementAnchor = {
   kind: 'element',
@@ -156,6 +166,24 @@ describe('a reply to a resolved thread', () => {
     // resolved" would also pass if the POST had failed outright.
     expect(t.comments.length).toBe(2);
     expect(t.comments.at(-1)?.author.id).toBe('agent-quick-build');
+    expect(t.status).toBe('resolved');
+    expect(syncedStatus(docId, threadId)).toBe('resolved');
+  });
+
+  it('does NOT reopen when an agent that DECLARES kind:agent replies', async () => {
+    const { docId, threadId } = await seedThread();
+    await resolve(docId, threadId);
+    // Positive control: the resolve took, so "still resolved" below is a
+    // decision and not a resolve that never happened.
+    expect(syncedStatus(docId, threadId)).toBe('resolved');
+
+    const t = await reply(docId, threadId, declaredAgent, 'Done — removed it in 943d603.');
+    // Positive control: the reply itself landed.
+    expect(t.comments.length).toBe(2);
+    expect(t.comments.at(-1)?.author.id).toBe('team-lead');
+    // The whole point. This author's id and name are person-shaped, so before
+    // classifyActor honoured an explicit kind, its closing note reopened the
+    // thread a human had just resolved — every time, silently, with a 200.
     expect(t.status).toBe('resolved');
     expect(syncedStatus(docId, threadId)).toBe('resolved');
   });
