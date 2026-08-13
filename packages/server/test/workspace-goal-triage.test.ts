@@ -72,8 +72,10 @@ describe('workspace goal + triage hook', () => {
       off();
       expect(events).toHaveLength(1);
       const e = events[0];
-      if (!e) throw new Error('no event');
-      expect(e.type).toBe('workspace.goal_updated');
+      // Narrow the union — the assertion is the same, the throw carries it.
+      if (e?.type !== 'workspace.goal_updated') {
+        throw new Error(`expected workspace.goal_updated, got ${e?.type}`);
+      }
       expect(e.workspaceId).toBe(ws.id);
       expect(e.oldGoal).toBe('Old goal.');
       expect(e.newGoal).toBe('New goal.');

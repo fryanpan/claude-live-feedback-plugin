@@ -48,6 +48,7 @@ import type { ShareConfig } from './share/types.ts';
 import { sanitizeVisitorAuthor } from './share/visitor-identity.ts';
 import { SseHub, openSseStream } from './sse.ts';
 import { KEYCHAIN_SERVICE, ThreadSummarizer } from './summarize.ts';
+import { TaskProjection } from './task-projection.ts';
 import { type Ref, type TaskStatus, TaskStore } from './tasks.ts';
 import { type WebhookLogEntry, createWebhookDispatcher } from './webhooks.ts';
 import { onClose, onMessage, onOpen } from './yjs-protocol.ts';
@@ -152,6 +153,9 @@ export interface ServerHandle {
   rooms: Rooms;
   /** The hub task store — workspaces, tasks, the transition gate. */
   tasks: TaskStore;
+  /** The ydoc projection of the task store (ws:<id> board rooms + task
+   *  body rooms). Exposed so tests can force a reassert. */
+  projection: TaskProjection;
   shares: Shares | null;
   /** Hang up every websocket and SSE stream whose share is no longer live.
    *  Runs on a 60s interval; exposed so tests exercise the real sweep. */
@@ -362,6 +366,20 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // The hub task store (plan §3.2/§3.3): server-owned workspaces + tasks,
   // persisted as per-workspace sidecars under <dataDir>/workspaces/.
   const taskStore = new TaskStore({ dataDir });
+  // Every store event rides the existing SSE pipeline on the workspace
+  // channel (`ws~<workspaceId>`, the same channel doc thread events use for
+  // legacy grouping workspaces) — no new transport (§3.6). The audit log
+  // append happens inside the store's emit, not here.
+  taskStore.onEvent((ev) => {
+    const { type, ...rest } = ev;
+    sse.broadcast(`ws~${ev.workspaceId}`, { event: type, ...rest });
+  });
+  // The ydoc projection (§3.3): ws:<workspaceId> board rooms the server
+  // writes and defends (foreign writes reverted), plus task:<taskId> body
+  // rooms. init() runs after both stores hydrated, so the sidecar is
+  // authoritative for gated fields on restart.
+  const taskProjection = new TaskProjection({ rooms, tasks: taskStore });
+  taskProjection.init();
 
   /**
    * CORS is decided once, here, for every response the handler produces,
@@ -915,7 +933,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         if (wsEventsMatch) {
           const workspaceId = decodeURIComponent(wsEventsMatch[1] ?? '');
           if (!isValidDocId(workspaceId)) return j(400, { error: 'bad workspaceId' });
-          const exists = rooms.list().some((m) => m.workspaceId === workspaceId);
+          // A workspace channel exists for legacy grouping workspaces (diff
+          // reviews / folder binds) AND for hub workspaces — task.* events
+          // broadcast on the same `ws~<id>` channel (§3.6).
+          const exists =
+            rooms.list().some((m) => m.workspaceId === workspaceId) ||
+            taskStore.getWorkspace(workspaceId) !== undefined;
           if (!exists) return j(404, { error: 'workspace not found' });
           return openSseStream(sse, `ws~${workspaceId}`, visitorShareId ?? undefined);
         }
@@ -996,6 +1019,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!folderPath && typeof body?.name === 'string' && body.name.trim().length > 0) {
             const goal = typeof body?.goal === 'string' ? (body.goal as string) : undefined;
             const workspace = taskStore.createWorkspace(body.name.trim(), goal);
+            // createWorkspace emits no event (nothing subscribes to a
+            // workspace that doesn't exist yet), so the route brings the
+            // board room up itself.
+            taskProjection.ensureWorkspace(workspace.id);
             return j(200, { workspace });
           }
           if (!folderPath || typeof folderPath !== 'string') {
@@ -1143,6 +1170,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!exists) return j(404, { error: 'doc not found', docId });
           const res = taskStore.attachDoc(workspaceId, docId);
           if (!res.ok) return j(404, res);
+          // attachDoc emits no store event; refresh the projection's docIds.
+          taskProjection.ensureWorkspace(workspaceId);
           return j(200, { ok: true, workspace: taskStore.getWorkspace(workspaceId) });
         }
         const wsTasksMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/tasks$/);
@@ -1940,12 +1969,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     port: server.port ?? port,
     rooms,
     tasks: taskStore,
+    projection: taskProjection,
     shares,
     sweepDeadShares,
     sharingGate,
     webhookLog,
     stop: async () => {
       if (shareSweep) clearInterval(shareSweep);
+      // Flush pending body snapshots into the store BEFORE the store's own
+      // flush, so the last keystrokes in a task body reach the sidecar.
+      taskProjection.stop();
       // Flush pending sidecar writes so a clean shutdown never loses board
       // state that was still inside the debounce window.
       taskStore.stop();
