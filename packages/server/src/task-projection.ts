@@ -99,10 +99,18 @@ export class TaskProjection {
   private rooms: Rooms;
   private tasks: TaskStore;
   private snapshotDebounceMs: number;
-  /** workspaceIds whose revert guard is wired (rooms are long-lived). */
-  private wired = new Set<string>();
-  /** body-room docIds whose snapshot observer is wired. */
-  private bodyWired = new Set<string>();
+  /**
+   * The DOC a workspace's revert guard is wired to — keyed to the ydoc, not
+   * to the workspaceId. `rooms.getOrCreate` hands back a NEW Y.Doc whenever
+   * the room is no longer in the map (a `DELETE /api/docs/ws:<id>` drops
+   * it), and a workspaceId-keyed "already wired" set then skips observing
+   * the replacement: from that moment the board accepts and KEEPS arbitrary
+   * client writes, silently, until the process restarts.
+   */
+  private wired = new Map<string, Y.Doc>();
+  /** Same identity rule for body rooms: docId → the ydoc whose snapshot
+   *  observer is wired. A recreated room re-arms rather than going quiet. */
+  private bodyWired = new Map<string, Y.Doc>();
   private snapshotTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private off: (() => void) | null = null;
 
@@ -150,8 +158,8 @@ export class TaskProjection {
       type: 'workspace',
       title: ws.name,
     });
-    if (!this.wired.has(workspaceId)) {
-      this.wired.add(workspaceId);
+    if (this.wired.get(workspaceId) !== room.ydoc) {
+      this.wired.set(workspaceId, room.ydoc);
       const guard = (_events: Y.YEvent<Y.AbstractType<unknown>>[], tr: Y.Transaction) => {
         if (tr.origin === PROJECTION_ORIGIN) return;
         // A foreign transaction touched server-owned state (client writes
@@ -223,8 +231,8 @@ export class TaskProjection {
     if (fragment.length === 0 && task.body?.trim()) {
       this.rooms.setDocContent(docId, task.body);
     }
-    if (!this.bodyWired.has(docId)) {
-      this.bodyWired.add(docId);
+    if (this.bodyWired.get(docId) !== room.ydoc) {
+      this.bodyWired.set(docId, room.ydoc);
       fragment.observeDeep(() => this.scheduleSnapshot(docId));
     }
   }
