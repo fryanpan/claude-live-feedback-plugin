@@ -233,6 +233,157 @@ describe('hub workspace + task routes', () => {
       const noWs = await post('/api/workspaces/w-nope/tasks', { title: 'x' });
       expect(noWs.status).toBe(404);
     });
+
+    // `afterEnforce` is a SUBSET of `after` — openBlockers walks `after` and
+    // uses afterEnforce only as a lookup set, so an id in one array and not
+    // the other is never visited and hard-blocks nothing. Accepting it
+    // silently disables the strongest of the three anti-rollover guards, in
+    // the direction of letting work through.
+    it('refuses afterEnforce ids that are not also in after', async () => {
+      const gate = (await (
+        await post(`/api/workspaces/${wsId}/tasks`, { title: 'your go', needs: 'decision' })
+      ).json()) as { task: Task };
+
+      const lopsided = await post(`/api/workspaces/${wsId}/tasks`, {
+        title: 'Open the PR',
+        afterEnforce: [gate.task.id],
+      });
+      expect(lopsided.status).toBe(400);
+      expect(((await lopsided.json()) as { error: string }).error).toBe('unknown-after-enforce');
+
+      // Positive control: the same pair in BOTH arrays is accepted and gates.
+      const both = await post(`/api/workspaces/${wsId}/tasks`, {
+        title: 'Open the PR',
+        after: [gate.task.id],
+        afterEnforce: [gate.task.id],
+      });
+      expect(both.status).toBe(200);
+      const work = ((await both.json()) as { task: Task }).task;
+      const refused = await post(`/api/tasks/${work.id}/transition`, {
+        to: 'in-progress',
+        author: AGENT,
+      });
+      expect(refused.status).toBe(409);
+    });
+
+    // Sibling routes validate the identical values (POST .../links runs
+    // isValidRef; .../goal validates riskTier), so the create route
+    // answering 200 to a malformed ref is the same field giving two answers.
+    it('validates links and needs on create the way the sibling routes do', async () => {
+      const badLink = await post(`/api/workspaces/${wsId}/tasks`, {
+        title: 'Bad ref',
+        links: [{ kind: 'thread', docId: 'plan-doc' }], // threadId missing
+      });
+      expect(badLink.status).toBe(400);
+
+      const badNeeds = await post(`/api/workspaces/${wsId}/tasks`, {
+        title: 'Approve the spend',
+        assignee: 'human',
+        needs: 'Decision', // capitalized — silently not a decision task
+      });
+      expect(badNeeds.status).toBe(400);
+
+      // Positive control: the well-formed forms are accepted and stored.
+      const good = await post(`/api/workspaces/${wsId}/tasks`, {
+        title: 'Approve the spend',
+        assignee: 'human',
+        needs: 'decision',
+        links: [{ kind: 'thread', docId: 'plan-doc', threadId: 'th-1' }],
+      });
+      expect(good.status).toBe(200);
+      const task = ((await good.json()) as { task: Task }).task;
+      expect(task.needs).toBe('decision');
+      expect(task.links).toHaveLength(1);
+    });
+  });
+
+  // §3.4: risk is a property of the ACTION. Green is free; yellow needs a
+  // human's live confirmation; red the gate refuses outright — for the
+  // LF-MEDIATED mutations that flow through this server. The tier was
+  // stamped, projected and rendered, and no gate path ever read it.
+  describe('riskTier at the transition gate', () => {
+    let wsId: string;
+
+    beforeAll(async () => {
+      const r = await post('/api/workspaces', { name: 'risk-ws' });
+      wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
+    });
+
+    const mkTask = async (title: string, riskTier?: string): Promise<Task> => {
+      const r = await post(`/api/workspaces/${wsId}/tasks`, { title });
+      const task = ((await r.json()) as { task: Task }).task;
+      if (riskTier) {
+        const g = await post(`/api/tasks/${task.id}/goal`, {
+          goal: 'chores',
+          author: AGENT,
+          riskTier,
+        });
+        expect(g.status).toBe(200);
+      }
+      return task;
+    };
+
+    it('refuses an agent forward move on a red task, allows the person and the undo', async () => {
+      const red = await mkTask('Flip the repo public', 'red');
+      const refused = await post(`/api/tasks/${red.id}/transition`, {
+        to: 'in-progress',
+        author: AGENT,
+      });
+      expect(refused.status).toBe(409);
+      const body = (await refused.json()) as { error: string; riskTier?: string };
+      expect(body.error).toBe('risk-refused');
+      expect(body.riskTier).toBe('red');
+      // It really did not move.
+      const after = (await (await local(`/api/workspaces/${wsId}/tasks`)).json()) as {
+        tasks: Task[];
+      };
+      expect(after.tasks.find((t) => t.id === red.id)?.status).toBe('todo');
+
+      // POSITIVE CONTROL 1: a person moving the same red task is allowed —
+      // the human override is one tap, the gate binds agents.
+      const byPerson = await post(`/api/tasks/${red.id}/transition`, {
+        to: 'in-progress',
+        author: PERSON,
+      });
+      expect(byPerson.status).toBe(200);
+      // POSITIVE CONTROL 2: undoing is never blocked, whoever asks.
+      const undo = await post(`/api/tasks/${red.id}/transition`, { to: 'todo', author: AGENT });
+      expect(undo.status).toBe(200);
+    });
+
+    it('a green task is untouched by the gate (positive control)', async () => {
+      const green = await mkTask('Draft the rollout note', 'green');
+      const r = await post(`/api/tasks/${green.id}/transition`, {
+        to: 'in-progress',
+        author: AGENT,
+      });
+      expect(r.status).toBe(200);
+      const untiered = await mkTask('No tier stamped yet');
+      const r2 = await post(`/api/tasks/${untiered.id}/transition`, {
+        to: 'in-progress',
+        author: AGENT,
+      });
+      expect(r2.status).toBe(200);
+    });
+
+    it('a yellow task needs the human confirmation flag, and records it', async () => {
+      const yellow = await mkTask('Send the partner update', 'yellow');
+      const refused = await post(`/api/tasks/${yellow.id}/transition`, {
+        to: 'in-progress',
+        author: AGENT,
+      });
+      expect(refused.status).toBe(409);
+      expect(((await refused.json()) as { error: string }).error).toBe('needs-confirmation');
+
+      const confirmed = await post(`/api/tasks/${yellow.id}/transition`, {
+        to: 'in-progress',
+        author: AGENT,
+        confirmed: true,
+      });
+      expect(confirmed.status).toBe(200);
+      const { task } = (await confirmed.json()) as { task: Task };
+      expect(task.transitions.at(-1)?.confirmed).toBe(true);
+    });
   });
 
   describe('POST /api/tasks/:id/transition', () => {

@@ -136,6 +136,10 @@ export interface TaskTransition {
   evidence?: TaskEvidence;
   /** Agent-reported cost at done. */
   usage?: { inputTokens: number; outputTokens: number };
+  /** The human's live confirmation, required for an agent to move a
+   *  yellow-tier task forward (§3.4). Recorded so the after-the-fact review
+   *  can see the confirmation was asked for and given. */
+  confirmed?: boolean;
 }
 
 export interface Task {
@@ -220,13 +224,28 @@ export type TransitionResult =
   | { ok: true; task: Task; blockers: TransitionBlocker[]; unproven: boolean }
   | {
       ok: false;
-      error: 'not-found' | 'bad-status' | 'same-status' | 'blocked';
+      error:
+        | 'not-found'
+        | 'bad-status'
+        | 'same-status'
+        | 'blocked'
+        // §3.4 risk tiers, agent actors only, forward moves only:
+        // red is refused outright; yellow needs the human's live
+        // confirmation on the request.
+        | 'risk-refused'
+        | 'needs-confirmation';
       blockers?: TransitionBlocker[];
+      riskTier?: 'green' | 'yellow' | 'red';
+      /** Refusal text shaped to land verbatim in an agent's context. */
+      message?: string;
     };
 
 export type CreateTaskResult =
   | { ok: true; task: Task }
-  | { ok: false; error: 'workspace-not-found' | 'unknown-goal' | 'unknown-after' };
+  | {
+      ok: false;
+      error: 'workspace-not-found' | 'unknown-goal' | 'unknown-after' | 'unknown-after-enforce';
+    };
 
 /**
  * The §3.3 visitor-contract chip (rule 2): how a task renders inside a doc —
@@ -469,8 +488,30 @@ export interface TaskTransitionedEvent {
   evidence?: TaskEvidence;
   /** What the task cost in tokens (agent-reported at done). */
   usage?: { inputTokens: number; outputTokens: number };
+  /** The human's live confirmation on a yellow-tier agent move (§3.4) —
+   *  in the audit log, so the after-the-fact review can see the gate was
+   *  answered rather than absent. */
+  confirmed?: boolean;
   /** A forward move with no evidence attached — allowed, flagged (§7.1). */
   unproven: boolean;
+  ts: number;
+}
+
+/**
+ * A gate refusal (§3.4 risk tiers). Not in §3.6's table, which predates the
+ * tier arm having any consumer — §3.9's Decisions filter promises "gate
+ * refusals" as rows, and a refusal that emits nothing can never appear
+ * there. It carries no task, because nothing about the task changed.
+ */
+export interface TaskGateRefusedEvent {
+  type: 'task.gate_refused';
+  workspaceId: string;
+  taskId: string;
+  /** The status the actor was refused. */
+  to: TaskStatus;
+  riskTier: 'green' | 'yellow' | 'red';
+  reason: 'risk-refused' | 'needs-confirmation';
+  actor: TaskActor;
   ts: number;
 }
 
@@ -577,6 +618,7 @@ export interface VoiceRequestEvent {
 export type TaskStoreEvent =
   | TaskCreatedEvent
   | TaskTransitionedEvent
+  | TaskGateRefusedEvent
   | TaskRegroupedEvent
   | DecisionAnsweredEvent
   | WorkspaceGoalUpdatedEvent
@@ -906,6 +948,14 @@ export class TaskStore {
     for (const dep of after) {
       if (!state.tasks.has(dep)) return { ok: false, error: 'unknown-after' };
     }
+    // `afterEnforce` is a SUBSET of `after`: openBlockers walks `after` and
+    // consults afterEnforce only as a lookup set, so an id in one array and
+    // not the other is never visited and hard-blocks NOTHING. Refusing beats
+    // quietly widening `after`, which would change the blocker list the
+    // caller sees without saying so.
+    for (const dep of opts.afterEnforce ?? []) {
+      if (!after.includes(dep)) return { ok: false, error: 'unknown-after-enforce' };
+    }
 
     const now = Date.now();
     const inGoal = Array.from(state.tasks.values()).filter((t) => t.goal === goal);
@@ -1008,6 +1058,13 @@ export class TaskStore {
    *  - `unproven` marks a forward move that attached no evidence: allowed,
    *    flagged, never refused (§7.1 — the worst this can do is draw attention
    *    to something that turned out to be fine).
+   *  - `riskTier` (§3.4) gates the ACTOR, not the task's importance: an
+   *    AGENT moving a `red` task forward is refused outright, and a `yellow`
+   *    one needs the human's live confirmation on the request. A person is
+   *    never gated (the override is one tap) and neither is moving back to
+   *    todo. Honest reach: this binds LF-MEDIATED mutations only — actions
+   *    an agent runs in its own runtime never touch this server, where the
+   *    tier stays advisory and the fleet's permission rules enforce.
    */
   transition(
     taskId: string,
@@ -1017,6 +1074,8 @@ export class TaskStore {
       note?: string;
       evidence?: TaskEvidence;
       usage?: { inputTokens: number; outputTokens: number };
+      /** The human's live confirmation for a yellow-tier forward move. */
+      confirmed?: boolean;
     },
   ): TransitionResult {
     const task = this.getTask(taskId);
@@ -1036,6 +1095,23 @@ export class TaskStore {
       name: opts.actor.name,
       kind: classifyActor(opts.actor),
     };
+    const refusal = forward && by.kind === 'agent' ? this.riskRefusal(task, opts.confirmed) : null;
+    if (refusal) {
+      // A refusal is a decision the after-the-fact review has to be able to
+      // see (§3.9's Decisions filter promises gate refusals), so it emits —
+      // the task itself is unchanged.
+      this.emit({
+        type: 'task.gate_refused',
+        workspaceId: task.workspaceId,
+        taskId: task.id,
+        to,
+        riskTier: task.riskTier ?? 'green',
+        reason: refusal.error,
+        actor: by,
+        ts: Date.now(),
+      });
+      return { ok: false, ...refusal, blockers };
+    }
     const entry: TaskTransition = {
       ts: Date.now(),
       from: task.status,
@@ -1044,6 +1120,7 @@ export class TaskStore {
       ...(opts.note !== undefined ? { note: opts.note } : {}),
       ...(opts.evidence !== undefined ? { evidence: opts.evidence } : {}),
       ...(opts.usage !== undefined ? { usage: opts.usage } : {}),
+      ...(opts.confirmed === true ? { confirmed: true } : {}),
     };
     task.transitions.push(entry);
     task.status = to;
@@ -1061,6 +1138,7 @@ export class TaskStore {
       ...(opts.note !== undefined ? { note: opts.note } : {}),
       ...(opts.evidence !== undefined ? { evidence: opts.evidence } : {}),
       ...(opts.usage !== undefined ? { usage: opts.usage } : {}),
+      ...(opts.confirmed === true ? { confirmed: true } : {}),
       unproven,
       ts: entry.ts,
     });
@@ -1417,6 +1495,45 @@ export class TaskStore {
       });
     }
     return out;
+  }
+
+  /**
+   * The §3.4 risk arm of the gate, for an AGENT actor moving forward.
+   *
+   * Red = the D-class stops made general (irreversible deletes, force
+   * pushes, breaking default-branch merges, credentials, one-way doors):
+   * refused outright. Yellow = outward-facing or hard to reverse: allowed
+   * only with the human's confirmation carried on the request. Green (and
+   * an untriaged task with no tier yet) passes untouched — a tier that
+   * blocks by DEFAULT would stop ordinary work on every task triage hasn't
+   * reached, which is the opposite of what §3.4 asks for.
+   *
+   * The message is written to land verbatim in the agent's context, the
+   * same way an enforce blocker's does.
+   */
+  private riskRefusal(
+    task: Task,
+    confirmed: boolean | undefined,
+  ): {
+    error: 'risk-refused' | 'needs-confirmation';
+    riskTier: 'yellow' | 'red';
+    message: string;
+  } | null {
+    if (task.riskTier === 'red') {
+      return {
+        error: 'risk-refused',
+        riskTier: 'red',
+        message: `refused: ${task.id} is red-tier ('${task.title}') — a person has to make this move`,
+      };
+    }
+    if (task.riskTier === 'yellow' && confirmed !== true) {
+      return {
+        error: 'needs-confirmation',
+        riskTier: 'yellow',
+        message: `blocked: ${task.id} is yellow-tier ('${task.title}') — ask the human, show them the concrete effect, then retry with confirmed:true`,
+      };
+    }
+    return null;
   }
 
   private goalIdExists(workspace: HubWorkspace, goalId: string): boolean {

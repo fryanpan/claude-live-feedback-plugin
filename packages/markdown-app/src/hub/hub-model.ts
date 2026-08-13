@@ -244,6 +244,7 @@ export type ActivityFilter = 'all' | 'decisions';
 const DECISION_EVENTS: ReadonlySet<string> = new Set([
   'task.created',
   'task.regrouped',
+  'task.gate_refused',
   'workspace.retriaged',
   'workspace.goals_changed',
 ]);
@@ -339,6 +340,8 @@ export function describeEvent(ev: ActivityEvent, titleOf: (taskId: string) => st
       return `${actorName(ev)} moved ${title()}: ${String(ev.from)} → ${String(ev.to)}`;
     case 'task.regrouped':
       return `${actorName(ev)} regrouped ${title()}: ${String(ev.fromGoal)} → ${String(ev.toGoal)}`;
+    case 'task.gate_refused':
+      return `the gate refused ${actorName(ev)} on ${title()}: ${String(ev.riskTier)}-tier, → ${String(ev.to)}`;
     case 'decision.answered': {
       const answer = ev.answer as { text?: string } | undefined;
       return `${actorName(ev)} answered ${title()}${answer?.text ? `: “${answer.text}”` : ''}`;
