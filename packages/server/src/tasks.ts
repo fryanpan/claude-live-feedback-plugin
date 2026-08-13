@@ -40,12 +40,42 @@ export type Ref =
   | { kind: 'doc'; docId: string }
   | { kind: 'thread'; docId: string; threadId: string }
   | { kind: 'task'; taskId: string }
-  | { kind: 'diff'; workspaceId: string };
+  | { kind: 'diff'; workspaceId: string }
+  | { kind: 'url'; url: string };
+
+/** Every kind `isValidRef` accepts, for error messages. A caller who sends a
+ *  bad ref should learn the vocabulary from the response, not from reading
+ *  this file — which is what the first outside user of these routes had to
+ *  do. Derived from nothing: keep it in step with the union above. */
+export const REF_KINDS = ['doc', 'thread', 'task', 'diff', 'url'] as const;
+
+/** Schemes a `url` ref may carry. A ref is rendered as a clickable chip, so
+ *  the value becomes an href — `javascript:` and `data:` are script injection
+ *  and `file:` reads the host. Every other kind is an internal id and cannot
+ *  express a scheme at all, which is why this check has no analogue there. */
+function isSafeHttpUrl(value: string): boolean {
+  // No trimming first, deliberately: a leading space would make `new URL`
+  // parse `  javascript:…` fine in some runtimes, and a caller sending
+  // padded input is not a caller whose padding we should silently fix.
+  if (value !== value.trim()) return false;
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+  // `URL.protocol` is already lowercased by the parser, so a mixed-case
+  // scheme can't slip past this comparison.
+  return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+}
 
 /** Structural validity of a caller-supplied Ref: known kind, every field a
  *  non-empty string. Existence of the target is deliberately NOT checked
  *  (same stance as createTask's `links`): a dangling annotation is visible
- *  and harmless, where a dangling `after` edge would silently never block. */
+ *  and harmless, where a dangling `after` edge would silently never block.
+ *  `url` is the one kind with a value constraint beyond non-emptiness — not
+ *  because we check that it resolves (we don't, same stance) but because it
+ *  is the only kind that reaches the DOM as an href. */
 export function isValidRef(ref: unknown): ref is Ref {
   if (typeof ref !== 'object' || ref === null) return false;
   const r = ref as Record<string, unknown>;
@@ -59,6 +89,8 @@ export function isValidRef(ref: unknown): ref is Ref {
       return str(r.taskId);
     case 'diff':
       return str(r.workspaceId);
+    case 'url':
+      return str(r.url) && isSafeHttpUrl(r.url);
     default:
       return false;
   }
@@ -76,6 +108,13 @@ export function refKey(ref: Ref): string {
       return `task|${ref.taskId}`;
     case 'diff':
       return `diff|${ref.workspaceId}`;
+    case 'url':
+      // Identity IS the URL string — that is what makes "which tasks point at
+      // this pull request" answerable. No normalisation (no case folding, no
+      // trailing-slash trimming): two spellings of the same page staying
+      // distinct is a missed grouping, whereas collapsing two genuinely
+      // different URLs would merge unrelated work.
+      return `url|${ref.url}`;
   }
 }
 

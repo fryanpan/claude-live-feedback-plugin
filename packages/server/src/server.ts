@@ -60,6 +60,7 @@ import {
   type WorkspaceSubgoal,
   eventsLogPath,
   isAttachmentRuntime,
+  REF_KINDS,
   isValidRef,
   taskChip,
 } from './tasks.ts';
@@ -127,18 +128,44 @@ function parseNeeds(raw: unknown): { ok: true; needs?: 'action' | 'decision' } |
 
 /**
  * `links` for the two task-create routes: every element through the SAME
- * `isValidRef` the dedicated links route runs. Without it the identical ref
- * got two answers from two routes — 400 with an explanation from
- * `POST /api/tasks/:id/links`, a silent 200 from create — and a malformed
- * ref matches no backlink query, so the chip the link existed for never
- * appears.
+ * `isValidRef` the dedicated links route runs — a malformed ref matches no
+ * backlink query, so the chip the link existed for never appears, and a
+ * silent 200 hides that.
+ *
+ * But it is PARTIAL: bad refs are dropped and reported in `ignoredLinks`,
+ * and the task is still created. Rejecting the whole call cost an outside
+ * user a task's title, body, goal and assignee over one malformed field on
+ * an *annotation* — and refs are explicitly never existence-checked, so a
+ * well-formed ref pointing nowhere was already accepted. Refusing the
+ * malformed one outright was the harsher answer to the lesser problem.
+ * The precedent is the import path, which returns `ignoredColumns` rather
+ * than refusing a tracker with one column it doesn't understand.
+ *
+ * The dedicated `POST /api/tasks/:id/links` route deliberately still 400s:
+ * there the ref IS the request, so dropping it would mean answering 200 to
+ * a call that did nothing. The distinction is annotation vs. payload, not
+ * one route being stricter than another.
+ *
+ * `ok: false` now means only "this isn't an array at all".
  */
-function parseLinks(raw: unknown): { ok: true; links?: Ref[] } | { ok: false } {
-  if (raw === undefined) return { ok: true };
+function parseLinks(
+  raw: unknown,
+): { ok: true; links?: Ref[]; ignored: unknown[] } | { ok: false } {
+  if (raw === undefined) return { ok: true, ignored: [] };
   if (!Array.isArray(raw)) return { ok: false };
-  for (const ref of raw) if (!isValidRef(ref)) return { ok: false };
-  return { ok: true, links: raw as Ref[] };
+  const links: Ref[] = [];
+  const ignored: unknown[] = [];
+  for (const ref of raw) {
+    if (isValidRef(ref)) links.push(ref);
+    else ignored.push(ref);
+  }
+  return { ok: true, links, ignored };
 }
+
+/** The 400 body for a ref a route refuses. Naming the accepted kinds turns a
+ *  source dive into a re-send — the first outside caller of these routes had
+ *  to read tasks.ts to discover which spellings existed. */
+const BAD_REF_ERROR = `links must be an array of valid refs (kind: ${REF_KINDS.join(' | ')}); a url ref must be http(s)`;
 
 /** The anchor's display snippet, whichever anchor kind carries it — an
  *  orphan keeps its original's snippet. */
@@ -1546,7 +1573,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const needs = parseNeeds(body?.needs);
           if (!needs.ok) return j(400, { error: "needs must be 'action' | 'decision'" });
           const links = parseLinks(body?.links);
-          if (!links.ok) return j(400, { error: 'links must be an array of valid refs' });
+          if (!links.ok) return j(400, { error: BAD_REF_ERROR });
           const res = taskStore.createTask(workspaceId, {
             title: title.trim(),
             body: body?.body as string | undefined,
@@ -1568,7 +1595,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             actor: authorFor(body?.author) ?? undefined,
           });
           if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
-          return j(200, { task: res.task });
+          // Dropped refs are reported, never swallowed: the caller finds out
+          // what didn't survive without having to diff what it sent.
+          return j(200, {
+            task: res.task,
+            ...(links.ignored.length > 0 ? { ignoredLinks: links.ignored } : {}),
+          });
         }
         // The single gate for status changes: attributed, evidence-stamped,
         // dependency-checked. 409 on an enforce-marked open dependency.
@@ -1618,7 +1650,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const taskId = decodeURIComponent(taskLinksMatch[1] ?? '');
           const body = await safeJson(req);
           const ref = body?.ref;
-          if (!isValidRef(ref)) return j(400, { error: 'valid ref required' });
+          if (!isValidRef(ref)) return j(400, { error: BAD_REF_ERROR });
           const res =
             req.method === 'POST'
               ? taskStore.linkRef(taskId, ref)
@@ -1784,7 +1816,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const promoteNeeds = parseNeeds(body?.needs);
           if (!promoteNeeds.ok) return j(400, { error: "needs must be 'action' | 'decision'" });
           const promoteLinks = parseLinks(body?.links);
-          if (!promoteLinks.ok) return j(400, { error: 'links must be an array of valid refs' });
+          if (!promoteLinks.ok) return j(400, { error: BAD_REF_ERROR });
           const res = taskStore.createTask(workspaceId, {
             title,
             body: draftBody,
@@ -1801,7 +1833,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             actor: authorFor(body?.author) ?? undefined,
           });
           if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
-          return j(200, { task: res.task });
+          return j(200, {
+            task: res.task,
+            ...(promoteLinks.ignored.length > 0 ? { ignoredLinks: promoteLinks.ignored } : {}),
+          });
         }
         // --- REST: agent attachments (§4) ---
         // AgentAttachment records live OUTSIDE every ydoc; this REST surface
