@@ -6,13 +6,13 @@ import {
   DEFAULT_DONE_WINDOW,
   type HubGoal,
   type HubTask,
+  TASK_STATUS_ORDER,
   type UptimeReport,
   activityRows,
   boardSections,
   decisionRows,
   describeEvent,
   doneAt,
-  nextStatus,
   presenceChips,
   taskVisible,
   timeAgo,
@@ -142,11 +142,9 @@ describe('decisionRows', () => {
   });
 });
 
-describe('nextStatus', () => {
-  it('cycles todo → in-progress → done → todo', () => {
-    expect(nextStatus('todo')).toBe('in-progress');
-    expect(nextStatus('in-progress')).toBe('done');
-    expect(nextStatus('done')).toBe('todo');
+describe('TASK_STATUS_ORDER', () => {
+  it('offers every status, so no transition is two moves away', () => {
+    expect([...TASK_STATUS_ORDER].sort()).toEqual(['done', 'in-progress', 'todo']);
   });
 });
 

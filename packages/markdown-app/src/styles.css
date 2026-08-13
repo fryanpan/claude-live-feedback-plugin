@@ -889,25 +889,31 @@ body.hub-body {
   border: 1px solid var(--accent);
   border-radius: 4px;
 }
-/* The row's status control: a fixed-size round mark so column one is the
-   same width on every row. The status NAME lives in aria-label + title —
-   see the comment at its construction for why it isn't drawn.
-   44px of tap target via padding-free min sizes + the row's own height:
-   the mark is 24px but the row is >=40px tall and the whole row is
-   clickable, so the small visual target isn't a small touch target. */
-.hub-status-mark {
-  width: 24px;
-  height: 24px;
-  display: grid;
-  place-items: center;
-  padding: 0;
-  border-radius: 50%;
-  border: 1.5px solid var(--border);
+/* The row's status control: a native <select>, so the workflow isn't assumed
+   to be linear (see TASK_STATUS_ORDER) and the phone gets its own picker.
+   Fixed width so column one is the same on every row and titles line up —
+   the widest label ("In progress") is what sets it. `appearance: none` drops
+   the platform chrome; the caret is drawn as a background triangle so the
+   control stays 30px tall, which is the row's own tap-target floor. */
+.hub-status-select {
+  flex: 0 0 auto;
+  width: 96px;
+  min-height: 30px;
+  padding: 2px 18px 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
   background: var(--bg-panel);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1;
   cursor: pointer;
   color: var(--fg-muted);
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 11px) calc(50% + 1px), calc(100% - 7px) calc(50% + 1px);
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
 }
 .hub-status-chip {
   flex: 0 0 auto;

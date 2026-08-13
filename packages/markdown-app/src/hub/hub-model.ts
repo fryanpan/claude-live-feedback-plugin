@@ -213,19 +213,18 @@ export function decisionRows(tasks: HubTask[]): HubTask[] {
     .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
 }
 
-// ── Status chips ───────────────────────────────────────────────────────────
+// ── Status control ─────────────────────────────────────────────────────────
 
-/** Tap-to-change cycle (§3.9): deliberately just three statuses. */
-export function nextStatus(s: TaskStatus): TaskStatus {
-  switch (s) {
-    case 'todo':
-      return 'in-progress';
-    case 'in-progress':
-      return 'done';
-    case 'done':
-      return 'todo';
-  }
-}
+/**
+ * The order statuses are LISTED in, which is not a claim about the order they
+ * are reached in. §3.9's `nextStatus` cycle (todo → in-progress → done → todo)
+ * baked a linear workflow into the only control the board offered: reopening a
+ * done task cost two transitions through in-progress, each one a real audit
+ * event, and there was no way to say "this went straight back to todo". Real
+ * work moves backwards and skips steps, so the control is a dropdown over all
+ * statuses and this array only decides what sits above what.
+ */
+export const TASK_STATUS_ORDER: readonly TaskStatus[] = ['todo', 'in-progress', 'done'];
 
 // ── Activity view (exactly two filters — §3.9) ─────────────────────────────
 

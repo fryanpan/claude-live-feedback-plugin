@@ -1,7 +1,7 @@
 /**
  * DOM renderers for the workspace hub (plan §3.9). Each function re-renders
  * one region into its container from the view model — no fetches, no Yjs —
- * so the interaction contracts (tap-to-cycle status, in-place title edits,
+ * so the interaction contracts (the status dropdown, in-place title edits,
  * the two-filter activity view) are testable under happy-dom.
  */
 import { escapeHtml } from '@feedback/core';
@@ -12,6 +12,7 @@ import {
   type BoardSection,
   type HubTask,
   type PresenceChip,
+  TASK_STATUS_ORDER,
   type TaskStatus,
   type UptimeReport,
   activityRows,
@@ -125,9 +126,9 @@ export function renderGoalStrip(
 // ── Board ──────────────────────────────────────────────────────────────────
 
 export interface BoardHandlers {
-  /** Tap-to-change status chip (§3.9) — the caller decides the next status. */
-  onStatusTap: (task: HubTask) => void;
-  onTitleCommit: (task: HubTask, title: string) => void;
+  /** The row's status dropdown picked `to` — an arbitrary status, not a step
+   *  along a cycle. Same shape as the detail panel's, deliberately. */
+  onStatusSet: (task: HubTask, to: TaskStatus) => void;
   onGoalTitleCommit: (sectionId: string, title: string) => void;
   onOpenTask: (task: HubTask) => void;
 }
@@ -242,36 +243,43 @@ export function renderTaskRow(task: HubTask, handlers: BoardHandlers): HTMLEleme
   row.dataset.taskId = task.id;
   row.tabIndex = 0;
 
-  // A round mark, not a labelled pill. The pill was ~88px of every row's
-  // width spent restating a value the shape and colour already carry, and it
-  // was the reason the title had too little room to stay on one line. The
-  // status name moves to the accessible name and the tooltip, so nothing is
-  // lost for a screen reader or a hovering mouse — only for the skim, which
-  // is the thing that got better.
-  const chip = document.createElement('button');
-  chip.type = 'button';
-  chip.className = `hub-status-mark hub-chip-${task.status}`;
-  const glyph = document.createElement('span');
-  glyph.setAttribute('aria-hidden', 'true');
-  glyph.textContent = task.status === 'done' ? '✓' : task.status === 'in-progress' ? '◐' : '';
-  chip.append(glyph);
-  chip.setAttribute('aria-label', `${STATUS_LABEL[task.status]} — tap to change status`);
-  chip.title = `${STATUS_LABEL[task.status]} — tap to change status`;
-  chip.addEventListener('click', (ev) => {
+  // A dropdown over every status, not a tap-to-cycle mark. The cycle assumed
+  // the workflow was linear (todo → in-progress → done → todo), so sending a
+  // finished task back to todo cost two transitions and wrote two audit events
+  // for a move that happened once. A native <select> also gets the mobile
+  // picker and keyboard support for free, which a custom popup would owe.
+  const chip = document.createElement('select');
+  chip.className = `hub-status-select hub-chip-${task.status}`;
+  for (const s of TASK_STATUS_ORDER) {
+    const opt = document.createElement('option');
+    opt.value = s;
+    opt.textContent = STATUS_LABEL[s];
+    chip.append(opt);
+  }
+  // After the options are in the tree, not via `option.selected` before it —
+  // a detached option's selected flag doesn't survive being appended.
+  chip.value = task.status;
+  chip.setAttribute('aria-label', `Status: ${STATUS_LABEL[task.status]}`);
+  chip.title = `Status: ${STATUS_LABEL[task.status]}`;
+  // A select swallows its own clicks in a real browser, but the row's open
+  // handler must not fire from the picker either way.
+  chip.addEventListener('click', (ev) => ev.stopPropagation());
+  chip.addEventListener('change', (ev) => {
     ev.stopPropagation();
-    handlers.onStatusTap(task);
+    const to = chip.value as TaskStatus;
+    if (to !== task.status) handlers.onStatusSet(task, to);
   });
 
   const dot = riskDot(task);
   const title = document.createElement('span');
   title.className = 'hub-task-title';
   title.textContent = task.title;
-  title.title = 'Tap to edit the title';
-  wireInPlaceTitle(
-    title,
-    () => task.title,
-    (v) => handlers.onTitleCommit(task, v),
-  );
+  // NOT editable in place. The title spans most of the row, and its click
+  // handler stopped propagation to enter edit mode — so on a phone, where the
+  // title is nearly the whole row, tapping a task could only ever rename it.
+  // "I can't open a task to see what's inside" was the report. Renaming lives
+  // in the detail panel, which is now one tap away from anywhere on the row.
+  title.title = 'Tap to open';
 
   row.append(chip, dot, title, taskBadges(task));
   row.addEventListener('click', () => handlers.onOpenTask(task));
