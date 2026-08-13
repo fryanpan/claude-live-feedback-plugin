@@ -827,6 +827,26 @@ export class TaskStore {
     return { ok: true };
   }
 
+  /**
+   * The hub workspace this docId belongs to for SHARE-SCOPE purposes, or
+   * null (§3.12 commit 8): a doc linked via attachDoc, or a task's own body
+   * room (`task:<taskId>`). Deliberately NOT the `ws:<id>` board room — its
+   * share allowance is explicit in host-guard, so granting the board stays
+   * a decision rather than a resolver side effect. Also deliberately not
+   * transitive: attachDoc can link a whole legacy grouping (diff review) by
+   * its grouping id, and this resolver does not widen to that grouping's
+   * member docs.
+   */
+  workspaceOfDoc(docId: string): string | null {
+    if (docId.startsWith('task:')) {
+      return this.getTask(docId.slice('task:'.length))?.workspaceId ?? null;
+    }
+    for (const state of this.workspaces.values()) {
+      if (state.workspace.docIds.includes(docId)) return state.workspace.id;
+    }
+    return null;
+  }
+
   // ── Tasks ────────────────────────────────────────────────────────────────
 
   createTask(workspaceId: string, opts: CreateTaskOpts): CreateTaskResult {
