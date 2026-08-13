@@ -637,6 +637,52 @@ Technical discoveries that should persist across sessions for this project.
   paths or `--diff-range` and **ignores stdin**, so piping content at it
   scans nothing and exits 0.
 
+## A self-test is green until it runs on a machine that isn't yours
+
+- **The fix for the gate above shipped with two bugs, and every one of its
+  eleven cases passed on my machine.** A peer ran the same suite in the
+  canonical repo and two failed immediately. The entire difference: **this
+  repo has no `registry.yaml` at its root and that one does**, so
+  `find_registry()`'s repo-local branch never executed here and executed every
+  time there. The bugs weren't subtle — the local lookup ran *before* the
+  `SCRUB_REGISTRY` override, so a self-test pointing at a fixture silently read
+  the real fleet registry, found none of its planted names, and reported clean.
+  **A positive control scanning the wrong data is worse than no control**, and
+  it is the exact failure an authoritative override exists to prevent, one
+  level above the bug being fixed. Rule: when a code path is gated on an
+  environmental fact (a file exists at the repo root, a platform, a config
+  present), the suite must construct BOTH shapes — here, `git init` a temp repo
+  with a `registry.yaml` in it — because the shape you develop in is the one
+  you will never test.
+- **Some rows are unreachable from the environment by design, and that's where
+  dead code hides.** The second bug — a stranger's clone getting every push
+  refused, citing config paths that were never theirs — needed "no machine
+  config, but this repo tracks its own registry". No env override can produce
+  it: an authoritative override *suppresses* the repo-local lookup, which is
+  the point of it. So "just run it in the other repo shape" cannot cover it.
+  The fix is a seam: `decide_sources(registry, fleet_registry, denylist,
+  require_sources)` is pure and table-tested over all eight combinations, with
+  the end-to-end cases layered on top. **A branch reachable only in the field
+  is untested by construction.**
+- **Two spellings of "not found" is a bug generator.** `None` from the
+  resolver and "a path that doesn't exist" from the old constants coexisted;
+  each downstream guard picked a different one, and the escape-hatch branch
+  became unreachable while reading as correct. One spelling, held everywhere.
+- **Infer "is this machine configured" from machine-level facts only.** A
+  repo-local `registry.yaml` arrives with the clone, so counting it as evidence
+  turns every stranger into a fleet machine with a broken install.
+- **The file a scanner skips is the file where the leak gets written.**
+  `scrub-check.py` is in its own `SKIP_PATHS` (it quotes denylist keywords as
+  examples, so scanning it blocks its own propagation) — and a private project
+  name had been sitting in it, in this public repo, as the example for the
+  word-boundary regex. Guaranteed-unscanned is exactly where an example name
+  goes. Audit skip-listed files by hand, on a schedule, since no gate will.
+- **A false positive on a REMOVAL is the worst false positive available.** The
+  Haiku layer blocked the push of the commit that deleted that name, reading
+  the `-` line as content going public. Blocking the fix is how a gate teaches
+  people to reach for `SCRUB_SKIP=1`. The prompt now judges added lines only,
+  verified both directions (an added leak still exits 1).
+
 ## gh pr merge --delete-branch switches your working copy to main
 
 - When the branch being deleted is the CURRENT branch of the main

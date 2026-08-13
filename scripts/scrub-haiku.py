@@ -58,6 +58,11 @@ SYSTEM_PROMPT = """You are a sensitive-content scanner. You will be shown a git 
 - Generic placeholders: <user>, <your-tailnet>, your-username/example, my-project, the user
 - Function/variable/class names, programming jargon, code comments about the code itself
 - Standard package descriptions ("a Python module that does X")
+- **Anything on a line starting with `-`.** Those lines are being REMOVED by
+  this push. A commit that deletes a leak is the fix, not the leak; flagging it
+  blocks the one change that improves the situation. Judge only added lines
+  (`+`) and, for context, unchanged ones. If a name appears on a `-` line and
+  not on any `+` line, that is a removal — say nothing.
 
 **Output format — respond in EXACTLY this shape:**
 
