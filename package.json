@@ -21,6 +21,8 @@
     "publish:mcp": "cd packages/mcp && npm publish",
     "check:widget-size": "bun run scripts/check-widget-size.ts",
     "check:plugin-version": "bun run scripts/check-plugin-version.ts",
+    "check:scrub-gate": "python3 scripts/scrub-selftest.py",
+    "staging": "bun run scripts/staging.ts",
     "share": "bun run scripts/share.ts",
     "activity:backfill": "bun run packages/server/src/activity-backfill.ts"
   },
