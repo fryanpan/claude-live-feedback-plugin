@@ -371,7 +371,12 @@ describe('renderTaskDetail', () => {
     expect(() =>
       renderTaskDetail(
         root,
-        task({ links: [{ kind: 'quasar', quasarId: 'q-1' }, { kind: 'doc', docId: 'd-1' }] }),
+        task({
+          links: [
+            { kind: 'quasar', quasarId: 'q-1' },
+            { kind: 'doc', docId: 'd-1' },
+          ],
+        }),
         detailHandlers(),
       ),
     ).not.toThrow();
