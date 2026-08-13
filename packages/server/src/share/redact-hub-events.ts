@@ -18,7 +18,7 @@
 import { projectTask } from '../task-projection.ts';
 import type { Task } from '../tasks.ts';
 
-const HUB_EVENT = /^(task|decision|workspace|agent|triage)\./;
+const HUB_EVENT = /^(task|decision|workspace|agent|triage|voice)\./;
 
 /** `{id, name, kind}` → `{name, kind}` — the §3.3 display-only actor. */
 function displayActor(actor: unknown): unknown {

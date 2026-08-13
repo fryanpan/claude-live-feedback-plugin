@@ -1128,6 +1128,59 @@ body.hub-body {
   }
 }
 
+/* ================= VOICE (hold-to-talk, §2.4/§3.8) =================
+   The mic button + streaming-dictation/ack indicator, shared by the hub,
+   the doc surface, and the task detail. Bottom-LEFT, out of the deep-work
+   path (the composer and comment pill live bottom-right/center). Rises with
+   the keyboard via --kb-bottom like every bottom-docked element. */
+
+.voice-mic {
+  position: fixed;
+  bottom: calc(16px + var(--kb-bottom, 0px) + var(--safe-bottom, 0px));
+  left: 16px;
+  z-index: 70;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--fg);
+  font-size: 19px;
+  line-height: 1;
+  cursor: pointer;
+  touch-action: none; /* the hold IS the gesture — never a scroll */
+  user-select: none;
+  -webkit-user-select: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+.voice-mic:hover {
+  background: var(--bg-hover);
+}
+.voice-mic.voice-active {
+  background: #c53030;
+  border-color: #c53030;
+  color: #fff;
+}
+.voice-indicator {
+  position: fixed;
+  bottom: calc(68px + var(--kb-bottom, 0px) + var(--safe-bottom, 0px));
+  left: 16px;
+  z-index: 70;
+  max-width: min(80vw, 420px);
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  color: var(--fg);
+  font-size: 14px;
+  line-height: 1.4;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  word-break: break-word;
+}
+
 /* ================= FORMAT BAR ================= */
 
 .format-bar {

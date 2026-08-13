@@ -14743,7 +14743,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "attach_agent",
-      description: "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks') plus the untriaged task ids to sweep with set_task_goal. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments with a fresh heartbeat, and after ~5 minutes of silence the hub shows you as away and requests queue.",
+      description: "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep with set_task_goal, and queuedVoice — voice change-requests that arrived while no agent was live; act on each transcript verbatim. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments with a fresh heartbeat, and after ~5 minutes of silence the hub shows you as away and requests queue.",
       inputSchema: {
         type: "object",
         properties: {
@@ -15373,7 +15373,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           workspaceId,
           agentId: res.attachment?.agentId ?? agentId ?? AUTHOR.id,
           gating: res.gating,
-          untriaged: res.untriaged ?? []
+          untriaged: res.untriaged ?? [],
+          queuedVoice: res.queuedVoice ?? []
         });
       }
       case "heartbeat": {
@@ -15482,7 +15483,7 @@ async function handleFrame(raw) {
   }
   await emitChannelMessage(ev, payload);
 }
-var HUB_EVENT_RE = /^(task|decision|workspace|agent|triage)\./;
+var HUB_EVENT_RE = /^(task|decision|workspace|agent|triage|voice)\./;
 async function emitHubChannelMessage(event, rawPayload) {
   const p = rawPayload ?? {};
   if (event === "agent.heartbeat")
@@ -15519,6 +15520,13 @@ async function emitHubChannelMessage(event, rawPayload) {
     case "agent.detached":
       body = `[${event}] ${p.agentId ?? "?"}`;
       break;
+    case "voice.request": {
+      if (p.route === "fast-path")
+        return;
+      const ctx = p.context ? ` (at ${p.context.surface ?? "?"}${p.context.docId ? ` ${p.context.docId}` : ""}${p.context.taskId ? ` ${p.context.taskId}` : ""}${p.context.visibleHeading ? `, near "${p.context.visibleHeading}"` : ""})` : "";
+      body = `[voice.request]${by}${ctx}: "${p.transcript ?? ""}" — act on it through the task/edit tools; the speaker was told: "${truncate(p.ack ?? "", 120)}"`;
+      break;
+    }
     default:
       body = `[${event}]${p.taskId ? ` task ${p.taskId}` : ""}`;
   }

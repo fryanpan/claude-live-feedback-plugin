@@ -8,6 +8,7 @@
  */
 import { type User, connect, escapeHtml } from '@feedback/core';
 import { ensureUserIdentity } from '../identity-prompt.ts';
+import { type VoiceAck, createVoiceCapture } from '../voice-capture.ts';
 import {
   type ActivityEvent,
   type ActivityFilter,
@@ -141,7 +142,9 @@ function buildShell(root: HTMLElement, name: string): void {
         </dl>
       </div>
     </div>
-    <div id="hub-toast" class="hub-toast hidden"></div>`;
+    <div id="hub-toast" class="hub-toast hidden"></div>
+    <button type="button" id="hub-mic" class="voice-mic" title="Hold to talk (or hold Space)" aria-label="Hold to talk">🎙</button>
+    <div id="hub-voice" class="voice-indicator hidden" aria-live="polite"></div>`;
   const doneSelect = document.getElementById('hub-done-filter') as HTMLSelectElement;
   for (const w of DONE_WINDOWS) {
     const opt = document.createElement('option');
@@ -587,6 +590,36 @@ async function main(): Promise<void> {
     );
   });
 
+  // Voice (§2.4/§3.8): hold Space or the mic button; the context object sent
+  // with each utterance anchors it to wherever the speaker is NOW — the hub
+  // board, or the open task detail. Every utterance gets an explicit ack.
+  createVoiceCapture({
+    button: el('hub-mic'),
+    indicator: el('hub-voice'),
+    getContext: () =>
+      state.detailTaskId ? { surface: 'task', taskId: state.detailTaskId } : { surface: 'hub' },
+    send: async (transcript, context) => {
+      const res = await send(`/api/workspaces/${encodeURIComponent(workspaceId)}/voice`, 'POST', {
+        transcript,
+        context,
+        author,
+      });
+      return res.ok && res.data ? (res.data as unknown as VoiceAck) : null;
+    },
+    onNavigate: (u) => {
+      // A task lookup on this same hub opens the detail in place — the
+      // session survives navigation (§3.8); everything else is a page move.
+      const url = new URL(u, location.origin);
+      const taskParam = url.searchParams.get('task');
+      if (taskParam && url.pathname === location.pathname) {
+        state.detailTaskId = taskParam;
+        renderDetail();
+      } else {
+        location.assign(u);
+      }
+    },
+  });
+
   // Gmail-style shortcuts (§3.9): j/k walk rows, o/Enter opens, s cycles
   // status, ? shows help. Never while typing.
   document.addEventListener('keydown', (ev) => {
@@ -625,6 +658,12 @@ async function main(): Promise<void> {
       ev.preventDefault();
     }
   });
+
+  // Deep link: /workspaces/<id>?task=<taskId> opens the detail on load —
+  // this is also how the voice fast path lands a task lookup from another
+  // surface.
+  const deepLinkTask = new URLSearchParams(location.search).get('task');
+  if (deepLinkTask) state.detailTaskId = deepLinkTask;
 
   // First paint from REST (the ydoc syncs in behind it), then the
   // REST-backed regions.

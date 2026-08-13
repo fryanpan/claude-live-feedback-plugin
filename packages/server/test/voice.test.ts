@@ -1,0 +1,316 @@
+/**
+ * Voice routing (§2.4 / §3.8, commit 9): POST /api/workspaces/:id/voice takes
+ * a transcript + per-surface context, classifies it (Haiku fast path — via an
+ * injected `complete`, tests never reach the network), and answers EVERY
+ * utterance with an explicit ack naming what was heard and which route
+ * handles it — including "agent away — queued".
+ *
+ * Driven through the real route table wherever a route exists (the `groups`
+ * lesson: the route layer hand-copies fields and nothing type-checks it), and
+ * every absence assertion has a positive control.
+ *
+ * All fixtures are synthetic — invented names in the jordan@partner.example
+ * register. The repo is public.
+ */
+import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { type ServerHandle, createServer } from '../src/server.ts';
+import { TaskStore, type TaskStoreEvent, voiceQueuePath } from '../src/tasks.ts';
+import { VoiceRouter, parseVoiceReply } from '../src/voice.ts';
+
+const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
+
+describe('voice routing (§3.8)', () => {
+  let handle: ServerHandle;
+  let dataDir: string;
+  let base: string;
+  let hubId: string;
+  let taskId: string;
+  let docId: string;
+  /** Per-test fast-path behavior. null = "fast path unavailable". */
+  let completeImpl: ((args: { system: string; user: string }) => Promise<string>) | null = null;
+  /** What the last classification call received — proves the route forwards
+   *  the transcript + context all the way into the prompt. (A holder, not a
+   *  bare let: TS narrows a `= null` assignment to `null` and can't see the
+   *  closure write.) */
+  const lastPrompt: { value: { system: string; user: string } | null } = { value: null };
+  /** Fresh read — sidesteps TS narrowing `.value` to null after a reset. */
+  const promptUser = (): string => lastPrompt.value?.user ?? '';
+
+  const local = (path: string, init: RequestInit = {}) =>
+    fetch(`${base}${path}`, {
+      ...init,
+      headers: {
+        host: `localhost:${handle.port}`,
+        ...((init.headers as Record<string, string>) ?? {}),
+      },
+    });
+
+  const post = (path: string, body: unknown) =>
+    local(path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  const voice = (body: unknown) => post(`/api/workspaces/${hubId}/voice`, body);
+
+  beforeAll(async () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'voice-data-'));
+    handle = createServer({
+      port: 0,
+      dataDir,
+      voiceComplete: (args) => {
+        lastPrompt.value = args;
+        if (!completeImpl) return Promise.reject(new Error('fast path down'));
+        return completeImpl(args);
+      },
+    });
+    base = `http://localhost:${handle.port}`;
+
+    const ws = await post('/api/workspaces', {
+      name: 'search-revamp',
+      goal: 'Ship the new search.',
+    });
+    expect(ws.status).toBe(200);
+    hubId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
+
+    const t = await post(`/api/workspaces/${hubId}/tasks`, {
+      title: 'Wire the results page',
+      author: PERSON,
+    });
+    expect(t.status).toBe(200);
+    taskId = ((await t.json()) as { task: { id: string } }).task.id;
+
+    // One attached doc so doc lookups have a target.
+    docId = 'expansion-plan';
+    const p = join(dataDir, `${docId}.md`);
+    writeFileSync(p, '# Expansion plan\n\nBody.\n');
+    expect((await post('/api/docs', { docId, type: 'markdown', sourceUrl: p })).status).toBe(200);
+    expect((await post(`/api/workspaces/${hubId}/docs`, { docId })).status).toBe(200);
+  });
+
+  afterAll(async () => {
+    await handle.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  describe('route validation', () => {
+    it('400 without a transcript, 400 without an author, 404 on unknown workspace', async () => {
+      expect((await voice({ author: PERSON })).status).toBe(400);
+      expect((await voice({ transcript: '   ', author: PERSON })).status).toBe(400);
+      expect((await voice({ transcript: 'hello' })).status).toBe(400);
+      expect(
+        (await post('/api/workspaces/nope/voice', { transcript: 'hello', author: PERSON })).status,
+      ).toBe(404);
+    });
+  });
+
+  describe('fast path (lookups only)', () => {
+    it('a task lookup navigates to the task and acks what was heard', async () => {
+      completeImpl = () =>
+        Promise.resolve(JSON.stringify({ kind: 'lookup', target: 'task', id: taskId }));
+      lastPrompt.value = null;
+      const r = await voice({
+        transcript: 'take me to the results page task',
+        context: { surface: 'hub' },
+        author: PERSON,
+      });
+      expect(r.status).toBe(200);
+      const body = (await r.json()) as { route: string; ack: string; navigate?: string };
+      expect(body.route).toBe('fast-path');
+      expect(body.navigate).toBe(`/workspaces/${hubId}?task=${taskId}`);
+      expect(body.ack).toContain('take me to the results page task');
+      expect(body.ack).toContain('Wire the results page');
+      // The route forwarded the transcript into the classification prompt,
+      // and the prompt carries the workspace index the model searches.
+      expect(promptUser()).toContain('take me to the results page task');
+      expect(promptUser()).toContain('Wire the results page');
+    });
+
+    it('the per-surface context rides into the prompt (doc surface + visibleHeading)', async () => {
+      completeImpl = () => Promise.resolve(JSON.stringify({ kind: 'change' }));
+      lastPrompt.value = null;
+      const r = await voice({
+        transcript: 'rewrite this section',
+        context: { surface: 'doc', docId, visibleHeading: 'Rollout risks' },
+        author: PERSON,
+      });
+      expect(r.status).toBe(200);
+      expect(promptUser()).toContain('Rollout risks');
+      expect(promptUser()).toContain(docId);
+    });
+
+    it('a doc lookup navigates to the review page', async () => {
+      completeImpl = () =>
+        Promise.resolve(JSON.stringify({ kind: 'lookup', target: 'doc', id: docId }));
+      const r = await voice({
+        transcript: 'open the expansion plan',
+        context: { surface: 'hub' },
+        author: PERSON,
+      });
+      const body = (await r.json()) as { route: string; navigate?: string };
+      expect(body.route).toBe('fast-path');
+      expect(body.navigate).toBe(`/review/${encodeURIComponent(docId)}`);
+    });
+
+    it('a lookup naming an id that does not exist answers honestly, with no navigation', async () => {
+      completeImpl = () =>
+        Promise.resolve(JSON.stringify({ kind: 'lookup', target: 'task', id: 't-invented' }));
+      const r = await voice({
+        transcript: 'open the flux capacitor task',
+        author: PERSON,
+      });
+      const body = (await r.json()) as { route: string; ack: string; navigate?: string };
+      expect(body.route).toBe('fast-path');
+      expect(body.navigate).toBeUndefined();
+      expect(body.ack).toContain('nothing');
+      expect(body.ack).toContain('open the flux capacitor task');
+    });
+  });
+
+  describe('agent route (changes) + the queued fallback', () => {
+    it('with no live attachment, a change is QUEUED and the ack says so', async () => {
+      completeImpl = () => Promise.resolve(JSON.stringify({ kind: 'change' }));
+      const r = await voice({
+        transcript: 'rework these into different groupings',
+        context: { surface: 'hub' },
+        author: PERSON,
+      });
+      expect(r.status).toBe(200);
+      const body = (await r.json()) as { route: string; ack: string };
+      expect(body.route).toBe('agent-queued');
+      expect(body.ack).toContain('rework these into different groupings');
+      expect(body.ack.toLowerCase()).toContain('queued');
+      // "Queued" is grounded: the request is on disk, not just promised.
+      const qPath = voiceQueuePath(dataDir, hubId);
+      expect(existsSync(qPath)).toBe(true);
+      expect(readFileSync(qPath, 'utf8')).toContain('rework these into different groupings');
+    });
+
+    it('attaching an agent DRAINS the queue into the attach result', async () => {
+      const r = await post(`/api/workspaces/${hubId}/attachments`, {
+        agentId: 'agent-search-revamp',
+        runtime: 'claude-code-local',
+      });
+      expect(r.status).toBe(200);
+      const body = (await r.json()) as {
+        queuedVoice?: Array<{ transcript: string }>;
+      };
+      expect(body.queuedVoice?.map((q) => q.transcript)).toContain(
+        'rework these into different groupings',
+      );
+      expect(existsSync(voiceQueuePath(dataDir, hubId))).toBe(false);
+      // Drained means drained: a second attach delivers nothing again.
+      const r2 = await post(`/api/workspaces/${hubId}/attachments`, {
+        agentId: 'agent-search-revamp',
+        runtime: 'claude-code-local',
+      });
+      const body2 = (await r2.json()) as { queuedVoice?: unknown[] };
+      expect(body2.queuedVoice ?? []).toHaveLength(0);
+    });
+
+    it('with a live attachment, a change goes to the agent and emits voice.request', async () => {
+      completeImpl = () => Promise.resolve(JSON.stringify({ kind: 'change' }));
+      const seen: TaskStoreEvent[] = [];
+      const off = handle.tasks.onEvent((ev) => seen.push(ev));
+      const r = await voice({
+        transcript: 'add a task to benchmark the crawler',
+        context: { surface: 'hub' },
+        author: PERSON,
+      });
+      off();
+      expect(r.status).toBe(200);
+      const body = (await r.json()) as { route: string; ack: string };
+      expect(body.route).toBe('agent');
+      expect(body.ack).toContain('workspace agent');
+      const ev = seen.find((e) => e.type === 'voice.request');
+      expect(ev).toBeDefined();
+      if (ev?.type === 'voice.request') {
+        expect(ev.transcript).toBe('add a task to benchmark the crawler');
+        expect(ev.route).toBe('agent');
+        expect(ev.ack).toBe(body.ack);
+      }
+    });
+
+    it('a failing fast path still answers: the utterance falls to the agent route', async () => {
+      completeImpl = null; // complete rejects
+      const r = await voice({
+        transcript: 'take me to the expansion budget decision',
+        author: PERSON,
+      });
+      expect(r.status).toBe(200);
+      const body = (await r.json()) as { route: string; ack: string };
+      expect(body.route).toBe('agent');
+      expect(body.ack).toContain('take me to the expansion budget decision');
+      expect(body.ack.toLowerCase()).toContain('fast path unavailable');
+    });
+
+    it('garbage from the model is a fast-path failure, never a crash', async () => {
+      completeImpl = () => Promise.resolve('well, that depends on what you mean by task');
+      const r = await voice({ transcript: 'open the plan', author: PERSON });
+      expect(r.status).toBe(200);
+      const body = (await r.json()) as { route: string };
+      expect(body.route).toBe('agent');
+    });
+  });
+
+  describe('every utterance is audited (§3.6 voice.request)', () => {
+    it('the events.jsonl audit log carries the transcript, route, and ack verbatim', async () => {
+      const r = await local(`/api/workspaces/${hubId}/events`);
+      expect(r.status).toBe(200);
+      const { events } = (await r.json()) as {
+        events: Array<{ event: string; transcript?: string; route?: string; ack?: string }>;
+      };
+      const voiceEvents = events.filter((e) => e.event === 'voice.request');
+      // Positive control: the log sees voice events at all.
+      expect(voiceEvents.length).toBeGreaterThan(0);
+      const queued = voiceEvents.find(
+        (e) => e.transcript === 'rework these into different groupings',
+      );
+      expect(queued?.route).toBe('agent-queued');
+      expect(queued?.ack?.toLowerCase()).toContain('queued');
+      const looked = voiceEvents.find((e) => e.transcript === 'take me to the results page task');
+      expect(looked?.route).toBe('fast-path');
+    });
+  });
+
+  describe('VoiceRouter without a configured fast path', () => {
+    it('routes a change honestly and reports unknown workspaces', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'voice-unit-'));
+      const store = new TaskStore({ dataDir: dir, debounceMs: 1 });
+      const ws = store.createWorkspace('bare', 'Goal.');
+      const router = new VoiceRouter({ tasks: store });
+      const res = await router.handle(ws.id, {
+        transcript: 'regroup everything',
+        actor: { id: 'known-jordan', name: 'Jordan' },
+      });
+      expect(res.ok).toBe(true);
+      if (res.ok) {
+        expect(res.route).toBe('agent-queued');
+        expect(res.ack).toContain('regroup everything');
+      }
+      const missing = await router.handle('nope', {
+        transcript: 'hello',
+        actor: { id: 'known-jordan', name: 'Jordan' },
+      });
+      expect(missing.ok).toBe(false);
+      store.stop();
+      rmSync(dir, { recursive: true, force: true });
+    });
+  });
+
+  describe('parseVoiceReply', () => {
+    it('reads JSON even when wrapped in prose/fences, and rejects non-answers', () => {
+      expect(parseVoiceReply('{"kind":"change"}')).toEqual({ kind: 'change' });
+      expect(
+        parseVoiceReply('Sure!\n```json\n{"kind":"lookup","target":"task","id":"t-1"}\n```'),
+      ).toEqual({ kind: 'lookup', target: 'task', id: 't-1' });
+      expect(parseVoiceReply('{"kind":"lookup"}')).toEqual({ kind: 'lookup' });
+      expect(parseVoiceReply('no json here')).toBeNull();
+      expect(parseVoiceReply('{"kind":"weird"}')).toBeNull();
+    });
+  });
+});
