@@ -34,6 +34,30 @@ async function buildOnce(): Promise<void> {
     return;
   }
 
+  // The workspace hub is its own entry (served at /app/hub.js by the shell
+  // the server renders for /workspaces/:id) — a separate build call because
+  // each entry wants a fixed output name.
+  const hubResult = await Bun.build({
+    entrypoints: [join(pkgRoot, 'src', 'hub', 'hub-app.ts')],
+    outdir: dist,
+    target: 'browser',
+    format: 'esm',
+    splitting: false,
+    sourcemap: 'external',
+    naming: {
+      entry: 'hub.js',
+      chunk: '[name]-[hash].js',
+      asset: '[name].[ext]',
+    },
+    minify: process.env.NODE_ENV !== 'dev' && !isWatch,
+  });
+  if (!hubResult.success) {
+    console.error('hub build failed:');
+    for (const m of hubResult.logs) console.error(m);
+    if (!isWatch) process.exit(1);
+    return;
+  }
+
   cpSync(join(pkgRoot, 'index.html'), join(dist, 'index.html'));
   cpSync(join(pkgRoot, 'src', 'styles.css'), join(dist, 'styles.css'));
 

@@ -1,0 +1,156 @@
+/**
+ * The activity view (§3.9) reads events.jsonl — so its renderer has to be
+ * fed the rows the SERVER actually writes, not hand-written fixtures.
+ *
+ * This is the "a unit test can be true and still prove nothing about the
+ * caller" lesson applied to the audit log: `describeEvent`'s own suite
+ * invents shapes (a `decision.answered` with no answer at all), and under
+ * those the renderer silently dropped every verbatim decision answer —
+ * reading `ev.answer.text` where the emitted row carries a plain string.
+ * "Decisions keep the words" failed on the one surface built to review them.
+ *
+ * So: drive the real routes, read the real log back, and render THOSE rows
+ * with the real client model. `hub-model.ts` is pure (no DOM, no fetch), so
+ * a server test can import it directly.
+ *
+ * All fixtures are synthetic — invented names in the jordan@partner.example
+ * register. The repo is public.
+ */
+import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { User } from '@feedback/core';
+import { type ActivityEvent, describeEvent } from '../../markdown-app/src/hub/hub-model.ts';
+import { type ServerHandle, createServer } from '../src/server.ts';
+import { type Task, eventsLogPath } from '../src/tasks.ts';
+
+const PERSON: User = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
+const AGENT: User = {
+  id: 'agent-search-revamp',
+  name: 'Search Revamp',
+  kind: 'known',
+  color: '#888888',
+};
+
+describe('the activity view renders the rows the server really wrote', () => {
+  let handle: ServerHandle;
+  let dataDir: string;
+  let base: string;
+  let wsId: string;
+  let decisionId: string;
+
+  const local = (path: string, init: RequestInit = {}) =>
+    fetch(`${base}${path}`, {
+      ...init,
+      headers: {
+        host: `localhost:${handle.port}`,
+        'content-type': 'application/json',
+        ...((init.headers as Record<string, string>) ?? {}),
+      },
+    });
+  const post = (path: string, body: unknown) =>
+    local(path, { method: 'POST', body: JSON.stringify(body) });
+
+  /** Every audit row, as the activity view reads them. */
+  const rows = (): ActivityEvent[] => {
+    const path = eventsLogPath(dataDir, wsId);
+    if (!existsSync(path)) return [];
+    return readFileSync(path, 'utf8')
+      .split('\n')
+      .filter((l) => l.trim().length > 0)
+      .map((l) => JSON.parse(l) as ActivityEvent);
+  };
+  const rowsOf = (event: string): ActivityEvent[] => rows().filter((r) => r.event === event);
+
+  beforeAll(async () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'activity-lines-'));
+    handle = createServer({ port: 0, dataDir });
+    base = `http://localhost:${handle.port}`;
+    const ws = await post('/api/workspaces', { name: 'search-revamp', goal: 'Ship the search.' });
+    wsId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
+    const d = await post(`/api/workspaces/${wsId}/tasks`, {
+      title: 'Ship Thursday or Friday?',
+      assignee: 'human',
+      needs: 'decision',
+      author: AGENT,
+    });
+    expect(d.status).toBe(200);
+    decisionId = ((await d.json()) as { task: Task }).task.id;
+  });
+
+  afterAll(async () => {
+    await handle.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('keeps the words of a decision answer', async () => {
+    const r = await post(`/api/tasks/${decisionId}/answer`, {
+      text: 'Ship Friday, not Thursday.',
+      author: PERSON,
+    });
+    expect(r.status).toBe(200);
+
+    const row = rowsOf('decision.answered').at(-1);
+    expect(row).toBeDefined();
+    const line = describeEvent(row as ActivityEvent, () => 'Ship Thursday or Friday?');
+    // Positive control: the row renders at all, with actor and title…
+    expect(line).toContain('Jordan');
+    expect(line).toContain('Ship Thursday or Friday?');
+    // …and the verbatim answer is the point of the row.
+    expect(line).toContain('Ship Friday, not Thursday.');
+  });
+
+  it('attributes task.created, so an author can be told from a stranger', async () => {
+    const r = await post(`/api/workspaces/${wsId}/tasks`, {
+      title: 'Wire the index',
+      author: AGENT,
+    });
+    expect(r.status).toBe(200);
+    const row = rowsOf('task.created').at(-1);
+    expect((row?.actor as { id?: string; name?: string } | undefined)?.id).toBe(
+      'agent-search-revamp',
+    );
+    expect(describeEvent(row as ActivityEvent, () => 'Wire the index')).toContain('Search Revamp');
+  });
+
+  it('emits one batched workspace.retriaged for a goal edit, with the regroups referencing it', async () => {
+    const before = rowsOf('workspace.retriaged').length;
+    const g = await local(`/api/workspaces/${wsId}/goal`, {
+      method: 'PUT',
+      body: JSON.stringify({ goal: 'Ship the search, then measure it.', author: PERSON }),
+    });
+    expect(g.status).toBe(200);
+
+    // Positive control: the same exercise put goal_updated in the log, so a
+    // missing retriaged row would not be "the log stopped receiving".
+    expect(rowsOf('workspace.goal_updated').length).toBeGreaterThan(0);
+    const retriaged = rowsOf('workspace.retriaged');
+    expect(retriaged.length).toBe(before + 1);
+    const batch = retriaged.at(-1) as ActivityEvent & {
+      batchId: string;
+      taskIds: string[];
+      oldGoal: string;
+      newGoal: string;
+    };
+    expect(batch.oldGoal).toBe('Ship the search.');
+    expect(batch.newGoal).toBe('Ship the search, then measure it.');
+    expect(batch.taskIds).toContain(decisionId);
+    expect(batch.batchId).toBeTruthy();
+
+    // The agent's re-triage placements carry the batch key, so N regroupings
+    // read as one goal edit rather than N unexplained moves.
+    const placed = await post(`/api/tasks/${decisionId}/goal`, {
+      goal: 'chores',
+      author: AGENT,
+      position: 5,
+      batchId: batch.batchId,
+    });
+    expect(placed.status).toBe(200);
+    const regrouped = rowsOf('task.regrouped').at(-1) as
+      | (ActivityEvent & { partOf?: string })
+      | undefined;
+    expect(regrouped?.taskId).toBe(decisionId); // positive control
+    expect(regrouped?.partOf).toBe(batch.batchId);
+  });
+});
