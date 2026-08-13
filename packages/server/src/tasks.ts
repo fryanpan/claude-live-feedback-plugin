@@ -42,6 +42,43 @@ export type Ref =
   | { kind: 'task'; taskId: string }
   | { kind: 'diff'; workspaceId: string };
 
+/** Structural validity of a caller-supplied Ref: known kind, every field a
+ *  non-empty string. Existence of the target is deliberately NOT checked
+ *  (same stance as createTask's `links`): a dangling annotation is visible
+ *  and harmless, where a dangling `after` edge would silently never block. */
+export function isValidRef(ref: unknown): ref is Ref {
+  if (typeof ref !== 'object' || ref === null) return false;
+  const r = ref as Record<string, unknown>;
+  const str = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
+  switch (r.kind) {
+    case 'doc':
+      return str(r.docId);
+    case 'thread':
+      return str(r.docId) && str(r.threadId);
+    case 'task':
+      return str(r.taskId);
+    case 'diff':
+      return str(r.workspaceId);
+    default:
+      return false;
+  }
+}
+
+/** Canonical identity of a Ref — two refs are the same link iff their keys
+ *  match. Field order can't leak in (each kind lists its fields explicitly). */
+export function refKey(ref: Ref): string {
+  switch (ref.kind) {
+    case 'doc':
+      return `doc|${ref.docId}`;
+    case 'thread':
+      return `thread|${ref.docId}|${ref.threadId}`;
+    case 'task':
+      return `task|${ref.taskId}`;
+    case 'diff':
+      return `diff|${ref.workspaceId}`;
+  }
+}
+
 export interface WorkspaceSubgoal {
   id: string;
   title: string;
@@ -190,6 +227,31 @@ export type TransitionResult =
 export type CreateTaskResult =
   | { ok: true; task: Task }
   | { ok: false; error: 'workspace-not-found' | 'unknown-goal' | 'unknown-after' };
+
+/**
+ * The §3.3 visitor-contract chip (rule 2): how a task renders inside a doc —
+ * id, title, status, assignee, and deliberately NOTHING else. This shape
+ * reaches share visitors, so adding a field here is a sharing decision, not
+ * a convenience.
+ */
+export interface TaskChip {
+  id: string;
+  title: string;
+  status: TaskStatus;
+  assignee: string;
+}
+
+export function taskChip(task: Task): TaskChip {
+  return { id: task.id, title: task.title, status: task.status, assignee: task.assignee };
+}
+
+export type LinkRefResult =
+  | { ok: true; task: Task; changed: boolean }
+  | { ok: false; error: 'not-found' | 'bad-ref' | 'self-ref' };
+
+export type UnlinkRefResult =
+  | { ok: true; task: Task; changed: boolean }
+  | { ok: false; error: 'not-found' | 'bad-ref' };
 
 /**
  * A triage request the server EMITS — triage itself executes in the attached
@@ -892,6 +954,87 @@ export class TaskStore {
     task.body = body;
     this.scheduleSave(task.workspaceId);
     return true;
+  }
+
+  // ── Cross-references (§3.2 Ref; §3.12 commit 4) ──────────────────────────
+  //
+  // Links are stored on the task; backlinks are COMPUTED on read, never
+  // stored, so the two directions can't drift. NOTE: link changes emit no
+  // store event — §3.6's exhaustive table has no row for them — so the route
+  // layer refreshes the ydoc projection by hand, the same pattern as
+  // createWorkspace/attachDoc.
+
+  /**
+   * Add a cross-reference to a task's `links`. Idempotent: linking a ref
+   * that's already there reports `changed: false` and touches nothing.
+   * A task may not link itself (`self-ref`).
+   */
+  linkRef(taskId: string, ref: Ref): LinkRefResult {
+    const task = this.getTask(taskId);
+    if (!task) return { ok: false, error: 'not-found' };
+    if (!isValidRef(ref)) return { ok: false, error: 'bad-ref' };
+    if (ref.kind === 'task' && ref.taskId === taskId) return { ok: false, error: 'self-ref' };
+    const key = refKey(ref);
+    if (task.links.some((r) => refKey(r) === key)) return { ok: true, task, changed: false };
+    task.links.push(ref);
+    task.updatedAt = Date.now();
+    this.scheduleSave(task.workspaceId);
+    return { ok: true, task, changed: true };
+  }
+
+  /** Remove a cross-reference. Removing one that isn't there is a no-op
+   *  (`changed: false`), not an error — the end state is what was asked for. */
+  unlinkRef(taskId: string, ref: Ref): UnlinkRefResult {
+    const task = this.getTask(taskId);
+    if (!task) return { ok: false, error: 'not-found' };
+    if (!isValidRef(ref)) return { ok: false, error: 'bad-ref' };
+    const key = refKey(ref);
+    const next = task.links.filter((r) => refKey(r) !== key);
+    if (next.length === task.links.length) return { ok: true, task, changed: false };
+    task.links = next;
+    task.updatedAt = Date.now();
+    this.scheduleSave(task.workspaceId);
+    return { ok: true, task, changed: true };
+  }
+
+  /**
+   * Every task that references `ref` — via `links` or via its promotion
+   * `origin` (a task promoted from a thread references that thread without
+   * anyone calling link_refs). Exact-ref matching; spans all workspaces,
+   * because refs do (a task may cite a doc that lives outside its hub
+   * workspace). Deterministic order: creation time, then id.
+   */
+  backlinksFor(ref: Ref): Task[] {
+    const key = refKey(ref);
+    return this.tasksMatching((r) => refKey(r) === key);
+  }
+
+  /**
+   * Doc→task surfacing: tasks that reference the doc itself OR any thread
+   * in it — a task promoted from one of a doc's threads is about that doc.
+   */
+  tasksReferencingDoc(docId: string): Task[] {
+    return this.tasksMatching(
+      (r) => (r.kind === 'doc' || r.kind === 'thread') && r.docId === docId,
+    );
+  }
+
+  /** Thread→task surfacing: exact thread-ref matches only. */
+  tasksReferencingThread(docId: string, threadId: string): Task[] {
+    return this.backlinksFor({ kind: 'thread', docId, threadId });
+  }
+
+  /** Tasks whose `links` or `origin` contain a ref matching `pred`. */
+  private tasksMatching(pred: (ref: Ref) => boolean): Task[] {
+    const out: Task[] = [];
+    for (const state of this.workspaces.values()) {
+      for (const task of state.tasks.values()) {
+        if (task.links.some(pred) || (task.origin !== undefined && pred(task.origin))) {
+          out.push(task);
+        }
+      }
+    }
+    return out.sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
   }
 
   /** Open (not-done) dependencies of a task, described so the message can

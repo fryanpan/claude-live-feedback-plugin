@@ -49,7 +49,7 @@ import { sanitizeVisitorAuthor } from './share/visitor-identity.ts';
 import { SseHub, openSseStream } from './sse.ts';
 import { KEYCHAIN_SERVICE, ThreadSummarizer } from './summarize.ts';
 import { TaskProjection } from './task-projection.ts';
-import { type Ref, type TaskStatus, TaskStore } from './tasks.ts';
+import { type Ref, type TaskStatus, TaskStore, isValidRef, taskChip } from './tasks.ts';
 import { type WebhookLogEntry, createWebhookDispatcher } from './webhooks.ts';
 import { onClose, onMessage, onOpen } from './yjs-protocol.ts';
 
@@ -555,6 +555,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             });
           }
           return claimed as User | undefined;
+        };
+
+        /**
+         * Thread→task surfacing (§3.12 commit 4): decorate a thread payload
+         * with chips for the tasks that reference it — via `links` or via a
+         * promotion `origin`. The chip is the §3.3 rule-2 visitor-safe shape,
+         * so visitors get the decoration too. Omitted when empty (trimmed
+         * results, §3.10) — every reader treats a missing `tasks` as none.
+         */
+        const withTaskChips = <T extends { id: string }>(docId: string, t: T): T => {
+          const chips = taskStore.tasksReferencingThread(docId, t.id).map(taskChip);
+          return chips.length > 0 ? { ...t, tasks: chips } : t;
         };
 
         // Set when this request comes from a SHARE visitor (either mode).
@@ -1240,6 +1252,36 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           return j(200, res);
         }
+        // Cross-references (§3.10 `.../links`): links are STORED on the
+        // task; backlinks are COMPUTED per read, never stored, so the two
+        // directions can't drift.
+        const taskLinksMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/links$/);
+        if (taskLinksMatch && req.method === 'GET') {
+          const taskId = decodeURIComponent(taskLinksMatch[1] ?? '');
+          const task = taskStore.getTask(taskId);
+          if (!task) return j(404, { error: 'task not found' });
+          return j(200, {
+            taskId,
+            links: task.links,
+            backlinks: taskStore.backlinksFor({ kind: 'task', taskId }).map(taskChip),
+          });
+        }
+        if (taskLinksMatch && (req.method === 'POST' || req.method === 'DELETE')) {
+          const taskId = decodeURIComponent(taskLinksMatch[1] ?? '');
+          const body = await safeJson(req);
+          const ref = body?.ref;
+          if (!isValidRef(ref)) return j(400, { error: 'valid ref required' });
+          const res =
+            req.method === 'POST'
+              ? taskStore.linkRef(taskId, ref)
+              : taskStore.unlinkRef(taskId, ref);
+          if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
+          // Link changes emit no store event (§3.6's exhaustive table has no
+          // row for them), so refresh the projection by hand — the same
+          // pattern as createWorkspace/attachDoc above.
+          taskProjection.ensureWorkspace(res.task.workspaceId);
+          return j(200, { ok: true, changed: res.changed, task: res.task });
+        }
         // Delete a whole workspace as one unit (all-or-nothing open-thread
         // guardrail; ?force=true to override). Member SOURCE files are left
         // untouched, same as DELETE /api/docs/:id.
@@ -1264,7 +1306,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             return j(404, { error: 'workspace not found', workspaceId });
           }
           const status = url.searchParams.get('status') as 'open' | 'resolved' | null;
-          const threads = rooms.listWorkspaceThreads(workspaceId, status ? { status } : undefined);
+          const threads = rooms
+            .listWorkspaceThreads(workspaceId, status ? { status } : undefined)
+            .map((t) => withTaskChips(t.docId, t));
           return j(200, { workspaceId, threads });
         }
         // Grouped-diff sidebar model: changed files organized into logical
@@ -1364,7 +1408,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const room = rooms.get(docId);
           if (!room) return j(404, { error: 'doc not found' });
           if (rest === '' && req.method === 'GET') {
-            return j(200, { meta: metaFor(room.meta) });
+            // Doc→task surfacing (§3.12 commit 4): chips for the tasks that
+            // reference this doc — directly or via one of its threads.
+            // Visitor-safe by construction (§3.3 rule 2); omitted when empty.
+            const taskRefs = taskStore.tasksReferencingDoc(docId).map(taskChip);
+            return j(200, {
+              meta: metaFor(room.meta),
+              ...(taskRefs.length > 0 ? { tasks: taskRefs } : {}),
+            });
           }
           if (rest === '' && req.method === 'DELETE') {
             const force = url.searchParams.get('force') === 'true';
@@ -1375,7 +1426,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (rest === 'threads' && req.method === 'GET') {
             const status = url.searchParams.get('status') as 'open' | 'resolved' | null;
             return j(200, {
-              threads: rooms.listThreads(docId, status ? { status } : undefined),
+              threads: rooms
+                .listThreads(docId, status ? { status } : undefined)
+                .map((t) => withTaskChips(docId, t)),
             });
           }
           const threadIdMatch = rest.match(/^threads\/([^/]+)(\/.*)?$/);
@@ -1384,7 +1437,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             const threadRest = threadIdMatch[2] ?? '';
             if (threadRest === '' && req.method === 'GET') {
               const t = rooms.getThread(docId, threadId);
-              return t ? j(200, { thread: t }) : j(404, { error: 'thread not found' });
+              return t
+                ? j(200, { thread: withTaskChips(docId, t) })
+                : j(404, { error: 'thread not found' });
             }
             if (threadRest === '/comments' && req.method === 'POST') {
               const body = await safeJson(req);
