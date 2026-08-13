@@ -334,7 +334,8 @@ export function describeEvent(ev: ActivityEvent, titleOf: (taskId: string) => st
   switch (ev.event) {
     case 'task.created': {
       const goal = (ev.goal as string | undefined) ?? '';
-      return `created ${title()}${goal ? ` in ${goal}` : ''}`;
+      const who = ev.actor !== undefined ? `${actorName(ev)} ` : '';
+      return `${who}created ${title()}${goal ? ` in ${goal}` : ''}`;
     }
     case 'task.transitioned':
       return `${actorName(ev)} moved ${title()}: ${String(ev.from)} → ${String(ev.to)}`;
@@ -343,8 +344,19 @@ export function describeEvent(ev: ActivityEvent, titleOf: (taskId: string) => st
     case 'task.gate_refused':
       return `the gate refused ${actorName(ev)} on ${title()}: ${String(ev.riskTier)}-tier, → ${String(ev.to)}`;
     case 'decision.answered': {
-      const answer = ev.answer as { text?: string } | undefined;
-      return `${actorName(ev)} answered ${title()}${answer?.text ? `: “${answer.text}”` : ''}`;
+      // The emitted row carries the answer as a plain STRING (the store's
+      // `answer: text`), not the `{text, by, ts}` object the task field
+      // holds. Reading `.text` off the string silently dropped every
+      // verbatim answer — the words are the whole point of the row.
+      const answer =
+        typeof ev.answer === 'string'
+          ? ev.answer
+          : (ev.answer as { text?: string } | undefined)?.text;
+      return `${actorName(ev)} answered ${title()}${answer ? `: “${answer}”` : ''}`;
+    }
+    case 'workspace.retriaged': {
+      const n = (ev.taskIds as string[] | undefined)?.length ?? 0;
+      return `${actorName(ev)} changed the goal — re-triaging ${n} open task${n === 1 ? '' : 's'}`;
     }
     case 'workspace.goal_updated':
       return `${actorName(ev)} updated the workspace goal`;

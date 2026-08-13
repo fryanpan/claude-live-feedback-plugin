@@ -206,6 +206,10 @@ export interface CreateTaskOpts {
   links?: Ref[];
   origin?: Ref;
   quote?: string;
+  /** Who is creating it, when the caller knows — attributed on the event
+   *  and in the audit log. Optional: the create routes predate it and a
+   *  missing author must not become an anonymous 400. */
+  actor?: { id: string; name: string; kind?: string };
 }
 
 /** An open dependency reported by the transition gate. `enforce: true` means
@@ -296,6 +300,9 @@ export type TriageRequest =
       oldGoal: string;
       newGoal: string;
       taskIds: string[];
+      /** The `workspace.retriaged` row this request belongs to. The agent
+       *  passes it back on each placement so N moves read as one goal edit. */
+      batchId: string;
       actor: TaskActor;
       ts: number;
     };
@@ -458,11 +465,9 @@ export function attachmentsSidecarPath(dataDir: string, workspaceId: string): st
  *
  * The §3.6 list is exhaustive by contract — anything that subscribes to this
  * feed (mirrors, cloud agent runtimes) sees nothing at all for a change that
- * doesn't emit an event. Two §3.6 rows have no store mutation yet and are
- * deliberately absent from this union until their mutation lands:
- * `task.assigned` (no assignment mutation until the MCP-tools commit) and
- * `workspace.retriaged` (emitted when the attached agent's re-triage
- * placements land, which needs set_task_goal).
+ * doesn't emit an event. One §3.6 row has no store mutation yet and is
+ * deliberately absent from this union until its mutation lands:
+ * `task.assigned` (there is no assignment mutation to emit from).
  */
 export interface TaskCreatedEvent {
   type: 'task.created';
@@ -474,6 +479,15 @@ export interface TaskCreatedEvent {
   goal: string;
   assignee: string;
   triagedAgainst?: { goalId: string; goal: string; ts: number };
+  /**
+   * Who created it. Absent when the caller supplied no author (the browser
+   * board has no create affordance; imports attribute themselves).
+   * Load-bearing beyond the audit trail: the MCP child suppresses an
+   * author's own events by comparing `actor.id`, and with no actor on the
+   * event agents most emit, a session that creates six tasks received all
+   * six back as inbound channel messages.
+   */
+  actor?: TaskActor;
   ts: number;
 }
 
@@ -524,8 +538,9 @@ export interface TaskRegroupedEvent {
   /** The task's position in its new goal. */
   order: number;
   actor: TaskActor;
-  /** Set when this move is one member of a batched goal-list edit — it
-   *  references the parent workspace.goals_changed event's batchId. */
+  /** Set when this move is one member of a batch — it references the parent
+   *  `workspace.goals_changed` (goal-list edit, server-side) or
+   *  `workspace.retriaged` (goal edit, placed by the agent) batchId. */
   partOf?: string;
   ts: number;
 }
@@ -547,6 +562,31 @@ export interface WorkspaceGoalUpdatedEvent {
   workspaceId: string;
   oldGoal: string;
   newGoal: string;
+  actor: TaskActor;
+  ts: number;
+}
+
+/**
+ * §3.6's batched re-triage row. One per goal edit that has open tasks to
+ * re-place, emitted at the same choke point as the triage REQUEST — the
+ * request rides SSE only and is deliberately outside the audit log, so
+ * without this a goal edit's N placements reached the activity view as N
+ * unexplained individual regroupings with nothing tying them to the edit
+ * that caused them (and §3.9's Decisions filter listed a row kind that could
+ * never exist). Member `task.regrouped` events carry `batchId` as `partOf`.
+ */
+export interface WorkspaceRetriagedEvent {
+  type: 'workspace.retriaged';
+  workspaceId: string;
+  batchId: string;
+  oldGoal: string;
+  newGoal: string;
+  /** The OPEN tasks the edit asks the agent to re-place (done stays put). */
+  taskIds: string[];
+  /** Whether the request reached a live attachment. With none, the
+   *  re-triage honestly does not happen — the row records that it was asked
+   *  for, not that it was done. */
+  delivered: boolean;
   actor: TaskActor;
   ts: number;
 }
@@ -622,6 +662,7 @@ export type TaskStoreEvent =
   | TaskRegroupedEvent
   | DecisionAnsweredEvent
   | WorkspaceGoalUpdatedEvent
+  | WorkspaceRetriagedEvent
   | WorkspaceGoalsChangedEvent
   | AgentAttachedEvent
   | AgentDetachedEvent
@@ -656,7 +697,7 @@ export type SetWorkspaceGoalResult =
        *  the request actually reached a live attachment. With none attached
        *  the re-triage honestly does not happen — placements stay as they
        *  were (§3.4). */
-      retriage: { requested: boolean; taskIds: string[] };
+      retriage: { requested: boolean; taskIds: string[]; batchId?: string };
     }
   | { ok: false; error: 'workspace-not-found' };
 
@@ -882,18 +923,35 @@ export class TaskStore {
     const taskIds = Array.from(state.tasks.values())
       .filter((t) => t.status !== 'done')
       .map((t) => t.id);
-    const requested =
-      taskIds.length > 0 &&
-      this.requestTriage({
-        kind: 'goal-retriage',
-        workspaceId,
-        oldGoal,
-        newGoal: goal,
-        taskIds,
-        actor,
-        ts,
-      });
-    return { ok: true, workspace, changed: true, retriage: { requested, taskIds } };
+    if (taskIds.length === 0) {
+      return { ok: true, workspace, changed: true, retriage: { requested: false, taskIds } };
+    }
+    // The request rides SSE and is gone; the ROW is what the activity view
+    // and the after-the-fact review read, so it is emitted whether or not
+    // delivery found a live attachment — `delivered` says which happened.
+    const batchId = cryptoId('rt');
+    const requested = this.requestTriage({
+      kind: 'goal-retriage',
+      workspaceId,
+      oldGoal,
+      newGoal: goal,
+      taskIds,
+      batchId,
+      actor,
+      ts,
+    });
+    this.emit({
+      type: 'workspace.retriaged',
+      workspaceId,
+      batchId,
+      oldGoal,
+      newGoal: goal,
+      taskIds,
+      delivered: requested,
+      actor,
+      ts,
+    });
+    return { ok: true, workspace, changed: true, retriage: { requested, taskIds, batchId } };
   }
 
   /** Link an existing doc or review to a hub workspace. A link only — the
@@ -1010,6 +1068,15 @@ export class TaskStore {
       goal: task.goal,
       assignee: task.assignee,
       ...(task.triagedAgainst !== undefined ? { triagedAgainst: task.triagedAgainst } : {}),
+      ...(opts.actor !== undefined
+        ? {
+            actor: {
+              id: opts.actor.id,
+              name: opts.actor.name,
+              kind: classifyActor(opts.actor),
+            },
+          }
+        : {}),
       ts: now,
     });
     return { ok: true, task };
@@ -1227,6 +1294,10 @@ export class TaskStore {
        *  (an unchanged goal keeps the current position). */
       position?: number;
       riskTier?: 'green' | 'yellow' | 'red';
+      /** The `workspace.retriaged` batch this placement fulfils, echoed from
+       *  the triage request. Stamped on `task.regrouped` as `partOf` so the
+       *  activity view reads N moves as one goal edit. */
+      batchId?: string;
     },
   ): SetTaskGoalResult {
     const task = this.getTask(taskId);
@@ -1276,6 +1347,7 @@ export class TaskStore {
         toGoal: goal,
         order,
         actor,
+        ...(opts.batchId !== undefined ? { partOf: opts.batchId } : {}),
         ts,
       });
     }
