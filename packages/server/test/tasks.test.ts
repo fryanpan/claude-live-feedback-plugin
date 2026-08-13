@@ -12,13 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import {
-  CHORES_GOAL_ID,
-  TaskStore,
-  isValidRef,
-  refKey,
-  tasksSidecarPath,
-} from '../src/tasks.ts';
+import { CHORES_GOAL_ID, TaskStore, isValidRef, refKey, tasksSidecarPath } from '../src/tasks.ts';
 
 const PERSON = { id: 'known-bryan', name: 'Bryan', kind: 'known' };
 const OUTSIDE_PERSON = { id: 'email:jordan1', name: 'Jordan', kind: 'known' };
@@ -470,9 +464,7 @@ describe('Ref: the url kind', () => {
   it('keys identity on the URL string, so two tasks can share one link', () => {
     const pr = 'https://github.com/example-org/example-repo/pull/1669';
     expect(refKey({ kind: 'url', url: pr })).toBe(refKey({ kind: 'url', url: pr }));
-    expect(refKey({ kind: 'url', url: pr })).not.toBe(
-      refKey({ kind: 'url', url: pr + '/files' }),
-    );
+    expect(refKey({ kind: 'url', url: pr })).not.toBe(refKey({ kind: 'url', url: pr + '/files' }));
     // Distinct from every other kind's keyspace.
     expect(refKey({ kind: 'url', url: 'x' })).not.toBe(refKey({ kind: 'doc', docId: 'x' }));
   });
@@ -529,9 +521,7 @@ describe('Ref: the url kind', () => {
 
       // Positive control: the query works before the junk lands, so a later
       // empty result can't be mistaken for "the query never worked".
-      expect(store.backlinksFor({ kind: 'url', url: pr }).map((t) => t.id)).toEqual([
-        good.task.id,
-      ]);
+      expect(store.backlinksFor({ kind: 'url', url: pr }).map((t) => t.id)).toEqual([good.task.id]);
 
       // Exactly the shapes the old cast admitted, planted the way a reload
       // from `<ws>.tasks.json` would produce them.
@@ -542,9 +532,7 @@ describe('Ref: the url kind', () => {
       stored.links = [null, 'not-a-ref', { kind: 'nope' }];
 
       expect(() => store.backlinksFor({ kind: 'url', url: pr })).not.toThrow();
-      expect(store.backlinksFor({ kind: 'url', url: pr }).map((t) => t.id)).toEqual([
-        good.task.id,
-      ]);
+      expect(store.backlinksFor({ kind: 'url', url: pr }).map((t) => t.id)).toEqual([good.task.id]);
       expect(() => store.tasksReferencingDoc('any-doc')).not.toThrow();
     } finally {
       store.stop();

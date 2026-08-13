@@ -53,6 +53,7 @@ import { KEYCHAIN_SERVICE, ThreadSummarizer } from './summarize.ts';
 import { applyImport, importBanner, importMarkerFor, parseTrackerMarkdown } from './task-import.ts';
 import { TaskProjection } from './task-projection.ts';
 import {
+  REF_KINDS,
   type Ref,
   type TaskStatus,
   TaskStore,
@@ -60,7 +61,6 @@ import {
   type WorkspaceSubgoal,
   eventsLogPath,
   isAttachmentRuntime,
-  REF_KINDS,
   isValidRef,
   taskChip,
 } from './tasks.ts';
@@ -148,9 +148,7 @@ function parseNeeds(raw: unknown): { ok: true; needs?: 'action' | 'decision' } |
  *
  * `ok: false` now means only "this isn't an array at all".
  */
-function parseLinks(
-  raw: unknown,
-): { ok: true; links?: Ref[]; ignored: unknown[] } | { ok: false } {
+function parseLinks(raw: unknown): { ok: true; links?: Ref[]; ignored: unknown[] } | { ok: false } {
   if (raw === undefined) return { ok: true, ignored: [] };
   if (!Array.isArray(raw)) return { ok: false };
   const links: Ref[] = [];
