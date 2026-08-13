@@ -519,8 +519,28 @@ export class Rooms {
       text,
     });
     if (!comment) return null;
-    const thread = this.getThread(docId, threadId);
+    // A PERSON replying to a resolved thread is continuing the conversation,
+    // so the thread reopens. It has to: the drawer's default "Open" tab drops
+    // resolved threads entirely, so a reply that leaves the status alone is a
+    // reply the reviewer can never see — reported, accurately from where he
+    // sat, as "comments are going missing".
+    //
+    // An AGENT reply deliberately does NOT reopen. Agents post closing notes
+    // ("done, removed it in <sha>") after a human resolves, and resurrecting
+    // a thread the human just closed is its own bug. Same actor split the
+    // activity log uses.
+    const replied = this.getThread(docId, threadId);
+    const reopened =
+      replied?.status === 'resolved' && classifyActor(author) === 'person'
+        ? schemaSetStatus(room.ydoc, threadId, 'open')
+        : null;
+    const thread = reopened ?? replied;
     if (thread) this.fireEvent(room, 'thread.replied', thread, comment, opts);
+    // Watchers that track open/resolved from the event stream would otherwise
+    // hold 'resolved' for a thread that is open again. No separate activity
+    // record: the reply below already logs this person's action, and a
+    // synthetic 'reopen' would double-count it.
+    if (reopened && thread) this.fireEvent(room, 'thread.reopened', thread, undefined, opts);
     this.recordActivity(room, 'reply', author, threadId, { text, tsMs: comment.ts });
     return thread;
   }
