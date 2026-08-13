@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CHORES_GOAL_ID, TaskStore, tasksSidecarPath } from '../src/tasks.ts';
+import { CHORES_GOAL_ID, TaskStore, isValidRef, refKey, tasksSidecarPath } from '../src/tasks.ts';
 
 const PERSON = { id: 'known-bryan', name: 'Bryan', kind: 'known' };
 const OUTSIDE_PERSON = { id: 'email:jordan1', name: 'Jordan', kind: 'known' };
@@ -439,5 +439,104 @@ describe('TaskStore', () => {
         reborn.stop();
       }
     });
+  });
+});
+
+describe('Ref: the url kind', () => {
+  it('accepts http and https, and nothing else', () => {
+    expect(isValidRef({ kind: 'url', url: 'https://example.com/a/pull/7' })).toBe(true);
+    expect(isValidRef({ kind: 'url', url: 'http://example.com/dashboard' })).toBe(true);
+    // A ref becomes an href in the hub's link chips, so the scheme is the
+    // security boundary. `url` is the first kind that can carry one at all —
+    // every other kind is an internal id.
+    expect(isValidRef({ kind: 'url', url: 'javascript:alert(1)' })).toBe(false);
+    expect(isValidRef({ kind: 'url', url: 'data:text/html,<script>x</script>' })).toBe(false);
+    expect(isValidRef({ kind: 'url', url: 'file:///etc/passwd' })).toBe(false);
+    // Case and whitespace must not be a way around the check.
+    expect(isValidRef({ kind: 'url', url: 'JaVaScRiPt:alert(1)' })).toBe(false);
+    expect(isValidRef({ kind: 'url', url: '  javascript:alert(1)' })).toBe(false);
+    // Not a URL at all.
+    expect(isValidRef({ kind: 'url', url: 'example.com' })).toBe(false);
+    expect(isValidRef({ kind: 'url', url: '' })).toBe(false);
+    expect(isValidRef({ kind: 'url' })).toBe(false);
+  });
+
+  it('keys identity on the URL string, so two tasks can share one link', () => {
+    const pr = 'https://github.com/example-org/example-repo/pull/1669';
+    expect(refKey({ kind: 'url', url: pr })).toBe(refKey({ kind: 'url', url: pr }));
+    expect(refKey({ kind: 'url', url: pr })).not.toBe(refKey({ kind: 'url', url: pr + '/files' }));
+    // Distinct from every other kind's keyspace.
+    expect(refKey({ kind: 'url', url: 'x' })).not.toBe(refKey({ kind: 'doc', docId: 'x' }));
+  });
+
+  it('finds every task pointing at the same URL (the "three tasks touch this PR" question)', () => {
+    // Own temp dir: this describe sits outside the suite that manages one.
+    const dir = mkdtempSync(join(tmpdir(), 'feedback-urlref-'));
+    const store = new TaskStore({ dataDir: dir, debounceMs: 5 });
+    try {
+      const ws = store.createWorkspace('outward');
+      const pr = 'https://github.com/example-org/example-repo/pull/1669';
+      const a = store.createTask(ws.id, {
+        title: 'Land it',
+        actor: AGENT,
+        links: [{ kind: 'url', url: pr }],
+      });
+      const b = store.createTask(ws.id, {
+        title: 'Review it',
+        actor: AGENT,
+        links: [{ kind: 'url', url: pr }],
+      });
+      // Positive control: a task with a DIFFERENT url must not come back, or
+      // "both tasks found" would also pass for a matcher that matches all.
+      store.createTask(ws.id, {
+        title: 'Unrelated',
+        actor: AGENT,
+        links: [{ kind: 'url', url: 'https://example.com/other' }],
+      });
+      const found = store.backlinksFor({ kind: 'url', url: pr }).map((t) => t.id);
+      if (!a.ok || !b.ok) throw new Error('fixture tasks were not created');
+      expect(found.sort()).toEqual([a.task.id, b.task.id].sort());
+    } finally {
+      store.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // The route validates `origin` now, but it did not always, and what it let
+  // through was WRITTEN TO DISK — so the malformed refs already out there
+  // outlive the fix. `tasksMatching` spans every workspace and is on the
+  // doc-open path, so one bad ref anywhere used to throw for everyone.
+  it('survives a malformed ref that is already in the store', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'feedback-badref-'));
+    const store = new TaskStore({ dataDir: dir, debounceMs: 5 });
+    try {
+      const ws = store.createWorkspace('legacy');
+      const pr = 'https://github.com/example-org/example-repo/pull/1669';
+      const good = store.createTask(ws.id, {
+        title: 'Reachable',
+        actor: AGENT,
+        links: [{ kind: 'url', url: pr }],
+      });
+      if (!good.ok) throw new Error('fixture task was not created');
+
+      // Positive control: the query works before the junk lands, so a later
+      // empty result can't be mistaken for "the query never worked".
+      expect(store.backlinksFor({ kind: 'url', url: pr }).map((t) => t.id)).toEqual([good.task.id]);
+
+      // Exactly the shapes the old cast admitted, planted the way a reload
+      // from `<ws>.tasks.json` would produce them.
+      const poisoned = store.createTask(ws.id, { title: 'Poisoned', actor: AGENT });
+      if (!poisoned.ok) throw new Error('fixture task was not created');
+      const stored = poisoned.task as { origin?: unknown; links: unknown[] };
+      stored.origin = null;
+      stored.links = [null, 'not-a-ref', { kind: 'nope' }];
+
+      expect(() => store.backlinksFor({ kind: 'url', url: pr })).not.toThrow();
+      expect(store.backlinksFor({ kind: 'url', url: pr }).map((t) => t.id)).toEqual([good.task.id]);
+      expect(() => store.tasksReferencingDoc('any-doc')).not.toThrow();
+    } finally {
+      store.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

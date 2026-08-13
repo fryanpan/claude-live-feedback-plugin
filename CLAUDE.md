@@ -57,8 +57,15 @@ unbumped change is invisible on both ends: green push here, unchanged plugin
 there. That is how 25 feature commits sat undelivered between 2026-05-09 and
 2026-08-10.
 
-- **Bump the patch version on every PR.** Both manifests, identical values:
-  `packages/plugin/.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`.
+- **Bump the patch version on every PR. THREE places, identical values** —
+  `packages/plugin/.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`,
+  and the `version:` literal in `packages/mcp/src/mcp.ts` (the serverInfo a
+  client sees in the initialize handshake). This entry said "both manifests"
+  until a bump that followed it exactly still shipped a stale handshake
+  version; the third site is the one that has actually drifted in the field,
+  three minor releases behind. `packages/mcp/test/launcher.test.ts` asserts
+  the handshake against plugin.json, so the miss goes red rather than out —
+  but only after `bun run build:mcp`, since the test drives the BUNDLE.
   Minor/major bumps are Bryan's call; patch is the default and needs no discussion.
 - **CI enforces the dangerous half.** `bun run check:plugin-version` fails when a
   PR touches `packages/plugin/**` without moving the version forward, or when the
