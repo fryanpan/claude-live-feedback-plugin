@@ -49,7 +49,14 @@ import { sanitizeVisitorAuthor } from './share/visitor-identity.ts';
 import { SseHub, openSseStream } from './sse.ts';
 import { KEYCHAIN_SERVICE, ThreadSummarizer } from './summarize.ts';
 import { TaskProjection } from './task-projection.ts';
-import { type Ref, type TaskStatus, TaskStore, isValidRef, taskChip } from './tasks.ts';
+import {
+  type Ref,
+  type TaskStatus,
+  TaskStore,
+  isAttachmentRuntime,
+  isValidRef,
+  taskChip,
+} from './tasks.ts';
 import { type WebhookLogEntry, createWebhookDispatcher } from './webhooks.ts';
 import { onClose, onMessage, onOpen } from './yjs-protocol.ts';
 
@@ -373,6 +380,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   taskStore.onEvent((ev) => {
     const { type, ...rest } = ev;
     sse.broadcast(`ws~${ev.workspaceId}`, { event: type, ...rest });
+  });
+  // The real triage-delivery bridge (§3.4, grounded-pending): a request
+  // counts as delivered ONLY when the workspace has a live attachment to act
+  // on it — that check is what earns the task its triagePendingTs. The
+  // request rides the workspace SSE channel (the MCP watch transport) but
+  // deliberately NOT the store's emit: §3.6's table is the exhaustive
+  // subscriber/audit contract and has no triage.requested row, so requests
+  // never reach events.jsonl (they're a delivery, not a change).
+  taskStore.setTriageDelivery((req) => {
+    if (!taskStore.hasLiveAttachment(req.workspaceId)) return false;
+    sse.broadcast(`ws~${req.workspaceId}`, { event: 'triage.requested', ...req });
+    return true;
   });
   // The ydoc projection (§3.3): ws:<workspaceId> board rooms the server
   // writes and defends (foreign writes reverted), plus task:<taskId> body
@@ -1281,6 +1300,76 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // pattern as createWorkspace/attachDoc above.
           taskProjection.ensureWorkspace(res.task.workspaceId);
           return j(200, { ok: true, changed: res.changed, task: res.task });
+        }
+        // --- REST: agent attachments (§4) ---
+        // AgentAttachment records live OUTSIDE every ydoc; this REST surface
+        // is their only read path. `endpoint` is host-machine-describing, so
+        // a share visitor's read is redacted (the private-meta pattern) and
+        // the mutations are owner-only outright — a visitor attaching an
+        // agent or forging a heartbeat is never legitimate.
+        const wsAgentsMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/attachments$/);
+        if (wsAgentsMatch && req.method === 'GET') {
+          const workspaceId = decodeURIComponent(wsAgentsMatch[1] ?? '');
+          if (!taskStore.getWorkspace(workspaceId)) {
+            return j(404, { error: 'workspace not found' });
+          }
+          return j(200, {
+            workspaceId,
+            attachments: visitor
+              ? taskStore.listPublicAttachments(workspaceId)
+              : taskStore.listAttachments(workspaceId),
+          });
+        }
+        if (wsAgentsMatch && req.method === 'POST') {
+          if (visitor) return j(403, { error: 'not available to share visitors' });
+          const workspaceId = decodeURIComponent(wsAgentsMatch[1] ?? '');
+          const body = await safeJson(req);
+          const agentId = body?.agentId;
+          if (typeof agentId !== 'string' || agentId.trim().length === 0) {
+            return j(400, { error: 'agentId required' });
+          }
+          const runtime = body?.runtime;
+          if (!isAttachmentRuntime(runtime)) {
+            return j(400, { error: 'runtime must be claude-code-local | managed-agent | webhook' });
+          }
+          const res = taskStore.attachAgent(workspaceId, {
+            agentId: agentId.trim(),
+            runtime,
+            capabilities: Array.isArray(body?.capabilities)
+              ? (body.capabilities as unknown[]).filter((c): c is string => typeof c === 'string')
+              : undefined,
+            endpoint: typeof body?.endpoint === 'string' ? body.endpoint : undefined,
+          });
+          if (!res.ok) return j(404, res);
+          return j(200, res);
+        }
+        const wsAgentHeartbeatMatch = pathname.match(
+          /^\/api\/workspaces\/([^/]+)\/attachments\/([^/]+)\/heartbeat$/,
+        );
+        if (wsAgentHeartbeatMatch && req.method === 'POST') {
+          if (visitor) return j(403, { error: 'not available to share visitors' });
+          const workspaceId = decodeURIComponent(wsAgentHeartbeatMatch[1] ?? '');
+          const agentId = decodeURIComponent(wsAgentHeartbeatMatch[2] ?? '');
+          const body = await safeJson(req);
+          const res = taskStore.heartbeat(workspaceId, agentId, {
+            // Forwarded, not re-derived: the runtime knows when it last did
+            // work; the route's job is only to not drop the field.
+            toolCallAt: typeof body?.toolCallAt === 'number' ? Number(body.toolCallAt) : undefined,
+          });
+          if (!res.ok) return j(404, res);
+          return j(200, res);
+        }
+        const wsAgentDetachMatch = pathname.match(
+          /^\/api\/workspaces\/([^/]+)\/attachments\/([^/]+)$/,
+        );
+        if (wsAgentDetachMatch && req.method === 'DELETE') {
+          if (visitor) return j(403, { error: 'not available to share visitors' });
+          const workspaceId = decodeURIComponent(wsAgentDetachMatch[1] ?? '');
+          const agentId = decodeURIComponent(wsAgentDetachMatch[2] ?? '');
+          if (!taskStore.detachAgent(workspaceId, agentId)) {
+            return j(404, { error: 'attachment not found' });
+          }
+          return j(200, { ok: true });
         }
         // Delete a whole workspace as one unit (all-or-nothing open-thread
         // guardrail; ?force=true to override). Member SOURCE files are left

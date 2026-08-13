@@ -282,14 +282,149 @@ export type TriageRequest =
     };
 
 /**
- * Bridge to whatever can carry a triage request to a live attached agent
- * (the attachment registry arrives in a later commit; the MCP watch channel
- * is the expected transport). MUST return true ONLY when the request was
- * actually emitted to a live attachment — the return value is what grounds
- * the task's triage-pending marker, so an optimistic true would promise
- * work that isn't queued.
+ * Bridge to whatever can carry a triage request to a live attached agent —
+ * server.ts installs the real one: `hasLiveAttachment` decides live, the
+ * workspace SSE channel (the MCP watch transport) carries it. MUST return
+ * true ONLY when the request was actually emitted to a live attachment —
+ * the return value is what grounds the task's triage-pending marker, so an
+ * optimistic true would promise work that isn't queued.
  */
 export type TriageDelivery = (req: TriageRequest) => boolean;
+
+// ── Agent attachments (plan §4) ─────────────────────────────────────────────
+
+export type AttachmentRuntime = 'claude-code-local' | 'managed-agent' | 'webhook';
+
+const ATTACHMENT_RUNTIMES: ReadonlySet<string> = new Set([
+  'claude-code-local',
+  'managed-agent',
+  'webhook',
+]);
+
+export function isAttachmentRuntime(v: unknown): v is AttachmentRuntime {
+  return typeof v === 'string' && ATTACHMENT_RUNTIMES.has(v);
+}
+
+/**
+ * The workspace↔agent link, stored as DATA from day one (§4) — keyed
+ * (workspaceId, agentId), no uniqueness on agentId, so one agent can hold
+ * attachments to N workspaces at once. v1's only real runtime is the local
+ * Claude Code session; a cloud agent or webhook later is a new record shape,
+ * not a new architecture.
+ *
+ * PRIVACY (§3.3 projection visitor contract, rule 1): these records NEVER
+ * enter any ydoc, and `endpoint` — the one host-machine-describing field —
+ * additionally never rides an event. Both surfaces reach share visitors
+ * (Yjs sync is all-or-nothing; the SSE feed opens to visitors in the
+ * minimal-share commit), so the endpoint's only exits are the attachments
+ * sidecar and owner REST, with visitor redaction — the private-meta pattern.
+ */
+export interface AgentAttachment {
+  workspaceId: string;
+  agentId: string;
+  runtime: AttachmentRuntime;
+  /** Where to reach a non-local runtime. Host-machine-describing: REST-only
+   *  with visitor redaction; absent for the local session. */
+  endpoint?: string;
+  lastHeartbeat: number;
+  /** A heartbeat proves the child process is ALIVE; this proves it can
+   *  WORK. A session at its usage limit heartbeats normally for hours — the
+   *  outage signature is these two fields disagreeing (§4). */
+  lastToolCallAt: number;
+  /** e.g. ['tasks.write', 'docs.edit', 'voice.mutations']. */
+  capabilities: string[];
+}
+
+/** How recent a heartbeat must be for the process to count as up. */
+export const HEARTBEAT_FRESH_MS = 5 * 60_000;
+/** §4: "no lastToolCallAt movement in 30+ minutes" is the outage signature. */
+export const TOOL_CALL_STALE_MS = 30 * 60_000;
+
+export type AttachmentState = 'active' | 'unresponsive' | 'away';
+
+export interface AttachmentThresholds {
+  heartbeatFreshMs?: number;
+  toolCallStaleMs?: number;
+}
+
+/**
+ * Derive the hub's attachment state (§4). "Active 2m ago" is shown because a
+ * heartbeat actually arrived — we never guess from the absence of activity —
+ * and fresh-heartbeat-but-stale-tool-calls is rendered as "process up, agent
+ * unresponsive", never as active.
+ */
+export function attachmentState(
+  att: Pick<AgentAttachment, 'lastHeartbeat' | 'lastToolCallAt'>,
+  now: number,
+  thresholds?: AttachmentThresholds,
+): AttachmentState {
+  const freshMs = thresholds?.heartbeatFreshMs ?? HEARTBEAT_FRESH_MS;
+  const staleMs = thresholds?.toolCallStaleMs ?? TOOL_CALL_STALE_MS;
+  if (now - att.lastHeartbeat >= freshMs) return 'away';
+  if (now - att.lastToolCallAt >= staleMs) return 'unresponsive';
+  return 'active';
+}
+
+export function attachmentStateLabel(state: AttachmentState): string {
+  switch (state) {
+    case 'active':
+      return 'active';
+    case 'unresponsive':
+      return 'process up, agent unresponsive';
+    case 'away':
+      return 'away — requests queue';
+  }
+}
+
+/** An attachment plus its derived state, computed at read time. */
+export type DescribedAttachment = AgentAttachment & {
+  state: AttachmentState;
+  stateLabel: string;
+};
+
+/** The §4 record WITHOUT `endpoint`, plus derived state — what agent.*
+ *  events carry and what a share visitor's REST read gets. */
+export type PublicAttachment = Omit<DescribedAttachment, 'endpoint'>;
+
+export function publicAttachment(
+  att: AgentAttachment,
+  now: number,
+  thresholds?: AttachmentThresholds,
+): PublicAttachment {
+  const state = attachmentState(att, now, thresholds);
+  const { endpoint: _endpoint, ...rest } = att;
+  return { ...rest, state, stateLabel: attachmentStateLabel(state) };
+}
+
+/** The one-line "a fresh context learns the gates exist" summary returned on
+ *  attach (§3.3): open decision tasks that gate open tasks via `after`. */
+export interface GatingSummary {
+  openDecisions: number;
+  gatedTasks: number;
+  summary: string;
+}
+
+export type AttachAgentResult =
+  | {
+      ok: true;
+      attachment: AgentAttachment;
+      gating: GatingSummary;
+      /** Open Chores tasks no triage has placed — what the agent sweeps
+       *  after attaching (§3.4). */
+      untriaged: string[];
+    }
+  | { ok: false; error: 'workspace-not-found' };
+
+export type HeartbeatResult =
+  | { ok: true; attachment: AgentAttachment }
+  | { ok: false; error: 'not-found' };
+
+/** Where a workspace's attachment records persist — their own sidecar, so
+ *  heartbeat churn never rewrites the task data (§4.1: "state sidecars —
+ *  tasks, invites, attachments"). */
+export function attachmentsSidecarPath(dataDir: string, workspaceId: string): string {
+  return join(dataDir, 'workspaces', `${workspaceId}.attachments.json`);
+}
 
 /**
  * Store-level events (plan §3.6). The SSE transport subscribes via `onEvent`;
@@ -387,13 +522,43 @@ export interface WorkspaceGoalsChangedEvent {
   ts: number;
 }
 
+/** §3.6: agent.attached / agent.detached / agent.heartbeat carry the
+ *  attachment record — in its PUBLIC shape, because the SSE feed and the
+ *  audit log both outlive the local trust boundary (endpoint never rides). */
+export interface AgentAttachedEvent {
+  type: 'agent.attached';
+  workspaceId: string;
+  agentId: string;
+  attachment: PublicAttachment;
+  ts: number;
+}
+
+export interface AgentDetachedEvent {
+  type: 'agent.detached';
+  workspaceId: string;
+  agentId: string;
+  attachment: PublicAttachment;
+  ts: number;
+}
+
+export interface AgentHeartbeatEvent {
+  type: 'agent.heartbeat';
+  workspaceId: string;
+  agentId: string;
+  attachment: PublicAttachment;
+  ts: number;
+}
+
 export type TaskStoreEvent =
   | TaskCreatedEvent
   | TaskTransitionedEvent
   | TaskRegroupedEvent
   | DecisionAnsweredEvent
   | WorkspaceGoalUpdatedEvent
-  | WorkspaceGoalsChangedEvent;
+  | WorkspaceGoalsChangedEvent
+  | AgentAttachedEvent
+  | AgentDetachedEvent
+  | AgentHeartbeatEvent;
 
 export type SetWorkspaceGoalResult =
   | {
@@ -437,6 +602,9 @@ export interface ListTasksFilter {
 interface WorkspaceState {
   workspace: HubWorkspace;
   tasks: Map<string, Task>;
+  /** agentId → attachment (§4). Keyed per workspace, so the same agentId in
+   *  two workspaces is two independent records. */
+  attachments: Map<string, AgentAttachment>;
 }
 
 /** Where a workspace's sidecar lives. Exported so tests assert the real
@@ -461,14 +629,27 @@ export class TaskStore {
   private workspaces = new Map<string, WorkspaceState>();
   private taskIndex = new Map<string, string>(); // taskId → workspaceId
   private saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private attachmentSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private dataDir: string;
   private debounceMs: number;
+  private attachmentThresholds: AttachmentThresholds;
   private triageDelivery: TriageDelivery | undefined;
   private eventListeners = new Set<(event: TaskStoreEvent) => void>();
 
-  constructor(opts: { dataDir: string; debounceMs?: number }) {
+  constructor(opts: {
+    dataDir: string;
+    debounceMs?: number;
+    /** Attachment liveness knobs — overridable so tests never burn real
+     *  minutes (§6: delivery timings configurable). */
+    heartbeatFreshMs?: number;
+    toolCallStaleMs?: number;
+  }) {
     this.dataDir = opts.dataDir;
     this.debounceMs = opts.debounceMs ?? 200;
+    this.attachmentThresholds = {
+      ...(opts.heartbeatFreshMs !== undefined ? { heartbeatFreshMs: opts.heartbeatFreshMs } : {}),
+      ...(opts.toolCallStaleMs !== undefined ? { toolCallStaleMs: opts.toolCallStaleMs } : {}),
+    };
     this.hydrateFromDisk();
   }
 
@@ -545,7 +726,7 @@ export class TaskStore {
       docIds: [],
       createdAt: now,
     };
-    this.workspaces.set(workspace.id, { workspace, tasks: new Map() });
+    this.workspaces.set(workspace.id, { workspace, tasks: new Map(), attachments: new Map() });
     this.scheduleSave(workspace.id);
     return workspace;
   }
@@ -1066,6 +1247,188 @@ export class TaskStore {
     );
   }
 
+  // ── Agent attachments (§4) ───────────────────────────────────────────────
+  //
+  // The registry behind the triage-delivery bridge and the hub's attachment
+  // state. Records live in their own per-workspace sidecar; agent.* events
+  // ride the SAME emit choke point as every other §3.6 row (SSE + audit),
+  // carrying the PUBLIC shape — `endpoint` never leaves REST/sidecar.
+
+  /**
+   * Attach (or re-attach) an agent to a workspace — an upsert on
+   * (workspaceId, agentId). Attach is itself a tool call, so both liveness
+   * clocks start at now: a freshly attached agent reads as active, never as
+   * unresponsive-from-birth. The result carries the §3.3 one-line summary of
+   * open gating decisions and the untriaged Chores tasks to sweep (§3.4) —
+   * a fresh context learns the gates exist without thinking to read the
+   * board.
+   */
+  attachAgent(
+    workspaceId: string,
+    opts: {
+      agentId: string;
+      runtime: AttachmentRuntime;
+      capabilities?: string[];
+      endpoint?: string;
+    },
+  ): AttachAgentResult {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return { ok: false, error: 'workspace-not-found' };
+    const now = Date.now();
+    const attachment: AgentAttachment = {
+      workspaceId,
+      agentId: opts.agentId,
+      runtime: opts.runtime,
+      ...(opts.endpoint !== undefined ? { endpoint: opts.endpoint } : {}),
+      lastHeartbeat: now,
+      lastToolCallAt: now,
+      capabilities: opts.capabilities ?? [],
+    };
+    state.attachments.set(opts.agentId, attachment);
+    this.scheduleAttachmentsSave(workspaceId);
+    this.emit({
+      type: 'agent.attached',
+      workspaceId,
+      agentId: opts.agentId,
+      attachment: publicAttachment(attachment, now, this.attachmentThresholds),
+      ts: now,
+    });
+    return {
+      ok: true,
+      attachment,
+      gating: this.gatingSummary(workspaceId),
+      untriaged: this.listUntriaged(workspaceId).map((t) => t.id),
+    };
+  }
+
+  /**
+   * Record a heartbeat. A plain heartbeat proves only that the process is
+   * alive; `toolCallAt` lets the runtime report when it last did WORK — the
+   * two clocks are deliberately separate (§4: a session at its usage limit
+   * heartbeats normally for hours). `toolCallAt` is monotonic and clamped to
+   * now: it can neither backdate nor forward-date activity.
+   */
+  heartbeat(workspaceId: string, agentId: string, opts?: { toolCallAt?: number }): HeartbeatResult {
+    const attachment = this.workspaces.get(workspaceId)?.attachments.get(agentId);
+    if (!attachment) return { ok: false, error: 'not-found' };
+    const now = Date.now();
+    attachment.lastHeartbeat = now;
+    if (opts?.toolCallAt !== undefined) {
+      const claimed = Math.min(opts.toolCallAt, now);
+      if (claimed > attachment.lastToolCallAt) attachment.lastToolCallAt = claimed;
+    }
+    this.scheduleAttachmentsSave(workspaceId);
+    this.emit({
+      type: 'agent.heartbeat',
+      workspaceId,
+      agentId,
+      attachment: publicAttachment(attachment, now, this.attachmentThresholds),
+      ts: now,
+    });
+    return { ok: true, attachment };
+  }
+
+  /** Bump lastToolCallAt to now. No event — tool calls are not a §3.6 row;
+   *  the next heartbeat event carries the moved clock. */
+  noteAgentToolCall(workspaceId: string, agentId: string): boolean {
+    const attachment = this.workspaces.get(workspaceId)?.attachments.get(agentId);
+    if (!attachment) return false;
+    attachment.lastToolCallAt = Date.now();
+    this.scheduleAttachmentsSave(workspaceId);
+    return true;
+  }
+
+  /** Remove an attachment. Emits agent.detached once; a second detach has
+   *  nothing left to announce. */
+  detachAgent(workspaceId: string, agentId: string): boolean {
+    const state = this.workspaces.get(workspaceId);
+    const attachment = state?.attachments.get(agentId);
+    if (!state || !attachment) return false;
+    const now = Date.now();
+    state.attachments.delete(agentId);
+    this.scheduleAttachmentsSave(workspaceId);
+    this.emit({
+      type: 'agent.detached',
+      workspaceId,
+      agentId,
+      attachment: publicAttachment(attachment, now, this.attachmentThresholds),
+      ts: now,
+    });
+    return true;
+  }
+
+  /** Full records + derived state — the OWNER surface (endpoint included).
+   *  Visitors get `listPublicAttachments` instead. */
+  listAttachments(workspaceId: string): DescribedAttachment[] {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return [];
+    const now = Date.now();
+    return Array.from(state.attachments.values())
+      .sort((a, b) => a.agentId.localeCompare(b.agentId))
+      .map((att) => {
+        const s = attachmentState(att, now, this.attachmentThresholds);
+        return { ...att, state: s, stateLabel: attachmentStateLabel(s) };
+      });
+  }
+
+  /** The visitor-redacted read: same list, endpoint stripped. */
+  listPublicAttachments(workspaceId: string): PublicAttachment[] {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return [];
+    const now = Date.now();
+    return Array.from(state.attachments.values())
+      .sort((a, b) => a.agentId.localeCompare(b.agentId))
+      .map((att) => publicAttachment(att, now, this.attachmentThresholds));
+  }
+
+  /**
+   * Is any attachment's heartbeat fresh? This is what grounds the triage
+   * pending marker (§3.4): "emitted to a live attachment" means someone with
+   * a live process is subscribed to act — existence alone proves nothing
+   * (a record whose runtime died an hour ago is `away`, and promising it
+   * work would be the summaries-incident lie again).
+   */
+  hasLiveAttachment(workspaceId: string): boolean {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return false;
+    const now = Date.now();
+    const freshMs = this.attachmentThresholds.heartbeatFreshMs ?? HEARTBEAT_FRESH_MS;
+    for (const att of state.attachments.values()) {
+      if (now - att.lastHeartbeat < freshMs) return true;
+    }
+    return false;
+  }
+
+  /** Open decision tasks that gate open tasks via `after` edges, rolled into
+   *  the §3.3 one-liner: "2 open decisions gating 3 tasks". */
+  private gatingSummary(workspaceId: string): GatingSummary {
+    const state = this.workspaces.get(workspaceId);
+    const decisions = new Set<string>();
+    const gated = new Set<string>();
+    if (state) {
+      for (const task of state.tasks.values()) {
+        if (task.status === 'done') continue;
+        for (const depId of task.after) {
+          const dep = state.tasks.get(depId);
+          if (dep && dep.status !== 'done' && dep.needs === 'decision') {
+            decisions.add(dep.id);
+            gated.add(task.id);
+          }
+        }
+      }
+    }
+    const d = decisions.size;
+    const g = gated.size;
+    return {
+      openDecisions: d,
+      gatedTasks: g,
+      summary:
+        d === 0
+          ? 'no open gating decisions'
+          : `${d} open decision${d === 1 ? '' : 's'} gating ${g} task${g === 1 ? '' : 's'}`,
+    };
+  }
+
   // ── Persistence ──────────────────────────────────────────────────────────
 
   /** Flush every pending debounced write synchronously (tests, shutdown). */
@@ -1075,6 +1438,11 @@ export class TaskStore {
       this.persist(workspaceId);
     }
     this.saveTimers.clear();
+    for (const [workspaceId, timer] of this.attachmentSaveTimers) {
+      clearTimeout(timer);
+      this.persistAttachments(workspaceId);
+    }
+    this.attachmentSaveTimers.clear();
   }
 
   /** Flush and stop — after this the store schedules nothing. */
@@ -1092,6 +1460,65 @@ export class TaskStore {
     // Never hold the process (or a test runner) open.
     timer.unref?.();
     this.saveTimers.set(workspaceId, timer);
+  }
+
+  private scheduleAttachmentsSave(workspaceId: string): void {
+    const prev = this.attachmentSaveTimers.get(workspaceId);
+    if (prev) clearTimeout(prev);
+    const timer = setTimeout(() => {
+      this.attachmentSaveTimers.delete(workspaceId);
+      this.persistAttachments(workspaceId);
+    }, this.debounceMs);
+    timer.unref?.();
+    this.attachmentSaveTimers.set(workspaceId, timer);
+  }
+
+  /** Attachments get their own sidecar so heartbeat churn never rewrites the
+   *  task data. Empty registry → the file is removed (private-meta pattern:
+   *  nothing sensitive left on disk when nothing is attached). */
+  private persistAttachments(workspaceId: string): void {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return;
+    const dir = join(this.dataDir, 'workspaces');
+    const path = attachmentsSidecarPath(this.dataDir, workspaceId);
+    const tmp = `${path}.tmp`;
+    try {
+      if (state.attachments.size === 0) {
+        rmSync(path, { force: true });
+        return;
+      }
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      const payload = { attachments: Array.from(state.attachments.values()) };
+      writeFileSync(tmp, `${JSON.stringify(payload, null, 2)}\n`);
+      renameSync(tmp, path);
+    } catch (err) {
+      console.error(`[tasks] failed to persist attachments for ${workspaceId}:`, err);
+      try {
+        rmSync(tmp, { force: true });
+      } catch {}
+    }
+  }
+
+  /** Load a workspace's attachments sidecar. Records hydrate with their old
+   *  clocks — a stale lastHeartbeat honestly reads as `away` until the agent
+   *  heartbeats again; we never reset it to look alive. */
+  private loadAttachments(workspaceId: string): Map<string, AgentAttachment> {
+    const out = new Map<string, AgentAttachment>();
+    const path = attachmentsSidecarPath(this.dataDir, workspaceId);
+    if (!existsSync(path)) return out;
+    try {
+      const parsed = JSON.parse(readFileSync(path, 'utf8')) as {
+        attachments?: AgentAttachment[];
+      };
+      for (const att of parsed.attachments ?? []) {
+        if (typeof att?.agentId !== 'string' || !isAttachmentRuntime(att.runtime)) continue;
+        out.set(att.agentId, { ...att, workspaceId });
+      }
+    } catch (err) {
+      // A corrupt sidecar loses the attachments, never the workspace.
+      console.error(`[tasks] unreadable attachments sidecar for ${workspaceId} — skipped:`, err);
+    }
+    return out;
   }
 
   private persist(workspaceId: string): void {
@@ -1151,7 +1578,11 @@ export class TaskStore {
           tasks.set(task.id, task);
           this.taskIndex.set(task.id, workspace.id);
         }
-        this.workspaces.set(workspace.id, { workspace, tasks });
+        this.workspaces.set(workspace.id, {
+          workspace,
+          tasks,
+          attachments: this.loadAttachments(workspace.id),
+        });
       } catch (err) {
         // A corrupt sidecar loses that one workspace, never the server.
         console.error(`[tasks] unreadable sidecar ${entry} — skipped:`, err);
