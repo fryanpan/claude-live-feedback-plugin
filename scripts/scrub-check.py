@@ -224,7 +224,7 @@ def load_project_names(registry_path: Optional[str]) -> Set[str]:
 
     Skips names that would cause heavy false-positive load:
       - Names without a hyphen AND under 6 chars (e.g. `tasks`, `crm`) — collide
-        with common English words. Bryan can still flag them precisely via the
+        with common English words. The operator can still flag them precisely via the
         hand-curated denylist if he wants stricter matching.
       - The current repo's own name (a repo legitimately self-references in its
         README, CLAUDE.md, plugin metadata, etc).
@@ -309,7 +309,7 @@ def build_patterns(names: Set[str], denylist: List[Tuple[str, bool]]) -> List[Tu
     """Compile all match patterns. Names use a hyphen-aware word boundary."""
     patterns: List[Tuple[str, re.Pattern]] = []
     for name in sorted(names):
-        # (?<![\w-]) and (?![\w-]) keep `personal-crm` from matching inside `super-personal-crm-foo`.
+        # (?<![\w-]) and (?![\w-]) keep e.g. `some-proj` from matching inside `super-some-proj-foo`.
         rx = re.compile(r"(?<![\w-])" + re.escape(name) + r"(?![\w-])", re.IGNORECASE)
         patterns.append((f"registry-project: {name}", rx))
     for raw, is_regex in denylist:
