@@ -2380,7 +2380,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // experiment was permanent. Ask the task store first, by id.
           if (taskStore.getWorkspace(workspaceId)) {
             const hub = taskStore.deleteWorkspace(workspaceId, { force });
-            if (!hub.ok) return j(hub.error === 'has-open-tasks' ? 409 : 404, hub);
+            if (!hub.ok) {
+              // 'persist-failed' is a 500, not a 404: the board is still
+              // there, and the caller must not read the refusal as "already
+              // gone" and stop asking.
+              const code =
+                hub.error === 'has-open-tasks' ? 409 : hub.error === 'persist-failed' ? 500 : 404;
+              return j(code, hub);
+            }
             // Rooms are the projection's, not the store's. Attached docs are
             // deliberately untouched: attachDoc is a LINK, so a doc that a
             // deleted board merely cited keeps working at its own URL.
