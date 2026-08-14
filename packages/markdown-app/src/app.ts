@@ -25,6 +25,7 @@ import {
   setSidebarSignature,
   sidebarShowsSignature,
 } from './sidebar-nav-key.ts';
+import { installStaleClientNotice } from './stale-client.ts';
 import { readSuggestModePref, setSuggesting, writeSuggestModePref } from './suggest-input.ts';
 import { registerMarkdownMount } from './surface-registry.ts';
 import { type TableMenuItem, tableMenuItems } from './table-menu.ts';
@@ -179,7 +180,11 @@ async function main(): Promise<void> {
   startRouter({
     user,
     fetchMeta: fetchDocMeta,
-    connectFor: (docId, docType) => connect(DEFAULT_WS_PATH(docId, docType)),
+    connectFor: (docId, docType) => {
+      const client = connect(DEFAULT_WS_PATH(docId, docType));
+      installStaleClientNotice(client);
+      return client;
+    },
     mountFor: (ctx) => {
       // A MARKDOWN file in a diff review reads as prose → Word-style redline;
       // other code/diff docs → CodeMirror source; everything else → Tiptap.
