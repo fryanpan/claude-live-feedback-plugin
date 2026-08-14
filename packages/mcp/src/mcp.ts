@@ -6,6 +6,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { resolveAgentAuthor } from './author.ts';
+import { type ThreadCreateInput, threadCreateRequest } from './thread-create.ts';
 import { triageRequestLine } from './triage-line.ts';
 
 /**
@@ -71,7 +72,7 @@ const server = new Server(
     // Must match packages/plugin/.claude-plugin/plugin.json — this is the version
     // a client sees in the initialize handshake, and it had drifted three minor
     // releases behind. Asserted in packages/mcp/test/launcher.test.ts.
-    version: '0.1.18',
+    version: '0.1.19',
   },
   {
     capabilities: {
@@ -217,18 +218,25 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'create_thread',
       description:
-        'Open a new comment thread anchored to a `find` text range, seeded with an initial comment from the configured author. Use when the agent has editorial notes / suggestions that should land as durable threads on the doc (instead of one-shot chat messages) — e.g. running `/edit` on a blog draft and leaving anchored feedback at six different places. Disambiguation works the same as `find_and_replace`: pass `contextBefore`/`contextAfter` or `occurrence` if the text appears more than once. Returns `{ thread }` with `thread.id` for follow-up `post_reply` calls. The thread fires the same `thread.created` event the editor uses, so watchers see it immediately.',
+        'Open a new comment thread on a doc, seeded with an initial comment from the configured author. Use when the agent has editorial notes / suggestions that should land as durable threads (instead of one-shot chat messages) — e.g. running `/edit` on a blog draft and leaving anchored feedback at six different places. Pass `find` to anchor the thread to that text; disambiguation works the same as `find_and_replace` (`contextBefore`/`contextAfter` or `occurrence` if the text appears more than once). OMIT `find` to open a thread about the doc AS A WHOLE — this is how you discuss a hub task, whose body doc is `task:<taskId>` and is often still empty: `create_thread(docId="task:t-abc", text="...")`. A subject thread never orphans. Returns `{ thread }` with `thread.id` for follow-up `post_reply` calls, and fires the same `thread.created` event the editor uses, so watchers see it immediately.',
       inputSchema: {
         type: 'object',
         properties: {
-          docId: { type: 'string' },
-          find: { type: 'string' },
+          docId: {
+            type: 'string',
+            description: 'Doc id. A task\'s discussion lives on "task:<taskId>".',
+          },
+          find: {
+            type: 'string',
+            description:
+              'Text to anchor to. Omit entirely for a thread about the whole doc; an empty string is rejected rather than treated as "no anchor".',
+          },
           contextBefore: { type: 'string' },
           contextAfter: { type: 'string' },
           occurrence: { type: 'number' },
           text: { type: 'string' },
         },
-        required: ['docId', 'find', 'text'],
+        required: ['docId', 'text'],
       },
     },
     {
@@ -1446,22 +1454,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok(res);
       }
       case 'create_thread': {
-        const { docId, find, contextBefore, contextAfter, occurrence, text } = a as {
-          docId: string;
-          find: string;
-          contextBefore?: string;
-          contextAfter?: string;
-          occurrence?: number;
-          text: string;
-        };
-        const res = await http('POST', `/api/docs/${encodeURIComponent(docId)}/threads/by_find`, {
-          author: AUTHOR,
-          text,
-          find,
-          ...(contextBefore !== undefined ? { contextBefore } : {}),
-          ...(contextAfter !== undefined ? { contextAfter } : {}),
-          ...(occurrence !== undefined ? { occurrence } : {}),
-        });
+        // Two endpoints; omitting `find` opens the thread on the subject.
+        // See thread-create.ts.
+        const { path, body } = threadCreateRequest(a as unknown as ThreadCreateInput, AUTHOR);
+        const res = await http('POST', path, body);
         return ok(res);
       }
       case 'resolve_thread': {

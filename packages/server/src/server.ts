@@ -5,6 +5,7 @@ import {
   type DocMeta,
   type DocType,
   type User,
+  type WebhookPayload,
   contentKind,
   suggestOps,
   summaryHash,
@@ -51,7 +52,7 @@ import { sanitizeVisitorAuthor } from './share/visitor-identity.ts';
 import { SseHub, openSseStream } from './sse.ts';
 import { KEYCHAIN_SERVICE, ThreadSummarizer } from './summarize.ts';
 import { applyImport, importBanner, importMarkerFor, parseTrackerMarkdown } from './task-import.ts';
-import { TaskProjection } from './task-projection.ts';
+import { TaskProjection, taskIdOfBodyDoc } from './task-projection.ts';
 import { buildQueue, summarizeGoals } from './task-queue.ts';
 import {
   REF_KINDS,
@@ -234,6 +235,7 @@ export const HUB_FEEDBACK_DOC_ID = 'lf-hub-feedback';
 /** The anchor's display snippet, whichever anchor kind carries it — an
  *  orphan keeps its original's snippet. */
 function anchorSnippetText(anchor: Anchor): string | undefined {
+  if (anchor.kind === 'subject') return undefined;
   if (anchor.kind === 'orphan') {
     return anchor.original.snippet?.text;
   }
@@ -556,11 +558,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // Generation is opt-IN at this seam: no summarizer, no outbound call, ever.
   // See ServerOptions.summarizer for why constructing one here was wrong.
   const summarizer = opts.summarizer ?? null;
+  // Late-bound because Rooms is constructed before the task store and the
+  // projection it needs. Nothing can fire through it until a room exists,
+  // which is after both.
+  let onTaskBodyEvent: ((docId: string, payload: WebhookPayload) => void) | null = null;
   const rooms = new Rooms({
     dataDir,
     sse,
     webhooks,
     decorateDocMeta: withReviewUrl,
+    onRoomEvent: (docId, payload) => onTaskBodyEvent?.(docId, payload),
     ...(summarizer ? { summarizer } : {}),
   });
   // Materialize the shared hub-feedback doc at startup rather than letting
@@ -612,6 +619,19 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // authoritative for gated fields on restart.
   const taskProjection = new TaskProjection({ rooms, tasks: taskStore });
   taskProjection.init();
+  // A task's discussion lives in its body room, but an agent working a board
+  // watches the WORKSPACE channel, not each task's doc — so a comment that
+  // only fans out on the doc's own stream reaches nobody who is working. The
+  // same event also moves the row's comment count, which nothing else would
+  // refresh (the store never changes, so no task.* event fires).
+  onTaskBodyEvent = (docId, payload) => {
+    const taskId = taskIdOfBodyDoc(docId);
+    if (!taskId) return;
+    const workspaceId = taskStore.getTask(taskId)?.workspaceId;
+    if (!workspaceId) return;
+    sse.broadcast(`ws~${workspaceId}`, payload);
+    taskProjection.refresh(workspaceId);
+  };
   // Deploy readiness (§3.12 commit 11): uptime is measured from the same
   // events.jsonl the audit trail lives in. The monitor stamps
   // server.started now (bounding whatever outage this boot ended) and

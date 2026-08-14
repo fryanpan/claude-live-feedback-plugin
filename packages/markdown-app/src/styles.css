@@ -1578,6 +1578,78 @@ a.hub-link-chip:hover {
   color: var(--fg-muted);
 }
 
+/* --- task discussion (comments on the task itself) --- */
+.hub-discussion-loading,
+.hub-discussion-empty {
+  margin: 4px 0 10px;
+  color: var(--fg-muted);
+  font-size: 13px;
+  font-style: italic;
+}
+.hub-thread {
+  border-left: 2px solid var(--border);
+  padding: 2px 0 2px 10px;
+  margin: 0 0 12px;
+}
+.hub-thread.resolved {
+  opacity: 0.72;
+}
+.hub-thread-status {
+  display: inline-block;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+  margin-bottom: 4px;
+}
+.hub-comment {
+  margin: 0 0 8px;
+  /* Long agent output and pasted paths must wrap rather than widen the
+     panel — the detail sits in a 430px column on a phone. */
+  overflow-wrap: anywhere;
+}
+.hub-comment-author {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-muted);
+}
+.hub-comment-body {
+  font-family: var(--prose);
+  line-height: 1.5;
+  font-size: 14px;
+}
+.hub-comment-body > :first-child {
+  margin-top: 0;
+}
+.hub-comment-body > :last-child {
+  margin-bottom: 0;
+}
+.hub-comment-form,
+.hub-reply-form {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 6px 0 0;
+}
+.hub-comment-form textarea,
+.hub-reply-form textarea {
+  width: 100%;
+  /* The panel is a grid/flex child; without this a long unbroken paste sets
+     the textarea's intrinsic width and pushes the panel past the viewport. */
+  min-width: 0;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 14px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.hub-comment-form {
+  margin-top: 10px;
+}
+
 /* --- help + toast --- */
 .hub-help {
   position: fixed;

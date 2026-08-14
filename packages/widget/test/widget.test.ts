@@ -85,4 +85,57 @@ describe('widget', () => {
     expect(widgetHost?.hasAttribute('data-feedback-widget')).toBe(true);
     root;
   });
+
+  /**
+   * A thread with no anchor is about the PAGE. `create_thread` without a
+   * `find` now produces one on any doc, so a mockup can carry one — and the
+   * panel is the only place it could ever appear, since there is nothing on
+   * the page to pin it to. Dropping it would be the store-has-it /
+   * surface-can't-show-it failure, on the surface whose whole job is
+   * showing threads.
+   */
+  it('lists a thread that is about the page itself', async () => {
+    const mod = await importWidget();
+    const core = await import('@feedback/core');
+    const el = mod.FeedbackWidget.init({ docId: 'w-test-subject', user: 'bryan' });
+    const inner = el as unknown as {
+      client: { ydoc: import('yjs').Doc } | null;
+      renderThreads: () => void;
+    };
+    const ydoc = inner.client?.ydoc;
+    expect(ydoc).toBeTruthy();
+    if (!ydoc) return;
+    const author = { id: 'known-jordan', name: 'Jordan', kind: 'known' as const, color: '#2e7dd7' };
+    core.createThread(ydoc, {
+      threadId: 'th-subject',
+      anchor: { kind: 'subject' },
+      createdBy: author,
+      firstComment: { id: 'c-1', text: 'This whole screen assumes a signed-in user.' },
+    });
+    // Positive control: an element-anchored thread on the same doc, so a
+    // panel that listed nothing at all could not pass this test.
+    core.createThread(ydoc, {
+      threadId: 'th-element',
+      anchor: {
+        kind: 'element',
+        fingerprint: {
+          id: 'hello',
+          tag: 'BUTTON',
+          stableAttrs: {},
+          classes: [],
+          text: 'Hello',
+          path: 'BUTTON[0] > MAIN[0]',
+          dataAttrs: {},
+        },
+        snippet: { text: 'Hello' },
+      } as never,
+      createdBy: author,
+      firstComment: { id: 'c-2', text: 'And this button is mislabelled.' },
+    });
+    inner.renderThreads();
+    const rows = [...el.shadowRoot!.querySelectorAll('.panel-threads .thread')];
+    const texts = rows.map((r) => r.textContent ?? '');
+    expect(texts.some((t) => t.includes('mislabelled'))).toBe(true);
+    expect(texts.some((t) => t.includes('signed-in user'))).toBe(true);
+  });
 });
