@@ -499,6 +499,31 @@ Technical discoveries that should persist across sessions for this project.
   data dir. So the shape is: evaluate on staging pre-merge, then do the real
   work once, after the merge. Don't ask a reviewer to enter real content twice.
 
+## Prod no longer serves the client out of a working tree — publish, then switch
+
+- **Two entries above say prod serves `packages/markdown-app/dist` from the
+  primary checkout *per request*. That stopped being true** when prod started
+  copying the built bundles into an immutable numbered release under the state
+  root (`~/.local/state/live-feedback/client`, `LF_CLIENT_ROOT` to override)
+  and serving that. A `git checkout` in the repo can no longer change what a
+  browser loads. What survives unchanged: that checkout is prod's **deploy
+  source**, so bundles built there still ship at the next restart — which is
+  why `bun run staging` still refuses to run from it.
+- **Any "swap what's being served" operation needs an intermediate nobody
+  reads.** Copy into a dot-prefixed staging dir, `rename(2)` it into place (a
+  release then exists completely or not at all), and move the `current`
+  pointer by renaming a fresh symlink over it. Copying into the live directory
+  has a window where the served tree is half-populated; there is no amount of
+  ordering that removes it. The server is handed the RESOLVED release path, so
+  no request can resolve half a path either side of a swap.
+- **Release ids must sort in publish order.** The first cut used a
+  seconds-granularity timestamp plus a random suffix, so "keep the newest N"
+  was a coin flip between same-second releases and the prune test failed
+  intermittently-by-construction. Millisecond stamp + a fixed-width counter.
+- The full picture of what reaches whom, and how, is
+  [delivery.md](delivery.md) — read that before answering "why doesn't my peer
+  have this yet".
+
 ## Server lifecycle on the Mac Mini
 
 - The live-feedback server has no auto-restart story today. If it crashes
