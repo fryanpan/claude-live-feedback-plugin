@@ -69,6 +69,9 @@ interface HubState {
   docs: SidebarDoc[];
   threads: SidebarThread[];
   detailTaskId: string | null;
+  /** The thread the review queue aimed at, when the panel was opened from it.
+   *  Null every other way in. */
+  detailThreadId: string | null;
   /**
    * The open task's discussion, and the id it was fetched FOR. Keyed rather
    * than just held, because a load that lands after the reader has moved to
@@ -219,6 +222,7 @@ async function main(): Promise<void> {
     docs: [],
     threads: [],
     detailTaskId: null,
+    detailThreadId: null,
     discussion: { loading: false, threads: [] },
     discussionTaskId: null,
     reviewItems: [],
@@ -272,6 +276,9 @@ async function main(): Promise<void> {
     onGoalTitleCommit: (sectionId: string, title: string) => void retitleGoal(sectionId, title),
     onOpenTask: (task: HubTask) => {
       state.detailTaskId = task.id;
+      // Opening the task any other way clears the queue's aim, so a mark left
+      // over from the last walkthrough item can't point at the wrong thread.
+      state.detailThreadId = null;
       renderDetail();
     },
     onReorder: (task: HubTask, target: ReorderTarget) => void placeTask(task, target),
@@ -299,7 +306,13 @@ async function main(): Promise<void> {
     if (!t) return;
     if (t.kind === 'task-thread') {
       const task = t.taskId ? state.tasks.get(t.taskId) : undefined;
-      if (task) boardHandlers.onOpenTask(task);
+      if (!task) return;
+      boardHandlers.onOpenTask(task);
+      // The task is the container; the thread is the errand. On a task with
+      // six discussions, landing on the panel top is the same "now go find
+      // it" the strip exists to remove — so aim at the one that was queued.
+      state.detailThreadId = t.threadId;
+      renderDetail();
       return;
     }
     location.assign(
@@ -426,6 +439,7 @@ async function main(): Promise<void> {
       {
         onClose: () => {
           state.detailTaskId = null;
+          state.detailThreadId = null;
           renderDetail();
         },
         onStatusSet: (t, to) => void transitionTask(t, to),
@@ -435,6 +449,7 @@ async function main(): Promise<void> {
         knownAgentIds: knownAgentIds(),
         goalLabel: (id) => goalLabel(state.info?.goals ?? [], id),
         onComment: (t, text, threadId) => postTaskComment(t, text, threadId),
+        ...(state.detailThreadId ? { focusThreadId: state.detailThreadId } : {}),
       },
       task ? discussion : undefined,
     );
@@ -574,7 +589,7 @@ async function main(): Promise<void> {
   function renderAll(): void {
     // Mounted, not rendered: `renderQuickAdd` is a no-op after the first call
     // so a board repaint can never take the caret out of a half-typed idea.
-    renderQuickAdd(el('hub-quick'), { onCapture: (text) => void captureTask(text) });
+    renderQuickAdd(el('hub-quick'), { onCapture: (text) => captureTask(text) });
     renderGoal();
     renderLead();
     renderBoardRegion();
@@ -755,9 +770,9 @@ async function main(): Promise<void> {
    * discussing it with you" — an idea he captures is one he wants picked up,
    * not one he means to file to himself and never see again.
    */
-  async function captureTask(text: string): Promise<void> {
+  async function captureTask(text: string): Promise<boolean> {
     const parsed = parseQuickAdd(text);
-    if (!parsed) return;
+    if (!parsed) return false;
     const res = await send(`/api/workspaces/${encodeURIComponent(workspaceId)}/tasks`, 'POST', {
       title: parsed.title,
       ...(parsed.body !== undefined ? { body: parsed.body } : {}),
@@ -767,11 +782,14 @@ async function main(): Promise<void> {
     if (!res.ok) {
       const why = typeof res.data?.message === 'string' ? res.data.message : 'Capture failed';
       showToast(why);
-      return;
+      // False, so the box KEEPS the words. A toast the reader may have already
+      // scrolled past is not a copy of their idea.
+      return false;
     }
     // The row itself arrives over the ydoc; the toast is the receipt for the
     // words that just left the box.
     showToast(`Captured — “${parsed.title}” is in triage`);
+    return true;
   }
 
   async function loadReviewItems(): Promise<void> {

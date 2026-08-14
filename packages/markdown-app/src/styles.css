@@ -1758,6 +1758,14 @@ a.hub-link-chip:hover {
 .hub-thread.resolved {
   opacity: 0.72;
 }
+/* The one the review queue sent you here to answer. Scrolling to it is not
+   enough on a panel of six near-identical threads — you have to be able to
+   tell WHICH one when you look up from the scroll. */
+.hub-thread-focus {
+  border-left-color: var(--accent, #3b6fd4);
+  background: var(--accent-wash, rgba(59, 111, 212, 0.07));
+  border-radius: 0 6px 6px 0;
+}
 .hub-thread-status {
   display: inline-block;
   font-size: 11px;

@@ -802,8 +802,13 @@ export function renderBoard(
  */
 export interface QuickAddHandlers {
   /** The raw text, exactly as typed. Splitting it into title and body is the
-   *  model's job, not the DOM's. */
-  onCapture: (text: string) => void;
+   *  model's job, not the DOM's.
+   *
+   *  Resolves true when the task actually exists. The box clears on THAT, not
+   *  on dispatch: a phone in a lift would otherwise eat the idea and hand back
+   *  a toast, which is the one failure this box exists to prevent, at the
+   *  moment it costs most. */
+  onCapture: (text: string) => Promise<boolean>;
 }
 
 export function renderQuickAdd(container: HTMLElement, handlers: QuickAddHandlers): void {
@@ -827,12 +832,24 @@ export function renderQuickAdd(container: HTMLElement, handlers: QuickAddHandler
     input.style.height = 'auto';
     input.style.height = `${Math.min(input.scrollHeight, 160)}px`;
   };
+  // One in flight at a time. Without this the second Enter — the reflex when
+  // the first appears to do nothing — files the idea twice, because the text
+  // now stays in the box until the task lands.
+  let inFlight = false;
   const capture = () => {
     const text = input.value.trim();
-    if (!text) return;
-    handlers.onCapture(text);
-    input.value = '';
-    autosize();
+    if (!text || inFlight) return;
+    inFlight = true;
+    submit.disabled = true;
+    void handlers.onCapture(text).then((ok) => {
+      inFlight = false;
+      submit.disabled = false;
+      if (!ok) return;
+      // Only what was sent. Anything typed while it was in flight is a second
+      // idea, and clearing the whole box would take it with the first.
+      input.value = input.value.trim() === text ? '' : input.value;
+      autosize();
+    });
   };
   input.addEventListener('input', autosize);
   // Enter submits, Shift+Enter is a newline — the convention every chat box
@@ -1437,6 +1454,10 @@ export interface DetailHandlers {
   /** A comment on the task. With `threadId` it is a reply; without one it
    *  opens a new thread about the task itself. */
   onComment?: (task: HubTask, text: string, threadId?: string) => Promise<boolean>;
+  /** The one thread the reader was sent here to answer, when they arrived
+   *  from the review queue. Marked and scrolled to — "open the task" is not
+   *  the promise the strip makes on a task with six discussions. */
+  focusThreadId?: string;
 }
 
 export interface TaskComment {
@@ -1536,6 +1557,7 @@ function renderDiscussion(
   task: HubTask,
   discussion: TaskDiscussion,
   onComment: (task: HubTask, text: string, threadId?: string) => Promise<boolean>,
+  focusThreadId?: string,
 ): HTMLElement {
   const section = document.createElement('section');
   section.className = 'hub-discussion';
@@ -1562,7 +1584,10 @@ function renderDiscussion(
     // Resolved threads stay VISIBLE. A resolved thread is still part of the
     // argument, and hiding one here would repeat the drawer bug where a reply
     // existed in the store with no surface that could reach it.
-    el.className = `hub-thread${t.status === 'resolved' ? ' resolved' : ''}`;
+    el.className = `hub-thread${t.status === 'resolved' ? ' resolved' : ''}${
+      t.id === focusThreadId ? ' hub-thread-focus' : ''
+    }`;
+    el.dataset.threadId = t.id;
     if (t.status === 'resolved') {
       const badge = document.createElement('span');
       badge.className = 'hub-thread-status';
@@ -1774,7 +1799,7 @@ export function renderTaskDetail(
   panel.append(body);
 
   if (discussion && handlers.onComment) {
-    panel.append(renderDiscussion(task, discussion, handlers.onComment));
+    panel.append(renderDiscussion(task, discussion, handlers.onComment, handlers.focusThreadId));
   }
 
   if (task.transitions.length > 0) {
@@ -1800,4 +1825,14 @@ export function renderTaskDetail(
     if (ev.target === container) handlers.onClose();
   });
   container.append(panel);
+  // After it is in the document — scrollIntoView on a detached node does
+  // nothing, silently. Guarded because happy-dom has no implementation.
+  const focus = handlers.focusThreadId
+    ? panel.querySelector<HTMLElement>(
+        `.hub-thread[data-thread-id="${CSS.escape(handlers.focusThreadId)}"]`,
+      )
+    : null;
+  if (focus && typeof focus.scrollIntoView === 'function') {
+    focus.scrollIntoView({ block: 'center' });
+  }
 }
