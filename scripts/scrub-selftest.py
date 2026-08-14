@@ -69,6 +69,30 @@ def run(paths: list[str], registry: str | None, denylist: str | None, cwd: str |
     )
 
 
+def clean_git_env() -> dict[str, str]:
+    """The environment minus every variable that redirects git at a repo.
+
+    This suite runs from `.githooks/pre-push`, where git has exported GIT_DIR
+    (and friends) pointing at the repo being pushed. Inheriting that, a
+    `git init` in a temp directory does not initialize the temp directory —
+    it re-initializes the repo GIT_DIR names, and when GIT_DIR is a linked
+    worktree's gitdir it writes `core.bare = true` into the SHARED config,
+    i.e. the primary checkout's. That checkout then refuses `git status`,
+    `git pull`, and every worktree command with "this operation must be run
+    in a work tree".
+
+    It cost weeks of intermittent breakage that looked like a Claude Code
+    worktree bug, because it only ever happened on a push and the config
+    change carried no author. Strip the variables instead of guessing which
+    ones matter: the list git exports to hooks is not a contract.
+    """
+    env = dict(os.environ)
+    for key in list(env):
+        if key.startswith("GIT_"):
+            del env[key]
+    return env
+
+
 def make_repo_with_registry(path: str, project: str) -> None:
     """A git repo carrying its own registry.yaml at the root.
 
@@ -80,9 +104,87 @@ def make_repo_with_registry(path: str, project: str) -> None:
     """
     os.makedirs(path, exist_ok=True)
     subprocess.run(["git", "init", "-q"], cwd=path, check=True,
-                   capture_output=True)
+                   capture_output=True, env=clean_git_env())
     with open(os.path.join(path, "registry.yaml"), "w") as f:
         f.write(f"projects:\n  {project}:\n    path: ~/dev/{project}\n")
+
+
+def check_git_env_isolation() -> None:
+    """`git init` in a fixture must not reach the repo being pushed.
+
+    This suite runs from `.githooks/pre-push`, and git exports GIT_DIR (plus
+    friends) into every hook subprocess. A `git init` that inherits that
+    environment does NOT initialize the directory you passed as cwd — it
+    re-initializes the repo GIT_DIR names, and because the cwd isn't that
+    repo's worktree it records `core.bare = true`. The real checkout then
+    refuses `git status`, `git pull`, and every worktree command with "this
+    operation must be run in a work tree", which is how a self-test blew up
+    the repo it was defending, once per push, for weeks.
+
+    The shape matters, and getting it wrong makes this test vacuous: GIT_DIR
+    naming a plain repo's `.git` is harmless — `git init` just reinitializes
+    it and leaves core.bare alone. It is GIT_DIR naming a LINKED WORKTREE's
+    gitdir that writes `core.bare = true`, into the shared config, i.e. the
+    primary checkout's. Every agent in this repo pushes from a worktree, so
+    that is the shape that actually happens.
+
+    The victim is a throwaway repo, not the real one — but it stands in the
+    same relation, so this catches the bug without breaking anything.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        victim = os.path.join(tmp, "victim")
+        os.makedirs(victim)
+        # This suite's OWN setup has to be isolated too — run from the hook,
+        # an inherited GIT_DIR would build the fixture inside the real repo.
+        clean = clean_git_env()
+        # Identity via -c, not env: clean_git_env strips GIT_AUTHOR_* and
+        # GIT_COMMITTER_* along with everything else, and a CI runner has no
+        # global user.email — so a bare `git commit` here exits 128 on every
+        # machine that isn't a developer laptop. (This suite has now shipped
+        # twice with a case that only ran on mine.)
+        ident = ["-c", "user.email=selftest@example.invalid", "-c", "user.name=Scrub Selftest"]
+        subprocess.run(["git", "init", "-q"], cwd=victim, check=True,
+                       capture_output=True, env=clean)
+        subprocess.run(["git", *ident, "commit", "-q", "--allow-empty", "-m", "seed"],
+                       cwd=victim, check=True, capture_output=True, env=clean)
+        worktree = os.path.join(tmp, "victim-wt")
+        subprocess.run(["git", "worktree", "add", "-q", worktree, "-b", "probe"],
+                       cwd=victim, check=True, capture_output=True, env=clean)
+        # What git exports to a hook run from that worktree. Ask git rather
+        # than building the path: the gitdir is named after the worktree
+        # DIRECTORY, not the branch, and a hand-built path that doesn't exist
+        # makes this whole case pass vacuously.
+        hook_git_dir = subprocess.run(
+            ["git", "rev-parse", "--absolute-git-dir"],
+            cwd=worktree, capture_output=True, text=True, check=True, env=clean,
+        ).stdout.strip()
+        expect("git-env isolation: the worktree gitdir resolves",
+               0 if os.path.isdir(hook_git_dir) else 1, 0, hook_git_dir)
+
+        def bare_flag() -> str:
+            r = subprocess.run(
+                ["git", "config", "--file", os.path.join(victim, ".git", "config"), "core.bare"],
+                capture_output=True, text=True,
+            )
+            return r.stdout.strip()
+
+        # Positive control: the victim is a normal, non-bare repo right now, so
+        # "still false" below is a claim about the fixture call rather than
+        # about a flag that was never set.
+        expect("git-env isolation: victim starts non-bare", 0 if bare_flag() == "false" else 1, 0,
+               f"core.bare={bare_flag()!r}")
+
+        prior = dict(os.environ)
+        os.environ["GIT_DIR"] = hook_git_dir
+        try:
+            make_repo_with_registry(os.path.join(tmp, "fixture"), "some-project")
+        finally:
+            os.environ.clear()
+            os.environ.update(prior)
+
+        expect("git-env isolation: fixture init leaves the outer repo alone",
+               0 if bare_flag() == "false" else 1, 0,
+               f"core.bare={bare_flag()!r} — GIT_DIR leaked into the fixture's git init")
 
 
 def expect(label: str, got: int, want: int, out: str = "") -> None:
@@ -132,6 +234,7 @@ def check_decision_table() -> None:
 
 
 def main() -> int:
+    check_git_env_isolation()
     check_decision_table()
     with tempfile.TemporaryDirectory() as tmp:
         registry = os.path.join(tmp, "registry.yaml")
