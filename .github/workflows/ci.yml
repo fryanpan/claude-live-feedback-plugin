@@ -33,6 +33,8 @@ jobs:
         run: bun run build:widget
       - name: Widget bundle size
         run: bun run check:widget-size
+      - name: Client build id is reproducible
+        run: bun run check:build-id
       - name: Plugin version bumped
         run: bun run check:plugin-version --base origin/${{ github.event.pull_request.base.ref || 'main' }}
       - name: MCP bundle matches source

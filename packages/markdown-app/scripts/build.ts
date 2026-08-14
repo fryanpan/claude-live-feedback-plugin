@@ -1,22 +1,30 @@
 #!/usr/bin/env bun
-import { cpSync, existsSync, mkdirSync, rmSync, watch, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, watch, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { computeBuildId } from '../src/build-id.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const pkgRoot = join(here, '..');
 const dist = join(pkgRoot, 'dist');
 const isWatch = process.argv.includes('--watch');
 
-async function buildOnce(): Promise<void> {
+/** Assets whose bytes decide the build id — everything a browser loads. */
+const HASHED = ['app.js', 'hub.js', 'styles.css', 'index.html'];
+
+/**
+ * Builds both entries plus the copied assets. Runs TWICE per build: once with
+ * a placeholder id to get bytes to hash, then again with the real id baked in.
+ *
+ * The id has to be derived from the output rather than the clock, because
+ * prod rebuilds the client on every restart — a timestamp id would change
+ * when nothing changed and turn every restart into "a new version is
+ * available" for every open tab. Two passes is the price of an id that is
+ * stable across a no-op rebuild; it costs about a second.
+ */
+async function emit(buildId: string): Promise<boolean> {
   rmSync(dist, { recursive: true, force: true });
   mkdirSync(dist, { recursive: true });
-
-  // One id per build, stamped into BOTH the bundles and BUILD_INFO.txt. An
-  // open tab compares the id it is running against the id the server serves
-  // (see src/stale-client.ts), so the two must be written from one value —
-  // computing them separately would make every build look stale to itself.
-  const buildId = new Date().toISOString();
   const define = { __LF_BUILD_ID__: JSON.stringify(buildId) };
 
   const result = await Bun.build({
@@ -39,7 +47,7 @@ async function buildOnce(): Promise<void> {
     console.error('build failed:');
     for (const m of result.logs) console.error(m);
     if (!isWatch) process.exit(1);
-    return;
+    return false;
   }
 
   // The workspace hub is its own entry (served at /app/hub.js by the shell
@@ -64,7 +72,7 @@ async function buildOnce(): Promise<void> {
     console.error('hub build failed:');
     for (const m of hubResult.logs) console.error(m);
     if (!isWatch) process.exit(1);
-    return;
+    return false;
   }
 
   cpSync(join(pkgRoot, 'index.html'), join(dist, 'index.html'));
@@ -74,11 +82,28 @@ async function buildOnce(): Promise<void> {
     console.error('app.js missing from dist — build emitted:');
     console.error(result.outputs.map((o) => o.path));
     if (!isWatch) process.exit(1);
-    return;
+    return false;
   }
+  return true;
+}
+
+async function buildOnce(): Promise<void> {
+  // Pass 1: a fixed placeholder, so the only thing varying between two builds
+  // of the same source is the source.
+  if (!(await emit('0'))) return;
+  const buildId = computeBuildId(
+    HASHED.filter((n) => existsSync(join(dist, n))).map((name) => ({
+      name,
+      bytes: readFileSync(join(dist, name)),
+    })),
+  );
+  // Pass 2: the real id, baked into the bundles and written where the server
+  // serves it. Both come from this one value — computing them separately
+  // would make every build look stale to itself.
+  if (!(await emit(buildId))) return;
 
   writeFileSync(join(dist, 'BUILD_INFO.txt'), `built ${buildId}\n`);
-  console.log(`[markdown-app] built to ${dist}`);
+  console.log(`[markdown-app] built to ${dist} (${buildId})`);
 }
 
 await buildOnce();
