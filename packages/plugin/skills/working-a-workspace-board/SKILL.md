@@ -11,6 +11,11 @@ to whoever is working the board: a lead agent, a peer picking up one task, a
 subagent handed a workspaceId. If you are touching the board at all, this is
 the contract.
 
+This is the discipline. For the **tool shapes** — creating a workspace,
+ordering goals, filing a task, triaging, transitions, decisions, the
+lead-agent seat — read `live-feedback:running-a-workspace-hub`. Don't
+reconstruct the API from the server source.
+
 ## Always work in priority order
 
 Before you pick up anything, call `get_workspace(workspaceId)`. It returns the
