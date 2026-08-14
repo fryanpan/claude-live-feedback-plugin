@@ -8,6 +8,7 @@ import {
   type UptimeReport,
   boardSections,
   goalLabel,
+  pluginDriftNotice,
   reviewQueue,
 } from '../src/hub/hub-model.ts';
 import {
@@ -18,6 +19,7 @@ import {
   renderBoard,
   renderGoalStrip,
   renderLeadStrip,
+  renderPresence,
   renderQuickAdd,
   renderReviewStrip,
   renderTaskDetail,
@@ -1383,5 +1385,40 @@ describe('the sticky walkthrough nav reserves its own height', () => {
     for (const b of sticky) {
       expect(b).toMatch(/\.hub-walk-card\s*\{[^}]*padding-bottom:\s*[\d.]+px/);
     }
+  });
+});
+
+describe('renderPresence — plugin drift', () => {
+  const drift = () =>
+    pluginDriftNotice({
+      version: '0.1.26',
+      behind: [{ agentId: 'agent-quill', pluginVersion: '0.1.12' }],
+    });
+
+  it('shows the notice even when nobody is present to draw a chip for', () => {
+    // An away session draws no chip, and an away session is exactly the one
+    // most likely to be stranded on an old bundle. Hiding the region on
+    // "no chips" would hide the drift with it.
+    const host = document.createElement('div');
+    renderPresence(host, [], null, { onTap: () => {}, onLongPress: () => {} }, drift());
+    expect(host.classList.contains('hidden')).toBe(false);
+    const note = host.querySelector('.hub-drift');
+    expect(note?.textContent).toContain('older plugin than 0.1.26');
+    expect(note?.textContent).toContain('agent-quill 0.1.12');
+    expect(note?.textContent).toContain(
+      'command claude plugin update live-feedback@claude-live-feedback',
+    );
+  });
+
+  it('renders nothing extra when every agent is current', () => {
+    const host = document.createElement('div');
+    // Positive control: the same call WITH a notice puts a .hub-drift in, so
+    // this absence means the notice is what drives it.
+    renderPresence(host, [], null, { onTap: () => {}, onLongPress: () => {} }, drift());
+    expect(host.querySelector('.hub-drift')).not.toBeNull();
+
+    renderPresence(host, [], null, { onTap: () => {}, onLongPress: () => {} }, null);
+    expect(host.querySelector('.hub-drift')).toBeNull();
+    expect(host.classList.contains('hidden')).toBe(true);
   });
 });

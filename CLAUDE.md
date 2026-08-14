@@ -59,8 +59,10 @@ there. That is how 25 feature commits sat undelivered between 2026-05-09 and
 
 - **Bump the patch version on every PR. THREE places, identical values** —
   `packages/plugin/.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`,
-  and the `version:` literal in `packages/mcp/src/mcp.ts` (the serverInfo a
-  client sees in the initialize handshake). This entry said "both manifests"
+  and the `PLUGIN_VERSION` constant in `packages/mcp/src/mcp.ts` (the serverInfo
+  a client sees in the initialize handshake, and — since the drift notice — the
+  version each session reports to its board on `attach_agent`; one constant, so
+  those two can never disagree). This entry said "both manifests"
   until a bump that followed it exactly still shipped a stale handshake
   version; the third site is the one that has actually drifted in the field,
   three minor releases behind. `packages/mcp/test/launcher.test.ts` asserts
@@ -91,6 +93,21 @@ there. That is how 25 feature commits sat undelivered between 2026-05-09 and
   different versions for as long as that takes. Anything whose value ships
   inside the bundle — a skill, a tool description — is not delivered by
   merging it.
+- **The board now says who is behind**, so this stops being something a person
+  has to remember to check. Every session reports the bundle it is RUNNING on
+  `attach_agent`, and the workspace's presence strip names any session older
+  than the version this server's deploy source would install. That is the
+  answer to "does my peer have this yet" — read it there rather than asking.
+  Its one honest limit: "released" means *this checkout's manifest*, so a
+  checkout nobody pulled reports its own staleness as current.
+- **An agent CAN run the update; the shell makes it look otherwise.** On this
+  machine `claude` resolves to a shell function that injects flags ahead of the
+  subcommand, so `claude plugin update …` is parsed as a prompt and dies with
+  "Input must be provided either through stdin or as a prompt argument when
+  using --print". That reads exactly like a permission refusal, and it was
+  written up in a ticket as one. `command` bypasses functions and aliases, so
+  the invocation that works is `command claude plugin update
+  live-feedback@claude-live-feedback`. The restart is still the human step.
 
 **The whole delivery model is written down once, in
 [docs/process/delivery.md](docs/process/delivery.md)**: how the plugin travels

@@ -22,6 +22,7 @@ import {
   type HubTask,
   type HubWorkspaceInfo,
   type PendingRetriageView,
+  type PluginRelease,
   type PresenceAgent,
   type PresenceChip,
   type PresencePerson,
@@ -32,6 +33,7 @@ import {
   boardSections,
   goalLabel,
   parseQuickAdd,
+  pluginDriftNotice,
   presenceChips,
   reviewQueue,
 } from './hub-model.ts';
@@ -66,6 +68,10 @@ interface HubState {
   /** Deploy readiness (§3.12 commit 11) — null until the log has lines. */
   uptime: UptimeReport | null;
   agents: PresenceAgent[];
+  /** Plugin versions: what the deploy source would install, and which
+   *  attached sessions are running something older. Null until the first
+   *  attachments read lands. */
+  pluginRelease: PluginRelease | null;
   docs: SidebarDoc[];
   threads: SidebarThread[];
   detailTaskId: string | null;
@@ -219,6 +225,7 @@ async function main(): Promise<void> {
     events: [],
     uptime: null,
     agents: [],
+    pluginRelease: null,
     docs: [],
     threads: [],
     detailTaskId: null,
@@ -570,20 +577,26 @@ async function main(): Promise<void> {
 
   function renderPresenceRegion(): void {
     const chips = presenceChips(peopleFromAwareness(), state.agents, Date.now());
-    renderPresence(el('hub-presence'), chips, state.followedKey, {
-      onTap: (chip: PresenceChip) => {
-        if (chip.docId) location.assign(`/review/${encodeURIComponent(chip.docId)}`);
+    renderPresence(
+      el('hub-presence'),
+      chips,
+      state.followedKey,
+      {
+        onTap: (chip: PresenceChip) => {
+          if (chip.docId) location.assign(`/review/${encodeURIComponent(chip.docId)}`);
+        },
+        onLongPress: (chip: PresenceChip) => {
+          state.followedKey = state.followedKey === chip.key ? null : chip.key;
+          showToast(
+            state.followedKey
+              ? `Following ${chip.label} — long-press again to stop`
+              : 'Stopped following',
+          );
+          renderPresenceRegion();
+        },
       },
-      onLongPress: (chip: PresenceChip) => {
-        state.followedKey = state.followedKey === chip.key ? null : chip.key;
-        showToast(
-          state.followedKey
-            ? `Following ${chip.label} — long-press again to stop`
-            : 'Stopped following',
-        );
-        renderPresenceRegion();
-      },
-    });
+      pluginDriftNotice(state.pluginRelease),
+    );
   }
 
   function renderAll(): void {
@@ -827,8 +840,12 @@ async function main(): Promise<void> {
         stateLabel?: string;
         lastToolCallAt: number;
       }>;
+      pluginRelease?: PluginRelease;
     }>(`/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`);
     const before = knownAgentIds().join('\n');
+    // Which sessions can't run what was merged. Rides the read the board
+    // already makes, so nobody has to think to check.
+    state.pluginRelease = res?.pluginRelease ?? null;
     state.agents = (res?.attachments ?? []).map((a) => ({
       agentId: a.agentId,
       state: a.state ?? 'away',

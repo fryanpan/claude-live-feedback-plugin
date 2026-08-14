@@ -13788,9 +13788,10 @@ var AUTHOR = resolveAgentAuthor({
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
+var PLUGIN_VERSION = "0.1.27";
 var server = new Server({
   name: "claude-live-feedback",
-  version: "0.1.26"
+  version: PLUGIN_VERSION
 }, {
   capabilities: {
     tools: {},
@@ -15688,7 +15689,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`, {
           agentId: agentId ?? AUTHOR.id,
           runtime: runtime ?? "claude-code-local",
-          ...capabilities !== undefined ? { capabilities } : {}
+          ...capabilities !== undefined ? { capabilities } : {},
+          pluginVersion: PLUGIN_VERSION
         });
         if (subscribe !== false)
           await watchWorkspace(workspaceId);
