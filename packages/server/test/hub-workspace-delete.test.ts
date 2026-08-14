@@ -60,6 +60,30 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
   const del = (path: string) => fetch(`${base}${path}`, { method: 'DELETE' });
 
   /**
+   * A comment on a task's body, anchored the way the product anchors one.
+   * These threads live ONLY in the body room — nothing in the task store
+   * holds them — which is what makes destroying a body room before the
+   * delete has committed a data-loss path rather than a cache miss.
+   */
+  const commentOnBody = async (taskId: string, find: string) => {
+    const docId = taskBodyDocId(taskId);
+    const r = await post(`/api/docs/${encodeURIComponent(docId)}/threads/by_find`, {
+      author: AGENT,
+      text: 'Does this cover the retry case?',
+      find,
+    });
+    expect(r.status).toBe(200);
+  };
+
+  const openThreadCount = async (taskId: string): Promise<number> => {
+    const docId = taskBodyDocId(taskId);
+    const r = await fetch(`${base}/api/docs/${encodeURIComponent(docId)}/threads`);
+    if (r.status !== 200) return -1;
+    const payload = (await r.json()) as { threads?: unknown[] };
+    return (payload.threads ?? []).length;
+  };
+
+  /**
    * Both the tasks sidecar and a room's `.ydoc` are written on a debounce, so
    * "it exists" is a condition to wait for, not a fact right after the
    * create. This matters beyond timing: a test that deletes before the first
@@ -184,6 +208,8 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
     // "Deleted" and "still on disk" is the worst pair available here: the
     // caller stops asking, and the next restart hands the board back.
     const { wsId, open } = await seed();
+    await commentOnBody(open.id, 'still open');
+    expect(await openThreadCount(open.id)).toBe(1);
     const sidecar = tasksSidecarPath(dataDir as string, wsId);
     expect(await awaitFile(sidecar)).toBe(true);
     // Stand in for any unlink failure (permissions, a locked file) without
@@ -200,9 +226,11 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
     // filesystem is fixed still has something to delete.
     expect(await listWorkspaceIds()).toContain(wsId);
     expect(handle?.tasks.getTask(open.id)).toBeDefined();
-    // The rooms went first and are gone by now, which is fine: they are
-    // derived, and the next touch rebuilds them from the store. So what the
-    // refusal leaves is a working board, not a hollow one.
+    // This is the failure that happens at the COMMIT, after the room files
+    // were already removed — and it still costs nothing, because the live
+    // rooms were never torn down. The board works and the comment is there.
+    expect(handle?.rooms.get(workspaceRoomId(wsId))).toBeDefined();
+    expect(await openThreadCount(open.id)).toBe(1);
     const again = await post(`/api/workspaces/${wsId}/tasks`, {
       title: 'after the failure',
       goal: 'chores',
@@ -210,7 +238,6 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
       body: 'Agent can keep using the board so that a failed delete costs nothing.',
     });
     expect(again.status).toBe(200);
-    expect(handle?.rooms.get(workspaceRoomId(wsId))).toBeDefined();
   });
 
   it('keeps the board when a room file survives, so the delete can be retried', async () => {
@@ -220,6 +247,8 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
     // restart behind an id that no longer resolves as a board — nothing
     // could ever come back for it.
     const { wsId, open } = await seed();
+    await commentOnBody(open.id, 'still open');
+    expect(await openThreadCount(open.id)).toBe(1);
     const boardYdoc = join(dataDir as string, `${workspaceRoomId(wsId)}.ydoc`);
     expect(await awaitFile(boardYdoc)).toBe(true);
     // Same root-proof stand-in for an unlink failure as above.
@@ -237,11 +266,15 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
     expect(retry.status).toBe(500);
     expect(((await retry.json()) as { error: string }).error).toBe('rooms-cleanup-failed');
     // The board and its tasks are still there, so the same call retries once
-    // the filesystem is fixed — and the projection rebuilds the rooms it did
-    // manage to drop.
+    // the filesystem is fixed.
     expect(await listWorkspaceIds()).toContain(wsId);
     expect(handle?.tasks.getTask(open.id)).toBeDefined();
     expect(existsSync(tasksSidecarPath(dataDir as string, wsId))).toBe(true);
+    // And nothing irreversible happened on the way to failing. The comment
+    // exists ONLY in the body room, so tearing that room down before the
+    // delete could commit would destroy it — a failed operation that
+    // silently costs the reviewer their thread.
+    expect(await openThreadCount(open.id)).toBe(1);
   });
 
   it('re-arms the write it cancelled when the delete refuses', () => {

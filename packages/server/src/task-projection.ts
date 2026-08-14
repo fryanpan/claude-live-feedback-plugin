@@ -230,50 +230,67 @@ export class TaskProjection {
     this.refresh(workspaceId);
   }
 
+  /** Every room this projection owns for a workspace: the board, plus one
+   *  body room per task. The caller passes the ids because after the board
+   *  is deleted the store can no longer enumerate them. */
+  private workspaceRoomIds(workspaceId: string, taskIds: string[]): string[] {
+    return [...taskIds.map(taskBodyDocId), workspaceRoomId(workspaceId)];
+  }
+
   /**
-   * Tear down every room this projection created for a workspace: the board
-   * room and one body room per task.
+   * Remove the persisted `.ydoc` of every room a workspace owns, WITHOUT
+   * touching the live rooms. Reports whether the disk is now clean.
    *
-   * The store owns no rooms and the rooms own no store state, so deleting a
-   * workspace is two calls and this is the second one — the caller passes the
-   * task ids because by the time it runs, the store can no longer enumerate
-   * them.
+   * This is the reversible half of the teardown, and it runs BEFORE the
+   * board is deleted from the store, because the two failure modes pull in
+   * opposite directions:
+   *  - orphan files must not outlive the board (once the store entry is
+   *    gone the id no longer resolves as a board, so nothing can ever come
+   *    back for them, and they reload on every restart);
+   *  - but a body room is NOT purely derived — it holds the task's
+   *    discussion threads, which live nowhere else — so a delete that goes
+   *    on to FAIL must not have destroyed one.
+   * Removing files while the rooms stay live satisfies both: on failure
+   * everything is still readable and the delete is retryable, and the live
+   * rooms re-persist on their next write.
    *
-   * Cancel the snapshot timer BEFORE dropping the room: a debounced snapshot
-   * that fires afterwards would try to write body text back into a task that
-   * no longer exists.
-   *
-   * Returns ok:false if any room's persisted `.ydoc` survived its removal.
-   * That room would reload on the next restart, and the caller is expected
-   * to run this BEFORE deleting the board from the store — once the store
-   * entry is gone the id no longer resolves as a board, so nothing could
-   * ever come back for the orphans.
+   * Ask about the FILE, not the room: `deleteDoc` logs a failed unlink and
+   * still returns ok, and on a retry it answers 'not-found' without going
+   * near the disk, because the first attempt took the room out of memory.
    */
-  dropWorkspace(workspaceId: string, taskIds: string[]): { ok: boolean } {
-    let persistFailed = false;
-    const drop = (docId: string) => {
-      // force: a task body's own discussion threads are part of what's being
-      // deleted, so open ones are not a reason to refuse here — the refusal
-      // that matters (open TASKS) is the caller's.
-      this.rooms.deleteDoc(docId, { force: true });
-      // Ask about the FILE, not the room. `deleteDoc` logs a failed unlink
-      // and returns ok — and on a RETRY it answers 'not-found', because the
-      // first attempt already took the room out of memory, so it never
-      // reaches the disk at all. Either way an orphan `.ydoc` would survive
-      // a delete that reported success.
-      if (!this.rooms.purgePersisted(docId)) persistFailed = true;
-    };
+  purgeWorkspaceFiles(workspaceId: string, taskIds: string[]): { ok: boolean } {
+    let ok = true;
+    for (const docId of this.workspaceRoomIds(workspaceId, taskIds)) {
+      if (!this.rooms.purgePersisted(docId)) ok = false;
+    }
+    return { ok };
+  }
+
+  /**
+   * Tear the live rooms down. DESTRUCTIVE — a body room's threads are gone
+   * after this — so call it only once the board is out of the store, i.e.
+   * once the delete has actually committed and nothing can still refuse.
+   *
+   * Cancel each snapshot timer BEFORE its room goes: a debounced snapshot
+   * firing afterwards would try to write body text back into a task that no
+   * longer exists. `deleteDoc` re-purges the persisted file, which covers
+   * anything a live room rewrote between the purge above and here.
+   */
+  dropWorkspaceRooms(workspaceId: string, taskIds: string[]): void {
     for (const taskId of taskIds) {
       const docId = taskBodyDocId(taskId);
       const timer = this.snapshotTimers.get(docId);
       if (timer) clearTimeout(timer);
       this.snapshotTimers.delete(docId);
       this.bodyWired.delete(docId);
-      drop(docId);
     }
     this.wired.delete(workspaceId);
-    drop(workspaceRoomId(workspaceId));
-    return { ok: !persistFailed };
+    for (const docId of this.workspaceRoomIds(workspaceId, taskIds)) {
+      // force: a task body's discussion threads are part of what's being
+      // deleted, so open ones are not a reason to refuse here — the refusal
+      // that matters (open TASKS) already happened, before any of this.
+      this.rooms.deleteDoc(docId, { force: true });
+    }
   }
 
   /**

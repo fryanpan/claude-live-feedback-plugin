@@ -2383,20 +2383,22 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             if (openTasks > 0 && !force) {
               return j(409, { ok: false, error: 'has-open-tasks', openTasks });
             }
-            // Rooms come down FIRST because they are DERIVED state: the
-            // projection rebuilds a board room and its body rooms from the
-            // store on the next touch, so a failure here leaves a coherent
-            // board that the same call can retry. The other order strands
-            // orphan .ydocs behind an id that no longer resolves as a board,
-            // and they reload on the next restart with nothing able to reach
-            // them. Attached docs are untouched either way: attachDoc is a
-            // LINK, so a doc a deleted board merely cited keeps working.
+            // Three steps, ordered so that nothing irreversible happens
+            // before the operation can still fail. (1) Remove the rooms'
+            // persisted files while the rooms themselves stay live: orphan
+            // .ydocs must not outlive the board, because once the store
+            // entry is gone the id no longer resolves as a board and nothing
+            // can come back for them. (2) Delete the board — the commit
+            // point. (3) Only now tear the live rooms down, which destroys
+            // each task's discussion threads and is therefore the one step
+            // that must not run ahead of a refusal.
+            // Attached docs are untouched throughout: attachDoc is a LINK,
+            // so a doc a deleted board merely cited keeps working.
             const taskIds = taskStore.listTasks(workspaceId).map((t) => t.id);
-            if (!taskProjection.dropWorkspace(workspaceId, taskIds).ok) {
+            if (!taskProjection.purgeWorkspaceFiles(workspaceId, taskIds).ok) {
               return j(500, { ok: false, error: 'rooms-cleanup-failed' });
             }
-            // force: the open-task guard was applied above, and refusing now
-            // would leave the board without the rooms it just lost.
+            // force: the open-task guard was applied above.
             const hub = taskStore.deleteWorkspace(workspaceId, { force: true });
             if (!hub.ok) {
               // 'persist-failed' is a 500, not a 404: the board is still
@@ -2404,6 +2406,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               // gone" and stop asking.
               return j(hub.error === 'persist-failed' ? 500 : 404, hub);
             }
+            taskProjection.dropWorkspaceRooms(workspaceId, hub.taskIds);
             return j(200, { ok: true, deletedTasks: hub.deletedTasks });
           }
           const res = rooms.deleteWorkspace(workspaceId, { force });
