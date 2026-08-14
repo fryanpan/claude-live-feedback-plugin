@@ -427,6 +427,23 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
       expect((await pub(`/api/workspaces/${hubId}`)).status).toBe(401);
     });
 
+    /**
+     * The strip's decision half arrives over the board room and its thread
+     * half over this route, so a gate that allows one and refuses the other
+     * leaves a visitor a strip that silently drops every question — the same
+     * split-transport failure as the two reads above.
+     */
+    it('serves the review queue to a workspace visitor, refuses a doc visitor', async () => {
+      const r = await pub(`/api/workspaces/${hubId}/review-items`, hubCookie);
+      expect(r.status).toBe(200);
+      const seen = (await r.json()) as { items: unknown[] };
+      expect(Array.isArray(seen.items)).toBe(true);
+      expect((await pub(`/api/workspaces/${hubId}/review-items`, docCookie)).status).toBe(403);
+      expect((await pub(`/api/workspaces/${hubId}/review-items`)).status).toBe(401);
+      // Read-only, like every other allowance on this gate.
+      expect((await pub(`/api/workspaces/${hubId}/tasks`, hubCookie)).status).toBe(403);
+    });
+
     it('serves agent presence redacted — no endpoint — with the owner’s copy as the control', async () => {
       const att = await post(`/api/workspaces/${hubId}/attachments`, {
         agentId: 'agent-search-revamp',

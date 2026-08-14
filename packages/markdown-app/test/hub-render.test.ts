@@ -1014,6 +1014,33 @@ describe('renderTaskDetail — discussion', () => {
     ...over,
   });
 
+  /**
+   * "Each item goes exactly to the place where I need to review" is the
+   * strip's whole claim. On a task with several discussions, opening the task
+   * is not that — the reviewer still has to find the one they were sent for.
+   */
+  it('marks the thread the queue aimed at, and only that one', () => {
+    renderTaskDetail(root, task(), detailHandlers({ focusThreadId: 'th-2' }), {
+      loading: false,
+      threads: [thread({ id: 'th-1' }), thread({ id: 'th-2' }), thread({ id: 'th-3' })],
+    });
+    const marked = [...root.querySelectorAll('.hub-thread-focus')];
+    // Positive control: all three rendered, so "only one marked" means
+    // something. Then: it is the RIGHT one.
+    expect(root.querySelectorAll('.hub-thread')).toHaveLength(3);
+    expect(marked).toHaveLength(1);
+    expect((marked[0] as HTMLElement).dataset.threadId).toBe('th-2');
+  });
+
+  it('marks nothing when the panel was opened any other way', () => {
+    renderTaskDetail(root, task(), detailHandlers(), {
+      loading: false,
+      threads: [thread({ id: 'th-1' }), thread({ id: 'th-2' })],
+    });
+    expect(root.querySelectorAll('.hub-thread')).toHaveLength(2);
+    expect(root.querySelectorAll('.hub-thread-focus')).toHaveLength(0);
+  });
+
   it('shows each comment with who said it', () => {
     renderTaskDetail(root, task(), detailHandlers(), {
       loading: false,
@@ -1219,8 +1246,8 @@ describe('discussionIsBusy', () => {
 });
 
 describe('renderQuickAdd', () => {
-  it('captures on Enter and clears, and Shift+Enter does not file a half-typed idea', () => {
-    const onCapture = vi.fn();
+  it('captures on Enter and clears, and Shift+Enter does not file a half-typed idea', async () => {
+    const onCapture = vi.fn(() => Promise.resolve(true));
     renderQuickAdd(root, { onCapture });
     const box = root.querySelector('.hub-quick-input') as HTMLTextAreaElement;
     box.value = 'Rework the strip';
@@ -1231,11 +1258,12 @@ describe('renderQuickAdd', () => {
     box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     expect(onCapture).toHaveBeenCalledWith('Rework the strip');
     // Cleared, so the next idea starts empty rather than appended to the last.
+    await Promise.resolve();
     expect(box.value).toBe('');
   });
 
   it('files nothing for whitespace, from either the key or the button', () => {
-    const onCapture = vi.fn();
+    const onCapture = vi.fn(() => Promise.resolve(true));
     renderQuickAdd(root, { onCapture });
     const box = root.querySelector('.hub-quick-input') as HTMLTextAreaElement;
     box.value = '   ';
@@ -1246,15 +1274,50 @@ describe('renderQuickAdd', () => {
     expect(onCapture).not.toHaveBeenCalled();
   });
 
+  /**
+   * Clearing on dispatch rather than on success means an offline phone eats
+   * the idea and shows a toast — the one failure this box exists to prevent,
+   * at the exact moment (no signal, thought half-formed) it matters most.
+   */
+  it('keeps the text when the capture fails, and clears it when it lands', async () => {
+    let outcome = Promise.resolve(false);
+    renderQuickAdd(root, { onCapture: () => outcome });
+    const box = root.querySelector('.hub-quick-input') as HTMLTextAreaElement;
+    box.value = 'Rework the strip';
+    box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await outcome;
+    expect(box.value).toBe('Rework the strip');
+
+    outcome = Promise.resolve(true);
+    box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await outcome;
+    // Positive control: the same box does clear once the task really lands.
+    expect(box.value).toBe('');
+  });
+
+  it('does not file the same idea twice while the first one is in flight', async () => {
+    let release = (_ok: boolean) => {};
+    const onCapture = vi.fn(() => new Promise<boolean>((r) => (release = r)));
+    renderQuickAdd(root, { onCapture });
+    const box = root.querySelector('.hub-quick-input') as HTMLTextAreaElement;
+    box.value = 'Rework the strip';
+    box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(onCapture).toHaveBeenCalledTimes(1);
+    release(true);
+    await Promise.resolve();
+  });
+
   // The board repaints on every ydoc change. A composer that re-rendered with
   // it would take the caret out of a half-typed idea — which is the exact
   // friction this box exists to remove, reintroduced by the region pattern
   // every other renderer here follows.
   it('mounts once and leaves a half-typed idea alone on a repaint', () => {
-    renderQuickAdd(root, { onCapture: vi.fn() });
+    const stub = () => Promise.resolve(true);
+    renderQuickAdd(root, { onCapture: stub });
     const box = root.querySelector('.hub-quick-input') as HTMLTextAreaElement;
     box.value = 'half an idea';
-    renderQuickAdd(root, { onCapture: vi.fn() });
+    renderQuickAdd(root, { onCapture: stub });
     expect(root.querySelectorAll('.hub-quick-input')).toHaveLength(1);
     expect((root.querySelector('.hub-quick-input') as HTMLTextAreaElement).value).toBe(
       'half an idea',
