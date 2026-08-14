@@ -278,7 +278,13 @@ export function markOrphan(doc: Y.Doc, threadId: string): Thread | null {
   const threadMap = threads.get(threadId);
   if (!threadMap) return null;
   const current = threadMap.get('anchor') as Anchor | undefined;
-  if (!current || current.kind === 'orphan') return readThread(threadMap, threadId);
+  // A subject anchor points at the thing the thread is ON, which cannot stop
+  // existing while the thread does — so there is nothing to lose and nothing
+  // to recover. Orphaning one would only hide it from the surfaces that show
+  // anchored comments.
+  if (!current || current.kind === 'orphan' || current.kind === 'subject') {
+    return readThread(threadMap, threadId);
+  }
   const orphan: Anchor = { kind: 'orphan', original: current, lastSeenAt: Date.now() };
   doc.transact(() => threadMap.set('anchor', orphan));
   return readThread(threadMap, threadId);

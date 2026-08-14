@@ -676,7 +676,11 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     const t = collectThreads().find((x) => x.id === id);
     if (!t) return;
     const anchorText =
-      t.anchor.kind === 'orphan' ? t.anchor.original.snippet.text : t.anchor.snippet.text;
+      t.anchor.kind === 'subject'
+        ? ''
+        : t.anchor.kind === 'orphan'
+          ? t.anchor.original.snippet.text
+          : t.anchor.snippet.text;
     threadViewBody.innerHTML = '';
     const anchor = document.createElement('div');
     anchor.className = 'thread-anchor';

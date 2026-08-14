@@ -34,6 +34,9 @@ import {
 import {
   type SidebarDoc,
   type SidebarThread,
+  type TaskDiscussion,
+  type TaskThread,
+  discussionIsBusy,
   otherAssignee,
   renderActivity,
   renderBoard,
@@ -62,6 +65,13 @@ interface HubState {
   docs: SidebarDoc[];
   threads: SidebarThread[];
   detailTaskId: string | null;
+  /**
+   * The open task's discussion, and the id it was fetched FOR. Keyed rather
+   * than just held, because a load that lands after the reader has moved to
+   * another task would otherwise show them someone else's argument.
+   */
+  discussion: TaskDiscussion;
+  discussionTaskId: string | null;
   /** Position in the decision walkthrough; -1 when it is closed. */
   walkIndex: number;
   followedKey: string | null;
@@ -196,6 +206,8 @@ async function main(): Promise<void> {
     docs: [],
     threads: [],
     detailTaskId: null,
+    discussion: { loading: false, threads: [] },
+    discussionTaskId: null,
     walkIndex: -1,
     followedKey: null,
   };
@@ -343,16 +355,96 @@ async function main(): Promise<void> {
 
   function renderDetail(): void {
     const task = state.detailTaskId ? (state.tasks.get(state.detailTaskId) ?? null) : null;
-    renderTaskDetail(el('hub-detail'), task, {
-      onClose: () => {
-        state.detailTaskId = null;
-        renderDetail();
+    // Fetch here rather than at each of the four places that open the panel
+    // (row tap, `o`, deep link, voice navigate) — one of them would be missed
+    // otherwise, and the miss looks like a task with no discussion. Safe from
+    // recursion: loadDiscussion claims the id before it re-renders.
+    if (task && state.discussionTaskId !== task.id) void loadDiscussion(task);
+    if (!task) state.discussionTaskId = null;
+    // Only pass a discussion that belongs to the task on screen. An in-flight
+    // load for a task the reader has left must not paint under this one.
+    const discussion =
+      task && state.discussionTaskId === task.id
+        ? state.discussion
+        : { loading: true, threads: [] };
+    renderTaskDetail(
+      el('hub-detail'),
+      task,
+      {
+        onClose: () => {
+          state.detailTaskId = null;
+          renderDetail();
+        },
+        onStatusSet: (t, to) => void transitionTask(t, to),
+        onTitleCommit: (t, title) => void renameTask(t, title),
+        onAnswer: (t, text) => void answerDecision(t, text),
+        onAssign: (t, assignee) => void assignTask(t, assignee),
+        onComment: (t, text, threadId) => postTaskComment(t, text, threadId),
       },
-      onStatusSet: (t, to) => void transitionTask(t, to),
-      onTitleCommit: (t, title) => void renameTask(t, title),
-      onAnswer: (t, text) => void answerDecision(t, text),
-      onAssign: (t, assignee) => void assignTask(t, assignee),
-    });
+      task ? discussion : undefined,
+    );
+  }
+
+  // ── Task discussion ─────────────────────────────────────────────────────
+
+  /**
+   * A task's comments live in its body doc (`task:<taskId>`), so this is the
+   * ordinary thread API pointed at the task room — no second store, and the
+   * same threads an agent sees through `create_thread`.
+   */
+  async function loadDiscussion(task: HubTask, quiet = false): Promise<void> {
+    state.discussionTaskId = task.id;
+    if (!quiet) {
+      // A quiet reload is a refresh of something already on screen; flipping
+      // it to "Loading…" would blank a discussion the reader is reading.
+      state.discussion = { loading: true, threads: [] };
+      renderDetail();
+    }
+    const payload = await fetchJson<{
+      threads?: Array<{
+        id: string;
+        status?: string;
+        comments?: Array<{ author?: { name?: string }; text?: string; ts?: number }>;
+      }>;
+    }>(`/api/docs/${encodeURIComponent(task.bodyDocId)}/threads`);
+    // The reader may have moved on while this was in flight.
+    if (state.discussionTaskId !== task.id) return;
+    const threads: TaskThread[] = (payload?.threads ?? []).map((t) => ({
+      id: t.id,
+      status: t.status === 'resolved' ? 'resolved' : 'open',
+      comments: (t.comments ?? []).map((c) => ({
+        author: c.author?.name ?? 'Someone',
+        text: c.text ?? '',
+        ts: c.ts ?? Date.now(),
+      })),
+    }));
+    state.discussion = { loading: false, threads };
+    renderDetail();
+  }
+
+  /** Resolves to whether the comment actually landed — the composer keeps the
+   *  text until it hears yes, so a failed post is retryable. */
+  async function postTaskComment(task: HubTask, text: string, threadId?: string): Promise<boolean> {
+    const doc = encodeURIComponent(task.bodyDocId);
+    const res = threadId
+      ? await send(`/api/docs/${doc}/threads/${encodeURIComponent(threadId)}/comments`, 'POST', {
+          author,
+          text,
+        })
+      : // No anchor to point at — the comment is about the task itself, which
+        // is what a subject anchor means. A task's description is often empty,
+        // so there is frequently nothing in it to point at at all.
+        await send(`/api/docs/${doc}/threads`, 'POST', {
+          author,
+          text,
+          anchor: { kind: 'subject' },
+        });
+    if (!res.ok) {
+      showToast('Posting the comment failed — your text is still in the box');
+      return false;
+    }
+    await loadDiscussion(task);
+    return true;
   }
 
   /**
@@ -670,6 +762,17 @@ async function main(): Promise<void> {
     'workspace.goals_changed',
   ]) {
     es.addEventListener(name, () => void loadEvents());
+  }
+  // A reply to the question you just asked is the case this whole surface is
+  // for, so it lands in the open panel without a reload. These events reach
+  // the workspace channel only because a task body room fans out to it — the
+  // board is not subscribed to each task's own doc stream.
+  for (const name of ['thread.created', 'thread.replied', 'thread.resolved', 'thread.reopened']) {
+    es.addEventListener(name, () => {
+      const open = state.detailTaskId ? state.tasks.get(state.detailTaskId) : undefined;
+      if (!open || discussionIsBusy(document)) return;
+      void loadDiscussion(open, true);
+    });
   }
 
   // Controls.

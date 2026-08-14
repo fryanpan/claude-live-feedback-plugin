@@ -1,4 +1,4 @@
-import { prose } from '@feedback/core';
+import { listThreads, prose } from '@feedback/core';
 import * as Y from 'yjs';
 import type { Rooms } from './rooms.ts';
 import type { Task, TaskStore, TaskStoreEvent } from './tasks.ts';
@@ -60,8 +60,11 @@ export function taskBodyDocId(taskId: string): string {
 }
 
 /** taskId ⇦ its body room docId (inverse of taskBodyDocId). */
-function taskIdOfBodyDoc(docId: string): string {
-  return docId.startsWith('task:') ? docId.slice('task:'.length) : docId;
+/** The task a body docId belongs to, or null if the docId isn't one.
+ *  One spelling of "not found" — callers that hold a body room and callers
+ *  handed an arbitrary docId ask the same question and read the same answer. */
+export function taskIdOfBodyDoc(docId: string): string | null {
+  return docId.startsWith('task:') ? docId.slice('task:'.length) : null;
 }
 
 /**
@@ -92,9 +95,19 @@ function projectBody(body: string | undefined): {
  *  visitor-contract fields, stated here so it's a decision, not an
  *  accident. No actor ids (display names only); the body is the capped
  *  snapshot, and the live one stays in its own room. */
-export function projectTask(task: Task): Record<string, unknown> {
+export function projectTask(
+  task: Task,
+  /**
+   * How many comments the task's discussion holds. Lives outside `Task`
+   * because the discussion lives in the task's body ROOM, not in the store —
+   * but the row has to say a discussion exists, or the only way to find one
+   * is to open every task.
+   */
+  commentCount = 0,
+): Record<string, unknown> {
   return {
     id: task.id,
+    ...(commentCount > 0 ? { commentCount } : {}),
     workspaceId: task.workspaceId,
     title: task.title,
     status: task.status,
@@ -231,7 +244,9 @@ export class TaskProjection {
     });
     const tasksMap = room.ydoc.getMap('tasks');
     const wsMap = room.ydoc.getMap('workspace');
-    const want = new Map(this.tasks.listTasks(workspaceId).map((t) => [t.id, projectTask(t)]));
+    const want = new Map(
+      this.tasks.listTasks(workspaceId).map((t) => [t.id, projectTask(t, this.commentCount(t.id))]),
+    );
     const pending = this.tasks.getPendingRetriage(workspaceId);
     const wsFields: Record<string, unknown> = {
       id: ws.id,
@@ -299,6 +314,18 @@ export class TaskProjection {
     }
   }
 
+  /**
+   * How many comments the task's discussion holds, read from the body room
+   * where they actually live. Zero when the room doesn't exist yet — the
+   * common case, since a room is created lazily and an empty one has no
+   * threads either way.
+   */
+  private commentCount(taskId: string): number {
+    const room = this.rooms.get(taskBodyDocId(taskId));
+    if (!room) return 0;
+    return listThreads(room.ydoc).reduce((n, t) => n + t.comments.length, 0);
+  }
+
   private scheduleSnapshot(docId: string): void {
     const prev = this.snapshotTimers.get(docId);
     if (prev) clearTimeout(prev);
@@ -314,6 +341,7 @@ export class TaskProjection {
     const room = this.rooms.get(docId);
     if (!room) return;
     const taskId = taskIdOfBodyDoc(docId);
+    if (!taskId) return;
     try {
       const md = prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
       if (!this.tasks.updateBodySnapshot(taskId, md)) return;
