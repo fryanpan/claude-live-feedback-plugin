@@ -315,6 +315,34 @@ export class TaskProjection {
   }
 
   /**
+   * Make a task's body room exist and hand back its docId — the entry point
+   * for anything that wants to WRITE a body rather than react to one.
+   *
+   * Rooms are created lazily and re-armed by `ensureWorkspace`, so on a
+   * process that hasn't served this workspace yet (i.e. after every deploy)
+   * the room for a task nobody has opened does not exist, and a write aimed
+   * straight at the doc comes back 'not-found' — which reads as "no such
+   * task" to the caller.
+   */
+  ensureBodyRoom(task: Task): string {
+    this.ensureTaskBody(task);
+    return taskBodyDocId(task.id);
+  }
+
+  /**
+   * Push the body room's text into the store snapshot NOW, instead of on the
+   * debounce. A caller that rewrote a body and immediately reads the task
+   * back (the MCP round trip does exactly this) would otherwise be handed
+   * the pre-rewrite text and conclude the write failed.
+   */
+  flushBodySnapshot(taskId: string): void {
+    const prev = this.snapshotTimers.get(taskBodyDocId(taskId));
+    if (prev) clearTimeout(prev);
+    this.snapshotTimers.delete(taskBodyDocId(taskId));
+    this.snapshotNow(taskBodyDocId(taskId));
+  }
+
+  /**
    * How many comments the task's discussion holds, read from the body room
    * where they actually live. Zero when the room doesn't exist yet — the
    * common case, since a room is created lazily and an empty one has no

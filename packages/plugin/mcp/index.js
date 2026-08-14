@@ -13790,7 +13790,7 @@ function suggestionAuthor() {
 }
 var server = new Server({
   name: "claude-live-feedback",
-  version: "0.1.23"
+  version: "0.1.24"
 }, {
   capabilities: {
     tools: {},
@@ -14795,6 +14795,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       }
     },
     {
+      name: "update_task_body",
+      description: "Replace a task's description after it was created — the fix for a task filed thin, or one whose acceptance criteria turned out to be wrong. Whole-body replace, so send the full markdown you want the task to have; there is no partial edit. Written through the task's live body doc as a block-level diff, which means comment threads anchored to paragraphs you did not change keep their anchors, and anyone reading the task on the board watches it update. Recorded as task.body_edited, attributed to you. Keep the shape a task body owes its next reader — a compact user story plus falsifiable done-when criteria — because rewriting is also the moment to add the ones that were missing. Refuses an empty body: blanking a description is not an edit, and if the task should not exist, say so on it instead.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          taskId: { type: "string" },
+          markdown: {
+            type: "string",
+            description: "The FULL new description. Replaces what is there."
+          }
+        },
+        required: ["taskId", "markdown"]
+      }
+    },
+    {
       name: "set_task_goal",
       description: "Place a task under a goal (or subgoal) at an exact position — this IS triage's write half: pick the spot, not just the bucket. Stamps triagedAgainst with the goal text judged against and clears the triage-pending marker; every move is recorded and fires task.regrouped, so regroup freely — the safety is the record, not asking first. When a move would cross a human's earlier placement, leave a task comment referencing it. Pass `riskTier` for how dangerous EXECUTING the task is (green: reversible/contained; yellow: outward-facing or hard to reverse; red: irreversible/one-way) — keyed to the action's damage, never its importance. `position` is fractional — there is always room between two tasks; omitted = bottom of the goal.",
       inputSchema: {
@@ -15574,6 +15589,14 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           author: AUTHOR
         });
         return ok({ taskId, assignee: res.task.assignee, changed: res.changed });
+      }
+      case "update_task_body": {
+        const { taskId, markdown } = a;
+        const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/body`, {
+          markdown,
+          author: AUTHOR
+        });
+        return ok({ taskId, title: res.task?.title, body: res.task?.body });
       }
       case "set_task_goal": {
         const { taskId, goal, position, riskTier, batchId } = a;

@@ -774,6 +774,65 @@ Technical discoveries that should persist across sessions for this project.
   flip to the second, with the culprit process in the snapshot. Instrument
   rather than theorise once a second hypothesis has died.
 
+## "X is impossible" measured AN absence, not THE absence
+
+- **A beta report said a task body is immutable — `PATCH` and `PUT` both
+  404, measured not guessed — and it was wrong.** A task body is not a
+  field, it's a live Yjs room (`task:<taskId>`), and `set_doc_content` on
+  that docId already rewrote it. The report probed the two verbs a REST
+  field would have and missed the door that was open. Reproducing the
+  capability first (throwaway workspace → thin task → rewrite → read back
+  through `get_doc` AND `next_tasks`) took two minutes and changed the
+  shape of the work: not "make the body mutable" but "make the existing
+  write findable, immediate, and attributed."
+- **Rule: reproduce the impossibility before building the fix.** A fix
+  that follows a wrong premise is usually the wrong SIZE — here it would
+  have been a whole mutable-field path parallel to a room that already
+  worked. Same family as "a peer agent's 'it worked' means the call didn't
+  error": a confident measurement bounds what was tried, not what exists.
+- The real gaps all shared a failure signature — each one presents to the
+  caller as *"the rewrite didn't work"*: no named route (reachable only by
+  knowing the docId convention), a debounced snapshot so rewrite-then-read
+  returns the OLD body, no audit row, and a `delete_doc`'d body room
+  answering `not-found` (which reads as "no such task" when the task is
+  fine). When a capability exists but everyone reports it missing, look for
+  the ring of things around it rather than at it.
+
+## A new emitted event reaches the surface as a bare slug
+
+- **`task.body_edited` rode the existing SSE + `events.jsonl` path to the
+  activity feed the moment it was emitted — and rendered as the literal
+  string `task.body_edited`, with no actor and no task title**, because
+  `describeEvent`'s switch had no case for it. The fallback is deliberate
+  ("a table miss should be visible, not blank"), which is exactly why it
+  doesn't count as handling: nothing goes red, the row just reads like a
+  log line in a view built for people. **Emitting a new store event is two
+  changes, and the second one is in the client.**
+- **Two tests, because either alone is the "true but proves nothing about
+  the caller" shape**: one that the switch has a case (hand-written row),
+  and one in `activity-lines.test.ts` that drives the real route, reads the
+  real `events.jsonl` back, and renders THAT row — which is what proves the
+  emitted keys match the ones the case reads. Verified by mutation in both
+  directions: delete the case, and blank `taskId` in the emit.
+
+## A malformed anchor crashes a request that never touched the doc
+
+- **`POST /api/docs/:id/threads` takes `anchor` verbatim and validates
+  nothing.** A hand-written `text-range` with no `startRel`/`endRel` is
+  accepted, stored, and then kills the re-anchor sweep with
+  `Y.decodeRelativePosition(undefined)` — thrown inside a Yjs observer, so
+  it surfaces as an unhandled async `TypeError` on whatever request or test
+  happens to be running by then. Cost a full diagnosis pass: the server
+  suite went red in `ws-meta-leak.test.ts` (`decoder.arr.length`
+  undefined), a file the branch never touched.
+- **Use `/threads/by_find` in fixtures.** It builds the RelativePositions
+  from the doc, which is the only way to get an anchor that is actually an
+  anchor.
+- The method that found it, again: baseline unmodified `main` (green),
+  baseline the worktree (1 failure), then remove only the new TEST file —
+  green. That sequence proves the source innocent before you start reading
+  it, and points at the fixture.
+
 ## gh pr merge --delete-branch switches your working copy to main
 
 - When the branch being deleted is the CURRENT branch of the main
