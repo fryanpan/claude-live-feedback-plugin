@@ -125,3 +125,39 @@ describe('renderCommentMarkdown — XSS payload battery', () => {
     expect(out).toContain('<code>c</code>');
   });
 });
+
+/**
+ * Decision bodies are REQUIRED to be heading-structured — the create API
+ * refuses one without `## Question` / `## Stakes` / `## Options` — and the
+ * walkthrough is where a person reads them. Without heading support every
+ * decision card printed the literal characters `## Question`.
+ */
+describe('renderCommentMarkdown — headings', () => {
+  it('renders an ATX heading as a heading, demoted below the card title', () => {
+    const out = renderCommentMarkdown('## Question\nShip it blue or green?');
+    expect(out).toContain('<h4 class="cm-h">Question</h4>');
+    expect(out).not.toContain('##');
+  });
+
+  it('keeps every level distinct and clamps at h6', () => {
+    expect(renderCommentMarkdown('# A')).toContain('<h3 class="cm-h">A</h3>');
+    expect(renderCommentMarkdown('### A')).toContain('<h5 class="cm-h">A</h5>');
+    expect(renderCommentMarkdown('###### A')).toContain('<h6 class="cm-h">A</h6>');
+  });
+
+  it('marks up inside a heading, and escapes it', () => {
+    expect(renderCommentMarkdown('## **bold** head')).toContain('<strong>bold</strong>');
+    expect(renderCommentMarkdown('## <img src=x onerror=alert(1)>')).not.toContain('<img');
+  });
+
+  it('leaves a hash that is not a heading alone', () => {
+    // No space after the hashes, so it is a tag or an issue number, not a head.
+    expect(renderCommentMarkdown('#4 is the one')).toContain('<p>#4 is the one</p>');
+    expect(renderCommentMarkdown('a # b')).toContain('<p>a # b</p>');
+  });
+
+  it('closes an open list and paragraph before the next heading', () => {
+    const out = renderCommentMarkdown('- one\n## Next');
+    expect(out).toBe('<ul class="cm-list"><li>one</li></ul><h4 class="cm-h">Next</h4>');
+  });
+});

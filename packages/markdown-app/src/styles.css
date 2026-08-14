@@ -1942,14 +1942,29 @@ a.hub-link-chip:hover {
     border-radius: 0;
   }
   /* Sticky, because the way out must not be a scroll away on a long body.
-     Inset past the hold-to-talk mic, which is fixed bottom-left at the same
-     stacking level by design (it is meant to sit above the detail panel) and
-     would otherwise land exactly on top of Back. */
+     Inset past BOTH bottom-docked launchers: the hold-to-talk mic bottom-left
+     (fixed at the same stacking level by design — it is meant to sit above the
+     detail panel) and the feedback widget's own pencil bottom-right, which is
+     injected into this page like any other and sits above everything. Without
+     the right inset the pencil lands on the end of Skip. */
   .hub-walk-nav {
     position: sticky;
     bottom: 0;
-    padding: 8px 4px calc(4px + var(--safe-bottom, 0px)) 68px;
+    padding: 8px 68px calc(4px + var(--safe-bottom, 0px)) 68px;
     background: var(--bg);
+  }
+  /* A sticky bar takes its space back from the scroller, so the tail of the
+     card scrolls UNDER it and stops there. On the decision card the tail is
+     "Tell me more" — the button for the case where you can't decide yet, i.e.
+     exactly the one a stuck reviewer reaches for — and it was covered and
+     unclickable at 430px, with 2px of it below the fold. Reserve the bar's
+     height so the last control can always be scrolled clear. */
+  .hub-walk-card {
+    /* Fill the panel so the nav is pinned to the bottom of the SCREEN on a
+       short card, not left floating mid-panel above a half-screen of white.
+       On a long card this does nothing and the sticky rule takes over. */
+    flex: 1 1 auto;
+    padding-bottom: 60px;
   }
 }
 
@@ -2925,6 +2940,21 @@ body.threads-resizing {
 }
 .thread .body ul.cm-list:last-child {
   margin-bottom: 0;
+}
+/* Headings from renderCommentMarkdown, wherever its output lands — a thread
+   body, a walkthrough card, a task detail panel. Unscoped on purpose: the
+   class is stamped by that one renderer, so it can't collide, and a decision
+   body's `## Question` has to look like a section label in all three places.
+   Deliberately quiet — the surrounding card already has the loud heading. */
+.cm-h {
+  margin: 0.7em 0 0.2em;
+  font-size: 0.92em;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  color: var(--muted-strong, var(--fg, inherit));
+}
+.cm-h:first-child {
+  margin-top: 0;
 }
 .thread .body li {
   margin: 0.1em 0;
