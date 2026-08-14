@@ -13790,7 +13790,7 @@ function suggestionAuthor() {
 }
 var server = new Server({
   name: "claude-live-feedback",
-  version: "0.1.24"
+  version: "0.1.25"
 }, {
   capabilities: {
     tools: {},
@@ -14952,6 +14952,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       }
     },
     {
+      name: "list_backlinks",
+      description: "Which tasks point at this ref — across every workspace, since refs cross workspace boundaries. Same ref shapes as link_refs: {kind:'doc',docId} | {kind:'thread',docId,threadId} | {kind:'task',taskId} | {kind:'diff',workspaceId} | {kind:'url',url}. This is the question a url ref exists to answer: paste a pull request or a dashboard link and find out what work already cites it, before filing something that duplicates it. Counts a task's stored `links` AND its promotion `origin`, so a task promoted from a thread comes back for that thread without anyone having linked it by hand. Returns task chips (id, title, status, assignee), oldest first. An empty list means nobody points at it — a malformed ref is refused instead, so an empty answer is always a real one.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ref: { type: "object", description: "The ref to find citers of." }
+        },
+        required: ["ref"]
+      }
+    },
+    {
       name: "attach_agent",
       description: "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep with set_task_goal, queuedVoice — voice change-requests that arrived while no agent was live; act on each transcript verbatim — and, if you LEAD this workspace, pendingRetriage: a goal edit made while you were away, whose taskIds you re-place with set_task_goal (echo its batchId on each). All three are drained by this call. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments with a fresh heartbeat, and after ~5 minutes of silence the hub shows you as away and requests queue.",
       inputSchema: {
@@ -15659,6 +15670,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ref
         });
         return ok({ taskId, changed: res.changed });
+      }
+      case "list_backlinks": {
+        const { ref } = a;
+        const res = await http("POST", "/api/refs/backlinks", { ref });
+        return ok({ ref, tasks: res.tasks });
       }
       case "unlink_refs": {
         const { taskId, ref } = a;
