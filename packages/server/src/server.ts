@@ -590,8 +590,19 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // deliberately NOT the store's emit: §3.6's table is the exhaustive
   // subscriber/audit contract and has no triage.requested row, so requests
   // never reach events.jsonl (they're a delivery, not a change).
+  //
+  // A goal-retriage is addressed to the workspace's LEAD agent specifically:
+  // it asks someone to re-place the whole board against a new north star,
+  // and "whoever happened to be connected" is how that request reached
+  // nobody accountable. A task placement stays any-live-agent — a new task
+  // can be placed by whoever is home. Undelivered goal-retriages are not
+  // lost either way; the store persists them for the lead's next attach.
   taskStore.setTriageDelivery((req) => {
-    if (!taskStore.hasLiveAttachment(req.workspaceId)) return false;
+    const live =
+      req.kind === 'goal-retriage'
+        ? taskStore.hasLiveLeadAttachment(req.workspaceId)
+        : taskStore.hasLiveAttachment(req.workspaceId);
+    if (!live) return false;
     sse.broadcast(`ws~${req.workspaceId}`, { event: 'triage.requested', ...req });
     return true;
   });
@@ -1446,7 +1457,23 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const folderPath = body?.folderPath as string | undefined;
           if (!folderPath && typeof body?.name === 'string' && body.name.trim().length > 0) {
             const goal = typeof body?.goal === 'string' ? (body.goal as string) : undefined;
-            const workspace = taskStore.createWorkspace(body.name.trim(), goal);
+            // Who leads the board. Explicit `leadAgentId` wins; otherwise the
+            // CREATING agent takes the seat — which is the whole point of
+            // "every workspace has a lead, always": the common path is an
+            // agent minting a board for work it is about to do. A person
+            // creating one leaves the seat open rather than being installed
+            // as an agent lead; the first agent to attach claims it.
+            const claimed = body?.leadAgentId;
+            const author = authorFor(body?.author);
+            const leadAgentId =
+              typeof claimed === 'string' && claimed.trim().length > 0
+                ? claimed.trim()
+                : author && classifyActor(author) === 'agent'
+                  ? author.id
+                  : undefined;
+            const workspace = taskStore.createWorkspace(body.name.trim(), goal, {
+              ...(leadAgentId !== undefined ? { leadAgentId } : {}),
+            });
             // createWorkspace emits no event (nothing subscribes to a
             // workspace that doesn't exist yet), so the route brings the
             // board room up itself.
@@ -1603,6 +1630,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           return j(200, {
             workspace,
             goalSummary: summarizeGoals(taskStore.listTasks(workspaceId), workspace.goals),
+            // A goal edit waiting for the lead agent. Read-only here: only an
+            // attach drains it. Surfaced so "nobody has picked this up" is
+            // visible work on the board rather than a silent gap.
+            pendingRetriage: taskStore.getPendingRetriage(workspaceId),
           });
         }
         // The work queue: priority order, dependency-aware, grouped into
@@ -1682,6 +1713,23 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const author = authorFor(body?.author);
           if (!author) return j(400, { error: 'author required' });
           const res = taskStore.setWorkspaceGoal(workspaceId, goal, { actor: author });
+          if (!res.ok) return j(404, res);
+          return j(200, res);
+        }
+        // set_workspace_lead: hand the board's lead-agent seat to someone
+        // else. A standing assignment, not a session fact — the lead may be
+        // away, and a goal edit still has an addressee to queue for.
+        const wsLeadMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/lead$/);
+        if (wsLeadMatch && req.method === 'PUT') {
+          const workspaceId = decodeURIComponent(wsLeadMatch[1] ?? '');
+          const body = await safeJson(req);
+          const leadAgentId = body?.leadAgentId;
+          if (typeof leadAgentId !== 'string' || leadAgentId.trim().length === 0) {
+            return j(400, { error: 'leadAgentId required' });
+          }
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const res = taskStore.setLeadAgent(workspaceId, leadAgentId, { actor: author });
           if (!res.ok) return j(404, res);
           return j(200, res);
         }

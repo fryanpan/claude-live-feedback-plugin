@@ -13,6 +13,7 @@ import {
   type DecisionQueue,
   type DecisionRow,
   type HubTask,
+  type PendingRetriageView,
   type PresenceChip,
   type ReorderTarget,
   TASK_STATUS_ORDER,
@@ -139,6 +140,77 @@ export function renderGoalStrip(
     ta.focus();
   });
   container.append(body, edit);
+}
+
+// ── Lead-agent strip ───────────────────────────────────────────────────────
+
+export interface LeadStripHandlers {
+  onLeadCommit: (leadAgentId: string) => void;
+}
+
+/**
+ * Who is responsible for this board.
+ *
+ * A goal change with nobody responsible is a dead letter, so the vacancy is
+ * rendered as loudly as the assignment — "no lead agent" is a state to fix,
+ * not a blank. The picker lists every agent the board knows about (the
+ * current lead plus everyone attached), so reassigning is one tap; with
+ * nothing to pick from it degrades to the sentence alone rather than an
+ * empty dropdown that looks broken.
+ */
+export function renderLeadStrip(
+  container: HTMLElement,
+  leadAgentId: string | undefined,
+  knownAgentIds: string[],
+  handlers: LeadStripHandlers,
+  pendingRetriage?: PendingRetriageView,
+): void {
+  container.replaceChildren();
+  container.classList.toggle('hub-lead-empty', !leadAgentId);
+  const label = document.createElement('span');
+  label.className = 'hub-lead-label';
+  label.textContent = leadAgentId ? 'Lead agent' : 'No lead agent — nobody owns goal changes here';
+  container.append(label);
+  if (pendingRetriage && pendingRetriage.taskIds.length > 0) {
+    // A goal edit that has not been picked up. Counted, not vaguely
+    // announced: "3 tasks" is the size of the ask, and it is stated whether
+    // or not there is a lead — the case with no lead is exactly the one
+    // where this used to disappear.
+    const n = pendingRetriage.taskIds.length;
+    const waiting = document.createElement('span');
+    waiting.className = 'hub-lead-pending';
+    waiting.textContent = leadAgentId
+      ? `Goal edit waiting for the lead — ${n} task${n === 1 ? '' : 's'} to re-place`
+      : `Goal edit waiting — ${n} task${n === 1 ? '' : 's'} to re-place, and nobody to do it`;
+    waiting.title = `Edited by ${pendingRetriage.byName}`;
+    container.append(waiting);
+  }
+
+  const options = [...new Set([...(leadAgentId ? [leadAgentId] : []), ...knownAgentIds])].sort(
+    (a, b) => a.localeCompare(b),
+  );
+  if (options.length === 0) return;
+
+  const select = document.createElement('select');
+  select.className = 'hub-select hub-lead-select';
+  select.setAttribute('aria-label', 'Lead agent');
+  if (!leadAgentId) {
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = 'Assign a lead…';
+    select.append(placeholder);
+  }
+  for (const id of options) {
+    const opt = document.createElement('option');
+    opt.value = id;
+    opt.textContent = id;
+    select.append(opt);
+  }
+  select.value = leadAgentId ?? '';
+  select.addEventListener('change', () => {
+    if (select.value && select.value !== leadAgentId) handlers.onLeadCommit(select.value);
+  });
+  container.append(select);
 }
 
 // ── Board ──────────────────────────────────────────────────────────────────

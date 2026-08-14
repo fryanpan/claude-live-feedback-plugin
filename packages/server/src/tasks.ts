@@ -150,6 +150,21 @@ export interface HubWorkspace {
   /** Docs/reviews linked via attachDoc. Links, not membership — the docs'
    *  own metadata is untouched. */
   docIds: string[];
+  /**
+   * The agent RESPONSIBLE for this board — the addressee for anything that
+   * needs one, a goal edit's re-triage first of all. Set at creation (the
+   * creating agent), claimed by the first agent to attach when the seat is
+   * empty, and reassignable via `setLeadAgent`.
+   *
+   * Optional because the absence has to be REPRESENTABLE: a board created by
+   * a person, or hydrated from before this field existed, genuinely has
+   * nobody responsible, and the surfaces say so. Inventing a lead from
+   * whoever happens to be connected is the same lie as an inferred pending
+   * state — it promises an addressee that was never asked.
+   */
+  leadAgentId?: string;
+  /** When the current lead took the seat. */
+  leadAgentSince?: number;
   createdAt: number;
 }
 
@@ -407,6 +422,12 @@ export type TriageRequest =
       oldGoal: string;
       newGoal: string;
       taskIds: string[];
+      /** Who this is ADDRESSED to — the workspace's lead agent. The request
+       *  rides a per-workspace channel every attached agent can hear, so the
+       *  addressee has to be in the payload; a non-lead listener is reading
+       *  someone else's mail. Absent only when the seat is empty, which is
+       *  also the one case where the request cannot be delivered at all. */
+      leadAgentId?: string;
       /** The `workspace.retriaged` row this request belongs to. The agent
        *  passes it back on each placement so N moves read as one goal edit. */
       batchId: string;
@@ -550,6 +571,16 @@ export type AttachAgentResult =
        *  one payload a fresh attachment is guaranteed to read — and drained:
        *  a second attach gets an empty list. */
       queuedVoice: QueuedVoiceRequest[];
+      /** A goal edit that happened while the lead was away. Delivered HERE —
+       *  the one payload a fresh attachment is guaranteed to read — and
+       *  drained, so a re-attach never asks for the same walk twice. Only
+       *  ever handed to the LEAD; a bystander attaching leaves it waiting. */
+      pendingRetriage?: PendingRetriage;
+      /** Is THIS attachment the workspace's lead agent — either because it
+       *  already held the seat, or because it just claimed an empty one? The
+       *  lead is the addressee for goal-edit re-triage, so a fresh context
+       *  needs to know which it is without a second call. */
+      lead: boolean;
     }
   | { ok: false; error: 'workspace-not-found' };
 
@@ -729,10 +760,28 @@ export interface WorkspaceRetriagedEvent {
   newGoal: string;
   /** The OPEN tasks the edit asks the agent to re-place (done stays put). */
   taskIds: string[];
-  /** Whether the request reached a live attachment. With none, the
-   *  re-triage honestly does not happen — the row records that it was asked
-   *  for, not that it was done. */
+  /** Whether the request reached the live lead agent. */
   delivered: boolean;
+  /** Whether an undelivered request was PERSISTED for the lead's next
+   *  attach. `delivered:false, queued:true` is "waiting for them"; both
+   *  false is the only case where the edit genuinely asks nobody for
+   *  anything (no open tasks to re-place). */
+  queued: boolean;
+  actor: TaskActor;
+  ts: number;
+}
+
+/**
+ * The board's responsible agent changed — claimed on a first attach into an
+ * empty seat, or reassigned outright. `oldLeadAgentId` is absent for a claim,
+ * which is what distinguishes "a leaderless board found one" from "the lead
+ * was handed over" in the activity view.
+ */
+export interface WorkspaceLeadChangedEvent {
+  type: 'workspace.lead_changed';
+  workspaceId: string;
+  oldLeadAgentId?: string;
+  leadAgentId: string;
   actor: TaskActor;
   ts: number;
 }
@@ -811,6 +860,7 @@ export type TaskStoreEvent =
   | DecisionInfoRequestedEvent
   | WorkspaceGoalUpdatedEvent
   | WorkspaceRetriagedEvent
+  | WorkspaceLeadChangedEvent
   | WorkspaceGoalsChangedEvent
   | AgentAttachedEvent
   | AgentDetachedEvent
@@ -833,6 +883,36 @@ export function voiceQueuePath(dataDir: string, workspaceId: string): string {
   return join(dataDir, 'workspaces', `${workspaceId}.voice-queue.json`);
 }
 
+/**
+ * A goal edit whose re-triage request never reached the lead agent, waiting
+ * for their next attach.
+ *
+ * At most ONE per workspace: successive edits in the same gap coalesce into
+ * a single ask — `oldGoal` stays the baseline the placements were last
+ * judged against (the FIRST undelivered edit's), `newGoal` and `batchId`
+ * take the newest values, and `taskIds` unions. Two separate asks would make
+ * the agent walk the same tasks twice against a goal that is already stale.
+ */
+export interface PendingRetriage {
+  /** The newest `workspace.retriaged` row this stands for. The agent echoes
+   *  it on each placement so N moves read as one goal edit. */
+  batchId: string;
+  oldGoal: string;
+  newGoal: string;
+  taskIds: string[];
+  actor: TaskActor;
+  /** When the first undelivered edit in this pending happened. */
+  ts: number;
+}
+
+/** Where a workspace's undelivered re-triage waits. Its own sidecar, like
+ *  the voice queue: a promise to the person who edited the goal, so it must
+ *  not ride a debounce that a crash can drop. Exported so tests assert the
+ *  real contract path rather than a re-implementation of it. */
+export function pendingRetriagePath(dataDir: string, workspaceId: string): string {
+  return join(dataDir, 'workspaces', `${workspaceId}.retriage.json`);
+}
+
 export type SetWorkspaceGoalResult =
   | {
       ok: true;
@@ -842,10 +922,20 @@ export type SetWorkspaceGoalResult =
        *  change nobody made). */
       changed: boolean;
       /** `taskIds` = the open tasks a re-triage covers; `requested` = whether
-       *  the request actually reached a live attachment. With none attached
-       *  the re-triage honestly does not happen — placements stay as they
-       *  were (§3.4). */
-      retriage: { requested: boolean; taskIds: string[]; batchId?: string };
+       *  the request reached the live lead agent; `queued` = whether an
+       *  undelivered one was persisted for the lead's next attach. The edit
+       *  survives the lead being busy or absent — it waits rather than
+       *  expiring (§3.4). */
+      retriage: { requested: boolean; queued: boolean; taskIds: string[]; batchId?: string };
+    }
+  | { ok: false; error: 'workspace-not-found' };
+
+export type SetLeadAgentResult =
+  | {
+      ok: true;
+      workspace: HubWorkspace;
+      /** False when the named agent already held the seat. */
+      changed: boolean;
     }
   | { ok: false; error: 'workspace-not-found' };
 
@@ -923,6 +1013,9 @@ interface WorkspaceState {
   /** agentId → attachment (§4). Keyed per workspace, so the same agentId in
    *  two workspaces is two independent records. */
   attachments: Map<string, AgentAttachment>;
+  /** The goal edit waiting for the lead agent, mirrored from its sidecar.
+   *  Held in memory because the projection re-reads it on every refresh. */
+  pendingRetriage?: PendingRetriage;
 }
 
 /** Where a workspace's sidecar lives. Exported so tests assert the real
@@ -1033,8 +1126,9 @@ export class TaskStore {
 
   // ── Workspaces ───────────────────────────────────────────────────────────
 
-  createWorkspace(name: string, goal?: string): HubWorkspace {
+  createWorkspace(name: string, goal?: string, opts?: { leadAgentId?: string }): HubWorkspace {
     const now = Date.now();
+    const lead = opts?.leadAgentId?.trim();
     const workspace: HubWorkspace = {
       id: cryptoId('w'),
       name,
@@ -1042,6 +1136,9 @@ export class TaskStore {
       goalUpdatedAt: now,
       goals: [],
       docIds: [],
+      // The creating agent is the lead by default. No event: nothing is
+      // subscribed to a workspace that did not exist a line ago.
+      ...(lead ? { leadAgentId: lead, leadAgentSince: now } : {}),
       createdAt: now,
     };
     this.workspaces.set(workspace.id, { workspace, tasks: new Map(), attachments: new Map() });
@@ -1061,8 +1158,13 @@ export class TaskStore {
    * Edit the workspace's north-star goal (§3.4: the input to every intake
    * decision). Emits `workspace.goal_updated` (old goal, new goal, actor)
    * and requests a re-triage of the OPEN tasks — done stays put. The
-   * re-triage EXECUTES in the attached agent; this method only emits the
-   * request, and with no live attachment it honestly does not happen.
+   * re-triage EXECUTES in the lead agent; this method only emits the
+   * request.
+   *
+   * The request is addressed to the LEAD agent, and it does not expire. With
+   * the lead away it is persisted and handed over on their next attach — a
+   * goal edit made while nobody was looking used to vanish with nothing but
+   * a `delivered:false` row to show for it.
    */
   setWorkspaceGoal(
     workspaceId: string,
@@ -1076,7 +1178,12 @@ export class TaskStore {
     if (goal === workspace.goal) {
       // Nothing changed, so nothing to announce and nothing to re-triage —
       // every placement's triagedAgainst is still accurate.
-      return { ok: true, workspace, changed: false, retriage: { requested: false, taskIds: [] } };
+      return {
+        ok: true,
+        workspace,
+        changed: false,
+        retriage: { requested: false, queued: false, taskIds: [] },
+      };
     }
 
     const ts = Date.now();
@@ -1098,11 +1205,20 @@ export class TaskStore {
       .filter((t) => t.status !== 'done')
       .map((t) => t.id);
     if (taskIds.length === 0) {
-      return { ok: true, workspace, changed: true, retriage: { requested: false, taskIds } };
+      // Nothing to re-place, so there is nothing to deliver OR to queue.
+      // Both flags false also covers a queue write that FAILED (logged) —
+      // in both cases nobody is durably waiting on this edit, which is the
+      // question the flags answer.
+      return {
+        ok: true,
+        workspace,
+        changed: true,
+        retriage: { requested: false, queued: false, taskIds },
+      };
     }
     // The request rides SSE and is gone; the ROW is what the activity view
     // and the after-the-fact review read, so it is emitted whether or not
-    // delivery found a live attachment — `delivered` says which happened.
+    // delivery found the lead — `delivered` and `queued` say which happened.
     const batchId = cryptoId('rt');
     const requested = this.requestTriage({
       kind: 'goal-retriage',
@@ -1111,9 +1227,27 @@ export class TaskStore {
       newGoal: goal,
       taskIds,
       batchId,
+      ...(workspace.leadAgentId !== undefined ? { leadAgentId: workspace.leadAgentId } : {}),
       actor,
       ts,
     });
+    // Delivered or not, the workspace is now at the new goal — so a request
+    // still waiting from an EARLIER gap describes a baseline that no longer
+    // exists. Either it just went out live (superseded) or it merges into
+    // the one being queued below; both paths go through here.
+    let queued = false;
+    if (requested) {
+      this.clearPendingRetriage(state);
+    } else {
+      queued = this.queuePendingRetriage(state, {
+        batchId,
+        oldGoal,
+        newGoal: goal,
+        taskIds,
+        actor,
+        ts,
+      });
+    }
     this.emit({
       type: 'workspace.retriaged',
       workspaceId,
@@ -1122,10 +1256,186 @@ export class TaskStore {
       newGoal: goal,
       taskIds,
       delivered: requested,
+      queued,
       actor,
       ts,
     });
-    return { ok: true, workspace, changed: true, retriage: { requested, taskIds, batchId } };
+    return {
+      ok: true,
+      workspace,
+      changed: true,
+      retriage: { requested, queued, taskIds, batchId },
+    };
+  }
+
+  // ── Pending re-triage (the goal edit that outlives the gap) ───────────────
+
+  /**
+   * The goal edit waiting for this workspace's lead agent, or undefined.
+   *
+   * Read-and-PRUNE: task ids that have since gone `done` (or been dropped)
+   * are filtered out, and a request with nothing left to re-place retires
+   * itself. Pruning here rather than at every mutation site is deliberate —
+   * "which tasks still need re-placing" is a question about the CURRENT
+   * board, and answering it from a snapshot taken minutes ago is how a
+   * queued promise turns into a request for work that no longer exists.
+   */
+  getPendingRetriage(workspaceId: string): PendingRetriage | undefined {
+    const state = this.workspaces.get(workspaceId);
+    if (!state?.pendingRetriage) return undefined;
+    const pending = state.pendingRetriage;
+    const live = pending.taskIds.filter((id) => {
+      const task = state.tasks.get(id);
+      return task !== undefined && task.status !== 'done';
+    });
+    if (live.length === 0) {
+      this.clearPendingRetriage(state);
+      return undefined;
+    }
+    if (live.length !== pending.taskIds.length) {
+      state.pendingRetriage = { ...pending, taskIds: live };
+      this.writePendingRetriage(state);
+    }
+    return state.pendingRetriage;
+  }
+
+  /**
+   * Persist an undelivered re-triage for the lead's next attach, coalescing
+   * with anything already waiting: the baseline `oldGoal` and `ts` stay with
+   * the FIRST undelivered edit (that is what the placements were last judged
+   * against), while the newest goal and batch win and the task lists union.
+   *
+   * SYNCHRONOUS write, like the voice queue: the caller is about to tell the
+   * person who edited the goal that a re-triage is waiting, and an ack
+   * grounded in a debounce a crash can drop is the summaries-incident lie.
+   */
+  private queuePendingRetriage(state: WorkspaceState, next: PendingRetriage): boolean {
+    const prev = state.pendingRetriage;
+    state.pendingRetriage = prev
+      ? {
+          batchId: next.batchId,
+          oldGoal: prev.oldGoal,
+          newGoal: next.newGoal,
+          taskIds: Array.from(new Set([...prev.taskIds, ...next.taskIds])),
+          actor: next.actor,
+          ts: prev.ts,
+        }
+      : next;
+    return this.writePendingRetriage(state);
+  }
+
+  /**
+   * @returns whether the request is actually on disk. The caller ACKS with
+   * this: "queued" is a restart-proof promise, so a swallowed write turns the
+   * ack into exactly the lie the synchronous write exists to prevent. The
+   * in-memory copy is kept either way — it can still be handed over during
+   * this process lifetime — so a false here under-promises rather than
+   * over-promises.
+   */
+  private writePendingRetriage(state: WorkspaceState): boolean {
+    const path = pendingRetriagePath(this.dataDir, state.workspace.id);
+    try {
+      const dir = join(this.dataDir, 'workspaces');
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      writeFileSync(path, `${JSON.stringify({ pending: state.pendingRetriage }, null, 2)}\n`);
+      return true;
+    } catch (err) {
+      console.error(`[tasks] failed to queue re-triage for ${state.workspace.id}:`, err);
+      return false;
+    }
+  }
+
+  private clearPendingRetriage(state: WorkspaceState): void {
+    if (state.pendingRetriage === undefined) return;
+    state.pendingRetriage = undefined;
+    try {
+      rmSync(pendingRetriagePath(this.dataDir, state.workspace.id), { force: true });
+    } catch {}
+  }
+
+  /** Load a workspace's waiting re-triage, if any. A corrupt sidecar loses
+   *  the request, never the workspace. */
+  private loadPendingRetriage(workspaceId: string): PendingRetriage | undefined {
+    const path = pendingRetriagePath(this.dataDir, workspaceId);
+    if (!existsSync(path)) return undefined;
+    try {
+      const parsed = JSON.parse(readFileSync(path, 'utf8')) as { pending?: PendingRetriage };
+      const pending = parsed.pending;
+      if (!pending || typeof pending.batchId !== 'string' || !Array.isArray(pending.taskIds)) {
+        return undefined;
+      }
+      return pending;
+    } catch (err) {
+      console.error(`[tasks] unreadable re-triage sidecar for ${workspaceId} — skipped:`, err);
+      return undefined;
+    }
+  }
+
+  /**
+   * Hand the board's lead-agent seat to `leadAgentId`. Reassignment is a
+   * first-class operation rather than a side effect of attaching, because
+   * "who is responsible" outlives any one session: the agent that holds it
+   * may be away, and the next goal edit still has an addressee.
+   */
+  setLeadAgent(
+    workspaceId: string,
+    leadAgentId: string,
+    opts: { actor: { id: string; name: string; kind?: string } },
+  ): SetLeadAgentResult {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return { ok: false, error: 'workspace-not-found' };
+    const workspace = state.workspace;
+    const next = leadAgentId.trim();
+    if (next === workspace.leadAgentId) return { ok: true, workspace, changed: false };
+    const actor: TaskActor = {
+      id: opts.actor.id,
+      name: opts.actor.name,
+      kind: classifyActor(opts.actor),
+    };
+    this.assignLead(state, next, actor);
+    // A waiting request is addressed to the SEAT, not to the agent that was
+    // sitting in it — so a handover has to re-ask the new occupant. Draining
+    // happens on attach, and an agent that is ALREADY attached has no next
+    // attach: without this the request waits on a reconnect that may never
+    // come, with its addressee live the whole time. Away leads are unaffected
+    // — `hasLiveLeadAttachment` is false for them and it keeps waiting.
+    const pending = this.getPendingRetriage(workspaceId);
+    if (pending && this.hasLiveLeadAttachment(workspaceId)) {
+      const delivered = this.requestTriage({
+        kind: 'goal-retriage',
+        workspaceId,
+        oldGoal: pending.oldGoal,
+        newGoal: pending.newGoal,
+        taskIds: pending.taskIds,
+        batchId: pending.batchId,
+        leadAgentId: next,
+        actor: pending.actor,
+        ts: pending.ts,
+      });
+      // Only on success — a request that did not go out must stay queued
+      // rather than being dropped by the attempt to deliver it.
+      if (delivered) this.clearPendingRetriage(state);
+    }
+    return { ok: true, workspace, changed: true };
+  }
+
+  /** The seat change itself, shared by `setLeadAgent` and the attach-time
+   *  claim so both persist and announce it identically. */
+  private assignLead(state: WorkspaceState, leadAgentId: string, actor: TaskActor): void {
+    const workspace = state.workspace;
+    const oldLeadAgentId = workspace.leadAgentId;
+    const ts = Date.now();
+    workspace.leadAgentId = leadAgentId;
+    workspace.leadAgentSince = ts;
+    this.scheduleSave(workspace.id);
+    this.emit({
+      type: 'workspace.lead_changed',
+      workspaceId: workspace.id,
+      ...(oldLeadAgentId !== undefined ? { oldLeadAgentId } : {}),
+      leadAgentId,
+      actor,
+      ts,
+    });
   }
 
   /** Link an existing doc or review to a hub workspace. A link only — the
@@ -2035,6 +2345,26 @@ export class TaskStore {
     };
     state.attachments.set(opts.agentId, attachment);
     this.scheduleAttachmentsSave(workspaceId);
+    // Claim an EMPTY seat only. A board created before this field existed —
+    // or by a person — would otherwise stay a dead letter forever, but an
+    // occupied seat is a standing decision and a second agent attaching is
+    // not a reassignment.
+    if (state.workspace.leadAgentId === undefined) {
+      this.assignLead(state, opts.agentId, {
+        id: opts.agentId,
+        name: opts.agentId,
+        kind: 'agent',
+      });
+    }
+    const lead = state.workspace.leadAgentId === opts.agentId;
+    // Only the lead carries the waiting goal edit off. A bystander attaching
+    // must leave it where it is, or the request is "delivered" to whoever
+    // showed up first — the failure this whole path exists to end.
+    const pendingRetriage = lead ? this.getPendingRetriage(workspaceId) : undefined;
+    if (pendingRetriage) this.clearPendingRetriage(state);
+    // Emitted LAST, after every state change above: the projection refreshes
+    // off this event, so an earlier emit would repaint the board with a
+    // pending re-triage this very call just drained.
     this.emit({
       type: 'agent.attached',
       workspaceId,
@@ -2048,6 +2378,8 @@ export class TaskStore {
       gating: this.gatingSummary(workspaceId),
       untriaged: this.listUntriaged(workspaceId).map((t) => t.id),
       queuedVoice: this.drainVoiceQueue(workspaceId),
+      ...(pendingRetriage ? { pendingRetriage } : {}),
+      lead,
     };
   }
 
@@ -2245,6 +2577,26 @@ export class TaskStore {
     return false;
   }
 
+  /**
+   * Is the workspace's LEAD agent live right now?
+   *
+   * Stricter than `hasLiveAttachment` on purpose, and only goal-edit
+   * re-triage uses it: that request asks someone to re-place the whole
+   * board against a new north star, which is the lead's job. A bystander
+   * agent being connected is not a reason to call it delivered — it is
+   * exactly how a goal edit ended up "delivered" to nobody accountable.
+   * False also covers the empty seat, where there is no addressee at all.
+   */
+  hasLiveLeadAttachment(workspaceId: string): boolean {
+    const state = this.workspaces.get(workspaceId);
+    const leadAgentId = state?.workspace.leadAgentId;
+    if (!state || leadAgentId === undefined) return false;
+    const att = state.attachments.get(leadAgentId);
+    if (!att) return false;
+    const freshMs = this.attachmentThresholds.heartbeatFreshMs ?? HEARTBEAT_FRESH_MS;
+    return Date.now() - att.lastHeartbeat < freshMs;
+  }
+
   /** Open decision tasks that gate open tasks via `after` edges, rolled into
    *  the §3.3 one-liner: "2 open decisions gating 3 tasks". */
   private gatingSummary(workspaceId: string): GatingSummary {
@@ -2424,10 +2776,15 @@ export class TaskStore {
           tasks.set(task.id, task);
           this.taskIndex.set(task.id, workspace.id);
         }
+        const pendingRetriage = this.loadPendingRetriage(workspace.id);
         this.workspaces.set(workspace.id, {
           workspace,
           tasks,
           attachments: this.loadAttachments(workspace.id),
+          // Unlike a task's triage marker above, a queued goal edit SURVIVES
+          // the restart: the marker promised in-flight work that the restart
+          // killed, this is a request nobody has answered yet.
+          ...(pendingRetriage ? { pendingRetriage } : {}),
         });
       } catch (err) {
         // A corrupt sidecar loses that one workspace, never the server.

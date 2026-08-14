@@ -408,8 +408,12 @@ describe('attachment routes + triage bridge', () => {
   const post = (path: string, body: unknown) =>
     local(path, { method: 'POST', body: JSON.stringify(body) });
 
-  const makeWorkspace = async (name: string): Promise<string> => {
-    const r = await post('/api/workspaces', { name, goal: 'Ship it.' });
+  const makeWorkspace = async (name: string, leadAgentId?: string): Promise<string> => {
+    const r = await post('/api/workspaces', {
+      name,
+      goal: 'Ship it.',
+      ...(leadAgentId !== undefined ? { leadAgentId } : {}),
+    });
     const body = (await r.json()) as { workspace: { id: string } };
     return body.workspace.id;
   };
@@ -577,7 +581,12 @@ describe('attachment routes + triage bridge', () => {
   });
 
   it('AgentAttachment records never enter any ydoc (§3.3 rule 1)', async () => {
-    const wsId = await makeWorkspace('clean-room-hub');
+    // The board is given a lead up front so the agent we attach below is NOT
+    // the lead. That separation is what keeps this assertion strong now that
+    // the workspace projects `leadAgentId`: an agent id in the ws room is
+    // board state (who is responsible), never evidence that an ATTACHMENT
+    // reached the ydoc, and this test still refuses the latter.
+    const wsId = await makeWorkspace('clean-room-hub', 'agent-board-lead');
     await post(`/api/workspaces/${wsId}/tasks`, { title: 'A visible task' });
     await post(`/api/workspaces/${wsId}/attachments`, {
       agentId: 'relay-agent',
@@ -593,12 +602,16 @@ describe('attachment routes + triage bridge', () => {
       tasks: room.ydoc.getMap('tasks').toJSON(),
       workspace: room.ydoc.getMap('workspace').toJSON(),
     });
-    // Positive control: the room really projects this workspace's state.
+    // Positive control: the room really projects this workspace's state —
+    // including the one agent-shaped field it is SUPPOSED to carry.
     expect(dump).toContain('A visible task');
     expect(dump).toContain('clean-room-hub');
-    // The absences under test: no attachment record, no endpoint, no agent id.
+    expect(dump).toContain('agent-board-lead');
+    // The absences under test: no attachment record, no endpoint, and not
+    // even the agent id of the agent that attached.
     expect(dump).not.toContain('9099');
     expect(dump).not.toContain('relay-agent');
     expect(dump).not.toContain('lastHeartbeat');
+    expect(dump).not.toContain('capabilities');
   });
 });

@@ -298,12 +298,22 @@ describe('GET /api/workspaces/:id/events — uptime rendered into the activity p
       body: JSON.stringify({ name: 'unmeasured' }),
     });
     const { workspace } = (await createRes.json()) as { workspace: { id: string } };
+    // A brand-new workspace may already have caught a tick from the loop, so
+    // which answer is correct depends on the log — and the log is read on
+    // BOTH sides of the request, because a tick landing between the response
+    // and a single read makes the check demand an answer the server could
+    // not have given yet. (That race went red on CI while passing locally.)
+    const path = eventsLogPath(dataDir, workspace.id);
+    const hasLines = () => existsSync(path) && readFileSync(path, 'utf8').trim().length > 0;
+    const before = hasLines();
     const res = await fetch(`${base}/api/workspaces/${workspace.id}/events`);
     const body = (await res.json()) as { events: unknown[]; uptime: unknown };
-    // A brand-new workspace may already have caught a tick from the loop;
-    // read the log to know which of the two honest answers to expect.
-    const path = eventsLogPath(dataDir, workspace.id);
-    if (existsSync(path) && readFileSync(path, 'utf8').trim().length > 0) {
+    const after = hasLines();
+    if (before !== after) {
+      // A tick raced the request: both answers are honest, so all this can
+      // still assert is that the field IS one of the two shapes.
+      expect(body.uptime === null || typeof body.uptime === 'object').toBe(true);
+    } else if (after) {
       expect(body.uptime).not.toBeNull();
     } else {
       expect(body.uptime).toBeNull();
