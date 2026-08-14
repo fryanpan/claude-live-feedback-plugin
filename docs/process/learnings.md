@@ -708,6 +708,72 @@ Technical discoveries that should persist across sessions for this project.
   people to reach for `SCRUB_SKIP=1`. The prompt now judges added lines only,
   verified both directions (an added leak still exits 1).
 
+## A restart can move a session BACKWARDS a plugin version
+
+- **The plugin resolves from a version-keyed CACHE, not from this checkout.**
+  `claude-live-feedback` is registered as a **GitHub-source** marketplace, so
+  `${CLAUDE_PLUGIN_ROOT}` points at `~/.claude/plugins/cache/...`, and a merge
+  to main changes nothing anywhere until someone runs
+  `claude plugin update live-feedback@claude-live-feedback`.
+- **The failure mode this produces is counter-intuitive and cost a full
+  restart cycle.** A session whose MCP child happened to be launched against
+  the working tree was running 0.1.15; the respawn dropped it onto the cache,
+  which was still at 0.1.12. So the restart — done specifically to pick up new
+  tools — **removed** them. Confirmed by grepping the two bundles:
+  `set_task_dependencies` appears 2x in the 0.1.15 bundle and 0x in 0.1.12.
+- **`claude plugin update` is the deploy step; the restart only picks up
+  whatever the cache holds at that moment.** The CLAUDE.md bullet above said
+  "merge, then the peer restarts", which reads as though the restart is what
+  delivers. It isn't, and the order matters: update, THEN restart. Restarting
+  first gets you the old version and looks like the merge didn't work.
+- **Verify from inside the session, not from a spawned child.** A subagent
+  gets its own MCP connection and proves nothing about the parent's. The
+  check that counts is `ToolSearch` for the new tool name in the session that
+  needs it, followed by an actual call against real data.
+- **Consequence for a fleet: a merge does not deliver.** After one update ran,
+  exactly one peer was on 0.1.15 and eight were still on 0.1.12, each picking
+  it up whenever it next happened to restart. So "is this feature available?"
+  has a different answer per peer, and any feature whose value ships inside
+  the bundle (a skill, a tool description) can't meet its acceptance until
+  delivery stops needing a person.
+
+## git exports GIT_DIR into hooks, and `git init` inherits it
+
+- **`git push` → `pre-push` hook → a script that runs `git init` somewhere
+  else set `core.bare = true` on the primary checkout**, which then failed
+  every subsequent command with "this operation must be run in a work tree".
+  git exports `GIT_DIR` (and friends) into every hook it runs; a `git init`
+  carrying that inherited env does not initialize its own `cwd` — it
+  re-initializes the repo `GIT_DIR` names.
+- **Only one env shape is destructive, and it is the one a worktree
+  produces.** Probed all four empirically rather than guessing: plain-repo
+  `GIT_DIR` → harmless, `GIT_DIR` + `GIT_WORK_TREE` → harmless, relative
+  `.git` → harmless, **linked-worktree gitdir as `GIT_DIR` → writes
+  `core.bare = true` into the shared config**, i.e. the primary checkout's.
+  Fix: strip every `GIT_*` key from the environment before invoking `git
+  init` in a fixture builder.
+- **Stripping `GIT_*` also removes `GIT_AUTHOR_*` / `GIT_COMMITTER_*`**, so a
+  fixture commit then needs `-c user.email=... -c user.name=...`. CI runners
+  have no global identity and a bare `git commit` exits 128 — which is
+  exactly how this shipped green locally and went red on the runner, for the
+  third time in this file.
+- **Two consecutive drafts of the regression test passed with the fix
+  removed.** (1) The victim repo was a plain repo, which `git init`
+  harmlessly reinitializes; (2) the hook gitdir was built as
+  `.git/worktrees/<branch>`, but `git worktree add <dir> -b <branch>` names
+  the gitdir after the **directory**, so the path never existed and the
+  scenario never ran. The test only went red for the right reason after it
+  built a real linked worktree and asked git for the path
+  (`git rev-parse --absolute-git-dir` from inside it) — plus an assertion
+  that the path resolves at all. **A fixture that constructs the wrong shape
+  is the default outcome, not the unlucky one; assert the shape before
+  asserting the behaviour.**
+- How it was finally found is the reusable part: three sessions of
+  hypothesising (worktree spawn? worktree removal?) got nowhere. A 1s poll
+  recording every `core.bare` transition alongside a `ps` snapshot caught the
+  flip to the second, with the culprit process in the snapshot. Instrument
+  rather than theorise once a second hypothesis has died.
+
 ## gh pr merge --delete-branch switches your working copy to main
 
 - When the branch being deleted is the CURRENT branch of the main
