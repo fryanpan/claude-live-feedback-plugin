@@ -51,6 +51,14 @@ import type { ShareConfig } from './share/types.ts';
 import { sanitizeVisitorAuthor } from './share/visitor-identity.ts';
 import { SseHub, openSseStream } from './sse.ts';
 import { KEYCHAIN_SERVICE, ThreadSummarizer } from './summarize.ts';
+import {
+  BAD_OPTIONS_ERROR,
+  BAD_REF_ERROR,
+  parseLinks,
+  parseNeeds,
+  parseOptions,
+  parseTaskCreate,
+} from './task-create.ts';
 import { applyImport, importBanner, importMarkerFor, parseTrackerMarkdown } from './task-import.ts';
 import {
   ASSIGNEE_REQUIRED_ERROR,
@@ -60,7 +68,6 @@ import {
 import { TaskProjection, taskIdOfBodyDoc } from './task-projection.ts';
 import { buildQueue, summarizeGoals } from './task-queue.ts';
 import {
-  REF_KINDS,
   type Ref,
   type TaskStatus,
   TaskStore,
@@ -119,113 +126,6 @@ function parseGoalList(raw: unknown): WorkspaceGoal[] | null {
   }
   return goals;
 }
-
-/**
- * `needs` for the two task-create routes. Validated HERE, the way `riskTier`
- * and `runtime` already are on neighbouring routes: a capitalized
- * `'Decision'` stored verbatim produces a task that is absent from the
- * decisions strip, absent from `list_tasks(needs:'decision')`, and refused
- * by `answer_decision` — while the create call answered 200.
- */
-function parseNeeds(raw: unknown): { ok: true; needs?: 'action' | 'decision' } | { ok: false } {
-  if (raw === undefined) return { ok: true };
-  if (raw === 'action' || raw === 'decision') return { ok: true, needs: raw };
-  return { ok: false };
-}
-
-/**
- * `options` for the two task-create routes — the candidate answers a decision
- * arrives with.
- *
- * Refused rather than partially accepted, unlike `links`: an option is not an
- * annotation, it is a control the person deciding will TAP, and a silently
- * dropped one is a choice they were never offered. The store re-checks the
- * same rules (it is the gate), so this exists to turn a shape error into a 400
- * instead of a cast that reaches the store as `undefined`.
- */
-function parseOptions(
-  raw: unknown,
-): { ok: true; options?: Array<{ label: string; detail?: string }> } | { ok: false } {
-  if (raw === undefined) return { ok: true };
-  if (!Array.isArray(raw)) return { ok: false };
-  const options: Array<{ label: string; detail?: string }> = [];
-  for (const entry of raw) {
-    if (typeof entry !== 'object' || entry === null) return { ok: false };
-    const o = entry as { label?: unknown; detail?: unknown };
-    if (typeof o.label !== 'string' || o.label.trim().length === 0) return { ok: false };
-    if (o.detail !== undefined && typeof o.detail !== 'string') return { ok: false };
-    options.push({
-      label: o.label,
-      ...(typeof o.detail === 'string' ? { detail: o.detail } : {}),
-    });
-  }
-  return { ok: true, options };
-}
-
-const BAD_OPTIONS_ERROR = 'options must be [{label, detail?}] with a non-empty label';
-
-/**
- * `links` for the two task-create routes: every element through the SAME
- * `isValidRef` the dedicated links route runs — a malformed ref matches no
- * backlink query, so the chip the link existed for never appears, and a
- * silent 200 hides that.
- *
- * But it is PARTIAL: bad refs are dropped and reported in `ignoredLinks`,
- * and the task is still created. Rejecting the whole call cost an outside
- * user a task's title, body, goal and assignee over one malformed field on
- * an *annotation* — and refs are explicitly never existence-checked, so a
- * well-formed ref pointing nowhere was already accepted. Refusing the
- * malformed one outright was the harsher answer to the lesser problem.
- * The precedent is the import path, which returns `ignoredColumns` rather
- * than refusing a tracker with one column it doesn't understand.
- *
- * The dedicated `POST /api/tasks/:id/links` route deliberately still 400s:
- * there the ref IS the request, so dropping it would mean answering 200 to
- * a call that did nothing. The distinction is annotation vs. payload, not
- * one route being stricter than another.
- *
- * `ok: false` now means only "this isn't an array at all".
- */
-function parseLinks(raw: unknown): { ok: true; links?: Ref[]; ignored: unknown[] } | { ok: false } {
-  if (raw === undefined) return { ok: true, ignored: [] };
-  if (!Array.isArray(raw)) return { ok: false };
-  const links: Ref[] = [];
-  const ignored: unknown[] = [];
-  for (const ref of raw) {
-    if (isValidRef(ref)) links.push(ref);
-    else ignored.push(ref);
-  }
-  return { ok: true, links, ignored };
-}
-
-/**
- * The promotion `origin`, validated rather than cast.
- *
- * It used to be `body?.origin as Ref | undefined` — a cast, which checks
- * nothing at runtime. Two holes, both reachable from one unauthenticated
- * POST: a `url` origin skipped the http(s) scheme check that the identical
- * ref in `links` gets (the whole reason that check exists is that a url ref
- * reaches the DOM as an href), and `origin: null` persisted to disk and then
- * threw in `refKey` on every backlink query — including the doc-open path,
- * for every workspace, until someone hand-edited the JSON.
- *
- * `null` is read as "no origin" because clients spell an absent field that
- * way and dropping it is harmless. A present-but-malformed origin 400s: it's
- * payload, not annotation — unlike `links`, there is no good half to keep.
- */
-function parseOrigin(raw: unknown): { ok: true; origin?: Ref } | { ok: false } {
-  if (raw === undefined || raw === null) return { ok: true };
-  if (!isValidRef(raw)) return { ok: false };
-  return { ok: true, origin: raw };
-}
-
-/** The 400 body for a ref a route refuses. Naming the accepted kinds turns a
- *  source dive into a re-send — the first outside caller of these routes had
- *  to read tasks.ts to discover which spellings existed. */
-const BAD_REF_ERROR = `links must be an array of valid refs (kind: ${REF_KINDS.join(' | ')}); a url ref must be http(s)`;
-
-/** Same rules, one ref, named for the field so the caller knows where to look. */
-const BAD_ORIGIN_ERROR = `origin must be a valid ref (kind: ${REF_KINDS.join(' | ')}); a url ref must be http(s)`;
 
 /**
  * The one doc every hub's feedback widget writes to.
@@ -1907,56 +1807,21 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         if (wsTasksMatch && req.method === 'POST') {
           const workspaceId = decodeURIComponent(wsTasksMatch[1] ?? '');
           const body = await safeJson(req);
-          const title = body?.title as string | undefined;
-          if (!title || typeof title !== 'string' || title.trim().length === 0) {
-            return j(400, { error: 'title required' });
-          }
-          const needs = parseNeeds(body?.needs);
-          if (!needs.ok) return j(400, { error: "needs must be 'action' | 'decision'" });
-          const options = parseOptions(body?.options);
-          if (!options.ok) return j(400, { error: BAD_OPTIONS_ERROR });
-          const links = parseLinks(body?.links);
-          if (!links.ok) return j(400, { error: BAD_REF_ERROR });
-          const origin = parseOrigin(body?.origin);
-          if (!origin.ok) return j(400, { error: BAD_ORIGIN_ERROR });
           // An unknown workspace is a 404 before anything about the task is
           // judged — otherwise a typo'd id comes back as a complaint about
           // the body, and the caller fixes the wrong thing.
           if (!taskStore.getWorkspace(workspaceId)) {
             return j(404, { error: 'workspace-not-found' });
           }
-          // Nothing enters the board belonging to nobody: an unnamed assignee
-          // falls back to the caller's own identity, and a create that still
-          // resolves to the generic word is refused rather than filed under it.
-          const createdBy = authorFor(body?.author);
-          const owner = resolveAssignee(body?.assignee, createdBy);
-          if (!owner) {
+          // One reading of a create body, shared with the batch route below.
+          const parsed = parseTaskCreate(body, authorFor(body?.author));
+          if (!parsed.ok) {
             return j(400, {
-              error: ASSIGNEE_REQUIRED_ERROR,
-              message: ASSIGNEE_REQUIRED_MESSAGE,
+              error: parsed.error,
+              ...(parsed.message !== undefined ? { message: parsed.message } : {}),
             });
           }
-          const res = taskStore.createTask(workspaceId, {
-            title: title.trim(),
-            body: body?.body as string | undefined,
-            assignee: owner,
-            needs: needs.needs,
-            options: options.options,
-            goal: body?.goal as string | undefined,
-            order: typeof body?.order === 'number' ? Number(body.order) : undefined,
-            after: Array.isArray(body?.after) ? (body.after as string[]) : undefined,
-            afterEnforce: Array.isArray(body?.afterEnforce)
-              ? (body.afterEnforce as string[])
-              : undefined,
-            dueAt: typeof body?.dueAt === 'number' ? Number(body.dueAt) : undefined,
-            links: links.links,
-            origin: origin.origin,
-            quote: body?.quote as string | undefined,
-            // Optional: a task can be created by a UI with no session yet.
-            // When it IS supplied, the created row is attributed (§3.6) —
-            // "who put this here" is the first question of every triage.
-            actor: createdBy ?? undefined,
-          });
+          const res = taskStore.createTask(workspaceId, parsed.opts);
           if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
           // Dropped refs are reported, never swallowed: the caller finds out
           // what didn't survive without having to diff what it sent. Same
@@ -1964,8 +1829,89 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // caller still learns which parts of the shape are missing.
           return j(200, {
             task: res.task,
-            ...(links.ignored.length > 0 ? { ignoredLinks: links.ignored } : {}),
+            ...(parsed.ignoredLinks.length > 0 ? { ignoredLinks: parsed.ignoredLinks } : {}),
             ...(res.shapeGaps !== undefined ? { shapeGaps: res.shapeGaps } : {}),
+          });
+        }
+        /**
+         * Batch capture: a burst of ideas in ONE call, each landing owned and
+         * placed, and the whole thing coming back in board order so the caller
+         * can see the ranking it just produced without a second read.
+         *
+         * PER-ITEM failure, deliberately. An all-or-nothing batch turns one
+         * typo into "which of these eight already landed?", and the answer to
+         * that question is a read the caller shouldn't have to do — so a bad
+         * row is reported by index and its neighbours still land. The two
+         * whole-call refusals left are the ones where nothing could have
+         * landed anyway: an unknown workspace, and a body with no rows in it.
+         */
+        const wsTasksBatchMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/tasks\/batch$/);
+        if (wsTasksBatchMatch && req.method === 'POST') {
+          const workspaceId = decodeURIComponent(wsTasksBatchMatch[1] ?? '');
+          const body = await safeJson(req);
+          if (!taskStore.getWorkspace(workspaceId)) {
+            return j(404, { error: 'workspace-not-found' });
+          }
+          const rows = body?.tasks;
+          if (!Array.isArray(rows) || rows.length === 0) {
+            return j(400, { error: 'tasks must be a non-empty array of task bodies' });
+          }
+          const createdBy = authorFor(body?.author);
+          const createdIds = new Set<string>();
+          const failures: Array<{
+            index: number;
+            title?: string;
+            error: string;
+            message?: string;
+          }> = [];
+          const ignoredLinks: Array<{ taskId: string; ignored: unknown[] }> = [];
+          const shapeGaps: Array<{ taskId: string; gaps: unknown[] }> = [];
+          for (const [index, row] of rows.entries()) {
+            // A row may name its own author; without one it inherits the
+            // batch's, which is the common case (one agent, one burst).
+            const rowAuthor =
+              (row as { author?: unknown } | null)?.author !== undefined
+                ? authorFor((row as { author?: unknown }).author)
+                : createdBy;
+            const title = (row as { title?: unknown } | null)?.title;
+            const named = typeof title === 'string' ? { title } : {};
+            const parsed = parseTaskCreate(row, rowAuthor);
+            if (!parsed.ok) {
+              failures.push({
+                index,
+                ...named,
+                error: parsed.error,
+                ...(parsed.message !== undefined ? { message: parsed.message } : {}),
+              });
+              continue;
+            }
+            const res = taskStore.createTask(workspaceId, parsed.opts);
+            if (!res.ok) {
+              failures.push({
+                index,
+                ...named,
+                error: res.error,
+                ...(res.message !== undefined ? { message: res.message } : {}),
+              });
+              continue;
+            }
+            createdIds.add(res.task.id);
+            if (parsed.ignoredLinks.length > 0) {
+              ignoredLinks.push({ taskId: res.task.id, ignored: parsed.ignoredLinks });
+            }
+            if (res.shapeGaps !== undefined) {
+              shapeGaps.push({ taskId: res.task.id, gaps: res.shapeGaps });
+            }
+          }
+          // Board order comes from the board, not from a second sort of our
+          // own that happens to agree with it today.
+          const tasks = taskStore.listTasks(workspaceId).filter((t) => createdIds.has(t.id));
+          return j(200, {
+            workspaceId,
+            tasks,
+            failures,
+            ...(ignoredLinks.length > 0 ? { ignoredLinks } : {}),
+            ...(shapeGaps.length > 0 ? { shapeGaps } : {}),
           });
         }
         // The single gate for status changes: attributed, evidence-stamped,
