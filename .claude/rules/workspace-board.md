@@ -104,7 +104,11 @@ actually at the top. Often the honest answer is that the new idea is real and
 still below the main flow, and saying so is the work.
 
 Do not spend a session's capacity on an idea that has not been ranked against
-the goals it competes with.
+the goals it competes with. If an idea is worth exploring but sits below the
+top of the queue, spin off a subagent to research it — but only once the
+higher-priority work is actually taken care of, not merely started. The point
+is that the main flow keeps moving; a background researcher is fine, a
+foreground detour is not.
 
 ## Don't route around the tools
 
