@@ -72,7 +72,7 @@ const server = new Server(
     // Must match packages/plugin/.claude-plugin/plugin.json — this is the version
     // a client sees in the initialize handshake, and it had drifted three minor
     // releases behind. Asserted in packages/mcp/test/launcher.test.ts.
-    version: '0.1.20',
+    version: '0.1.21',
   },
   {
     capabilities: {
@@ -155,7 +155,8 @@ const server = new Server(
       '',
       'WORKSPACE HUB: a hub workspace is a goal + a task board + linked docs.',
       'create_workspace mints one; attach_doc links existing docs/reviews to it;',
-      'create_task / promote_to_task add work (omit `goal` and the task lands in',
+      'create_task / create_tasks (a whole burst in one call) / promote_to_task',
+      'add work (omit `goal` and the task lands in',
       'Chores awaiting triage — placing it with set_task_goal IS the triage:',
       'pick the goal AND the exact position, and pass riskTier for how dangerous',
       'the ACTION is, not how important the task is). task_transition is the',
@@ -1015,6 +1016,24 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           quote: { type: 'string', description: "The human's verbatim words, for chat-born asks." },
         },
         required: ['workspaceId', 'title'],
+      },
+    },
+    {
+      name: 'create_tasks',
+      description:
+        "Capture a BURST of ideas as tasks in ONE call — the tool to reach for when a conversation just produced five things worth doing, instead of five create_task round trips. Each row takes exactly the fields create_task takes (minus workspaceId), and every rule create_task applies applies per row: an omitted `assignee` means YOU own that row, an omitted `goal` routes that row through triage, an explicit `order` places it. Returns the created tasks IN BOARD ORDER — the ranking you just produced, without a second read — plus `failures: [{index, title, error, message}]` for any row that didn't land. A bad row NEVER rejects the batch: its neighbours are created and it comes back by index, so you fix and re-send that one row. The whole call is refused only when nothing could have landed anyway (unknown workspace, no rows).",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          workspaceId: { type: 'string' },
+          tasks: {
+            type: 'array',
+            description:
+              'The rows. Each is a create_task body without `workspaceId`: {title, body?, assignee?, needs?, options?, goal?, order?, after?, afterEnforce?, dueAt?, links?, quote?}. `title` is the only required field — but write a `body` on every row you are not doing yourself within the hour, for the same reason create_task says so: a bare title is not pickup-able by an agent that was not in the conversation. Rows are created in the order given, so an `after` may name a task id from an EARLIER row only if you already have it — dependencies within one batch need a follow-up set_task_dependencies.',
+            items: { type: 'object' },
+          },
+        },
+        required: ['workspaceId', 'tasks'],
       },
     },
     {
@@ -2110,6 +2129,36 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           },
         )) as { task: TaskPayload; ignoredLinks?: unknown[]; shapeGaps?: string[] };
         return ok(taskCreatedSummary(res.task, res.ignoredLinks, res.shapeGaps));
+      }
+      case 'create_tasks': {
+        const { workspaceId, tasks } = a as { workspaceId: string; tasks: unknown[] };
+        const res = (await http(
+          'POST',
+          `/api/workspaces/${encodeURIComponent(workspaceId)}/tasks/batch`,
+          { tasks, author: AUTHOR },
+        )) as {
+          tasks: TaskPayload[];
+          failures: Array<{ index: number; title?: string; error: string; message?: string }>;
+          ignoredLinks?: Array<{ taskId: string; ignored: unknown[] }>;
+          shapeGaps?: Array<{ taskId: string; gaps: string[] }>;
+        };
+        const gapsFor = (taskId: string) =>
+          res.shapeGaps?.find((g) => g.taskId === taskId)?.gaps ?? undefined;
+        const droppedFor = (taskId: string) =>
+          res.ignoredLinks?.find((l) => l.taskId === taskId)?.ignored ?? undefined;
+        return ok({
+          // Board order, carrying the title so the caller can match rows back
+          // to what it sent without holding its own index — the returned
+          // order is deliberately NOT the order it sent them in.
+          created: res.tasks.map((t) => ({
+            title: t.title,
+            ...taskCreatedSummary(t, droppedFor(t.id), gapsFor(t.id)),
+          })),
+          // Always present, even when empty: a caller that has to check for
+          // the KEY before checking the count reads "no failures" as "the
+          // field is missing because this build doesn't report them".
+          failures: res.failures,
+        });
       }
       case 'promote_to_task': {
         const { docId, threadId, workspaceId, title, body, assignee, needs, goal, dueAt, links } =
