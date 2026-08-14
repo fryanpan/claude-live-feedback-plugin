@@ -15,6 +15,7 @@ import {
   doneAt,
   dropIndexFor,
   dropTarget,
+  goalLabel,
   positionBetween,
   presenceChips,
   stepTarget,
@@ -88,6 +89,26 @@ describe('boardSections', () => {
     // Positive control: the task is somewhere at all.
     expect(sections.flatMap((s) => s.tasks).map((t) => t.id)).toContain(orphan.id);
     expect(sections.find((s) => s.isChores)?.tasks.map((t) => t.id)).toContain(orphan.id);
+  });
+});
+
+describe('goalLabel', () => {
+  it('names a goal and a subgoal the way its section header does', () => {
+    expect(goalLabel(GOALS, 'g-pr')).toBe('1. Get the PR out');
+    expect(goalLabel(GOALS, 'g-pr-tickets')).toBe('1.1 Post-PR tickets');
+  });
+
+  // Anything boardSections drops into Chores has to READ as Chores. A row
+  // sitting under a header that says one thing while its detail panel says
+  // another is the same defect as printing the raw id.
+  it('says Chores for the catch-all and for a goal that no longer exists', () => {
+    expect(goalLabel(GOALS, CHORES_ID)).toBe('Chores');
+    expect(goalLabel(GOALS, 'g-deleted')).toBe('Chores');
+    // The pairing this has to hold: same input, same answer as the board.
+    const section = boardSections(GOALS, [task({ goal: 'g-deleted' })], filters).find((s) =>
+      s.tasks.some((t) => t.goal === 'g-deleted'),
+    );
+    expect(section?.title).toBe(goalLabel(GOALS, 'g-deleted'));
   });
 });
 
