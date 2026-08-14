@@ -26,7 +26,7 @@
  * register. The repo is public.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
@@ -128,6 +128,37 @@ describe('durable goal-edit re-triage', () => {
       pending?: PendingRetriage;
     };
     expect(onDisk.pending?.batchId).toBe(pending.batchId);
+  });
+
+  // The ack above is only worth what the write is worth. `queued: true` says
+  // "it is on disk waiting for the lead" — if the write threw and we said it
+  // anyway, the person who edited the goal is told a restart-proof promise
+  // that a restart erases. Reported false, deliberately conservative: the
+  // in-memory copy is kept and can still be handed over this process
+  // lifetime, so the flag under-promises rather than over-promises.
+  it('does NOT claim the request is queued when the sidecar write fails', () => {
+    const brokenDir = mkdtempSync(join(tmpdir(), 'retriage-broken-'));
+    // `workspaces` as a FILE: existsSync passes, every write under it ENOTDIRs.
+    writeFileSync(join(brokenDir, 'workspaces'), 'not a directory\n');
+    const broken = new TaskStore({ dataDir: brokenDir, debounceMs: 5 });
+    const brokenEvents: TaskStoreEvent[] = [];
+    broken.onEvent((e) => brokenEvents.push(e));
+    broken.setTriageDelivery(() => false);
+    try {
+      const ws = broken.createWorkspace('broken-hub', 'Old goal.', { leadAgentId: LEAD });
+      const t = broken.createTask(ws.id, { title: 'draft the outline', goal: 'chores' });
+      if (!t.ok) throw new Error('fixture');
+
+      const res = broken.setWorkspaceGoal(ws.id, 'New goal.', { actor: PERSON });
+      if (!res.ok) throw new Error('unexpected');
+      expect(res.retriage.requested).toBe(false);
+      expect(res.retriage.queued).toBe(false);
+      const row = brokenEvents.filter((e) => e.type === 'workspace.retriaged').at(-1);
+      expect(row && 'queued' in row ? row.queued : undefined).toBe(false);
+    } finally {
+      broken.stop();
+      rmSync(brokenDir, { recursive: true, force: true });
+    }
   });
 
   it('the audit row records that it was queued, not merely undelivered', () => {

@@ -25,7 +25,10 @@ describe('triageRequestLine', () => {
   // imperative when the reader is the addressee, so the assertion there is
   // about the addressing and not about something inert in the payload.
   it('renders the imperative for that same payload when the reader IS the lead', () => {
-    const line = triageRequestLine({ ...RETRIAGE, leadAgentId: 'agent-bystander' }, 'agent-bystander');
+    const line = triageRequestLine(
+      { ...RETRIAGE, leadAgentId: 'agent-bystander' },
+      'agent-bystander',
+    );
     expect(line).toContain('re-triage 3 open task(s) with set_task_goal');
     expect(line).not.toContain('Act only if');
   });
@@ -44,7 +47,10 @@ describe('triageRequestLine', () => {
   });
 
   it('leaves single-task placement alone — it is addressed to whoever is attached', () => {
-    const line = triageRequestLine({ kind: 'task', taskId: 't-z', leadAgentId: 'agent-lead' }, 'agent-bystander');
+    const line = triageRequestLine(
+      { kind: 'task', taskId: 't-z', leadAgentId: 'agent-lead' },
+      'agent-bystander',
+    );
     expect(line).toBe('[triage.requested] place task t-z against the goal (set_task_goal)');
   });
 
