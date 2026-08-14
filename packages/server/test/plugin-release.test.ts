@@ -2,7 +2,12 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { agentsBehind, compareSemver, readReleasedPluginVersion } from '../src/plugin-release';
+import {
+  agentsBehind,
+  compareSemver,
+  moduleDir,
+  readReleasedPluginVersion,
+} from '../src/plugin-release';
 
 describe('compareSemver', () => {
   test('orders by number, not by string', () => {
@@ -100,5 +105,29 @@ describe('agentsBehind', () => {
     // The manifest is unreadable — we do not know what current IS, so
     // reporting drift would be inventing it.
     expect(agentsBehind(null, [local('a', '0.1.12')])).toEqual([]);
+  });
+});
+
+describe('moduleDir', () => {
+  test('decodes a percent-escaped path', () => {
+    // `new URL(u).pathname` keeps the escapes, so a checkout under a
+    // directory with a space resolves to a path that does not exist —
+    // readReleasedPluginVersion then returns null and the whole drift signal
+    // switches itself off, silently. This machine's checkout has no spaces,
+    // which is exactly why it would never have been noticed here.
+    expect(moduleDir('file:///Users/sam/My%20Code/repo/packages/server/src/x.ts')).toBe(
+      '/Users/sam/My Code/repo/packages/server/src',
+    );
+  });
+
+  test('handles an ordinary path unchanged (positive control)', () => {
+    expect(moduleDir('file:///srv/repo/packages/server/src/x.ts')).toBe(
+      '/srv/repo/packages/server/src',
+    );
+  });
+
+  test('the no-argument read finds this repo, whatever its path', () => {
+    // The end the escape bug actually breaks.
+    expect(readReleasedPluginVersion()).toMatch(/^\d+\.\d+\.\d+$/);
   });
 });
