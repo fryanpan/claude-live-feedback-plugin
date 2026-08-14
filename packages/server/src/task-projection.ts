@@ -22,20 +22,27 @@ import type { Task, TaskStore, TaskStoreEvent } from './tasks.ts';
  *    store after load, so a crash can't leave forged or stale board state
  *    standing.
  *
- * Task BODIES are the deliberate exception to "tasks live in the store":
- * each body is a live collaborative doc in its own `task:<taskId>` room (no
- * file binding), which is what makes every existing edit tool, thread
- * store, REST route, and SSE event apply unchanged (they're all keyed by
- * docId). The store's `body` string is a debounced SNAPSHOT of that room
- * for search and export only — a snapshot never re-seeds a live fragment,
- * so fragment identity (and every thread anchor in it) survives projection
- * refreshes and restarts.
+ * Task BODIES are EDITED in a deliberate exception to "tasks live in the
+ * store": each body is a live collaborative doc in its own `task:<taskId>`
+ * room (no file binding), which is what makes every existing edit tool,
+ * thread store, REST route, and SSE event apply unchanged (they're all
+ * keyed by docId). The store's `body` string is a debounced SNAPSHOT of
+ * that room — a snapshot never re-seeds a live fragment, so fragment
+ * identity (and every thread anchor in it) survives projection refreshes
+ * and restarts.
  *
- * What the ws room syncs is exactly the §3.3 visitor-contract list: titles,
- * status, order, transitions with actor DISPLAY names (no ids), evidence
- * commit hashes, token usage, goal text, and verbatim quote/answer fields.
- * Bodies are not in the map (own rooms); AgentAttachment records never
- * enter any ydoc.
+ * That snapshot IS projected (capped, see BODY_PROJECTION_LIMIT). It was
+ * not, originally, and the cost was that a task read as a bare title and
+ * "what is this for" meant navigating to a second page — the
+ * store-has-it/surface-can't-show-it failure this codebase has hit before.
+ * Note what this widens: the ws room syncs to workspace-share visitors, and
+ * Yjs is a state exchange with no per-connection projection, so a
+ * description is now readable by anyone holding a workspace share.
+ *
+ * What the ws room syncs is otherwise the §3.3 visitor-contract list:
+ * titles, status, order, transitions with actor DISPLAY names (no ids),
+ * evidence commit hashes, token usage, goal text, and verbatim quote/answer
+ * fields. AgentAttachment records never enter any ydoc.
  */
 
 /** Yjs transaction origin for every projection write. Anything else
@@ -57,9 +64,34 @@ function taskIdOfBodyDoc(docId: string): string {
   return docId.startsWith('task:') ? docId.slice('task:'.length) : docId;
 }
 
+/**
+ * How much of a description the board projection carries.
+ *
+ * A task body is a live doc anyone can paste a plan into, and the ws room
+ * re-syncs to every board viewer on every debounced snapshot — so an
+ * uncapped body makes the board's sync cost proportional to the longest
+ * thing anyone ever pasted. Past the cap the panel shows the head and says
+ * so; the doc link carries the rest. The cap is on the PROJECTION only: the
+ * store keeps the whole body.
+ */
+export const BODY_PROJECTION_LIMIT = 4_000;
+
+/** The projected slice of a body, plus the flag that keeps the truncation
+ *  honest on the surface. */
+function projectBody(body: string | undefined): {
+  body?: string;
+  bodyTruncated?: boolean;
+} {
+  const text = body?.trim();
+  if (!text) return {};
+  if (text.length <= BODY_PROJECTION_LIMIT) return { body: text };
+  return { body: text.slice(0, BODY_PROJECTION_LIMIT), bodyTruncated: true };
+}
+
 /** The plain-JSON shape of one task inside the `tasks` Y.Map — the §3.3
  *  visitor-contract fields, stated here so it's a decision, not an
- *  accident. No body (own room), no actor ids (display names only). */
+ *  accident. No actor ids (display names only); the body is the capped
+ *  snapshot, and the live one stays in its own room. */
 export function projectTask(task: Task): Record<string, unknown> {
   return {
     id: task.id,
@@ -90,6 +122,7 @@ export function projectTask(task: Task): Record<string, unknown> {
       ...(t.usage !== undefined ? { usage: t.usage } : {}),
     })),
     bodyDocId: taskBodyDocId(task.id),
+    ...projectBody(task.body),
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
   };
@@ -251,9 +284,18 @@ export class TaskProjection {
   private snapshotNow(docId: string): void {
     const room = this.rooms.get(docId);
     if (!room) return;
+    const taskId = taskIdOfBodyDoc(docId);
     try {
       const md = prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
-      this.tasks.updateBodySnapshot(taskIdOfBodyDoc(docId), md);
+      if (!this.tasks.updateBodySnapshot(taskId, md)) return;
+      // The board renders the description from the projection, and
+      // `updateBodySnapshot` deliberately fires no task.* event (body typing
+      // is not board activity) — so without this push nothing would ever
+      // refresh it and every board would show the description as of task
+      // creation, forever. `refresh` is diff-aware, so an unchanged body
+      // costs an empty transaction.
+      const workspaceId = this.tasks.getTask(taskId)?.workspaceId;
+      if (workspaceId) this.refresh(workspaceId);
     } catch (err) {
       console.error(`[projection] body snapshot failed for ${docId}:`, err);
     }

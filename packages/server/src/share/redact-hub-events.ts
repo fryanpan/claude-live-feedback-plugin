@@ -2,7 +2,7 @@
  * Visitor redaction for hub events riding the workspace SSE feed.
  *
  * The ws:<id> board room enforces the §3.3 visitor contract via projectTask
- * (no body snapshot, transition actors as display names only). The SSE feed
+ * (transition actors as display names only). The SSE feed
  * broadcasts the RAW store events — full Task objects and TaskActor records
  * with ids — so without this, granting a visitor the feed (§3.12 commit 8)
  * would leak through the second door exactly the way DocMeta once did
