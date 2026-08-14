@@ -1286,3 +1286,39 @@ describe('the row badges are capped against the viewport, not against themselves
     for (const r of rules) expect(r).not.toMatch(/max-width:\s*[\d.]+%/);
   });
 });
+
+/**
+ * happy-dom does no layout, so nothing else in this suite can see a sticky
+ * bar painting over a button. What it CAN see is the invariant: the media
+ * block that makes the nav sticky must also reserve its height in the
+ * scroller, or the card's last control ends up under it.
+ */
+describe('the sticky walkthrough nav reserves its own height', () => {
+  it('gives the card bottom clearance wherever the nav is sticky', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const css = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
+    // The media blocks are the unit: sticky nav and card clearance have to
+    // travel together, so find the block and assert about that one text.
+    // Brace-scanned rather than regexed — a media block holds nested rules,
+    // and a pattern that assumes otherwise matches nothing and proves nothing.
+    const blocks: string[] = [];
+    for (const m of css.matchAll(/@media[^{]*\{/g)) {
+      let depth = 1;
+      let i = (m.index ?? 0) + m[0].length;
+      const start = i;
+      while (i < css.length && depth > 0) {
+        if (css[i] === '{') depth += 1;
+        else if (css[i] === '}') depth -= 1;
+        i += 1;
+      }
+      blocks.push(css.slice(start, i - 1));
+    }
+    const sticky = blocks.filter((b) => /\.hub-walk-nav\s*\{[^}]*position:\s*sticky/.test(b));
+    // Positive control: the block this asserts about exists and was matched.
+    expect(sticky.length).toBeGreaterThan(0);
+    for (const b of sticky) {
+      expect(b).toMatch(/\.hub-walk-card\s*\{[^}]*padding-bottom:\s*[\d.]+px/);
+    }
+  });
+});
