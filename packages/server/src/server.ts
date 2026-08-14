@@ -26,6 +26,7 @@ import {
   isTrustedLocalHost,
   shareScopeAllows,
 } from './middleware/host-guard.ts';
+import { agentsBehind, readReleasedPluginVersion } from './plugin-release.ts';
 import { localHostnames, publicBaseUrl } from './public-host.ts';
 import { reviewThreadItems } from './review-queue.ts';
 import { type FeedbackWs, Rooms, type WorkspaceDirNode, type WorkspaceFileNode } from './rooms.ts';
@@ -2345,11 +2346,25 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!taskStore.getWorkspace(workspaceId)) {
             return j(404, { error: 'workspace not found' });
           }
+          const attachments = visitor
+            ? taskStore.listPublicAttachments(workspaceId)
+            : taskStore.listAttachments(workspaceId);
+          // Drift rides the same read the board already makes, so nobody has
+          // to run a command to discover that a merge never reached them.
+          // A plugin version is workspace-visible, not host-describing —
+          // it says which tools an agent here can use, so a visitor sees it
+          // for the same reason they see who is attached.
+          const released = readReleasedPluginVersion();
           return j(200, {
             workspaceId,
-            attachments: visitor
-              ? taskStore.listPublicAttachments(workspaceId)
-              : taskStore.listAttachments(workspaceId),
+            attachments,
+            pluginRelease: {
+              version: released,
+              behind: agentsBehind(released, attachments).map((a) => ({
+                agentId: a.agentId,
+                ...(a.pluginVersion !== undefined ? { pluginVersion: a.pluginVersion } : {}),
+              })),
+            },
           });
         }
         if (wsAgentsMatch && req.method === 'POST') {
@@ -2371,6 +2386,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               ? (body.capabilities as unknown[]).filter((c): c is string => typeof c === 'string')
               : undefined,
             endpoint: typeof body?.endpoint === 'string' ? body.endpoint : undefined,
+            // The bundle this session is running. Absent from every peer
+            // older than the release that added it — which is the signal,
+            // not a gap to paper over with a default.
+            pluginVersion:
+              typeof body?.pluginVersion === 'string' && body.pluginVersion.trim().length > 0
+                ? body.pluginVersion.trim()
+                : undefined,
           });
           if (!res.ok) return j(404, res);
           return j(200, res);

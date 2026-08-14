@@ -490,6 +490,13 @@ export interface AgentAttachment {
   lastToolCallAt: number;
   /** e.g. ['tasks.write', 'docs.edit', 'voice.mutations']. */
   capabilities: string[];
+  /** The plugin bundle version this session is RUNNING — not the one its
+   *  machine's cache holds. A session resolves the plugin at launch, so
+   *  those two disagree from the moment an update runs until the session
+   *  restarts, and this is the one that decides whether a tool exists for
+   *  this agent. Absent on any peer older than the release that added it,
+   *  which is exactly what makes silence readable as "behind". */
+  pluginVersion?: string;
 }
 
 /** How recent a heartbeat must be for the process to count as up. */
@@ -2484,6 +2491,7 @@ export class TaskStore {
       runtime: AttachmentRuntime;
       capabilities?: string[];
       endpoint?: string;
+      pluginVersion?: string;
     },
   ): AttachAgentResult {
     const state = this.workspaces.get(workspaceId);
@@ -2494,6 +2502,7 @@ export class TaskStore {
       agentId: opts.agentId,
       runtime: opts.runtime,
       ...(opts.endpoint !== undefined ? { endpoint: opts.endpoint } : {}),
+      ...(opts.pluginVersion !== undefined ? { pluginVersion: opts.pluginVersion } : {}),
       lastHeartbeat: now,
       lastToolCallAt: now,
       capabilities: opts.capabilities ?? [],
