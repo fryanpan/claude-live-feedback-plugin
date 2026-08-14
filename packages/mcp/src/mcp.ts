@@ -374,7 +374,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'bind_folder',
       description:
-        'Alias for create_diff_review WITHOUT a base: binds a folder/worktree as a BROWSE workspace. One entry doc binds eagerly (README preferred; markdown opens editable); every other file appears in the all-files sidebar and opens lazily on click — no eager per-file binds, no file-count cap. Prefer create_diff_review directly: pass base to ALSO get the PR-style changed-files diff on top of browsing. Returns the workspace id, root, scan fileCount, and the entry file.',
+        'Alias for create_diff_review WITHOUT a base: binds a folder/worktree as a BROWSE workspace. One entry doc binds eagerly (README preferred; markdown opens editable); every other file appears in the all-files sidebar and opens lazily on click — no eager per-file binds, no file-count cap. Prefer create_diff_review directly: pass base to ALSO get the PR-style changed-files diff on top of browsing. Returns the workspace id (the grouping), the hub workspace it was filed on (hubWorkspaceId — the board, so the bind is discoverable without the URL), root, scan fileCount, and the entry file.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -386,6 +386,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
               "Path prefixes (relative to the folder) to keep out of the workspace, e.g. ['node_modules', 'vendor']. Persisted, so refresh_workspace replays it.",
           },
           workspaceId: { type: 'string' },
+          hubWorkspaceId: {
+            type: 'string',
+            description:
+              'Optional hub workspace (board) to file this bind under — the id `create_workspace` returned, and deliberately NOT `workspaceId` above, which is the GROUPING id this bind creates for its own member files. Omit it and the bind still lands on a board: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went. The whole bind is ONE row on the board, never one per file.',
+          },
           title: { type: 'string' },
           include: { type: 'array', items: { type: 'string' } },
           maxFiles: { type: 'number' },
@@ -406,7 +411,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'create_diff_review',
       description:
-        "Create a GitHub-PR-style review of a git diff: point it at a local repo and a base ref, and the server creates one review doc per changed file, grouped as a workspace — the reviewer gets a file tree with per-file A/M/D/R + line-count badges, a unified diff view with old/new line numbers and collapsed unchanged regions, a per-file Diff ↔ whole-File toggle, and line-anchored comment threads in both views. DEFAULT MODE (no `target`): diff base → the WORKING TREE, i.e. the folder as it is right now, uncommitted edits and untracked files included. The docs bind to the live files on disk, so as you keep editing the code the reviewer's diff re-renders within ~1s — this is the live-loop mode. Comments stay anchored to their lines through edits (snippet-based auto-reanchor); if an anchored line disappears, the thread lands in the existing Orphaned/outdated section where the reviewer can re-anchor it. Once the review EXISTS, prefer refresh_workspace(reviewId) over re-running this tool: it re-reads the diff from the stored base (no need to remember the ref), picks up files that changed since, and flags members whose change was reverted — all without re-minting a docId. Re-running this tool is still idempotent (same docIds, threads survive). PINNED MODE (pass `target`): content is frozen at the target commit; anchors can never drift; same reviewId with a different range is rejected. `repo` is an absolute path to a local checkout/worktree; `base`/`target` are any refs git can resolve (hashes, branches, HEAD~2). Binary files and files over 512 KB are skipped and reported in skipped[]. Pass `exclude` (path prefixes, e.g. ['src/main/assets/vendored-repo']) to keep vendored or generated directories out of the review. GUARDRAIL: more than `maxFiles` (default 300) changed files → error 'too-many-files'; narrow with `exclude` or raise `maxFiles`. The caller is auto-subscribed to thread events on every file doc (pass subscribe:false to skip). Returns {reviewId, entryUrl, files[{docId, relPath, status, additions, deletions, reviewUrl}], skipped[]} — hand `entryUrl` to the human (the file tree navigates to the rest). Clean up with delete_workspace(reviewId) when the review is done. Comments on DELETED lines aren't supported yet — ask the reviewer to comment on an adjacent kept line.",
+        "Create a GitHub-PR-style review of a git diff: point it at a local repo and a base ref, and the server creates one review doc per changed file, grouped as a workspace — the reviewer gets a file tree with per-file A/M/D/R + line-count badges, a unified diff view with old/new line numbers and collapsed unchanged regions, a per-file Diff ↔ whole-File toggle, and line-anchored comment threads in both views. DEFAULT MODE (no `target`): diff base → the WORKING TREE, i.e. the folder as it is right now, uncommitted edits and untracked files included. The docs bind to the live files on disk, so as you keep editing the code the reviewer's diff re-renders within ~1s — this is the live-loop mode. Comments stay anchored to their lines through edits (snippet-based auto-reanchor); if an anchored line disappears, the thread lands in the existing Orphaned/outdated section where the reviewer can re-anchor it. Once the review EXISTS, prefer refresh_workspace(reviewId) over re-running this tool: it re-reads the diff from the stored base (no need to remember the ref), picks up files that changed since, and flags members whose change was reverted — all without re-minting a docId. Re-running this tool is still idempotent (same docIds, threads survive). PINNED MODE (pass `target`): content is frozen at the target commit; anchors can never drift; same reviewId with a different range is rejected. `repo` is an absolute path to a local checkout/worktree; `base`/`target` are any refs git can resolve (hashes, branches, HEAD~2). Binary files and files over 512 KB are skipped and reported in skipped[]. Pass `exclude` (path prefixes, e.g. ['src/main/assets/vendored-repo']) to keep vendored or generated directories out of the review. GUARDRAIL: more than `maxFiles` (default 300) changed files → error 'too-many-files'; narrow with `exclude` or raise `maxFiles`. The caller is auto-subscribed to thread events on every file doc (pass subscribe:false to skip). Returns {reviewId, hubWorkspaceId, entryUrl, files[{docId, relPath, status, additions, deletions, reviewUrl}], skipped[]} — `hubWorkspaceId` is the board the whole review was filed on as ONE row, so a reviewer can find it without the URL — hand `entryUrl` to the human (the file tree navigates to the rest). Clean up with delete_workspace(reviewId) when the review is done. Comments on DELETED lines aren't supported yet — ask the reviewer to comment on an adjacent kept line.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -425,6 +430,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'string',
             description:
               'Optional review/workspace id. Defaults to <repo-basename>-<base7>-<target7|live>.',
+          },
+          hubWorkspaceId: {
+            type: 'string',
+            description:
+              'Optional hub workspace (board) to file this review under — the id `create_workspace` returned, and deliberately NOT `reviewId` above, which is the GROUPING id holding the review\'s member files. Omit it and the review still lands on a board: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went. The whole review is ONE row on the board, never one per changed file. Filing is sticky — re-running this tool without `hubWorkspaceId` leaves a review on the board it is already on.',
           },
           title: { type: 'string' },
           exclude: {
@@ -1550,6 +1560,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const {
           folderPath,
           workspaceId,
+          hubWorkspaceId,
           title,
           include,
           exclude,
@@ -1559,6 +1570,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         } = a as {
           folderPath: string;
           workspaceId?: string;
+          hubWorkspaceId?: string;
           title?: string;
           include?: string[];
           exclude?: string[];
@@ -1570,6 +1582,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           folderPath,
           owner: process.cwd(),
           ...(workspaceId ? { workspaceId } : {}),
+          // The BOARD, next to the grouping id above. Two ids, two meanings,
+          // one payload — which is why they are spelled apart.
+          ...(hubWorkspaceId ? { hubWorkspaceId } : {}),
           ...(title ? { title } : {}),
           ...(include ? { include } : {}),
           ...(exclude ? { exclude } : {}),
@@ -1589,6 +1604,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           base,
           target,
           reviewId,
+          hubWorkspaceId,
           title,
           exclude,
           groups,
@@ -1600,6 +1616,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           base: string;
           target?: string;
           reviewId?: string;
+          hubWorkspaceId?: string;
           title?: string;
           exclude?: string[];
           groups?: Array<{ title: string; paths: string[]; details?: string }>;
@@ -1613,6 +1630,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...(target ? { target } : {}),
           owner: process.cwd(),
           ...(reviewId ? { reviewId } : {}),
+          // The BOARD, next to the grouping id above. Two ids, two meanings,
+          // one payload — which is why they are spelled apart.
+          ...(hubWorkspaceId ? { hubWorkspaceId } : {}),
           ...(title ? { title } : {}),
           ...(exclude ? { exclude } : {}),
           ...(groups ? { groups } : {}),
