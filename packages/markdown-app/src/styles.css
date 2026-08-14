@@ -1671,11 +1671,14 @@ a.hub-link-chip:hover {
     width: 100%;
     border-radius: 0;
   }
-  /* Sticky, because the way out must not be a scroll away on a long body. */
+  /* Sticky, because the way out must not be a scroll away on a long body.
+     Inset past the hold-to-talk mic, which is fixed bottom-left at the same
+     stacking level by design (it is meant to sit above the detail panel) and
+     would otherwise land exactly on top of Back. */
   .hub-walk-nav {
     position: sticky;
     bottom: 0;
-    padding-top: 8px;
+    padding: 8px 4px calc(4px + var(--safe-bottom, 0px)) 68px;
     background: var(--bg);
   }
 }
