@@ -20,6 +20,19 @@ import {
 import { widgetStyles } from './styles.ts';
 
 /**
+ * The line a thread row shows above its latest comment.
+ *
+ * A subject anchor points at the PAGE rather than into it — `create_thread`
+ * with no `find` makes one on any doc — so it names that instead of quoting
+ * something. Without this the row would read a snippet that isn't there.
+ */
+function threadSnippet(anchor: Thread['anchor']): string {
+  if (anchor.kind === 'orphan') return anchor.original.snippet.text;
+  if (anchor.kind === 'subject') return 'About this page';
+  return (anchor as ElementAnchor).snippet.text;
+}
+
+/**
  * <claude-feedback-widget> web component
  *
  * Usage:
@@ -510,6 +523,17 @@ class FeedbackWidgetEl extends HTMLElement {
       el: HTMLElement | null;
     }[] = [];
     for (const t of threads) {
+      // A subject thread has nothing on the page to pin, but the panel is the
+      // one place it can ever appear — dropping it here is how a comment ends
+      // up in the store with no surface able to show it.
+      if (t.anchor.kind === 'subject') {
+        annotated.push({
+          thread: t,
+          status: t.status === 'resolved' ? 'resolved' : 'open',
+          el: null,
+        });
+        continue;
+      }
       if (t.anchor.kind !== 'element' && t.anchor.kind !== 'orphan') continue;
       const statusBase: 'open' | 'resolved' | 'orphan' =
         t.status === 'resolved' ? 'resolved' : 'open';
@@ -639,10 +663,7 @@ class FeedbackWidgetEl extends HTMLElement {
     row.className = `thread status-${status}`;
     if (this.activeThread === t.id) row.classList.add('active');
 
-    const snippet =
-      t.anchor.kind === 'orphan'
-        ? t.anchor.original.snippet.text
-        : (t.anchor as ElementAnchor).snippet.text;
+    const snippet = threadSnippet(t.anchor);
     const last = t.comments[t.comments.length - 1];
     row.innerHTML = `
       <div class="meta">
@@ -681,10 +702,7 @@ class FeedbackWidgetEl extends HTMLElement {
     pop.className = 'thread-popover';
     pop.style.left = `${Math.min(cx + 6, window.innerWidth - 340)}px`;
     pop.style.top = `${Math.min(cy + 6, window.innerHeight - 240)}px`;
-    const snippet =
-      t.anchor.kind === 'orphan'
-        ? t.anchor.original.snippet.text
-        : (t.anchor as ElementAnchor).snippet.text;
+    const snippet = threadSnippet(t.anchor);
     const status = t.anchor.kind === 'orphan' ? 'orphan' : t.status;
     pop.innerHTML = `
       <header>

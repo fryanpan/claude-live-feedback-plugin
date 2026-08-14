@@ -31,9 +31,11 @@ export function resolveElement(anchor: ElementAnchor, env: ElementResolveEnv): E
   return Element.resolve(anchor, env);
 }
 
-/** Convenience: classify an anchor as orphan eligible. */
+/** Convenience: classify an anchor as orphan eligible. A subject anchor
+ *  resolves to the document itself, so there is nothing to resolve and
+ *  nothing that can break. */
 export function isResolvable(anchor: Anchor): boolean {
-  return anchor.kind !== 'orphan';
+  return anchor.kind !== 'orphan' && anchor.kind !== 'subject';
 }
 
 export const SCORE_THRESHOLD = 40;

@@ -66,6 +66,10 @@ export interface HubTask {
    *  `bodyTruncated` — with the full text always in the body doc. */
   body?: string;
   bodyTruncated?: boolean;
+  /** How many comments the task's discussion holds. Absent means none — the
+   *  server omits the key rather than projecting a zero, so a row is marked
+   *  only when there is something to read. */
+  commentCount?: number;
   createdAt: number;
   updatedAt: number;
 }
