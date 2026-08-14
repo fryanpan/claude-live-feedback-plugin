@@ -72,7 +72,7 @@ const server = new Server(
     // Must match packages/plugin/.claude-plugin/plugin.json — this is the version
     // a client sees in the initialize handshake, and it had drifted three minor
     // releases behind. Asserted in packages/mcp/test/launcher.test.ts.
-    version: '0.1.21',
+    version: '0.1.22',
   },
   {
     capabilities: {
@@ -1141,14 +1141,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'assign_task',
       description:
-        "Hand a task to someone: 'human' (it needs Bryan), 'agent' (you or another agent will do it), or a named identity. This is the hand-off gesture — use it the moment you discover a task is not yours to finish, rather than leaving it parked in your column: an unassigned blocker looks like work in flight to everyone reading the board. Status is untouched (re-assigning is not progress), and the move is recorded as task.assigned with both ends, so the direction of every hand-off is reviewable.",
+        "Hand a task to somebody: 'human' (it needs Bryan), or a named identity — a person, or the agent's own name. NOT the bare word 'agent': that names a category rather than somebody, so the board cannot say who is doing this and next_tasks?assignee=<me> matches nothing; the API refuses it. This is the hand-off gesture — use it the moment you discover a task is not yours to finish, rather than leaving it parked in your column: an unassigned blocker looks like work in flight to everyone reading the board. Status is untouched (re-assigning is not progress), and the move is recorded as task.assigned with both ends, so the direction of every hand-off is reviewable.",
       inputSchema: {
         type: 'object',
         properties: {
           taskId: { type: 'string' },
           assignee: {
             type: 'string',
-            description: "'human', 'agent', or a named identity.",
+            description:
+              "'human', a person's name, or an agent's name (yours comes from FEEDBACK_AGENT_NAME). The bare word 'agent' is refused.",
           },
         },
         required: ['taskId', 'assignee'],

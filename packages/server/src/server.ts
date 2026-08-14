@@ -62,6 +62,7 @@ import {
 import { applyImport, importBanner, importMarkerFor, parseTrackerMarkdown } from './task-import.ts';
 import {
   ASSIGNEE_REQUIRED_ERROR,
+  ASSIGNEE_REQUIRED_HANDOVER_MESSAGE,
   ASSIGNEE_REQUIRED_MESSAGE,
   resolveAssignee,
 } from './task-owner.ts';
@@ -2128,8 +2129,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         if (taskAssigneeMatch && req.method === 'POST') {
           const taskId = decodeURIComponent(taskAssigneeMatch[1] ?? '');
           const body = await safeJson(req);
-          const assignee = typeof body?.assignee === 'string' ? body.assignee.trim() : '';
-          if (assignee.length === 0) return j(400, { error: 'assignee required' });
+          const assignee = resolveAssignee(body?.assignee, undefined);
+          // The create routes gate this; without the same gate here a board
+          // could be walked back to the generic owner one hand-over at a time.
+          // No author fallback: "hand it to whoever" is not a hand-over, and
+          // silently assigning to the caller would do something else than what
+          // they asked.
+          if (!assignee) {
+            return j(400, {
+              error: ASSIGNEE_REQUIRED_ERROR,
+              message: ASSIGNEE_REQUIRED_HANDOVER_MESSAGE,
+            });
+          }
           const author = authorFor(body?.author);
           if (!author) return j(400, { error: 'author required' });
           const res = taskStore.setAssignee(taskId, assignee, { actor: author });
