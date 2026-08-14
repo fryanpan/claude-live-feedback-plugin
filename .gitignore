@@ -19,3 +19,32 @@ data/
 data-staging/
 coverage/
 .vitest-cache/
+
+# Working drafts stay local until someone deliberately publishes them.
+#
+# This repo is PUBLIC, and the convention is that plans, research notes and
+# mockups get written here while the work is in flight — bound to a live
+# review doc, not committed. At the time this was added there were 17 such
+# files sitting untracked in the primary checkout, seven of them named after
+# another project's ticket ids, all of them one `git add -A` from being
+# public record forever.
+#
+# These patterns do NOT untrack anything: the plans and demos already in the
+# repo stay tracked and their changes stay visible. What they stop is the
+# accidental sweep. Publishing a new one is still available and is now a
+# deliberate act — scrub it, then `git add -f <path>`. That is exactly the
+# shape the "scrub the plan, then open a PR for it" task describes.
+docs/product/plans/*.md
+docs/research/*.md
+# Tracked demos all live in demos/dev-server/ and demos/mockup/; anything else
+# at the top level of demos/ is a one-off mockup for review, not a deliverable.
+#
+# Match everything and re-include the two real ones, rather than listing file
+# types. The first cut used `demos/*.html` + `demos/*/`, and a symlink slipped
+# through both -- `*/` matches directories, and a symlink is neither a
+# directory nor an .html file. A symlink also carries its target path as
+# content, so enumerating entry kinds is the wrong question here; the right
+# one is whether an entry is something this repo ships.
+demos/*
+!demos/dev-server/
+!demos/mockup/
