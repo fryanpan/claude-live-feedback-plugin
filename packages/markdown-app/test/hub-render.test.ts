@@ -7,8 +7,8 @@ import {
   type HubTask,
   type UptimeReport,
   boardSections,
-  decisionQueue,
   goalLabel,
+  reviewQueue,
 } from '../src/hub/hub-model.ts';
 import {
   type BoardHandlers,
@@ -16,9 +16,9 @@ import {
   discussionIsBusy,
   renderActivity,
   renderBoard,
-  renderDecisions,
   renderGoalStrip,
   renderLeadStrip,
+  renderReviewStrip,
   renderTaskDetail,
 } from '../src/hub/hub-render.ts';
 
@@ -581,18 +581,18 @@ describe('keyboard reordering', () => {
   });
 });
 
-describe('renderDecisions', () => {
+describe('renderReviewStrip', () => {
   it('shows a chip per open decision and opens it on tap', () => {
     const onOpen = vi.fn();
     const d = task({ needs: 'decision', assignee: 'human', title: 'Ship now or wait?' });
     const strip = { onOpen, onWalkthrough: vi.fn() };
-    renderDecisions(root, decisionQueue([d]), strip);
+    renderReviewStrip(root, reviewQueue([d], [], NOW), strip);
     const chip = root.querySelector('.hub-decision-chip') as HTMLElement;
     expect(chip.textContent).toContain('Ship now or wait?');
     chip.click();
     expect(onOpen).toHaveBeenCalledTimes(1);
     // Empty → the strip hides instead of rendering an empty shell.
-    renderDecisions(root, decisionQueue([]), strip);
+    renderReviewStrip(root, reviewQueue([], [], NOW), strip);
     expect(root.classList.contains('hidden')).toBe(true);
   });
 });

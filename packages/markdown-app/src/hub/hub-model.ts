@@ -446,6 +446,107 @@ export function decisionQueue(tasks: HubTask[]): DecisionQueue {
   return { rows, total: rows.length, blocking, waiting: rows.length - blocking };
 }
 
+// ── The review queue: everything waiting on a person, in one list ──────────
+
+/**
+ * One thread-shaped item, exactly as `GET /api/workspaces/:id/review-items`
+ * ships it. The server owns this half because "is this comment an agent's" is
+ * `classifyActor`'s judgement and must not be re-decided in the browser.
+ */
+export interface ReviewThreadItem {
+  kind: 'task-thread' | 'doc-thread';
+  docId: string;
+  threadId: string;
+  taskId?: string;
+  title: string;
+  ask: string;
+  askedBy: string;
+  since: number;
+}
+
+export type ReviewKind = 'decision' | 'task-thread' | 'doc-thread';
+
+export interface ReviewItem {
+  /** Stable across re-fetches. The walkthrough steps by position and the list
+   *  reorders underneath it, so identity cannot be the index. */
+  key: string;
+  kind: ReviewKind;
+  /** What this is ABOUT — the decision, the task, the doc. */
+  title: string;
+  /** The ask itself, one line. Empty for a decision whose body is the ask. */
+  ask: string;
+  /** Why it sits where it does; the item's second line. */
+  why: string;
+  since: number;
+  /** Set on a decision — the row the answer form and the blocks line need. */
+  decision?: DecisionRow;
+  /** Set on either thread kind — where the reply gets written. */
+  thread?: ReviewThreadItem;
+}
+
+export interface ReviewQueue {
+  items: ReviewItem[];
+  total: number;
+  /** How many are holding other work up right now. Decisions only: a thread
+   *  blocks nothing structurally, and counting it would inflate the one
+   *  number that is supposed to mean "act now". */
+  blocking: number;
+}
+
+/**
+ * Everything waiting on a person, banded and ordered.
+ *
+ * Bryan's question on coming back to the board is "what do I look at next",
+ * and until this existed the board could only answer it for open decisions.
+ * The other two kinds were in the store and unreachable from the surface —
+ * the failure this codebase has been bitten by before, and the one that
+ * presents as the worst possible bug because nothing is actually lost.
+ *
+ * Bands, in the order Bryan named them: decisions, then task discussions,
+ * then doc comments. Within the decision band the existing `decisionQueue`
+ * ordering is kept wholesale (enforced edges, then how much is waiting, then
+ * age) rather than re-derived — it is already tuned and already tested.
+ * Within each thread band, the LONGEST WAIT is first: ranking by recency
+ * starves the tail, which is exactly what this list exists to prevent.
+ */
+export function reviewQueue(
+  tasks: HubTask[],
+  threadItems: ReviewThreadItem[],
+  now: number,
+): ReviewQueue {
+  const decisions = decisionQueue(tasks);
+  const items: ReviewItem[] = decisions.rows.map((row) => ({
+    key: `decision:${row.task.id}`,
+    kind: 'decision' as const,
+    title: row.task.title,
+    ask: '',
+    why:
+      row.blocks.length === 0
+        ? 'Nothing is waiting on this yet'
+        : `${row.hard ? 'Hard-blocking' : 'Blocking'} ${row.blocks.length === 1 ? '1 task' : `${row.blocks.length} tasks`}`,
+    since: row.task.createdAt,
+    decision: row,
+  }));
+
+  const byAge = (a: ReviewThreadItem, b: ReviewThreadItem) =>
+    a.since - b.since || a.threadId.localeCompare(b.threadId);
+  for (const kind of ['task-thread', 'doc-thread'] as const) {
+    for (const t of threadItems.filter((i) => i.kind === kind).sort(byAge)) {
+      items.push({
+        key: `${t.kind}:${t.docId}:${t.threadId}`,
+        kind,
+        title: t.title,
+        ask: t.ask,
+        why: `${t.askedBy} asked ${timeAgo(t.since, now)} · ${kind === 'task-thread' ? 'on this task' : 'on this doc'}`,
+        since: t.since,
+        thread: t,
+      });
+    }
+  }
+
+  return { items, total: items.length, blocking: decisions.blocking };
+}
+
 // ── Status control ─────────────────────────────────────────────────────────
 
 /**

@@ -6,6 +6,7 @@ import {
   DEFAULT_DONE_WINDOW,
   type HubGoal,
   type HubTask,
+  type ReviewThreadItem,
   TASK_STATUS_ORDER,
   type UptimeReport,
   activityRows,
@@ -18,6 +19,7 @@ import {
   goalLabel,
   positionBetween,
   presenceChips,
+  reviewQueue,
   stepTarget,
   taskVisible,
   timeAgo,
@@ -468,5 +470,116 @@ describe('stepTarget (the keyboard half of reordering)', () => {
     expect(stepTarget(stepSections(), 'a', -1)).toBeNull();
     const last = boardSections(GOALS, [task({ id: 'q', goal: CHORES_ID, order: 1 })], filters);
     expect(stepTarget(last, 'q', 1)).toBeNull();
+  });
+});
+
+// ── The review queue: one list of everything waiting on a person ───────────
+
+describe('reviewQueue', () => {
+  const T0 = 1_700_000_000_000;
+  const decision = (over: Partial<HubTask> = {}) =>
+    ({
+      id: 'd-1',
+      title: 'Pick the palette',
+      status: 'todo',
+      assignee: 'human',
+      needs: 'decision',
+      goal: CHORES_ID,
+      order: 1,
+      after: [],
+      links: [],
+      transitions: [],
+      bodyDocId: 'task:d-1',
+      createdAt: T0,
+      updatedAt: T0,
+      ...over,
+    }) as HubTask;
+
+  const threadItem = (over: Partial<ReviewThreadItem> = {}): ReviewThreadItem => ({
+    kind: 'task-thread',
+    docId: 'task:tk-1',
+    threadId: 'th-1',
+    taskId: 'tk-1',
+    title: 'Ship the widget',
+    ask: 'Green or blue?',
+    askedBy: 'Helper',
+    since: T0,
+    ...over,
+  });
+
+  // The ordering Bryan asked for, and the reason the queue exists: the thing
+  // holding work up is first, and a doc comment is not allowed to outrank a
+  // decision just because it is older.
+  it('bands decisions above task threads above doc threads', () => {
+    const q = reviewQueue(
+      [decision()],
+      [
+        threadItem({ kind: 'doc-thread', threadId: 'th-doc', since: T0 - 100_000 }),
+        threadItem({ threadId: 'th-task', since: T0 - 50_000 }),
+      ],
+      T0,
+    );
+    expect(q.items.map((i) => i.kind)).toEqual(['decision', 'task-thread', 'doc-thread']);
+    expect(q.total).toBe(3);
+  });
+
+  // Within a band the longest wait wins — a queue that ranks by recency
+  // starves its own tail, which is the failure this list exists to prevent.
+  it('puts the longest wait first within a band', () => {
+    const q = reviewQueue(
+      [],
+      [
+        threadItem({ threadId: 'newer', since: T0 - 1_000 }),
+        threadItem({ threadId: 'older', since: T0 - 90_000 }),
+      ],
+      T0,
+    );
+    expect(q.items.map((i) => i.thread?.threadId)).toEqual(['older', 'newer']);
+  });
+
+  // An answered decision is gone from the board's strip today, and the same
+  // has to be true of the merged queue — otherwise the count at the top keeps
+  // promising work that is finished.
+  it('drops an answered decision and a done one', () => {
+    const q = reviewQueue(
+      [
+        decision({ id: 'd-ans', answer: { text: 'blue', by: 'Bryan', ts: T0 } }),
+        decision({ id: 'd-done', status: 'done' }),
+      ],
+      [],
+      T0,
+    );
+    expect(q.items).toEqual([]);
+    expect(q.total).toBe(0);
+  });
+
+  // Every item needs a stable identity, because the walkthrough steps by
+  // position and a re-fetch reorders the list under it. Keys that collide
+  // would step to the wrong item; keys that churn would lose the place.
+  it('gives every item a distinct, stable key', () => {
+    const q = reviewQueue(
+      [decision()],
+      [threadItem({ threadId: 'a' }), threadItem({ threadId: 'b', kind: 'doc-thread' })],
+      T0,
+    );
+    const keys = q.items.map((i) => i.key);
+    expect(new Set(keys).size).toBe(3);
+    expect(
+      reviewQueue([decision()], [threadItem({ threadId: 'a' })], T0 + 5_000).items[0].key,
+    ).toBe(keys[0]);
+  });
+
+  // The count at the top says how many are holding work up. For a decision
+  // that is its dependents; a thread blocks nothing structurally, so counting
+  // it would inflate the number that is supposed to mean "act now".
+  it('counts only decisions with dependents as blocking', () => {
+    const gate = decision({ id: 'd-gate' });
+    const waiting = {
+      ...decision({ id: 'tk-w', needs: 'action', assignee: 'agent' }),
+      after: ['d-gate'],
+    } as HubTask;
+    const q = reviewQueue([gate, waiting], [threadItem()], T0);
+    expect(q.blocking).toBe(1);
+    expect(q.total).toBe(2);
   });
 });
