@@ -1174,6 +1174,18 @@ export class TaskStore {
   }
 
   /**
+   * How many of a board's tasks are still open — the guard `deleteWorkspace`
+   * applies, exposed so a caller can check it BEFORE doing work the refusal
+   * would waste (the route tears down rooms first). `null` when there is no
+   * such board, which is a different answer from zero.
+   */
+  openTaskCount(workspaceId: string): number | null {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return null;
+    return Array.from(state.tasks.values()).filter((t) => t.status !== 'done').length;
+  }
+
+  /**
    * Remove a hub workspace and everything this store holds for it.
    *
    * Guarded by open tasks the way `Rooms.deleteWorkspace` is guarded by open
@@ -1204,7 +1216,7 @@ export class TaskStore {
 
     const taskIds = Array.from(state.tasks.keys());
     if (!opts?.force) {
-      const openTasks = Array.from(state.tasks.values()).filter((t) => t.status !== 'done').length;
+      const openTasks = this.openTaskCount(workspaceId) ?? 0;
       if (openTasks > 0) return { ok: false, error: 'has-open-tasks', openTasks };
     }
 

@@ -242,21 +242,32 @@ export class TaskProjection {
    * Cancel the snapshot timer BEFORE dropping the room: a debounced snapshot
    * that fires afterwards would try to write body text back into a task that
    * no longer exists.
+   *
+   * Returns ok:false if any room's persisted `.ydoc` survived its removal.
+   * That room would reload on the next restart, and the caller is expected
+   * to run this BEFORE deleting the board from the store — once the store
+   * entry is gone the id no longer resolves as a board, so nothing could
+   * ever come back for the orphans.
    */
-  dropWorkspace(workspaceId: string, taskIds: string[]): void {
+  dropWorkspace(workspaceId: string, taskIds: string[]): { ok: boolean } {
+    let persistFailed = false;
+    const drop = (docId: string) => {
+      // force: a task body's own discussion threads are part of what's being
+      // deleted, so open ones are not a reason to refuse here — the refusal
+      // that matters (open TASKS) is the caller's.
+      if (this.rooms.deleteDoc(docId, { force: true }).persistFailed) persistFailed = true;
+    };
     for (const taskId of taskIds) {
       const docId = taskBodyDocId(taskId);
       const timer = this.snapshotTimers.get(docId);
       if (timer) clearTimeout(timer);
       this.snapshotTimers.delete(docId);
       this.bodyWired.delete(docId);
-      // force: a task body's own discussion threads are part of what's being
-      // deleted, so open ones are not a reason to refuse here — the refusal
-      // that matters (open TASKS) already happened in the store.
-      this.rooms.deleteDoc(docId, { force: true });
+      drop(docId);
     }
     this.wired.delete(workspaceId);
-    this.rooms.deleteDoc(workspaceRoomId(workspaceId), { force: true });
+    drop(workspaceRoomId(workspaceId));
+    return { ok: !persistFailed };
   }
 
   /**
