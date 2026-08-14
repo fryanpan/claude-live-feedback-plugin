@@ -239,6 +239,13 @@ export class TaskProjection {
       goalUpdatedAt: ws.goalUpdatedAt,
       goals: ws.goals,
       docIds: ws.docIds,
+      // Who is responsible for this board. Conditional, never `undefined`:
+      // the refresh deletes projected keys that aren't in this object, so an
+      // absent lead removes the key and the surface renders the vacancy
+      // instead of a stale name. An agentId is not host-machine-describing —
+      // it already rides agent.attached on the visitor-facing SSE feed.
+      ...(ws.leadAgentId !== undefined ? { leadAgentId: ws.leadAgentId } : {}),
+      ...(ws.leadAgentSince !== undefined ? { leadAgentSince: ws.leadAgentSince } : {}),
       createdAt: ws.createdAt,
     };
     room.ydoc.transact(() => {

@@ -141,6 +141,62 @@ export function renderGoalStrip(
   container.append(body, edit);
 }
 
+// ── Lead-agent strip ───────────────────────────────────────────────────────
+
+export interface LeadStripHandlers {
+  onLeadCommit: (leadAgentId: string) => void;
+}
+
+/**
+ * Who is responsible for this board.
+ *
+ * A goal change with nobody responsible is a dead letter, so the vacancy is
+ * rendered as loudly as the assignment — "no lead agent" is a state to fix,
+ * not a blank. The picker lists every agent the board knows about (the
+ * current lead plus everyone attached), so reassigning is one tap; with
+ * nothing to pick from it degrades to the sentence alone rather than an
+ * empty dropdown that looks broken.
+ */
+export function renderLeadStrip(
+  container: HTMLElement,
+  leadAgentId: string | undefined,
+  knownAgentIds: string[],
+  handlers: LeadStripHandlers,
+): void {
+  container.replaceChildren();
+  container.classList.toggle('hub-lead-empty', !leadAgentId);
+  const label = document.createElement('span');
+  label.className = 'hub-lead-label';
+  label.textContent = leadAgentId ? 'Lead agent' : 'No lead agent — nobody owns goal changes here';
+  container.append(label);
+
+  const options = [...new Set([...(leadAgentId ? [leadAgentId] : []), ...knownAgentIds])].sort(
+    (a, b) => a.localeCompare(b),
+  );
+  if (options.length === 0) return;
+
+  const select = document.createElement('select');
+  select.className = 'hub-select hub-lead-select';
+  select.setAttribute('aria-label', 'Lead agent');
+  if (!leadAgentId) {
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = 'Assign a lead…';
+    select.append(placeholder);
+  }
+  for (const id of options) {
+    const opt = document.createElement('option');
+    opt.value = id;
+    opt.textContent = id;
+    select.append(opt);
+  }
+  select.value = leadAgentId ?? '';
+  select.addEventListener('change', () => {
+    if (select.value && select.value !== leadAgentId) handlers.onLeadCommit(select.value);
+  });
+  container.append(select);
+}
+
 // ── Board ──────────────────────────────────────────────────────────────────
 
 export interface BoardHandlers {

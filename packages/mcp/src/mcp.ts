@@ -70,7 +70,7 @@ const server = new Server(
     // Must match packages/plugin/.claude-plugin/plugin.json — this is the version
     // a client sees in the initialize handshake, and it had drifted three minor
     // releases behind. Asserted in packages/mcp/test/launcher.test.ts.
-    version: '0.1.15',
+    version: '0.1.17',
   },
   {
     capabilities: {
@@ -894,15 +894,33 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'create_workspace',
       description:
-        "Create a hub WORKSPACE — a goal + task board + linked docs, the unit Bryan reviews on the hub page (/workspaces/<id>). Distinct from a folder bind / diff review (those are doc groupings; link one to a hub workspace with attach_doc). `goal` is the north-star statement every triage decision is judged against — write it as a sentence or two of markdown, and keep it current with set_workspace_goal. Board sections come later via set_goal_list. Auto-subscribes this session to the workspace's event channel (task.*, decision.answered, triage.requested, …); pass subscribe:false to skip. Returns { workspaceId } — the id is crypto-random because URLs hang off it.",
+        "Create a hub WORKSPACE — a goal + task board + linked docs, the unit Bryan reviews on the hub page (/workspaces/<id>). Distinct from a folder bind / diff review (those are doc groupings; link one to a hub workspace with attach_doc). `goal` is the north-star statement every triage decision is judged against — write it as a sentence or two of markdown, and keep it current with set_workspace_goal. Board sections come later via set_goal_list. YOU become the workspace's LEAD AGENT — the addressee for goal-edit re-triage — unless you pass a different `leadAgentId`; hand it over later with set_workspace_lead. Auto-subscribes this session to the workspace's event channel (task.*, decision.answered, triage.requested, …); pass subscribe:false to skip. Returns { workspaceId, leadAgentId } — the id is crypto-random because URLs hang off it.",
       inputSchema: {
         type: 'object',
         properties: {
           name: { type: 'string', description: 'Short handle, e.g. "search-revamp".' },
           goal: { type: 'string', description: 'North-star goal statement (markdown).' },
+          leadAgentId: {
+            type: 'string',
+            description:
+              "The agent responsible for this board. Defaults to this agent's identity — pass another only when you are setting a board up for someone else.",
+          },
           subscribe: { type: 'boolean' },
         },
         required: ['name'],
+      },
+    },
+    {
+      name: 'set_workspace_lead',
+      description:
+        "Hand the workspace's LEAD AGENT seat to another agent. The lead is who a goal edit's re-triage is addressed to — it is a standing assignment, not a session fact, so a goal change waits for the lead even while they are away rather than going to whoever happens to be connected. Use it when you are handing a board off, or to fill the seat on a board a person created.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          workspaceId: { type: 'string', description: 'Hub workspace id from create_workspace.' },
+          leadAgentId: { type: 'string', description: 'The agent id taking responsibility.' },
+        },
+        required: ['workspaceId', 'leadAgentId'],
       },
     },
     {
@@ -1975,16 +1993,23 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const {
           name: wsName,
           goal,
+          leadAgentId,
           subscribe,
         } = a as {
           name: string;
           goal?: string;
+          leadAgentId?: string;
           subscribe?: boolean;
         };
         const res = (await http('POST', '/api/workspaces', {
           name: wsName,
           ...(goal !== undefined ? { goal } : {}),
-        })) as { workspace: { id: string; name: string; goal: string } };
+          // The creating agent leads the board unless it says otherwise. A
+          // board with no lead has nobody to address a goal edit to.
+          leadAgentId: leadAgentId ?? AUTHOR.id,
+        })) as {
+          workspace: { id: string; name: string; goal: string; leadAgentId?: string };
+        };
         if (subscribe !== false && res.workspace?.id) {
           await watchWorkspace(res.workspace.id);
         }
@@ -1992,6 +2017,19 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           workspaceId: res.workspace.id,
           name: res.workspace.name,
           goal: res.workspace.goal,
+          leadAgentId: res.workspace.leadAgentId,
+        });
+      }
+      case 'set_workspace_lead': {
+        const { workspaceId, leadAgentId } = a as { workspaceId: string; leadAgentId: string };
+        const res = (await http('PUT', `/api/workspaces/${encodeURIComponent(workspaceId)}/lead`, {
+          leadAgentId,
+          author: AUTHOR,
+        })) as { changed: boolean; workspace?: { leadAgentId?: string } };
+        return ok({
+          workspaceId,
+          changed: res.changed,
+          leadAgentId: res.workspace?.leadAgentId ?? leadAgentId,
         });
       }
       case 'attach_doc': {
@@ -2090,7 +2128,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       case 'get_workspace': {
         const { workspaceId } = a as { workspaceId: string };
         const res = (await http('GET', `/api/workspaces/${encodeURIComponent(workspaceId)}`)) as {
-          workspace: { id: string; name: string; goal: string; goalUpdatedAt: number };
+          workspace: {
+            id: string;
+            name: string;
+            goal: string;
+            goalUpdatedAt: number;
+            leadAgentId?: string;
+          };
           goalSummary: unknown[];
         };
         return ok({
@@ -2098,6 +2142,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           name: res.workspace.name,
           goal: res.workspace.goal,
           goalUpdatedAt: res.workspace.goalUpdatedAt,
+          // Absent means nobody is responsible for this board — a goal edit
+          // here has no addressee until someone attaches or takes the seat.
+          leadAgentId: res.workspace.leadAgentId,
           goals: res.goalSummary,
         });
       }
@@ -2292,12 +2339,17 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           gating?: unknown;
           untriaged?: string[];
           queuedVoice?: Array<{ transcript: string; ts: number }>;
+          lead?: boolean;
         };
         if (subscribe !== false) await watchWorkspace(workspaceId);
         return ok({
           workspaceId,
           agentId: res.attachment?.agentId ?? agentId ?? AUTHOR.id,
           gating: res.gating,
+          // Are you the board's LEAD agent? True if you already held the seat
+          // or just claimed an empty one. The lead is where goal-edit
+          // re-triage is addressed, so this says whether those land on you.
+          lead: res.lead ?? false,
           untriaged: res.untriaged ?? [],
           // Voice change-requests that arrived while no agent was live
           // ("agent away — queued"): this attach is their delivery. Act on
@@ -2475,6 +2527,7 @@ interface HubEventPayload {
   kind?: string;
   movedToChores?: string[];
   agentId?: string;
+  leadAgentId?: string;
   batchId?: string;
   riskTier?: string;
   reason?: string;
@@ -2523,6 +2576,14 @@ async function emitHubChannelMessage(event: string, rawPayload: unknown): Promis
       break;
     case 'workspace.goal_updated':
       body = `[workspace.goal_updated]${by}: "${truncate(p.newGoal ?? '', 120)}"`;
+      break;
+    case 'workspace.lead_changed':
+      // Worth forwarding even though it is not a task: it changes WHO a goal
+      // edit's re-triage will be addressed to, including when that is you.
+      body =
+        p.leadAgentId === AUTHOR.id
+          ? `[workspace.lead_changed]${by}: you are now the lead agent — goal-edit re-triage is addressed to you`
+          : `[workspace.lead_changed]${by}: lead agent is now ${p.leadAgentId ?? '?'}`;
       break;
     case 'workspace.goals_changed': {
       const moved = p.movedToChores?.length ?? 0;

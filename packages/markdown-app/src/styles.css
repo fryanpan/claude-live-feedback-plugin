@@ -602,6 +602,28 @@ body.hub-body {
   color: #fff;
 }
 
+/* --- lead-agent strip: who is responsible for this board --- */
+.hub-lead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0 0;
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+.hub-lead-label {
+  font-weight: 600;
+}
+/* The vacancy is a state to fix, not a blank — a goal change with nobody
+   responsible is a dead letter, so it reads as a warning. */
+.hub-lead-empty .hub-lead-label {
+  color: var(--yellow);
+}
+.hub-lead-select {
+  max-width: 100%;
+}
+
 /* --- presence strip (§2.7) --- */
 .hub-presence {
   display: flex;

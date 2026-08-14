@@ -150,6 +150,21 @@ export interface HubWorkspace {
   /** Docs/reviews linked via attachDoc. Links, not membership — the docs'
    *  own metadata is untouched. */
   docIds: string[];
+  /**
+   * The agent RESPONSIBLE for this board — the addressee for anything that
+   * needs one, a goal edit's re-triage first of all. Set at creation (the
+   * creating agent), claimed by the first agent to attach when the seat is
+   * empty, and reassignable via `setLeadAgent`.
+   *
+   * Optional because the absence has to be REPRESENTABLE: a board created by
+   * a person, or hydrated from before this field existed, genuinely has
+   * nobody responsible, and the surfaces say so. Inventing a lead from
+   * whoever happens to be connected is the same lie as an inferred pending
+   * state — it promises an addressee that was never asked.
+   */
+  leadAgentId?: string;
+  /** When the current lead took the seat. */
+  leadAgentSince?: number;
   createdAt: number;
 }
 
@@ -550,6 +565,11 @@ export type AttachAgentResult =
        *  one payload a fresh attachment is guaranteed to read — and drained:
        *  a second attach gets an empty list. */
       queuedVoice: QueuedVoiceRequest[];
+      /** Is THIS attachment the workspace's lead agent — either because it
+       *  already held the seat, or because it just claimed an empty one? The
+       *  lead is the addressee for goal-edit re-triage, so a fresh context
+       *  needs to know which it is without a second call. */
+      lead: boolean;
     }
   | { ok: false; error: 'workspace-not-found' };
 
@@ -737,6 +757,21 @@ export interface WorkspaceRetriagedEvent {
   ts: number;
 }
 
+/**
+ * The board's responsible agent changed — claimed on a first attach into an
+ * empty seat, or reassigned outright. `oldLeadAgentId` is absent for a claim,
+ * which is what distinguishes "a leaderless board found one" from "the lead
+ * was handed over" in the activity view.
+ */
+export interface WorkspaceLeadChangedEvent {
+  type: 'workspace.lead_changed';
+  workspaceId: string;
+  oldLeadAgentId?: string;
+  leadAgentId: string;
+  actor: TaskActor;
+  ts: number;
+}
+
 export interface WorkspaceGoalsChangedEvent {
   type: 'workspace.goals_changed';
   workspaceId: string;
@@ -811,6 +846,7 @@ export type TaskStoreEvent =
   | DecisionInfoRequestedEvent
   | WorkspaceGoalUpdatedEvent
   | WorkspaceRetriagedEvent
+  | WorkspaceLeadChangedEvent
   | WorkspaceGoalsChangedEvent
   | AgentAttachedEvent
   | AgentDetachedEvent
@@ -846,6 +882,15 @@ export type SetWorkspaceGoalResult =
        *  the re-triage honestly does not happen — placements stay as they
        *  were (§3.4). */
       retriage: { requested: boolean; taskIds: string[]; batchId?: string };
+    }
+  | { ok: false; error: 'workspace-not-found' };
+
+export type SetLeadAgentResult =
+  | {
+      ok: true;
+      workspace: HubWorkspace;
+      /** False when the named agent already held the seat. */
+      changed: boolean;
     }
   | { ok: false; error: 'workspace-not-found' };
 
@@ -1033,8 +1078,9 @@ export class TaskStore {
 
   // ── Workspaces ───────────────────────────────────────────────────────────
 
-  createWorkspace(name: string, goal?: string): HubWorkspace {
+  createWorkspace(name: string, goal?: string, opts?: { leadAgentId?: string }): HubWorkspace {
     const now = Date.now();
+    const lead = opts?.leadAgentId?.trim();
     const workspace: HubWorkspace = {
       id: cryptoId('w'),
       name,
@@ -1042,6 +1088,9 @@ export class TaskStore {
       goalUpdatedAt: now,
       goals: [],
       docIds: [],
+      // The creating agent is the lead by default. No event: nothing is
+      // subscribed to a workspace that did not exist a line ago.
+      ...(lead ? { leadAgentId: lead, leadAgentSince: now } : {}),
       createdAt: now,
     };
     this.workspaces.set(workspace.id, { workspace, tasks: new Map(), attachments: new Map() });
@@ -1126,6 +1175,50 @@ export class TaskStore {
       ts,
     });
     return { ok: true, workspace, changed: true, retriage: { requested, taskIds, batchId } };
+  }
+
+  /**
+   * Hand the board's lead-agent seat to `leadAgentId`. Reassignment is a
+   * first-class operation rather than a side effect of attaching, because
+   * "who is responsible" outlives any one session: the agent that holds it
+   * may be away, and the next goal edit still has an addressee.
+   */
+  setLeadAgent(
+    workspaceId: string,
+    leadAgentId: string,
+    opts: { actor: { id: string; name: string; kind?: string } },
+  ): SetLeadAgentResult {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return { ok: false, error: 'workspace-not-found' };
+    const workspace = state.workspace;
+    const next = leadAgentId.trim();
+    if (next === workspace.leadAgentId) return { ok: true, workspace, changed: false };
+    const actor: TaskActor = {
+      id: opts.actor.id,
+      name: opts.actor.name,
+      kind: classifyActor(opts.actor),
+    };
+    this.assignLead(state, next, actor);
+    return { ok: true, workspace, changed: true };
+  }
+
+  /** The seat change itself, shared by `setLeadAgent` and the attach-time
+   *  claim so both persist and announce it identically. */
+  private assignLead(state: WorkspaceState, leadAgentId: string, actor: TaskActor): void {
+    const workspace = state.workspace;
+    const oldLeadAgentId = workspace.leadAgentId;
+    const ts = Date.now();
+    workspace.leadAgentId = leadAgentId;
+    workspace.leadAgentSince = ts;
+    this.scheduleSave(workspace.id);
+    this.emit({
+      type: 'workspace.lead_changed',
+      workspaceId: workspace.id,
+      ...(oldLeadAgentId !== undefined ? { oldLeadAgentId } : {}),
+      leadAgentId,
+      actor,
+      ts,
+    });
   }
 
   /** Link an existing doc or review to a hub workspace. A link only — the
@@ -2042,12 +2135,24 @@ export class TaskStore {
       attachment: publicAttachment(attachment, now, this.attachmentThresholds),
       ts: now,
     });
+    // Claim an EMPTY seat only. A board created before this field existed —
+    // or by a person — would otherwise stay a dead letter forever, but an
+    // occupied seat is a standing decision and a second agent attaching is
+    // not a reassignment.
+    if (state.workspace.leadAgentId === undefined) {
+      this.assignLead(state, opts.agentId, {
+        id: opts.agentId,
+        name: opts.agentId,
+        kind: 'agent',
+      });
+    }
     return {
       ok: true,
       attachment,
       gating: this.gatingSummary(workspaceId),
       untriaged: this.listUntriaged(workspaceId).map((t) => t.id),
       queuedVoice: this.drainVoiceQueue(workspaceId),
+      lead: state.workspace.leadAgentId === opts.agentId,
     };
   }
 
