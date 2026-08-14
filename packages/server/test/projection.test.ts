@@ -172,7 +172,7 @@ describe('ydoc projection + workspace room', () => {
   }
 
   async function makeTask(wsId: string, opts: Record<string, unknown>): Promise<string> {
-    const r = await post(`/api/workspaces/${wsId}/tasks`, opts);
+    const r = await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, ...opts });
     expect(r.status).toBe(200);
     const body = (await r.json()) as { task: { id: string } };
     return body.task.id;

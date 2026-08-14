@@ -100,6 +100,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
   async function seedTask(workspaceId: string, opts: Record<string, unknown> = {}): Promise<Task> {
     const { task } = await jj<{ task: Task }>(
       await post(`/api/workspaces/${workspaceId}/tasks`, {
+        author: AGENT,
         title: 'tune the ranking',
         goal: 'g1',
         ...opts,
@@ -356,7 +357,10 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
         }),
       );
       const { task } = await jj<{ task: Task }>(
-        await post(`/api/workspaces/${wsId}/tasks`, { title: 'untriaged capture' }),
+        await post(`/api/workspaces/${wsId}/tasks`, {
+          assignee: 'human',
+          title: 'untriaged capture',
+        }),
       );
       // Positive control: the marker IS set before placement.
       expect(task.triagePendingTs).toBeGreaterThan(0);
@@ -425,8 +429,10 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
   describe('POST /api/tasks/:id/assignee', () => {
     it('forwards the assignee + author, emits task.assigned, and the projection follows', async () => {
       const wsId = await seedWorkspace();
-      const task = await seedTask(wsId); // defaults to 'agent'
-      expect(task.assignee).toBe('agent');
+      // Created BY the agent, so it starts owned by the agent — the route
+      // below is what hands it to a person.
+      const task = await seedTask(wsId);
+      expect(task.assignee).toBe(AGENT.name);
       const events: TaskStoreEvent[] = [];
       const off = handle.tasks.onEvent((e) => events.push(e));
       try {
@@ -442,7 +448,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
         expect(assigned.length).toBe(1);
         const ev = assigned[0] as Extract<TaskStoreEvent, { type: 'task.assigned' }>;
         expect(ev.taskId).toBe(task.id);
-        expect(ev.from).toBe('agent');
+        expect(ev.from).toBe(AGENT.name);
         expect(ev.to).toBe('human');
         expect(ev.actor).toEqual({ id: PERSON.id, name: PERSON.name, kind: 'person' });
 
@@ -578,7 +584,10 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
         }),
       );
       const res = await jj<{ task: Task }>(
-        await post(`/api/docs/${docId}/threads/${threadId}/promote`, { workspaceId: wsId }),
+        await post(`/api/docs/${docId}/threads/${threadId}/promote`, {
+          workspaceId: wsId,
+          author: AGENT,
+        }),
       );
       expect(res.task.origin).toEqual({ kind: 'thread', docId, threadId });
       expect(res.task.quote).toBe('This ranking clause reads backwards — flip the priority order.');
@@ -628,7 +637,10 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       );
       const a = await seedThread();
       const untriaged = await jj<{ task: Task }>(
-        await post(`/api/docs/${a.docId}/threads/${a.threadId}/promote`, { workspaceId: wsId }),
+        await post(`/api/docs/${a.docId}/threads/${a.threadId}/promote`, {
+          workspaceId: wsId,
+          author: AGENT,
+        }),
       );
       expect(untriaged.task.goal).toBe('chores');
       expect(untriaged.task.triagePendingTs).toBeGreaterThan(0);
@@ -638,6 +650,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
         await post(`/api/docs/${b.docId}/threads/${b.threadId}/promote`, {
           workspaceId: wsId,
           goal: 'g1',
+          author: AGENT,
         }),
       );
       expect(placed.task.triagePendingTs).toBeUndefined();
@@ -647,11 +660,20 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       const wsId = await seedWorkspace();
       const { docId, threadId } = await seedThread();
       expect(
-        (await post(`/api/docs/${docId}/threads/th-missing/promote`, { workspaceId: wsId })).status,
+        (
+          await post(`/api/docs/${docId}/threads/th-missing/promote`, {
+            workspaceId: wsId,
+            author: AGENT,
+          })
+        ).status,
       ).toBe(404);
       expect(
-        (await post(`/api/docs/doc-missing/threads/${threadId}/promote`, { workspaceId: wsId }))
-          .status,
+        (
+          await post(`/api/docs/doc-missing/threads/${threadId}/promote`, {
+            workspaceId: wsId,
+            author: AGENT,
+          })
+        ).status,
       ).toBe(404);
       expect(
         (await post(`/api/docs/${docId}/threads/${threadId}/promote`, { workspaceId: 'w-missing' }))

@@ -198,7 +198,10 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
 
     expect((await post(`/api/workspaces/${hubId}/docs`, { docId: ATTACHED })).status).toBe(200);
 
-    const t = await post(`/api/workspaces/${hubId}/tasks`, { title: 'Wire the store' });
+    const t = await post(`/api/workspaces/${hubId}/tasks`, {
+      author: PERSON,
+      title: 'Wire the store',
+    });
     expect(t.status).toBe(200);
     taskId = ((await t.json()) as { task: { id: string } }).task.id;
 
@@ -486,7 +489,10 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
         ],
         [
           `/api/workspaces/${hubId}/tasks`,
-          { method: 'POST', body: JSON.stringify({ title: 'Injected task' }) },
+          {
+            method: 'POST',
+            body: JSON.stringify({ title: 'Injected task', assignee: 'human' }),
+          },
         ],
         [
           `/api/workspaces/${hubId}/docs`,

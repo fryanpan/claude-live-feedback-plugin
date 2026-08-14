@@ -71,7 +71,7 @@ describe('task discussion', () => {
   async function makeTaskIn(title: string): Promise<{ taskId: string; workspaceId: string }> {
     const w = await post('/api/workspaces', { name: 'search-revamp', goal: 'Ship it.' });
     const { workspace } = (await w.json()) as { workspace: { id: string } };
-    const r = await post(`/api/workspaces/${workspace.id}/tasks`, { title });
+    const r = await post(`/api/workspaces/${workspace.id}/tasks`, { author: PERSON, title });
     expect(r.status).toBe(200);
     const { task } = (await r.json()) as { task: { id: string } };
     return { taskId: task.id, workspaceId: workspace.id };

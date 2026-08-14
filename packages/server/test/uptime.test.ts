@@ -189,7 +189,7 @@ describe('GET /api/workspaces/:id/events — uptime rendered into the activity p
     const taskRes = await fetch(`${base}/api/workspaces/${workspace.id}/tasks`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ title: 'Watch the gauges' }),
+      body: JSON.stringify({ title: 'Watch the gauges', assignee: 'human' }),
     });
     expect(taskRes.ok).toBe(true);
 
