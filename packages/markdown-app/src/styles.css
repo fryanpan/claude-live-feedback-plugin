@@ -1146,10 +1146,15 @@ body.hub-body {
   border-radius: 4px;
   opacity: 1;
 }
-/* Who has it, at the far right. Borderless at rest for the same reason the
-   status control is (see below): a box on every row turns the last column
-   into a grid of outlines. */
+/* Who has it, at the far right — a picker over everyone it could go to.
+   Borderless at rest for the same reason the status control is (see below):
+   a box on every row turns the last column into a grid of outlines. The
+   native caret is suppressed because the column is the tightest on the row
+   and the arrow costs ~16px of name; the pill shape carries "this is a
+   control", and hover/focus draw the border back. */
 .hub-row-assignee {
+  appearance: none;
+  -webkit-appearance: none;
   max-width: 96px;
   min-height: 30px;
   padding: 2px 8px;
@@ -1163,6 +1168,25 @@ body.hub-body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* The three answers a reader acts on differently, told apart by colour as
+   well as by text — the name is the first thing a narrow row truncates, so
+   "a person has this" cannot depend on reading it. */
+.hub-row-assignee.hub-owner-human {
+  color: var(--accent);
+  background-color: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.hub-row-assignee.hub-owner-agent {
+  color: var(--fg-muted);
+  background-color: var(--bg-subtle, #fafafa);
+}
+/* Nobody owns it. Dashed rather than coloured-in: it is a hole in the board,
+   and it should read as unfinished rather than as a fourth kind of owner. */
+.hub-row-assignee.hub-owner-none {
+  color: var(--fg-muted);
+  border-style: dashed;
+  border-color: var(--border);
+  font-style: italic;
 }
 .hub-row-assignee:hover {
   background-color: var(--bg-hover);
@@ -1470,10 +1494,13 @@ body.hub-body {
   margin: 0;
   overflow-wrap: anywhere;
 }
-/* The assignee row is a control, not a label — a hand-off is one tap. Sized
-   for a thumb (design-mobile.md's 44px target) without looking like a button
-   in a list of facts. */
+/* The assignee row is a control, not a label — a hand-off is a pick from
+   everyone it could go to. Sized for a thumb (design-mobile.md's 44px
+   target) without looking like a button in a list of facts. Unlike the board
+   row's pill this one keeps its caret: the panel has the room, and it is the
+   surface where "I can change this" should be obvious. */
 .hub-assignee-btn {
+  max-width: 100%;
   min-height: 44px;
   margin: -10px 0;
   padding: 0 8px;
@@ -1742,8 +1769,12 @@ a.hub-link-chip:hover {
   .hub-task-badges {
     max-width: 30%;
   }
+  /* A select CLIPS where a button ellipsised (see the status width note
+     below), so the mobile pill buys its width back from the caret this
+     control no longer draws. A name longer than this still truncates —
+     the colour states above are what keep the row readable when it does. */
   .hub-row-assignee {
-    max-width: 64px;
+    max-width: 84px;
     padding: 2px 6px;
   }
   /* "In progress" is what sets this width, here as on desktop — a select
