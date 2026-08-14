@@ -2775,7 +2775,9 @@ body.composer-open #editor .ProseMirror ::selection {
   background: #1b1f23;
   color: #fff;
   padding: 8px 10px 8px 16px;
-  border-radius: 99px;
+  /* Not a pill: the copy wraps at narrow widths, and a 99px radius on a
+     three-line box reads as a lozenge. */
+  border-radius: 14px;
   font-size: 14px;
   z-index: 1201;
   box-shadow: var(--shadow-lg);

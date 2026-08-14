@@ -19,6 +19,7 @@
     "build:mcp": "bun run packages/mcp/scripts/build.ts",
     "build:all": "bun run build:widget && bun run build:markdown-app && bun run build:mcp",
     "publish:mcp": "cd packages/mcp && npm publish",
+    "check:build-id": "bun run scripts/check-build-id.ts",
     "check:widget-size": "bun run scripts/check-widget-size.ts",
     "check:plugin-version": "bun run scripts/check-plugin-version.ts",
     "check:scrub-gate": "python3 scripts/scrub-selftest.py",
