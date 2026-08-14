@@ -72,7 +72,7 @@ const server = new Server(
     // Must match packages/plugin/.claude-plugin/plugin.json — this is the version
     // a client sees in the initialize handshake, and it had drifted three minor
     // releases behind. Asserted in packages/mcp/test/launcher.test.ts.
-    version: '0.1.23',
+    version: '0.1.24',
   },
   {
     capabilities: {
@@ -1153,6 +1153,22 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
         },
         required: ['taskId', 'assignee'],
+      },
+    },
+    {
+      name: 'update_task_body',
+      description:
+        "Replace a task's description after it was created — the fix for a task filed thin, or one whose acceptance criteria turned out to be wrong. Whole-body replace, so send the full markdown you want the task to have; there is no partial edit. Written through the task's live body doc as a block-level diff, which means comment threads anchored to paragraphs you did not change keep their anchors, and anyone reading the task on the board watches it update. Recorded as task.body_edited, attributed to you. Keep the shape a task body owes its next reader — a compact user story plus falsifiable done-when criteria — because rewriting is also the moment to add the ones that were missing. Refuses an empty body: blanking a description is not an edit, and if the task should not exist, say so on it instead.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          taskId: { type: 'string' },
+          markdown: {
+            type: 'string',
+            description: 'The FULL new description. Replaces what is there.',
+          },
+        },
+        required: ['taskId', 'markdown'],
       },
     },
     {
@@ -2300,6 +2316,14 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           author: AUTHOR,
         })) as { task: TaskPayload; changed: boolean };
         return ok({ taskId, assignee: res.task.assignee, changed: res.changed });
+      }
+      case 'update_task_body': {
+        const { taskId, markdown } = a as { taskId: string; markdown: string };
+        const res = (await http('POST', `/api/tasks/${encodeURIComponent(taskId)}/body`, {
+          markdown,
+          author: AUTHOR,
+        })) as { task: TaskPayload };
+        return ok({ taskId, title: res.task?.title, body: res.task?.body });
       }
       case 'set_task_goal': {
         const { taskId, goal, position, riskTier, batchId } = a as {

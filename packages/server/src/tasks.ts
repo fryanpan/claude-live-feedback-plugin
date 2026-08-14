@@ -685,6 +685,25 @@ export interface TaskAssignedEvent {
   ts: number;
 }
 
+/**
+ * A description rewritten after creation. Not in §3.6's table for the same
+ * reason `task.gate_refused` isn't: the table predates the body being
+ * writable at all, and a mutation that emits nothing is invisible to every
+ * subscriber and to the audit log.
+ *
+ * Deliberately NOT emitted by `updateBodySnapshot`, which fires on every
+ * keystroke's debounce as somebody types in the body room — that is content
+ * activity, and the doc room already announces it. This row is for the
+ * discrete, attributable act of replacing a description wholesale.
+ */
+export interface TaskBodyEditedEvent {
+  type: 'task.body_edited';
+  workspaceId: string;
+  taskId: string;
+  actor: TaskActor;
+  ts: number;
+}
+
 export interface TaskRegroupedEvent {
   type: 'task.regrouped';
   workspaceId: string;
@@ -858,6 +877,7 @@ export type TaskStoreEvent =
   | TaskTransitionedEvent
   | TaskGateRefusedEvent
   | TaskAssignedEvent
+  | TaskBodyEditedEvent
   | TaskRegroupedEvent
   | DecisionAnsweredEvent
   | DecisionInfoRequestedEvent
@@ -1921,6 +1941,33 @@ export class TaskStore {
     task.updatedAt = Date.now();
     this.scheduleSave(task.workspaceId);
     return { ok: true, task, changed: true };
+  }
+
+  /**
+   * Record that somebody replaced a task's description. The text itself
+   * lives in the `task:<id>` doc room and reaches this store as a snapshot,
+   * so this does not take the markdown — it exists so the rewrite has an
+   * attributed row in the audit log, which is the half `set_doc_content` on
+   * the body room could never provide (a doc edit knows nothing about
+   * tasks).
+   */
+  noteBodyEdited(
+    taskId: string,
+    opts: { actor: { id: string; name: string; kind?: string } },
+  ): boolean {
+    const task = this.getTask(taskId);
+    if (!task) return false;
+    const ts = Date.now();
+    task.updatedAt = ts;
+    this.scheduleSave(task.workspaceId);
+    this.emit({
+      type: 'task.body_edited',
+      workspaceId: task.workspaceId,
+      taskId: task.id,
+      actor: { id: opts.actor.id, name: opts.actor.name, kind: classifyActor(opts.actor) },
+      ts,
+    });
+    return true;
   }
 
   /**

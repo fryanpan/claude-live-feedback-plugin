@@ -575,6 +575,13 @@ export function describeEvent(ev: ActivityEvent, titleOf: (taskId: string) => st
       return `${actorName(ev)} assigned ${title()}: ${String(ev.from)} → ${String(ev.to)}`;
     case 'task.regrouped':
       return `${actorName(ev)} regrouped ${title()}: ${String(ev.fromGoal)} → ${String(ev.toGoal)}`;
+    case 'task.body_edited':
+      // Typing in a task body is deliberately NOT activity (the snapshot
+      // fires no event at all). This row is the other thing: a wholesale
+      // rewrite through the body route, which is how a thin task gets its
+      // acceptance criteria — worth a line, because the reader who filed it
+      // is looking at different words than the ones they wrote.
+      return `${actorName(ev)} rewrote the description of ${title()}`;
     case 'task.gate_refused':
       return `the gate refused ${actorName(ev)} on ${title()}: ${String(ev.riskTier)}-tier, → ${String(ev.to)}`;
     case 'decision.answered': {
