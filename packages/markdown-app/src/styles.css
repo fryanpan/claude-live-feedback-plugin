@@ -1151,6 +1151,35 @@ a.hub-link-chip:hover {
   border-radius: var(--radius);
   margin-bottom: 8px;
 }
+/* The description, read in place. Prose measure and font, because this is
+   the one part of the panel that is writing rather than metadata. */
+.hub-detail-body {
+  font-family: var(--prose);
+  line-height: 1.55;
+  margin: 12px 0;
+  overflow-wrap: anywhere;
+}
+.hub-detail-body > :first-child {
+  margin-top: 0;
+}
+.hub-detail-body > :last-child {
+  margin-bottom: 0;
+}
+.hub-detail-body ul {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+.hub-detail-body-empty,
+.hub-detail-body-more {
+  margin: 12px 0;
+  color: var(--fg-muted);
+  font-size: 13px;
+  font-style: italic;
+}
+.hub-detail-body-link {
+  margin: 4px 0 0;
+  font-size: 13px;
+}
 .hub-detail-subhead {
   font-size: 13px;
   color: var(--fg-muted);

@@ -444,6 +444,52 @@ describe('renderTaskDetail', () => {
     expect(a.getAttribute('href')).toBe(`/review/${encodeURIComponent(t.bodyDocId)}`);
   });
 
+  // The description was stored on every task and the panel rendered only a
+  // link to another page — so "what is this task for" cost a navigation, and
+  // the board read as a list of bare titles. Same shape as the resolved-thread
+  // report: the store had it, no surface could show it.
+  it('renders the description on the task itself, as markdown', () => {
+    const t = task({
+      body: 'Agent can **read** the description here so that it can pick a task up cold.',
+    });
+    renderTaskDetail(root, t, detailHandlers());
+    const desc = root.querySelector('.hub-detail-body');
+    expect(desc?.textContent).toContain('pick a task up cold');
+    // Rendered, not dumped: the marks became elements rather than asterisks.
+    expect(desc?.querySelector('strong')?.textContent).toBe('read');
+    expect(desc?.textContent).not.toContain('**');
+  });
+
+  it('escapes markup in a description rather than executing it', () => {
+    renderTaskDetail(root, task({ body: '<img src=x onerror=alert(1)>' }), detailHandlers());
+    expect(root.querySelector('.hub-detail-body img')).toBeNull();
+    expect(root.querySelector('.hub-detail-body')?.textContent).toContain('<img');
+  });
+
+  it('says a task has no description rather than showing nothing', () => {
+    // Positive control: with a body there is no empty note, so its presence
+    // below means the branch ran rather than "this test renders nothing".
+    renderTaskDetail(root, task({ body: 'Something specific.' }), detailHandlers());
+    expect(root.querySelector('.hub-detail-body-empty')).toBeNull();
+
+    renderTaskDetail(root, task(), detailHandlers());
+    expect(root.querySelector('.hub-detail-body-empty')).toBeTruthy();
+    // The link out stays either way — the doc is where you edit and comment.
+    expect(root.querySelector('.hub-detail-body-link a')).toBeTruthy();
+  });
+
+  it('says so when the projected description is only the head of a longer one', () => {
+    renderTaskDetail(root, task({ body: 'The first part.' }), detailHandlers());
+    expect(root.querySelector('.hub-detail-body-more')).toBeNull();
+
+    renderTaskDetail(
+      root,
+      task({ body: 'The first part.', bodyTruncated: true }),
+      detailHandlers(),
+    );
+    expect(root.querySelector('.hub-detail-body-more')).toBeTruthy();
+  });
+
   it('the assignee row hands the task the OTHER way — a one-tap hand-off', () => {
     const onAssign = vi.fn();
     const t = task({ assignee: 'agent' });

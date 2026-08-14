@@ -692,11 +692,35 @@ export function renderTaskDetail(
     panel.append(form);
   }
 
+  // The description reads HERE. It used to be a link and nothing else, so
+  // "what is this task for" cost a navigation and the board read as a list of
+  // bare titles — the store had the description and no surface showed it.
+  // `renderCommentMarkdown` escapes first and only adds known-safe tags, so a
+  // body written by anyone with write access is inert markup either way.
+  const desc = document.createElement('div');
+  if (task.body?.trim()) {
+    desc.className = 'hub-detail-body';
+    desc.innerHTML = renderCommentMarkdown(task.body);
+  } else {
+    desc.className = 'hub-detail-body-empty';
+    desc.textContent = 'No description yet.';
+  }
+  panel.append(desc);
+
+  if (task.bodyTruncated) {
+    const more = document.createElement('p');
+    more.className = 'hub-detail-body-more';
+    more.textContent = 'Shortened here — the full description is in the task doc.';
+    panel.append(more);
+  }
+
   const body = document.createElement('p');
   body.className = 'hub-detail-body-link';
   const bodyLink = document.createElement('a');
   bodyLink.href = `/review/${encodeURIComponent(task.bodyDocId)}`;
-  bodyLink.textContent = 'Open the task doc (live, commentable)';
+  bodyLink.textContent = task.body?.trim()
+    ? 'Edit or comment on the task doc'
+    : 'Write the description in the task doc';
   body.append(bodyLink);
   panel.append(body);
 

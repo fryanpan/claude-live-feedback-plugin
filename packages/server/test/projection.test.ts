@@ -30,7 +30,7 @@ import * as encoding from 'lib0/encoding';
 import * as syncProtocol from 'y-protocols/sync';
 import * as Y from 'yjs';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { taskBodyDocId, workspaceRoomId } from '../src/task-projection.ts';
+import { BODY_PROJECTION_LIMIT, taskBodyDocId, workspaceRoomId } from '../src/task-projection.ts';
 import { eventsLogPath } from '../src/tasks.ts';
 
 const PERSON = { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' };
@@ -141,6 +141,8 @@ type ProjectedTask = {
   goal: string;
   order: number;
   bodyDocId: string;
+  body?: string;
+  bodyTruncated?: boolean;
   transitions: Array<{ by: Record<string, unknown>; from: string; to: string }>;
 };
 
@@ -303,6 +305,56 @@ describe('ydoc projection + workspace room', () => {
     expect(r.status).toBe(200);
     await settle(700);
     expect(handle.tasks.getTask(taskId)?.body).toContain('verify on a phone');
+  });
+
+  /**
+   * The description travels WITH the task, so the board can render it in
+   * place. It deliberately did not, and the cost was that every task read as
+   * a bare title and "what is this for" meant opening a second page — the
+   * store-has-it/surface-can't-show-it failure this codebase has hit before.
+   *
+   * The snapshot is what the board renders, so it also has to be pushed on
+   * change: `updateBodySnapshot` fires no task.* event by design (body typing
+   * is not board activity), which means nothing else would ever refresh the
+   * projection and the board would show the description as of creation
+   * forever.
+   */
+  it('carries the description into the board projection, and keeps it current', async () => {
+    const wsId = await makeWorkspace('body-on-the-board');
+    const taskId = await makeTask(wsId, {
+      title: 'Write the rollout note',
+      body: 'Agent can read the description on the task so that it can pick it up cold.\n',
+    });
+    const room = handle.rooms.get(workspaceRoomId(wsId));
+    if (!room) throw new Error('ws room missing');
+    const projected = room.ydoc.getMap('tasks').get(taskId) as ProjectedTask;
+    expect(projected.body).toContain('pick it up cold');
+    expect(projected.bodyTruncated).toBeUndefined();
+
+    const r = await post(`/api/docs/${taskBodyDocId(taskId)}/content`, {
+      markdown: 'Agent can read the revised description so that it stays current.\n',
+    });
+    expect(r.status).toBe(200);
+    await settle(700);
+    const after = room.ydoc.getMap('tasks').get(taskId) as ProjectedTask;
+    expect(after.body).toContain('stays current');
+  });
+
+  it('caps a runaway description and says it capped it', async () => {
+    const wsId = await makeWorkspace('body-cap');
+    // A body room is a live doc anyone can paste a plan into, and the ws room
+    // syncs to every board viewer on every debounced snapshot.
+    const long = `${'word '.repeat(1_200)}TAIL`;
+    const taskId = await makeTask(wsId, { title: 'Pasted a whole plan in here', body: long });
+    const room = handle.rooms.get(workspaceRoomId(wsId));
+    if (!room) throw new Error('ws room missing');
+    const projected = room.ydoc.getMap('tasks').get(taskId) as ProjectedTask;
+    expect(projected.bodyTruncated).toBe(true);
+    expect(projected.body?.length).toBe(BODY_PROJECTION_LIMIT);
+    expect(projected.body).not.toContain('TAIL');
+    // The whole thing is still THERE — capping the projection must not cap
+    // the task. The doc link is what reaches the rest.
+    expect(handle.tasks.getTask(taskId)?.body).toContain('TAIL');
   });
 
   it('a body-anchored thread survives a projection refresh and a server restart', async () => {
