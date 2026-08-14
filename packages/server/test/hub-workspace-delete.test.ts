@@ -240,20 +240,21 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
     expect(again.status).toBe(200);
   });
 
-  it('keeps the board when a room file survives, so the delete can be retried', async () => {
-    // Rooms are derived state, so they come down first and the store entry
-    // is the commit point. If a room's `.ydoc` can't be removed, deleting
-    // the board anyway would strand an orphan that reloads on the next
-    // restart behind an id that no longer resolves as a board — nothing
-    // could ever come back for it.
+  it('keeps the board when a room file cannot be moved, and survives a restart', async () => {
+    // If a room's `.ydoc` can't be got rid of, deleting the board anyway
+    // would strand an orphan that reloads on every restart behind an id that
+    // no longer resolves as a board — nothing could ever come back for it.
     const { wsId, open } = await seed();
     await commentOnBody(open.id, 'still open');
     expect(await openThreadCount(open.id)).toBe(1);
     const boardYdoc = join(dataDir as string, `${workspaceRoomId(wsId)}.ydoc`);
     expect(await awaitFile(boardYdoc)).toBe(true);
-    // Same root-proof stand-in for an unlink failure as above.
-    rmSync(boardYdoc);
-    mkdirSync(boardYdoc);
+    // Stand in for a filesystem that won't let the file move, without
+    // depending on the test user's privileges: renaming onto a non-empty
+    // directory fails, and root can't make it succeed either — a chmod
+    // fixture would silently pass as root.
+    mkdirSync(`${boardYdoc}.deleting`);
+    writeFileSync(join(`${boardYdoc}.deleting`, 'occupied'), 'in the way\n');
 
     const res = await del(`/api/workspaces/${wsId}?force=true`);
     expect(res.status).toBe(500);
@@ -271,9 +272,18 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
     expect(handle?.tasks.getTask(open.id)).toBeDefined();
     expect(existsSync(tasksSidecarPath(dataDir as string, wsId))).toBe(true);
     // And nothing irreversible happened on the way to failing. The comment
-    // exists ONLY in the body room, so tearing that room down before the
-    // delete could commit would destroy it — a failed operation that
-    // silently costs the reviewer their thread.
+    // exists ONLY in the body room, so a teardown that ran before the delete
+    // could commit would destroy it — a failed operation that silently costs
+    // the reviewer their thread.
+    expect(await openThreadCount(open.id)).toBe(1);
+
+    // The strong form of the same claim: the failure cost nothing even to a
+    // restart landing right after it. This is what makes the pre-commit half
+    // a rename and not an unlink — a live room's state reaches disk again
+    // only on its next write, which may never come.
+    await handle?.stop();
+    handle = await start(dataDir as string);
+    expect(await listWorkspaceIds()).toContain(wsId);
     expect(await openThreadCount(open.id)).toBe(1);
   });
 

@@ -337,6 +337,53 @@ export class Rooms {
    * not leave an orphan `.ydoc` behind — one that reloads on every restart,
    * under an id whose owner may be gone — has to ask about the FILE.
    */
+  /**
+   * Move a docId's persisted `.ydoc` aside, reversibly, so a multi-step
+   * delete can prove the file is removable before it does anything it can't
+   * take back.
+   *
+   * `rename` is the whole point: unlinking is not reversible from a live
+   * room (its state re-reaches disk only on the next write, and a restart in
+   * between loses it), while a staged file can be moved straight back. The
+   * staged name deliberately does not end in `.ydoc`, so `hydrateFromDisk`
+   * skips it — a leftover is inert litter rather than a room that reloads
+   * under an id whose owner is gone.
+   *
+   * Returns false only if the file is there and could not be moved.
+   */
+  stagePersisted(docId: string): boolean {
+    const path = this.pathFor(docId);
+    if (!existsSync(path)) return true;
+    try {
+      renameSync(path, `${path}.deleting`);
+      return true;
+    } catch (err) {
+      console.error(`[rooms] failed to stage ${docId} for deletion:`, err);
+      return false;
+    }
+  }
+
+  /** Put a staged `.ydoc` back — the delete didn't commit. */
+  unstagePersisted(docId: string): void {
+    const staged = `${this.pathFor(docId)}.deleting`;
+    if (!existsSync(staged)) return;
+    try {
+      renameSync(staged, this.pathFor(docId));
+    } catch (err) {
+      console.error(`[rooms] failed to restore staged ${docId}:`, err);
+    }
+  }
+
+  /** Remove a staged `.ydoc` — the delete committed. A failure here leaves
+   *  a file nothing loads, so it is litter, not an orphan room. */
+  dropStaged(docId: string): void {
+    try {
+      rmSync(`${this.pathFor(docId)}.deleting`, { force: true });
+    } catch (err) {
+      console.error(`[rooms] failed to remove staged ${docId}:`, err);
+    }
+  }
+
   purgePersisted(docId: string): boolean {
     try {
       const p = this.pathFor(docId);

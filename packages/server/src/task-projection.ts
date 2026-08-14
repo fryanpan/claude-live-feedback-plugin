@@ -238,32 +238,40 @@ export class TaskProjection {
   }
 
   /**
-   * Remove the persisted `.ydoc` of every room a workspace owns, WITHOUT
-   * touching the live rooms. Reports whether the disk is now clean.
+   * Move every room file a workspace owns out of the way, reversibly, and
+   * report whether they all moved.
    *
-   * This is the reversible half of the teardown, and it runs BEFORE the
-   * board is deleted from the store, because the two failure modes pull in
-   * opposite directions:
-   *  - orphan files must not outlive the board (once the store entry is
-   *    gone the id no longer resolves as a board, so nothing can ever come
-   *    back for them, and they reload on every restart);
-   *  - but a body room is NOT purely derived — it holds the task's
-   *    discussion threads, which live nowhere else — so a delete that goes
-   *    on to FAIL must not have destroyed one.
-   * Removing files while the rooms stay live satisfies both: on failure
-   * everything is still readable and the delete is retryable, and the live
-   * rooms re-persist on their next write.
+   * This is the pre-commit half of the teardown, and it is staged rather
+   * than deleted because the two failure modes pull in opposite directions:
+   *  - orphan `.ydoc`s must not outlive the board (once the store entry is
+   *    gone the id no longer resolves as a board, so nothing can come back
+   *    for them, and they reload on every restart);
+   *  - but a body room is NOT derived state — it holds the task's discussion
+   *    threads, which live nowhere else — so a delete that goes on to FAIL
+   *    must be able to give everything back, including after a restart that
+   *    lands in the middle.
+   * A rename satisfies both. Unlinking satisfies only the first: a live
+   * room's state re-reaches disk on its next write, which may never come.
    *
    * Ask about the FILE, not the room: `deleteDoc` logs a failed unlink and
    * still returns ok, and on a retry it answers 'not-found' without going
    * near the disk, because the first attempt took the room out of memory.
    */
-  purgeWorkspaceFiles(workspaceId: string, taskIds: string[]): { ok: boolean } {
+  stageWorkspaceFiles(workspaceId: string, taskIds: string[]): { ok: boolean } {
     let ok = true;
     for (const docId of this.workspaceRoomIds(workspaceId, taskIds)) {
-      if (!this.rooms.purgePersisted(docId)) ok = false;
+      if (!this.rooms.stagePersisted(docId)) ok = false;
     }
     return { ok };
+  }
+
+  /** Put every staged room file back — the delete didn't commit. Runs over
+   *  the whole set, including ids that never staged, because a partial
+   *  failure leaves a partial staging. */
+  unstageWorkspaceFiles(workspaceId: string, taskIds: string[]): void {
+    for (const docId of this.workspaceRoomIds(workspaceId, taskIds)) {
+      this.rooms.unstagePersisted(docId);
+    }
   }
 
   /**
@@ -290,6 +298,10 @@ export class TaskProjection {
       // deleted, so open ones are not a reason to refuse here — the refusal
       // that matters (open TASKS) already happened, before any of this.
       this.rooms.deleteDoc(docId, { force: true });
+      // deleteDoc unlinks the LIVE path, which covers anything a room
+      // rewrote between the staging and here; the staged copy is the one
+      // holding the state, and this is the point of no return for it.
+      this.rooms.dropStaged(docId);
     }
   }
 
