@@ -2372,6 +2372,21 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         if (wsDeleteMatch && req.method === 'DELETE') {
           const workspaceId = decodeURIComponent(wsDeleteMatch[1] ?? '');
           const force = url.searchParams.get('force') === 'true';
+          // Two different stores answer to the word "workspace", and this one
+          // route fronts both: `POST /api/workspaces` mints a hub board from
+          // `name` and a doc grouping from `folderPath`. `rooms.deleteWorkspace`
+          // enumerates DOC members, so a hub board — which has none — always
+          // came back not-found, and a board created for a five-minute
+          // experiment was permanent. Ask the task store first, by id.
+          if (taskStore.getWorkspace(workspaceId)) {
+            const hub = taskStore.deleteWorkspace(workspaceId, { force });
+            if (!hub.ok) return j(hub.error === 'has-open-tasks' ? 409 : 404, hub);
+            // Rooms are the projection's, not the store's. Attached docs are
+            // deliberately untouched: attachDoc is a LINK, so a doc that a
+            // deleted board merely cited keeps working at its own URL.
+            taskProjection.dropWorkspace(workspaceId, hub.taskIds);
+            return j(200, { ok: true, deletedTasks: hub.deletedTasks });
+          }
           const res = rooms.deleteWorkspace(workspaceId, { force });
           if (res.ok) {
             // The grouping was one row on a board; deleting it must take the
