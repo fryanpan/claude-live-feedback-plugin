@@ -128,6 +128,37 @@ function parseNeeds(raw: unknown): { ok: true; needs?: 'action' | 'decision' } |
 }
 
 /**
+ * `options` for the two task-create routes — the candidate answers a decision
+ * arrives with.
+ *
+ * Refused rather than partially accepted, unlike `links`: an option is not an
+ * annotation, it is a control the person deciding will TAP, and a silently
+ * dropped one is a choice they were never offered. The store re-checks the
+ * same rules (it is the gate), so this exists to turn a shape error into a 400
+ * instead of a cast that reaches the store as `undefined`.
+ */
+function parseOptions(
+  raw: unknown,
+): { ok: true; options?: Array<{ label: string; detail?: string }> } | { ok: false } {
+  if (raw === undefined) return { ok: true };
+  if (!Array.isArray(raw)) return { ok: false };
+  const options: Array<{ label: string; detail?: string }> = [];
+  for (const entry of raw) {
+    if (typeof entry !== 'object' || entry === null) return { ok: false };
+    const o = entry as { label?: unknown; detail?: unknown };
+    if (typeof o.label !== 'string' || o.label.trim().length === 0) return { ok: false };
+    if (o.detail !== undefined && typeof o.detail !== 'string') return { ok: false };
+    options.push({
+      label: o.label,
+      ...(typeof o.detail === 'string' ? { detail: o.detail } : {}),
+    });
+  }
+  return { ok: true, options };
+}
+
+const BAD_OPTIONS_ERROR = 'options must be [{label, detail?}] with a non-empty label';
+
+/**
  * `links` for the two task-create routes: every element through the SAME
  * `isValidRef` the dedicated links route runs — a malformed ref matches no
  * backlink query, so the chip the link existed for never appears, and a
@@ -1761,6 +1792,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           const needs = parseNeeds(body?.needs);
           if (!needs.ok) return j(400, { error: "needs must be 'action' | 'decision'" });
+          const options = parseOptions(body?.options);
+          if (!options.ok) return j(400, { error: BAD_OPTIONS_ERROR });
           const links = parseLinks(body?.links);
           if (!links.ok) return j(400, { error: BAD_REF_ERROR });
           const origin = parseOrigin(body?.origin);
@@ -1770,6 +1803,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             body: body?.body as string | undefined,
             assignee: body?.assignee as string | undefined,
             needs: needs.needs,
+            options: options.options,
             goal: body?.goal as string | undefined,
             order: typeof body?.order === 'number' ? Number(body.order) : undefined,
             after: Array.isArray(body?.after) ? (body.after as string[]) : undefined,
@@ -1787,10 +1821,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           });
           if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
           // Dropped refs are reported, never swallowed: the caller finds out
-          // what didn't survive without having to diff what it sent.
+          // what didn't survive without having to diff what it sent. Same
+          // reasoning for `shapeGaps` — the decision WAS created and the
+          // caller still learns which parts of the shape are missing.
           return j(200, {
             task: res.task,
             ...(links.ignored.length > 0 ? { ignoredLinks: links.ignored } : {}),
+            ...(res.shapeGaps !== undefined ? { shapeGaps: res.shapeGaps } : {}),
           });
         }
         // The single gate for status changes: attributed, evidence-stamped,
@@ -1905,8 +1942,67 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           const author = authorFor(body?.author);
           if (!author) return j(400, { error: 'author required' });
-          const res = taskStore.answerDecision(taskId, text, { actor: author });
+          // `optionId` says which candidate the words came from. The words are
+          // still the answer — an option is a shortcut to typing them, so this
+          // route deliberately does NOT look the label up and substitute it.
+          const optionId = body?.optionId;
+          if (optionId !== undefined && typeof optionId !== 'string') {
+            return j(400, { error: 'optionId must be a string' });
+          }
+          const res = taskStore.answerDecision(taskId, text, {
+            actor: author,
+            ...(optionId !== undefined ? { optionId } : {}),
+          });
           if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
+          return j(200, res);
+        }
+        // "Tell me more" — a question asked back at a decision INSTEAD of
+        // answering it. Keeps the options from being a closed set: the row
+        // stays open, stays counted, and the attached agent owes context.
+        const taskMoreInfoMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/more-info$/);
+        if (taskMoreInfoMatch && req.method === 'POST') {
+          const taskId = decodeURIComponent(taskMoreInfoMatch[1] ?? '');
+          const body = await safeJson(req);
+          const question = typeof body?.question === 'string' ? body.question.trim() : '';
+          if (question.length === 0) return j(400, { error: 'question required' });
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const res = taskStore.requestMoreInfo(taskId, question, { actor: author });
+          if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
+          return j(200, res);
+        }
+        // set_task_dependencies: edit `after` / `afterEnforce` on a task that
+        // already exists. Until this route, `after` could only be set at
+        // creation — so a decision filed after the work it gates could never
+        // be wired to it, every decision on a real board had an empty `after`,
+        // and "is this blocking anything" was underivable. Replaces the whole
+        // edge set (an edge has to be removable), and emits no store event, so
+        // the projection is refreshed by hand — the renameTask contract.
+        const taskAfterMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/after$/);
+        if (taskAfterMatch && req.method === 'POST') {
+          const taskId = decodeURIComponent(taskAfterMatch[1] ?? '');
+          const body = await safeJson(req);
+          if (!Array.isArray(body?.after)) return j(400, { error: 'after must be an array' });
+          if (body?.afterEnforce !== undefined && !Array.isArray(body.afterEnforce)) {
+            return j(400, { error: 'afterEnforce must be an array' });
+          }
+          for (const id of [...body.after, ...((body.afterEnforce as unknown[]) ?? [])]) {
+            if (typeof id !== 'string') return j(400, { error: 'task ids must be strings' });
+          }
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const res = taskStore.setDependencies(
+            taskId,
+            {
+              after: body.after as string[],
+              ...(body.afterEnforce !== undefined
+                ? { afterEnforce: body.afterEnforce as string[] }
+                : {}),
+            },
+            { actor: author },
+          );
+          if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
+          taskProjection.ensureWorkspace(res.task.workspaceId);
           return j(200, res);
         }
         // In-place task title edit (§3.9: tap the title, Enter commits).
@@ -2006,6 +2102,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                 ].join('\n');
           const promoteNeeds = parseNeeds(body?.needs);
           if (!promoteNeeds.ok) return j(400, { error: "needs must be 'action' | 'decision'" });
+          const promoteOptions = parseOptions(body?.options);
+          if (!promoteOptions.ok) return j(400, { error: BAD_OPTIONS_ERROR });
           const promoteLinks = parseLinks(body?.links);
           if (!promoteLinks.ok) return j(400, { error: BAD_REF_ERROR });
           const res = taskStore.createTask(workspaceId, {
@@ -2013,6 +2111,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             body: draftBody,
             assignee: body?.assignee as string | undefined,
             needs: promoteNeeds.needs,
+            options: promoteOptions.options,
             // Forward undefined untouched: an omitted goal is what routes the
             // task through triage (an explicit 'chores' would skip it).
             goal: body?.goal as string | undefined,
@@ -2027,6 +2126,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           return j(200, {
             task: res.task,
             ...(promoteLinks.ignored.length > 0 ? { ignoredLinks: promoteLinks.ignored } : {}),
+            ...(res.shapeGaps !== undefined ? { shapeGaps: res.shapeGaps } : {}),
           });
         }
         // --- REST: agent attachments (§4) ---

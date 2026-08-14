@@ -11,6 +11,11 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { classifyActor } from './activity.ts';
+import {
+  type DecisionShapeGap,
+  checkDecisionShape,
+  decisionShapeMessage,
+} from './decision-shape.ts';
 
 /**
  * The hub task store: server-owned state for Workspace Hub workspaces and
@@ -181,6 +186,33 @@ export interface TaskTransition {
   confirmed?: boolean;
 }
 
+/**
+ * One candidate answer on a decision.
+ *
+ * The point is not to close the set — it is that a question usually ARRIVES
+ * with candidates, the way an AskUserQuestion prompt does, and before this
+ * there was nowhere to put them. So the person deciding had to compose prose
+ * to say "the second one". `detail` is what that choice costs, which is the
+ * half that makes a list of labels decidable.
+ */
+export interface DecisionOption {
+  /** `o-<crypto-random>`, minted here — a caller-supplied label is not a
+   *  stable identity, and `answer.optionId` has to survive a relabel. */
+  id: string;
+  /** The words recorded VERBATIM as the answer if this one is picked. */
+  label: string;
+  /** What picking it costs or implies. */
+  detail?: string;
+}
+
+/** A question asked back at a decision instead of answering it. */
+export interface InfoRequest {
+  text: string;
+  /** Display name (§3.3 visitor contract — no actor ids in projected state). */
+  by: string;
+  ts: number;
+}
+
 export interface Task {
   /** `t-<crypto-random>`. */
   id: string;
@@ -194,6 +226,16 @@ export interface Task {
   assignee: string;
   /** Only meaningful when the assignee is a human. */
   needs?: 'action' | 'decision';
+  /**
+   * Candidate answers on a decision — a SHORTCUT, never a closed set. Picking
+   * one records its label as the verbatim answer (plus `answer.optionId`), and
+   * free text and `requestMoreInfo` stay first-class next to it. Only ever
+   * present when `needs === 'decision'`.
+   */
+  options?: DecisionOption[];
+  /** "Tell me more" — questions asked back at the decision, in order. These
+   *  deliberately do NOT answer it: the task stays open and stays counted. */
+  infoRequests?: InfoRequest[];
   /** Goal or subgoal id; `chores` is the catch-all. */
   goal: string;
   /** Fractional sort key — always room to insert between two tasks. */
@@ -211,8 +253,9 @@ export interface Task {
   origin?: Ref;
   /** The human's verbatim words at promotion or creation. */
   quote?: string;
-  /** Decisions keep the verbatim answer. */
-  answer?: { text: string; by: string; ts: number };
+  /** Decisions keep the verbatim answer. `optionId` records WHICH candidate
+   *  the words came from when one was tapped — the text stays the answer. */
+  answer?: { text: string; by: string; ts: number; optionId?: string };
   /** Which goal (id + its text at the time) produced this placement. */
   triagedAgainst?: { goalId: string; goal: string; ts: number };
   /**
@@ -237,6 +280,8 @@ export interface CreateTaskOpts {
   body?: string;
   assignee?: string;
   needs?: 'action' | 'decision';
+  /** Candidate answers. Decision tasks only; ids are minted here. */
+  options?: Array<{ label: string; detail?: string }>;
   goal?: string;
   order?: number;
   after?: string[];
@@ -284,10 +329,33 @@ export type TransitionResult =
     };
 
 export type CreateTaskResult =
-  | { ok: true; task: Task }
+  | {
+      ok: true;
+      task: Task;
+      /**
+       * Advisory: the parts of the decision shape this body doesn't visibly
+       * have (`stakes`, `options`, `blocked`). Only ever set for
+       * `needs: 'decision'`, and never a refusal — a gate demanding all four
+       * would make filing a quick decision a chore, and the response to a
+       * chore is to file it as an action instead.
+       */
+      shapeGaps?: DecisionShapeGap[];
+    }
   | {
       ok: false;
-      error: 'workspace-not-found' | 'unknown-goal' | 'unknown-after' | 'unknown-after-enforce';
+      error:
+        | 'workspace-not-found'
+        | 'unknown-goal'
+        | 'unknown-after'
+        | 'unknown-after-enforce'
+        // §"a decision body must be decision-shaped": the body has to ASK
+        // something. A progress report filed as a decision leaves the person
+        // who opens it with nothing to decide from.
+        | 'decision-body-required'
+        | 'options-need-decision'
+        | 'bad-option';
+      /** Refusal text shaped to land verbatim in an agent's context. */
+      message?: string;
     };
 
 /**
@@ -605,8 +673,32 @@ export interface DecisionAnsweredEvent {
   taskId: string;
   /** The VERBATIM answer text (§3.6). */
   answer: string;
+  /** Which candidate the words came from, when one was tapped. Absent for
+   *  free text — the answer is the text either way. */
+  optionId?: string;
   actor: TaskActor;
   /** The decision task's links — a ready-made propagation checklist. */
+  links: Ref[];
+  ts: number;
+}
+
+/**
+ * "Tell me more" — the third first-class response to a decision, next to
+ * picking an option and writing your own answer.
+ *
+ * Deliberately its own event rather than an answer with a flag: the decision
+ * is still OPEN afterwards, it still counts at the top of the board, and what
+ * the attached agent owes is context, not propagation. Collapsing the two
+ * would make "I can't decide from this yet" indistinguishable from a decision
+ * that has been made.
+ */
+export interface DecisionInfoRequestedEvent {
+  type: 'decision.info_requested';
+  workspaceId: string;
+  taskId: string;
+  /** The VERBATIM question. */
+  question: string;
+  actor: TaskActor;
   links: Ref[];
   ts: number;
 }
@@ -716,6 +808,7 @@ export type TaskStoreEvent =
   | TaskAssignedEvent
   | TaskRegroupedEvent
   | DecisionAnsweredEvent
+  | DecisionInfoRequestedEvent
   | WorkspaceGoalUpdatedEvent
   | WorkspaceRetriagedEvent
   | WorkspaceGoalsChangedEvent
@@ -758,7 +851,23 @@ export type SetWorkspaceGoalResult =
 
 export type AnswerDecisionResult =
   | { ok: true; task: Task }
+  | { ok: false; error: 'not-found' | 'not-a-decision' | 'unknown-option' };
+
+export type RequestMoreInfoResult =
+  | { ok: true; task: Task }
   | { ok: false; error: 'not-found' | 'not-a-decision' };
+
+export type SetDependenciesResult =
+  | {
+      ok: true;
+      task: Task;
+      /** False when the edge set is already exactly this — no write. */
+      changed: boolean;
+    }
+  | {
+      ok: false;
+      error: 'not-found' | 'unknown-after' | 'unknown-after-enforce' | 'self-dependency';
+    };
 
 export type RenameTaskResult =
   | {
@@ -1097,6 +1206,43 @@ export class TaskStore {
       if (!after.includes(dep)) return { ok: false, error: 'unknown-after-enforce' };
     }
 
+    // ── Decision shape ────────────────────────────────────────────────────
+    // Options only mean something where an answer can be recorded from them,
+    // so they belong to `needs: 'decision'` and nowhere else — accepting them
+    // on an action task would store a control nothing can operate.
+    const rawOptions = opts.options ?? [];
+    if (rawOptions.length > 0 && opts.needs !== 'decision') {
+      return { ok: false, error: 'options-need-decision' };
+    }
+    for (const o of rawOptions) {
+      if (typeof o?.label !== 'string' || o.label.trim().length === 0) {
+        return { ok: false, error: 'bad-option', message: 'every option needs a non-empty label' };
+      }
+    }
+    const options: DecisionOption[] = rawOptions.map((o) => ({
+      id: cryptoId('o'),
+      label: o.label.trim(),
+      ...(o.detail !== undefined ? { detail: o.detail } : {}),
+    }));
+
+    // The gate this whole feature rests on: a decision nobody can decide from
+    // is worse than no decision task, because it LOOKS answerable. Refuse the
+    // one thing that makes it unanswerable — no question — and report the
+    // rest. Applied in the STORE so promote_to_task is held to it too; the
+    // route is the layer that would otherwise quietly not check.
+    let shapeGaps: DecisionShapeGap[] | undefined;
+    if (opts.needs === 'decision') {
+      const check = checkDecisionShape(opts.body, options);
+      if (!check.ok) {
+        return {
+          ok: false,
+          error: 'decision-body-required',
+          message: decisionShapeMessage(check),
+        };
+      }
+      shapeGaps = check.gaps;
+    }
+
     const now = Date.now();
     const inGoal = Array.from(state.tasks.values()).filter((t) => t.goal === goal);
     const order = opts.order ?? Math.max(0, ...inGoal.map((t) => t.order)) + 1;
@@ -1107,6 +1253,7 @@ export class TaskStore {
       ...(opts.body !== undefined ? { body: opts.body } : {}),
       assignee: opts.assignee ?? 'agent',
       ...(opts.needs !== undefined ? { needs: opts.needs } : {}),
+      ...(options.length > 0 ? { options } : {}),
       goal,
       order,
       status: 'todo',
@@ -1161,7 +1308,7 @@ export class TaskStore {
         : {}),
       ts: now,
     });
-    return { ok: true, task };
+    return { ok: true, task, ...(shapeGaps !== undefined ? { shapeGaps } : {}) };
   }
 
   /**
@@ -1305,8 +1452,63 @@ export class TaskStore {
   answerDecision(
     taskId: string,
     text: string,
-    opts: { actor: { id: string; name: string; kind?: string } },
+    opts: { actor: { id: string; name: string; kind?: string }; optionId?: string },
   ): AnswerDecisionResult {
+    const task = this.getTask(taskId);
+    if (!task) return { ok: false, error: 'not-found' };
+    if (task.needs !== 'decision') return { ok: false, error: 'not-a-decision' };
+    // An optionId that resolves to nothing would record an answer whose
+    // provenance is a lie — and the UI's whole point is that tapping a
+    // candidate is the same act as writing its words.
+    if (opts.optionId !== undefined && !task.options?.some((o) => o.id === opts.optionId)) {
+      return { ok: false, error: 'unknown-option' };
+    }
+    const ts = Date.now();
+    const actor: TaskActor = {
+      id: opts.actor.id,
+      name: opts.actor.name,
+      kind: classifyActor(opts.actor),
+    };
+    // `by` is the display name — the projection ships display names, not ids
+    // (§3.3 visitor contract), and the event carries the full actor anyway.
+    // `text` stays the answer whether it was typed or tapped: an option is a
+    // shortcut to words, never a replacement for them.
+    task.answer = {
+      text,
+      by: actor.name,
+      ts,
+      ...(opts.optionId !== undefined ? { optionId: opts.optionId } : {}),
+    };
+    task.updatedAt = ts;
+    this.scheduleSave(task.workspaceId);
+    this.emit({
+      type: 'decision.answered',
+      workspaceId: task.workspaceId,
+      taskId: task.id,
+      answer: text,
+      ...(opts.optionId !== undefined ? { optionId: opts.optionId } : {}),
+      actor,
+      links: task.links,
+      ts,
+    });
+    return { ok: true, task };
+  }
+
+  /**
+   * Ask a decision for more context INSTEAD of answering it — the third
+   * first-class response next to picking an option and writing your own
+   * answer, and the one that keeps options from becoming a closed set.
+   *
+   * Nothing about the task's status or answer changes: it stays open, stays
+   * counted at the top of the board, and stays in the walkthrough. What the
+   * attached agent owes back is context, which is why this is its own event
+   * rather than an answer carrying a flag.
+   */
+  requestMoreInfo(
+    taskId: string,
+    question: string,
+    opts: { actor: { id: string; name: string; kind?: string } },
+  ): RequestMoreInfoResult {
     const task = this.getTask(taskId);
     if (!task) return { ok: false, error: 'not-found' };
     if (task.needs !== 'decision') return { ok: false, error: 'not-a-decision' };
@@ -1316,21 +1518,73 @@ export class TaskStore {
       name: opts.actor.name,
       kind: classifyActor(opts.actor),
     };
-    // `by` is the display name — the projection ships display names, not ids
-    // (§3.3 visitor contract), and the event carries the full actor anyway.
-    task.answer = { text, by: actor.name, ts };
+    task.infoRequests = [...(task.infoRequests ?? []), { text: question, by: actor.name, ts }];
     task.updatedAt = ts;
     this.scheduleSave(task.workspaceId);
     this.emit({
-      type: 'decision.answered',
+      type: 'decision.info_requested',
       workspaceId: task.workspaceId,
       taskId: task.id,
-      answer: text,
+      question,
       actor,
       links: task.links,
       ts,
     });
     return { ok: true, task };
+  }
+
+  /**
+   * Replace a task's dependency edges after it was created.
+   *
+   * This did not exist, and its absence is what made urgency underivable:
+   * "this decision is blocking work now" is the same fact as "something
+   * depends on it", `after` already records that, and `after` could only ever
+   * be set at creation — when the decision being waited on often doesn't
+   * exist yet. Every decision on the real board therefore had an empty
+   * `after`, and nothing could tell blocking from parked.
+   *
+   * Replaces rather than appends, so an edge can be REMOVED — a dependency
+   * that turned out not to exist is exactly as misleading as a missing one.
+   * No store event fires (§3.6's table has no row for it), so the route
+   * refreshes the projection by hand, the same contract as renameTask.
+   */
+  setDependencies(
+    taskId: string,
+    edges: { after: string[]; afterEnforce?: string[] },
+    _opts: { actor: { id: string; name: string; kind?: string } },
+  ): SetDependenciesResult {
+    const task = this.getTask(taskId);
+    if (!task) return { ok: false, error: 'not-found' };
+    const state = this.workspaces.get(task.workspaceId);
+    if (!state) return { ok: false, error: 'not-found' };
+
+    const after = [...new Set(edges.after)];
+    for (const dep of after) {
+      // Self first: `state.tasks.has(task.id)` is true, so a self-edge would
+      // pass the existence check and then block the task on itself forever.
+      if (dep === taskId) return { ok: false, error: 'self-dependency' };
+      // Same workspace only — a cross-workspace id resolves in `getTask` but
+      // not in this board's `tasks` map, so the gate would skip it silently.
+      if (!state.tasks.has(dep)) return { ok: false, error: 'unknown-after' };
+    }
+    const afterEnforce = [...new Set(edges.afterEnforce ?? [])];
+    for (const dep of afterEnforce) {
+      if (!after.includes(dep)) return { ok: false, error: 'unknown-after-enforce' };
+    }
+
+    const same =
+      task.after.length === after.length &&
+      task.after.every((d) => after.includes(d)) &&
+      (task.afterEnforce ?? []).length === afterEnforce.length &&
+      (task.afterEnforce ?? []).every((d) => afterEnforce.includes(d));
+    if (same) return { ok: true, task, changed: false };
+
+    task.after = after;
+    if (afterEnforce.length > 0) task.afterEnforce = afterEnforce;
+    else task.afterEnforce = undefined;
+    task.updatedAt = Date.now();
+    this.scheduleSave(task.workspaceId);
+    return { ok: true, task, changed: true };
   }
 
   /**
