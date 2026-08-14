@@ -24,13 +24,13 @@
  * register. The repo is public.
  */
 import { afterEach, describe, expect, it } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { User } from '@feedback/core';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { taskBodyDocId, workspaceRoomId } from '../src/task-projection.ts';
-import { type Task, eventsLogPath, tasksSidecarPath } from '../src/tasks.ts';
+import { type Task, TaskStore, eventsLogPath, tasksSidecarPath } from '../src/tasks.ts';
 
 const AGENT: User = {
   id: 'agent-search-revamp',
@@ -200,6 +200,45 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
     expect(await listWorkspaceIds()).toContain(wsId);
     expect(handle?.tasks.getTask(open.id)).toBeDefined();
     expect(handle?.rooms.get(workspaceRoomId(wsId))).toBeDefined();
+  });
+
+  it('re-arms the write it cancelled when the delete refuses', () => {
+    // A delete cancels the workspace's debounced writes before touching the
+    // filesystem — otherwise a save in flight recreates the sidecar just
+    // after the delete reports success. That cancellation is only free when
+    // the delete goes through: on a refusal the board is still live and
+    // still owes those writes, and nothing re-arms them until the next
+    // mutation, so the edits inside the window die at the next restart.
+    //
+    // Store-level, with a debounce long enough that "a write is pending" is
+    // a fact rather than a race.
+    const dir = mkdtempSync(join(tmpdir(), 'hub-ws-delete-store-'));
+    const store = new TaskStore({ dataDir: dir, debounceMs: 5000 });
+    try {
+      const ws = store.createWorkspace('scratch', 'Try one thing.');
+      store.createTask(ws.id, { title: 'written' });
+      store.flush();
+      const sidecar = tasksSidecarPath(dir, ws.id);
+      expect(existsSync(sidecar)).toBe(true);
+
+      store.createTask(ws.id, { title: 'inside the debounce window' });
+      rmSync(sidecar);
+      mkdirSync(sidecar);
+      expect(store.deleteWorkspace(ws.id, { force: true }).ok).toBe(false);
+
+      // Repair the filesystem and flush. `flush()` only persists workspaces
+      // that have a PENDING timer, so this reaches disk only if the refusal
+      // put one back.
+      rmSync(sidecar, { recursive: true });
+      store.flush();
+      const saved = JSON.parse(readFileSync(sidecar, 'utf8')) as {
+        tasks: Array<{ title: string }>;
+      };
+      expect(saved.tasks.map((t) => t.title)).toContain('inside the debounce window');
+    } finally {
+      store.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('leaves an attached doc alone — attachDoc is a link, not ownership', async () => {
