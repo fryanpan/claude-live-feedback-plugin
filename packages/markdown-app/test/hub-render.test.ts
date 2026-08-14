@@ -325,22 +325,87 @@ describe('inline title editing', () => {
 });
 
 describe('the row assignee', () => {
-  it('reads the current assignee and hands the task the other way in one tap', () => {
-    const h = handlers();
-    const t = task({ goal: 'g-pr', assignee: 'agent' });
+  const pickerIn = (el: HTMLElement) => el.querySelector('.hub-row-assignee') as HTMLSelectElement;
+  const values = (sel: HTMLSelectElement) => [...sel.options].map((o) => o.value);
+
+  // The gesture used to be a two-word toggle: tap and the owner flipped
+  // between 'human' and the bare word 'agent'. That word names a category
+  // rather than somebody — two agents in the same workspace could not tell
+  // their queues apart — and the API now refuses it outright, so the toggle
+  // could only ever hand a task to nobody or take it away from a named agent.
+  it("offers the workspace's agents and human, and never the generic word", () => {
+    const h = handlers({ knownAgentIds: ['Index Rebuild', 'Search Revamp'] });
+    const t = task({ goal: 'g-pr', assignee: 'Search Revamp' });
     renderBoard(root, boardSections(GOALS, [t], filters), h);
-    const btn = root.querySelector('.hub-row-assignee') as HTMLButtonElement;
-    expect(btn.textContent).toBe('agent');
-    btn.click();
-    expect(h.onAssign).toHaveBeenCalledWith(expect.objectContaining({ id: t.id }), 'human');
-    // Reassigning is not opening.
+    const pick = pickerIn(root);
+    expect(pick.tagName).toBe('SELECT');
+    expect(values(pick)).toEqual(
+      expect.arrayContaining(['human', 'Index Rebuild', 'Search Revamp']),
+    );
+    expect(values(pick)).not.toContain('agent');
+    expect(pick.value).toBe('Search Revamp');
+  });
+
+  it('hands the task to whoever was picked, without opening it', () => {
+    const h = handlers({ knownAgentIds: ['Index Rebuild'] });
+    const t = task({ goal: 'g-pr', assignee: 'human' });
+    renderBoard(root, boardSections(GOALS, [t], filters), h);
+    const pick = pickerIn(root);
+    pick.value = 'Index Rebuild';
+    pick.dispatchEvent(new Event('change'));
+    expect(h.onAssign).toHaveBeenCalledWith(expect.objectContaining({ id: t.id }), 'Index Rebuild');
     expect(h.onOpenTask).not.toHaveBeenCalled();
+  });
+
+  // A workspace's attachments are the agents live RIGHT NOW. An owner who has
+  // since detached — or a person who was never an attachment — must still be
+  // shown as the owner, or the row silently renames somebody's work.
+  it('keeps an owner who is not among the attached agents', () => {
+    const h = handlers({ knownAgentIds: ['Index Rebuild'] });
+    renderBoard(
+      root,
+      boardSections(GOALS, [task({ goal: 'g-pr', assignee: 'Jordan' })], filters),
+      h,
+    );
+    const pick = pickerIn(root);
+    expect(pick.value).toBe('Jordan');
+    expect(values(pick)).toContain('Index Rebuild');
+  });
+
+  it('reads a task still sitting on the generic owner as unassigned', () => {
+    const h = handlers({ knownAgentIds: ['Index Rebuild'] });
+    renderBoard(
+      root,
+      boardSections(GOALS, [task({ goal: 'g-pr', assignee: 'agent' })], filters),
+      h,
+    );
+    const pick = pickerIn(root);
+    expect(pick.value).toBe('');
+    expect(pick.selectedOptions[0]?.textContent ?? '').toMatch(/unassigned/i);
+    expect(pick.classList.contains('hub-owner-none')).toBe(true);
+  });
+
+  // 'human' and a named agent are the two answers a reader acts on
+  // differently, so they cannot look the same at a glance — and the mobile
+  // pill is narrow enough that the text alone will not carry it.
+  it('marks a person, an agent, and nobody apart from each other', () => {
+    const h = handlers({ knownAgentIds: ['Index Rebuild'] });
+    const rows = [
+      task({ goal: 'g-pr', order: 1, assignee: 'human' }),
+      task({ goal: 'g-pr', order: 2, assignee: 'Index Rebuild' }),
+      task({ goal: 'g-pr', order: 3, assignee: 'agent' }),
+    ];
+    renderBoard(root, boardSections(GOALS, rows, filters), h);
+    const classes = [...root.querySelectorAll('.hub-row-assignee')].map((el) =>
+      [...el.classList].filter((c) => c.startsWith('hub-owner-')).join(),
+    );
+    expect(classes).toEqual(['hub-owner-human', 'hub-owner-agent', 'hub-owner-none']);
   });
 
   // It used to be a badge that rendered only when the assignee was not the
   // default 'agent' — so most rows showed no owner at all, and the one place
   // it appeared was also the place a long name could win the row.
-  it('is on every row, including the default assignee', () => {
+  it('is on every row, including one nobody owns', () => {
     renderBoard(
       root,
       boardSections(GOALS, [task({ goal: 'g-pr', assignee: 'agent' })], filters),
@@ -803,7 +868,7 @@ describe('renderTaskDetail', () => {
     expect(root.querySelector('.hub-detail-body-more')).toBeTruthy();
   });
 
-  it('the assignee row hands the task the OTHER way — a one-tap hand-off', () => {
+  it('the assignee row picks who takes it — the same choice the board row offers', () => {
     const onAssign = vi.fn();
     const t = task({ assignee: 'agent' });
     renderTaskDetail(root, t, {
@@ -812,11 +877,17 @@ describe('renderTaskDetail', () => {
       onTitleCommit: vi.fn(),
       onAnswer: vi.fn(),
       onAssign,
+      knownAgentIds: ['Index Rebuild'],
     });
-    const btn = root.querySelector('.hub-assignee-btn') as HTMLButtonElement;
-    expect(btn.textContent).toBe('agent'); // it still READS as the current value
-    btn.dispatchEvent(new Event('click', { bubbles: true }));
-    expect(onAssign).toHaveBeenCalledWith(expect.objectContaining({ id: t.id }), 'human');
+    const pick = root.querySelector('.hub-assignee-btn') as HTMLSelectElement;
+    // Nobody owns it yet — the generic word is not somebody.
+    expect(pick.value).toBe('');
+    expect([...pick.options].map((o) => o.value)).toEqual(
+      expect.arrayContaining(['human', 'Index Rebuild']),
+    );
+    pick.value = 'Index Rebuild';
+    pick.dispatchEvent(new Event('change'));
+    expect(onAssign).toHaveBeenCalledWith(expect.objectContaining({ id: t.id }), 'Index Rebuild');
   });
 });
 

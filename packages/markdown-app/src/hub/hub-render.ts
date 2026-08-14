@@ -225,11 +225,79 @@ export interface BoardHandlers {
   onReorder: (task: HubTask, target: ReorderTarget) => void;
   onTitleCommit: (task: HubTask, title: string) => void;
   onAssign: (task: HubTask, assignee: string) => void;
+  /** The agents currently attached to this workspace — who a task can be
+   *  handed to besides a person. Omitted → the picker offers 'human' and
+   *  whoever already owns the task. */
+  knownAgentIds?: string[];
   /**
    * Whether the title renames on tap. See `renderTaskRow` for why this is a
    * pointer question rather than a width one. Omitted → asked of the browser.
    */
   inlineTitleEdit?: () => boolean;
+}
+
+/** The bare word the store used to default to. It names a category rather
+ *  than somebody, so a task still carrying it is UNOWNED, not assigned —
+ *  and the API refuses to hand a task to it. */
+const GENERIC_ASSIGNEE = 'agent';
+
+/**
+ * Who has this task, as a picker over everyone it could go to.
+ *
+ * This was a two-word toggle: one tap flipped the owner between 'human' and
+ * the bare word 'agent'. With more than one agent in a workspace that word
+ * cannot say who is doing the work — `next_tasks?assignee=<me>` matches
+ * nothing, and the board answers "who has this" with a category — so the
+ * toggle's only two destinations were a person and nobody.
+ *
+ * The options are the workspace's live attachments plus 'human', plus the
+ * current owner whoever they are: attachments describe who is here NOW, and
+ * dropping a detached owner from the list would silently rename their work on
+ * the next render. A native <select> buys the mobile picker and keyboard
+ * support for free — the same reasoning as the status chip.
+ */
+function assigneePicker(
+  className: string,
+  task: HubTask,
+  knownAgentIds: string[] | undefined,
+  onPick: (assignee: string) => void,
+): HTMLSelectElement {
+  const owner = task.assignee.trim().toLowerCase() === GENERIC_ASSIGNEE ? '' : task.assignee.trim();
+  const kind = owner === '' ? 'none' : owner === 'human' ? 'human' : 'agent';
+  const sel = document.createElement('select');
+  sel.className = `${className} hub-owner-${kind}`;
+  if (owner === '') {
+    // Only ever offered while nobody owns it: an unowned task needs a landing
+    // place in the list, but "hand this back to nobody" is not a move.
+    const none = document.createElement('option');
+    none.value = '';
+    none.textContent = 'Unassigned';
+    sel.append(none);
+  }
+  const agents = [
+    ...new Set([...(knownAgentIds ?? []), ...(owner && owner !== 'human' ? [owner] : [])]),
+  ]
+    .filter((id) => id.trim().toLowerCase() !== GENERIC_ASSIGNEE)
+    .sort((a, b) => a.localeCompare(b));
+  for (const id of ['human', ...agents]) {
+    const opt = document.createElement('option');
+    opt.value = id;
+    opt.textContent = id;
+    sel.append(opt);
+  }
+  // After the options are in the tree — a detached option's selected flag
+  // does not survive being appended.
+  sel.value = owner;
+  const reads = owner === '' ? 'nobody' : owner;
+  sel.title = `Assignee: ${reads} — pick who takes this`;
+  sel.setAttribute('aria-label', `Assignee: ${reads} — pick who takes this`);
+  sel.addEventListener('click', (ev) => ev.stopPropagation());
+  sel.addEventListener('change', (ev) => {
+    ev.stopPropagation();
+    const to = sel.value;
+    if (to && to !== owner) onPick(to);
+  });
+  return sel;
 }
 
 /**
@@ -473,19 +541,11 @@ export function renderTaskRow(task: HubTask, handlers: BoardHandlers): HTMLEleme
     title.title = 'Tap to open';
   }
 
-  // ── Far right: who has it. One tap hands it the other way, the same
-  // gesture the detail panel offers.
-  const assignee = document.createElement('button');
-  assignee.type = 'button';
-  assignee.className = 'hub-row-assignee';
-  assignee.textContent = task.assignee;
-  const handTo = otherAssignee(task.assignee);
-  assignee.title = `Assignee ${task.assignee} — assign to ${handTo}`;
-  assignee.setAttribute('aria-label', `Assignee ${task.assignee} — assign to ${handTo}`);
-  assignee.addEventListener('click', (ev) => {
-    ev.stopPropagation();
-    handlers.onAssign(task, handTo);
-  });
+  // ── Far right: who has it, and the gesture that hands it over — the same
+  // picker the detail panel offers.
+  const assignee = assigneePicker('hub-row-assignee', task, handlers.knownAgentIds, (to) =>
+    handlers.onAssign(task, to),
+  );
 
   row.append(handle, openZone, chip, dot, title, taskBadges(task), assignee);
   row.addEventListener('click', () => handlers.onOpenTask(task));
@@ -1170,6 +1230,8 @@ export interface DetailHandlers {
    *  `text` is the verbatim answer either way. */
   onAnswer: (task: HubTask, text: string, optionId?: string) => void;
   onAssign: (task: HubTask, assignee: string) => void;
+  /** The agents currently attached to this workspace — see `BoardHandlers`. */
+  knownAgentIds?: string[];
   /** A comment on the task. With `threadId` it is a reply; without one it
    *  opens a new thread about the task itself. */
   onComment?: (task: HubTask, text: string, threadId?: string) => Promise<boolean>;
@@ -1196,13 +1258,6 @@ export interface TaskThread {
 export interface TaskDiscussion {
   loading: boolean;
   threads: TaskThread[];
-}
-
-/** The hand-off toggle's other end. Named assignees (a specific agent) are
- *  set from the tools; the board's one-tap gesture is the human/agent flip,
- *  which is the hand-off that actually happens minute to minute. */
-export function otherAssignee(assignee: string): string {
-  return assignee === 'human' ? 'agent' : 'human';
 }
 
 /**
@@ -1408,15 +1463,11 @@ export function renderTaskDetail(
     const dt = document.createElement('dt');
     dt.textContent = 'Assignee';
     const dd = document.createElement('dd');
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'hub-assignee-btn';
-    btn.textContent = task.assignee;
-    const to = otherAssignee(task.assignee);
-    btn.title = `Assign to ${to}`;
-    btn.setAttribute('aria-label', `Assignee ${task.assignee} — assign to ${to}`);
-    btn.addEventListener('click', () => handlers.onAssign(task, to));
-    dd.append(btn);
+    dd.append(
+      assigneePicker('hub-assignee-btn', task, handlers.knownAgentIds, (to) =>
+        handlers.onAssign(task, to),
+      ),
+    );
     meta.append(dt, dd);
   }
   addMeta('Goal', task.goal);
