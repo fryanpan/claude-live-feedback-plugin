@@ -176,8 +176,32 @@ export class TaskProjection {
    *  loaded whatever the .ydoc files held, so reasserting from the store
    *  here is what makes the sidecar authoritative for gated fields. */
   init(): void {
+    this.recoverInterruptedDeletes();
     this.off = this.tasks.onEvent((ev) => this.onEvent(ev));
     for (const ws of this.tasks.listWorkspaces()) this.ensureWorkspace(ws.id);
+  }
+
+  /**
+   * Undo the staging half of a delete that the process didn't live to
+   * finish.
+   *
+   * A workspace delete renames its room files aside before committing, so a
+   * crash in that window leaves the state in `<docId>.ydoc.deleting` — which
+   * hydration deliberately skips. Left alone, the body room would come back
+   * EMPTY on the next `getOrCreate`, and the only copy of the task's
+   * discussion would sit in a file nothing reads.
+   *
+   * The board's continued existence is the discriminator, and it is the
+   * reason this lives here rather than in Rooms: a staged file whose board
+   * is GONE is the opposite case — post-commit litter, where restoring
+   * would resurrect a room belonging to nothing. So this restores only for
+   * boards the store still has, and it runs before anything opens a room.
+   */
+  private recoverInterruptedDeletes(): void {
+    for (const ws of this.tasks.listWorkspaces()) {
+      const taskIds = this.tasks.listTasks(ws.id).map((t) => t.id);
+      this.unstageWorkspaceFiles(ws.id, taskIds);
+    }
   }
 
   /** Flush pending body snapshots and unsubscribe. Call before the store's
@@ -228,6 +252,81 @@ export class TaskProjection {
       for (const t of this.tasks.listTasks(workspaceId)) this.ensureTaskBody(t);
     }
     this.refresh(workspaceId);
+  }
+
+  /** Every room this projection owns for a workspace: the board, plus one
+   *  body room per task. The caller passes the ids because after the board
+   *  is deleted the store can no longer enumerate them. */
+  private workspaceRoomIds(workspaceId: string, taskIds: string[]): string[] {
+    return [...taskIds.map(taskBodyDocId), workspaceRoomId(workspaceId)];
+  }
+
+  /**
+   * Move every room file a workspace owns out of the way, reversibly, and
+   * report whether they all moved.
+   *
+   * This is the pre-commit half of the teardown, and it is staged rather
+   * than deleted because the two failure modes pull in opposite directions:
+   *  - orphan `.ydoc`s must not outlive the board (once the store entry is
+   *    gone the id no longer resolves as a board, so nothing can come back
+   *    for them, and they reload on every restart);
+   *  - but a body room is NOT derived state — it holds the task's discussion
+   *    threads, which live nowhere else — so a delete that goes on to FAIL
+   *    must be able to give everything back, including after a restart that
+   *    lands in the middle.
+   * A rename satisfies both. Unlinking satisfies only the first: a live
+   * room's state re-reaches disk on its next write, which may never come.
+   *
+   * Ask about the FILE, not the room: `deleteDoc` logs a failed unlink and
+   * still returns ok, and on a retry it answers 'not-found' without going
+   * near the disk, because the first attempt took the room out of memory.
+   */
+  stageWorkspaceFiles(workspaceId: string, taskIds: string[]): { ok: boolean } {
+    let ok = true;
+    for (const docId of this.workspaceRoomIds(workspaceId, taskIds)) {
+      if (!this.rooms.stagePersisted(docId)) ok = false;
+    }
+    return { ok };
+  }
+
+  /** Put every staged room file back — the delete didn't commit. Runs over
+   *  the whole set, including ids that never staged, because a partial
+   *  failure leaves a partial staging. */
+  unstageWorkspaceFiles(workspaceId: string, taskIds: string[]): void {
+    for (const docId of this.workspaceRoomIds(workspaceId, taskIds)) {
+      this.rooms.unstagePersisted(docId);
+    }
+  }
+
+  /**
+   * Tear the live rooms down. DESTRUCTIVE — a body room's threads are gone
+   * after this — so call it only once the board is out of the store, i.e.
+   * once the delete has actually committed and nothing can still refuse.
+   *
+   * Cancel each snapshot timer BEFORE its room goes: a debounced snapshot
+   * firing afterwards would try to write body text back into a task that no
+   * longer exists. `deleteDoc` re-purges the persisted file, which covers
+   * anything a live room rewrote between the purge above and here.
+   */
+  dropWorkspaceRooms(workspaceId: string, taskIds: string[]): void {
+    for (const taskId of taskIds) {
+      const docId = taskBodyDocId(taskId);
+      const timer = this.snapshotTimers.get(docId);
+      if (timer) clearTimeout(timer);
+      this.snapshotTimers.delete(docId);
+      this.bodyWired.delete(docId);
+    }
+    this.wired.delete(workspaceId);
+    for (const docId of this.workspaceRoomIds(workspaceId, taskIds)) {
+      // force: a task body's discussion threads are part of what's being
+      // deleted, so open ones are not a reason to refuse here — the refusal
+      // that matters (open TASKS) already happened, before any of this.
+      this.rooms.deleteDoc(docId, { force: true });
+      // deleteDoc unlinks the LIVE path, which covers anything a room
+      // rewrote between the staging and here; the staged copy is the one
+      // holding the state, and this is the point of no return for it.
+      this.rooms.dropStaged(docId);
+    }
   }
 
   /**

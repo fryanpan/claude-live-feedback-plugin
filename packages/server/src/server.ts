@@ -2372,6 +2372,47 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         if (wsDeleteMatch && req.method === 'DELETE') {
           const workspaceId = decodeURIComponent(wsDeleteMatch[1] ?? '');
           const force = url.searchParams.get('force') === 'true';
+          // Two different stores answer to the word "workspace", and this one
+          // route fronts both: `POST /api/workspaces` mints a hub board from
+          // `name` and a doc grouping from `folderPath`. `rooms.deleteWorkspace`
+          // enumerates DOC members, so a hub board — which has none — always
+          // came back not-found, and a board created for a five-minute
+          // experiment was permanent. Ask the task store first, by id.
+          if (taskStore.getWorkspace(workspaceId)) {
+            const openTasks = taskStore.openTaskCount(workspaceId) ?? 0;
+            if (openTasks > 0 && !force) {
+              return j(409, { ok: false, error: 'has-open-tasks', openTasks });
+            }
+            // Three steps, ordered so that nothing irreversible happens
+            // while the operation can still fail. (1) STAGE the rooms' files
+            // — a rename, so it proves they are removable and can be undone;
+            // orphan .ydocs must not outlive the board, because once the
+            // store entry is gone the id no longer resolves as a board and
+            // nothing can come back for them. (2) Delete the board: the
+            // commit point. (3) Only now tear the live rooms down, which
+            // destroys each task's discussion threads and is therefore the
+            // one step that must never run ahead of a refusal. Both failure
+            // paths unstage, so a failed DELETE costs nothing at all — not
+            // even to a restart that lands right after it.
+            // Attached docs are untouched throughout: attachDoc is a LINK,
+            // so a doc a deleted board merely cited keeps working.
+            const taskIds = taskStore.listTasks(workspaceId).map((t) => t.id);
+            if (!taskProjection.stageWorkspaceFiles(workspaceId, taskIds).ok) {
+              taskProjection.unstageWorkspaceFiles(workspaceId, taskIds);
+              return j(500, { ok: false, error: 'rooms-cleanup-failed' });
+            }
+            // force: the open-task guard was applied above.
+            const hub = taskStore.deleteWorkspace(workspaceId, { force: true });
+            if (!hub.ok) {
+              taskProjection.unstageWorkspaceFiles(workspaceId, taskIds);
+              // 'persist-failed' is a 500, not a 404: the board is still
+              // there, and the caller must not read the refusal as "already
+              // gone" and stop asking.
+              return j(hub.error === 'persist-failed' ? 500 : 404, hub);
+            }
+            taskProjection.dropWorkspaceRooms(workspaceId, hub.taskIds);
+            return j(200, { ok: true, deletedTasks: hub.deletedTasks });
+          }
           const res = rooms.deleteWorkspace(workspaceId, { force });
           if (res.ok) {
             // The grouping was one row on a board; deleting it must take the

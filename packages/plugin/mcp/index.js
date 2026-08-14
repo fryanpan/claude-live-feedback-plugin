@@ -13790,7 +13790,7 @@ function suggestionAuthor() {
 }
 var server = new Server({
   name: "claude-live-feedback",
-  version: "0.1.25"
+  version: "0.1.26"
 }, {
   capabilities: {
     tools: {},
@@ -14171,7 +14171,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "delete_workspace",
-      description: "Permanently delete a whole workspace (a folder bound via bind_folder) as ONE unit: drops every member review doc, cancels their sync, and removes the persisted state — but leaves the bound SOURCE files on disk untouched. Use this when a worktree/folder review is done instead of calling delete_doc once per file. GUARDRAIL is ALL-OR-NOTHING: without force, if ANY member file still has OPEN comment threads, nothing is deleted and it returns ok:false, error:'has-open-threads' with files:[{docId, openThreads}] listing the offenders — resolve those threads first, or pass force:true to delete everything regardless. Returns error:'not-found' if no docs carry that workspaceId. On success returns {ok:true, deleted:<count>}.",
+      description: "Permanently delete a whole workspace as ONE unit. Handles BOTH things called a workspace, dispatching on the id you pass. (1) A DOC GROUPING (a folder bound via bind_folder, or a diff review): drops every member review doc and cancels their sync — the bound SOURCE files on disk are left untouched. Use this when a worktree/folder review is done instead of calling delete_doc once per file. Its guardrail is ALL-OR-NOTHING: without force, if ANY member file still has OPEN comment threads, nothing is deleted and it returns ok:false, error:'has-open-threads' with files:[{docId, openThreads}] listing the offenders. (2) A HUB BOARD (created by create_workspace): drops the board, all of its tasks, its board room, every per-task body room, its event log and its persisted state — so a board minted for a short experiment doesn't become permanent. Its guardrail counts OPEN TASKS, not threads: without force it refuses with error:'has-open-tasks' and openTasks:<count>, so finish or close them first, or pass force:true. Docs ATTACHED to a hub board are deliberately left alive at their own URLs — attaching is a link, not ownership. Either way pass force:true to delete regardless, and either way error:'not-found' means nothing exists under that id. On success returns {ok:true} plus deleted:<docs> for a grouping or deletedTasks:<count> for a board.",
       inputSchema: {
         type: "object",
         properties: {

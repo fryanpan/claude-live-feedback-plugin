@@ -1173,6 +1173,108 @@ export class TaskStore {
     return this.workspaces.get(id)?.workspace;
   }
 
+  /**
+   * How many of a board's tasks are still open — the guard `deleteWorkspace`
+   * applies, exposed so a caller can check it BEFORE doing work the refusal
+   * would waste (the route tears down rooms first). `null` when there is no
+   * such board, which is a different answer from zero.
+   */
+  openTaskCount(workspaceId: string): number | null {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return null;
+    return Array.from(state.tasks.values()).filter((t) => t.status !== 'done').length;
+  }
+
+  /**
+   * Remove a hub workspace and everything this store holds for it.
+   *
+   * Guarded by open tasks the way `Rooms.deleteWorkspace` is guarded by open
+   * threads: the mistake to make hard is discarding a board somebody is
+   * working, and a bare id with no confirmation is exactly the call an agent
+   * makes by accident. `force` is the deliberate override, and the refusal
+   * carries the count so the caller does not have to go and look.
+   *
+   * Deletion has to reach DISK, not just the map: the sidecar is
+   * authoritative on hydrate, so an in-memory-only delete looks completely
+   * successful until the next restart brings the board back. The events log
+   * goes with it — an audit trail for a board nobody can see is a file that
+   * only grows.
+   *
+   * Returns the task ids so the caller can tear down each one's body room;
+   * this store owns no rooms and deliberately does not reach into them.
+   */
+  deleteWorkspace(
+    workspaceId: string,
+    opts?: { force?: boolean },
+  ):
+    | { ok: true; deletedTasks: number; taskIds: string[] }
+    | { ok: false; error: 'not-found' }
+    | { ok: false; error: 'has-open-tasks'; openTasks: number }
+    | { ok: false; error: 'persist-failed' } {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return { ok: false, error: 'not-found' };
+
+    const taskIds = Array.from(state.tasks.keys());
+    if (!opts?.force) {
+      const openTasks = this.openTaskCount(workspaceId) ?? 0;
+      if (openTasks > 0) return { ok: false, error: 'has-open-tasks', openTasks };
+    }
+
+    // Cancel pending writes BEFORE removing the files, or a debounced save
+    // still in flight recreates the sidecar milliseconds after the delete
+    // reports success.
+    const pending = this.saveTimers.get(workspaceId);
+    if (pending) clearTimeout(pending);
+    this.saveTimers.delete(workspaceId);
+    const pendingAttachments = this.attachmentSaveTimers.get(workspaceId);
+    if (pendingAttachments) clearTimeout(pendingAttachments);
+    this.attachmentSaveTimers.delete(workspaceId);
+    // If the delete goes on to refuse, the workspace stays live and those
+    // writes are still owed. Nothing else would re-arm them until the next
+    // mutation, so the edits inside the debounce window would be lost at the
+    // next restart — a cancelled save is only free when the delete succeeds.
+    const restorePendingWrites = () => {
+      if (pending) this.scheduleSave(workspaceId);
+      if (pendingAttachments) this.scheduleAttachmentsSave(workspaceId);
+    };
+
+    // The tasks sidecar is the resurrection source, so it comes off FIRST and
+    // its failure is the whole operation's failure. Reporting success with
+    // that file intact would promise a deletion the next restart undoes —
+    // silently, and hours later. Nothing in memory has changed yet at this
+    // point, so refusing here leaves a coherent board rather than a half-
+    // deleted one. (The cancelled save is the cost: at most one debounce
+    // window of unwritten changes, which the next mutation reschedules.)
+    try {
+      rmSync(tasksSidecarPath(this.dataDir, workspaceId), { force: true });
+    } catch (err) {
+      console.error(`[tasks] failed to remove the tasks sidecar for ${workspaceId}:`, err);
+      restorePendingWrites();
+      return { ok: false, error: 'persist-failed' };
+    }
+
+    for (const taskId of taskIds) this.taskIndex.delete(taskId);
+    this.workspaces.delete(workspaceId);
+
+    // None of these can resurrect the board, so a failure here is litter
+    // rather than a lie — log it and let the delete stand. The list is every
+    // OTHER per-workspace path this file exports; a new sidecar belongs here
+    // the day it is added, or it becomes a file nothing can reach.
+    for (const path of [
+      attachmentsSidecarPath(this.dataDir, workspaceId),
+      eventsLogPath(this.dataDir, workspaceId),
+      voiceQueuePath(this.dataDir, workspaceId),
+      pendingRetriagePath(this.dataDir, workspaceId),
+    ]) {
+      try {
+        rmSync(path, { force: true });
+      } catch (err) {
+        console.error(`[tasks] failed to remove ${path}:`, err);
+      }
+    }
+    return { ok: true, deletedTasks: taskIds.length, taskIds };
+  }
+
   listWorkspaces(): HubWorkspace[] {
     return Array.from(this.workspaces.values()).map((s) => s.workspace);
   }
