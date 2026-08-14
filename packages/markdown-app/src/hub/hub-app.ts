@@ -26,11 +26,14 @@ import {
   type PresenceChip,
   type PresencePerson,
   type ReorderTarget,
+  type ReviewItem,
+  type ReviewThreadItem,
   type UptimeReport,
   boardSections,
-  decisionQueue,
   goalLabel,
+  parseQuickAdd,
   presenceChips,
+  reviewQueue,
 } from './hub-model.ts';
 import {
   type SidebarDoc,
@@ -40,12 +43,13 @@ import {
   discussionIsBusy,
   renderActivity,
   renderBoard,
-  renderDecisionWalkthrough,
-  renderDecisions,
   renderDocsSidebar,
   renderGoalStrip,
   renderLeadStrip,
   renderPresence,
+  renderQuickAdd,
+  renderReviewStrip,
+  renderReviewWalkthrough,
   renderTaskDetail,
   renderThreadsSidebar,
 } from './hub-render.ts';
@@ -65,6 +69,9 @@ interface HubState {
   docs: SidebarDoc[];
   threads: SidebarThread[];
   detailTaskId: string | null;
+  /** The thread the review queue aimed at, when the panel was opened from it.
+   *  Null every other way in. */
+  detailThreadId: string | null;
   /**
    * The open task's discussion, and the id it was fetched FOR. Keyed rather
    * than just held, because a load that lands after the reader has moved to
@@ -72,7 +79,14 @@ interface HubState {
    */
   discussion: TaskDiscussion;
   discussionTaskId: string | null;
-  /** Position in the decision walkthrough; -1 when it is closed. */
+  /**
+   * The thread-shaped half of "what needs you" — task discussions and doc
+   * comments whose newest word is an agent's. Server-computed, because
+   * whether a comment is an agent's is `classifyActor`'s call and there must
+   * not be a second one. Decisions are derived from `tasks` here.
+   */
+  reviewItems: ReviewThreadItem[];
+  /** Position in the review walkthrough; -1 when it is closed. */
   walkIndex: number;
   followedKey: string | null;
 }
@@ -148,6 +162,7 @@ function buildShell(root: HTMLElement, name: string): void {
           <button type="button" id="hub-view-toggle" class="hub-btn">Activity</button>
         </div>
         <div id="hub-decisions" class="hub-decisions hidden"></div>
+        <div id="hub-quick" class="hub-quick"></div>
         <div id="hub-board" class="hub-board"></div>
         <div id="hub-activity" class="hub-activity hidden"></div>
       </section>
@@ -165,6 +180,7 @@ function buildShell(root: HTMLElement, name: string): void {
           <dt>a</dt><dd>open the focused task's assignee picker</dd>
           <dt>alt + ↑ / ↓</dt><dd>move the focused task up / down — past the ends of its goal it moves into the next one</dd>
           <dt>tab to ⠿, then ↑ / ↓</dt><dd>the same move from the drag handle</dd>
+          <dt>c</dt><dd>capture a task — type it however you like, Enter files it</dd>
           <dt>?</dt><dd>toggle this help</dd>
         </dl>
       </div>
@@ -206,8 +222,10 @@ async function main(): Promise<void> {
     docs: [],
     threads: [],
     detailTaskId: null,
+    detailThreadId: null,
     discussion: { loading: false, threads: [] },
     discussionTaskId: null,
+    reviewItems: [],
     walkIndex: -1,
     followedKey: null,
   };
@@ -258,12 +276,49 @@ async function main(): Promise<void> {
     onGoalTitleCommit: (sectionId: string, title: string) => void retitleGoal(sectionId, title),
     onOpenTask: (task: HubTask) => {
       state.detailTaskId = task.id;
+      // Opening the task any other way clears the queue's aim, so a mark left
+      // over from the last walkthrough item can't point at the wrong thread.
+      state.detailThreadId = null;
       renderDetail();
     },
     onReorder: (task: HubTask, target: ReorderTarget) => void placeTask(task, target),
     onTitleCommit: (task: HubTask, title: string) => void renameTask(task, title),
     onAssign: (task: HubTask, assignee: string) => void assignTask(task, assignee),
   };
+
+  /** Re-derived on every render rather than stored: the decision half comes
+   *  from the live projection, so an answer anyone posts drops its item out
+   *  without a fetch. */
+  const currentQueue = () => reviewQueue(taskList(), state.reviewItems, Date.now());
+
+  /**
+   * "Exactly the place where I need to review and make the choice" — the
+   * whole point of the queue. A decision opens its task panel; a task comment
+   * opens that task's discussion; a doc comment opens the doc AT the comment
+   * (`?thread=`), not the doc's top.
+   */
+  function openReviewItem(item: ReviewItem): void {
+    if (item.decision) {
+      boardHandlers.onOpenTask(item.decision.task);
+      return;
+    }
+    const t = item.thread;
+    if (!t) return;
+    if (t.kind === 'task-thread') {
+      const task = t.taskId ? state.tasks.get(t.taskId) : undefined;
+      if (!task) return;
+      boardHandlers.onOpenTask(task);
+      // The task is the container; the thread is the errand. On a task with
+      // six discussions, landing on the panel top is the same "now go find
+      // it" the strip exists to remove — so aim at the one that was queued.
+      state.detailThreadId = t.threadId;
+      renderDetail();
+      return;
+    }
+    location.assign(
+      `/review/${encodeURIComponent(t.docId)}?thread=${encodeURIComponent(t.threadId)}`,
+    );
+  }
 
   /** Everyone a task can be handed to besides a person: the agents attached
    *  to this workspace, plus the lead (who owns goal changes here and is
@@ -324,8 +379,8 @@ async function main(): Promise<void> {
         : row;
       back?.focus();
     }
-    renderDecisions(el('hub-decisions'), decisionQueue(taskList()), {
-      onOpen: boardHandlers.onOpenTask,
+    renderReviewStrip(el('hub-decisions'), currentQueue(), {
+      onOpen: openReviewItem,
       onWalkthrough: () => {
         state.walkIndex = 0;
         renderWalkthrough();
@@ -384,6 +439,7 @@ async function main(): Promise<void> {
       {
         onClose: () => {
           state.detailTaskId = null;
+          state.detailThreadId = null;
           renderDetail();
         },
         onStatusSet: (t, to) => void transitionTask(t, to),
@@ -393,6 +449,7 @@ async function main(): Promise<void> {
         knownAgentIds: knownAgentIds(),
         goalLabel: (id) => goalLabel(state.info?.goals ?? [], id),
         onComment: (t, text, threadId) => postTaskComment(t, text, threadId),
+        ...(state.detailThreadId ? { focusThreadId: state.detailThreadId } : {}),
       },
       task ? discussion : undefined,
     );
@@ -469,9 +526,15 @@ async function main(): Promise<void> {
    * offered to you.
    */
   function renderWalkthrough(): void {
-    renderDecisionWalkthrough(el('hub-walkthrough'), decisionQueue(taskList()), state.walkIndex, {
+    renderReviewWalkthrough(el('hub-walkthrough'), currentQueue(), state.walkIndex, {
       onAnswer: (t, text, optionId) => void answerDecision(t, text, optionId),
       onMoreInfo: (t, question) => void requestMoreInfo(t, question),
+      onReply: (item, text) => void replyToReviewItem(item, text),
+      onOpenItem: (item) => {
+        state.walkIndex = -1;
+        renderWalkthrough();
+        openReviewItem(item);
+      },
       onStep: (i) => {
         state.walkIndex = Math.max(0, i);
         renderWalkthrough();
@@ -524,6 +587,9 @@ async function main(): Promise<void> {
   }
 
   function renderAll(): void {
+    // Mounted, not rendered: `renderQuickAdd` is a no-op after the first call
+    // so a board repaint can never take the caret out of a half-typed idea.
+    renderQuickAdd(el('hub-quick'), { onCapture: (text) => captureTask(text) });
     renderGoal();
     renderLead();
     renderBoardRegion();
@@ -666,6 +732,74 @@ async function main(): Promise<void> {
     );
   }
 
+  /**
+   * Answer a queued comment from the queue itself. The reply is an ordinary
+   * thread comment — the same POST the doc and the task panel use — which is
+   * what takes the item OUT of the queue: `awaitingPerson` reports a thread
+   * only while an agent spoke last, so there is no separate dismissed flag to
+   * write and none to keep in sync.
+   */
+  async function replyToReviewItem(item: ReviewItem, text: string): Promise<void> {
+    const t = item.thread;
+    if (!t) return;
+    const res = await send(
+      `/api/docs/${encodeURIComponent(t.docId)}/threads/${encodeURIComponent(t.threadId)}/comments`,
+      'POST',
+      { author, text },
+    );
+    if (!res.ok) {
+      showToast('Posting the reply failed — your text is still in the box');
+      return;
+    }
+    // Refresh BEFORE re-rendering: the walkthrough steps by position, so the
+    // answered item has to be gone from the queue for the same index to land
+    // on the next thing rather than re-showing the one just answered.
+    await loadReviewItems();
+  }
+
+  /**
+   * File a captured line as a task.
+   *
+   * It lands in TRIAGE — `goal` is deliberately omitted, which is what routes
+   * it there — because ranking an idea against the goals it competes with is
+   * exactly the judgement capture must not force at capture time.
+   *
+   * It is assigned to the workspace's lead agent when there is one, falling
+   * back to the person capturing. Reversible either way (one dropdown on the
+   * row), and this is the direction Bryan asked for: "mostly by just
+   * discussing it with you" — an idea he captures is one he wants picked up,
+   * not one he means to file to himself and never see again.
+   */
+  async function captureTask(text: string): Promise<boolean> {
+    const parsed = parseQuickAdd(text);
+    if (!parsed) return false;
+    const res = await send(`/api/workspaces/${encodeURIComponent(workspaceId)}/tasks`, 'POST', {
+      title: parsed.title,
+      ...(parsed.body !== undefined ? { body: parsed.body } : {}),
+      ...(state.info?.leadAgentId ? { assignee: state.info.leadAgentId } : {}),
+      author,
+    });
+    if (!res.ok) {
+      const why = typeof res.data?.message === 'string' ? res.data.message : 'Capture failed';
+      showToast(why);
+      // False, so the box KEEPS the words. A toast the reader may have already
+      // scrolled past is not a copy of their idea.
+      return false;
+    }
+    // The row itself arrives over the ydoc; the toast is the receipt for the
+    // words that just left the box.
+    showToast(`Captured — “${parsed.title}” is in triage`);
+    return true;
+  }
+
+  async function loadReviewItems(): Promise<void> {
+    const res = await fetchJson<{ items: ReviewThreadItem[] }>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/review-items`,
+    );
+    state.reviewItems = res?.items ?? [];
+    renderBoardRegion();
+  }
+
   // ── Sidebars ────────────────────────────────────────────────────────────
   async function loadSidebars(): Promise<void> {
     const docIds = state.info?.docIds ?? [];
@@ -794,11 +928,18 @@ async function main(): Promise<void> {
   // board is not subscribed to each task's own doc stream.
   for (const name of ['thread.created', 'thread.replied', 'thread.resolved', 'thread.reopened']) {
     es.addEventListener(name, () => {
+      // Every one of these can change what is waiting on a person — a new
+      // question arrives, someone answers one, a thread is closed. The strip
+      // is the surface that has to be right when Bryan comes back, so it
+      // refreshes whether or not a task panel happens to be open.
+      void loadReviewItems();
       const open = state.detailTaskId ? state.tasks.get(state.detailTaskId) : undefined;
       if (!open || discussionIsBusy(document)) return;
       void loadDiscussion(open, true);
     });
   }
+  // A task going done takes its discussion out of the queue.
+  es.addEventListener('task.transitioned', () => void loadReviewItems());
 
   // Controls.
   for (const btn of document.querySelectorAll<HTMLButtonElement>('.hub-tabs .hub-tab')) {
@@ -866,6 +1007,17 @@ async function main(): Promise<void> {
       el('hub-help').classList.toggle('hidden');
       return;
     }
+    // Gmail's compose key. Before the row shortcuts, and before the
+    // rows-are-empty bail below it — capture has to work on a board with
+    // nothing on it, which is exactly when it is needed most.
+    if (ev.key === 'c') {
+      const box = document.querySelector<HTMLTextAreaElement>('.hub-quick-input');
+      if (box) {
+        box.focus();
+        ev.preventDefault();
+      }
+      return;
+    }
     if (ev.key === 'Escape') {
       el('hub-help').classList.add('hidden');
       if (state.detailTaskId) {
@@ -917,6 +1069,7 @@ async function main(): Promise<void> {
   void loadSidebars();
   void loadAgents();
   void loadEvents();
+  void loadReviewItems();
 }
 
 void main();

@@ -7,7 +7,8 @@
  * There is no raw-HTML passthrough, so a comment containing `<script>` is inert.
  *
  * Supported: **bold**, *italic* / _italic_, `code`, ~~strike~~,
- * [label](url) (http/https/mailto only), `-`/`*` bullet lists, and line breaks.
+ * [label](url) (http/https/mailto only), `-`/`*` bullet lists, `#` headings,
+ * and line breaks.
  */
 
 function escapeHtml(s: string): string {
@@ -74,8 +75,18 @@ export function renderCommentMarkdown(text: string): string {
     }
   };
   for (const line of lines) {
+    // ATX heading. Demoted by two so the body sits UNDER whatever card title
+    // it was rendered into — a decision body's `## Question` is a section of
+    // the card, never a peer of the card's own heading. A space after the
+    // hashes is required, so `#4` stays an issue number.
+    const head = line.match(/^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/);
     const bullet = line.match(/^\s*[-*]\s+(.*)$/);
-    if (bullet) {
+    if (head) {
+      flushPara();
+      closeList();
+      const level = Math.min(6, (head[1] ?? '#').length + 2);
+      html.push(`<h${level} class="cm-h">${inline(escapeHtml(head[2] ?? ''))}</h${level}>`);
+    } else if (bullet) {
       flushPara();
       if (!listOpen) {
         html.push('<ul class="cm-list">');
