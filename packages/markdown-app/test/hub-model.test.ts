@@ -220,6 +220,25 @@ describe('describeEvent', () => {
     expect(s).toContain('g-pr');
   });
 
+  it('names a description rewrite, rather than printing the raw event slug', () => {
+    // The feed's fallback prints the event name for anything the table
+    // misses, so this row would have "worked" — as the literal string
+    // `task.body_edited`, with no actor and no task title. A new emitted
+    // event needs its row here or the surface shows a slug.
+    const s = describeEvent(
+      {
+        event: 'task.body_edited',
+        ts: NOW,
+        taskId: 't-1',
+        actor: { id: 'agent-x', name: 'Search Revamp', kind: 'agent' },
+      },
+      titleOf,
+    );
+    expect(s).toContain('Search Revamp');
+    expect(s).toContain('Fix ranking');
+    expect(s).not.toContain('task.body_edited');
+  });
+
   it('falls back to the event name for unknown rows', () => {
     expect(describeEvent({ event: 'voice.request', ts: NOW }, titleOf)).toContain('voice.request');
   });

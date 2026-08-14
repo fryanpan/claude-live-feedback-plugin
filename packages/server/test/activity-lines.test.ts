@@ -115,6 +115,34 @@ describe('the activity view renders the rows the server really wrote', () => {
     expect(describeEvent(row as ActivityEvent, () => 'Wire the index')).toContain('Search Revamp');
   });
 
+  it('renders a description rewrite with the actor and the task, from the row the route wrote', async () => {
+    // describeEvent's own suite hands it a hand-written row, so it proves
+    // the switch has a case — not that the emitted row carries the keys the
+    // case reads. That gap is the whole reason this file exists.
+    const created = await post(`/api/workspaces/${wsId}/tasks`, {
+      title: 'Tune the ranking',
+      author: AGENT,
+      body: 'thin.',
+    });
+    expect(created.status).toBe(200);
+    const taskId = ((await created.json()) as { task: Task }).task.id;
+
+    const r = await post(`/api/tasks/${taskId}/body`, {
+      markdown: 'Agent can rewrite a thin task so that the next reader knows when it is done.',
+      author: AGENT,
+    });
+    expect(r.status).toBe(200);
+
+    const row = rowsOf('task.body_edited').at(-1);
+    expect(row).toBeDefined();
+    const line = describeEvent(row as ActivityEvent, (id) =>
+      id === taskId ? 'Tune the ranking' : id,
+    );
+    expect(line).toContain('Search Revamp');
+    expect(line).toContain('Tune the ranking');
+    expect(line).not.toContain('task.body_edited');
+  });
+
   it('emits one batched workspace.retriaged for a goal edit, with the regroups referencing it', async () => {
     const before = rowsOf('workspace.retriaged').length;
     const g = await local(`/api/workspaces/${wsId}/goal`, {
