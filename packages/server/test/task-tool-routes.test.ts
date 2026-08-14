@@ -474,13 +474,13 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       try {
         // Positive control: a real change on this task DOES emit…
         const moved = await jj<{ changed: boolean }>(
-          await post(`/api/tasks/${task.id}/assignee`, { assignee: 'agent', author: AGENT }),
+          await post(`/api/tasks/${task.id}/assignee`, { assignee: AGENT.name, author: AGENT }),
         );
         expect(moved.changed).toBe(true);
         expect(events.filter((e) => e.type === 'task.assigned').length).toBe(1);
         // …and the no-op that follows does not.
         const same = await jj<{ changed: boolean }>(
-          await post(`/api/tasks/${task.id}/assignee`, { assignee: 'agent', author: AGENT }),
+          await post(`/api/tasks/${task.id}/assignee`, { assignee: AGENT.name, author: AGENT }),
         );
         expect(same.changed).toBe(false);
         expect(events.filter((e) => e.type === 'task.assigned').length).toBe(1);

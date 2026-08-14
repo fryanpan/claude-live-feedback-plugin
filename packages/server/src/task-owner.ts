@@ -21,6 +21,17 @@ export const ASSIGNEE_REQUIRED_MESSAGE =
   'or identify yourself with `author`. An agent gets its name from FEEDBACK_AGENT_NAME ' +
   `in its launch environment — "${GENERIC_ASSIGNEE}" on its own is not an owner.`;
 
+/**
+ * The re-assign route's version of the same refusal. It gets its own wording
+ * because there is no author to fall back on there: handing a task to the
+ * caller because they typed the generic word would be a different action than
+ * the one they asked for, so the only move left is to say who to name.
+ */
+export const ASSIGNEE_REQUIRED_HANDOVER_MESSAGE =
+  "Name who takes this task: pass `assignee` (a person, an agent's name, or 'human'). " +
+  'An agent gets its name from FEEDBACK_AGENT_NAME in its launch environment — ' +
+  `"${GENERIC_ASSIGNEE}" on its own is not an owner.`;
+
 /** The value a caller supplied, or nothing when it names nobody. */
 function named(value: unknown): string | null {
   if (typeof value !== 'string') return null;
