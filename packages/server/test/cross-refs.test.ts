@@ -202,7 +202,7 @@ describe('cross-reference routes + payload surfacing', () => {
   const del = send('DELETE');
 
   const mkTask = async (opts: Record<string, unknown>): Promise<Task> => {
-    const r = await post(`/api/workspaces/${wsId}/tasks`, opts);
+    const r = await post(`/api/workspaces/${wsId}/tasks`, { assignee: 'human', ...opts });
     expect(r.status).toBe(200);
     return ((await r.json()) as { task: Task }).task;
   };
@@ -258,7 +258,7 @@ describe('cross-reference routes + payload surfacing', () => {
       };
       expect(body.taskId).toBe(target.id);
       expect(body.backlinks).toEqual([
-        { id: referrer.id, title: 'refers to target', status: 'todo', assignee: 'agent' },
+        { id: referrer.id, title: 'refers to target', status: 'todo', assignee: 'human' },
       ]);
     });
 

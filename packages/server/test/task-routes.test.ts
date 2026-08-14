@@ -192,6 +192,7 @@ describe('hub workspace + task routes', () => {
     it('forwards after + afterEnforce (proved by the transition refusing)', async () => {
       const gate = (await (
         await post(`/api/workspaces/${wsId}/tasks`, {
+          author: AGENT,
           title: 'your go',
           needs: 'decision',
           body: DECISION_BODY,
@@ -199,6 +200,7 @@ describe('hub workspace + task routes', () => {
       ).json()) as { task: Task };
       const work = (await (
         await post(`/api/workspaces/${wsId}/tasks`, {
+          author: AGENT,
           title: 'Open the PR',
           after: [gate.task.id],
           afterEnforce: [gate.task.id],
@@ -250,6 +252,7 @@ describe('hub workspace + task routes', () => {
     it('refuses afterEnforce ids that are not also in after', async () => {
       const gate = (await (
         await post(`/api/workspaces/${wsId}/tasks`, {
+          author: AGENT,
           title: 'your go',
           needs: 'decision',
           body: DECISION_BODY,
@@ -257,6 +260,7 @@ describe('hub workspace + task routes', () => {
       ).json()) as { task: Task };
 
       const lopsided = await post(`/api/workspaces/${wsId}/tasks`, {
+        author: AGENT,
         title: 'Open the PR',
         afterEnforce: [gate.task.id],
       });
@@ -265,6 +269,7 @@ describe('hub workspace + task routes', () => {
 
       // Positive control: the same pair in BOTH arrays is accepted and gates.
       const both = await post(`/api/workspaces/${wsId}/tasks`, {
+        author: AGENT,
         title: 'Open the PR',
         after: [gate.task.id],
         afterEnforce: [gate.task.id],
@@ -313,6 +318,7 @@ describe('hub workspace + task routes', () => {
       // rejected, so this asserts the two fields agree rather than asserting
       // that nothing anywhere accepts it.
       const viaLinks = await post(`/api/workspaces/${wsId}/tasks`, {
+        author: AGENT,
         title: 'via links',
         links: [hostile],
       });
@@ -321,6 +327,7 @@ describe('hub workspace + task routes', () => {
       expect(kept.links).toHaveLength(0);
 
       const viaOrigin = await post(`/api/workspaces/${wsId}/tasks`, {
+        author: AGENT,
         title: 'via origin',
         origin: hostile,
       });
@@ -329,6 +336,7 @@ describe('hub workspace + task routes', () => {
       // A well-formed url origin still goes through — the check is on the
       // scheme, not on the kind.
       const good = await post(`/api/workspaces/${wsId}/tasks`, {
+        author: AGENT,
         title: 'good origin',
         origin: { kind: 'url', url: 'https://example.com/pr/1' },
       });
@@ -343,6 +351,7 @@ describe('hub workspace + task routes', () => {
     // created it and breaks readers on every subsequent boot.
     it('a null `origin` cannot poison backlink queries', async () => {
       const created = await post(`/api/workspaces/${wsId}/tasks`, {
+        author: AGENT,
         title: 'null origin',
         origin: null,
       });
@@ -366,6 +375,7 @@ describe('hub workspace + task routes', () => {
     it('accepts an external URL as a link and keys it for backlinks', async () => {
       const pr = 'https://github.com/example-org/example-repo/pull/1669';
       const r = await post(`/api/workspaces/${wsId}/tasks`, {
+        author: AGENT,
         title: 'Land the watcher fix',
         links: [{ kind: 'url', url: pr }],
       });
@@ -387,6 +397,7 @@ describe('hub workspace + task routes', () => {
     it('refuses a URL ref whose scheme is not http(s)', async () => {
       for (const url of ['javascript:alert(1)', 'data:text/html,<script>x</script>', 'not a url']) {
         const r = await post(`/api/workspaces/${wsId}/tasks`, {
+          author: AGENT,
           title: 'Hostile link',
           links: [{ kind: 'url', url }],
         });
@@ -438,7 +449,10 @@ describe('hub workspace + task routes', () => {
     // The dedicated links route is the opposite case: the ref IS the request,
     // so dropping it would mean answering 200 to a call that did nothing.
     it('still 400s on the dedicated links route, and names the accepted kinds', async () => {
-      const created = await post(`/api/workspaces/${wsId}/tasks`, { title: 'Has links' });
+      const created = await post(`/api/workspaces/${wsId}/tasks`, {
+        author: AGENT,
+        title: 'Has links',
+      });
       const { task } = (await created.json()) as { task: Task };
 
       const r = await post(`/api/tasks/${task.id}/links`, {
@@ -468,7 +482,7 @@ describe('hub workspace + task routes', () => {
     });
 
     const mkTask = async (title: string, riskTier?: string): Promise<Task> => {
-      const r = await post(`/api/workspaces/${wsId}/tasks`, { title });
+      const r = await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, title });
       const task = ((await r.json()) as { task: Task }).task;
       if (riskTier) {
         const g = await post(`/api/tasks/${task.id}/goal`, {
@@ -553,7 +567,7 @@ describe('hub workspace + task routes', () => {
     });
 
     const mkTask = async (title: string): Promise<Task> => {
-      const r = await post(`/api/workspaces/${wsId}/tasks`, { title });
+      const r = await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, title });
       return ((await r.json()) as { task: Task }).task;
     };
 
@@ -681,7 +695,7 @@ describe('hub workspace + task routes', () => {
     });
 
     it('a goal edit through the route reaches a live attachment as a re-triage of open tasks', async () => {
-      const tr = await post(`/api/workspaces/${wsId}/tasks`, { title: 'open task' });
+      const tr = await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, title: 'open task' });
       const task = ((await tr.json()) as { task: Task }).task;
 
       const requests: TriageRequest[] = [];
@@ -739,7 +753,7 @@ describe('hub workspace + task routes', () => {
       });
       expect(g.status).toBe(200);
       const mk = async (opts: Record<string, unknown>): Promise<string> => {
-        const res = await post(`/api/workspaces/${wsId}/tasks`, opts);
+        const res = await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, ...opts });
         expect(res.status).toBe(200);
         return ((await res.json()) as { task: { id: string } }).task.id;
       };
@@ -774,7 +788,7 @@ describe('hub workspace + task routes', () => {
       const r = await post('/api/workspaces', { name: 'filter-ws', goal: 'Ship it.' });
       const wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
       const mk = async (opts: Record<string, unknown>): Promise<string> => {
-        const res = await post(`/api/workspaces/${wsId}/tasks`, opts);
+        const res = await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, ...opts });
         return ((await res.json()) as { task: { id: string } }).task.id;
       };
       const dep = await mk({ title: 'dep', assignee: 'human' });
@@ -822,8 +836,16 @@ describe('hub workspace + task routes', () => {
             author: PERSON,
           }),
         });
-        await post(`/api/workspaces/${id}/tasks`, { title: 'in a subgoal', goal: 'g-one-a' });
-        await post(`/api/workspaces/${id}/tasks`, { title: 'a chore', goal: 'chores' });
+        await post(`/api/workspaces/${id}/tasks`, {
+          author: AGENT,
+          title: 'in a subgoal',
+          goal: 'g-one-a',
+        });
+        await post(`/api/workspaces/${id}/tasks`, {
+          author: AGENT,
+          title: 'a chore',
+          goal: 'chores',
+        });
         return { wsId: id };
       })();
 
@@ -843,7 +865,7 @@ describe('hub workspace + task routes', () => {
     it('a created workspace survives into a fresh server on the same dataDir', async () => {
       const r = await post('/api/workspaces', { name: 'durable-ws', goal: 'Persist.' });
       const wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
-      await post(`/api/workspaces/${wsId}/tasks`, { title: 'survives' });
+      await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, title: 'survives' });
       handle.tasks.flush();
 
       const second = createServer({ port: 0, dataDir });
