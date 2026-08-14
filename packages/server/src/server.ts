@@ -1429,7 +1429,23 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const folderPath = body?.folderPath as string | undefined;
           if (!folderPath && typeof body?.name === 'string' && body.name.trim().length > 0) {
             const goal = typeof body?.goal === 'string' ? (body.goal as string) : undefined;
-            const workspace = taskStore.createWorkspace(body.name.trim(), goal);
+            // Who leads the board. Explicit `leadAgentId` wins; otherwise the
+            // CREATING agent takes the seat — which is the whole point of
+            // "every workspace has a lead, always": the common path is an
+            // agent minting a board for work it is about to do. A person
+            // creating one leaves the seat open rather than being installed
+            // as an agent lead; the first agent to attach claims it.
+            const claimed = body?.leadAgentId;
+            const author = authorFor(body?.author);
+            const leadAgentId =
+              typeof claimed === 'string' && claimed.trim().length > 0
+                ? claimed.trim()
+                : author && classifyActor(author) === 'agent'
+                  ? author.id
+                  : undefined;
+            const workspace = taskStore.createWorkspace(body.name.trim(), goal, {
+              ...(leadAgentId !== undefined ? { leadAgentId } : {}),
+            });
             // createWorkspace emits no event (nothing subscribes to a
             // workspace that doesn't exist yet), so the route brings the
             // board room up itself.
@@ -1649,6 +1665,23 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const author = authorFor(body?.author);
           if (!author) return j(400, { error: 'author required' });
           const res = taskStore.setWorkspaceGoal(workspaceId, goal, { actor: author });
+          if (!res.ok) return j(404, res);
+          return j(200, res);
+        }
+        // set_workspace_lead: hand the board's lead-agent seat to someone
+        // else. A standing assignment, not a session fact — the lead may be
+        // away, and a goal edit still has an addressee to queue for.
+        const wsLeadMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/lead$/);
+        if (wsLeadMatch && req.method === 'PUT') {
+          const workspaceId = decodeURIComponent(wsLeadMatch[1] ?? '');
+          const body = await safeJson(req);
+          const leadAgentId = body?.leadAgentId;
+          if (typeof leadAgentId !== 'string' || leadAgentId.trim().length === 0) {
+            return j(400, { error: 'leadAgentId required' });
+          }
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const res = taskStore.setLeadAgent(workspaceId, leadAgentId, { actor: author });
           if (!res.ok) return j(404, res);
           return j(200, res);
         }

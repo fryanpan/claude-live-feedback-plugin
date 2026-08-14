@@ -87,6 +87,9 @@ export interface HubWorkspaceInfo {
   goalUpdatedAt: number;
   goals: HubGoal[];
   docIds: string[];
+  /** The agent responsible for this board. Absent = the seat is empty, and
+   *  the strip says so rather than showing a stale or guessed name. */
+  leadAgentId?: string;
   createdAt: number;
 }
 

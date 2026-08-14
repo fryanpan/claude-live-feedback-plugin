@@ -15,6 +15,7 @@ import {
   renderBoard,
   renderDecisions,
   renderGoalStrip,
+  renderLeadStrip,
   renderTaskDetail,
 } from '../src/hub/hub-render.ts';
 
@@ -469,6 +470,53 @@ describe('renderGoalStrip', () => {
   it('leads with start-planning on an empty workspace instead of an empty strip', () => {
     renderGoalStrip(root, '', { onGoalCommit: vi.fn() });
     expect(root.textContent).toContain('start planning');
+  });
+});
+
+describe('renderLeadStrip', () => {
+  it('names the lead and lists every known agent as a reassignment target', () => {
+    const onLeadCommit = vi.fn();
+    renderLeadStrip(root, 'agent-relay', ['agent-helper', 'agent-relay'], { onLeadCommit });
+    expect(root.textContent).toContain('Lead agent');
+    expect(root.classList.contains('hub-lead-empty')).toBe(false);
+    const select = root.querySelector('select') as HTMLSelectElement;
+    expect(Array.from(select.options).map((o) => o.value)).toEqual([
+      'agent-helper',
+      'agent-relay',
+    ]);
+    expect(select.value).toBe('agent-relay');
+
+    select.value = 'agent-helper';
+    select.dispatchEvent(new Event('change'));
+    expect(onLeadCommit).toHaveBeenCalledWith('agent-helper');
+  });
+
+  it('picking the agent that already leads commits nothing', () => {
+    const onLeadCommit = vi.fn();
+    renderLeadStrip(root, 'agent-relay', ['agent-helper'], { onLeadCommit });
+    const select = root.querySelector('select') as HTMLSelectElement;
+    // Positive control that this select can fire at all is the test above.
+    select.value = 'agent-relay';
+    select.dispatchEvent(new Event('change'));
+    expect(onLeadCommit).not.toHaveBeenCalled();
+  });
+
+  it('an empty seat reads as a state to fix, and still offers the attached agents', () => {
+    const onLeadCommit = vi.fn();
+    renderLeadStrip(root, undefined, ['agent-helper'], { onLeadCommit });
+    expect(root.textContent).toContain('No lead agent');
+    expect(root.classList.contains('hub-lead-empty')).toBe(true);
+    const select = root.querySelector('select') as HTMLSelectElement;
+    expect(select.value).toBe('');
+    select.value = 'agent-helper';
+    select.dispatchEvent(new Event('change'));
+    expect(onLeadCommit).toHaveBeenCalledWith('agent-helper');
+  });
+
+  it('with nothing to pick from it says the seat is empty rather than showing a dead dropdown', () => {
+    renderLeadStrip(root, undefined, [], { onLeadCommit: vi.fn() });
+    expect(root.textContent).toContain('No lead agent');
+    expect(root.querySelector('select')).toBeNull();
   });
 });
 
