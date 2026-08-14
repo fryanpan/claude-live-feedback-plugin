@@ -1,6 +1,5 @@
 /**
- * The work queue: "what do I pick up next, and what can run at the same
- * time" (§3.9 priority order, agent side).
+ * The work queue: "what do I pick up next" (§3.9 priority order, agent side).
  *
  * Priority is goal order, then task order — and until this existed there was
  * no way for an agent to READ goal order at all, so ordering lived in each
@@ -88,13 +87,17 @@ describe('buildQueue — priority order', () => {
     expect(buildQueue([mine, theirs], GOALS, { assignee: 'Live Feedback' })).toHaveLength(1);
   });
 
-  it('carries the first line of the description, so a row is pickup-able as it stands', () => {
-    const t = task({
-      body: 'Agent can read the queue so that it works in Bryan’s order.\n\nDone when: …',
-    });
-    expect(buildQueue([t], GOALS)[0]?.story).toBe(
-      'Agent can read the queue so that it works in Bryan’s order.',
-    );
+  it('carries the WHOLE description, so a row is pickup-able as it stands', () => {
+    // A first line is not a task. Truncating here sends the reader for a
+    // second call to find out what the work actually is, which is the
+    // navigation this queue exists to remove.
+    const body =
+      'Agent can read the queue so that it works in Bryan’s order.\n\nDone when: the top row is the highest band.';
+    expect(buildQueue([task({ body })], GOALS)[0]?.body).toBe(body);
+  });
+
+  it('reports an empty description as empty rather than undefined', () => {
+    expect(buildQueue([task()], GOALS)[0]?.body).toBe('');
   });
 });
 
@@ -133,61 +136,6 @@ describe('buildQueue — blockers', () => {
   it('a dangling dependency id cannot block — a deleted task must not wedge the queue', () => {
     const t = task({ after: ['t-deleted'], afterEnforce: ['t-deleted'] });
     expect(buildQueue([t], GOALS)[0]?.ready).toBe(true);
-  });
-});
-
-describe('buildQueue — waves (what can run at once)', () => {
-  it('puts independent work in the same wave and a dependant in the next', () => {
-    const a = task({ order: 1 });
-    const b = task({ order: 2 });
-    const afterA = task({ order: 3, after: [a.id] });
-    const rows = buildQueue([a, b, afterA], GOALS);
-    const wave = new Map(rows.map((r) => [r.id, r.wave]));
-    expect(wave.get(a.id)).toBe(0);
-    expect(wave.get(b.id)).toBe(0);
-    expect(wave.get(afterA.id)).toBe(1);
-  });
-
-  it('chains three deep', () => {
-    const a = task({ order: 1 });
-    const b = task({ order: 2, after: [a.id] });
-    const c = task({ order: 3, after: [b.id] });
-    const wave = new Map(buildQueue([a, b, c], GOALS).map((r) => [r.id, r.wave]));
-    expect([wave.get(a.id), wave.get(b.id), wave.get(c.id)]).toEqual([0, 1, 2]);
-  });
-
-  it('never runs two tasks of the same lane at once — the merge-conflict guard', () => {
-    // `after` models "don't start yet"; it does not model "these two rewrite
-    // the same file". Long branches that both append to styles.css conflict
-    // every time (learnings.md), and no dependency edge says so.
-    const one = task({ order: 1, lane: 'hub-render' });
-    const two = task({ order: 2, lane: 'hub-render' });
-    const other = task({ order: 3, lane: 'mcp' });
-    const wave = new Map(buildQueue([one, two, other], GOALS).map((r) => [r.id, r.wave]));
-    expect(wave.get(one.id)).toBe(0);
-    expect(wave.get(other.id)).toBe(0); // a different lane rides along
-    expect(wave.get(two.id)).toBe(1);
-  });
-
-  it('leaves lane-less tasks unconstrained, and says the grouping is undeclared', () => {
-    const a = task({ order: 1 });
-    const b = task({ order: 2 });
-    const rows = buildQueue([a, b], GOALS);
-    expect(rows.every((r) => r.wave === 0)).toBe(true);
-    // Honest reach: wave 0 means "nothing DECLARED a conflict", not "proven
-    // safe". A caller that can't tell the difference will fan out into a
-    // merge conflict, so the queue says which rows it had nothing to go on.
-    expect(rows.every((r) => r.laneDeclared === false)).toBe(true);
-    expect(buildQueue([task({ lane: 'x' })], GOALS)[0]?.laneDeclared).toBe(true);
-  });
-
-  it('limits after grouping, so a wave number never shifts with the page size', () => {
-    const a = task({ order: 1 });
-    const b = task({ order: 2, after: [a.id] });
-    const full = buildQueue([a, b], GOALS);
-    const capped = buildQueue([a, b], GOALS, { limit: 1 });
-    expect(capped).toHaveLength(1);
-    expect(capped[0]?.wave).toBe(full[0]?.wave);
   });
 });
 
