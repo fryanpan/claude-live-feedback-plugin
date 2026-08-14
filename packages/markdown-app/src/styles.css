@@ -1146,55 +1146,137 @@ body.hub-body {
   border-radius: 4px;
   opacity: 1;
 }
-/* Who has it, at the far right — a picker over everyone it could go to.
-   Borderless at rest for the same reason the status control is (see below):
-   a box on every row turns the last column into a grid of outlines. The
-   native caret is suppressed because the column is the tightest on the row
-   and the arrow costs ~16px of name; the pill shape carries "this is a
-   control", and hover/focus draw the border back. */
+/* Who has it, at the far right — a picker over everyone it could go to. It is
+   invisible by construction: the styling lives on the avatar it sits over
+   (`.hub-owner-avatar`, below), which is what carries the colour states. The
+   `hub-owner-<kind>` class stays on the select because that is where the row
+   reads it from. */
 .hub-row-assignee {
   appearance: none;
   -webkit-appearance: none;
-  max-width: 96px;
-  min-height: 30px;
-  padding: 2px 8px;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  background: none;
   font: inherit;
-  font-size: 12px;
-  color: var(--fg-muted);
+  color: inherit;
   cursor: pointer;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
-/* The three answers a reader acts on differently, told apart by colour as
-   well as by text — the name is the first thing a narrow row truncates, so
-   "a person has this" cannot depend on reading it. */
-.hub-row-assignee.hub-owner-human {
+/* --- the two round marks that flank the title --- */
+/* Status and owner used to be a 96px select each, drawing the words "In
+   progress" and a full agent id on every row of a list whose entire job is
+   letting someone read TITLES. ~200px plus gaps, out of 430px on the phone.
+   Both are round marks now.
+
+   The control is unchanged underneath: the native <select> is laid over its
+   mark at full size and made transparent. That is what keeps the phone's own
+   picker, the tab stop and the accessible name — a div-and-popup rewrite would
+   have owed all three back. The mark is `aria-hidden`, so the name a screen
+   reader announces is still the select's. */
+.hub-status-ctl,
+.hub-owner-ctl {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+}
+.hub-status-ctl .hub-status-select,
+.hub-owner-ctl .hub-row-assignee {
+  position: absolute;
+  /* Slightly larger than the mark it covers: 24px is under any tap-target
+     floor, and the overflow lands in the row's own gap rather than on a
+     neighbour. Nothing here affects layout — the element is absolute. */
+  inset: -5px;
+  width: auto;
+  max-width: none;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  opacity: 0;
+  cursor: pointer;
+}
+/* Focus has to survive the transparency, or the keyboard path this whole
+   construction exists to preserve becomes invisible. The ring moves to the
+   wrapper. */
+.hub-status-ctl:has(.hub-status-select:focus-visible),
+.hub-owner-ctl:has(.hub-row-assignee:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 50%;
+}
+.hub-status-ctl:hover .hub-status-mark,
+.hub-owner-ctl:hover .hub-owner-avatar {
+  box-shadow: 0 0 0 3px var(--bg-hover);
+}
+/* Shape and colour carry the status; no glyph for the two states a ring can
+   say by itself. Only `done` gets a character, because "finished" is the one
+   an empty ring cannot express. */
+.hub-status-mark {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 1.5px solid var(--fg-muted);
+  border-radius: 50%;
+}
+.hub-status-mark-in-progress {
+  border-color: var(--accent);
+}
+.hub-status-mark-in-progress::after {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.hub-status-mark-done {
+  border-color: var(--green);
+  background: var(--green);
+}
+.hub-status-mark-done::after {
+  content: "✓";
+  color: var(--bg, #fff);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+/* One or two letters (see `ownerInitials`). The colour states are the ones the
+   old pill carried, because "a person has this" must survive the loss of the
+   name — it is now the only thing left to read. */
+.hub-owner-avatar {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  user-select: none;
+}
+.hub-owner-avatar.hub-owner-human {
   color: var(--accent);
-  background-color: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  background-color: color-mix(in srgb, var(--accent) 12%, transparent);
 }
-.hub-row-assignee.hub-owner-agent {
+.hub-owner-avatar.hub-owner-agent {
   color: var(--fg-muted);
+  border-color: var(--border);
   background-color: var(--bg-subtle, #fafafa);
 }
-/* Nobody owns it. Dashed rather than coloured-in: it is a hole in the board,
-   and it should read as unfinished rather than as a fourth kind of owner. */
-.hub-row-assignee.hub-owner-none {
+/* Nobody owns it — a hole in the board, drawn as one. */
+.hub-owner-avatar.hub-owner-none {
   color: var(--fg-muted);
   border-style: dashed;
   border-color: var(--border);
-  font-style: italic;
-}
-.hub-row-assignee:hover {
-  background-color: var(--bg-hover);
-  border-color: var(--border);
-}
-.hub-row-assignee:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  background: none;
 }
 /* --- dragging --- */
 .hub-task-row.hub-dragging {
@@ -1280,34 +1362,15 @@ body.hub-body {
   border-radius: 4px;
 }
 /* The row's status control: a native <select>, so the workflow isn't assumed
-   to be linear (see TASK_STATUS_ORDER) and the phone gets its own picker.
-   Fixed width so column one is the same on every row and titles line up —
-   the widest label ("In progress") is what sets it. `appearance: none` drops
-   the platform chrome; the caret is drawn as a background triangle so the
-   control stays 30px tall, which is the row's own tap-target floor. */
+   to be linear (see TASK_STATUS_ORDER) and the phone gets its own picker. It
+   is transparent over `.hub-status-mark` (above) — no caret, no pill, no
+   label width; the ring is what a reader sees. */
 .hub-status-select {
-  flex: 0 0 auto;
-  width: 96px;
-  min-height: 30px;
-  padding: 2px 18px 2px 8px;
-  border-radius: 999px;
-  /* No box at rest. A border around every status control turns column one
-     into a grid of outlines and costs more readability than the affordance
-     buys — the caret already says "this opens something". The transparent
-     border stays so revealing it on hover doesn't reflow the row. */
-  border: 1px solid transparent;
-  background-color: transparent;
-  font-size: 12px;
-  line-height: 1;
-  cursor: pointer;
-  color: var(--fg-muted);
   appearance: none;
   -webkit-appearance: none;
-  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
-    linear-gradient(135deg, currentColor 50%, transparent 50%);
-  background-position: calc(100% - 11px) calc(50% + 1px), calc(100% - 7px) calc(50% + 1px);
-  background-size: 4px 4px, 4px 4px;
-  background-repeat: no-repeat;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
 }
 .hub-status-chip {
   flex: 0 0 auto;
@@ -1325,12 +1388,10 @@ body.hub-body {
    keyboard so it costs nothing while reading. focus-visible (not focus) keeps
    the ring off a mouse click but guarantees it for tab navigation — removing
    a border must not remove the only thing a keyboard user can see. */
-.hub-status-select:hover,
 .hub-status-chip:hover {
   background-color: var(--bg-hover);
   border-color: var(--border);
 }
-.hub-status-select:focus-visible,
 .hub-status-chip:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
@@ -1769,20 +1830,14 @@ a.hub-link-chip:hover {
   .hub-task-badges {
     max-width: 30%;
   }
-  /* A select CLIPS where a button ellipsised (see the status width note
-     below), so the mobile pill buys its width back from the caret this
-     control no longer draws. A name longer than this still truncates —
-     the colour states above are what keep the row readable when it does. */
-  .hub-row-assignee {
-    max-width: 84px;
-    padding: 2px 6px;
-  }
-  /* "In progress" is what sets this width, here as on desktop — a select
-     clips rather than ellipsizes, so anything narrower runs the label under
-     its own caret. The 8px saved goes to the title. */
-  .hub-status-select {
-    width: 88px;
-    padding-left: 6px;
+  /* Both marks stay 24px — the ~160px this used to cost in status and owner
+     labels is the whole point, and on a 430px row it all goes to the title.
+     What the phone gets instead is a bigger invisible target over the same
+     mark: 36px square, which is what a finger actually needs. The overflow is
+     absolute, so it costs no layout and lands in the row's own gap. */
+  .hub-status-ctl .hub-status-select,
+  .hub-owner-ctl .hub-row-assignee {
+    inset: -6px;
   }
   .hub-detail {
     padding: 0;
