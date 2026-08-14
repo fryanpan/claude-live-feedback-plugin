@@ -33,6 +33,11 @@ const AGENT: User = {
   color: '#888888',
 };
 
+/** Clears the decision-shape gate, so a fixture about the answer route is not
+ *  accidentally a test of the gate. */
+const DECISION_BODY =
+  'Ship now or wait for the index rebuild? Waiting costs a week and removes the stale-results risk. Blocked until answered: the launch note.';
+
 const anchor: ElementAnchor = {
   kind: 'element',
   fingerprint: {
@@ -503,6 +508,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
         title: 'ship now or wait for the index rebuild?',
         assignee: 'human',
         needs: 'decision',
+        body: DECISION_BODY,
         links: [{ kind: 'doc', docId: 'plan-doc' }],
       });
       const events: TaskStoreEvent[] = [];
@@ -544,7 +550,11 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
 
     it('404s an unknown task; 400s missing text or author', async () => {
       const wsId = await seedWorkspace();
-      const decision = await seedTask(wsId, { assignee: 'human', needs: 'decision' });
+      const decision = await seedTask(wsId, {
+        assignee: 'human',
+        needs: 'decision',
+        body: DECISION_BODY,
+      });
       expect(
         (await post('/api/tasks/t-missing/answer', { text: 'x', author: PERSON })).status,
       ).toBe(404);
