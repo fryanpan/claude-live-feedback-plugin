@@ -27,6 +27,7 @@ import {
   shareScopeAllows,
 } from './middleware/host-guard.ts';
 import { localHostnames, publicBaseUrl } from './public-host.ts';
+import { reviewThreadItems } from './review-queue.ts';
 import { type FeedbackWs, Rooms, type WorkspaceDirNode, type WorkspaceFileNode } from './rooms.ts';
 import { isWithinRoot } from './safe-path.ts';
 import { CfApi } from './share/cf-api.ts';
@@ -66,7 +67,7 @@ import {
   ASSIGNEE_REQUIRED_MESSAGE,
   resolveAssignee,
 } from './task-owner.ts';
-import { TaskProjection, taskIdOfBodyDoc } from './task-projection.ts';
+import { TaskProjection, taskBodyDocId, taskIdOfBodyDoc } from './task-projection.ts';
 import { buildQueue, summarizeGoals } from './task-queue.ts';
 import {
   type Ref,
@@ -1564,6 +1565,43 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // attach drains it. Surfaced so "nobody has picked this up" is
             // visible work on the board rather than a silent gap.
             pendingRetriage: taskStore.getPendingRetriage(workspaceId),
+          });
+        }
+        // The human's queue, to the board's agent-side `next` below: every
+        // open thread across this workspace's tasks and docs whose newest
+        // comment is an agent's. Decisions are NOT here — the board already
+        // holds every task, so shipping them again would put the priority
+        // rule in two places; the client merges the two halves and orders
+        // them (see `reviewQueue` in hub-model).
+        //
+        // One request rather than one per doc: a board with forty tasks is a
+        // board with forty rooms, and the strip has to be right at first
+        // paint or it is not a "what do I look at next" surface.
+        const wsReviewMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/review-items$/);
+        if (wsReviewMatch && req.method === 'GET') {
+          const workspaceId = decodeURIComponent(wsReviewMatch[1] ?? '');
+          const workspace = taskStore.getWorkspace(workspaceId);
+          if (!workspace) return j(404, { error: 'workspace not found' });
+          return j(200, {
+            workspaceId,
+            items: reviewThreadItems({
+              tasks: taskStore.listTasks(workspaceId).map((t) => ({
+                id: t.id,
+                title: t.title,
+                bodyDocId: taskBodyDocId(t.id),
+                done: t.status === 'done',
+              })),
+              docs: workspace.docIds.map((docId) => {
+                const meta = rooms.get(docId)?.meta;
+                // Title, else the file's BASENAME — never `relPath` whole and
+                // never `sourceUrl`. Those describe the host machine, and a
+                // share visitor reads this route (§3.3): a label is workspace
+                // content, a path is not.
+                const base = meta?.relPath?.split('/').pop();
+                return { docId, title: meta?.title || base || docId };
+              }),
+              source: { threadsOf: (docId) => rooms.listThreads(docId, { status: 'open' }) },
+            }),
           });
         }
         // The work queue: priority order, dependency-aware, grouped into
