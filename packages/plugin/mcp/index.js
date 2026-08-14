@@ -13790,7 +13790,7 @@ function suggestionAuthor() {
 }
 var server = new Server({
   name: "claude-live-feedback",
-  version: "0.1.20"
+  version: "0.1.21"
 }, {
   capabilities: {
     tools: {},
@@ -13869,7 +13869,8 @@ var server = new Server({
     "",
     "WORKSPACE HUB: a hub workspace is a goal + a task board + linked docs.",
     "create_workspace mints one; attach_doc links existing docs/reviews to it;",
-    "create_task / promote_to_task add work (omit `goal` and the task lands in",
+    "create_task / create_tasks (a whole burst in one call) / promote_to_task",
+    "add work (omit `goal` and the task lands in",
     "Chores awaiting triage — placing it with set_task_goal IS the triage:",
     "pick the goal AND the exact position, and pass riskTier for how dangerous",
     "the ACTION is, not how important the task is). task_transition is the",
@@ -14667,6 +14668,23 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       }
     },
     {
+      name: "create_tasks",
+      description: "Capture a BURST of ideas as tasks in ONE call — the tool to reach for when a conversation just produced five things worth doing, instead of five create_task round trips. Each row takes exactly the fields create_task takes (minus workspaceId), and every rule create_task applies applies per row: an omitted `assignee` means YOU own that row, an omitted `goal` routes that row through triage, an explicit `order` places it. Returns the created tasks IN BOARD ORDER — the ranking you just produced, without a second read — plus `failures: [{index, title, error, message}]` for any row that didn't land. A bad row NEVER rejects the batch: its neighbours are created and it comes back by index, so you fix and re-send that one row. The whole call is refused only when nothing could have landed anyway (unknown workspace, no rows).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          workspaceId: { type: "string" },
+          tasks: {
+            type: "array",
+            description: "The rows, at most 100 — an oversized batch is refused WHOLE rather than truncated, and a tracker that big belongs in import_tasks_markdown. Each row is a create_task body without `workspaceId`: {title, body?, assignee?, needs?, options?, goal?, order?, after?, afterEnforce?, dueAt?, links?, quote?}. `title` is the only required field — but write a `body` on every row you are not doing yourself within the hour, for the same reason create_task says so: a bare title is not pickup-able by an agent that was not in the conversation. Rows are created in the order given, and `after` can only name a task id you already hold, so dependencies BETWEEN rows of one batch need a follow-up set_task_dependencies.",
+            items: { type: "object" },
+            maxItems: 100
+          }
+        },
+        required: ["workspaceId", "tasks"]
+      }
+    },
+    {
       name: "promote_to_task",
       description: "Promote a comment thread into a task. Captures the origin ref (the thread backlinks to the task automatically), the latest HUMAN comment as the verbatim `quote` (agent replies never become the quote), and drafts a title + body from the quote when you don't supply them. Same goal semantics as create_task: omit `goal` to route the placement through triage. Returns { taskId, title, goal, order, quote } — trimmed.",
       inputSchema: {
@@ -15452,6 +15470,19 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           author: AUTHOR
         });
         return ok(taskCreatedSummary(res.task, res.ignoredLinks, res.shapeGaps));
+      }
+      case "create_tasks": {
+        const { workspaceId, tasks } = a;
+        const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/tasks/batch`, { tasks, author: AUTHOR });
+        const gapsFor = (taskId) => res.shapeGaps?.find((g) => g.taskId === taskId)?.gaps ?? undefined;
+        const droppedFor = (taskId) => res.ignoredLinks?.find((l) => l.taskId === taskId)?.ignored ?? undefined;
+        return ok({
+          created: res.tasks.map((t) => ({
+            title: t.title,
+            ...taskCreatedSummary(t, droppedFor(t.id), gapsFor(t.id))
+          })),
+          failures: res.failures
+        });
       }
       case "promote_to_task": {
         const { docId, threadId, workspaceId, title, body, assignee, needs, goal, dueAt, links } = a;
