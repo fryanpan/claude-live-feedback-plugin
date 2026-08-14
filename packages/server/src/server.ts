@@ -85,6 +85,10 @@ import { onClose, onMessage, onOpen } from './yjs-protocol.ts';
 
 const DEFAULT_PORT = Number(process.env.PORT ?? 8787);
 
+/** Rows one `POST /tasks/batch` will take. A burst out of a conversation is
+ *  single digits; a hundred is a tracker, and that has its own import path. */
+const MAX_BATCH_TASKS = 100;
+
 /**
  * Structural validation for PUT /api/workspaces/:id/goals. Returns the
  * sanitized list, or null if any entry is malformed. Unknown keys are
@@ -1856,6 +1860,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!Array.isArray(rows) || rows.length === 0) {
             return j(400, { error: 'tasks must be a non-empty array of task bodies' });
           }
+          // Refused, never truncated. A capture tool that silently keeps the
+          // first N reports success for rows that don't exist, and the caller
+          // has no way to know which — the failure this whole route is shaped
+          // to avoid. The number is a burst-sized ceiling, not a capacity
+          // limit: a batch this large is a tracker, and import_tasks_markdown
+          // is the surface for one.
+          if (rows.length > MAX_BATCH_TASKS) {
+            return j(400, {
+              error: 'too-many-tasks',
+              message: `a batch takes at most ${MAX_BATCH_TASKS} rows; this one had ${rows.length}. Nothing was created — split it, or use import_tasks_markdown for a whole tracker.`,
+            });
+          }
           const createdBy = authorFor(body?.author);
           const createdIds = new Set<string>();
           const failures: Array<{
@@ -1867,15 +1883,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const ignoredLinks: Array<{ taskId: string; ignored: unknown[] }> = [];
           const shapeGaps: Array<{ taskId: string; gaps: unknown[] }> = [];
           for (const [index, row] of rows.entries()) {
-            // A row may name its own author; without one it inherits the
-            // batch's, which is the common case (one agent, one burst).
-            const rowAuthor =
-              (row as { author?: unknown } | null)?.author !== undefined
-                ? authorFor((row as { author?: unknown }).author)
-                : createdBy;
+            // One caller, one identity: every row is attributed to whoever
+            // sent the batch. A row naming its own author would be a second
+            // way to spell attribution with no caller asking for it — and
+            // `assignee` already answers the question people actually have,
+            // which is who OWNS the row rather than who typed it.
             const title = (row as { title?: unknown } | null)?.title;
             const named = typeof title === 'string' ? { title } : {};
-            const parsed = parseTaskCreate(row, rowAuthor);
+            const parsed = parseTaskCreate(row, createdBy);
             if (!parsed.ok) {
               failures.push({
                 index,
