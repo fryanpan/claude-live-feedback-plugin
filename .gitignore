@@ -19,3 +19,26 @@ data/
 data-staging/
 coverage/
 .vitest-cache/
+
+# Working drafts stay local until someone deliberately publishes them.
+#
+# This repo is PUBLIC, and the convention is that plans, research notes and
+# mockups get written here while the work is in flight — bound to a live
+# review doc, not committed. At the time this was added there were 17 such
+# files sitting untracked in the primary checkout, seven of them named after
+# another project's ticket ids, all of them one `git add -A` from being
+# public record forever.
+#
+# These patterns do NOT untrack anything: the plans and demos already in the
+# repo stay tracked and their changes stay visible. What they stop is the
+# accidental sweep. Publishing a new one is still available and is now a
+# deliberate act — scrub it, then `git add -f <path>`. That is exactly the
+# shape the "scrub the plan, then open a PR for it" task describes.
+docs/product/plans/*.md
+docs/research/*.md
+# Tracked demos all live in demos/dev-server/ and demos/mockup/; loose files
+# at the top level of demos/ are one-off mockups for review, not deliverables.
+demos/*.html
+demos/*/
+!demos/dev-server/
+!demos/mockup/
