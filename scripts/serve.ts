@@ -17,12 +17,13 @@
  * Modes:
  *   default     — DEV: server runs under `bun --watch` (hot-reload on any
  *                 imported change) + a markdown-app bundler in --watch mode.
- *   --no-watch  — PROD: server runs as a plain long-lived process and the
- *                 bundler is NOT started. Deploys are deliberate (git pull +
- *                 rebuild dist + restart), so prod must NOT hot-reload — a
- *                 --watch reload once left the server alive-but-unbound and
- *                 took the fleet-shared review server down. This mode is what
- *                 the launchd service runs.
+ *   --no-watch  — PROD: rebuilds the browser bundles once, publishes them as
+ *                 an immutable client release outside this checkout, and runs
+ *                 the server as a plain long-lived process against it. No
+ *                 bundler, no hot-reload: deploys are deliberate (git pull +
+ *                 restart), and a --watch reload once left the server
+ *                 alive-but-unbound and took the fleet-shared review server
+ *                 down. This mode is what the launchd service runs.
  *
  * Stops cleanly on Ctrl+C.
  */
@@ -32,6 +33,12 @@ import { connect as netConnect, createServer as netServer } from 'node:net';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  type PreparedClient,
+  clientReleaseRoot,
+  currentClientRelease,
+  prepareClientRelease,
+} from '../packages/server/src/client-release.ts';
 
 const args = process.argv.slice(2);
 function arg(name: string): string | undefined {
@@ -82,24 +89,73 @@ function isPortListening(port: number, host = '127.0.0.1'): Promise<boolean> {
 
 const port = await pickFreePort(requestedPort);
 
-// PROD: the served bundles are whatever the last deploy left in dist/ — and
-// nothing enforced that a deploy rebuilt them. 2026-08-11: generated thread
-// summaries merged, the server restarted, and every browser kept loading a
-// pre-feature app.js because dist predated the merge — the server generated
-// summaries no client could display. Rebuild both served bundles here, once,
-// before the server starts, so restart == deploy. A failed build falls back
-// to the existing dist (stale beats down), loudly.
+// PROD deploy step. Two problems, one sequence:
+//
+//   1. The served bundles used to be whatever the last deploy left in dist/,
+//      and nothing enforced that a deploy rebuilt them. 2026-08-11: generated
+//      thread summaries merged, the server restarted, and every browser kept
+//      loading a pre-feature app.js. So: rebuild both bundles here, once,
+//      before the server starts — restart == deploy.
+//
+//   2. The server then served `packages/markdown-app/dist` FROM THIS CHECKOUT,
+//      per request. That made building anywhere in this checkout a deploy to
+//      the whole fleet, and made the served client track whichever commit the
+//      working tree happened to be parked on. So: copy the built bundles into
+//      an immutable release directory outside any working tree and serve that
+//      (client-release.ts). The switch is a rename, never a copy over live
+//      files, so there is no instant where a half-populated directory is
+//      being served.
+//
+// A failed build keeps the previous release live (stale beats down), loudly.
+const clientArgs: string[] = [];
 if (noWatch) {
+  let built = true;
   for (const pkg of ['widget', 'markdown-app']) {
     const r = spawnSync('bun', ['run', join(repoRoot, 'packages', pkg, 'scripts', 'build.ts')], {
       stdio: 'inherit',
     });
     if (r.status !== 0) {
-      console.error(
-        `[supervisor] ${pkg} build FAILED — serving the existing (possibly stale) dist`,
-      );
+      built = false;
+      console.error(`[supervisor] ${pkg} build FAILED`);
     }
   }
+
+  const root = clientReleaseRoot();
+  // A failed build must not be published even if dist LOOKS complete — the
+  // markdown-app build writes app.js before its second entrypoint, so a late
+  // failure leaves a dist that passes a file-existence check and is wrong.
+  const prepared: PreparedClient = built
+    ? prepareClientRelease({
+        root,
+        sources: {
+          widget: join(repoRoot, 'packages', 'widget', 'dist'),
+          markdownApp: join(repoRoot, 'packages', 'markdown-app', 'dist'),
+        },
+      })
+    : (() => {
+        const cur = currentClientRelease(root);
+        return {
+          releaseDir: cur?.releaseDir ?? null,
+          widget: cur?.widgetDir ?? null,
+          markdownApp: cur?.markdownAppDir ?? null,
+          stale: true,
+          error: 'bundle build failed',
+        };
+      })();
+
+  if (prepared.stale) {
+    console.error(
+      `[supervisor] client NOT republished (${prepared.error ?? 'unknown'}) — ` +
+        (prepared.releaseDir
+          ? `serving the last good release ${prepared.releaseDir}`
+          : 'and there is no previous release, so no client will be served'),
+    );
+  } else {
+    console.log(`[supervisor] client release: ${prepared.releaseDir}`);
+  }
+
+  if (prepared.widget) clientArgs.push('--widget-dist', prepared.widget);
+  if (prepared.markdownApp) clientArgs.push('--markdown-app-dist', prepared.markdownApp);
 }
 
 // DEV supervises two processes so code is never stale:
@@ -108,12 +164,16 @@ if (noWatch) {
 //   2. The markdown-app bundler in --watch mode — rebuilds dist on any
 //      src/**/*.{ts,css} or index.html change.
 // PROD (--no-watch) runs neither watcher: the server is a plain long-lived
-// process and dist is built once at deploy time.
+// process serving a client release published above, which nothing can change
+// while it runs.
 const serverArgs = [
   'run',
   join(repoRoot, 'packages', 'server', 'src', 'bin.ts'),
   '--port',
   String(port),
+  // PROD only: the published release to serve. Empty in dev, where the
+  // bundler watches this checkout's dist and the server should follow it.
+  ...clientArgs,
 ];
 if (!noWatch) serverArgs.unshift('--watch');
 const server = spawn('bun', serverArgs, {

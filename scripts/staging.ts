@@ -8,10 +8,11 @@
  * this touches it — which takes two specific guardrails, both of which are the
  * whole reason this script exists rather than a line in a doc:
  *
- * 1. **It refuses to run from the primary checkout.** Prod serves
- *    `packages/markdown-app/dist` per-request from that directory, so building
- *    bundles there is a deploy to the fleet, not a test build. A linked
- *    worktree has its own `dist`, so building there is inert for prod. We
+ * 1. **It refuses to run from the primary checkout.** That checkout is prod's
+ *    DEPLOY SOURCE: every prod start rebuilds the bundles there and publishes
+ *    them as the client release the whole fleet loads. So bundles built there
+ *    are staged to go out at the next restart — a test build that becomes a
+ *    deploy. A linked worktree has its own `dist`, which prod never reads. We
  *    detect the primary checkout by comparing `--git-dir` with
  *    `--git-common-dir`: they're equal only in the main checkout.
  *
@@ -56,8 +57,9 @@ if (isPrimaryCheckout && !args.includes('--force')) {
       '',
       `  ${repoRoot}`,
       '',
-      '  Prod serves packages/markdown-app/dist from this directory on every',
-      '  request, so building bundles here deploys to the whole fleet — the',
+      "  This checkout is prod's deploy source: every prod start rebuilds the",
+      '  bundles here and publishes them as the client release the whole fleet',
+      '  loads. Bundles built here are staged to ship at the next restart — the',
       '  "test build" would BE the deploy, which is the trap this exists to',
       '  prevent.',
       '',

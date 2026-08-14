@@ -2,6 +2,7 @@
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveClientDists } from './client-release.ts';
 import { lanHostnames, tailscaleHost } from './public-host.ts';
 import { createServer } from './server.ts';
 import { readKeychainPassword } from './share/keychain.ts';
@@ -22,8 +23,17 @@ function arg(name: string, fallback?: string): string | undefined {
 
 const requestedPort = Number(arg('port', process.env.PORT ?? '8787'));
 const dataDir = arg('data-dir', join(repoRoot, 'data'));
-const widgetDist = pathOrNull(join(repoRoot, 'packages', 'widget', 'dist'));
-const markdownAppDist = pathOrNull(join(repoRoot, 'packages', 'markdown-app', 'dist'));
+
+// Which browser bundles to serve. PROD passes published release directories
+// (see client-release.ts) so the served client is NOT read out of a git
+// working tree someone may be editing or switching branches in. Unset — `bun
+// run dev`, `bun run staging`, a bare bin.ts — falls back to this checkout's
+// own dist, which is what those want.
+const { widget: widgetDist, markdownApp: markdownAppDist } = resolveClientDists({
+  widgetDist: arg('widget-dist') ?? process.env.LF_WIDGET_DIST,
+  markdownAppDist: arg('markdown-app-dist') ?? process.env.LF_MARKDOWN_APP_DIST,
+  repoRoot,
+});
 const demosDir = pathOrNull(join(repoRoot, 'demos'));
 
 // Extra hostnames to treat as LOCAL. Loopback, the tailnet name, this
