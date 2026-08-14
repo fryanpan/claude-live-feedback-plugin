@@ -11,6 +11,7 @@ import {
   type ActivityFilter,
   type BoardSection,
   type DecisionRow,
+  type DriftNotice,
   type HubTask,
   type PendingRetriageView,
   type PresenceChip,
@@ -1255,13 +1256,24 @@ export function renderPresence(
   chips: PresenceChip[],
   followedKey: string | null,
   handlers: PresenceHandlers,
+  drift?: DriftNotice | null,
 ): void {
   container.replaceChildren();
-  if (chips.length === 0) {
+  if (chips.length === 0 && !drift) {
     container.classList.add('hidden');
     return;
   }
   container.classList.remove('hidden');
+  if (drift) {
+    // Beside the agents, because that is what it is about — and BEFORE the
+    // early return that a chipless strip used to take: an away session draws
+    // no chip, and an away session is the one most likely to be stranded on
+    // a bundle that predates whatever was just merged.
+    const note = document.createElement('div');
+    note.className = 'hub-drift';
+    note.innerHTML = `<span class="hub-drift-head">${escapeHtml(drift.headline)}</span><span class="hub-drift-who">${escapeHtml(drift.detail)}</span><span class="hub-drift-fix">${escapeHtml(drift.fix)}</span>`;
+    container.append(note);
+  }
   for (const chip of chips) {
     const el = document.createElement('button');
     el.type = 'button';
