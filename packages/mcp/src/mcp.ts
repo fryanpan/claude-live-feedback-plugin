@@ -66,13 +66,23 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
 
+/**
+ * Must match packages/plugin/.claude-plugin/plugin.json — this is the version
+ * a client sees in the initialize handshake, and it had drifted three minor
+ * releases behind. Asserted against the manifest, through the real bundle, in
+ * packages/mcp/test/launcher.test.ts.
+ *
+ * One constant rather than a literal per use: the same value is reported to
+ * the hub on attach, so the board can say which sessions are running an older
+ * bundle than the deploy source would install. A second literal would be a
+ * fourth version site, and this file's history is that version sites drift.
+ */
+const PLUGIN_VERSION = '0.1.27';
+
 const server = new Server(
   {
     name: 'claude-live-feedback',
-    // Must match packages/plugin/.claude-plugin/plugin.json — this is the version
-    // a client sees in the initialize handshake, and it had drifted three minor
-    // releases behind. Asserted in packages/mcp/test/launcher.test.ts.
-    version: '0.1.26',
+    version: PLUGIN_VERSION,
   },
   {
     capabilities: {
@@ -2455,6 +2465,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             agentId: agentId ?? AUTHOR.id,
             runtime: runtime ?? 'claude-code-local',
             ...(capabilities !== undefined ? { capabilities } : {}),
+            // What this session can actually DO is decided by the bundle it
+            // loaded at launch, not by what its machine's cache holds now.
+            // Reporting it is what lets the board say a merge never arrived.
+            pluginVersion: PLUGIN_VERSION,
           },
         )) as {
           attachment?: { agentId?: string };

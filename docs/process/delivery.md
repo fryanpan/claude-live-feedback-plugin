@@ -72,8 +72,10 @@ places, to the same value:
    reports about itself.
 2. `.claude-plugin/marketplace.json` — what the marketplace advertises, and
    what `claude plugin update` compares against.
-3. The `version:` literal in `packages/mcp/src/mcp.ts` — the `serverInfo` a
-   client sees in the MCP **initialize handshake**.
+3. The `PLUGIN_VERSION` constant in `packages/mcp/src/mcp.ts` — the
+   `serverInfo` a client sees in the MCP **initialize handshake**, and the
+   version each session reports to its board on `attach_agent`. One constant
+   for both, so those two can never disagree.
 
 The third one exists because the MCP server introduces itself independently of
 the plugin manifest, and it is the one that has actually drifted in the field:
@@ -166,6 +168,29 @@ read once from the launch environment.
 So the full path for a plugin change is: merge → bump landed → peer runs
 `claude plugin update live-feedback@claude-live-feedback` → **peer restarts the
 session**.
+
+An agent can run the update itself — but not through the shell function. On
+this machine `claude` resolves to a wrapper that injects flags ahead of the subcommand,
+so `claude plugin update …` is parsed as a prompt and dies with *"Input must be
+provided either through stdin or as a prompt argument when using --print"*,
+which reads like a permission refusal and was once written up as one. Use
+`command claude plugin update live-feedback@claude-live-feedback` — `command`
+bypasses functions and aliases. The restart remains the human step.
+
+### Who is behind, without going to look
+
+Every session reports the bundle it is **running** when it attaches to a
+workspace, and the board's presence strip names any session older than the
+version this server's deploy source would install, with both fix steps in
+order. So "does my peer have this yet" is a thing you read rather than a thing
+you audit — which matters because the failure mode is silence: eleven releases
+once sat undelivered with everything green on both ends.
+
+Two limits worth stating. "Released" means *this checkout's manifest*, not
+GitHub — a checkout nobody pulled reports its own staleness as current, the
+same limitation the published client release has. And a session that reports no
+version at all is counted as behind, because the field ships in the release
+that reads it; silence means older than this feature, not unknown.
 
 ## Reviewing work before it merges
 
