@@ -36,9 +36,15 @@ coverage/
 # shape the "scrub the plan, then open a PR for it" task describes.
 docs/product/plans/*.md
 docs/research/*.md
-# Tracked demos all live in demos/dev-server/ and demos/mockup/; loose files
-# at the top level of demos/ are one-off mockups for review, not deliverables.
-demos/*.html
-demos/*/
+# Tracked demos all live in demos/dev-server/ and demos/mockup/; anything else
+# at the top level of demos/ is a one-off mockup for review, not a deliverable.
+#
+# Match everything and re-include the two real ones, rather than listing file
+# types. The first cut used `demos/*.html` + `demos/*/`, and a symlink slipped
+# through both -- `*/` matches directories, and a symlink is neither a
+# directory nor an .html file. A symlink also carries its target path as
+# content, so enumerating entry kinds is the wrong question here; the right
+# one is whether an entry is something this repo ships.
+demos/*
 !demos/dev-server/
 !demos/mockup/
