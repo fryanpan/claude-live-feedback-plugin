@@ -193,6 +193,8 @@ export function readStoredSummary(value: unknown): StoredSummary | undefined {
  */
 export function anchorText(t: Thread): string {
   const a = t.anchor;
+  // A subject anchor has no text of its own — the thread is about the doc.
+  if (a.kind === 'subject') return '';
   const raw = a.kind === 'orphan' ? a.original?.snippet?.text : a.snippet?.text;
   return oneLine(raw ?? '');
 }

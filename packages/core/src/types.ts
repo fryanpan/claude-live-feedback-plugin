@@ -252,7 +252,20 @@ export interface OrphanAnchor {
   lastSeenAt: number;
 }
 
-export type Anchor = TextRangeAnchor | ElementAnchor | OrphanAnchor;
+/**
+ * A thread about the document itself rather than a span inside it.
+ *
+ * Every other kind points INTO content, so none of them can express "this
+ * comment is about the thing as a whole" — which is the only kind of comment a
+ * task discussion can be, and a new task's description is empty, so there is
+ * nothing in it to point at. A subject anchor cannot break, so it is never
+ * re-anchored and never orphaned.
+ */
+export interface SubjectAnchor {
+  kind: 'subject';
+}
+
+export type Anchor = TextRangeAnchor | ElementAnchor | OrphanAnchor | SubjectAnchor;
 
 export interface Comment {
   id: string;

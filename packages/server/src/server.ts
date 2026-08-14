@@ -234,6 +234,7 @@ export const HUB_FEEDBACK_DOC_ID = 'lf-hub-feedback';
 /** The anchor's display snippet, whichever anchor kind carries it — an
  *  orphan keeps its original's snippet. */
 function anchorSnippetText(anchor: Anchor): string | undefined {
+  if (anchor.kind === 'subject') return undefined;
   if (anchor.kind === 'orphan') {
     return anchor.original.snippet?.text;
   }
