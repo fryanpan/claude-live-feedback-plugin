@@ -94,6 +94,20 @@ If a create comes back `assignee-required`, your session was launched without
 you cannot fix it from inside the session, so say so and pass an explicit
 `assignee` meanwhile.
 
+## A burst of ideas goes on the board in one call
+
+When a conversation just produced five things worth doing, use `create_tasks`
+rather than five `create_task` round trips. Each row takes the same fields, and
+every rule above still applies per row — omit `assignee` and that row is yours,
+give it a `goal` and it lands there instead of in Chores. It returns the
+created tasks **in board order**, so you see the ranking you just produced
+without a second read.
+
+A bad row never rejects the batch: it comes back in `failures` by index, its
+neighbours are created, and you re-send that one row. So don't hold ideas back
+waiting until you're sure of all of them — capture the burst, then fix the row
+the API argued with.
+
 ## Keep the board current as you go
 
 - Transition to `in-progress` when you start, not when you report.
