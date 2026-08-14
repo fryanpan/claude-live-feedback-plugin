@@ -199,6 +199,25 @@ describe('a doc always lands in a workspace', () => {
     expect(handle.tasks.workspaceOfDoc('doc-then-attached')).toBe(realId);
   });
 
+  it('a deleted doc leaves no link behind on the board', async () => {
+    // Filing every doc means a board would otherwise collect one tombstone per
+    // deleted doc — invisible in the UI (a dangling id renders as nothing) and
+    // permanent in the store.
+    const created = await post('/api/docs', {
+      docId: 'doc-to-delete',
+      type: 'markdown',
+      sourceUrl: mdFile('to-delete.md'),
+    });
+    const wsId = ((await created.json()) as DocResponse).hubWorkspaceId as string;
+    // Positive control: it is linked right now, so "not linked" below is a
+    // claim about the delete rather than about a link that never existed.
+    expect(handle.tasks.getWorkspace(wsId)?.docIds).toContain('doc-to-delete');
+
+    const del = await local('/api/docs/doc-to-delete', { method: 'DELETE' });
+    expect(del.status).toBe(200);
+    expect(handle.tasks.getWorkspace(wsId)?.docIds).not.toContain('doc-to-delete');
+  });
+
   it('files the doc the WIDGET conjures, not just the ones a route creates', async () => {
     // A mockup doc auto-creates on the `/y/<id>` websocket connect — the
     // widget is a third creation path next to POST /api/docs and the MCP
