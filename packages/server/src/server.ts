@@ -1795,6 +1795,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             failures: res.failures,
             skipped: mapping.skipped,
             ignoredColumns: mapping.ignoredColumns,
+            // Hand-copied, like every field above it — a mapping field that
+            // isn't listed here is silently dropped on the apply path while
+            // the dry-run (which spreads `mapping`) still shows it.
+            warnings: mapping.warnings,
           });
         }
         const wsTasksMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/tasks$/);
