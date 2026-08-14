@@ -23,7 +23,7 @@ export interface HubTransition {
 }
 
 /** One task as projected into the `tasks` Y.Map (§3.3 visitor contract —
- *  display names only, no body, no actor ids). */
+ *  display names only, no actor ids). */
 export interface HubTask {
   id: string;
   title: string;
@@ -44,6 +44,10 @@ export interface HubTask {
   riskTier?: 'green' | 'yellow' | 'red';
   transitions: HubTransition[];
   bodyDocId: string;
+  /** The description, as markdown. Capped by the server projection — see
+   *  `bodyTruncated` — with the full text always in the body doc. */
+  body?: string;
+  bodyTruncated?: boolean;
   createdAt: number;
   updatedAt: number;
 }
