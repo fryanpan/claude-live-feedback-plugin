@@ -13754,7 +13754,7 @@ function suggestionAuthor() {
 }
 var server = new Server({
   name: "claude-live-feedback",
-  version: "0.1.14"
+  version: "0.1.15"
 }, {
   capabilities: {
     tools: {},
@@ -13967,6 +13967,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           title: { type: "string" },
           setId: { type: "string" },
           subscribe: { type: "boolean" },
+          hubWorkspaceId: {
+            type: "string",
+            description: 'Optional hub workspace (board) to file this doc under — the id `create_workspace` returned, NOT a folder-bind grouping id. Omit it and the doc still lands in a workspace: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went. Filing it later with attach_doc moves it out of Unfiled.'
+          },
           producedBy: {
             type: "object",
             description: "Optional provenance for the activity event stream: {agentId?, sessionId?}. Captured into doc meta so hands-on activity events can attribute the doc to the producing agent + session. If omitted, agentId is derived from the owner cwd and sessionId stays null.",
@@ -14024,7 +14028,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           docId: { type: "string" },
           sourceHtmlPath: { type: "string" },
           title: { type: "string" },
-          subscribe: { type: "boolean" }
+          subscribe: { type: "boolean" },
+          hubWorkspaceId: {
+            type: "string",
+            description: 'Optional hub workspace (board) to file this mockup under — the id `create_workspace` returned, NOT a folder-bind grouping id. Omit it and the mockup still lands in a workspace: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went.'
+          }
         },
         required: ["docId", "sourceHtmlPath"]
       }
@@ -14979,7 +14987,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok(res);
       }
       case "create_review_doc": {
-        const { docId, path, title, setId, producedBy } = a;
+        const { docId, path, title, setId, hubWorkspaceId, producedBy } = a;
         const res = await http("POST", "/api/docs", {
           docId,
           type: "markdown",
@@ -14987,6 +14995,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           owner: process.cwd(),
           ...title ? { title } : {},
           ...setId ? { setId } : {},
+          ...hubWorkspaceId ? { hubWorkspaceId } : {},
           ...producedBy ? { producedBy } : {}
         });
         return ok(res);
@@ -15010,13 +15019,14 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok(res);
       }
       case "bind_mock": {
-        const { docId, sourceHtmlPath, title } = a;
+        const { docId, sourceHtmlPath, title, hubWorkspaceId } = a;
         const res = await http("POST", "/api/docs", {
           docId,
           type: "mockup",
           owner: process.cwd(),
           ...sourceHtmlPath ? { sourceUrl: sourceHtmlPath } : {},
-          ...title ? { title } : {}
+          ...title ? { title } : {},
+          ...hubWorkspaceId ? { hubWorkspaceId } : {}
         });
         return ok(res);
       }

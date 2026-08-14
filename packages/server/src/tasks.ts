@@ -1143,6 +1143,23 @@ export class TaskStore {
     return { ok: true };
   }
 
+  /** Unlink a doc from a hub workspace. `removed` distinguishes "it was
+   *  linked and now isn't" from "it was never linked" — the caller filing a
+   *  doc out of the holding-pen workspace needs to know whether anything
+   *  actually moved before it refreshes a projection. */
+  detachDoc(
+    workspaceId: string,
+    docId: string,
+  ): { ok: true; removed: boolean } | { ok: false; error: 'workspace-not-found' } {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return { ok: false, error: 'workspace-not-found' };
+    const i = state.workspace.docIds.indexOf(docId);
+    if (i === -1) return { ok: true, removed: false };
+    state.workspace.docIds.splice(i, 1);
+    this.scheduleSave(workspaceId);
+    return { ok: true, removed: true };
+  }
+
   /**
    * The hub workspace this docId belongs to for SHARE-SCOPE purposes, or
    * null (§3.12 commit 8): a doc linked via attachDoc, or a task's own body
