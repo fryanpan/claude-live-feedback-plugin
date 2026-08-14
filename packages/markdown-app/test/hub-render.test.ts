@@ -1261,3 +1261,28 @@ describe('renderQuickAdd', () => {
     );
   });
 });
+
+/**
+ * A percentage max-width on a grid item resolves against its own grid AREA.
+ * `.hub-task-badges` sits in an `auto` track — a track sized FROM the item —
+ * so `max-width: 30%` meant "30% of yourself", and with `overflow: hidden`
+ * the `decision` pill rendered as the two letters "de" on a phone. Nothing
+ * else in this suite can see it: happy-dom has no layout, the DOM is
+ * identical either way, and the row's grid template is already asserted
+ * above and was correct the whole time. Found by looking at a staging board
+ * at 430px, which is the only way this class of defect is ever found.
+ */
+describe('the row badges are capped against the viewport, not against themselves', () => {
+  it('never uses a percentage max-width on .hub-task-badges', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    // vitest runs from the repo root (vitest.config.ts lives there).
+    const css = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
+    const rules = [...css.matchAll(/\.hub-task-badges\s*\{([^}]*)\}/g)].map((m) => m[1] ?? '');
+    // Positive control: the rules this asserts about really were found, and
+    // one of them really does cap the width.
+    expect(rules.length).toBeGreaterThan(1);
+    expect(rules.some((r) => /max-width/.test(r))).toBe(true);
+    for (const r of rules) expect(r).not.toMatch(/max-width:\s*[\d.]+%/);
+  });
+});

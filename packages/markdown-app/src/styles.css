@@ -1898,13 +1898,18 @@ a.hub-link-chip:hover {
   .hub-badge-after {
     display: none;
   }
-  /* Hard ceiling so a long assignee name can never win the row against the
-     title. `minmax(0, 1fr)` handles the title side; this handles the other.
-     Tighter than it was, because the row now also carries a handle, an open
-     zone and the assignee — four fixed columns plus gaps out of 430px, and
-     the title is the one that must not collapse. */
+  /* Hard ceiling so badges can never win the row against the title.
+     `minmax(0, 1fr)` handles the title side; this handles the other.
+
+     In viewport units, NOT a percentage. A percentage max-width on a grid
+     item resolves against its own grid AREA — and this item's track is
+     `auto`, i.e. sized from the item — so `max-width: 30%` meant "30% of
+     yourself" and clipped every badge to a third of its width: the
+     `decision` pill rendered as the two letters "de" against `overflow:
+     hidden`, on the one surface whose job is to say at a glance which rows
+     need a person. Found on a staging board at 430px. */
   .hub-task-badges {
-    max-width: 30%;
+    max-width: 30vw;
   }
   /* Both marks stay 24px — the ~160px this used to cost in status and owner
      labels is the whole point, and on a 430px row it all goes to the title.
