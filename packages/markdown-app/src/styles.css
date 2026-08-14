@@ -2758,6 +2758,57 @@ body.composer-open #editor .ProseMirror ::selection {
   pointer-events: none;
 }
 
+/* ================= STALE CLIENT NOTICE =================
+   Sits next to the toast because it is the same kind of thing: a
+   transient, bottom-docked line that must never take a click the
+   document wanted. Shown once per page load, at most. */
+
+.stale-client {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--kb-bottom, 0px) + 24px + var(--safe-bottom));
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(92vw, 520px);
+  background: #1b1f23;
+  color: #fff;
+  padding: 8px 10px 8px 16px;
+  border-radius: 99px;
+  font-size: 14px;
+  z-index: 1201;
+  box-shadow: var(--shadow-lg);
+}
+.stale-client__text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.stale-client__reload {
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 99px;
+  padding: 5px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1b1f23;
+  background: #fff;
+  cursor: pointer;
+}
+.stale-client__dismiss {
+  flex: 0 0 auto;
+  border: 0;
+  background: transparent;
+  color: #b8bfc7;
+  font-size: 14px;
+  line-height: 1;
+  padding: 6px;
+  cursor: pointer;
+}
+.stale-client__dismiss:hover {
+  color: #fff;
+}
+
 /* ================= FULL-SCREEN THREAD VIEW =================
    Tapping a highlight in the doc opens this — Notion's "Diskussion"
    pattern. Focused single-thread view, dismissable with X or Esc. */

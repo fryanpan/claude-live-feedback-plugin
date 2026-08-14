@@ -4,6 +4,14 @@ alwaysApply: true
 
 # Continuous Feedback & Learning
 
+> **Scope: sessions that are NOT working a live-feedback board.** If this
+> session has a workspace board, `workspace-board.md` governs — finishing a
+> task means taking the next one, and anything you'd want to ask or report
+> goes in a task comment. The prompts below ("ask for feedback", "offer a
+> retro after a PR") were written for a chat-driven session; on a queue they
+> fire after every task and manufacture a stop. Capturing learnings still
+> applies everywhere.
+
 ## After Completing a Feature
 1. **Self-review** before declaring done:
    - Did I miss any edge cases?
