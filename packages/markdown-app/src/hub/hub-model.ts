@@ -845,10 +845,18 @@ export function pluginDriftNotice(release: PluginRelease | null | undefined): Dr
     detail: behind
       .map((b) => `${b.agentId} ${b.pluginVersion ?? '(too old to report)'}`.trim())
       .join(', '),
-    // The order is load-bearing and the reason this sentence exists at all:
-    // restarting first re-resolves the cache as it stands, which has moved a
-    // session BACKWARDS a version in exactly this situation.
-    fix: 'Run: claude plugin update live-feedback@claude-live-feedback — then restart that session.',
+    // Two things this one sentence has to get right.
+    //
+    // `command` — because `claude` is a shell FUNCTION on this machine that
+    // injects flags ahead of the subcommand, so the bare form is parsed as a
+    // prompt and dies with a message that reads like a permission refusal.
+    // An agent already filed that as "deploying is not mine to run". Printing
+    // a remediation known to fail is worse than printing none; `command` is
+    // inert wherever no such wrapper exists.
+    //
+    // The ORDER — restarting first re-resolves the cache as it stands, which
+    // has moved a session BACKWARDS a version in exactly this situation.
+    fix: 'Run: command claude plugin update live-feedback@claude-live-feedback — then restart that session.',
   };
 }
 

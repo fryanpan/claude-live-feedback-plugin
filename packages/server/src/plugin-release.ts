@@ -20,6 +20,7 @@
 
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /** Numeric, component-wise comparison. Returns -1 | 0 | 1. */
 export function compareSemver(a: string, b: string): number {
@@ -67,9 +68,22 @@ export function readReleasedPluginVersion(rootDir: string = repoRoot()): string 
   }
 }
 
+/**
+ * The directory a `file:` module URL points at.
+ *
+ * Exported because `.pathname` is NOT a filesystem path: it keeps percent
+ * escapes, so a checkout under `~/My Code/` resolves to a directory that does
+ * not exist, the manifest read fails, and the entire drift signal switches
+ * itself off without a word. This machine's checkout has no spaces in it,
+ * which is precisely why nothing here would ever have caught it.
+ */
+export function moduleDir(url: string): string {
+  return dirname(fileURLToPath(url));
+}
+
 /** This file is `<root>/packages/server/src/plugin-release.ts`. */
 function repoRoot(): string {
-  return resolve(dirname(new URL(import.meta.url).pathname), '../../..');
+  return resolve(moduleDir(import.meta.url), '../../..');
 }
 
 /** The subset of an attachment this module needs — kept structural so the

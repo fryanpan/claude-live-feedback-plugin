@@ -643,8 +643,13 @@ describe('pluginDriftNotice', () => {
     expect(n.detail).toBe('agent-quill 0.1.12');
     // Both steps, in order. Restarting first pulls whatever the cache already
     // holds — which has moved a session BACKWARDS a version.
+    // `command` bypasses shell functions and aliases. Bryan's shell wraps
+    // `claude` with one that injects flags ahead of the subcommand, so the
+    // bare form is parsed as a prompt and fails — printing a remediation
+    // that does not work is worse than printing none. Harmless everywhere
+    // that has no such wrapper.
     expect(n.fix).toBe(
-      'Run: claude plugin update live-feedback@claude-live-feedback — then restart that session.',
+      'Run: command claude plugin update live-feedback@claude-live-feedback — then restart that session.',
     );
   });
 

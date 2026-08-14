@@ -1405,7 +1405,9 @@ describe('renderPresence — plugin drift', () => {
     const note = host.querySelector('.hub-drift');
     expect(note?.textContent).toContain('older plugin than 0.1.26');
     expect(note?.textContent).toContain('agent-quill 0.1.12');
-    expect(note?.textContent).toContain('claude plugin update live-feedback@claude-live-feedback');
+    expect(note?.textContent).toContain(
+      'command claude plugin update live-feedback@claude-live-feedback',
+    );
   });
 
   it('renders nothing extra when every agent is current', () => {
