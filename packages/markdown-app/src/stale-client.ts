@@ -103,7 +103,7 @@ export function showStaleNotice(doc: Document, reload: () => void): void {
 
   const text = doc.createElement('span');
   text.className = 'stale-client__text';
-  text.textContent = 'A newer version of this app is available.';
+  text.textContent = 'New version available';
 
   const reloadBtn = doc.createElement('button');
   reloadBtn.type = 'button';
