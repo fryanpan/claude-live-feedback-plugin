@@ -702,6 +702,130 @@ describe('hub workspace + task routes', () => {
     });
   });
 
+  describe('GET /api/workspaces/:id/next (the work queue)', () => {
+    /** Goals a, b + a chores task, so priority order is observable. */
+    async function seed(): Promise<{ wsId: string; ids: Record<string, string> }> {
+      const r = await post('/api/workspaces', { name: 'queue-ws', goal: 'Ship it.' });
+      const wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
+      const g = await local(`/api/workspaces/${wsId}/goals`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          goals: [
+            {
+              id: 'g-ship',
+              title: '1. Ship',
+              subgoals: [
+                { id: 'g-blockers', title: '1.1 Blockers' },
+                { id: 'g-loop', title: '1.2 Loop' },
+              ],
+            },
+          ],
+          author: PERSON,
+        }),
+      });
+      expect(g.status).toBe(200);
+      const mk = async (opts: Record<string, unknown>): Promise<string> => {
+        const res = await post(`/api/workspaces/${wsId}/tasks`, opts);
+        expect(res.status).toBe(200);
+        return ((await res.json()) as { task: { id: string } }).task.id;
+      };
+      const ids: Record<string, string> = {};
+      ids.chore = await mk({ title: 'A chore', goal: 'chores' });
+      ids.loop = await mk({ title: 'Loop work', goal: 'g-loop' });
+      ids.blocker = await mk({
+        title: 'Delivery blocker',
+        goal: 'g-blockers',
+        body: 'Agent can ship so that peers get the fix.\n\nDone when: merged.',
+      });
+      return { wsId, ids };
+    }
+
+    it('answers in priority order, with the goal title and the description line', async () => {
+      const { wsId, ids } = await seed();
+      const res = await local(`/api/workspaces/${wsId}/next`);
+      expect(res.status).toBe(200);
+      const { tasks } = (await res.json()) as {
+        tasks: Array<{ id: string; goalTitle: string; body: string }>;
+      };
+      expect(tasks.map((t) => t.id)).toEqual([ids.blocker, ids.loop, ids.chore]);
+      expect(tasks[0]?.goalTitle).toBe('1.1 Blockers');
+      // The WHOLE description, not a first line — the row has to be
+      // pickup-able without a second call.
+      expect(tasks[0]?.body).toBe(
+        'Agent can ship so that peers get the fix.\n\nDone when: merged.',
+      );
+    });
+
+    it('forwards assignee, limit and includeBlocked', async () => {
+      const r = await post('/api/workspaces', { name: 'filter-ws', goal: 'Ship it.' });
+      const wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
+      const mk = async (opts: Record<string, unknown>): Promise<string> => {
+        const res = await post(`/api/workspaces/${wsId}/tasks`, opts);
+        return ((await res.json()) as { task: { id: string } }).task.id;
+      };
+      const dep = await mk({ title: 'dep', assignee: 'human' });
+      const held = await mk({ title: 'held', after: [dep], afterEnforce: [dep] });
+
+      const mine = await local(`/api/workspaces/${wsId}/next?assignee=human`);
+      const mineRows = (await mine.json()) as { tasks: Array<{ id: string }> };
+      expect(mineRows.tasks.map((t) => t.id)).toEqual([dep]);
+
+      const capped = await local(`/api/workspaces/${wsId}/next?limit=1`);
+      expect(((await capped.json()) as { tasks: unknown[] }).tasks).toHaveLength(1);
+
+      // Default hides the hard-blocked row; includeBlocked brings it back.
+      const plain = await local(`/api/workspaces/${wsId}/next`);
+      expect(
+        ((await plain.json()) as { tasks: Array<{ id: string }> }).tasks.map((t) => t.id),
+      ).not.toContain(held);
+      const all = await local(`/api/workspaces/${wsId}/next?includeBlocked=true`);
+      const allRows = (await all.json()) as {
+        tasks: Array<{ id: string; ready: boolean; blockedBy: unknown[] }>;
+      };
+      const heldRow = allRows.tasks.find((t) => t.id === held);
+      expect(heldRow?.ready).toBe(false);
+      expect(heldRow?.blockedBy).toHaveLength(1);
+    });
+
+    it('404s for an unknown workspace', async () => {
+      const res = await local('/api/workspaces/w-nope/next');
+      expect(res.status).toBe(404);
+    });
+  });
+
+  describe('GET /api/workspaces/:id (goal summary)', () => {
+    it('returns the ordered goals with counts, parent then subgoals, Chores last', async () => {
+      const { wsId } = await (async () => {
+        const r = await post('/api/workspaces', { name: 'summary-ws', goal: 'Ship it.' });
+        const id = ((await r.json()) as { workspace: { id: string } }).workspace.id;
+        await local(`/api/workspaces/${id}/goals`, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            goals: [
+              { id: 'g-one', title: '1. One', subgoals: [{ id: 'g-one-a', title: '1.1 One A' }] },
+            ],
+            author: PERSON,
+          }),
+        });
+        await post(`/api/workspaces/${id}/tasks`, { title: 'in a subgoal', goal: 'g-one-a' });
+        await post(`/api/workspaces/${id}/tasks`, { title: 'a chore', goal: 'chores' });
+        return { wsId: id };
+      })();
+
+      const res = await local(`/api/workspaces/${wsId}`);
+      expect(res.status).toBe(200);
+      const { goalSummary } = (await res.json()) as {
+        goalSummary: Array<{ id: string; title: string; depth: number; todo: number }>;
+      };
+      expect(goalSummary.map((g) => g.id)).toEqual(['g-one', 'g-one-a', 'chores']);
+      expect(goalSummary.map((g) => g.depth)).toEqual([0, 1, 0]);
+      expect(goalSummary.find((g) => g.id === 'g-one-a')?.todo).toBe(1);
+      expect(goalSummary.find((g) => g.id === 'chores')?.todo).toBe(1);
+    });
+  });
+
   describe('persistence through the server handle', () => {
     it('a created workspace survives into a fresh server on the same dataDir', async () => {
       const r = await post('/api/workspaces', { name: 'durable-ws', goal: 'Persist.' });
