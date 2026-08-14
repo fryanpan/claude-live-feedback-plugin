@@ -89,6 +89,10 @@ What it will not accept is the bare word `agent`: that names a category, and a
 board where every row is owned by "agent" cannot answer who is doing what, or
 give you your own queue from `next_tasks(assignee: <your name>)`.
 
+The same rule holds when you hand a task over later: `assign_task` takes a
+person, `'human'`, or an agent's name, and refuses the bare word too. A gate
+that only guards creation can be walked back one hand-off at a time.
+
 If a create comes back `assignee-required`, your session was launched without
 `FEEDBACK_AGENT_NAME`. That is a launcher setting, read once at session start —
 you cannot fix it from inside the session, so say so and pass an explicit
