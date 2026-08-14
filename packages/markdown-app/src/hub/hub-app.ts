@@ -27,7 +27,7 @@ import {
   type ReorderTarget,
   type UptimeReport,
   boardSections,
-  decisionRows,
+  decisionQueue,
   presenceChips,
 } from './hub-model.ts';
 import {
@@ -36,6 +36,7 @@ import {
   otherAssignee,
   renderActivity,
   renderBoard,
+  renderDecisionWalkthrough,
   renderDecisions,
   renderDocsSidebar,
   renderGoalStrip,
@@ -59,6 +60,8 @@ interface HubState {
   docs: SidebarDoc[];
   threads: SidebarThread[];
   detailTaskId: string | null;
+  /** Position in the decision walkthrough; -1 when it is closed. */
+  walkIndex: number;
   followedKey: string | null;
 }
 
@@ -138,6 +141,7 @@ function buildShell(root: HTMLElement, name: string): void {
       <aside id="hub-threads" class="hub-side hub-side-threads"></aside>
     </div>
     <div id="hub-detail" class="hub-detail hidden"></div>
+    <div id="hub-walkthrough" class="hub-walkthrough hidden"></div>
     <div id="hub-help" class="hub-help hidden">
       <div class="hub-help-card">
         <h2>Keyboard shortcuts</h2>
@@ -189,6 +193,7 @@ async function main(): Promise<void> {
     docs: [],
     threads: [],
     detailTaskId: null,
+    walkIndex: -1,
     followedKey: null,
   };
 
@@ -279,7 +284,14 @@ async function main(): Promise<void> {
         : row;
       back?.focus();
     }
-    renderDecisions(el('hub-decisions'), decisionRows(taskList()), boardHandlers.onOpenTask);
+    renderDecisions(el('hub-decisions'), decisionQueue(taskList()), {
+      onOpen: boardHandlers.onOpenTask,
+      onWalkthrough: () => {
+        state.walkIndex = 0;
+        renderWalkthrough();
+      },
+    });
+    renderWalkthrough();
     for (const btn of document.querySelectorAll<HTMLButtonElement>('.hub-tabs .hub-tab')) {
       btn.classList.toggle('hub-tab-active', btn.dataset.tab === state.tab);
       btn.setAttribute('aria-selected', String(btn.dataset.tab === state.tab));
@@ -323,6 +335,29 @@ async function main(): Promise<void> {
       onTitleCommit: (t, title) => void renameTask(t, title),
       onAnswer: (t, text) => void answerDecision(t, text),
       onAssign: (t, assignee) => void assignTask(t, assignee),
+    });
+  }
+
+  /**
+   * The walkthrough re-derives its queue from the live projection on every
+   * render, and the position is an INDEX into that queue rather than a task
+   * id. So answering the card you're on drops it out of the queue and the
+   * same index lands on the next one — six answers without six navigations —
+   * and a decision another peer answers while you sit here simply isn't
+   * offered to you.
+   */
+  function renderWalkthrough(): void {
+    renderDecisionWalkthrough(el('hub-walkthrough'), decisionQueue(taskList()), state.walkIndex, {
+      onAnswer: (t, text, optionId) => void answerDecision(t, text, optionId),
+      onMoreInfo: (t, question) => void requestMoreInfo(t, question),
+      onStep: (i) => {
+        state.walkIndex = Math.max(0, i);
+        renderWalkthrough();
+      },
+      onClose: () => {
+        state.walkIndex = -1;
+        renderWalkthrough();
+      },
     });
   }
 
@@ -467,13 +502,28 @@ async function main(): Promise<void> {
     renderGoal();
   }
 
-  async function answerDecision(task: HubTask, text: string): Promise<void> {
+  async function answerDecision(task: HubTask, text: string, optionId?: string): Promise<void> {
     // Posted with the PERSON's own identity: answer.by shows who decided.
+    // `text` is always the verbatim answer — tapping an option sends the
+    // option's label as the answer and its id alongside, so nothing about the
+    // recorded answer depends on the option list still existing later.
     const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/answer`, 'POST', {
       text,
+      ...(optionId ? { optionId } : {}),
       author,
     });
     if (!res.ok) showToast('Recording the answer failed');
+  }
+
+  /** "I can't answer this yet" — the decision stays open and unanswered. */
+  async function requestMoreInfo(task: HubTask, question: string): Promise<void> {
+    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/more-info`, 'POST', {
+      question,
+      author,
+    });
+    showToast(
+      res.ok ? 'Asked — it stays open until you have the answer' : 'Sending the question failed',
+    );
   }
 
   // ── Sidebars ────────────────────────────────────────────────────────────
@@ -576,6 +626,7 @@ async function main(): Promise<void> {
     'task.transitioned',
     'task.regrouped',
     'decision.answered',
+    'decision.info_requested',
     'workspace.goal_updated',
     'workspace.goals_changed',
   ]) {

@@ -213,6 +213,7 @@ describe('TaskStore attachment registry', () => {
       title: 'your go',
       assignee: 'human',
       needs: 'decision',
+      body: 'Which of these two? Both land this week; the second costs a migration. Blocked until answered: the PR.',
       goal: 'chores',
     });
     if (!dec.ok) throw new Error('fixture');

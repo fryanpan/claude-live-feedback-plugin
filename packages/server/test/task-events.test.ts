@@ -125,6 +125,7 @@ describe('task store events + audit log', () => {
         title: 'Your go?',
         assignee: 'human',
         needs: 'decision',
+        body: 'Your go — which of these two? Both land this week; the second costs a migration. Blocked until answered: the PR.',
       });
       if (!gate.ok) throw new Error('create failed');
       const blocked = store.createTask(ws.id, {
@@ -152,6 +153,7 @@ describe('task store events + audit log', () => {
         title: 'Expand the budget?',
         assignee: 'human',
         needs: 'decision',
+        body: 'Expand the budget, or cut the scope? Expanding costs $40/mo forever. Blocked until answered: the summaries rollout.',
         links: [{ kind: 'doc', docId: 'plan-doc' }],
       });
       if (!created.ok) throw new Error('create failed');
