@@ -138,6 +138,58 @@ describe('task creation records a real owner', () => {
     });
   });
 
+  describe('re-assign (POST /api/tasks/<id>/assignee)', () => {
+    // The create routes refuse an owner that resolves to the generic word, but
+    // ownership can also be SET after the fact — and that route took any
+    // non-empty string. So a board whose every create was gated could still be
+    // walked back to "agent" one hand-over at a time, which is exactly the
+    // state the gate exists to prevent.
+    async function seedTask(wsId: string, title: string): Promise<Task> {
+      const { task } = await jj<{ task: Task }>(
+        await post(`/api/workspaces/${wsId}/tasks`, { title, author: AGENT }),
+      );
+      return task;
+    }
+
+    it('refuses a hand-over to the generic word, and leaves the owner alone', async () => {
+      const wsId = await seedWorkspace();
+      const task = await seedTask(wsId, 'Rebuild the index');
+      const r = await post(`/api/tasks/${task.id}/assignee`, {
+        assignee: GENERIC_ASSIGNEE,
+        author: PERSON,
+      });
+      expect(r.status).toBe(400);
+      const body = (await r.json()) as { error: string; message?: string };
+      expect(body.error).toBe('assignee-required');
+      // Same rule as the create routes, so the same remediation.
+      expect(body.message).toContain('FEEDBACK_AGENT_NAME');
+      // The refusal is a no-op, not a clear: the previous owner still has it.
+      expect((await getTasks(wsId)).find((t) => t.id === task.id)?.assignee).toBe('Search Revamp');
+    });
+
+    it('hands the task to a named agent', async () => {
+      const wsId = await seedWorkspace();
+      const task = await seedTask(wsId, 'Write the launch note');
+      const ok = await post(`/api/tasks/${task.id}/assignee`, {
+        assignee: 'Index Rebuild',
+        author: PERSON,
+      });
+      expect(ok.status).toBe(200);
+      expect((await getTasks(wsId)).find((t) => t.id === task.id)?.assignee).toBe('Index Rebuild');
+    });
+
+    it("hands the task to a person — 'human' is an answer", async () => {
+      const wsId = await seedWorkspace();
+      const task = await seedTask(wsId, 'Decide the ranking rule');
+      const ok = await post(`/api/tasks/${task.id}/assignee`, {
+        assignee: 'human',
+        author: PERSON,
+      });
+      expect(ok.status).toBe(200);
+      expect((await getTasks(wsId)).find((t) => t.id === task.id)?.assignee).toBe('human');
+    });
+  });
+
   describe('promote (thread → task)', () => {
     async function seedThread(docId: string): Promise<string> {
       const file = join(dataDir, `${docId}.md`);
