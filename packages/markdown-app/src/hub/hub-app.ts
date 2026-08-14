@@ -26,11 +26,13 @@ import {
   type PresenceChip,
   type PresencePerson,
   type ReorderTarget,
+  type ReviewItem,
+  type ReviewThreadItem,
   type UptimeReport,
   boardSections,
-  decisionQueue,
   goalLabel,
   presenceChips,
+  reviewQueue,
 } from './hub-model.ts';
 import {
   type SidebarDoc,
@@ -40,12 +42,12 @@ import {
   discussionIsBusy,
   renderActivity,
   renderBoard,
-  renderDecisionWalkthrough,
-  renderDecisions,
   renderDocsSidebar,
   renderGoalStrip,
   renderLeadStrip,
   renderPresence,
+  renderReviewStrip,
+  renderReviewWalkthrough,
   renderTaskDetail,
   renderThreadsSidebar,
 } from './hub-render.ts';
@@ -72,7 +74,14 @@ interface HubState {
    */
   discussion: TaskDiscussion;
   discussionTaskId: string | null;
-  /** Position in the decision walkthrough; -1 when it is closed. */
+  /**
+   * The thread-shaped half of "what needs you" — task discussions and doc
+   * comments whose newest word is an agent's. Server-computed, because
+   * whether a comment is an agent's is `classifyActor`'s call and there must
+   * not be a second one. Decisions are derived from `tasks` here.
+   */
+  reviewItems: ReviewThreadItem[];
+  /** Position in the review walkthrough; -1 when it is closed. */
   walkIndex: number;
   followedKey: string | null;
 }
@@ -208,6 +217,7 @@ async function main(): Promise<void> {
     detailTaskId: null,
     discussion: { loading: false, threads: [] },
     discussionTaskId: null,
+    reviewItems: [],
     walkIndex: -1,
     followedKey: null,
   };
@@ -264,6 +274,34 @@ async function main(): Promise<void> {
     onTitleCommit: (task: HubTask, title: string) => void renameTask(task, title),
     onAssign: (task: HubTask, assignee: string) => void assignTask(task, assignee),
   };
+
+  /** Re-derived on every render rather than stored: the decision half comes
+   *  from the live projection, so an answer anyone posts drops its item out
+   *  without a fetch. */
+  const currentQueue = () => reviewQueue(taskList(), state.reviewItems, Date.now());
+
+  /**
+   * "Exactly the place where I need to review and make the choice" — the
+   * whole point of the queue. A decision opens its task panel; a task comment
+   * opens that task's discussion; a doc comment opens the doc AT the comment
+   * (`?thread=`), not the doc's top.
+   */
+  function openReviewItem(item: ReviewItem): void {
+    if (item.decision) {
+      boardHandlers.onOpenTask(item.decision.task);
+      return;
+    }
+    const t = item.thread;
+    if (!t) return;
+    if (t.kind === 'task-thread') {
+      const task = t.taskId ? state.tasks.get(t.taskId) : undefined;
+      if (task) boardHandlers.onOpenTask(task);
+      return;
+    }
+    location.assign(
+      `/review/${encodeURIComponent(t.docId)}?thread=${encodeURIComponent(t.threadId)}`,
+    );
+  }
 
   /** Everyone a task can be handed to besides a person: the agents attached
    *  to this workspace, plus the lead (who owns goal changes here and is
@@ -324,8 +362,8 @@ async function main(): Promise<void> {
         : row;
       back?.focus();
     }
-    renderDecisions(el('hub-decisions'), decisionQueue(taskList()), {
-      onOpen: boardHandlers.onOpenTask,
+    renderReviewStrip(el('hub-decisions'), currentQueue(), {
+      onOpen: openReviewItem,
       onWalkthrough: () => {
         state.walkIndex = 0;
         renderWalkthrough();
@@ -469,9 +507,15 @@ async function main(): Promise<void> {
    * offered to you.
    */
   function renderWalkthrough(): void {
-    renderDecisionWalkthrough(el('hub-walkthrough'), decisionQueue(taskList()), state.walkIndex, {
+    renderReviewWalkthrough(el('hub-walkthrough'), currentQueue(), state.walkIndex, {
       onAnswer: (t, text, optionId) => void answerDecision(t, text, optionId),
       onMoreInfo: (t, question) => void requestMoreInfo(t, question),
+      onReply: (item, text) => void replyToReviewItem(item, text),
+      onOpenItem: (item) => {
+        state.walkIndex = -1;
+        renderWalkthrough();
+        openReviewItem(item);
+      },
       onStep: (i) => {
         state.walkIndex = Math.max(0, i);
         renderWalkthrough();
@@ -666,6 +710,39 @@ async function main(): Promise<void> {
     );
   }
 
+  /**
+   * Answer a queued comment from the queue itself. The reply is an ordinary
+   * thread comment — the same POST the doc and the task panel use — which is
+   * what takes the item OUT of the queue: `awaitingPerson` reports a thread
+   * only while an agent spoke last, so there is no separate dismissed flag to
+   * write and none to keep in sync.
+   */
+  async function replyToReviewItem(item: ReviewItem, text: string): Promise<void> {
+    const t = item.thread;
+    if (!t) return;
+    const res = await send(
+      `/api/docs/${encodeURIComponent(t.docId)}/threads/${encodeURIComponent(t.threadId)}/comments`,
+      'POST',
+      { author, text },
+    );
+    if (!res.ok) {
+      showToast('Posting the reply failed — your text is still in the box');
+      return;
+    }
+    // Refresh BEFORE re-rendering: the walkthrough steps by position, so the
+    // answered item has to be gone from the queue for the same index to land
+    // on the next thing rather than re-showing the one just answered.
+    await loadReviewItems();
+  }
+
+  async function loadReviewItems(): Promise<void> {
+    const res = await fetchJson<{ items: ReviewThreadItem[] }>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/review-items`,
+    );
+    state.reviewItems = res?.items ?? [];
+    renderBoardRegion();
+  }
+
   // ── Sidebars ────────────────────────────────────────────────────────────
   async function loadSidebars(): Promise<void> {
     const docIds = state.info?.docIds ?? [];
@@ -794,11 +871,18 @@ async function main(): Promise<void> {
   // board is not subscribed to each task's own doc stream.
   for (const name of ['thread.created', 'thread.replied', 'thread.resolved', 'thread.reopened']) {
     es.addEventListener(name, () => {
+      // Every one of these can change what is waiting on a person — a new
+      // question arrives, someone answers one, a thread is closed. The strip
+      // is the surface that has to be right when Bryan comes back, so it
+      // refreshes whether or not a task panel happens to be open.
+      void loadReviewItems();
       const open = state.detailTaskId ? state.tasks.get(state.detailTaskId) : undefined;
       if (!open || discussionIsBusy(document)) return;
       void loadDiscussion(open, true);
     });
   }
+  // A task going done takes its discussion out of the queue.
+  es.addEventListener('task.transitioned', () => void loadReviewItems());
 
   // Controls.
   for (const btn of document.querySelectorAll<HTMLButtonElement>('.hub-tabs .hub-tab')) {
@@ -917,6 +1001,7 @@ async function main(): Promise<void> {
   void loadSidebars();
   void loadAgents();
   void loadEvents();
+  void loadReviewItems();
 }
 
 void main();
