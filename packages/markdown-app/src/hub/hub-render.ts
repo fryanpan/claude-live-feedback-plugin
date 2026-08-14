@@ -1232,12 +1232,12 @@ export interface DetailHandlers {
   onAssign: (task: HubTask, assignee: string) => void;
   /** The agents currently attached to this workspace — see `BoardHandlers`. */
   knownAgentIds?: string[];
-  /** Goal id → the title the board shows for it, subgoals included. The panel
-   *  is where a reader goes to find out what a task is FOR, so it has to name
-   *  the goal the way the section header above the row named it; an id is a
-   *  fact about the store. Optional, and a miss falls back to the id — a
-   *  freshly renamed goal must not blank the row. */
-  goalTitles?: Record<string, string>;
+  /** Names the goal the way the board's own section header does — pass
+   *  `hub-model`'s `goalLabel`, which resolves subgoals and Chores. The panel
+   *  is where a reader goes to find out what a task is FOR, so an id is a
+   *  fact about the store rather than an answer. Optional, and without it the
+   *  row falls back to the id — a missing lookup must not blank it. */
+  goalLabel?: (goalId: string) => string;
   /** A comment on the task. With `threadId` it is a reply; without one it
    *  opens a new thread about the task itself. */
   onComment?: (task: HubTask, text: string, threadId?: string) => Promise<boolean>;
@@ -1476,7 +1476,7 @@ export function renderTaskDetail(
     );
     meta.append(dt, dd);
   }
-  addMeta('Goal', handlers.goalTitles?.[task.goal] ?? task.goal);
+  addMeta('Goal', handlers.goalLabel?.(task.goal) ?? task.goal);
   if (task.riskTier) addMeta('Risk', task.riskTier);
   if (task.dueAt !== undefined) addMeta('Due', new Date(task.dueAt).toLocaleDateString());
   if (task.after.length > 0) addMeta('After', task.after.join(', '));

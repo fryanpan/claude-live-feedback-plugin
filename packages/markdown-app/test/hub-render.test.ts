@@ -8,6 +8,7 @@ import {
   type UptimeReport,
   boardSections,
   decisionQueue,
+  goalLabel,
 } from '../src/hub/hub-model.ts';
 import {
   type BoardHandlers,
@@ -729,19 +730,29 @@ describe('renderTaskDetail', () => {
   it('names the goal the way the board does', () => {
     renderTaskDetail(root, task({ goal: 'g-pr' }), {
       ...detailHandlers(),
-      goalTitles: { 'g-pr': '1. Get the PR out' },
+      goalLabel: (id) => goalLabel(GOALS, id),
     });
     expect(metaValue('Goal')).toBe('1. Get the PR out');
   });
 
-  it('falls back to the id when nothing names that goal', () => {
-    renderTaskDetail(root, task({ goal: 'g-unknown' }), {
-      ...detailHandlers(),
-      goalTitles: { 'g-pr': '1. Get the PR out' },
-    });
-    // Positive control for the test above: the lookup is real, so a miss
-    // still says something rather than going blank.
-    expect(metaValue('Goal')).toBe('g-unknown');
+  // Chores is a real section with a real header, and it is also where an
+  // orphaned task lands — so both have to say Chores here, not `chores`.
+  it('says Chores for a chore and for a goal that no longer exists', () => {
+    for (const goal of [CHORES_ID, 'g-deleted']) {
+      root.replaceChildren();
+      renderTaskDetail(root, task({ goal }), {
+        ...detailHandlers(),
+        goalLabel: (id) => goalLabel(GOALS, id),
+      });
+      expect(metaValue('Goal')).toBe('Chores');
+    }
+  });
+
+  it('falls back to the id when no lookup is wired in', () => {
+    renderTaskDetail(root, task({ goal: 'g-pr' }), detailHandlers());
+    // Positive control for the tests above: the label comes from the lookup,
+    // so without one the row still says something rather than going blank.
+    expect(metaValue('Goal')).toBe('g-pr');
   });
 
   // The server accepted, keyed and backlinked `url` refs before anything

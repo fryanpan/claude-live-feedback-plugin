@@ -29,6 +29,7 @@ import {
   type UptimeReport,
   boardSections,
   decisionQueue,
+  goalLabel,
   presenceChips,
 } from './hub-model.ts';
 import {
@@ -272,17 +273,6 @@ async function main(): Promise<void> {
     return [...new Set([...state.agents.map((a) => a.agentId), ...(lead ? [lead] : [])])];
   }
 
-  /** Goal id → the title the board's own section headers show, subgoals
-   *  included — the detail panel names a goal the same way the board does. */
-  function goalTitles(): Record<string, string> {
-    const out: Record<string, string> = {};
-    for (const g of state.info?.goals ?? []) {
-      out[g.id] = g.title;
-      for (const sub of g.subgoals ?? []) out[sub.id] = sub.title;
-    }
-    return out;
-  }
-
   function renderGoal(): void {
     renderGoalStrip(el('hub-goal'), state.info?.goal ?? '', {
       onGoalCommit: (goal) => void saveGoal(goal),
@@ -401,7 +391,7 @@ async function main(): Promise<void> {
         onAnswer: (t, text) => void answerDecision(t, text),
         onAssign: (t, assignee) => void assignTask(t, assignee),
         knownAgentIds: knownAgentIds(),
-        goalTitles: goalTitles(),
+        goalLabel: (id) => goalLabel(state.info?.goals ?? [], id),
         onComment: (t, text, threadId) => postTaskComment(t, text, threadId),
       },
       task ? discussion : undefined,
