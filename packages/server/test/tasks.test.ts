@@ -148,7 +148,7 @@ describe('TaskStore', () => {
         links: [{ kind: 'doc', docId: 'mockup-doc' }],
         origin: { kind: 'thread', docId: 'mockup-doc', threadId: 'th-1' },
         dueAt: 1770000000000,
-        body: 'Two candidate palettes are attached.',
+        body: 'Which of the two attached palettes? The warmer one costs a contrast pass. Blocked until answered: the mockup.',
       });
       expect(res.ok).toBe(true);
       if (!res.ok) return;
@@ -157,7 +157,7 @@ describe('TaskStore', () => {
       expect(res.task.links).toEqual([{ kind: 'doc', docId: 'mockup-doc' }]);
       expect(res.task.origin).toEqual({ kind: 'thread', docId: 'mockup-doc', threadId: 'th-1' });
       expect(res.task.dueAt).toBe(1770000000000);
-      expect(res.task.body).toBe('Two candidate palettes are attached.');
+      expect(res.task.body).toContain('Which of the two attached palettes?');
     });
 
     it("rejects a goal id that isn't chores or in the goal list", () => {
@@ -184,7 +184,12 @@ describe('TaskStore', () => {
   describe('listTasks', () => {
     it('filters by status / assignee / needs / goal', () => {
       const ws = store.createWorkspace('ws');
-      const a = store.createTask(ws.id, { title: 'a', assignee: 'human', needs: 'decision' });
+      const a = store.createTask(ws.id, {
+        title: 'a',
+        assignee: 'human',
+        needs: 'decision',
+        body: 'a or b? b costs a migration. Blocked until answered: the PR.',
+      });
       store.createTask(ws.id, { title: 'b' });
       if (!a.ok) throw new Error('create failed');
       store.transition(a.task.id, 'in-progress', { actor: PERSON });
@@ -287,6 +292,7 @@ describe('TaskStore', () => {
         title: 'your go',
         assignee: 'human',
         needs: 'decision',
+        body: 'Your go — which of these two? Both land this week; the second costs a migration. Blocked until answered: the PR.',
       });
       if (!gate.ok) throw new Error('create failed');
       const work = store.createTask(ws.id, { title: 'Open the PR', after: [gate.task.id] });
@@ -313,6 +319,7 @@ describe('TaskStore', () => {
         title: 'your go',
         assignee: 'human',
         needs: 'decision',
+        body: 'Your go — which of these two? Both land this week; the second costs a migration. Blocked until answered: the PR.',
       });
       if (!gate.ok) throw new Error('create failed');
       const work = store.createTask(ws.id, {
