@@ -774,11 +774,29 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     return m ? m[0] : p;
   }
 
+  // `?thread=<id>` — arrive AT the comment, not at the document that contains
+  // it. The board's review queue links here, and "it drops me on the doc and I
+  // scroll looking for it" is the thing that link exists to remove. Fired once,
+  // on the first sync: threads don't exist before the ydoc arrives, and
+  // re-revealing on every later sync would yank the reader back mid-read.
+  let deepLinked = false;
+  function revealLinkedThread(): void {
+    if (deepLinked) return;
+    const wanted = new URLSearchParams(location.search).get('thread');
+    if (!wanted) return;
+    // Only when it's really there — a stale link should leave the reader on
+    // the doc rather than pulse at nothing.
+    if (!reviewChrome.collectThreads().some((t) => t.id === wanted)) return;
+    deepLinked = true;
+    reviewChrome.revealThread(wanted);
+  }
+
   client.onReady(() => {
     if (scope.disposed) return;
     reviewChrome.renderDocLabel();
     void renderSetNav();
     reviewChrome.redrawThreads();
+    revealLinkedThread();
   });
 
   // ---- Save state indicator ----

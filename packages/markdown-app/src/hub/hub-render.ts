@@ -10,12 +10,14 @@ import {
   type ActivityEvent,
   type ActivityFilter,
   type BoardSection,
-  type DecisionQueue,
   type DecisionRow,
   type HubTask,
   type PendingRetriageView,
   type PresenceChip,
   type ReorderTarget,
+  type ReviewItem,
+  type ReviewKind,
+  type ReviewQueue,
   TASK_STATUS_ORDER,
   type TaskStatus,
   type UptimeReport,
@@ -301,6 +303,32 @@ function assigneePicker(
 }
 
 /**
+ * One or two letters for the circle that stands in for an owner.
+ *
+ * A board row is read for its TITLE, and the two controls flanking it were
+ * spending ~200px on the words "In progress" and a full agent id — on the
+ * surface whose entire job is letting someone scan what the work is. The name
+ * does not disappear: it stays on the picker's `title`/`aria-label` and in the
+ * detail panel, where there is room for it.
+ *
+ * `agent-` / `agent_` leads are dropped before the initials are taken, because
+ * every agent id starts with it and a column of "A"s distinguishes nobody.
+ * A single word yields ONE letter rather than its first two — "HU" for `human`
+ * reads as a name fragment, "H" reads as a mark.
+ */
+export function ownerInitials(owner: string): string {
+  const trimmed = owner.trim();
+  if (trimmed === '' || trimmed.toLowerCase() === GENERIC_ASSIGNEE) return '?';
+  const words = trimmed
+    .replace(/^agent[-_\s]+/i, '')
+    .split(/[-_\s.]+/)
+    .filter((w) => /[a-z0-9]/i.test(w));
+  if (words.length === 0) return '?';
+  if (words.length === 1) return (words[0][0] ?? '?').toUpperCase();
+  return `${words[0][0]}${words[1][0]}`.toUpperCase();
+}
+
+/**
  * A hovering, precise pointer is what makes tap-to-rename on the title safe:
  * it implies a visible hover state (so the drag handle and the open zone are
  * discoverable) and a click that lands where it was aimed. Asking the pointer
@@ -477,6 +505,18 @@ export function renderTaskRow(task: HubTask, handlers: BoardHandlers): HTMLEleme
     if (to !== task.status) handlers.onStatusSet(task, to);
   });
 
+  // …drawn as a small round mark rather than as the word. The select is still
+  // the control — it is laid over the mark at full size and made transparent,
+  // which is the only way to keep the phone's native picker and the keyboard
+  // behaviour while spending 22px instead of 96px of the row. Nothing about
+  // the picker changes: same class, same options, same aria-label.
+  const statusCtl = document.createElement('span');
+  statusCtl.className = 'hub-status-ctl';
+  const statusMark = document.createElement('span');
+  statusMark.className = `hub-status-mark hub-status-mark-${task.status}`;
+  statusMark.setAttribute('aria-hidden', 'true');
+  statusCtl.append(statusMark, chip);
+
   // ── Far left: the drag handle. Hidden until the row is hovered or the
   // handle itself is focused (CSS) — a permanent column of ⠿ is noise on a
   // list you read by skimming. A done row keeps the ELEMENT and loses the
@@ -543,11 +583,22 @@ export function renderTaskRow(task: HubTask, handlers: BoardHandlers): HTMLEleme
 
   // ── Far right: who has it, and the gesture that hands it over — the same
   // picker the detail panel offers.
+  // Same construction as the status control, same reason: a circle of initials
+  // where a truncated id used to be, with the real picker transparent on top
+  // of it so the gesture, the keyboard path and the accessible name all stay.
   const assignee = assigneePicker('hub-row-assignee', task, handlers.knownAgentIds, (to) =>
     handlers.onAssign(task, to),
   );
+  const ownerCtl = document.createElement('span');
+  ownerCtl.className = 'hub-owner-ctl';
+  const avatar = document.createElement('span');
+  const ownerKind = assignee.className.split(' ').find((c) => c.startsWith('hub-owner-')) ?? '';
+  avatar.className = `hub-owner-avatar ${ownerKind}`;
+  avatar.textContent = ownerInitials(task.assignee);
+  avatar.setAttribute('aria-hidden', 'true');
+  ownerCtl.append(avatar, assignee);
 
-  row.append(handle, openZone, chip, dot, title, taskBadges(task), assignee);
+  row.append(handle, openZone, statusCtl, dot, title, taskBadges(task), ownerCtl);
   row.addEventListener('click', () => handlers.onOpenTask(task));
   row.addEventListener('keydown', (ev) => {
     if (ev.key === 'Enter' && !(ev.target as HTMLElement).closest('input')) {
@@ -738,11 +789,94 @@ export function renderBoard(
   wireBoardReorder(container, sections, handlers);
 }
 
+// ── Quick capture ──────────────────────────────────────────────────────────
+
+/**
+ * One box, always in the same place, that turns a sentence into a task.
+ *
+ * Built once and never re-rendered — unlike every other region here. That is
+ * the whole point: the board repaints on every ydoc change, and a composer
+ * that is replaced mid-sentence loses what you were typing and the caret with
+ * it. So `renderQuickAdd` is a MOUNT, guarded against a second call on the
+ * same container.
+ */
+export interface QuickAddHandlers {
+  /** The raw text, exactly as typed. Splitting it into title and body is the
+   *  model's job, not the DOM's.
+   *
+   *  Resolves true when the task actually exists. The box clears on THAT, not
+   *  on dispatch: a phone in a lift would otherwise eat the idea and hand back
+   *  a toast, which is the one failure this box exists to prevent, at the
+   *  moment it costs most. */
+  onCapture: (text: string) => Promise<boolean>;
+}
+
+export function renderQuickAdd(container: HTMLElement, handlers: QuickAddHandlers): void {
+  if (container.dataset.mounted === '1') return;
+  container.dataset.mounted = '1';
+  const form = document.createElement('form');
+  form.className = 'hub-quick-form';
+  const input = document.createElement('textarea');
+  input.className = 'hub-quick-input';
+  input.rows = 1;
+  input.placeholder = 'Capture a task — say it however you like';
+  input.setAttribute('aria-label', 'Capture a task');
+  const submit = document.createElement('button');
+  submit.type = 'submit';
+  submit.className = 'hub-btn hub-quick-submit';
+  submit.textContent = 'Add';
+
+  // Grow with the text: an idea that runs to three lines shouldn't be typed
+  // through a one-line slot.
+  const autosize = () => {
+    input.style.height = 'auto';
+    input.style.height = `${Math.min(input.scrollHeight, 160)}px`;
+  };
+  // One in flight at a time. Without this the second Enter — the reflex when
+  // the first appears to do nothing — files the idea twice, because the text
+  // now stays in the box until the task lands.
+  let inFlight = false;
+  const capture = () => {
+    const text = input.value.trim();
+    if (!text || inFlight) return;
+    inFlight = true;
+    submit.disabled = true;
+    void handlers.onCapture(text).then((ok) => {
+      inFlight = false;
+      submit.disabled = false;
+      if (!ok) return;
+      // Only what was sent. Anything typed while it was in flight is a second
+      // idea, and clearing the whole box would take it with the first.
+      input.value = input.value.trim() === text ? '' : input.value;
+      autosize();
+    });
+  };
+  input.addEventListener('input', autosize);
+  // Enter submits, Shift+Enter is a newline — the convention every chat box
+  // has, because this is the box people reach for instead of chat.
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter' && !ev.shiftKey) {
+      ev.preventDefault();
+      capture();
+    } else if (ev.key === 'Escape') {
+      input.blur();
+    }
+  });
+  form.addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    capture();
+  });
+  form.append(input, submit);
+  container.append(form);
+}
+
 // ── Decisions strip ────────────────────────────────────────────────────────
 
-export interface DecisionStripHandlers {
-  /** Jump straight to one decision's detail panel. */
-  onOpen: (task: HubTask) => void;
+export interface ReviewStripHandlers {
+  /** Jump straight to where this one gets answered — the decision's panel,
+   *  the task's discussion at that thread, the doc anchored on that comment.
+   *  "Exactly the place", not the containing surface. */
+  onOpen: (item: ReviewItem) => void;
   /** Go through all of them, one at a time. */
   onWalkthrough: () => void;
 }
@@ -751,17 +885,39 @@ function clip(text: string, max = 60): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
+/** What each kind is, in one glyph. The queue mixes three surfaces and the
+ *  reader has to know which one a row will take them to before they tap it. */
+const REVIEW_MARK: Record<ReviewKind, string> = {
+  decision: '◆',
+  'task-thread': '💬',
+  'doc-thread': '📄',
+};
+const REVIEW_KIND_LABEL: Record<ReviewKind, string> = {
+  decision: 'Decision',
+  'task-thread': 'Task comment',
+  'doc-thread': 'Doc comment',
+};
+
 /**
- * The read at the top of the board: how many decisions are waiting on you, and
- * how many of them are holding work up right now.
+ * The read at the top of the board: what is waiting on you, in priority order,
+ * across every surface this workspace has.
  *
- * The split is derived from the dependency edges (see `decisionQueue`) — there
- * is no urgency field to set and no urgency to keep up to date.
+ * This replaced a decisions-only strip. The reason is the whole feature: when
+ * Bryan comes back to the board his question is "what do I look at next", and
+ * a strip that only knew about decision tasks answered a narrower one — an
+ * agent's question on a task and an unanswered doc comment were in the store
+ * and unreachable from the board, which is the failure mode this codebase has
+ * already been bitten by and which presents as the worst possible bug because
+ * nothing is actually lost.
+ *
+ * Urgency is still DERIVED, never declared: "blocking work now" is the same
+ * fact as "something depends on it", which `after` / `afterEnforce` already
+ * record. There is no urgency field to set and none to keep up to date.
  */
-export function renderDecisions(
+export function renderReviewStrip(
   container: HTMLElement,
-  queue: DecisionQueue,
-  handlers: DecisionStripHandlers,
+  queue: ReviewQueue,
+  handlers: ReviewStripHandlers,
 ): void {
   container.replaceChildren();
   if (queue.total === 0) {
@@ -776,42 +932,54 @@ export function renderDecisions(
   const count = document.createElement('button');
   count.type = 'button';
   count.className = 'hub-decisions-count';
-  count.textContent =
-    queue.total === 1 ? '1 decision waiting on you' : `${queue.total} decisions waiting on you`;
+  count.textContent = queue.total === 1 ? '1 thing needs you' : `${queue.total} things need you`;
   count.setAttribute('aria-label', `${count.textContent} — go through them one at a time`);
   count.addEventListener('click', () => handlers.onWalkthrough());
 
   const urgency = document.createElement('span');
   urgency.className = 'hub-decisions-urgency';
   // "0 blocking" reads like a metric nobody asked for; say the fact instead.
+  const rest = queue.total - queue.blocking;
   urgency.textContent =
     queue.blocking === 0
       ? 'Nothing is blocked on them yet'
-      : queue.waiting === 0
+      : rest === 0
         ? `${queue.blocking} blocking work now`
-        : `${queue.blocking} blocking work now · ${queue.waiting} can wait`;
+        : `${queue.blocking} blocking work now · ${rest} can wait`;
 
   head.append(count, urgency);
   container.append(head);
 
   const chips = document.createElement('div');
   chips.className = 'hub-decision-chips';
-  for (const row of queue.rows) {
+  for (const item of queue.items) {
     const chip = document.createElement('button');
     chip.type = 'button';
-    chip.className = `hub-decision-chip${row.blocks.length > 0 ? ' hub-decision-blocking' : ''}`;
+    const blocking = (item.decision?.blocks.length ?? 0) > 0;
+    chip.className = `hub-decision-chip hub-review-${item.kind}${blocking ? ' hub-decision-blocking' : ''}`;
+    const mark = document.createElement('span');
+    mark.className = 'hub-review-mark';
+    mark.textContent = REVIEW_MARK[item.kind];
+    mark.setAttribute('aria-hidden', 'true');
     const label = document.createElement('span');
     label.className = 'hub-decision-chip-title';
-    label.textContent = clip(row.task.title);
-    chip.append(label);
-    if (row.blocks.length > 0) {
+    label.textContent = clip(item.title);
+    chip.append(mark, label);
+    // The ask on a thread is the thing that tells you whether to open it —
+    // "Ship the widget" alone is the container, not the question.
+    if (item.ask) {
+      const ask = document.createElement('span');
+      ask.className = 'hub-review-ask';
+      ask.textContent = clip(item.ask, 48);
+      chip.append(ask);
+    } else if (blocking) {
       const blocks = document.createElement('span');
       blocks.className = 'hub-decision-chip-blocks';
-      blocks.textContent = `blocks ${row.blocks.length}`;
+      blocks.textContent = `blocks ${item.decision?.blocks.length}`;
       chip.append(blocks);
     }
-    chip.title = row.task.title;
-    chip.addEventListener('click', () => handlers.onOpen(row.task));
+    chip.title = `${REVIEW_KIND_LABEL[item.kind]}: ${item.title}${item.ask ? ` — ${item.ask}` : ''} · ${item.why}`;
+    chip.addEventListener('click', () => handlers.onOpen(item));
     chips.append(chip);
   }
   container.append(chips);
@@ -825,6 +993,12 @@ export interface WalkthroughHandlers {
   onAnswer: (task: HubTask, text: string, optionId?: string) => void;
   /** "I can't answer this yet" — a question back to the asker, not an answer. */
   onMoreInfo: (task: HubTask, question: string) => void;
+  /** Answer a thread without leaving the queue. Posts a reply on the thread the
+   *  item came from, wherever that thread lives. */
+  onReply: (item: ReviewItem, text: string) => void;
+  /** Go to the exact place instead of answering here — the task's discussion at
+   *  that thread, the doc anchored on that comment. */
+  onOpenItem: (item: ReviewItem) => void;
   /** Move to another position in the queue (skip forward, step back). */
   onStep: (index: number) => void;
   onClose: () => void;
@@ -863,19 +1037,39 @@ function promptForm(
   return form;
 }
 
+/** Back / skip. Shared by both card kinds, because "go through the list" is
+ *  the feature and it must not stop working when the next item is a comment. */
+function walkNav(index: number, total: number, handlers: WalkthroughHandlers): HTMLElement {
+  const nav = document.createElement('div');
+  nav.className = 'hub-walk-nav';
+  const back = document.createElement('button');
+  back.type = 'button';
+  back.className = 'hub-btn hub-walk-back';
+  back.textContent = 'Back';
+  back.disabled = index === 0;
+  back.addEventListener('click', () => handlers.onStep(index - 1));
+  const skip = document.createElement('button');
+  skip.type = 'button';
+  skip.className = 'hub-btn hub-walk-skip';
+  skip.textContent = index + 1 === total ? 'Skip — finish' : 'Skip for now';
+  skip.addEventListener('click', () => handlers.onStep(index + 1));
+  nav.append(back, skip);
+  return nav;
+}
+
 /**
- * One decision at a time, in the derived order, with the way out at every
+ * One item at a time, in the derived order, with the way out at every
  * step: tap one of the asker's options, write your own answer, ask for more
  * information, or skip. Six answers should be one sitting, not six
  * navigations — so the position and the queue live here rather than in six
  * separate detail-panel visits.
  *
- * `index` is the position in `queue.rows`; past the end (or over an empty
+ * `index` is the position in `queue.items`; past the end (or over an empty
  * queue) is the done state, and a negative index means closed.
  */
-export function renderDecisionWalkthrough(
+export function renderReviewWalkthrough(
   container: HTMLElement,
-  queue: DecisionQueue,
+  queue: ReviewQueue,
   index: number,
   handlers: WalkthroughHandlers,
 ): void {
@@ -891,8 +1085,9 @@ export function renderDecisionWalkthrough(
   panel.setAttribute('role', 'dialog');
   panel.setAttribute('aria-modal', 'true');
 
-  const row = queue.rows[index];
-  if (!row) {
+  const item = queue.items[index];
+  const row = item?.decision;
+  if (!item) {
     const done = document.createElement('div');
     done.className = 'hub-walk-done';
     const h = document.createElement('h2');
@@ -910,13 +1105,11 @@ export function renderDecisionWalkthrough(
     return;
   }
 
-  const task = row.task;
-
   const head = document.createElement('div');
   head.className = 'hub-walk-head';
   const pos = document.createElement('span');
   pos.className = 'hub-walk-pos';
-  pos.textContent = `${index + 1} of ${queue.rows.length}`;
+  pos.textContent = `${index + 1} of ${queue.items.length}`;
   const close = document.createElement('button');
   close.type = 'button';
   close.className = 'hub-btn hub-walk-close';
@@ -927,12 +1120,47 @@ export function renderDecisionWalkthrough(
   panel.append(head);
 
   const card = document.createElement('div');
-  card.className = 'hub-walk-card';
+  card.className = `hub-walk-card hub-walk-${item.kind}`;
+
+  const kind = document.createElement('p');
+  kind.className = 'hub-walk-kind';
+  kind.textContent = `${REVIEW_MARK[item.kind]} ${REVIEW_KIND_LABEL[item.kind]}`;
+  card.append(kind);
 
   const title = document.createElement('h2');
   title.className = 'hub-walk-title';
-  title.textContent = task.title;
+  title.textContent = item.title;
   card.append(title);
+
+  // ── A thread: the question, a reply box, and the way out to the surface it
+  // lives on. Answering here is the point — going through the queue must not
+  // mean leaving the queue on every item — but a comment sometimes only makes
+  // sense in place, so "open where this lives" is always offered.
+  if (!row) {
+    const ask = document.createElement('blockquote');
+    ask.className = 'hub-walk-ask';
+    ask.textContent = item.ask;
+    const who = document.createElement('p');
+    who.className = 'hub-walk-blocks';
+    who.textContent = item.why;
+    card.append(who, ask);
+    card.append(
+      promptForm('hub-walk-answer', 'Reply…', 'Reply', (text) => handlers.onReply(item, text)),
+    );
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'hub-btn hub-walk-open';
+    open.textContent =
+      item.kind === 'task-thread' ? 'Open the task discussion' : 'Open the doc at this comment';
+    open.addEventListener('click', () => handlers.onOpenItem(item));
+    card.append(open);
+    panel.append(card);
+    panel.append(walkNav(index, queue.items.length, handlers));
+    container.append(panel);
+    return;
+  }
+
+  const task = row.task;
 
   const blocks = document.createElement('p');
   blocks.className = `hub-walk-blocks${row.blocks.length > 0 ? ' hub-walk-blocking' : ''}`;
@@ -1006,22 +1234,7 @@ export function renderDecisionWalkthrough(
   );
 
   panel.append(card);
-
-  const nav = document.createElement('div');
-  nav.className = 'hub-walk-nav';
-  const back = document.createElement('button');
-  back.type = 'button';
-  back.className = 'hub-btn hub-walk-back';
-  back.textContent = 'Back';
-  back.disabled = index === 0;
-  back.addEventListener('click', () => handlers.onStep(index - 1));
-  const skip = document.createElement('button');
-  skip.type = 'button';
-  skip.className = 'hub-btn hub-walk-skip';
-  skip.textContent = index + 1 === queue.rows.length ? 'Skip — finish' : 'Skip for now';
-  skip.addEventListener('click', () => handlers.onStep(index + 1));
-  nav.append(back, skip);
-  panel.append(nav);
+  panel.append(walkNav(index, queue.items.length, handlers));
 
   container.append(panel);
 }
@@ -1241,6 +1454,10 @@ export interface DetailHandlers {
   /** A comment on the task. With `threadId` it is a reply; without one it
    *  opens a new thread about the task itself. */
   onComment?: (task: HubTask, text: string, threadId?: string) => Promise<boolean>;
+  /** The one thread the reader was sent here to answer, when they arrived
+   *  from the review queue. Marked and scrolled to — "open the task" is not
+   *  the promise the strip makes on a task with six discussions. */
+  focusThreadId?: string;
 }
 
 export interface TaskComment {
@@ -1340,6 +1557,7 @@ function renderDiscussion(
   task: HubTask,
   discussion: TaskDiscussion,
   onComment: (task: HubTask, text: string, threadId?: string) => Promise<boolean>,
+  focusThreadId?: string,
 ): HTMLElement {
   const section = document.createElement('section');
   section.className = 'hub-discussion';
@@ -1366,7 +1584,10 @@ function renderDiscussion(
     // Resolved threads stay VISIBLE. A resolved thread is still part of the
     // argument, and hiding one here would repeat the drawer bug where a reply
     // existed in the store with no surface that could reach it.
-    el.className = `hub-thread${t.status === 'resolved' ? ' resolved' : ''}`;
+    el.className = `hub-thread${t.status === 'resolved' ? ' resolved' : ''}${
+      t.id === focusThreadId ? ' hub-thread-focus' : ''
+    }`;
+    el.dataset.threadId = t.id;
     if (t.status === 'resolved') {
       const badge = document.createElement('span');
       badge.className = 'hub-thread-status';
@@ -1578,7 +1799,7 @@ export function renderTaskDetail(
   panel.append(body);
 
   if (discussion && handlers.onComment) {
-    panel.append(renderDiscussion(task, discussion, handlers.onComment));
+    panel.append(renderDiscussion(task, discussion, handlers.onComment, handlers.focusThreadId));
   }
 
   if (task.transitions.length > 0) {
@@ -1604,4 +1825,14 @@ export function renderTaskDetail(
     if (ev.target === container) handlers.onClose();
   });
   container.append(panel);
+  // After it is in the document — scrollIntoView on a detached node does
+  // nothing, silently. Guarded because happy-dom has no implementation.
+  const focus = handlers.focusThreadId
+    ? panel.querySelector<HTMLElement>(
+        `.hub-thread[data-thread-id="${CSS.escape(handlers.focusThreadId)}"]`,
+      )
+    : null;
+  if (focus && typeof focus.scrollIntoView === 'function') {
+    focus.scrollIntoView({ block: 'center' });
+  }
 }

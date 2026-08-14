@@ -7,8 +7,8 @@ import {
   type HubTask,
   type UptimeReport,
   boardSections,
-  decisionQueue,
   goalLabel,
+  reviewQueue,
 } from '../src/hub/hub-model.ts';
 import {
   type BoardHandlers,
@@ -16,9 +16,10 @@ import {
   discussionIsBusy,
   renderActivity,
   renderBoard,
-  renderDecisions,
   renderGoalStrip,
   renderLeadStrip,
+  renderQuickAdd,
+  renderReviewStrip,
   renderTaskDetail,
 } from '../src/hub/hub-render.ts';
 
@@ -170,12 +171,71 @@ describe('renderBoard', () => {
     expect([...row.children].map((c) => (c as HTMLElement).className.split(' ')[0])).toEqual([
       'hub-drag-handle',
       'hub-open-zone',
-      'hub-status-select',
+      'hub-status-ctl',
       'hub-risk-slot',
       'hub-task-title',
       'hub-task-badges',
-      'hub-row-assignee',
+      'hub-owner-ctl',
     ]);
+  });
+
+  // The two controls that flank the title used to spend ~200px of every row
+  // drawing the words "In progress" and an agent id, on a surface whose whole
+  // job is reading titles. They are round marks now, and the words they used
+  // to draw must not come back as visible text — that regression would be
+  // invisible to every other assertion here, because the SELECT still holds
+  // the labels and still reports the same values.
+  it('draws status and owner as marks, not as words in the row', () => {
+    const h = handlers();
+    renderBoard(
+      root,
+      boardSections(GOALS, [task({ goal: 'g-pr', status: 'in-progress' })], filters),
+      h,
+    );
+    const ctl = root.querySelector('.hub-status-ctl') as HTMLElement;
+    const mark = ctl.querySelector('.hub-status-mark') as HTMLElement;
+    expect(mark.className).toContain('hub-status-mark-in-progress');
+    // The mark carries no label text — the status is shape and colour.
+    expect(mark.textContent?.trim()).toBe('');
+    // …and the picker underneath is untouched: same class, same options.
+    const select = ctl.querySelector('.hub-status-select') as HTMLSelectElement;
+    expect(select.value).toBe('in-progress');
+    select.value = 'done';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(h.onStatusSet).toHaveBeenCalled();
+  });
+
+  // One or two letters, never the whole id. The name still has to be reachable
+  // — a circle reading "TL" with no way to learn whose it is trades one
+  // unreadable row for one unanswerable one.
+  it('shows the owner as initials, keeping the full name reachable', () => {
+    const h = handlers();
+    const rows: [string, string][] = [
+      ['team-lead-fleet', 'TL'],
+      ['human', 'H'],
+      ['agent-live-feedback', 'LF'],
+    ];
+    for (const [assignee, expected] of rows) {
+      root.replaceChildren();
+      renderBoard(root, boardSections(GOALS, [task({ goal: 'g-pr', assignee })], filters), h);
+      const avatar = root.querySelector('.hub-owner-avatar') as HTMLElement;
+      expect(avatar.textContent).toBe(expected);
+      expect((root.querySelector('.hub-row-assignee') as HTMLElement).title).toContain(assignee);
+    }
+  });
+
+  // Unowned is a hole in the board, and it has to look like one rather than
+  // like a third person — this is the row the initials scheme has no input for.
+  it('marks an unowned task rather than inventing initials for it', () => {
+    const h = handlers();
+    renderBoard(
+      root,
+      boardSections(GOALS, [task({ goal: 'g-pr', assignee: 'agent' })], filters),
+      h,
+    );
+    const avatar = root.querySelector('.hub-owner-avatar') as HTMLElement;
+    expect(avatar.textContent).toBe('?');
+    expect(avatar.className).toContain('hub-owner-none');
   });
 
   // The bug this pins: `grid-template-columns` names four tracks, and grid
@@ -522,18 +582,18 @@ describe('keyboard reordering', () => {
   });
 });
 
-describe('renderDecisions', () => {
+describe('renderReviewStrip', () => {
   it('shows a chip per open decision and opens it on tap', () => {
     const onOpen = vi.fn();
     const d = task({ needs: 'decision', assignee: 'human', title: 'Ship now or wait?' });
     const strip = { onOpen, onWalkthrough: vi.fn() };
-    renderDecisions(root, decisionQueue([d]), strip);
+    renderReviewStrip(root, reviewQueue([d], [], NOW), strip);
     const chip = root.querySelector('.hub-decision-chip') as HTMLElement;
     expect(chip.textContent).toContain('Ship now or wait?');
     chip.click();
     expect(onOpen).toHaveBeenCalledTimes(1);
     // Empty → the strip hides instead of rendering an empty shell.
-    renderDecisions(root, decisionQueue([]), strip);
+    renderReviewStrip(root, reviewQueue([], [], NOW), strip);
     expect(root.classList.contains('hidden')).toBe(true);
   });
 });
@@ -954,6 +1014,33 @@ describe('renderTaskDetail — discussion', () => {
     ...over,
   });
 
+  /**
+   * "Each item goes exactly to the place where I need to review" is the
+   * strip's whole claim. On a task with several discussions, opening the task
+   * is not that — the reviewer still has to find the one they were sent for.
+   */
+  it('marks the thread the queue aimed at, and only that one', () => {
+    renderTaskDetail(root, task(), detailHandlers({ focusThreadId: 'th-2' }), {
+      loading: false,
+      threads: [thread({ id: 'th-1' }), thread({ id: 'th-2' }), thread({ id: 'th-3' })],
+    });
+    const marked = [...root.querySelectorAll('.hub-thread-focus')];
+    // Positive control: all three rendered, so "only one marked" means
+    // something. Then: it is the RIGHT one.
+    expect(root.querySelectorAll('.hub-thread')).toHaveLength(3);
+    expect(marked).toHaveLength(1);
+    expect((marked[0] as HTMLElement).dataset.threadId).toBe('th-2');
+  });
+
+  it('marks nothing when the panel was opened any other way', () => {
+    renderTaskDetail(root, task(), detailHandlers(), {
+      loading: false,
+      threads: [thread({ id: 'th-1' }), thread({ id: 'th-2' })],
+    });
+    expect(root.querySelectorAll('.hub-thread')).toHaveLength(2);
+    expect(root.querySelectorAll('.hub-thread-focus')).toHaveLength(0);
+  });
+
   it('shows each comment with who said it', () => {
     renderTaskDetail(root, task(), detailHandlers(), {
       loading: false,
@@ -1155,5 +1242,146 @@ describe('discussionIsBusy', () => {
     const ta = root.querySelector('.hub-discussion textarea') as HTMLTextAreaElement;
     ta.focus();
     expect(discussionIsBusy(root)).toBe(true);
+  });
+});
+
+describe('renderQuickAdd', () => {
+  it('captures on Enter and clears, and Shift+Enter does not file a half-typed idea', async () => {
+    const onCapture = vi.fn(() => Promise.resolve(true));
+    renderQuickAdd(root, { onCapture });
+    const box = root.querySelector('.hub-quick-input') as HTMLTextAreaElement;
+    box.value = 'Rework the strip';
+    box.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true }),
+    );
+    expect(onCapture).not.toHaveBeenCalled();
+    box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(onCapture).toHaveBeenCalledWith('Rework the strip');
+    // Cleared, so the next idea starts empty rather than appended to the last.
+    await Promise.resolve();
+    expect(box.value).toBe('');
+  });
+
+  it('files nothing for whitespace, from either the key or the button', () => {
+    const onCapture = vi.fn(() => Promise.resolve(true));
+    renderQuickAdd(root, { onCapture });
+    const box = root.querySelector('.hub-quick-input') as HTMLTextAreaElement;
+    box.value = '   ';
+    box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    (root.querySelector('.hub-quick-form') as HTMLFormElement).dispatchEvent(
+      new Event('submit', { cancelable: true }),
+    );
+    expect(onCapture).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Clearing on dispatch rather than on success means an offline phone eats
+   * the idea and shows a toast — the one failure this box exists to prevent,
+   * at the exact moment (no signal, thought half-formed) it matters most.
+   */
+  it('keeps the text when the capture fails, and clears it when it lands', async () => {
+    let outcome = Promise.resolve(false);
+    renderQuickAdd(root, { onCapture: () => outcome });
+    const box = root.querySelector('.hub-quick-input') as HTMLTextAreaElement;
+    box.value = 'Rework the strip';
+    box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await outcome;
+    expect(box.value).toBe('Rework the strip');
+
+    outcome = Promise.resolve(true);
+    box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await outcome;
+    // Positive control: the same box does clear once the task really lands.
+    expect(box.value).toBe('');
+  });
+
+  it('does not file the same idea twice while the first one is in flight', async () => {
+    let release = (_ok: boolean) => {};
+    const onCapture = vi.fn(() => new Promise<boolean>((r) => (release = r)));
+    renderQuickAdd(root, { onCapture });
+    const box = root.querySelector('.hub-quick-input') as HTMLTextAreaElement;
+    box.value = 'Rework the strip';
+    box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(onCapture).toHaveBeenCalledTimes(1);
+    release(true);
+    await Promise.resolve();
+  });
+
+  // The board repaints on every ydoc change. A composer that re-rendered with
+  // it would take the caret out of a half-typed idea — which is the exact
+  // friction this box exists to remove, reintroduced by the region pattern
+  // every other renderer here follows.
+  it('mounts once and leaves a half-typed idea alone on a repaint', () => {
+    const stub = () => Promise.resolve(true);
+    renderQuickAdd(root, { onCapture: stub });
+    const box = root.querySelector('.hub-quick-input') as HTMLTextAreaElement;
+    box.value = 'half an idea';
+    renderQuickAdd(root, { onCapture: stub });
+    expect(root.querySelectorAll('.hub-quick-input')).toHaveLength(1);
+    expect((root.querySelector('.hub-quick-input') as HTMLTextAreaElement).value).toBe(
+      'half an idea',
+    );
+  });
+});
+
+/**
+ * A percentage max-width on a grid item resolves against its own grid AREA.
+ * `.hub-task-badges` sits in an `auto` track — a track sized FROM the item —
+ * so `max-width: 30%` meant "30% of yourself", and with `overflow: hidden`
+ * the `decision` pill rendered as the two letters "de" on a phone. Nothing
+ * else in this suite can see it: happy-dom has no layout, the DOM is
+ * identical either way, and the row's grid template is already asserted
+ * above and was correct the whole time. Found by looking at a staging board
+ * at 430px, which is the only way this class of defect is ever found.
+ */
+describe('the row badges are capped against the viewport, not against themselves', () => {
+  it('never uses a percentage max-width on .hub-task-badges', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    // vitest runs from the repo root (vitest.config.ts lives there).
+    const css = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
+    const rules = [...css.matchAll(/\.hub-task-badges\s*\{([^}]*)\}/g)].map((m) => m[1] ?? '');
+    // Positive control: the rules this asserts about really were found, and
+    // one of them really does cap the width.
+    expect(rules.length).toBeGreaterThan(1);
+    expect(rules.some((r) => /max-width/.test(r))).toBe(true);
+    for (const r of rules) expect(r).not.toMatch(/max-width:\s*[\d.]+%/);
+  });
+});
+
+/**
+ * happy-dom does no layout, so nothing else in this suite can see a sticky
+ * bar painting over a button. What it CAN see is the invariant: the media
+ * block that makes the nav sticky must also reserve its height in the
+ * scroller, or the card's last control ends up under it.
+ */
+describe('the sticky walkthrough nav reserves its own height', () => {
+  it('gives the card bottom clearance wherever the nav is sticky', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const css = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
+    // The media blocks are the unit: sticky nav and card clearance have to
+    // travel together, so find the block and assert about that one text.
+    // Brace-scanned rather than regexed — a media block holds nested rules,
+    // and a pattern that assumes otherwise matches nothing and proves nothing.
+    const blocks: string[] = [];
+    for (const m of css.matchAll(/@media[^{]*\{/g)) {
+      let depth = 1;
+      let i = (m.index ?? 0) + m[0].length;
+      const start = i;
+      while (i < css.length && depth > 0) {
+        if (css[i] === '{') depth += 1;
+        else if (css[i] === '}') depth -= 1;
+        i += 1;
+      }
+      blocks.push(css.slice(start, i - 1));
+    }
+    const sticky = blocks.filter((b) => /\.hub-walk-nav\s*\{[^}]*position:\s*sticky/.test(b));
+    // Positive control: the block this asserts about exists and was matched.
+    expect(sticky.length).toBeGreaterThan(0);
+    for (const b of sticky) {
+      expect(b).toMatch(/\.hub-walk-card\s*\{[^}]*padding-bottom:\s*[\d.]+px/);
+    }
   });
 });

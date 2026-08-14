@@ -369,6 +369,21 @@ describe('shareScopeAllows (workspace-hub surfaces — §3.12 commit 8)', () => 
     expect(shareScopeAllows('/events/workspace/hub-1-other', 'GET', HUB)).toBe(false);
   });
 
+  /**
+   * The strip's thread half rides REST while its decision half rides the board
+   * room. Blocked, the client swallows the non-ok and a visitor's strip shows
+   * decisions only — the same silent transport/surface disagreement that closed
+   * `<ws>` and `<ws>/attachments` were reopened to fix.
+   */
+  it('allows the review queue for a workspace share, and only its own workspace', () => {
+    expect(shareScopeAllows('/api/workspaces/hub-1/review-items', 'GET', HUB)).toBe(true);
+    expect(shareScopeAllows('/api/workspaces/hub-2/review-items', 'GET', HUB)).toBe(false);
+    // A DOC-scoped share never reaches a board, review queue included.
+    expect(shareScopeAllows('/api/workspaces/hub-1/review-items', 'GET', DOC)).toBe(false);
+    // Read-only, like every other allowance here.
+    expect(shareScopeAllows('/api/workspaces/hub-1/review-items', 'POST', HUB)).toBe(false);
+  });
+
   it('visitors are read-only on the gate: every task/goal/decision mutation route is out of scope', () => {
     const cases: Array<[string, string]> = [
       ['/api/tasks/t-1/transition', 'POST'],
