@@ -76,7 +76,15 @@ there. That is how 25 feature commits sat undelivered between 2026-05-09 and
   `packages/mcp/src/**` must run `bun run build:mcp` and commit the result.
   This is why CI pins its Bun version — bundler output moves between releases.
 - After merging a plugin change, `claude plugin update live-feedback@claude-live-feedback`
-  is what actually delivers it to a session.
+  is what actually delivers it to a session — **and the peer must then restart
+  the session**, because the plugin cache path is version-keyed and a running
+  session resolved it at launch.
+
+**The whole delivery model is written down once, in
+[docs/process/delivery.md](docs/process/delivery.md)**: how the plugin travels
+(GitHub marketplace), which artifacts are tracked vs built on the box, why a
+prod restart is the browser deploy, and the one human step left. Read it before
+answering "why doesn't my peer / my browser have this yet".
 
 ## Reviewing a branch before it merges (`bun run staging`)
 
@@ -86,7 +94,7 @@ Peers and people can review an unmerged build without merging it. From a **linke
 bun run staging            # builds this worktree's bundles, serves :8788 with a throwaway data dir
 ```
 
-Prod stays on 8787 with its own data throughout. The script refuses to run from the primary checkout, because prod serves `packages/markdown-app/dist` from there per-request — building bundles in the primary checkout is a deploy to the fleet, not a test build. It also starts the server via `bin.ts` rather than `scripts/serve.ts`, because `serve.ts` publishes the live port that the live-feedback MCP discovers, which would silently repoint every agent in the fleet at the staging build.
+Prod stays on 8787 with its own data throughout. The script refuses to run from the primary checkout, because that checkout is prod's deploy source: every prod start rebuilds the bundles there and publishes them as the client release the whole fleet loads, so a "test build" there ships at the next restart. It also starts the server via `bin.ts` rather than `scripts/serve.ts`, because `serve.ts` publishes the live port that the live-feedback MCP discovers, which would silently repoint every agent in the fleet at the staging build.
 
 To put an *agent* on staging: `FEEDBACK_BASE_URL=http://<host>:8788` in its launch env (read once at session start, so it needs a restart). Staging data never migrates to prod — evaluate pre-merge, do the real work once, after.
 
