@@ -18,8 +18,8 @@ import {
   dropTarget,
   goalLabel,
   parseQuickAdd,
-  positionBetween,
   pluginDriftNotice,
+  positionBetween,
   presenceChips,
   reviewQueue,
   stepTarget,
@@ -635,7 +635,9 @@ describe('pluginDriftNotice', () => {
   ) => ({ version, behind });
 
   it('says who is behind, what current is, and both steps of the fix', () => {
-    const n = pluginDriftNotice(rel('0.1.26', [{ agentId: 'agent-quill', pluginVersion: '0.1.12' }]));
+    const n = pluginDriftNotice(
+      rel('0.1.26', [{ agentId: 'agent-quill', pluginVersion: '0.1.12' }]),
+    );
     if (!n) throw new Error('expected a notice');
     expect(n.headline).toBe('1 agent is running an older plugin than 0.1.26');
     expect(n.detail).toBe('agent-quill 0.1.12');

@@ -66,8 +66,9 @@ describe('plugin drift over the attachment routes', () => {
       pluginVersion: '0.1.12',
     });
     expect(r.status).toBe(200);
-    expect(((await r.json()) as { attachment: { pluginVersion?: string } }).attachment.pluginVersion)
-      .toBe('0.1.12');
+    expect(
+      ((await r.json()) as { attachment: { pluginVersion?: string } }).attachment.pluginVersion,
+    ).toBe('0.1.12');
 
     const body = (await (await local(`/api/workspaces/${wsId}/attachments`)).json()) as ListBody;
     expect(body.attachments[0]?.pluginVersion).toBe('0.1.12');
@@ -78,9 +79,7 @@ describe('plugin drift over the attachment routes', () => {
     // The released version is read from this checkout's own manifest, so the
     // test asserts a RELATIONSHIP against that manifest rather than a literal
     // — a literal would go red on every routine patch bump.
-    const manifest = readReleasedPluginVersion(
-      join(import.meta.dir, '../../..'),
-    );
+    const manifest = readReleasedPluginVersion(join(import.meta.dir, '../../..'));
     if (!manifest) throw new Error('this repo must have a plugin manifest to test against');
 
     await post(`/api/workspaces/${wsId}/attachments`, {
