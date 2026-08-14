@@ -2121,6 +2121,33 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           taskProjection.ensureWorkspace(res.task.workspaceId);
           return j(200, res);
         }
+        // update_task_body: replace a task's description after creation.
+        // The body is a live `task:<id>` doc room, so this goes THROUGH that
+        // room rather than at the store's snapshot field — a block-level
+        // diff, so comment threads on paragraphs the rewrite didn't touch
+        // keep their anchors, and anyone reading the task on the board sees
+        // it change under them. Three things the doc route alone can't do,
+        // and each of them looks like "the rewrite failed" from outside:
+        // create the room on a workspace this process hasn't served yet,
+        // flush the snapshot the board and next_tasks read, and put an
+        // attributed row in the audit log.
+        const taskBodyMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/body$/);
+        if (taskBodyMatch && req.method === 'POST') {
+          const taskId = decodeURIComponent(taskBodyMatch[1] ?? '');
+          const body = await safeJson(req);
+          const markdown = typeof body?.markdown === 'string' ? body.markdown : '';
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const task = taskStore.getTask(taskId);
+          if (!task) return j(404, { ok: false, error: 'not-found' });
+          if (!markdown.trim()) return j(400, { ok: false, error: 'empty' });
+          const docId = taskProjection.ensureBodyRoom(task);
+          const res = rooms.setDocContent(docId, markdown);
+          if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
+          taskProjection.flushBodySnapshot(taskId);
+          taskStore.noteBodyEdited(taskId, { actor: author });
+          return j(200, { ok: true, task: taskStore.getTask(taskId) });
+        }
         // assign_task (§3.6 task.assigned): hand a task between the human and
         // the agent (or a named identity). Status is untouched — a hand-off
         // is not progress, and routing it through the transition gate would
