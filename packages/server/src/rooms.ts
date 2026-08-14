@@ -292,15 +292,7 @@ export class Rooms {
   deleteDoc(
     docId: string,
     opts?: { force?: boolean },
-  ): {
-    ok: boolean;
-    error?: 'not-found' | 'has-open-threads';
-    openThreads?: number;
-    /** The room is out of memory, but its persisted `.ydoc` is still on
-     *  disk, so a restart reloads it. Additive on purpose — callers that
-     *  only read `ok` keep their existing behaviour. */
-    persistFailed?: boolean;
-  } {
+  ): { ok: boolean; error?: 'not-found' | 'has-open-threads'; openThreads?: number } {
     const room = this.rooms.get(docId);
     if (!room) return { ok: false, error: 'not-found' };
     const openThreads = listThreads(room.ydoc).filter((t) => t.status === 'open').length;
@@ -327,20 +319,34 @@ export class Rooms {
       } catch {}
     }
     this.rooms.delete(docId);
-    let persistFailed = false;
-    try {
-      const p = this.pathFor(docId);
-      if (existsSync(p)) rmSync(p);
-      deletePrivateMeta(this.cfg.dataDir, docId);
-    } catch (err) {
-      console.error(`[rooms] failed to remove persisted ${docId}:`, err);
-      persistFailed = true;
-    }
+    this.purgePersisted(docId);
     try {
       room.awareness.destroy();
       room.ydoc.destroy();
     } catch {}
-    return persistFailed ? { ok: true, persistFailed: true } : { ok: true };
+    return { ok: true };
+  }
+
+  /**
+   * Remove a docId's persisted state whether or not the room is in memory,
+   * and report whether the disk is now clean.
+   *
+   * `deleteDoc` answers about the ROOM: it logs a failed unlink and still
+   * returns ok, and on a second attempt the room is already out of memory so
+   * it returns 'not-found' without touching disk at all. A caller that must
+   * not leave an orphan `.ydoc` behind — one that reloads on every restart,
+   * under an id whose owner may be gone — has to ask about the FILE.
+   */
+  purgePersisted(docId: string): boolean {
+    try {
+      const p = this.pathFor(docId);
+      if (existsSync(p)) rmSync(p);
+      deletePrivateMeta(this.cfg.dataDir, docId);
+      return !existsSync(p);
+    } catch (err) {
+      console.error(`[rooms] failed to remove persisted ${docId}:`, err);
+      return false;
+    }
   }
 
   // The persisted Yjs files are the source of truth for doc existence —

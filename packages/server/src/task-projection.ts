@@ -255,7 +255,13 @@ export class TaskProjection {
       // force: a task body's own discussion threads are part of what's being
       // deleted, so open ones are not a reason to refuse here — the refusal
       // that matters (open TASKS) is the caller's.
-      if (this.rooms.deleteDoc(docId, { force: true }).persistFailed) persistFailed = true;
+      this.rooms.deleteDoc(docId, { force: true });
+      // Ask about the FILE, not the room. `deleteDoc` logs a failed unlink
+      // and returns ok — and on a RETRY it answers 'not-found', because the
+      // first attempt already took the room out of memory, so it never
+      // reaches the disk at all. Either way an orphan `.ydoc` would survive
+      // a delete that reported success.
+      if (!this.rooms.purgePersisted(docId)) persistFailed = true;
     };
     for (const taskId of taskIds) {
       const docId = taskBodyDocId(taskId);

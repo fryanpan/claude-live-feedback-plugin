@@ -229,6 +229,13 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
     const res = await del(`/api/workspaces/${wsId}?force=true`);
     expect(res.status).toBe(500);
     expect(((await res.json()) as { error: string }).error).toBe('rooms-cleanup-failed');
+    // And it must keep refusing while the file is still there. The first
+    // attempt took the room out of memory, so a check that asks the ROOM
+    // ("not-found, nothing to do") would call the retry a success and delete
+    // the board over the top of the orphan.
+    const retry = await del(`/api/workspaces/${wsId}?force=true`);
+    expect(retry.status).toBe(500);
+    expect(((await retry.json()) as { error: string }).error).toBe('rooms-cleanup-failed');
     // The board and its tasks are still there, so the same call retries once
     // the filesystem is fixed — and the projection rebuilds the rooms it did
     // manage to drop.
