@@ -232,6 +232,7 @@ export class TaskProjection {
     const tasksMap = room.ydoc.getMap('tasks');
     const wsMap = room.ydoc.getMap('workspace');
     const want = new Map(this.tasks.listTasks(workspaceId).map((t) => [t.id, projectTask(t)]));
+    const pending = this.tasks.getPendingRetriage(workspaceId);
     const wsFields: Record<string, unknown> = {
       id: ws.id,
       name: ws.name,
@@ -246,6 +247,21 @@ export class TaskProjection {
       // it already rides agent.attached on the visitor-facing SSE feed.
       ...(ws.leadAgentId !== undefined ? { leadAgentId: ws.leadAgentId } : {}),
       ...(ws.leadAgentSince !== undefined ? { leadAgentSince: ws.leadAgentSince } : {}),
+      // A goal edit nobody has picked up yet. Projected so the board can SAY
+      // it is waiting — an undelivered request that only exists in a sidecar
+      // is the store-has-it/surface-can't-show-it failure by construction.
+      // Trimmed to what the strip renders: no actor id (display name only),
+      // and no goal text, which the board already carries in full.
+      ...(pending
+        ? {
+            pendingRetriage: {
+              batchId: pending.batchId,
+              taskIds: pending.taskIds,
+              ts: pending.ts,
+              byName: pending.actor.name,
+            },
+          }
+        : {}),
       createdAt: ws.createdAt,
     };
     room.ydoc.transact(() => {

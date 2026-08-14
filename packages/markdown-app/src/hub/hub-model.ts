@@ -80,6 +80,14 @@ export interface HubGoal extends HubSubgoal {
   subgoals?: HubSubgoal[];
 }
 
+/** The projected slice of a goal edit still waiting for its lead agent. */
+export interface PendingRetriageView {
+  batchId: string;
+  taskIds: string[];
+  ts: number;
+  byName: string;
+}
+
 export interface HubWorkspaceInfo {
   id: string;
   name: string;
@@ -90,6 +98,9 @@ export interface HubWorkspaceInfo {
   /** The agent responsible for this board. Absent = the seat is empty, and
    *  the strip says so rather than showing a stale or guessed name. */
   leadAgentId?: string;
+  /** A goal edit the lead agent has not picked up yet. Absent = none
+   *  waiting; the board never infers one. */
+  pendingRetriage?: PendingRetriageView;
   createdAt: number;
 }
 

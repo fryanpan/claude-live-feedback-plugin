@@ -623,6 +623,15 @@ body.hub-body {
 .hub-lead-select {
   max-width: 100%;
 }
+/* A goal edit nobody has picked up yet. Sits next to the lead because that is
+   who owes it — and it is loudest when there is no lead at all. */
+.hub-lead-pending {
+  padding: 2px 8px;
+  border: 1px solid var(--yellow);
+  border-radius: 10px;
+  color: var(--yellow);
+  font-size: 12px;
+}
 
 /* --- presence strip (§2.7) --- */
 .hub-presence {
