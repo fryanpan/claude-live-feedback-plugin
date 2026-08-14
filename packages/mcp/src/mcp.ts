@@ -1029,8 +1029,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           tasks: {
             type: 'array',
             description:
-              'The rows. Each is a create_task body without `workspaceId`: {title, body?, assignee?, needs?, options?, goal?, order?, after?, afterEnforce?, dueAt?, links?, quote?}. `title` is the only required field — but write a `body` on every row you are not doing yourself within the hour, for the same reason create_task says so: a bare title is not pickup-able by an agent that was not in the conversation. Rows are created in the order given, so an `after` may name a task id from an EARLIER row only if you already have it — dependencies within one batch need a follow-up set_task_dependencies.',
+              'The rows, at most 100 — an oversized batch is refused WHOLE rather than truncated, and a tracker that big belongs in import_tasks_markdown. Each row is a create_task body without `workspaceId`: {title, body?, assignee?, needs?, options?, goal?, order?, after?, afterEnforce?, dueAt?, links?, quote?}. `title` is the only required field — but write a `body` on every row you are not doing yourself within the hour, for the same reason create_task says so: a bare title is not pickup-able by an agent that was not in the conversation. Rows are created in the order given, and `after` can only name a task id you already hold, so dependencies BETWEEN rows of one batch need a follow-up set_task_dependencies.',
             items: { type: 'object' },
+            maxItems: 100,
           },
         },
         required: ['workspaceId', 'tasks'],

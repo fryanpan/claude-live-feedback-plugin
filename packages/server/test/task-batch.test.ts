@@ -197,6 +197,28 @@ describe('POST /api/workspaces/<id>/tasks/batch', () => {
     expect(titles.sort()).toEqual(['Good row one', 'Good row two']);
   });
 
+  it('refuses an oversized batch outright rather than keeping the first N', async () => {
+    const wsId = await seedWorkspace();
+    const rows = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({ title: `Idea ${i}`, goal: 'g-index' }));
+    const over = await post(`/api/workspaces/${wsId}/tasks/batch`, {
+      author: AGENT,
+      tasks: rows(101),
+    });
+    expect(over.status).toBe(400);
+    const body = (await over.json()) as { error: string; message?: string };
+    expect(body.error).toBe('too-many-tasks');
+    // A silent truncation would report success for rows that don't exist, so
+    // the refusal has to leave the board untouched.
+    expect(await listTasks(wsId)).toHaveLength(0);
+    // Positive control at the boundary: the largest allowed batch lands whole.
+    const at = await jj<BatchResult>(
+      await post(`/api/workspaces/${wsId}/tasks/batch`, { author: AGENT, tasks: rows(100) }),
+    );
+    expect(at.tasks).toHaveLength(100);
+    expect(at.failures).toEqual([]);
+  });
+
   it('400s an empty or malformed batch, and 404s an unknown workspace', async () => {
     const wsId = await seedWorkspace();
     expect((await post(`/api/workspaces/${wsId}/tasks/batch`, { tasks: [] })).status).toBe(400);
