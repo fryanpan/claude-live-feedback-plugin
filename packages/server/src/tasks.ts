@@ -1256,11 +1256,15 @@ export class TaskStore {
     for (const taskId of taskIds) this.taskIndex.delete(taskId);
     this.workspaces.delete(workspaceId);
 
-    // Neither of these can resurrect the board, so a failure here is litter
-    // rather than a lie — log it and let the delete stand.
+    // None of these can resurrect the board, so a failure here is litter
+    // rather than a lie — log it and let the delete stand. The list is every
+    // OTHER per-workspace path this file exports; a new sidecar belongs here
+    // the day it is added, or it becomes a file nothing can reach.
     for (const path of [
       attachmentsSidecarPath(this.dataDir, workspaceId),
       eventsLogPath(this.dataDir, workspaceId),
+      voiceQueuePath(this.dataDir, workspaceId),
+      pendingRetriagePath(this.dataDir, workspaceId),
     ]) {
       try {
         rmSync(path, { force: true });
