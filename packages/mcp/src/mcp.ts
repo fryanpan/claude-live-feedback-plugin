@@ -6,6 +6,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { resolveAgentAuthor } from './author.ts';
+import { triageRequestLine } from './triage-line.ts';
 
 /**
  * Thin MCP server that proxies tool calls to a running feedback server
@@ -70,7 +71,7 @@ const server = new Server(
     // Must match packages/plugin/.claude-plugin/plugin.json — this is the version
     // a client sees in the initialize handshake, and it had drifted three minor
     // releases behind. Asserted in packages/mcp/test/launcher.test.ts.
-    version: '0.1.16',
+    version: '0.1.17',
   },
   {
     capabilities: {
@@ -904,15 +905,33 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'create_workspace',
       description:
-        "Create a hub WORKSPACE — a goal + task board + linked docs, the unit Bryan reviews on the hub page (/workspaces/<id>). Distinct from a folder bind / diff review (those are doc groupings; link one to a hub workspace with attach_doc). `goal` is the north-star statement every triage decision is judged against — write it as a sentence or two of markdown, and keep it current with set_workspace_goal. Board sections come later via set_goal_list. Auto-subscribes this session to the workspace's event channel (task.*, decision.answered, triage.requested, …); pass subscribe:false to skip. Returns { workspaceId } — the id is crypto-random because URLs hang off it.",
+        "Create a hub WORKSPACE — a goal + task board + linked docs, the unit Bryan reviews on the hub page (/workspaces/<id>). Distinct from a folder bind / diff review (those are doc groupings; link one to a hub workspace with attach_doc). `goal` is the north-star statement every triage decision is judged against — write it as a sentence or two of markdown, and keep it current with set_workspace_goal. Board sections come later via set_goal_list. YOU become the workspace's LEAD AGENT — the addressee for goal-edit re-triage — unless you pass a different `leadAgentId`; hand it over later with set_workspace_lead. Auto-subscribes this session to the workspace's event channel (task.*, decision.answered, triage.requested, …); pass subscribe:false to skip. Returns { workspaceId, leadAgentId } — the id is crypto-random because URLs hang off it.",
       inputSchema: {
         type: 'object',
         properties: {
           name: { type: 'string', description: 'Short handle, e.g. "search-revamp".' },
           goal: { type: 'string', description: 'North-star goal statement (markdown).' },
+          leadAgentId: {
+            type: 'string',
+            description:
+              "The agent responsible for this board. Defaults to this agent's identity — pass another only when you are setting a board up for someone else.",
+          },
           subscribe: { type: 'boolean' },
         },
         required: ['name'],
+      },
+    },
+    {
+      name: 'set_workspace_lead',
+      description:
+        "Hand the workspace's LEAD AGENT seat to another agent. The lead is who a goal edit's re-triage is addressed to — it is a standing assignment, not a session fact, so a goal change waits for the lead even while they are away rather than going to whoever happens to be connected. Use it when you are handing a board off, or to fill the seat on a board a person created.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          workspaceId: { type: 'string', description: 'Hub workspace id from create_workspace.' },
+          leadAgentId: { type: 'string', description: 'The agent id taking responsibility.' },
+        },
+        required: ['workspaceId', 'leadAgentId'],
       },
     },
     {
@@ -1162,7 +1181,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'set_workspace_goal',
       description:
-        "Edit the workspace's north-star goal statement — the text every triage decision is judged against. Emits workspace.goal_updated and requests a re-triage of all OPEN tasks from the live workspace agent (the result's `retriage.requested` says whether one was actually delivered — with no live agent attached the re-triage honestly does not happen and placements stay as they were). If the re-triage lands in YOUR channel, walk the taskIds with set_task_goal, passing the request's batchId on each so the moves read as one goal edit.",
+        "Edit the workspace's north-star goal statement — the text every triage decision is judged against. Emits workspace.goal_updated and requests a re-triage of all OPEN tasks from the workspace's LEAD AGENT. The request does not expire: `retriage.requested` says it reached the lead live, `retriage.queued` says the lead was away and it is WAITING for their next attach_agent (a workspace with no lead at all queues it too, and the board shows it as pending work). If the re-triage lands in YOUR channel — or arrives as `pendingRetriage` on your attach — walk the taskIds with set_task_goal, passing the request's batchId on each so the moves read as one goal edit.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1260,7 +1279,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'attach_agent',
       description:
-        "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep with set_task_goal, and queuedVoice — voice change-requests that arrived while no agent was live; act on each transcript verbatim. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments with a fresh heartbeat, and after ~5 minutes of silence the hub shows you as away and requests queue.",
+        "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep with set_task_goal, queuedVoice — voice change-requests that arrived while no agent was live; act on each transcript verbatim — and, if you LEAD this workspace, pendingRetriage: a goal edit made while you were away, whose taskIds you re-place with set_task_goal (echo its batchId on each). All three are drained by this call. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments with a fresh heartbeat, and after ~5 minutes of silence the hub shows you as away and requests queue.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1995,16 +2014,23 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const {
           name: wsName,
           goal,
+          leadAgentId,
           subscribe,
         } = a as {
           name: string;
           goal?: string;
+          leadAgentId?: string;
           subscribe?: boolean;
         };
         const res = (await http('POST', '/api/workspaces', {
           name: wsName,
           ...(goal !== undefined ? { goal } : {}),
-        })) as { workspace: { id: string; name: string; goal: string } };
+          // The creating agent leads the board unless it says otherwise. A
+          // board with no lead has nobody to address a goal edit to.
+          leadAgentId: leadAgentId ?? AUTHOR.id,
+        })) as {
+          workspace: { id: string; name: string; goal: string; leadAgentId?: string };
+        };
         if (subscribe !== false && res.workspace?.id) {
           await watchWorkspace(res.workspace.id);
         }
@@ -2012,6 +2038,19 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           workspaceId: res.workspace.id,
           name: res.workspace.name,
           goal: res.workspace.goal,
+          leadAgentId: res.workspace.leadAgentId,
+        });
+      }
+      case 'set_workspace_lead': {
+        const { workspaceId, leadAgentId } = a as { workspaceId: string; leadAgentId: string };
+        const res = (await http('PUT', `/api/workspaces/${encodeURIComponent(workspaceId)}/lead`, {
+          leadAgentId,
+          author: AUTHOR,
+        })) as { changed: boolean; workspace?: { leadAgentId?: string } };
+        return ok({
+          workspaceId,
+          changed: res.changed,
+          leadAgentId: res.workspace?.leadAgentId ?? leadAgentId,
         });
       }
       case 'attach_doc': {
@@ -2110,14 +2149,27 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       case 'get_workspace': {
         const { workspaceId } = a as { workspaceId: string };
         const res = (await http('GET', `/api/workspaces/${encodeURIComponent(workspaceId)}`)) as {
-          workspace: { id: string; name: string; goal: string; goalUpdatedAt: number };
+          workspace: {
+            id: string;
+            name: string;
+            goal: string;
+            goalUpdatedAt: number;
+            leadAgentId?: string;
+          };
           goalSummary: unknown[];
+          pendingRetriage?: { batchId: string; newGoal: string; taskIds: string[] };
         };
         return ok({
           workspaceId: res.workspace.id,
           name: res.workspace.name,
           goal: res.workspace.goal,
           goalUpdatedAt: res.workspace.goalUpdatedAt,
+          // Absent means nobody is responsible for this board — a goal edit
+          // here has no addressee until someone attaches or takes the seat.
+          leadAgentId: res.workspace.leadAgentId,
+          // A goal edit nobody has picked up yet. Only attach_agent drains
+          // it — reading it here does not.
+          pendingRetriage: res.pendingRetriage,
           goals: res.goalSummary,
         });
       }
@@ -2228,7 +2280,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const res = (await http('PUT', `/api/workspaces/${encodeURIComponent(workspaceId)}/goal`, {
           goal,
           author: AUTHOR,
-        })) as { changed: boolean; retriage: { requested: boolean; taskIds: string[] } };
+        })) as {
+          changed: boolean;
+          retriage: { requested: boolean; queued: boolean; taskIds: string[]; batchId?: string };
+        };
         return ok({ workspaceId, changed: res.changed, retriage: res.retriage });
       }
       case 'answer_decision': {
@@ -2312,17 +2367,34 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           gating?: unknown;
           untriaged?: string[];
           queuedVoice?: Array<{ transcript: string; ts: number }>;
+          lead?: boolean;
+          pendingRetriage?: {
+            batchId: string;
+            oldGoal: string;
+            newGoal: string;
+            taskIds: string[];
+          };
         };
         if (subscribe !== false) await watchWorkspace(workspaceId);
         return ok({
           workspaceId,
           agentId: res.attachment?.agentId ?? agentId ?? AUTHOR.id,
           gating: res.gating,
+          // Are you the board's LEAD agent? True if you already held the seat
+          // or just claimed an empty one. The lead is where goal-edit
+          // re-triage is addressed, so this says whether those land on you.
+          lead: res.lead ?? false,
           untriaged: res.untriaged ?? [],
           // Voice change-requests that arrived while no agent was live
           // ("agent away — queued"): this attach is their delivery. Act on
           // each transcript, verbatim.
           queuedVoice: res.queuedVoice ?? [],
+          // A goal edit made while you were away, waiting for you because
+          // you lead this board. Walk its taskIds with set_task_goal against
+          // the NEW goal, passing its batchId on each so the moves read as
+          // one edit. It is drained by this call — nothing will offer it
+          // again.
+          ...(res.pendingRetriage ? { pendingRetriage: res.pendingRetriage } : {}),
         });
       }
       case 'heartbeat': {
@@ -2495,6 +2567,7 @@ interface HubEventPayload {
   kind?: string;
   movedToChores?: string[];
   agentId?: string;
+  leadAgentId?: string;
   batchId?: string;
   riskTier?: string;
   reason?: string;
@@ -2544,6 +2617,14 @@ async function emitHubChannelMessage(event: string, rawPayload: unknown): Promis
     case 'workspace.goal_updated':
       body = `[workspace.goal_updated]${by}: "${truncate(p.newGoal ?? '', 120)}"`;
       break;
+    case 'workspace.lead_changed':
+      // Worth forwarding even though it is not a task: it changes WHO a goal
+      // edit's re-triage will be addressed to, including when that is you.
+      body =
+        p.leadAgentId === AUTHOR.id
+          ? `[workspace.lead_changed]${by}: you are now the lead agent — goal-edit re-triage is addressed to you`
+          : `[workspace.lead_changed]${by}: lead agent is now ${p.leadAgentId ?? '?'}`;
+      break;
     case 'workspace.goals_changed': {
       const moved = p.movedToChores?.length ?? 0;
       body = `[workspace.goals_changed] ${p.kind ?? 'edit'}${by}${
@@ -2551,13 +2632,10 @@ async function emitHubChannelMessage(event: string, rawPayload: unknown): Promis
       }`;
       break;
     }
+    // The request reaches EVERY agent attached to the board, so who it is
+    // addressed to has to survive into the wording — see triage-line.ts.
     case 'triage.requested':
-      body =
-        p.kind === 'goal-retriage'
-          ? `[triage.requested] goal changed — re-triage ${p.taskIds?.length ?? '?'} open task(s) with set_task_goal${
-              p.batchId ? `, passing batchId "${p.batchId}" on each` : ''
-            }`
-          : `[triage.requested] place task ${p.taskId} against the goal (set_task_goal)`;
+      body = triageRequestLine(p, AUTHOR.id);
       break;
     // The audit row for the same goal edit the request above already asked
     // for. Forwarding both would say one thing twice, and only the request

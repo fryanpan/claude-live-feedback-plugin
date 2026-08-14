@@ -21,6 +21,7 @@ import {
   type HubGoal,
   type HubTask,
   type HubWorkspaceInfo,
+  type PendingRetriageView,
   type PresenceAgent,
   type PresenceChip,
   type PresencePerson,
@@ -40,6 +41,7 @@ import {
   renderDecisions,
   renderDocsSidebar,
   renderGoalStrip,
+  renderLeadStrip,
   renderPresence,
   renderTaskDetail,
   renderThreadsSidebar,
@@ -122,6 +124,7 @@ function buildShell(root: HTMLElement, name: string): void {
       <button type="button" id="hub-share" class="hub-btn">Share workspace</button>
     </header>
     <div id="hub-presence" class="hub-presence hidden"></div>
+    <div id="hub-lead" class="hub-lead"></div>
     <div id="hub-goal" class="hub-goal"></div>
     <div class="hub-main">
       <aside id="hub-docs" class="hub-side hub-side-docs"></aside>
@@ -225,6 +228,10 @@ async function main(): Promise<void> {
         goalUpdatedAt: Number(wsMap.get('goalUpdatedAt') ?? 0),
         goals: (wsMap.get('goals') as HubGoal[] | undefined) ?? [],
         docIds: (wsMap.get('docIds') as string[] | undefined) ?? [],
+        ...(wsMap.get('leadAgentId') ? { leadAgentId: String(wsMap.get('leadAgentId')) } : {}),
+        ...(wsMap.get('pendingRetriage')
+          ? { pendingRetriage: wsMap.get('pendingRetriage') as PendingRetriageView }
+          : {}),
         createdAt: Number(wsMap.get('createdAt') ?? 0),
       };
     }
@@ -250,6 +257,16 @@ async function main(): Promise<void> {
     renderGoalStrip(el('hub-goal'), state.info?.goal ?? '', {
       onGoalCommit: (goal) => void saveGoal(goal),
     });
+  }
+
+  function renderLead(): void {
+    renderLeadStrip(
+      el('hub-lead'),
+      state.info?.leadAgentId,
+      state.agents.map((agent) => agent.agentId),
+      { onLeadCommit: (leadAgentId) => void saveLead(leadAgentId) },
+      state.info?.pendingRetriage,
+    );
   }
 
   function renderBoardRegion(): void {
@@ -403,6 +420,7 @@ async function main(): Promise<void> {
 
   function renderAll(): void {
     renderGoal();
+    renderLead();
     renderBoardRegion();
     renderActivityRegion();
     renderDetail();
@@ -502,6 +520,23 @@ async function main(): Promise<void> {
     renderGoal();
   }
 
+  async function saveLead(leadAgentId: string): Promise<void> {
+    const res = await send(`/api/workspaces/${encodeURIComponent(workspaceId)}/lead`, 'PUT', {
+      leadAgentId,
+      author,
+    });
+    if (!res.ok) {
+      showToast('Lead agent update failed');
+      renderLead();
+      return;
+    }
+    showToast(`${leadAgentId} now leads this workspace`);
+    // The projection carries the new lead back through wsMap; render now so
+    // the strip does not sit on the old value until that round-trips.
+    if (state.info) state.info = { ...state.info, leadAgentId };
+    renderLead();
+  }
+
   async function answerDecision(task: HubTask, text: string, optionId?: string): Promise<void> {
     // Posted with the PERSON's own identity: answer.by shows who decided.
     // `text` is always the verbatim answer — tapping an option sends the
@@ -561,6 +596,9 @@ async function main(): Promise<void> {
       lastToolCallAt: a.lastToolCallAt,
     }));
     renderPresenceRegion();
+    // The picker's options come from the attachment list, so a fresh list is
+    // also a fresh set of agents to hand the board to.
+    renderLead();
   }
 
   async function loadEvents(): Promise<void> {
@@ -581,6 +619,7 @@ async function main(): Promise<void> {
   wsMap.observeDeep(() => {
     readProjection();
     renderGoal();
+    renderLead();
     renderBoardRegion();
     void loadSidebars();
   });
