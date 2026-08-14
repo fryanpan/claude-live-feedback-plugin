@@ -13,6 +13,7 @@ import {
   type DecisionQueue,
   type DecisionRow,
   type HubTask,
+  type PendingRetriageView,
   type PresenceChip,
   type ReorderTarget,
   TASK_STATUS_ORDER,
@@ -162,6 +163,7 @@ export function renderLeadStrip(
   leadAgentId: string | undefined,
   knownAgentIds: string[],
   handlers: LeadStripHandlers,
+  pendingRetriage?: PendingRetriageView,
 ): void {
   container.replaceChildren();
   container.classList.toggle('hub-lead-empty', !leadAgentId);
@@ -169,6 +171,20 @@ export function renderLeadStrip(
   label.className = 'hub-lead-label';
   label.textContent = leadAgentId ? 'Lead agent' : 'No lead agent — nobody owns goal changes here';
   container.append(label);
+  if (pendingRetriage && pendingRetriage.taskIds.length > 0) {
+    // A goal edit that has not been picked up. Counted, not vaguely
+    // announced: "3 tasks" is the size of the ask, and it is stated whether
+    // or not there is a lead — the case with no lead is exactly the one
+    // where this used to disappear.
+    const n = pendingRetriage.taskIds.length;
+    const waiting = document.createElement('span');
+    waiting.className = 'hub-lead-pending';
+    waiting.textContent = leadAgentId
+      ? `Goal edit waiting for the lead — ${n} task${n === 1 ? '' : 's'} to re-place`
+      : `Goal edit waiting — ${n} task${n === 1 ? '' : 's'} to re-place, and nobody to do it`;
+    waiting.title = `Edited by ${pendingRetriage.byName}`;
+    container.append(waiting);
+  }
 
   const options = [...new Set([...(leadAgentId ? [leadAgentId] : []), ...knownAgentIds])].sort(
     (a, b) => a.localeCompare(b),

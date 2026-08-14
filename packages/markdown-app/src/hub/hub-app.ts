@@ -21,6 +21,7 @@ import {
   type HubGoal,
   type HubTask,
   type HubWorkspaceInfo,
+  type PendingRetriageView,
   type PresenceAgent,
   type PresenceChip,
   type PresencePerson,
@@ -228,6 +229,9 @@ async function main(): Promise<void> {
         goals: (wsMap.get('goals') as HubGoal[] | undefined) ?? [],
         docIds: (wsMap.get('docIds') as string[] | undefined) ?? [],
         ...(wsMap.get('leadAgentId') ? { leadAgentId: String(wsMap.get('leadAgentId')) } : {}),
+        ...(wsMap.get('pendingRetriage')
+          ? { pendingRetriage: wsMap.get('pendingRetriage') as PendingRetriageView }
+          : {}),
         createdAt: Number(wsMap.get('createdAt') ?? 0),
       };
     }
@@ -261,6 +265,7 @@ async function main(): Promise<void> {
       state.info?.leadAgentId,
       state.agents.map((agent) => agent.agentId),
       { onLeadCommit: (leadAgentId) => void saveLead(leadAgentId) },
+      state.info?.pendingRetriage,
     );
   }
 

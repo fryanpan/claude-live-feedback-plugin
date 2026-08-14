@@ -480,10 +480,7 @@ describe('renderLeadStrip', () => {
     expect(root.textContent).toContain('Lead agent');
     expect(root.classList.contains('hub-lead-empty')).toBe(false);
     const select = root.querySelector('select') as HTMLSelectElement;
-    expect(Array.from(select.options).map((o) => o.value)).toEqual([
-      'agent-helper',
-      'agent-relay',
-    ]);
+    expect(Array.from(select.options).map((o) => o.value)).toEqual(['agent-helper', 'agent-relay']);
     expect(select.value).toBe('agent-relay');
 
     select.value = 'agent-helper';
@@ -517,6 +514,44 @@ describe('renderLeadStrip', () => {
     renderLeadStrip(root, undefined, [], { onLeadCommit: vi.fn() });
     expect(root.textContent).toContain('No lead agent');
     expect(root.querySelector('select')).toBeNull();
+  });
+
+  const pending = (taskIds: string[]) => ({
+    batchId: 'b-1',
+    taskIds,
+    ts: 1_700_000_000_000,
+    byName: 'Jordan',
+  });
+
+  it('a goal edit waiting on the lead is counted, not merely announced', () => {
+    renderLeadStrip(
+      root,
+      'agent-relay',
+      ['agent-relay'],
+      { onLeadCommit: vi.fn() },
+      pending(['t-1', 't-2', 't-3']),
+    );
+    const waiting = root.querySelector('.hub-lead-pending') as HTMLElement;
+    expect(waiting.textContent).toContain('3 tasks');
+    expect(waiting.textContent).toContain('waiting for the lead');
+    expect(waiting.title).toContain('Jordan');
+  });
+
+  it('with no lead at all the waiting edit says nobody is going to do it', () => {
+    renderLeadStrip(root, undefined, [], { onLeadCommit: vi.fn() }, pending(['t-1']));
+    const waiting = root.querySelector('.hub-lead-pending') as HTMLElement;
+    // Singular, because "1 tasks" is how a count stops being trusted.
+    expect(waiting.textContent).toContain('1 task to re-place');
+    expect(waiting.textContent).toContain('nobody to do it');
+  });
+
+  it('says nothing when nothing is waiting', () => {
+    // The absence assertions above are only worth anything because the two
+    // tests before this one show the strip CAN render the pending line.
+    renderLeadStrip(root, 'agent-relay', ['agent-relay'], { onLeadCommit: vi.fn() });
+    expect(root.querySelector('.hub-lead-pending')).toBeNull();
+    renderLeadStrip(root, 'agent-relay', ['agent-relay'], { onLeadCommit: vi.fn() }, pending([]));
+    expect(root.querySelector('.hub-lead-pending')).toBeNull();
   });
 });
 

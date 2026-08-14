@@ -14778,7 +14778,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "set_workspace_goal",
-      description: "Edit the workspace's north-star goal statement — the text every triage decision is judged against. Emits workspace.goal_updated and requests a re-triage of all OPEN tasks from the live workspace agent (the result's `retriage.requested` says whether one was actually delivered — with no live agent attached the re-triage honestly does not happen and placements stay as they were). If the re-triage lands in YOUR channel, walk the taskIds with set_task_goal, passing the request's batchId on each so the moves read as one goal edit.",
+      description: "Edit the workspace's north-star goal statement — the text every triage decision is judged against. Emits workspace.goal_updated and requests a re-triage of all OPEN tasks from the workspace's LEAD AGENT. The request does not expire: `retriage.requested` says it reached the lead live, `retriage.queued` says the lead was away and it is WAITING for their next attach_agent (a workspace with no lead at all queues it too, and the board shows it as pending work). If the re-triage lands in YOUR channel — or arrives as `pendingRetriage` on your attach — walk the taskIds with set_task_goal, passing the request's batchId on each so the moves read as one goal edit.",
       inputSchema: {
         type: "object",
         properties: {
@@ -14867,7 +14867,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "attach_agent",
-      description: "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep with set_task_goal, and queuedVoice — voice change-requests that arrived while no agent was live; act on each transcript verbatim. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments with a fresh heartbeat, and after ~5 minutes of silence the hub shows you as away and requests queue.",
+      description: "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep with set_task_goal, queuedVoice — voice change-requests that arrived while no agent was live; act on each transcript verbatim — and, if you LEAD this workspace, pendingRetriage: a goal edit made while you were away, whose taskIds you re-place with set_task_goal (echo its batchId on each). All three are drained by this call. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments with a fresh heartbeat, and after ~5 minutes of silence the hub shows you as away and requests queue.",
       inputSchema: {
         type: "object",
         properties: {
@@ -15431,6 +15431,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           goal: res.workspace.goal,
           goalUpdatedAt: res.workspace.goalUpdatedAt,
           leadAgentId: res.workspace.leadAgentId,
+          pendingRetriage: res.pendingRetriage,
           goals: res.goalSummary
         });
       }
@@ -15577,7 +15578,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           gating: res.gating,
           lead: res.lead ?? false,
           untriaged: res.untriaged ?? [],
-          queuedVoice: res.queuedVoice ?? []
+          queuedVoice: res.queuedVoice ?? [],
+          ...res.pendingRetriage ? { pendingRetriage: res.pendingRetriage } : {}
         });
       }
       case "heartbeat": {

@@ -590,8 +590,19 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // deliberately NOT the store's emit: §3.6's table is the exhaustive
   // subscriber/audit contract and has no triage.requested row, so requests
   // never reach events.jsonl (they're a delivery, not a change).
+  //
+  // A goal-retriage is addressed to the workspace's LEAD agent specifically:
+  // it asks someone to re-place the whole board against a new north star,
+  // and "whoever happened to be connected" is how that request reached
+  // nobody accountable. A task placement stays any-live-agent — a new task
+  // can be placed by whoever is home. Undelivered goal-retriages are not
+  // lost either way; the store persists them for the lead's next attach.
   taskStore.setTriageDelivery((req) => {
-    if (!taskStore.hasLiveAttachment(req.workspaceId)) return false;
+    const live =
+      req.kind === 'goal-retriage'
+        ? taskStore.hasLiveLeadAttachment(req.workspaceId)
+        : taskStore.hasLiveAttachment(req.workspaceId);
+    if (!live) return false;
     sse.broadcast(`ws~${req.workspaceId}`, { event: 'triage.requested', ...req });
     return true;
   });
@@ -1586,6 +1597,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           return j(200, {
             workspace,
             goalSummary: summarizeGoals(taskStore.listTasks(workspaceId), workspace.goals),
+            // A goal edit waiting for the lead agent. Read-only here: only an
+            // attach drains it. Surfaced so "nobody has picked this up" is
+            // visible work on the board rather than a silent gap.
+            pendingRetriage: taskStore.getPendingRetriage(workspaceId),
           });
         }
         // The work queue: priority order, dependency-aware, grouped into

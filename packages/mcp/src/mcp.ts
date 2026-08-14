@@ -1170,7 +1170,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'set_workspace_goal',
       description:
-        "Edit the workspace's north-star goal statement — the text every triage decision is judged against. Emits workspace.goal_updated and requests a re-triage of all OPEN tasks from the live workspace agent (the result's `retriage.requested` says whether one was actually delivered — with no live agent attached the re-triage honestly does not happen and placements stay as they were). If the re-triage lands in YOUR channel, walk the taskIds with set_task_goal, passing the request's batchId on each so the moves read as one goal edit.",
+        "Edit the workspace's north-star goal statement — the text every triage decision is judged against. Emits workspace.goal_updated and requests a re-triage of all OPEN tasks from the workspace's LEAD AGENT. The request does not expire: `retriage.requested` says it reached the lead live, `retriage.queued` says the lead was away and it is WAITING for their next attach_agent (a workspace with no lead at all queues it too, and the board shows it as pending work). If the re-triage lands in YOUR channel — or arrives as `pendingRetriage` on your attach — walk the taskIds with set_task_goal, passing the request's batchId on each so the moves read as one goal edit.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1268,7 +1268,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'attach_agent',
       description:
-        "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep with set_task_goal, and queuedVoice — voice change-requests that arrived while no agent was live; act on each transcript verbatim. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments with a fresh heartbeat, and after ~5 minutes of silence the hub shows you as away and requests queue.",
+        "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep with set_task_goal, queuedVoice — voice change-requests that arrived while no agent was live; act on each transcript verbatim — and, if you LEAD this workspace, pendingRetriage: a goal edit made while you were away, whose taskIds you re-place with set_task_goal (echo its batchId on each). All three are drained by this call. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments with a fresh heartbeat, and after ~5 minutes of silence the hub shows you as away and requests queue.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -2136,6 +2136,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             leadAgentId?: string;
           };
           goalSummary: unknown[];
+          pendingRetriage?: { batchId: string; newGoal: string; taskIds: string[] };
         };
         return ok({
           workspaceId: res.workspace.id,
@@ -2145,6 +2146,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           // Absent means nobody is responsible for this board — a goal edit
           // here has no addressee until someone attaches or takes the seat.
           leadAgentId: res.workspace.leadAgentId,
+          // A goal edit nobody has picked up yet. Only attach_agent drains
+          // it — reading it here does not.
+          pendingRetriage: res.pendingRetriage,
           goals: res.goalSummary,
         });
       }
@@ -2255,7 +2259,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const res = (await http('PUT', `/api/workspaces/${encodeURIComponent(workspaceId)}/goal`, {
           goal,
           author: AUTHOR,
-        })) as { changed: boolean; retriage: { requested: boolean; taskIds: string[] } };
+        })) as {
+          changed: boolean;
+          retriage: { requested: boolean; queued: boolean; taskIds: string[]; batchId?: string };
+        };
         return ok({ workspaceId, changed: res.changed, retriage: res.retriage });
       }
       case 'answer_decision': {
@@ -2340,6 +2347,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           untriaged?: string[];
           queuedVoice?: Array<{ transcript: string; ts: number }>;
           lead?: boolean;
+          pendingRetriage?: {
+            batchId: string;
+            oldGoal: string;
+            newGoal: string;
+            taskIds: string[];
+          };
         };
         if (subscribe !== false) await watchWorkspace(workspaceId);
         return ok({
@@ -2355,6 +2368,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           // ("agent away — queued"): this attach is their delivery. Act on
           // each transcript, verbatim.
           queuedVoice: res.queuedVoice ?? [],
+          // A goal edit made while you were away, waiting for you because
+          // you lead this board. Walk its taskIds with set_task_goal against
+          // the NEW goal, passing its batchId on each so the moves read as
+          // one edit. It is drained by this call — nothing will offer it
+          // again.
+          ...(res.pendingRetriage ? { pendingRetriage: res.pendingRetriage } : {}),
         });
       }
       case 'heartbeat': {
