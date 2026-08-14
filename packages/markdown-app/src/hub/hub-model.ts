@@ -112,6 +112,10 @@ export interface HubWorkspaceInfo {
  *  rendered last, never in goals[], not reorderable or deletable. */
 export const CHORES_ID = 'chores';
 
+/** The one spelling of the Chores header, shared by the section and by
+ *  anything else that has to name the goal a task sits under. */
+export const CHORES_TITLE = 'Chores';
+
 // ── Done visibility ────────────────────────────────────────────────────────
 
 export type DoneWindow = 'none' | 'hour' | '3h' | 'day' | 'all';
@@ -227,7 +231,7 @@ export function boardSections(goals: HubGoal[], tasks: HubTask[], f: BoardFilter
   }
   const chores: BoardSection = {
     id: CHORES_ID,
-    title: 'Chores',
+    title: CHORES_TITLE,
     depth: 0,
     isChores: true,
     tasks: [],
@@ -240,6 +244,24 @@ export function boardSections(goals: HubGoal[], tasks: HubTask[], f: BoardFilter
   }
   for (const s of sections) s.tasks.sort(byBoardOrder);
   return sections;
+}
+
+/**
+ * What the board calls `goalId` — the text on the section header the task's
+ * row actually sits under.
+ *
+ * It lives next to `boardSections` and shares its fallback on purpose: every
+ * goal id that has no section (the Chores catch-all, a goal deleted out from
+ * under a task) renders under Chores, so anything naming a goal elsewhere has
+ * to say Chores too. Two places deciding that independently is how a row ends
+ * up under one header while its detail panel claims another.
+ */
+export function goalLabel(goals: HubGoal[], goalId: string): string {
+  for (const g of goals) {
+    if (g.id === goalId) return g.title;
+    for (const sub of g.subgoals ?? []) if (sub.id === goalId) return sub.title;
+  }
+  return CHORES_TITLE;
 }
 
 // ── Reordering (the drag handle and its keyboard twin) ─────────────────────
