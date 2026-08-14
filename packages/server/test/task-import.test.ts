@@ -163,6 +163,117 @@ describe('parseTrackerMarkdown (golden file)', () => {
   });
 });
 
+// ── A layout table is not a task table ─────────────────────────────────────
+
+/**
+ * A prose tracker built out of BORDERLESS key/value tables imported silent
+ * partial garbage: the key column ("State", "Size", "Blocking") became task
+ * titles under a minted goal, so a reviewer skimming "1 goal, 3 tasks" read
+ * a successful partial import. Importing nothing is legible as a failure;
+ * importing three plausible rows is not.
+ *
+ * The tell was already in the response and thrown away — `ignoredColumns`
+ * carried `[""]`, i.e. the parser noticed the header row was blank. A task
+ * table names its first column; a table whose header cells are ALL empty is
+ * being used for layout.
+ *
+ * Every assertion here that an import is EMPTY is paired with one that the
+ * same parser still imports a real table, because a guard that swallows
+ * everything would satisfy the empty half on its own.
+ */
+describe('parseTrackerMarkdown (layout tables)', () => {
+  const LAYOUT = [
+    '# Harborlight Market — build status',
+    '',
+    '## PR #48 — Vendor map',
+    '',
+    '|          |                                    |',
+    '| -------- | ---------------------------------- |',
+    '| State    | Merged 2026-05-02 (squash)         |',
+    '| Size     | 9 commits, 22 files, +1,340 / -18  |',
+    '| Blocking | Nothing — merged, not yet deployed |',
+    '',
+    'The map now renders every stall by aisle.',
+    '',
+  ].join('\n');
+
+  it('imports nothing from a borderless key/value table', () => {
+    const m = parseTrackerMarkdown(LAYOUT, emptyWorkspace);
+    // The regression: these were tasks titled State / Size / Blocking.
+    expect(m.tasks).toEqual([]);
+    // And the heading above them minted a goal to hold them.
+    expect(m.goals).toEqual([]);
+  });
+
+  it('says the table was layout, not merely that the heading had no table', () => {
+    const m = parseTrackerMarkdown(LAYOUT, emptyWorkspace);
+    const reasons = m.skipped.map((s) => s.reason);
+    // Distinguishable from 'heading has no task table' — a dry-run has to say
+    // WHICH of the two happened, or "no tasks" is unactionable.
+    expect(reasons.some((r) => /layout/i.test(r))).toBe(true);
+    // Anchored to the table itself, not to the heading four lines up.
+    const layoutSkip = m.skipped.find((s) => /layout/i.test(s.reason));
+    expect(layoutSkip?.line).toBe(5);
+  });
+
+  it('warns when a file with content yields no tasks at all', () => {
+    const m = parseTrackerMarkdown(LAYOUT, emptyWorkspace);
+    expect(m.warnings.length).toBeGreaterThan(0);
+    expect(m.warnings.join(' ')).toMatch(/no tasks/i);
+  });
+
+  // ── Positive controls: the guard must not be a blanket refusal ──────────
+
+  it('still imports a real task table (the guard is not over-broad)', () => {
+    const ok = [
+      '# Harborlight Market',
+      '',
+      '## Stall setup',
+      '',
+      '| Task              | Status | Owner  |',
+      '| ----------------- | ------ | ------ |',
+      '| Chalk the aisles  | done   | Jordan |',
+      '| Hang the banner   | todo   | Sam    |',
+      '',
+    ].join('\n');
+    const m = parseTrackerMarkdown(ok, emptyWorkspace);
+    expect(m.tasks.map((t) => t.title)).toEqual(['Chalk the aisles', 'Hang the banner']);
+    expect(m.warnings).toEqual([]);
+  });
+
+  it('a SOME-blank header is still a task table — only an all-blank one is layout', () => {
+    // One unnamed column next to named ones is ordinary markdown, not layout.
+    const partial = [
+      '## Stall setup',
+      '',
+      '| Task             |   | Status |',
+      '| ---------------- | - | ------ |',
+      '| Chalk the aisles | ✳ | done   |',
+      '',
+    ].join('\n');
+    const m = parseTrackerMarkdown(partial, emptyWorkspace);
+    expect(m.tasks.map((t) => t.title)).toEqual(['Chalk the aisles']);
+  });
+
+  it('a layout table does not consume the real table that follows it', () => {
+    const both = [
+      '## PR #48 — Vendor map',
+      '',
+      '|       |                    |',
+      '| ----- | ------------------ |',
+      '| State | Merged 2026-05-02  |',
+      '',
+      '| Task            | Status |',
+      '| --------------- | ------ |',
+      '| Print the badges| todo   |',
+      '',
+    ].join('\n');
+    const m = parseTrackerMarkdown(both, emptyWorkspace);
+    expect(m.tasks.map((t) => t.title)).toEqual(['Print the badges']);
+    expect(m.warnings).toEqual([]);
+  });
+});
+
 describe('normalizeTrackerStatus', () => {
   it('normalizes the hand-maintained vocabulary', () => {
     expect(normalizeTrackerStatus('Done')).toBe('done');
