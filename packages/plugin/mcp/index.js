@@ -13731,6 +13731,28 @@ function resolveAgentAuthor(env) {
   return { name, color: hashToColor(name), id: `agent-${slug}`, kind: "known" };
 }
 
+// packages/mcp/src/thread-create.ts
+function threadCreateRequest(input, author) {
+  const doc2 = encodeURIComponent(input.docId);
+  if (input.find === undefined) {
+    return {
+      path: `/api/docs/${doc2}/threads`,
+      body: { author, text: input.text, anchor: { kind: "subject" } }
+    };
+  }
+  return {
+    path: `/api/docs/${doc2}/threads/by_find`,
+    body: {
+      author,
+      text: input.text,
+      find: input.find,
+      ...input.contextBefore !== undefined ? { contextBefore: input.contextBefore } : {},
+      ...input.contextAfter !== undefined ? { contextAfter: input.contextAfter } : {},
+      ...input.occurrence !== undefined ? { occurrence: input.occurrence } : {}
+    }
+  };
+}
+
 // packages/mcp/src/triage-line.ts
 function triageRequestLine(p, selfAgentId) {
   if (p.kind !== "goal-retriage") {
@@ -13768,7 +13790,7 @@ function suggestionAuthor() {
 }
 var server = new Server({
   name: "claude-live-feedback",
-  version: "0.1.17"
+  version: "0.1.18"
 }, {
   capabilities: {
     tools: {},
@@ -13907,18 +13929,24 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "create_thread",
-      description: "Open a new comment thread anchored to a `find` text range, seeded with an initial comment from the configured author. Use when the agent has editorial notes / suggestions that should land as durable threads on the doc (instead of one-shot chat messages) — e.g. running `/edit` on a blog draft and leaving anchored feedback at six different places. Disambiguation works the same as `find_and_replace`: pass `contextBefore`/`contextAfter` or `occurrence` if the text appears more than once. Returns `{ thread }` with `thread.id` for follow-up `post_reply` calls. The thread fires the same `thread.created` event the editor uses, so watchers see it immediately.",
+      description: 'Open a new comment thread on a doc, seeded with an initial comment from the configured author. Use when the agent has editorial notes / suggestions that should land as durable threads (instead of one-shot chat messages) — e.g. running `/edit` on a blog draft and leaving anchored feedback at six different places. Pass `find` to anchor the thread to that text; disambiguation works the same as `find_and_replace` (`contextBefore`/`contextAfter` or `occurrence` if the text appears more than once). OMIT `find` to open a thread about the doc AS A WHOLE — this is how you discuss a hub task, whose body doc is `task:<taskId>` and is often still empty: `create_thread(docId="task:t-abc", text="...")`. A subject thread never orphans. Returns `{ thread }` with `thread.id` for follow-up `post_reply` calls, and fires the same `thread.created` event the editor uses, so watchers see it immediately.',
       inputSchema: {
         type: "object",
         properties: {
-          docId: { type: "string" },
-          find: { type: "string" },
+          docId: {
+            type: "string",
+            description: `Doc id. A task's discussion lives on "task:<taskId>".`
+          },
+          find: {
+            type: "string",
+            description: 'Text to anchor to. Omit entirely for a thread about the whole doc; an empty string is rejected rather than treated as "no anchor".'
+          },
           contextBefore: { type: "string" },
           contextAfter: { type: "string" },
           occurrence: { type: "number" },
           text: { type: "string" }
         },
-        required: ["docId", "find", "text"]
+        required: ["docId", "text"]
       }
     },
     {
@@ -14993,15 +15021,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok(res);
       }
       case "create_thread": {
-        const { docId, find, contextBefore, contextAfter, occurrence, text } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/by_find`, {
-          author: AUTHOR,
-          text,
-          find,
-          ...contextBefore !== undefined ? { contextBefore } : {},
-          ...contextAfter !== undefined ? { contextAfter } : {},
-          ...occurrence !== undefined ? { occurrence } : {}
-        });
+        const { path, body } = threadCreateRequest(a, AUTHOR);
+        const res = await http("POST", path, body);
         return ok(res);
       }
       case "resolve_thread": {
