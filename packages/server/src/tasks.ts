@@ -1205,8 +1205,10 @@ export class TaskStore {
       .filter((t) => t.status !== 'done')
       .map((t) => t.id);
     if (taskIds.length === 0) {
-      // Nothing to re-place, so there is nothing to deliver OR to queue. The
-      // one honest case of both flags false.
+      // Nothing to re-place, so there is nothing to deliver OR to queue.
+      // Both flags false also covers a queue write that FAILED (logged) —
+      // in both cases nobody is durably waiting on this edit, which is the
+      // question the flags answer.
       return {
         ok: true,
         workspace,
@@ -1233,10 +1235,18 @@ export class TaskStore {
     // still waiting from an EARLIER gap describes a baseline that no longer
     // exists. Either it just went out live (superseded) or it merges into
     // the one being queued below; both paths go through here.
+    let queued = false;
     if (requested) {
       this.clearPendingRetriage(state);
     } else {
-      this.queuePendingRetriage(state, { batchId, oldGoal, newGoal: goal, taskIds, actor, ts });
+      queued = this.queuePendingRetriage(state, {
+        batchId,
+        oldGoal,
+        newGoal: goal,
+        taskIds,
+        actor,
+        ts,
+      });
     }
     this.emit({
       type: 'workspace.retriaged',
@@ -1246,7 +1256,7 @@ export class TaskStore {
       newGoal: goal,
       taskIds,
       delivered: requested,
-      queued: !requested,
+      queued,
       actor,
       ts,
     });
@@ -1254,7 +1264,7 @@ export class TaskStore {
       ok: true,
       workspace,
       changed: true,
-      retriage: { requested, queued: !requested, taskIds, batchId },
+      retriage: { requested, queued, taskIds, batchId },
     };
   }
 
@@ -1299,7 +1309,7 @@ export class TaskStore {
    * person who edited the goal that a re-triage is waiting, and an ack
    * grounded in a debounce a crash can drop is the summaries-incident lie.
    */
-  private queuePendingRetriage(state: WorkspaceState, next: PendingRetriage): void {
+  private queuePendingRetriage(state: WorkspaceState, next: PendingRetriage): boolean {
     const prev = state.pendingRetriage;
     state.pendingRetriage = prev
       ? {
@@ -1311,17 +1321,27 @@ export class TaskStore {
           ts: prev.ts,
         }
       : next;
-    this.writePendingRetriage(state);
+    return this.writePendingRetriage(state);
   }
 
-  private writePendingRetriage(state: WorkspaceState): void {
+  /**
+   * @returns whether the request is actually on disk. The caller ACKS with
+   * this: "queued" is a restart-proof promise, so a swallowed write turns the
+   * ack into exactly the lie the synchronous write exists to prevent. The
+   * in-memory copy is kept either way — it can still be handed over during
+   * this process lifetime — so a false here under-promises rather than
+   * over-promises.
+   */
+  private writePendingRetriage(state: WorkspaceState): boolean {
     const path = pendingRetriagePath(this.dataDir, state.workspace.id);
     try {
       const dir = join(this.dataDir, 'workspaces');
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
       writeFileSync(path, `${JSON.stringify({ pending: state.pendingRetriage }, null, 2)}\n`);
+      return true;
     } catch (err) {
       console.error(`[tasks] failed to queue re-triage for ${state.workspace.id}:`, err);
+      return false;
     }
   }
 
