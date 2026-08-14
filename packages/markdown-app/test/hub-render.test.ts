@@ -716,6 +716,34 @@ describe('renderTaskDetail', () => {
     onAssign: vi.fn(),
   });
 
+  const metaValue = (key: string): string | null => {
+    const dts = [...root.querySelectorAll('.hub-detail-meta dt')];
+    const dds = [...root.querySelectorAll('.hub-detail-meta dd')];
+    const i = dts.findIndex((dt) => dt.textContent === key);
+    return i === -1 ? null : (dds[i]?.textContent ?? null);
+  };
+
+  // The board spends a whole section header naming the goal; the panel you
+  // open to find out what a task is FOR printed `g1-loop`. An id is a fact
+  // about the store, not an answer to "which goal does this serve".
+  it('names the goal the way the board does', () => {
+    renderTaskDetail(root, task({ goal: 'g-pr' }), {
+      ...detailHandlers(),
+      goalTitles: { 'g-pr': '1. Get the PR out' },
+    });
+    expect(metaValue('Goal')).toBe('1. Get the PR out');
+  });
+
+  it('falls back to the id when nothing names that goal', () => {
+    renderTaskDetail(root, task({ goal: 'g-unknown' }), {
+      ...detailHandlers(),
+      goalTitles: { 'g-pr': '1. Get the PR out' },
+    });
+    // Positive control for the test above: the lookup is real, so a miss
+    // still says something rather than going blank.
+    expect(metaValue('Goal')).toBe('g-unknown');
+  });
+
   // The server accepted, keyed and backlinked `url` refs before anything
   // drew them — stored and unreachable, which is the same failure this
   // codebase already hit with resolved threads. So this asserts the SURFACE,
