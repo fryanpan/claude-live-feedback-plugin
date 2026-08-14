@@ -292,7 +292,15 @@ export class Rooms {
   deleteDoc(
     docId: string,
     opts?: { force?: boolean },
-  ): { ok: boolean; error?: 'not-found' | 'has-open-threads'; openThreads?: number } {
+  ): {
+    ok: boolean;
+    error?: 'not-found' | 'has-open-threads';
+    openThreads?: number;
+    /** The room is out of memory, but its persisted `.ydoc` is still on
+     *  disk, so a restart reloads it. Additive on purpose — callers that
+     *  only read `ok` keep their existing behaviour. */
+    persistFailed?: boolean;
+  } {
     const room = this.rooms.get(docId);
     if (!room) return { ok: false, error: 'not-found' };
     const openThreads = listThreads(room.ydoc).filter((t) => t.status === 'open').length;
@@ -319,18 +327,20 @@ export class Rooms {
       } catch {}
     }
     this.rooms.delete(docId);
+    let persistFailed = false;
     try {
       const p = this.pathFor(docId);
       if (existsSync(p)) rmSync(p);
       deletePrivateMeta(this.cfg.dataDir, docId);
     } catch (err) {
       console.error(`[rooms] failed to remove persisted ${docId}:`, err);
+      persistFailed = true;
     }
     try {
       room.awareness.destroy();
       room.ydoc.destroy();
     } catch {}
-    return { ok: true };
+    return persistFailed ? { ok: true, persistFailed: true } : { ok: true };
   }
 
   // The persisted Yjs files are the source of truth for doc existence —

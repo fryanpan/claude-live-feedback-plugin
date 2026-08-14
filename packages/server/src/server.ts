@@ -2379,19 +2379,31 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // came back not-found, and a board created for a five-minute
           // experiment was permanent. Ask the task store first, by id.
           if (taskStore.getWorkspace(workspaceId)) {
-            const hub = taskStore.deleteWorkspace(workspaceId, { force });
+            const openTasks = taskStore.openTaskCount(workspaceId) ?? 0;
+            if (openTasks > 0 && !force) {
+              return j(409, { ok: false, error: 'has-open-tasks', openTasks });
+            }
+            // Rooms come down FIRST because they are DERIVED state: the
+            // projection rebuilds a board room and its body rooms from the
+            // store on the next touch, so a failure here leaves a coherent
+            // board that the same call can retry. The other order strands
+            // orphan .ydocs behind an id that no longer resolves as a board,
+            // and they reload on the next restart with nothing able to reach
+            // them. Attached docs are untouched either way: attachDoc is a
+            // LINK, so a doc a deleted board merely cited keeps working.
+            const taskIds = taskStore.listTasks(workspaceId).map((t) => t.id);
+            if (!taskProjection.dropWorkspace(workspaceId, taskIds).ok) {
+              return j(500, { ok: false, error: 'rooms-cleanup-failed' });
+            }
+            // force: the open-task guard was applied above, and refusing now
+            // would leave the board without the rooms it just lost.
+            const hub = taskStore.deleteWorkspace(workspaceId, { force: true });
             if (!hub.ok) {
               // 'persist-failed' is a 500, not a 404: the board is still
               // there, and the caller must not read the refusal as "already
               // gone" and stop asking.
-              const code =
-                hub.error === 'has-open-tasks' ? 409 : hub.error === 'persist-failed' ? 500 : 404;
-              return j(code, hub);
+              return j(hub.error === 'persist-failed' ? 500 : 404, hub);
             }
-            // Rooms are the projection's, not the store's. Attached docs are
-            // deliberately untouched: attachDoc is a LINK, so a doc that a
-            // deleted board merely cited keeps working at its own URL.
-            taskProjection.dropWorkspace(workspaceId, hub.taskIds);
             return j(200, { ok: true, deletedTasks: hub.deletedTasks });
           }
           const res = rooms.deleteWorkspace(workspaceId, { force });

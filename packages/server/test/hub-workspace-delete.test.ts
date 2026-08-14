@@ -60,12 +60,13 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
   const del = (path: string) => fetch(`${base}${path}`, { method: 'DELETE' });
 
   /**
-   * The tasks sidecar is written on a debounce, so "it exists" is a condition
-   * to wait for, not a fact right after the create. This matters beyond
-   * timing: a test that deletes before the first write would assert the
-   * absence of a file that was never there, and pass with the removal gone.
+   * Both the tasks sidecar and a room's `.ydoc` are written on a debounce, so
+   * "it exists" is a condition to wait for, not a fact right after the
+   * create. This matters beyond timing: a test that deletes before the first
+   * write would assert the absence of a file that was never there, and pass
+   * with the removal gone.
    */
-  const awaitSidecar = async (path: string): Promise<boolean> => {
+  const awaitFile = async (path: string): Promise<boolean> => {
     for (let i = 0; i < 100; i++) {
       if (existsSync(path)) return true;
       await new Promise((r) => setTimeout(r, 20));
@@ -144,7 +145,7 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
     // Positive controls: every one of these exists BEFORE the delete, so the
     // absences asserted after it mean something.
     expect(await listWorkspaceIds()).toContain(wsId);
-    expect(await awaitSidecar(tasksSidecarPath(dataDir as string, wsId))).toBe(true);
+    expect(await awaitFile(tasksSidecarPath(dataDir as string, wsId))).toBe(true);
     expect(existsSync(eventsLogPath(dataDir as string, wsId))).toBe(true);
     expect(handle?.rooms.get(boardRoom)).toBeDefined();
     expect(handle?.rooms.get(openBody)).toBeDefined();
@@ -171,7 +172,7 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
     const { wsId } = await seed();
     // Wait for the board to actually reach disk first — deleting before the
     // debounced write would make this pass with the file removal deleted.
-    expect(await awaitSidecar(tasksSidecarPath(dataDir as string, wsId))).toBe(true);
+    expect(await awaitFile(tasksSidecarPath(dataDir as string, wsId))).toBe(true);
     expect((await del(`/api/workspaces/${wsId}?force=true`)).status).toBe(200);
 
     await handle?.stop();
@@ -184,7 +185,7 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
     // caller stops asking, and the next restart hands the board back.
     const { wsId, open } = await seed();
     const sidecar = tasksSidecarPath(dataDir as string, wsId);
-    expect(await awaitSidecar(sidecar)).toBe(true);
+    expect(await awaitFile(sidecar)).toBe(true);
     // Stand in for any unlink failure (permissions, a locked file) without
     // depending on the test user's privileges: a directory where the file
     // was makes the non-recursive rmSync throw, and root can't make it
@@ -199,7 +200,41 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
     // filesystem is fixed still has something to delete.
     expect(await listWorkspaceIds()).toContain(wsId);
     expect(handle?.tasks.getTask(open.id)).toBeDefined();
+    // The rooms went first and are gone by now, which is fine: they are
+    // derived, and the next touch rebuilds them from the store. So what the
+    // refusal leaves is a working board, not a hollow one.
+    const again = await post(`/api/workspaces/${wsId}/tasks`, {
+      title: 'after the failure',
+      goal: 'chores',
+      author: AGENT,
+      body: 'Agent can keep using the board so that a failed delete costs nothing.',
+    });
+    expect(again.status).toBe(200);
     expect(handle?.rooms.get(workspaceRoomId(wsId))).toBeDefined();
+  });
+
+  it('keeps the board when a room file survives, so the delete can be retried', async () => {
+    // Rooms are derived state, so they come down first and the store entry
+    // is the commit point. If a room's `.ydoc` can't be removed, deleting
+    // the board anyway would strand an orphan that reloads on the next
+    // restart behind an id that no longer resolves as a board — nothing
+    // could ever come back for it.
+    const { wsId, open } = await seed();
+    const boardYdoc = join(dataDir as string, `${workspaceRoomId(wsId)}.ydoc`);
+    expect(await awaitFile(boardYdoc)).toBe(true);
+    // Same root-proof stand-in for an unlink failure as above.
+    rmSync(boardYdoc);
+    mkdirSync(boardYdoc);
+
+    const res = await del(`/api/workspaces/${wsId}?force=true`);
+    expect(res.status).toBe(500);
+    expect(((await res.json()) as { error: string }).error).toBe('rooms-cleanup-failed');
+    // The board and its tasks are still there, so the same call retries once
+    // the filesystem is fixed — and the projection rebuilds the rooms it did
+    // manage to drop.
+    expect(await listWorkspaceIds()).toContain(wsId);
+    expect(handle?.tasks.getTask(open.id)).toBeDefined();
+    expect(existsSync(tasksSidecarPath(dataDir as string, wsId))).toBe(true);
   });
 
   it('re-arms the write it cancelled when the delete refuses', () => {
