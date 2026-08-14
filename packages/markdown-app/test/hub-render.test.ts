@@ -52,11 +52,18 @@ const filters: BoardFilters = {
   now: NOW,
 };
 
-function handlers(): BoardHandlers {
+/** Desktop by default: a fine, hovering pointer is what makes tap-to-rename
+ *  on the title safe (see `renderTaskRow`). Coarse-pointer cases opt in. */
+function handlers(over: Partial<BoardHandlers> = {}): BoardHandlers {
   return {
     onStatusSet: vi.fn(),
     onGoalTitleCommit: vi.fn(),
     onOpenTask: vi.fn(),
+    onReorder: vi.fn(),
+    onTitleCommit: vi.fn(),
+    onAssign: vi.fn(),
+    inlineTitleEdit: () => true,
+    ...over,
   };
 }
 
@@ -138,12 +145,16 @@ describe('renderBoard', () => {
     // long title under its own status control and misaligned the column.
     expect(title.className).toContain('hub-task-title');
     const row = root.querySelector('.hub-task-row') as HTMLElement;
-    // Order is the contract the grid tracks are written against.
+    // Order is the contract the grid tracks are written against — and it is
+    // the row anatomy itself: handle, open zone, status, title, assignee.
     expect([...row.children].map((c) => (c as HTMLElement).className.split(' ')[0])).toEqual([
+      'hub-drag-handle',
+      'hub-open-zone',
       'hub-status-select',
       'hub-risk-slot',
       'hub-task-title',
       'hub-task-badges',
+      'hub-row-assignee',
     ]);
   });
 
@@ -174,31 +185,16 @@ describe('renderBoard', () => {
     const shape = (r: HTMLElement) =>
       [...r.children].map((c) => (c as HTMLElement).className.split(' ')[0]);
     expect(shape(rows[0])).toEqual(shape(rows[1]));
-    expect(shape(rows[0])).toHaveLength(4);
+    expect(shape(rows[0])).toHaveLength(7);
     // Positive control: the tiers really do differ, so the shapes matching
     // above is not two identically-empty rows agreeing about nothing.
     expect(rows[0].querySelector('.hub-risk')).toBeNull();
     expect(rows[1].querySelector('.hub-risk')).not.toBeNull();
   });
 
-  // Reported as "I can't open a task to see what's inside". The title spans
-  // most of the row, and it used to stop propagation and swap itself for an
-  // input — so on a phone, where the title is nearly the whole row, tapping a
-  // task could only ever rename it. Renaming moved to the detail panel; the
-  // row's one gesture is open.
-  it('tapping the title opens the task rather than renaming it', () => {
-    const h = handlers();
-    const t = task({ goal: 'g-pr', title: 'Old title' });
-    renderBoard(root, boardSections(GOALS, [t], filters), h);
-    const title = root.querySelector('.hub-task-title') as HTMLElement;
-    title.click();
-    expect(title.querySelector('input')).toBeNull();
-    expect(h.onOpenTask).toHaveBeenCalledWith(expect.objectContaining({ id: t.id }));
-  });
-
   // The rest of the row was never the problem, but it is the positive control
-  // for the assertion above: if opening broke everywhere, the test above
-  // would pass for the wrong reason.
+  // for the title assertions below: if opening broke everywhere, "the title
+  // renamed instead of opening" would pass for the wrong reason.
   it('tapping the row anywhere else opens the task too', () => {
     const h = handlers();
     const t = task({ goal: 'g-pr' });
@@ -223,6 +219,221 @@ describe('renderBoard', () => {
     ) as HTMLElement;
     choresTitle.click();
     expect(choresTitle.querySelector('input')).toBeNull();
+  });
+});
+
+// ── The Asana row anatomy: handle · open zone · status · title · assignee ──
+
+describe('the open zone', () => {
+  // The deliberate space whose only job is opening the task. It is what makes
+  // restoring inline title editing safe: with the title editable, the row
+  // needs a target that can only ever mean "open".
+  it('opens the task and says so to assistive tech', () => {
+    const h = handlers();
+    const t = task({ goal: 'g-pr', title: 'Open me' });
+    renderBoard(root, boardSections(GOALS, [t], filters), h);
+    const zone = root.querySelector('.hub-open-zone') as HTMLButtonElement;
+    expect(zone.getAttribute('aria-label') ?? '').toContain('Open me');
+    zone.click();
+    expect(h.onOpenTask).toHaveBeenCalledWith(expect.objectContaining({ id: t.id }));
+  });
+});
+
+describe('inline title editing', () => {
+  // Restored deliberately — and it re-opens the bug that removed it, so the
+  // gate is the pointer, not the title.
+  it('a fine pointer renames in place; Enter commits', () => {
+    const h = handlers();
+    const t = task({ goal: 'g-pr', title: 'Old title' });
+    renderBoard(root, boardSections(GOALS, [t], filters), h);
+    const title = root.querySelector('.hub-task-title') as HTMLElement;
+    title.click();
+    const input = title.querySelector('input') as HTMLInputElement;
+    expect(input).not.toBeNull();
+    // The click that entered edit mode must not also have opened the task.
+    expect(h.onOpenTask).not.toHaveBeenCalled();
+    input.value = 'New title';
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(h.onTitleCommit).toHaveBeenCalledWith(
+      expect.objectContaining({ id: t.id }),
+      'New title',
+    );
+  });
+
+  it('Escape cancels without writing', () => {
+    const h = handlers();
+    renderBoard(root, boardSections(GOALS, [task({ goal: 'g-pr', title: 'Keep me' })], filters), h);
+    const title = root.querySelector('.hub-task-title') as HTMLElement;
+    title.click();
+    const input = title.querySelector('input') as HTMLInputElement;
+    input.value = 'Discard me';
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(h.onTitleCommit).not.toHaveBeenCalled();
+    expect(title.textContent).toBe('Keep me');
+  });
+
+  // Keyboard parity: a rename reachable only by clicking is a rename a
+  // keyboard user cannot perform.
+  it('is reachable from the keyboard — the title is focusable and Enter starts it', () => {
+    const h = handlers();
+    renderBoard(root, boardSections(GOALS, [task({ goal: 'g-pr' })], filters), h);
+    const title = root.querySelector('.hub-task-title') as HTMLElement;
+    expect(title.tabIndex).toBe(0);
+    title.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(title.querySelector('input')).not.toBeNull();
+    // …and starting an edit must not also open the task behind it.
+    expect(h.onOpenTask).not.toHaveBeenCalled();
+  });
+
+  // THE mobile decision. A phone has no hover and a fat pointer: the title is
+  // ~60% of a 430px row, so tap-to-rename there is the exact bug that removed
+  // inline editing an hour before this shipped ("I can't open a task to see
+  // what's inside"). On a coarse pointer the title opens, and renaming lives
+  // in the detail panel — one tap away, full-width target.
+  it('a coarse pointer opens the task instead of renaming it', () => {
+    const h = handlers({ inlineTitleEdit: () => false });
+    const t = task({ goal: 'g-pr', title: 'Old title' });
+    renderBoard(root, boardSections(GOALS, [t], filters), h);
+    const title = root.querySelector('.hub-task-title') as HTMLElement;
+    title.click();
+    expect(title.querySelector('input')).toBeNull();
+    expect(h.onTitleCommit).not.toHaveBeenCalled();
+    expect(h.onOpenTask).toHaveBeenCalledWith(expect.objectContaining({ id: t.id }));
+    // The open zone is still there and still works — the anatomy does not
+    // change shape between pointers, only what the title's tap means.
+    expect(root.querySelector('.hub-open-zone')).not.toBeNull();
+  });
+});
+
+describe('the row assignee', () => {
+  it('reads the current assignee and hands the task the other way in one tap', () => {
+    const h = handlers();
+    const t = task({ goal: 'g-pr', assignee: 'agent' });
+    renderBoard(root, boardSections(GOALS, [t], filters), h);
+    const btn = root.querySelector('.hub-row-assignee') as HTMLButtonElement;
+    expect(btn.textContent).toBe('agent');
+    btn.click();
+    expect(h.onAssign).toHaveBeenCalledWith(expect.objectContaining({ id: t.id }), 'human');
+    // Reassigning is not opening.
+    expect(h.onOpenTask).not.toHaveBeenCalled();
+  });
+
+  // It used to be a badge that rendered only when the assignee was not the
+  // default 'agent' — so most rows showed no owner at all, and the one place
+  // it appeared was also the place a long name could win the row.
+  it('is on every row, including the default assignee', () => {
+    renderBoard(
+      root,
+      boardSections(GOALS, [task({ goal: 'g-pr', assignee: 'agent' })], filters),
+      handlers(),
+    );
+    expect(root.querySelectorAll('.hub-row-assignee')).toHaveLength(1);
+    // …and no longer duplicated as a badge.
+    expect(root.querySelector('.hub-badge-assignee')).toBeNull();
+  });
+});
+
+describe('the drag handle', () => {
+  it('is a real control with an accessible name, at the far left of the row', () => {
+    renderBoard(root, boardSections(GOALS, [task({ goal: 'g-pr' })], filters), handlers());
+    const row = root.querySelector('.hub-task-row') as HTMLElement;
+    const handle = row.firstElementChild as HTMLButtonElement;
+    expect(handle.className).toContain('hub-drag-handle');
+    expect(handle.tagName).toBe('BUTTON');
+    expect(handle.getAttribute('aria-label') ?? '').toMatch(/reorder|move/i);
+  });
+
+  // Mockup v2's rule: finishing a task doesn't move it, so a done row has no
+  // handle. The ELEMENT stays (the grid fills tracks consecutively — a
+  // missing child slides every later cell one track left), it is just inert.
+  it('is inert on a done row, without changing the row shape', () => {
+    const done = task({
+      goal: 'g-pr',
+      status: 'done',
+      transitions: [{ ts: NOW, from: 'todo', to: 'done', by: { name: 'Agent', kind: 'agent' } }],
+    });
+    const open = task({ goal: 'g-pr' });
+    renderBoard(
+      root,
+      boardSections(GOALS, [done, open], { ...filters, doneWindow: 'all' }),
+      handlers(),
+    );
+    const rows = [...root.querySelectorAll('.hub-task-row')] as HTMLElement[];
+    const handleOf = (r: HTMLElement) => r.querySelector('.hub-drag-handle') as HTMLButtonElement;
+    expect(rows[0].children.length).toBe(rows[1].children.length);
+    expect(handleOf(rows[0]).disabled).toBe(true);
+    // Positive control: the open row's handle is live, so `disabled` above is
+    // this row's state and not the element's default.
+    expect(handleOf(rows[1]).disabled).toBe(false);
+  });
+
+  it('a disabled handle refuses to reorder even if a key reaches it', () => {
+    const h = handlers();
+    const done = task({
+      goal: 'g-pr',
+      status: 'done',
+      transitions: [{ ts: NOW, from: 'todo', to: 'done', by: { name: 'Agent', kind: 'agent' } }],
+    });
+    renderBoard(
+      root,
+      boardSections(GOALS, [done, task({ goal: 'g-pr' })], { ...filters, doneWindow: 'all' }),
+      h,
+    );
+    const handle = root.querySelector('.hub-drag-handle') as HTMLButtonElement;
+    handle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    expect(h.onReorder).not.toHaveBeenCalled();
+  });
+});
+
+describe('keyboard reordering', () => {
+  const three = () => [
+    task({ id: 'k-a', goal: 'g-pr', order: 1 }),
+    task({ id: 'k-b', goal: 'g-pr', order: 2 }),
+    task({ id: 'k-c', goal: 'g-pr', order: 3 }),
+  ];
+
+  it('the focused handle moves its row with the arrow keys', () => {
+    const h = handlers();
+    renderBoard(root, boardSections(GOALS, three(), filters), h);
+    const handle = root.querySelector('[data-task-id="k-a"] .hub-drag-handle') as HTMLButtonElement;
+    handle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    expect(h.onReorder).toHaveBeenCalledWith(expect.objectContaining({ id: 'k-a' }), {
+      goal: 'g-pr',
+      position: 2.5,
+    });
+  });
+
+  // j/k focuses the ROW, not the handle, so a reorder that only worked from
+  // the handle would mean tabbing out of the navigation you are already in.
+  it('Alt+Arrow works from the row itself, where j/k leaves the focus', () => {
+    const h = handlers();
+    renderBoard(root, boardSections(GOALS, three(), filters), h);
+    const row = root.querySelector('[data-task-id="k-c"]') as HTMLElement;
+    row.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowUp', altKey: true, bubbles: true }),
+    );
+    expect(h.onReorder).toHaveBeenCalledWith(expect.objectContaining({ id: 'k-c' }), {
+      goal: 'g-pr',
+      position: 1.5,
+    });
+  });
+
+  // Bare arrows on a row must stay the browser's (scrolling, and the status
+  // dropdown's own key handling); only the modified chord reorders.
+  it('a bare Arrow on the row does not reorder', () => {
+    const h = handlers();
+    renderBoard(root, boardSections(GOALS, three(), filters), h);
+    const row = root.querySelector('[data-task-id="k-c"]') as HTMLElement;
+    row.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
+    expect(h.onReorder).not.toHaveBeenCalled();
+  });
+
+  it('Enter still opens the row it is focused on', () => {
+    const h = handlers();
+    renderBoard(root, boardSections(GOALS, three(), filters), h);
+    const row = root.querySelector('[data-task-id="k-b"]') as HTMLElement;
+    row.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(h.onOpenTask).toHaveBeenCalledWith(expect.objectContaining({ id: 'k-b' }));
   });
 });
 

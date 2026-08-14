@@ -12,11 +12,15 @@ import {
   type BoardSection,
   type HubTask,
   type PresenceChip,
+  type ReorderTarget,
   TASK_STATUS_ORDER,
   type TaskStatus,
   type UptimeReport,
   activityRows,
   describeEvent,
+  dropIndexFor,
+  dropTarget,
+  stepTarget,
   timeAgo,
   uptimeSummary,
 } from './hub-model.ts';
@@ -31,12 +35,24 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
  * Swap a title element for an input; Enter commits, Escape or blur cancels
  * (§3.9: tap the title text to edit, Enter commits). Cancel restores the
  * original text — the caller re-renders on commit anyway.
+ *
+ * Enter/F2 on the element itself starts the edit, so renaming is not a
+ * pointer-only gesture. That handler stops propagation for the same reason
+ * the click one does: on a task row, an un-stopped Enter would open the task
+ * behind the editor it just opened.
  */
 function wireInPlaceTitle(
   el: HTMLElement,
   current: () => string,
   commit: (v: string) => void,
 ): void {
+  el.addEventListener('keydown', (ev) => {
+    if (el.querySelector('input')) return; // the input owns its own keys
+    if (ev.key !== 'Enter' && ev.key !== 'F2') return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    el.click();
+  });
   el.addEventListener('click', (ev) => {
     ev.stopPropagation();
     if (el.querySelector('input')) return;
@@ -131,6 +147,40 @@ export interface BoardHandlers {
   onStatusSet: (task: HubTask, to: TaskStatus) => void;
   onGoalTitleCommit: (sectionId: string, title: string) => void;
   onOpenTask: (task: HubTask) => void;
+  /** A drag or an arrow-key move resolved to a `set_task_goal` call. */
+  onReorder: (task: HubTask, target: ReorderTarget) => void;
+  onTitleCommit: (task: HubTask, title: string) => void;
+  onAssign: (task: HubTask, assignee: string) => void;
+  /**
+   * Whether the title renames on tap. See `renderTaskRow` for why this is a
+   * pointer question rather than a width one. Omitted → asked of the browser.
+   */
+  inlineTitleEdit?: () => boolean;
+}
+
+/**
+ * A hovering, precise pointer is what makes tap-to-rename on the title safe:
+ * it implies a visible hover state (so the drag handle and the open zone are
+ * discoverable) and a click that lands where it was aimed. Asking the pointer
+ * rather than the viewport width is the honest form of the question — an
+ * iPad with a trackpad gets the desktop gesture, a touchscreen laptop's mouse
+ * does too, and a 430px phone never does.
+ */
+let pointerQuery: { matches: boolean } | null | undefined;
+function finePointer(): boolean {
+  if (pointerQuery === undefined) {
+    // Resolved once and kept: the MediaQueryList stays LIVE (its `matches`
+    // tracks the real pointer), and asking for a new one per row would build
+    // a hundred objects on every board render.
+    const mm = (globalThis as { matchMedia?: (q: string) => { matches: boolean } }).matchMedia;
+    try {
+      pointerQuery =
+        typeof mm === 'function' ? mm.call(globalThis, '(hover: hover) and (pointer: fine)') : null;
+    } catch {
+      pointerQuery = null;
+    }
+  }
+  return pointerQuery === null ? true : pointerQuery.matches;
 }
 
 /* Always emits a slot, even with no tier to show. Grid auto-placement fills
@@ -164,7 +214,9 @@ function taskBadges(task: HubTask): HTMLElement {
   };
   if (task.needs === 'decision') add('hub-badge-decision', 'decision');
   else if (task.needs === 'action') add('hub-badge-action', 'action');
-  if (task.assignee && task.assignee !== 'agent') add('hub-badge-assignee', task.assignee);
+  // The assignee is its own cell at the end of the row now (§ row anatomy).
+  // As a badge it appeared only when it wasn't the default 'agent', so most
+  // rows showed no owner at all.
   if (task.after.length > 0)
     add('hub-badge-after', `after ${task.after.length}`, `blocked on: ${task.after.join(', ')}`);
   if (task.dueAt !== undefined) {
@@ -270,18 +322,85 @@ export function renderTaskRow(task: HubTask, handlers: BoardHandlers): HTMLEleme
     if (to !== task.status) handlers.onStatusSet(task, to);
   });
 
+  // ── Far left: the drag handle. Hidden until the row is hovered or the
+  // handle itself is focused (CSS) — a permanent column of ⠿ is noise on a
+  // list you read by skimming. A done row keeps the ELEMENT and loses the
+  // control: finishing a task doesn't move it (mockup v2), and dropping the
+  // child instead would slide every later cell one grid track left, which is
+  // the bug the risk-dot slot already exists to prevent.
+  const handle = document.createElement('button');
+  handle.type = 'button';
+  handle.className = 'hub-drag-handle';
+  handle.textContent = '⠿';
+  handle.tabIndex = -1;
+  if (task.status === 'done') {
+    handle.disabled = true;
+    handle.setAttribute('aria-hidden', 'true');
+  } else {
+    handle.tabIndex = 0;
+    handle.setAttribute('aria-label', `Reorder “${task.title}” — drag, or arrow keys to move`);
+    handle.title = 'Drag to reorder — or focus and use the arrow keys';
+  }
+  handle.addEventListener('click', (ev) => ev.stopPropagation());
+
+  // ── Then the open zone: space whose only job is opening the task. It is
+  // what makes restoring inline title editing safe — with the title claiming
+  // taps for a rename, the row needs a target that can only ever mean "open".
+  const openZone = document.createElement('button');
+  openZone.type = 'button';
+  openZone.className = 'hub-open-zone';
+  openZone.textContent = '›';
+  openZone.setAttribute('aria-label', `Open ${task.title}`);
+  openZone.title = 'Open this task';
+  openZone.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    handlers.onOpenTask(task);
+  });
+
   const dot = riskDot(task);
   const title = document.createElement('span');
   title.className = 'hub-task-title';
   title.textContent = task.title;
-  // NOT editable in place. The title spans most of the row, and its click
-  // handler stopped propagation to enter edit mode — so on a phone, where the
-  // title is nearly the whole row, tapping a task could only ever rename it.
-  // "I can't open a task to see what's inside" was the report. Renaming lives
-  // in the detail panel, which is now one tap away from anywhere on the row.
-  title.title = 'Tap to open';
+  // Inline editing, restored — but only for a pointer that can hover and aim.
+  //
+  // It was removed an hour before this shipped because the title spans most
+  // of the row and its click handler stopped propagation to enter edit mode,
+  // so on a phone tapping a task could only ever rename it ("I can't open a
+  // task to see what's inside"). The open zone is the structural half of the
+  // fix; `finePointer()` is the other half, and it is deliberately NOT a
+  // width breakpoint: a narrow gap is not a real tap target at 430px, so
+  // rather than dedicate ~44px of a 430px row to whitespace, the phone keeps
+  // the gesture it already had — the whole row, title included, opens the
+  // task, and renaming happens in the detail panel one tap away, where the
+  // title is a full-width target.
+  const editable = (handlers.inlineTitleEdit ?? finePointer)();
+  if (editable) {
+    title.tabIndex = 0;
+    title.title = 'Click or press Enter to rename';
+    wireInPlaceTitle(
+      title,
+      () => task.title,
+      (v) => handlers.onTitleCommit(task, v),
+    );
+  } else {
+    title.title = 'Tap to open';
+  }
 
-  row.append(chip, dot, title, taskBadges(task));
+  // ── Far right: who has it. One tap hands it the other way, the same
+  // gesture the detail panel offers.
+  const assignee = document.createElement('button');
+  assignee.type = 'button';
+  assignee.className = 'hub-row-assignee';
+  assignee.textContent = task.assignee;
+  const handTo = otherAssignee(task.assignee);
+  assignee.title = `Assignee ${task.assignee} — assign to ${handTo}`;
+  assignee.setAttribute('aria-label', `Assignee ${task.assignee} — assign to ${handTo}`);
+  assignee.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    handlers.onAssign(task, handTo);
+  });
+
+  row.append(handle, openZone, chip, dot, title, taskBadges(task), assignee);
   row.addEventListener('click', () => handlers.onOpenTask(task));
   row.addEventListener('keydown', (ev) => {
     if (ev.key === 'Enter' && !(ev.target as HTMLElement).closest('input')) {
@@ -289,6 +408,139 @@ export function renderTaskRow(task: HubTask, handlers: BoardHandlers): HTMLEleme
     }
   });
   return row;
+}
+
+// ── Reordering: drag from the handle, or move with the keyboard ────────────
+
+function clearDropMarks(container: HTMLElement): void {
+  for (const el of container.querySelectorAll('.hub-drop-into')) {
+    el.classList.remove('hub-drop-into');
+  }
+  for (const el of container.querySelectorAll('.hub-drop-before, .hub-drop-after')) {
+    el.classList.remove('hub-drop-before', 'hub-drop-after');
+  }
+}
+
+/**
+ * Which section and slot the pointer is currently over, painted as it goes.
+ * This is the only browser-shaped part of reordering — `elementFromPoint` and
+ * layout rectangles have no meaning without a real engine — so it does no
+ * arithmetic of its own: the index comes from `dropIndexFor` and the call it
+ * turns into comes from `dropTarget`, both pure and both unit-tested.
+ */
+function previewDrop(
+  container: HTMLElement,
+  dragged: HTMLElement,
+  x: number,
+  y: number,
+): { sectionId: string; index: number } | null {
+  const at =
+    typeof document.elementFromPoint === 'function' ? document.elementFromPoint(x, y) : null;
+  const section = at?.closest?.('.hub-section') as HTMLElement | null;
+  if (!section) return null;
+  const rows = [...section.querySelectorAll<HTMLElement>('.hub-task-row')].filter(
+    (r) => r !== dragged,
+  );
+  const index = dropIndexFor(
+    rows.map((r) => {
+      const box = r.getBoundingClientRect();
+      return { top: box.top, height: box.height };
+    }),
+    y,
+  );
+  clearDropMarks(container);
+  section.classList.add('hub-drop-into');
+  const before = rows[index];
+  if (before) before.classList.add('hub-drop-before');
+  else rows[rows.length - 1]?.classList.add('hub-drop-after');
+  return { sectionId: section.dataset.goalId ?? '', index };
+}
+
+/**
+ * Pointer Events rather than HTML5 drag-and-drop. Mockup v2 used `draggable`,
+ * which is the right sketch and the wrong mechanism here: `dragstart` never
+ * fires for a finger, so a `draggable` handle is dead on the surface where
+ * this board is actually reviewed. One pointer path covers mouse, trackpad
+ * and touch; the interaction it draws — handle at the far left, grab cursor,
+ * the row at .45 opacity, the target section outlined — is the mockup's.
+ *
+ * A drag has two endings and `pointercancel` is the common one on a phone, so
+ * both are wired; on cancel the move is abandoned rather than committed. A
+ * board re-render mid-drag (the ydoc is live) replaces these rows outright,
+ * which drops the gesture — the listeners go with the detached element, so
+ * nothing is left armed.
+ */
+function wireBoardReorder(
+  container: HTMLElement,
+  sections: BoardSection[],
+  handlers: BoardHandlers,
+): void {
+  const byId = new Map<string, HubTask>();
+  for (const section of sections) for (const t of section.tasks) byId.set(t.id, t);
+
+  const step = (task: HubTask, dir: -1 | 1) => {
+    const target = stepTarget(sections, task.id, dir);
+    if (target) handlers.onReorder(task, target);
+  };
+
+  for (const row of container.querySelectorAll<HTMLElement>('.hub-task-row')) {
+    const task = byId.get(row.dataset.taskId ?? '');
+    if (!task || task.status === 'done') continue;
+
+    // Alt+Arrow from the ROW: j/k leaves the focus on the row, so a reorder
+    // reachable only from the handle would mean tabbing out of the navigation
+    // you are already in. Bare arrows stay the browser's.
+    row.addEventListener('keydown', (ev) => {
+      if (!ev.altKey || (ev.key !== 'ArrowUp' && ev.key !== 'ArrowDown')) return;
+      ev.preventDefault();
+      step(task, ev.key === 'ArrowUp' ? -1 : 1);
+    });
+
+    const handle = row.querySelector<HTMLElement>('.hub-drag-handle');
+    if (!handle) continue;
+    handle.addEventListener('keydown', (ev) => {
+      if (ev.key !== 'ArrowUp' && ev.key !== 'ArrowDown') return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      step(task, ev.key === 'ArrowUp' ? -1 : 1);
+    });
+    handle.addEventListener('pointerdown', (ev) => {
+      if (ev.button > 0) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      let drop: { sectionId: string; index: number } | null = null;
+      row.classList.add('hub-dragging');
+      try {
+        handle.setPointerCapture?.(ev.pointerId);
+      } catch {
+        /* capture is an optimisation; the listeners below work without it */
+      }
+      const onMove = (m: PointerEvent) => {
+        const next = previewDrop(container, row, m.clientX, m.clientY);
+        if (next) drop = next;
+      };
+      const finish = (commit: boolean) => {
+        handle.removeEventListener('pointermove', onMove);
+        handle.removeEventListener('pointerup', onUp);
+        handle.removeEventListener('pointercancel', onCancel);
+        try {
+          handle.releasePointerCapture?.(ev.pointerId);
+        } catch {
+          /* nothing captured */
+        }
+        row.classList.remove('hub-dragging');
+        clearDropMarks(container);
+        if (!commit || !drop) return;
+        const target = dropTarget(sections, task.id, drop.sectionId, drop.index);
+        if (target) handlers.onReorder(task, target);
+      };
+      const onUp = () => finish(true);
+      const onCancel = () => finish(false);
+      handle.addEventListener('pointermove', onMove);
+      handle.addEventListener('pointerup', onUp);
+      handle.addEventListener('pointercancel', onCancel);
+    });
+  }
 }
 
 /** Goals-as-sections, Chores last (already ordered by the model); done rows
@@ -334,6 +586,9 @@ export function renderBoard(
     }
     container.append(sec);
   }
+  // After the rows exist: the drag/keyboard wiring needs the whole board (a
+  // drop can cross into another goal's section), so it can't live on the row.
+  wireBoardReorder(container, sections, handlers);
 }
 
 // ── Decisions strip ────────────────────────────────────────────────────────
