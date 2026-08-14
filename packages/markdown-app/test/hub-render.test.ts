@@ -12,6 +12,7 @@ import {
 import {
   type BoardHandlers,
   type TaskThread,
+  discussionIsBusy,
   renderActivity,
   renderBoard,
   renderDecisions,
@@ -114,6 +115,21 @@ describe('renderBoard', () => {
     select.dispatchEvent(new Event('change', { bubbles: true }));
     expect(h.onStatusSet).toHaveBeenCalledWith(expect.objectContaining({ id: t.id }), 'todo');
     expect(h.onOpenTask).not.toHaveBeenCalled();
+  });
+
+  // A comment nobody can see from the board is a comment nobody reads: with
+  // no mark on the row, finding a discussion means opening every task.
+  it('marks a row whose task has a discussion, and leaves a quiet one unmarked', () => {
+    const h = handlers();
+    const discussed = task({ goal: 'g-pr', commentCount: 3 });
+    const quiet = task({ goal: 'g-pr' });
+    renderBoard(root, boardSections(GOALS, [discussed, quiet], filters), h);
+    const badgeOf = (t: HubTask) =>
+      root
+        .querySelector(`.hub-task-row[data-task-id="${t.id}"]`)
+        ?.querySelector('.hub-badge-comments');
+    expect(badgeOf(discussed)?.textContent).toContain('3');
+    expect(badgeOf(quiet)).toBeNull();
   });
 
   it('a change event that re-picks the current status writes nothing', () => {
@@ -939,5 +955,58 @@ describe('renderTaskDetail — discussion', () => {
     renderTaskDetail(root, task({ title: 'Wire the index' }), detailHandlers());
     expect(root.querySelector('.hub-detail-title')?.textContent).toBe('Wire the index');
     expect(root.querySelector('.hub-comment-form')).toBeNull();
+  });
+});
+
+/**
+ * A comment can land while the panel is open — an agent replying to the
+ * question you just asked is the case the whole surface is for. Repainting
+ * the panel is how that reply appears, and repainting rebuilds the composer,
+ * so the refresh has to know when someone's hands are on it.
+ */
+describe('discussionIsBusy', () => {
+  let root: HTMLElement;
+  beforeEach(() => {
+    root = document.createElement('div');
+    document.body.replaceChildren(root);
+  });
+
+  const open = () =>
+    renderTaskDetail(
+      root,
+      task(),
+      {
+        onClose: vi.fn(),
+        onStatusSet: vi.fn(),
+        onTitleCommit: vi.fn(),
+        onAnswer: vi.fn(),
+        onAssign: vi.fn(),
+        onComment: vi.fn(),
+      },
+      { loading: false, threads: [] },
+    );
+
+  // Positive control for the two below: an untouched composer is refreshable,
+  // so "busy" is a statement about the typing and not about the panel.
+  it('is quiet when the composer is empty and unfocused', () => {
+    open();
+    expect(root.querySelector('.hub-discussion textarea')).toBeTruthy();
+    expect(discussionIsBusy(root)).toBe(false);
+  });
+
+  it('is busy while a draft is sitting in the composer', () => {
+    open();
+    const ta = root.querySelector('.hub-discussion textarea') as HTMLTextAreaElement;
+    ta.value = 'I think this is below the API work because';
+    expect(discussionIsBusy(root)).toBe(true);
+  });
+
+  // Focus alone counts: someone who has tapped in has not typed a character
+  // yet, and yanking the field out from under them is the same rudeness.
+  it('is busy while the composer has focus', () => {
+    open();
+    const ta = root.querySelector('.hub-discussion textarea') as HTMLTextAreaElement;
+    ta.focus();
+    expect(discussionIsBusy(root)).toBe(true);
   });
 });

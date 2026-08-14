@@ -18,9 +18,37 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { taskBodyDocId } from '../src/task-projection.ts';
+import { taskBodyDocId, workspaceRoomId } from '../src/task-projection.ts';
 
 const PERSON = { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' };
+
+const settle = (ms = 300) => new Promise((r) => setTimeout(r, ms));
+
+/** Read an SSE stream until stop(), collecting event names. */
+function listen(res: Response): { events: string[]; stop: () => void } {
+  const events: string[] = [];
+  const reader = (res.body as ReadableStream<Uint8Array>).getReader();
+  const decoder = new TextDecoder();
+  let stopped = false;
+  void (async () => {
+    try {
+      while (!stopped) {
+        const { done, value } = await reader.read();
+        if (done) return;
+        for (const line of decoder.decode(value).split('\n')) {
+          if (line.startsWith('event: ')) events.push(line.slice('event: '.length).trim());
+        }
+      }
+    } catch {}
+  })();
+  return {
+    events,
+    stop: () => {
+      stopped = true;
+      void reader.cancel().catch(() => {});
+    },
+  };
+}
 
 type ThreadPayload = {
   thread: { id: string; anchor: { kind: string }; comments: Array<{ text: string }> };
@@ -40,13 +68,17 @@ describe('task discussion', () => {
   const get = (path: string) =>
     fetch(`${base}${path}`, { headers: { host: `localhost:${handle.port}` } });
 
-  async function makeTask(title: string): Promise<string> {
+  async function makeTaskIn(title: string): Promise<{ taskId: string; workspaceId: string }> {
     const w = await post('/api/workspaces', { name: 'search-revamp', goal: 'Ship it.' });
     const { workspace } = (await w.json()) as { workspace: { id: string } };
     const r = await post(`/api/workspaces/${workspace.id}/tasks`, { title });
     expect(r.status).toBe(200);
     const { task } = (await r.json()) as { task: { id: string } };
-    return task.id;
+    return { taskId: task.id, workspaceId: workspace.id };
+  }
+
+  async function makeTask(title: string): Promise<string> {
+    return (await makeTaskIn(title)).taskId;
   }
 
   beforeAll(() => {
@@ -119,5 +151,63 @@ describe('task discussion', () => {
     const found = listed.threads.find((t) => t.id === thread.id);
     expect(found?.comments).toHaveLength(2);
     expect(found?.anchor.kind).toBe('subject');
+  });
+  /**
+   * A comment nobody can see from the board is a comment nobody reads. The
+   * row has to say a discussion exists, or the only way to find one is to
+   * open every task.
+   */
+  it('the board projection counts the discussion', async () => {
+    const { taskId, workspaceId } = await makeTaskIn('Wire the index');
+    const docId = taskBodyDocId(taskId);
+    const room = handle.rooms.get(workspaceRoomId(workspaceId));
+    if (!room) throw new Error('ws room missing');
+    const projected = () => room.ydoc.getMap('tasks').get(taskId) as { commentCount?: number };
+
+    expect(projected().commentCount ?? 0).toBe(0);
+
+    const created = await post(`/api/docs/${encodeURIComponent(docId)}/threads`, {
+      author: PERSON,
+      text: 'Is this still the plan?',
+      anchor: { kind: 'subject' },
+    });
+    const { thread } = (await created.json()) as ThreadPayload;
+    expect(projected().commentCount).toBe(1);
+
+    await post(
+      `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(thread.id)}/comments`,
+      { author: PERSON, text: 'It is.' },
+    );
+    expect(projected().commentCount).toBe(2);
+  });
+
+  /**
+   * And the agent has to HEAR it. An agent working a board watches the
+   * workspace channel, not each task's body doc — so a comment that only
+   * fans out on the doc's own stream reaches nobody who is working.
+   */
+  it('a task comment reaches the workspace channel', async () => {
+    const { taskId, workspaceId } = await makeTaskIn('Wire the index');
+    const stream = await fetch(`${base}/events/workspace/${encodeURIComponent(workspaceId)}`, {
+      headers: { host: `localhost:${handle.port}` },
+    });
+    expect(stream.status).toBe(200);
+    const heard = listen(stream);
+
+    // Positive control: this channel is live and delivering — without it,
+    // "the comment arrived" and "the stream works at all" are the same
+    // assertion, and an empty list would prove nothing.
+    await post(`/api/tasks/${taskId}/transition`, { to: 'in-progress', author: PERSON });
+    await settle();
+    expect(heard.events).toContain('task.transitioned');
+
+    await post(`/api/docs/${encodeURIComponent(taskBodyDocId(taskId))}/threads`, {
+      author: PERSON,
+      text: 'Is this still the plan?',
+      anchor: { kind: 'subject' },
+    });
+    await settle();
+    heard.stop();
+    expect(heard.events).toContain('thread.created');
   });
 });
