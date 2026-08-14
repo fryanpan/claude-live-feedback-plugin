@@ -1197,7 +1197,8 @@ export class TaskStore {
   ):
     | { ok: true; deletedTasks: number; taskIds: string[] }
     | { ok: false; error: 'not-found' }
-    | { ok: false; error: 'has-open-tasks'; openTasks: number } {
+    | { ok: false; error: 'has-open-tasks'; openTasks: number }
+    | { ok: false; error: 'persist-failed' } {
     const state = this.workspaces.get(workspaceId);
     if (!state) return { ok: false, error: 'not-found' };
 
@@ -1217,21 +1218,32 @@ export class TaskStore {
     if (pendingAttachments) clearTimeout(pendingAttachments);
     this.attachmentSaveTimers.delete(workspaceId);
 
+    // The tasks sidecar is the resurrection source, so it comes off FIRST and
+    // its failure is the whole operation's failure. Reporting success with
+    // that file intact would promise a deletion the next restart undoes —
+    // silently, and hours later. Nothing in memory has changed yet at this
+    // point, so refusing here leaves a coherent board rather than a half-
+    // deleted one. (The cancelled save is the cost: at most one debounce
+    // window of unwritten changes, which the next mutation reschedules.)
+    try {
+      rmSync(tasksSidecarPath(this.dataDir, workspaceId), { force: true });
+    } catch (err) {
+      console.error(`[tasks] failed to remove the tasks sidecar for ${workspaceId}:`, err);
+      return { ok: false, error: 'persist-failed' };
+    }
+
     for (const taskId of taskIds) this.taskIndex.delete(taskId);
     this.workspaces.delete(workspaceId);
 
+    // Neither of these can resurrect the board, so a failure here is litter
+    // rather than a lie — log it and let the delete stand.
     for (const path of [
-      tasksSidecarPath(this.dataDir, workspaceId),
       attachmentsSidecarPath(this.dataDir, workspaceId),
       eventsLogPath(this.dataDir, workspaceId),
     ]) {
       try {
         rmSync(path, { force: true });
       } catch (err) {
-        // The in-memory removal already happened, so the workspace is gone
-        // from every read path. A file left behind is a hydrate-time
-        // resurrection, which is worth a loud line rather than a throw that
-        // would leave the caller thinking nothing was deleted.
         console.error(`[tasks] failed to remove ${path}:`, err);
       }
     }

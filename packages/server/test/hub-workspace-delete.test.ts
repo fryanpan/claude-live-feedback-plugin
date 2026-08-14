@@ -24,7 +24,7 @@
  * register. The repo is public.
  */
 import { afterEach, describe, expect, it } from 'bun:test';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { User } from '@feedback/core';
@@ -177,6 +177,29 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
     await handle?.stop();
     handle = await start(dataDir as string);
     expect(await listWorkspaceIds()).not.toContain(wsId);
+  });
+
+  it('refuses instead of claiming success when the sidecar survives', async () => {
+    // "Deleted" and "still on disk" is the worst pair available here: the
+    // caller stops asking, and the next restart hands the board back.
+    const { wsId, open } = await seed();
+    const sidecar = tasksSidecarPath(dataDir as string, wsId);
+    expect(await awaitSidecar(sidecar)).toBe(true);
+    // Stand in for any unlink failure (permissions, a locked file) without
+    // depending on the test user's privileges: a directory where the file
+    // was makes the non-recursive rmSync throw, and root can't make it
+    // succeed either — a chmod fixture would silently pass as root.
+    rmSync(sidecar);
+    mkdirSync(sidecar);
+
+    const res = await del(`/api/workspaces/${wsId}?force=true`);
+    expect(res.status).toBe(500);
+    expect(((await res.json()) as { error: string }).error).toBe('persist-failed');
+    // And the board is intact rather than half-deleted, so a retry once the
+    // filesystem is fixed still has something to delete.
+    expect(await listWorkspaceIds()).toContain(wsId);
+    expect(handle?.tasks.getTask(open.id)).toBeDefined();
+    expect(handle?.rooms.get(workspaceRoomId(wsId))).toBeDefined();
   });
 
   it('leaves an attached doc alone — attachDoc is a link, not ownership', async () => {
