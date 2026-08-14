@@ -1834,6 +1834,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (alreadyImported !== null) {
             return j(409, { error: 'already-imported', workspaceId: alreadyImported });
           }
+          // An import inherits the importer's identity for every row that
+          // names nobody, so an anonymous importer would file a whole tracker
+          // under the generic word — the one thing every other create refuses.
+          // Whole-import refusal is right here: one caller, one identity, so
+          // there is no partial state to reason about. The dry run above is
+          // deliberately still allowed — it creates nothing.
+          if (!resolveAssignee(undefined, author)) {
+            return j(400, { error: ASSIGNEE_REQUIRED_ERROR, message: ASSIGNEE_REQUIRED_MESSAGE });
+          }
           const res = applyImport(taskStore, workspaceId, mapping, { actor: author });
           if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
           // Stamp the source file. If the tracker is bound as a live doc,

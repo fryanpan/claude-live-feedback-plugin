@@ -206,5 +206,44 @@ describe('task creation records a real owner', () => {
       // Positive control: a row that DOES name an owner keeps it.
       expect(tasks.find((t) => t.title === 'Write the launch note')?.assignee).toBe('Jordan');
     });
+
+    it('refuses the whole import when the importer itself is anonymous', async () => {
+      const wsId = await seedWorkspace();
+      const path = join(dataDir, 'anon-tracker.md');
+      writeFileSync(
+        path,
+        [
+          '# Search revamp',
+          '',
+          '## Ship search v2.',
+          '',
+          '| Task              | Status |',
+          '| ----------------- | ------ |',
+          '| Rebuild the index | todo   |',
+          '',
+        ].join('\n'),
+      );
+      const anon = { id: 'known-agent', name: GENERIC_ASSIGNEE, kind: 'known' };
+      const r = await post(`/api/workspaces/${wsId}/import-tasks`, {
+        path,
+        apply: true,
+        author: anon,
+      });
+      expect(r.status).toBe(400);
+      expect(((await r.json()) as { error: string }).error).toBe('assignee-required');
+      // Nothing landed — an import is all-or-nothing on this gate.
+      expect(await getTasks(wsId)).toHaveLength(0);
+      // The dry run is still allowed: it creates nothing, so refusing it would
+      // only hide the mapping from someone about to fix their launch env.
+      const dry = await post(`/api/workspaces/${wsId}/import-tasks`, { path, author: anon });
+      expect(dry.status).toBe(200);
+      // Positive control: a named importer applies the same file.
+      const named = await post(`/api/workspaces/${wsId}/import-tasks`, {
+        path,
+        apply: true,
+        author: AGENT,
+      });
+      expect(named.status).toBe(200);
+    });
   });
 });
