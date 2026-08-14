@@ -775,23 +775,53 @@ body.hub-body {
   padding: 0 6px;
 }
 
-/* --- decisions strip --- */
+/* --- decisions strip: the count first, the list second --- */
 .hub-decisions {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
   padding: 8px 10px;
   margin-bottom: 10px;
   border: 1px solid var(--yellow);
   border-radius: var(--radius);
   background: color-mix(in srgb, var(--yellow) 8%, var(--bg));
 }
-.hub-decisions-label {
-  font-weight: 650;
+.hub-decisions-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+/* The count is the affordance: tapping it walks the whole queue. Sized as a
+   heading rather than a button because it is the thing being read. */
+.hub-decisions-count {
+  min-height: 36px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  text-align: left;
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.hub-decisions-urgency {
   font-size: 13px;
+  color: var(--fg-muted);
+}
+.hub-decision-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 .hub-decision-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   min-height: 36px;
   padding: 4px 10px;
   border: 1px solid var(--border);
@@ -800,9 +830,164 @@ body.hub-body {
   cursor: pointer;
   font-size: 13px;
   max-width: 100%;
+}
+.hub-decision-chip.hub-decision-blocking {
+  border-color: var(--yellow);
+}
+.hub-decision-chip-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.hub-decision-chip-blocks {
+  flex: none;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+/* --- decision walkthrough: one at a time, in the derived order --- */
+.hub-walkthrough {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 4vh 14px;
+  z-index: 70;
+}
+.hub-walkthrough.hidden {
+  display: none;
+}
+.hub-walk-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(680px, 100%);
+  max-height: 92vh;
+  overflow: auto;
+  background: var(--bg);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  padding: 16px;
+}
+.hub-walk-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+.hub-walk-pos {
+  font-size: 13px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.hub-walk-close {
+  min-height: 36px;
+}
+.hub-walk-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 10px 0 14px;
+}
+.hub-walk-title {
+  margin: 0;
+  font-size: 19px;
+  overflow-wrap: anywhere;
+}
+/* What is waiting on the answer — the reason this one is at the top. */
+.hub-walk-blocks {
+  margin: 0;
+  font-size: 13px;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
+.hub-walk-blocks.hub-walk-blocking {
+  color: var(--fg);
+  font-weight: 600;
+}
+.hub-walk-body {
+  font-family: var(--prose);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.hub-walk-body > :first-child {
+  margin-top: 0;
+}
+.hub-walk-body > :last-child {
+  margin-bottom: 0;
+}
+.hub-walk-body-empty {
+  color: var(--fg-muted);
+}
+.hub-walk-asked {
+  margin: 0;
+  font-size: 13px;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
+.hub-walk-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/* Full-width targets: on a phone this is the primary gesture, and a row of
+   pills would put two answers under one thumb. */
+.hub-walk-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.hub-walk-option-label {
+  font-weight: 600;
+}
+.hub-walk-option-detail {
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+.hub-walk-answer textarea,
+.hub-walk-info textarea {
+  width: 100%;
+  font: inherit;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 8px;
+}
+.hub-walk-info {
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.hub-walk-nav {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.hub-walk-nav .hub-btn {
+  min-height: 44px;
+}
+.hub-walk-done {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 0;
+}
+.hub-walk-done h2 {
+  margin: 0;
+  font-size: 19px;
+}
+.hub-walk-done p {
+  margin: 0;
+  color: var(--fg-muted);
 }
 
 /* --- board sections (goals ARE the sections) --- */
@@ -1473,6 +1658,25 @@ a.hub-link-chip:hover {
     height: 100%;
     width: 100%;
     border-radius: 0;
+  }
+  /* The walkthrough is a phone-first surface — six answers in one sitting is
+     a couch gesture, so it takes the whole screen rather than floating in a
+     card with the board showing round the edges. */
+  .hub-walkthrough {
+    padding: 0;
+  }
+  .hub-walk-panel {
+    max-height: 100vh;
+    height: 100%;
+    width: 100%;
+    border-radius: 0;
+  }
+  /* Sticky, because the way out must not be a scroll away on a long body. */
+  .hub-walk-nav {
+    position: sticky;
+    bottom: 0;
+    padding-top: 8px;
+    background: var(--bg);
   }
 }
 
