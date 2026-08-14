@@ -170,12 +170,71 @@ describe('renderBoard', () => {
     expect([...row.children].map((c) => (c as HTMLElement).className.split(' ')[0])).toEqual([
       'hub-drag-handle',
       'hub-open-zone',
-      'hub-status-select',
+      'hub-status-ctl',
       'hub-risk-slot',
       'hub-task-title',
       'hub-task-badges',
-      'hub-row-assignee',
+      'hub-owner-ctl',
     ]);
+  });
+
+  // The two controls that flank the title used to spend ~200px of every row
+  // drawing the words "In progress" and an agent id, on a surface whose whole
+  // job is reading titles. They are round marks now, and the words they used
+  // to draw must not come back as visible text — that regression would be
+  // invisible to every other assertion here, because the SELECT still holds
+  // the labels and still reports the same values.
+  it('draws status and owner as marks, not as words in the row', () => {
+    const h = handlers();
+    renderBoard(
+      root,
+      boardSections(GOALS, [task({ goal: 'g-pr', status: 'in-progress' })], filters),
+      h,
+    );
+    const ctl = root.querySelector('.hub-status-ctl') as HTMLElement;
+    const mark = ctl.querySelector('.hub-status-mark') as HTMLElement;
+    expect(mark.className).toContain('hub-status-mark-in-progress');
+    // The mark carries no label text — the status is shape and colour.
+    expect(mark.textContent?.trim()).toBe('');
+    // …and the picker underneath is untouched: same class, same options.
+    const select = ctl.querySelector('.hub-status-select') as HTMLSelectElement;
+    expect(select.value).toBe('in-progress');
+    select.value = 'done';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(h.onStatusSet).toHaveBeenCalled();
+  });
+
+  // One or two letters, never the whole id. The name still has to be reachable
+  // — a circle reading "TL" with no way to learn whose it is trades one
+  // unreadable row for one unanswerable one.
+  it('shows the owner as initials, keeping the full name reachable', () => {
+    const h = handlers();
+    const rows: [string, string][] = [
+      ['team-lead-fleet', 'TL'],
+      ['human', 'H'],
+      ['agent-live-feedback', 'LF'],
+    ];
+    for (const [assignee, expected] of rows) {
+      root.replaceChildren();
+      renderBoard(root, boardSections(GOALS, [task({ goal: 'g-pr', assignee })], filters), h);
+      const avatar = root.querySelector('.hub-owner-avatar') as HTMLElement;
+      expect(avatar.textContent).toBe(expected);
+      expect((root.querySelector('.hub-row-assignee') as HTMLElement).title).toContain(assignee);
+    }
+  });
+
+  // Unowned is a hole in the board, and it has to look like one rather than
+  // like a third person — this is the row the initials scheme has no input for.
+  it('marks an unowned task rather than inventing initials for it', () => {
+    const h = handlers();
+    renderBoard(
+      root,
+      boardSections(GOALS, [task({ goal: 'g-pr', assignee: 'agent' })], filters),
+      h,
+    );
+    const avatar = root.querySelector('.hub-owner-avatar') as HTMLElement;
+    expect(avatar.textContent).toBe('?');
+    expect(avatar.className).toContain('hub-owner-none');
   });
 
   // The bug this pins: `grid-template-columns` names four tracks, and grid

@@ -301,6 +301,32 @@ function assigneePicker(
 }
 
 /**
+ * One or two letters for the circle that stands in for an owner.
+ *
+ * A board row is read for its TITLE, and the two controls flanking it were
+ * spending ~200px on the words "In progress" and a full agent id — on the
+ * surface whose entire job is letting someone scan what the work is. The name
+ * does not disappear: it stays on the picker's `title`/`aria-label` and in the
+ * detail panel, where there is room for it.
+ *
+ * `agent-` / `agent_` leads are dropped before the initials are taken, because
+ * every agent id starts with it and a column of "A"s distinguishes nobody.
+ * A single word yields ONE letter rather than its first two — "HU" for `human`
+ * reads as a name fragment, "H" reads as a mark.
+ */
+export function ownerInitials(owner: string): string {
+  const trimmed = owner.trim();
+  if (trimmed === '' || trimmed.toLowerCase() === GENERIC_ASSIGNEE) return '?';
+  const words = trimmed
+    .replace(/^agent[-_\s]+/i, '')
+    .split(/[-_\s.]+/)
+    .filter((w) => /[a-z0-9]/i.test(w));
+  if (words.length === 0) return '?';
+  if (words.length === 1) return (words[0][0] ?? '?').toUpperCase();
+  return `${words[0][0]}${words[1][0]}`.toUpperCase();
+}
+
+/**
  * A hovering, precise pointer is what makes tap-to-rename on the title safe:
  * it implies a visible hover state (so the drag handle and the open zone are
  * discoverable) and a click that lands where it was aimed. Asking the pointer
@@ -477,6 +503,18 @@ export function renderTaskRow(task: HubTask, handlers: BoardHandlers): HTMLEleme
     if (to !== task.status) handlers.onStatusSet(task, to);
   });
 
+  // …drawn as a small round mark rather than as the word. The select is still
+  // the control — it is laid over the mark at full size and made transparent,
+  // which is the only way to keep the phone's native picker and the keyboard
+  // behaviour while spending 22px instead of 96px of the row. Nothing about
+  // the picker changes: same class, same options, same aria-label.
+  const statusCtl = document.createElement('span');
+  statusCtl.className = 'hub-status-ctl';
+  const statusMark = document.createElement('span');
+  statusMark.className = `hub-status-mark hub-status-mark-${task.status}`;
+  statusMark.setAttribute('aria-hidden', 'true');
+  statusCtl.append(statusMark, chip);
+
   // ── Far left: the drag handle. Hidden until the row is hovered or the
   // handle itself is focused (CSS) — a permanent column of ⠿ is noise on a
   // list you read by skimming. A done row keeps the ELEMENT and loses the
@@ -543,11 +581,22 @@ export function renderTaskRow(task: HubTask, handlers: BoardHandlers): HTMLEleme
 
   // ── Far right: who has it, and the gesture that hands it over — the same
   // picker the detail panel offers.
+  // Same construction as the status control, same reason: a circle of initials
+  // where a truncated id used to be, with the real picker transparent on top
+  // of it so the gesture, the keyboard path and the accessible name all stay.
   const assignee = assigneePicker('hub-row-assignee', task, handlers.knownAgentIds, (to) =>
     handlers.onAssign(task, to),
   );
+  const ownerCtl = document.createElement('span');
+  ownerCtl.className = 'hub-owner-ctl';
+  const avatar = document.createElement('span');
+  const ownerKind = assignee.className.split(' ').find((c) => c.startsWith('hub-owner-')) ?? '';
+  avatar.className = `hub-owner-avatar ${ownerKind}`;
+  avatar.textContent = ownerInitials(task.assignee);
+  avatar.setAttribute('aria-hidden', 'true');
+  ownerCtl.append(avatar, assignee);
 
-  row.append(handle, openZone, chip, dot, title, taskBadges(task), assignee);
+  row.append(handle, openZone, statusCtl, dot, title, taskBadges(task), ownerCtl);
   row.addEventListener('click', () => handlers.onOpenTask(task));
   row.addEventListener('keydown', (ev) => {
     if (ev.key === 'Enter' && !(ev.target as HTMLElement).closest('input')) {
