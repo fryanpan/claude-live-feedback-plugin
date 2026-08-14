@@ -137,9 +137,15 @@ def check_git_env_isolation() -> None:
         # This suite's OWN setup has to be isolated too — run from the hook,
         # an inherited GIT_DIR would build the fixture inside the real repo.
         clean = clean_git_env()
+        # Identity via -c, not env: clean_git_env strips GIT_AUTHOR_* and
+        # GIT_COMMITTER_* along with everything else, and a CI runner has no
+        # global user.email — so a bare `git commit` here exits 128 on every
+        # machine that isn't a developer laptop. (This suite has now shipped
+        # twice with a case that only ran on mine.)
+        ident = ["-c", "user.email=selftest@example.invalid", "-c", "user.name=Scrub Selftest"]
         subprocess.run(["git", "init", "-q"], cwd=victim, check=True,
                        capture_output=True, env=clean)
-        subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", "seed"],
+        subprocess.run(["git", *ident, "commit", "-q", "--allow-empty", "-m", "seed"],
                        cwd=victim, check=True, capture_output=True, env=clean)
         worktree = os.path.join(tmp, "victim-wt")
         subprocess.run(["git", "worktree", "add", "-q", worktree, "-b", "probe"],
