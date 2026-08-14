@@ -1974,6 +1974,25 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             backlinks: taskStore.backlinksFor({ kind: 'task', taskId }).map(taskChip),
           });
         }
+        // The same question asked about an ARBITRARY ref. `backlinksFor`
+        // always answered it; the HTTP surface could only pose it about a
+        // task (above) or a doc/thread (`GET /api/docs/<id>/tasks`), so the
+        // question the `url` kind was added for — "which tasks point at this
+        // pull request" — had no route, and `diff` refs had none either.
+        //
+        // POST for a read is deliberate: a ref is a structured value whose
+        // `url` kind carries a caller-supplied URL, and putting that in a
+        // query string writes it into every access log and proxy on the path
+        // for no gain. Nothing here mutates.
+        if (pathname === '/api/refs/backlinks' && req.method === 'POST') {
+          const body = await safeJson(req);
+          const ref = body?.ref;
+          // A malformed ref must NOT fall through to an empty answer: [] and
+          // "I didn't understand you" are indistinguishable to the caller,
+          // and the first one reads as "nothing points at this PR".
+          if (!isValidRef(ref)) return j(400, { error: BAD_REF_ERROR });
+          return j(200, { ref, tasks: taskStore.backlinksFor(ref).map(taskChip) });
+        }
         if (taskLinksMatch && (req.method === 'POST' || req.method === 'DELETE')) {
           const taskId = decodeURIComponent(taskLinksMatch[1] ?? '');
           const body = await safeJson(req);
