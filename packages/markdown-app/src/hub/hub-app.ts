@@ -37,7 +37,6 @@ import {
   type TaskDiscussion,
   type TaskThread,
   discussionIsBusy,
-  otherAssignee,
   renderActivity,
   renderBoard,
   renderDecisionWalkthrough,
@@ -162,7 +161,7 @@ function buildShell(root: HTMLElement, name: string): void {
           <dt>j / k</dt><dd>next / previous task</dd>
           <dt>o or Enter</dt><dd>open the focused task</dd>
           <dt>s</dt><dd>open the focused task's status dropdown</dd>
-          <dt>a</dt><dd>hand the focused task to the human / the agent</dd>
+          <dt>a</dt><dd>open the focused task's assignee picker</dd>
           <dt>alt + ↑ / ↓</dt><dd>move the focused task up / down — past the ends of its goal it moves into the next one</dd>
           <dt>tab to ⠿, then ↑ / ↓</dt><dd>the same move from the drag handle</dd>
           <dt>?</dt><dd>toggle this help</dd>
@@ -265,6 +264,14 @@ async function main(): Promise<void> {
     onAssign: (task: HubTask, assignee: string) => void assignTask(task, assignee),
   };
 
+  /** Everyone a task can be handed to besides a person: the agents attached
+   *  to this workspace, plus the lead (who owns goal changes here and is
+   *  therefore somebody, whether or not their session is currently up). */
+  function knownAgentIds(): string[] {
+    const lead = state.info?.leadAgentId;
+    return [...new Set([...state.agents.map((a) => a.agentId), ...(lead ? [lead] : [])])];
+  }
+
   function renderGoal(): void {
     renderGoalStrip(el('hub-goal'), state.info?.goal ?? '', {
       onGoalCommit: (goal) => void saveGoal(goal),
@@ -299,7 +306,10 @@ async function main(): Promise<void> {
     renderBoard(
       el('hub-board'),
       boardSections(state.info?.goals ?? [], taskList(), filters),
-      boardHandlers,
+      // Read at render time, not once at wiring time: attachments arrive
+      // after the first paint and change while the board is open, and a
+      // picker built from a stale list offers agents who have left.
+      { ...boardHandlers, knownAgentIds: knownAgentIds() },
     );
     if (focusedTaskId) {
       // By scan, not by attribute selector: a task id is server-generated but
@@ -379,6 +389,7 @@ async function main(): Promise<void> {
         onTitleCommit: (t, title) => void renameTask(t, title),
         onAnswer: (t, text) => void answerDecision(t, text),
         onAssign: (t, assignee) => void assignTask(t, assignee),
+        knownAgentIds: knownAgentIds(),
         onComment: (t, text, threadId) => postTaskComment(t, text, threadId),
       },
       task ? discussion : undefined,
@@ -865,7 +876,10 @@ async function main(): Promise<void> {
         state.detailTaskId = task.id;
         renderDetail();
       } else if (ev.key === 'a') {
-        void assignTask(task, otherAssignee(task.assignee));
+        // Focus the picker rather than choosing for them — for the same
+        // reason `s` does below, and because there is no longer an "other
+        // end" to flip to: a workspace can hold any number of agents.
+        rows[focusedIdx]?.querySelector<HTMLSelectElement>('.hub-row-assignee')?.focus();
       } else {
         // Focus the row's dropdown rather than picking a status for them —
         // the keyboard path must not re-introduce the linear assumption the
