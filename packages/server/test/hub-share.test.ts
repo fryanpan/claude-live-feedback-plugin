@@ -206,6 +206,7 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
       title: 'Ship search now, or wait for reindex?',
       assignee: 'human',
       needs: 'decision',
+      body: 'Ship now or wait for the reindex? Waiting costs a week and removes the stale-results risk. Blocked until answered: the launch note.',
     });
     decisionId = ((await d.json()) as { task: { id: string } }).task.id;
 

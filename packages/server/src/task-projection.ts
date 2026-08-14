@@ -100,6 +100,12 @@ export function projectTask(task: Task): Record<string, unknown> {
     status: task.status,
     assignee: task.assignee,
     ...(task.needs !== undefined ? { needs: task.needs } : {}),
+    // Options and info-requests are workspace CONTENT — the board's decision
+    // strip and its batch walkthrough render straight off this projection, so
+    // withholding them would be the store-has-it/surface-can't-show-it bug by
+    // construction. Everything in a workspace is available to everyone in it.
+    ...(task.options !== undefined ? { options: task.options } : {}),
+    ...(task.infoRequests !== undefined ? { infoRequests: task.infoRequests } : {}),
     goal: task.goal,
     order: task.order,
     after: task.after,
