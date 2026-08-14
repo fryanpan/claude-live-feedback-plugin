@@ -52,6 +52,11 @@ import { sanitizeVisitorAuthor } from './share/visitor-identity.ts';
 import { SseHub, openSseStream } from './sse.ts';
 import { KEYCHAIN_SERVICE, ThreadSummarizer } from './summarize.ts';
 import { applyImport, importBanner, importMarkerFor, parseTrackerMarkdown } from './task-import.ts';
+import {
+  ASSIGNEE_REQUIRED_ERROR,
+  ASSIGNEE_REQUIRED_MESSAGE,
+  resolveAssignee,
+} from './task-owner.ts';
 import { TaskProjection, taskIdOfBodyDoc } from './task-projection.ts';
 import { buildQueue, summarizeGoals } from './task-queue.ts';
 import {
@@ -1829,6 +1834,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (alreadyImported !== null) {
             return j(409, { error: 'already-imported', workspaceId: alreadyImported });
           }
+          // An import inherits the importer's identity for every row that
+          // names nobody, so an anonymous importer would file those rows under
+          // the generic word — the one thing every other create refuses. The
+          // test is per row and the refusal is whole: a tracker whose owner
+          // column is filled in imports fine no matter who ran it, and one
+          // that isn't fails before anything is written, so there is no
+          // partial state to reason about. The dry run above stays allowed —
+          // it creates nothing, and it's what you read while fixing this.
+          if (mapping.tasks.some((row) => !resolveAssignee(row.assignee, author))) {
+            return j(400, { error: ASSIGNEE_REQUIRED_ERROR, message: ASSIGNEE_REQUIRED_MESSAGE });
+          }
           const res = applyImport(taskStore, workspaceId, mapping, { actor: author });
           if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
           // Stamp the source file. If the tracker is bound as a live doc,
@@ -1903,10 +1919,27 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!links.ok) return j(400, { error: BAD_REF_ERROR });
           const origin = parseOrigin(body?.origin);
           if (!origin.ok) return j(400, { error: BAD_ORIGIN_ERROR });
+          // An unknown workspace is a 404 before anything about the task is
+          // judged — otherwise a typo'd id comes back as a complaint about
+          // the body, and the caller fixes the wrong thing.
+          if (!taskStore.getWorkspace(workspaceId)) {
+            return j(404, { error: 'workspace-not-found' });
+          }
+          // Nothing enters the board belonging to nobody: an unnamed assignee
+          // falls back to the caller's own identity, and a create that still
+          // resolves to the generic word is refused rather than filed under it.
+          const createdBy = authorFor(body?.author);
+          const owner = resolveAssignee(body?.assignee, createdBy);
+          if (!owner) {
+            return j(400, {
+              error: ASSIGNEE_REQUIRED_ERROR,
+              message: ASSIGNEE_REQUIRED_MESSAGE,
+            });
+          }
           const res = taskStore.createTask(workspaceId, {
             title: title.trim(),
             body: body?.body as string | undefined,
-            assignee: body?.assignee as string | undefined,
+            assignee: owner,
             needs: needs.needs,
             options: options.options,
             goal: body?.goal as string | undefined,
@@ -1922,7 +1955,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // Optional: a task can be created by a UI with no session yet.
             // When it IS supplied, the created row is attributed (§3.6) —
             // "who put this here" is the first question of every triage.
-            actor: authorFor(body?.author) ?? undefined,
+            actor: createdBy ?? undefined,
           });
           if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
           // Dropped refs are reported, never swallowed: the caller finds out
@@ -2211,10 +2244,20 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!promoteOptions.ok) return j(400, { error: BAD_OPTIONS_ERROR });
           const promoteLinks = parseLinks(body?.links);
           if (!promoteLinks.ok) return j(400, { error: BAD_REF_ERROR });
+          // Same rule as a plain create: a promoted thread lands owned by
+          // whoever promoted it unless the call names someone else.
+          const promotedBy = authorFor(body?.author);
+          const promoteOwner = resolveAssignee(body?.assignee, promotedBy);
+          if (!promoteOwner) {
+            return j(400, {
+              error: ASSIGNEE_REQUIRED_ERROR,
+              message: ASSIGNEE_REQUIRED_MESSAGE,
+            });
+          }
           const res = taskStore.createTask(workspaceId, {
             title,
             body: draftBody,
-            assignee: body?.assignee as string | undefined,
+            assignee: promoteOwner,
             needs: promoteNeeds.needs,
             options: promoteOptions.options,
             // Forward undefined untouched: an omitted goal is what routes the
@@ -2225,7 +2268,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             links: promoteLinks.links,
             origin: { kind: 'thread', docId, threadId },
             ...(quote !== undefined ? { quote } : {}),
-            actor: authorFor(body?.author) ?? undefined,
+            actor: promotedBy ?? undefined,
           });
           if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
           return j(200, {

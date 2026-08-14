@@ -17,6 +17,7 @@
  * imported — and the mapping says so (`skipped`, `ignoredColumns`) rather
  * than silently dropping them.
  */
+import { resolveAssignee } from './task-owner.ts';
 import {
   CHORES_GOAL_ID,
   type Task,
@@ -393,8 +394,11 @@ export function applyImport(
     const created = store.createTask(workspaceId, {
       title: row.title,
       goal: row.goalId,
-      ...(row.assignee !== undefined ? { assignee: row.assignee } : {}),
+      // A row that names nobody belongs to whoever ran the import — the
+      // tracker's owner column is often blank, and "agent" is not an owner.
+      assignee: resolveAssignee(row.assignee, opts.actor) ?? opts.actor.name,
       ...(row.notes !== undefined ? { body: row.notes } : {}),
+      actor: opts.actor,
     });
     if (!created.ok) {
       failures.push({ title: row.title, error: created.error });

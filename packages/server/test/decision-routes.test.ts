@@ -291,7 +291,7 @@ describe('decision routes', () => {
       const wsId = await seedWorkspace();
       const task = await seedDecision(wsId);
       const { task: plain } = await jj<{ task: Task }>(
-        await post(`/api/workspaces/${wsId}/tasks`, { title: 'plain' }),
+        await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, title: 'plain' }),
       );
       expect(
         (await post('/api/tasks/t-missing/more-info', { question: 'x', author: PERSON })).status,
@@ -311,7 +311,7 @@ describe('decision routes', () => {
       const wsId = await seedWorkspace();
       const gate = await seedDecision(wsId);
       const { task: work } = await jj<{ task: Task }>(
-        await post(`/api/workspaces/${wsId}/tasks`, { title: 'Open the PR' }),
+        await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, title: 'Open the PR' }),
       );
       // Presence first: with no edge, the transition goes through.
       expect(
@@ -342,7 +342,7 @@ describe('decision routes', () => {
       const wsId = await seedWorkspace();
       const gate = await seedDecision(wsId);
       const { task: work } = await jj<{ task: Task }>(
-        await post(`/api/workspaces/${wsId}/tasks`, { title: 'Open the PR' }),
+        await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, title: 'Open the PR' }),
       );
       await jj(await post(`/api/tasks/${work.id}/after`, { after: [gate.id], author: AGENT }));
       expect((await getTasks(wsId)).find((t) => t.id === work.id)?.after).toEqual([gate.id]);
@@ -353,7 +353,7 @@ describe('decision routes', () => {
     it('404s an unknown task; 400s a bad edge, a self edge, and a missing author', async () => {
       const wsId = await seedWorkspace();
       const { task: work } = await jj<{ task: Task }>(
-        await post(`/api/workspaces/${wsId}/tasks`, { title: 'Open the PR' }),
+        await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, title: 'Open the PR' }),
       );
       expect((await post('/api/tasks/t-missing/after', { after: [], author: AGENT })).status).toBe(
         404,

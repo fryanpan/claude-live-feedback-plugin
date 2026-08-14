@@ -132,7 +132,7 @@ describe('hub rooms defend everything the server owns', () => {
   }
 
   async function makeTask(wsId: string, opts: Record<string, unknown>): Promise<string> {
-    const r = await post(`/api/workspaces/${wsId}/tasks`, opts);
+    const r = await post(`/api/workspaces/${wsId}/tasks`, { assignee: 'human', ...opts });
     expect(r.status).toBe(200);
     return ((await r.json()) as { task: { id: string } }).task.id;
   }

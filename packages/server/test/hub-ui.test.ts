@@ -48,7 +48,7 @@ describe('hub UI routes (plan §3.12 commit 7)', () => {
 
   async function seedTask(workspaceId: string, title = 'Fix the ranking clause'): Promise<Task> {
     const { task } = await jj<{ task: Task }>(
-      await post(`/api/workspaces/${workspaceId}/tasks`, { title }),
+      await post(`/api/workspaces/${workspaceId}/tasks`, { assignee: 'human', title }),
     );
     return task;
   }
