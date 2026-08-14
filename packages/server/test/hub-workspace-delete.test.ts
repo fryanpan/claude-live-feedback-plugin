@@ -24,13 +24,28 @@
  * register. The repo is public.
  */
 import { afterEach, describe, expect, it } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { User } from '@feedback/core';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { taskBodyDocId, workspaceRoomId } from '../src/task-projection.ts';
-import { type Task, TaskStore, eventsLogPath, tasksSidecarPath } from '../src/tasks.ts';
+import {
+  type Task,
+  TaskStore,
+  eventsLogPath,
+  pendingRetriagePath,
+  tasksSidecarPath,
+  voiceQueuePath,
+} from '../src/tasks.ts';
 
 const AGENT: User = {
   id: 'agent-search-revamp',
@@ -109,6 +124,28 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
     return (payload.hubWorkspaces ?? []).map((w) => w.id);
   };
 
+  /**
+   * Every file under the data dir whose NAME carries this workspace id.
+   *
+   * Named on purpose rather than a list of the sidecars I happen to know
+   * about: the first draft of the delete enumerated three of the five
+   * per-workspace paths, and the two it missed (the voice queue, the pending
+   * re-triage) are exactly the kind that get added later. A scan fails when
+   * the sixth one arrives; a list quietly doesn't.
+   */
+  const filesMentioning = (id: string): string[] => {
+    const out: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.name.includes(id)) out.push(full);
+      }
+    };
+    walk(dataDir as string);
+    return out;
+  };
+
   /** A board with two tasks, one of them already closed. */
   async function seed(): Promise<{ wsId: string; open: Task; done: Task }> {
     dataDir = mkdtempSync(join(tmpdir(), 'hub-ws-delete-'));
@@ -175,9 +212,29 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
     expect(handle?.rooms.get(openBody)).toBeDefined();
     expect(handle?.rooms.get(doneBody)).toBeDefined();
 
+    // Two sidecars that only exist when the board has been used a certain
+    // way — and so are exactly the ones a delete forgets.
+    expect(
+      handle?.tasks.queueVoiceRequest(wsId, {
+        transcript: 'move the tracing work to next week',
+        actor: AGENT,
+      }),
+    ).toBe(true);
+    const goal = await fetch(`${base}/api/workspaces/${wsId}/goal`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ goal: 'Try a second thing instead.', author: AGENT }),
+    });
+    expect(goal.status).toBe(200);
+    expect(existsSync(voiceQueuePath(dataDir as string, wsId))).toBe(true);
+    expect(existsSync(pendingRetriagePath(dataDir as string, wsId))).toBe(true);
+
     const res = await del(`/api/workspaces/${wsId}?force=true`);
     expect(res.status).toBe(200);
 
+    // Nothing anywhere under the data dir still carries this id — which is
+    // the assertion that will still be right when a sixth sidecar shows up.
+    expect(filesMentioning(wsId)).toEqual([]);
     expect(await listWorkspaceIds()).not.toContain(wsId);
     expect(existsSync(tasksSidecarPath(dataDir as string, wsId))).toBe(false);
     expect(existsSync(eventsLogPath(dataDir as string, wsId))).toBe(false);
