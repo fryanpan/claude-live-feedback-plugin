@@ -9,6 +9,7 @@
 import { type User, connect, escapeHtml } from '@feedback/core';
 import { ensureUserIdentity } from '../identity-prompt.ts';
 import { eventPath, typingInPath } from '../keyboard-target.ts';
+import { installStaleClientNotice } from '../stale-client.ts';
 import { type VoiceAck, createVoiceCapture } from '../voice-capture.ts';
 import {
   type ActivityEvent,
@@ -201,6 +202,7 @@ async function main(): Promise<void> {
 
   // ── Realtime: the ws:<id> board room ────────────────────────────────────
   const client = connect(wsUrl(`ws:${workspaceId}`, 'workspace'));
+  installStaleClientNotice(client);
   const tasksMap = client.ydoc.getMap('tasks');
   const wsMap = client.ydoc.getMap('workspace');
 
