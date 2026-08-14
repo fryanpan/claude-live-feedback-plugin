@@ -231,6 +231,35 @@ export class TaskProjection {
   }
 
   /**
+   * Tear down every room this projection created for a workspace: the board
+   * room and one body room per task.
+   *
+   * The store owns no rooms and the rooms own no store state, so deleting a
+   * workspace is two calls and this is the second one — the caller passes the
+   * task ids because by the time it runs, the store can no longer enumerate
+   * them.
+   *
+   * Cancel the snapshot timer BEFORE dropping the room: a debounced snapshot
+   * that fires afterwards would try to write body text back into a task that
+   * no longer exists.
+   */
+  dropWorkspace(workspaceId: string, taskIds: string[]): void {
+    for (const taskId of taskIds) {
+      const docId = taskBodyDocId(taskId);
+      const timer = this.snapshotTimers.get(docId);
+      if (timer) clearTimeout(timer);
+      this.snapshotTimers.delete(docId);
+      this.bodyWired.delete(docId);
+      // force: a task body's own discussion threads are part of what's being
+      // deleted, so open ones are not a reason to refuse here — the refusal
+      // that matters (open TASKS) already happened in the store.
+      this.rooms.deleteDoc(docId, { force: true });
+    }
+    this.wired.delete(workspaceId);
+    this.rooms.deleteDoc(workspaceRoomId(workspaceId), { force: true });
+  }
+
+  /**
    * Reassert the projection from the store — diff-aware, so an in-sync map
    * is a no-op transaction and a foreign write is surgically overwritten.
    * Never touches task body rooms.

@@ -1173,6 +1173,71 @@ export class TaskStore {
     return this.workspaces.get(id)?.workspace;
   }
 
+  /**
+   * Remove a hub workspace and everything this store holds for it.
+   *
+   * Guarded by open tasks the way `Rooms.deleteWorkspace` is guarded by open
+   * threads: the mistake to make hard is discarding a board somebody is
+   * working, and a bare id with no confirmation is exactly the call an agent
+   * makes by accident. `force` is the deliberate override, and the refusal
+   * carries the count so the caller does not have to go and look.
+   *
+   * Deletion has to reach DISK, not just the map: the sidecar is
+   * authoritative on hydrate, so an in-memory-only delete looks completely
+   * successful until the next restart brings the board back. The events log
+   * goes with it — an audit trail for a board nobody can see is a file that
+   * only grows.
+   *
+   * Returns the task ids so the caller can tear down each one's body room;
+   * this store owns no rooms and deliberately does not reach into them.
+   */
+  deleteWorkspace(
+    workspaceId: string,
+    opts?: { force?: boolean },
+  ):
+    | { ok: true; deletedTasks: number; taskIds: string[] }
+    | { ok: false; error: 'not-found' }
+    | { ok: false; error: 'has-open-tasks'; openTasks: number } {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return { ok: false, error: 'not-found' };
+
+    const taskIds = Array.from(state.tasks.keys());
+    if (!opts?.force) {
+      const openTasks = Array.from(state.tasks.values()).filter((t) => t.status !== 'done').length;
+      if (openTasks > 0) return { ok: false, error: 'has-open-tasks', openTasks };
+    }
+
+    // Cancel pending writes BEFORE removing the files, or a debounced save
+    // still in flight recreates the sidecar milliseconds after the delete
+    // reports success.
+    const pending = this.saveTimers.get(workspaceId);
+    if (pending) clearTimeout(pending);
+    this.saveTimers.delete(workspaceId);
+    const pendingAttachments = this.attachmentSaveTimers.get(workspaceId);
+    if (pendingAttachments) clearTimeout(pendingAttachments);
+    this.attachmentSaveTimers.delete(workspaceId);
+
+    for (const taskId of taskIds) this.taskIndex.delete(taskId);
+    this.workspaces.delete(workspaceId);
+
+    for (const path of [
+      tasksSidecarPath(this.dataDir, workspaceId),
+      attachmentsSidecarPath(this.dataDir, workspaceId),
+      eventsLogPath(this.dataDir, workspaceId),
+    ]) {
+      try {
+        rmSync(path, { force: true });
+      } catch (err) {
+        // The in-memory removal already happened, so the workspace is gone
+        // from every read path. A file left behind is a hydrate-time
+        // resurrection, which is worth a loud line rather than a throw that
+        // would leave the caller thinking nothing was deleted.
+        console.error(`[tasks] failed to remove ${path}:`, err);
+      }
+    }
+    return { ok: true, deletedTasks: taskIds.length, taskIds };
+  }
+
   listWorkspaces(): HubWorkspace[] {
     return Array.from(this.workspaces.values()).map((s) => s.workspace);
   }
