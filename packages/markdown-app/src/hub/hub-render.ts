@@ -1172,7 +1172,7 @@ export interface DetailHandlers {
   onAssign: (task: HubTask, assignee: string) => void;
   /** A comment on the task. With `threadId` it is a reply; without one it
    *  opens a new thread about the task itself. */
-  onComment?: (task: HubTask, text: string, threadId?: string) => void;
+  onComment?: (task: HubTask, text: string, threadId?: string) => Promise<boolean>;
 }
 
 export interface TaskComment {
@@ -1209,12 +1209,19 @@ export function otherAssignee(assignee: string): string {
  * A comment box that submits its trimmed text and clears itself. Shared by
  * the new-thread composer and every reply, so "empty posts nothing" is one
  * rule rather than one per box.
+ *
+ * The box empties only once the post is ACKNOWLEDGED. A handler that returns
+ * a promise resolving `false` (or that rejects) leaves the text where it is:
+ * a comment lost to a dropped connection is worse than one that never sent,
+ * because the box is empty, the toast is gone in seconds, and the person
+ * believes they said it. A handler that never resolves true
+ * therefore keeps its text — the safe direction.
  */
 function commentForm(
   className: string,
   placeholder: string,
   submitLabel: string,
-  onSubmit: (text: string) => void,
+  onSubmit: (text: string) => Promise<boolean>,
 ): HTMLFormElement {
   const form = document.createElement('form');
   form.className = className;
@@ -1230,8 +1237,19 @@ function commentForm(
     ev.preventDefault();
     const text = ta.value.trim();
     if (!text) return;
-    ta.value = '';
-    onSubmit(text);
+    ta.disabled = true;
+    submit.disabled = true;
+    // `Promise.resolve` rather than `await onSubmit(...)` so a handler that
+    // returns nothing at all still settles here instead of throwing.
+    void Promise.resolve(onSubmit(text))
+      .then((ok) => {
+        if (ok) ta.value = '';
+      })
+      .catch(() => {})
+      .finally(() => {
+        ta.disabled = false;
+        submit.disabled = false;
+      });
   });
   return form;
 }
@@ -1260,7 +1278,7 @@ export function discussionIsBusy(root: ParentNode): boolean {
 function renderDiscussion(
   task: HubTask,
   discussion: TaskDiscussion,
-  onComment: (task: HubTask, text: string, threadId?: string) => void,
+  onComment: (task: HubTask, text: string, threadId?: string) => Promise<boolean>,
 ): HTMLElement {
   const section = document.createElement('section');
   section.className = 'hub-discussion';
