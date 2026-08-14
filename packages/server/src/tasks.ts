@@ -237,7 +237,10 @@ export interface Task {
    *  (`task:<taskId>`) arrives with the projection commit; this snapshot is
    *  for search/export and never re-seeds a live fragment (§3.3). */
   body?: string;
-  /** 'human' | 'agent' | any named identity. Agent-decided by default. */
+  /** 'human' for work only a person can do, otherwise a named identity —
+   *  the agent or person who owns it. Every route that creates a task
+   *  resolves this from the caller and REFUSES the generic word (see
+   *  task-owner.ts), so a stored 'agent' is a pre-enforcement row. */
   assignee: string;
   /** Only meaningful when the assignee is a human. */
   needs?: 'action' | 'decision';
@@ -1561,6 +1564,9 @@ export class TaskStore {
       workspaceId,
       title: opts.title,
       ...(opts.body !== undefined ? { body: opts.body } : {}),
+      // The last-resort default. Every creation ROUTE resolves a real owner
+      // before it gets here (task-owner.ts), so this only covers a direct
+      // in-process call that named nobody.
       assignee: opts.assignee ?? 'agent',
       ...(opts.needs !== undefined ? { needs: opts.needs } : {}),
       ...(options.length > 0 ? { options } : {}),

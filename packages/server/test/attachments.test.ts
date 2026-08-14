@@ -544,7 +544,10 @@ describe('attachment routes + triage bridge', () => {
     // presence below on the same stream shape).
     const coldWs = await makeWorkspace('cold-hub');
     const coldSse = listen(await local(`/events/workspace/${coldWs}`));
-    const cold = await post(`/api/workspaces/${coldWs}/tasks`, { title: 'Nobody home' });
+    const cold = await post(`/api/workspaces/${coldWs}/tasks`, {
+      author: PERSON,
+      title: 'Nobody home',
+    });
     const coldTask = ((await cold.json()) as { task: { id: string; triagePendingTs?: number } })
       .task;
     await settle();
@@ -562,7 +565,10 @@ describe('attachment routes + triage bridge', () => {
       runtime: 'claude-code-local',
     });
     const hotSse = listen(await local(`/events/workspace/${hotWs}`));
-    const hot = await post(`/api/workspaces/${hotWs}/tasks`, { title: 'Somebody home' });
+    const hot = await post(`/api/workspaces/${hotWs}/tasks`, {
+      author: PERSON,
+      title: 'Somebody home',
+    });
     const hotTask = ((await hot.json()) as { task: { id: string; triagePendingTs?: number } }).task;
     await settle();
     hotSse.stop();
@@ -587,7 +593,7 @@ describe('attachment routes + triage bridge', () => {
     // board state (who is responsible), never evidence that an ATTACHMENT
     // reached the ydoc, and this test still refuses the latter.
     const wsId = await makeWorkspace('clean-room-hub', 'agent-board-lead');
-    await post(`/api/workspaces/${wsId}/tasks`, { title: 'A visible task' });
+    await post(`/api/workspaces/${wsId}/tasks`, { author: PERSON, title: 'A visible task' });
     await post(`/api/workspaces/${wsId}/attachments`, {
       agentId: 'relay-agent',
       runtime: 'webhook',
