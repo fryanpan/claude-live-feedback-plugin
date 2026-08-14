@@ -52,6 +52,7 @@ import { SseHub, openSseStream } from './sse.ts';
 import { KEYCHAIN_SERVICE, ThreadSummarizer } from './summarize.ts';
 import { applyImport, importBanner, importMarkerFor, parseTrackerMarkdown } from './task-import.ts';
 import { TaskProjection } from './task-projection.ts';
+import { buildQueue, summarizeGoals } from './task-queue.ts';
 import {
   REF_KINDS,
   type Ref,
@@ -1410,9 +1411,36 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // task-routes.test.ts (the `groups` lesson).
         const hubWsMatch = pathname.match(/^\/api\/workspaces\/([^/]+)$/);
         if (hubWsMatch && req.method === 'GET') {
-          const workspace = taskStore.getWorkspace(decodeURIComponent(hubWsMatch[1] ?? ''));
+          const workspaceId = decodeURIComponent(hubWsMatch[1] ?? '');
+          const workspace = taskStore.getWorkspace(workspaceId);
           if (!workspace) return j(404, { error: 'workspace not found' });
-          return j(200, { workspace });
+          // Goals with their counts, in priority order. The goals were always
+          // in this payload and no MCP tool read it, so ordering lived in
+          // each agent's head; the counts are what make the list answer
+          // "where is the open work" without a second call per goal.
+          return j(200, {
+            workspace,
+            goalSummary: summarizeGoals(taskStore.listTasks(workspaceId), workspace.goals),
+          });
+        }
+        // The work queue: priority order, dependency-aware, grouped into
+        // waves that can run at once (§3.9 agent side).
+        const wsNextMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/next$/);
+        if (wsNextMatch && req.method === 'GET') {
+          const workspaceId = decodeURIComponent(wsNextMatch[1] ?? '');
+          const workspace = taskStore.getWorkspace(workspaceId);
+          if (!workspace) return j(404, { error: 'workspace not found' });
+          const limitRaw = url.searchParams.get('limit');
+          const rows = buildQueue(taskStore.listTasks(workspaceId), workspace.goals, {
+            ...(url.searchParams.get('assignee')
+              ? { assignee: url.searchParams.get('assignee') ?? '' }
+              : {}),
+            ...(limitRaw !== null && Number.isFinite(Number(limitRaw))
+              ? { limit: Number(limitRaw) }
+              : {}),
+            includeBlocked: url.searchParams.get('includeBlocked') === 'true',
+          });
+          return j(200, { workspaceId, tasks: rows });
         }
         // Activity view (§3.9): the per-workspace events.jsonl audit log,
         // read back as rows. This is the surface where the after-the-fact
@@ -1628,6 +1656,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             afterEnforce: Array.isArray(body?.afterEnforce)
               ? (body.afterEnforce as string[])
               : undefined,
+            lane: typeof body?.lane === 'string' ? body.lane : undefined,
             dueAt: typeof body?.dueAt === 'number' ? Number(body.dueAt) : undefined,
             links: links.links,
             origin: origin.origin,
