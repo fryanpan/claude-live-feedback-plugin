@@ -8,6 +8,7 @@ import {
   type UptimeReport,
   boardSections,
   decisionQueue,
+  goalLabel,
 } from '../src/hub/hub-model.ts';
 import {
   type BoardHandlers,
@@ -714,6 +715,44 @@ describe('renderTaskDetail', () => {
     onTitleCommit: vi.fn(),
     onAnswer: vi.fn(),
     onAssign: vi.fn(),
+  });
+
+  const metaValue = (key: string): string | null => {
+    const dts = [...root.querySelectorAll('.hub-detail-meta dt')];
+    const dds = [...root.querySelectorAll('.hub-detail-meta dd')];
+    const i = dts.findIndex((dt) => dt.textContent === key);
+    return i === -1 ? null : (dds[i]?.textContent ?? null);
+  };
+
+  // The board spends a whole section header naming the goal; the panel you
+  // open to find out what a task is FOR printed `g1-loop`. An id is a fact
+  // about the store, not an answer to "which goal does this serve".
+  it('names the goal the way the board does', () => {
+    renderTaskDetail(root, task({ goal: 'g-pr' }), {
+      ...detailHandlers(),
+      goalLabel: (id) => goalLabel(GOALS, id),
+    });
+    expect(metaValue('Goal')).toBe('1. Get the PR out');
+  });
+
+  // Chores is a real section with a real header, and it is also where an
+  // orphaned task lands — so both have to say Chores here, not `chores`.
+  it('says Chores for a chore and for a goal that no longer exists', () => {
+    for (const goal of [CHORES_ID, 'g-deleted']) {
+      root.replaceChildren();
+      renderTaskDetail(root, task({ goal }), {
+        ...detailHandlers(),
+        goalLabel: (id) => goalLabel(GOALS, id),
+      });
+      expect(metaValue('Goal')).toBe('Chores');
+    }
+  });
+
+  it('falls back to the id when no lookup is wired in', () => {
+    renderTaskDetail(root, task({ goal: 'g-pr' }), detailHandlers());
+    // Positive control for the tests above: the label comes from the lookup,
+    // so without one the row still says something rather than going blank.
+    expect(metaValue('Goal')).toBe('g-pr');
   });
 
   // The server accepted, keyed and backlinked `url` refs before anything

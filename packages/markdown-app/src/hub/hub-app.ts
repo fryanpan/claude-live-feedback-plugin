@@ -29,6 +29,7 @@ import {
   type UptimeReport,
   boardSections,
   decisionQueue,
+  goalLabel,
   presenceChips,
 } from './hub-model.ts';
 import {
@@ -390,6 +391,7 @@ async function main(): Promise<void> {
         onAnswer: (t, text) => void answerDecision(t, text),
         onAssign: (t, assignee) => void assignTask(t, assignee),
         knownAgentIds: knownAgentIds(),
+        goalLabel: (id) => goalLabel(state.info?.goals ?? [], id),
         onComment: (t, text, threadId) => postTaskComment(t, text, threadId),
       },
       task ? discussion : undefined,
