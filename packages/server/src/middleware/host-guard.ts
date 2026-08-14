@@ -198,15 +198,25 @@ export function shareScopeAllows(
     // agree; the client swallows a non-ok, so they disagreed silently.
     //   GET <ws>              workspace name + goal text (§3.3 in-contract)
     //   GET <ws>/attachments  agent presence, redacted to PublicAttachment
+    //   GET <ws>/review-items what is waiting on a person
     // Bare DELETE and every mutation stay closed (method-checked here, and
     // refused again at the route).
+    //
+    // `review-items` is here for the same reason the first two are: the strip's
+    // decision half arrives over the board room and its thread half over REST,
+    // so blocking one leaves a visitor a strip that quietly drops every doc and
+    // task question. It carries workspace content only — thread asks, which a
+    // workspace share already reaches through `<ws>/threads`, and a doc label
+    // that is a title or a BASENAME, never a path. Note `<ws>/tasks` GET stays
+    // closed and is not the precedent: tasks are closed there because the board
+    // room already syncs them, not because they are withheld.
     if (method === 'GET' && pathname.startsWith('/api/workspaces/')) {
       const rest = pathname.slice('/api/workspaces/'.length);
       const slash = rest.indexOf('/');
       const seg = slash < 0 ? rest : rest.slice(0, slash);
       if (safeDecode(seg) === wsId) {
         const sub = slash < 0 ? '' : rest.slice(slash + 1);
-        if (sub === '' || sub === 'attachments') return true;
+        if (sub === '' || sub === 'attachments' || sub === 'review-items') return true;
       }
     }
   }
