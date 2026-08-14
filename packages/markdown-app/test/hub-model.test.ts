@@ -19,6 +19,7 @@ import {
   goalLabel,
   parseQuickAdd,
   positionBetween,
+  pluginDriftNotice,
   presenceChips,
   reviewQueue,
   stepTarget,
@@ -620,5 +621,58 @@ describe('parseQuickAdd', () => {
     const parsed = parseQuickAdd('x'.repeat(200));
     expect(parsed?.title).toBe(`${'x'.repeat(90)}…`);
     expect(parsed?.body).toBe('x'.repeat(200));
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Plugin drift notice
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('pluginDriftNotice', () => {
+  const rel = (
+    version: string | null,
+    behind: Array<{ agentId: string; pluginVersion?: string }>,
+  ) => ({ version, behind });
+
+  it('says who is behind, what current is, and both steps of the fix', () => {
+    const n = pluginDriftNotice(rel('0.1.26', [{ agentId: 'agent-quill', pluginVersion: '0.1.12' }]));
+    if (!n) throw new Error('expected a notice');
+    expect(n.headline).toBe('1 agent is running an older plugin than 0.1.26');
+    expect(n.detail).toBe('agent-quill 0.1.12');
+    // Both steps, in order. Restarting first pulls whatever the cache already
+    // holds — which has moved a session BACKWARDS a version.
+    expect(n.fix).toBe(
+      'Run: claude plugin update live-feedback@claude-live-feedback — then restart that session.',
+    );
+  });
+
+  it('pluralises, and lists every session', () => {
+    const n = pluginDriftNotice(
+      rel('0.2.0', [
+        { agentId: 'agent-quill', pluginVersion: '0.1.12' },
+        { agentId: 'agent-vane', pluginVersion: '0.1.30' },
+      ]),
+    );
+    expect(n?.headline).toBe('2 agents are running an older plugin than 0.2.0');
+    expect(n?.detail).toBe('agent-quill 0.1.12, agent-vane 0.1.30');
+  });
+
+  it('names a session that could not report a version', () => {
+    // It is on a bundle older than the one that added the field, so "older
+    // than we can name" is the true statement — not a blank.
+    const n = pluginDriftNotice(rel('0.1.26', [{ agentId: 'agent-old' }]));
+    expect(n?.detail).toBe('agent-old (too old to report)');
+  });
+
+  it('says nothing when everyone is current', () => {
+    // Positive control lives in the cases above: the same shape WITH a behind
+    // entry does produce a notice, so this absence is not vacuous.
+    expect(pluginDriftNotice(rel('0.1.26', []))).toBeNull();
+  });
+
+  it('says nothing when the released version is unknown', () => {
+    // The manifest was unreadable. Claiming drift would be inventing it.
+    expect(pluginDriftNotice(rel(null, [{ agentId: 'a', pluginVersion: '0.1.0' }]))).toBeNull();
+    expect(pluginDriftNotice(undefined)).toBeNull();
   });
 });
