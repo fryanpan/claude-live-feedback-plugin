@@ -680,6 +680,30 @@ body.hub-body {
   border-color: var(--accent);
   box-shadow: 0 0 0 1px var(--accent);
 }
+/* Plugin drift, beside the agents it is about. Full-width so it wraps rather
+   than competing with the chips for room on a phone. */
+.hub-drift {
+  flex: 1 0 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--yellow);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.hub-drift-head {
+  font-weight: 650;
+}
+.hub-drift-who,
+.hub-drift-fix {
+  color: var(--fg-muted);
+  /* The fix is a command: it must break anywhere rather than push the strip
+     wider than the viewport. */
+  overflow-wrap: anywhere;
+}
 
 /* --- goal strip --- */
 .hub-goal {

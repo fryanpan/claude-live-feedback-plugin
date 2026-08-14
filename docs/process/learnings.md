@@ -737,6 +737,53 @@ Technical discoveries that should persist across sessions for this project.
   the bundle (a skill, a tool description) can't meet its acceptance until
   delivery stops needing a person.
 
+## A shell wrapper made an agent conclude it was forbidden from deploying
+
+- **`claude` is a shell FUNCTION on this machine** — it re-invokes the real
+  binary with `"${CLAUDE_CHANNEL_FLAGS[@]}" "$@"` — so the flags land ahead of the
+  subcommand and `claude plugin update …` is parsed as a prompt: *"Input must
+  be provided either through stdin or as a prompt argument when using
+  --print"*. Reproduced on `plugin list`, which is read-only: the function
+  form errors, `command claude plugin list` prints the plugins. It fails even
+  with that array empty, so it is the wrapper, not the flags.
+- **That error reads exactly like a permission refusal**, and a ticket
+  recorded it as one: "the one-line fix is not mine to run", generalised into
+  an agent being unable to deploy at all. It was a footgun, not a wall. Fix:
+  `command` bypasses functions and aliases — `command claude plugin update
+  live-feedback@claude-live-feedback`.
+- Same family as "X is impossible measured AN absence, not THE absence".
+  Before writing down that a capability is denied you, check whether what
+  refused you was the tool or a wrapper around it: `type -a <cmd>` costs one
+  line and would have saved this one a ticket and a fleet-wide belief.
+
+## Drift you have to go and look for is drift nobody looks for
+
+- **`main` reached 0.1.26 while every peer's cache sat at 0.1.15 — eleven
+  releases, none delivered, nothing said so.** Each one was merged and green.
+  The only detector was a person deciding to check, and the reason nobody did
+  is that there was no moment that prompted it: a merge looks like shipping.
+  The fix is not a better reminder, it is a reading — sessions report the
+  bundle they are RUNNING on `attach_agent`, and the board names anyone older
+  than what the deploy source would install.
+- **Report the version the session is running, not the one its cache holds.**
+  Those disagree from the moment an update runs until the session restarts,
+  and the running one is the only one that decides whether a tool exists for
+  that agent. A cache-based signal would go quiet at the update and hide the
+  half of the problem that is still open.
+- **A peer that reports NO version is behind, not unknown.** The field ships
+  in the release that reads it, so silence means "older than this feature" —
+  which is the state of the entire fleet the day it lands. Treating absence as
+  unknown would have hidden precisely the drift it was built for. The mirror
+  rule: a session AHEAD of the deploy source is *not* behind (an agent
+  launched against a working tree legitimately outruns an unpulled checkout),
+  and nagging it to downgrade is worse than silence.
+- **A stale staging instance answers as though it were your build.** Port 8788
+  was still held by an earlier `bun run staging`, so the new one moved to 8789
+  and printed so — while a probe at 8788 returned a clean, complete, entirely
+  wrong answer (no `pluginRelease` at all, which reads as "my feature is
+  broken"). Read the port the run actually bound before pointing anything at
+  it; same shape as a positive control scanning the wrong data.
+
 ## git exports GIT_DIR into hooks, and `git init` inherits it
 
 - **`git push` → `pre-push` hook → a script that runs `git init` somewhere

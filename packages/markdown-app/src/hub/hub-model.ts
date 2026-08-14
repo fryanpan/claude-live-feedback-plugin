@@ -809,6 +809,57 @@ export interface PresenceChip {
   state?: PresenceAgent['state'];
 }
 
+/** What the attachments read says about plugin versions. */
+export interface PluginRelease {
+  /** The version this server's deploy source would install; null if its
+   *  manifest could not be read. */
+  version: string | null;
+  behind: Array<{ agentId: string; pluginVersion?: string }>;
+}
+
+export interface DriftNotice {
+  headline: string;
+  detail: string;
+  fix: string;
+}
+
+/**
+ * "Some of your agents can't do what you just merged."
+ *
+ * A merge does not deliver: the plugin resolves from a version-keyed cache,
+ * so somebody has to run the update and the session then has to restart. That
+ * went unnoticed for eleven releases because the only way to find out was to
+ * go and look. This is the looking, done by the board.
+ *
+ * Two things it deliberately will not do: invent a claim when the released
+ * version is unknown, and print a blank where a session is too old to report
+ * its version — "too old to name" is the true statement there, and it is the
+ * state every peer is in the moment this ships.
+ */
+export function pluginDriftNotice(release: PluginRelease | null | undefined): DriftNotice | null {
+  const version = release?.version;
+  const behind = release?.behind ?? [];
+  if (!version || behind.length === 0) return null;
+  return {
+    headline: `${behind.length} ${behind.length === 1 ? 'agent is' : 'agents are'} running an older plugin than ${version}`,
+    detail: behind
+      .map((b) => `${b.agentId} ${b.pluginVersion ?? '(too old to report)'}`.trim())
+      .join(', '),
+    // Two things this one sentence has to get right.
+    //
+    // `command` — because `claude` is a shell FUNCTION on this machine that
+    // injects flags ahead of the subcommand, so the bare form is parsed as a
+    // prompt and dies with a message that reads like a permission refusal.
+    // An agent already filed that as "deploying is not mine to run". Printing
+    // a remediation known to fail is worse than printing none; `command` is
+    // inert wherever no such wrapper exists.
+    //
+    // The ORDER — restarting first re-resolves the cache as it stands, which
+    // has moved a session BACKWARDS a version in exactly this situation.
+    fix: 'Run: command claude plugin update live-feedback@claude-live-feedback — then restart that session.',
+  };
+}
+
 /** One chip per person and agent (§2.7), people first. Person chips carry the
  *  surface they're on; agent chips carry the derived liveness state — real
  *  signals (heartbeat, last tool call), never guesses. */
