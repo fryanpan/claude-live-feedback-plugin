@@ -115,6 +115,16 @@ export interface ImportMapping {
   /** Table column headers with no mapping (e.g. a Due column) — reported so
    *  dropped data is a visible decision, not a silent loss. */
   ignoredColumns: string[];
+  /**
+   * File-level things a reader must not miss, in plain sentences.
+   *
+   * `skipped` is per-line and reads as detail; a caller scanning a dry-run
+   * for "did this work" looks at `tasks` and stops. When the answer is "this
+   * file produced nothing", that has to be stated, not inferred from an empty
+   * array — an empty list is exactly what a clean import of an empty file
+   * looks like too.
+   */
+  warnings: string[];
 }
 
 // ── Parsing ────────────────────────────────────────────────────────────────
@@ -247,6 +257,29 @@ export function parseTrackerMarkdown(
     ) {
       sawContent = true;
       const header = splitRow(line);
+      /**
+       * A table whose header cells are ALL blank is being used for LAYOUT —
+       * the borderless key/value block people write to lay out a summary:
+       *
+       *   |          |                            |
+       *   | -------- | -------------------------- |
+       *   | State    | Merged 2026-05-02          |
+       *
+       * Parsed as a task table it yields tasks called "State"/"Size"/
+       * "Blocking" under a minted goal, which reads as a successful partial
+       * import rather than as a failure. A task table names its first
+       * column; ALL-blank is the signal, never SOME-blank — one unnamed
+       * column beside named ones is ordinary markdown and still imports.
+       */
+      if (header.every((h) => h === '')) {
+        skipped.push({
+          line: i + 1,
+          reason: 'table has a blank header row — read as layout, not tasks',
+        });
+        i += 2; // past header + separator
+        while (i < lines.length && isTableLine(lines[i] ?? '')) i++;
+        continue;
+      }
       const findCol = (re: RegExp) => {
         const idx = header.findIndex((h) => re.test(h));
         return idx === -1 ? undefined : idx;
@@ -295,7 +328,24 @@ export function parseTrackerMarkdown(
   }
   if (pending !== null) skipped.push({ line: pending.line, reason: 'heading has no task table' });
 
-  return { goals, tasks, skipped, ignoredColumns };
+  // "Nothing was imported" has to be said out loud. An empty `tasks` is also
+  // what a clean run over an empty file returns, so the caller cannot tell
+  // the two apart — and the expensive mistake is reading a failed import as
+  // a successful one. Only fires when the file HAD content to work with.
+  const warnings: string[] = [];
+  if (tasks.length === 0 && sawContent) {
+    const layoutTables = skipped.filter((s) => s.reason.includes('layout')).length;
+    const bareHeadings = skipped.filter((s) => s.reason === 'heading has no task table').length;
+    const because = [
+      bareHeadings > 0 ? `${bareHeadings} heading(s) had no task table` : '',
+      layoutTables > 0 ? `${layoutTables} table(s) were layout, not tasks` : '',
+    ].filter(Boolean);
+    warnings.push(
+      `No tasks were imported from this file${because.length ? `: ${because.join('; ')}` : ''}.`,
+    );
+  }
+
+  return { goals, tasks, skipped, ignoredColumns, warnings };
 }
 
 // ── Applying a mapping ─────────────────────────────────────────────────────
