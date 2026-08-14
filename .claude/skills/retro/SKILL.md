@@ -1,17 +1,18 @@
 ---
 name: retro
 user-invocable: true
-description: Run a retrospective with transcript analysis and log feedback. Use when the user explicitly invokes /retro, when a full plan implementation is complete, or after creating a PR or addressing code review feedback (if a retro hasn't happened yet this session).
+description: Run a retrospective with transcript analysis and log feedback. Use when the user explicitly invokes /retro, or when a full plan implementation is complete.
 ---
 # Retrospective
 
 Run this skill when:
 - The user explicitly invokes `/retro`
 - A full plan implementation is complete (all work packages done and verified)
-- After creating a PR (offer a quick retro, if a retro hasn't happened yet this session)
-- After receiving and addressing code review feedback (offer, if a retro hasn't happened yet this session)
 
-For the last two triggers, use a lightweight prompt: "Good moment for a quick retro. Want me to run `/retro`?" Do NOT auto-run — just offer. If the user declines, move on.
+**Don't offer a retro nobody asked for** (Bryan, 2026-08-13). This skill used to
+suggest itself after every PR and every code review; that turns finishing a
+piece of work into a prompt, and a prompt is a stop. If a retro is worth
+running, the person will ask.
 
 ## Session Mode
 

@@ -4,13 +4,14 @@ alwaysApply: true
 
 # Continuous Feedback & Learning
 
-> **Scope: sessions that are NOT working a live-feedback board.** If this
-> session has a workspace board, `workspace-board.md` governs — finishing a
-> task means taking the next one, and anything you'd want to ask or report
-> goes in a task comment. The prompts below ("ask for feedback", "offer a
-> retro after a PR") were written for a chat-driven session; on a queue they
-> fire after every task and manufacture a stop. Capturing learnings still
-> applies everywhere.
+> **Don't manufacture a stop to collect feedback.** This file used to end
+> every feature with "ask the user how that went" and every PR with an offer
+> to run `/retro`. Both are gone (Bryan, 2026-08-13): a question asked in the
+> terminal only exists while someone is watching the terminal, and asked after
+> every unit of work it turns a queue into a conversation. If you have a
+> question about the work, put it where the work is — a comment on the task or
+> the review doc — and keep going. Capturing learnings still applies
+> everywhere.
 
 ## After Completing a Feature
 1. **Self-review** before declaring done:
@@ -18,11 +19,7 @@ alwaysApply: true
    - Is this the simplest solution?
    - Did I update all places that needed updating?
 
-2. **Ask for feedback**:
-   - "Does this work as expected?"
-   - "Anything that felt clunky or could be improved?"
-
-3. **Capture learnings**: Proactively identify things worth remembering:
+2. **Capture learnings**: Proactively identify things worth remembering:
    - Technical gotchas or surprises
    - Patterns that worked well
    - Mistakes to avoid repeating
@@ -36,28 +33,19 @@ alwaysApply: true
 
 ## During Work - Watch for Friction
 If the user seems frustrated, confused, or an approach isn't working:
-- Pause and acknowledge: "This doesn't seem to be working well. What's off?"
+- Acknowledge it: "This doesn't seem to be working well. What's off?"
 - Ask what they'd prefer instead
-- Offer to log the feedback for future sessions
+- Log the feedback for future sessions
 
-## Periodic Retrospective
-After ~2-3 hours of work or completing a major feature, prompt:
-> "Quick retro:
-> - What worked well?
-> - What was frustrating or slower than expected?
-> - Anything I should do differently?"
+This one is responsive, not scheduled — it fires because a person is already
+telling you something, which is the opposite of stopping to ask whether they
+have anything to tell you.
 
-Then offer to log feedback in `docs/process/retrospective.md`
+## Retros
 
-## Automatic Retro Triggers
-
-After any of these events, if a retro hasn't happened yet this session, offer to run `/retro`:
-- Creating a PR (via `/commit-push-pr` or `gh pr create`)
-- Receiving and addressing code review feedback
-
-Lightweight prompt: "Good moment for a quick retro. Want me to run `/retro`?"
-Do NOT auto-run — just offer. User can decline.
-If a retro already happened this session, skip the offer.
+`/retro` runs when someone asks for it. Don't offer one after a PR, after a
+code review, or on a timer — a retro nobody asked for is a stop nobody asked
+for.
 
 ## Elevating to Learnings
 
