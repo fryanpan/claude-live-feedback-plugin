@@ -11,6 +11,7 @@ import {
 } from '../src/hub/hub-model.ts';
 import {
   type BoardHandlers,
+  type TaskThread,
   renderActivity,
   renderBoard,
   renderDecisions,
@@ -800,5 +801,143 @@ describe('renderTaskDetail', () => {
     expect(btn.textContent).toBe('agent'); // it still READS as the current value
     btn.dispatchEvent(new Event('click', { bubbles: true }));
     expect(onAssign).toHaveBeenCalledWith(expect.objectContaining({ id: t.id }), 'human');
+  });
+});
+
+/**
+ * The task detail panel is where a person pushes back on a task. Before this,
+ * the only comment affordance on the board was a LINK to the task doc — so
+ * disagreeing with a task meant leaving the board, and in practice it meant
+ * saying it in chat instead, where it reaches nobody the task reaches.
+ */
+describe('renderTaskDetail — discussion', () => {
+  const detailHandlers = (over: Record<string, unknown> = {}) => ({
+    onClose: vi.fn(),
+    onStatusSet: vi.fn(),
+    onTitleCommit: vi.fn(),
+    onAnswer: vi.fn(),
+    onAssign: vi.fn(),
+    onComment: vi.fn(),
+    ...over,
+  });
+
+  const thread = (over: Partial<TaskThread> = {}): TaskThread => ({
+    id: 'th-1',
+    status: 'open',
+    comments: [{ author: 'Jordan', text: 'Is the index really first?', ts: NOW }],
+    ...over,
+  });
+
+  it('shows each comment with who said it', () => {
+    renderTaskDetail(root, task(), detailHandlers(), {
+      loading: false,
+      threads: [
+        thread({
+          comments: [
+            { author: 'Jordan', text: 'Is the index really first?', ts: NOW },
+            { author: 'Search Revamp', text: 'It unblocks two others.', ts: NOW + 1000 },
+          ],
+        }),
+      ],
+    });
+    const comments = root.querySelectorAll('.hub-comment');
+    expect(comments).toHaveLength(2);
+    expect(comments[0]?.textContent).toContain('Jordan');
+    expect(comments[0]?.textContent).toContain('Is the index really first?');
+    expect(comments[1]?.textContent).toContain('Search Revamp');
+  });
+
+  // The acceptance: an empty description is the NORMAL state of a task worth
+  // arguing about, so the composer cannot be gated on there being something
+  // to reply to.
+  it('offers a composer on a task with no description and no comments', () => {
+    const onComment = vi.fn();
+    const t = task({ body: undefined });
+    renderTaskDetail(root, t, detailHandlers({ onComment }), { loading: false, threads: [] });
+
+    const form = root.querySelector('.hub-comment-form') as HTMLFormElement;
+    expect(form).toBeTruthy();
+    const ta = form.querySelector('textarea') as HTMLTextAreaElement;
+    ta.value = 'This assumes the index ships first.';
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    // No threadId — a new thread about the task itself.
+    expect(onComment).toHaveBeenCalledWith(
+      expect.objectContaining({ id: t.id }),
+      'This assumes the index ships first.',
+    );
+  });
+
+  it('replies go to the thread they were typed under', () => {
+    const onComment = vi.fn();
+    const t = task();
+    renderTaskDetail(root, t, detailHandlers({ onComment }), {
+      loading: false,
+      threads: [thread({ id: 'th-77' })],
+    });
+    const reply = root.querySelector('.hub-reply-form') as HTMLFormElement;
+    const ta = reply.querySelector('textarea') as HTMLTextAreaElement;
+    ta.value = 'Because it unblocks two others.';
+    reply.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    expect(onComment).toHaveBeenCalledWith(
+      expect.objectContaining({ id: t.id }),
+      'Because it unblocks two others.',
+      'th-77',
+    );
+  });
+
+  it('an empty box posts nothing', () => {
+    const onComment = vi.fn();
+    renderTaskDetail(root, task(), detailHandlers({ onComment }), { loading: false, threads: [] });
+    const form = root.querySelector('.hub-comment-form') as HTMLFormElement;
+    (form.querySelector('textarea') as HTMLTextAreaElement).value = '   ';
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    expect(onComment).not.toHaveBeenCalled();
+  });
+
+  // A resolved thread is still part of the argument. Hiding it here would
+  // repeat the drawer bug where a reply existed in the store and no surface
+  // could reach it.
+  it('keeps a resolved thread visible, marked as resolved', () => {
+    renderTaskDetail(root, task(), detailHandlers(), {
+      loading: false,
+      threads: [thread({ id: 'th-r', status: 'resolved' })],
+    });
+    const el = root.querySelector('.hub-thread') as HTMLElement;
+    expect(el).toBeTruthy();
+    expect(el.classList.contains('resolved')).toBe(true);
+  });
+
+  // Grounded in the fetch, not inferred from anything: the panel says
+  // "loading" only while a load is actually in flight.
+  it('distinguishes "still loading" from "nothing to say yet"', () => {
+    renderTaskDetail(root, task(), detailHandlers(), { loading: true, threads: [] });
+    expect(root.querySelector('.hub-discussion-loading')).toBeTruthy();
+    expect(root.querySelector('.hub-discussion-empty')).toBeNull();
+
+    renderTaskDetail(root, task(), detailHandlers(), { loading: false, threads: [] });
+    expect(root.querySelector('.hub-discussion-loading')).toBeNull();
+    expect(root.querySelector('.hub-discussion-empty')).toBeTruthy();
+  });
+
+  it('renders comment text as inert markup', () => {
+    renderTaskDetail(root, task(), detailHandlers(), {
+      loading: false,
+      threads: [
+        thread({
+          comments: [{ author: 'Jordan', text: '<img src=x onerror="boom()"> **real**', ts: NOW }],
+        }),
+      ],
+    });
+    const body = root.querySelector('.hub-comment-body') as HTMLElement;
+    expect(body.querySelector('img')).toBeNull();
+    expect(body.innerHTML).toContain('<strong>real</strong>');
+  });
+
+  // Without a discussion argument at all the panel is exactly what it was —
+  // the hub renders detail before the threads have been fetched.
+  it('renders with no discussion supplied', () => {
+    renderTaskDetail(root, task({ title: 'Wire the index' }), detailHandlers());
+    expect(root.querySelector('.hub-detail-title')?.textContent).toBe('Wire the index');
+    expect(root.querySelector('.hub-comment-form')).toBeNull();
   });
 });

@@ -1157,6 +1157,32 @@ export interface DetailHandlers {
    *  `text` is the verbatim answer either way. */
   onAnswer: (task: HubTask, text: string, optionId?: string) => void;
   onAssign: (task: HubTask, assignee: string) => void;
+  /** A comment on the task. With `threadId` it is a reply; without one it
+   *  opens a new thread about the task itself. */
+  onComment?: (task: HubTask, text: string, threadId?: string) => void;
+}
+
+export interface TaskComment {
+  author: string;
+  text: string;
+  ts: number;
+}
+
+export interface TaskThread {
+  id: string;
+  status: 'open' | 'resolved';
+  comments: TaskComment[];
+}
+
+/**
+ * The task's discussion, as fetched. `loading` is the FETCH's own state, not
+ * an inference from empty threads — an empty task and a task whose threads
+ * have not arrived look identical otherwise, and guessing between them means
+ * promising a comment that never appears.
+ */
+export interface TaskDiscussion {
+  loading: boolean;
+  threads: TaskThread[];
 }
 
 /** The hand-off toggle's other end. Named assignees (a specific agent) are
@@ -1166,10 +1192,119 @@ export function otherAssignee(assignee: string): string {
   return assignee === 'human' ? 'agent' : 'human';
 }
 
+/**
+ * A comment box that submits its trimmed text and clears itself. Shared by
+ * the new-thread composer and every reply, so "empty posts nothing" is one
+ * rule rather than one per box.
+ */
+function commentForm(
+  className: string,
+  placeholder: string,
+  submitLabel: string,
+  onSubmit: (text: string) => void,
+): HTMLFormElement {
+  const form = document.createElement('form');
+  form.className = className;
+  const ta = document.createElement('textarea');
+  ta.placeholder = placeholder;
+  ta.rows = 2;
+  const submit = document.createElement('button');
+  submit.type = 'submit';
+  submit.className = 'hub-btn';
+  submit.textContent = submitLabel;
+  form.append(ta, submit);
+  form.addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    const text = ta.value.trim();
+    if (!text) return;
+    ta.value = '';
+    onSubmit(text);
+  });
+  return form;
+}
+
+/**
+ * The task's Discussion.
+ *
+ * This is the whole point of the panel for a reviewer: the board used to
+ * offer a LINK to the task doc and nothing else, so disagreeing with a task
+ * cost a navigation — which in practice meant saying it in chat instead,
+ * where it reaches nobody the task reaches.
+ */
+function renderDiscussion(
+  task: HubTask,
+  discussion: TaskDiscussion,
+  onComment: (task: HubTask, text: string, threadId?: string) => void,
+): HTMLElement {
+  const section = document.createElement('section');
+  section.className = 'hub-discussion';
+
+  const h = document.createElement('h3');
+  h.className = 'hub-detail-subhead';
+  h.textContent = 'Discussion';
+  section.append(h);
+
+  if (discussion.loading) {
+    const p = document.createElement('p');
+    p.className = 'hub-discussion-loading';
+    p.textContent = 'Loading the discussion…';
+    section.append(p);
+  } else if (discussion.threads.length === 0) {
+    const p = document.createElement('p');
+    p.className = 'hub-discussion-empty';
+    p.textContent = 'No comments yet.';
+    section.append(p);
+  }
+
+  for (const t of discussion.threads) {
+    const el = document.createElement('div');
+    // Resolved threads stay VISIBLE. A resolved thread is still part of the
+    // argument, and hiding one here would repeat the drawer bug where a reply
+    // existed in the store with no surface that could reach it.
+    el.className = `hub-thread${t.status === 'resolved' ? ' resolved' : ''}`;
+    if (t.status === 'resolved') {
+      const badge = document.createElement('span');
+      badge.className = 'hub-thread-status';
+      badge.textContent = 'Resolved';
+      el.append(badge);
+    }
+    for (const c of t.comments) {
+      const row = document.createElement('div');
+      row.className = 'hub-comment';
+      const who = document.createElement('span');
+      who.className = 'hub-comment-author';
+      who.textContent = c.author;
+      who.title = new Date(c.ts).toLocaleString();
+      const body = document.createElement('div');
+      body.className = 'hub-comment-body';
+      // Same escape-then-allow-known-tags path the description uses, so a
+      // comment written by anyone with write access is inert markup.
+      body.innerHTML = renderCommentMarkdown(c.text);
+      row.append(who, body);
+      el.append(row);
+    }
+    el.append(
+      commentForm('hub-reply-form', 'Reply…', 'Reply', (text) => onComment(task, text, t.id)),
+    );
+    section.append(el);
+  }
+
+  section.append(
+    commentForm(
+      'hub-comment-form',
+      discussion.threads.length > 0 ? 'Start another thread…' : 'Say something about this task…',
+      'Comment',
+      (text) => onComment(task, text),
+    ),
+  );
+  return section;
+}
+
 export function renderTaskDetail(
   container: HTMLElement,
   task: HubTask | null,
   handlers: DetailHandlers,
+  discussion?: TaskDiscussion,
 ): void {
   container.replaceChildren();
   if (!task) {
@@ -1333,11 +1468,17 @@ export function renderTaskDetail(
   body.className = 'hub-detail-body-link';
   const bodyLink = document.createElement('a');
   bodyLink.href = `/review/${encodeURIComponent(task.bodyDocId)}`;
+  // No longer "or comment" — commenting happens right below, and sending
+  // someone elsewhere to do it is what this section replaces.
   bodyLink.textContent = task.body?.trim()
-    ? 'Edit or comment on the task doc'
+    ? 'Edit the task doc'
     : 'Write the description in the task doc';
   body.append(bodyLink);
   panel.append(body);
+
+  if (discussion && handlers.onComment) {
+    panel.append(renderDiscussion(task, discussion, handlers.onComment));
+  }
 
   if (task.transitions.length > 0) {
     const h = document.createElement('h3');
