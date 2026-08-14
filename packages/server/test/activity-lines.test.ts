@@ -73,6 +73,7 @@ describe('the activity view renders the rows the server really wrote', () => {
       title: 'Ship Thursday or Friday?',
       assignee: 'human',
       needs: 'decision',
+      body: 'Thursday or Friday? Friday buys one more review pass and misses the demo. Blocked until answered: the release note.',
       author: AGENT,
     });
     expect(d.status).toBe(200);
