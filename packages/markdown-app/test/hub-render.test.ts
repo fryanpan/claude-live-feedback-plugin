@@ -7,6 +7,7 @@ import {
   type HubTask,
   type UptimeReport,
   boardSections,
+  decisionQueue,
 } from '../src/hub/hub-model.ts';
 import {
   type BoardHandlers,
@@ -441,13 +442,14 @@ describe('renderDecisions', () => {
   it('shows a chip per open decision and opens it on tap', () => {
     const onOpen = vi.fn();
     const d = task({ needs: 'decision', assignee: 'human', title: 'Ship now or wait?' });
-    renderDecisions(root, [d], onOpen);
+    const strip = { onOpen, onWalkthrough: vi.fn() };
+    renderDecisions(root, decisionQueue([d]), strip);
     const chip = root.querySelector('.hub-decision-chip') as HTMLElement;
     expect(chip.textContent).toContain('Ship now or wait?');
     chip.click();
     expect(onOpen).toHaveBeenCalledTimes(1);
     // Empty → the strip hides instead of rendering an empty shell.
-    renderDecisions(root, [], onOpen);
+    renderDecisions(root, decisionQueue([]), strip);
     expect(root.classList.contains('hidden')).toBe(true);
   });
 });

@@ -22,6 +22,18 @@ export interface HubTransition {
   usage?: { inputTokens: number; outputTokens: number };
 }
 
+export interface HubDecisionOption {
+  id: string;
+  label: string;
+  detail?: string;
+}
+
+export interface HubInfoRequest {
+  text: string;
+  by: string;
+  ts: number;
+}
+
 /** One task as projected into the `tasks` Y.Map (§3.3 visitor contract —
  *  display names only, no actor ids). */
 export interface HubTask {
@@ -38,7 +50,13 @@ export interface HubTask {
   links: unknown[];
   origin?: unknown;
   quote?: string;
-  answer?: { text: string; by: string; ts: number };
+  /** Candidate answers the asker already had in mind. A shortcut, never a
+   *  closed set — Bryan can always write his own answer instead. */
+  options?: HubDecisionOption[];
+  /** "I can't answer this yet, tell me more" — recorded rather than answered,
+   *  so the decision stays open and the asker gets the question. */
+  infoRequests?: HubInfoRequest[];
+  answer?: { text: string; by: string; ts: number; optionId?: string };
   triagedAgainst?: { goalId: string; goal: string; ts: number };
   triagePendingTs?: number;
   riskTier?: 'green' | 'yellow' | 'red';
@@ -324,6 +342,68 @@ export function decisionRows(tasks: HubTask[]): HubTask[] {
   return tasks
     .filter((t) => t.needs === 'decision' && t.status !== 'done' && !t.answer)
     .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+}
+
+/** One open decision plus the work that is actually waiting on it. */
+export interface DecisionRow {
+  task: HubTask;
+  /** Open tasks that name this decision in `after`. */
+  blocks: HubTask[];
+  /** At least one dependent names it in `afterEnforce` — that work cannot
+   *  proceed at all, rather than merely being ordered behind it. */
+  hard: boolean;
+}
+
+export interface DecisionQueue {
+  rows: DecisionRow[];
+  total: number;
+  /** Decisions with at least one open dependent: "blocking work now". */
+  blocking: number;
+  /** The rest: real questions, but nothing is stalled on them. */
+  waiting: number;
+}
+
+/**
+ * The queue behind the count at the top of the board.
+ *
+ * Urgency here is DERIVED, never declared. "This is blocking work now" is the
+ * same fact as "something depends on it", and `after` / `afterEnforce` already
+ * record that — so there is deliberately no urgency field to set. A hand-set
+ * one would be written at creation, the moment its author knows least about
+ * what will end up waiting on the answer (the same reasoning that kept a
+ * `lane` field off tasks).
+ *
+ * Ordering is what it blocks, not which goal it sits under: enforced edges
+ * first, then by how many tasks are waiting, then oldest.
+ */
+export function decisionQueue(tasks: HubTask[]): DecisionQueue {
+  const open = decisionRows(tasks);
+  if (open.length === 0) return { rows: [], total: 0, blocking: 0, waiting: 0 };
+
+  const byId = new Map(open.map((d) => [d.id, { task: d, blocks: [] as HubTask[], hard: false }]));
+  for (const t of tasks) {
+    // Finished work waits on nothing, and a task can't block on itself.
+    if (t.status === 'done') continue;
+    const seen = new Set<string>();
+    for (const id of t.after) {
+      if (id === t.id || seen.has(id)) continue;
+      seen.add(id);
+      const row = byId.get(id);
+      if (!row) continue;
+      row.blocks.push(t);
+      if (t.afterEnforce?.includes(id)) row.hard = true;
+    }
+  }
+
+  const rows = [...byId.values()].sort(
+    (a, b) =>
+      Number(b.hard) - Number(a.hard) ||
+      b.blocks.length - a.blocks.length ||
+      a.task.createdAt - b.task.createdAt ||
+      a.task.id.localeCompare(b.task.id),
+  );
+  const blocking = rows.filter((r) => r.blocks.length > 0).length;
+  return { rows, total: rows.length, blocking, waiting: rows.length - blocking };
 }
 
 // ── Status control ─────────────────────────────────────────────────────────

@@ -10,6 +10,8 @@ import {
   type ActivityEvent,
   type ActivityFilter,
   type BoardSection,
+  type DecisionQueue,
+  type DecisionRow,
   type HubTask,
   type PresenceChip,
   type ReorderTarget,
@@ -593,30 +595,290 @@ export function renderBoard(
 
 // ── Decisions strip ────────────────────────────────────────────────────────
 
+export interface DecisionStripHandlers {
+  /** Jump straight to one decision's detail panel. */
+  onOpen: (task: HubTask) => void;
+  /** Go through all of them, one at a time. */
+  onWalkthrough: () => void;
+}
+
+function clip(text: string, max = 60): string {
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+/**
+ * The read at the top of the board: how many decisions are waiting on you, and
+ * how many of them are holding work up right now.
+ *
+ * The split is derived from the dependency edges (see `decisionQueue`) — there
+ * is no urgency field to set and no urgency to keep up to date.
+ */
 export function renderDecisions(
   container: HTMLElement,
-  rows: HubTask[],
-  onOpen: (task: HubTask) => void,
+  queue: DecisionQueue,
+  handlers: DecisionStripHandlers,
 ): void {
   container.replaceChildren();
-  if (rows.length === 0) {
+  if (queue.total === 0) {
     container.classList.add('hidden');
     return;
   }
   container.classList.remove('hidden');
-  const label = document.createElement('span');
-  label.className = 'hub-decisions-label';
-  label.textContent = rows.length === 1 ? '1 open decision' : `${rows.length} open decisions`;
-  container.append(label);
-  for (const task of rows) {
+
+  const head = document.createElement('div');
+  head.className = 'hub-decisions-head';
+
+  const count = document.createElement('button');
+  count.type = 'button';
+  count.className = 'hub-decisions-count';
+  count.textContent =
+    queue.total === 1 ? '1 decision waiting on you' : `${queue.total} decisions waiting on you`;
+  count.setAttribute('aria-label', `${count.textContent} — go through them one at a time`);
+  count.addEventListener('click', () => handlers.onWalkthrough());
+
+  const urgency = document.createElement('span');
+  urgency.className = 'hub-decisions-urgency';
+  // "0 blocking" reads like a metric nobody asked for; say the fact instead.
+  urgency.textContent =
+    queue.blocking === 0
+      ? 'Nothing is blocked on them yet'
+      : queue.waiting === 0
+        ? `${queue.blocking} blocking work now`
+        : `${queue.blocking} blocking work now · ${queue.waiting} can wait`;
+
+  head.append(count, urgency);
+  container.append(head);
+
+  const chips = document.createElement('div');
+  chips.className = 'hub-decision-chips';
+  for (const row of queue.rows) {
     const chip = document.createElement('button');
     chip.type = 'button';
-    chip.className = 'hub-decision-chip';
-    chip.textContent = task.title.length > 60 ? `${task.title.slice(0, 59)}…` : task.title;
-    chip.title = task.title;
-    chip.addEventListener('click', () => onOpen(task));
-    container.append(chip);
+    chip.className = `hub-decision-chip${row.blocks.length > 0 ? ' hub-decision-blocking' : ''}`;
+    const label = document.createElement('span');
+    label.className = 'hub-decision-chip-title';
+    label.textContent = clip(row.task.title);
+    chip.append(label);
+    if (row.blocks.length > 0) {
+      const blocks = document.createElement('span');
+      blocks.className = 'hub-decision-chip-blocks';
+      blocks.textContent = `blocks ${row.blocks.length}`;
+      chip.append(blocks);
+    }
+    chip.title = row.task.title;
+    chip.addEventListener('click', () => handlers.onOpen(row.task));
+    chips.append(chip);
   }
+  container.append(chips);
+}
+
+// ── Decision walkthrough (six answers in one sitting) ──────────────────────
+
+export interface WalkthroughHandlers {
+  /** Record a verbatim answer. `optionId` rides along when the answer came
+   *  from tapping one of the asker's candidates. */
+  onAnswer: (task: HubTask, text: string, optionId?: string) => void;
+  /** "I can't answer this yet" — a question back to the asker, not an answer. */
+  onMoreInfo: (task: HubTask, question: string) => void;
+  /** Move to another position in the queue (skip forward, step back). */
+  onStep: (index: number) => void;
+  onClose: () => void;
+}
+
+function blocksLine(row: DecisionRow): string {
+  if (row.blocks.length === 0) return 'Nothing is waiting on this one.';
+  const titles = row.blocks.map((t) => t.title);
+  const shown = titles.slice(0, 3).join(', ');
+  const rest = titles.length > 3 ? ` and ${titles.length - 3} more` : '';
+  return `${row.hard ? 'Hard-blocking' : 'Blocking'} ${titles.length === 1 ? '1 task' : `${titles.length} tasks`}: ${shown}${rest}`;
+}
+
+/** A textarea + submit pair; the submit is ignored when the field is blank. */
+function promptForm(
+  className: string,
+  placeholder: string,
+  submitLabel: string,
+  onSubmit: (text: string) => void,
+): HTMLFormElement {
+  const form = document.createElement('form');
+  form.className = className;
+  const ta = document.createElement('textarea');
+  ta.placeholder = placeholder;
+  ta.rows = 3;
+  const submit = document.createElement('button');
+  submit.type = 'submit';
+  submit.className = 'hub-btn hub-btn-primary';
+  submit.textContent = submitLabel;
+  form.append(ta, submit);
+  form.addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    const text = ta.value.trim();
+    if (text) onSubmit(text);
+  });
+  return form;
+}
+
+/**
+ * One decision at a time, in the derived order, with the way out at every
+ * step: tap one of the asker's options, write your own answer, ask for more
+ * information, or skip. Six answers should be one sitting, not six
+ * navigations — so the position and the queue live here rather than in six
+ * separate detail-panel visits.
+ *
+ * `index` is the position in `queue.rows`; past the end (or over an empty
+ * queue) is the done state, and a negative index means closed.
+ */
+export function renderDecisionWalkthrough(
+  container: HTMLElement,
+  queue: DecisionQueue,
+  index: number,
+  handlers: WalkthroughHandlers,
+): void {
+  container.replaceChildren();
+  if (index < 0) {
+    container.classList.add('hidden');
+    return;
+  }
+  container.classList.remove('hidden');
+
+  const panel = document.createElement('div');
+  panel.className = 'hub-walk-panel';
+  panel.setAttribute('role', 'dialog');
+  panel.setAttribute('aria-modal', 'true');
+
+  const row = queue.rows[index];
+  if (!row) {
+    const done = document.createElement('div');
+    done.className = 'hub-walk-done';
+    const h = document.createElement('h2');
+    h.textContent = 'All caught up';
+    const p = document.createElement('p');
+    p.textContent = 'Nothing else is waiting on you right now.';
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'hub-btn hub-btn-primary';
+    close.textContent = 'Back to the board';
+    close.addEventListener('click', () => handlers.onClose());
+    done.append(h, p, close);
+    panel.append(done);
+    container.append(panel);
+    return;
+  }
+
+  const task = row.task;
+
+  const head = document.createElement('div');
+  head.className = 'hub-walk-head';
+  const pos = document.createElement('span');
+  pos.className = 'hub-walk-pos';
+  pos.textContent = `${index + 1} of ${queue.rows.length}`;
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'hub-btn hub-walk-close';
+  close.textContent = '✕';
+  close.setAttribute('aria-label', 'Close the walkthrough');
+  close.addEventListener('click', () => handlers.onClose());
+  head.append(pos, close);
+  panel.append(head);
+
+  const card = document.createElement('div');
+  card.className = 'hub-walk-card';
+
+  const title = document.createElement('h2');
+  title.className = 'hub-walk-title';
+  title.textContent = task.title;
+  card.append(title);
+
+  const blocks = document.createElement('p');
+  blocks.className = `hub-walk-blocks${row.blocks.length > 0 ? ' hub-walk-blocking' : ''}`;
+  blocks.textContent = blocksLine(row);
+  card.append(blocks);
+
+  const body = document.createElement('div');
+  // `renderCommentMarkdown` escapes first and only adds known-safe tags, so a
+  // body written by anyone with write access is inert markup either way.
+  if (task.body?.trim()) {
+    body.className = 'hub-walk-body';
+    body.innerHTML = renderCommentMarkdown(task.body);
+  } else {
+    body.className = 'hub-walk-body hub-walk-body-empty';
+    body.textContent = 'No context was written for this one.';
+  }
+  card.append(body);
+
+  if (task.infoRequests && task.infoRequests.length > 0) {
+    const asked = document.createElement('p');
+    asked.className = 'hub-walk-asked';
+    const last = task.infoRequests[task.infoRequests.length - 1];
+    asked.textContent = `You already asked: “${last?.text ?? ''}”`;
+    card.append(asked);
+  }
+
+  if (task.options && task.options.length > 0) {
+    const opts = document.createElement('div');
+    opts.className = 'hub-walk-options';
+    for (const o of task.options) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'hub-walk-option';
+      const label = document.createElement('span');
+      label.className = 'hub-walk-option-label';
+      label.textContent = o.label;
+      b.append(label);
+      if (o.detail) {
+        const detail = document.createElement('span');
+        detail.className = 'hub-walk-option-detail';
+        detail.textContent = o.detail;
+        b.append(detail);
+      }
+      // The option's label IS the verbatim answer; the id says which candidate
+      // it was, so a shortcut and a typed answer land in the same field.
+      b.addEventListener('click', () => handlers.onAnswer(task, o.label, o.id));
+      opts.append(b);
+    }
+    card.append(opts);
+  }
+
+  // Always present, options or not: the candidates are a shortcut, never a
+  // closed set.
+  card.append(
+    promptForm(
+      'hub-walk-answer',
+      task.options && task.options.length > 0
+        ? 'Or answer in your own words…'
+        : 'Record your answer, verbatim…',
+      'Record answer',
+      (text) => handlers.onAnswer(task, text),
+    ),
+  );
+  card.append(
+    promptForm(
+      'hub-walk-info',
+      "Not enough to decide? Ask for what's missing…",
+      'Tell me more',
+      (text) => handlers.onMoreInfo(task, text),
+    ),
+  );
+
+  panel.append(card);
+
+  const nav = document.createElement('div');
+  nav.className = 'hub-walk-nav';
+  const back = document.createElement('button');
+  back.type = 'button';
+  back.className = 'hub-btn hub-walk-back';
+  back.textContent = 'Back';
+  back.disabled = index === 0;
+  back.addEventListener('click', () => handlers.onStep(index - 1));
+  const skip = document.createElement('button');
+  skip.type = 'button';
+  skip.className = 'hub-btn hub-walk-skip';
+  skip.textContent = index + 1 === queue.rows.length ? 'Skip — finish' : 'Skip for now';
+  skip.addEventListener('click', () => handlers.onStep(index + 1));
+  nav.append(back, skip);
+  panel.append(nav);
+
+  container.append(panel);
 }
 
 // ── Presence strip (§2.7) ──────────────────────────────────────────────────
@@ -819,7 +1081,9 @@ export interface DetailHandlers {
   onClose: () => void;
   onStatusSet: (task: HubTask, to: TaskStatus) => void;
   onTitleCommit: (task: HubTask, title: string) => void;
-  onAnswer: (task: HubTask, text: string) => void;
+  /** `optionId` is set only when the answer came from tapping a candidate;
+   *  `text` is the verbatim answer either way. */
+  onAnswer: (task: HubTask, text: string, optionId?: string) => void;
   onAssign: (task: HubTask, assignee: string) => void;
 }
 
@@ -929,6 +1193,30 @@ export function renderTaskDetail(
     ans.textContent = `Answered by ${task.answer.by}: “${task.answer.text}”`;
     panel.append(ans);
   } else if (task.needs === 'decision') {
+    // The walkthrough is not the only way in — a chip or a board row lands
+    // here, and options the asker supplied have to be tappable from both.
+    if (task.options && task.options.length > 0) {
+      const opts = document.createElement('div');
+      opts.className = 'hub-detail-options';
+      for (const o of task.options) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'hub-detail-option';
+        const label = document.createElement('span');
+        label.className = 'hub-detail-option-label';
+        label.textContent = o.label;
+        b.append(label);
+        if (o.detail) {
+          const detail = document.createElement('span');
+          detail.className = 'hub-detail-option-detail';
+          detail.textContent = o.detail;
+          b.append(detail);
+        }
+        b.addEventListener('click', () => handlers.onAnswer(task, o.label, o.id));
+        opts.append(b);
+      }
+      panel.append(opts);
+    }
     const form = document.createElement('form');
     form.className = 'hub-answer-form';
     const ta = document.createElement('textarea');

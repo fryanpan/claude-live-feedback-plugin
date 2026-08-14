@@ -19,6 +19,10 @@ import type { Task, TaskStoreEvent, TriageRequest } from '../src/tasks.ts';
 
 const PERSON = { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' };
 const AGENT = { id: 'agent-search-revamp', name: 'Search Revamp', kind: 'known', color: '#888888' };
+/** Clears the decision-shape gate, so a fixture about dependency edges is not
+ *  accidentally a test of the gate. */
+const DECISION_BODY =
+  'Which of these two? Both land this week; the second costs a migration. Blocked until answered: the PR.';
 
 describe('hub workspace + task routes', () => {
   let handle: ServerHandle;
@@ -160,7 +164,7 @@ describe('hub workspace + task routes', () => {
         links: [{ kind: 'doc', docId: 'hub-plan-doc' }],
         origin: { kind: 'thread', docId: 'hub-plan-doc', threadId: 'th-1' },
         dueAt: 1770000000000,
-        body: 'Two candidates attached.',
+        body: 'Which of the two attached candidates? The warmer one costs a contrast pass. Blocked until answered: the mockup.',
         order: 7,
       });
       expect(r.status).toBe(200);
@@ -172,7 +176,7 @@ describe('hub workspace + task routes', () => {
       expect(task.links).toEqual([{ kind: 'doc', docId: 'hub-plan-doc' }]);
       expect(task.origin).toEqual({ kind: 'thread', docId: 'hub-plan-doc', threadId: 'th-1' });
       expect(task.dueAt).toBe(1770000000000);
-      expect(task.body).toBe('Two candidates attached.');
+      expect(task.body).toContain('Which of the two attached candidates?');
       expect(task.order).toBe(7);
 
       // Read the stored effect back through the OTHER route, not the response.
@@ -187,7 +191,11 @@ describe('hub workspace + task routes', () => {
 
     it('forwards after + afterEnforce (proved by the transition refusing)', async () => {
       const gate = (await (
-        await post(`/api/workspaces/${wsId}/tasks`, { title: 'your go', needs: 'decision' })
+        await post(`/api/workspaces/${wsId}/tasks`, {
+          title: 'your go',
+          needs: 'decision',
+          body: DECISION_BODY,
+        })
       ).json()) as { task: Task };
       const work = (await (
         await post(`/api/workspaces/${wsId}/tasks`, {
@@ -241,7 +249,11 @@ describe('hub workspace + task routes', () => {
     // the direction of letting work through.
     it('refuses afterEnforce ids that are not also in after', async () => {
       const gate = (await (
-        await post(`/api/workspaces/${wsId}/tasks`, { title: 'your go', needs: 'decision' })
+        await post(`/api/workspaces/${wsId}/tasks`, {
+          title: 'your go',
+          needs: 'decision',
+          body: DECISION_BODY,
+        })
       ).json()) as { task: Task };
 
       const lopsided = await post(`/api/workspaces/${wsId}/tasks`, {
@@ -282,6 +294,7 @@ describe('hub workspace + task routes', () => {
         title: 'Approve the spend',
         assignee: 'human',
         needs: 'decision',
+        body: DECISION_BODY,
         links: [{ kind: 'thread', docId: 'plan-doc', threadId: 'th-1' }],
       });
       expect(good.status).toBe(200);
