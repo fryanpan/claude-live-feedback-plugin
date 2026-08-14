@@ -861,6 +861,61 @@ describe('hub workspace + task routes', () => {
     });
   });
 
+  /**
+   * The board's "what needs you" strip. Driven end-to-end because the unit
+   * tests in review-queue.test.ts call the module directly, and every one of
+   * them would still pass if the route forwarded nothing at all.
+   */
+  describe('GET /api/workspaces/:id/review-items', () => {
+    it('lists an agent question on a task discussion, and drops it once a person answers', async () => {
+      const r = await post('/api/workspaces', { name: 'review-ws', goal: 'Answer things.' });
+      const wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
+      const t = await post(`/api/workspaces/${wsId}/tasks`, {
+        author: AGENT,
+        title: 'Pick a colour',
+      });
+      const taskId = ((await t.json()) as { task: { id: string } }).task.id;
+      const bodyDoc = `task:${taskId}`;
+
+      // The agent asks. A thread on the task's own body room is the same
+      // surface `create_thread` writes to.
+      const made = await post(`/api/docs/${encodeURIComponent(bodyDoc)}/threads`, {
+        author: AGENT,
+        text: 'Green or blue for the banner?',
+        anchor: { kind: 'subject' },
+      });
+      expect(made.status).toBe(200);
+      const threadId = ((await made.json()) as { thread: { id: string } }).thread.id;
+
+      const listed = await local(`/api/workspaces/${wsId}/review-items`);
+      expect(listed.status).toBe(200);
+      const { items } = (await listed.json()) as {
+        items: Array<{ kind: string; taskId?: string; threadId: string; ask: string }>;
+      };
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject({
+        kind: 'task-thread',
+        taskId,
+        threadId,
+        ask: 'Green or blue for the banner?',
+      });
+
+      // …and a person's reply is the only thing that clears it.
+      const replied = await post(
+        `/api/docs/${encodeURIComponent(bodyDoc)}/threads/${encodeURIComponent(threadId)}/comments`,
+        { author: PERSON, text: 'blue' },
+      );
+      expect(replied.status).toBe(200);
+      const after = await local(`/api/workspaces/${wsId}/review-items`);
+      expect(((await after.json()) as { items: unknown[] }).items).toEqual([]);
+    });
+
+    it('404s an unknown workspace rather than answering with an empty queue', async () => {
+      const res = await local('/api/workspaces/w-does-not-exist/review-items');
+      expect(res.status).toBe(404);
+    });
+  });
+
   describe('persistence through the server handle', () => {
     it('a created workspace survives into a fresh server on the same dataDir', async () => {
       const r = await post('/api/workspaces', { name: 'durable-ws', goal: 'Persist.' });
