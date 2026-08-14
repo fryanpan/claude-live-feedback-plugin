@@ -176,8 +176,32 @@ export class TaskProjection {
    *  loaded whatever the .ydoc files held, so reasserting from the store
    *  here is what makes the sidecar authoritative for gated fields. */
   init(): void {
+    this.recoverInterruptedDeletes();
     this.off = this.tasks.onEvent((ev) => this.onEvent(ev));
     for (const ws of this.tasks.listWorkspaces()) this.ensureWorkspace(ws.id);
+  }
+
+  /**
+   * Undo the staging half of a delete that the process didn't live to
+   * finish.
+   *
+   * A workspace delete renames its room files aside before committing, so a
+   * crash in that window leaves the state in `<docId>.ydoc.deleting` — which
+   * hydration deliberately skips. Left alone, the body room would come back
+   * EMPTY on the next `getOrCreate`, and the only copy of the task's
+   * discussion would sit in a file nothing reads.
+   *
+   * The board's continued existence is the discriminator, and it is the
+   * reason this lives here rather than in Rooms: a staged file whose board
+   * is GONE is the opposite case — post-commit litter, where restoring
+   * would resurrect a room belonging to nothing. So this restores only for
+   * boards the store still has, and it runs before anything opens a room.
+   */
+  private recoverInterruptedDeletes(): void {
+    for (const ws of this.tasks.listWorkspaces()) {
+      const taskIds = this.tasks.listTasks(ws.id).map((t) => t.id);
+      this.unstageWorkspaceFiles(ws.id, taskIds);
+    }
   }
 
   /** Flush pending body snapshots and unsubscribe. Call before the store's

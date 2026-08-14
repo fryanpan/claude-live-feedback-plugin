@@ -30,6 +30,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -342,6 +343,34 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
     handle = await start(dataDir as string);
     expect(await listWorkspaceIds()).toContain(wsId);
     expect(await openThreadCount(open.id)).toBe(1);
+  });
+
+  it('recovers a delete the process died in the middle of', async () => {
+    // The staging window is small but not empty: renamed aside, not yet
+    // committed, process gone. Hydration skips a staged file on purpose, so
+    // nothing else would ever put it back — the body room would return
+    // empty and the task's only discussion would sit in a file nothing
+    // reads.
+    const { wsId, open } = await seed();
+    await commentOnBody(open.id, 'still open');
+    expect(await openThreadCount(open.id)).toBe(1);
+    const bodyYdoc = join(dataDir as string, `${taskBodyDocId(open.id)}.ydoc`);
+    expect(await awaitFile(bodyYdoc)).toBe(true);
+
+    // Stop first, then stage by hand: this is the on-disk state a crash
+    // between stagePersisted and the commit leaves behind, and the same
+    // rename the delete itself performs.
+    await handle?.stop();
+    rmSync(join(dataDir as string, `${taskBodyDocId(open.id)}.ydoc.deleting`), { force: true });
+    renameSync(bodyYdoc, `${bodyYdoc}.deleting`);
+    expect(existsSync(bodyYdoc)).toBe(false);
+
+    handle = await start(dataDir as string);
+    // The board still exists, so the staged file belongs to a delete that
+    // never committed — and the comment comes back with it.
+    expect(await listWorkspaceIds()).toContain(wsId);
+    expect(await openThreadCount(open.id)).toBe(1);
+    expect(existsSync(bodyYdoc)).toBe(true);
   });
 
   it('re-arms the write it cancelled when the delete refuses', () => {
