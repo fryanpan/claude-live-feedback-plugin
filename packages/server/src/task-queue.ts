@@ -1,6 +1,5 @@
 /**
- * The work queue — "what do I pick up next, and what can run at the same
- * time" (§3.9, agent side).
+ * The work queue — "what do I pick up next" (§3.9, agent side).
  *
  * Priority is goal order then task order, which the board has always
  * rendered and no agent could READ: `list_tasks` returns goal IDS, and the
@@ -9,7 +8,7 @@
  * answer an agent could look up. This module is the lookup, kept pure so
  * the ordering rules are testable without a server.
  *
- * Three things it answers, in one pass:
+ * Two things it answers, in one pass:
  *
  *  - **Order.** Goal position (a subgoal inherits its parent's band and
  *    sorts after it), then the task's own fractional order. A goal id the
@@ -17,17 +16,16 @@
  *  - **Doable.** Open dependencies are reported; only an ENFORCED one holds
  *    a task back, matching the transition gate exactly rather than inventing
  *    a second notion of blocked.
- *  - **Parallel.** Rows are grouped into waves: everything in a wave has no
- *    declared conflict with anything else in it.
  *
- * On that last point, the honest reach matters. `after` models "don't start
- * yet"; nothing in the task model has ever modelled "these two rewrite the
- * same file", and long branches that both append to styles.css conflict
- * every time (docs/process/learnings.md). `lane` is where a caller declares
- * that, and `laneDeclared` is on every row so a fan-out can tell "no
- * conflict declared" from "proven independent". A queue that quietly
- * promised the second would send agents into merge conflicts and read as
- * confidence.
+ * What it deliberately does NOT do is decide what can run in parallel. A
+ * first cut modelled that as a `lane` label plus computed waves, and it
+ * earned nothing: the row carries its full description, and reading two
+ * descriptions is enough to tell whether they touch the same code. Worse,
+ * a lane is set at CREATION time — the moment a task's author knows least
+ * about what it will end up touching — so the schema would have frozen a
+ * guess made at the worst possible moment and invited callers to trust it
+ * at execution. `blockedBy` carries the dependency half, which is real data
+ * someone stated on purpose; the judgment half stays with the reader.
  */
 import type { Task, TaskStatus, WorkspaceGoal } from './tasks.ts';
 
@@ -43,9 +41,10 @@ export interface QueueBlocker {
 export interface QueueRow {
   id: string;
   title: string;
-  /** First non-empty line of the description — enough to pick the task up
-   *  without a second call. Empty when the task has no description. */
-  story: string;
+  /** The full description. A row has to be pickup-able as it stands — a
+   *  truncated one sends the reader for a second call to find out what the
+   *  task is, which is the navigation this queue exists to remove. */
+  body: string;
   goal: string;
   /** The goal's own title, verbatim. The band numbering ("1.2 …") is typed
    *  into these titles by hand, so deriving a second numbering here would
@@ -55,17 +54,10 @@ export interface QueueRow {
   assignee: string;
   needs?: 'action' | 'decision';
   riskTier?: 'green' | 'yellow' | 'red';
-  lane?: string;
-  /** Whether this row's lane was declared. False means the wave grouping had
-   *  nothing to go on for it — see the module note. */
-  laneDeclared: boolean;
   blockedBy: QueueBlocker[];
   /** No ENFORCED open blocker. Advisory (`after`-only) blockers leave this
    *  true, exactly as the transition gate treats them. */
   ready: boolean;
-  /** Parallel batch. Everything sharing a wave has no declared conflict
-   *  with the rest of that wave. */
-  wave: number;
 }
 
 export interface QueueOpts {
@@ -99,15 +91,6 @@ function goalTitleOf(goals: WorkspaceGoal[], goalId: string): string {
     }
   }
   return goalId;
-}
-
-/** The one line that says what a task is for. */
-function storyOf(body: string | undefined): string {
-  for (const line of (body ?? '').split('\n')) {
-    const trimmed = line.trim().replace(/^#+\s*/, '');
-    if (trimmed.length > 0) return trimmed;
-  }
-  return '';
 }
 
 /**
@@ -159,23 +142,19 @@ export function buildQueue(
     return {
       id: task.id,
       title: task.title,
-      story: storyOf(task.body),
+      body: task.body?.trim() ?? '',
       goal: task.goal,
       goalTitle: goalTitleOf(goals, task.goal),
       status: task.status,
       assignee: task.assignee,
       ...(task.needs !== undefined ? { needs: task.needs } : {}),
       ...(task.riskTier !== undefined ? { riskTier: task.riskTier } : {}),
-      ...(task.lane !== undefined ? { lane: task.lane } : {}),
-      laneDeclared: task.lane !== undefined,
       blockedBy,
       ready: !blockedBy.some((b) => b.enforce),
-      wave: 0,
     };
   });
 
   const kept = opts.includeBlocked ? rows : rows.filter((r) => r.ready);
-  assignWaves(kept);
   return opts.limit !== undefined ? kept.slice(0, Math.max(0, opts.limit)) : kept;
 }
 
@@ -238,39 +217,4 @@ export function summarizeGoals(tasks: Task[], goals: WorkspaceGoal[]): GoalSumma
   }
   if (counts.has(CHORES_ID)) out.push(row(CHORES_ID, 'Chores', 0));
   return out;
-}
-
-/**
- * Layered grouping, in priority order, mutating `wave` in place.
- *
- * A row lands one wave after the latest dependency that is ALSO in the
- * queue; a dependency outside it (filtered away, or already hard-blocking)
- * is reported on `blockedBy` rather than silently deepening the wave, since
- * the caller can see it either way and a wave number nobody can explain is
- * worse than one that says less.
- *
- * The lane pass runs second and only ever pushes a row LATER — its failure
- * mode is a fan-out narrower than it had to be, never two agents in the
- * same file.
- */
-function assignWaves(rows: QueueRow[]): void {
-  const wave = new Map<string, number>();
-  const claimed = new Map<number, Set<string>>();
-  const laneFree = (w: number, lane: string): boolean => !claimed.get(w)?.has(lane);
-
-  for (const row of rows) {
-    let w = 0;
-    for (const b of row.blockedBy) {
-      const dw = wave.get(b.taskId);
-      if (dw !== undefined) w = Math.max(w, dw + 1);
-    }
-    if (row.lane !== undefined) {
-      while (!laneFree(w, row.lane)) w++;
-      const set = claimed.get(w) ?? new Set<string>();
-      set.add(row.lane);
-      claimed.set(w, set);
-    }
-    wave.set(row.id, w);
-    row.wave = w;
-  }
 }

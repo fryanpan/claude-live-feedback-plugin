@@ -1656,7 +1656,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             afterEnforce: Array.isArray(body?.afterEnforce)
               ? (body.afterEnforce as string[])
               : undefined,
-            lane: typeof body?.lane === 'string' ? body.lane : undefined,
             dueAt: typeof body?.dueAt === 'number' ? Number(body.dueAt) : undefined,
             links: links.links,
             origin: origin.origin,

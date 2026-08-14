@@ -205,17 +205,6 @@ export interface Task {
   /** Subset of `after` whose edges hard-block transitions (opt-in per edge —
    *  a blanket refusal rule would block legitimate work). */
   afterEnforce?: string[];
-  /**
-   * Free-text contention label — the area this task rewrites ("hub-render",
-   * "mcp", "styles"). Two tasks sharing a lane never enter the same parallel
-   * wave (see task-queue.ts).
-   *
-   * It exists because `after` models "don't start yet" and nothing modelled
-   * "these two touch the same file". Optional and undeclared by default: an
-   * inferred lane would be wrong often enough to be trusted wrongly, and a
-   * missing one is visible on the queue row as `laneDeclared: false`.
-   */
-  lane?: string;
   dueAt?: number;
   links: Ref[];
   /** The thread/doc this was promoted from. */
@@ -252,7 +241,6 @@ export interface CreateTaskOpts {
   order?: number;
   after?: string[];
   afterEnforce?: string[];
-  lane?: string;
   dueAt?: number;
   links?: Ref[];
   origin?: Ref;
@@ -1107,7 +1095,6 @@ export class TaskStore {
       status: 'todo',
       after,
       ...(opts.afterEnforce?.length ? { afterEnforce: opts.afterEnforce } : {}),
-      ...(opts.lane?.trim() ? { lane: opts.lane.trim() } : {}),
       ...(opts.dueAt !== undefined ? { dueAt: opts.dueAt } : {}),
       links: opts.links ?? [],
       ...(opts.origin !== undefined ? { origin: opts.origin } : {}),

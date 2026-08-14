@@ -737,7 +737,6 @@ describe('hub workspace + task routes', () => {
         title: 'Delivery blocker',
         goal: 'g-blockers',
         body: 'Agent can ship so that peers get the fix.\n\nDone when: merged.',
-        lane: 'mcp',
       });
       return { wsId, ids };
     }
@@ -747,31 +746,15 @@ describe('hub workspace + task routes', () => {
       const res = await local(`/api/workspaces/${wsId}/next`);
       expect(res.status).toBe(200);
       const { tasks } = (await res.json()) as {
-        tasks: Array<{ id: string; goalTitle: string; story: string; wave: number }>;
+        tasks: Array<{ id: string; goalTitle: string; body: string }>;
       };
       expect(tasks.map((t) => t.id)).toEqual([ids.blocker, ids.loop, ids.chore]);
       expect(tasks[0]?.goalTitle).toBe('1.1 Blockers');
-      expect(tasks[0]?.story).toBe('Agent can ship so that peers get the fix.');
-    });
-
-    it('forwards lane through the create route, so waves actually separate', async () => {
-      // The route hand-copies every field; `lane` reaching the store is the
-      // whole reason two same-lane tasks land in different waves. Without the
-      // forward the POST still returns 200 and the queue silently says "run
-      // these together" (the `groups` lesson).
-      const r = await post('/api/workspaces', { name: 'lane-ws', goal: 'Ship it.' });
-      const wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
-      for (const title of ['first', 'second']) {
-        const res = await post(`/api/workspaces/${wsId}/tasks`, { title, lane: 'hub-render' });
-        expect(res.status).toBe(200);
-      }
-      const res = await local(`/api/workspaces/${wsId}/next`);
-      const { tasks } = (await res.json()) as {
-        tasks: Array<{ title: string; wave: number; lane?: string; laneDeclared: boolean }>;
-      };
-      expect(tasks.map((t) => t.lane)).toEqual(['hub-render', 'hub-render']);
-      expect(tasks.every((t) => t.laneDeclared)).toBe(true);
-      expect(tasks.map((t) => t.wave)).toEqual([0, 1]);
+      // The WHOLE description, not a first line — the row has to be
+      // pickup-able without a second call.
+      expect(tasks[0]?.body).toBe(
+        'Agent can ship so that peers get the fix.\n\nDone when: merged.',
+      );
     });
 
     it('forwards assignee, limit and includeBlocked', async () => {

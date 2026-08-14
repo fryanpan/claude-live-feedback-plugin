@@ -12,8 +12,8 @@ subgoals, Chores last. The first row is the highest band.
 
 Then call `next_tasks(workspaceId, {assignee: "<your name>"})`. It gives you
 the queue already sorted by goal band → task order, already filtered to what
-you can actually do (hard-blocked rows are omitted), each row carrying the
-first line of its description so you can pick it up without a second call.
+you can actually do (hard-blocked rows are omitted), each row carrying its
+full description so you can pick it up without a second call.
 
 **Take the top of that list.** Not the thing you were already holding, not the
 thing that's easiest, not the next id in a list you built earlier in the
@@ -28,20 +28,23 @@ You have latitude over the ordering itself: propose a reorder with
 `set_goal_list` when the sequence is wrong, and say why. What you don't have
 is latitude to ignore it silently.
 
-## Parallelism: `wave` says what MAY run together, not what is safe
+## Parallelism: read the descriptions and judge
 
-Each queue row carries a `wave`. Rows sharing a wave have **no declared
-conflict** — that is weaker than "independent", and the gap is where merge
-conflicts come from. `after` models "don't start yet"; nothing in the model
-ever said "these two rewrite the same file."
+`next_tasks` returns each row's **full description**. That is enough to tell
+whether two tasks touch the same code — read them and decide. Fan out on the
+ones that don't collide; sequence the ones that do.
 
-- `lane` is where you declare it. Set it on `create_task` whenever you can
-  name the area a task rewrites (`hub-render`, `mcp`, `styles`,
-  `server-routes`). Two tasks sharing a lane never enter the same wave.
-- `laneDeclared: false` on a row means the queue had nothing to go on. Before
-  fanning out across such rows, decide for yourself whether they collide — and
-  if they do, set lanes so the next agent doesn't have to re-derive it.
-- Fan out within a wave; finish a wave before starting the next.
+There is deliberately no field for this. A first cut added a `lane` label with
+computed parallel batches, and it earned nothing: the judgment takes seconds
+from the text, and a lane would have to be set at CREATION time — the moment
+its author knows least about what the task will end up touching — so the
+schema would have frozen a guess made at the worst possible moment and invited
+you to trust it later. Dependencies are different: `after` is something
+someone stated on purpose, so `blockedBy` is real data and you should respect
+it.
+
+If you find yourself unable to judge a collision from the descriptions, the
+descriptions are too thin. Fix those, not the schema.
 
 ## Every task gets a description
 
@@ -71,6 +74,37 @@ thing to open.
   own task with its own story line, not a paragraph in a chat message.
 - Leave comment threads **unresolved** unless asked — Bryan reads the
   discussion, and resolving hides it from the default Open tab.
+
+## A workspace is a shared view — everything in it is available to everyone in it
+
+This is the **default and the point of sharing**: everyone in a workspace has
+the same view of its resources and the same shared understanding. Tasks,
+descriptions, goals, threads, docs — if it is in the workspace, a member sees
+it. Granular roles and permissions may arrive later; until they do, do not
+design around a narrower default, and **do not ask whether some field should
+be withheld from workspace members.** That question is settled (Bryan,
+2026-08-13).
+
+The one thing this does not cover is data that is not workspace content at
+all — host-machine facts like a peer's local endpoint or filesystem paths.
+Those stay out because they were never workspace resources, not because
+members are untrusted.
+
+## Chat is a symptom — put the work in the product
+
+Every conversation in the terminal about how the work should go is a signal
+that the product cannot yet carry that conversation. The reflex should be:
+what would have to exist for this to have happened on the board instead?
+
+And when an idea does arrive mid-stream, **triage it before you build it**.
+The default failure — in this project and on most teams — is to work whatever
+was said most recently, which quietly reorders the whole queue around
+recency. File the idea, place it against the goals, and then look at what is
+actually at the top. Often the honest answer is that the new idea is real and
+still below the main flow, and saying so is the work.
+
+Do not spend a session's capacity on an idea that has not been ranked against
+the goals it competes with.
 
 ## Don't route around the tools
 
