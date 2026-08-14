@@ -1835,12 +1835,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             return j(409, { error: 'already-imported', workspaceId: alreadyImported });
           }
           // An import inherits the importer's identity for every row that
-          // names nobody, so an anonymous importer would file a whole tracker
-          // under the generic word — the one thing every other create refuses.
-          // Whole-import refusal is right here: one caller, one identity, so
-          // there is no partial state to reason about. The dry run above is
-          // deliberately still allowed — it creates nothing.
-          if (!resolveAssignee(undefined, author)) {
+          // names nobody, so an anonymous importer would file those rows under
+          // the generic word — the one thing every other create refuses. The
+          // test is per row and the refusal is whole: a tracker whose owner
+          // column is filled in imports fine no matter who ran it, and one
+          // that isn't fails before anything is written, so there is no
+          // partial state to reason about. The dry run above stays allowed —
+          // it creates nothing, and it's what you read while fixing this.
+          if (mapping.tasks.some((row) => !resolveAssignee(row.assignee, author))) {
             return j(400, { error: ASSIGNEE_REQUIRED_ERROR, message: ASSIGNEE_REQUIRED_MESSAGE });
           }
           const res = applyImport(taskStore, workspaceId, mapping, { actor: author });

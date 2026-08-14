@@ -245,5 +245,34 @@ describe('task creation records a real owner', () => {
       });
       expect(named.status).toBe(200);
     });
+
+    it('lets an anonymous importer through when every row names its own owner', async () => {
+      const wsId = await seedWorkspace();
+      const path = join(dataDir, 'owned-tracker.md');
+      writeFileSync(
+        path,
+        [
+          '# Search revamp',
+          '',
+          '## Ship search v2.',
+          '',
+          '| Task                  | Status | Owner  |',
+          '| --------------------- | ------ | ------ |',
+          '| Rebuild the index     | todo   | Jordan |',
+          '| Write the launch note | todo   | human  |',
+          '',
+        ].join('\n'),
+      );
+      const r = await post(`/api/workspaces/${wsId}/import-tasks`, {
+        path,
+        apply: true,
+        author: { id: 'known-agent', name: GENERIC_ASSIGNEE, kind: 'known' },
+      });
+      // The importer's own name is only ever a fallback — nothing needed it.
+      expect(r.status).toBe(200);
+      const tasks = await getTasks(wsId);
+      expect(tasks.find((t) => t.title === 'Rebuild the index')?.assignee).toBe('Jordan');
+      expect(tasks.find((t) => t.title === 'Write the launch note')?.assignee).toBe('human');
+    });
   });
 });
