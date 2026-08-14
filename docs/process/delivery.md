@@ -72,8 +72,10 @@ places, to the same value:
    reports about itself.
 2. `.claude-plugin/marketplace.json` — what the marketplace advertises, and
    what `claude plugin update` compares against.
-3. The `version:` literal in `packages/mcp/src/mcp.ts` — the `serverInfo` a
-   client sees in the MCP **initialize handshake**.
+3. The `PLUGIN_VERSION` constant in `packages/mcp/src/mcp.ts` — the
+   `serverInfo` a client sees in the MCP **initialize handshake**, and the
+   version each session reports to its board on `attach_agent`. One constant
+   for both, so those two can never disagree.
 
 The third one exists because the MCP server introduces itself independently of
 the plugin manifest, and it is the one that has actually drifted in the field:
@@ -167,8 +169,8 @@ So the full path for a plugin change is: merge → bump landed → peer runs
 `claude plugin update live-feedback@claude-live-feedback` → **peer restarts the
 session**.
 
-An agent can run the update itself — but not through the shell function. In
-Bryan's shell `claude` is a wrapper that injects flags ahead of the subcommand,
+An agent can run the update itself — but not through the shell function. On
+this machine `claude` resolves to a wrapper that injects flags ahead of the subcommand,
 so `claude plugin update …` is parsed as a prompt and dies with *"Input must be
 provided either through stdin or as a prompt argument when using --print"*,
 which reads like a permission refusal and was once written up as one. Use

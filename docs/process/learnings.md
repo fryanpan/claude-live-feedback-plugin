@@ -739,13 +739,13 @@ Technical discoveries that should persist across sessions for this project.
 
 ## A shell wrapper made an agent conclude it was forbidden from deploying
 
-- **`claude` is a shell FUNCTION here** — `/Users/…/claude
-  "${CLAUDE_CHANNEL_FLAGS[@]}" "$@"` — so the flags land ahead of the
+- **`claude` is a shell FUNCTION on this machine** — it re-invokes the real
+  binary with `"${CLAUDE_CHANNEL_FLAGS[@]}" "$@"` — so the flags land ahead of the
   subcommand and `claude plugin update …` is parsed as a prompt: *"Input must
   be provided either through stdin or as a prompt argument when using
   --print"*. Reproduced on `plugin list`, which is read-only: the function
   form errors, `command claude plugin list` prints the plugins. It fails even
-  with `CLAUDE_CHANNEL_FLAGS` empty, so it is the wrapper, not the flags.
+  with that array empty, so it is the wrapper, not the flags.
 - **That error reads exactly like a permission refusal**, and a ticket
   recorded it as one: "the one-line fix is not mine to run", generalised into
   an agent being unable to deploy at all. It was a footgun, not a wall. Fix:

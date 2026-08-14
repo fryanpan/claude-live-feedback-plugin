@@ -100,8 +100,8 @@ there. That is how 25 feature commits sat undelivered between 2026-05-09 and
   answer to "does my peer have this yet" — read it there rather than asking.
   Its one honest limit: "released" means *this checkout's manifest*, so a
   checkout nobody pulled reports its own staleness as current.
-- **An agent CAN run the update; the shell makes it look otherwise.** In
-  Bryan's shell `claude` is a function that injects flags ahead of the
+- **An agent CAN run the update; the shell makes it look otherwise.** On this
+  machine `claude` resolves to a shell function that injects flags ahead of the
   subcommand, so `claude plugin update …` is parsed as a prompt and dies with
   "Input must be provided either through stdin or as a prompt argument when
   using --print". That reads exactly like a permission refusal, and it was
