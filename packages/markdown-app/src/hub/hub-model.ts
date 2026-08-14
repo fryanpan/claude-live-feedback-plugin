@@ -206,6 +206,115 @@ export function boardSections(goals: HubGoal[], tasks: HubTask[], f: BoardFilter
   return sections;
 }
 
+// ── Reordering (the drag handle and its keyboard twin) ─────────────────────
+//
+// `task.order` is fractional and `set_task_goal` already takes a fractional
+// `position`, so "drop between these two rows" is arithmetic over the orders
+// either side — no new ordering API, no renumbering pass, and a cross-goal
+// drop is the same call with a different `goal`. Everything here is pure: the
+// only browser-shaped input is a list of row rectangles, which `dropIndexFor`
+// takes as plain numbers so the decision is testable without layout.
+
+/** The `set_task_goal` call a drop resolves to. */
+export interface ReorderTarget {
+  goal: string;
+  position: number;
+}
+
+/**
+ * The order a row takes when it lands between `before` and `after` (either
+ * side may be missing at the ends of a section).
+ *
+ * The tie guard matters: orders are only guaranteed dense *within* a goal, so
+ * two rows either side of a drop can carry the same number. A plain midpoint
+ * would then equal both, the server would compute `changed: false`, and the
+ * drop would look like it worked and do nothing.
+ */
+export function positionBetween(before?: HubTask, after?: HubTask): number {
+  if (before && after) {
+    const mid = (before.order + after.order) / 2;
+    return mid > before.order ? mid : before.order + 0.5;
+  }
+  if (before) return before.order + 1;
+  if (after) return after.order - 1;
+  return 0;
+}
+
+/**
+ * Where a pointer at `y` inserts, given the vertical extents of the rows it is
+ * dragging over (the dragged row itself excluded). One past the last row means
+ * "append", which is why the result ranges over 0..rects.length.
+ */
+export function dropIndexFor(
+  rects: ReadonlyArray<{ top: number; height: number }>,
+  y: number,
+): number {
+  let index = 0;
+  for (const r of rects) {
+    if (y > r.top + r.height / 2) index += 1;
+    else break;
+  }
+  return index;
+}
+
+/**
+ * Resolve a drop — section + insertion index — into the call that performs it,
+ * or null when it would be a no-op or names something that isn't there.
+ *
+ * The no-op case is not an optimisation: `setTaskGoal` stamps `triagedAgainst`
+ * and fires `task.regrouped` on every position change, so re-landing a row
+ * where it already sits would write an audit row for a move nobody made.
+ */
+export function dropTarget(
+  sections: BoardSection[],
+  taskId: string,
+  sectionId: string,
+  index: number,
+): ReorderTarget | null {
+  const section = sections.find((s) => s.id === sectionId);
+  if (!section) return null;
+  const from = sections.find((s) => s.tasks.some((t) => t.id === taskId));
+  if (!from) return null;
+  const rest = section.tasks.filter((t) => t.id !== taskId);
+  const clamped = Math.max(0, Math.min(index, rest.length));
+  if (from.id === section.id) {
+    const currentIndex = section.tasks.findIndex((t) => t.id === taskId);
+    if (currentIndex === clamped) return null;
+  }
+  return { goal: section.id, position: positionBetween(rest[clamped - 1], rest[clamped]) };
+}
+
+/**
+ * One slot in `dir` for the keyboard, crossing into the neighbouring section
+ * at a section's ends — the pointer can drop anywhere, so the keyboard has to
+ * be able to reach the boundary move too, which is the one that actually
+ * re-prioritises. Null at the ends of the board: reordering wraps nowhere.
+ */
+export function stepTarget(
+  sections: BoardSection[],
+  taskId: string,
+  dir: -1 | 1,
+): ReorderTarget | null {
+  const si = sections.findIndex((s) => s.tasks.some((t) => t.id === taskId));
+  if (si < 0) return null;
+  const section = sections[si];
+  if (!section) return null;
+  const rest = section.tasks.filter((t) => t.id !== taskId);
+  const next = section.tasks.findIndex((t) => t.id === taskId) + dir;
+  if (next >= 0 && next <= rest.length) return dropTarget(sections, taskId, section.id, next);
+  const neighbour = sections[si + dir];
+  if (!neighbour) return null;
+  // Leaving downwards lands at the top of the next section; leaving upwards
+  // lands at the bottom of the previous one — the row keeps moving the way
+  // the key points.
+  return dropTarget(
+    sections,
+    taskId,
+    neighbour.id,
+    dir === 1 ? 0 : neighbour.tasks.filter((t) => t.id !== taskId).length,
+  );
+}
+
 // ── Decisions strip ────────────────────────────────────────────────────────
 
 /** Open, unanswered decisions — the quick-decisions strip is a FILTER over

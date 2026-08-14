@@ -13,7 +13,11 @@ import {
   decisionRows,
   describeEvent,
   doneAt,
+  dropIndexFor,
+  dropTarget,
+  positionBetween,
   presenceChips,
+  stepTarget,
   taskVisible,
   timeAgo,
   uptimeSummary,
@@ -304,5 +308,125 @@ describe('presenceChips', () => {
       NOW,
     );
     expect(chips[0]?.title).toContain('process up, agent unresponsive');
+  });
+});
+
+// ── Reordering (drag handle + keyboard) ────────────────────────────────────
+//
+// `task.order` is fractional and `set_task_goal` already takes a fractional
+// `position`, so dropping between two rows is arithmetic, not a new API. The
+// DOM-facing half (which row is under the pointer) is browser-only; these are
+// the pure halves it feeds.
+
+describe('positionBetween', () => {
+  it('lands a row exactly between its two new neighbours', () => {
+    expect(positionBetween(task({ order: 1 }), task({ order: 2 }))).toBe(1.5);
+    expect(positionBetween(task({ order: 1.5 }), task({ order: 2 }))).toBe(1.75);
+  });
+
+  it('appends past the last row and prepends before the first', () => {
+    expect(positionBetween(task({ order: 7 }), undefined)).toBe(8);
+    expect(positionBetween(undefined, task({ order: 7 }))).toBe(6);
+    // An empty section has no neighbours at all.
+    expect(positionBetween(undefined, undefined)).toBe(0);
+  });
+
+  // Two rows can carry the same order across a goal boundary (orders are only
+  // dense within a goal). A plain midpoint would equal both, the server would
+  // report changed:false, and the drop would silently do nothing.
+  it('still produces a value greater than `before` when the neighbours tie', () => {
+    expect(positionBetween(task({ order: 3 }), task({ order: 3 }))).toBeGreaterThan(3);
+  });
+});
+
+describe('dropIndexFor', () => {
+  const rects = [
+    { top: 0, height: 40 },
+    { top: 40, height: 40 },
+    { top: 80, height: 40 },
+  ];
+
+  it('counts the rows whose midpoint the pointer has passed', () => {
+    expect(dropIndexFor(rects, 5)).toBe(0); // above the first midpoint
+    expect(dropIndexFor(rects, 25)).toBe(1); // past row 0's midpoint
+    expect(dropIndexFor(rects, 65)).toBe(2);
+    expect(dropIndexFor(rects, 500)).toBe(3); // below everything → append
+  });
+
+  it('an empty section takes the only index there is', () => {
+    expect(dropIndexFor([], 123)).toBe(0);
+  });
+});
+
+describe('dropTarget', () => {
+  const dropSections = () =>
+    boardSections(
+      GOALS,
+      [
+        task({ id: 'a', goal: 'g-pr', order: 1 }),
+        task({ id: 'b', goal: 'g-pr', order: 2 }),
+        task({ id: 'c', goal: 'g-pr', order: 3 }),
+        task({ id: 'z', goal: 'g-blog', order: 1 }),
+      ],
+      filters,
+    );
+
+  it('reorders inside a goal at the midpoint of the rows it lands between', () => {
+    // 'a' dropped at index 1 of the remaining [b, c] → between b and c.
+    expect(dropTarget(dropSections(), 'a', 'g-pr', 1)).toEqual({ goal: 'g-pr', position: 2.5 });
+    // …and one further down is past c, i.e. appended.
+    expect(dropTarget(dropSections(), 'a', 'g-pr', 2)).toEqual({ goal: 'g-pr', position: 4 });
+  });
+
+  it('moving to another goal is the same call with a different goal', () => {
+    expect(dropTarget(dropSections(), 'a', 'g-blog', 0)).toEqual({ goal: 'g-blog', position: 0 });
+    expect(dropTarget(dropSections(), 'a', 'g-blog', 1)).toEqual({ goal: 'g-blog', position: 2 });
+  });
+
+  it('a drop that changes nothing is not a write', () => {
+    // 'b' is already the second row of g-pr; re-landing it there would still
+    // stamp a triage and fire task.regrouped for a move that did not happen.
+    expect(dropTarget(dropSections(), 'b', 'g-pr', 1)).toBeNull();
+    // Positive control: one slot over IS a write.
+    expect(dropTarget(dropSections(), 'b', 'g-pr', 2)).not.toBeNull();
+  });
+
+  it('refuses a section or task it cannot resolve rather than guessing', () => {
+    expect(dropTarget(dropSections(), 'a', 'no-such-goal', 0)).toBeNull();
+    expect(dropTarget(dropSections(), 'no-such-task', 'g-pr', 0)).toBeNull();
+  });
+});
+
+describe('stepTarget (the keyboard half of reordering)', () => {
+  const stepSections = () =>
+    boardSections(
+      GOALS,
+      [
+        task({ id: 'a', goal: 'g-pr', order: 1 }),
+        task({ id: 'b', goal: 'g-pr', order: 2 }),
+        task({ id: 'z', goal: 'g-blog', order: 5 }),
+      ],
+      filters,
+    );
+
+  it('moves a row one slot down and one slot up inside its goal', () => {
+    expect(stepTarget(stepSections(), 'a', 1)).toEqual({ goal: 'g-pr', position: 3 });
+    expect(stepTarget(stepSections(), 'b', -1)).toEqual({ goal: 'g-pr', position: 0 });
+  });
+
+  // The keyboard has to reach every drop a pointer can, including the one
+  // that crosses a section boundary — otherwise reordering is pointer-only
+  // for exactly the move that matters most (re-prioritising into a goal).
+  it('crosses into the neighbouring section at the ends', () => {
+    // 'b' is last in g-pr; down lands it in the next section (the subgoal).
+    expect(stepTarget(stepSections(), 'b', 1)?.goal).toBe('g-pr-tickets');
+    // 'z' is alone in g-blog; up lands it in the section above it.
+    expect(stepTarget(stepSections(), 'z', -1)?.goal).toBe('g-pr-tickets');
+  });
+
+  it('stops at the ends of the board rather than wrapping', () => {
+    expect(stepTarget(stepSections(), 'a', -1)).toBeNull();
+    const last = boardSections(GOALS, [task({ id: 'q', goal: CHORES_ID, order: 1 })], filters);
+    expect(stepTarget(last, 'q', 1)).toBeNull();
   });
 });
