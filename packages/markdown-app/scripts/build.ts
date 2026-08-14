@@ -12,6 +12,13 @@ async function buildOnce(): Promise<void> {
   rmSync(dist, { recursive: true, force: true });
   mkdirSync(dist, { recursive: true });
 
+  // One id per build, stamped into BOTH the bundles and BUILD_INFO.txt. An
+  // open tab compares the id it is running against the id the server serves
+  // (see src/stale-client.ts), so the two must be written from one value —
+  // computing them separately would make every build look stale to itself.
+  const buildId = new Date().toISOString();
+  const define = { __LF_BUILD_ID__: JSON.stringify(buildId) };
+
   const result = await Bun.build({
     entrypoints: [join(pkgRoot, 'src', 'app.ts')],
     outdir: dist,
@@ -19,6 +26,7 @@ async function buildOnce(): Promise<void> {
     format: 'esm',
     splitting: false,
     sourcemap: 'external',
+    define,
     naming: {
       entry: 'app.js',
       chunk: '[name]-[hash].js',
@@ -44,6 +52,7 @@ async function buildOnce(): Promise<void> {
     format: 'esm',
     splitting: false,
     sourcemap: 'external',
+    define,
     naming: {
       entry: 'hub.js',
       chunk: '[name]-[hash].js',
@@ -68,7 +77,7 @@ async function buildOnce(): Promise<void> {
     return;
   }
 
-  writeFileSync(join(dist, 'BUILD_INFO.txt'), `built ${new Date().toISOString()}\n`);
+  writeFileSync(join(dist, 'BUILD_INFO.txt'), `built ${buildId}\n`);
   console.log(`[markdown-app] built to ${dist}`);
 }
 
