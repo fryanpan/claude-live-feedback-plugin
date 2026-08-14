@@ -901,8 +901,12 @@ body.hub-body {
   min-height: 30px;
   padding: 2px 18px 2px 8px;
   border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--bg-panel);
+  /* No box at rest. A border around every status control turns column one
+     into a grid of outlines and costs more readability than the affordance
+     buys — the caret already says "this opens something". The transparent
+     border stays so revealing it on hover doesn't reflow the row. */
+  border: 1px solid transparent;
+  background-color: transparent;
   font-size: 12px;
   line-height: 1;
   cursor: pointer;
@@ -921,11 +925,25 @@ body.hub-body {
   min-height: 30px;
   padding: 2px 8px;
   border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--bg-panel);
+  border: 1px solid transparent;
+  background-color: transparent;
   font-size: 12px;
   cursor: pointer;
   white-space: nowrap;
+}
+/* The affordance the border used to carry, moved onto the pointer and the
+   keyboard so it costs nothing while reading. focus-visible (not focus) keeps
+   the ring off a mouse click but guarantees it for tab navigation — removing
+   a border must not remove the only thing a keyboard user can see. */
+.hub-status-select:hover,
+.hub-status-chip:hover {
+  background-color: var(--bg-hover);
+  border-color: var(--border);
+}
+.hub-status-select:focus-visible,
+.hub-status-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 .hub-chip-todo {
   color: var(--fg-muted);
