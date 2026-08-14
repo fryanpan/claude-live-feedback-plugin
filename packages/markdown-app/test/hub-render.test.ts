@@ -18,6 +18,7 @@ import {
   renderBoard,
   renderGoalStrip,
   renderLeadStrip,
+  renderQuickAdd,
   renderReviewStrip,
   renderTaskDetail,
 } from '../src/hub/hub-render.ts';
@@ -1214,5 +1215,49 @@ describe('discussionIsBusy', () => {
     const ta = root.querySelector('.hub-discussion textarea') as HTMLTextAreaElement;
     ta.focus();
     expect(discussionIsBusy(root)).toBe(true);
+  });
+});
+
+describe('renderQuickAdd', () => {
+  it('captures on Enter and clears, and Shift+Enter does not file a half-typed idea', () => {
+    const onCapture = vi.fn();
+    renderQuickAdd(root, { onCapture });
+    const box = root.querySelector('.hub-quick-input') as HTMLTextAreaElement;
+    box.value = 'Rework the strip';
+    box.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true }),
+    );
+    expect(onCapture).not.toHaveBeenCalled();
+    box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(onCapture).toHaveBeenCalledWith('Rework the strip');
+    // Cleared, so the next idea starts empty rather than appended to the last.
+    expect(box.value).toBe('');
+  });
+
+  it('files nothing for whitespace, from either the key or the button', () => {
+    const onCapture = vi.fn();
+    renderQuickAdd(root, { onCapture });
+    const box = root.querySelector('.hub-quick-input') as HTMLTextAreaElement;
+    box.value = '   ';
+    box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    (root.querySelector('.hub-quick-form') as HTMLFormElement).dispatchEvent(
+      new Event('submit', { cancelable: true }),
+    );
+    expect(onCapture).not.toHaveBeenCalled();
+  });
+
+  // The board repaints on every ydoc change. A composer that re-rendered with
+  // it would take the caret out of a half-typed idea — which is the exact
+  // friction this box exists to remove, reintroduced by the region pattern
+  // every other renderer here follows.
+  it('mounts once and leaves a half-typed idea alone on a repaint', () => {
+    renderQuickAdd(root, { onCapture: vi.fn() });
+    const box = root.querySelector('.hub-quick-input') as HTMLTextAreaElement;
+    box.value = 'half an idea';
+    renderQuickAdd(root, { onCapture: vi.fn() });
+    expect(root.querySelectorAll('.hub-quick-input')).toHaveLength(1);
+    expect((root.querySelector('.hub-quick-input') as HTMLTextAreaElement).value).toBe(
+      'half an idea',
+    );
   });
 });

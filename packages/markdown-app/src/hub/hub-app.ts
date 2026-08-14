@@ -31,6 +31,7 @@ import {
   type UptimeReport,
   boardSections,
   goalLabel,
+  parseQuickAdd,
   presenceChips,
   reviewQueue,
 } from './hub-model.ts';
@@ -46,6 +47,7 @@ import {
   renderGoalStrip,
   renderLeadStrip,
   renderPresence,
+  renderQuickAdd,
   renderReviewStrip,
   renderReviewWalkthrough,
   renderTaskDetail,
@@ -157,6 +159,7 @@ function buildShell(root: HTMLElement, name: string): void {
           <button type="button" id="hub-view-toggle" class="hub-btn">Activity</button>
         </div>
         <div id="hub-decisions" class="hub-decisions hidden"></div>
+        <div id="hub-quick" class="hub-quick"></div>
         <div id="hub-board" class="hub-board"></div>
         <div id="hub-activity" class="hub-activity hidden"></div>
       </section>
@@ -174,6 +177,7 @@ function buildShell(root: HTMLElement, name: string): void {
           <dt>a</dt><dd>open the focused task's assignee picker</dd>
           <dt>alt + ↑ / ↓</dt><dd>move the focused task up / down — past the ends of its goal it moves into the next one</dd>
           <dt>tab to ⠿, then ↑ / ↓</dt><dd>the same move from the drag handle</dd>
+          <dt>c</dt><dd>capture a task — type it however you like, Enter files it</dd>
           <dt>?</dt><dd>toggle this help</dd>
         </dl>
       </div>
@@ -568,6 +572,9 @@ async function main(): Promise<void> {
   }
 
   function renderAll(): void {
+    // Mounted, not rendered: `renderQuickAdd` is a no-op after the first call
+    // so a board repaint can never take the caret out of a half-typed idea.
+    renderQuickAdd(el('hub-quick'), { onCapture: (text) => void captureTask(text) });
     renderGoal();
     renderLead();
     renderBoardRegion();
@@ -733,6 +740,38 @@ async function main(): Promise<void> {
     // answered item has to be gone from the queue for the same index to land
     // on the next thing rather than re-showing the one just answered.
     await loadReviewItems();
+  }
+
+  /**
+   * File a captured line as a task.
+   *
+   * It lands in TRIAGE — `goal` is deliberately omitted, which is what routes
+   * it there — because ranking an idea against the goals it competes with is
+   * exactly the judgement capture must not force at capture time.
+   *
+   * It is assigned to the workspace's lead agent when there is one, falling
+   * back to the person capturing. Reversible either way (one dropdown on the
+   * row), and this is the direction Bryan asked for: "mostly by just
+   * discussing it with you" — an idea he captures is one he wants picked up,
+   * not one he means to file to himself and never see again.
+   */
+  async function captureTask(text: string): Promise<void> {
+    const parsed = parseQuickAdd(text);
+    if (!parsed) return;
+    const res = await send(`/api/workspaces/${encodeURIComponent(workspaceId)}/tasks`, 'POST', {
+      title: parsed.title,
+      ...(parsed.body !== undefined ? { body: parsed.body } : {}),
+      ...(state.info?.leadAgentId ? { assignee: state.info.leadAgentId } : {}),
+      author,
+    });
+    if (!res.ok) {
+      const why = typeof res.data?.message === 'string' ? res.data.message : 'Capture failed';
+      showToast(why);
+      return;
+    }
+    // The row itself arrives over the ydoc; the toast is the receipt for the
+    // words that just left the box.
+    showToast(`Captured — “${parsed.title}” is in triage`);
   }
 
   async function loadReviewItems(): Promise<void> {
@@ -948,6 +987,17 @@ async function main(): Promise<void> {
     if (typingInPath(eventPath(ev))) return;
     if (ev.key === '?') {
       el('hub-help').classList.toggle('hidden');
+      return;
+    }
+    // Gmail's compose key. Before the row shortcuts, and before the
+    // rows-are-empty bail below it — capture has to work on a board with
+    // nothing on it, which is exactly when it is needed most.
+    if (ev.key === 'c') {
+      const box = document.querySelector<HTMLTextAreaElement>('.hub-quick-input');
+      if (box) {
+        box.focus();
+        ev.preventDefault();
+      }
       return;
     }
     if (ev.key === 'Escape') {

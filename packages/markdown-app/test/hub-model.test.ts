@@ -17,6 +17,7 @@ import {
   dropIndexFor,
   dropTarget,
   goalLabel,
+  parseQuickAdd,
   positionBetween,
   presenceChips,
   reviewQueue,
@@ -581,5 +582,43 @@ describe('reviewQueue', () => {
     const q = reviewQueue([gate, waiting], [threadItem()], T0);
     expect(q.blocking).toBe(1);
     expect(q.total).toBe(2);
+  });
+});
+
+describe('parseQuickAdd', () => {
+  it('takes a short line as the title and writes no body', () => {
+    expect(parseQuickAdd('  Fix the mobile row overflow  ')).toEqual({
+      title: 'Fix the mobile row overflow',
+    });
+  });
+
+  it('refuses nothing at all', () => {
+    expect(parseQuickAdd('')).toBeNull();
+    expect(parseQuickAdd('   \n  ')).toBeNull();
+  });
+
+  // The rule that matters: capture may never cost the speaker a word. If the
+  // title had to drop anything — extra lines, or an over-long first line —
+  // the whole utterance survives verbatim in the body.
+  it('keeps the full text verbatim whenever the title could not hold it', () => {
+    const multi = 'Rework the strip\nIt should lead with what is blocked.';
+    expect(parseQuickAdd(multi)).toEqual({ title: 'Rework the strip', body: multi });
+
+    const long = `${'the quick brown fox jumps over the lazy dog '.repeat(4)}end`;
+    const parsed = parseQuickAdd(long);
+    expect(parsed?.body).toBe(long);
+    expect(parsed?.title.length).toBeLessThanOrEqual(91);
+    expect(parsed?.title.endsWith('…')).toBe(true);
+    // A relationship, not a hand-copied string: the stem is a real prefix of
+    // what was typed, and it stops at a word boundary rather than mid-word.
+    const stem = (parsed?.title ?? '').slice(0, -1);
+    expect(long.startsWith(stem)).toBe(true);
+    expect(long.slice(stem.length, stem.length + 1)).toBe(' ');
+  });
+
+  it('does not clip a long line mid-word when there is no space to clip at', () => {
+    const parsed = parseQuickAdd('x'.repeat(200));
+    expect(parsed?.title).toBe(`${'x'.repeat(90)}…`);
+    expect(parsed?.body).toBe('x'.repeat(200));
   });
 });

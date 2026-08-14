@@ -806,6 +806,37 @@ body.hub-body {
   padding: 0 6px;
 }
 
+/* --- quick capture: the box that stops ideas going into chat --- */
+.hub-quick {
+  margin-bottom: 10px;
+}
+.hub-quick-form {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.hub-quick-input {
+  flex: 1;
+  min-width: 0;
+  /* 16px: anything smaller and iOS zooms the page on focus, which on a board
+     read from a phone is a worse cost than the extra pixel of height. */
+  font: inherit;
+  font-size: 16px;
+  line-height: 1.4;
+  padding: 8px 10px;
+  min-height: 40px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: inherit;
+  resize: none;
+  overflow: hidden;
+}
+.hub-quick-submit {
+  flex: none;
+  min-height: 40px;
+}
+
 /* --- decisions strip: the count first, the list second --- */
 .hub-decisions {
   display: flex;

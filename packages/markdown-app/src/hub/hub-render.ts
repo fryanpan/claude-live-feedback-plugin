@@ -789,6 +789,70 @@ export function renderBoard(
   wireBoardReorder(container, sections, handlers);
 }
 
+// ── Quick capture ──────────────────────────────────────────────────────────
+
+/**
+ * One box, always in the same place, that turns a sentence into a task.
+ *
+ * Built once and never re-rendered — unlike every other region here. That is
+ * the whole point: the board repaints on every ydoc change, and a composer
+ * that is replaced mid-sentence loses what you were typing and the caret with
+ * it. So `renderQuickAdd` is a MOUNT, guarded against a second call on the
+ * same container.
+ */
+export interface QuickAddHandlers {
+  /** The raw text, exactly as typed. Splitting it into title and body is the
+   *  model's job, not the DOM's. */
+  onCapture: (text: string) => void;
+}
+
+export function renderQuickAdd(container: HTMLElement, handlers: QuickAddHandlers): void {
+  if (container.dataset.mounted === '1') return;
+  container.dataset.mounted = '1';
+  const form = document.createElement('form');
+  form.className = 'hub-quick-form';
+  const input = document.createElement('textarea');
+  input.className = 'hub-quick-input';
+  input.rows = 1;
+  input.placeholder = 'Capture a task — say it however you like';
+  input.setAttribute('aria-label', 'Capture a task');
+  const submit = document.createElement('button');
+  submit.type = 'submit';
+  submit.className = 'hub-btn hub-quick-submit';
+  submit.textContent = 'Add';
+
+  // Grow with the text: an idea that runs to three lines shouldn't be typed
+  // through a one-line slot.
+  const autosize = () => {
+    input.style.height = 'auto';
+    input.style.height = `${Math.min(input.scrollHeight, 160)}px`;
+  };
+  const capture = () => {
+    const text = input.value.trim();
+    if (!text) return;
+    handlers.onCapture(text);
+    input.value = '';
+    autosize();
+  };
+  input.addEventListener('input', autosize);
+  // Enter submits, Shift+Enter is a newline — the convention every chat box
+  // has, because this is the box people reach for instead of chat.
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter' && !ev.shiftKey) {
+      ev.preventDefault();
+      capture();
+    } else if (ev.key === 'Escape') {
+      input.blur();
+    }
+  });
+  form.addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    capture();
+  });
+  form.append(input, submit);
+  container.append(form);
+}
+
 // ── Decisions strip ────────────────────────────────────────────────────────
 
 export interface ReviewStripHandlers {
