@@ -13731,6 +13731,20 @@ function resolveAgentAuthor(env) {
   return { name, color: hashToColor(name), id: `agent-${slug}`, kind: "known" };
 }
 
+// packages/mcp/src/triage-line.ts
+function triageRequestLine(p, selfAgentId) {
+  if (p.kind !== "goal-retriage") {
+    return `[triage.requested] place task ${p.taskId} against the goal (set_task_goal)`;
+  }
+  const count = p.taskIds?.length ?? "?";
+  const batch = p.batchId ? `, passing batchId "${p.batchId}" on each` : "";
+  const lead = p.leadAgentId;
+  if (lead !== undefined && lead !== selfAgentId) {
+    return `[triage.requested] FYI — goal changed; re-triaging ${count} open task(s) is addressed to lead agent ${lead}${batch}. Act only if that is you.`;
+  }
+  return `[triage.requested] goal changed — re-triage ${count} open task(s) with set_task_goal${batch}`;
+}
+
 // packages/mcp/src/mcp.ts
 function resolveBaseUrl() {
   if (process.env.FEEDBACK_BASE_URL)
@@ -15740,7 +15754,7 @@ async function emitHubChannelMessage(event, rawPayload) {
       break;
     }
     case "triage.requested":
-      body = p.kind === "goal-retriage" ? `[triage.requested] goal changed — re-triage ${p.taskIds?.length ?? "?"} open task(s) with set_task_goal${p.batchId ? `, passing batchId "${p.batchId}" on each` : ""}` : `[triage.requested] place task ${p.taskId} against the goal (set_task_goal)`;
+      body = triageRequestLine(p, AUTHOR.id);
       break;
     case "workspace.retriaged":
       return;

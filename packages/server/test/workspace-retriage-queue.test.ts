@@ -211,6 +211,44 @@ describe('durable goal-edit re-triage', () => {
     expect(nowLead.pendingRetriage?.batchId).toBe(res.retriage.batchId ?? '');
   });
 
+  it('a handover to an agent who is ALREADY live delivers the waiting request now', () => {
+    // The test above hands over and then attaches, so it only ever proves the
+    // request survives to the new lead's NEXT attach. An agent that is already
+    // attached has no next attach — without delivery here the request waits on
+    // a reconnect that may never come, with its addressee sitting right there.
+    const ws = hub('handover-live-hub', LEAD);
+    openTask(ws.id, 'draft the outline');
+    const res = store.setWorkspaceGoal(ws.id, 'New goal.', { actor: PERSON });
+    if (!res.ok) throw new Error('unexpected');
+    expect(res.retriage.queued).toBe(true); // positive control: it really is waiting
+
+    // OTHER is live BEFORE it gets the seat — as a bystander, so not delivery.
+    const bystander = store.attachAgent(ws.id, { agentId: OTHER, runtime: 'claude-code-local' });
+    if (!bystander.ok) throw new Error('fixture');
+    expect(bystander.lead).toBe(false); // the seat was taken, so this is a real bystander
+    expect(bystander.pendingRetriage).toBeUndefined(); // and it got nothing, correctly
+    expect(store.getPendingRetriage(ws.id)?.taskIds.length).toBe(1); // still waiting
+
+    store.setLeadAgent(ws.id, OTHER, { actor: PERSON });
+    // Now that the live bystander IS the lead, the request has been handed to
+    // it and is no longer queued against a seat nobody is watching.
+    expect(store.getPendingRetriage(ws.id)).toBeUndefined();
+  });
+
+  it('a handover to an AWAY agent leaves the request waiting for their attach', () => {
+    // The other direction, so the fix above can only deliver to someone live.
+    const ws = hub('handover-away-hub', LEAD);
+    openTask(ws.id, 'draft the outline');
+    const res = store.setWorkspaceGoal(ws.id, 'New goal.', { actor: PERSON });
+    if (!res.ok) throw new Error('unexpected');
+
+    store.setLeadAgent(ws.id, OTHER, { actor: PERSON }); // OTHER never attached
+    expect(store.getPendingRetriage(ws.id)?.taskIds.length).toBe(1);
+    const attach = store.attachAgent(ws.id, { agentId: OTHER, runtime: 'claude-code-local' });
+    if (!attach.ok) throw new Error('fixture');
+    expect(attach.pendingRetriage?.batchId).toBe(res.retriage.batchId ?? '');
+  });
+
   it('with NO lead at all the edit is still visible as pending work, and the first agent inherits it', () => {
     const ws = hub('leaderless-hub');
     expect(ws.leadAgentId).toBeUndefined(); // positive control on the fixture

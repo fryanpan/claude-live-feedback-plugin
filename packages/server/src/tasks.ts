@@ -1373,6 +1373,29 @@ export class TaskStore {
       kind: classifyActor(opts.actor),
     };
     this.assignLead(state, next, actor);
+    // A waiting request is addressed to the SEAT, not to the agent that was
+    // sitting in it — so a handover has to re-ask the new occupant. Draining
+    // happens on attach, and an agent that is ALREADY attached has no next
+    // attach: without this the request waits on a reconnect that may never
+    // come, with its addressee live the whole time. Away leads are unaffected
+    // — `hasLiveLeadAttachment` is false for them and it keeps waiting.
+    const pending = this.getPendingRetriage(workspaceId);
+    if (pending && this.hasLiveLeadAttachment(workspaceId)) {
+      const delivered = this.requestTriage({
+        kind: 'goal-retriage',
+        workspaceId,
+        oldGoal: pending.oldGoal,
+        newGoal: pending.newGoal,
+        taskIds: pending.taskIds,
+        batchId: pending.batchId,
+        leadAgentId: next,
+        actor: pending.actor,
+        ts: pending.ts,
+      });
+      // Only on success — a request that did not go out must stay queued
+      // rather than being dropped by the attempt to deliver it.
+      if (delivered) this.clearPendingRetriage(state);
+    }
     return { ok: true, workspace, changed: true };
   }
 

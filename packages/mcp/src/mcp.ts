@@ -6,6 +6,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { resolveAgentAuthor } from './author.ts';
+import { triageRequestLine } from './triage-line.ts';
 
 /**
  * Thin MCP server that proxies tool calls to a running feedback server
@@ -2631,13 +2632,10 @@ async function emitHubChannelMessage(event: string, rawPayload: unknown): Promis
       }`;
       break;
     }
+    // The request reaches EVERY agent attached to the board, so who it is
+    // addressed to has to survive into the wording — see triage-line.ts.
     case 'triage.requested':
-      body =
-        p.kind === 'goal-retriage'
-          ? `[triage.requested] goal changed — re-triage ${p.taskIds?.length ?? '?'} open task(s) with set_task_goal${
-              p.batchId ? `, passing batchId "${p.batchId}" on each` : ''
-            }`
-          : `[triage.requested] place task ${p.taskId} against the goal (set_task_goal)`;
+      body = triageRequestLine(p, AUTHOR.id);
       break;
     // The audit row for the same goal edit the request above already asked
     // for. Forwarding both would say one thing twice, and only the request
