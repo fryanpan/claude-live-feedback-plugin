@@ -400,7 +400,11 @@ describe('re-triage routing, over HTTP', () => {
     return ((await r.json()) as { workspace: { id: string } }).workspace.id;
   };
   const addTask = async (workspaceId: string, title: string): Promise<string> => {
-    const r = await post(`/api/workspaces/${workspaceId}/tasks`, { title, goal: 'chores' });
+    const r = await post(`/api/workspaces/${workspaceId}/tasks`, {
+      author: PERSON,
+      title,
+      goal: 'chores',
+    });
     return ((await r.json()) as { task: { id: string } }).task.id;
   };
   const editGoal = async (workspaceId: string, goal: string) => {

@@ -72,7 +72,7 @@ const server = new Server(
     // Must match packages/plugin/.claude-plugin/plugin.json — this is the version
     // a client sees in the initialize handshake, and it had drifted three minor
     // releases behind. Asserted in packages/mcp/test/launcher.test.ts.
-    version: '0.1.19',
+    version: '0.1.20',
   },
   {
     capabilities: {
@@ -971,7 +971,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           assignee: {
             type: 'string',
-            description: "'human' | 'agent' | a named identity. Default 'agent'.",
+            description:
+              "Who owns this task: 'human' for work only a person can do, or a named identity (another agent, a person). Omit it and YOU own it — the API records your own name. It REFUSES a create whose owner comes out as the bare word 'agent', because that names a category rather than somebody, and a board of tasks owned by \"agent\" cannot answer who is doing what. If you get that refusal, your session was launched without FEEDBACK_AGENT_NAME.",
           },
           needs: {
             type: 'string',
@@ -1028,7 +1029,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           workspaceId: { type: 'string', description: 'Hub workspace the task lands in.' },
           title: { type: 'string', description: 'Override the drafted title.' },
           body: { type: 'string', description: 'Override the drafted body.' },
-          assignee: { type: 'string' },
+          assignee: {
+            type: 'string',
+            description: "Who owns it. Omit and you do — same rule as create_task's assignee.",
+          },
           needs: { type: 'string', enum: ['action', 'decision'] },
           goal: { type: 'string', description: 'Goal/subgoal id. OMIT to route through triage.' },
           dueAt: { type: 'number' },
