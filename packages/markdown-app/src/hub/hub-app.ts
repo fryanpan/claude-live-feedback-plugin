@@ -692,6 +692,7 @@ async function main(): Promise<void> {
         lastToolCallAt: number;
       }>;
     }>(`/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`);
+    const before = knownAgentIds().join('\n');
     state.agents = (res?.attachments ?? []).map((a) => ({
       agentId: a.agentId,
       state: a.state ?? 'away',
@@ -702,6 +703,17 @@ async function main(): Promise<void> {
     // The picker's options come from the attachment list, so a fresh list is
     // also a fresh set of agents to hand the board to.
     renderLead();
+    // …and the board and the open task render their pickers from a snapshot
+    // taken when they last painted. This load is the ONLY thing that changes
+    // that list: the first one lands after the first paint, so without this
+    // the very first board offers nobody but 'human' until an unrelated task
+    // update happens to repaint it. Guarded on the SET rather than fired on
+    // every load, because `agent.heartbeat` arrives constantly and a board
+    // re-render would close a picker somebody is reading.
+    if (knownAgentIds().join('\n') !== before) {
+      renderBoardRegion();
+      renderDetail();
+    }
   }
 
   async function loadEvents(): Promise<void> {
