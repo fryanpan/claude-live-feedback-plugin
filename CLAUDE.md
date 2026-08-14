@@ -78,7 +78,19 @@ there. That is how 25 feature commits sat undelivered between 2026-05-09 and
 - After merging a plugin change, `claude plugin update live-feedback@claude-live-feedback`
   is what actually delivers it to a session — **and the peer must then restart
   the session**, because the plugin cache path is version-keyed and a running
-  session resolved it at launch.
+  session resolved it at launch. **The order is load-bearing: update, THEN
+  restart.** This marketplace is a GitHub source, so `${CLAUDE_PLUGIN_ROOT}`
+  resolves to the version-keyed cache and a merge changes nothing until the
+  update runs. Restarting first pulls whatever the cache already holds — which
+  has demonstrably moved a session *backwards*, from a working-tree 0.1.15 to a
+  cached 0.1.12, in the same restart that was meant to deliver new tools. See
+  "A restart can move a session BACKWARDS a plugin version" in
+  [docs/process/learnings.md](docs/process/learnings.md).
+- **A merge does not reach the fleet.** Each peer picks up a new version only
+  when someone runs the update for it and it then restarts, so peers sit on
+  different versions for as long as that takes. Anything whose value ships
+  inside the bundle — a skill, a tool description — is not delivered by
+  merging it.
 
 **The whole delivery model is written down once, in
 [docs/process/delivery.md](docs/process/delivery.md)**: how the plugin travels
