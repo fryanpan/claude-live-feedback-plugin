@@ -2,11 +2,13 @@
  * Visitor redaction for hub events on the workspace SSE feed.
  *
  * The §3.3 visitor contract says a workspace-scope visitor sees transitions
- * with actor DISPLAY NAMES only — no actor ids — and task shapes without the
- * body snapshot. The ws:<id> room already enforces that via projectTask; the
- * SSE feed is the second door (the private-meta lesson: redacting one
- * transport and forgetting the long-lived other is how leaks ship), so the
- * same shape is asserted here on the payloads the stream writes.
+ * with actor DISPLAY NAMES only — no actor ids. The ws:<id> room enforces
+ * that via projectTask; the SSE feed is the second door (the private-meta
+ * lesson: redacting one transport and forgetting the long-lived other is how
+ * leaks ship), so the same shape is asserted here on the payloads the stream
+ * writes. It follows projectTask exactly, which is why the description now
+ * rides along: it is in the synced ydoc, and a redaction that withholds
+ * nothing is worse than none, because it reads as a guarantee.
  *
  * All fixtures are synthetic — invented names in the jordan@partner.example
  * register. The repo is public.
@@ -59,7 +61,13 @@ describe('redactHubEventForVisitor', () => {
     expect(actor.id).toBeUndefined();
   });
 
-  it('projects a full task to the visitor-contract shape (no body, no transition actor ids)', () => {
+  // The description became a projected field when the board started
+  // rendering it in place, which widened what a workspace-share visitor can
+  // read. This stream must follow the projection rather than fight it: the
+  // same visitor already syncs the ws:<id> ydoc, and Yjs has no
+  // per-connection projection, so stripping the body HERE would withhold
+  // nothing while reading as a guarantee. One door, not one of two.
+  it('projects a full task to the visitor-contract shape — display actors, and the same body the board syncs', () => {
     const out = redactHubEventForVisitor({
       event: 'task.created',
       workspaceId: 'w-1',
@@ -71,9 +79,11 @@ describe('redactHubEventForVisitor', () => {
     });
     const task = out.task as unknown as Record<string, unknown>;
     expect(task.title).toBe('Wire the store'); // positive control
-    expect(task.body).toBeUndefined();
+    expect(task.body).toBe(TASK.body?.trim());
     const transitions = task.transitions as Array<{ by: Record<string, unknown> }>;
     expect(transitions[0]?.by).toEqual({ name: 'Search Revamp', kind: 'agent' });
+    // Ids are still the thing this drops.
+    expect(transitions[0]?.by.id).toBeUndefined();
   });
 
   it('leaves non-hub events untouched — thread events already have their own rules', () => {

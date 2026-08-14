@@ -70,7 +70,7 @@ const server = new Server(
     // Must match packages/plugin/.claude-plugin/plugin.json — this is the version
     // a client sees in the initialize handshake, and it had drifted three minor
     // releases behind. Asserted in packages/mcp/test/launcher.test.ts.
-    version: '0.1.11',
+    version: '0.1.12',
   },
   {
     capabilities: {
@@ -917,7 +917,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         properties: {
           workspaceId: { type: 'string' },
           title: { type: 'string' },
-          body: { type: 'string', description: 'Markdown description (small user story).' },
+          body: {
+            type: 'string',
+            description:
+              'The description. Not schema-required — but WRITE ONE ANYWAY, on every task: a bare title is not pickup-able by an agent that was not in the conversation, and reconstructing intent from a title is how the wrong thing gets built. Shape it as a compact user story — `<persona> can <do x> so that <goal y>`, one persona (Agent / Bryan / Collaborator) — and add falsifiable "done when" criteria for anything handed to someone else or parked beyond today. Proportionate: work you will finish within the hour needs the story line and nothing more. Markdown; it renders on the task itself and comes back whole from next_tasks, so do not create a separate doc to hold it.',
+          },
           assignee: {
             type: 'string',
             description: "'human' | 'agent' | a named identity. Default 'agent'.",
@@ -978,6 +982,34 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           links: { type: 'array', items: { type: 'object' } },
         },
         required: ['docId', 'threadId', 'workspaceId'],
+      },
+    },
+    {
+      name: 'get_workspace',
+      description:
+        'Read a hub workspace: its north-star goal, and the ORDERED goal list with per-goal task counts (todo / in-progress / done), parent goals followed by their subgoals, Chores last. Order IS priority — the first row is the highest band. Call this before deciding what to work on; without it goal order is invisible (list_tasks returns goal IDS only) and you will work the wrong band. Deliberately cheap — goals and counts, no tasks: pair it with next_tasks, which carries the tasks and their full descriptions. Reorder priorities with set_goal_list, which needs the ids and titles this returns.',
+      inputSchema: {
+        type: 'object',
+        properties: { workspaceId: { type: 'string' } },
+        required: ['workspaceId'],
+      },
+    },
+    {
+      name: 'next_tasks',
+      description:
+        'The work queue: what to pick up next, in priority order (goal band, then task order), already filtered to what you can actually DO. Each row carries its FULL description, so you can decide from this one call — including whether two tasks touch the same code and can therefore run in parallel; that judgment is yours to make from the text, not a field to look up. Also on each row: `blockedBy` (open dependencies — only `enforce` ones hold a task back) and `ready`. Hard-blocked rows are omitted unless includeBlocked. Pass assignee to get just your own queue. Make this call at the top of a work session and again after every task you finish — priorities move while you work.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          workspaceId: { type: 'string' },
+          assignee: { type: 'string', description: 'Usually your own agent name.' },
+          limit: { type: 'number' },
+          includeBlocked: {
+            type: 'boolean',
+            description: 'Include tasks held by an enforced open dependency.',
+          },
+        },
+        required: ['workspaceId'],
       },
     },
     {
@@ -1995,6 +2027,38 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           title: res.task.title,
           quote: res.task.quote,
         });
+      }
+      case 'get_workspace': {
+        const { workspaceId } = a as { workspaceId: string };
+        const res = (await http('GET', `/api/workspaces/${encodeURIComponent(workspaceId)}`)) as {
+          workspace: { id: string; name: string; goal: string; goalUpdatedAt: number };
+          goalSummary: unknown[];
+        };
+        return ok({
+          workspaceId: res.workspace.id,
+          name: res.workspace.name,
+          goal: res.workspace.goal,
+          goalUpdatedAt: res.workspace.goalUpdatedAt,
+          goals: res.goalSummary,
+        });
+      }
+      case 'next_tasks': {
+        const { workspaceId, assignee, limit, includeBlocked } = a as {
+          workspaceId: string;
+          assignee?: string;
+          limit?: number;
+          includeBlocked?: boolean;
+        };
+        const qs = new URLSearchParams();
+        if (assignee !== undefined) qs.set('assignee', assignee);
+        if (limit !== undefined) qs.set('limit', String(limit));
+        if (includeBlocked === true) qs.set('includeBlocked', 'true');
+        const query = qs.size > 0 ? `?${qs.toString()}` : '';
+        const res = (await http(
+          'GET',
+          `/api/workspaces/${encodeURIComponent(workspaceId)}/next${query}`,
+        )) as { tasks: unknown[] };
+        return ok({ workspaceId, tasks: res.tasks });
       }
       case 'list_tasks': {
         const { workspaceId, goal, status, assignee, needs } = a as {
