@@ -81,6 +81,19 @@ Put it in the task's `body`. **Do not create a separate doc to hold it** — the
 description renders on the task itself, and a second artifact is one more
 thing to open.
 
+## Every task belongs to somebody
+
+Omit `assignee` and the task is yours — the API records your own name. Pass
+`'human'` for work only a person can do, or another identity to hand it over.
+What it will not accept is the bare word `agent`: that names a category, and a
+board where every row is owned by "agent" cannot answer who is doing what, or
+give you your own queue from `next_tasks(assignee: <your name>)`.
+
+If a create comes back `assignee-required`, your session was launched without
+`FEEDBACK_AGENT_NAME`. That is a launcher setting, read once at session start —
+you cannot fix it from inside the session, so say so and pass an explicit
+`assignee` meanwhile.
+
 ## Keep the board current as you go
 
 - Transition to `in-progress` when you start, not when you report.
