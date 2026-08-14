@@ -1217,6 +1217,14 @@ export class TaskStore {
     const pendingAttachments = this.attachmentSaveTimers.get(workspaceId);
     if (pendingAttachments) clearTimeout(pendingAttachments);
     this.attachmentSaveTimers.delete(workspaceId);
+    // If the delete goes on to refuse, the workspace stays live and those
+    // writes are still owed. Nothing else would re-arm them until the next
+    // mutation, so the edits inside the debounce window would be lost at the
+    // next restart — a cancelled save is only free when the delete succeeds.
+    const restorePendingWrites = () => {
+      if (pending) this.scheduleSave(workspaceId);
+      if (pendingAttachments) this.scheduleAttachmentsSave(workspaceId);
+    };
 
     // The tasks sidecar is the resurrection source, so it comes off FIRST and
     // its failure is the whole operation's failure. Reporting success with
@@ -1229,6 +1237,7 @@ export class TaskStore {
       rmSync(tasksSidecarPath(this.dataDir, workspaceId), { force: true });
     } catch (err) {
       console.error(`[tasks] failed to remove the tasks sidecar for ${workspaceId}:`, err);
+      restorePendingWrites();
       return { ok: false, error: 'persist-failed' };
     }
 
