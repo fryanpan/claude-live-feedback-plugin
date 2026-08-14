@@ -679,6 +679,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   };
 
   /**
+   * A deleted doc leaves no link behind. This mattered little while attaching
+   * was a deliberate act on a handful of docs; now that EVERY doc is filed, a
+   * board would otherwise silently accumulate one tombstone per deleted doc.
+   */
+  const unlinkDocEverywhere = (docId: string): void => {
+    for (const w of taskStore.listWorkspaces()) {
+      const res = taskStore.detachDoc(w.id, docId);
+      if (res.ok && res.removed) taskProjection.ensureWorkspace(w.id);
+    }
+  };
+
+  /**
    * CORS is decided once, here, for every response the handler produces,
    * rather than by `j()` — which has no request context and used to stamp
    * `Access-Control-Allow-Origin: *` on everything. See
@@ -2231,7 +2243,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (rest === '' && req.method === 'DELETE') {
             const force = url.searchParams.get('force') === 'true';
             const res = rooms.deleteDoc(docId, { force });
-            if (res.ok) return j(200, res);
+            if (res.ok) {
+              unlinkDocEverywhere(docId);
+              return j(200, res);
+            }
             return j(res.error === 'has-open-threads' ? 409 : 404, res);
           }
           if (rest === 'threads' && req.method === 'GET') {
