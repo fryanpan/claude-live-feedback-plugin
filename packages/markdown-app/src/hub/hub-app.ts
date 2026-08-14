@@ -23,6 +23,7 @@ import {
   type PresenceAgent,
   type PresenceChip,
   type PresencePerson,
+  type ReorderTarget,
   type UptimeReport,
   boardSections,
   decisionRows,
@@ -144,6 +145,8 @@ function buildShell(root: HTMLElement, name: string): void {
           <dt>o or Enter</dt><dd>open the focused task</dd>
           <dt>s</dt><dd>open the focused task's status dropdown</dd>
           <dt>a</dt><dd>hand the focused task to the human / the agent</dd>
+          <dt>alt + ↑ / ↓</dt><dd>move the focused task up / down — past the ends of its goal it moves into the next one</dd>
+          <dt>tab to ⠿, then ↑ / ↓</dt><dd>the same move from the drag handle</dd>
           <dt>?</dt><dd>toggle this help</dd>
         </dl>
       </div>
@@ -231,6 +234,9 @@ async function main(): Promise<void> {
       state.detailTaskId = task.id;
       renderDetail();
     },
+    onReorder: (task: HubTask, target: ReorderTarget) => void placeTask(task, target),
+    onTitleCommit: (task: HubTask, title: string) => void renameTask(task, title),
+    onAssign: (task: HubTask, assignee: string) => void assignTask(task, assignee),
   };
 
   function renderGoal(): void {
@@ -246,11 +252,31 @@ async function main(): Promise<void> {
       doneWindow: state.doneWindow,
       now: Date.now(),
     };
+    // Every render replaces the rows, so whatever had focus is destroyed with
+    // them. That is fatal to keyboard reordering specifically: the move
+    // re-renders the board, and without this the second Alt+Arrow has nothing
+    // to act on — the shortcut works exactly once and then silently stops.
+    const active = document.activeElement as HTMLElement | null;
+    const focusedRow = active?.closest?.('.hub-task-row') as HTMLElement | null;
+    const focusedTaskId = focusedRow?.dataset.taskId;
+    const focusedHandle = active?.classList.contains('hub-drag-handle') ?? false;
     renderBoard(
       el('hub-board'),
       boardSections(state.info?.goals ?? [], taskList(), filters),
       boardHandlers,
     );
+    if (focusedTaskId) {
+      // By scan, not by attribute selector: a task id is server-generated but
+      // it is still untrusted text to a selector parser, and CSS.escape is
+      // one more thing to be missing.
+      const row = Array.from(document.querySelectorAll<HTMLElement>('.hub-task-row')).find(
+        (r) => r.dataset.taskId === focusedTaskId,
+      );
+      const back = focusedHandle
+        ? (row?.querySelector<HTMLElement>('.hub-drag-handle') ?? row)
+        : row;
+      back?.focus();
+    }
     renderDecisions(el('hub-decisions'), decisionRows(taskList()), boardHandlers.onOpenTask);
     for (const btn of document.querySelectorAll<HTMLButtonElement>('.hub-tabs .hub-tab')) {
       btn.classList.toggle('hub-tab-active', btn.dataset.tab === state.tab);
@@ -372,6 +398,22 @@ async function main(): Promise<void> {
       author,
     });
     if (!res.ok) showToast('Assignment failed');
+  }
+
+  /**
+   * A drag or an arrow-key move, sent as the placement it already is: goal +
+   * fractional position, the same `set_task_goal` write an agent performs.
+   * There is deliberately no reordering API of its own — `task.order` has
+   * always been fractional, so "between these two rows" is a number, and a
+   * cross-goal drop is this same call with a different goal.
+   */
+  async function placeTask(task: HubTask, target: ReorderTarget): Promise<void> {
+    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/goal`, 'POST', {
+      goal: target.goal,
+      position: target.position,
+      author,
+    });
+    if (!res.ok) showToast('Move failed');
   }
 
   async function renameTask(task: HubTask, title: string): Promise<void> {
