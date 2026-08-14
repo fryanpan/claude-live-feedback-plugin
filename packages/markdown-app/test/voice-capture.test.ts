@@ -9,11 +9,14 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  type OriginFacts,
   type RecognitionLike,
   type RecognitionResultEvent,
   type VoiceAck,
   type VoiceContext,
   createVoiceCapture,
+  insecureOriginMessage,
+  localhostUrlFor,
   topmostVisibleHeading,
 } from '../src/voice-capture.ts';
 
@@ -59,7 +62,21 @@ describe('createVoiceCapture', () => {
   let ackToReturn: VoiceAck | null;
   let navigated: string[];
 
-  const mount = (opts?: { createRecognition?: () => RecognitionLike | null }) =>
+  /** A secure origin — the state-machine tests are about the hold, not the
+   *  origin gate, so they run where the mic is actually allowed. */
+  const secureOrigin = (): OriginFacts => ({
+    isSecureContext: true,
+    protocol: 'https:',
+    hostname: 'feedback.example.com',
+    port: '',
+    pathname: '/workspaces/w-1',
+    search: '',
+  });
+
+  const mount = (opts?: {
+    createRecognition?: () => RecognitionLike | null;
+    readOrigin?: () => OriginFacts;
+  }) =>
     createVoiceCapture({
       button,
       indicator,
@@ -72,6 +89,7 @@ describe('createVoiceCapture', () => {
         navigated.push(url);
       },
       createRecognition: opts?.createRecognition ?? (() => rec),
+      readOrigin: opts?.readOrigin ?? secureOrigin,
     });
 
   beforeEach(() => {
@@ -211,5 +229,145 @@ describe('topmostVisibleHeading', () => {
   it('is undefined above the first heading, and tolerates no headings', () => {
     expect(topmostVisibleHeading([{ text: 'Later', top: 900 }])).toBeUndefined();
     expect(topmostVisibleHeading([])).toBeUndefined();
+  });
+});
+
+/**
+ * The origin gate (the "voice is just broken" report).
+ *
+ * The server is reached over plain http at a hostname, which is NOT a secure
+ * context: Chrome keeps the `SpeechRecognition` constructor on the page but
+ * refuses `start()` with `not-allowed` and never prompts. Verified in Chrome
+ * 151 against the real origin — `isSecureContext: false`,
+ * `navigator.mediaDevices === undefined`, `start()` → `not-allowed` → `end`.
+ *
+ * So the message must NOT tell anyone to allow the mic for the site — an
+ * insecure origin has no such permission to grant — and must name an origin
+ * that actually works.
+ */
+const insecureHostOrigin: OriginFacts = {
+  isSecureContext: false,
+  protocol: 'http:',
+  hostname: 'host.example.ts.net',
+  port: '8787',
+  pathname: '/workspaces/w-1',
+  search: '',
+};
+
+describe('localhostUrlFor', () => {
+  it('rewrites an insecure host origin to the same page on loopback', () => {
+    expect(localhostUrlFor(insecureHostOrigin)).toBe('http://localhost:8787/workspaces/w-1');
+  });
+
+  it('keeps the query string, so the suggested URL opens the same view', () => {
+    expect(localhostUrlFor({ ...insecureHostOrigin, search: '?tab=tasks' })).toBe(
+      'http://localhost:8787/workspaces/w-1?tab=tasks',
+    );
+  });
+
+  it('has nothing to suggest when the page is already on loopback', () => {
+    expect(localhostUrlFor({ ...insecureHostOrigin, hostname: 'localhost' })).toBeNull();
+    expect(localhostUrlFor({ ...insecureHostOrigin, hostname: '127.0.0.1' })).toBeNull();
+  });
+});
+
+describe('insecureOriginMessage', () => {
+  // Positive control: the function CAN return null, so the assertions below
+  // that expect a message are not vacuously true.
+  it('is null on a secure origin', () => {
+    expect(
+      insecureOriginMessage({ ...insecureHostOrigin, isSecureContext: true, protocol: 'https:' }),
+    ).toBeNull();
+  });
+
+  it('is null on plain-http loopback, which IS a secure context', () => {
+    expect(
+      insecureOriginMessage({
+        ...insecureHostOrigin,
+        hostname: 'localhost',
+        isSecureContext: true,
+      }),
+    ).toBeNull();
+  });
+
+  it('names the loopback URL that actually works', () => {
+    expect(insecureOriginMessage(insecureHostOrigin)).toContain(
+      'http://localhost:8787/workspaces/w-1',
+    );
+  });
+
+  it('never advises allowing the mic for the site — there is no such permission here', () => {
+    const msg = insecureOriginMessage(insecureHostOrigin);
+    // Assert the presence before the absence: an absence checked against a
+    // null message would pass for the wrong reason.
+    expect(msg).not.toBeNull();
+    expect((msg ?? '').toLowerCase()).not.toContain('allow the mic');
+  });
+});
+
+describe('createVoiceCapture on an insecure origin', () => {
+  let button: HTMLButtonElement;
+  let indicator: HTMLDivElement;
+  let created: number;
+
+  const mountAt = (origin: OriginFacts) =>
+    createVoiceCapture({
+      button,
+      indicator,
+      getContext: () => ({ surface: 'hub' }),
+      send: () => Promise.resolve(null),
+      createRecognition: () => {
+        created++;
+        return null;
+      },
+      readOrigin: () => origin,
+    });
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    button = document.createElement('button');
+    indicator = document.createElement('div');
+    indicator.className = 'hidden';
+    document.body.append(button, indicator);
+    created = 0;
+  });
+
+  it('explains on press instead of showing a dead "Listening…"', () => {
+    const cap = mountAt(insecureHostOrigin);
+    keydown(document.body);
+    expect(indicator.classList.contains('hidden')).toBe(false);
+    expect(indicator.textContent).toContain('http://localhost:8787/workspaces/w-1');
+    expect(indicator.textContent).not.toContain('Listening');
+    // Proactive: the engine is never asked, so there is no window in which
+    // the UI claims to be recording something it cannot record.
+    expect(created).toBe(0);
+    cap.destroy();
+  });
+
+  it('marks the button unavailable at mount but leaves it pressable, so the reason stays reachable', () => {
+    const cap = mountAt(insecureHostOrigin);
+    expect(button.classList.contains('voice-unavailable')).toBe(true);
+    expect(button.hasAttribute('disabled')).toBe(false);
+    expect(button.title).toContain('localhost');
+    cap.destroy();
+  });
+
+  it('a blocked press does not wedge the hold flag', () => {
+    const cap = mountAt(insecureHostOrigin);
+    keydown(document.body);
+    expect(cap.holding()).toBe(false);
+    keyup(document.body);
+    expect(cap.holding()).toBe(false);
+    cap.destroy();
+  });
+
+  // Positive control for the block: on a secure origin the guard is inert
+  // and the engine is reached exactly as before.
+  it('does not fire on a secure origin', () => {
+    const cap = mountAt({ ...insecureHostOrigin, isSecureContext: true, protocol: 'https:' });
+    expect(button.classList.contains('voice-unavailable')).toBe(false);
+    keydown(document.body);
+    expect(created).toBe(1);
+    cap.destroy();
   });
 });

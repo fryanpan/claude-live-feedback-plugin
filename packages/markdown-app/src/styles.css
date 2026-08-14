@@ -1348,6 +1348,16 @@ a.hub-link-chip:hover {
   border-color: #c53030;
   color: #fff;
 }
+/* Insecure origin: the mic cannot record here. Dimmed so it doesn't read as
+   a working control, but still pressable — the press is how the reason gets
+   surfaced, so `disabled` (which swallows it) would be the wrong tool. */
+.voice-mic.voice-unavailable {
+  opacity: 0.45;
+}
+.voice-mic.voice-unavailable:hover {
+  opacity: 1;
+  background: var(--bg-panel);
+}
 .voice-indicator {
   position: fixed;
   bottom: calc(68px + var(--kb-bottom, 0px) + var(--safe-bottom, 0px));
