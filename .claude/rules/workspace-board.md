@@ -75,6 +75,30 @@ thing to open.
 - Leave comment threads **unresolved** unless asked — Bryan reads the
   discussion, and resolving hides it from the default Open tab.
 
+## Finishing a task is not a reason to stop
+
+When a task closes, re-run `next_tasks` and take the top row. That is the
+whole loop. **Yield the turn only for one of three things:** a decision that
+is genuinely Bryan's to make, a blocker you cannot route around, or an empty
+queue.
+
+Everything else you might want to say is a **comment on the task**, not a
+stop. "Here's what I found", "this is deployed", "that took a second attempt"
+— all of those go on the board, where Bryan reads them on his own schedule,
+and you keep moving. A stop costs him a round trip; a comment costs him
+nothing.
+
+This is written down because the default pull is the other way. A chat
+assistant's instinct is: complete a unit of work → report → wait. On a board
+that reflex fires after every single task and turns a queue into a
+conversation. Two other rules in this repo pulled the same direction —
+`feedback-loop.md`'s "ask for feedback" step and the post-PR retro offer —
+and both are now scoped to sessions that aren't working a queue.
+
+Context compaction is the other trigger: coming back holding a summary rather
+than a running thread makes reporting look like the safe move. It isn't. Re-run
+`next_tasks` and pick up the top row.
+
 ## A workspace is a shared view — everything in it is available to everyone in it
 
 This is the **default and the point of sharing**: everyone in a workspace has
