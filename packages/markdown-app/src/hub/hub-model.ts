@@ -547,6 +547,55 @@ export function reviewQueue(
   return { items, total: items.length, blocking: decisions.blocking };
 }
 
+// ── Quick capture ──────────────────────────────────────────────────────────
+
+/** Longer than this and the line stops being a title. Chosen to fit a phone
+ *  row without wrapping twice, which is where the board is read. */
+const QUICK_TITLE_MAX = 90;
+
+export interface QuickAdd {
+  title: string;
+  /** The speaker's own words, whole, whenever the title had to lose any of
+   *  them. Never a rewrite. */
+  body?: string;
+}
+
+/**
+ * One box of prose → a task.
+ *
+ * Bryan: "I also can't create new tasks easily in the workspace, which is why
+ * I'm doing them here. I want a quick typing or voice option to create a
+ * task, mostly by just discussing it with you." The thing that makes capture
+ * expensive is being asked to compose a title — and the board's own contract
+ * asks for a user story, which is more composition still. So capture takes
+ * whatever he says and NEVER discards a word of it: the first line becomes
+ * the title, and if anything at all was left over — more lines, or a first
+ * line too long to be a title — the full text is kept verbatim as the body
+ * for whoever refines it.
+ *
+ * Deliberately not an LLM call. Capture has to work with no network, no key,
+ * and no attached agent, because the moment it can fail is the moment the
+ * idea goes back into chat.
+ */
+export function parseQuickAdd(raw: string): QuickAdd | null {
+  const text = raw.trim();
+  if (text === '') return null;
+  const lines = text.split('\n');
+  const first = (lines[0] ?? '').trim();
+  const multiline = lines.length > 1;
+  if (first.length <= QUICK_TITLE_MAX) {
+    return multiline ? { title: first, body: text } : { title: first };
+  }
+  // Clip on a word boundary when there is one nearby; the whole utterance
+  // survives in the body either way.
+  const cut = first.slice(0, QUICK_TITLE_MAX);
+  const space = cut.lastIndexOf(' ');
+  return {
+    title: `${(space > QUICK_TITLE_MAX * 0.6 ? cut.slice(0, space) : cut).trimEnd()}…`,
+    body: text,
+  };
+}
+
 // ── Status control ─────────────────────────────────────────────────────────
 
 /**
