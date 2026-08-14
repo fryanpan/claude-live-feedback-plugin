@@ -36,6 +36,7 @@ import {
   type SidebarThread,
   type TaskDiscussion,
   type TaskThread,
+  discussionIsBusy,
   otherAssignee,
   renderActivity,
   renderBoard,
@@ -391,10 +392,14 @@ async function main(): Promise<void> {
    * ordinary thread API pointed at the task room — no second store, and the
    * same threads an agent sees through `create_thread`.
    */
-  async function loadDiscussion(task: HubTask): Promise<void> {
+  async function loadDiscussion(task: HubTask, quiet = false): Promise<void> {
     state.discussionTaskId = task.id;
-    state.discussion = { loading: true, threads: [] };
-    renderDetail();
+    if (!quiet) {
+      // A quiet reload is a refresh of something already on screen; flipping
+      // it to "Loading…" would blank a discussion the reader is reading.
+      state.discussion = { loading: true, threads: [] };
+      renderDetail();
+    }
     const payload = await fetchJson<{
       threads?: Array<{
         id: string;
@@ -754,6 +759,17 @@ async function main(): Promise<void> {
     'workspace.goals_changed',
   ]) {
     es.addEventListener(name, () => void loadEvents());
+  }
+  // A reply to the question you just asked is the case this whole surface is
+  // for, so it lands in the open panel without a reload. These events reach
+  // the workspace channel only because a task body room fans out to it — the
+  // board is not subscribed to each task's own doc stream.
+  for (const name of ['thread.created', 'thread.replied', 'thread.resolved', 'thread.reopened']) {
+    es.addEventListener(name, () => {
+      const open = state.detailTaskId ? state.tasks.get(state.detailTaskId) : undefined;
+      if (!open || discussionIsBusy(document)) return;
+      void loadDiscussion(open, true);
+    });
   }
 
   // Controls.

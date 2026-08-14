@@ -155,6 +155,14 @@ export interface RoomsConfig {
    * card falls back to its deterministic lines and nothing else changes.
    */
   summarizer?: ThreadSummarizer;
+  /**
+   * Called for every thread/comment event, alongside the room's own fan-out.
+   * A doc can belong to something that wants to hear about its discussion
+   * without being a member of a `meta.workspaceId` grouping — a hub task's
+   * body room is one — and this is the seam for that, so Rooms stays
+   * ignorant of what a `task:` docId means.
+   */
+  onRoomEvent?: (docId: string, payload: WebhookPayload) => void;
 }
 
 /**
@@ -2768,6 +2776,7 @@ export class Rooms {
     if (room.webhookUrl) {
       void this.cfg.webhooks.send(room.webhookUrl, payload);
     }
+    this.cfg.onRoomEvent?.(room.docId, payload);
   }
 
   /**

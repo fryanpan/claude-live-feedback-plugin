@@ -291,6 +291,19 @@ function taskBadges(task: HubTask): HTMLElement {
   // The assignee is its own cell at the end of the row now (§ row anatomy).
   // As a badge it appeared only when it wasn't the default 'agent', so most
   // rows showed no owner at all.
+
+  // The row's only tell that a discussion exists. Without it the comments are
+  // in the store and unreachable from the board — the failure mode this
+  // codebase has already been bitten by with resolved threads. It goes before
+  // the derived badges because the badge strip clips on a narrow row, and the
+  // one badge that means “someone is talking to you” must not be the one lost.
+  if (task.commentCount) {
+    add(
+      'hub-badge-comments',
+      `💬 ${task.commentCount}`,
+      `${task.commentCount} comment${task.commentCount === 1 ? '' : 's'} — open the task to read them`,
+    );
+  }
   if (task.after.length > 0)
     add('hub-badge-after', `after ${task.after.length}`, `blocked on: ${task.after.join(', ')}`);
   if (task.dueAt !== undefined) {
@@ -1231,6 +1244,19 @@ function commentForm(
  * cost a navigation — which in practice meant saying it in chat instead,
  * where it reaches nobody the task reaches.
  */
+/**
+ * Whether someone is mid-sentence in the discussion's composer.
+ *
+ * A live refresh repaints the panel, and a repaint rebuilds the composer —
+ * so refreshing under someone's hands deletes what they were typing. This
+ * is deliberately one-directional: the worst it can do is make a reply
+ * appear when the reader stops typing rather than the instant it lands.
+ */
+export function discussionIsBusy(root: ParentNode): boolean {
+  const composers = [...root.querySelectorAll<HTMLTextAreaElement>('.hub-discussion textarea')];
+  return composers.some((ta) => ta.value.trim() !== '' || ta === ta.ownerDocument.activeElement);
+}
+
 function renderDiscussion(
   task: HubTask,
   discussion: TaskDiscussion,
