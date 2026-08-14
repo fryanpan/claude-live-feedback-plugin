@@ -274,6 +274,53 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       });
     });
 
+    // The board's drag handle and its arrow-key twin post THIS route — no
+    // ordering API of their own, because `order` was already fractional. So
+    // the reorder gesture is only as real as this call is: a person as the
+    // author (every case above sends an agent), a fractional position from
+    // the midpoint of two neighbours, a position ABOVE the current top row
+    // (which is `first.order - 1`, i.e. zero or negative), and `chores` —
+    // reserved, absent from goals[], and a legitimate drop target on screen.
+    it('carries the board reorder: a person, a fractional position, and a drop above the top row', async () => {
+      const wsId = await seedWorkspace();
+      const top = await seedTask(wsId, { goal: 'g1', order: 1 });
+      const bottom = await seedTask(wsId, { goal: 'g1', order: 2 });
+      const mover = await seedTask(wsId, { goal: 'g2', order: 1 });
+
+      // Dropped between the two g1 rows: the midpoint of their orders.
+      const between = await jj<{ task: Task; changed: boolean }>(
+        await post(`/api/tasks/${mover.id}/goal`, { goal: 'g1', position: 1.5, author: PERSON }),
+      );
+      expect(between.changed).toBe(true);
+      expect(between.task.order).toBe(1.5);
+
+      // …and dragged again to the very top, which is below the first order.
+      const above = await jj<{ task: Task }>(
+        await post(`/api/tasks/${mover.id}/goal`, { goal: 'g1', position: 0, author: PERSON }),
+      );
+      expect(above.task.order).toBe(0);
+
+      // The stored ordering is what the board re-renders from, so assert the
+      // relationship rather than the numbers: mover < top < bottom.
+      const stored = await getTasks(wsId);
+      const orderOf = (id: string) => stored.find((t) => t.id === id)?.order ?? Number.NaN;
+      expect(orderOf(mover.id)).toBeLessThan(orderOf(top.id));
+      expect(orderOf(top.id)).toBeLessThan(orderOf(bottom.id));
+
+      // Chores is a section on the board like any other; dropping into it is
+      // the same call with the reserved id.
+      const chores = await jj<{ task: Task; changed: boolean }>(
+        await post(`/api/tasks/${mover.id}/goal`, {
+          goal: 'chores',
+          position: 0.5,
+          author: PERSON,
+        }),
+      );
+      expect(chores.changed).toBe(true);
+      expect(chores.task.goal).toBe('chores');
+      expect(chores.task.order).toBe(0.5);
+    });
+
     it('accepts a subgoal id as the target', async () => {
       const wsId = await seedWorkspace();
       const task = await seedTask(wsId);
