@@ -167,6 +167,29 @@ So the full path for a plugin change is: merge → bump landed → peer runs
 `claude plugin update live-feedback@claude-live-feedback` → **peer restarts the
 session**.
 
+An agent can run the update itself — but not through the shell function. In
+Bryan's shell `claude` is a wrapper that injects flags ahead of the subcommand,
+so `claude plugin update …` is parsed as a prompt and dies with *"Input must be
+provided either through stdin or as a prompt argument when using --print"*,
+which reads like a permission refusal and was once written up as one. Use
+`command claude plugin update live-feedback@claude-live-feedback` — `command`
+bypasses functions and aliases. The restart remains the human step.
+
+### Who is behind, without going to look
+
+Every session reports the bundle it is **running** when it attaches to a
+workspace, and the board's presence strip names any session older than the
+version this server's deploy source would install, with both fix steps in
+order. So "does my peer have this yet" is a thing you read rather than a thing
+you audit — which matters because the failure mode is silence: eleven releases
+once sat undelivered with everything green on both ends.
+
+Two limits worth stating. "Released" means *this checkout's manifest*, not
+GitHub — a checkout nobody pulled reports its own staleness as current, the
+same limitation the published client release has. And a session that reports no
+version at all is counted as behind, because the field ships in the release
+that reads it; silence means older than this feature, not unknown.
+
 ## Reviewing work before it merges
 
 Never build in the primary checkout to test something. Instead, from a **linked
