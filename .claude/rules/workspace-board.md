@@ -12,6 +12,13 @@ It moved there because it is not advice about this repo: it is what the
 product asks of **anyone** working a board, and the people who need it most
 are peers who never read this file. One copy, shipped where the board is.
 
+The two things people look for here by name, so grep finds them: a task
+description is a compact user story — **`<persona> can <do x> so that
+<goal y>`**, one persona (Agent, Bryan, Collaborator) — and every task
+**belongs to somebody**, so the API refuses a create whose owner comes out as
+the bare word "agent" (your session needs `FEEDBACK_AGENT_NAME` set). The
+reasoning for both, and everything else about writing a task, is in the skill.
+
 What stays here is the part that is about building this product rather than
 about using it.
 
