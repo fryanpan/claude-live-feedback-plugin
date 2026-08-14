@@ -148,6 +148,23 @@ work, `get_doc` to read it. Edits snapshot back into the task body. This is how
 "ask for feedback on the task, not in chat" is actually done from an agent —
 there is no `comment_on_task` tool.
 
+**Omit `find` to comment on the task itself.** A description you want to
+question is often empty, or the thing you want to ask about is the task rather
+than a phrase inside it, so `create_thread` takes no anchor text in that case:
+
+```
+create_thread(
+  docId: "task:t-abc123",
+  text: "This assumes the index ships first — is that still true after the retriage?",
+)
+```
+
+The thread appears in the task's Discussion on the board, and it never
+orphans, however the description is later rewritten. Pass `find` when you do
+want the comment pinned to a specific line; an EMPTY `find` is an error rather
+than a shortcut to this, so a variable that came out blank can't quietly turn
+into a comment on the whole task.
+
 ## Decisions
 
 A decision is a task with `needs: 'decision'` and a human assignee.
