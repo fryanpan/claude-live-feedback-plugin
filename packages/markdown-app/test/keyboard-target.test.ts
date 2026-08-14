@@ -97,12 +97,17 @@ describe('recognition errors are named, not swallowed', () => {
     expect(errorCodeOf({ error: '' })).toBeNull();
   });
 
-  it('explains a mic blocked by an insecure context instead of blaming silence', () => {
-    // This is the case behind "voice is just broken": Chrome gates the mic on
-    // a secure context, the hubs are plain http at a hostname, and the old
-    // handler turned the refusal into an empty transcript.
+  it('explains a refused mic instead of blaming silence', () => {
+    // "Voice is just broken" was a refusal reported as silence. The INSECURE
+    // ORIGIN half of that now never reaches here — `insecureOriginMessage`
+    // gates the hold before the engine starts, because on a plain-http
+    // hostname there is no mic permission to grant and the advice has to be
+    // "open it on loopback" instead. What still lands here is a `not-allowed`
+    // from a SECURE origin, i.e. a permission genuinely refused, where the
+    // site and OS controls the message names do exist.
     const msg = recognitionErrorMessage('not-allowed');
-    expect(msg).toContain('https');
+    expect(msg.toLowerCase()).toContain('allow the mic for this site');
+    expect(msg.toLowerCase()).toContain('privacy settings');
     expect(msg).not.toBe("Didn't catch anything.");
     expect(recognitionErrorMessage('service-not-allowed')).toBe(msg);
     // A genuinely silent hold still reads as silence.
