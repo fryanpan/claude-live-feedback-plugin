@@ -634,6 +634,94 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     rooms.get(docId)?.meta.workspaceId ?? taskStore.workspaceOfDoc(docId);
 
   /**
+   * Every doc belongs to a hub workspace (Bryan, 2026-08-13) — and requiring
+   * one must not add a step. "Bind a doc, send Bryan the URL" is ONE agent
+   * call, so a caller with no workspace in hand does not get an error telling
+   * them to go create one first: a doc that arrives unfiled lands in the
+   * default workspace, and the id comes back in the same response so the
+   * caller learns where it went.
+   *
+   * This is the HUB workspace (the board: `taskStore`), NOT `meta.workspaceId`
+   * — the doc-GROUPING tag that folder binds and diff reviews use. The two are
+   * deliberately not conflated: a grouping id is a bundle of member docs, a hub
+   * id is a board with goals and tasks.
+   *
+   * Scope: standalone docs. Group binds (`/api/diffs`, folder binds) create
+   * their own grouping with many members and are left alone — attaching every
+   * member would file a hundred rows on a board nobody asked for.
+   */
+  const DEFAULT_WORKSPACE_NAME = 'Unfiled';
+  const DEFAULT_WORKSPACE_GOAL =
+    'Docs that arrived without a workspace. Move one into a real workspace once its work has a home.';
+
+  /**
+   * The default workspace, created on first need.
+   *
+   * Found by LOOKUP, never remembered in a variable: the store hydrates from
+   * disk on boot, so a cached id would fragment into one "Unfiled" per restart
+   * — which is the same as no workspace at all, one board per doc.
+   */
+  const defaultWorkspaceId = (): string => {
+    const existing = taskStore.listWorkspaces().find((w) => w.name === DEFAULT_WORKSPACE_NAME);
+    if (existing) return existing.id;
+    const created = taskStore.createWorkspace(DEFAULT_WORKSPACE_NAME, DEFAULT_WORKSPACE_GOAL);
+    // createWorkspace emits no event (nothing subscribes to a workspace that
+    // doesn't exist yet), so bring the board room up by hand — same as the
+    // POST /api/workspaces route.
+    taskProjection.ensureWorkspace(created.id);
+    return created.id;
+  };
+
+  /**
+   * Put `docId` in a hub workspace and answer which one. Idempotent: a doc
+   * already attached keeps the workspace it has (moving it is `attach_doc`'s
+   * job, not a side effect of re-binding). A `requested` id that names no real
+   * workspace falls back to the default rather than failing the bind — the
+   * whole point is that the doc always lands somewhere.
+   */
+  const ensureDocWorkspace = (docId: string, requested?: string): string => {
+    const existing = taskStore.workspaceOfDoc(docId);
+    if (existing) return existing;
+    const target =
+      requested && taskStore.getWorkspace(requested) ? requested : defaultWorkspaceId();
+    taskStore.attachDoc(target, docId);
+    // attachDoc emits no store event; refresh the projection's docIds.
+    taskProjection.ensureWorkspace(target);
+    return target;
+  };
+
+  /**
+   * Filing a doc into a real workspace takes it OUT of the default one.
+   *
+   * Without this, the usual agent flow — create the doc, then attach it —
+   * leaves it linked to two hub workspaces, and `workspaceOfDoc` answers with
+   * whichever the store iterates first. That is not cosmetic: it is what
+   * SHARE SCOPING resolves a doc against, so a workspace visitor was refused
+   * (403) on the very doc the share was created for. The default workspace is
+   * a holding pen, not a second home.
+   */
+  const unfileFromDefault = (docId: string, keptWorkspaceId: string): void => {
+    // `find`, never `defaultWorkspaceId()` — filing a doc must not conjure a
+    // holding pen on a server that has never needed one.
+    const holding = taskStore.listWorkspaces().find((w) => w.name === DEFAULT_WORKSPACE_NAME);
+    if (!holding || holding.id === keptWorkspaceId) return;
+    const res = taskStore.detachDoc(holding.id, docId);
+    if (res.ok && res.removed) taskProjection.ensureWorkspace(holding.id);
+  };
+
+  /**
+   * A deleted doc leaves no link behind. This mattered little while attaching
+   * was a deliberate act on a handful of docs; now that EVERY doc is filed, a
+   * board would otherwise silently accumulate one tombstone per deleted doc.
+   */
+  const unlinkDocEverywhere = (docId: string): void => {
+    for (const w of taskStore.listWorkspaces()) {
+      const res = taskStore.detachDoc(w.id, docId);
+      if (res.ok && res.removed) taskProjection.ensureWorkspace(w.id);
+    }
+  };
+
+  /**
    * CORS is decided once, here, for every response the handler produces,
    * rather than by `j()` — which has no request context and used to stamp
    * `Access-Control-Allow-Origin: *` on everything. See
@@ -1213,6 +1301,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!rooms.get(docId)) {
             if (type === 'mockup') {
               rooms.getOrCreate(docId, { type, sourceUrl });
+              // The widget is the third creation path (next to POST /api/docs
+              // and the MCP tools that front it), so it files its doc too —
+              // otherwise a mockup that was only ever opened in a browser is
+              // an orphan the hub can't see.
+              ensureDocWorkspace(docId);
             } else {
               return j(404, { error: 'doc not found' });
             }
@@ -1296,6 +1389,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             workspaceRoot: body?.workspaceRoot as string | undefined,
             producedBy: body?.producedBy as { agentId?: string; sessionId?: string } | undefined,
           });
+          // Before the file attach, not after: the room already exists at this
+          // point, and the 409 below returns early — filing afterwards would
+          // leave a failed bind as the one doc this route can still strand
+          // outside a workspace.
+          const hubWorkspaceId = ensureDocWorkspace(
+            docId,
+            body?.hubWorkspaceId as string | undefined,
+          );
           let attached: ReturnType<typeof rooms.attachFile> | undefined;
           if (type === 'markdown' && sourceUrl) {
             attached = rooms.attachFile(docId, sourceUrl);
@@ -1307,6 +1408,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           return j(200, {
             docId: room.docId,
             meta: withReviewUrl(room.meta),
+            // Where the doc landed, in the same call that created it — a
+            // caller who supplied no workspace still learns which one it got.
+            hubWorkspaceId,
             ...(attached ? { attached } : {}),
           });
         }
@@ -1433,7 +1537,21 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // openThreads, allIdle, owner, lastActivityAt). The daily triage uses
         // this to treat a folder bind as one cleanup unit.
         if (pathname === '/api/workspaces' && req.method === 'GET') {
-          return j(200, { workspaces: rooms.listWorkspaces() });
+          return j(200, {
+            workspaces: rooms.listWorkspaces(),
+            // Hub workspaces (the boards) are a different thing from the
+            // grouping workspaces above and stay in their own key rather than
+            // being mixed into one list. They belong on this route because a
+            // workspace the SERVER materialized for an unfiled doc has no
+            // other way to be found: nobody was told its id at creation time.
+            hubWorkspaces: taskStore.listWorkspaces().map((w) => ({
+              id: w.id,
+              name: w.name,
+              goal: w.goal,
+              docCount: w.docIds.length,
+              createdAt: w.createdAt,
+            })),
+          });
         }
         // --- REST: hub workspaces + tasks (plan §3.10) ---
         // Every handler below hand-copies body fields into the store call.
@@ -1570,6 +1688,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!exists) return j(404, { error: 'doc not found', docId });
           const res = taskStore.attachDoc(workspaceId, docId);
           if (!res.ok) return j(404, res);
+          // A doc filed here is no longer unfiled.
+          unfileFromDefault(docId, workspaceId);
           // attachDoc emits no store event; refresh the projection's docIds.
           taskProjection.ensureWorkspace(workspaceId);
           return j(200, { ok: true, workspace: taskStore.getWorkspace(workspaceId) });
@@ -2223,7 +2343,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (rest === '' && req.method === 'DELETE') {
             const force = url.searchParams.get('force') === 'true';
             const res = rooms.deleteDoc(docId, { force });
-            if (res.ok) return j(200, res);
+            if (res.ok) {
+              unlinkDocEverywhere(docId);
+              return j(200, res);
+            }
             return j(res.error === 'has-open-threads' ? 409 : 404, res);
           }
           if (rest === 'threads' && req.method === 'GET') {
@@ -3173,6 +3296,13 @@ function buildLandingModel(
     // would sit in "Ungrouped" forever inflating the artifact count. Still
     // reachable at /review/<id> — hidden from the index, not from the server.
     if (meta.docId === HUB_FEEDBACK_DOC_ID) continue;
+    // Same reasoning for the projection's own rooms: a `ws:<id>` board and a
+    // `task:<id>` body are surfaces the SERVER owns for the hub, not things
+    // anyone put up for review, and each one carried its workspace/task name
+    // into the index as a phantom artifact. Latent since the projection
+    // landed — invisible only because hub workspaces were rare; now that an
+    // unfiled doc materializes one, every install would grow the row.
+    if (meta.docId.startsWith('ws:') || meta.docId.startsWith('task:')) continue;
     const threads = rooms.listThreads(meta.docId);
     const openCount = threads.filter((t) => t.status === 'open').length;
     const lastActivity = Math.max(

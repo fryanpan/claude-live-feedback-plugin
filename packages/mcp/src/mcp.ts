@@ -70,7 +70,7 @@ const server = new Server(
     // Must match packages/plugin/.claude-plugin/plugin.json — this is the version
     // a client sees in the initialize handshake, and it had drifted three minor
     // releases behind. Asserted in packages/mcp/test/launcher.test.ts.
-    version: '0.1.14',
+    version: '0.1.15',
   },
   {
     capabilities: {
@@ -294,6 +294,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           title: { type: 'string' },
           setId: { type: 'string' },
           subscribe: { type: 'boolean' },
+          hubWorkspaceId: {
+            type: 'string',
+            description:
+              'Optional hub workspace (board) to file this doc under — the id `create_workspace` returned, NOT a folder-bind grouping id. Omit it and the doc still lands in a workspace: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went. Filing it later with attach_doc moves it out of Unfiled.',
+          },
           producedBy: {
             type: 'object',
             description:
@@ -357,6 +362,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           sourceHtmlPath: { type: 'string' },
           title: { type: 'string' },
           subscribe: { type: 'boolean' },
+          hubWorkspaceId: {
+            type: 'string',
+            description:
+              'Optional hub workspace (board) to file this mockup under — the id `create_workspace` returned, NOT a folder-bind grouping id. Omit it and the mockup still lands in a workspace: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went.',
+          },
         },
         required: ['docId', 'sourceHtmlPath'],
       },
@@ -1460,11 +1470,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok(res);
       }
       case 'create_review_doc': {
-        const { docId, path, title, setId, producedBy } = a as {
+        const { docId, path, title, setId, hubWorkspaceId, producedBy } = a as {
           docId: string;
           path: string;
           title?: string;
           setId?: string;
+          hubWorkspaceId?: string;
           producedBy?: { agentId?: string; sessionId?: string };
         };
         const res = await http('POST', '/api/docs', {
@@ -1474,6 +1485,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           owner: process.cwd(),
           ...(title ? { title } : {}),
           ...(setId ? { setId } : {}),
+          ...(hubWorkspaceId ? { hubWorkspaceId } : {}),
           ...(producedBy ? { producedBy } : {}),
         });
         return ok(res);
@@ -1497,10 +1509,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok(res);
       }
       case 'bind_mock': {
-        const { docId, sourceHtmlPath, title } = a as {
+        const { docId, sourceHtmlPath, title, hubWorkspaceId } = a as {
           docId: string;
           sourceHtmlPath?: string;
           title?: string;
+          hubWorkspaceId?: string;
         };
         // Same POST /api/docs route as create_review_doc, with type='mockup'.
         // The server's getOrCreate accepts both shapes; `sourceUrl` is optional
@@ -1511,6 +1524,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           owner: process.cwd(),
           ...(sourceHtmlPath ? { sourceUrl: sourceHtmlPath } : {}),
           ...(title ? { title } : {}),
+          ...(hubWorkspaceId ? { hubWorkspaceId } : {}),
         });
         return ok(res);
       }
