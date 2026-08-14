@@ -13754,7 +13754,7 @@ function suggestionAuthor() {
 }
 var server = new Server({
   name: "claude-live-feedback",
-  version: "0.1.13"
+  version: "0.1.15"
 }, {
   capabilities: {
     tools: {},
@@ -14555,7 +14555,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           title: { type: "string" },
           body: {
             type: "string",
-            description: 'The description. Not schema-required — but WRITE ONE ANYWAY, on every task: a bare title is not pickup-able by an agent that was not in the conversation, and reconstructing intent from a title is how the wrong thing gets built. Shape it as a compact user story — `<persona> can <do x> so that <goal y>`, one persona (Agent / Bryan / Collaborator) — and add falsifiable "done when" criteria for anything handed to someone else or parked beyond today. Proportionate: work you will finish within the hour needs the story line and nothing more. Markdown; it renders on the task itself and comes back whole from next_tasks, so do not create a separate doc to hold it.'
+            description: "The description. Not schema-required — but WRITE ONE ANYWAY, on every task: a bare title is not pickup-able by an agent that was not in the conversation, and reconstructing intent from a title is how the wrong thing gets built. Shape it as a compact user story — `<persona> can <do x> so that <goal y>`, one persona (Agent / Bryan / Collaborator) — and add falsifiable \"done when\" criteria for anything handed to someone else or parked beyond today. Proportionate: work you will finish within the hour needs the story line and nothing more. Markdown; it renders on the task itself and comes back whole from next_tasks, so do not create a separate doc to hold it.\n\nWhen `needs` is 'decision' this is REQUIRED and has a different shape — the question in one line, what is at stake in two or three, the options with what each one costs, then what is blocked until it is answered. A body with no question in it is REFUSED, because the failure this catches is filing a progress report as a decision: the field is populated, every check passes, and the person asked to decide has nothing to decide from. The other three parts come back as advisory `shapeGaps` on a successful create."
           },
           assignee: {
             type: "string",
@@ -14564,7 +14564,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           needs: {
             type: "string",
             enum: ["action", "decision"],
-            description: "Only meaningful when assignee is a human. 'decision' makes it a decision task (answer_decision records the verbatim answer)."
+            description: "Only meaningful when assignee is a human. 'decision' makes it a decision task (answer_decision records the verbatim answer). A decision REQUIRES a decision-shaped `body` — see that field."
+          },
+          options: {
+            type: "array",
+            description: 'Candidate answers, decision tasks only: [{label, detail?}]. `label` is the text recorded VERBATIM as the answer if it is picked; `detail` is what picking it costs. Supply them whenever you already have candidates in mind — that is the normal case, and without them the person deciding has to compose prose to say "the second one". They are a SHORTCUT, never a closed set: writing a different answer and asking for more information stay available next to them, so do not pad the list to look exhaustive. Two or more, or don\'t bother.',
+            items: { type: "object" }
           },
           goal: {
             type: "string",
@@ -14774,9 +14779,34 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         type: "object",
         properties: {
           taskId: { type: "string" },
-          text: { type: "string", description: "The human's verbatim answer." }
+          text: { type: "string", description: "The human's verbatim answer." },
+          optionId: {
+            type: "string",
+            description: "The id of the option they picked, when they picked one (from list_tasks / the task's `options`). The answer is STILL `text` — pass the option's label as the text; this only records which candidate the words came from. Omit when they answered in their own words."
+          }
         },
         required: ["taskId", "text"]
+      }
+    },
+    {
+      name: "set_task_dependencies",
+      description: "Set what a task waits on, AFTER it was created. `after` lists the task ids it depends on; `afterEnforce` is the subset whose open state hard-blocks its transitions. Replaces the whole edge set — pass the full list you want, and an empty `after` clears the edges.\n\nUse it the moment you discover a task is waiting on an open decision: name that decision in the blocked task's `after`. That edge is the ONLY record of \"this decision is blocking work now\" — the board derives a decision's urgency from what depends on it, and there is deliberately no urgency field to set by hand, because a hand-set one would be set at creation, the moment its author knows least. A decision nothing points at reads as parked, however loudly its body says otherwise.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          taskId: { type: "string", description: "The BLOCKED task — the one that waits." },
+          after: {
+            type: "array",
+            items: { type: "string" },
+            description: "Task ids this waits on, in full. Must exist in the same workspace; a self-reference is refused."
+          },
+          afterEnforce: {
+            type: "array",
+            items: { type: "string" },
+            description: "Subset of `after` that hard-blocks transitions while open. Every id here MUST also appear in `after` — the call is refused rather than silently widening `after`."
+          }
+        },
+        required: ["taskId", "after"]
       }
     },
     {
@@ -14875,7 +14905,7 @@ var NO_AUTO_WATCH_TOOLS = new Set([
   "observe_url",
   "attach_doc"
 ]);
-function taskCreatedSummary(task, ignoredLinks) {
+function taskCreatedSummary(task, ignoredLinks, shapeGaps) {
   return {
     taskId: task.id,
     goal: task.goal,
@@ -14883,6 +14913,7 @@ function taskCreatedSummary(task, ignoredLinks) {
     status: task.status,
     assignee: task.assignee,
     triagePending: task.triagePendingTs !== undefined,
+    ...shapeGaps !== undefined && shapeGaps.length > 0 ? { shapeGaps } : {},
     ...ignoredLinks !== undefined && ignoredLinks.length > 0 ? { ignoredLinks } : {}
   };
 }
@@ -15315,6 +15346,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           body,
           assignee,
           needs,
+          options,
           goal,
           order,
           after,
@@ -15328,6 +15360,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...body !== undefined ? { body } : {},
           ...assignee !== undefined ? { assignee } : {},
           ...needs !== undefined ? { needs } : {},
+          ...options !== undefined ? { options } : {},
           ...goal !== undefined ? { goal } : {},
           ...order !== undefined ? { order } : {},
           ...after !== undefined ? { after } : {},
@@ -15337,7 +15370,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...quote !== undefined ? { quote } : {},
           author: AUTHOR
         });
-        return ok(taskCreatedSummary(res.task, res.ignoredLinks));
+        return ok(taskCreatedSummary(res.task, res.ignoredLinks, res.shapeGaps));
       }
       case "promote_to_task": {
         const { docId, threadId, workspaceId, title, body, assignee, needs, goal, dueAt, links } = a;
@@ -15456,12 +15489,27 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok({ workspaceId, changed: res.changed, retriage: res.retriage });
       }
       case "answer_decision": {
-        const { taskId, text } = a;
+        const { taskId, text, optionId } = a;
         const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/answer`, {
           text,
+          ...optionId !== undefined ? { optionId } : {},
           author: AUTHOR
         });
         return ok({ taskId, recorded: true, links: res.task.links ?? [] });
+      }
+      case "set_task_dependencies": {
+        const { taskId, after, afterEnforce } = a;
+        const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/after`, {
+          after,
+          ...afterEnforce !== undefined ? { afterEnforce } : {},
+          author: AUTHOR
+        });
+        return ok({
+          taskId,
+          changed: res.changed,
+          after: res.task.after ?? [],
+          afterEnforce: res.task.afterEnforce ?? []
+        });
       }
       case "import_tasks_markdown": {
         const { workspaceId, path, apply } = a;
