@@ -901,6 +901,43 @@ describe('renderTaskDetail — discussion', () => {
     );
   });
 
+  /**
+   * A comment lost to a dropped connection is worse than one that never
+   * sent: the box is empty, the toast is gone in three seconds, and the
+   * person believes they said it. The text stays put until the post is
+   * acknowledged.
+   */
+  it('keeps the text in the box when the post fails', async () => {
+    const onComment = vi.fn(() => Promise.resolve(false));
+    renderTaskDetail(root, task(), detailHandlers({ onComment }), {
+      loading: false,
+      threads: [],
+    });
+    const form = root.querySelector('.hub-comment-form') as HTMLFormElement;
+    const ta = form.querySelector('textarea') as HTMLTextAreaElement;
+    ta.value = 'This is below the API work.';
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(ta.value).toBe('This is below the API work.');
+    expect(ta.disabled).toBe(false);
+  });
+
+  // Positive control: the box does empty on the ordinary path, so the test
+  // above is about the failure and not about a box that never clears.
+  it('empties the box once the post is acknowledged', async () => {
+    const onComment = vi.fn(() => Promise.resolve(true));
+    renderTaskDetail(root, task(), detailHandlers({ onComment }), {
+      loading: false,
+      threads: [],
+    });
+    const form = root.querySelector('.hub-comment-form') as HTMLFormElement;
+    const ta = form.querySelector('textarea') as HTMLTextAreaElement;
+    ta.value = 'Agreed, it goes first.';
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(ta.value).toBe('');
+  });
+
   it('an empty box posts nothing', () => {
     const onComment = vi.fn();
     renderTaskDetail(root, task(), detailHandlers({ onComment }), { loading: false, threads: [] });

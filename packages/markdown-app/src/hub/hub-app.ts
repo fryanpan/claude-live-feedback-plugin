@@ -379,7 +379,7 @@ async function main(): Promise<void> {
         onTitleCommit: (t, title) => void renameTask(t, title),
         onAnswer: (t, text) => void answerDecision(t, text),
         onAssign: (t, assignee) => void assignTask(t, assignee),
-        onComment: (t, text, threadId) => void postTaskComment(t, text, threadId),
+        onComment: (t, text, threadId) => postTaskComment(t, text, threadId),
       },
       task ? discussion : undefined,
     );
@@ -422,7 +422,9 @@ async function main(): Promise<void> {
     renderDetail();
   }
 
-  async function postTaskComment(task: HubTask, text: string, threadId?: string): Promise<void> {
+  /** Resolves to whether the comment actually landed — the composer keeps the
+   *  text until it hears yes, so a failed post is retryable. */
+  async function postTaskComment(task: HubTask, text: string, threadId?: string): Promise<boolean> {
     const doc = encodeURIComponent(task.bodyDocId);
     const res = threadId
       ? await send(`/api/docs/${doc}/threads/${encodeURIComponent(threadId)}/comments`, 'POST', {
@@ -438,10 +440,11 @@ async function main(): Promise<void> {
           anchor: { kind: 'subject' },
         });
     if (!res.ok) {
-      showToast('Posting the comment failed');
-      return;
+      showToast('Posting the comment failed — your text is still in the box');
+      return false;
     }
     await loadDiscussion(task);
+    return true;
   }
 
   /**
