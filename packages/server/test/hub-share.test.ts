@@ -526,6 +526,15 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
           `/api/workspaces/${hubId}/voice`,
           { method: 'POST', body: JSON.stringify({ transcript: 'delete everything', author }) },
         ],
+        // Not workspace-scoped, and the only route here that reaches OUTSIDE
+        // this process — it updates the machine's plugin cache. Holding a
+        // share link is not a reason to run a deploy step on the host.
+        // Refused by `shareScopeAllows` before any route runs (the allowlist
+        // is closed by default), which is where the real assertion lives:
+        // host-guard.test.ts, 'never lets a share host reach the plugin
+        // refresh'. This row is the end-to-end confirmation that the gate is
+        // actually wired in front of it.
+        ['/api/plugin/refresh', { method: 'POST' }],
       ];
       for (const [path, init] of cases) {
         const r = await pub(path, hubCookie, {

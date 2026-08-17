@@ -26,6 +26,7 @@ import {
   isTrustedLocalHost,
   shareScopeAllows,
 } from './middleware/host-guard.ts';
+import type { PluginRefresher } from './plugin-refresh.ts';
 import { agentsBehind, readReleasedPluginVersion } from './plugin-release.ts';
 import { localHostnames, publicBaseUrl } from './public-host.ts';
 import { reviewThreadItems } from './review-queue.ts';
@@ -173,6 +174,14 @@ export interface ServerOptions {
   sharingEnvLocked?: boolean;
   port?: number;
   dataDir?: string;
+  /**
+   * Runs `claude plugin update` on this machine when a peer asks. Absent by
+   * default and constructed in ONE place (bin.ts), so nothing that merely
+   * spins a server up — every test, every embedded use — can mutate this
+   * machine's plugin cache. Same seam rule as `summarizer`; here it also
+   * means a CI run can never trigger a deploy.
+   */
+  pluginRefresher?: PluginRefresher;
   /** Absolute path to the built widget dist dir, or null to skip. */
   widgetDistDir?: string | null;
   /** Absolute path to the built markdown-app dist dir. */
@@ -470,6 +479,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // Generation is opt-IN at this seam: no summarizer, no outbound call, ever.
   // See ServerOptions.summarizer for why constructing one here was wrong.
   const summarizer = opts.summarizer ?? null;
+  const pluginRefresher = opts.pluginRefresher ?? null;
   // Late-bound because Rooms is constructed before the task store and the
   // projection it needs. Nothing can fire through it until a room exists,
   // which is after both.
@@ -2333,6 +2343,32 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             ...(promoteLinks.ignored.length > 0 ? { ignoredLinks: promoteLinks.ignored } : {}),
             ...(res.shapeGaps !== undefined ? { shapeGaps: res.shapeGaps } : {}),
           });
+        }
+        // --- REST: plugin refresh ---
+        // The other half of the drift signal: any peer that can read who is
+        // behind can also ask the machine to fetch the new bundle. Safe to
+        // expose to everyone in the workspace because it cannot interrupt
+        // anyone — it rewrites a version-keyed cache, and a running session
+        // keeps loading the path it resolved at launch. Peers take the new
+        // version at their own next restart.
+        if (pathname === '/api/plugin/refresh') {
+          // Unreachable today — `shareScopeAllows` is an allowlist and this
+          // path is not on it, so a share host is refused before any route
+          // runs (host-guard.test.ts pins that). Kept, and kept AHEAD of the
+          // capability check, so that allowlisting this path later cannot
+          // silently open a deploy step to external reviewers, and so an
+          // unconfigured deployment never answers a visitor with what it
+          // would have done.
+          if (visitor) return j(403, { error: 'not available to share visitors' });
+          if (!pluginRefresher) {
+            return j(501, {
+              error:
+                'plugin refresh not enabled on this server (dev and staging deliberately cannot spawn an update)',
+            });
+          }
+          if (req.method === 'GET') return j(200, { refresh: pluginRefresher.last() });
+          if (req.method === 'POST') return j(200, { refresh: await pluginRefresher.refresh() });
+          return j(405, { error: 'method not allowed' });
         }
         // --- REST: agent attachments (§4) ---
         // AgentAttachment records live OUTSIDE every ydoc; this REST surface
