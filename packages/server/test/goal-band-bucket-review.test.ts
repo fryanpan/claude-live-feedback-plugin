@@ -445,9 +445,7 @@ describe('a new goal band asks the bucket to be re-looked-at', () => {
       if (!later.ok) throw new Error('fixture');
       const attach = store.attachAgent(ws.id, { agentId: LEAD, runtime: 'claude-code-local' });
       if (!attach.ok) throw new Error('attach failed');
-      expect(attach.pendingBucketReview?.taskIds.sort()).toEqual(
-        [...ids, later.task.id].sort(),
-      );
+      expect(attach.pendingBucketReview?.taskIds.sort()).toEqual([...ids, later.task.id].sort());
       // And it agrees with the other half of the same response.
       expect(attach.pendingBucketReview?.taskIds.sort()).toEqual([...attach.untriaged].sort());
     });
