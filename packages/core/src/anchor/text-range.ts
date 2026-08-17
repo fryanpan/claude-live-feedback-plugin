@@ -1,6 +1,7 @@
 import * as Y from 'yjs';
 import type { TextRangeAnchor } from '../types.ts';
 import type { TextResolution, TextResolveEnv } from './index.ts';
+import { decodeRelativePositionSafe } from './validate.ts';
 
 const SNIPPET_MAX = 80;
 
@@ -18,8 +19,16 @@ export function createFromOffsets(ytext: Y.Text, start: number, end: number): Te
 }
 
 export function resolve(anchor: TextRangeAnchor, env: TextResolveEnv): TextResolution {
-  const startRel = Y.decodeRelativePosition(anchor.startRel);
-  const endRel = Y.decodeRelativePosition(anchor.endRel);
+  // A malformed / undecodable position is reported as 'deleted' rather than
+  // thrown: it is indistinguishable from a position that no longer resolves,
+  // and every caller already handles that. Throwing here reaches callers
+  // running inside Yjs observers, where it becomes an unhandled async error
+  // charged to an unrelated request.
+  const startRel = decodeRelativePositionSafe(anchor.startRel);
+  const endRel = decodeRelativePositionSafe(anchor.endRel);
+  if (!startRel || !endRel) {
+    return { ok: false, reason: 'deleted' };
+  }
   const startAbs = Y.createAbsolutePositionFromRelativePosition(startRel, env.doc);
   const endAbs = Y.createAbsolutePositionFromRelativePosition(endRel, env.doc);
   if (!startAbs || !endAbs) {
