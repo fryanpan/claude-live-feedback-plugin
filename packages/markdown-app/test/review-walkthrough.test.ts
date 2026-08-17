@@ -170,6 +170,86 @@ describe('renderReviewStrip — the count and the urgency read', () => {
   });
 });
 
+describe('the blocker band — a person’s own task, holding agent work up', () => {
+  /** A human task with `n` open tasks waiting on it. */
+  function blocked(over: Partial<HubTask> = {}, n = 1): HubTask[] {
+    const gate = task({ assignee: 'human', title: 'Turn on the tunnel', ...over });
+    const waits = Array.from({ length: n }, (_, i) =>
+      task({ title: `Waiting ${i + 1}`, after: [gate.id] }),
+    );
+    return [gate, ...waits];
+  }
+
+  it('marks the chip as its own kind and says how much is waiting', () => {
+    const onOpen = vi.fn();
+    renderReviewStrip(root, q0(blocked({}, 2)), strip({ onOpen }));
+    const chip = root.querySelector('.hub-decision-chip') as HTMLElement;
+    expect(chip.className).toContain('hub-review-blocker');
+    expect(chip.textContent).toContain('Turn on the tunnel');
+    // The count is read off the edges, the same as a decision chip's.
+    expect(chip.textContent).toContain('blocks 2');
+    expect(chip.title).toContain('Blocking 2 tasks');
+    chip.click();
+    expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+
+  // Criterion 3 at the surface: widening the band to every human task is the
+  // easy wrong fix, and it shows up here as a strip full of personal backlog.
+  it('a human task nothing waits on never reaches the strip', () => {
+    // Presence first: with an edge, the strip is up.
+    renderReviewStrip(root, q0(blocked()), strip());
+    expect(root.classList.contains('hidden')).toBe(false);
+    renderReviewStrip(root, q0([task({ assignee: 'human', title: 'Read the retro' })]), strip());
+    expect(root.classList.contains('hidden')).toBe(true);
+  });
+
+  it('counts as blocking work now, not as something that can wait', () => {
+    renderReviewStrip(root, q0(blocked()), strip());
+    const urgency = root.querySelector('.hub-decisions-urgency') as HTMLElement;
+    expect(urgency.textContent).toContain('1 blocking work now');
+    expect(urgency.textContent).not.toContain('can wait');
+  });
+
+  // There is no question on a task, so the decision furniture must not appear:
+  // an answer box here would write an `answer` onto work that was never asked.
+  it('walks a blocker without offering to answer it', () => {
+    const onOpenItem = vi.fn();
+    const onStep = vi.fn();
+    const q = q0(blocked({}, 2));
+    renderReviewWalkthrough(root, q, 0, walk({ onOpenItem, onStep }));
+    // Presence first: it IS a card, with the blocks line and the kind on it.
+    const card = root.querySelector('.hub-walk-card') as HTMLElement;
+    expect(card.className).toContain('hub-walk-blocker');
+    expect((root.querySelector('.hub-walk-title') as HTMLElement).textContent).toBe(
+      'Turn on the tunnel',
+    );
+    const blocks = root.querySelector('.hub-walk-blocks') as HTMLElement;
+    expect(blocks.textContent).toContain('Blocking 2 tasks');
+    expect(blocks.textContent).toContain('Waiting 1');
+    expect(root.querySelector('.hub-walk-answer')).toBeNull();
+    expect(root.querySelector('.hub-walk-info')).toBeNull();
+    expect(root.querySelector('.hub-walk-options')).toBeNull();
+
+    // The way out, and the nav — going through the list must not stop here.
+    const open = root.querySelector('.hub-walk-open') as HTMLElement;
+    expect(open.textContent).toContain('task');
+    open.click();
+    expect(onOpenItem).toHaveBeenCalledWith(q.items[0]);
+    (root.querySelector('.hub-walk-skip') as HTMLElement).click();
+    expect(onStep).toHaveBeenCalledWith(1);
+  });
+
+  it('shows the task’s own description, and says so when there is none', () => {
+    const q = q0(blocked({ body: 'Needs a **cert** first.' }));
+    renderReviewWalkthrough(root, q, 0, walk());
+    expect((root.querySelector('.hub-walk-body') as HTMLElement).innerHTML).toContain(
+      '<strong>cert</strong>',
+    );
+    renderReviewWalkthrough(root, q0(blocked()), 0, walk());
+    expect(root.querySelector('.hub-walk-body-empty')).not.toBeNull();
+  });
+});
+
 describe('renderTaskDetail — the same options, from the other entrance', () => {
   it('offers the asker’s options in the detail panel, not only in the walkthrough', () => {
     const onAnswer = vi.fn();

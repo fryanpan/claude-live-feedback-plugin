@@ -1010,6 +1010,14 @@ body.hub-body {
   font-size: 12px;
   line-height: 1;
 }
+/* A person's own task that other work is waiting on. It is blocking by
+   definition — that is the condition for being in the band at all — so it is
+   drawn as blocking rather than waiting on the derived class to say so, and
+   tinted apart from a decision because the move it asks for is different. */
+.hub-decision-chip.hub-review-blocker {
+  border-color: var(--yellow);
+  background: color-mix(in srgb, var(--yellow) 12%, var(--bg));
+}
 /* The ask is what tells you whether to open it: a title alone is the
    container, not the question. Second, quieter, and clipped. */
 .hub-review-ask {
