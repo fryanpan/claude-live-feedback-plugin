@@ -92,12 +92,27 @@ export function isTrustedLocalHost(
 
 /** What a share hostname grants access to. */
 export interface ShareTarget {
-  /** The doc the share URL opens. Always in scope. */
+  /**
+   * The doc the share URL OPENS — a landing address, not a grant.
+   *
+   * It used to be "always in scope", which is precisely what a per-doc share
+   * was: one docId named on the target and waved through by `inScope`. That
+   * base case is gone. The entry doc is reachable because it is a member of
+   * `workspaceId`, and if it somehow is not a member it is not reachable —
+   * which is the correct answer, not a regression.
+   *
+   * Still read by `repairStaleReviewUrl`, which repoints a bookmarked
+   * `/review/<entry>` after the file behind it is renamed.
+   */
   docId: string;
   /**
-   * Set when the share covers a whole workspace (folder bind / diff
-   * review) rather than a single doc. Every member doc is then in scope,
-   * along with the navigation endpoints that make the set browsable.
+   * The workspace this share covers. Every member doc is in scope, along
+   * with the navigation endpoints that make the set browsable.
+   *
+   * REQUIRED, and it is the ONLY source of scope: a workspace is the unit of
+   * sharing. Typed optional so a caller that still constructs the old
+   * doc-only shape is refused by the guard below rather than rejected by the
+   * compiler and then shipped anyway — an absent workspaceId grants nothing.
    */
   workspaceId?: string;
 }
@@ -157,11 +172,20 @@ export function shareScopeAllows(
    * a single answer — an exact `=== workspaceOf(id)` was what refused a hub
    * visitor every review row on their own board.
    *
-   * Only consulted for workspace shares — a doc share never widens past its
-   * one doc, whatever this returns.
+   * Every share is a workspace share, so this is consulted for every scope
+   * question there is. A target with no workspace never reaches it: the guard
+   * refuses before this parameter is read.
    */
   workspacesOf?: (id: string) => string[],
 ): boolean {
+  // A workspace is the unit of sharing, so a target that names none grants
+  // NOTHING — not even the app shell. This is the structural half of removing
+  // per-doc sharing: the mint paths are gone, and a target that somehow
+  // arrives without a workspace (a legacy registry record, a caller still
+  // building the old shape) is refused here rather than falling through to
+  // the doc rules below and being served its one doc.
+  if (!target.workspaceId) return false;
+
   // Static app shell + assets (needed to render the review at all).
   if (pathname === '/app' || pathname.startsWith('/app/')) return true;
   if (pathname === '/widget.js' || pathname === '/widget.iife.js') return true;
@@ -170,12 +194,13 @@ export function shareScopeAllows(
 
   /**
    * Is this id INSIDE the shared workspace? The one rule, and the only place
-   * `workspacesOf` is read — both predicates below are it plus their own base
-   * case, so there is nothing here for a second rule to drift away from.
+   * `workspacesOf` is read — every predicate below is it, so there is nothing
+   * here for a second rule to drift away from. It used to sit beside a
+   * `id === target.docId` base case; that base case WAS the per-doc grant.
    */
   const insideSharedWorkspace = (id: string): boolean => {
     const wsId = target.workspaceId;
-    if (!wsId) return false; // a doc share never widens past its one doc
+    if (!wsId) return false;
     const owners = workspacesOf?.(id);
     // `Array.isArray` is not ceremony: this parameter used to return a bare
     // `string | null`, and a STRING also answers `.includes` — so a caller
@@ -185,11 +210,7 @@ export function shareScopeAllows(
   };
 
   /** Does this path segment name a DOC the share covers? */
-  const inScope = (segment: string): boolean => {
-    const id = safeDecode(segment);
-    if (id === target.docId || segment === target.docId) return true;
-    return insideSharedWorkspace(id);
-  };
+  const inScope = (segment: string): boolean => insideSharedWorkspace(safeDecode(segment));
 
   /**
    * Does this `/api/workspaces/<seg>/…` segment name a workspace the share

@@ -4,8 +4,12 @@
  * routes — same path the MCP tools take. The server (started by
  * scripts/serve.ts) owns the actual share state.
  *
+ * A WORKSPACE is the unit of sharing (Bryan, 2026-08-17) — there is no
+ * `share doc` subcommand, because there is no per-doc share. File the doc on
+ * a workspace and share that.
+ *
  * Usage:
- *   bun share doc <docId> --allow-domain @example.com [--allow-domain ...] [--ttl 72h] [--name <slug>]
+ *   bun share workspace <workspaceId> --allow-domain @example.com [--allow-domain ...] [--ttl 72h] [--name <slug>]
  *   bun share list
  *   bun share revoke <shareId>
  *
@@ -80,16 +84,22 @@ async function main(): Promise<void> {
   const base = resolveBaseUrl();
 
   if (sub === 'doc') {
-    const docId = args.positional[1];
-    if (!docId) usage('docId required');
+    usage(
+      'per-doc sharing was removed — a workspace is the unit of sharing. File the doc on a workspace and run: bun share workspace <workspaceId> --allow-domain @example.com',
+    );
+  }
+
+  if (sub === 'workspace') {
+    const workspaceId = args.positional[1];
+    if (!workspaceId) usage('workspaceId required');
     if (args.flags.allowDomain.length === 0) {
       usage('at least one --allow-domain is required');
     }
-    const res = await fetch(`${base}/api/share/doc`, {
+    const res = await fetch(`${base}/api/share/workspace`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        docId,
+        workspaceId,
         allowDomains: args.flags.allowDomain,
         ttlSeconds: args.flags.ttl,
         name: args.flags.name,
@@ -149,7 +159,7 @@ function usage(message?: string): never {
   console.error(
     [
       'Usage:',
-      '  bun share doc <docId> --allow-domain @example.com [--ttl 72h] [--name <slug>]',
+      '  bun share workspace <workspaceId> --allow-domain @example.com [--ttl 72h] [--name <slug>]',
       '  bun share list',
       '  bun share revoke <shareId>',
     ].join('\n'),

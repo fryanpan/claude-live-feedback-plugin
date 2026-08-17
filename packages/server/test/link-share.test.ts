@@ -7,6 +7,14 @@
  * requiring that session, (c) the session being scoped identically to an
  * Access visitor, and (d) revocation and expiry taking effect immediately
  * rather than when a browser cookie happens to lapse.
+ *
+ * **A workspace is the unit of sharing** (2026-08-17), so every fixture here
+ * is a workspace share. The file used to mint most of them with `{docId}` —
+ * a grant that no longer exists — so the "one doc" fixture is now a folder
+ * bind holding exactly one file, and the tests that were ABOUT per-doc
+ * scoping assert the removal instead: `POST /api/share/doc` is gone, and a
+ * `docId` in a `/api/share/link` body is refused by name rather than
+ * quietly re-scoped to something the caller never asked for.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -21,14 +29,21 @@ describe('link shares over HTTP', () => {
   let handle: ServerHandle;
   let dataDir: string;
   let folder: string;
+  let soloFolder: string;
   let base: string;
 
-  let docShare: { shareId: string; slug: string; url: string; expiresAt: number };
+  let soloShare: { shareId: string; slug: string; url: string; expiresAt: number };
   let wsShare: { shareId: string; slug: string };
   let workspaceId: string;
   let entryDocId: string;
+  /** The one-file workspace and its only member — this file's "narrowest
+   *  possible share" fixture, now that a doc cannot be shared on its own. */
+  let soloWorkspaceId: string;
+  let SOLO: string;
+  /** SOLO path-encoded. Member docIds are `<group>:<relPath>`, so they carry
+   *  a colon that every URL below has to encode. */
+  let soloPath: string;
 
-  const SOLO = 'solo-doc';
   const PRIVATE = 'private-doc';
 
   const local = (path: string, init: RequestInit = {}) =>
@@ -69,6 +84,11 @@ describe('link shares over HTTP', () => {
     writeFileSync(join(folder, 'README.md'), '# Entry\n\nRead me.\n');
     writeFileSync(join(folder, 'design.md'), '# Design\n\nThe plan.\n');
 
+    // The one-file folder. A share over it is as narrow as sharing gets now,
+    // and it is what every test that used to say `{docId: SOLO}` points at.
+    soloFolder = mkdtempSync(join(tmpdir(), 'link-share-solo-'));
+    writeFileSync(join(soloFolder, 'solo.md'), '# Solo\n\nBody.\n');
+
     handle = createServer({
       port: 0,
       dataDir,
@@ -77,36 +97,47 @@ describe('link shares over HTTP', () => {
     });
     base = `http://localhost:${handle.port}`;
 
-    for (const id of [SOLO, PRIVATE]) {
-      const path = join(dataDir, `${id}.md`);
-      writeFileSync(path, `# ${id}\n\nBody.\n`);
-      const r = await local('/api/docs', {
+    // PRIVATE is deliberately NOT bound into either workspace: it lands on the
+    // default "Unfiled" board, which no share below covers.
+    const privatePath = join(dataDir, `${PRIVATE}.md`);
+    writeFileSync(privatePath, `# ${PRIVATE}\n\nBody.\n`);
+    expect(
+      (
+        await local('/api/docs', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ docId: PRIVATE, type: 'markdown', sourceUrl: privatePath }),
+        })
+      ).status,
+    ).toBe(200);
+
+    const bindFolder = async (path: string) => {
+      const r = await local('/api/workspaces', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ docId: id, type: 'markdown', sourceUrl: path }),
+        body: JSON.stringify({ folderPath: path }),
       });
       expect(r.status).toBe(200);
-    }
-
-    const bind = await local('/api/workspaces', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ folderPath: folder }),
-    });
-    const bound = (await bind.json()) as {
-      workspaceId: string;
-      files: Array<{ docId: string }>;
+      return (await r.json()) as { workspaceId: string; files: Array<{ docId: string }> };
     };
+
+    const bound = await bindFolder(folder);
     workspaceId = bound.workspaceId;
     entryDocId = bound.files[0]?.docId ?? '';
+
+    const soloBound = await bindFolder(soloFolder);
+    soloWorkspaceId = soloBound.workspaceId;
+    SOLO = soloBound.files[0]?.docId ?? '';
+    soloPath = encodeURIComponent(SOLO);
+    expect(SOLO).not.toBe('');
 
     const dr = await local('/api/share/link', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ docId: SOLO, label: 'solo review' }),
+      body: JSON.stringify({ workspaceId: soloWorkspaceId, label: 'solo review' }),
     });
     expect(dr.status).toBe(200);
-    docShare = ((await dr.json()) as { share: typeof docShare }).share;
+    soloShare = ((await dr.json()) as { share: typeof soloShare }).share;
 
     const wr = await local('/api/share/link', {
       method: 'POST',
@@ -121,30 +152,36 @@ describe('link shares over HTTP', () => {
     await handle.stop();
     rmSync(dataDir, { recursive: true, force: true });
     rmSync(folder, { recursive: true, force: true });
+    rmSync(soloFolder, { recursive: true, force: true });
   });
+
+  /** Mint a link over the one-file workspace — the replacement for every
+   *  `{docId: SOLO}` body this file used to send. */
+  const mintSolo = (extra: Record<string, unknown> = {}) =>
+    local('/api/share/link', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ workspaceId: soloWorkspaceId, ...extra }),
+    });
 
   describe('minting', () => {
     it('needs no Cloudflare credentials and defaults to a one-week TTL', () => {
-      const days = (docShare.expiresAt - Date.now()) / 86_400_000;
+      const days = (soloShare.expiresAt - Date.now()) / 86_400_000;
       expect(days).toBeGreaterThan(6.9);
       expect(days).toBeLessThan(7.1);
     });
 
     it('mints an unguessable slug', () => {
-      expect(docShare.slug).toMatch(/^[0-9a-f]{32}$/); // 128 bits
-      expect(wsShare.slug).not.toBe(docShare.slug);
+      expect(soloShare.slug).toMatch(/^[0-9a-f]{32}$/); // 128 bits
+      expect(wsShare.slug).not.toBe(soloShare.slug);
     });
 
     it('points the URL at the public host', () => {
-      expect(docShare.url).toBe(`https://${PUBLIC_HOST}/s/${docShare.slug}`);
+      expect(soloShare.url).toBe(`https://${PUBLIC_HOST}/s/${soloShare.slug}`);
     });
 
     it('honours a caller-supplied TTL', async () => {
-      const r = await local('/api/share/link', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ docId: SOLO, ttlSeconds: 3600 }),
-      });
+      const r = await mintSolo({ ttlSeconds: 3600 });
       const { share } = (await r.json()) as { share: { expiresAt: number; shareId: string } };
       const hours = (share.expiresAt - Date.now()) / 3_600_000;
       expect(hours).toBeGreaterThan(0.9);
@@ -152,11 +189,7 @@ describe('link shares over HTTP', () => {
     });
 
     it('can extend or shorten a live share after the fact', async () => {
-      const mk = await local('/api/share/link', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ docId: SOLO }),
-      });
+      const mk = await mintSolo();
       const { share } = (await mk.json()) as { share: { shareId: string } };
       const r = await local(`/api/share/${share.shareId}/ttl`, {
         method: 'POST',
@@ -182,36 +215,97 @@ describe('link shares over HTTP', () => {
       // null, which reads as "not supplied". They're covered against the
       // registry directly in shares-ttl.test.ts.
       for (const ttlSeconds of [0, -60]) {
-        const r = await local('/api/share/link', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ docId: SOLO, ttlSeconds }),
-        });
+        const r = await mintSolo({ ttlSeconds });
         expect(r.status, String(ttlSeconds)).toBe(400);
       }
+      // Positive control: the same body with a sane TTL mints.
+      expect((await mintSolo({ ttlSeconds: 3600 })).status).toBe(200);
     });
 
-    it('refuses a doc or workspace that does not exist', async () => {
-      const a = await local('/api/share/link', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ docId: 'ghost' }),
-      });
-      expect(a.status).toBe(404);
-      const b = await local('/api/share/link', {
+    it('refuses a workspace that does not exist', async () => {
+      const ghost = await local('/api/share/link', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ workspaceId: 'ghost-ws' }),
       });
-      expect(b.status).toBe(404);
+      expect(ghost.status).toBe(404);
+      // Positive control: a real workspace id on the same route mints.
+      expect((await mintSolo()).status).toBe(200);
+    });
+  });
+
+  /**
+   * These four used to be the per-doc minting paths. A workspace is now the
+   * unit of sharing, so what they prove is the REMOVAL — and specifically
+   * that an older plugin bundle's payload is refused BY NAME rather than
+   * silently re-scoped to a workspace the caller never asked about. Each
+   * refusal sits next to the workspace call that replaces it, so none of
+   * them can pass by the route being broken for everyone.
+   */
+  describe('per-doc sharing is gone, and says so', () => {
+    it('answers POST /api/share/doc with 410 and names the replacement', async () => {
+      const r = await local('/api/share/doc', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ docId: SOLO, allowDomains: ['@partner-org.example'] }),
+      });
+      expect(r.status).toBe(410);
+      const body = (await r.json()) as { error: string; hint?: string };
+      expect(body.error).toBe('per_doc_sharing_removed');
+      expect(body.hint).toContain('workspaceId');
+      // Positive control: sharing IS enabled on this server — the workspace
+      // form of the same request succeeds.
+      expect((await mintSolo()).status).toBe(200);
+    });
+
+    it('refuses a docId in a share/link body, even alongside a workspaceId', async () => {
+      for (const body of [
+        { docId: SOLO },
+        // The dangerous reading of this payload is "ignore the field you
+        // don't recognise and mint something anyway".
+        { docId: SOLO, workspaceId: soloWorkspaceId },
+      ]) {
+        const r = await local('/api/share/link', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        expect(r.status, JSON.stringify(body)).toBe(410);
+        expect(((await r.json()) as { error: string }).error).toBe('per_doc_sharing_removed');
+      }
+      // Positive control: drop the docId and the very same call mints.
+      expect((await mintSolo()).status).toBe(200);
+    });
+
+    it('refuses a share/link body that names no workspace at all', async () => {
+      const r = await local('/api/share/link', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ label: 'no scope' }),
+      });
+      expect(r.status).toBe(400);
+      expect(((await r.json()) as { error: string }).error).toBe('workspaceId required');
+      // Positive control: add the workspaceId and the same label mints.
+      expect((await mintSolo({ label: 'no scope' })).status).toBe(200);
+    });
+
+    it('mints nothing along the way — every refusal above created no share', async () => {
+      // The failure this guards is a 4xx returned AFTER a share was pushed
+      // onto the registry, which would leave a live grant nobody can see in
+      // the response they got.
+      const { shares } = (await (await local('/api/share')).json()) as {
+        shares: Array<{ workspaceId?: string; docId: string }>;
+      };
+      expect(shares.length).toBeGreaterThan(0); // positive control: we can see shares
+      for (const s of shares) expect(s.workspaceId).toBeTruthy();
     });
   });
 
   describe('redemption', () => {
-    it('exchanges the slug for a session and redirects to the doc', async () => {
-      const r = await pub(`/s/${docShare.slug}`);
+    it('exchanges the slug for a session and redirects to the entry doc', async () => {
+      const r = await pub(`/s/${soloShare.slug}`);
       expect(r.status).toBe(302);
-      expect(r.headers.get('location')).toBe(`/review/${SOLO}`);
+      expect(r.headers.get('location')).toBe(`/review/${soloPath}`);
       const cookie = r.headers.get('set-cookie') ?? '';
       expect(cookie).toContain('HttpOnly');
       expect(cookie).toContain('SameSite=Lax');
@@ -230,7 +324,12 @@ describe('link shares over HTTP', () => {
 
   describe('the session is required', () => {
     it('refuses every other path on the public host without one', async () => {
-      for (const p of [`/review/${SOLO}`, `/api/docs/${SOLO}`, '/api/docs', `/y/${SOLO}`]) {
+      for (const p of [
+        `/review/${soloPath}`,
+        `/api/docs/${soloPath}`,
+        '/api/docs',
+        `/y/${soloPath}`,
+      ]) {
         const r = await pub(p);
         expect(r.status, p).toBe(401);
       }
@@ -238,22 +337,26 @@ describe('link shares over HTTP', () => {
 
     it('refuses a forged cookie', async () => {
       // Right shape, wrong key — the attacker doesn't have the HMAC secret.
-      const forged = signSession(docShare.shareId, 'f'.repeat(64));
-      expect((await pub(`/api/docs/${SOLO}`, forged)).status).toBe(401);
-      expect((await pub(`/api/docs/${SOLO}`, `${docShare.shareId}.`)).status).toBe(401);
+      const forged = signSession(soloShare.shareId, 'f'.repeat(64));
+      expect((await pub(`/api/docs/${soloPath}`, forged)).status).toBe(401);
+      expect((await pub(`/api/docs/${soloPath}`, `${soloShare.shareId}.`)).status).toBe(401);
     });
   });
 
   describe('a redeemed session is scoped exactly like an Access visitor', () => {
+    // The narrowest share available: a workspace holding one file. It reaches
+    // that file because it is a MEMBER, not because the share names it — the
+    // "the entry doc is always in scope" base case went away with per-doc
+    // sharing, so a doc outside the workspace is refused even here.
     let cookie: string;
     beforeAll(async () => {
-      cookie = await redeem(docShare.slug);
+      cookie = await redeem(soloShare.slug);
     });
 
     it('reaches its own doc', async () => {
-      expect((await pub(`/api/docs/${SOLO}`, cookie)).status).toBe(200);
-      expect((await pub(`/review/${SOLO}`, cookie)).status).not.toBe(403);
-      expect((await pub(`/api/docs/${SOLO}/threads`, cookie)).status).toBe(200);
+      expect((await pub(`/api/docs/${soloPath}`, cookie)).status).toBe(200);
+      expect((await pub(`/review/${soloPath}`, cookie)).status).not.toBe(403);
+      expect((await pub(`/api/docs/${soloPath}/threads`, cookie)).status).toBe(200);
     });
 
     it('CANNOT reach another doc or enumerate', async () => {
@@ -267,15 +370,25 @@ describe('link shares over HTTP', () => {
       const r = await pub('/api/share/link', cookie, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ docId: PRIVATE }),
+        body: JSON.stringify({ workspaceId }),
       });
       expect(r.status).toBe(403);
       expect((await pub('/api/share', cookie)).status).toBe(403);
+      // Positive control: the local surface CAN mint that very share, so the
+      // 403 is the gate refusing a visitor rather than the route being dead.
+      const ok = await local('/api/share/link', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId }),
+      });
+      expect(ok.status).toBe(200);
+      const minted = ((await ok.json()) as { share: { shareId: string } }).share;
+      await local(`/api/share/${minted.shareId}`, { method: 'DELETE' });
     });
 
     it('CANNOT delete or wholesale-replace the doc it was given', async () => {
-      expect((await pub(`/api/docs/${SOLO}`, cookie, { method: 'DELETE' })).status).toBe(403);
-      const rewrite = await pub(`/api/docs/${SOLO}/content`, cookie, {
+      expect((await pub(`/api/docs/${soloPath}`, cookie, { method: 'DELETE' })).status).toBe(403);
+      const rewrite = await pub(`/api/docs/${soloPath}/content`, cookie, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ markdown: '# Wiped\n' }),
@@ -317,89 +430,97 @@ describe('link shares over HTTP', () => {
     });
   });
 
-  describe('a DOC link to a workspace member does not advertise the workspace', () => {
-    // The client treats a non-empty workspaceId as permission to render
-    // workspace nav and re-poll /api/workspaces/<id>/… every 30s. A doc share
-    // is refused those routes, so leaving the id in the payload buys the
-    // visitor a broken sidebar and a steady loop of 403s.
-    let cookie: string;
+  describe('there is no longer a DOC link to a workspace member', () => {
+    /**
+     * This block used to prove that a doc-scoped link WITHHELD `workspaceId`
+     * from the doc payload: the client treats a non-empty workspaceId as
+     * permission to render workspace nav and re-poll `/api/workspaces/<id>/…`
+     * every 30s, and a doc share was refused those routes — so the id bought
+     * the visitor a broken sidebar and a steady loop of 403s.
+     *
+     * That grant is gone, and with it the whole class of visitor that could
+     * see a member doc without its workspace. So what is proven here now is
+     * the removal plus the consequence: minting one is refused, and the
+     * workspace link that replaces it DOES carry the id, because it can
+     * actually use it.
+     */
+    let wsCookie: string;
     beforeAll(async () => {
-      const r = await local('/api/share/link', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ docId: entryDocId }),
-      });
-      const { share } = (await r.json()) as { share: { slug: string } };
-      cookie = await redeem(share.slug);
-    });
-
-    it('serves the doc but withholds workspaceId and setId', async () => {
-      const res = await pub(`/api/docs/${encodeURIComponent(entryDocId)}`, cookie);
-      expect(res.status).toBe(200);
-      const { meta } = (await res.json()) as { meta: Record<string, unknown> };
-      // Positive control: this IS the workspace member, and the tailnet view
-      // of the same doc does carry the ids.
-      const owner = (await (await local(`/api/docs/${encodeURIComponent(entryDocId)}`)).json()) as {
-        meta: Record<string, unknown>;
-      };
-      expect(owner.meta.workspaceId).toBe(workspaceId);
-      expect(meta.docId).toBe(entryDocId);
-      expect(meta.workspaceId).toBeUndefined();
-      expect(meta.setId).toBeUndefined();
-    });
-
-    it('and the workspace routes stay closed to it either way', async () => {
-      expect(
-        (await pub(`/api/workspaces/${encodeURIComponent(workspaceId)}/tree`, cookie)).status,
-      ).toBe(403);
-    });
-
-    it('a WORKSPACE link still gets the id it needs to render the sidebar', async () => {
-      const wsCookie = await redeem((await mintWorkspaceLink()).slug);
-      const res = await pub(`/api/docs/${encodeURIComponent(entryDocId)}`, wsCookie);
-      const { meta } = (await res.json()) as { meta: Record<string, unknown> };
-      expect(meta.workspaceId).toBe(workspaceId);
-    });
-
-    const mintWorkspaceLink = async (): Promise<{ slug: string }> => {
       const r = await local('/api/share/link', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ workspaceId }),
       });
-      return ((await r.json()) as { share: { slug: string } }).share;
-    };
+      expect(r.status).toBe(200);
+      const { share } = (await r.json()) as { share: { slug: string } };
+      wsCookie = await redeem(share.slug);
+    });
+
+    it('refuses to mint a link scoped to one member of a workspace', async () => {
+      const r = await local('/api/share/link', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ docId: entryDocId }),
+      });
+      expect(r.status).toBe(410);
+      expect(((await r.json()) as { error: string }).error).toBe('per_doc_sharing_removed');
+      // Positive control: the workspace this member belongs to shares fine.
+      const ok = await local('/api/share/link', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId }),
+      });
+      expect(ok.status).toBe(200);
+      await local(
+        `/api/share/${((await ok.json()) as { share: { shareId: string } }).share.shareId}`,
+        { method: 'DELETE' },
+      );
+    });
+
+    it('the workspace link carries the id the sidebar needs, and the routes to use it', async () => {
+      const res = await pub(`/api/docs/${encodeURIComponent(entryDocId)}`, wsCookie);
+      expect(res.status).toBe(200);
+      const { meta } = (await res.json()) as { meta: Record<string, unknown> };
+      expect(meta.docId).toBe(entryDocId);
+      expect(meta.workspaceId).toBe(workspaceId);
+      // The id is only worth handing over because the nav routes are open to
+      // this visitor — the pairing the doc-scoped link could never have.
+      expect(
+        (await pub(`/api/workspaces/${encodeURIComponent(workspaceId)}/tree`, wsCookie)).status,
+      ).toBe(200);
+    });
+
+    it('and another workspace’s nav stays closed to it', async () => {
+      // Positive control is the test above: this same cookie reads its own
+      // tree. The one-file workspace is a different set, so it is refused.
+      expect(
+        (await pub(`/api/workspaces/${encodeURIComponent(soloWorkspaceId)}/tree`, wsCookie)).status,
+      ).toBe(403);
+      expect((await pub(`/api/docs/${soloPath}`, wsCookie)).status).toBe(403);
+    });
   });
 
   describe('revocation and expiry are immediate', () => {
     it('a revoked share kills a session already in a browser', async () => {
-      const mk = await local('/api/share/link', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ docId: SOLO }),
-      });
+      const mk = await mintSolo();
       const { share } = (await mk.json()) as { share: { shareId: string; slug: string } };
       const cookie = await redeem(share.slug);
-      expect((await pub(`/api/docs/${SOLO}`, cookie)).status).toBe(200);
+      expect((await pub(`/api/docs/${soloPath}`, cookie)).status).toBe(200);
 
       const del = await local(`/api/share/${share.shareId}`, { method: 'DELETE' });
       expect(del.status).toBe(200);
 
       // Same cookie, same browser — refused on the very next request.
-      expect((await pub(`/api/docs/${SOLO}`, cookie)).status).toBe(401);
+      expect((await pub(`/api/docs/${soloPath}`, cookie)).status).toBe(401);
       // And the slug no longer redeems.
       expect((await pub(`/s/${share.slug}`)).status).toBe(404);
     });
 
     it('an expired share stops working without anyone touching the browser', async () => {
-      const mk = await local('/api/share/link', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ docId: SOLO, ttlSeconds: 60 }),
-      });
+      const mk = await mintSolo({ ttlSeconds: 60 });
       const { share } = (await mk.json()) as { share: { shareId: string; slug: string } };
       const cookie = await redeem(share.slug);
-      expect((await pub(`/api/docs/${SOLO}`, cookie)).status).toBe(200);
+      expect((await pub(`/api/docs/${soloPath}`, cookie)).status).toBe(200);
 
       // Wind the expiry into the past via the TTL route's own validation
       // path — negative TTLs are refused, so expire it by re-issuing at 1s
@@ -410,18 +531,14 @@ describe('link shares over HTTP', () => {
       expect(live).toBeDefined();
       if (live) live.expiresAt = Date.now() - 1000;
 
-      expect((await pub(`/api/docs/${SOLO}`, cookie)).status).toBe(401);
+      expect((await pub(`/api/docs/${soloPath}`, cookie)).status).toBe(401);
       expect((await pub(`/s/${share.slug}`)).status).toBe(404);
     });
   });
 
   describe('an expired share cannot be resurrected', () => {
     it('refuses to extend it — a leaked URL must not come back to life', async () => {
-      const mk = await local('/api/share/link', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ docId: SOLO }),
-      });
+      const mk = await mintSolo();
       const { share } = (await mk.json()) as { share: { shareId: string; slug: string } };
       const live = handle.shares?.list().find((s) => s.shareId === share.shareId);
       if (live) live.expiresAt = Date.now() - 1000;
@@ -455,15 +572,11 @@ describe('link shares over HTTP', () => {
       // HTTP request, but a websocket is authorized ONCE at its upgrade.
       // Probing the deployed server showed the socket stayed open and
       // WRITABLE after unshare while HTTP correctly returned 401.
-      const mint = await local('/api/share/link', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ docId: SOLO }),
-      });
+      const mint = await mintSolo();
       const share = ((await mint.json()) as { share: { shareId: string; slug: string } }).share;
       const cookie = await redeem(share.slug);
 
-      const ws = new WebSocket(`ws://localhost:${handle.port}/y/${SOLO}`, {
+      const ws = new WebSocket(`ws://localhost:${handle.port}/y/${soloPath}`, {
         headers: { host: PUBLIC_HOST, cookie: `${SHARE_COOKIE}=${cookie}` },
       } as unknown as string[]);
       const opened = await new Promise<boolean>((resolve) => {
@@ -491,14 +604,10 @@ describe('link shares over HTTP', () => {
     it('leaves a tailnet socket alone when a share is revoked', async () => {
       // Bryan's own editor is not authorized by any share and must not be
       // hung up on because someone else's link was revoked.
-      const mint = await local('/api/share/link', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ docId: SOLO }),
-      });
+      const mint = await mintSolo();
       const share = ((await mint.json()) as { share: { shareId: string } }).share;
 
-      const ws = new WebSocket(`ws://localhost:${handle.port}/y/${SOLO}`);
+      const ws = new WebSocket(`ws://localhost:${handle.port}/y/${soloPath}`);
       const opened = await new Promise<boolean>((resolve) => {
         ws.addEventListener('open', () => resolve(true));
         ws.addEventListener('error', () => resolve(false));
@@ -518,20 +627,16 @@ describe('link shares over HTTP', () => {
   });
 
   describe('guest identity is scoped to the SHARE', () => {
-    it('gives the same browser different guest ids on two links to one doc', async () => {
-      // Two links to the same doc are two audiences. Seeding the guest id
-      // from the doc would attribute comments on a freshly minted link to
-      // the previous link's visitor.
+    it('gives the same browser different guest ids on two links to one workspace', async () => {
+      // Two links to the same workspace are two audiences. Seeding the guest
+      // id from the doc (or from the workspace) would attribute comments on a
+      // freshly minted link to the previous link's visitor.
       const ids: string[] = [];
       for (const label of ['first', 'second']) {
-        const mint = await local('/api/share/link', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ docId: SOLO, label }),
-        });
+        const mint = await mintSolo({ label });
         const share = ((await mint.json()) as { share: { shareId: string; slug: string } }).share;
         const cookie = await redeem(share.slug);
-        const r = await pub(`/api/docs/${SOLO}/threads/by_find`, cookie, {
+        const r = await pub(`/api/docs/${soloPath}/threads/by_find`, cookie, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
