@@ -917,6 +917,47 @@ Technical discoveries that should persist across sessions for this project.
   green. That sequence proves the source innocent before you start reading
   it, and points at the fixture.
 
+## A fallback that only logs is a fallback nobody knows they are on
+
+- **`prepareClientRelease` keeping the previous client alive when the build
+  fails is correct — and it left NOTHING on disk.** Reproduced before
+  building anything: publish once, fail twice, and the release root still
+  holds exactly `releases/` and `current`. The decision lived in a stderr
+  line in a launchd log and in a return value whose `stale` field no reader
+  anywhere consumed. So the failure path silently reintroduced the very
+  server-new/client-old split the release mechanism exists to prevent.
+  **General rule: a graceful degradation needs a durable trace, because the
+  process that degraded exits and the question gets asked days later.**
+- **The trace has to answer "how far behind", not "is something wrong".**
+  A boolean cannot distinguish minutes from a week, and the gap is the
+  entire reason to care. Provenance inside each release (published-at plus
+  the source commit) plus a failure ledger beside them is enough for a
+  surface to say the whole sentence.
+- **Record the SOURCE as well as the clock.** A stale checkout builds
+  successfully and stamps a current timestamp on old code, so a fresh-looking
+  release id proves nothing about the code in it. `git describe --always
+  --dirty` at publish costs one spawn per deploy and makes the release
+  self-describing.
+- **An alarm needs an arming rule with a stated silence.** Two failed starts
+  in a row, or one over a client already older than a day; a single failure
+  over a client published minutes ago says nothing. Without the silence the
+  first transient bundler hiccup trains everyone to ignore the strip — and
+  with a count-only rule a single failure that nobody ever retries stays
+  silent forever while the gap grows. Both halves were mutation-tested
+  (delete either clause and a named test goes red).
+- **Only the process that PUBLISHED may report on the publish.** Dev and
+  staging serve their own checkout's `dist` while sharing this machine's
+  default release root, so a root-derived signal there would report prod's
+  deploy state on a board that is not serving prod's client. Same seam as the
+  plugin refresher: one flag, passed in one place (`serve.ts --no-watch`).
+- **The hub's top-level script is the layer no unit test reaches.**
+  `hub-app.ts` has no exports and mounts on load, so the model and render
+  tests cannot prove it is wired. What proved it: build the bundles in a
+  linked worktree, start `bin.ts` on its own port and data dir against a
+  fixture release root with a failing ledger, and read `.hub-drift` out of a
+  real browser. Same method as the `pointercancel` fix, and it is the only
+  thing that would have caught a dropped state assignment.
+
 ## gh pr merge --delete-branch switches your working copy to main
 
 - When the branch being deleted is the CURRENT branch of the main

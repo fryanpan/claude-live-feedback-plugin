@@ -118,6 +118,41 @@ both browser bundles at startup, before the server process spawns. **Restarting
 prod is the deploy.** A build that fails logs loudly and leaves the previous
 client serving — stale beats down.
 
+### A failed build says so on the board, not only on stderr
+
+Stale beating down is the right call, but for a while the only record of it was
+a line on the supervisor's stderr, which is not a surface anybody reads. A build
+that keeps failing then means an ever-older client against an ever-newer server
+— the same server-new/client-old split this whole design descends from, arriving
+through the failure path instead of the happy path.
+
+So every publish attempt leaves a trace that outlives the process that made it:
+
+- `releases/<id>/release.json` — when this release was published and the
+  **source commit** it was built from (`git describe --always --dirty` of the
+  deploy source). Freshness of the artifact is not freshness of the source: a
+  checkout parked on an old commit builds successfully and stamps a current
+  timestamp on old code, so the commit is part of the reading.
+- `publish-log.json` beside the releases — how many attempts in a row have
+  failed, since when, and with what error. A success clears the streak.
+
+The workspace hub's presence strip reads that, next to the plugin-drift notice,
+and says how old the served client is, how long the build has been failing, and
+that the fix ends in a restart. **It arms on two failed starts in a row, or one
+over a client already older than a day** — a single failed start over a client
+published minutes ago stays quiet, because the browser is running essentially
+the code that build meant to replace and a warning there is how people learn to
+ignore warnings.
+
+Two deliberate limits. The signal is **owner-only** (a build error carries this
+machine's absolute paths, and which release is live is a fact about the host's
+deploy rather than workspace content). And only the process that **published**
+the release reports on it: `serve.ts --no-watch` passes
+`--client-release-root`, nothing else does, because `bun run dev` and `bun run
+staging` serve their own checkout's `dist` while sharing this machine's default
+release root — reading it there would put prod's deploy state on a board that is
+not serving prod's client.
+
 ### Where the served client lives (and why not in the checkout)
 
 Prod used to serve `packages/markdown-app/dist` *out of the primary checkout,
@@ -255,7 +290,9 @@ once, after.
       sites, same value.
 - [ ] `bun run test` and `bun run lint` green.
 - [ ] Client change people need to see? → restart prod (that is the deploy),
-      then confirm the release published in the supervisor log.
+      then confirm the release published — the supervisor log names it, and a
+      failure that left the previous client serving shows up on the board's
+      presence strip rather than only in that log.
 - [ ] Plugin change peers need now? → restarting prod refreshes the cache at
       boot; otherwise it lands within 30 min on its own. Either way tell peers
       to **restart their sessions** — that step is still theirs.
