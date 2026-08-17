@@ -203,7 +203,13 @@ describe('shareScopeAllows (workspace share)', () => {
     'ws-1:docs~design.md': 'ws-1',
     'ws-2:secrets.md': 'ws-2',
   };
-  const workspaceOf = (docId: string) => MEMBERS[docId] ?? null;
+  // The resolver answers with the SET of workspaces an id belongs to (see
+  // shareScopeAllows). A flat folder bind has one level, so each member
+  // answers with a one-element list.
+  const workspaceOf = (docId: string) => {
+    const ws = MEMBERS[docId];
+    return ws ? [ws] : [];
+  };
 
   it('covers every member doc of the shared workspace', () => {
     for (const p of [
@@ -282,7 +288,7 @@ describe('shareScopeAllows (workspace share)', () => {
 describe('shareScopeAllows — a visitor is a reviewer, not an operator', () => {
   const DOC = { docId: 'auth-rfc' };
   const WS = { docId: 'ws-1:index.md', workspaceId: 'ws-1' };
-  const workspaceOf = (d: string) => (d.startsWith('ws-1:') ? 'ws-1' : null);
+  const workspaceOf = (d: string) => (d.startsWith('ws-1:') ? ['ws-1'] : []);
 
   it('allows what the review UI actually calls', () => {
     expect(shareScopeAllows('/api/docs/auth-rfc', 'GET', DOC)).toBe(true);
@@ -338,7 +344,7 @@ describe('shareScopeAllows (workspace-hub surfaces — §3.12 commit 8)', () => 
   // docId is empty. Scope comes entirely from workspaceId.
   const HUB = { docId: '', workspaceId: 'hub-1' };
   const DOC = { docId: 'auth-rfc' };
-  const workspaceOf = (d: string) => (d.startsWith('hub-1:') ? 'hub-1' : null);
+  const workspaceOf = (d: string) => (d.startsWith('hub-1:') ? ['hub-1'] : []);
 
   it('allows the hub page for a workspace-scope share', () => {
     expect(shareScopeAllows('/workspaces/hub-1', 'GET', HUB)).toBe(true);
@@ -362,15 +368,15 @@ describe('shareScopeAllows (workspace-hub surfaces — §3.12 commit 8)', () => 
     expect(shareScopeAllows(`/api/docs/${DOC.docId}`, 'GET', DOC, workspaceOf)).toBe(true);
   });
 
-  it('allows the ws:<id> board room socket (workspaceOf returns null for it)', () => {
+  it('allows the ws:<id> board room socket (the resolver knows nothing of it)', () => {
     // The room is not a member doc — its allowance is explicit, so pass a
     // resolver that knows nothing about it and watch it still pass.
-    expect(shareScopeAllows('/y/ws%3Ahub-1', 'GET', HUB, () => null)).toBe(true);
-    expect(shareScopeAllows('/y/ws:hub-1', 'GET', HUB, () => null)).toBe(true);
+    expect(shareScopeAllows('/y/ws%3Ahub-1', 'GET', HUB, () => [])).toBe(true);
+    expect(shareScopeAllows('/y/ws:hub-1', 'GET', HUB, () => [])).toBe(true);
   });
 
   it('allows the workspace SSE feed', () => {
-    expect(shareScopeAllows('/events/workspace/hub-1', 'GET', HUB, () => null)).toBe(true);
+    expect(shareScopeAllows('/events/workspace/hub-1', 'GET', HUB, () => [])).toBe(true);
   });
 
   it('a DOC-scoped share gets NONE of the three (the §3.3 rule-2 boundary)', () => {
@@ -433,7 +439,7 @@ describe('shareScopeAllows (workspace-hub surfaces — §3.12 commit 8)', () => 
     ];
     for (const [p, m] of cases) {
       expect(
-        shareScopeAllows(p, m, HUB, () => null),
+        shareScopeAllows(p, m, HUB, () => []),
         `${m} ${p}`,
       ).toBe(false);
     }
@@ -449,5 +455,133 @@ describe('shareScopeAllows (workspace-hub surfaces — §3.12 commit 8)', () => 
     expect(shareScopeAllows('/api/docs/auth-rfc/tasks', 'GET', DOC)).toBe(true);
     expect(shareScopeAllows('/api/docs/auth-rfc/tasks', 'POST', DOC)).toBe(false);
     expect(shareScopeAllows('/api/docs/other-doc/tasks', 'GET', DOC)).toBe(false);
+  });
+});
+
+/**
+ * A GROUPING filed on a HUB board — the shape PR #131 made the default.
+ *
+ * A folder bind / diff review is one row on a board, and its members answer
+ * with the GROUPING's id while the share carries the HUB's. Exact equality
+ * refused every one of them, so a shared board showed a review row that
+ * opened onto nothing.
+ *
+ * The resolver is the ONE rule: it answers with the whole set an id belongs
+ * to — the grouping, and the board that grouping is filed on. Both the member
+ * check and the `/api/workspaces/<id>/…` check read it, so there is no second
+ * rule to drift.
+ */
+describe('shareScopeAllows — a grouping filed on a shared board', () => {
+  const HUB = { docId: '', workspaceId: 'hub-1' };
+  const OTHER_HUB = { docId: '', workspaceId: 'hub-2' };
+  /** grouping `rev-a` sits on hub-1; grouping `rev-b` sits on hub-2. */
+  const OWNERS: Record<string, string[]> = {
+    'rev-a': ['hub-1'],
+    'rev-a:src~app.ts': ['rev-a', 'hub-1'],
+    'rev-b': ['hub-2'],
+    'rev-b:src~app.ts': ['rev-b', 'hub-2'],
+    'hub-1:plan.md': ['hub-1'], // a doc attached to the board directly
+  };
+  const workspacesOf = (id: string) => OWNERS[id] ?? [];
+
+  it('opens the grouping’s navigation endpoints from the board share', () => {
+    for (const sub of ['tree', 'grouped', 'threads', 'files']) {
+      expect(shareScopeAllows(`/api/workspaces/rev-a/${sub}`, 'GET', HUB, workspacesOf), sub).toBe(
+        true,
+      );
+    }
+    expect(shareScopeAllows('/api/workspaces/rev-a/context-file', 'POST', HUB, workspacesOf)).toBe(
+      true,
+    );
+    expect(shareScopeAllows('/api/workspaces/rev-a/editable-file', 'POST', HUB, workspacesOf)).toBe(
+      true,
+    );
+  });
+
+  it('opens the grouping’s member docs from the board share', () => {
+    for (const p of [
+      '/review/rev-a%3Asrc~app.ts',
+      '/y/rev-a%3Asrc~app.ts',
+      '/events/rev-a%3Asrc~app.ts',
+      '/api/docs/rev-a%3Asrc~app.ts',
+      '/api/docs/rev-a%3Asrc~app.ts/threads',
+    ]) {
+      expect(shareScopeAllows(p, 'GET', HUB, workspacesOf), p).toBe(true);
+    }
+  });
+
+  // ── the half that matters ──
+  it('BLOCKS a grouping filed on a DIFFERENT board, and its members', () => {
+    for (const sub of ['tree', 'grouped', 'threads', 'files']) {
+      expect(shareScopeAllows(`/api/workspaces/rev-b/${sub}`, 'GET', HUB, workspacesOf), sub).toBe(
+        false,
+      );
+    }
+    expect(shareScopeAllows('/api/workspaces/rev-b/context-file', 'POST', HUB, workspacesOf)).toBe(
+      false,
+    );
+    for (const p of [
+      '/review/rev-b%3Asrc~app.ts',
+      '/y/rev-b%3Asrc~app.ts',
+      '/api/docs/rev-b%3Asrc~app.ts',
+      '/api/docs/rev-b%3Asrc~app.ts/threads',
+    ]) {
+      expect(shareScopeAllows(p, 'GET', HUB, workspacesOf), p).toBe(false);
+    }
+    // Mirrored, so neither board is special.
+    expect(shareScopeAllows('/api/workspaces/rev-a/tree', 'GET', OTHER_HUB, workspacesOf)).toBe(
+      false,
+    );
+    expect(shareScopeAllows('/review/rev-a%3Asrc~app.ts', 'GET', OTHER_HUB, workspacesOf)).toBe(
+      false,
+    );
+  });
+
+  it('BLOCKS deleting the grouping, and the workspace list', () => {
+    expect(shareScopeAllows('/api/workspaces/rev-a', 'DELETE', HUB, workspacesOf)).toBe(false);
+    expect(shareScopeAllows('/api/workspaces/rev-a/tree', 'DELETE', HUB, workspacesOf)).toBe(false);
+    expect(shareScopeAllows('/api/workspaces', 'GET', HUB, workspacesOf)).toBe(false);
+  });
+
+  it('BLOCKS the grouping’s hub-only surfaces — reachable is not the same as on the board', () => {
+    // These three are allowed for the SHARED workspace id only. A grouping has
+    // no board record, no agent presence and no review queue; granting them by
+    // reachability would answer a board question with a grouping's id.
+    for (const sub of ['', '/attachments', '/review-items']) {
+      expect(shareScopeAllows(`/api/workspaces/rev-a${sub}`, 'GET', HUB, workspacesOf), sub).toBe(
+        false,
+      );
+    }
+    expect(shareScopeAllows('/workspaces/rev-a', 'GET', HUB, workspacesOf)).toBe(false);
+    expect(shareScopeAllows('/y/ws%3Arev-a', 'GET', HUB, workspacesOf)).toBe(false);
+    expect(shareScopeAllows('/events/workspace/rev-a', 'GET', HUB, workspacesOf)).toBe(false);
+  });
+
+  it('a DOC share is not widened by any of it', () => {
+    const docShare = { docId: 'rev-a:src~app.ts' }; // no workspaceId
+    // Positive control: its own doc still opens.
+    expect(shareScopeAllows('/api/docs/rev-a%3Asrc~app.ts', 'GET', docShare, workspacesOf)).toBe(
+      true,
+    );
+    expect(shareScopeAllows('/api/workspaces/rev-a/tree', 'GET', docShare, workspacesOf)).toBe(
+      false,
+    );
+    expect(shareScopeAllows('/api/docs/hub-1%3Aplan.md', 'GET', docShare, workspacesOf)).toBe(
+      false,
+    );
+  });
+
+  it('refuses a resolver still returning the OLD `string | null` shape', () => {
+    // A string answers `.includes` too, so the old shape would have granted on
+    // any substring. Closing rather than trusting it can only refuse more.
+    const legacy = (id: string) => (id.startsWith('rev-a') ? 'hub-1' : null);
+    expect(
+      shareScopeAllows(
+        '/api/workspaces/rev-a/tree',
+        'GET',
+        HUB,
+        legacy as unknown as (id: string) => string[],
+      ),
+    ).toBe(false);
   });
 });

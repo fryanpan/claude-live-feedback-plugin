@@ -595,16 +595,41 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   });
 
   /**
-   * Which workspace a docId belongs to, for SHARE SCOPING (§3.12 commit 8).
-   * Legacy grouping tags (folder binds / diff reviews) answer from the doc's
-   * own metadata; hub workspaces answer from the store — docs linked via
-   * attachDoc plus each task's own `task:<id>` body room, which is what
-   * makes "visitors may post comments" true for a hub share (comments need
-   * an in-scope doc). Deliberately NOT the ws:<id> board room: its share
-   * allowance is spelled out in host-guard, never a resolver side effect.
+   * Which workspaces an id belongs to, for SHARE SCOPING (§3.12 commit 8).
+   * The id may be a doc room OR a grouping (folder bind / diff review), and
+   * the answer is a SET because those two senses of "workspace" nest:
+   *
+   *   1. a member doc's own GROUPING     (`meta.workspaceId`)
+   *   2. the HUB board the id is filed on directly — docs linked via
+   *      attachDoc, each task's `task:<id>` body room, and a grouping id,
+   *      which is how a review goes on a board as one row
+   *   3. the HUB board that member's GROUPING is filed on — the hop that
+   *      makes a review row on a shared board actually open. Without it a
+   *      hub-scoped share saw the row and 403'd on everything behind it,
+   *      because every member answers with the grouping id and the share
+   *      carries the hub id.
+   *
+   * ONE rule for both halves of the guard, on purpose: the same function
+   * tells the allowlist that a grouping belongs to a hub and tells it that
+   * the grouping's members do. Two rules would agree today and diverge
+   * later, and the one that diverges open is the breach.
+   *
+   * Exactly one hop from grouping to board — not a transitive closure.
+   * Deliberately NOT the ws:<id> board room: its share allowance is spelled
+   * out in host-guard, never a resolver side effect.
    */
-  const shareWorkspaceOf = (docId: string): string | null =>
-    rooms.get(docId)?.meta.workspaceId ?? taskStore.workspaceOfDoc(docId);
+  const shareWorkspacesOf = (id: string): string[] => {
+    const out: string[] = [];
+    const grouping = rooms.get(id)?.meta.workspaceId;
+    if (grouping) out.push(grouping);
+    const direct = taskStore.workspaceOfDoc(id);
+    if (direct) out.push(direct);
+    if (grouping) {
+      const board = taskStore.workspaceOfDoc(grouping);
+      if (board && board !== direct) out.push(board);
+    }
+    return out;
+  };
 
   /**
    * ── Two things wear the word "workspace". Read this before touching any
@@ -963,7 +988,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // gets the 403 below.
             const repaired = repairStaleReviewUrl(pathname, req.method, decision.target);
             if (repaired) return repaired;
-            if (!shareScopeAllows(pathname, req.method, decision.target, shareWorkspaceOf)) {
+            if (!shareScopeAllows(pathname, req.method, decision.target, shareWorkspacesOf)) {
               return j(403, { error: 'out_of_share_scope' });
             }
             visitor = decision.target;
@@ -982,7 +1007,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               if (!target) return j(401, { error: 'no_share_session' });
               const repaired = repairStaleReviewUrl(pathname, req.method, target);
               if (repaired) return repaired;
-              if (!shareScopeAllows(pathname, req.method, target, shareWorkspaceOf)) {
+              if (!shareScopeAllows(pathname, req.method, target, shareWorkspacesOf)) {
                 return j(403, { error: 'out_of_share_scope' });
               }
               visitor = target;
