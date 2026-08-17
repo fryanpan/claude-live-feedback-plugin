@@ -882,6 +882,46 @@ Technical discoveries that should persist across sessions for this project.
   fine). When a capability exists but everyone reports it missing, look for
   the ring of things around it rather than at it.
 
+## A truncated page read is indistinguishable from a page that never rendered
+
+- **An orchestrating session read the live workspace board in Chrome, reported
+  the quick-add form and every task row and goal section absent from the DOM,
+  and escalated it as a production regression** — blaming four just-merged PRs,
+  retracting a completed task, and holding a deploy. There was no bug.
+  `read_page` truncates at 50,000 characters by default; the board's
+  accessibility tree was ~24,413 characters **and grows with the task count**.
+  DOM order inside `.hub-board-col` is `hub-controls` → `hub-decisions` (the
+  REST-fed review strip, which rendered fine) → **`hub-quick`** → **`hub-board`**,
+  so the two "missing" regions are exactly the next two siblings after the last
+  thing the read showed. A snapshot tool truncates at the BOTTOM, which is where
+  the content you are asking about usually is.
+- **Rule: before reporting that an element is absent from a page, run a query
+  that can SEE it** — `document.querySelector` via `javascript_tool`, or a
+  `read_page` with an explicit high `max_chars` or a `ref_id` scoped to the
+  region. Absence inferred from a rendered snapshot bounds what the snapshot
+  held, not what the page holds. Same family as "a negative test needs a
+  positive control or it proves nothing" and "'X is impossible' measured AN
+  absence, not THE absence" — with the twist that here the blinding was a
+  default argument nobody passed, so nothing in the session looked wrong.
+- **Treat the truncation footer as load-bearing, not boilerplate.** It is the
+  only thing separating "the page lacks this" from "I stopped reading", and it
+  is what closed the diagnosis: re-running with `max_chars: 3300` reproduced
+  the bogus report item for item, in order, then cut at the same seam. The
+  positive control ran both ways too — emptying `#hub-quick` and `#hub-board`
+  made the probe say exactly what the bad report said, and restoring them
+  flipped it back. One detail made the false report convincing: the sole
+  survivor was the `position: fixed` "Hold to talk" mic button, which outlives
+  any truncation or scroll position and reads like the last fragment of a
+  broken page.
+- **The report was also structurally impossible under the deployed code, and
+  checking that is cheaper than raising an alarm.** `renderReviewStrip` has one
+  call site, in `renderBoardRegion`, *after* `renderBoard`; `renderBoard` opens
+  with `container.replaceChildren()`, so a null container throws rather than
+  no-ops; and `boardSections` unconditionally emits one section per goal plus a
+  Chores section, so it can never return `[]`. "Review strip with 7 rows"
+  therefore entails "at least one section in the DOM". When a browser
+  observation and the code cannot both be true, suspect the observation first.
+
 ## A new emitted event reaches the surface as a bare slug
 
 - **`task.body_edited` rode the existing SSE + `events.jsonl` path to the

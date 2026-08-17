@@ -44,6 +44,31 @@ Walk each user goal as if you've never seen the page before. For each goal:
 
 Take screenshots at the key states — initial load, mid-flow, completion, error states.
 
+### Reading the page: absence needs a query, not a snapshot
+
+`read_page` truncates at 50,000 characters by default, and it truncates at the
+**bottom** — where the region you came to review usually is. A cut snapshot and
+a page that never rendered look identical.
+
+- **Pass an explicit high `max_chars`** (or a `ref_id` scoped to the region you
+  care about) when reading a long surface. The live-feedback workspace board is
+  one: its accessibility tree already runs ~24k characters and grows with every
+  task added, so the default is a ceiling you will hit without noticing.
+- **Treat the truncation footer as load-bearing, not boilerplate.** It is the
+  only thing in the response that distinguishes "this element isn't on the page"
+  from "I stopped reading before it".
+- **Before reporting any element missing, run a query that can see it** —
+  `document.querySelector` / `querySelectorAll().length` via `javascript_tool`,
+  or a re-read scoped with `ref_id`. A finding of the form "X is absent from the
+  DOM" is only worth filing once a query that *could* have found X came back
+  empty.
+
+An orchestrating session skipped this and filed a production regression against
+four merged PRs — retracting a completed task and holding a deploy — over two
+DOM regions that were merely past the cut. See "A truncated page read is
+indistinguishable from a page that never rendered" in
+`docs/process/learnings.md`.
+
 ## The heuristic checklist
 
 After the walkthrough, evaluate against these. For each, mark Pass / Issue / Critical:
@@ -146,6 +171,7 @@ Produce a single markdown report with:
 - **Don't grade your own homework.** If the agent that built the feature is doing the review, dispatch a fresh subagent without context to walk it cold. Familiarity hides friction.
 - **Don't over-engineer the heuristics.** The point is to catch obvious problems quickly, not write a 10-page evaluation.
 - **Don't skip the goal-completion test.** Heuristic violations can be wrong; failure to complete a goal can't.
+- **Don't report an element missing because a snapshot didn't contain it.** Query for it first — a truncated read is the likelier explanation, and "the feature is gone" is the most expensive thing you can say wrongly.
 
 ## Future enhancements (not yet implemented)
 
