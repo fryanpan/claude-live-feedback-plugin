@@ -487,6 +487,16 @@ export type BlockerRow = DecisionRow;
  * - **A decision is not a blocker.** Every decision is also assigned to
  *   somebody, so without this the same task would appear in both bands and be
  *   counted twice in the number at the top of the board.
+ *
+ * Known limit, deliberately not closed: ownership here is the literal `human`,
+ * so a task handed to a person by NAME is not in this band. `taskVisible`'s
+ * My-Tasks branch does match the viewer's own name, and matching it here was
+ * considered — but the strip is one shared read of the workspace, and keying
+ * it on the viewer would make the count at the top differ per reader and would
+ * put every agent-owned blocker in the band for anyone whose typed display
+ * name happens to be an agent's, which is the inflation this band's other rule
+ * exists to prevent. Closing it properly needs a way to say "this assignee is
+ * a person", not a name comparison.
  */
 export function humanBlockerRows(tasks: HubTask[]): BlockerRow[] {
   const candidates = tasks.filter(
