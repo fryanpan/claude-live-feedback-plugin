@@ -1075,7 +1075,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           body: { type: 'string', description: 'Override the drafted body.' },
           assignee: {
             type: 'string',
-            description: "Who owns it. Omit and you do — same rule as a create_tasks row's assignee.",
+            description:
+              "Who owns it. Omit and you do — same rule as a create_tasks row's assignee.",
           },
           needs: { type: 'string', enum: ['action', 'decision'] },
           goal: { type: 'string', description: 'Goal/subgoal id. OMIT to route through triage.' },
