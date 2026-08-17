@@ -77,7 +77,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.42';
+const PLUGIN_VERSION = '0.1.43';
 
 const server = new Server(
   {
@@ -1212,7 +1212,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'update_task_body',
       description:
-        "Replace a task's description after it was created — the fix for a task filed thin, or one whose acceptance criteria turned out to be wrong. Whole-body replace, so send the full markdown you want the task to have; there is no partial edit. Written through the task's live body doc as a block-level diff, which means comment threads anchored to paragraphs you did not change keep their anchors, and anyone reading the task on the board watches it update. Recorded as task.body_edited, attributed to you. Keep the shape a task body owes its next reader — a compact user story plus falsifiable done-when criteria — because rewriting is also the moment to add the ones that were missing. Refuses an empty body: blanking a description is not an edit, and if the task should not exist, say so on it instead.",
+        "Rewrite a task so it can be picked up — its description, and in the SAME act its title. The fix for a task filed thin, one whose acceptance criteria turned out to be wrong, and the write half of triage's shaping step: a raw capture arrives with a machine-clipped fragment for a title and its whole unedited utterance for a body, and this is what turns both into work. Whole-body replace, so send the full markdown you want the task to have; there is no partial edit. Pass `title` whenever the title no longer names what the task is (omit it to leave the title alone). Written through the task's live body doc as a block-level diff, so comment threads anchored to paragraphs you did not change keep their anchors and anyone reading the task on the board watches it update. Recorded as ONE task.body_edited carrying both titles, attributed to you, and the activity feed renders the rename with the old name — the only name the person who filed it would recognise. The row's ORIGINAL words are preserved to `quote` automatically on the first rewrite, so a rewrite is never the only record of what was said; a quote already there (a dictated transcript) is never overwritten. Keep the shape a task body owes its next reader — a compact user story plus falsifiable done-when criteria — because rewriting is also the moment to add the ones that were missing. Refuses an empty body: blanking a description is not an edit, and if the task should not exist, say so on it instead.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1220,6 +1220,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           markdown: {
             type: 'string',
             description: 'The FULL new description. Replaces what is there.',
+          },
+          title: {
+            type: 'string',
+            description:
+              'A new title for the row, applied as part of the same act. Omit to keep the current one.',
           },
         },
         required: ['taskId', 'markdown'],
@@ -1449,7 +1454,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'attach_agent',
       description:
-        "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep with set_task_goal, queuedVoice — voice change-requests that arrived while no agent was live; act on each transcript verbatim — and, if you LEAD this workspace, pendingRetriage: a goal edit made while you were away, whose taskIds you re-place with set_task_goal (echo its batchId on each). All three are drained by this call. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments with a fresh heartbeat, and after ~5 minutes of silence the hub shows you as away and requests queue.",
+        "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep — and sweeping one means SHAPING it, not only filing it: read the row's own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each with update_task_body into a title and a story-shaped body, then set_task_goal. A capture arrives with a machine-clipped title and its raw utterance for a body, and this is the only step that turns it into work. Then queuedVoice — voice change-requests that arrived while no agent was live; act on each transcript verbatim — and, if you LEAD this workspace, pendingRetriage: a goal edit made while you were away, whose taskIds you re-place with set_task_goal (echo its batchId on each). All three are drained by this call. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments with a fresh heartbeat, and after ~5 minutes of silence the hub shows you as away and requests queue.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -2445,12 +2450,24 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok({ taskId, assignee: res.task.assignee, changed: res.changed });
       }
       case 'update_task_body': {
-        const { taskId, markdown } = a as { taskId: string; markdown: string };
+        const { taskId, markdown, title } = a as {
+          taskId: string;
+          markdown: string;
+          title?: string;
+        };
         const res = (await http('POST', `/api/tasks/${encodeURIComponent(taskId)}/body`, {
           markdown,
+          ...(title !== undefined ? { title } : {}),
           author: AUTHOR,
         })) as { task: TaskPayload };
-        return ok({ taskId, title: res.task?.title, body: res.task?.body });
+        // `quote` back, because this call is the one that can have filled it:
+        // the caller sees the words it just preserved without a second read.
+        return ok({
+          taskId,
+          title: res.task?.title,
+          body: res.task?.body,
+          quote: res.task?.quote,
+        });
       }
       case 'set_task_goal': {
         const { taskId, goal, position, riskTier, batchId } = a as {

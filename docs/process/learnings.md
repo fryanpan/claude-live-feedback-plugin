@@ -1076,6 +1076,32 @@ Technical discoveries that should persist across sessions for this project.
   emitted keys match the ones the case reads. Verified by mutation in both
   directions: delete the case, and blank `taskId` in the emit.
 
+## A guard on a field with two writers is dead before it runs
+
+- **"Preserve the row's original words, but only if this row has never been
+  rewritten" preserved nothing, ever.** The clause was
+  `bodyWrittenAt === undefined`, which reads as exactly the question being
+  asked. But `bodyWrittenAt` has TWO writers: the attributed rewrite
+  (`noteBodyEdited`) and `updateBodySnapshot`, which stamps it on every real
+  body change — and the route flushes the NEW body's snapshot *before* calling
+  the store. So on the very first rewrite the clause was already false, set
+  moments earlier by the same request. Nothing warns; the guard reads as
+  correct, the field means what its comment says, and the feature is simply
+  absent.
+- **Rule: before gating on a field, grep every writer of it and ask whether
+  one of them runs earlier in the same call path.** A field with one writer is
+  a fact; a field with two is a fact plus a race with yourself. Same family as
+  "the route layer silently drops params" — the thing that broke it lived one
+  layer away from where it was read.
+- The fix was to delete the clause, not repair it: the honest question was
+  "does anything hold this row's own words yet", which is `quote === undefined`
+  and has exactly one writer. **A predicate that needs two fields to express
+  one fact is usually a sign the second field is a proxy.**
+- Caught because the test asserted the preserved value rather than that the
+  call returned true. An assertion on the call's success would have passed
+  from the first commit — the same "true and still proves nothing about the
+  caller" shape as `isWhitespaceOnlyChange`.
+
 ## A malformed anchor crashes a request that never touched the doc
 
 - **`POST /api/docs/:id/threads` takes `anchor` verbatim and validates
