@@ -609,7 +609,9 @@ describe('renderGoalStrip', () => {
     const ta = root.querySelector('textarea') as HTMLTextAreaElement;
     ta.value = 'Ship search v3.';
     (root.querySelector('.hub-btn-primary') as HTMLElement).click();
-    expect(onGoalCommit).toHaveBeenCalledWith('Ship search v3.');
+    // The second argument is the ≤20-word display line; empty leaves the
+    // strip on its deterministic clip. See hub-goal-collapse.test.ts.
+    expect(onGoalCommit).toHaveBeenCalledWith('Ship search v3.', '');
   });
 
   it('leads with start-planning on an empty workspace instead of an empty strip', () => {

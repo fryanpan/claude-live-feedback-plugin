@@ -1688,11 +1688,40 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const workspaceId = decodeURIComponent(wsGoalMatch[1] ?? '');
           const body = await safeJson(req);
           const goal = body?.goal;
-          if (typeof goal !== 'string') return j(400, { error: 'goal required' });
+          // `summary` is the ≤20-word line the board DISPLAYS in place of the
+          // goal. It rides this route rather than getting one of its own so
+          // there is exactly one way in: two writers for one field is how a
+          // stale hash gets computed against the wrong goal.
+          const summary = body?.summary;
+          if (summary !== undefined && typeof summary !== 'string') {
+            return j(400, { error: 'summary must be a string' });
+          }
           const author = authorFor(body?.author);
           if (!author) return j(400, { error: 'author required' });
-          const res = taskStore.setWorkspaceGoal(workspaceId, goal, { actor: author });
+          if (typeof goal !== 'string') {
+            // Summary-only: re-wording the display line must not require the
+            // caller to echo the goal back, which would let a stale read
+            // silently revert a north star somebody else just edited.
+            if (typeof summary !== 'string') {
+              return j(400, { error: 'goal or summary required' });
+            }
+            const only = taskStore.setGoalSummary(workspaceId, summary);
+            if (!only.ok) return j(404, only);
+            // The store emits nothing for a display-only change, so nothing
+            // would push it to the open boards. Reassert the projection here
+            // — otherwise the summary exists and no surface can show it.
+            taskProjection.ensureWorkspace(workspaceId);
+            return j(200, { ok: true, workspace: only.workspace, changed: false });
+          }
+          const res = taskStore.setWorkspaceGoal(workspaceId, goal, {
+            actor: author,
+            ...(typeof summary === 'string' ? { summary } : {}),
+          });
           if (!res.ok) return j(404, res);
+          // A no-op goal edit carrying a new summary emits no event either,
+          // so the same reassert applies. Idempotent, so doing it on the
+          // changed path too costs nothing and removes a branch to get wrong.
+          if (typeof summary === 'string') taskProjection.ensureWorkspace(workspaceId);
           return j(200, res);
         }
         // set_workspace_lead: hand the board's lead-agent seat to someone
