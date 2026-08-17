@@ -118,6 +118,11 @@ both browser bundles at startup, before the server process spawns. **Restarting
 prod is the deploy.** A build that fails logs loudly and leaves the previous
 client serving — stale beats down.
 
+What origin that client is *reached on* is a separate question from which
+bundle it is, and it decides whether browser features gated on a secure
+context (the microphone, and so all voice input) exist at all. See
+[tailnet-https.md](tailnet-https.md).
+
 ### A failed build says so on the board, not only on stderr
 
 Stale beating down is the right call, but for a while the only record of it was
