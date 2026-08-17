@@ -2582,10 +2582,11 @@ export class TaskStore {
    * `previous` is REQUIRED, not optional, and that is the guard: a rewrite may
    * never be the only record of what the row said. Its words go to `quote`
    * when nothing has claimed that field yet — which is exactly the case for a
-   * raw capture, where the body IS the utterance. A quote already present wins
-   * (a dictated transcript is closer to the source than the box's text), and
-   * so does a row that has been rewritten before, whose current words were
-   * authored rather than captured.
+   * raw capture, where the body IS the utterance. A quote already present
+   * always wins — a dictated transcript is closer to the source than the box's
+   * text, and on a row that has been rewritten before, the quote the FIRST
+   * rewrite preserved is closer to the source than the words this one is
+   * replacing.
    */
   noteBodyEdited(
     taskId: string,
