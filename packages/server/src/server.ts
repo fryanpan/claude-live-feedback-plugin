@@ -6,6 +6,7 @@ import {
   type DocType,
   type User,
   type WebhookPayload,
+  anchors,
   contentKind,
   suggestOps,
   summaryHash,
@@ -3004,6 +3005,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               const body = await safeJson(req);
               const anchor = body?.anchor as Anchor | undefined;
               if (!anchor) return j(400, { error: 'anchor required' });
+              // Same gate as thread creation: this route can plant a
+              // malformed anchor on an EXISTING thread just as easily.
+              const reanchorCheck = anchors.validateAnchor(anchor);
+              if (!reanchorCheck.ok) return j(400, { error: reanchorCheck.error });
               const t = rooms.reanchor(docId, threadId, anchor);
               return t ? j(200, { thread: t }) : j(404, { error: 'thread not found' });
             }
@@ -3049,6 +3054,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             if (!user || !text || !anchor) {
               return j(400, { error: 'author + text + anchor required' });
             }
+            // Validate BEFORE the write. An anchor whose startRel/endRel
+            // don't decode is accepted silently by the CRDT and then kills
+            // the re-anchor sweep from inside a Yjs observer, i.e. on
+            // whatever request happens to be in flight minutes later. The
+            // caller that wrote it has to be the one that hears about it.
+            const anchorCheck = anchors.validateAnchor(anchor);
+            if (!anchorCheck.ok) return j(400, { error: anchorCheck.error });
             const t = await rooms.postComment(docId, null, user, text, anchor, {
               generate: !visitor,
             });

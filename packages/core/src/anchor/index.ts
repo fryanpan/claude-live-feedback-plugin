@@ -4,6 +4,7 @@ import * as Element from './element.ts';
 import * as TextRange from './text-range.ts';
 
 export * from './context.ts';
+export * from './validate.ts';
 export { TextRange, Element };
 
 export interface TextResolveEnv {
