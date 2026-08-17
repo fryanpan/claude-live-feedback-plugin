@@ -173,9 +173,16 @@ class FeedbackWidgetEl extends HTMLElement {
     if (serverUrl) opts.serverUrl = serverUrl;
     const view = this.getAttribute('view');
     if (view) opts.context = { view };
-    // Opt-in, and deliberately so: an embed that does not ask for it keeps the
-    // `cfw:` namespace exactly as before, so this cannot change identity on any
-    // page already running the widget.
+    // `identity-scope="host"` — see WidgetOpts.identityScope. Short version for
+    // whoever lands here debugging a namespace collision: the `cfw:` prefix
+    // exists because the widget is normally a GUEST on someone else's page and
+    // must not read or write their keys. Our own hub is the one surface where
+    // it isn't a guest, and there the prefix splits one human into two
+    // identities on a single page.
+    //
+    // Opt-in rather than "detect our own origin", deliberately: an embed that
+    // does not ask for it keeps the `cfw:` namespace byte-for-byte, so no page
+    // already running the widget can have its identity change underneath it.
     if (this.getAttribute('identity-scope') === 'host') opts.identityScope = 'host';
     this.init(opts);
   }
