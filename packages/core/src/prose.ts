@@ -11,6 +11,7 @@
  * concurrent user edits compose via Yjs' own CRDT machinery.
  */
 import * as Y from 'yjs';
+import { decodeRelativePositionSafe } from './anchor/validate.ts';
 import { LCS_CELL_BUDGET, lcsKept } from './lcs.ts';
 import { SUGGEST_INSERT_MARK } from './suggest.ts';
 
@@ -389,12 +390,18 @@ export function resolveRelativePosition(doc: Y.Doc, encoded: Uint8Array): number
 }
 
 /** Same resolution, but returns the Y.XmlText + local offset so callers
- *  that need to mutate (splice, insert) can operate directly on the node. */
+ *  that need to mutate (splice, insert) can operate directly on the node.
+ *
+ *  An anchor whose bytes don't decode answers null, exactly like one that no
+ *  longer resolves. This is the single busiest reader of a stored anchor, and
+ *  most of its callers run inside a Yjs observer where a throw would land on
+ *  an unrelated request. */
 export function resolveRelativePositionRaw(
   doc: Y.Doc,
   encoded: Uint8Array,
 ): { node: Y.XmlText; offset: number } | null {
-  const rel = Y.decodeRelativePosition(encoded);
+  const rel = decodeRelativePositionSafe(encoded);
+  if (!rel) return null;
   const abs = Y.createAbsolutePositionFromRelativePosition(rel, doc);
   if (!abs) return null;
   if (!(abs.type instanceof Y.XmlText)) return null;
@@ -1517,7 +1524,10 @@ export function autoReanchorDoc(
     ) {
       return;
     }
-    const needle = anchor.snippet.text;
+    // `snippet` is required by the type but not by anything that has ever
+    // written one — a hand-written anchor can omit it, and this sweep is
+    // where the missing property is first read.
+    const needle = anchor.snippet?.text;
     if (!needle) {
       stillOrphan++;
       return;
@@ -1599,18 +1609,17 @@ export function autoReanchorCodeDoc(
       | undefined;
     if (!anchor || anchor.kind !== 'text-range') return;
     checked++;
-    const needle = anchor.snippet.text;
+    const needle = anchor.snippet?.text;
     // Still valid? Both positions must resolve AND the spanned text must
     // still equal the snippet. (Resolution alone is insufficient — see the
-    // note above about flat-Y.Text clamping.)
-    const startAbs = Y.createAbsolutePositionFromRelativePosition(
-      Y.decodeRelativePosition(anchor.startRel),
-      doc,
-    );
-    const endAbs = Y.createAbsolutePositionFromRelativePosition(
-      Y.decodeRelativePosition(anchor.endRel),
-      doc,
-    );
+    // note above about flat-Y.Text clamping.) Undecodable bytes resolve to
+    // null here rather than throwing inside the observer this runs in.
+    const storedStart = decodeRelativePositionSafe(anchor.startRel);
+    const storedEnd = decodeRelativePositionSafe(anchor.endRel);
+    const startAbs = storedStart
+      ? Y.createAbsolutePositionFromRelativePosition(storedStart, doc)
+      : null;
+    const endAbs = storedEnd ? Y.createAbsolutePositionFromRelativePosition(storedEnd, doc) : null;
     if (startAbs && endAbs) {
       const lo = Math.min(startAbs.index, endAbs.index);
       const hi = Math.max(startAbs.index, endAbs.index);

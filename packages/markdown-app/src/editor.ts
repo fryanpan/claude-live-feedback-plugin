@@ -1,3 +1,4 @@
+import { anchors } from '@feedback/core';
 import { type AnyExtension, Editor } from '@tiptap/core';
 import Collaboration from '@tiptap/extension-collaboration';
 import { Image } from '@tiptap/extension-image';
@@ -219,18 +220,15 @@ export function createEditor(opts: CreateEditorOpts): EditorHandle {
       const sync = syncState();
       if (!sync?.binding) return null;
       const { mapping, type } = sync.binding;
-      const startAbs = relativePositionToAbsolutePosition(
-        opts.ydoc,
-        type,
-        Y.decodeRelativePosition(startRel),
-        mapping,
-      );
-      const endAbs = relativePositionToAbsolutePosition(
-        opts.ydoc,
-        type,
-        Y.decodeRelativePosition(endRel),
-        mapping,
-      );
+      // Undecodable bytes (a hand-written anchor persisted before the routes
+      // validated them) answer null, the same as a position that no longer
+      // resolves. Throwing here would break every decoration on the doc, not
+      // just this one thread's.
+      const startDecoded = anchors.decodeRelativePositionSafe(startRel);
+      const endDecoded = anchors.decodeRelativePositionSafe(endRel);
+      if (!startDecoded || !endDecoded) return null;
+      const startAbs = relativePositionToAbsolutePosition(opts.ydoc, type, startDecoded, mapping);
+      const endAbs = relativePositionToAbsolutePosition(opts.ydoc, type, endDecoded, mapping);
       if (startAbs == null || endAbs == null) return null;
       const from = Math.min(startAbs, endAbs);
       const to = Math.max(startAbs, endAbs);

@@ -13798,7 +13798,7 @@ var AUTHOR = resolveAgentAuthor({
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.37";
+var PLUGIN_VERSION = "0.1.39";
 var server = new Server({
   name: "claude-live-feedback",
   version: PLUGIN_VERSION
@@ -14868,7 +14868,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "set_goal_list",
-      description: `Replace a workspace's ORDERED goal list — use this to ADD, RENAME or REMOVE a goal. To only change PRIORITY ORDER, use reorder_goals instead: it is permutation-only and cannot lose a goal, where this call can. Each goal: {id, title, dueAt?, subgoals?: [{id, title, dueAt?}]} — one subgoal level max. "chores" is reserved (always rendered last, never in the list). DESTRUCTIVE EDGE: this is a full REPLACE, so open tasks whose goal id is not in the list you send move to the bottom of Chores — including a goal another writer added since you last read, which is why a reorder done here can silently orphan work. The result reports movedToChores so you can re-place each with set_task_goal; do that rather than leaving them piled.`,
+      description: 'Replace a workspace\'s ORDERED goal list — use this to ADD or REMOVE a goal. To RENAME one, use rename_goal: this call is keyed by ID, so submitting a new id with the new title is not a rename, it is a removal plus an addition, and it strands everything the old band held. To only change PRIORITY ORDER, use reorder_goals: it is permutation-only and cannot lose a goal. Each goal: {id, title, dueAt?, subgoals?: [{id, title, dueAt?}]} — one subgoal level max. "chores" is reserved (always rendered last, never in the list). DESTRUCTIVE EDGE, now GATED: this is a full REPLACE, so any id you leave out is removed — and if that id still holds tasks the call is REFUSED with error "would-strand-tasks", naming each band with its open and done counts. Nothing is written on a refusal. Removing a band that holds work therefore takes a second, deliberate call listing its id in `drop`; removing an EMPTY one needs no ceremony. On success the result reports movedToChores (open tasks swept to the bottom of Chores — re-place each with set_task_goal rather than leaving them piled) and strandedDone (done tasks still pointing at the removed id, which is what leaves a bare row in get_workspace).',
       inputSchema: {
         type: "object",
         properties: {
@@ -14896,9 +14896,34 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
               },
               required: ["id", "title"]
             }
+          },
+          drop: {
+            type: "array",
+            items: { type: "string" },
+            description: "Goal/subgoal ids you INTEND to remove even though they still hold tasks — the acknowledgement that turns the refusal into the removal. Send it only after reading what the refusal said each band holds; a caller working from a stale list cannot name a band it never saw, which is exactly the accident this gate exists to catch. Ids that are not actually being removed are ignored, so it can never widen the replace."
           }
         },
         required: ["workspaceId", "goals"]
+      }
+    },
+    {
+      name: "rename_goal",
+      description: "Change a goal's or subgoal's TITLE in place, by id — the safe way to rename a band. Use this instead of set_goal_list whenever the id is staying the same, which is almost always: set_goal_list is a full replace keyed by id, so renaming through it means restating every other band from a list that may have moved, and giving the band a NEW id there reads as a removal plus an addition (its open tasks swept to Chores, its done tasks orphaned onto an id that no longer exists). Nothing can move here: a task's band IS its goal id, and no input to this call changes an id. `dueAt` is optional — a number sets it, null clears it, omitting it leaves it alone. Fires the same workspace.goals_changed edit the board and activity feed already render. `chores` is refused: its label is fixed.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          workspaceId: { type: "string" },
+          goal: {
+            type: "string",
+            description: "The goal or subgoal id to retitle. Get it from get_workspace."
+          },
+          title: { type: "string", description: "The new title." },
+          dueAt: {
+            type: ["number", "null"],
+            description: "Epoch ms to set, null to clear, omit to leave unchanged."
+          }
+        },
+        required: ["workspaceId", "goal", "title"]
       }
     },
     {
@@ -15713,12 +15738,28 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok({ taskId, goal: res.task.goal, order: res.task.order, changed: res.changed });
       }
       case "set_goal_list": {
-        const { workspaceId, goals } = a;
+        const { workspaceId, goals, drop } = a;
         const res = await http("PUT", `/api/workspaces/${encodeURIComponent(workspaceId)}/goals`, {
           goals,
+          ...drop !== undefined ? { drop } : {},
           author: AUTHOR
         });
-        return ok({ workspaceId, changed: res.changed, movedToChores: res.movedToChores });
+        return ok({
+          workspaceId,
+          changed: res.changed,
+          movedToChores: res.movedToChores,
+          strandedDone: res.strandedDone
+        });
+      }
+      case "rename_goal": {
+        const { workspaceId, goal, title, dueAt } = a;
+        const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/goals/rename`, {
+          goal,
+          title,
+          ...dueAt !== undefined ? { dueAt } : {},
+          author: AUTHOR
+        });
+        return ok({ workspaceId, goal: res.goal, changed: res.changed });
       }
       case "reorder_goals": {
         const { workspaceId, order, parent } = a;

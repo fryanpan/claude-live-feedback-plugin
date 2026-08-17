@@ -138,4 +138,54 @@ describe('widget', () => {
     expect(texts.some((t) => t.includes('mislabelled'))).toBe(true);
     expect(texts.some((t) => t.includes('signed-in user'))).toBe(true);
   });
+
+  /**
+   * On a third-party page the widget is a guest and must keep its identity in
+   * its own `cfw:` namespace. On OUR hub the page has already asked the reader
+   * their name — two namespaces there means the presence strip greets the
+   * reader by that name while every comment the widget posts is signed
+   * "Anonymous <animal>". Observed on a live hub before this was fixed.
+   */
+  describe('identity scope', () => {
+    beforeEach(() => localStorage.clear());
+    afterEach(() => localStorage.clear());
+
+    it('ignores the host page name by default, and adopts it under scope=host', async () => {
+      // Imported for the side effect only: this test drives the element
+      // declaratively, so all it needs is `customElements.define` to have run.
+      await importWidget();
+      // The name the HOST page stored (unprefixed — what ensureUserIdentity writes).
+      localStorage.setItem('feedback-user-name', 'Dana Reviewer');
+
+      // Default scope: the guest namespace is empty, so the widget is anonymous.
+      const guest = document.createElement('claude-feedback-widget');
+      guest.setAttribute('doc-id', 'w-scope-default');
+      document.body.appendChild(guest);
+      const guestName = (guest as unknown as { user: { name: string } }).user.name;
+      expect(guestName).toMatch(/^Anonymous /);
+
+      // scope=host: the SAME stored name is now the widget's identity.
+      const hosted = document.createElement('claude-feedback-widget');
+      hosted.setAttribute('doc-id', 'w-scope-host');
+      hosted.setAttribute('identity-scope', 'host');
+      document.body.appendChild(hosted);
+      expect((hosted as unknown as { user: { name: string } }).user.name).toBe('Dana Reviewer');
+
+      // The pair is the point: same storage, same markup but for one attribute,
+      // two different answers. Neither half proves anything alone.
+      expect(guestName).not.toBe('Dana Reviewer');
+      // And the widget's own UI preference stays namespaced in both scopes, so
+      // `identity-scope` cannot make the widget collide with a host key.
+      expect(localStorage.getItem('showResolved')).toBeNull();
+      // Nothing wrote the host name into the guest namespace either.
+      expect(localStorage.getItem('cfw:feedback-user-name')).toBeNull();
+    });
+
+    it('via FeedbackWidget.init as well as the attribute', async () => {
+      const mod = await importWidget();
+      localStorage.setItem('feedback-user-name', 'Reviewer');
+      const el = mod.FeedbackWidget.init({ docId: 'w-scope-init', identityScope: 'host' });
+      expect((el as unknown as { user: { name: string } }).user.name).toBe('Reviewer');
+    });
+  });
 });
