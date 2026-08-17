@@ -128,13 +128,36 @@ through the failure path instead of the happy path.
 
 So every publish attempt leaves a trace that outlives the process that made it:
 
-- `releases/<id>/release.json` — when this release was published and the
-  **source commit** it was built from (`git describe --always --dirty` of the
-  deploy source). Freshness of the artifact is not freshness of the source: a
-  checkout parked on an old commit builds successfully and stamps a current
-  timestamp on old code, so the commit is part of the reading.
+- `releases/<id>/release.json` — when this release was published, the **source
+  commit** it was built from, and which paths in the deploy source were
+  uncommitted at the time. Freshness of the artifact is not freshness of the
+  source: a checkout parked on an old commit builds successfully and stamps a
+  current timestamp on old code, so the commit is part of the reading.
 - `publish-log.json` beside the releases — how many attempts in a row have
   failed, since when, and with what error. A success clears the streak.
+
+#### What `-dirty` on a `sourceRef` means
+
+`sourceRef` is `git describe --always` plus `-dirty` **only when a modified
+tracked path is something this deploy builds or serves.** It is not `git
+describe --dirty`, and the difference is the whole point: prod's deploy source
+is also where bound review documents live, so a tracked `.md` under `docs/`
+sits modified for as long as a review is open. For a day in August 2026 every
+release published during an ordinary editing session was stamped `-dirty`, and
+a marker that fires on document editing is a marker people learn to skip.
+
+The exemption list is **closed by default and deliberately tiny** — `docs/**`
+and top-level `*.md`. Anything else, `demos/**` included (it is served live out
+of the deploy source), still earns the suffix. The direction is chosen so that
+a mistake in the list can only produce a `-dirty` on a release that was fine,
+never a clean marker on a release built from uncommitted code. The rule, the
+reasoning, and what to re-check before adding an entry live in
+`packages/server/src/deploy-source.ts`.
+
+`release.json` also carries `dirtyPaths` (capped) and `dirtyPathCount` — every
+modified path, not only the ones that set the suffix. So a clean `sourceRef`
+sitting next to `dirtyPaths: ["docs/product/plans/…"]` reads as a decision
+rather than an oversight, and a `-dirty` one names the file that earned it.
 
 The workspace hub's presence strip reads that, next to the plugin-drift notice,
 and says how old the served client is, how long the build has been failing, and
