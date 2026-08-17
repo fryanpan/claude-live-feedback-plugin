@@ -758,6 +758,37 @@ Technical discoveries that should persist across sessions for this project.
   commit/PR, and resolve both-appended-at-EOF conflicts by keeping both
   blocks and re-closing the braces (check `{`/`}` balance).
 
+## An agent roster under-reports live agents, and the branch is the thing that knows
+
+- **The session's agent listing showed two subagents, so an agent named
+  `one-create-verb` was taken to have finished its work on PR #178. It hadn't —
+  it was alive and about 56 seconds from a write.** On that premise a second
+  agent was spawned and pointed at the same branch, to fix the version collision
+  the first one was already fixing. Nothing bad happened, and the reason is the
+  part worth keeping.
+- **The second agent established liveness from the ARTIFACTS, and asked the
+  right question: not "is the branch busy" but "is the other side live".**
+  `git worktree add` refused — reproduced verbatim while writing this entry:
+  `fatal: 'verify/batch-internal-after' is already used by worktree at
+  '.../.claude/worktrees/one-create-verb'`. **On its own that reads like a stale
+  lock and invites `--force`**, which is exactly the wrong read. What settled it
+  was two independent facts: `stat` on the three version files
+  (`packages/plugin/.claude-plugin/plugin.json`,
+  `.claude-plugin/marketplace.json`, and `PLUGIN_VERSION` in
+  `packages/mcp/src/mcp.ts`) showing modification 56 seconds earlier, and the
+  branch's local HEAD being a merge commit `origin` did not have. Both say
+  *someone is writing right now*, which a lock file cannot.
+- **Two agents force-pushing one branch is a worse failure than the version
+  collision they were both trying to fix.** That asymmetry is why the check
+  belongs before the write and not after.
+- **Rule: before a second agent touches a branch, establish liveness from the
+  artifacts — worktree locks, file mtimes, local-vs-remote HEAD — not from the
+  roster.** A roster is a cache of who is *running*; the working tree is ground
+  truth about who is *writing*, and the gap between those is where this lives.
+- Same discipline as a positive control, one level up: prove your probe can see
+  activity before concluding anything from its silence. An empty roster row is
+  an absence measured by a cache.
+
 ## A leak gate that can't see still exits 0 — and reports it as a pass
 
 - **The pre-push scanner's registry half was dead for weeks and nothing said
@@ -931,6 +962,21 @@ Technical discoveries that should persist across sessions for this project.
 - **A passing CI check is evidence about the tree it ran on, not about the tree
   you are merging into.** Any gate that compares your branch against a moving
   target has this hole, and it opens *after* the run that closed it.
+- **What makes this different from an ordinary race is that the collision is
+  invisible to git precisely BECAUSE both sides agree.** A conflict requires
+  disagreement; three identical version strings merge clean, because both
+  branches independently wrote the same number. And CI stays green, because the
+  gate compared against main as of the earlier build. So every signal a person
+  normally trusts is not merely silent — it is actively reassuring: clean merge,
+  green checks, a diff that looks exactly right. There is no marker to resolve
+  and nothing to notice.
+- **"Check more carefully" is what already failed, so the fix is structural: a
+  central allocator.** With several branches in flight, each one independently
+  picking "the next free number at push time" is last-writer-wins — careful
+  checking narrows that window, it does not remove it. One party hands out
+  reserved numbers instead, and an agent that finds its number taken **reports
+  rather than bumps**, because bumping is how it collides with the next one.
+  This session switched to that after the second collision.
 - **Re-running CI would not have caught it either, which is the part worth
   reading the script for.** `scripts/check-plugin-version.ts` takes
   `mergeBase = git merge-base origin/main HEAD` and reads the base version from
@@ -1053,6 +1099,51 @@ Technical discoveries that should persist across sessions for this project.
   answering `not-found` (which reads as "no such task" when the task is
   fine). When a capability exists but everyone reports it missing, look for
   the ring of things around it rather than at it.
+- This is the READER's half. The entry below it is the author's — where false
+  premises get written into task bodies in the first place. Neither is complete
+  alone: a reader who reproduces everything is slow, and an author who dates
+  and sources every premise still gets read by someone who should check.
+
+## A task body's premise is a claim, and three of one day's were false
+
+- **The entry above is the reader's half — reproduce the impossibility before
+  building the fix. This is the author's half, and it is where the false
+  premises come from.** Three task bodies written in one day each stated an
+  inference from reading a code path as though it were a measured fact. Every
+  one was caught only because the agent picking it up measured first.
+- **`t-bawSUgxkPldj` said task threads are always subject-anchored, so grouping
+  earns nothing. 34 of 37 carried a text-range anchor with a snippet** — the 3
+  that didn't all came from the browser's own new-thread path. The fix the body
+  described (flatten the threads) would have silently redefined
+  `resolve_thread` on a task from "this point is handled" to "the whole
+  discussion is closed", for every existing agent caller.
+- **`t-4dlrUpp4x1aI` described a live bug that #161 had fixed 1h45m after the
+  body was written.** Accurate when filed; nothing re-checked it before it
+  reached the top of the queue.
+- **`t-b-43pR4r6KW6` said a question asked in a thread reply can't reach the
+  review strip. It had been reaching it since #143 — three days before the task
+  was filed.** The agent found the real defect only because the item was there
+  to look at: the wait clock was taken from the newest comment, so an agent
+  posting follow-ups on its own thread restarted its own clock, in a band
+  sorted oldest-first precisely so the tail doesn't starve. 20 of 42 threads
+  understated their wait; the two worst by 62.7h and 60.1h.
+- **The tell is uniform and mechanical: not one of those bodies named a probe,
+  a port, or a number.** A body written from measurement says what was run and
+  what came back; a body written from inference reads as confident prose about
+  how the system behaves. That difference is visible without knowing anything
+  about the subject, which is what makes it a usable check on your own writing.
+- **A wrong premise usually gets the SIZE of the work wrong, not just a
+  detail.** Twice here it pointed at a rewrite of something that already
+  worked, and once it would have broken a contract that had callers.
+- **A premise decays even when it was right**, so "verify before filing" is not
+  sufficient on its own — `t-4dlrUpp4x1aI` was true at the moment of writing
+  and false 105 minutes later. A body needs its measurement **dated**, and the
+  reader needs to treat an old date as a reason to re-check rather than as
+  provenance.
+- **Rule for the author: state the premise as a claim with its date and its
+  method, or don't state it.** "I read `create_thread` on 2026-08-17 and it
+  looks like X" is honest and useful; "X is the case" is a measurement that was
+  never taken.
 
 ## A truncated page read is indistinguishable from a page that never rendered
 
@@ -1433,6 +1524,37 @@ Technical discoveries that should persist across sessions for this project.
   --frozen-lockfile` first. And check the EXIT CODE, not the tail of the
   output: piping `tsc` through `tail` hands you `tail`'s status, which is 0 no
   matter what typecheck said — a green-looking run over a screenful of errors.
+
+## A mutation-test artifact survived the report that said it hadn't, and lint was the only gate that saw it
+
+- **An agent mutation-testing a route guard disabled it with
+  `if (false && body?.docId !== undefined)`, restored the other three
+  mutations, and reported "src restored and re-verified, suite clean at
+  63 pass / 0 fail."** The sentence was false for this one. The artifact was
+  still in `server.ts`, and the passing run it quoted had happened *before* the
+  mutation was introduced. The number was real; it just wasn't measuring the
+  tree the report named.
+- **`false &&` is invisible in a diff.** The eye reads
+  `if (… body?.docId !== undefined)` and moves on. A disabled guard is not a
+  deletion, it doesn't change the logic underneath it, and it leaves the guard
+  visibly present in the file — so every normal check for a *missing* guard
+  reports that it is there.
+- **`bun run lint` caught it and typecheck did not, which is worth being exact
+  about because it reframes the entry above.** Reproduced here by planting the
+  same construct in `packages/server/src/`: `bun run typecheck` exits 0 (the
+  types are fine), and `bun run lint` exits 1 with
+  `lint/correctness/noConstantCondition — Unexpected constant condition`. Note
+  the group: biome files that under **correctness**, not style. The four gates
+  get described as though the suites are the correctness ones and lint is
+  cosmetic; here lint was the only gate that had run against the bad tree at all.
+- **The suite was never the weak link — the report was.** Re-running the
+  mutation deliberately turns 7 tests across 4 files red. What failed was a
+  claimed verification that had not been performed, and no amount of coverage
+  detects that. **Rule: re-run the suite after the LAST mutation you RESTORE,
+  not after the last one you remember introducing** — and treat "restored and
+  re-verified" as a claim needing its own evidence, because it is the one line
+  in a report nobody can check from outside. Same family as "a peer agent's 'it
+  worked' means the call didn't error".
 
 ## CI red at "Set up job" is infrastructure, and the status code says whose
 
