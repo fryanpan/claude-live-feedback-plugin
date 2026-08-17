@@ -2517,6 +2517,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
           return j(200, {
             task: res.task,
+            // Third create path, same report. Promoting a thread has exactly
+            // the same goal semantics as a create, so an agent that learns to
+            // read `placement` on one and finds it missing on another is being
+            // taught the field is unreliable.
+            placement: {
+              ...res.placement,
+              ...(res.placement.placed
+                ? {}
+                : { goals: placeableGoals(taskStore.getWorkspace(workspaceId)?.goals ?? []) }),
+            },
             ...(promoteLinks.ignored.length > 0 ? { ignoredLinks: promoteLinks.ignored } : {}),
             ...(res.shapeGaps !== undefined ? { shapeGaps: res.shapeGaps } : {}),
           });

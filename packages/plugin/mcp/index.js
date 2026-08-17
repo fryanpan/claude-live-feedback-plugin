@@ -15589,7 +15589,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           author: AUTHOR
         });
         return ok({
-          ...taskCreatedSummary(res.task, res.ignoredLinks),
+          ...taskCreatedSummary(res.task, res.ignoredLinks, undefined, res.placement?.placed),
+          ...res.placement?.goals !== undefined ? { goals: res.placement.goals } : {},
           title: res.task.title,
           quote: res.task.quote
         });
