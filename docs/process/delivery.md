@@ -16,7 +16,7 @@ who has your change and who does not — and the single human step that is left.
 
 | What | Travels as | Lands when | Human step |
 |---|---|---|---|
-| Plugin (commands, skills, hooks, MCP bundle) | Version-keyed copy from the GitHub marketplace | `claude plugin update` on that machine | Peer restarts its session |
+| Plugin (commands, skills, hooks, MCP bundle) | Version-keyed copy from the GitHub marketplace | Prod refreshes the cache on its own, ≤30 min after the merge | Peer restarts its session |
 | MCP server code | `packages/plugin/mcp/index.js`, **tracked in git** | Same as the plugin | Same |
 | Browser client (markdown app + widget) | `packages/markdown-app/dist` / `packages/widget/dist`, **untracked**, published at server start | Server restart | None (reload the page) |
 | Server code | The checkout the service runs from | Server restart | None |
@@ -165,17 +165,51 @@ from the bundle it already points at, but it cannot cross a version boundary.
 Same constraint as `FEEDBACK_AGENT_NAME` and `FEEDBACK_BASE_URL`, which are
 read once from the launch environment.
 
-So the full path for a plugin change is: merge → bump landed → peer runs
-`claude plugin update live-feedback@claude-live-feedback` → **peer restarts the
-session**.
+So the full path for a plugin change is: merge → bump landed → the cache
+refreshes itself (below) → **peer restarts the session**.
 
-An agent can run the update itself — but not through the shell function. On
-this machine `claude` resolves to a wrapper that injects flags ahead of the subcommand,
-so `claude plugin update …` is parsed as a prompt and dies with *"Input must be
+The restart is the human step, and it is the only one. A running session
+resolved `CLAUDE_PLUGIN_ROOT` to a version-keyed directory at launch, and an
+MCP reconnect re-execs that same path — it can pick up new tool schemas from
+the bundle it already points at, but it cannot cross a version boundary.
+
+### Nobody has to remember to run the update
+
+Prod polls it. `scripts/serve.ts --no-watch` passes
+`--plugin-refresh-interval-ms`, and the server then runs
+`claude plugin update live-feedback@claude-live-feedback` at boot and every 30
+minutes (`LF_PLUGIN_REFRESH_MINUTES`; `0` turns it off). A merge therefore
+reaches this machine's cache on its own, within the window.
+
+This is safe to arm without asking because **it cannot interrupt anyone**: the
+update rewrites a version-keyed cache directory and the `installed_plugins.json`
+pointer, and every running session keeps loading the bundle it already resolved.
+The refresh never touches a live session; peers take the new version at their
+own next restart.
+
+Dev and staging deliberately do **not** do this — they are copies of the deploy
+source, and a `bun run staging` that quietly updated the fleet's plugin would be
+the same class of accident as building bundles in the primary checkout. On those
+the route answers `501`.
+
+Any peer can also ask for it directly, without waiting for the poll or routing
+the ask through anyone: the `request_plugin_refresh` MCP tool, or
+`POST /api/plugin/refresh`. Concurrent asks collapse into one fetch.
+
+Read the result rather than the exit code. It reports the cache version
+**before and after, from disk** — `claude plugin update` reports success when
+it copies nothing, which is how 25 commits once sat undelivered with green on
+both ends. `changed: false` with matching versions means the cache was already
+current; that is an answer, not a failure.
+
+To run it by hand, do **not** use the bare command. On this machine `claude`
+resolves to a wrapper that injects flags ahead of the subcommand, so
+`claude plugin update …` is parsed as a prompt and dies with *"Input must be
 provided either through stdin or as a prompt argument when using --print"*,
 which reads like a permission refusal and was once written up as one. Use
 `command claude plugin update live-feedback@claude-live-feedback` — `command`
-bypasses functions and aliases. The restart remains the human step.
+bypasses functions and aliases. (The server never hits this: it spawns the
+resolved binary path with an argv array and no shell.)
 
 ### Who is behind, without going to look
 
@@ -222,4 +256,6 @@ once, after.
 - [ ] `bun run test` and `bun run lint` green.
 - [ ] Client change people need to see? → restart prod (that is the deploy),
       then confirm the release published in the supervisor log.
-- [ ] Plugin change peers need? → tell them to update **and restart**.
+- [ ] Plugin change peers need now? → restarting prod refreshes the cache at
+      boot; otherwise it lands within 30 min on its own. Either way tell peers
+      to **restart their sessions** — that step is still theirs.

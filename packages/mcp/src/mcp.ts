@@ -77,7 +77,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.27';
+const PLUGIN_VERSION = '0.1.28';
 
 const server = new Server(
   {
@@ -1389,6 +1389,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'request_plugin_refresh',
+      description:
+        "Ask this machine to fetch the newest live-feedback plugin from the marketplace. Call it when the board's presence strip says agents are running an older bundle than the one released — that notice and this tool are the two halves of the same thing. It REQUESTS rather than forces: the update rewrites a version-keyed cache, so no running session is interrupted and every peer (including you) picks the new version up at its own next restart. Safe to call from any session; concurrent asks collapse into one fetch. The result reports the cache version BEFORE and AFTER, read from disk rather than from the CLI's own success message, because `claude plugin update` reports success when it copies nothing. `changed: false` with matching versions means the cache was already current, which is a real answer and not a failure.",
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
       name: 'list_attachments',
       description:
         "List the agents attached to a hub workspace with their derived state: active, 'process up, agent unresponsive' (fresh heartbeat, stale tool calls), or 'away — requests queue'. The ambient-awareness read: who is where, and is anyone wedged.",
@@ -2519,6 +2525,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           { toolCallAt: toolCallAt ?? Date.now() },
         )) as { attachment?: { state?: string } };
         return ok({ workspaceId, agentId: agentId ?? AUTHOR.id, state: res.attachment?.state });
+      }
+      case 'request_plugin_refresh': {
+        // No arguments reach the process this runs — the server's argv is
+        // fixed. Nothing a caller can send gets spawned.
+        return ok(await http('POST', '/api/plugin/refresh'));
       }
       case 'list_attachments': {
         const { workspaceId } = a as { workspaceId: string };
