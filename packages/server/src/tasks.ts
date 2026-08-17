@@ -2568,7 +2568,7 @@ export class TaskStore {
     if (from === assignee && task.assigneeKind === kind) return { ok: true, task, changed: false };
     const ts = Date.now();
     task.assignee = assignee;
-    if (kind === undefined) delete task.assigneeKind;
+    if (kind === undefined) task.assigneeKind = undefined;
     else task.assigneeKind = kind;
     task.updatedAt = ts;
     this.scheduleSave(task.workspaceId);
