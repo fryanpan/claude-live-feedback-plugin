@@ -548,6 +548,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         ? taskStore.hasLiveLeadAttachment(req.workspaceId)
         : taskStore.hasLiveAttachment(req.workspaceId);
     if (!live) return false;
+    // The WHOLE request goes on the wire, deliberately: the MCP renders its
+    // channel line straight off this frame, so a field trimmed here cannot be
+    // rendered no matter what the renderer does — and the lead who is HERE
+    // would get less than the one who was away and picks the same edit up as
+    // `pendingRetriage` on attach. Pinned by a test that reads this frame.
     sse.broadcast(`ws~${req.workspaceId}`, { event: 'triage.requested', ...req });
     return true;
   });

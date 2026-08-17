@@ -500,6 +500,79 @@ describe('re-triage routing, over HTTP', () => {
     expect(JSON.stringify(projected)).not.toContain('known-jordan');
   });
 
+  /**
+   * The LIVE delivery must put the whole request on the wire.
+   *
+   * The MCP renders its channel line straight off this frame, so anything
+   * missing here cannot be rendered no matter what the renderer does — and
+   * the away lead, who gets `pendingRetriage` on attach, would keep getting
+   * strictly more than the lead sitting at their desk. That asymmetry was
+   * written down as "oldGoal is unrecoverable on the live path"; it was only
+   * ever unrendered. This is the assertion that keeps it on the wire, because
+   * `sse.broadcast(..., { event, ...req })` is a spread nothing type-checks
+   * against what the reader needs.
+   */
+  it('the live triage.requested frame carries oldGoal and every taskId, not just a count', async () => {
+    const wsId = await makeHub('wire-hub', LEAD);
+    const first = await addTask(wsId, 'draft the outline');
+    const second = await addTask(wsId, 'collect screenshots');
+    await post(`/api/workspaces/${wsId}/attachments`, {
+      agentId: LEAD,
+      runtime: 'claude-code-local',
+    });
+
+    const seen: Array<Record<string, unknown>> = [];
+    const ctl = new AbortController();
+    const stream = await local(`/events/workspace/${wsId}`, { signal: ctl.signal });
+    const reader = (stream.body as ReadableStream<Uint8Array>).getReader();
+    const dec = new TextDecoder();
+    const pump = (async () => {
+      let buf = '';
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) return;
+          buf += dec.decode(value, { stream: true });
+          const frames = buf.split('\n\n');
+          buf = frames.pop() ?? '';
+          for (const frame of frames) {
+            for (const line of frame.split('\n')) {
+              if (!line.startsWith('data:')) continue;
+              try {
+                seen.push(JSON.parse(line.slice(5).trim()) as Record<string, unknown>);
+              } catch {}
+            }
+          }
+        }
+      } catch {}
+    })();
+
+    try {
+      const edit = await editGoal(wsId, 'New goal: ship the board instead.');
+      expect(edit.retriage.requested).toBe(true); // it really went out live
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline && !seen.some((e) => e.event === 'triage.requested')) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+
+      // POSITIVE CONTROL: this reader can see frames at all. Without it,
+      // every assertion below could pass vacuously on an empty stream.
+      expect(seen.some((e) => e.event === 'workspace.goal_updated')).toBe(true);
+
+      const req = seen.find((e) => e.event === 'triage.requested');
+      if (!req) throw new Error('the live delivery never reached the channel');
+      expect(req.kind).toBe('goal-retriage');
+      expect(req.oldGoal).toBe('Old goal.');
+      expect(req.newGoal).toBe('New goal: ship the board instead.');
+      expect((req.taskIds as string[]).slice().sort()).toEqual([first, second].sort());
+      expect(req.batchId).toBe(edit.retriage.batchId);
+      expect(req.leadAgentId).toBe(LEAD);
+    } finally {
+      ctl.abort();
+      await pump;
+    }
+  });
+
   it("the delivered request's batchId ties the resulting moves together as one goal edit", async () => {
     const wsId = await makeHub('batch-hub', LEAD);
     await put(`/api/workspaces/${wsId}/goals`, {
