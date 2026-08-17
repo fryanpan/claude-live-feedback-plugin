@@ -8,6 +8,47 @@ browser running on the host machine itself at `http://localhost:8787`.
 This is a configuration change with one supporting code change. The server does
 not, and after this still does not, terminate TLS.
 
+## Doing step 1 without step 2 is the trap
+
+**Step 1 alone looks exactly like success from the outside.** HTTPS answers, a
+spot check passes, and every link the server emits still points past it — so
+voice stays dead for anyone who follows one, and nothing anywhere says why.
+
+The readings that distinguish the two states, in both directions — each needs
+its "before" value or it proves nothing:
+
+| | step 1 not done | step 1 done |
+|---|---|---|
+| `tailscale serve status` | `No serve config` | `https://<tailnet-name> (tailnet only)` → `proxy http://127.0.0.1:8787` |
+| `curl https://<tailnet-name>/` | `000` (nothing listening) | `200`, `ssl_verify_result=0` |
+| `curl http://<tailnet-name>:8787/` | `200` | `200` (unchanged, as intended) |
+
+Note the third row is the control: it must NOT move. If the plain-http origin
+stops answering, `serve` has been pointed at the wrong target rather than
+added alongside.
+
+**Setting `LF_PUBLIC_BASE_URL` by hand in the installed plist is a stopgap, not
+step 2.** It does take effect at the next restart from any cause, but
+`install.sh` regenerates the plist from its template on every run, so a
+hand-written value is silently discarded the next time anyone reinstalls. The
+canonical form is below, and it ends in `launchctl bootstrap`:
+
+```bash
+LF_PUBLIC_BASE_URL=https://<tailnet-name> ./scripts/launchd/install.sh
+```
+
+That restart is also the **client deploy** — the server rebuilds the bundles
+from the primary checkout and publishes them as the release every browser
+loads. So a checkout sitting behind `main` republishes an older client as a
+side effect of a config change nobody thought was a deploy. **Bring the primary
+checkout up to `main` first, then reinstall.** The other order is how a restart
+moves the served client backwards — see "A restart can move a session BACKWARDS
+a plugin version" and "A prod restart reloads server code but NOT the served app
+bundle" in [learnings.md](learnings.md).
+
+Until the reinstall lands, treat any `https://<tailnet-name>/…` link as
+hand-built rather than server-emitted.
+
 ## What is actually wrong
 
 Measured in Chrome against the two origins, same machine, same browser:
