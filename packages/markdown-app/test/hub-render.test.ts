@@ -1057,6 +1057,50 @@ describe('renderTaskDetail', () => {
     expect(desc?.textContent).not.toContain('**');
   });
 
+  // A shaped task carries the words it was shaped FROM, and an unlabelled
+  // blockquote above a rewritten description cannot say which of the two
+  // readings it is — "here is what you said" or "here is a source". Those want
+  // opposite reactions from the reader, and every shaped row carries one.
+  it('labels a preserved capture so it reads as provenance, not as a stray quote', () => {
+    renderTaskDetail(
+      root,
+      task({
+        quote: 'we should let people rename a goal without losing the tasks under it',
+        body: 'Agent can rename a goal so that filed work survives the rename.',
+      }),
+      detailHandlers(),
+    );
+    const fig = root.querySelector('.hub-detail-quote-block');
+    expect(fig).toBeTruthy();
+    expect(fig?.querySelector('.hub-detail-quote-label')?.textContent).toBe('Original words');
+    // The words themselves survive the wrapper — the label must not be the
+    // only thing that made it into the DOM.
+    expect(fig?.querySelector('.hub-detail-quote')?.textContent).toContain(
+      'without losing the tasks under it',
+    );
+    // The caption belongs to the quote, not to the panel: it is inside the
+    // figure, so nothing reads it as a heading over the description below.
+    expect(root.querySelector('.hub-detail-quote-label')?.closest('figure')).toBe(fig);
+  });
+
+  it('shows no quote block at all on a task that never had one', () => {
+    // Positive control first: the label renders when there IS a quote, so its
+    // absence below means the branch was skipped rather than that this test
+    // renders an empty panel.
+    renderTaskDetail(root, task({ quote: 'the thing I actually said' }), detailHandlers());
+    expect(root.querySelector('.hub-detail-quote-label')).toBeTruthy();
+
+    renderTaskDetail(
+      root,
+      task({ body: 'A task filed with no captured words.' }),
+      detailHandlers(),
+    );
+    expect(root.querySelector('.hub-detail-quote-block')).toBeNull();
+    expect(root.querySelector('.hub-detail-quote-label')).toBeNull();
+    // …on a panel that did render: the description is right there.
+    expect(root.querySelector('.hub-detail-body')?.textContent).toContain('no captured words');
+  });
+
   it('escapes markup in a description rather than executing it', () => {
     renderTaskDetail(root, task({ body: '<img src=x onerror=alert(1)>' }), detailHandlers());
     expect(root.querySelector('.hub-detail-body img')).toBeNull();
