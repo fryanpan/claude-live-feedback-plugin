@@ -67,12 +67,25 @@ export const widgetStyles = `
 .status-open, .status-open.status { background: #e8f5ed; color: ${STATUS_COLORS.resolved}; }
 .status-connecting { background: #fff5dc; color: #9a6700; }
 .status-closed { background: #ffe9e7; color: #a40e26; }
+/* Every button in the widget's chrome clears the 44px touch floor. These are
+   the controls a phone reviewer aims at, and they are unconditional rather
+   than wrapped in a phone media query on purpose: a media query changes WHEN
+   a rule applies, never how strongly, so a floor stated there loses to any
+   equal-specificity rule later in this file. A floor that only ever grows a
+   target is safe to state once, for every pointer. */
 .icon-btn {
   background: transparent;
   border: 0;
   font-size: 18px;
   cursor: pointer;
   color: #6e7781;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
 }
 .icon-btn:hover { color: #1b1f23; }
 
@@ -91,26 +104,41 @@ export const widgetStyles = `
   color: #fff;
   border: 1px solid #2e7dd7;
   border-radius: 6px;
-  padding: 6px 10px;
+  padding: 6px 12px;
   font-size: 12px;
   cursor: pointer;
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .primary:hover { filter: brightness(1.06); }
 .cancel {
   background: #fff;
   border: 1px solid #d1d5da;
   border-radius: 6px;
-  padding: 6px 10px;
+  padding: 6px 12px;
   font-size: 12px;
   cursor: pointer;
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .resolve, .reopen {
   background: #fff;
   border: 1px solid #d1d5da;
   border-radius: 6px;
-  padding: 6px 10px;
+  padding: 6px 12px;
   font-size: 12px;
   cursor: pointer;
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .panel-threads {
@@ -130,6 +158,7 @@ export const widgetStyles = `
   font-size: 11px;
   cursor: pointer;
   text-align: center;
+  min-height: 44px;
 }
 .resolved-toggle:hover { color: #1b1f23; border-color: #afb8c1; }
 .section-heading {
@@ -296,9 +325,15 @@ export const widgetStyles = `
   color: #fff;
   border: 1px solid rgba(255,255,255,0.3);
   border-radius: 6px;
-  padding: 3px 8px;
+  padding: 3px 10px;
   font-size: 12px;
   cursor: pointer;
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
 }
 
 .thread-popover .actions textarea {
