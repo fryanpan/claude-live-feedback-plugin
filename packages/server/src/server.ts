@@ -13,6 +13,7 @@ import {
 import { needsCall } from '@feedback/core/summary-prompt';
 import type { Server as BunServer } from 'bun';
 import { classifyActor } from './activity.ts';
+import { clientReleaseStatus } from './client-release.ts';
 import { showFile } from './git-diff.ts';
 import {
   LOOPBACK_HOSTS,
@@ -182,6 +183,19 @@ export interface ServerOptions {
    * means a CI run can never trigger a deploy.
    */
   pluginRefresher?: PluginRefresher;
+  /**
+   * The client release root this deployment publishes into (see
+   * client-release.ts), enabling the "your browser is running an old client"
+   * signal on the board.
+   *
+   * Set in ONE place — scripts/serve.ts --no-watch, via bin.ts — because only
+   * the process that PUBLISHES a release may report on it. `bun run dev` and
+   * `bun run staging` serve their own checkout's dist while sharing this
+   * machine's default release root, so reading it there would report prod's
+   * deploy state on a server that is not serving prod's client. Same seam
+   * rule as `pluginRefresher`.
+   */
+  clientReleaseRootDir?: string | null;
   /** Absolute path to the built widget dist dir, or null to skip. */
   widgetDistDir?: string | null;
   /** Absolute path to the built markdown-app dist dir. */
@@ -292,6 +306,7 @@ export interface ServerHandle {
 export function createServer(opts: ServerOptions = {}): ServerHandle {
   const port = opts.port ?? DEFAULT_PORT;
   const dataDir = opts.dataDir ?? join(process.cwd(), 'data');
+  const clientReleaseRootDir = opts.clientReleaseRootDir ?? null;
   const widgetDist = opts.widgetDistDir ?? null;
   const markdownAppDist = opts.markdownAppDistDir ?? null;
   const demosDir = opts.demosDir ?? null;
@@ -1688,11 +1703,40 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const workspaceId = decodeURIComponent(wsGoalMatch[1] ?? '');
           const body = await safeJson(req);
           const goal = body?.goal;
-          if (typeof goal !== 'string') return j(400, { error: 'goal required' });
+          // `summary` is the ≤20-word line the board DISPLAYS in place of the
+          // goal. It rides this route rather than getting one of its own so
+          // there is exactly one way in: two writers for one field is how a
+          // stale hash gets computed against the wrong goal.
+          const summary = body?.summary;
+          if (summary !== undefined && typeof summary !== 'string') {
+            return j(400, { error: 'summary must be a string' });
+          }
           const author = authorFor(body?.author);
           if (!author) return j(400, { error: 'author required' });
-          const res = taskStore.setWorkspaceGoal(workspaceId, goal, { actor: author });
+          if (typeof goal !== 'string') {
+            // Summary-only: re-wording the display line must not require the
+            // caller to echo the goal back, which would let a stale read
+            // silently revert a north star somebody else just edited.
+            if (typeof summary !== 'string') {
+              return j(400, { error: 'goal or summary required' });
+            }
+            const only = taskStore.setGoalSummary(workspaceId, summary);
+            if (!only.ok) return j(404, only);
+            // The store emits nothing for a display-only change, so nothing
+            // would push it to the open boards. Reassert the projection here
+            // — otherwise the summary exists and no surface can show it.
+            taskProjection.ensureWorkspace(workspaceId);
+            return j(200, { ok: true, workspace: only.workspace, changed: false });
+          }
+          const res = taskStore.setWorkspaceGoal(workspaceId, goal, {
+            actor: author,
+            ...(typeof summary === 'string' ? { summary } : {}),
+          });
           if (!res.ok) return j(404, res);
+          // A no-op goal edit carrying a new summary emits no event either,
+          // so the same reassert applies. Idempotent, so doing it on the
+          // changed path too costs nothing and removes a branch to get wrong.
+          if (typeof summary === 'string') taskProjection.ensureWorkspace(workspaceId);
           return j(200, res);
         }
         // set_workspace_lead: hand the board's lead-agent seat to someone
@@ -2437,9 +2481,21 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // it says which tools an agent here can use, so a visitor sees it
           // for the same reason they see who is attached.
           const released = readReleasedPluginVersion();
+          // The other half of "what is running where": the plugin drift above
+          // is about the agents, this is about the browser the reader is
+          // holding. A failed client build keeps the previous release live and
+          // used to say so only on stderr, so the split widened in silence.
+          //
+          // Owner-only: `lastError` is a build error off this machine's disk
+          // (absolute paths), and which release is live is a fact about the
+          // host's deploy rather than workspace content — the same line the
+          // `endpoint` redaction draws.
+          const clientRelease =
+            clientReleaseRootDir && !visitor ? clientReleaseStatus(clientReleaseRootDir) : null;
           return j(200, {
             workspaceId,
             attachments,
+            ...(clientRelease ? { clientRelease } : {}),
             pluginRelease: {
               version: released,
               behind: agentsBehind(released, attachments).map((a) => ({

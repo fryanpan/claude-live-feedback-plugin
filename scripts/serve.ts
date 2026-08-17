@@ -36,7 +36,6 @@ import { fileURLToPath } from 'node:url';
 import {
   type PreparedClient,
   clientReleaseRoot,
-  currentClientRelease,
   prepareClientRelease,
 } from '../packages/server/src/client-release.ts';
 
@@ -87,6 +86,30 @@ function isPortListening(port: number, host = '127.0.0.1'): Promise<boolean> {
   });
 }
 
+/**
+ * What this deploy source is parked on, stamped into the release so the served
+ * client can say what it was built from. `--dirty` matters: prod's checkout is
+ * also where people build, and "current timestamp, uncommitted tree" is a
+ * different claim from "current timestamp, this commit".
+ *
+ * Best-effort — no git, no repo, a slow filesystem, and the publish carries on
+ * with a timestamp alone rather than failing a deploy over a label.
+ */
+function deploySourceRef(): string | undefined {
+  try {
+    const r = spawnSync('git', ['describe', '--always', '--dirty'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      timeout: 5000,
+    });
+    const out = r.status === 0 ? r.stdout.trim() : '';
+    return out.length > 0 ? out : undefined;
+  } catch {
+    return undefined;
+  }
+}
+const sourceRef = noWatch ? deploySourceRef() : undefined;
+
 const port = await pickFreePort(requestedPort);
 
 // PROD deploy step. Two problems, one sequence:
@@ -109,13 +132,13 @@ const port = await pickFreePort(requestedPort);
 // A failed build keeps the previous release live (stale beats down), loudly.
 const clientArgs: string[] = [];
 if (noWatch) {
-  let built = true;
+  const failures: string[] = [];
   for (const pkg of ['widget', 'markdown-app']) {
     const r = spawnSync('bun', ['run', join(repoRoot, 'packages', pkg, 'scripts', 'build.ts')], {
       stdio: 'inherit',
     });
     if (r.status !== 0) {
-      built = false;
+      failures.push(pkg);
       console.error(`[supervisor] ${pkg} build FAILED`);
     }
   }
@@ -124,28 +147,26 @@ if (noWatch) {
   // A failed build must not be published even if dist LOOKS complete — the
   // markdown-app build writes app.js before its second entrypoint, so a late
   // failure leaves a dist that passes a file-existence check and is wrong.
-  const prepared: PreparedClient = built
-    ? prepareClientRelease({
-        root,
-        sources: {
-          widget: join(repoRoot, 'packages', 'widget', 'dist'),
-          markdownApp: join(repoRoot, 'packages', 'markdown-app', 'dist'),
-        },
-      })
-    : (() => {
-        const cur = currentClientRelease(root);
-        return {
-          releaseDir: cur?.releaseDir ?? null,
-          widget: cur?.widgetDir ?? null,
-          markdownApp: cur?.markdownAppDir ?? null,
-          stale: true,
-          error: 'bundle build failed',
-        };
-      })();
+  // `buildError` is how prepareClientRelease is told that, so BOTH kinds of
+  // failure land in the same ledger and the board sees either one.
+  const prepared: PreparedClient = prepareClientRelease({
+    root,
+    sources: {
+      widget: join(repoRoot, 'packages', 'widget', 'dist'),
+      markdownApp: join(repoRoot, 'packages', 'markdown-app', 'dist'),
+    },
+    // What the served client was built FROM. Freshness of the artifact is not
+    // freshness of the source: a checkout parked on an old commit builds
+    // successfully and stamps a current timestamp on old code, so the release
+    // has to carry the commit as well as the clock.
+    ...(sourceRef ? { sourceRef } : {}),
+    ...(failures.length > 0 ? { buildError: `${failures.join(' + ')} build failed` } : {}),
+  });
 
   if (prepared.stale) {
     console.error(
-      `[supervisor] client NOT republished (${prepared.error ?? 'unknown'}) — ` +
+      `[supervisor] client NOT republished (${prepared.error ?? 'unknown'}; ` +
+        `${prepared.consecutiveFailures} in a row) — ` +
         (prepared.releaseDir
           ? `serving the last good release ${prepared.releaseDir}`
           : 'and there is no previous release, so no client will be served'),
@@ -156,6 +177,11 @@ if (noWatch) {
 
   if (prepared.widget) clientArgs.push('--widget-dist', prepared.widget);
   if (prepared.markdownApp) clientArgs.push('--markdown-app-dist', prepared.markdownApp);
+  // Only the process that publishes may report on the published client. Dev
+  // and staging share this machine's default release root while serving their
+  // own dist, so arming them would put PROD's deploy state on a board that is
+  // not serving prod's client.
+  clientArgs.push('--client-release-root', root);
 }
 
 // DEV supervises two processes so code is never stale:

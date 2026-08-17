@@ -125,4 +125,69 @@ describe('bin.ts --markdown-app-dist / --widget-dist', () => {
       for (const d of [root, dataDir, build.dir]) rmSync(d, { recursive: true, force: true });
     }
   }, 20_000);
+
+  it('forwards --client-release-root, so the board can see a stale client', async () => {
+    // The signal is worth nothing if the flag that arms it is dropped in
+    // argv parsing — and argv parsing here is hand-written string matching.
+    const root = mkdtempSync(join(tmpdir(), 'lf-releases-'));
+    const dataDir = mkdtempSync(join(tmpdir(), 'lf-data-'));
+    const good = fakeBuild('gen-1');
+    const broken = fakeBuild('gen-2');
+    rmSync(join(broken.markdownApp, 'app.js'));
+    const rel = publishClientRelease({ root, sources: good, now: new Date(1000) });
+    prepareClientRelease({ root, sources: broken, now: 2000 });
+    prepareClientRelease({ root, sources: broken, now: 3000 });
+    const port = 9500 + Math.floor(Math.random() * 400);
+
+    const child = spawn(
+      'bun',
+      [
+        'run',
+        join(repoRoot, 'packages', 'server', 'src', 'bin.ts'),
+        '--port',
+        String(port),
+        '--data-dir',
+        dataDir,
+        '--markdown-app-dist',
+        rel.markdownAppDir,
+        '--widget-dist',
+        rel.widgetDir,
+        '--client-release-root',
+        root,
+      ],
+      { cwd: repoRoot, stdio: 'ignore', env: { ...process.env, LF_SUMMARIES: '0' } },
+    );
+
+    try {
+      const headers = { host: `localhost:${port}`, 'content-type': 'application/json' };
+      let workspaceId: string | null = null;
+      for (let i = 0; i < 100 && workspaceId === null; i++) {
+        await new Promise((r) => setTimeout(r, 100));
+        try {
+          const res = await fetch(`http://127.0.0.1:${port}/api/workspaces`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ name: 'wiring-hub', goal: 'Ship it.' }),
+          });
+          if (res.ok) {
+            workspaceId = ((await res.json()) as { workspace: { id: string } }).workspace.id;
+          }
+        } catch {}
+      }
+      // Positive control: the probe reached a live server at all.
+      expect(workspaceId).not.toBeNull();
+
+      const body = (await (
+        await fetch(`http://127.0.0.1:${port}/api/workspaces/${workspaceId}/attachments`, {
+          headers,
+        })
+      ).json()) as { clientRelease?: { stale: boolean; consecutiveFailures: number } };
+      expect(body.clientRelease?.stale).toBe(true);
+      expect(body.clientRelease?.consecutiveFailures).toBe(2);
+    } finally {
+      child.kill('SIGTERM');
+      for (const d of [root, dataDir, good.dir, broken.dir])
+        rmSync(d, { recursive: true, force: true });
+    }
+  }, 20_000);
 });

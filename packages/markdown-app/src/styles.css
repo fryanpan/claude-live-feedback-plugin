@@ -730,12 +730,47 @@ body.hub-body {
 .hub-goal-empty {
   color: var(--fg-muted);
 }
+.hub-goal-summary {
+  margin: 0;
+}
 .hub-goal-edit {
   min-width: 36px;
   min-height: 36px;
   border: none;
   background: none;
   cursor: pointer;
+}
+/* "Show full goal" / "Show less". Its own grid row so it sits under the text
+   at full width — on a 430px phone this is a thumb target, not a hover
+   reveal, and there is no hover to reveal it with. */
+.hub-goal-more {
+  grid-column: 1 / -1;
+  justify-self: start;
+  min-height: 36px;
+  padding: 6px 10px;
+  margin-top: 4px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--accent, #2e7dd7);
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.hub-goal-summary-label {
+  display: block;
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+.hub-goal-summary-input {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  font: inherit;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
 }
 .hub-goal-editor {
   grid-column: 1 / -1;
@@ -838,6 +873,9 @@ body.hub-body {
   display: flex;
   align-items: flex-start;
   gap: 6px;
+  /* So the dictation indicator can take a line of its own under the row
+     rather than squeezing the box it is reporting on. */
+  flex-wrap: wrap;
 }
 .hub-quick-input {
   flex: 1;
@@ -859,6 +897,40 @@ body.hub-body {
 .hub-quick-submit {
   flex: none;
   min-height: 40px;
+}
+/* Hold to dictate into the box. Square and at least 44px so it is a thumb
+   target on a phone, which is where talking beats typing by the most. */
+.hub-quick-mic {
+  flex: none;
+  min-height: 40px;
+  min-width: 44px;
+  padding-inline: 8px;
+  font-size: 16px;
+  line-height: 1;
+  /* iOS turns a long press on a button into text selection / the callout
+     menu, which cancels the hold before a word is said. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+/* Recording. Same red as the board-wide dock's mic — one meaning, one colour,
+   whichever mic you are holding. */
+.hub-quick-mic.voice-active {
+  background: #c53030;
+  border-color: #c53030;
+  color: #fff;
+}
+.hub-quick-mic.voice-unavailable {
+  opacity: 0.45;
+}
+.hub-quick-mic-state {
+  /* Its own line: the streaming transcript is the longest thing here and it
+     must not reflow the row mid-utterance. */
+  flex-basis: 100%;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
 }
 
 /* --- decisions strip: the count first, the list second --- */
@@ -1654,6 +1726,21 @@ body.hub-body {
 .hub-detail-meta dd {
   margin: 0;
   overflow-wrap: anywhere;
+}
+/* A meta value that is prose rather than a fact — shown clipped, with the
+   rest a tap away. The More/Less control is inline with the text (the row is
+   short) but still carries a 36px touch height, because the panel is read on
+   a phone and there is no hover there. */
+.hub-meta-more {
+  min-height: 36px;
+  padding: 0 6px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--accent, #2e7dd7);
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-decoration: underline;
 }
 /* The assignee row is a control, not a label — a hand-off is a pick from
    everyone it could go to. Sized for a thumb (design-mobile.md's 44px

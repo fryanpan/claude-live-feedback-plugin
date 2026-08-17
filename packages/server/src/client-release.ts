@@ -33,12 +33,14 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
+  readFileSync,
   readdirSync,
   realpathSync,
   renameSync,
   rmSync,
   statSync,
   symlinkSync,
+  writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -83,6 +85,68 @@ export function clientReleaseRoot(
   return join(state, 'live-feedback', 'client');
 }
 
+/**
+ * What a release says about itself, written into the release directory at
+ * publish time and never changed afterwards.
+ *
+ * The point is that "what the browser is running" must be answerable without
+ * asking the process that published it — the publishing process is long gone
+ * by the time anyone wonders, and until this existed the only record of a
+ * publish decision was a line on stderr.
+ */
+export interface ReleaseProvenance {
+  id: string;
+  /** Epoch ms. How old the served client is, which is the whole question. */
+  publishedAt: number;
+  /** What the deploy source was on when this was built, if the caller knew.
+   *  Freshness of the artifact is not freshness of the source: a stale
+   *  checkout builds successfully and stamps a current timestamp on old code,
+   *  so the timestamp alone cannot answer "is this the code I merged". */
+  sourceRef?: string;
+}
+
+const PROVENANCE_FILE = 'release.json';
+
+/**
+ * The record of publish ATTEMPTS, beside the releases rather than inside one —
+ * a failed attempt produces no release to write into, and that is precisely
+ * the case worth remembering.
+ */
+export interface PublishLedger {
+  /** Epoch ms of the most recent attempt, successful or not. */
+  lastAttemptAt: number;
+  /** How many attempts in a row have failed. Zero after any success. */
+  consecutiveFailures: number;
+  /** When the current streak began. Absent when there is no streak. */
+  firstFailureAt?: number;
+  /** Why the most recent attempt failed. Absent when it succeeded. */
+  lastError?: string;
+}
+
+const LEDGER_FILE = 'publish-log.json';
+
+/** Distinguishes two ledger writes from the same process, as the pid
+ *  distinguishes two processes. See `ledgerTmpPath`. */
+let ledgerSeq = 0;
+
+/**
+ * Where one ledger write stages its bytes before the rename that commits it.
+ *
+ * Per-attempt, never a fixed name: two supervisors starting against the same
+ * release root (a launchd respawn overlapping a manual start) would otherwise
+ * write the SAME temp path, and one rename would commit the other's outcome —
+ * losing a failure, or clearing a streak that is still live. Same reason
+ * `current` is staged as `.current-<id>` rather than `.current`.
+ */
+export function ledgerTmpPath(root: string): string {
+  ledgerSeq = (ledgerSeq + 1) % 1_000_000;
+  return join(root, `.${LEDGER_FILE}.${process.pid}.${ledgerSeq}.tmp`);
+}
+
+/** A client older than this is worth shouting about even on a single failure —
+ *  see `decideClientReleaseStale`. */
+export const CLIENT_STALE_AFTER_MS = 24 * 60 * 60 * 1000;
+
 /** Breaks ties between publishes that land in the same millisecond. Ids must
  *  sort lexicographically in publish order — pruning keeps "the newest N", and
  *  a random suffix makes that ordering a coin flip. */
@@ -107,8 +171,10 @@ export function publishClientRelease(opts: {
   /** How many releases to retain, newest first. The live one is always kept. */
   keep?: number;
   now?: Date;
+  /** The deploy source this build came from (a commit sha, typically). */
+  sourceRef?: string;
 }): ClientRelease {
-  const { root, sources, keep = 3, now = new Date() } = opts;
+  const { root, sources, keep = 3, now = new Date(), sourceRef } = opts;
 
   for (const key of ['widget', 'markdownApp'] as const) {
     const dir = sources[key];
@@ -136,6 +202,14 @@ export function publishClientRelease(opts: {
       recursive: true,
       dereference: true,
     });
+    // Written into the STAGING tree, so it lands with the rename: a release
+    // can never exist without saying what it is.
+    const provenance: ReleaseProvenance = {
+      id,
+      publishedAt: now.getTime(),
+      ...(sourceRef ? { sourceRef } : {}),
+    };
+    writeFileSync(join(staging, PROVENANCE_FILE), `${JSON.stringify(provenance, null, 2)}\n`);
     releaseDir = join(releases, id);
     // Atomic: the release directory springs into existence complete.
     renameSync(staging, releaseDir);
@@ -204,6 +278,178 @@ export function currentClientRelease(root: string): ClientRelease | null {
   };
 }
 
+/**
+ * The publish time encoded in a release id (`20260813T014455123Z-000003`).
+ *
+ * Every release that exists on the day provenance ships was published without
+ * it, and "age unknown" is the one answer that makes a fresh client look
+ * alarming. The id has always carried the timestamp, so read it back rather
+ * than inventing a gap.
+ */
+export function publishedAtFromId(id: string): number | null {
+  const m = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(\d{3})Z/.exec(id);
+  if (!m) return null;
+  const [, y, mo, d, h, mi, s, ms] = m as unknown as string[];
+  return Date.UTC(
+    Number(y),
+    Number(mo) - 1,
+    Number(d),
+    Number(h),
+    Number(mi),
+    Number(s),
+    Number(ms),
+  );
+}
+
+/** What a release says about itself, or the best reconstruction available. */
+export function readReleaseProvenance(releaseDir: string): ReleaseProvenance | null {
+  const id = releaseDir.split('/').pop() ?? '';
+  try {
+    const raw = JSON.parse(readFileSync(join(releaseDir, PROVENANCE_FILE), 'utf8')) as {
+      id?: unknown;
+      publishedAt?: unknown;
+      sourceRef?: unknown;
+    };
+    if (typeof raw.publishedAt === 'number' && Number.isFinite(raw.publishedAt)) {
+      return {
+        id: typeof raw.id === 'string' ? raw.id : id,
+        publishedAt: raw.publishedAt,
+        ...(typeof raw.sourceRef === 'string' && raw.sourceRef.length > 0
+          ? { sourceRef: raw.sourceRef }
+          : {}),
+      };
+    }
+  } catch {
+    // Falls through to the id, below — a release predating provenance, or a
+    // file someone truncated. Either way the id is still authoritative.
+  }
+  const publishedAt = publishedAtFromId(id);
+  return publishedAt === null ? null : { id, publishedAt };
+}
+
+/** The publish ledger, or null when nothing has ever been attempted here. */
+export function readPublishLedger(root: string): PublishLedger | null {
+  try {
+    const raw = JSON.parse(readFileSync(join(root, LEDGER_FILE), 'utf8')) as Partial<PublishLedger>;
+    if (typeof raw.consecutiveFailures !== 'number') return null;
+    return {
+      lastAttemptAt: typeof raw.lastAttemptAt === 'number' ? raw.lastAttemptAt : 0,
+      consecutiveFailures: raw.consecutiveFailures,
+      ...(typeof raw.firstFailureAt === 'number' ? { firstFailureAt: raw.firstFailureAt } : {}),
+      ...(typeof raw.lastError === 'string' ? { lastError: raw.lastError } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Record one publish attempt. A success clears the streak outright — the
+ * question the ledger answers is "is the build failing NOW", and a count that
+ * survived a good publish would keep answering yes forever.
+ */
+export function recordPublishAttempt(
+  root: string,
+  outcome: { ok: true } | { ok: false; error: string },
+  now: number = Date.now(),
+): PublishLedger {
+  const prev = readPublishLedger(root);
+  const next: PublishLedger = outcome.ok
+    ? { lastAttemptAt: now, consecutiveFailures: 0 }
+    : {
+        lastAttemptAt: now,
+        consecutiveFailures: (prev?.consecutiveFailures ?? 0) + 1,
+        firstFailureAt: prev?.firstFailureAt ?? now,
+        lastError: outcome.error,
+      };
+  // Write beside, then rename: a reader never sees half a ledger, and a crash
+  // mid-write leaves the previous answer rather than none.
+  const tmp = ledgerTmpPath(root);
+  try {
+    mkdirSync(root, { recursive: true });
+    writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`);
+    renameSync(tmp, join(root, LEDGER_FILE));
+  } catch {
+    // The ledger is a signal, not the deploy. Failing to write it must never
+    // take down a server that has a perfectly good client to serve.
+    rmSync(tmp, { force: true });
+  }
+  return next;
+}
+
+/** Everything a surface needs to say what the browser is running and whether
+ *  that is a problem. */
+export interface ClientReleaseStatus {
+  /** The release being served, or null when nothing has ever published. */
+  releaseId: string | null;
+  publishedAt: number | null;
+  /** How old the served client is, right now. */
+  ageMs: number | null;
+  sourceRef: string | null;
+  consecutiveFailures: number;
+  failingSince: number | null;
+  lastError: string | null;
+  /** The alarm: this deployment is serving a client its own build could not
+   *  replace, and it is no longer plausibly a blip. */
+  stale: boolean;
+}
+
+/**
+ * Whether a stale client is worth a person's attention.
+ *
+ * Two arming conditions, because either alone misses a real case:
+ *
+ * - **Two failures in a row.** Each prod start is one attempt, so a second
+ *   failure means the server has moved forward twice while the browser has
+ *   not. That is the widening split, measured rather than guessed.
+ * - **One failure over a client that is already old.** A single failure with
+ *   no further restarts never reaches two, so a count-only rule would stay
+ *   silent forever while the gap grows.
+ *
+ * And one deliberate silence: a single failed attempt over a client published
+ * minutes ago is a blip. The browser is running essentially the code the build
+ * was trying to replace, and a warning there teaches people to ignore the
+ * warning.
+ */
+export function decideClientReleaseStale(input: {
+  publishedAt: number | null;
+  consecutiveFailures: number;
+  now: number;
+  staleAfterMs?: number;
+}): boolean {
+  const { publishedAt, consecutiveFailures, now, staleAfterMs = CLIENT_STALE_AFTER_MS } = input;
+  if (consecutiveFailures <= 0) return false;
+  if (consecutiveFailures >= 2) return true;
+  // Nothing published at all: a failed build with no fallback is the worst
+  // case there is, never a blip.
+  if (publishedAt === null) return true;
+  return now - publishedAt >= staleAfterMs;
+}
+
+/** Read both traces off disk and decide. Two small file reads — deliberately
+ *  uncached, so what a surface reports is the state of this machine now. */
+export function clientReleaseStatus(
+  root: string,
+  now: number = Date.now(),
+  staleAfterMs: number = CLIENT_STALE_AFTER_MS,
+): ClientReleaseStatus {
+  const current = currentClientRelease(root);
+  const provenance = current ? readReleaseProvenance(current.releaseDir) : null;
+  const ledger = readPublishLedger(root);
+  const publishedAt = provenance?.publishedAt ?? null;
+  const consecutiveFailures = ledger?.consecutiveFailures ?? 0;
+  return {
+    releaseId: current?.id ?? null,
+    publishedAt,
+    ageMs: publishedAt === null ? null : Math.max(0, now - publishedAt),
+    sourceRef: provenance?.sourceRef ?? null,
+    consecutiveFailures,
+    failingSince: consecutiveFailures > 0 ? (ledger?.firstFailureAt ?? null) : null,
+    lastError: consecutiveFailures > 0 ? (ledger?.lastError ?? null) : null,
+    stale: decideClientReleaseStale({ publishedAt, consecutiveFailures, now, staleAfterMs }),
+  };
+}
+
 export interface PreparedClient {
   /** The release to serve, or null when nothing has ever been published. */
   releaseDir: string | null;
@@ -213,39 +459,65 @@ export interface PreparedClient {
   stale: boolean;
   /** Why the publish was skipped, when it was. */
   error?: string;
+  /** How many starts in a row have now failed to publish, this one included. */
+  consecutiveFailures: number;
 }
 
 /**
  * The whole prod decision, in one place: publish the freshly-built bundles if
  * they are complete, otherwise keep serving the release that is already live.
  * Stale beats down — a failed build must not take the review server's client
- * offline — but it is never silent: `stale` and `error` are for the caller to
- * shout about.
+ * offline.
+ *
+ * Every attempt goes in the ledger, success or failure. That is what turns
+ * "this start could not publish" from a line on stderr into a fact the running
+ * server can read back and put on a surface: the process that made the
+ * decision exits, and the question gets asked days later.
  */
 export function prepareClientRelease(opts: {
   root: string;
   sources: ClientSources;
   keep?: number;
+  /** The deploy source this build came from (a commit sha, typically). */
+  sourceRef?: string;
+  /**
+   * The bundler already failed, so do not even look at `sources`. A failed
+   * build can leave a dist that passes a file-existence check — the
+   * markdown-app build writes app.js before its second entrypoint — so
+   * "publish if the files are there" would ship half a build.
+   */
+  buildError?: string | null;
+  /** Epoch ms; injectable so the ledger is testable without waiting. */
+  now?: number;
 }): PreparedClient {
+  const now = opts.now ?? Date.now();
+  const fallback = (error: string): PreparedClient => {
+    const { consecutiveFailures } = recordPublishAttempt(opts.root, { ok: false, error }, now);
+    const cur = currentClientRelease(opts.root);
+    return {
+      releaseDir: cur?.releaseDir ?? null,
+      widget: cur?.widgetDir ?? null,
+      markdownApp: cur?.markdownAppDir ?? null,
+      stale: true,
+      error,
+      consecutiveFailures,
+    };
+  };
+
+  if (opts.buildError) return fallback(opts.buildError);
+
   try {
-    const rel = publishClientRelease(opts);
+    const rel = publishClientRelease({ ...opts, now: new Date(now) });
+    recordPublishAttempt(opts.root, { ok: true }, now);
     return {
       releaseDir: rel.releaseDir,
       widget: rel.widgetDir,
       markdownApp: rel.markdownAppDir,
       stale: false,
+      consecutiveFailures: 0,
     };
   } catch (err) {
-    const error = err instanceof Error ? err.message : String(err);
-    const cur = currentClientRelease(opts.root);
-    if (!cur) return { releaseDir: null, widget: null, markdownApp: null, stale: true, error };
-    return {
-      releaseDir: cur.releaseDir,
-      widget: cur.widgetDir,
-      markdownApp: cur.markdownAppDir,
-      stale: true,
-      error,
-    };
+    return fallback(err instanceof Error ? err.message : String(err));
   }
 }
 
