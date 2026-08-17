@@ -390,6 +390,28 @@ describe('a new goal band asks the bucket to be re-looked-at', () => {
       expect(attach2.ok && attach2.pendingBucketReview).toBeUndefined();
       expect(existsSync(pendingBucketReviewPath(dataDir, ws2.id))).toBe(false);
     });
+
+    // A retitle deliberately asks for nothing (it reveals no new destination),
+    // which means it also never refreshes a waiting ask. So a band added while
+    // the lead was away and renamed before they got back would replay under
+    // the title it had at capture — naming a band the board no longer calls
+    // that, in a request whose whole job is to say which band appeared.
+    it('names a renamed band the way the board names it NOW', () => {
+      const { ws } = board({ lead: null });
+      store.setGoalList(ws.id, [{ id: 'g1', title: 'Provisional name' }], { actor: PERSON });
+      store.renameGoal(ws.id, 'g1', { title: 'Reviewer trust' }, { actor: PERSON });
+      const attach = store.attachAgent(ws.id, { agentId: LEAD, runtime: 'claude-code-local' });
+      if (!attach.ok) throw new Error('attach failed');
+      expect(attach.pendingBucketReview?.newBands).toEqual([{ id: 'g1', title: 'Reviewer trust' }]);
+    });
+
+    it('(control) an unrenamed band keeps the title it appeared with', () => {
+      const { ws } = board({ lead: null });
+      store.setGoalList(ws.id, [{ id: 'g1', title: 'Reviewer trust' }], { actor: PERSON });
+      const attach = store.attachAgent(ws.id, { agentId: LEAD, runtime: 'claude-code-local' });
+      if (!attach.ok) throw new Error('attach failed');
+      expect(attach.pendingBucketReview?.newBands).toEqual([{ id: 'g1', title: 'Reviewer trust' }]);
+    });
   });
 
   it('delete_workspace removes the sidecar', () => {

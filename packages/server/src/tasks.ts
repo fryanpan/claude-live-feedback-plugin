@@ -3147,6 +3147,14 @@ export class TaskStore {
    *  - a band that has since been REMOVED is not apparent any more, and a
    *    request naming a band that no longer exists is the field-that-lies
    *    failure this record's own slot exists to avoid.
+   *
+   * A surviving band is REBUILT from the live list rather than replayed from
+   * the record, so a rename between the capture and the attach reaches the
+   * lead. Nothing else would deliver it: a retitle deliberately asks for
+   * nothing (it reveals no new destination), which also means it never
+   * refreshes a waiting ask — so the stored title would name a band the board
+   * no longer calls that, in a request whose entire job is to say which band
+   * appeared. The id is what the record is keyed on; the title is display.
    */
   getPendingBucketReview(workspaceId: string): PendingBucketReview | undefined {
     const state = this.workspaces.get(workspaceId);
@@ -3156,15 +3164,19 @@ export class TaskStore {
       const task = state.tasks.get(id);
       return task !== undefined && task.status !== 'done' && task.unplacedSince !== undefined;
     });
-    const stillThere = new Set(flattenGoals(state.workspace.goals).map((g) => g.id));
-    const liveBands = pending.newBands.filter((b) => stillThere.has(b.id));
+    const current = new Map(flattenGoals(state.workspace.goals).map((g) => [g.id, g.title]));
+    const liveBands: GoalBand[] = pending.newBands
+      .filter((b) => current.has(b.id))
+      .map((b) => ({ id: b.id, title: current.get(b.id) as string }));
     if (liveTasks.length === 0 || liveBands.length === 0) {
       this.clearPendingBucketReview(state);
       return undefined;
     }
+    // Compare the bands by VALUE, not by length: a rename keeps the count and
+    // is exactly the change this has to persist.
     if (
       liveTasks.length !== pending.taskIds.length ||
-      liveBands.length !== pending.newBands.length
+      JSON.stringify(liveBands) !== JSON.stringify(pending.newBands)
     ) {
       state.pendingBucketReview = { ...pending, taskIds: liveTasks, newBands: liveBands };
       this.writePendingBucketReview(state);
