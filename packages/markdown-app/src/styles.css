@@ -1451,6 +1451,19 @@ body.hub-body {
   border-color: var(--border);
   background-color: var(--bg-subtle, #fafafa);
 }
+/* Somebody owns it and nothing on the board says whether they are a person or
+   an agent. It is drawn as its own state rather than folded into the agent
+   mark, because that fold is the bug: a person named Bryan was rendered
+   identically to an agent, so the board could not answer the one question the
+   mark exists for. Muted like the agent mark (it is not an alarm) but with the
+   dotted edge that reads as "not stated" — and the words are in the picker's
+   accessible name, since colour alone is not a distinction. */
+.hub-owner-avatar.hub-owner-unknown {
+  color: var(--fg-muted);
+  border-style: dotted;
+  border-color: var(--fg-muted);
+  background: none;
+}
 /* Nobody owns it — a hole in the board, drawn as one. */
 .hub-owner-avatar.hub-owner-none {
   color: var(--fg-muted);

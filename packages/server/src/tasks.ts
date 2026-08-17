@@ -18,6 +18,7 @@ import {
   checkDecisionShape,
   decisionShapeMessage,
 } from './decision-shape.ts';
+import { type DeclaredOwnerKind, declaredAssigneeKind } from './task-owner.ts';
 
 /**
  * The hub task store: server-owned state for Workspace Hub workspaces and
@@ -341,6 +342,14 @@ export interface Task {
    *  resolves this from the caller and REFUSES the generic word (see
    *  task-owner.ts), so a stored 'agent' is a pre-enforcement row. */
   assignee: string;
+  /**
+   * What KIND of somebody the assignee is, as DECLARED — never as guessed
+   * from the name. Absent means nobody has said, which reads as `unknown`
+   * (see `resolveOwnerKind`), not as a person. Cleared on a hand-over that
+   * declares nothing, because inheriting the previous owner's kind would
+   * label the new one by accident.
+   */
+  assigneeKind?: DeclaredOwnerKind;
   /** Only meaningful when the assignee is a human. */
   needs?: 'action' | 'decision';
   /**
@@ -412,6 +421,10 @@ export interface CreateTaskOpts {
   title: string;
   body?: string;
   assignee?: string;
+  /** Declares whether `assignee` is a person or an agent. Omitted, the store
+   *  falls back to the author's own classification when the caller is
+   *  assigning to itself. */
+  assigneeKind?: DeclaredOwnerKind;
   needs?: 'action' | 'decision';
   /** Candidate answers. Decision tasks only; ids are minted here. */
   options?: Array<{ label: string; detail?: string }>;
@@ -1984,6 +1997,7 @@ export class TaskStore {
     }
 
     const now = Date.now();
+    const assigneeKind = declaredAssigneeKind(opts.assignee ?? '', opts.assigneeKind, opts.actor);
     const inGoal = Array.from(state.tasks.values()).filter((t) => t.goal === goal);
     const order = opts.order ?? Math.max(0, ...inGoal.map((t) => t.order)) + 1;
     const task: Task = {
@@ -1995,6 +2009,7 @@ export class TaskStore {
       // before it gets here (task-owner.ts), so this only covers a direct
       // in-process call that named nobody.
       assignee: opts.assignee ?? 'agent',
+      ...(assigneeKind !== undefined ? { assigneeKind } : {}),
       ...(opts.needs !== undefined ? { needs: opts.needs } : {}),
       ...(options.length > 0 ? { options } : {}),
       goal,
@@ -2534,14 +2549,27 @@ export class TaskStore {
   setAssignee(
     taskId: string,
     assignee: string,
-    opts: { actor: { id: string; name: string; kind?: string } },
+    opts: {
+      actor: { id: string; name: string; kind?: string };
+      /** Declares what the new owner IS. Omitted, the kind is re-derived from
+       *  the caller — which for a hand-over to somebody else means it is
+       *  CLEARED rather than inherited from the previous owner. */
+      assigneeKind?: unknown;
+    },
   ): SetAssigneeResult {
     const task = this.getTask(taskId);
     if (!task) return { ok: false, error: 'not-found' };
     const from = task.assignee;
-    if (from === assignee) return { ok: true, task, changed: false };
+    const kind = declaredAssigneeKind(assignee, opts.assigneeKind, opts.actor);
+    // A kind-only change is a real change. Without the second clause,
+    // declaring that the person who already holds this task IS a person
+    // would be swallowed as a no-op, and the one call that closes the gap
+    // for an existing row would do nothing while answering ok:true.
+    if (from === assignee && task.assigneeKind === kind) return { ok: true, task, changed: false };
     const ts = Date.now();
     task.assignee = assignee;
+    if (kind === undefined) delete task.assigneeKind;
+    else task.assigneeKind = kind;
     task.updatedAt = ts;
     this.scheduleSave(task.workspaceId);
     this.emit({
