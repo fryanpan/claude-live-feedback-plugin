@@ -82,7 +82,15 @@ export function normalizeTrackerStatus(raw: string | undefined): TaskStatus {
 // ── Mapping types ──────────────────────────────────────────────────────────
 
 export interface ImportGoalMapping {
-  /** Existing board-goal id when the heading matched one; a fresh slug otherwise. */
+  /**
+   * Existing board-goal id when the heading matched one (`existing: true`).
+   * Otherwise a PARSE-LOCAL PLACEHOLDER — readable, and deliberately not the
+   * id the goal will get: ids are minted by the store at apply time
+   * (`newGoalId`), so a dry run cannot know one and must not pretend to.
+   * `applyImport` maps each placeholder to the minted id before creating a
+   * single task. Sending a placeholder to `set_goal_list` is refused as
+   * `unknown-goal-id`, which is the right answer to "create this id for me".
+   */
   id: string;
   /** The heading text, verbatim. */
   title: string;
@@ -378,22 +386,36 @@ export function applyImport(
   if (!workspace) return { ok: false, error: 'workspace-not-found' };
 
   const newGoals = mapping.goals.filter((g) => !g.existing);
+  // A new goal's id is the SERVER's to mint, so the entries go in without one
+  // and the real ids come back in `created`, in submission order. The
+  // parser's ids for new goals are parse-local placeholders that key task
+  // rows to their heading and never reach the board — which is why every row
+  // below is re-pointed through `mintedId` before a task is created.
+  const mintedId = new Map<string, string>();
   if (newGoals.length > 0) {
     const res = store.setGoalList(
       workspaceId,
-      [...workspace.goals, ...newGoals.map((g) => ({ id: g.id, title: g.title }))],
+      [...workspace.goals, ...newGoals.map((g) => ({ title: g.title }))],
       { actor: opts.actor },
     );
     if (!res.ok) return { ok: false, error: 'goal-list-rejected' };
+    if (res.created.length !== newGoals.length) return { ok: false, error: 'goal-list-rejected' };
+    newGoals.forEach((g, i) => {
+      const row = res.created[i];
+      if (row) mintedId.set(g.id, row.id);
+    });
   }
 
-  const goalsCreated = newGoals.map((g) => ({ id: g.id, title: g.title }));
+  const goalsCreated = newGoals.map((g) => ({
+    id: mintedId.get(g.id) ?? g.id,
+    title: g.title,
+  }));
   const tasksCreated: ApplyImportResult['tasksCreated'] = [];
   const failures: ApplyImportResult['failures'] = [];
   for (const row of mapping.tasks) {
     const created = store.createTask(workspaceId, {
       title: row.title,
-      goal: row.goalId,
+      goal: mintedId.get(row.goalId) ?? row.goalId,
       // A row that names nobody belongs to whoever ran the import — the
       // tracker's owner column is often blank, and "agent" is not an owner.
       assignee: resolveAssignee(row.assignee, opts.actor) ?? opts.actor.name,

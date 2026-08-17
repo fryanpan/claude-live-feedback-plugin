@@ -27,6 +27,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { TaskStore } from '../src/tasks.ts';
+import { type GoalIds, seedGoals, seedGoalsOverHttp } from './goal-seed.ts';
 
 const AGENT = { id: 'agent-search-revamp', name: 'Search Revamp', kind: 'known', color: '#888888' };
 
@@ -56,23 +57,25 @@ describe('the store reports placement, grounded in what actually happened', () =
   });
   afterAll(() => rmSync(dataDir, { recursive: true, force: true }));
 
-  function seed() {
+  function seed(): { wsId: string; G: GoalIds } {
     store = new TaskStore({ dataDir });
     const ws = store.createWorkspace('search-revamp', 'Ship search v2.');
-    store.setGoalList(ws.id, [{ id: 'g-ship', title: '1. Ship' }], {
-      actor: { id: AGENT.id, name: AGENT.name, kind: AGENT.kind },
+    const G = seedGoals(store, ws.id, [{ key: 'ship', title: '1. Ship' }], {
+      id: AGENT.id,
+      name: AGENT.name,
+      kind: AGENT.kind,
     });
-    return ws.id;
+    return { wsId: ws.id, G };
   }
 
   it('an explicit goal is a placement — even an explicit "chores"', () => {
-    const wsId = seed();
+    const { wsId, G } = seed();
     // The distinction the whole field rests on: the same resting bucket,
     // reached two different ways, is not the same event.
     const named = store.createTask(wsId, {
       title: 'Placed',
       assignee: 'Search Revamp',
-      goal: 'g-ship',
+      goal: G.ship,
     });
     const chores = store.createTask(wsId, {
       title: 'Placed in chores on purpose',
@@ -84,7 +87,7 @@ describe('the store reports placement, grounded in what actually happened', () =
   });
 
   it('an omitted goal is not a placement, and triageDelivered follows the delivery', () => {
-    const wsId = seed();
+    const { wsId } = seed();
     // No delivery wired: the request reaches nobody, and the report says so.
     const away = store.createTask(wsId, { title: 'Nobody home', assignee: 'Search Revamp' });
     expect(away.ok && away.placement).toEqual({ placed: false, triageDelivered: false });
@@ -102,12 +105,12 @@ describe('the store reports placement, grounded in what actually happened', () =
   });
 
   it('never claims delivery for a placed task — a placement asks for no triage', () => {
-    const wsId = seed();
+    const { wsId, G } = seed();
     store.setTriageDelivery(() => true);
     const res = store.createTask(wsId, {
       title: 'Placed while an agent is live',
       assignee: 'Search Revamp',
-      goal: 'g-ship',
+      goal: G.ship,
     });
     expect(res.ok && res.placement).toEqual({ placed: true, triageDelivered: false });
   });
@@ -129,23 +132,20 @@ describe('the create ROUTES carry placement to the caller', () => {
       body: body === undefined ? undefined : JSON.stringify(body),
     });
 
-  async function seedWorkspace(): Promise<string> {
+  async function seedWorkspace(): Promise<{ wsId: string; G: GoalIds }> {
     const { workspace } = await jj<{ workspace: { id: string } }>(
       await post('/api/workspaces', { name: 'search-revamp', goal: 'Ship search v2.' }),
     );
-    const g = await fetch(`${base}/api/workspaces/${workspace.id}/goals`, {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        goals: [
-          { id: 'g-ship', title: '1. Ship', subgoals: [{ id: 'g-index', title: '1.1 Index' }] },
-          { id: 'g-trust', title: '2. Trust' },
-        ],
-        author: AGENT,
-      }),
-    });
-    expect(g.status).toBe(200);
-    return workspace.id;
+    const G = await seedGoalsOverHttp(
+      base,
+      workspace.id,
+      [
+        { key: 'ship', title: '1. Ship', subgoals: [{ key: 'index', title: '1.1 Index' }] },
+        { key: 'trust', title: '2. Trust' },
+      ],
+      AGENT,
+    );
+    return { wsId: workspace.id, G };
   }
 
   beforeAll(() => {
@@ -159,15 +159,15 @@ describe('the create ROUTES carry placement to the caller', () => {
   });
 
   it('single create: an unplaced task comes back with the bands it could go in', async () => {
-    const wsId = await seedWorkspace();
+    const { wsId, G } = await seedWorkspace();
     const res = await jj<{ placement: SinglePlacement }>(
       await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, title: 'Unplaced' }),
     );
     expect(res.placement.placed).toBe(false);
     // Ordered, flat, parent then subgoal — the same order the board reads.
-    expect(res.placement.goals?.map((g) => g.id)).toEqual(['g-ship', 'g-index', 'g-trust']);
+    expect(res.placement.goals?.map((g) => g.id)).toEqual([G.ship, G.index, G.trust]);
     expect(res.placement.goals?.map((g) => g.depth)).toEqual([0, 1, 0]);
-    expect(res.placement.goals?.find((g) => g.id === 'g-index')?.parent).toBe('g-ship');
+    expect(res.placement.goals?.find((g) => g.id === G.index)?.parent).toBe(G.ship);
     // `chores` is where it just landed, not a band it could have been ranked
     // into — offering it back as a choice would be the tool suggesting the
     // outcome it is reporting.
@@ -175,19 +175,19 @@ describe('the create ROUTES carry placement to the caller', () => {
   });
 
   it('single create: a placed task carries no band list to wade through', async () => {
-    const wsId = await seedWorkspace();
+    const { wsId, G } = await seedWorkspace();
     const res = await jj<{ placement: SinglePlacement }>(
       await post(`/api/workspaces/${wsId}/tasks`, {
         author: AGENT,
         title: 'Placed',
-        goal: 'g-index',
+        goal: G.index,
       }),
     );
     expect(res.placement).toEqual({ placed: true, triageDelivered: false });
   });
 
   it('batch: reports which rows are unplaced, once, with the bands', async () => {
-    const wsId = await seedWorkspace();
+    const { wsId, G } = await seedWorkspace();
     const res = await jj<{
       tasks: Array<{ id: string; title: string }>;
       placement: BatchPlacement;
@@ -195,7 +195,7 @@ describe('the create ROUTES carry placement to the caller', () => {
       await post(`/api/workspaces/${wsId}/tasks/batch`, {
         author: AGENT,
         tasks: [
-          { title: 'Placed row', goal: 'g-index' },
+          { title: 'Placed row', goal: G.index },
           { title: 'Unplaced row' },
           { title: 'Another unplaced row' },
         ],
@@ -208,17 +208,17 @@ describe('the create ROUTES carry placement to the caller', () => {
     expect(res.placement.unplaced).not.toContain(idOf('Placed row'));
     // One band list for the whole call — repeating it per row would be the
     // same answer a hundred times in a hundred-row burst.
-    expect(res.placement.goals.map((g) => g.id)).toEqual(['g-ship', 'g-index', 'g-trust']);
+    expect(res.placement.goals.map((g) => g.id)).toEqual([G.ship, G.index, G.trust]);
   });
 
   it('batch: a fully placed burst carries no placement block at all', async () => {
-    const wsId = await seedWorkspace();
+    const { wsId, G } = await seedWorkspace();
     const res = await jj<{ placement?: BatchPlacement }>(
       await post(`/api/workspaces/${wsId}/tasks/batch`, {
         author: AGENT,
         tasks: [
-          { title: 'One', goal: 'g-ship' },
-          { title: 'Two', goal: 'g-trust' },
+          { title: 'One', goal: G.ship },
+          { title: 'Two', goal: G.trust },
         ],
       }),
     );
@@ -229,7 +229,7 @@ describe('the create ROUTES carry placement to the caller', () => {
     // The half a unit test cannot prove: whether the route reads the store's
     // answer or re-derives one. With no attachment it must be false; with a
     // live attachment, true — same call, same body, different report.
-    const wsId = await seedWorkspace();
+    const { wsId } = await seedWorkspace();
     const away = await jj<{ placement: SinglePlacement }>(
       await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, title: 'Filed while away' }),
     );

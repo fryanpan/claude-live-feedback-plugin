@@ -75,11 +75,10 @@ import {
 import { TaskProjection, taskBodyDocId, taskIdOfBodyDoc } from './task-projection.ts';
 import { buildQueue, placeableGoals, summarizeGoals } from './task-queue.ts';
 import {
+  type GoalListEntry,
   type Ref,
   type TaskStatus,
   TaskStore,
-  type WorkspaceGoal,
-  type WorkspaceSubgoal,
   eventsLogPath,
   isAttachmentRuntime,
   isValidRef,
@@ -102,34 +101,40 @@ const MAX_BATCH_TASKS = 100;
  * dropped rather than persisted — the sidecar shape is a contract, not a
  * junk drawer. ONE subgoal level max (§3.2); a subgoal with subgoals is
  * malformed, not silently flattened.
+ *
+ * `id` is OPTIONAL and that is the create/keep switch (see `GoalListEntry`):
+ * omitted means "create this band, mint me an id", present means "the band
+ * you already have with this id". A present-but-empty id is still malformed —
+ * it is a caller trying to say something, not a caller omitting the key, and
+ * reading it as "create" would turn a bug into a silent new band.
  */
-function parseGoalList(raw: unknown): WorkspaceGoal[] | null {
+function parseGoalList(raw: unknown): GoalListEntry[] | null {
   if (!Array.isArray(raw)) return null;
-  const goals: WorkspaceGoal[] = [];
+  const goals: GoalListEntry[] = [];
   for (const entry of raw) {
     const g = entry as Record<string, unknown>;
-    if (typeof g?.id !== 'string' || g.id.length === 0) return null;
+    if (g?.id !== undefined && (typeof g.id !== 'string' || g.id.length === 0)) return null;
     if (typeof g?.title !== 'string' || g.title.length === 0) return null;
     if (g.dueAt !== undefined && typeof g.dueAt !== 'number') return null;
-    let subgoals: WorkspaceSubgoal[] | undefined;
+    let subgoals: Array<{ id?: string; title: string; dueAt?: number }> | undefined;
     if (g.subgoals !== undefined) {
       if (!Array.isArray(g.subgoals)) return null;
       subgoals = [];
       for (const sub of g.subgoals) {
         const s = sub as Record<string, unknown>;
-        if (typeof s?.id !== 'string' || s.id.length === 0) return null;
+        if (s?.id !== undefined && (typeof s.id !== 'string' || s.id.length === 0)) return null;
         if (typeof s?.title !== 'string' || s.title.length === 0) return null;
         if (s.dueAt !== undefined && typeof s.dueAt !== 'number') return null;
         if (s.subgoals !== undefined) return null;
         subgoals.push({
-          id: s.id,
+          ...(s.id !== undefined ? { id: s.id as string } : {}),
           title: s.title,
           ...(s.dueAt !== undefined ? { dueAt: s.dueAt as number } : {}),
         });
       }
     }
     goals.push({
-      id: g.id,
+      ...(g.id !== undefined ? { id: g.id as string } : {}),
       title: g.title,
       ...(g.dueAt !== undefined ? { dueAt: g.dueAt as number } : {}),
       ...(subgoals !== undefined ? { subgoals } : {}),
@@ -2492,7 +2497,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!author) return j(400, { error: 'author required' });
           const goals = parseGoalList(body?.goals);
           if (!goals) {
-            return j(400, { error: 'goals must be [{id, title, dueAt?, subgoals?}]' });
+            return j(400, { error: 'goals must be [{id?, title, dueAt?, subgoals?}]' });
           }
           // `drop` is the caller's explicit "yes, remove that band even
           // though it holds work". A malformed value must NOT read as absent
@@ -2513,22 +2518,38 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // The refusal is the whole feature, so it has to name the way
             // out: the MCP layer surfaces this body verbatim as the error
             // text an agent reads.
+            // An id this board does not hold is the re-key gesture arriving
+            // by its other spelling ("submit the list with a new id"), so the
+            // message has to name both ways out rather than just saying no.
             const detail =
-              res.error === 'would-strand-tasks'
+              res.error === 'unknown-goal-id'
                 ? {
                     message:
-                      'this replace would strand work filed under ' +
-                      `${res.stranding
-                        .map(
-                          (s) => `"${s.title}" (${s.id}: ${s.openTasks} open, ${s.doneTasks} done)`,
-                        )
-                        .join('; ')}. ` +
-                      'If you meant to RENAME a band, use rename_goal — it changes the title ' +
-                      'in place and cannot move a task. If you meant to remove it, say so by ' +
-                      'listing its id in `drop`; open tasks then land at the bottom of Chores ' +
-                      'and done tasks keep pointing at the removed id, both reported back.',
+                      `this board has no goal with id ${res.unknownIds
+                        .map((id) => `"${id}"`)
+                        .join(', ')}. ` +
+                      'Goal ids are generated and permanent: to CREATE a band, send the entry ' +
+                      'with no `id` at all and the new id comes back in `created`; to change a ' +
+                      "band's title, use rename_goal, which cannot move a task. There is no " +
+                      "way to give an existing band a different id, because a task's band IS " +
+                      'its goal id — re-keying one is what strands everything filed under it.',
                   }
-                : {};
+                : res.error === 'would-strand-tasks'
+                  ? {
+                      message:
+                        'this replace would strand work filed under ' +
+                        `${res.stranding
+                          .map(
+                            (s) =>
+                              `"${s.title}" (${s.id}: ${s.openTasks} open, ${s.doneTasks} done)`,
+                          )
+                          .join('; ')}. ` +
+                        'If you meant to RENAME a band, use rename_goal — it changes the title ' +
+                        'in place and cannot move a task. If you meant to remove it, say so by ' +
+                        'listing its id in `drop`; open tasks then land at the bottom of Chores ' +
+                        'and done tasks keep pointing at the removed id, both reported back.',
+                    }
+                  : {};
             return j(res.error === 'workspace-not-found' ? 404 : 400, { ...res, ...detail });
           }
           return j(200, res);

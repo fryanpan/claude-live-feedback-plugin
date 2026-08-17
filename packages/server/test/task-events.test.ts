@@ -22,22 +22,31 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   CHORES_GOAL_ID,
+  type GoalListEntry,
   TaskStore,
   type TaskStoreEvent,
   type WorkspaceGoal,
   eventsLogPath,
 } from '../src/tasks.ts';
+import { type GoalIds, type SeedGoalSpec, seedGoals } from './goal-seed.ts';
 
 const PERSON = { id: 'known-bryan', name: 'Bryan', kind: 'known' };
 const AGENT = { id: 'agent-search-revamp', name: 'Search Revamp', kind: 'known' };
 
-const GOALS: WorkspaceGoal[] = [
+/** The list as a caller submits it: no ids, because a caller cannot choose
+ *  one. The board's rows — with the ids the server minted — come back from
+ *  `created` / `getWorkspace`, and that is what the assertions compare. */
+const GOAL_ENTRIES: GoalListEntry[] = [
+  { title: '1. Ship the launch post', subgoals: [{ title: '1.1 QA pass' }] },
+  { title: '2. Cut page weight' },
+];
+const GOAL_SPEC: SeedGoalSpec[] = [
   {
-    id: 'g-launch',
+    key: 'launch',
     title: '1. Ship the launch post',
-    subgoals: [{ id: 'g-launch-qa', title: '1.1 QA pass' }],
+    subgoals: [{ key: 'qa', title: '1.1 QA pass' }],
   },
-  { id: 'g-perf', title: '2. Cut page weight' },
+  { key: 'perf', title: '2. Cut page weight' },
 ];
 
 function readAudit(dataDir: string, workspaceId: string): Array<Record<string, unknown>> {
@@ -189,31 +198,54 @@ describe('task store events + audit log', () => {
   });
 
   describe('setGoalList (workspace.goals_changed)', () => {
+    /** Seed the file's two bands and hand back both the minted ids and the
+     *  rows the board now holds — what the old `GOALS` constant was, minus
+     *  the pretence that a test could choose the ids. */
+    const seedBoard = (workspaceId: string): { G: GoalIds; goals: WorkspaceGoal[] } => ({
+      G: seedGoals(store, workspaceId, GOAL_SPEC, PERSON),
+      goals: store.getWorkspace(workspaceId)?.goals ?? [],
+    });
+
     it('replaces the ordered list and emits old list, new list, actor, kind', () => {
       const ws = store.createWorkspace('search-revamp', 'Ship the search.');
-      const res = store.setGoalList(ws.id, GOALS, { actor: PERSON });
+      const res = store.setGoalList(ws.id, GOAL_ENTRIES, { actor: PERSON });
       expect(res.ok).toBe(true);
       if (!res.ok) return;
       expect(res.changed).toBe(true);
-      expect(res.workspace.goals).toEqual(GOALS);
+      // Every band is new, so every id came back in `created` — parent first,
+      // then its subgoal, in submission order.
+      expect(res.created.map((c) => c.title)).toEqual([
+        '1. Ship the launch post',
+        '1.1 QA pass',
+        '2. Cut page weight',
+      ]);
+      const expected: WorkspaceGoal[] = [
+        {
+          id: res.created[0]?.id as string,
+          title: '1. Ship the launch post',
+          subgoals: [{ id: res.created[1]?.id as string, title: '1.1 QA pass' }],
+        },
+        { id: res.created[2]?.id as string, title: '2. Cut page weight' },
+      ];
+      expect(res.workspace.goals).toEqual(expected);
       expect(events).toHaveLength(1);
       const e = events[0];
       if (e?.type !== 'workspace.goals_changed')
         throw new Error(`expected goals_changed, got ${e?.type}`);
       expect(e.oldGoals).toEqual([]);
-      expect(e.newGoals).toEqual(GOALS);
+      expect(e.newGoals).toEqual(expected);
       expect(e.actor.kind).toBe('person');
       expect(e.kind).toBe('edit');
       // A task can now be created under the new goal id (subgoal too).
-      const t = store.createTask(ws.id, { title: 'QA sweep', goal: 'g-launch-qa' });
+      const t = store.createTask(ws.id, { title: 'QA sweep', goal: res.created[1]?.id });
       expect(t.ok).toBe(true);
     });
 
     it('a pure reorder is kind=reorder; an identical list is changed=false with no event', () => {
       const ws = store.createWorkspace('search-revamp', 'Ship the search.');
-      store.setGoalList(ws.id, GOALS, { actor: PERSON });
+      const { goals } = seedBoard(ws.id);
       events.length = 0;
-      const reordered = [GOALS[1], GOALS[0]] as WorkspaceGoal[];
+      const reordered = [goals[1], goals[0]] as WorkspaceGoal[];
       const res = store.setGoalList(ws.id, reordered, { actor: PERSON });
       expect(res.ok).toBe(true);
       if (!res.ok) return;
@@ -232,22 +264,22 @@ describe('task store events + audit log', () => {
 
     it('moves OPEN tasks whose goal disappears to Chores, batched under the goals_changed event; done stays put', () => {
       const ws = store.createWorkspace('search-revamp', 'Ship the search.');
-      store.setGoalList(ws.id, GOALS, { actor: PERSON });
-      const open = store.createTask(ws.id, { title: 'Trim the bundle', goal: 'g-perf' });
-      const closed = store.createTask(ws.id, { title: 'Old perf audit', goal: 'g-perf' });
+      const { G, goals } = seedBoard(ws.id);
+      const open = store.createTask(ws.id, { title: 'Trim the bundle', goal: G.perf });
+      const closed = store.createTask(ws.id, { title: 'Old perf audit', goal: G.perf });
       if (!open.ok || !closed.ok) throw new Error('create failed');
       store.transition(closed.task.id, 'done', { actor: AGENT, evidence: { commit: 'fff0000' } });
       events.length = 0;
-      const res = store.setGoalList(ws.id, [GOALS[0] as WorkspaceGoal], {
+      const res = store.setGoalList(ws.id, [goals[0] as WorkspaceGoal], {
         actor: PERSON,
-        drop: ['g-perf'],
+        drop: [G.perf],
       });
       expect(res.ok).toBe(true);
       if (!res.ok) return;
       expect(res.movedToChores).toEqual([open.task.id]);
       // The open task moved to the bottom of Chores; the done one kept its goal.
       expect(store.getTask(open.task.id)?.goal).toBe(CHORES_GOAL_ID);
-      expect(store.getTask(closed.task.id)?.goal).toBe('g-perf');
+      expect(store.getTask(closed.task.id)?.goal).toBe(G.perf);
       // One goals_changed event, then one member task.regrouped referencing it.
       expect(events.map((e) => e.type)).toEqual(['workspace.goals_changed', 'task.regrouped']);
       const parent = events[0];
@@ -257,7 +289,7 @@ describe('task store events + audit log', () => {
       }
       expect(parent.movedToChores).toEqual([open.task.id]);
       expect(member.taskId).toBe(open.task.id);
-      expect(member.fromGoal).toBe('g-perf');
+      expect(member.fromGoal).toBe(G.perf);
       expect(member.toGoal).toBe(CHORES_GOAL_ID);
       expect(member.partOf).toBe(parent.batchId);
     });
