@@ -49,6 +49,28 @@ The feedback widget that ships Linear tickets in `~/dev/health-tool` and `~/dev/
 - **Edit Bryan's bound docs directly; don't default to `suggest: true`.** Concurrent editing is the norm — he's in the doc while you work and expects your changes to land. Reserve `suggest: true` for judgment calls where a one-tap approve/reject genuinely beats a silent rewrite (voice, framing, a claim you're unsure of). Mechanical fixes, typos, and anything he explicitly asked for go in as plain edits.
 - **Mobile UX is load-bearing.** Bryan reviews on his phone. Any UI change touching the editor, widget, or landing page must follow [docs/product/design-mobile.md](docs/product/design-mobile.md) — verify at 430px wide before shipping.
 
+## The four gates — run all of them before you push
+
+```bash
+bunx vitest run                 # unit + client suites
+bun test packages/server/test   # server suite (NOT covered by vitest)
+bun run typecheck               # tsc --noEmit; vitest does not typecheck
+bun run lint                    # biome; nothing else formats
+```
+
+They are **four separate gates and each one catches what the others cannot** —
+`vitest` does not typecheck, `typecheck` does not lint, and none of them
+format. A single over-long string has taken CI red on its own.
+
+Written down here because the failure mode is not forgetting to verify, it is
+**reciting the list from memory** — which on one day briefed eight agents with
+an incomplete set. Read it, don't recall it. `bunx biome check --write` fixes
+formatting; leave the pre-existing `noExplicitAny` **warnings** alone, they are
+warnings and not failures.
+
+A PR that touches `packages/mcp/src/**` adds `bun run build:mcp` plus the
+committed bundle, and every PR adds the version bump — both below.
+
 ## Releasing the plugin (bump the version on every PR)
 
 Peers install by version. `claude plugin update` compares the version string and
