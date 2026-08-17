@@ -875,6 +875,47 @@ Technical discoveries that should persist across sessions for this project.
   activity before concluding anything from its silence. An empty roster row is
   an absence measured by a cache.
 
+## Restoring a tree in place is indistinguishable from data loss to whoever else is writing in it
+
+- **The entry above is the near-miss; this is the same day's hit.** A second
+  agent was spawned onto task `t-Us2HML0w5cfK` because a roster did not list the
+  one already working it, and it hard-reset the worktree it found
+  (`.claude/worktrees/git-vs-bound`, branch `fix/git-ops-vs-bound-docs`). The
+  reflog recorded `reset: moving to HEAD` and then `reset: moving to
+  origin/main`; an entire uncommitted first pass — a new source file, three
+  edits to `rooms.ts`, two to `learnings.md`, a new test file — was gone.
+  **`git add -A` had run seconds earlier and `git fsck --unreachable` in that
+  worktree found none of the blobs**, so the recovery that usually applies did
+  not. The work survived only because it was reconstructable from conversation.
+- **The general shape is any harness that restores state IN PLACE**, and a
+  mutation test is the common one: write a mutation, run a suite, put the file
+  back with `git checkout -- <file>`. That is correct in a tree the harness
+  owns and a silent revert of somebody else's uncommitted edit in a tree it
+  shares. Same class as the reset above — an operation whose definition of
+  "restore" is "whatever HEAD says", run where HEAD is not the only truth.
+- **Against a bound doc it is worse, and that half is measured** (task
+  `t-3bFI5h-F9qRW`; full detail in "A git operation on a bound file is an editor
+  save, and it goes both ways"). `git checkout -- <file>` inside the 800ms write
+  debounce is reasserted by the live doc about a second later, so git exits 0,
+  `git status` is clean at that instant, and the tree is dirty again immediately
+  after. `git stash` in the same window leaves the content in **neither HEAD nor
+  the stash**, and no git command brings it back.
+- **Two rules, both one-directional.** A harness that needs a clean tree takes a
+  **detached worktree at a sha** (`git worktree add --detach <dir> <sha>`),
+  never a restore-in-place in a checkout somebody else may be writing — its
+  worst failure is a stray directory, which is cheap. And **"this worktree looks
+  abandoned" is not a fact you can read off a roster**: establish liveness from
+  the artifacts (worktree locks, file mtimes, local-vs-remote HEAD) as the entry
+  above says, before the write rather than after.
+- **The layer that protects concurrent writers does not extend to the file.**
+  "Concurrent agent+human edits are CRDT-safe; disk reconcile was not" is about
+  two parties editing the same doc, where Yjs merges them; nothing merges two
+  parties editing the same working tree, and git's restore verbs are written on
+  the assumption that there is only one. That asymmetry is why the expensive
+  window is the one before the first commit — **commit as soon as a coherent
+  chunk exists** rather than letting a whole implementation pass sit in the tree
+  while a long suite runs.
+
 ## A leak gate that can't see still exits 0 — and reports it as a pass
 
 - **The pre-push scanner's registry half was dead for weeks and nothing said
@@ -1084,9 +1125,71 @@ Technical discoveries that should persist across sessions for this project.
   at all and was correct: it touched neither. Bumping on every PR manufactures a
   **total merge order across unrelated branches** — land 0.1.44 and a green PR
   sitting at 0.1.42 can no longer merge without a rebase it never needed.
+- **It recurred the same morning, to four branches on one number, and the
+  count is readable straight out of the object database.** `git log --all
+  --grep='0\.1\.46'` finds four independent claims on 0.1.46: `capture-guard`
+  (`69bf263`), `fix/setdoc-task-body-guard` (`4c0e53d`),
+  `judge/evidence-and-orphan-band` (`10125fb`) and `feat/goal-band-retriage`
+  (`fcf5659`). Exactly one landed — #185, `9ce04dd`. Three of the four subject
+  lines say in so many words that they are *already* re-taking a number lost to
+  #180, so this was the second lap of the same race, not the first.
+- **Read the number off the ref, never off the gate.** `git show
+  origin/main:packages/plugin/.claude-plugin/plugin.json` answers "what is taken
+  now"; `bun run check:plugin-version` answers "was my fork point lower", which
+  is a different question and stays green however long the branch sits. Read all
+  three sites that way, not two — `check-plugin-version.ts` compares only the
+  two manifests, and the third (`PLUGIN_VERSION` in `packages/mcp/src/mcp.ts`)
+  is pinned by `packages/mcp/test/launcher.test.ts` against the BUILT bundle, so
+  it can only go red after a `bun run build:mcp`.
+- **Allocate the number last, and let the sequence skip.**
+  `feat/goal-band-retriage` took 0.1.46 in `fcf5659`, carries 0.1.48 today after
+  merging main, and main has since reached 0.1.51 — three numbers, each correct
+  when written, none of them shipped. Main's own history runs
+  0.1.45 → .46 → .47 → .49 → .51: 0.1.48 and 0.1.50 are simply absent,
+  allocated to branches that hadn't landed when the next one did (`954cb48`,
+  "Take 0.1.50, the number allocated to this branch", is still sitting on
+  `opaque-goal-ids`). Peers compare version strings and nothing requires
+  contiguity, so a gap costs nothing while a pre-allocated number costs a
+  re-bump for every merge that beats you. The order that works is: merge main,
+  run the four gates, hold, take a number, merge immediately.
 - Same family as "Drift you have to go and look for is drift nobody looks for",
   one layer earlier: there a merged release failed to reach the fleet, here two
   releases collide before they get the chance.
+
+## The merge queue is serialized by a generated artifact, and the version collisions are its symptom
+
+- **Every plugin-touching branch acquires the same four-file conflict the moment
+  another one merges.** Measured 2026-08-17 with `git merge-tree --write-tree
+  origin/main <branch>` against three branches that had nothing to do with each
+  other — `feat/goal-band-retriage` (PR #187), `capture-guard`,
+  `judge/evidence-and-orphan-band` — which returned an identical set:
+  `.claude-plugin/marketplace.json`,
+  `packages/plugin/.claude-plugin/plugin.json`, `packages/mcp/src/mcp.ts` (whose
+  conflicting hunk is the `PLUGIN_VERSION` literal, confirmed in the diff) and
+  `packages/plugin/mcp/index.js`. So **only one plugin-touching PR can be in
+  flight without rework**, however carefully the numbers are handed out. The
+  entry above is what this looks like from the version side; this is the
+  mechanism underneath it.
+- **The fourth file is the one that is not yours to resolve.**
+  `packages/plugin/mcp/index.js` is generated by `bun run build:mcp` and tracked
+  because peers load *it* rather than the source (see "An MCP source fix doesn't
+  reach peers until the tracked bundle is rebuilt"), so every branch touching
+  `packages/mcp/src/**` rewrites all 16,081 lines and 618 KB of it. It is built
+  with `minify: false` (`packages/mcp/scripts/build.ts`) and therefore reads like
+  ordinary code, which is exactly what makes hand-resolving its hunks feel
+  reasonable. A bundle merged hunk by hunk can come out syntactically valid and
+  semantically wrong, and nothing reads it to find out. **Rule: never resolve
+  that file's hunks — take either side wholesale, run `bun run build:mcp`, and
+  commit the result.** CI rebuilds it and fails on any difference
+  (`.github/workflows/ci.yml:42-50`), which is both what makes "take either
+  side" safe and what makes hand-editing pointless.
+- **The refusal is the good outcome, and it is the exact inverse of the failure
+  above.** There the danger is that git *doesn't* refuse — two branches writing
+  the identical version string merge clean, and the collision is silent. Here
+  git refuses on all three version sites, because a central allocator makes the
+  two sides write *different* numbers. That is the trade the allocator actually
+  bought: the queue got slower, and it stopped being able to ship two releases
+  under one version string.
 
 ## What makes a fleet-wide action safe is that it can't interrupt anybody
 
@@ -1714,6 +1817,39 @@ Technical discoveries that should persist across sessions for this project.
   re-verified" as a claim needing its own evidence, because it is the one line
   in a report nobody can check from outside. Same family as "a peer agent's 'it
   worked' means the call didn't error".
+
+## A conflicted PR has ZERO check-runs, which reads exactly like CI not having started yet
+
+- **PR #187 sat at `mergeable: CONFLICTING` / `mergeStateStatus: DIRTY` with no
+  checks at all — not pending, not failed, absent.** Measured 2026-08-17:
+  `gh api repos/<owner>/<repo>/commits/ef2916a7/check-runs --jq .total_count`
+  answers `0`, while
+  `gh api ".../actions/runs?branch=feat/goal-band-retriage"` answers 2 runs,
+  both `pull_request`, both `success` — on `33733b0` and `8ac0f05`, the branch's
+  two EARLIER heads. So the branch shows green history while the head under
+  review has never been built at all. `.github/workflows/ci.yml` runs
+  `on: pull_request`, which needs a merge ref, and there is no merge ref to
+  build for a conflicted PR.
+- **The positive control is a peer PR in the same repo on the same day.** #193's
+  head `c103abf` answers `1` to the identical call — `verify`, `success`.
+  Without that half, `0` is just as consistent with a malformed query as with a
+  real absence. Same discipline as "A negative test needs a positive control or
+  it proves nothing".
+- **`gh pr checks 187` prints `no checks reported on the
+  'feat/goal-band-retriage' branch` and exits 1.** The exit code is honest; the
+  sentence is not. It names an absence, volunteers no cause, and is word for
+  word what a PR opened thirty seconds ago says — so "CI hasn't started" is the
+  natural reading, and it is a wait that never ends.
+- **The probe that separates them is the check-run count against the HEAD SHA,
+  read together with `mergeable` / `mergeStateStatus`** — never the PR page,
+  whose check list is empty in both worlds. `DIRTY` + 0 means merge main or
+  rebase, not wait. `BLOCKED` means branch protection: on this repo that is the
+  one required approving review (`required_status_checks` is null), and a
+  `BLOCKED` PR's head sha still carries its check-run.
+- Same family as "A truncated page read is indistinguishable from a page that
+  never rendered" and "'X is impossible' measured AN absence, not THE absence":
+  the reading is accurate, and the conclusion drawn from it is wrong, because
+  nothing on the surface separates "not there" from "never got made".
 
 ## CI red at "Set up job" is infrastructure, and the status code says whose
 
