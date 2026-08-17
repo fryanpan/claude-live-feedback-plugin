@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'bun:test';
 import type { Comment, Thread } from '@feedback/core';
-import { awaitingPerson, reviewThreadItems } from '../src/review-queue.ts';
+import {
+  asksPerson,
+  awaitingPerson,
+  reviewThreadItems,
+  unansweredRun,
+} from '../src/review-queue.ts';
 
 /** All fixtures are synthetic — invented names and ids throughout. */
 
@@ -157,5 +162,189 @@ describe('reviewThreadItems', () => {
     });
     expect(items[0].ask.length).toBeLessThanOrEqual(200);
     expect(items[0].ask.endsWith('…')).toBe(true);
+  });
+});
+
+// ── The wait clock, the question, and telling the two kinds of run apart ────
+
+describe('unansweredRun', () => {
+  /**
+   * The rule this change had to preserve, restated independently.
+   *
+   * Comparing against `awaitingPerson` would prove nothing — that function is
+   * now implemented ON TOP of `unansweredRun`, so the equivalence would be a
+   * tautology that passes however wrong the run is. This is the pre-change
+   * predicate written out from scratch: open, non-empty, newest-by-time is an
+   * agent's.
+   */
+  const wasAwaiting = (t: Thread): boolean => {
+    if (t.status !== 'open') return false;
+    const cs = t.comments ?? [];
+    if (cs.length === 0) return false;
+    let newest = cs[0];
+    for (const c of cs) if (c.ts >= newest.ts) newest = c;
+    return newest.author.id.startsWith('agent-') || newest.author.kind === undefined;
+  };
+
+  // The safety property of the whole change. The run is non-empty exactly when
+  // the old predicate said a person was being waited on, so no thread that
+  // reaches the strip today can stop reaching it — only the quoted line and the
+  // clock move.
+  it('is non-empty exactly where the pre-change predicate was', () => {
+    const cases = [
+      thread({ comments: [comment({ ts: T0 })] }),
+      thread({ comments: [comment({ kind: 'person', ts: T0 })] }),
+      thread({ comments: [comment({ ts: T0 }), comment({ kind: 'person', ts: T0 + 5 })] }),
+      thread({ comments: [comment({ kind: 'person', ts: T0 }), comment({ ts: T0 + 5 })] }),
+      // Out of array order, so a run built by position rather than by clock
+      // disagrees here.
+      thread({
+        comments: [comment({ ts: T0 + 90 }), comment({ kind: 'person', ts: T0 + 10 })],
+      }),
+      thread({ status: 'resolved' }),
+      thread({ comments: [] }),
+    ];
+    // Non-vacuity: these cases must cover BOTH answers, or an implementation
+    // that always returns one of them passes.
+    expect(new Set(cases.map(wasAwaiting)).size).toBe(2);
+    for (const t of cases) {
+      expect(unansweredRun(t).length > 0).toBe(wasAwaiting(t));
+    }
+  });
+
+  it('starts after the last person comment, not at the top of the thread', () => {
+    const t = thread({
+      comments: [
+        comment({ text: 'early agent note', ts: T0 }),
+        comment({ kind: 'person', text: 'answered', ts: T0 + 10 }),
+        comment({ text: 'first since', ts: T0 + 20 }),
+        comment({ text: 'second since', ts: T0 + 30 }),
+      ],
+    });
+    expect(unansweredRun(t).map((c) => c.text)).toEqual(['first since', 'second since']);
+  });
+});
+
+describe('asksPerson', () => {
+  const people = ['Jordan'];
+
+  // Every one of these was measured firing a bare "?" rule on this project's
+  // real board — 19 of 86 agent comments. They are why the interrogative alone
+  // is unusable as the signal.
+  it('refuses a question mark that is punctuation rather than a question', () => {
+    for (const text of [
+      'Opened at http://example.test/board?tab=open — have a look.',
+      'Measured: `in listUntriaged?` returned false for that row.',
+      'Revert `anchor.snippet?.text` and the named test goes red.',
+      '## Is the fleet knowable from this server?\n\nYes, via the presence strip.',
+      'A first-time visitor is held at the "Who\'s reviewing?" prompt.',
+    ]) {
+      expect(asksPerson(text, people)).toBe(false);
+    }
+  });
+
+  it('refuses a name that is mentioned rather than addressed', () => {
+    expect(asksPerson('That call is Jordan’s, and I think it should be (b)?', people)).toBe(false);
+  });
+
+  it('refuses an address with nothing asked', () => {
+    expect(asksPerson('**Jordan —** merged and deployed. Leaving this open.', people)).toBe(false);
+  });
+
+  it('accepts a name addressed at a line or emphasis boundary plus a question', () => {
+    for (const text of [
+      '**Jordan — this one is yours:** should the API refuse, or report?',
+      'Jordan: do you want (a) or (b)?',
+      'Long preamble.\nJordan, which of these should ship first?',
+    ]) {
+      expect(asksPerson(text, people)).toBe(true);
+    }
+  });
+
+  // A workspace where nobody has spoken as a person yet must behave exactly as
+  // it did before this rule existed.
+  it('answers no to everything when no people are known', () => {
+    expect(asksPerson('**Jordan — this one is yours:** (a) or (b)?', [])).toBe(false);
+  });
+});
+
+describe('reviewThreadItems — which comment is the ask, and since when', () => {
+  const source = (map: Record<string, Thread[]>) => ({
+    threadsOf: (docId: string) => map[docId] ?? [],
+  });
+  // A person has spoken somewhere in the workspace, which is where the set of
+  // addressable names comes from.
+  const seenPerson = thread({
+    id: 'th-seed',
+    comments: [comment({ kind: 'person', text: 'noted', ts: T0 })],
+  });
+
+  /** The shape the fixture task describes: an agent asks, then keeps working
+   *  and posting on its own thread. Synthetic text, real structure. */
+  const askedThenKeptTalking = thread({
+    id: 'th-ask',
+    comments: [
+      comment({ text: 'Reproduced first; the premise is incomplete.', ts: T0 + 100 }),
+      comment({
+        text: 'Shipped the reporting half.\n\n**Jordan — this is the open question and it is yours:** should the API (a) report and let it land in the bucket, (b) refuse until the caller names a band, or (c) file it automatically, which I think is wrong?\n\nLeaving this open.',
+        ts: T0 + 200,
+      }),
+      comment({ text: 'Merged as a1b2c3d and deployed. Not closing this one.', ts: T0 + 300 }),
+      comment({ text: 'PR is open; found a second hole while building it.', ts: T0 + 400 }),
+    ],
+  });
+
+  const items = () =>
+    reviewThreadItems({
+      tasks: [{ id: 'tk-1', title: 'File tasks against the current goal', bodyDocId: 'task:tk-1' }],
+      docs: [{ docId: 'd-1', title: 'Plan' }],
+      source: source({ 'task:tk-1': [askedThenKeptTalking], 'd-1': [seenPerson] }),
+    });
+
+  // The defect this change exists for. The agent's own follow-ups were being
+  // read as the ask, so the strip quoted a status note for a thread whose open
+  // question sat two comments back.
+  it('quotes the question, not whatever the agent said most recently', () => {
+    const [item] = items();
+    expect(item.direct).toBe(true);
+    expect(item.ask).toContain('should the API');
+    expect(item.ask).not.toContain('found a second hole');
+  });
+
+  // "Whatever surfaces the question must carry its options and their costs, or
+  // it just relocates the reading problem."
+  it('carries the options through to the strip', () => {
+    const [item] = items();
+    for (const opt of ['(a)', '(b)', '(c)']) expect(item.ask).toContain(opt);
+    expect(item.ask.endsWith('?')).toBe(true);
+  });
+
+  // The starvation bug: measured on the live board, 20 of 42 open threads
+  // understated their wait, the worst two by more than 60 hours.
+  it('dates the wait from when it started, not from the latest follow-up', () => {
+    expect(items()[0].since).toBe(T0 + 100);
+  });
+
+  // The strip renders textContent, and these comments are markdown. An
+  // unstripped line reads `**PR #169 is open…`, and slicing mid-emphasis
+  // leaves an unmatched marker behind.
+  it('strips emphasis markers the plain-text strip would show literally', () => {
+    const [item] = items();
+    expect(item.ask).not.toContain('**');
+    expect(item.ask.startsWith('Jordan')).toBe(true);
+  });
+
+  it('leaves a run with no question undecorated and clipped as before', () => {
+    const notes = thread({
+      id: 'th-note',
+      comments: [comment({ text: 'Merged and deployed.', ts: T0 + 50 })],
+    });
+    const [item] = reviewThreadItems({
+      tasks: [{ id: 'tk-2', title: 'Ship', bodyDocId: 'task:tk-2' }],
+      docs: [{ docId: 'd-1', title: 'Plan' }],
+      source: source({ 'task:tk-2': [notes], 'd-1': [seenPerson] }),
+    });
+    expect(item.direct).toBe(false);
+    expect(item.ask).toBe('Merged and deployed.');
   });
 });
