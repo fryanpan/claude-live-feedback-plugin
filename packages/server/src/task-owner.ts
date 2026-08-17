@@ -196,9 +196,17 @@ export function resolveOwnerKind(
   // same question as person-or-agent, and answering it either way would put
   // an unowned task in a band that means "somebody is on this".
   if (name === '' || name.toLowerCase() === GENERIC_ASSIGNEE) return 'unknown';
+  // The other reserved word, decided in the same breath and for the same
+  // reason: `human` MEANS "a person, unnamed". It is not a display name that
+  // might turn out to belong to an agent, so the agent-signals-first rule
+  // below does not apply to it — that rule exists to settle a NAME two
+  // parties could each plausibly claim. Below the roster check, an
+  // `assigneeKind: 'agent'` on the reserved owner resolved to `agent`, which
+  // dropped it out of every person-owned surface and disagreed with the
+  // client's own reading of the same literal.
+  if (name.toLowerCase() === HUMAN_ASSIGNEE) return 'person';
   if (isAttachedAgent(name)) return 'agent';
   if (stored === 'agent') return 'agent';
-  if (name.toLowerCase() === HUMAN_ASSIGNEE) return 'person';
   if (stored === 'person') return 'person';
   return 'unknown';
 }
