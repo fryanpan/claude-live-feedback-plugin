@@ -13788,7 +13788,7 @@ var AUTHOR = resolveAgentAuthor({
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.28";
+var PLUGIN_VERSION = "0.1.29";
 var server = new Server({
   name: "claude-live-feedback",
   version: PLUGIN_VERSION
@@ -14710,7 +14710,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "get_workspace",
-      description: "Read a hub workspace: its north-star goal, and the ORDERED goal list with per-goal task counts (todo / in-progress / done), parent goals followed by their subgoals, Chores last. Order IS priority — the first row is the highest band. Call this before deciding what to work on; without it goal order is invisible (list_tasks returns goal IDS only) and you will work the wrong band. Deliberately cheap — goals and counts, no tasks: pair it with next_tasks, which carries the tasks and their full descriptions. Reorder priorities with set_goal_list, which needs the ids and titles this returns.",
+      description: "Read a hub workspace: its north-star goal, and the ORDERED goal list with per-goal task counts (todo / in-progress / done), parent goals followed by their subgoals, Chores last. Order IS priority — the first row is the highest band. Call this before deciding what to work on; without it goal order is invisible (list_tasks returns goal IDS only) and you will work the wrong band. Deliberately cheap — goals and counts, no tasks: pair it with next_tasks, which carries the tasks and their full descriptions. Each row carries `depth` (0 = top-level, 1 = subgoal) and, on subgoals, `parent` — the two fields reorder_goals needs to scope a change, so read here then reorder there with ids alone.",
       inputSchema: {
         type: "object",
         properties: { workspaceId: { type: "string" } },
@@ -14830,7 +14830,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "set_goal_list",
-      description: `Replace a workspace's ORDERED goal list — the board's sections; order is priority, so reordering goals is the priority gesture (it fires workspace.goals_changed, never a re-triage). Each goal: {id, title, dueAt?, subgoals?: [{id, title, dueAt?}]} — one subgoal level max. "chores" is reserved (always rendered last, never in the list). DESTRUCTIVE EDGE: open tasks whose goal id disappears move to the bottom of Chores — the result reports movedToChores so you can re-place each with set_task_goal; do that rather than leaving them piled.`,
+      description: `Replace a workspace's ORDERED goal list — use this to ADD, RENAME or REMOVE a goal. To only change PRIORITY ORDER, use reorder_goals instead: it is permutation-only and cannot lose a goal, where this call can. Each goal: {id, title, dueAt?, subgoals?: [{id, title, dueAt?}]} — one subgoal level max. "chores" is reserved (always rendered last, never in the list). DESTRUCTIVE EDGE: this is a full REPLACE, so open tasks whose goal id is not in the list you send move to the bottom of Chores — including a goal another writer added since you last read, which is why a reorder done here can silently orphan work. The result reports movedToChores so you can re-place each with set_task_goal; do that rather than leaving them piled.`,
       inputSchema: {
         type: "object",
         properties: {
@@ -14861,6 +14861,26 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           }
         },
         required: ["workspaceId", "goals"]
+      }
+    },
+    {
+      name: "reorder_goals",
+      description: "Change the PRIORITY ORDER of a workspace's goals — order IS priority, so this is the gesture for \"work 2.1 before 1.2\". PERMUTATION ONLY: `order` must be exactly the goal ids already at one scope (the top-level list, or the subgoals of `parent`) — same ids, same count, no titles. Nothing is created, renamed, removed or reparented, and no task can move. An order that omits, repeats or invents an id is REFUSED with 400 naming the offending ids, so a list that another writer has changed since you read it makes you re-read rather than silently dropping a goal — which is exactly what set_goal_list does with the same mistake (its omissions dump that goal's open tasks into Chores). Get the ids from get_workspace, which also names each subgoal's `parent`. Reach for set_goal_list only when you actually mean to add, rename or remove a goal.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          workspaceId: { type: "string" },
+          order: {
+            type: "array",
+            items: { type: "string" },
+            description: "EVERY goal id at this scope, in the new priority order, highest first. Leaving one out is an error, not a demotion."
+          },
+          parent: {
+            type: "string",
+            description: "Reorder this goal's SUBGOALS instead of the top-level list. Omit for the top level. A subgoal id is not a valid parent — nesting is one level deep."
+          }
+        },
+        required: ["workspaceId", "order"]
       }
     },
     {
@@ -15633,6 +15653,20 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           author: AUTHOR
         });
         return ok({ workspaceId, changed: res.changed, movedToChores: res.movedToChores });
+      }
+      case "reorder_goals": {
+        const { workspaceId, order, parent } = a;
+        const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/goals/reorder`, {
+          order,
+          ...parent !== undefined ? { parent } : {},
+          author: AUTHOR
+        });
+        return ok({
+          workspaceId,
+          ...parent !== undefined ? { parent } : {},
+          order: res.order,
+          changed: res.changed
+        });
       }
       case "set_workspace_goal": {
         const { workspaceId, goal } = a;
