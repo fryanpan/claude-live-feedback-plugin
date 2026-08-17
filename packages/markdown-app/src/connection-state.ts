@@ -82,6 +82,15 @@ export function watchConnection(opts: ConnectionWatchOptions): void {
  * Letting the debounce settle inside the grace window therefore printed "All
  * changes saved" over a disconnected doc, which is a reassuring lie about the
  * one thing this indicator exists to be honest about.
+ *
+ * RESIDUAL, deliberately not fixed here: `wsOnline` means the SOCKET is open,
+ * not that the reconnect's sync exchange has delivered the offline edits. The
+ * caller waits 500ms after 'open' before settling, and ws-client pushes those
+ * edits in the first sync round-trip — so the gap is a stalled handshake, not
+ * a normal one. Closing it properly needs a per-reconnect "synced" signal on
+ * ws-client, which is transport work this change deliberately stays out of.
+ * The whole indicator is already a heuristic for an ack y-websocket does not
+ * expose; this narrows it rather than removing it.
  */
 export function settlePending(pendingEdits: number, wsOnline: boolean): number {
   return wsOnline ? 0 : pendingEdits;
@@ -110,7 +119,13 @@ export function renderConnectionBanner(el: HTMLElement | null, view: ConnectionV
   if (view === 'reconnecting') {
     // Names the cause, because the cause is almost always a deploy. "Offline"
     // and "connection error" both read as the app breaking.
-    el.textContent = 'Reconnecting… the server is restarting. Your work is safe.';
+    //
+    // It does NOT say the work is safe, which the first draft did. There is
+    // no local persistence: unsent updates live only in the in-memory Y.Doc,
+    // and `client.close()` on navigate/reload destroys them. "Keep this tab
+    // open" is the same reassurance turned into the one instruction that is
+    // actually true — and the only action that changes the outcome.
+    el.textContent = 'Reconnecting… the server is usually just restarting. Keep this tab open.';
     el.classList.remove('hidden');
     return;
   }

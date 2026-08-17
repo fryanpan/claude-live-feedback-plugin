@@ -146,6 +146,19 @@ describe('renderConnectionBanner', () => {
     expect(el.textContent).not.toMatch(/error|failed|offline/i);
   });
 
+  it('does not promise durability it cannot deliver', () => {
+    // There is no local persistence — unsent updates live only in the
+    // in-memory Y.Doc and die with `client.close()` on navigate or reload.
+    // A banner saying "your work is safe" is exactly wrong for the one
+    // reader who then closes the tab because it told them they could.
+    const el = document.createElement('div');
+    renderConnectionBanner(el, 'reconnecting');
+
+    expect(el.textContent).not.toMatch(/safe|saved|no data will be lost|don't worry/i);
+    // Says the thing that IS true and IS actionable instead.
+    expect(el.textContent).toMatch(/keep this tab open/i);
+  });
+
   it('hides itself again on recovery, leaving no leftover text', () => {
     const el = document.createElement('div');
     el.className = 'conn-banner hidden';
