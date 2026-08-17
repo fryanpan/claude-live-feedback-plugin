@@ -23,7 +23,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { summarizeGoals } from '../src/task-queue.ts';
+import { type GoalSummaryRow, summarizeGoals } from '../src/task-queue.ts';
 import {
   CHORES_GOAL_ID,
   TaskStore,
@@ -142,7 +142,7 @@ describe('TaskStore.reorderGoals', () => {
     expect(events).toHaveLength(0);
   });
 
-  it('refuses a repeated id, and refuses the reserved chores id as unknown', () => {
+  it('refuses a repeated id, and refuses the reserved chores id as RESERVED', () => {
     const wsId = seed();
     const dup = store.reorderGoals(wsId, ['g-perf', 'g-perf', 'g-launch'], { actor: PERSON });
     expect(dup.ok).toBe(false);
@@ -151,13 +151,16 @@ describe('TaskStore.reorderGoals', () => {
     expect(dup.missingIds).toEqual(['g-docs']);
 
     // 'chores' is never in goals[], so trying to position it is a mismatch
-    // rather than a silent no-op that looks like it worked.
+    // rather than a silent no-op that looks like it worked — but it is a
+    // DIFFERENT mismatch from an invented id, because the caller really did
+    // see the row and the fix is "leave it out", not "re-read".
     const chores = store.reorderGoals(wsId, [CHORES_GOAL_ID, 'g-launch', 'g-perf', 'g-docs'], {
       actor: PERSON,
     });
     expect(chores.ok).toBe(false);
     if (chores.ok || chores.error !== 'order-mismatch') throw new Error('expected order-mismatch');
-    expect(chores.unknownIds).toEqual([CHORES_GOAL_ID]);
+    expect(chores.reservedIds).toEqual([CHORES_GOAL_ID]);
+    expect(chores.unknownIds).toEqual([]);
     expect(events).toHaveLength(0);
   });
 
@@ -254,6 +257,134 @@ describe('summarizeGoals names each subgoal’s parent', () => {
     expect(byId.get('g-launch')?.parent).toBeUndefined();
     expect(byId.get('g-launch-qa')?.parent).toBe('g-launch');
     expect(byId.get('g-docs-api')?.parent).toBe('g-docs');
+  });
+});
+
+/**
+ * `parent` scopes a SUBGOAL reorder. Nothing scoped the TOP-LEVEL one, and
+ * "every depth-0 row" — the only rule the read offered — is wrong: the list
+ * ends with rows that are not goals at all. `chores` is appended whenever it
+ * holds anything, and a goal id that a `setGoalList` removal left behind on a
+ * DONE task comes back as a bare row so the work stays visible. Both render
+ * at depth 0, identical in shape to a real band, and both are refused by
+ * `reorderGoals` — so the most obvious way to write the call from the read is
+ * a 400. `reorderable` is the field that says which rows the write accepts.
+ */
+describe('summarizeGoals marks which rows a reorder accepts', () => {
+  /** Rows for a workspace built by `seed`, read the way the route reads them. */
+  function rowsFor(seed: (s: TaskStore, wsId: string) => void): GoalSummaryRow[] {
+    const dir = mkdtempSync(join(tmpdir(), 'goal-rows-'));
+    const s = new TaskStore({ dataDir: dir, debounceMs: 5 });
+    try {
+      const ws = s.createWorkspace('search-revamp', 'Ship search v2.');
+      s.setGoalList(ws.id, GOALS, { actor: PERSON });
+      seed(s, ws.id);
+      return summarizeGoals(s.listTasks(ws.id, {}), s.getWorkspace(ws.id)?.goals ?? []);
+    } finally {
+      s.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it('marks every real goal reorderable, at both depths', () => {
+    const rows = summarizeGoals([], GOALS);
+    // Positive control for the negative assertions below: the field is
+    // present and TRUE on every row that is genuinely in the ordered list.
+    expect(rows.map((r) => r.id)).toEqual([
+      'g-launch',
+      'g-launch-qa',
+      'g-launch-copy',
+      'g-perf',
+      'g-docs',
+      'g-docs-api',
+    ]);
+    expect(rows.every((r) => r.reorderable === true)).toBe(true);
+  });
+
+  it('marks the Chores row NOT reorderable — it is appended, never ordered', () => {
+    const rows = rowsFor((s, wsId) => {
+      s.createTask(wsId, { title: 'Rotate the API key', goal: CHORES_GOAL_ID });
+    });
+    const chores = rows.find((r) => r.id === CHORES_GOAL_ID);
+    // Presence first: the row this asserts about must actually be here.
+    expect(chores).toBeDefined();
+    expect(chores?.depth).toBe(0);
+    expect(chores?.reorderable).toBe(false);
+    // …and the real goals in the same payload still say true, so `false` is
+    // reporting something about this row rather than about the field.
+    expect(rows.find((r) => r.id === 'g-perf')?.reorderable).toBe(true);
+  });
+
+  it('marks an orphaned goal row NOT reorderable', () => {
+    const rows = rowsFor((s, wsId) => {
+      const t = s.createTask(wsId, { title: 'Trim the bundle', goal: 'g-perf' });
+      if (!t.ok) throw new Error('create failed');
+      // Only a DONE task survives a removal in place; an open one is swept
+      // into Chores, which is the other synthetic row.
+      s.transition(t.task.id, 'in-progress', { actor: PERSON });
+      s.transition(t.task.id, 'done', { actor: PERSON, evidence: { commit: 'abc1234' } });
+      s.setGoalList(wsId, [GOALS[0], GOALS[2]] as WorkspaceGoal[], { actor: PERSON });
+    });
+    const orphan = rows.find((r) => r.id === 'g-perf');
+    expect(orphan).toBeDefined();
+    expect(orphan?.done).toBe(1);
+    expect(orphan?.depth).toBe(0);
+    expect(orphan?.reorderable).toBe(false);
+    expect(rows.find((r) => r.id === 'g-launch')?.reorderable).toBe(true);
+  });
+});
+
+describe('TaskStore.reorderGoals names a RESERVED id as reserved', () => {
+  let dataDir: string;
+  let store: TaskStore;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'goal-reserved-'));
+    store = new TaskStore({ dataDir, debounceMs: 5 });
+  });
+  afterEach(() => {
+    store.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  function seeded(): string {
+    const ws = store.createWorkspace('search-revamp', 'Ship search v2.');
+    store.setGoalList(ws.id, GOALS, { actor: PERSON });
+    return ws.id;
+  }
+
+  it('separates `chores` from an id the caller invented', () => {
+    const wsId = seeded();
+    const res = store.reorderGoals(
+      wsId,
+      ['g-launch', 'g-perf', 'g-docs', CHORES_GOAL_ID, 'g-social'],
+      { actor: PERSON },
+    );
+    expect(res.ok).toBe(false);
+    if (res.ok || res.error !== 'order-mismatch') throw new Error('expected order-mismatch');
+    // `chores` is not unknown — it is a real bucket that is never ordered.
+    // Telling the caller "unknown" sends them looking for a typo.
+    expect(res.reservedIds).toEqual([CHORES_GOAL_ID]);
+    // Positive control: a genuinely invented id still lands in unknownIds,
+    // so `reservedIds` is a split rather than a relabelling of everything.
+    expect(res.unknownIds).toEqual(['g-social']);
+    expect(res.missingIds).toEqual([]);
+  });
+
+  it('still refuses `chores` even when the rest of the order is perfect', () => {
+    const wsId = seeded();
+    const res = store.reorderGoals(wsId, ['g-docs', 'g-perf', 'g-launch', CHORES_GOAL_ID], {
+      actor: PERSON,
+    });
+    expect(res.ok).toBe(false);
+    // Accepting it would be the silent-wrong-result failure: `chores` always
+    // renders last, so honouring a caller who put it FIRST is impossible and
+    // quietly ignoring the position is worse than saying so.
+    expect(store.getWorkspace(wsId)?.goals.map((g) => g.id)).toEqual([
+      'g-launch',
+      'g-perf',
+      'g-docs',
+    ]);
   });
 });
 
@@ -438,5 +569,127 @@ describe('POST /api/workspaces/:id/goals/reorder', () => {
     const byId = new Map(got.goalSummary.map((r) => [r.id, r]));
     expect(byId.get('g-launch-qa')?.parent).toBe('g-launch');
     expect(byId.get('g-launch')?.parent).toBeUndefined();
+  });
+
+  /** The whole round trip, over HTTP, exactly as an agent performs it. The
+   *  store-level tests above prove `reorderable` is computed; only this one
+   *  proves the field survives the route and that filtering on it produces an
+   *  order the write ACCEPTS. */
+  describe('the read is writable back into the reorder', () => {
+    const readRows = async (wsId: string) =>
+      (await jj<{ goalSummary: GoalSummaryRow[] }>(await fetch(`${base}/api/workspaces/${wsId}`)))
+        .goalSummary;
+
+    /** A board with the two synthetic rows on it: Chores holding work, and a
+     *  goal id left behind on a done task. Without these the round trip
+     *  passes for the wrong reason — there is nothing to filter out. */
+    async function seedBoardWithBuckets(): Promise<string> {
+      const wsId = await seedWorkspace();
+      await jj(
+        await post(`/api/workspaces/${wsId}/tasks`, {
+          author: AGENT,
+          title: 'rotate the api key',
+          goal: CHORES_GOAL_ID,
+        }),
+      );
+      const { task } = await jj<{ task: { id: string } }>(
+        await post(`/api/workspaces/${wsId}/tasks`, {
+          author: AGENT,
+          title: 'trim the bundle',
+          goal: 'g-perf',
+        }),
+      );
+      for (const to of ['in-progress', 'done']) {
+        await jj(
+          await post(`/api/tasks/${task.id}/transition`, {
+            author: AGENT,
+            to,
+            evidence: { commit: 'abc1234' },
+          }),
+        );
+      }
+      // Remove g-perf: the done task stays put, so its goal id becomes an
+      // orphan row rather than disappearing.
+      await jj(
+        await put(`/api/workspaces/${wsId}/goals`, {
+          goals: [GOALS[0], GOALS[2]],
+          author: PERSON,
+        }),
+      );
+      return wsId;
+    }
+
+    it('sending back every reorderable depth-0 row succeeds; sending every depth-0 row does not', async () => {
+      const wsId = await seedBoardWithBuckets();
+      const rows = await readRows(wsId);
+
+      // Presence control: the payload really does carry rows that are NOT
+      // goals, otherwise the filter below proves nothing.
+      const notGoals = rows.filter((r) => r.depth === 0 && !r.reorderable).map((r) => r.id);
+      expect(notGoals.sort()).toEqual([CHORES_GOAL_ID, 'g-perf']);
+
+      // The naive read → write, which is what an agent writes when the only
+      // rule available is "the depth-0 rows": refused.
+      const naive = rows.filter((r) => r.depth === 0).map((r) => r.id);
+      const naiveRes = await post(`/api/workspaces/${wsId}/goals/reorder`, {
+        order: [...naive].reverse(),
+        author: PERSON,
+      });
+      expect(naiveRes.status).toBe(400);
+
+      // The same gesture written from `reorderable`: accepted, and the board
+      // actually moved.
+      const scoped = rows.filter((r) => r.depth === 0 && r.reorderable).map((r) => r.id);
+      expect(scoped).toEqual(['g-launch', 'g-docs']);
+      const res = await jj<{ changed: boolean; order: string[] }>(
+        await post(`/api/workspaces/${wsId}/goals/reorder`, {
+          order: [...scoped].reverse(),
+          author: PERSON,
+        }),
+      );
+      expect(res.changed).toBe(true);
+      expect((await readGoals(wsId)).map((g) => g.id)).toEqual(['g-docs', 'g-launch']);
+    });
+
+    it('the same filter scopes a SUBGOAL reorder from the read alone', async () => {
+      const wsId = await seedBoardWithBuckets();
+      const rows = await readRows(wsId);
+      const subgoals = rows
+        .filter((r) => r.parent === 'g-launch' && r.reorderable)
+        .map((r) => r.id);
+      expect(subgoals).toEqual(['g-launch-qa', 'g-launch-copy']);
+      await jj(
+        await post(`/api/workspaces/${wsId}/goals/reorder`, {
+          order: [...subgoals].reverse(),
+          parent: 'g-launch',
+          author: PERSON,
+        }),
+      );
+      const goals = await readGoals(wsId);
+      expect(goals.find((g) => g.id === 'g-launch')?.subgoals?.map((s) => s.id)).toEqual([
+        'g-launch-copy',
+        'g-launch-qa',
+      ]);
+    });
+
+    it('the refusal calls `chores` reserved, not unknown, and says what to send', async () => {
+      const wsId = await seedWorkspace();
+      const res = await post(`/api/workspaces/${wsId}/goals/reorder`, {
+        order: ['g-launch', 'g-perf', 'g-docs', CHORES_GOAL_ID],
+        author: PERSON,
+      });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as {
+        error: string;
+        reservedIds: string[];
+        unknownIds: string[];
+        message: string;
+      };
+      expect(body.error).toBe('order-mismatch');
+      expect(body.reservedIds).toEqual([CHORES_GOAL_ID]);
+      expect(body.unknownIds).toEqual([]);
+      expect(body.message).toContain('reserved');
+      expect(body.message).toContain('reorderable');
+    });
   });
 });
