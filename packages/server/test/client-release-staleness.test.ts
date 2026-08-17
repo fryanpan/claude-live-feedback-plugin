@@ -77,6 +77,29 @@ describe('release provenance', () => {
     }
   });
 
+  it('records which paths were modified, including ones that did not set -dirty', () => {
+    // The suffix alone cannot be judged later. A clean `sourceRef` next to a
+    // modified doc has to read as a decision, so the paths ride along — see
+    // deploy-source.ts for which of them earn the suffix.
+    const root = tmpRoot();
+    const build = fakeBuild('gen-dirty');
+    try {
+      const rel = publishClientRelease({
+        root,
+        sources: build,
+        sourceRef: 'abc1234',
+        dirtyPaths: ['docs/product/plans/some-plan.md'],
+        dirtyPathCount: 3,
+      });
+      const prov = readReleaseProvenance(rel.releaseDir);
+      expect(prov?.sourceRef).toBe('abc1234');
+      expect(prov?.dirtyPaths).toEqual(['docs/product/plans/some-plan.md']);
+      expect(prov?.dirtyPathCount).toBe(3);
+    } finally {
+      for (const d of [root, build.dir]) rmSync(d, { recursive: true, force: true });
+    }
+  });
+
   it('dates a release published before provenance existed, from its id', () => {
     // Every release already live on the day this ships has no release.json.
     // Falling back to "age unknown" would make the first failed build after

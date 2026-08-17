@@ -189,3 +189,60 @@ companion doc reuses the whole prose sync stack and the only new machinery —
 flat write-back with a conflict arm — is required for code editing anyway.
 `.md` members do NOT get flat write-back (single-writer per file: edits flow
 through the companion doc). Reversible; revisit if the two-doc UX confuses.
+
+## 2026-08-17 — A task's discussion keeps threading, and has exactly ONE composer
+
+**The report.** Bryan: *"why do I have two reply boxes at the bottom of each
+task…are we supporting threaded replies unnecsarily?"* He was right about the
+surface: `renderDiscussion` appended a reply box inside every thread and then a
+new-thread box under all of them, so the ordinary single-thread task ended in
+two stacked boxes whose only difference was placeholder text. N threads meant
+N+1 boxes.
+
+**What reproducing changed.** The premise that threading on a task is
+decorative did not survive contact with the board. Measured across all 96 tasks
+in this workspace:
+
+| | count |
+|---|---|
+| tasks with 0 threads | 62 |
+| tasks with exactly 1 thread | 32 |
+| tasks with 2 threads | 2 |
+| tasks with 3+ threads | 0 |
+| **task threads that are `text-range`-anchored, with a snippet** | **34 of 37** |
+| task threads that are `subject`-anchored | 3 |
+
+So multi-thread tasks are rare — but threads that point at a specific passage
+of the description are the overwhelming norm, because that is what an agent's
+`create_thread(docId: 'task:<id>', find: …)` produces. Only the browser's own
+"start a thread" path writes `anchor: {kind: 'subject'}`, and it accounts for
+all three of the unanchored ones. Task threads were doing exactly what document
+threads do; **the surface was throwing the anchor away** and then asking the
+reader to disambiguate piles it had just made indistinguishable.
+
+**Decision: option 2 — keep threading, make one composer.** Rejected:
+
+- *One flat conversation per task.* It reads as the simplest answer only while
+  you believe the threads are arbitrary. It would flatten 34 anchored threads,
+  discard an anchor an agent set deliberately, and change what `resolve_thread`
+  means on a task from "this point is settled" to "this task's whole discussion
+  is settled" — a store-model change smuggled in behind a UI fix.
+- *Differentiate the labels.* Accepts N+1 boxes and tries to fix them with
+  words, which is the state that was just described as oddly complex.
+
+**What ships.** Each thread quotes the passage it is anchored to and carries a
+`Reply` button that points the single composer at it. The composer sits at the
+bottom and names its target above the box (`Replying to "…"` / `Starting a new
+thread`), with `New thread` to switch away. The default target is the queue's
+aim if there is one, else the last thread on screen — which on the common
+single-thread task is the only reply anyone means, and makes that case behave
+exactly as it did minus the second box.
+
+**Nothing in the store changed.** No route, no anchor kind, no thread model.
+Agents still post through `create_thread` on `task:<id>` and their threads
+render better, not differently. Resolved threads stay visible and stay
+replyable — that visibility is deliberate, and hiding a thread with an
+unread reply in it is a bug this project has already shipped once.
+
+Reversible. **If you are about to add a second always-present composer, this is
+the state it produced.**

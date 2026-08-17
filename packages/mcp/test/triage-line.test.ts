@@ -55,7 +55,28 @@ describe('triageRequestLine', () => {
       { kind: 'task', taskId: 't-z', leadAgentId: 'agent-lead' },
       'agent-bystander',
     );
-    expect(line).toBe('[triage.requested] place task t-z against the goal (set_task_goal)');
+    // Still the imperative, never the addressed FYI a goal-retriage produces.
+    expect(line).toContain('shape and place task t-z');
+    expect(line).not.toContain('FYI');
+    expect(line).not.toContain('agent-lead');
+  });
+
+  // The line is the whole contract for a single-task triage: there is no
+  // skill name on this path and no second delivery. It used to say only
+  // "place task X against the goal", and the board did exactly that — a
+  // captured paragraph got a goal and kept its clipped fragment of a title
+  // forever, with every component reporting success. The three verbs have to
+  // be IN the request, because it is the only thing the recipient reads.
+  it('asks for shaping, not only placement', () => {
+    const line = triageRequestLine({ kind: 'task', taskId: 't-z' }, 'agent-whoever');
+    // Read the words.
+    expect(line).toContain('its own words');
+    // Decide how many tasks it is — including none.
+    expect(line).toContain('zero / one / several');
+    expect(line).toContain('instruction about neighbouring text is zero');
+    // Rewrite, then place. Both verbs named, in that order.
+    expect(line.indexOf('update_task_body')).toBeGreaterThan(-1);
+    expect(line.indexOf('set_task_goal')).toBeGreaterThan(line.indexOf('update_task_body'));
   });
 
   it('says "?" rather than a wrong count when taskIds is missing', () => {
@@ -171,7 +192,9 @@ describe('parity with the replayed payload', () => {
       { kind: 'task', taskId: 't-z', taskIds: ['t-a'], oldGoal: 'Old.' },
       'agent-whoever',
     );
-    expect(line).toBe('[triage.requested] place task t-z against the goal (set_task_goal)');
+    expect(line).toContain('shape and place task t-z');
+    expect(line).not.toContain('t-a');
+    expect(line).not.toContain('Old.');
   });
 });
 

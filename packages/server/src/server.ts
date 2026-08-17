@@ -29,7 +29,7 @@ import {
   shareScopeAllows,
 } from './middleware/host-guard.ts';
 import type { PluginRefresher } from './plugin-refresh.ts';
-import { agentsBehind, readReleasedPluginVersion } from './plugin-release.ts';
+import { agentsBehind, checkableAttachments, readReleasedPluginVersion } from './plugin-release.ts';
 import { localHostnames, publicBaseUrl } from './public-host.ts';
 import { reviewThreadItems } from './review-queue.ts';
 import { type FeedbackWs, Rooms, type WorkspaceDirNode, type WorkspaceFileNode } from './rooms.ts';
@@ -230,6 +230,19 @@ export interface ServerOptions {
    * see middleware/browser-origin.ts.
    */
   allowedOrigins?: string[];
+  /**
+   * The external base URL this deployment is reached on, when something in
+   * front terminates TLS (`tailscale serve` → this process on loopback).
+   * Already normalized — bin.ts runs `normalizePublicBaseUrl` on
+   * `LF_PUBLIC_BASE_URL` at boot so a typo fails there rather than here.
+   *
+   * Every human-facing URL the server emits (`reviewUrl`, `entryUrl`, the
+   * import banner's `hubUrl`) is built from this when set. Unset — the
+   * default, and every test that doesn't care — falls back to
+   * `http://<discovered host>:<port>`, which is what a server with nothing
+   * in front of it is actually reachable on.
+   */
+  publicBaseUrl?: string;
   /**
    * Cloudflare Access JWT verification config. When set, every non-OPTIONS
    * request must carry a valid `Cf-Access-Jwt-Assertion` header (or
@@ -1926,7 +1939,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // pull the banner into the live doc too — reparse right after our
           // own write, so disk (which we just wrote) wins the race with the
           // doc's debounced flush.
-          const hubUrl = `${publicBaseUrl(server.port ?? port)}/workspaces/${encodeURIComponent(workspaceId)}`;
+          const hubUrl = `${externalBaseUrl()}/workspaces/${encodeURIComponent(workspaceId)}`;
           writeFileSync(
             path,
             importBanner({
@@ -2407,16 +2420,35 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const taskId = decodeURIComponent(taskBodyMatch[1] ?? '');
           const body = await safeJson(req);
           const markdown = typeof body?.markdown === 'string' ? body.markdown : '';
+          // Optional: shaping retitles and rewrites in ONE act, so a clipped
+          // capture title is not left behind by the pass that fixed its body.
+          // A blank string is "no new title", never a request to blank one.
+          const title = typeof body?.title === 'string' ? body.title.trim() : '';
           const author = authorFor(body?.author);
           if (!author) return j(400, { error: 'author required' });
           const task = taskStore.getTask(taskId);
           if (!task) return j(404, { ok: false, error: 'not-found' });
           if (!markdown.trim()) return j(400, { ok: false, error: 'empty' });
+          // Read the row's own words BEFORE the rewrite lands — after
+          // setDocContent the snapshot is the new text and the original is
+          // gone from every surface. This is the one place that can still see
+          // it, which is why the store takes it as a required parameter.
+          const previous = {
+            title: task.title,
+            ...(task.body !== undefined ? { body: task.body } : {}),
+          };
           const docId = taskProjection.ensureBodyRoom(task);
           const res = rooms.setDocContent(docId, markdown);
           if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
           taskProjection.flushBodySnapshot(taskId);
-          taskStore.noteBodyEdited(taskId, { actor: author });
+          taskStore.noteBodyEdited(taskId, {
+            actor: author,
+            previous,
+            ...(title ? { title } : {}),
+          });
+          // No hand-refresh of the projection: unlike `/title` (which emits
+          // nothing by design), this act DOES emit, and the projection's own
+          // subscriber re-runs ensureWorkspace off the event.
           return j(200, { ok: true, task: taskStore.getTask(taskId) });
         }
         // assign_task (§3.6 task.assigned): hand a task between the human and
@@ -2760,6 +2792,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                 agentId: a.agentId,
                 ...(a.pluginVersion !== undefined ? { pluginVersion: a.pluginVersion } : {}),
               })),
+              // How many sessions the `behind` list was computed OVER. It
+              // ships beside the list because the list alone cannot be read:
+              // empty means "none of the ones checked", and for this board
+              // that has normally been one session — its own. Without the
+              // denominator the surface renders participation as clearance.
+              checked: checkableAttachments(attachments).length,
             },
           });
         }
@@ -3602,6 +3640,23 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     },
   });
 
+  /**
+   * The base every human-facing URL this server emits is built on.
+   *
+   * One function, so the operator override cannot reach some links and miss
+   * others. That is not hypothetical tidiness: the links are the deliverable
+   * of a TLS deploy — a `reviewUrl` still pointing at `http://<host>:<port>`
+   * sends the reader back to the origin the deploy existed to leave, where
+   * the browser refuses the microphone. Missing one call site would look
+   * entirely fine until someone pressed the mic on that particular link.
+   *
+   * A function rather than a captured constant because `server.port` is only
+   * known after `Bun.serve` resolves port 0.
+   */
+  function externalBaseUrl(): string {
+    return opts.publicBaseUrl ?? publicBaseUrl(server.port ?? port);
+  }
+
   // Decorate doc metadata with a `reviewUrl` that's actually reachable from
   // other devices on the tailnet / LAN. Markdown docs render at /review/...;
   // mockup docs bound to a file on disk render at /mockup/<docId> — same
@@ -3611,7 +3666,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   function withReviewUrl<T extends { docId: string; type: DocType; sourceUrl?: string }>(
     meta: T,
   ): T & { reviewUrl?: string } {
-    const base = publicBaseUrl(server.port ?? port);
+    const base = externalBaseUrl();
     if (contentKind(meta.type) !== 'none') {
       // Every doc kind with LF-held content (markdown/code/diff) shares the
       // SPA route; the app branches the editor on the doc's type at boot.

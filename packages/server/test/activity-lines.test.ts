@@ -143,6 +143,35 @@ describe('the activity view renders the rows the server really wrote', () => {
     expect(line).not.toContain('task.body_edited');
   });
 
+  it('renders a SHAPING with both titles, from the row the route wrote', async () => {
+    // Two keys are new on this event (`titleFrom` / `titleTo`) and the client
+    // case reads them by name. describeEvent's own suite hands it a
+    // hand-written row, which proves the case exists and nothing about
+    // whether the route emits those keys — the exact gap this file is for.
+    const clipped = 'And also it is really hard to go from one shel…';
+    const created = await post(`/api/workspaces/${wsId}/tasks`, {
+      title: clipped,
+      author: AGENT,
+      body: `${clipped}\n\nAnyway. Make a ticket from this or multiple`,
+    });
+    expect(created.status).toBe(200);
+    const taskId = ((await created.json()) as { task: Task }).task.id;
+
+    const r = await post(`/api/tasks/${taskId}/body`, {
+      title: 'Moving between shelves loses your place',
+      markdown: 'Person can move between shelves so that planning keeps its place.',
+      author: AGENT,
+    });
+    expect(r.status).toBe(200);
+
+    const row = rowsOf('task.body_edited').at(-1);
+    expect(row).toBeDefined();
+    const line = describeEvent(row as ActivityEvent, () => 'unused');
+    expect(line).toContain('Search Revamp');
+    expect(line).toContain(clipped);
+    expect(line).toContain('Moving between shelves loses your place');
+  });
+
   it('renders an evidence correction from the row the route wrote, naming the sha it replaced', async () => {
     // Same gap as the rewrite row above: a hand-written fixture proves the
     // switch has a case, not that the EMITTED keys are the ones it reads. The
