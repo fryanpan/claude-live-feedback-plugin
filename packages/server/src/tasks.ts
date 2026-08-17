@@ -367,6 +367,22 @@ export interface Task {
   transitions: TaskTransition[];
   createdAt: number;
   updatedAt: number;
+  /**
+   * When the DESCRIPTION last changed — a body clock, not a row clock.
+   *
+   * `updatedAt` cannot answer this: twelve mutators bump it, including
+   * `linkRef`, so "the row changed" says nothing about whether the
+   * description still describes the world. And the live-room path
+   * (`updateBodySnapshot`) deliberately bumps nothing at all, which is
+   * correct for board activity and useless here — measured on the real
+   * board, seven bodies had been rewritten and the system held no record of
+   * a single one of those edits.
+   *
+   * Absent on a task filed before this field, and on a body that has never
+   * been touched since it was written; `bodyWrittenAtOf` resolves both to
+   * `createdAt`, which is when a never-edited body was in fact written.
+   */
+  bodyWrittenAt?: number;
 }
 
 export interface CreateTaskOpts {
@@ -2444,6 +2460,7 @@ export class TaskStore {
     if (!task) return false;
     const ts = Date.now();
     task.updatedAt = ts;
+    task.bodyWrittenAt = ts;
     this.scheduleSave(task.workspaceId);
     this.emit({
       type: 'task.body_edited',
@@ -2795,6 +2812,11 @@ export class TaskStore {
     if (!task) return false;
     if (task.body === body) return true;
     task.body = body;
+    // The one thing this path DOES record: when the description changed.
+    // Stamped only on a real change (the equality guard above returns first),
+    // so a no-op flush cannot make a stale body look freshly written — which
+    // would silently clear the drift notice on exactly the rows that need it.
+    task.bodyWrittenAt = Date.now();
     this.scheduleSave(task.workspaceId);
     return true;
   }

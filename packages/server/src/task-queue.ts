@@ -27,6 +27,12 @@
  * at execution. `blockedBy` carries the dependency half, which is real data
  * someone stated on purpose; the judgment half stays with the reader.
  */
+import {
+  bodyWrittenAtOf,
+  decidePremiseDrift,
+  type PremiseDrift,
+  type PremiseNote,
+} from './task-staleness.ts';
 import type { Task, TaskStatus, WorkspaceGoal } from './tasks.ts';
 
 export interface QueueBlocker {
@@ -58,6 +64,22 @@ export interface QueueRow {
   /** No ENFORCED open blocker. Advisory (`after`-only) blockers leave this
    *  true, exactly as the transition gate treats them. */
   ready: boolean;
+  /** When the description above was written. Present on every row, because
+   *  "how old is this measurement" is something a reader needs whether or
+   *  not it has drifted — the body is written in the present tense about a
+   *  codebase that moves several times a day. */
+  bodyWrittenAt: number;
+  /**
+   * Present only when the description has stood still while the task was
+   * discussed (see `decidePremiseDrift`). Carries the notes posted since,
+   * so the correction a previous reader already wrote arrives WITH the
+   * description it corrects instead of one API call away.
+   *
+   * Omitted, never false: an absent field costs nothing on the rows that
+   * are fine, which is what keeps the notes affordable on the rows that
+   * are not.
+   */
+  premise?: PremiseDrift;
 }
 
 export interface QueueOpts {
@@ -65,6 +87,14 @@ export interface QueueOpts {
   limit?: number;
   /** Keep hard-blocked rows. Off by default — the queue is what you can DO. */
   includeBlocked?: boolean;
+  /**
+   * Comments on a task, by task id. Optional so `buildQueue` stays pure and
+   * testable without a room store; a caller that omits it gets rows with no
+   * `premise` at all rather than rows that claim to be fresh.
+   */
+  discussion?: (taskId: string) => readonly PremiseNote[];
+  /** Overridable for tests. */
+  staleAfterMs?: number;
 }
 
 /** Sort key for a goal id: `[band, sub]`. A goal is `[i, 0]`, its j-th
@@ -139,6 +169,15 @@ export function buildQueue(
         enforce: enforce.has(depId),
       });
     }
+    const bodyWrittenAt = bodyWrittenAtOf(task);
+    const premise = opts.discussion
+      ? decidePremiseDrift({
+          status: task.status,
+          bodyWrittenAt,
+          notes: opts.discussion(task.id),
+          ...(opts.staleAfterMs !== undefined ? { staleAfterMs: opts.staleAfterMs } : {}),
+        })
+      : null;
     return {
       id: task.id,
       title: task.title,
@@ -151,6 +190,8 @@ export function buildQueue(
       ...(task.riskTier !== undefined ? { riskTier: task.riskTier } : {}),
       blockedBy,
       ready: !blockedBy.some((b) => b.enforce),
+      bodyWrittenAt,
+      ...(premise ? { premise } : {}),
     };
   });
 
