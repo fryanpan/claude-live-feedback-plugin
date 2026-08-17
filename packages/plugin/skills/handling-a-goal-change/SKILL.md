@@ -120,10 +120,16 @@ their subgoals, each with todo / in-progress / done counts. That list is the
 vocabulary you are about to place tasks into, and its ids are what
 `reorder_goals` needs. Read it in the same call.
 
-One trap in that list: **Chores appears only when something is already in it.**
-Its id is the literal string `"chores"`, it is reserved, and it is never a row
-you can read out of `goals` on an empty board. Do not conclude from its absence
-that you cannot park anything there.
+Two traps in that list:
+
+- **Chores appears only when something is already in it.** Its id is the
+  literal string `"chores"`, it is reserved, and it is not a row you can read
+  out of `goals` on a board where nothing is parked. Do not conclude from its
+  absence that you cannot park anything there.
+- **Not every row is a band.** Each row carries `reorderable`. It is `false` on
+  the rows the read *appends* rather than orders — Chores, and a goal id left
+  behind on a done task by an earlier removal — and those look exactly like a
+  band otherwise. They matter in step 6.
 
 ## 5. Re-place every open task
 
@@ -179,6 +185,12 @@ Permutation only: `order` must be exactly the ids already at that scope. It
 creates nothing, renames nothing, moves no task, and **refuses** an order that
 omits, repeats or invents an id — naming the offending ids so you re-read
 instead of guessing.
+
+**Scope it as "every row at my scope whose `reorderable` is true", never
+"every depth-0 row".** Chores and orphaned goal rows sit at depth 0 and are not
+in the ordered list, so including one is refused as reserved — reported
+separately from unknown ids, because the fix is to drop it rather than to
+re-read.
 
 `set_goal_list` is a full **replace**, and that is the whole hazard: any band id
 you leave out has its open tasks dumped at the bottom of Chores. Including a
