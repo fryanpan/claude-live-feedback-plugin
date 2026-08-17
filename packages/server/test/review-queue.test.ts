@@ -251,6 +251,27 @@ describe('asksPerson', () => {
     expect(asksPerson('**Jordan —** merged and deployed. Leaving this open.', people)).toBe(false);
   });
 
+  // Found by codex review. Asking only that a "?" exist SOMEWHERE let a status
+  // note that happens to link a query string be announced as a question — the
+  // exact false positive the two-part rule was chosen to avoid, arriving
+  // through the half that was supposed to prevent it.
+  it('refuses an address whose only question mark is a URL or code', () => {
+    for (const text of [
+      'Jordan — deployed; see /board?tab=open',
+      'Jordan: reverting `anchor.snippet?.text` turns the named test red.',
+    ]) {
+      expect(asksPerson(text, people)).toBe(false);
+    }
+  });
+
+  // A "?" that belongs to a later, unrelated paragraph is not this address's
+  // question.
+  it('refuses a question mark from a paragraph the address did not open', () => {
+    expect(asksPerson('Jordan — merged and deployed.\n\nIs the fleet knowable?', people)).toBe(
+      false,
+    );
+  });
+
   it('accepts a name addressed at a line or emphasis boundary plus a question', () => {
     for (const text of [
       '**Jordan — this one is yours:** should the API refuse, or report?',
@@ -323,6 +344,25 @@ describe('reviewThreadItems — which comment is the ask, and since when', () =>
   // understated their wait, the worst two by more than 60 hours.
   it('dates the wait from when it started, not from the latest follow-up', () => {
     expect(items()[0].since).toBe(T0 + 100);
+  });
+
+  // Also found by codex review, and the root cause of both: the extractor kept
+  // its OWN copy of the address regex and had dropped the newline branch, so a
+  // comment `asksPerson` accepted could fall through to clipping from character
+  // zero — truncating away the very question the change exists to surface.
+  // Both now go through one matcher.
+  it('extracts an address that opens a later line, after a long preamble', () => {
+    const text = `${'Context that runs on. '.repeat(30)}\nJordan, which of these should ship first?`;
+    const [item] = reviewThreadItems({
+      tasks: [{ id: 'tk-3', title: 'Ship', bodyDocId: 'task:tk-3' }],
+      docs: [{ docId: 'd-1', title: 'Plan' }],
+      source: source({
+        'task:tk-3': [thread({ id: 'th-late', comments: [comment({ text, ts: T0 + 5 })] })],
+        'd-1': [seenPerson],
+      }),
+    });
+    expect(item.direct).toBe(true);
+    expect(item.ask).toBe('Jordan, which of these should ship first?');
   });
 
   // The strip renders textContent, and these comments are markdown. An
