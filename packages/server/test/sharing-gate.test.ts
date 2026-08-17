@@ -8,6 +8,11 @@
  *
  * Every "is refused" assertion is an absence, so each block first proves the
  * same request SUCCEEDS while sharing is on.
+ *
+ * The visitor fixture is a WORKSPACE link over a one-file folder bind — a
+ * workspace is the unit of sharing (2026-08-17), so `{docId}` no longer
+ * mints anything. Nothing about the master switch changes with it: the gate
+ * sits ahead of both the share lookup and authentication.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -76,7 +81,10 @@ describe('sharing gate over HTTP', () => {
   let base: string;
   let cookie: string;
   let slug: string;
+  /** Member docId of the bound folder — `<group>:<relPath>`, so it carries a
+   *  colon and every URL below uses the encoded form. */
   let docId: string;
+  let docSeg: string;
 
   const local = (path: string, init: RequestInit = {}) =>
     fetch(`${base}${path}`, {
@@ -114,16 +122,25 @@ describe('sharing gate over HTTP', () => {
     });
     base = `http://localhost:${handle.port}`;
 
-    docId = 'gate-doc';
-    await local('/api/docs', {
+    const bind = await local('/api/workspaces', {
       method: 'POST',
-      body: JSON.stringify({ docId, type: 'markdown', sourceUrl: docPath }),
+      body: JSON.stringify({ folderPath: folder }),
     });
+    expect(bind.status).toBe(200);
+    const bound = (await bind.json()) as {
+      workspaceId: string;
+      files: Array<{ docId: string }>;
+    };
+    docId = bound.files[0]?.docId ?? '';
+    docSeg = encodeURIComponent(docId);
+    expect(docId).not.toBe('');
+
     const share = await local('/api/share/link', {
       method: 'POST',
-      body: JSON.stringify({ docId }),
+      body: JSON.stringify({ workspaceId: bound.workspaceId }),
     }).then((r) => r.json());
     slug = share.share.slug;
+    expect(slug).toBeTruthy();
 
     const redeemed = await fetch(`${base}/s/${slug}`, {
       redirect: 'manual',
@@ -143,7 +160,7 @@ describe('sharing gate over HTTP', () => {
   });
 
   it('CONTROL: a visitor reaches the doc while sharing is on', async () => {
-    const r = await pub(`/api/docs/${docId}`);
+    const r = await pub(`/api/docs/${docSeg}`);
     expect(r.status).toBe(200);
     expect((await r.json()).meta.docId).toBe(docId);
   });
@@ -158,7 +175,7 @@ describe('sharing gate over HTTP', () => {
 
   it('refuses a valid session once sharing is off', async () => {
     expect((await setSharing(false)).status).toBe(200);
-    const r = await pub(`/api/docs/${docId}`);
+    const r = await pub(`/api/docs/${docSeg}`);
     expect(r.status).toBe(403);
     expect((await r.json()).error).toBe('sharing_disabled');
   });
@@ -172,7 +189,7 @@ describe('sharing gate over HTTP', () => {
   });
 
   it('refuses the websocket upgrade once sharing is off', async () => {
-    const r = await fetch(`${base}/y/${docId}`, {
+    const r = await fetch(`${base}/y/${docSeg}`, {
       headers: {
         host: PUBLIC_HOST,
         'x-forwarded-proto': 'https',
@@ -184,18 +201,18 @@ describe('sharing gate over HTTP', () => {
   });
 
   it('refuses the SSE stream once sharing is off', async () => {
-    const r = await pub(`/events/${docId}`);
+    const r = await pub(`/events/${docSeg}`);
     expect(r.status).toBe(403);
   });
 
   it('gates BEFORE auth — no cookie looks the same as a good one', async () => {
-    const withOut = await pub(`/api/docs/${docId}`, false);
+    const withOut = await pub(`/api/docs/${docSeg}`, false);
     expect(withOut.status).toBe(403);
     expect((await withOut.json()).error).toBe('sharing_disabled');
   });
 
   it('leaves the LOCAL surface working while sharing is off', async () => {
-    const r = await local(`/api/docs/${docId}`);
+    const r = await local(`/api/docs/${docSeg}`);
     expect(r.status).toBe(200);
     const list = await local('/api/docs');
     expect(list.status).toBe(200);
@@ -208,7 +225,7 @@ describe('sharing gate over HTTP', () => {
 
   it('restores access when switched back on', async () => {
     expect((await setSharing(true)).status).toBe(200);
-    const r = await pub(`/api/docs/${docId}`);
+    const r = await pub(`/api/docs/${docSeg}`);
     expect(r.status).toBe(200);
   });
 });
