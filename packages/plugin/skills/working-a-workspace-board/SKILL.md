@@ -103,19 +103,58 @@ If a create comes back `assignee-required`, your session was launched without
 you cannot fix it from inside the session, so say so and pass an explicit
 `assignee` meanwhile.
 
-## A burst of ideas goes on the board in one call
+## One way to file work, and it takes a list
 
-When a conversation just produced five things worth doing, use `create_tasks`
-rather than five `create_task` round trips. Each row takes the same fields, and
-every rule above still applies per row — omit `assignee` and that row is yours,
-give it a `goal` and it lands there instead of in Chores. It returns the
-created tasks **in board order**, so you see the ranking you just produced
-without a second read.
+`create_tasks` is the create verb. It always takes a list, and **one idea is a
+one-row list** — so there is never a moment where you have to decide which of
+two tools to reach for. Filing 24 things one at a time measured 78s against 13s
+for the same rows in one call, and that gap is a tooling choice rather than a
+floor.
+
+Every rule above still applies per row — omit `assignee` and that row is yours,
+give it a `goal` and it lands there instead of in Chores. It returns the created
+tasks **in board order**, so you see the ranking you just produced without a
+second read.
 
 A bad row never rejects the batch: it comes back in `failures` by index, its
 neighbours are created, and you re-send that one row. So don't hold ideas back
 waiting until you're sure of all of them — capture the burst, then fix the row
 the API argued with.
+
+(`create_task` — the single-row form — still answers, so a session on an older
+bundle keeps working. It is no longer the way to file work, and it is going
+away.)
+
+### A row can depend on another row of the same batch
+
+Give a row a `key`, and a later row can name it in `after` / `afterEnforce`:
+
+```
+create_tasks(workspaceId, tasks: [
+  { title: "Rebuild the index", goal: "g-index", key: "reindex" },
+  { title: "Flip the read path", goal: "g-index", after: ["#reindex"] },
+  { title: "Delete the old path", goal: "g-index", after: [0, 1] },
+])
+```
+
+`"#<key>"` names a row by its key; a bare number (or `"#0"`) names it by index.
+Anything without the `#` is still a task id you already hold. Three rules, all
+of them refusals rather than silent drops, because an `after` edge that resolves
+to nothing does not error — it just never blocks:
+
+- **Backwards only.** Rows are created in order, so a row can only depend on a
+  row above it. Reorder the batch rather than pointing forward.
+- **If the row you depend on failed, you fail too.** A task created with its
+  dependency quietly missing looks unblocked and nothing ever says otherwise.
+- **Keys are unique in the batch, and can't be all digits or start with `#`.**
+
+### An unplaced task says so, and hands you the bands
+
+A create with no `goal` comes back with `placed: false` and `goals` — the
+ordered bands, so the next call is `set_task_goal` rather than a `get_workspace`
+first. (In a batch it's one `placement` block for the whole call, naming the
+unplaced ids.) Don't let it sit: you are the party that still knows why the task
+exists, and placement is cheapest right now.
 
 ## Keep the board current as you go
 

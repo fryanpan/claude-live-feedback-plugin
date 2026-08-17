@@ -15,6 +15,7 @@
  * say, which is a different question with different error shapes (a 400 the
  * caller can act on, per field).
  */
+import { BATCH_REF_SIGIL } from './task-batch-refs.ts';
 import {
   ASSIGNEE_REQUIRED_ERROR,
   ASSIGNEE_REQUIRED_MESSAGE,
@@ -23,6 +24,7 @@ import {
 import { type CreateTaskOpts, REF_KINDS, type Ref, isValidRef } from './tasks.ts';
 
 export const BAD_TITLE_ERROR = 'title required';
+export const BATCH_REF_OUTSIDE_BATCH_ERROR = 'batch-ref-outside-batch';
 export const BAD_NEEDS_ERROR = "needs must be 'action' | 'decision'";
 export const BAD_OPTIONS_ERROR = 'options must be [{label, detail?}] with a non-empty label';
 
@@ -135,6 +137,24 @@ export function parseOrigin(raw: unknown): { ok: true; origin?: Ref } | { ok: fa
   return { ok: true, origin: raw };
 }
 
+/**
+ * A batch-local reference (`"#seed"`) that reached a body with no batch
+ * around it.
+ *
+ * The batch route substitutes every one of these for a real id BEFORE this
+ * parser sees the row, so by the time a `#` entry gets here it is on the
+ * single-create route, where it can never resolve. Passing it through as a
+ * task id earns `unknown-after` — which sends the caller hunting for a task
+ * that was never the problem. Same class as the refusals in
+ * task-batch-refs.ts: name the actual mistake, once, where it is made.
+ */
+function batchRefIn(raw: unknown): string | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  return raw.find((e) => typeof e === 'string' && e.startsWith(BATCH_REF_SIGIL)) as
+    | string
+    | undefined;
+}
+
 export type TaskCreateParse =
   | { ok: true; opts: CreateTaskOpts; ignoredLinks: unknown[] }
   | { ok: false; error: string; message?: string };
@@ -166,6 +186,14 @@ export function parseTaskCreate(
   if (!links.ok) return { ok: false, error: BAD_REF_ERROR };
   const origin = parseOrigin(body.origin);
   if (!origin.ok) return { ok: false, error: BAD_ORIGIN_ERROR };
+  const strayRef = batchRefIn(body.after) ?? batchRefIn(body.afterEnforce);
+  if (strayRef !== undefined) {
+    return {
+      ok: false,
+      error: BATCH_REF_OUTSIDE_BATCH_ERROR,
+      message: `"${strayRef}" is a batch-local reference and there is no batch here — it can only name another row of the same create_tasks call. Name a task id you already hold, or send both tasks in one create_tasks call.`,
+    };
+  }
   // Nothing enters the board belonging to nobody: an unnamed assignee falls
   // back to the caller's own identity, and a create that still resolves to
   // the generic word is refused rather than filed under it.
