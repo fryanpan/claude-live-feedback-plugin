@@ -142,9 +142,9 @@ describe('widget', () => {
   /**
    * On a third-party page the widget is a guest and must keep its identity in
    * its own `cfw:` namespace. On OUR hub the page has already asked the reader
-   * their name — two namespaces there means the presence strip greets "Bryan"
-   * while every comment the widget posts is signed "Anonymous <animal>".
-   * Observed on the live hub before this was fixed.
+   * their name — two namespaces there means the presence strip greets the
+   * reader by that name while every comment the widget posts is signed
+   * "Anonymous <animal>". Observed on a live hub before this was fixed.
    */
   describe('identity scope', () => {
     beforeEach(() => localStorage.clear());
@@ -153,7 +153,7 @@ describe('widget', () => {
     it('ignores the host page name by default, and adopts it under scope=host', async () => {
       const mod = await importWidget();
       // The name the HOST page stored (unprefixed — what ensureUserIdentity writes).
-      localStorage.setItem('feedback-user-name', 'Bryan');
+      localStorage.setItem('feedback-user-name', 'Dana Reviewer');
 
       // Default scope: the guest namespace is empty, so the widget is anonymous.
       const guest = document.createElement('claude-feedback-widget');
@@ -167,11 +167,11 @@ describe('widget', () => {
       hosted.setAttribute('doc-id', 'w-scope-host');
       hosted.setAttribute('identity-scope', 'host');
       document.body.appendChild(hosted);
-      expect((hosted as unknown as { user: { name: string } }).user.name).toBe('Bryan');
+      expect((hosted as unknown as { user: { name: string } }).user.name).toBe('Dana Reviewer');
 
       // The pair is the point: same storage, same markup but for one attribute,
       // two different answers. Neither half proves anything alone.
-      expect(guestName).not.toBe('Bryan');
+      expect(guestName).not.toBe('Dana Reviewer');
       // And the widget's own UI preference stays namespaced in both scopes, so
       // `identity-scope` cannot make the widget collide with a host key.
       expect(localStorage.getItem('showResolved')).toBeNull();
