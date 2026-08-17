@@ -917,7 +917,10 @@ export function renderQuickAdd(container: HTMLElement, handlers: QuickAddHandler
   // release in some browsers, which would send a half-dictated idea.
   mic.type = 'button';
   mic.className = 'hub-btn hub-quick-mic';
-  mic.setAttribute('aria-label', 'Hold to dictate a task');
+  // Names the key, because the hold is genuinely available from the keyboard
+  // (the capture binds Space/Enter on this button) and nothing else on the
+  // page would tell someone who never taps that it is.
+  mic.setAttribute('aria-label', 'Hold to dictate a task — hold Space or Enter');
   mic.textContent = '🎤';
   const indicator = document.createElement('span');
   indicator.className = 'hub-quick-mic-state';
