@@ -281,6 +281,81 @@ Technical discoveries that should persist across sessions for this project.
   a test fails intermittently, measure the baseline flakiness on unmodified
   HEAD (run it 5×) BEFORE assuming your change caused it.
 
+## A git operation on a bound file is an editor save, and it goes both ways
+
+- **Measured 2026-08-17 in a running server over synthetic git fixtures, not
+  read off the source.** The premise was filed from a code reading; every
+  claim below reproduced. `git checkout -- <file>`, a branch switch, `git
+  stash` and `git pull` all rewrite the bytes and bump the mtime, and nothing
+  they leave on the file distinguishes them from a person saving in an editor.
+  So the poll classifies them with `decideReconcile` like anything else, and
+  which of two very different things happens depends on the live doc:
+  - **Live doc idle → `apply`.** The git content lands in the doc. A reader
+    watching a bound doc sees it change to the other branch, with no
+    `syncError` and nothing on the page saying why. This is arguably correct —
+    the doc is a view of the file — and it is left alone.
+  - **Live doc has un-flushed edits → `conflict`.** The live doc wins and is
+    reasserted onto the working tree ~800ms later. **git exits 0, `git status`
+    was clean, and a second later the file is modified again.** For `git
+    stash` the result is worse than it sounds: the stash really did consume
+    the change, and the tree comes back dirty holding content that is in
+    neither HEAD nor the stash, so a later `git stash pop` has an unexpected
+    local change to contend with.
+- **The window is the 800ms write debounce after any live edit — but it
+  re-arms on every keystroke**, so a doc somebody is actively typing in is
+  continuously in it. This is not a rare race for the surface it matters on.
+- **The policy is right and stays.** Letting a git-sourced write win would
+  clobber a human's un-flushed edits, which is the exact incident class the
+  conflict arm exists to prevent. The harm here is not that the wrong side
+  won — it is that **nobody is told**. `syncError` is reachable only through
+  `get_doc` and MCP edit responses, and the person who just ran `git checkout`
+  is looking at a terminal.
+- **Don't reach for a "suspend sync while I run git" call.** A human at a
+  terminal never makes it, an agent shelling out to `git` never makes it
+  either unless taught, and it cannot be made automatic — which is the
+  "a tool somebody has to decide to call" failure this file already records
+  twice. What shipped instead: the conflict `syncError` now names git.
+- **The signal that makes that possible is provenance, checked after the
+  fact.** `git hash-object` the bytes we are about to overwrite and ask
+  whether the repo already contains that blob. An editor save produces content
+  the object database has never seen; a checkout, stash, branch switch or pull
+  writes a blob that is in it by construction. Verified to discriminate in
+  both directions — HEAD's content and another ref's blob classify as `git`,
+  typed text and an empty string do not — and it degrades to "unknown" outside
+  a repo or when the directory is gone. It is **advisory only and never
+  changes which side wins**, so a false positive can at worst name git in a
+  message; it cannot lose anyone's work.
+- **A recovery instruction is a claim, and this one was false in the first
+  draft.** The hint ended "…or `reparse_from_disk` to let the git version win",
+  which cannot work for the reason the comment three lines above the call site
+  already gave: the reassert reaches disk first, so a reparse faithfully pulls
+  our own content back. Measured — reparse returns ok, the doc is unchanged,
+  **and the syncError is cleared**, so following the advice also throws away
+  the only pointer to the backup holding the git version. A recovery step that
+  returns ok and changes nothing is the worst available shape: it reads as
+  success to the one person who just lost something. The advice that works is
+  what the pre-existing half of the same message already said — restore the
+  backup, or let the doc go idle and re-run the git command. **Rule: an
+  instruction embedded in an error message needs the same test as a code
+  path.** Nothing else will ever execute it, so it fails silently by
+  definition. Found by an independent second measurement of the same premise,
+  not by this branch's own review — which is the argument for running one.
+- **The test that pins this measures behaviour, not the fix.** It asserts both
+  directions of the reconcile for all four operations, so a later change that
+  alters either one goes red — with an editor-save positive control in the
+  same file, because a harness where the poll never fires would report the
+  same silence for every git case. Mutation-verified both ways: an
+  unconditional hint fails the "an ordinary editor save does NOT blame git"
+  case, and a suppressed hint fails the "names git" case.
+- **Assert the shape before the behaviour, again**: each git case checks that
+  the mtime actually moved before checking what the doc did, since a git
+  command that left the file byte-identical would produce a clean-looking
+  "nothing happened" for the wrong reason.
+- Still open, and it is the half that would reach the operator: the
+  `syncError` has no event on the doc's watch channel, so an agent that runs
+  `git checkout` and is watching the doc is not told. That is the backlog item
+  already noted under the bound-doc sync contract.
+
 ## Serializer must recurse for nested lists (round-trip fidelity)
 
 - **The markdown serializer flattened nested lists + multi-paragraph list
@@ -731,9 +806,20 @@ Technical discoveries that should persist across sessions for this project.
   write-back) exists only once someone opens that file's redline/File view.
   Unopened members are plain files; normal tools are fine. `list_docs`
   shows which companions exist.
+- **A git command counts as a disk write, and the same rules apply to it** —
+  `git checkout`, a branch switch, `git stash` and `git pull` are
+  indistinguishable from an editor save at the poll. Against un-flushed live
+  edits they lose the same way, which means the git operation is partly undone
+  a second after git reports success. Before running one in a checkout with
+  bound docs, let the docs go idle (~1s after the last edit); afterwards, if
+  the tree is unexpectedly dirty, read the doc's `syncError` — it now says
+  when the bytes it overwrote came from git. Full measurement in "A git
+  operation on a bound file is an editor save, and it goes both ways" above.
 - Backlog (peer request): emit a `syncError` event on the doc's watch
   channel (docId, relPath, dropped sids) so a lost write announces itself
-  the way comment events do.
+  the way comment events do. **This is what the git case above needs too** —
+  the agent that ran `git checkout` is the one watching the doc, and today
+  nothing tells it.
 - `FEEDBACK_AGENT_NAME` is read ONCE at MCP-child start from the session's
   LAUNCH environment — an MCP reconnect picks up new tool schemas but never
   a new name. Attribution changes require a full session restart with the

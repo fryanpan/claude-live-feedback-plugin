@@ -20,6 +20,7 @@ import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { GENERIC_ASSIGNEE } from '../src/task-owner.ts';
 import type { Task } from '../src/tasks.ts';
+import { type GoalIds, seedGoalsOverHttp } from './goal-seed.ts';
 
 const AGENT = { id: 'agent-search-revamp', name: 'Search Revamp', kind: 'known', color: '#888888' };
 
@@ -51,27 +52,20 @@ describe('POST /api/workspaces/<id>/tasks/batch', () => {
       body: body === undefined ? undefined : JSON.stringify(body),
     });
 
-  /** A workspace with two real goals, so placement is observable. */
-  async function seedWorkspace(): Promise<string> {
+  /** A workspace with two real goals, so placement is observable. The ids are
+   *  minted by the server; `G.ship` / `G.index` are what this file used to
+   *  hard-code as `g-ship` / `g-index`. */
+  async function seedWorkspace(): Promise<{ wsId: string; G: GoalIds }> {
     const { workspace } = await jj<{ workspace: { id: string } }>(
       await post('/api/workspaces', { name: 'search-revamp', goal: 'Ship search v2.' }),
     );
-    const g = await fetch(`${base}/api/workspaces/${workspace.id}/goals`, {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        goals: [
-          {
-            id: 'g-ship',
-            title: '1. Ship',
-            subgoals: [{ id: 'g-index', title: '1.1 Index' }],
-          },
-        ],
-        author: AGENT,
-      }),
-    });
-    expect(g.status).toBe(200);
-    return workspace.id;
+    const G = await seedGoalsOverHttp(
+      base,
+      workspace.id,
+      [{ key: 'ship', title: '1. Ship', subgoals: [{ key: 'index', title: '1.1 Index' }] }],
+      AGENT,
+    );
+    return { wsId: workspace.id, G };
   }
 
   async function listTasks(workspaceId: string): Promise<Task[]> {
@@ -93,15 +87,15 @@ describe('POST /api/workspaces/<id>/tasks/batch', () => {
   });
 
   it('creates every row in one call and returns them in board order', async () => {
-    const wsId = await seedWorkspace();
+    const { wsId, G } = await seedWorkspace();
     // Deliberately sent out of order: input order must not be the answer.
     const res = await jj<BatchResult>(
       await post(`/api/workspaces/${wsId}/tasks/batch`, {
         author: AGENT,
         tasks: [
-          { title: 'Third', goal: 'g-index', order: 3 },
-          { title: 'First', goal: 'g-index', order: 1 },
-          { title: 'Second', goal: 'g-index', order: 2 },
+          { title: 'Third', goal: G.index, order: 3 },
+          { title: 'First', goal: G.index, order: 1 },
+          { title: 'Second', goal: G.index, order: 2 },
         ],
       }),
     );
@@ -114,7 +108,7 @@ describe('POST /api/workspaces/<id>/tasks/batch', () => {
   });
 
   it('lands every task assigned — the caller by default, the named owner when given', async () => {
-    const wsId = await seedWorkspace();
+    const { wsId } = await seedWorkspace();
     const res = await jj<BatchResult>(
       await post(`/api/workspaces/${wsId}/tasks/batch`, {
         author: AGENT,
@@ -134,7 +128,7 @@ describe('POST /api/workspaces/<id>/tasks/batch', () => {
   });
 
   it('refuses the rows that name nobody, and only those rows', async () => {
-    const wsId = await seedWorkspace();
+    const { wsId } = await seedWorkspace();
     const res = await jj<BatchResult>(
       // No `author`: the only owner a row can have is the one it names.
       await post(`/api/workspaces/${wsId}/tasks/batch`, {
@@ -156,13 +150,13 @@ describe('POST /api/workspaces/<id>/tasks/batch', () => {
   });
 
   it('honours per-row placement instead of piling the batch into Chores', async () => {
-    const wsId = await seedWorkspace();
+    const { wsId, G } = await seedWorkspace();
     await jj<BatchResult>(
       await post(`/api/workspaces/${wsId}/tasks/batch`, {
         author: AGENT,
         tasks: [
-          { title: 'Placed on a goal', goal: 'g-index', order: 7 },
-          { title: 'Placed on its parent', goal: 'g-ship' },
+          { title: 'Placed on a goal', goal: G.index, order: 7 },
+          { title: 'Placed on its parent', goal: G.ship },
           // The other direction: an unplaced row still rests in Chores, the
           // way a single create does.
           { title: 'Unplaced' },
@@ -171,14 +165,14 @@ describe('POST /api/workspaces/<id>/tasks/batch', () => {
     );
     const stored = await listTasks(wsId);
     const at = (title: string) => stored.find((t) => t.title === title);
-    expect(at('Placed on a goal')?.goal).toBe('g-index');
+    expect(at('Placed on a goal')?.goal).toBe(G.index);
     expect(at('Placed on a goal')?.order).toBe(7);
-    expect(at('Placed on its parent')?.goal).toBe('g-ship');
+    expect(at('Placed on its parent')?.goal).toBe(G.ship);
     expect(at('Unplaced')?.goal).toBe('chores');
   });
 
   it('reports a malformed row per item and still lands the rest', async () => {
-    const wsId = await seedWorkspace();
+    const { wsId } = await seedWorkspace();
     const res = await jj<BatchResult>(
       await post(`/api/workspaces/${wsId}/tasks/batch`, {
         author: AGENT,
@@ -198,9 +192,9 @@ describe('POST /api/workspaces/<id>/tasks/batch', () => {
   });
 
   it('refuses an oversized batch outright rather than keeping the first N', async () => {
-    const wsId = await seedWorkspace();
+    const { wsId, G } = await seedWorkspace();
     const rows = (n: number) =>
-      Array.from({ length: n }, (_, i) => ({ title: `Idea ${i}`, goal: 'g-index' }));
+      Array.from({ length: n }, (_, i) => ({ title: `Idea ${i}`, goal: G.index }));
     const over = await post(`/api/workspaces/${wsId}/tasks/batch`, {
       author: AGENT,
       tasks: rows(101),
@@ -229,14 +223,14 @@ describe('POST /api/workspaces/<id>/tasks/batch', () => {
    */
   describe('a row can depend on another row of the same batch', () => {
     it('wires an edge by key and by index, and the store agrees it is an edge', async () => {
-      const wsId = await seedWorkspace();
+      const { wsId, G } = await seedWorkspace();
       const res = await jj<BatchResult>(
         await post(`/api/workspaces/${wsId}/tasks/batch`, {
           author: AGENT,
           tasks: [
-            { title: 'Rebuild the index', goal: 'g-index', key: 'reindex' },
-            { title: 'Flip the read path', goal: 'g-index', after: ['#reindex'] },
-            { title: 'Delete the old path', goal: 'g-index', after: [0, 1] },
+            { title: 'Rebuild the index', goal: G.index, key: 'reindex' },
+            { title: 'Flip the read path', goal: G.index, after: ['#reindex'] },
+            { title: 'Delete the old path', goal: G.index, after: [0, 1] },
           ],
         }),
       );
@@ -259,15 +253,15 @@ describe('POST /api/workspaces/<id>/tasks/batch', () => {
     // by the same thing. `setTaskDependencies` has always deduped; creation
     // did not, and this feature is what makes the gap reachable by accident.
     it('collapses two spellings of ONE edge, rather than blocking twice on it', async () => {
-      const wsId = await seedWorkspace();
+      const { wsId, G } = await seedWorkspace();
       const res = await jj<BatchResult>(
         await post(`/api/workspaces/${wsId}/tasks/batch`, {
           author: AGENT,
           tasks: [
-            { title: 'Warm the cache', goal: 'g-index', key: 'warm' },
+            { title: 'Warm the cache', goal: G.index, key: 'warm' },
             {
               title: 'Serve from cache',
-              goal: 'g-index',
+              goal: G.index,
               after: ['#warm', 0],
               afterEnforce: [0, '#warm'],
             },
@@ -291,15 +285,15 @@ describe('POST /api/workspaces/<id>/tasks/batch', () => {
     });
 
     it('carries afterEnforce through the same resolution, so the subset rule holds', async () => {
-      const wsId = await seedWorkspace();
+      const { wsId, G } = await seedWorkspace();
       const res = await jj<BatchResult>(
         await post(`/api/workspaces/${wsId}/tasks/batch`, {
           author: AGENT,
           tasks: [
-            { title: 'Decide the cutover', goal: 'g-index', key: 'cutover' },
+            { title: 'Decide the cutover', goal: G.index, key: 'cutover' },
             {
               title: 'Run the cutover',
-              goal: 'g-index',
+              goal: G.index,
               after: ['#cutover'],
               afterEnforce: ['#cutover'],
             },
@@ -318,18 +312,18 @@ describe('POST /api/workspaces/<id>/tasks/batch', () => {
     it('still accepts a task id the caller already holds', async () => {
       // Positive control for the negative cases below: an entry with no sigil
       // is an id, and that path is untouched.
-      const wsId = await seedWorkspace();
+      const { wsId, G } = await seedWorkspace();
       const first = await jj<BatchResult>(
         await post(`/api/workspaces/${wsId}/tasks/batch`, {
           author: AGENT,
-          tasks: [{ title: 'Earlier work', goal: 'g-index' }],
+          tasks: [{ title: 'Earlier work', goal: G.index }],
         }),
       );
       const held = first.tasks[0]?.id as string;
       const second = await jj<BatchResult>(
         await post(`/api/workspaces/${wsId}/tasks/batch`, {
           author: AGENT,
-          tasks: [{ title: 'Later work', goal: 'g-index', after: [held] }],
+          tasks: [{ title: 'Later work', goal: G.index, after: [held] }],
         }),
       );
       expect(second.failures).toEqual([]);
@@ -337,14 +331,14 @@ describe('POST /api/workspaces/<id>/tasks/batch', () => {
     });
 
     it('fails the dependent row when the row it depends on failed', async () => {
-      const wsId = await seedWorkspace();
+      const { wsId, G } = await seedWorkspace();
       const res = await jj<BatchResult>(
         await post(`/api/workspaces/${wsId}/tasks/batch`, {
           author: AGENT,
           tasks: [
-            { title: '   ', goal: 'g-index', key: 'seed' }, // refused: no title
-            { title: 'Depends on the row that failed', goal: 'g-index', after: ['#seed'] },
-            { title: 'Independent', goal: 'g-index' },
+            { title: '   ', goal: G.index, key: 'seed' }, // refused: no title
+            { title: 'Depends on the row that failed', goal: G.index, after: ['#seed'] },
+            { title: 'Independent', goal: G.index },
           ],
         }),
       );
@@ -357,15 +351,15 @@ describe('POST /api/workspaces/<id>/tasks/batch', () => {
     });
 
     it('refuses a forward reference, a bad key, and an unknown key — by row', async () => {
-      const wsId = await seedWorkspace();
+      const { wsId, G } = await seedWorkspace();
       const res = await jj<BatchResult>(
         await post(`/api/workspaces/${wsId}/tasks/batch`, {
           author: AGENT,
           tasks: [
-            { title: 'Points at a later row', goal: 'g-index', after: [2] },
-            { title: 'Key is all digits', goal: 'g-index', key: '12' },
-            { title: 'Names a key nobody declared', goal: 'g-index', after: ['#ghost'] },
-            { title: 'Fine', goal: 'g-index' },
+            { title: 'Points at a later row', goal: G.index, after: [2] },
+            { title: 'Key is all digits', goal: G.index, key: '12' },
+            { title: 'Names a key nobody declared', goal: G.index, after: ['#ghost'] },
+            { title: 'Fine', goal: G.index },
           ],
         }),
       );
@@ -385,7 +379,7 @@ describe('POST /api/workspaces/<id>/tasks/batch', () => {
       // There is no batch here, so `#seed` can never resolve. Passing it
       // through as a task id answers `unknown-after`, which sends the caller
       // looking for a task that was never the problem.
-      const wsId = await seedWorkspace();
+      const { wsId } = await seedWorkspace();
       const res = await post(`/api/workspaces/${wsId}/tasks`, {
         author: AGENT,
         title: 'Lone task',
@@ -400,7 +394,7 @@ describe('POST /api/workspaces/<id>/tasks/batch', () => {
   });
 
   it('400s an empty or malformed batch, and 404s an unknown workspace', async () => {
-    const wsId = await seedWorkspace();
+    const { wsId } = await seedWorkspace();
     expect((await post(`/api/workspaces/${wsId}/tasks/batch`, { tasks: [] })).status).toBe(400);
     expect((await post(`/api/workspaces/${wsId}/tasks/batch`, { tasks: 'nope' })).status).toBe(400);
     const missing = await post('/api/workspaces/w-does-not-exist/tasks/batch', {
