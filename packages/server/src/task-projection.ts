@@ -96,7 +96,16 @@ const TASK_BODY_ALLOWED_MUTATIONS: ReadonlySet<string> = new Set([
   'agent_anchors',
   'activity',
   'hooks/fire',
-  'suggestions/resolve_all',
+  // `suggestions/resolve_all` is deliberately NOT here, and it is the one entry
+  // whose absence needs explaining. Its destructive half is selected by
+  // `action` in the request BODY — `accept` rewrites the doc through
+  // `resolveAllSuggestions` — and this guard runs before any route reads a
+  // body, so the two halves are indistinguishable at the only point that can
+  // refuse them. Reading the body here to tell them apart would move the
+  // decision out of the choke point, which is the property that makes this
+  // guard worth having. The safe half survives per-suggestion as
+  // `suggestions/<sid>/reject`, so the cost of refusing the bulk form is
+  // rejecting one at a time on a task body.
   // Deleting the ROOM is deliberately still allowed, and the reason is worth
   // stating because it looks like the most destructive call here. It isn't:
   // the description lives in the task store (`task.body`), the room is a live
@@ -110,10 +119,21 @@ const TASK_BODY_ALLOWED_MUTATIONS: ReadonlySet<string> = new Set([
 /** Thread and suggestion sub-routes carry an id, so they are matched by
  *  shape rather than by literal. Only the ones that leave body TEXT alone
  *  are here: `insert_after`, `insert_blocks_after` and `rewrite_region`
- *  edit the document and are deliberately absent. */
+ *  edit the document and are deliberately absent.
+ *
+ *  `reanchor` IS here: it rewrites a thread's anchor metadata and never the
+ *  doc, and it is how a reviewer repairs a comment whose anchor broke — the
+ *  markdown app's Re-anchor button posts it. Refusing it would take a comment
+ *  that has already lost its place and make it unfixable, on a guard whose
+ *  stated promise is that comments and anchors are unaffected.
+ *
+ *  `promote` is matched here for completeness, but never reaches this function
+ *  today: `/api/docs/:id/threads/:tid/promote` is handled by its own earlier
+ *  branch in server.ts, above the block this guard sits in. Left in so that
+ *  moving it down later doesn't silently break promoting a task-body comment. */
 const TASK_BODY_ALLOWED_PATTERNS: readonly RegExp[] = [
   /^threads\/[^/]+$/,
-  /^threads\/[^/]+\/(comments|resolve|reopen|promote|summary)$/,
+  /^threads\/[^/]+\/(comments|resolve|reopen|promote|reanchor|summary)$/,
   /^agent_anchors\/[^/]+$/,
   /^suggestions\/[^/]+\/reject$/,
 ];
