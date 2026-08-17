@@ -1,6 +1,6 @@
 {
   "name": "live-feedback",
-  "version": "0.1.45",
+  "version": "0.1.46",
   "description": "Point-and-comment real-time feedback for Claude Code agents. Wraps an MCP server, slash commands, an auto-approve hook, and a live review surface (markdown + widget) in one plugin.",
   "author": {
     "name": "Bryan Chan",
