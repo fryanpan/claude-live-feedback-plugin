@@ -1,6 +1,6 @@
 ---
 name: working-a-workspace-board
-description: Use when this session is working from a live-feedback workspace — you have a workspaceId, you are calling next_tasks / task_transition, or someone told you "the board is your task list". Covers priority order, fanning out in parallel, what a description owes the next agent, keeping the board current, and why finishing a task is not a reason to stop.
+description: Use when this session is working from a live-feedback workspace — you have a workspaceId, you are calling next_tasks / task_transition, or someone told you "the board is your task list". Covers priority order, taking a whole batch in parallel by default, what actually forces a sequence, what a description owes the next agent, keeping the board current, and why finishing a task is not a reason to stop.
 ---
 
 # Working a live-feedback workspace board
@@ -33,9 +33,100 @@ the session. The owner's ordering of the goals *is* the priority, and an agent
 working a lower band while a higher one has open work is doing the wrong thing
 well.
 
-Re-run `next_tasks` after every task you finish — priorities move while you
-work, and a queue you read an hour ago is a queue about a board that no longer
-exists.
+Re-run `next_tasks` whenever a line of work finishes — priorities move while
+you work, and a queue you read an hour ago is a queue about a board that no
+longer exists.
+
+That ordering settles **what** you work on. **How much of it you take is the
+next section, and the answer is never "one".**
+
+You have latitude over the ordering itself: propose a reorder with
+`reorder_goals(workspaceId, order, parent?)` when the sequence is wrong, and
+say why. It takes ids only — no titles — and it refuses any `order` that is
+not exactly the goals already there, so it cannot lose one to a list you read
+a while ago. To change a band's TITLE, use `rename_goal(workspaceId, goal,
+title)` — it changes the title in place and cannot move a task. Reach for
+`set_goal_list` only to add or remove a goal; it is a full replace keyed by
+id, so reordering with it means restating every title, and renaming through
+it by giving a band a new id is a removal plus an addition that strands
+everything the band held. A removal that would strand work is now refused
+until you name the id in `drop`. What you don't have is latitude to ignore
+the ordering silently.
+
+## The unit of pickup is a batch, not a task
+
+**Default: read the whole ready queue and start everything in it that can run
+now.** Not the top row. One agent holding one task while eight others sit
+ready is the slowest way to work a board — and it is what an agent does
+unprompted, which is why this is a rule rather than an option.
+
+The exception is narrow, and you have to be able to name it: take fewer than
+the ready set when the rows you're dropping would **collide** with one you're
+starting (below), and for no other reason. "Cleaner one at a time", "I'll see
+how the first goes", and "the next one depends on what I learn here" are not
+collisions. The last is a dependency — and if it is real it belongs in `after`,
+where the queue can see it, not in your head.
+
+**One `next_tasks` call is enough to plan the batch.** Every row carries:
+
+- its **full description** — which is what tells you whether two tasks touch
+  the same code. That judgement is made from the text. There is no
+  parallelism field to look up, and there is not going to be one.
+- **`blockedBy`**, each entry flagged `enforce`, and **`ready`**. An enforced
+  open edge is a real stop somebody stated on purpose; an advisory `after`
+  edge leaves `ready` true and is a hint about sequence, not a wall.
+
+Then: group the ready rows by what they touch, start one line of work per
+group, and move **every one of them to `in-progress` before you begin**, so
+the board shows what is actually running. Give each line its own worktree and
+its own runner — a subagent per line, working from the task body — so two
+lines cannot overwrite each other's files. Priority still governs *within* the
+batch: if you can only staff three lines, they are the top three, not the
+three that look fun.
+
+Each line still owes the project's full verification set before its PR — and
+**look that set up, don't recite it**. Briefing several runners at once is
+exactly when a check falls off the list from memory, and an omission made once
+reaches every line in the batch at the same time.
+
+### What actually forces a sequence
+
+Four things — and it matters enormously which part of the work each one
+sequences:
+
+- **Two tasks editing the same file.** Genuinely serial, or split them so they
+  aren't. Watch for the files everyone appends to (a long stylesheet, a
+  registry, a barrel export): two branches that both append at the end
+  conflict every time, so put a change in the section it belongs to instead of
+  at the bottom.
+- **A version or manifest bump every PR has to make.** Concurrent branches all
+  move the same number, and the last to push is the one that's wrong. The fix
+  is to re-read that number off `origin/main` immediately before each push —
+  never to hold the other branches back. Eight PRs can be **developed at once
+  and land one at a time**, each re-reading before it pushes; that is the
+  normal shape, not a special case. A CI run that went green *before* a
+  colliding merge landed is not evidence your number is still ahead.
+- **Merges.** They land one at a time, in an order somebody chooses, each
+  branch taking a fresh `main` merge before its final commit.
+- **A `yellow` or `red` risk tier, or an open decision.** These gate the
+  **forward transition** — the moment the work becomes real. They do not gate
+  reading the code, reproducing the problem, writing the branch, or opening
+  the PR.
+
+Only the first is a reason to serialise the **work**. The next two sequence
+the **merge**, and sequencing merges is entirely compatible with every branch
+being written at the same time. The last gates a **transition**, which happens
+after the work is already done. Getting this backwards — treating merge
+contention as proof that the work can't overlap — is how a whole session ends
+up serial with a good-sounding reason.
+
+If you can't judge a collision from two descriptions, the descriptions are too
+thin; fix those. (A first cut of this modelled parallelism as a `lane` field
+with computed waves, and it earned nothing: a lane has to be set at CREATION
+time, when its author knows least about what the task will end up touching, so
+the schema would have frozen the worst-informed guess and invited you to trust
+it later. Dependencies are different — `after` is something someone stated on
+purpose, which is exactly why `blockedBy` is real data.)
 
 ## A description is a measurement with a date on it
 
@@ -66,44 +157,6 @@ about when it was taken, not a mistake to erase.
 
 None of this replaces reproducing before you build. It tells you where
 somebody already did.
-
-You have latitude over the ordering itself: propose a reorder with
-`reorder_goals(workspaceId, order, parent?)` when the sequence is wrong, and
-say why. It takes ids only — no titles — and it refuses any `order` that is
-not exactly the goals already there, so it cannot lose one to a list you read
-a while ago. To change a band's TITLE, use `rename_goal(workspaceId, goal,
-title)` — it changes the title in place and cannot move a task. Reach for
-`set_goal_list` only to add or remove a goal; it is a full replace keyed by
-id, so reordering with it means restating every title, and renaming through
-it by giving a band a new id is a removal plus an addition that strands
-everything the band held. A removal that would strand work is now refused
-until you name the id in `drop`. What you don't have is latitude to ignore
-the ordering silently.
-
-## Take the top *set*, not the top row
-
-Don't read one row and start. Read the whole ready queue, decide **which tasks
-are worth running at the same time**, and start all of them. One agent working
-one task at a time is leaving the machine idle; the board exists so that
-several things can be in flight without anyone losing track of them.
-
-`next_tasks` returns each row's **full description**. That is enough to tell
-whether two tasks touch the same code — read them and decide. Fan out on the
-ones that don't collide; sequence the ones that do. Give each parallel line of
-work its own worktree so they can't overwrite each other, and put every one of
-them `in-progress` before you start, so the board shows what's actually
-running.
-
-There is deliberately no field for this. A first cut added a `lane` label with
-computed parallel batches, and it earned nothing: the judgment takes seconds
-from the text, and a lane would have to be set at CREATION time — the moment
-its author knows least about what the task will end up touching — so the
-schema would have frozen a guess made at the worst possible moment and invited
-you to trust it later. Dependencies are different: `after` is something someone
-stated on purpose, so `blockedBy` is real data and you should respect it.
-
-If you find yourself unable to judge a collision from the descriptions, the
-descriptions are too thin. Fix those, not the schema.
 
 ## Every task gets a description
 
@@ -220,10 +273,13 @@ what took two attempts. Those are task comments. The board is the channel.
 
 ## Finishing a task is not a reason to stop
 
-When a task closes, re-run `next_tasks` and start the next set of work.
-That is the whole loop. **Yield the turn only for one of three things:** a
-decision that is genuinely the owner's to make, a blocker you cannot route
-around, or an empty queue.
+When a line of work closes, **refill it**: re-run `next_tasks` and start
+whatever is ready now. You don't wait for the rest of the batch to land
+first, and "my batch is done" is not a stopping point either — a drained
+batch is a reason to read the queue again, not to report. That is the whole
+loop. **Yield the turn only for one of three things:** a decision that is
+genuinely the owner's to make, a blocker you cannot route around, or an empty
+queue.
 
 "Empty" means empty of work worth doing now. A task someone deliberately
 parked — "this can wait", a "done when" that depends on something that hasn't

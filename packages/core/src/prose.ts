@@ -13,7 +13,7 @@
 import * as Y from 'yjs';
 import { decodeRelativePositionSafe } from './anchor/validate.ts';
 import { LCS_CELL_BUDGET, lcsKept } from './lcs.ts';
-import { SUGGEST_INSERT_MARK } from './suggest.ts';
+import { SUGGEST_DELETE_MARK, SUGGEST_INSERT_MARK } from './suggest.ts';
 
 export const PROSE_FRAGMENT_KEY = 'prose';
 
@@ -245,6 +245,101 @@ export interface ReplaceResult {
   error?: 'no-match' | 'ambiguous' | 'cross-node' | 'out-of-range' | 'occurrence-out-of-range';
   /** For ambiguous results, a short preview of each candidate's neighbourhood. */
   candidates?: Array<{ docOffset: number; preview: string }>;
+  /** Mark keys (bold/italic/code/link/strike) that covered only PART of the
+   *  replaced text, so they could not be carried onto the replacement. Present
+   *  only when non-empty — a formatting loss this call could not avoid has to
+   *  be VISIBLE to the caller rather than inferred from the doc afterwards. */
+  marksDropped?: string[];
+  /** Human-readable companion to `marksDropped`. */
+  warning?: string;
+}
+
+/** A contiguous slice of one Y.XmlText, in document order. */
+export interface TextSlice {
+  node: Y.XmlText;
+  offset: number;
+  length: number;
+}
+
+const SUGGEST_MARK_KEYS = new Set<string>([SUGGEST_INSERT_MARK, SUGGEST_DELETE_MARK]);
+
+/** Per-run inline attributes over [offset, offset+length) of one node, with
+ *  suggestion bookkeeping marks stripped (they are never content). */
+function runAttrsOverSlice(
+  node: Y.XmlText,
+  offset: number,
+  length: number,
+): Array<Record<string, unknown>> {
+  const out: Array<Record<string, unknown>> = [];
+  if (length <= 0) return out;
+  const end = offset + length;
+  let cursor = 0;
+  for (const op of node.toDelta() as Array<{
+    insert?: string;
+    attributes?: Record<string, unknown>;
+  }>) {
+    if (typeof op.insert !== 'string' || op.insert.length === 0) continue;
+    const runStart = cursor;
+    cursor += op.insert.length;
+    if (cursor <= offset) continue;
+    if (runStart >= end) break;
+    const attrs: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(op.attributes ?? {})) {
+      if (SUGGEST_MARK_KEYS.has(k) || v == null) continue;
+      attrs[k] = v;
+    }
+    out.push(attrs);
+  }
+  return out;
+}
+
+/**
+ * The inline marks that cover EVERY character of the given slices, plus the
+ * keys of marks that cover only some of them.
+ *
+ * This is what a replacement has to be inserted WITH. Yjs's unattributed
+ * `Y.XmlText.insert` inherits the formatting of the character to the LEFT of
+ * the insertion point — which is the right answer only when the match starts
+ * strictly inside a marked run. A match that begins at a run's FIRST character
+ * (very often the whole run: a bold label, a link, an inline-code span) has an
+ * unmarked left neighbour, so the replacement came back plain, and when the
+ * match covered the run entirely the mark disappeared from the document with
+ * no error. Reading the marks off the text being replaced — which is what the
+ * suggestion path always did — removes the dependency on what happens to sit
+ * to the left.
+ *
+ * Marks that cover only part of the range cannot be carried: the replacement
+ * is one string with no correspondence to the runs it replaces. Those come
+ * back as `dropped` so the caller can say so instead of losing them quietly.
+ */
+export function coveringInlineMarks(slices: TextSlice[]): {
+  attributes: Record<string, unknown>;
+  dropped: string[];
+} {
+  const runs = slices.flatMap((s) => runAttrsOverSlice(s.node, s.offset, s.length));
+  if (runs.length === 0) return { attributes: {}, dropped: [] };
+  const keys = new Set<string>();
+  for (const r of runs) for (const k of Object.keys(r)) keys.add(k);
+  const attributes: Record<string, unknown> = {};
+  for (const k of keys) {
+    const first = runs[0]?.[k];
+    if (first === undefined) continue;
+    const encoded = JSON.stringify(first);
+    if (runs.every((r) => k in r && JSON.stringify(r[k]) === encoded)) attributes[k] = first;
+  }
+  const dropped = [...keys].filter((k) => !(k in attributes)).sort();
+  return { attributes, dropped };
+}
+
+function marksReport(dropped: string[]): { marksDropped?: string[]; warning?: string } {
+  if (dropped.length === 0) return {};
+  return {
+    marksDropped: dropped,
+    warning:
+      `The replaced text was not uniformly formatted: ${dropped.join(', ')} covered only part ` +
+      'of it, so the mark could not be carried onto the replacement. Re-apply it with ' +
+      'parseInlineMarks if you need it back.',
+  };
 }
 
 /**
@@ -268,6 +363,14 @@ export interface ReplaceResult {
  * with its own mark to add (the suggestion path's `suggestInsert`) has to
  * merge the surrounding marks in itself. Per-op marks parsed out of the
  * text win over `attributes` on a key collision: explicit beats inherited.
+ *
+ * An EMPTY `attributes` object is not the same as omitting it: it means "this
+ * text carries no marks", and it must suppress the left-inheritance too. A
+ * caller that computed the marks of the text it is replacing (see
+ * `coveringInlineMarks`) has an answer even when that answer is "none", and
+ * silently falling back to whatever sits to the left would re-introduce the
+ * mark bleed in the other direction — plain text picking up the bold of the
+ * run in front of it.
  */
 export function insertTextWithMarks(
   node: Y.XmlText,
@@ -276,8 +379,7 @@ export function insertTextWithMarks(
   opts?: { parseInlineMarks?: boolean; attributes?: Record<string, unknown> },
 ): void {
   if (text.length === 0) return;
-  const extra =
-    opts?.attributes && Object.keys(opts.attributes).length > 0 ? opts.attributes : undefined;
+  const extra = opts?.attributes;
   if (opts?.parseInlineMarks !== true) {
     if (extra) node.insert(offset, text, extra);
     else node.insert(offset, text);
@@ -295,21 +397,16 @@ export function insertTextWithMarks(
   node.applyDelta(positioned as any);
 }
 
-function insertWithOptionalMarks(
-  node: Y.XmlText,
-  offset: number,
-  text: string,
-  parseInlineMarks: boolean,
-): void {
-  insertTextWithMarks(node, offset, text, { parseInlineMarks });
-}
-
 /**
  * Resolve a find (with optional context) and replace it in place. The
- * replacement is inserted into the SAME Y.XmlText node — so any marks
- * (bold, italic, links) covering the matched text apply to the
- * replacement too, which is what you want when fixing a typo inside an
- * italicized span.
+ * replacement is inserted into the SAME Y.XmlText node, carrying the marks
+ * (bold, italic, code, link, strike) that covered the matched text — which is
+ * what you want when fixing a typo inside an italicized span, and equally
+ * when the match IS the whole bold label.
+ *
+ * Marks that covered only PART of the match cannot be carried onto a single
+ * replacement string; those come back as `marksDropped` rather than being
+ * lost quietly.
  *
  * Pass `parseInlineMarks: true` to interpret `[label](url)` / `**bold**`
  * / `*italic*` / `` `code` `` / `~~strike~~` syntax in the `replace`
@@ -353,17 +450,22 @@ export function findAndReplace(
     chosen = matches[0]!;
   }
 
+  // Read the marks off the text being replaced BEFORE deleting it: once the
+  // characters are gone there is nothing left to read, and Yjs' own
+  // left-inheritance answers with whatever precedes the match instead.
+  const marks = coveringInlineMarks([
+    { node: chosen.segment.node, offset: chosen.offsetInNode, length: chosen.length },
+  ]);
+
   doc.transact(() => {
     chosen.segment.node.delete(chosen.offsetInNode, chosen.length);
-    insertWithOptionalMarks(
-      chosen.segment.node,
-      chosen.offsetInNode,
-      opts.replace,
-      opts.parseInlineMarks === true,
-    );
+    insertTextWithMarks(chosen.segment.node, chosen.offsetInNode, opts.replace, {
+      parseInlineMarks: opts.parseInlineMarks === true,
+      attributes: marks.attributes,
+    });
   }, opts.transactionOrigin ?? 'agent');
 
-  return { ok: true };
+  return { ok: true, ...marksReport(marks.dropped) };
 }
 
 function preview(text: string, at: number, length: number): string {
@@ -411,6 +513,9 @@ export function resolveRelativePositionRaw(
 export interface AnchoredEditResult {
   ok: boolean;
   error?: 'anchor-not-found' | 'anchor-orphaned' | 'cross-block' | 'no-host-block' | 'parse-failed';
+  /** See `ReplaceResult.marksDropped` — same contract, same reason. */
+  marksDropped?: string[];
+  warning?: string;
 }
 
 /**
@@ -447,11 +552,15 @@ export function rewriteRange(
   if (start.node === end.node) {
     const from = Math.min(start.offset, end.offset);
     const to = Math.max(start.offset, end.offset);
+    const marks = coveringInlineMarks([{ node: start.node, offset: from, length: to - from }]);
     doc.transact(() => {
       start.node.delete(from, to - from);
-      insertWithOptionalMarks(start.node, from, opts.replacement, parseInlineMarks);
+      insertTextWithMarks(start.node, from, opts.replacement, {
+        parseInlineMarks,
+        attributes: marks.attributes,
+      });
     }, opts.transactionOrigin ?? 'agent');
-    return { ok: true };
+    return { ok: true, ...marksReport(marks.dropped) };
   }
 
   // Cross-node. Walk the flattened fragment, locate the block each
@@ -476,6 +585,15 @@ export function rewriteRange(
   const lastIdx = blockSegments.indexOf(lastSeg);
   const touched = blockSegments.slice(firstIdx, lastIdx + 1);
 
+  const slices: TextSlice[] = touched.map((seg, i) => {
+    if (i === touched.length - 1) return { node: seg.node, offset: 0, length: lastOffset };
+    if (i === 0) {
+      return { node: seg.node, offset: firstOffset, length: seg.length - firstOffset };
+    }
+    return { node: seg.node, offset: 0, length: seg.length };
+  });
+  const marks = coveringInlineMarks(slices);
+
   doc.transact(() => {
     // Delete from the END so earlier node indices don't shift.
     for (let i = touched.length - 1; i >= 0; i--) {
@@ -488,9 +606,12 @@ export function rewriteRange(
         seg.node.delete(0, seg.length);
       }
     }
-    insertWithOptionalMarks(touched[0]!.node, firstOffset, opts.replacement, parseInlineMarks);
+    insertTextWithMarks(touched[0]!.node, firstOffset, opts.replacement, {
+      parseInlineMarks,
+      attributes: marks.attributes,
+    });
   }, opts.transactionOrigin ?? 'agent');
-  return { ok: true };
+  return { ok: true, ...marksReport(marks.dropped) };
 }
 
 /**
