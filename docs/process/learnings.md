@@ -347,9 +347,35 @@ Technical discoveries that should persist across sessions for this project.
 - Can't split list items. `replace='item-a\n\nitem-b'` produces a paragraph
   break inside one list item, not a sibling item. Backlog: a dedicated
   `insert_list_item_after_text` or `insert_blocks_after_thread` extension.
-- Can't add new inline marks. Replacement strings with `**bold**` /
-  `*italic*` / `[link](url)` syntax land as literal characters, not marks.
-  Backlog: a dedicated `apply_mark` tool.
+- Can't add new inline marks by default. Replacement strings with `**bold**`
+  / `*italic*` / `[link](url)` syntax land as literal characters unless you
+  pass `parseInlineMarks: true`, which interprets them as marks.
+- **It used to DELETE marks that were already there, silently — that half is
+  fixed, and it was data loss rather than a missing feature.** Until the
+  covering-marks fix, the replacement was re-inserted with NO attributes, and
+  Yjs' unattributed `insert` inherits the marks of the character to the LEFT
+  of the insertion point. So a match starting strictly inside a bold run kept
+  its bold (which is why most replaces looked fine), while a match starting at
+  the run's FIRST character inherited the unmarked text in front of it — and
+  when the match covered the whole run (a bold label, a link, an inline-code
+  span) the mark disappeared from the document with `ok: true` and nothing
+  else to see. Found in the field on two list labels whose siblings kept their
+  bold, caught only because someone counted `**` markers before and after.
+  **The one-sentence trigger: the replacement inherited from the left instead
+  of from the text it replaced, so any match beginning at a marked run's first
+  character lost that run's marks.**
+- Both edit paths now read the marks off the text being REPLACED
+  (`coveringInlineMarks`), which is what the suggestion path always did — so
+  before the fix, `suggest: true` + accept PRESERVED the bold that the plain
+  call destroyed. When two paths are supposed to produce the same state, test
+  them against each other; the disagreement is the bug report.
+- **Marks covering only PART of a match still cannot be carried** — one
+  replacement string has no correspondence to the runs it replaces — so those
+  come back as `marksDropped: ['bold']` plus a `warning` on the 200 response.
+  That is the actual fix: the loss that remains is the loss that gets
+  reported. Widening the match to include an unmarked character is also how
+  you deliberately REMOVE a mark.
+- Backlog: a dedicated `apply_mark` tool.
 
 ## A "we're working on it" UI state must be grounded in the work, not inferred
 
