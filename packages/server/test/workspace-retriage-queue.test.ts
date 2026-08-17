@@ -38,6 +38,7 @@ import {
   type TriageRequest,
   pendingRetriagePath,
 } from '../src/tasks.ts';
+import { seedGoalsOverHttp } from './goal-seed.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'person' };
 const LEAD = 'agent-lead';
@@ -575,10 +576,12 @@ describe('re-triage routing, over HTTP', () => {
 
   it("the delivered request's batchId ties the resulting moves together as one goal edit", async () => {
     const wsId = await makeHub('batch-hub', LEAD);
-    await put(`/api/workspaces/${wsId}/goals`, {
-      goals: [{ id: 'g-ship', title: '1. Ship it' }],
-      author: PERSON,
-    });
+    const G = await seedGoalsOverHttp(
+      baseUrl,
+      wsId,
+      [{ key: 'ship', title: '1. Ship it' }],
+      PERSON,
+    );
     const first = await addTask(wsId, 'draft the outline');
     const second = await addTask(wsId, 'collect screenshots');
     await post(`/api/workspaces/${wsId}/attachments`, {
@@ -595,7 +598,7 @@ describe('re-triage routing, over HTTP', () => {
     try {
       for (const taskId of [first, second]) {
         const moved = await post(`/api/tasks/${taskId}/goal`, {
-          goal: 'g-ship',
+          goal: G.ship,
           batchId,
           author: { id: LEAD, name: 'Lead', kind: 'agent' },
         });
