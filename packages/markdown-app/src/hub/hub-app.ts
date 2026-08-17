@@ -33,6 +33,7 @@ import {
   type ReviewItem,
   type ReviewThreadItem,
   type UptimeReport,
+  advanceWalk,
   applyRefresh,
   boardSections,
   clientDriftNotice,
@@ -43,12 +44,14 @@ import {
   refreshReviewItems,
   reviewQueue,
   reviewRow,
+  walkPosition,
 } from './hub-model.ts';
 import {
   type SidebarDoc,
   type SidebarThread,
   type TaskDiscussion,
   type TaskThread,
+  type WalkProgress,
   discussionIsBusy,
   renderActivity,
   renderBoard,
@@ -103,8 +106,17 @@ interface HubState {
    * not be a second one. Decisions are derived from `tasks` here.
    */
   reviewItems: ReviewThreadItem[];
-  /** Position in the review walkthrough; -1 when it is closed. */
+  /** Position in the review walkthrough; -1 when it is closed. A CACHE of
+   *  where `walkKey` resolved on the last render — see `walkPosition`. */
   walkIndex: number;
+  /** What the walkthrough is aimed AT. The queue re-derives on every render
+   *  and shrinks under the reader, so the index alone steps over an item
+   *  whenever anything before it drops out. Null when nothing is aimed
+   *  (closed, or run off the end into the done state). */
+  walkKey: string | null;
+  /** What this sitting has cleared, so the surface can say that answering
+   *  moved you rather than leaving you to infer it from a shrinking total. */
+  walkProgress: WalkProgress;
   followedKey: string | null;
 }
 
@@ -247,6 +259,8 @@ async function main(): Promise<void> {
     discussionTaskId: null,
     reviewItems: [],
     walkIndex: -1,
+    walkKey: null,
+    walkProgress: { cleared: 0, last: null },
     followedKey: null,
   };
 
@@ -420,7 +434,12 @@ async function main(): Promise<void> {
     renderReviewStrip(el('hub-decisions'), currentQueue(), {
       onOpen: openReviewItem,
       onWalkthrough: () => {
+        // A sitting starts empty: the tally counts what THIS pass cleared, so
+        // carrying the last one's over would open on "4 cleared" before the
+        // reader has answered anything.
+        state.walkProgress = { cleared: 0, last: null };
         state.walkIndex = 0;
+        state.walkKey = currentQueue().items[0]?.key ?? null;
         renderWalkthrough();
       },
     });
@@ -564,24 +583,76 @@ async function main(): Promise<void> {
    * offered to you.
    */
   function renderWalkthrough(): void {
-    renderReviewWalkthrough(el('hub-walkthrough'), currentQueue(), state.walkIndex, {
-      onAnswer: (t, text, optionId) => void answerDecision(t, text, optionId),
-      onMoreInfo: (t, question) => void requestMoreInfo(t, question),
-      onReply: (item, text) => void replyToReviewItem(item, text),
-      onOpenItem: (item) => {
-        state.walkIndex = -1;
-        renderWalkthrough();
-        openReviewItem(item);
+    const queue = currentQueue();
+    // Resolve the aim before rendering, and write the result back: from here
+    // on the index is a cache of where the key IS, not an independent claim
+    // about where the reader stands.
+    const index = walkPosition(queue, state.walkIndex, state.walkKey);
+    state.walkIndex = index;
+    const current = queue.items[index] ?? null;
+    const next = queue.items[index + 1] ?? null;
+    renderReviewWalkthrough(
+      el('hub-walkthrough'),
+      queue,
+      index,
+      {
+        // `current` rather than a lookup by task id: it is the item this
+        // render drew, so the key that gets advanced past cannot be a
+        // different row that happens to share a task.
+        onAnswer: (t, text, optionId) =>
+          finishWalkItem(current, next, () => answerDecision(t, text, optionId)),
+        // Not a finish. The decision stays open and unanswered, so advancing
+        // would claim something happened that did not.
+        onMoreInfo: (t, question) => requestMoreInfo(t, question),
+        onReply: (item, text) => finishWalkItem(item, next, () => replyToReviewItem(item, text)),
+        onOpenItem: (item) => {
+          state.walkIndex = -1;
+          state.walkKey = null;
+          renderWalkthrough();
+          openReviewItem(item);
+        },
+        onStep: (i) => {
+          // Skip and back are positional by nature — the reader is pointing at
+          // a place in the list they can see. Re-aim from that position so the
+          // next repaint follows the item rather than the number.
+          const to = Math.max(0, i);
+          state.walkIndex = to;
+          state.walkKey = queue.items[to]?.key ?? null;
+          renderWalkthrough();
+        },
+        onClose: () => {
+          state.walkIndex = -1;
+          state.walkKey = null;
+          state.walkProgress = { cleared: 0, last: null };
+          renderWalkthrough();
+        },
       },
-      onStep: (i) => {
-        state.walkIndex = Math.max(0, i);
-        renderWalkthrough();
-      },
-      onClose: () => {
-        state.walkIndex = -1;
-        renderWalkthrough();
-      },
-    });
+      state.walkProgress,
+    );
+  }
+
+  /**
+   * Answering moves you on, and the surface says so.
+   *
+   * Order is the whole point: the write, THEN the advance. The advance is the
+   * confirmation that the answer landed, so a refused write has to leave the
+   * reader on the same card with their words still in the box — otherwise the
+   * queue moves and nothing recorded it, which is the one failure this flow
+   * cannot afford.
+   */
+  async function finishWalkItem(
+    item: ReviewItem | null,
+    next: ReviewItem | null,
+    write: () => Promise<boolean>,
+  ): Promise<boolean> {
+    const ok = await write();
+    if (!ok || !item) return ok;
+    state.walkProgress = { cleared: state.walkProgress.cleared + 1, last: item };
+    const queue = currentQueue();
+    state.walkIndex = advanceWalk(queue, state.walkIndex, item.key, next?.key ?? null);
+    state.walkKey = queue.items[state.walkIndex]?.key ?? null;
+    renderWalkthrough();
+    return ok;
   }
 
   function peopleFromAwareness(): PresencePerson[] {
@@ -774,7 +845,9 @@ async function main(): Promise<void> {
     renderLead();
   }
 
-  async function answerDecision(task: HubTask, text: string, optionId?: string): Promise<void> {
+  /** Resolves to whether the answer LANDED — the walkthrough advances on that
+   *  and on nothing else, and the composer keeps the text until it hears yes. */
+  async function answerDecision(task: HubTask, text: string, optionId?: string): Promise<boolean> {
     // Posted with the PERSON's own identity: answer.by shows who decided.
     // `text` is always the verbatim answer — tapping an option sends the
     // option's label as the answer and its id alongside, so nothing about the
@@ -784,11 +857,12 @@ async function main(): Promise<void> {
       ...(optionId ? { optionId } : {}),
       author,
     });
-    if (!res.ok) showToast('Recording the answer failed');
+    if (!res.ok) showToast('Recording the answer failed — your words are still in the box');
+    return res.ok;
   }
 
   /** "I can't answer this yet" — the decision stays open and unanswered. */
-  async function requestMoreInfo(task: HubTask, question: string): Promise<void> {
+  async function requestMoreInfo(task: HubTask, question: string): Promise<boolean> {
     const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/more-info`, 'POST', {
       question,
       author,
@@ -796,6 +870,7 @@ async function main(): Promise<void> {
     showToast(
       res.ok ? 'Asked — it stays open until you have the answer' : 'Sending the question failed',
     );
+    return res.ok;
   }
 
   /**
@@ -805,9 +880,9 @@ async function main(): Promise<void> {
    * only while an agent spoke last, so there is no separate dismissed flag to
    * write and none to keep in sync.
    */
-  async function replyToReviewItem(item: ReviewItem, text: string): Promise<void> {
+  async function replyToReviewItem(item: ReviewItem, text: string): Promise<boolean> {
     const t = item.thread;
-    if (!t) return;
+    if (!t) return false;
     const res = await send(
       `/api/docs/${encodeURIComponent(t.docId)}/threads/${encodeURIComponent(t.threadId)}/comments`,
       'POST',
@@ -815,12 +890,13 @@ async function main(): Promise<void> {
     );
     if (!res.ok) {
       showToast('Posting the reply failed — your text is still in the box');
-      return;
+      return false;
     }
-    // Refresh BEFORE re-rendering: the walkthrough steps by position, so the
-    // answered item has to be gone from the queue for the same index to land
-    // on the next thing rather than re-showing the one just answered.
+    // Refresh BEFORE the advance: the queue has to have dropped the answered
+    // item before the new position is computed against it, or the aim lands on
+    // a list that still holds the thing just replied to.
     await loadReviewItems();
+    return true;
   }
 
   /**
