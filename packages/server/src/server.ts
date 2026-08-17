@@ -2293,6 +2293,52 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
           return j(200, res);
         }
+        // reorder_goals (§3.2): the priority gesture, permutation-only. A
+        // separate route from the PUT above because that one REPLACES the
+        // list — the two params here (`order`, `parent`) are the whole
+        // contract, and `parent` is exactly the kind of param a hand-copying
+        // route drops while still answering 200, so both are asserted
+        // end-to-end in goal-reorder.test.ts (the `groups` lesson).
+        const wsReorderMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/goals\/reorder$/);
+        if (wsReorderMatch && req.method === 'POST') {
+          const workspaceId = decodeURIComponent(wsReorderMatch[1] ?? '');
+          const body = await safeJson(req);
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const order = body?.order;
+          if (
+            !Array.isArray(order) ||
+            order.some((id) => typeof id !== 'string' || id.length === 0)
+          ) {
+            return j(400, { error: 'order must be an array of goal ids' });
+          }
+          const parent = body?.parent;
+          if (parent !== undefined && (typeof parent !== 'string' || parent.length === 0)) {
+            return j(400, { error: 'parent must be a goal id' });
+          }
+          const res = taskStore.reorderGoals(workspaceId, order as string[], {
+            actor: author,
+            ...(parent !== undefined ? { parent: parent as string } : {}),
+          });
+          if (!res.ok) {
+            // The refusal has to be readable by the agent that hit it: the
+            // MCP layer surfaces the raw body as the error text, so the ids
+            // and what to do about them belong right here.
+            const detail =
+              res.error === 'order-mismatch'
+                ? {
+                    message:
+                      'order must be exactly the goal ids at this scope. ' +
+                      `unknown: [${res.unknownIds.join(', ')}]; ` +
+                      `missing: [${res.missingIds.join(', ')}]; ` +
+                      `duplicated: [${res.duplicateIds.join(', ')}]. ` +
+                      `Re-read the list with GET /api/workspaces/${workspaceId} and send every id back.`,
+                  }
+                : {};
+            return j(res.error === 'workspace-not-found' ? 404 : 400, { ...res, ...detail });
+          }
+          return j(200, res);
+        }
         // promote_to_task (§3.10): thread → task. Captures the origin ref,
         // the latest HUMAN comment as the verbatim quote (an agent's closing
         // note must never become the quote), and drafts a title + body the
