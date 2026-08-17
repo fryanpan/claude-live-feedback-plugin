@@ -71,6 +71,61 @@ export function publicBaseUrl(port: number): string {
 }
 
 /**
+ * The operator-declared external base URL, normalized — or null when unset.
+ *
+ * The server does not terminate TLS. When something in front of it does
+ * (`tailscale serve` maps `https://<tailnet-name>` onto this process on
+ * loopback), the process has no way to learn its own external origin: the
+ * socket is plain http, and the only hostname it can discover is the one it
+ * would have guessed anyway. So the operator states it, and every URL the
+ * server hands a human is built from it.
+ *
+ * This matters more than cosmetics. `publicBaseUrl` is the single source of
+ * `reviewUrl`, `entryUrl` and the task-import banner's `hubUrl` — the links
+ * agents paste to Bryan. Left at `http://<host>:<port>` behind a TLS
+ * frontend, every one of those links lands on the INSECURE origin, which is
+ * exactly the origin where the microphone does not exist. The whole point of
+ * putting TLS in front is undone by the links still pointing past it.
+ *
+ * Strict, and it THROWS rather than falling back. A silent fallback here is
+ * the "fallback nobody knows they are on" failure: the server would keep
+ * serving, every link would keep working, and they would all quietly point
+ * at the origin the deploy was meant to leave behind. A typo must be a boot
+ * failure someone reads, not a degradation nobody sees.
+ *
+ * Rejected on purpose:
+ *   - a scheme other than http/https — nothing else is a browser origin
+ *   - a path, query or fragment — routes mount at the root, and a base with
+ *     a path would build `https://h/x/review/<id>`, which this server does
+ *     not serve
+ *   - embedded credentials — these strings are pasted to humans
+ */
+export function normalizePublicBaseUrl(raw: string | null | undefined): string | null {
+  const s = (raw ?? '').trim();
+  if (s === '') return null;
+  const bad = (why: string): never => {
+    throw new Error(`LF_PUBLIC_BASE_URL is invalid (${why}): ${JSON.stringify(s)}`);
+  };
+  let u: URL;
+  try {
+    u = new URL(s);
+  } catch {
+    return bad('not a URL — expected e.g. https://host.example.ts.net');
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return bad('scheme must be http or https');
+  if (u.hostname === '') return bad('no hostname');
+  if (u.username !== '' || u.password !== '') return bad('must not embed credentials');
+  if (u.search !== '') return bad('must not carry a query string');
+  if (u.hash !== '') return bad('must not carry a fragment');
+  // `new URL('https://h')` normalizes the path to '/', which is the only path
+  // this accepts — anything longer is a subpath mount the routes cannot serve.
+  if (u.pathname !== '/' && u.pathname !== '') return bad('must not include a path');
+  // `URL.origin` drops a default port (443 for https, 80 for http) and keeps
+  // an explicit non-default one — exactly the shape the callers concatenate.
+  return u.origin;
+}
+
+/**
  * Every hostname that resolves to THIS machine — loopback aside — cached the
  * same way and for the same reason as `publicHost()`: `tailscaleHost()` shells
  * out to `tailscale status --json`, and the host gate and the browser-origin
