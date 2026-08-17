@@ -352,6 +352,11 @@ export class TaskProjection {
       name: ws.name,
       goal: ws.goal,
       goalUpdatedAt: ws.goalUpdatedAt,
+      // The ≤20-word display line. Conditional for the same reason the lead
+      // is: the refresh deletes projected keys absent from this object, so
+      // clearing the summary in the store must clear it on every open board
+      // rather than leaving the last one rendered forever.
+      ...(ws.goalSummary !== undefined ? { goalSummary: ws.goalSummary } : {}),
       goals: ws.goals,
       docIds: ws.docIds,
       // Who is responsible for this board. Conditional, never `undefined`:
