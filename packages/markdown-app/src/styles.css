@@ -1031,6 +1031,19 @@ body.hub-body {
 .hub-review-ask::before {
   content: "— ";
 }
+/* A question addressed to the reader, as against a note left for them. It
+   carries the strip's normal foreground rather than the muted one, because on
+   a strip whose whole promise is "these need you" the answerable rows are the
+   ones that keep the promise. Colour is not the only carrier — the row's own
+   line says "asked you" vs "posted". */
+.hub-review-ask--direct {
+  color: var(--fg);
+  font-weight: 500;
+}
+.hub-review-ask--direct::before {
+  content: "asks ";
+  color: var(--fg-muted);
+}
 
 /* --- review walkthrough: one at a time, in the derived order --- */
 .hub-walkthrough {

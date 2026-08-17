@@ -584,6 +584,63 @@ describe('reviewQueue', () => {
     expect(q.items.map((i) => i.thread?.threadId)).toEqual(['older', 'newer']);
   });
 
+  // A question addressed to the reader outranks a note left for them, even a
+  // much older one. Age alone put status updates at the top of the band — the
+  // part of the strip that actually gets read — while the answerable rows sank.
+  it('puts a direct question above an older status note', () => {
+    const q = reviewQueue(
+      [],
+      [
+        threadItem({ threadId: 'note-old', since: T0 - 90_000 }),
+        threadItem({ threadId: 'asked', since: T0 - 1_000, direct: true }),
+      ],
+      T0,
+    );
+    expect(q.items.map((i) => i.thread?.threadId)).toEqual(['asked', 'note-old']);
+  });
+
+  it('still ranks by longest wait among the questions themselves', () => {
+    const q = reviewQueue(
+      [],
+      [
+        threadItem({ threadId: 'newer-ask', since: T0 - 1_000, direct: true }),
+        threadItem({ threadId: 'older-ask', since: T0 - 90_000, direct: true }),
+      ],
+      T0,
+    );
+    expect(q.items.map((i) => i.thread?.threadId)).toEqual(['older-ask', 'newer-ask']);
+  });
+
+  // "asked you" is a claim that there is a question. A row that makes it over
+  // a status note is the strip promising something it cannot deliver.
+  it('says asked you only for a question, and posted otherwise', () => {
+    const q = reviewQueue(
+      [],
+      [
+        threadItem({ threadId: 'a', direct: true }),
+        threadItem({ threadId: 'b', kind: 'doc-thread' }),
+      ],
+      T0,
+    );
+    expect(q.items[0].why).toContain('asked you');
+    expect(q.items[1].why).toContain('posted');
+    expect(q.items[1].why).not.toContain('asked');
+  });
+
+  // A payload from a server that predates the field must order exactly as it
+  // did before — undefined is not "true".
+  it('treats a missing direct flag as a note', () => {
+    const q = reviewQueue(
+      [],
+      [
+        threadItem({ threadId: 'newer', since: T0 - 1_000 }),
+        threadItem({ threadId: 'older', since: T0 - 90_000 }),
+      ],
+      T0,
+    );
+    expect(q.items.map((i) => i.thread?.threadId)).toEqual(['older', 'newer']);
+  });
+
   // An answered decision is gone from the board's strip today, and the same
   // has to be true of the merged queue — otherwise the count at the top keeps
   // promising work that is finished.
