@@ -204,6 +204,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       const res = await jj<{ movedToChores: string[] }>(
         await put(`/api/workspaces/${wsId}/goals`, {
           goals: [{ id: 'g1', title: '1. Get the PR out' }],
+          drop: ['g2'],
           author: PERSON,
         }),
       );

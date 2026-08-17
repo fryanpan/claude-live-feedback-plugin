@@ -2440,8 +2440,85 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!goals) {
             return j(400, { error: 'goals must be [{id, title, dueAt?, subgoals?}]' });
           }
-          const res = taskStore.setGoalList(workspaceId, goals, { actor: author });
-          if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
+          // `drop` is the caller's explicit "yes, remove that band even
+          // though it holds work". A malformed value must NOT read as absent
+          // — silently treating a string as no acknowledgement would turn a
+          // typo into a refusal the caller cannot explain.
+          const drop = body?.drop;
+          if (
+            drop !== undefined &&
+            (!Array.isArray(drop) || drop.some((id) => typeof id !== 'string' || id.length === 0))
+          ) {
+            return j(400, { error: 'drop must be an array of goal ids' });
+          }
+          const res = taskStore.setGoalList(workspaceId, goals, {
+            actor: author,
+            ...(drop !== undefined ? { drop: drop as string[] } : {}),
+          });
+          if (!res.ok) {
+            // The refusal is the whole feature, so it has to name the way
+            // out: the MCP layer surfaces this body verbatim as the error
+            // text an agent reads.
+            const detail =
+              res.error === 'would-strand-tasks'
+                ? {
+                    message:
+                      'this replace would strand work filed under ' +
+                      `${res.stranding
+                        .map(
+                          (s) => `"${s.title}" (${s.id}: ${s.openTasks} open, ${s.doneTasks} done)`,
+                        )
+                        .join('; ')}. ` +
+                      'If you meant to RENAME a band, use rename_goal — it changes the title ' +
+                      'in place and cannot move a task. If you meant to remove it, say so by ' +
+                      'listing its id in `drop`; open tasks then land at the bottom of Chores ' +
+                      'and done tasks keep pointing at the removed id, both reported back.',
+                  }
+                : {};
+            return j(res.error === 'workspace-not-found' ? 404 : 400, { ...res, ...detail });
+          }
+          return j(200, res);
+        }
+        // rename_goal (§3.2): change a band's TITLE without touching its id.
+        // Its own route rather than a flag on the PUT above, because the
+        // whole value is that it cannot reach the replace path at all — a
+        // task's band IS its goal id, and nothing here changes an id.
+        const wsRenameMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/goals\/rename$/);
+        if (wsRenameMatch && req.method === 'POST') {
+          const workspaceId = decodeURIComponent(wsRenameMatch[1] ?? '');
+          const body = await safeJson(req);
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const goalId = body?.goal;
+          if (typeof goalId !== 'string' || goalId.length === 0) {
+            return j(400, { error: 'goal must be a goal id' });
+          }
+          const title = body?.title;
+          if (typeof title !== 'string' || title.trim().length === 0) {
+            return j(400, { error: 'title must be a non-empty string' });
+          }
+          // `null` clears dueAt, a number sets it, absent leaves it alone —
+          // three distinct meanings, so the parse keeps them distinct.
+          const dueAt = body?.dueAt;
+          if (dueAt !== undefined && dueAt !== null && typeof dueAt !== 'number') {
+            return j(400, { error: 'dueAt must be a number, or null to clear it' });
+          }
+          const res = taskStore.renameGoal(
+            workspaceId,
+            goalId,
+            {
+              title: title.trim(),
+              ...(dueAt !== undefined ? { dueAt: dueAt as number | null } : {}),
+            },
+            { actor: author },
+          );
+          if (!res.ok) {
+            // `chores` is a 400, not a 404: it is a row the caller really
+            // saw, so "no such goal" would send them hunting for a typo.
+            const status =
+              res.error === 'reserved-goal-id' ? 400 : res.error === 'goal-not-found' ? 404 : 404;
+            return j(status, res);
+          }
           return j(200, res);
         }
         // reorder_goals (§3.2): the priority gesture, permutation-only. A
