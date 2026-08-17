@@ -287,6 +287,70 @@ describe('asksPerson', () => {
   it('answers no to everything when no people are known', () => {
     expect(asksPerson('**Jordan — this one is yours:** (a) or (b)?', [])).toBe(false);
   });
+
+  // Requiring whitespace immediately after the "?" rejected 7 of 9 realistic
+  // markdown endings — including the bold form these comments almost always
+  // use, so an agent's bolded question fell back to a clip of the report above
+  // it. Each of these ends the sentence; the closer is just markup.
+  it('accepts a question closed by markup rather than by whitespace', () => {
+    for (const text of [
+      '**Jordan — should we ship now?**',
+      '**Jordan: ship (a) or (b)?**',
+      'Jordan: "should we ship now?"',
+      'Jordan: ship now (or later?)',
+    ]) {
+      expect(asksPerson(text, people)).toBe(true);
+    }
+  });
+
+  // Allowing closers re-admitted the quoted-copy class that condition 3 exists
+  // to reject: measured on the live board it matched a comment quoting example
+  // questions back, whose extracted ask rendered as a run of fragments.
+  it('refuses a question mark inside inline code, and an address inside it', () => {
+    expect(
+      asksPerson('Jordan: the fixture is `Bryan: ship (a) or (b)?` in the test.', people),
+    ).toBe(false);
+    expect(asksPerson('The fixture reads `Jordan: ship now?` and nothing else.', people)).toBe(
+      false,
+    );
+    // The shape measured on the live board, and the one the "?" guard alone
+    // does NOT catch: the only ADDRESS is inside code, while a "?" sits in
+    // ordinary prose after it. Anchoring on the quoted address drags the whole
+    // quoted run into the extracted ask. Note each of these puts the name
+    // within reach of a line start or an emphasis run, which is what makes the
+    // address regex fire at all — a fixture that does not is testing nothing.
+    for (const text of [
+      'Fixture: `Jordan: ship now?` — so is that worth doing?',
+      'Fixture:\n`**Jordan: ship now?**` — so is that worth doing?',
+      'Docs say `**Jordan — pick one?**` here. Should we do that?',
+    ]) {
+      expect(asksPerson(text, people)).toBe(false);
+    }
+    // Positive control on the same shape: unquote the address and it asks.
+    expect(asksPerson('Fixture:\n**Jordan: ship now?**', people)).toBe(true);
+  });
+
+  // Same text, CRLF: `\r\n\r\n` is not `\n\n`, so the paragraph scope ran to
+  // the end of the comment and a question two paragraphs down counted as this
+  // address's own.
+  it('refuses a later paragraph question when the breaks are CRLF', () => {
+    expect(asksPerson('Jordan — merged and deployed.\r\n\r\nIs the fleet knowable?', people)).toBe(
+      false,
+    );
+    // Positive control on the same encoding: a CRLF comment can still ask.
+    expect(asksPerson('Jordan — should we ship (a) or (b)?\r\nMore below.', people)).toBe(true);
+  });
+
+  // The paragraph bound was recomputed per match with `indexOf` from the match
+  // position, which re-scans to the end of the text on every miss. Measured at
+  // 49ms for one 188KB comment, on a path that runs per person, per comment,
+  // on every strip refresh.
+  it('stays cheap on a very long comment', () => {
+    const text = '**Jordan: x? '.repeat(16_000);
+    const started = performance.now();
+    asksPerson(text, people);
+    expect(performance.now() - started).toBeLessThan(150);
+  });
 });
 
 describe('reviewThreadItems — which comment is the ask, and since when', () => {
@@ -386,5 +450,95 @@ describe('reviewThreadItems — which comment is the ask, and since when', () =>
     });
     expect(item.direct).toBe(false);
     expect(item.ask).toBe('Merged and deployed.');
+  });
+
+  // `since` is the run's start, which is right for RANKING. But the row says
+  // "asked you <t>", and the run can begin days before the question — status,
+  // status, then an ask. Reading `since` there told the reader they had been
+  // sitting on something they were handed moments ago.
+  it('dates the question itself separately from the wait it belongs to', () => {
+    const [item] = items();
+    expect(item.since).toBe(T0 + 100);
+    expect(item.askedAt).toBe(T0 + 200);
+    expect(item.askedAt).not.toBe(item.since);
+  });
+
+  it('leaves askedAt off a run that asks nothing', () => {
+    const notes = thread({
+      id: 'th-note2',
+      comments: [comment({ text: 'Merged and deployed.', ts: T0 + 50 })],
+    });
+    const [item] = reviewThreadItems({
+      tasks: [{ id: 'tk-4', title: 'Ship', bodyDocId: 'task:tk-4' }],
+      docs: [{ docId: 'd-1', title: 'Plan' }],
+      source: source({ 'task:tk-4': [notes], 'd-1': [seenPerson] }),
+    });
+    expect(item.askedAt).toBeUndefined();
+  });
+});
+
+/**
+ * Who counts as a person must not depend on which threads are still open.
+ *
+ * The route filters `threadsOf` to open threads — right for "what is waiting",
+ * wrong for "who is a person here". With one source, resolving an unrelated
+ * thread on a different task removed its author from the roster and silently
+ * flipped a live question from "asked you" back to "posted".
+ */
+describe('reviewThreadItems — who counts as a person', () => {
+  const asking = thread({
+    id: 'th-q',
+    comments: [comment({ text: '**Jordan — which one:** (a) or (b)?', ts: T0 + 10 })],
+  });
+  const personSpoke = (status: Thread['status']) =>
+    thread({ id: 'th-seed', status, comments: [comment({ kind: 'person', text: 'go', ts: T0 })] });
+
+  const run = (seedStatus: Thread['status'], withRoster: boolean) => {
+    const all: Record<string, Thread[]> = {
+      'task:tk-1': [asking],
+      'd-1': [personSpoke(seedStatus)],
+    };
+    const open: Record<string, Thread[]> = {
+      'task:tk-1': [asking],
+      'd-1': all['d-1'].filter((t) => t.status === 'open'),
+    };
+    return reviewThreadItems({
+      tasks: [{ id: 'tk-1', title: 'Ship', bodyDocId: 'task:tk-1' }],
+      docs: [{ docId: 'd-1', title: 'Plan' }],
+      source: {
+        threadsOf: (docId: string) => open[docId] ?? [],
+        ...(withRoster ? { allThreadsOf: (docId: string) => all[docId] ?? [] } : {}),
+      },
+    }).find((i) => i.threadId === 'th-q');
+  };
+
+  // Positive control first: while the seed thread is open, both wirings agree
+  // the question is a direct ask. Without this the assertion below could pass
+  // against a rule that never fires at all.
+  it('sees the question while the person’s own thread is open', () => {
+    expect(run('open', false)?.direct).toBe(true);
+    expect(run('open', true)?.direct).toBe(true);
+  });
+
+  it('keeps seeing it once that unrelated thread is resolved', () => {
+    // The bug, pinned: with only the open-filtered source the roster empties.
+    expect(run('resolved', false)?.direct).toBe(false);
+    expect(run('resolved', true)?.direct).toBe(true);
+  });
+
+  // "Person opens a thread, agent answers at length and asks back" is exactly
+  // the shape where every COMMENT in the roster source is an agent's.
+  it('counts a person who opened a thread but never commented on it', () => {
+    const opened = thread({
+      id: 'th-q2',
+      createdBy: { id: 'person-jordan', name: 'Jordan', kind: 'known', color: '#000000' },
+      comments: [comment({ text: '**Jordan — which one:** (a) or (b)?', ts: T0 + 10 })],
+    });
+    const [item] = reviewThreadItems({
+      tasks: [{ id: 'tk-1', title: 'Ship', bodyDocId: 'task:tk-1' }],
+      docs: [],
+      source: { threadsOf: (docId: string) => (docId === 'task:tk-1' ? [opened] : []) },
+    });
+    expect(item.direct).toBe(true);
   });
 });

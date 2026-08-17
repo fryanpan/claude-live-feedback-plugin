@@ -68,6 +68,17 @@ export interface ReviewThreadItem {
    * `asksPerson` for the rule and for what it is measured to miss.
    */
   direct: boolean;
+  /**
+   * When the QUESTION was asked, present only when `direct`.
+   *
+   * Distinct from `since` on purpose, and the distinction is a truthfulness
+   * one. `since` is the start of the whole unanswered run, which is the right
+   * thing to RANK by; but an agent that posts status for three days and only
+   * then asks has a run starting three days ago and a question twelve minutes
+   * old. Attributing `since` to the asker made the row say "asked you 3 days
+   * ago" about a question nobody had yet had a chance to see.
+   */
+  askedAt?: number;
 }
 
 export interface ReviewTaskRef {
@@ -89,6 +100,17 @@ export interface ThreadSource {
    *  never been opened has no threads either way, so absence and emptiness
    *  are the same answer here. */
   threadsOf(docId: string): Thread[];
+  /**
+   * A doc's threads REGARDLESS of status, for working out who the people are.
+   *
+   * Separate from `threadsOf` because the caller filters that one to open
+   * threads — correct for "what is waiting", wrong for "who is a person here".
+   * With one source, resolving an unrelated thread on a different task removed
+   * its author from the roster and silently flipped a live question from "asked
+   * you" back to "posted". Falls back to `threadsOf` so an existing caller
+   * keeps working; the fallback narrows the roster, it cannot widen it.
+   */
+  allThreadsOf?(docId: string): Thread[];
 }
 
 /**
@@ -198,14 +220,36 @@ export function findAsk(
   text: string,
   people: Iterable<string>,
 ): { index: number; end: number } | null {
+  const src = normalizeForAsk(text);
+  // Nothing without a "?" can be a question, and this is the common case by a
+  // wide margin. It also bounds the cost below: the paragraph index and the
+  // per-match scanning only ever run on text that could still qualify.
+  if (!src.includes('?')) return null;
+  // Every paragraph break, computed ONCE. Doing `indexOf('\n\n', m.index)` per
+  // match re-scans to the end of the text on every miss, which is quadratic in
+  // comment length — measured at 49ms for a 188KB comment, on a path that runs
+  // per person, per comment, on every strip refresh.
+  const breaks: number[] = [];
+  for (let i = src.indexOf('\n\n'); i >= 0; i = src.indexOf('\n\n', i + 1)) breaks.push(i);
+
+  // An address inside `inline code` is a quoted example, not this comment
+  // addressing anybody — and anchoring on one drags the quoted run into the
+  // extracted ask, which is how the strip ends up showing a row of fragments.
+  const code = codeSpans(src);
   for (const name of people) {
     if (name.trim() === '') continue;
     const re = new RegExp(`(?:^|\\n|\\*\\*)[^\\n]{0,12}?\\b${escapeRe(name)}\\b\\s*[—:,-]`, 'g');
-    for (let m = re.exec(text); m !== null; m = re.exec(text)) {
+    for (let m = re.exec(src); m !== null; m = re.exec(src)) {
+      // Where the NAME is, not where the match starts. The match may begin at
+      // a line start well outside the code span that quotes the address —
+      // testing `m.index` let `Fixture: \`Jordan: ship now?\` — worth it?`
+      // anchor on the quoted address and count a later prose "?" as its own.
+      const nameAt = m.index + m[0].indexOf(name);
+      if (code.some(([a, b]) => nameAt >= a && nameAt < b)) continue;
       // The paragraph the address opens; a "?" past a blank line belongs to
       // something else that happens to be further down the same comment.
-      const para = text.indexOf('\n\n', m.index);
-      const scope = para >= 0 ? text.slice(m.index, para) : text.slice(m.index);
+      const para = breaks.find((b) => b > m.index) ?? -1;
+      const scope = para >= 0 ? src.slice(m.index, para) : src.slice(m.index);
       const q = sentenceQuestion(scope);
       if (q >= 0) return { index: m.index, end: m.index + q + 1 };
     }
@@ -213,13 +257,67 @@ export function findAsk(
   return null;
 }
 
-/** Index of the first sentence-ending "?" in `s`, or -1. */
+/**
+ * CRLF folded to LF, because every anchor in this matcher is newline-shaped.
+ * A `\r\n\r\n` paragraph break does not match `\n\n`, so on CRLF text the
+ * paragraph scope ran to the end of the comment and a question two paragraphs
+ * below an unrelated address counted as that address's own — precisely the
+ * false positive the paragraph rule exists to prevent.
+ *
+ * Idempotent, so `findAsk` and `extractAsk` can both apply it and still agree
+ * about what an index means.
+ */
+function normalizeForAsk(text: string): string {
+  return text.includes('\r') ? text.replace(/\r\n/g, '\n') : text;
+}
+
+/**
+ * Index of the last character of the first sentence-ending "?" in `s`, or -1.
+ *
+ * "Sentence-ending" means the "?" is followed by whitespace or the end of the
+ * text — which is what separates prose from a query string (`?tab=open`) and
+ * from optional chaining (`snippet?.text`). But markdown routinely puts a
+ * CLOSING marker in between: `**Bryan — ship now?**`, `"…now?"`, `(or later?)`,
+ * `` `foo?` ``. Requiring whitespace immediately after the "?" rejected 7 of 9
+ * realistic endings, including the bold form these comments almost always use
+ * — so an agent's bolded question fell back to a clip of the report above it.
+ * Closers are skipped before the test, never instead of it: `?tab=open` and
+ * `snippet?.text` are still rejected, because `t` and `.` are not closers.
+ */
+const ASK_CLOSERS = new Set(['*', '`', '"', "'", '_', ')', ']', '}', '”', '’']);
 function sentenceQuestion(s: string): number {
+  const code = codeSpans(s);
   for (let i = s.indexOf('?'); i >= 0; i = s.indexOf('?', i + 1)) {
-    const next = s[i + 1];
-    if (next === undefined || /\s/.test(next)) return i;
+    // A "?" inside `inline code` is quoted copy, not this comment's question.
+    // Allowing closers re-admitted that class: measured on the live board it
+    // matched a comment quoting example questions back, and the extracted ask
+    // rendered as a run of fragments. One-directional, like the rest of this
+    // rule — it can only decline to promote.
+    if (code.some(([a, b]) => i >= a && i < b)) continue;
+    let j = i + 1;
+    while (j < s.length && ASK_CLOSERS.has(s[j] as string)) j += 1;
+    const next = s[j];
+    if (next === undefined || /\s/.test(next)) return j - 1;
   }
   return -1;
+}
+
+/** `[start, end)` of every inline code span, by backtick runs. */
+function codeSpans(s: string): Array<[number, number]> {
+  const spans: Array<[number, number]> = [];
+  let open = -1;
+  for (let i = 0; i < s.length; i += 1) {
+    if (s[i] !== '`') continue;
+    let n = i;
+    while (n < s.length && s[n] === '`') n += 1;
+    if (open < 0) open = n;
+    else {
+      spans.push([open, i]);
+      open = -1;
+    }
+    i = n - 1;
+  }
+  return spans;
 }
 
 function escapeRe(s: string): string {
@@ -257,8 +355,9 @@ function extractAsk(text: string, people: Iterable<string>): string {
   // match is anchored on line starts. Flattening first destroys the newlines
   // the anchor is made of, which is how the previous copy of this regex
   // silently stopped finding one of the three forms it claimed to accept.
-  const at = findAsk(text, people);
-  return clip(at ? text.slice(at.index, at.end) : text, DIRECT_ASK_MAX);
+  const src = normalizeForAsk(text);
+  const at = findAsk(src, people);
+  return clip(at ? src.slice(at.index, at.end) : src, DIRECT_ASK_MAX);
 }
 
 /**
@@ -304,6 +403,7 @@ export function reviewThreadItems(args: {
         // that stops an agent's follow-ups from burying its own question.
         since: run[0].ts,
         direct: asked !== undefined,
+        ...(asked ? { askedAt: asked.ts } : {}),
       });
     }
   };
@@ -329,11 +429,18 @@ export function reviewThreadItems(args: {
  */
 function knownPeople(docIds: Iterable<string>, source: ThreadSource): Set<string> {
   const people = new Set<string>();
+  const add = (u: { name?: string } | undefined) => {
+    if (u && classifyActor(u as Parameters<typeof classifyActor>[0]) === 'person' && u.name)
+      people.add(u.name);
+  };
+  const threadsFor = source.allThreadsOf?.bind(source) ?? source.threadsOf.bind(source);
   for (const docId of docIds) {
-    for (const thread of source.threadsOf(docId)) {
-      for (const c of thread.comments ?? []) {
-        if (classifyActor(c.author) === 'person' && c.author.name) people.add(c.author.name);
-      }
+    for (const thread of threadsFor(docId)) {
+      // A person who opened a thread is a person even if every comment on it is
+      // an agent's — which is the shape of "person asks, agent answers at
+      // length" and so exactly the thread an agent is most likely to ask back on.
+      add(thread.createdBy);
+      for (const c of thread.comments ?? []) add(c.author);
     }
   }
   return people;

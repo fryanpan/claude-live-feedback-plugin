@@ -544,6 +544,10 @@ export interface ReviewThreadItem {
    *  payload from a server older than this field, which reads as false — the
    *  pre-existing ordering, which is the safe direction. */
   direct?: boolean;
+  /** When the question was asked, when there is one. Absent from an older
+   *  server's payload, in which case the row falls back to `since` — the
+   *  pre-existing wording. */
+  askedAt?: number;
 }
 
 /**
@@ -688,8 +692,13 @@ export function reviewQueue(
         // "asked" is a claim about there being a question. Say it only when
         // there is one; otherwise the row promises an answerable thing and
         // delivers a status note, which is how a strip stops being believed.
+        // The clock beside "asked" has to be the QUESTION's, not the run's.
+        // The run can start days before the ask — status, status, then a
+        // question — and quoting the run's start there tells the reader they
+        // have been sitting on something they were handed minutes ago.
+        // Ranking still uses `since`; only the sentence changes.
         why: t.direct
-          ? `${t.askedBy} asked you ${timeAgo(t.since, now)} · ${where}`
+          ? `${t.askedBy} asked you ${timeAgo(t.askedAt ?? t.since, now)} · ${where}`
           : `${t.askedBy} posted ${timeAgo(t.since, now)} · ${where}`,
         since: t.since,
         thread: t,

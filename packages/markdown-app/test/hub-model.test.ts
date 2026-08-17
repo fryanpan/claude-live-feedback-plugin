@@ -650,6 +650,31 @@ describe('reviewQueue', () => {
     expect(q.items[1].why).not.toContain('asked');
   });
 
+  // The clock beside "asked" is the QUESTION's, not the run's. An agent that
+  // posts status for a day and only then asks has a run starting a day ago and
+  // a question minutes old; reading `since` there told the reader they had been
+  // sitting on something they were just handed. Ranking still uses `since`.
+  it('dates asked you from the question, not from the start of the wait', () => {
+    const q = reviewQueue(
+      [],
+      [threadItem({ threadId: 'a', direct: true, since: T0 - 86_400_000, askedAt: T0 - 60_000 })],
+      T0,
+    );
+    expect(q.items[0].why).toContain('asked you 1m ago');
+    expect(q.items[0].why).not.toContain('1d ago');
+    // The wait itself is unchanged — this is a wording fix, not a re-rank.
+    expect(q.items[0].since).toBe(T0 - 86_400_000);
+  });
+
+  it('falls back to the wait when an older server sends no askedAt', () => {
+    const q = reviewQueue(
+      [],
+      [threadItem({ threadId: 'a', direct: true, since: T0 - 60_000 })],
+      T0,
+    );
+    expect(q.items[0].why).toContain('asked you 1m ago');
+  });
+
   // A payload from a server that predates the field must order exactly as it
   // did before — undefined is not "true".
   it('treats a missing direct flag as a note', () => {

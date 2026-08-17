@@ -1705,7 +1705,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                 const base = meta?.relPath?.split('/').pop();
                 return { docId, title: meta?.title || base || docId };
               }),
-              source: { threadsOf: (docId) => rooms.listThreads(docId, { status: 'open' }) },
+              source: {
+                threadsOf: (docId) => rooms.listThreads(docId, { status: 'open' }),
+                // Unfiltered, and only for the roster: who counts as a person
+                // here must not depend on whether their thread is still open.
+                allThreadsOf: (docId) => rooms.listThreads(docId),
+              },
             }),
           });
         }
