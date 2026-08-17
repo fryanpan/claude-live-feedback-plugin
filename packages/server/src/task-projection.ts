@@ -1,7 +1,7 @@
 import { listThreads, prose } from '@feedback/core';
 import * as Y from 'yjs';
 import type { Rooms } from './rooms.ts';
-import { type OwnerKind, resolveOwnerKind } from './task-owner.ts';
+import { type OwnerKind, attachedAgentTest, resolveOwnerKind } from './task-owner.ts';
 import type { PremiseNote } from './task-staleness.ts';
 import type { Task, TaskStore, TaskStoreEvent } from './tasks.ts';
 
@@ -257,6 +257,26 @@ export class TaskProjection {
   }
 
   /**
+   * The owner-kind reader the BOARD uses, for a route that wants to answer
+   * the same question over REST.
+   *
+   * Agents cannot read the ydoc projection, so without this the resolved
+   * kind is visible only in a browser — and an agent that declares an owner
+   * has no way to confirm the declaration landed, nor to ask which rows the
+   * board is drawing as "not recorded". A success response means "the call
+   * didn't error"; this is what makes it mean something.
+   *
+   * Returns a closure so the workspace's roster is read ONCE per request
+   * rather than once per row.
+   */
+  ownerKindReader(workspaceId: string): (task: Task) => OwnerKind {
+    const isAttachedAgent = attachedAgentTest(
+      this.tasks.listAttachments(workspaceId).map((a) => a.agentId),
+    );
+    return (task) => resolveOwnerKind(task.assignee, task.assigneeKind, isAttachedAgent);
+  }
+
+  /**
    * Make the workspace's board room exist, guarded, and current. Safe to
    * call repeatedly — server.ts calls it from the create/attach routes
    * (which mutate the store without emitting events) and `onEvent` calls it
@@ -383,21 +403,11 @@ export class TaskProjection {
     // / agent.detached are store events — so the derived half of an owner's
     // kind re-projects the moment the roster moves, rather than going stale
     // until something unrelated touches a task.
-    const attached = new Set(
-      this.tasks.listAttachments(workspaceId).map((a) => a.agentId.trim().toLowerCase()),
-    );
-    const isAttachedAgent = (name: string) => attached.has(name.trim().toLowerCase());
+    const ownerKindOf = this.ownerKindReader(workspaceId);
     const want = new Map(
       this.tasks
         .listTasks(workspaceId)
-        .map((t) => [
-          t.id,
-          projectTask(
-            t,
-            this.commentCount(t.id),
-            resolveOwnerKind(t.assignee, t.assigneeKind, isAttachedAgent),
-          ),
-        ]),
+        .map((t) => [t.id, projectTask(t, this.commentCount(t.id), ownerKindOf(t))]),
     );
     const pending = this.tasks.getPendingRetriage(workspaceId);
     const wsFields: Record<string, unknown> = {

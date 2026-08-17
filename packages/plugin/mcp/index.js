@@ -13714,6 +13714,22 @@ function knownUserForName(nameOrKey) {
     return null;
   return { id: `known-${key}`, kind: "known", name: meta2.name, color: meta2.color };
 }
+function agentSlug(name) {
+  const trimmed = name.trim();
+  const slug = trimmed.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  if (slug)
+    return slug;
+  let h = 0;
+  for (let i = 0;i < trimmed.length; i++)
+    h = h * 31 + trimmed.charCodeAt(i) >>> 0;
+  return h.toString(36);
+}
+function agentIdForName(name) {
+  const known = knownUserForName(name.trim());
+  if (known)
+    return known.id;
+  return `agent-${agentSlug(name)}`;
+}
 
 // packages/mcp/src/author.ts
 function resolveAgentAuthor(env) {
@@ -13721,14 +13737,7 @@ function resolveAgentAuthor(env) {
   const known = knownUserForName(name);
   if (known)
     return known;
-  let slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-  if (!slug) {
-    let h = 0;
-    for (let i = 0;i < name.length; i++)
-      h = h * 31 + name.charCodeAt(i) >>> 0;
-    slug = h.toString(36);
-  }
-  return { name, color: hashToColor(name), id: `agent-${slug}`, kind: "known" };
+  return { name, color: hashToColor(name), id: agentIdForName(name), kind: "known" };
 }
 
 // packages/mcp/src/thread-create.ts
@@ -15715,7 +15724,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...assigneeKind !== undefined ? { assigneeKind } : {},
           author: AUTHOR
         });
-        return ok({ taskId, assignee: res.task.assignee, changed: res.changed });
+        return ok({
+          taskId,
+          assignee: res.task.assignee,
+          changed: res.changed,
+          ...res.ownerKind !== undefined ? { ownerKind: res.ownerKind } : {}
+        });
       }
       case "update_task_body": {
         const { taskId, markdown, title } = a;

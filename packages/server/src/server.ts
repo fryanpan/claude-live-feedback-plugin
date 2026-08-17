@@ -70,8 +70,10 @@ import {
   ASSIGNEE_REQUIRED_ERROR,
   ASSIGNEE_REQUIRED_HANDOVER_MESSAGE,
   ASSIGNEE_REQUIRED_MESSAGE,
+  BAD_ASSIGNEE_KIND_ERROR,
+  BAD_ASSIGNEE_KIND_MESSAGE,
+  parseAssigneeKind,
   resolveAssignee,
-  statedOwnerKind,
 } from './task-owner.ts';
 import { TaskProjection, taskBodyDocId, taskIdOfBodyDoc } from './task-projection.ts';
 import { buildQueue, placeableGoals, summarizeGoals } from './task-queue.ts';
@@ -1990,7 +1992,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               ? { needs: url.searchParams.get('needs') as 'action' | 'decision' }
               : {}),
           });
-          return j(200, { workspaceId, tasks });
+          // The kind the BOARD resolves, not just the one somebody declared.
+          // An agent has no other way to ask "which of my rows read as an
+          // unrecorded owner" — the resolved value lives in a ydoc it cannot
+          // read, and the two answers differ exactly where it matters (an
+          // undeclared row whose owner is an attached agent reads `agent`).
+          const ownerKindOf = taskProjection.ownerKindReader(workspaceId);
+          return j(200, {
+            workspaceId,
+            tasks: tasks.map((t) => ({ ...t, ownerKind: ownerKindOf(t) })),
+          });
         }
         if (wsTasksMatch && req.method === 'POST') {
           const workspaceId = decodeURIComponent(wsTasksMatch[1] ?? '');
@@ -2476,17 +2487,31 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // `assigneeKind` is forwarded here explicitly. The route layer is
           // the one nothing type-checks, and a param accepted by the tool and
           // dropped by the route answers 200 while doing nothing — this
-          // codebase has shipped that exact bug.
+          // codebase has shipped that exact bug. Refused rather than dropped
+          // for the same reason: the plausible typo here is 'human', which is
+          // a valid ASSIGNEE, and swallowing it would answer 200 while the
+          // row lands undeclared.
+          const handoverKind = parseAssigneeKind(body?.assigneeKind);
+          if (!handoverKind.ok) {
+            return j(400, {
+              error: BAD_ASSIGNEE_KIND_ERROR,
+              message: BAD_ASSIGNEE_KIND_MESSAGE,
+            });
+          }
           const res = taskStore.setAssignee(taskId, assignee, {
             actor: author,
-            assigneeKind: body?.assigneeKind,
+            assigneeKind: handoverKind.assigneeKind,
           });
           if (!res.ok) return j(404, res);
           // A no-op emits nothing, so nothing would refresh the board room —
           // harmless here (nothing changed) but the changed path is covered
           // by the task.assigned event's own projection hook.
           if (!res.changed) taskProjection.ensureWorkspace(res.task.workspaceId);
-          return j(200, res);
+          // Echo what the board now says this owner IS. Without it the caller
+          // learns only that the call didn't error — which is exactly what a
+          // declaration that silently failed to land also reports.
+          const ownerKind = taskProjection.ownerKindReader(res.task.workspaceId)(res.task);
+          return j(200, { ...res, ownerKind });
         }
         // set_goal_list (§3.2 edit contract): replace the ordered board
         // sections. Structural validation happens HERE because the store
@@ -2683,6 +2708,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // Same rule as a plain create: a promoted thread lands owned by
           // whoever promoted it unless the call names someone else.
           const promotedBy = authorFor(body?.author);
+          const promoteKind = parseAssigneeKind(body?.assigneeKind);
+          if (!promoteKind.ok) {
+            return j(400, {
+              error: BAD_ASSIGNEE_KIND_ERROR,
+              message: BAD_ASSIGNEE_KIND_MESSAGE,
+            });
+          }
           const promoteOwner = resolveAssignee(body?.assignee, promotedBy);
           if (!promoteOwner) {
             return j(400, {
@@ -2694,7 +2726,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             title,
             body: draftBody,
             assignee: promoteOwner,
-            assigneeKind: statedOwnerKind(body?.assigneeKind),
+            assigneeKind: promoteKind.assigneeKind,
             needs: promoteNeeds.needs,
             options: promoteOptions.options,
             // Forward undefined untouched: an omitted goal is what routes the

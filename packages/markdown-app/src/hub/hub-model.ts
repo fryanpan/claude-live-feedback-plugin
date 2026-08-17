@@ -210,6 +210,10 @@ export interface BoardFilters {
   now: number;
 }
 
+/** The reserved owner meaning "a person, unnamed" — one spelling, so the two
+ *  readers below cannot drift apart. Mirrors the server's HUMAN_ASSIGNEE. */
+const HUMAN_OWNER = 'human';
+
 /**
  * What kind of somebody holds this task.
  *
@@ -227,7 +231,7 @@ export function ownerKind(task: HubTask): HubOwnerKind {
   // it here is not the name-matching this field exists to avoid, and it keeps
   // a row that reached the client without a resolved kind (an SSE payload,
   // state projected by an older release) saying what it has always said.
-  return task.assignee.trim().toLowerCase() === 'human' ? 'person' : 'unknown';
+  return task.assignee.trim().toLowerCase() === HUMAN_OWNER ? 'person' : 'unknown';
 }
 
 /**
@@ -239,9 +243,14 @@ export function ownerKind(task: HubTask): HubOwnerKind {
  * viewer — so My Tasks keeps using it. Widening this one to every declared
  * person would file a task owned by SOMEBODY ELSE under the viewer's own tab,
  * which is a worse answer than the gap it would close.
+ *
+ * Case-folded to match `ownerKind` above. They disagreed for one release, and
+ * the disagreement had a victim: a row stored `Human` drew the person mark
+ * and was still missing from My Tasks — two spellings of one question, in one
+ * file, which is the bug generator this module's own comments argue against.
  */
 export function assignedToHuman(task: HubTask): boolean {
-  return task.assignee === 'human';
+  return task.assignee.trim().toLowerCase() === HUMAN_OWNER;
 }
 
 /**

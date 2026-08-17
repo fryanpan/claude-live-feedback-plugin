@@ -22,7 +22,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { declaredAssigneeKind, resolveOwnerKind } from '../src/task-owner.ts';
+import { attachedAgentTest, declaredAssigneeKind, resolveOwnerKind } from '../src/task-owner.ts';
 import { workspaceRoomId } from '../src/task-projection.ts';
 import type { Task } from '../src/tasks.ts';
 
@@ -64,6 +64,29 @@ describe('resolveOwnerKind', () => {
     // A roster that answered true for everything must still not turn "nobody
     // holds this" into "an agent holds this".
     expect(resolveOwnerKind('agent', undefined, ALWAYS_ATTACHED)).toBe('unknown');
+  });
+});
+
+describe('attachedAgentTest', () => {
+  // A task records a DISPLAY NAME; an attachment records an identity id.
+  // Comparing the two directly is what made the roster half of this feature
+  // dead in production while every test that attached under the display name
+  // passed — so each spelling the field actually produces gets a row.
+  it('matches the id the default attach path sends', () => {
+    const roster = attachedAgentTest(['agent-cartographer']);
+    expect(roster('Cartographer')).toBe(true);
+    // Positive control for the negative below: this roster matches something.
+    expect(roster('Ada Fenwick')).toBe(false);
+  });
+
+  it('matches a hand-supplied slug and a display-name id too', () => {
+    expect(attachedAgentTest(['quick-build'])('Quick Build')).toBe(true);
+    expect(attachedAgentTest(['Surveyor'])('  surveyor ')).toBe(true);
+  });
+
+  it('never matches on an empty roster, or on an empty name', () => {
+    expect(attachedAgentTest([])('Cartographer')).toBe(false);
+    expect(attachedAgentTest(['agent-cartographer'])('   ')).toBe(false);
   });
 });
 
@@ -135,7 +158,11 @@ describe('owner kind over the real routes', () => {
     const wsId = await seedWorkspace();
     await jj(
       await post(`/api/workspaces/${wsId}/attachments`, {
-        agentId: 'Cartographer',
+        // The shape the DEFAULT attach path produces: `attach_agent` sends
+        // the session's identity id, never its display name. Attaching as
+        // 'Cartographer' here is what let the roster half of this feature
+        // pass every test while matching nothing in production.
+        agentId: 'agent-cartographer',
         runtime: 'claude-code-local',
         capabilities: ['tasks.write'],
       }),
@@ -278,6 +305,76 @@ describe('owner kind over the real routes', () => {
     expect(projected(wsId, task.id)?.ownerKind).toBe('unknown');
   });
 
+  it('refuses a malformed assigneeKind on every write path that takes one', async () => {
+    // 'human' is the plausible mistake, because `assignee: 'human'` is the
+    // canonical spelling of the field directly above it. Dropped silently it
+    // answers 200, the row lands undeclared, and the board draws "not
+    // recorded" with nothing anywhere saying why.
+    const wsId = await seedWorkspace();
+    const create = await post(`/api/workspaces/${wsId}/tasks`, {
+      title: 'plot the shoreline',
+      assignee: 'Ada Fenwick',
+      assigneeKind: 'human',
+      author: AGENT,
+    });
+    expect(create.status).toBe(400);
+    expect(((await create.json()) as { error: string }).error).toBe('bad-assignee-kind');
+
+    // Positive control on the same route: the valid spelling still lands.
+    const { task } = await jj<{ task: Task }>(
+      await post(`/api/workspaces/${wsId}/tasks`, {
+        title: 'plot the shoreline',
+        assignee: 'Ada Fenwick',
+        assigneeKind: 'person',
+        author: AGENT,
+      }),
+    );
+    expect(projected(wsId, task.id)?.ownerKind).toBe('person');
+
+    const handOver = await post(`/api/tasks/${task.id}/assignee`, {
+      assignee: 'Rowan Iles',
+      assigneeKind: 'human',
+      author: AGENT,
+    });
+    expect(handOver.status).toBe(400);
+    // …and the refusal did not half-apply: the owner is untouched.
+    expect(projected(wsId, task.id)?.assignee).toBe('Ada Fenwick');
+  });
+
+  it('tells the caller what the board resolved, on the write and on the read', async () => {
+    // An agent cannot read the ydoc, so without an echo "my declaration
+    // landed" and "the call didn't error" are the same observation.
+    const wsId = await seedWorkspace();
+    const { task } = await jj<{ task: Task }>(
+      await post(`/api/workspaces/${wsId}/tasks`, {
+        title: 'name the ridge',
+        assignee: 'Ada Fenwick',
+        author: AGENT,
+      }),
+    );
+
+    const listed = await jj<{ tasks: Array<{ id: string; ownerKind: string }> }>(
+      await fetch(`${base}/api/workspaces/${wsId}/tasks`),
+    );
+    expect(listed.tasks.find((t) => t.id === task.id)?.ownerKind).toBe('unknown');
+
+    const handed = await jj<{ ownerKind: string }>(
+      await post(`/api/tasks/${task.id}/assignee`, {
+        assignee: 'Ada Fenwick',
+        assigneeKind: 'person',
+        author: AGENT,
+      }),
+    );
+    expect(handed.ownerKind).toBe('person');
+
+    // The sweep query the echo exists for: "which rows read not-recorded"
+    // now has a different answer than it did one call ago.
+    const after = await jj<{ tasks: Array<{ id: string; ownerKind: string }> }>(
+      await fetch(`${base}/api/workspaces/${wsId}/tasks`),
+    );
+    expect(after.tasks.find((t) => t.id === task.id)?.ownerKind).toBe('person');
+  });
+
   it('re-projects when the agent roster moves, with no task write in between', async () => {
     // The migration half: tasks created long before this field existed carry
     // no declaration, and must still resolve the moment their owner attaches.
@@ -294,7 +391,9 @@ describe('owner kind over the real routes', () => {
 
     await jj(
       await post(`/api/workspaces/${wsId}/attachments`, {
-        agentId: 'Surveyor',
+        // Production shape again: the owner is `Surveyor`, the attachment is
+        // `agent-surveyor`. The migration claim is only true if THOSE match.
+        agentId: 'agent-surveyor',
         runtime: 'claude-code-local',
         capabilities: ['tasks.write'],
       }),
@@ -303,7 +402,7 @@ describe('owner kind over the real routes', () => {
 
     // …and back, when the roster no longer vouches for it. Unknown, not
     // person: losing evidence is not gaining the opposite evidence.
-    const del = await fetch(`${base}/api/workspaces/${wsId}/attachments/Surveyor`, {
+    const del = await fetch(`${base}/api/workspaces/${wsId}/attachments/agent-surveyor`, {
       method: 'DELETE',
     });
     expect(del.ok).toBe(true);

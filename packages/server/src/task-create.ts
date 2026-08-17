@@ -19,8 +19,10 @@ import { BATCH_REF_SIGIL } from './task-batch-refs.ts';
 import {
   ASSIGNEE_REQUIRED_ERROR,
   ASSIGNEE_REQUIRED_MESSAGE,
+  BAD_ASSIGNEE_KIND_ERROR,
+  BAD_ASSIGNEE_KIND_MESSAGE,
+  parseAssigneeKind,
   resolveAssignee,
-  statedOwnerKind,
 } from './task-owner.ts';
 import { type CreateTaskOpts, REF_KINDS, type Ref, isValidRef } from './tasks.ts';
 
@@ -181,6 +183,10 @@ export function parseTaskCreate(
   }
   const needs = parseNeeds(body.needs);
   if (!needs.ok) return { ok: false, error: BAD_NEEDS_ERROR };
+  const kind = parseAssigneeKind(body.assigneeKind);
+  if (!kind.ok) {
+    return { ok: false, error: BAD_ASSIGNEE_KIND_ERROR, message: BAD_ASSIGNEE_KIND_MESSAGE };
+  }
   const options = parseOptions(body.options);
   if (!options.ok) return { ok: false, error: BAD_OPTIONS_ERROR };
   const links = parseLinks(body.links);
@@ -213,7 +219,7 @@ export function parseTaskCreate(
       // it from the author, and derives NOTHING when the owner is somebody
       // else. Guessing from the name here is exactly what this field exists
       // to avoid.
-      assigneeKind: statedOwnerKind(body.assigneeKind),
+      assigneeKind: kind.assigneeKind,
       needs: needs.needs,
       options: options.options,
       // Forward undefined untouched: an omitted goal is what routes the task

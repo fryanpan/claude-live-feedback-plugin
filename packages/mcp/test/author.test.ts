@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { agentIdCandidates, agentIdForName } from '../../core/src/identity.ts';
 import { resolveAgentAuthor } from '../src/author.ts';
 
 describe('resolveAgentAuthor', () => {
@@ -48,6 +49,20 @@ describe('resolveAgentAuthor', () => {
     const a = resolveAgentAuthor({ FEEDBACK_AUTHOR: 'Blog Assistant' });
     expect(a.name).toBe('Blog Assistant');
     expect(a.id).toBe('agent-blog-assistant');
+  });
+
+  it('mints exactly the id the board looks a display name up by', () => {
+    // The one that matters in production: the session attaches under
+    // `AUTHOR.id`, the board matches a task's OWNER (a display name) against
+    // that roster. When these two derivations drifted, every task owned by an
+    // attached agent read "not recorded" — 83 rows on the main board.
+    for (const name of ['Live Feedback', 'Quick Build', 'Blog Assistant', '!!!']) {
+      const minted = resolveAgentAuthor({ FEEDBACK_AGENT_NAME: name }).id;
+      expect(minted).toBe(agentIdForName(name));
+      expect(agentIdCandidates(name)).toContain(minted.toLowerCase());
+    }
+    // Positive control: the candidate set is not simply everything.
+    expect(agentIdCandidates('Live Feedback')).not.toContain('agent-quick-build');
   });
 
   it('names with no alphanumerics still get distinct non-empty ids', () => {
