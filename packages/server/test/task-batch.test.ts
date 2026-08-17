@@ -251,6 +251,45 @@ describe('POST /api/workspaces/<id>/tasks/batch', () => {
       expect(at('Delete the old path')?.after).toEqual([seed?.id as string, flip?.id as string]);
     });
 
+    // Batch-local refs give one edge two spellings — `"#seed"` and the index
+    // of the row that declared it are the same row — so a caller can now write
+    // the same dependency twice WITHOUT repeating themselves, which is not
+    // true of a hand-written id list. Undeduped, it reaches `openBlockers` as
+    // two visits to one task and the reader is told twice that it is blocked
+    // by the same thing. `setTaskDependencies` has always deduped; creation
+    // did not, and this feature is what makes the gap reachable by accident.
+    it('collapses two spellings of ONE edge, rather than blocking twice on it', async () => {
+      const wsId = await seedWorkspace();
+      const res = await jj<BatchResult>(
+        await post(`/api/workspaces/${wsId}/tasks/batch`, {
+          author: AGENT,
+          tasks: [
+            { title: 'Warm the cache', goal: 'g-index', key: 'warm' },
+            {
+              title: 'Serve from cache',
+              goal: 'g-index',
+              after: ['#warm', 0],
+              afterEnforce: [0, '#warm'],
+            },
+          ],
+        }),
+      );
+      expect(res.failures).toEqual([]);
+      const stored = await listTasks(wsId);
+      const warm = stored.find((t) => t.title === 'Warm the cache');
+      const serve = stored.find((t) => t.title === 'Serve from cache');
+      expect(serve?.after).toEqual([warm?.id as string]);
+      expect(serve?.afterEnforce).toEqual([warm?.id as string]);
+      // The surface a person reads: one blocker, named once.
+      const blocked = await post(`/api/tasks/${serve?.id}/transition`, {
+        to: 'in-progress',
+        author: AGENT,
+      });
+      expect(blocked.status).toBe(409);
+      const body = (await blocked.json()) as { blockers: Array<{ taskId: string }> };
+      expect(body.blockers.map((b) => b.taskId)).toEqual([warm?.id as string]);
+    });
+
     it('carries afterEnforce through the same resolution, so the subset rule holds', async () => {
       const wsId = await seedWorkspace();
       const res = await jj<BatchResult>(

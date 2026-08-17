@@ -189,3 +189,112 @@ companion doc reuses the whole prose sync stack and the only new machinery —
 flat write-back with a conflict arm — is required for code editing anyway.
 `.md` members do NOT get flat write-back (single-writer per file: edits flow
 through the companion doc). Reversible; revisit if the two-doc UX confuses.
+
+## 2026-08-17 — A task's discussion keeps threading, and has exactly ONE composer
+
+**The report.** Bryan: *"why do I have two reply boxes at the bottom of each
+task…are we supporting threaded replies unnecsarily?"* He was right about the
+surface: `renderDiscussion` appended a reply box inside every thread and then a
+new-thread box under all of them, so the ordinary single-thread task ended in
+two stacked boxes whose only difference was placeholder text. N threads meant
+N+1 boxes.
+
+**What reproducing changed.** The premise that threading on a task is
+decorative did not survive contact with the board. Measured across all 96 tasks
+in this workspace:
+
+| | count |
+|---|---|
+| tasks with 0 threads | 62 |
+| tasks with exactly 1 thread | 32 |
+| tasks with 2 threads | 2 |
+| tasks with 3+ threads | 0 |
+| **task threads that are `text-range`-anchored, with a snippet** | **34 of 37** |
+| task threads that are `subject`-anchored | 3 |
+
+So multi-thread tasks are rare — but threads that point at a specific passage
+of the description are the overwhelming norm, because that is what an agent's
+`create_thread(docId: 'task:<id>', find: …)` produces. Only the browser's own
+"start a thread" path writes `anchor: {kind: 'subject'}`, and it accounts for
+all three of the unanchored ones. Task threads were doing exactly what document
+threads do; **the surface was throwing the anchor away** and then asking the
+reader to disambiguate piles it had just made indistinguishable.
+
+**Decision: option 2 — keep threading, make one composer.** Rejected:
+
+- *One flat conversation per task.* It reads as the simplest answer only while
+  you believe the threads are arbitrary. It would flatten 34 anchored threads,
+  discard an anchor an agent set deliberately, and change what `resolve_thread`
+  means on a task from "this point is settled" to "this task's whole discussion
+  is settled" — a store-model change smuggled in behind a UI fix.
+- *Differentiate the labels.* Accepts N+1 boxes and tries to fix them with
+  words, which is the state that was just described as oddly complex.
+
+**What ships.** Each thread quotes the passage it is anchored to and carries a
+`Reply` button that points the single composer at it. The composer sits at the
+bottom and names its target above the box (`Replying to "…"` / `Starting a new
+thread`), with `New thread` to switch away. The default target is the queue's
+aim if there is one, else the last thread on screen — which on the common
+single-thread task is the only reply anyone means, and makes that case behave
+exactly as it did minus the second box.
+
+**Nothing in the store changed.** No route, no anchor kind, no thread model.
+Agents still post through `create_thread` on `task:<id>` and their threads
+render better, not differently. Resolved threads stay visible and stay
+replyable — that visibility is deliberate, and hiding a thread with an
+unread reply in it is a bug this project has already shipped once.
+
+Reversible. **If you are about to add a second always-present composer, this is
+the state it produced.**
+
+## 2026-08-17 — A workspace is the unit of sharing; per-doc sharing is removed
+
+**Decision (Bryan, verbatim):** "Remove all code for sharing docs, reviews and
+so on individually. Share a workspace. And for anything already shared, please
+work with owning agent to attach it to a workspace or work with the agent to
+wind down the share."
+
+**What went:** the `share_doc` MCP tool, `POST /api/share/doc`, `share_link`'s
+`docId` argument, `Shares.createShareDoc`, `CreateShareDocReq`, and
+`ShareSurface`'s `'doc'` member. `Share.workspaceId` is now required, and
+`shareScopeAllows` refuses everything — including the app shell — for a target
+that names no workspace. The "target.docId is always in scope" base case in
+the gate WAS the per-doc grant; removing it is what makes the removal
+structural rather than cosmetic.
+
+**What stayed, and why it is not per-doc machinery:** visitor identity, the
+private-meta sidecar and `redactMetaForVisitor`, `redactHubEvents`, the
+Access-mode gate and `cf-api`, TTL enforcement, `link-session`, the
+`sharing.json` master switch, `set_share_ttl` / `unshare` / `list_shares` /
+`set_sharing_enabled`. Every one of them is needed *more* by workspace
+sharing, which reaches more content per grant. They sit in
+`packages/server/src/share/` because that is where sharing lives, not because
+they were doc-scoped.
+
+**Nothing had to be wound down.** Measured before removing anything: prod's
+`data/shares.json` was `[]`, `sharing.json` was `{"enabled": false}`, and the
+launchd service sets only `CF_SHARE_PUBLIC_HOSTNAME` — no `CF_ACCOUNT_ID` or
+`CF_ACCESS_TEAM_DOMAIN`, so `cfApi` is null and no Cloudflare Access app could
+ever have been created to outlive the local registry. The registry file is the
+only place a share was ever persisted.
+
+**Legacy records are dropped, not honoured.** `Shares.load` filters out any
+record with no `workspaceId` and rewrites the file, because the gate reads the
+registry rather than the code that wrote it — removing the mint path alone
+would have retired the feature everywhere except where it is exercised.
+
+**Older callers get a sentence, not a 404.** Every peer keeps calling the
+shared `:8787` routes with the payload ITS bundle sends. `POST
+/api/share/doc` and a `docId` in `POST /api/share/link` both answer 410
+`per_doc_sharing_removed` with the replacement named. The guard tests for the
+`docId` KEY rather than a truthy value, because the old bundle sends the same
+five-field body for a workspace share with `docId: undefined` — which
+`JSON.stringify` drops, so an old peer's workspace shares keep working.
+
+**Not settled here, deliberately:** whether a folder bind / diff review
+*grouping* counts as a "workspace" for sharing, or whether only a hub board
+does. The product's own vocabulary calls groupings "doc groupings" and
+reserves "workspace" for a hub board, which would read "reviews … individually"
+as covering them too — but that change requires every review to be reachable
+through a board first, and that is a product prerequisite rather than a
+deletion. Tracked separately.

@@ -690,6 +690,60 @@ function blockingLine(row: DecisionRow): string {
   return `${row.hard ? 'Hard-blocking' : 'Blocking'} ${n === 1 ? '1 task' : `${n} tasks`}`;
 }
 
+// ── Where the walkthrough is standing ──────────────────────────────────────
+
+/**
+ * The position the walkthrough should render, given where it was AIMED.
+ *
+ * The queue is re-derived on every render and shrinks underneath the reader —
+ * their own answer removes an item, and so does a peer's. A bare index is
+ * therefore not a position: when anything BEFORE it drops out, the same index
+ * silently lands one item further on, and the reader never sees the one that
+ * was skipped. So the aim is a `ReviewItem.key`, and the index is only the
+ * fallback for the two cases a key cannot express — the aimed item is gone,
+ * and the walk has run off the end into the done state.
+ *
+ * A negative index means closed, and stays closed: resolving it against the
+ * queue would reopen the panel on every repaint.
+ */
+export function walkPosition(queue: ReviewQueue, index: number, key: string | null): number {
+  if (index < 0) return -1;
+  if (key) {
+    const at = queue.items.findIndex((i) => i.key === key);
+    if (at !== -1) return at;
+  }
+  return Math.min(Math.max(index, 0), queue.items.length);
+}
+
+/**
+ * Where to stand after the item at `index` was answered or replied to.
+ *
+ * Answering usually takes the item OUT of the queue, so `index + 1` steps over
+ * whatever slid into its place — the classic off-by-one of a list that edits
+ * itself. Aim instead at the item that was NEXT when the answer was submitted,
+ * by identity.
+ *
+ * Two fallbacks, both real: the answered item can still be in the queue when
+ * the write lands (a decision's answer arrives back through the ydoc
+ * projection, not in the POST's response), in which case stepping past it is
+ * right; and the next item can be gone too, when a peer answered it while this
+ * one was being written — then the gap left behind is as good a place as any.
+ */
+export function advanceWalk(
+  queue: ReviewQueue,
+  index: number,
+  finishedKey: string,
+  nextKey: string | null,
+): number {
+  if (nextKey) {
+    const at = queue.items.findIndex((i) => i.key === nextKey);
+    if (at !== -1) return at;
+  }
+  const still = queue.items.findIndex((i) => i.key === finishedKey);
+  if (still !== -1) return still + 1;
+  return Math.min(Math.max(index, 0), queue.items.length);
+}
+
 // ── Quick capture ──────────────────────────────────────────────────────────
 
 /** Longer than this and the line stops being a title. Chosen to fit a phone
