@@ -151,7 +151,8 @@ describe('the owner mark on a board row', () => {
     renderBoard(root, boardSections(GOALS, tasks, filters), handlers());
     return Array.from(root.querySelectorAll('.hub-task-row')).map((row) => ({
       cls: (row.querySelector('.hub-owner-avatar') as HTMLElement).className,
-      label: (row.querySelector('.hub-row-assignee') as HTMLElement).getAttribute('aria-label') ?? '',
+      label:
+        (row.querySelector('.hub-row-assignee') as HTMLElement).getAttribute('aria-label') ?? '',
     }));
   }
 

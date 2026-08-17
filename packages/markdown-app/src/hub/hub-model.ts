@@ -221,7 +221,13 @@ export interface BoardFilters {
  * unreachable while reading as correct).
  */
 export function ownerKind(task: HubTask): HubOwnerKind {
-  return task.ownerKind ?? 'unknown';
+  if (task.ownerKind !== undefined) return task.ownerKind;
+  // The reserved literal is not a display name — it has meant "a person, and
+  // this board does not say which one" since before the kind existed. Reading
+  // it here is not the name-matching this field exists to avoid, and it keeps
+  // a row that reached the client without a resolved kind (an SSE payload,
+  // state projected by an older release) saying what it has always said.
+  return task.assignee.trim().toLowerCase() === 'human' ? 'person' : 'unknown';
 }
 
 /**
