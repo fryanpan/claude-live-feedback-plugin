@@ -1,6 +1,7 @@
 import { listThreads, prose } from '@feedback/core';
 import * as Y from 'yjs';
 import type { Rooms } from './rooms.ts';
+import type { PremiseNote } from './task-staleness.ts';
 import type { Task, TaskStore, TaskStoreEvent } from './tasks.ts';
 
 /**
@@ -472,6 +473,33 @@ export class TaskProjection {
     const room = this.rooms.get(taskBodyDocId(taskId));
     if (!room) return 0;
     return listThreads(room.ydoc).reduce((n, t) => n + t.comments.length, 0);
+  }
+
+  /**
+   * Every comment on the task, flattened across threads — the discussion the
+   * pickup path has always dropped.
+   *
+   * Reads from memory only, and that is sound rather than lucky: `Rooms`
+   * hydrates every `.ydoc` under the data dir at construction, so a task
+   * whose body room has ever held content is loaded. A room that genuinely
+   * does not exist has no threads either, so the empty answer is the true
+   * one rather than a miss.
+   *
+   * Resolved threads are included deliberately. "The premise moved, here is
+   * what is actually true" is exactly the note somebody resolves after
+   * acting on it, and dropping it would hide the corrections most likely to
+   * have been confirmed.
+   */
+  discussionNotes(taskId: string): PremiseNote[] {
+    const room = this.rooms.get(taskBodyDocId(taskId));
+    if (!room) return [];
+    const notes: PremiseNote[] = [];
+    for (const thread of listThreads(room.ydoc)) {
+      for (const c of thread.comments) {
+        notes.push({ ts: c.ts, by: c.author?.name ?? 'unknown', text: c.text });
+      }
+    }
+    return notes.sort((a, b) => a.ts - b.ts);
   }
 
   private scheduleSnapshot(docId: string): void {

@@ -198,6 +198,17 @@ export interface ServerOptions {
    * rule as `pluginRefresher`.
    */
   clientReleaseRootDir?: string | null;
+  /**
+   * How far a description may lag the newest note on its task before the
+   * work queue says so (see task-staleness.ts). Defaults to
+   * `PREMISE_STALE_AFTER_MS`.
+   *
+   * Overridable because the arming rule is a comparison against wall-clock
+   * gaps of DAYS, and a test cannot wait for one: the alternative is
+   * backdating a task through a route built for it, which would add a
+   * production surface whose only caller is a test.
+   */
+  premiseStaleAfterMs?: number;
   /** Absolute path to the built widget dist dir, or null to skip. */
   widgetDistDir?: string | null;
   /** Absolute path to the built markdown-app dist dir. */
@@ -1701,6 +1712,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               ? { limit: Number(limitRaw) }
               : {}),
             includeBlocked: url.searchParams.get('includeBlocked') === 'true',
+            // The discussion the queue has always dropped. Every one of the
+            // five known stale-premise pickups had a comment on the task
+            // saying the premise had moved, and none of them reached the
+            // next reader, because this route returned `body` and nothing
+            // else. Passed as a reader rather than a map so `buildQueue`
+            // stays pure and only the armed rows pay for their notes.
+            discussion: (taskId) => taskProjection.discussionNotes(taskId),
+            ...(opts.premiseStaleAfterMs !== undefined
+              ? { staleAfterMs: opts.premiseStaleAfterMs }
+              : {}),
           });
           return j(200, { workspaceId, tasks: rows });
         }
