@@ -72,7 +72,12 @@ import {
   ASSIGNEE_REQUIRED_MESSAGE,
   resolveAssignee,
 } from './task-owner.ts';
-import { TaskProjection, taskBodyDocId, taskIdOfBodyDoc } from './task-projection.ts';
+import {
+  TaskProjection,
+  taskBodyDocId,
+  taskBodyOpAllowed,
+  taskIdOfBodyDoc,
+} from './task-projection.ts';
 import { buildQueue, placeableGoals, summarizeGoals } from './task-queue.ts';
 import {
   type Ref,
@@ -3021,6 +3026,30 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
           const room = rooms.get(docId);
           if (!room) return j(404, { error: 'doc not found' });
+          // A task's body is a live room, so every route below can reach it
+          // by docId convention — and the content-mutating ones skip the
+          // write-once `quote` preservation and the `task.body_edited` row
+          // that `POST /api/tasks/<id>/body` runs. That is not a smaller
+          // version of the same act: it is the same act with the audit trail
+          // and the only surviving copy of the captured words removed, and it
+          // returned 200. Refused here, at the one place an arbitrary caller
+          // names a docId, rather than in `rooms.setDocContent` — which the
+          // body room's own seed path calls, and which has no actor to
+          // attribute an audit row to anyway (set_doc_content sends none).
+          const bodyDocTaskId = taskIdOfBodyDoc(docId);
+          if (bodyDocTaskId && !taskBodyOpAllowed(rest, req.method)) {
+            return j(409, {
+              ok: false,
+              error: 'task-body-doc',
+              taskId: bodyDocTaskId,
+              message:
+                `${docId} is a task's live description, not an ordinary doc. Rewriting it here ` +
+                'would drop the captured words it replaces and record nothing, so it is refused: ' +
+                'use update_task_body (POST /api/tasks/<taskId>/body), which preserves the ' +
+                "previous description into the task's `quote` when nothing holds it yet and " +
+                'emits task.body_edited. Comments and anchors on this doc are unaffected.',
+            });
+          }
           if (rest === '' && req.method === 'GET') {
             // Doc→task surfacing (§3.12 commit 4): chips for the tasks that
             // reference this doc — directly or via one of its threads.

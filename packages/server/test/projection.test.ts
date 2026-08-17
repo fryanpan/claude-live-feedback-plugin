@@ -346,11 +346,14 @@ describe('ydoc projection + workspace room', () => {
     expect(md).toContain('Check the flow works end to end.');
 
     // A live edit through the doc surface flows back into the store snapshot
-    // (search/export), debounced.
-    const r = await post(`/api/docs/${taskBodyDocId(taskId)}/content`, {
-      markdown: '## Steps\n\nRevised: verify on a phone as well.\n',
-    });
-    expect(r.status).toBe(200);
+    // (search/export), debounced. Applied straight to the ydoc, which is what
+    // "the doc surface" means here — the browser edits the body over the Yjs
+    // websocket, and the REST content route now refuses a `task:` doc so the
+    // captured words cannot be replaced without attribution.
+    prose.applyMarkdownToFragment(
+      prose.getProseFragment(bodyRoom.ydoc),
+      '## Steps\n\nRevised: verify on a phone as well.\n',
+    );
     await settle(700);
     expect(handle.tasks.getTask(taskId)?.body).toContain('verify on a phone');
   });
@@ -379,10 +382,14 @@ describe('ydoc projection + workspace room', () => {
     expect(projected.body).toContain('pick it up cold');
     expect(projected.bodyTruncated).toBeUndefined();
 
-    const r = await post(`/api/docs/${taskBodyDocId(taskId)}/content`, {
-      markdown: 'Agent can read the revised description so that it stays current.\n',
-    });
-    expect(r.status).toBe(200);
+    // Edited on the live room, the way the browser does it — see the note in
+    // the test above about why this is no longer the REST content route.
+    const bodyRoom = handle.rooms.get(taskBodyDocId(taskId));
+    if (!bodyRoom) throw new Error('body room missing');
+    prose.applyMarkdownToFragment(
+      prose.getProseFragment(bodyRoom.ydoc),
+      'Agent can read the revised description so that it stays current.\n',
+    );
     await settle(700);
     const after = room.ydoc.getMap('tasks').get(taskId) as ProjectedTask;
     expect(after.body).toContain('stays current');
