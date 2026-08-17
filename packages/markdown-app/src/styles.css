@@ -697,6 +697,17 @@ body.hub-body {
 .hub-drift-head {
   font-weight: 650;
 }
+/* The "here is what this reading covers" variant. It is on the board even
+   when nothing is wrong, so it must not wear the alarm's yellow border — a
+   permanent warning is a warning nobody reads. Declared AFTER the base rules
+   it overrides, so it wins on order as well as on specificity. */
+.hub-drift-quiet {
+  border-color: var(--border);
+}
+.hub-drift-quiet .hub-drift-head {
+  font-weight: 600;
+  color: var(--fg-muted);
+}
 .hub-drift-who,
 .hub-drift-fix {
   color: var(--fg-muted);
