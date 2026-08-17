@@ -40,7 +40,7 @@ Walk each user goal as if you've never seen the page before. For each goal:
 
 4. **Try to mess it up.** Submit empty fields. Click the wrong thing first. Use keyboard only. What breaks?
 
-5. **Try to do it on mobile.** Resize to ~375px width. Targets too small? Layout broken? Important content below the fold?
+5. **Try to do it on mobile.** Chrome will not make a window narrower than ~500px, so resizing the browser cannot reach a phone viewport at all — load the page inside a **same-origin 430×932 iframe** and drive that instead. 430px is the width this repo verifies at (`docs/product/design-mobile.md`). Targets too small? Layout broken? Important content below the fold?
 
 Take screenshots at the key states — initial load, mid-flow, completion, error states.
 
@@ -68,6 +68,19 @@ four merged PRs — retracting a completed task and holding a deploy — over tw
 DOM regions that were merely past the cut. See "A truncated page read is
 indistinguishable from a page that never rendered" in
 `docs/process/learnings.md`.
+
+### Timing the page: a backgrounded tab's clock is not yours
+
+- **Chrome clamps timers in a tab that isn't in front** — measured here at 3
+  ticks in 2 seconds where 50 were expected. Anything you time in a hidden tab
+  (a debounce, a retry backoff, an animation) reads LONGER than it is, so the
+  measurement supports a lower bound and never an exact value. Don't report
+  "the delay is 3s" from a background tab.
+- **What throttling does not undermine is whether the delay exists at all.**
+  Events are not throttled — a WebSocket close, a click, an inbound message
+  arrives immediately — so an implementation with no debounce paints within
+  milliseconds regardless of which tab is in front. "There is a delay here" is
+  provable in the background; its duration isn't.
 
 ## The heuristic checklist
 
