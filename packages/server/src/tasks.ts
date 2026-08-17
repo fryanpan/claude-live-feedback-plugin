@@ -1993,7 +1993,13 @@ export class TaskStore {
     // Dangling `after` edges would silently never block (the gate skips ids
     // it can't resolve), so refuse them at creation where the caller can fix
     // the reference.
-    const after = opts.after ?? [];
+    // Deduped for the same reason `setTaskDependencies` dedupes: `openBlockers`
+    // walks this array, so a repeated id is a second visit to one task and the
+    // reader is told twice that the same thing blocks them. Batch-local refs
+    // are what make that reachable by accident — `"#warm"` and the index of the
+    // row that declared it are two spellings of ONE edge, so a caller can write
+    // the duplicate without repeating themselves.
+    const after = [...new Set(opts.after ?? [])];
     for (const dep of after) {
       if (!state.tasks.has(dep)) return { ok: false, error: 'unknown-after' };
     }
@@ -2002,7 +2008,8 @@ export class TaskStore {
     // not the other is never visited and hard-blocks NOTHING. Refusing beats
     // quietly widening `after`, which would change the blocker list the
     // caller sees without saying so.
-    for (const dep of opts.afterEnforce ?? []) {
+    const afterEnforce = [...new Set(opts.afterEnforce ?? [])];
+    for (const dep of afterEnforce) {
       if (!after.includes(dep)) return { ok: false, error: 'unknown-after-enforce' };
     }
 
@@ -2061,7 +2068,7 @@ export class TaskStore {
       order,
       status: 'todo',
       after,
-      ...(opts.afterEnforce?.length ? { afterEnforce: opts.afterEnforce } : {}),
+      ...(afterEnforce.length > 0 ? { afterEnforce } : {}),
       ...(opts.dueAt !== undefined ? { dueAt: opts.dueAt } : {}),
       links: opts.links ?? [],
       ...(opts.origin !== undefined ? { origin: opts.origin } : {}),
