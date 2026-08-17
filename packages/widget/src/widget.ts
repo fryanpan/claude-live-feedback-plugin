@@ -58,6 +58,21 @@ export interface WidgetOpts {
    * anchored in that view don't leak onto the base page.
    */
   context?: AnchorContext;
+  /**
+   * Whose localStorage identity the widget adopts.
+   *
+   * `'widget'` (the default) namespaces the identity under `cfw:`, because on a
+   * third-party page the widget is a guest and must not read or write the host
+   * site's keys.
+   *
+   * `'host'` reads the UNPREFIXED keys — the ones `ensureUserIdentity` in the
+   * markdown-app/hub uses. Set it only when the widget is embedded in one of
+   * OUR OWN surfaces, where the page has already asked the person who they are:
+   * there, two namespaces mean one page holds two identities for one human, and
+   * the widget posts as "Anonymous <animal>" on a board that greets the same
+   * person by name.
+   */
+  identityScope?: 'widget' | 'host';
 }
 
 const TAG = 'claude-feedback-widget';
@@ -122,9 +137,13 @@ class FeedbackWidgetEl extends HTMLElement {
     this.opts.docId = opts.docId;
     this.opts.user = opts.user ?? null;
     this.opts.serverUrl = opts.serverUrl ?? defaultServerUrl();
+    // Identity keys only. `cfw:showResolved` is a widget-local UI preference
+    // and stays namespaced in both scopes — sharing it would let the widget
+    // collide with a host key that means something else.
+    const idPrefix = opts.identityScope === 'host' ? '' : 'cfw:';
     this.user = resolveUser(this.opts.user ?? null, {
-      get: (k) => localStorage.getItem(`cfw:${k}`),
-      set: (k, v) => localStorage.setItem(`cfw:${k}`, v),
+      get: (k) => localStorage.getItem(`${idPrefix}${k}`),
+      set: (k, v) => localStorage.setItem(`${idPrefix}${k}`, v),
     });
     this.showResolved = localStorage.getItem('cfw:showResolved') === '1';
     this.currentContext = {
@@ -154,6 +173,10 @@ class FeedbackWidgetEl extends HTMLElement {
     if (serverUrl) opts.serverUrl = serverUrl;
     const view = this.getAttribute('view');
     if (view) opts.context = { view };
+    // Opt-in, and deliberately so: an embed that does not ask for it keeps the
+    // `cfw:` namespace exactly as before, so this cannot change identity on any
+    // page already running the widget.
+    if (this.getAttribute('identity-scope') === 'host') opts.identityScope = 'host';
     this.init(opts);
   }
 
