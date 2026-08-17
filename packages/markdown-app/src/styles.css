@@ -2095,6 +2095,70 @@ a.hub-link-chip:hover {
   }
 }
 
+/* --- row anatomy on a PHONE: what the badge strip is allowed to cost ---
+   A phone, meaning both halves: a pointer that can't hover (so the 32px handle
+   from the coarse-pointer block is in the row) AND a viewport narrow enough
+   for the row to be over-subscribed. A coarse pointer alone would strip a
+   1024px tablet that can easily afford these badges; a width alone would strip
+   a desktop window nobody reviews on. Both, or neither.
+
+   THIS BLOCK'S POSITION IS LOAD-BEARING, and it is why the rules are here
+   rather than up beside the rest of the phone row anatomy. A media query adds
+   NO specificity, so `min-width: max-content` inside one loses on source order
+   to the base `.hub-task-badges { min-width: 0 }` — one class each. Written
+   next to the coarse-pointer block it computed to `0px` on a real phone-shaped
+   viewport while every other rule in it applied, which is the quietest
+   possible failure: the badges disappear as intended and the guarantee they
+   were traded for is not there. It sits after the base rule and after the
+   ≤900px block, so anything added to either of those from here on outranks it
+   — check this block when you touch them.
+
+   Measured on a real build at a true 430px with the touch rules forced on: the
+   row is 402px and its fixed chrome (handle 32 · open zone 0 · status 24 ·
+   risk 10 · owner 24 · six 6px gaps = 126px) leaves 276px for the title and
+   the badges TOGETHER. Each word badge is 55–75px of that. `decision` + `💬 3`
+   put the title at 167px; `💬 3` + `due Aug 19` put it at 152px — 38% of the
+   row, about 22 characters, on a list whose only job is telling two tasks
+   apart. Seven of thirty-three rows came out under half.
+
+   So the phone strip carries one mark: the discussion count — the one the row
+   would otherwise have no tell for at all, and the one `taskBadges` already
+   says must not be the one lost. The others each say in eight characters what
+   the detail panel says in a sentence, and a task that `needs: decision` is
+   named again by the board's own review strip. Same trade the status word and
+   the owner name already made on this row. What is genuinely given up is the
+   overdue mark: at 75px it cannot coexist with a half-width title, and a
+   second red 10px dot beside the risk dot would say two different things in
+   one shape. It stays one tap away, in the panel. */
+@media (hover: none) and (max-width: 560px), (pointer: coarse) and (max-width: 560px) {
+  /* Scoped to the strip, NOT to `.hub-badge`. The same class also draws a
+     goal SECTION's due date in `.hub-section-title` (`renderBoard`), which is
+     one badge per section rather than per row and costs the title nothing —
+     a bare `.hub-badge { display: none }` took that with it. */
+  .hub-task-badges .hub-badge {
+    display: none;
+  }
+  .hub-task-badges .hub-badge-comments {
+    display: inline-block;
+  }
+  /* The half that makes “whole or not at all” structural rather than
+     arithmetic. The base rule's `min-width: 0` (with `overflow: hidden`) makes
+     this grid track contribute a ZERO minimum, so the `minmax(0, 1fr)` title
+     could squeeze it to 11px and render `💬 3` as the left third of a speech
+     bubble with no number — which reads as a rendering fault rather than as
+     information. With a max-content minimum the track can never go under its
+     own content: the title's track floor is 0, so the TITLE absorbs any
+     shortfall and the chip is either there whole or not there.
+
+     It also outranks the `max-width: 30vw` ceiling in the ≤900px block, since
+     a min-width always beats a max-width. That is the priority we want — never
+     clip a chip — and it costs nothing here, because with one chip in the
+     strip max-content is ~40px against a 129px ceiling at 430px. */
+  .hub-task-badges {
+    min-width: max-content;
+  }
+}
+
 /* ================= VOICE (hold-to-talk, §2.4/§3.8) =================
    The mic button + streaming-dictation/ack indicator, shared by the hub,
    the doc surface, and the task detail. Bottom-LEFT, out of the deep-work
