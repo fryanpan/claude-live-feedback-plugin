@@ -67,16 +67,35 @@ set_goal_list(workspaceId, goals: [
 ])
 ```
 
-- **Order IS priority.** The first goal is the highest band; reordering this
-  list is the priority gesture (it fires `workspace.goals_changed`, never a
-  re-triage).
+- **Order IS priority.** The first goal is the highest band. To CHANGE that
+  order, use `reorder_goals` (below) rather than this call — it fires the same
+  `workspace.goals_changed`, never a re-triage, and it cannot lose a goal.
 - One subgoal level, maximum. `dueAt` is epoch ms and optional at every
   level — never invent one.
 - `"chores"` is **reserved**: it always renders last and must not appear in the
   list you pass.
-- **Destructive edge:** open tasks whose goal id disappears from the list move
-  to the bottom of Chores. The result reports `movedToChores` — re-place each
-  one with `set_task_goal` rather than leaving them piled.
+- **Destructive edge:** this is a full REPLACE, so open tasks whose goal id is
+  not in the list you send move to the bottom of Chores — including a goal
+  another writer added since you last read. The result reports
+  `movedToChores` — re-place each one with `set_task_goal` rather than leaving
+  them piled.
+
+## Change priority with `reorder_goals`, not `set_goal_list`
+
+```
+reorder_goals(workspaceId, order: ["recall", "latency"])
+reorder_goals(workspaceId, order: ["shape", "index"], parent: "latency")
+```
+
+- **Permutation only.** `order` must be exactly the goal ids already at one
+  scope — the top-level list, or the subgoals of `parent`. Ids, no titles.
+- An order that omits, repeats or invents an id is **refused**, naming the
+  offending ids. That refusal is the feature: a list that changed under you
+  makes you re-read rather than silently dropping somebody's goal.
+- Nothing is created, renamed, removed or reparented, and **no task moves** —
+  the Chores hazard above cannot happen here.
+- Get the ids from `get_workspace`, whose rows carry `depth` and, on
+  subgoals, `parent`.
 
 ## Read the board before you decide anything
 
