@@ -60,6 +60,18 @@ describe('resolveOwnerKind', () => {
     expect(resolveOwnerKind('  CARTOGRAPHER ', 'person', attached)).toBe('agent');
   });
 
+  it('keeps the reserved human owner a person against contradictory input', () => {
+    // `human` MEANS "a person, unnamed" — it is not a display name an agent
+    // could also hold, so the agent-signals-first rule does not reach it.
+    // Below the roster check this resolved to `agent`, which dropped the row
+    // out of every person-owned surface and disagreed with the client's own
+    // reading of the same literal.
+    expect(resolveOwnerKind('human', 'agent', NOBODY_ATTACHED)).toBe('person');
+    expect(resolveOwnerKind('human', 'agent', ALWAYS_ATTACHED)).toBe('person');
+    // Positive control: agent-first still holds for an actual NAME.
+    expect(resolveOwnerKind('Cartographer', 'agent', NOBODY_ATTACHED)).toBe('agent');
+  });
+
   it('does not let an attachment claim the unowned word', () => {
     // A roster that answered true for everything must still not turn "nobody
     // holds this" into "an agent holds this".
