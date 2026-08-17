@@ -52,14 +52,17 @@ describe('create_tasks is the canonical create verb', () => {
     expect(decl).toMatch(/one-row list/);
   });
 
-  it('marks create_task as not canonical, and points at the replacement', () => {
-    // It stays REACHABLE on purpose — peers sit on different bundle versions
-    // for days, so removing it in the release that promotes create_tasks
-    // breaks every session that has not restarted. This assertion is the
-    // record that it is deprecated rather than merely unloved.
-    const decl = declarationFor('create_task');
-    expect(decl).toMatch(/NOT the canonical create/);
-    expect(decl).toMatch(/create_tasks/);
+  it('carries the per-row field contract on its own schema', () => {
+    // The single-row `create_task` declaration used to hold every field
+    // description, and `tasks` merely pointed at it ("a create_task body
+    // without workspaceId"). Deleting that tool without moving these would
+    // have left a schema that still validates and documents nothing — the
+    // kind of regression no assertion about the deleted tool can catch.
+    const decl = declarationFor('create_tasks');
+    expect(decl).toMatch(/<persona> can <do x> so that <goal y>/); // the body rule
+    expect(decl).toMatch(/bare word 'agent'/); // the owner refusal
+    expect(decl).toMatch(/decision-shaped `body`|REQUIRED and has a different shape/);
+    expect(decl).toMatch(/MUST also appear in `after`/); // the afterEnforce subset rule
   });
 
   it('documents the batch-local dependency reference on the row schema', () => {
@@ -70,13 +73,7 @@ describe('create_tasks is the canonical create verb', () => {
   });
 });
 
-describe('the create handlers forward placement rather than dropping it', () => {
-  it('single create passes `placed` through and returns the goal bands', () => {
-    const h = handlerFor('create_task');
-    expect(h).toMatch(/res\.placement\?\.placed/);
-    expect(h).toMatch(/res\.placement\?\.goals/);
-  });
-
+describe('the create handler forwards placement rather than dropping it', () => {
   it('batch marks each row placed from the unplaced set, and returns the block once', () => {
     const h = handlerFor('create_tasks');
     expect(h).toMatch(/res\.placement\?\.unplaced/);
@@ -92,8 +89,45 @@ describe('the committed bundle peers load carries all of it', () => {
     // passing the assertions below vacuously.
     expect(BUNDLE).toContain('list_attachments');
     expect(BUNDLE).toContain('THE way to create tasks');
-    expect(BUNDLE).toContain('NOT the canonical create');
     expect(BUNDLE).toContain('/tasks/batch');
     expect(BUNDLE).toContain('placement');
+  });
+});
+
+/**
+ * The single-row `create_task` is GONE, and gone from the artifact peers
+ * actually load — `.mcp.json` runs `packages/plugin/mcp/index.js`, so a
+ * source-only removal would leave every peer still seeing the tool on its
+ * next restart. That is the exact shape of PR #69, which edited mcp.ts and
+ * never rebuilt.
+ *
+ * The word boundary is the whole trick: `create_task` is a PREFIX of
+ * `create_tasks`, so a plain `includes('create_task')` is true forever and
+ * an absence test written that way can never fail.
+ */
+describe('create_task is removed, in the source and in the shipped bundle', () => {
+  const SINGULAR = /create_task\b/; // \b does not match between `k` and `s`
+
+  it('the naive check cannot see the difference (why the boundary is load-bearing)', () => {
+    // Not a test of the product — a test of the assertion below. If this ever
+    // goes false, `create_tasks` has been renamed and the guard is measuring
+    // nothing.
+    expect(BUNDLE.includes('create_task')).toBe(true);
+    expect(SINGULAR.test('create_tasks')).toBe(false);
+    expect(SINGULAR.test("case 'create_task': {")).toBe(true);
+  });
+
+  it('is absent from the bundle, which still contains the batch verb', () => {
+    // Positive control in the SAME read: an empty or unreadable bundle would
+    // satisfy the absence assertion and fail this one.
+    expect(BUNDLE).toMatch(/create_tasks\b/);
+    expect(BUNDLE).toContain('case "create_tasks":');
+
+    expect(BUNDLE).not.toMatch(SINGULAR);
+  });
+
+  it('is absent from the source too — no declaration, no handler', () => {
+    expect(SRC).toMatch(/create_tasks\b/);
+    expect(SRC).not.toMatch(SINGULAR);
   });
 });
