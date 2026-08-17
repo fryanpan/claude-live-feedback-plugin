@@ -46,28 +46,37 @@ esac
 ZERO_SHA="0000000000000000000000000000000000000000"
 exit_code=0
 
+# The remote's NAME, which git passes as $1 ($2 is the URL). It decides which
+# remote-tracking refs count as "already public" below.
+remote_name="${1:-origin}"
+
 while read -r local_ref local_sha remote_ref remote_sha; do
   # Skip deletes
   [ "$local_sha" = "$ZERO_SHA" ] && continue
 
-  if [ "$remote_sha" = "$ZERO_SHA" ]; then
-    # New branch — diff against the remote's default branch.
-    default_branch="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')"
-    default_branch="${default_branch:-main}"
-    range="origin/${default_branch}..${local_sha}"
-  else
-    range="${remote_sha}..${local_sha}"
-  fi
+  # Both layers get the same question: which COMMITS does this push make
+  # public? Not "how do these two trees differ" — that was the old range, and
+  # the moment a branch merges main (which the conventions require before the
+  # final push) it re-presents every line main gained since the branch point as
+  # an addition. Measured at 7,516 insertions across 64 files for a branch
+  # whose own change was two lines. scrub_git.py has the full account.
+  #
+  # remote_sha is passed straight through: git reports the ref's ACTUAL state
+  # on the remote, which can be ahead of the local remote-tracking ref. The
+  # all-zeroes "no such ref there yet" form is dropped on the other side.
+  scan_args="--push-tip $local_sha --remote $remote_name --already-public $remote_sha"
 
   # Regex pass first (fast, deterministic, free).
-  if ! python3 "$regex_script" --diff-range "$range"; then
+  # shellcheck disable=SC2086
+  if ! python3 "$regex_script" $scan_args; then
     exit_code=1
     continue  # don't spend an API call on a push that's already blocked
   fi
 
   # Haiku pass second (context-aware, catches what regex misses).
   if [ "$haiku_enabled" = "1" ] && [ -f "$haiku_script" ]; then
-    if ! python3 "$haiku_script" --diff-range "$range"; then
+    # shellcheck disable=SC2086
+    if ! python3 "$haiku_script" $scan_args; then
       exit_code=1
     fi
   fi
