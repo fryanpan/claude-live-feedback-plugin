@@ -22,6 +22,9 @@ export interface TriageRequestPayload {
   oldGoal?: string;
   /** Who the server addressed this to. Absent when the lead seat is empty. */
   leadAgentId?: string;
+  /** `bucket-review` only: the bands that just appeared in the goal list —
+   *  the reason the unplaced pile is worth another look. */
+  newBands?: Array<{ id?: string; title?: string }>;
 }
 
 /**
@@ -107,7 +110,49 @@ function retriageDetail(p: TriageRequestPayload): string {
  * that turns out to be someone else's, never a goal edit that reaches nobody.
  * Silence has no recovery path — the live request is not replayed.
  */
+/**
+ * The body of a `bucket-review` — "a band appeared, re-look at the pile".
+ *
+ * Rendered on its own branch rather than through the re-triage one, because
+ * the north-star text did NOT move: borrowing that branch would tell the lead
+ * their placements were judged against a goal that never changed, which is
+ * the same lie that kept this request out of the re-triage sidecar.
+ *
+ * Two things the line must say and one it must not. It names the bands and
+ * every task id, for the same parity reason the re-triage line does — the
+ * present lead must not get less than the away one, who receives the whole
+ * `pendingBucketReview` on attach. And it says that leaving a task unplaced
+ * is a valid answer, because the server deliberately places nothing: an
+ * auto-assign would stamp a ranking decision no human made, and a line read
+ * as "empty this bucket" is that same decision made of words. It does NOT
+ * carry the goal-change contract skill: that asks for a re-triage of every
+ * open task against a new north star, which is not what happened here.
+ */
+function bucketReviewDetail(p: TriageRequestPayload): string {
+  const bands = (p.newBands ?? [])
+    .map((b) => (b.title && b.id ? `"${b.title}" (${b.id})` : (b.title ?? b.id)))
+    .filter((s): s is string => typeof s === 'string' && s.length > 0);
+  const banded = bands.length > 0 ? `\nnew band(s): ${bands.join(', ')}` : '';
+  const ids = p.taskIds ?? [];
+  const tasks = ids.length > 0 ? `\nunplaced tasks: ${ids.join(', ')}` : '';
+  return `${banded}${tasks}`;
+}
+
 export function triageRequestLine(p: TriageRequestPayload, selfAgentId: string): string {
+  if (p.kind === 'bucket-review') {
+    const count = p.taskIds?.length ?? '?';
+    const batch = p.batchId ? `, passing batchId "${p.batchId}" on each` : '';
+    const detail = bucketReviewDetail(p);
+    const ask =
+      `re-look at ${count} unplaced task(s) — a new goal band appeared, so some of them may ` +
+      `have a home now. Place the ones that do with set_task_goal${batch}; leaving the rest ` +
+      'unplaced is fine, that is what the bucket is for.';
+    const lead = p.leadAgentId;
+    if (lead !== undefined && lead !== selfAgentId) {
+      return `[triage.requested] FYI — ${ask} Addressed to lead agent ${lead}. Act only if that is you.${detail}`;
+    }
+    return `[triage.requested] ${ask}${detail}`;
+  }
   if (p.kind !== 'goal-retriage') {
     return `[triage.requested] shape and place task ${p.taskId}: ${SHAPE_THEN_PLACE}`;
   }
