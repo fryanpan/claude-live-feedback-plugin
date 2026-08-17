@@ -7,6 +7,7 @@
  * which the server would revert.
  */
 import { type User, connect, escapeHtml } from '@feedback/core';
+import { renderConnectionBanner, watchConnection } from '../connection-state.ts';
 import { ensureUserIdentity } from '../identity-prompt.ts';
 import { eventPath, typingInPath } from '../keyboard-target.ts';
 import { installStaleClientNotice } from '../stale-client.ts';
@@ -30,11 +31,13 @@ import {
   type ReviewItem,
   type ReviewThreadItem,
   type UptimeReport,
+  applyRefresh,
   boardSections,
   goalLabel,
   parseQuickAdd,
   pluginDriftNotice,
   presenceChips,
+  refreshReviewItems,
   reviewQueue,
 } from './hub-model.ts';
 import {
@@ -153,6 +156,7 @@ function buildShell(root: HTMLElement, name: string): void {
       <span class="hub-ws-name">${escapeHtml(name)}</span>
       <button type="button" id="hub-share" class="hub-btn">Share workspace</button>
     </header>
+    <div id="hub-connection" class="conn-banner hidden" role="status" aria-live="polite"></div>
     <div id="hub-presence" class="hub-presence hidden"></div>
     <div id="hub-lead" class="hub-lead"></div>
     <div id="hub-goal" class="hub-goal"></div>
@@ -248,6 +252,14 @@ async function main(): Promise<void> {
   // ── Realtime: the ws:<id> board room ────────────────────────────────────
   const client = connect(wsUrl(`ws:${workspaceId}`, 'workspace'));
   installStaleClientNotice(client);
+  // The board had no reading of its own connection at all, in any viewport —
+  // during a restart it just stopped updating. Wired here rather than in
+  // renderAll: this subscribes once, to THIS client, and the banner it drives
+  // is not a projection of board state.
+  watchConnection({
+    onStatus: (cb) => client.onStatus(cb),
+    onView: (view) => renderConnectionBanner(document.getElementById('hub-connection'), view),
+  });
   const tasksMap = client.ydoc.getMap('tasks');
   const wsMap = client.ydoc.getMap('workspace');
 
@@ -806,10 +818,11 @@ async function main(): Promise<void> {
   }
 
   async function loadReviewItems(): Promise<void> {
-    const res = await fetchJson<{ items: ReviewThreadItem[] }>(
-      `/api/workspaces/${encodeURIComponent(workspaceId)}/review-items`,
+    await refreshReviewItems(state, () =>
+      fetchJson<{ items: ReviewThreadItem[] }>(
+        `/api/workspaces/${encodeURIComponent(workspaceId)}/review-items`,
+      ),
     );
-    state.reviewItems = res?.items ?? [];
     renderBoardRegion();
   }
 
@@ -845,13 +858,19 @@ async function main(): Promise<void> {
     const before = knownAgentIds().join('\n');
     // Which sessions can't run what was merged. Rides the read the board
     // already makes, so nobody has to think to check.
-    state.pluginRelease = res?.pluginRelease ?? null;
-    state.agents = (res?.attachments ?? []).map((a) => ({
-      agentId: a.agentId,
-      state: a.state ?? 'away',
-      stateLabel: a.stateLabel ?? a.state ?? 'away',
-      lastToolCallAt: a.lastToolCallAt,
-    }));
+    // Same guard as the review strip: a refresh that never reached the server
+    // must not empty the presence row. During a restart every session looks
+    // detached for as long as the fetch keeps failing, which reads as the
+    // fleet going down rather than the server coming back.
+    state.pluginRelease = applyRefresh(state.pluginRelease, res, (r) => r.pluginRelease ?? null);
+    state.agents = applyRefresh(state.agents, res, (r) =>
+      (r.attachments ?? []).map((a) => ({
+        agentId: a.agentId,
+        state: a.state ?? 'away',
+        stateLabel: a.stateLabel ?? a.state ?? 'away',
+        lastToolCallAt: a.lastToolCallAt,
+      })),
+    );
     renderPresenceRegion();
     // The picker's options come from the attachment list, so a fresh list is
     // also a fresh set of agents to hand the board to.
@@ -873,8 +892,8 @@ async function main(): Promise<void> {
     const res = await fetchJson<{ events: ActivityEvent[]; uptime: UptimeReport | null }>(
       `/api/workspaces/${encodeURIComponent(workspaceId)}/events`,
     );
-    state.events = res?.events ?? [];
-    state.uptime = res?.uptime ?? null;
+    state.events = applyRefresh(state.events, res, (r) => r.events ?? []);
+    state.uptime = applyRefresh(state.uptime, res, (r) => r.uptime ?? null);
     if (state.view === 'activity') renderActivityRegion();
   }
 

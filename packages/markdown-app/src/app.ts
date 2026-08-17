@@ -1,5 +1,6 @@
 import { type User, connect, escapeHtml, readDocMeta, suggestOps } from '@feedback/core';
 import { mountCode } from './code/code-app.ts';
+import { watchConnection } from './connection-state.ts';
 import { renderDiffNav, setActiveFile } from './diff-nav.ts';
 import { type EditorHandle, createEditor } from './editor.ts';
 import { trackGesture } from './gesture.ts';
@@ -810,11 +811,16 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   const saveStateEl = el<HTMLElement>('save-state');
   let pendingLocalEdits = 0;
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
-  let wsOnline = false;
+  // Optimistic at mount, because the socket is always 'connecting' for the
+  // first moments of every page load and every doc navigation — starting at
+  // false painted the offline chip on each one and took it straight back
+  // down. watchConnection below only flips this once a drop has LASTED.
+  let wsOnline = true;
   function renderSaveState(): void {
     saveStateEl.classList.remove('save-state--saved', 'save-state--dirty', 'save-state--offline');
     if (!wsOnline) {
-      saveStateEl.textContent = 'Offline — reconnecting…';
+      // Not "Offline": a restart is the usual cause and it is coming back.
+      saveStateEl.textContent = 'Reconnecting…';
       saveStateEl.classList.add('save-state--offline');
       return;
     }
@@ -840,10 +846,17 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       renderSaveState();
     }, 500);
   });
-  client.onStatus((s) => {
-    if (scope.disposed) return;
-    wsOnline = s === 'open';
-    renderSaveState();
+  // One reading of the connection, shared with the board: a drop is only
+  // worth showing once it has outlasted the grace window, and it clears the
+  // moment the socket returns — no reload. The disposed guard matters because
+  // the grace timer can outlive the mount that armed it.
+  watchConnection({
+    onStatus: (cb) => client.onStatus(cb),
+    onView: (view) => {
+      if (scope.disposed) return;
+      wsOnline = view === 'online';
+      renderSaveState();
+    },
   });
   renderSaveState();
   // On navigation, cancel the pending save-state debounce and blank the shared
