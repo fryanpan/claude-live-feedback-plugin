@@ -123,8 +123,17 @@ there. That is how 25 feature commits sat undelivered between 2026-05-09 and
   `attach_agent`, and the workspace's presence strip names any session older
   than the version this server's deploy source would install. That is the
   answer to "does my peer have this yet" — read it there rather than asking.
-  Its one honest limit: "released" means *this checkout's manifest*, so a
-  checkout nobody pulled reports its own staleness as current.
+  Two honest limits. "Released" means *this checkout's manifest*, so a
+  checkout nobody pulled reports its own staleness as current. And the strip
+  only sees **sessions that attached to that board** — a peer that never
+  attached is absent, not current, and there is no server-wide session
+  registry to widen it with (a plugin version reaches the server through
+  `attach_agent` and nowhere else). So the strip now always states its
+  denominator — "no attached session is behind 0.1.40 (1 checked)" — because
+  an empty list rendered as silence, and silence read as a fleet-wide
+  all-clear while most of the fleet was several releases back. **Never gate a
+  tool removal on an empty `behind` list alone**; see "The strip reads a
+  board, not the fleet" in [docs/process/delivery.md](docs/process/delivery.md).
 - **An agent CAN run the update; the shell makes it look otherwise.** On this
   machine `claude` resolves to a shell function that injects flags ahead of the
   subcommand, so `claude plugin update …` is parsed as a prompt and dies with
