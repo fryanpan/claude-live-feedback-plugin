@@ -219,6 +219,147 @@ describe('POST /api/workspaces/<id>/tasks/batch', () => {
     expect(at.failures).toEqual([]);
   });
 
+  /**
+   * Dependencies between rows of one batch, through the REAL route.
+   *
+   * The pure decisions are covered in task-batch-refs.test.ts. What only the
+   * route can prove is that the resolved ids reach the STORE — the layer
+   * nothing type-checks, and the one where a param has twice been accepted
+   * and discarded in this repo.
+   */
+  describe('a row can depend on another row of the same batch', () => {
+    it('wires an edge by key and by index, and the store agrees it is an edge', async () => {
+      const wsId = await seedWorkspace();
+      const res = await jj<BatchResult>(
+        await post(`/api/workspaces/${wsId}/tasks/batch`, {
+          author: AGENT,
+          tasks: [
+            { title: 'Rebuild the index', goal: 'g-index', key: 'reindex' },
+            { title: 'Flip the read path', goal: 'g-index', after: ['#reindex'] },
+            { title: 'Delete the old path', goal: 'g-index', after: [0, 1] },
+          ],
+        }),
+      );
+      expect(res.failures).toEqual([]);
+      const stored = await listTasks(wsId);
+      const at = (title: string) => stored.find((t) => t.title === title);
+      const seed = at('Rebuild the index');
+      const flip = at('Flip the read path');
+      expect(seed?.id).toBeTruthy();
+      // The whole point: a real id, not the reference the caller sent.
+      expect(flip?.after).toEqual([seed?.id as string]);
+      expect(at('Delete the old path')?.after).toEqual([seed?.id as string, flip?.id as string]);
+    });
+
+    it('carries afterEnforce through the same resolution, so the subset rule holds', async () => {
+      const wsId = await seedWorkspace();
+      const res = await jj<BatchResult>(
+        await post(`/api/workspaces/${wsId}/tasks/batch`, {
+          author: AGENT,
+          tasks: [
+            { title: 'Decide the cutover', goal: 'g-index', key: 'cutover' },
+            {
+              title: 'Run the cutover',
+              goal: 'g-index',
+              after: ['#cutover'],
+              afterEnforce: ['#cutover'],
+            },
+          ],
+        }),
+      );
+      // Resolved apart, these two spellings would come out as different
+      // strings and the store would answer unknown-after-enforce.
+      expect(res.failures).toEqual([]);
+      const stored = await listTasks(wsId);
+      const decide = stored.find((t) => t.title === 'Decide the cutover');
+      const run = stored.find((t) => t.title === 'Run the cutover');
+      expect(run?.afterEnforce).toEqual([decide?.id as string]);
+    });
+
+    it('still accepts a task id the caller already holds', async () => {
+      // Positive control for the negative cases below: an entry with no sigil
+      // is an id, and that path is untouched.
+      const wsId = await seedWorkspace();
+      const first = await jj<BatchResult>(
+        await post(`/api/workspaces/${wsId}/tasks/batch`, {
+          author: AGENT,
+          tasks: [{ title: 'Earlier work', goal: 'g-index' }],
+        }),
+      );
+      const held = first.tasks[0]?.id as string;
+      const second = await jj<BatchResult>(
+        await post(`/api/workspaces/${wsId}/tasks/batch`, {
+          author: AGENT,
+          tasks: [{ title: 'Later work', goal: 'g-index', after: [held] }],
+        }),
+      );
+      expect(second.failures).toEqual([]);
+      expect(second.tasks[0]?.after).toEqual([held]);
+    });
+
+    it('fails the dependent row when the row it depends on failed', async () => {
+      const wsId = await seedWorkspace();
+      const res = await jj<BatchResult>(
+        await post(`/api/workspaces/${wsId}/tasks/batch`, {
+          author: AGENT,
+          tasks: [
+            { title: '   ', goal: 'g-index', key: 'seed' }, // refused: no title
+            { title: 'Depends on the row that failed', goal: 'g-index', after: ['#seed'] },
+            { title: 'Independent', goal: 'g-index' },
+          ],
+        }),
+      );
+      expect(res.failures.map((f) => f.index)).toEqual([0, 1]);
+      expect(res.failures[1]?.error).toBe('batch-dep-row-failed');
+      // Creating it with the edge dropped is the failure this prevents: the
+      // task would look blocked-free and nothing would ever say otherwise.
+      const titles = (await listTasks(wsId)).map((t) => t.title);
+      expect(titles).toEqual(['Independent']);
+    });
+
+    it('refuses a forward reference, a bad key, and an unknown key — by row', async () => {
+      const wsId = await seedWorkspace();
+      const res = await jj<BatchResult>(
+        await post(`/api/workspaces/${wsId}/tasks/batch`, {
+          author: AGENT,
+          tasks: [
+            { title: 'Points at a later row', goal: 'g-index', after: [2] },
+            { title: 'Key is all digits', goal: 'g-index', key: '12' },
+            { title: 'Names a key nobody declared', goal: 'g-index', after: ['#ghost'] },
+            { title: 'Fine', goal: 'g-index' },
+          ],
+        }),
+      );
+      expect(res.failures.map((f) => f.error)).toEqual([
+        'forward-batch-ref',
+        'bad-batch-key',
+        'unknown-batch-ref',
+      ]);
+      expect(res.failures.map((f) => f.index)).toEqual([0, 1, 2]);
+      // Every refusal carries a message the caller can act on without
+      // reading the source.
+      for (const f of res.failures) expect(f.message?.length ?? 0).toBeGreaterThan(0);
+      expect((await listTasks(wsId)).map((t) => t.title)).toEqual(['Fine']);
+    });
+
+    it('refuses a batch-local reference on the SINGLE-create route, by name', async () => {
+      // There is no batch here, so `#seed` can never resolve. Passing it
+      // through as a task id answers `unknown-after`, which sends the caller
+      // looking for a task that was never the problem.
+      const wsId = await seedWorkspace();
+      const res = await post(`/api/workspaces/${wsId}/tasks`, {
+        author: AGENT,
+        title: 'Lone task',
+        after: ['#seed'],
+      });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: string; message?: string };
+      expect(body.error).toBe('batch-ref-outside-batch');
+      expect(body.message).toContain('create_tasks');
+      expect(await listTasks(wsId)).toHaveLength(0);
+    });
+  });
+
   it('400s an empty or malformed batch, and 404s an unknown workspace', async () => {
     const wsId = await seedWorkspace();
     expect((await post(`/api/workspaces/${wsId}/tasks/batch`, { tasks: [] })).status).toBe(400);
