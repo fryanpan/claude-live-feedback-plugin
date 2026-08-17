@@ -55,6 +55,7 @@ import type { ShareConfig } from './share/types.ts';
 import { sanitizeVisitorAuthor } from './share/visitor-identity.ts';
 import { SseHub, openSseStream } from './sse.ts';
 import { KEYCHAIN_SERVICE, ThreadSummarizer } from './summarize.ts';
+import { indexBatchKeys, resolveRowRefs } from './task-batch-refs.ts';
 import {
   BAD_OPTIONS_ERROR,
   BAD_REF_ERROR,
@@ -71,7 +72,7 @@ import {
   resolveAssignee,
 } from './task-owner.ts';
 import { TaskProjection, taskBodyDocId, taskIdOfBodyDoc } from './task-projection.ts';
-import { buildQueue, summarizeGoals } from './task-queue.ts';
+import { buildQueue, placeableGoals, summarizeGoals } from './task-queue.ts';
 import {
   type Ref,
   type TaskStatus,
@@ -1980,6 +1981,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // caller still learns which parts of the shape are missing.
           return j(200, {
             task: res.task,
+            // What happened to the placement, and — only when nobody judged
+            // it — the bands it could have been ranked into. The caller that
+            // just generated this work is the one party that still knows why
+            // it exists; handing it `goal: "chores"` and nothing else is what
+            // let agent-generated work drift out of the goal structure.
+            placement: {
+              ...res.placement,
+              ...(res.placement.placed
+                ? {}
+                : { goals: placeableGoals(taskStore.getWorkspace(workspaceId)?.goals ?? []) }),
+            },
             ...(parsed.ignoredLinks.length > 0 ? { ignoredLinks: parsed.ignoredLinks } : {}),
             ...(res.shapeGaps !== undefined ? { shapeGaps: res.shapeGaps } : {}),
           });
@@ -2029,6 +2041,20 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }> = [];
           const ignoredLinks: Array<{ taskId: string; ignored: unknown[] }> = [];
           const shapeGaps: Array<{ taskId: string; gaps: unknown[] }> = [];
+          // Placement, collected per row and reported ONCE. Per-row it would
+          // repeat the same band list a hundred times in a hundred-row burst;
+          // the rows that need naming are the unplaced ones, so those are what
+          // it names.
+          const unplaced: string[] = [];
+          const triageDelivered: string[] = [];
+          // Batch-local dependency references. Keys are read once, up front,
+          // so an ambiguous one is refused where it is DECLARED rather than
+          // at every site that reads it; `idByIndex` fills in as rows land,
+          // which is what lets a row that depends on a FAILED row fail too
+          // instead of being created with the edge silently dropped.
+          const { keyToIndex, keyErrors } = indexBatchKeys(rows);
+          const idByIndex = new Map<number, string>();
+          const refCtx = { keyToIndex, idByIndex, rowCount: rows.length };
           for (const [index, row] of rows.entries()) {
             // One caller, one identity: every row is attributed to whoever
             // sent the batch. A row naming its own author would be a second
@@ -2037,7 +2063,28 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // which is who OWNS the row rather than who typed it.
             const title = (row as { title?: unknown } | null)?.title;
             const named = typeof title === 'string' ? { title } : {};
-            const parsed = parseTaskCreate(row, createdBy);
+            const keyError = keyErrors.get(index);
+            if (keyError) {
+              failures.push({ index, ...named, ...keyError });
+              continue;
+            }
+            const refs = resolveRowRefs(row, index, refCtx);
+            if (!refs.ok) {
+              failures.push({ index, ...named, error: refs.error, message: refs.message });
+              continue;
+            }
+            // Hand the parser a row whose references are already real ids —
+            // so the store's `unknown-after` gate and every rule downstream
+            // of it are unchanged by this feature.
+            const resolvedRow =
+              refs.after === undefined && refs.afterEnforce === undefined
+                ? row
+                : {
+                    ...(row as Record<string, unknown>),
+                    ...(refs.after !== undefined ? { after: refs.after } : {}),
+                    ...(refs.afterEnforce !== undefined ? { afterEnforce: refs.afterEnforce } : {}),
+                  };
+            const parsed = parseTaskCreate(resolvedRow, createdBy);
             if (!parsed.ok) {
               failures.push({
                 index,
@@ -2058,6 +2105,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               continue;
             }
             createdIds.add(res.task.id);
+            idByIndex.set(index, res.task.id);
+            if (!res.placement.placed) unplaced.push(res.task.id);
+            if (res.placement.triageDelivered) triageDelivered.push(res.task.id);
             if (parsed.ignoredLinks.length > 0) {
               ignoredLinks.push({ taskId: res.task.id, ignored: parsed.ignoredLinks });
             }
@@ -2072,6 +2122,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             workspaceId,
             tasks,
             failures,
+            // Absent when every row was placed — there is nothing to act on,
+            // and a block that is always there is a block nobody reads.
+            ...(unplaced.length > 0
+              ? {
+                  placement: {
+                    unplaced,
+                    triageDelivered,
+                    goals: placeableGoals(taskStore.getWorkspace(workspaceId)?.goals ?? []),
+                  },
+                }
+              : {}),
             ...(ignoredLinks.length > 0 ? { ignoredLinks } : {}),
             ...(shapeGaps.length > 0 ? { shapeGaps } : {}),
           });
@@ -2509,6 +2570,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
           return j(200, {
             task: res.task,
+            // Third create path, same report. Promoting a thread has exactly
+            // the same goal semantics as a create, so an agent that learns to
+            // read `placement` on one and finds it missing on another is being
+            // taught the field is unreliable.
+            placement: {
+              ...res.placement,
+              ...(res.placement.placed
+                ? {}
+                : { goals: placeableGoals(taskStore.getWorkspace(workspaceId)?.goals ?? []) }),
+            },
             ...(promoteLinks.ignored.length > 0 ? { ignoredLinks: promoteLinks.ignored } : {}),
             ...(res.shapeGaps !== undefined ? { shapeGaps: res.shapeGaps } : {}),
           });
