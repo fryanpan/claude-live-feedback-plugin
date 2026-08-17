@@ -151,7 +151,9 @@ describe('widget', () => {
     afterEach(() => localStorage.clear());
 
     it('ignores the host page name by default, and adopts it under scope=host', async () => {
-      const mod = await importWidget();
+      // Imported for the side effect only: this test drives the element
+      // declaratively, so all it needs is `customElements.define` to have run.
+      await importWidget();
       // The name the HOST page stored (unprefixed — what ensureUserIdentity writes).
       localStorage.setItem('feedback-user-name', 'Dana Reviewer');
 
