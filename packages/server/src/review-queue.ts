@@ -166,18 +166,60 @@ export function unansweredRun(thread: Thread): Comment[] {
  * behaves exactly as it did before this existed.
  */
 export function asksPerson(text: string, people: Iterable<string>): boolean {
-  if (!text.includes('?')) return false;
+  return findAsk(text, people) !== null;
+}
+
+/**
+ * Where the ask starts and where its question ends, or null if this is not one.
+ *
+ * ONE matcher, because the detector and the extractor have to agree about which
+ * span they are talking about. Two hand-written regexes that must stay in step
+ * is a bug generator, and it produced one immediately: the extractor's copy had
+ * dropped the newline branch, so a comment the detector accepted could fall
+ * back to clipping from character zero and cut the question off — the exact
+ * failure this change exists to fix, one layer down.
+ *
+ * Three conditions, all necessary. The measurements behind them are in
+ * `asksPerson`'s note above.
+ *  1. A direct ADDRESS: the name at a line start or just inside an emphasis
+ *     run, then the punctuation an address takes. The small leading allowance
+ *     admits "**Bryan —**" and "OK Bryan:" while still refusing a name buried
+ *     mid-sentence ("which is Bryan's call"), which is the distinction the
+ *     whole rule turns on.
+ *  2. The question comes AFTER the address and in the same paragraph. Asking
+ *     merely that a "?" exist somewhere in the comment let a status note that
+ *     happens to link `…/board?tab=open` be announced as a question.
+ *  3. It is a SENTENCE-ending "?" — followed by whitespace or the end of the
+ *     text. This is what separates a question from a URL query string,
+ *     `anchor.snippet?.text`, and a "?" inside quoted or fenced copy, which is
+ *     what nearly every false positive in the corpus turned out to be.
+ */
+export function findAsk(
+  text: string,
+  people: Iterable<string>,
+): { index: number; end: number } | null {
   for (const name of people) {
     if (name.trim() === '') continue;
-    // Name at a line start or just inside an emphasis run, then the
-    // punctuation a direct address takes. The small leading allowance lets
-    // "**Bryan —**" and "OK Bryan:" through without matching a name buried
-    // mid-sentence ("which is Bryan's call"), which is the distinction the
-    // whole rule turns on.
-    const re = new RegExp(`(?:^|\\n|\\*\\*)[^\\n]{0,12}?\\b${escapeRe(name)}\\b\\s*[—:,-]`);
-    if (re.test(text)) return true;
+    const re = new RegExp(`(?:^|\\n|\\*\\*)[^\\n]{0,12}?\\b${escapeRe(name)}\\b\\s*[—:,-]`, 'g');
+    for (let m = re.exec(text); m !== null; m = re.exec(text)) {
+      // The paragraph the address opens; a "?" past a blank line belongs to
+      // something else that happens to be further down the same comment.
+      const para = text.indexOf('\n\n', m.index);
+      const scope = para >= 0 ? text.slice(m.index, para) : text.slice(m.index);
+      const q = sentenceQuestion(scope);
+      if (q >= 0) return { index: m.index, end: m.index + q + 1 };
+    }
   }
-  return false;
+  return null;
+}
+
+/** Index of the first sentence-ending "?" in `s`, or -1. */
+function sentenceQuestion(s: string): number {
+  for (let i = s.indexOf('?'); i >= 0; i = s.indexOf('?', i + 1)) {
+    const next = s[i + 1];
+    if (next === undefined || /\s/.test(next)) return i;
+  }
+  return -1;
 }
 
 function escapeRe(s: string): string {
@@ -211,20 +253,12 @@ function stripEmphasis(text: string): string {
  * the "?", which is where the options were written.
  */
 function extractAsk(text: string, people: Iterable<string>): string {
-  const flat = text.replace(/\s+/g, ' ').trim();
-  for (const name of people) {
-    if (name.trim() === '') continue;
-    const re = new RegExp(`(?:^|\\*\\*)[^\\n]{0,12}?\\b${escapeRe(name)}\\b\\s*[—:,-]`);
-    const m = re.exec(flat);
-    if (!m) continue;
-    const from = flat.slice(m.index);
-    const end = from.indexOf('?');
-    // Through the end of the asking sentence; the options live between the
-    // address and the "?" in every form this is written in.
-    const cut = end >= 0 ? from.slice(0, end + 1) : from;
-    return clip(cut, DIRECT_ASK_MAX);
-  }
-  return clip(text, DIRECT_ASK_MAX);
+  // Sliced from the ORIGINAL text, before whitespace is flattened, because the
+  // match is anchored on line starts. Flattening first destroys the newlines
+  // the anchor is made of, which is how the previous copy of this regex
+  // silently stopped finding one of the three forms it claimed to accept.
+  const at = findAsk(text, people);
+  return clip(at ? text.slice(at.index, at.end) : text, DIRECT_ASK_MAX);
 }
 
 /**
