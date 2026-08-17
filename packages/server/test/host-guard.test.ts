@@ -319,6 +319,18 @@ describe('shareScopeAllows — a visitor is a reviewer, not an operator', () => 
     expect(shareScopeAllows('/api/docs/auth-rfc/export', 'GET', DOC)).toBe(false);
     expect(shareScopeAllows('/api/docs/auth-rfc/rename', 'POST', DOC)).toBe(false);
   });
+
+  it('BLOCKS writing the audit trail — moves and their evidence alike', () => {
+    // The allowlist above is the positive control: these same predicates say
+    // yes to the review verbs, so a `false` here is a decision and not a
+    // probe that can never see anything.
+    for (const target of [DOC, WS] as const) {
+      expect(shareScopeAllows('/api/tasks/t-1/transition', 'POST', target, workspaceOf)).toBe(
+        false,
+      );
+      expect(shareScopeAllows('/api/tasks/t-1/evidence', 'POST', target, workspaceOf)).toBe(false);
+    }
+  });
 });
 
 describe('shareScopeAllows (workspace-hub surfaces — §3.12 commit 8)', () => {
