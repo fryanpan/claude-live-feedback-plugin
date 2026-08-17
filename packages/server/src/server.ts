@@ -1412,6 +1412,24 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const body = await safeJson(req);
           const docId = (body?.docId as string) ?? '';
           if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
+          // A task's body room is created by the task store, never here. This
+          // route would otherwise `attachFile` it to a path on disk — seeding
+          // an empty body from that file and wiring bidirectional write-back,
+          // so a task's description would start tracking a file nobody on the
+          // board can see. Found while enumerating every route that can reach
+          // a `task:` docId: the doc-route guard below sits inside the
+          // `/api/docs/<id>/…` block and this create route is above it.
+          const newDocTaskId = taskIdOfBodyDoc(docId);
+          if (newDocTaskId) {
+            return j(409, {
+              error: 'task-body-doc',
+              taskId: newDocTaskId,
+              message:
+                `${docId} is a task's live description, not a doc this route creates. ` +
+                'It exists as soon as the task does; write it with update_task_body ' +
+                `(POST /api/tasks/${newDocTaskId}/body) and read it with get_doc.`,
+            });
+          }
           const type = (body?.type as DocType) ?? 'markdown';
           const sourceUrl = body?.sourceUrl as string | undefined;
           // Every markdown doc is file-backed. POST /api/docs is the sole

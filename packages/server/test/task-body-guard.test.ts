@@ -127,6 +127,45 @@ describe('task body docs refuse programmatic whole-body rewrites', () => {
     expect(task.body?.trim()).toBe(CAPTURE);
   });
 
+  it('refuses resolve_all, whose accept half rewrites the doc from the request body', async () => {
+    // The guard runs before any route reads a body, so `action: 'accept'` and
+    // `action: 'reject'` are the same string to it. Refusing both is the only
+    // call it can make from where it stands.
+    const taskId = await newTask('row-resolve-all');
+    for (const action of ['accept', 'reject'] as const) {
+      const r = await post(`/api/docs/task:${taskId}/suggestions/resolve_all`, { action });
+      expect(r.status).toBe(409);
+      expect(((await r.json()) as { error: string }).error).toBe('task-body-doc');
+    }
+    await settle();
+    expect((await readTask(taskId)).body?.trim()).toBe(CAPTURE);
+  });
+
+  it('refuses POST /api/docs for a task body docId, which would bind it to a file', async () => {
+    // A different route entirely — above the doc-route block the guard sits
+    // in — and it reaches the same room: `attachFile` would seed an empty body
+    // from a file on disk and wire write-back both ways.
+    const taskId = await newTask('row-create-doc');
+    const file = join(dataDir, 'hijack.md');
+    writeFileSync(file, '# Not this task\n\nContent from somewhere else.\n');
+
+    const r = await post('/api/docs', {
+      docId: `task:${taskId}`,
+      type: 'markdown',
+      sourceUrl: file,
+    });
+    expect(r.status).toBe(409);
+    const body = (await r.json()) as { error: string; message: string; taskId: string };
+    expect(body.error).toBe('task-body-doc');
+    expect(body.message).toContain('update_task_body');
+    expect(body.taskId).toBe(taskId);
+
+    await settle();
+    const task = await readTask(taskId);
+    expect(task.body?.trim()).toBe(CAPTURE);
+    expect(task.body).not.toContain('somewhere else');
+  });
+
   it('still allows DELETE of the body ROOM, which does not cost the captured words', async () => {
     // The most destructive-looking call here is deliberately untouched: the
     // description lives in the task store, not in the room, so deleting the
@@ -172,6 +211,26 @@ describe('task body docs refuse programmatic whole-body rewrites', () => {
     expect(r.status).toBe(200);
     const { thread } = (await r.json()) as { thread: { id: string } };
     expect(thread.id.length).toBeGreaterThan(0);
+  });
+
+  it('POSITIVE CONTROL: an orphaned comment on a task body can still be re-anchored', async () => {
+    // The guard's message promises comments and anchors are unaffected. A
+    // comment whose anchor broke is repaired through this route and no other,
+    // so refusing it would make the promise false in exactly the case that
+    // matters — the one where somebody already lost their place.
+    const taskId = await newTask('row-reanchor');
+    const created = await post(`/api/docs/task:${taskId}/threads`, {
+      author: AGENT,
+      text: 'a comment whose anchor will need repairing',
+      anchor: { kind: 'subject' },
+    });
+    expect(created.status).toBe(200);
+    const { thread } = (await created.json()) as { thread: { id: string } };
+
+    const r = await post(`/api/docs/task:${taskId}/threads/${thread.id}/reanchor`, {
+      anchor: { kind: 'subject' },
+    });
+    expect(r.status).toBe(200);
   });
 
   it('POSITIVE CONTROL: set_doc_content still works on an ordinary doc', async () => {

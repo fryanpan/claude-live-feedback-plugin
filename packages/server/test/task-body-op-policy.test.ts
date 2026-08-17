@@ -27,6 +27,11 @@ describe('taskBodyOpAllowed', () => {
     ['threads/t-123/rewrite_region', 'POST'],
     ['suggestions/s-123/accept', 'POST'],
     ['reparse_from_disk', 'POST'],
+    // The bulk form picks accept-vs-reject from the request BODY, which this
+    // guard runs before anything reads — so its destructive half cannot be
+    // told apart here and the whole route is refused. `suggestions/<sid>/reject`
+    // below is the per-suggestion way through.
+    ['suggestions/resolve_all', 'POST'],
   ];
 
   /** Discussing and annotating a task, which is what its body room is for. */
@@ -42,10 +47,13 @@ describe('taskBodyOpAllowed', () => {
     ['threads/t-123/reopen', 'POST'],
     ['threads/t-123/promote', 'POST'],
     ['threads/t-123/summary', 'POST'],
+    // Repairing a broken anchor rewrites thread metadata, never the doc — and
+    // a guard that promised comments were unaffected while making an orphaned
+    // one unfixable would be lying about its own scope.
+    ['threads/t-123/reanchor', 'POST'],
     ['agent_anchors', 'POST'],
     ['agent_anchors/a-123', 'DELETE'],
     ['suggestions/s-123/reject', 'POST'],
-    ['suggestions/resolve_all', 'POST'],
     ['activity', 'POST'],
     ['hooks/fire', 'POST'],
   ];
