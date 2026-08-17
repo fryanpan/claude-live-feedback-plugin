@@ -55,6 +55,7 @@ import type { ShareConfig } from './share/types.ts';
 import { sanitizeVisitorAuthor } from './share/visitor-identity.ts';
 import { SseHub, openSseStream } from './sse.ts';
 import { KEYCHAIN_SERVICE, ThreadSummarizer } from './summarize.ts';
+import { indexBatchKeys, resolveRowRefs } from './task-batch-refs.ts';
 import {
   BAD_OPTIONS_ERROR,
   BAD_REF_ERROR,
@@ -71,7 +72,7 @@ import {
   resolveAssignee,
 } from './task-owner.ts';
 import { TaskProjection, taskBodyDocId, taskIdOfBodyDoc } from './task-projection.ts';
-import { buildQueue, summarizeGoals } from './task-queue.ts';
+import { buildQueue, placeableGoals, summarizeGoals } from './task-queue.ts';
 import {
   type Ref,
   type TaskStatus,
@@ -595,16 +596,64 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   });
 
   /**
-   * Which workspace a docId belongs to, for SHARE SCOPING (§3.12 commit 8).
-   * Legacy grouping tags (folder binds / diff reviews) answer from the doc's
-   * own metadata; hub workspaces answer from the store — docs linked via
-   * attachDoc plus each task's own `task:<id>` body room, which is what
-   * makes "visitors may post comments" true for a hub share (comments need
-   * an in-scope doc). Deliberately NOT the ws:<id> board room: its share
-   * allowance is spelled out in host-guard, never a resolver side effect.
+   * Which workspaces an id belongs to, for SHARE SCOPING (§3.12 commit 8).
+   * The id may be a doc room OR a grouping (folder bind / diff review), and
+   * the answer is a SET because those two senses of "workspace" nest:
+   *
+   *   1. a member doc's own GROUPING     (`meta.workspaceId`)
+   *   2. the HUB board the id is filed on directly — docs linked via
+   *      attachDoc, each task's `task:<id>` body room, and a grouping id,
+   *      which is how a review goes on a board as one row
+   *   3. the HUB board that member's GROUPING is filed on — the hop that
+   *      makes a review row on a shared board actually open. Without it a
+   *      hub-scoped share saw the row and 403'd on everything behind it,
+   *      because every member answers with the grouping id and the share
+   *      carries the hub id.
+   *
+   * ONE rule for both halves of the guard, on purpose: the same function
+   * tells the allowlist that a grouping belongs to a hub and tells it that
+   * the grouping's members do. Two rules would agree today and diverge
+   * later, and the one that diverges open is the breach.
+   *
+   * Exactly one hop from grouping to board — not a transitive closure.
+   * Deliberately NOT the ws:<id> board room: its share allowance is spelled
+   * out in host-guard, never a resolver side effect.
    */
-  const shareWorkspaceOf = (docId: string): string | null =>
-    rooms.get(docId)?.meta.workspaceId ?? taskStore.workspaceOfDoc(docId);
+  const shareWorkspacesOf = (id: string): string[] => {
+    const out = new Set<string>();
+    const grouping = rooms.get(id)?.meta.workspaceId;
+    if (grouping) out.add(grouping);
+    for (const board of hubWorkspacesHolding(id)) out.add(board);
+    if (grouping) for (const board of hubWorkspacesHolding(grouping)) out.add(board);
+    return Array.from(out);
+  };
+
+  /**
+   * EVERY hub board an attachment is linked to — not the first one.
+   *
+   * `attachDoc` links, it does not move: only the default holding pen is
+   * unfiled on the way (see `unfileFromDefault`), so a review deliberately
+   * put on two real boards is on both. `taskStore.workspaceOfDoc` answers
+   * with whichever the store iterates first, which for share scoping means
+   * the visitors of every OTHER board holding it are refused the row their
+   * own board shows them — the exact 403-on-your-own-share failure
+   * `unfileFromDefault` records, surviving in the case it cannot fix,
+   * because there both links are legitimate and neither may be dropped.
+   *
+   * `task:<id>` keeps the store's own resolution: a task body belongs to its
+   * task's workspace, which is a field rather than a link, so it has one
+   * answer by construction.
+   */
+  function hubWorkspacesHolding(attachmentId: string): string[] {
+    if (attachmentId.startsWith('task:')) {
+      const w = taskStore.workspaceOfDoc(attachmentId);
+      return w ? [w] : [];
+    }
+    return taskStore
+      .listWorkspaces()
+      .filter((w) => w.docIds.includes(attachmentId))
+      .map((w) => w.id);
+  }
 
   /**
    * ── Two things wear the word "workspace". Read this before touching any
@@ -963,7 +1012,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // gets the 403 below.
             const repaired = repairStaleReviewUrl(pathname, req.method, decision.target);
             if (repaired) return repaired;
-            if (!shareScopeAllows(pathname, req.method, decision.target, shareWorkspaceOf)) {
+            if (!shareScopeAllows(pathname, req.method, decision.target, shareWorkspacesOf)) {
               return j(403, { error: 'out_of_share_scope' });
             }
             visitor = decision.target;
@@ -982,7 +1031,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               if (!target) return j(401, { error: 'no_share_session' });
               const repaired = repairStaleReviewUrl(pathname, req.method, target);
               if (repaired) return repaired;
-              if (!shareScopeAllows(pathname, req.method, target, shareWorkspaceOf)) {
+              if (!shareScopeAllows(pathname, req.method, target, shareWorkspacesOf)) {
                 return j(403, { error: 'out_of_share_scope' });
               }
               visitor = target;
@@ -1932,6 +1981,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // caller still learns which parts of the shape are missing.
           return j(200, {
             task: res.task,
+            // What happened to the placement, and — only when nobody judged
+            // it — the bands it could have been ranked into. The caller that
+            // just generated this work is the one party that still knows why
+            // it exists; handing it `goal: "chores"` and nothing else is what
+            // let agent-generated work drift out of the goal structure.
+            placement: {
+              ...res.placement,
+              ...(res.placement.placed
+                ? {}
+                : { goals: placeableGoals(taskStore.getWorkspace(workspaceId)?.goals ?? []) }),
+            },
             ...(parsed.ignoredLinks.length > 0 ? { ignoredLinks: parsed.ignoredLinks } : {}),
             ...(res.shapeGaps !== undefined ? { shapeGaps: res.shapeGaps } : {}),
           });
@@ -1981,6 +2041,20 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }> = [];
           const ignoredLinks: Array<{ taskId: string; ignored: unknown[] }> = [];
           const shapeGaps: Array<{ taskId: string; gaps: unknown[] }> = [];
+          // Placement, collected per row and reported ONCE. Per-row it would
+          // repeat the same band list a hundred times in a hundred-row burst;
+          // the rows that need naming are the unplaced ones, so those are what
+          // it names.
+          const unplaced: string[] = [];
+          const triageDelivered: string[] = [];
+          // Batch-local dependency references. Keys are read once, up front,
+          // so an ambiguous one is refused where it is DECLARED rather than
+          // at every site that reads it; `idByIndex` fills in as rows land,
+          // which is what lets a row that depends on a FAILED row fail too
+          // instead of being created with the edge silently dropped.
+          const { keyToIndex, keyErrors } = indexBatchKeys(rows);
+          const idByIndex = new Map<number, string>();
+          const refCtx = { keyToIndex, idByIndex, rowCount: rows.length };
           for (const [index, row] of rows.entries()) {
             // One caller, one identity: every row is attributed to whoever
             // sent the batch. A row naming its own author would be a second
@@ -1989,7 +2063,28 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // which is who OWNS the row rather than who typed it.
             const title = (row as { title?: unknown } | null)?.title;
             const named = typeof title === 'string' ? { title } : {};
-            const parsed = parseTaskCreate(row, createdBy);
+            const keyError = keyErrors.get(index);
+            if (keyError) {
+              failures.push({ index, ...named, ...keyError });
+              continue;
+            }
+            const refs = resolveRowRefs(row, index, refCtx);
+            if (!refs.ok) {
+              failures.push({ index, ...named, error: refs.error, message: refs.message });
+              continue;
+            }
+            // Hand the parser a row whose references are already real ids —
+            // so the store's `unknown-after` gate and every rule downstream
+            // of it are unchanged by this feature.
+            const resolvedRow =
+              refs.after === undefined && refs.afterEnforce === undefined
+                ? row
+                : {
+                    ...(row as Record<string, unknown>),
+                    ...(refs.after !== undefined ? { after: refs.after } : {}),
+                    ...(refs.afterEnforce !== undefined ? { afterEnforce: refs.afterEnforce } : {}),
+                  };
+            const parsed = parseTaskCreate(resolvedRow, createdBy);
             if (!parsed.ok) {
               failures.push({
                 index,
@@ -2010,6 +2105,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               continue;
             }
             createdIds.add(res.task.id);
+            idByIndex.set(index, res.task.id);
+            if (!res.placement.placed) unplaced.push(res.task.id);
+            if (res.placement.triageDelivered) triageDelivered.push(res.task.id);
             if (parsed.ignoredLinks.length > 0) {
               ignoredLinks.push({ taskId: res.task.id, ignored: parsed.ignoredLinks });
             }
@@ -2024,6 +2122,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             workspaceId,
             tasks,
             failures,
+            // Absent when every row was placed — there is nothing to act on,
+            // and a block that is always there is a block nobody reads.
+            ...(unplaced.length > 0
+              ? {
+                  placement: {
+                    unplaced,
+                    triageDelivered,
+                    goals: placeableGoals(taskStore.getWorkspace(workspaceId)?.goals ?? []),
+                  },
+                }
+              : {}),
             ...(ignoredLinks.length > 0 ? { ignoredLinks } : {}),
             ...(shapeGaps.length > 0 ? { shapeGaps } : {}),
           });
@@ -2538,6 +2647,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
           return j(200, {
             task: res.task,
+            // Third create path, same report. Promoting a thread has exactly
+            // the same goal semantics as a create, so an agent that learns to
+            // read `placement` on one and finds it missing on another is being
+            // taught the field is unreliable.
+            placement: {
+              ...res.placement,
+              ...(res.placement.placed
+                ? {}
+                : { goals: placeableGoals(taskStore.getWorkspace(workspaceId)?.goals ?? []) }),
+            },
             ...(promoteLinks.ignored.length > 0 ? { ignoredLinks: promoteLinks.ignored } : {}),
             ...(res.shapeGaps !== undefined ? { shapeGaps: res.shapeGaps } : {}),
           });

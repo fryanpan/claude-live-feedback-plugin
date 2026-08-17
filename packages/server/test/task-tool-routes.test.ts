@@ -628,6 +628,38 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       expect(res.task.links).toEqual([{ kind: 'doc', docId: 'related-doc' }]);
     });
 
+    it('reports placement the same way the create routes do', async () => {
+      // Promote is the third create path. An agent that learns to read
+      // `placement` on two of three is being taught the field is unreliable —
+      // and the goal semantics here are identical, so there is nothing to
+      // justify the difference.
+      const wsId = await seedWorkspace();
+      const unplacedSeed = await seedThread();
+      const unplaced = await jj<{
+        placement: { placed: boolean; goals?: Array<{ id: string }> };
+      }>(
+        await post(`/api/docs/${unplacedSeed.docId}/threads/${unplacedSeed.threadId}/promote`, {
+          workspaceId: wsId,
+          author: AGENT,
+        }),
+      );
+      expect(unplaced.placement.placed).toBe(false);
+      expect((unplaced.placement.goals ?? []).length).toBeGreaterThan(0);
+
+      // Positive control: the same call WITH a goal reports a placement and
+      // drops the band list, so the assertions above measure something.
+      const placedSeed = await seedThread();
+      const placed = await jj<{ placement: { placed: boolean; goals?: unknown[] } }>(
+        await post(`/api/docs/${placedSeed.docId}/threads/${placedSeed.threadId}/promote`, {
+          workspaceId: wsId,
+          author: AGENT,
+          goal: 'g1',
+        }),
+      );
+      expect(placed.placement.placed).toBe(true);
+      expect(placed.placement.goals).toBeUndefined();
+    });
+
     it('an omitted goal is a triage candidate; an explicit goal is a placement', async () => {
       const wsId = await seedWorkspace();
       await jj(

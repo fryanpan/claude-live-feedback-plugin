@@ -188,6 +188,37 @@ export interface GoalSummaryRow {
 /** The reserved out-of-band bucket, never present in `goals`. */
 const CHORES_ID = 'chores';
 
+/** A band a task can be ranked into — id, title, and where it sits. */
+export interface PlaceableGoal {
+  id: string;
+  title: string;
+  /** 0 for a top-level goal, 1 for a subgoal (one level max). */
+  depth: number;
+  /** The parent goal's id, on subgoal rows only. */
+  parent?: string;
+}
+
+/**
+ * The bands a create could have named, in priority order — what a task
+ * create hands back when the caller named no goal.
+ *
+ * Deliberately NOT `summarizeGoals`: no counts (this answers "where could
+ * this go", not "where is the open work"), and no appended rows. `chores`
+ * in particular is excluded, because it is where the unplaced task just
+ * landed — offering it back as a choice would be the tool suggesting the
+ * outcome it is reporting.
+ */
+export function placeableGoals(goals: WorkspaceGoal[]): PlaceableGoal[] {
+  const out: PlaceableGoal[] = [];
+  for (const g of goals) {
+    out.push({ id: g.id, title: g.title, depth: 0 });
+    for (const s of g.subgoals ?? []) {
+      out.push({ id: s.id, title: s.title, depth: 1, parent: g.id });
+    }
+  }
+  return out;
+}
+
 /**
  * The goal list as an agent needs to read it: ordered, flat (parent then its
  * subgoals), each with its task counts. Every field here was already in the

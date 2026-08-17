@@ -1,6 +1,6 @@
 ---
 name: running-a-workspace-hub
-description: Use when you need to stand up or drive a live-feedback workspace hub with the MCP tools — create_workspace, set_goal_list, create_task, set_task_goal, attach_agent, task_transition, answer_decision, link_refs. Covers the north-star goal, the ordered goal list, story-shaped task bodies, triage, the work loop, decisions, and the lead-agent seat.
+description: Use when you need to stand up or drive a live-feedback workspace hub with the MCP tools — create_workspace, set_goal_list, create_tasks, set_task_goal, attach_agent, task_transition, answer_decision, link_refs. Covers the north-star goal, the ordered goal list, story-shaped task bodies, triage, the work loop, decisions, and the lead-agent seat.
 ---
 
 # Running a live-feedback workspace hub
@@ -134,22 +134,33 @@ pair it with `next_tasks`, which carries the tasks and their full descriptions.
 
 ## File work
 
+`create_tasks` is the create verb, and it always takes a LIST — one task is a
+one-row list, so there is never a choice to make about which tool to reach for.
+
 ```
-create_task(
-  workspaceId,
-  title: "Cache the tokenizer between queries",
-  body: "Agent can reuse a warm tokenizer so that p95 drops without a reindex.\n\n"
-      + "Done when: a repeated query allocates no new tokenizer, and the "
-      + "latency benchmark shows the p95 delta.",
-  goal: "latency",          // OMIT to route through triage
-  after: ["t-abc123"],      // "don't start yet" is a dependency, not a status
-  afterEnforce: ["t-abc123"],
-  links: [{ kind: "url", url: "https://example.test/pr/41" }],
-)
-→ { taskId, goal, order, status, triagePending }
+create_tasks(workspaceId, tasks: [
+  {
+    title: "Cache the tokenizer between queries",
+    body: "Agent can reuse a warm tokenizer so that p95 drops without a reindex.\n\n"
+        + "Done when: a repeated query allocates no new tokenizer, and the "
+        + "latency benchmark shows the p95 delta.",
+    goal: "latency",          // OMIT to route through triage
+    key: "warm-cache",        // so a later ROW can depend on this one
+    links: [{ kind: "url", url: "https://example.test/pr/41" }],
+  },
+  {
+    title: "Benchmark the p95 after the cache lands",
+    goal: "latency",
+    after: ["#warm-cache"],   // a row of this batch, by key; or [0] by index
+    afterEnforce: ["#warm-cache"],
+  },
+])
+→ { created: [{ title, taskId, goal, order, status, assignee, placed, … }],
+    failures: [{ index, title, error, message }],
+    placement?: { unplaced, triageDelivered, goals } }
 ```
 
-Only `workspaceId` and `title` are required. What matters:
+Only `workspaceId` and a `title` per row are required. What matters:
 
 - **`body` — write one on every task**, even though the schema does not demand
   it. A bare title is not pickup-able by an agent that was not in the
@@ -160,9 +171,18 @@ Only `workspaceId` and `title` are required. What matters:
   more. It renders on the task and comes back whole from `next_tasks` — do not
   create a separate doc to hold it.
 - **`goal` — omit it when you have not judged placement yet.** The task lands
-  at the bottom of Chores and a triage request goes to the live workspace
-  agent (possibly you). An explicit goal — *even `"chores"`* — is a placement
-  and skips triage.
+  UNPLACED at the bottom of Chores and a triage request goes to the live
+  workspace agent (possibly you). An explicit goal — *even `"chores"`* — is a
+  placement and skips triage. The create says which happened: `placed` is
+  whether YOU named a goal (not whether the goal is `chores`), `triagePending`
+  is whether the request actually reached a live attachment, and `goals` — the
+  ordered bands — comes back when nothing placed it, so `set_task_goal` is the
+  next call rather than a `get_workspace` first.
+- **`key` + `after` — a row can depend on another row of the SAME batch**, by
+  key (`"#warm-cache"`) or by index (`0`, or `"#0"`). Backwards only: rows are
+  created in order, so a forward reference is refused, and so is a reference to
+  a row that failed — a task carrying a dependency that never blocks it is
+  worse than a refusal. An entry with no `#` is still a task id you hold.
 - **`quote` — the human's VERBATIM words**, for chat-born asks. Kept on the
   task forever. Do not paraphrase it.
 - `after` / `afterEnforce`: `afterEnforce` is a **subset** of `after`. An id in
@@ -211,22 +231,24 @@ into a comment on the whole task.
 A decision is a task with `needs: 'decision'` and a human assignee.
 
 ```
-create_task(
-  workspaceId,
-  title: "Pick the tokenizer cache eviction policy",
-  assignee: "human",
-  needs: "decision",
-  body: "Do we evict the tokenizer cache by LRU or keep one per index forever?\n\n"
-      + "Memory is the constraint: one-per-index costs ~40MB steady state and "
-      + "never stalls; LRU holds ~8MB but can stall a cold query by 300ms.\n\n"
-      + "- LRU: cheap memory, occasional cold-start stall\n"
-      + "- One per index: predictable latency, 5x the memory\n\n"
-      + "The latency work is blocked until this is answered.",
-  options: [
-    { label: "LRU", detail: "8MB steady, up to 300ms on a cold query" },
-    { label: "One per index", detail: "40MB steady, no stall" },
-  ],
-)
+create_tasks(workspaceId, tasks: [
+  {
+    title: "Pick the tokenizer cache eviction policy",
+    assignee: "human",
+    needs: "decision",
+    goal: "latency",
+    body: "Do we evict the tokenizer cache by LRU or keep one per index forever?\n\n"
+        + "Memory is the constraint: one-per-index costs ~40MB steady state and "
+        + "never stalls; LRU holds ~8MB but can stall a cold query by 300ms.\n\n"
+        + "- LRU: cheap memory, occasional cold-start stall\n"
+        + "- One per index: predictable latency, 5x the memory\n\n"
+        + "The latency work is blocked until this is answered.",
+    options: [
+      { label: "LRU", detail: "8MB steady, up to 300ms on a cold query" },
+      { label: "One per index", detail: "40MB steady, no stall" },
+    ],
+  },
+])
 ```
 
 **The body is REQUIRED and has a shape**: the question in one line, what is at

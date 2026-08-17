@@ -145,11 +145,22 @@ export function shareScopeAllows(
   method: string,
   target: ShareTarget,
   /**
-   * Resolves a docId to the workspace it belongs to (null when it belongs
-   * to none). Only consulted for workspace shares — a doc share never
-   * widens past its one doc, whatever this returns.
+   * Every workspace an id belongs to, most specific first — empty when it
+   * belongs to none. ONE rule, consulted at BOTH places a scope question is
+   * asked below (a member doc, and a `/api/workspaces/<id>/…` path segment),
+   * because two rules that agree today drift apart later and the one that
+   * drifts open is a breach.
+   *
+   * The id may be a doc OR a grouping (folder bind / diff review), and a
+   * doc belongs to more than one workspace at once: its grouping, and the
+   * hub board that grouping is filed on. Membership is therefore a SET, not
+   * a single answer — an exact `=== workspaceOf(id)` was what refused a hub
+   * visitor every review row on their own board.
+   *
+   * Only consulted for workspace shares — a doc share never widens past its
+   * one doc, whatever this returns.
    */
-  workspaceOf?: (docId: string) => string | null,
+  workspacesOf?: (id: string) => string[],
 ): boolean {
   // Static app shell + assets (needed to render the review at all).
   if (pathname === '/app' || pathname.startsWith('/app/')) return true;
@@ -157,12 +168,40 @@ export function shareScopeAllows(
   if (pathname === '/widget.esm.js' || pathname.startsWith('/widget/')) return true;
   if (pathname === '/favicon.ico') return true;
 
-  /** Is this path segment a doc the share covers? */
+  /**
+   * Is this id INSIDE the shared workspace? The one rule, and the only place
+   * `workspacesOf` is read — both predicates below are it plus their own base
+   * case, so there is nothing here for a second rule to drift away from.
+   */
+  const insideSharedWorkspace = (id: string): boolean => {
+    const wsId = target.workspaceId;
+    if (!wsId) return false; // a doc share never widens past its one doc
+    const owners = workspacesOf?.(id);
+    // `Array.isArray` is not ceremony: this parameter used to return a bare
+    // `string | null`, and a STRING also answers `.includes` — so a caller
+    // still handing the old shape would silently grant on any SUBSTRING
+    // match. Refusing a non-array can only close, never open.
+    return Array.isArray(owners) && owners.includes(wsId);
+  };
+
+  /** Does this path segment name a DOC the share covers? */
   const inScope = (segment: string): boolean => {
     const id = safeDecode(segment);
     if (id === target.docId || segment === target.docId) return true;
-    if (!target.workspaceId) return false;
-    return workspaceOf?.(id) === target.workspaceId;
+    return insideSharedWorkspace(id);
+  };
+
+  /**
+   * Does this `/api/workspaces/<seg>/…` segment name a workspace the share
+   * covers — the shared workspace itself, or a grouping filed on it?
+   *
+   * Deliberately NOT `inScope`: a workspace id and a doc id come from the
+   * same string space, and letting the entry DOC of a workspace share match
+   * here would answer a workspace question with a doc's identity.
+   */
+  const inWorkspaceScope = (segment: string): boolean => {
+    const id = safeDecode(segment);
+    return id === target.workspaceId || insideSharedWorkspace(id);
   };
 
   // Workspace-hub surfaces (§3.12 commit 8) — three explicit allowances,
@@ -170,7 +209,7 @@ export function shareScopeAllows(
   // board: the ws:<id> room syncs every task in the workspace (§3.3 rule 2),
   // so task chips inside a shared doc resolve through the REST endpoint
   // below instead. The board room is deliberately NOT resolved through
-  // `workspaceOf` (it is not a member doc) — its allowance is spelled out
+  // `workspacesOf` (it is not a member doc) — its allowance is spelled out
   // here so granting it stays a decision, not a resolver side effect.
   if (target.workspaceId) {
     const wsId = target.workspaceId;
@@ -251,8 +290,23 @@ export function shareScopeAllows(
   // They are bounded by the workspace root — rooms.openContextFile /
   // openEditableFile reject any relPath that escapes it ('bad-path').
   //
-  // Two things stay closed: a different workspace, and DELETE (bare
-  // /api/workspaces/<id>), which would let a visitor destroy the review.
+  // Two things stay closed: a workspace this share does not cover, and
+  // DELETE (bare /api/workspaces/<id>), which would let a visitor destroy
+  // the review.
+  //
+  // "Covers" is `inScope`, not string equality, and that is the whole of the
+  // fix for a shared BOARD: a group bind is filed on a hub workspace, so the
+  // review row a visitor can see on the board is reached through the
+  // GROUPING's id while the share is scoped to the HUB's. An exact `!==`
+  // refused every one of them. A grouping filed on a different board is not
+  // in the set `workspacesOf` returns, so it stays refused — that half is
+  // the one under test, because widening is the direction that costs.
+  //
+  // What this inherits, stated rather than discovered later: a diff review's
+  // workspace root is the whole repo, so a board visitor who can reach the
+  // review can `files`/`context-file` the repo the same way a visitor
+  // invited to that review directly always could. Sharing the board is
+  // sharing what is filed on it.
   //
   // Worth knowing when you share a DIFF review rather than a folder: the
   // workspace root is the whole repo, so `files` lists every repo file and
@@ -264,7 +318,7 @@ export function shareScopeAllows(
     const rest = pathname.slice('/api/workspaces/'.length);
     const slash = rest.indexOf('/');
     if (slash < 0) return false; // bare /api/workspaces/<id> is DELETE-only
-    if (safeDecode(rest.slice(0, slash)) !== target.workspaceId) return false;
+    if (!inWorkspaceScope(rest.slice(0, slash))) return false;
     const sub = rest.slice(slash + 1);
     if (method === 'GET')
       return sub === 'tree' || sub === 'grouped' || sub === 'threads' || sub === 'files';

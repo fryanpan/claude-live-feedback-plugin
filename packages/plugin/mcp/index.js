@@ -13798,7 +13798,7 @@ var AUTHOR = resolveAgentAuthor({
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.36";
+var PLUGIN_VERSION = "0.1.38";
 var server = new Server({
   name: "claude-live-feedback",
   version: PLUGIN_VERSION
@@ -13880,9 +13880,10 @@ var server = new Server({
     "",
     "WORKSPACE HUB: a hub workspace is a goal + a task board + linked docs.",
     "create_workspace mints one; attach_doc links existing docs/reviews to it;",
-    "create_task / create_tasks (a whole burst in one call) / promote_to_task",
-    "add work (omit `goal` and the task lands in",
-    "Chores awaiting triage — placing it with set_task_goal IS the triage:",
+    "create_tasks (ALWAYS a list — one idea is a one-row list) and",
+    "promote_to_task add work (omit `goal` and the task lands UNPLACED in",
+    "Chores awaiting triage — the create says so and hands you the goal",
+    "bands, and placing it with set_task_goal IS the triage:",
     "pick the goal AND the exact position, and pass riskTier for how dangerous",
     "the ACTION is, not how important the task is). task_transition is the",
     "single gate for status changes — blockers come back in the result, and",
@@ -14625,7 +14626,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "create_task",
-      description: 'Create a task on a hub workspace board. For chat-born asks pass `quote` — the human\'s VERBATIM words, kept forever on the task (for thread-born asks use promote_to_task, which captures the quote itself). OMIT `goal` when you have not judged placement yet: the task lands at the bottom of Chores and a triage request is emitted to the live workspace agent (that may be you — place it with set_task_goal). An explicit goal — even "chores" — is a placement and skips triage. `after` lists task ids this depends on ("don\'t start yet" is a dependency, not a status); `afterEnforce` names the subset whose open state hard-blocks transitions. Write the body like a small user story with falsifiable acceptance criteria when the task is for someone else or parked beyond today; a bare title is fine for work you\'ll do within the hour. Returns { taskId, goal, order, status, triagePending } — trimmed, read details back with list_tasks.',
+      description: 'NOT the canonical create — use `create_tasks`, which takes a list and treats one task as a one-row list. This single-row form is kept only so sessions on older bundles keep working, and it is scheduled for removal; everything below is true of a `create_tasks` row too. For chat-born asks pass `quote` — the human\'s VERBATIM words, kept forever on the task (for thread-born asks use promote_to_task, which captures the quote itself). OMIT `goal` when you have not judged placement yet: the task lands UNPLACED at the bottom of Chores and a triage request is emitted to the live workspace agent (that may be you — place it with set_task_goal). An explicit goal — even "chores" — is a placement and skips triage. `after` lists task ids this depends on ("don\'t start yet" is a dependency, not a status); `afterEnforce` names the subset whose open state hard-blocks transitions. A batch-local reference ("#seed") is refused here by name — it only means something inside one `create_tasks` call. Write the body like a small user story with falsifiable acceptance criteria when the task is for someone else or parked beyond today; a bare title is fine for work you\'ll do within the hour. Returns { taskId, goal, order, status, triagePending, placed } plus `goals` — the ordered bands — when nothing placed it.',
       inputSchema: {
         type: "object",
         properties: {
@@ -14680,14 +14681,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "create_tasks",
-      description: "Capture a BURST of ideas as tasks in ONE call — the tool to reach for when a conversation just produced five things worth doing, instead of five create_task round trips. Each row takes exactly the fields create_task takes (minus workspaceId), and every rule create_task applies applies per row: an omitted `assignee` means YOU own that row, an omitted `goal` routes that row through triage, an explicit `order` places it. Returns the created tasks IN BOARD ORDER — the ranking you just produced, without a second read — plus `failures: [{index, title, error, message}]` for any row that didn't land. A bad row NEVER rejects the batch: its neighbours are created and it comes back by index, so you fix and re-send that one row. The whole call is refused only when nothing could have landed anyway (unknown workspace, no rows).",
+      description: 'THE way to create tasks — always takes a LIST, and a single task is a one-row list, so reach for this one whether you have one idea or fifteen. Filing 24 things one at a time costs 78s against 13s for the same rows in one call, and that gap is a tooling choice rather than a floor. Each row takes exactly the fields create_task takes (minus workspaceId), and every rule applies per row: an omitted `assignee` means YOU own that row, an omitted `goal` leaves that row UNPLACED at the bottom of Chores and routes it through triage, an explicit `order` places it. A row may name another row of the SAME batch in `after` / `afterEnforce` — by index (`0`) or by a `key` another row declares (`"#seed"`) — so a burst with internal ordering no longer needs a follow-up set_task_dependencies. Returns the created tasks IN BOARD ORDER — the ranking you just produced, without a second read — plus `failures: [{index, title, error, message}]` for any row that didn\'t land, plus `placement` when any row went in unplaced (the unplaced task ids and the ordered goal bands, so you can set_task_goal without reading the board first). A bad row NEVER rejects the batch: its neighbours are created and it comes back by index, so you fix and re-send that one row. The whole call is refused only when nothing could have landed anyway (unknown workspace, no rows).',
       inputSchema: {
         type: "object",
         properties: {
           workspaceId: { type: "string" },
           tasks: {
             type: "array",
-            description: "The rows, at most 100 — an oversized batch is refused WHOLE rather than truncated, and a tracker that big belongs in import_tasks_markdown. Each row is a create_task body without `workspaceId`: {title, body?, assignee?, needs?, options?, goal?, order?, after?, afterEnforce?, dueAt?, links?, quote?}. `title` is the only required field — but write a `body` on every row you are not doing yourself within the hour, for the same reason create_task says so: a bare title is not pickup-able by an agent that was not in the conversation. Rows are created in the order given, and `after` can only name a task id you already hold, so dependencies BETWEEN rows of one batch need a follow-up set_task_dependencies.",
+            description: 'The rows, at most 100 — an oversized batch is refused WHOLE rather than truncated, and a tracker that big belongs in import_tasks_markdown. Each row is a create_task body without `workspaceId`: {title, body?, key?, assignee?, needs?, options?, goal?, order?, after?, afterEnforce?, dueAt?, links?, quote?}. `title` is the only required field — but write a `body` on every row you are not doing yourself within the hour: a bare title is not pickup-able by an agent that was not in the conversation. `key` is an optional label THIS batch uses to reference the row; it must be unique in the batch and must not be all digits or start with "#". Rows are created in the order given, so a row can only depend on a row ABOVE it — a forward reference is refused rather than silently dropped, and so is a reference to a row that failed (a task carrying a dependency that never blocks it is worse than a refusal). An entry with no "#" is still an existing task id, exactly as before.',
             items: { type: "object" },
             maxItems: 100
           }
@@ -15110,7 +15111,7 @@ var NO_AUTO_WATCH_TOOLS = new Set([
   "observe_url",
   "attach_doc"
 ]);
-function taskCreatedSummary(task, ignoredLinks, shapeGaps) {
+function taskCreatedSummary(task, ignoredLinks, shapeGaps, placed) {
   return {
     taskId: task.id,
     goal: task.goal,
@@ -15118,6 +15119,7 @@ function taskCreatedSummary(task, ignoredLinks, shapeGaps) {
     status: task.status,
     assignee: task.assignee,
     triagePending: task.triagePendingTs !== undefined,
+    ...placed !== undefined ? { placed } : {},
     ...shapeGaps !== undefined && shapeGaps.length > 0 ? { shapeGaps } : {},
     ...ignoredLinks !== undefined && ignoredLinks.length > 0 ? { ignoredLinks } : {}
   };
@@ -15587,19 +15589,24 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...quote !== undefined ? { quote } : {},
           author: AUTHOR
         });
-        return ok(taskCreatedSummary(res.task, res.ignoredLinks, res.shapeGaps));
+        return ok({
+          ...taskCreatedSummary(res.task, res.ignoredLinks, res.shapeGaps, res.placement?.placed),
+          ...res.placement?.goals !== undefined ? { goals: res.placement.goals } : {}
+        });
       }
       case "create_tasks": {
         const { workspaceId, tasks } = a;
         const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/tasks/batch`, { tasks, author: AUTHOR });
         const gapsFor = (taskId) => res.shapeGaps?.find((g) => g.taskId === taskId)?.gaps ?? undefined;
         const droppedFor = (taskId) => res.ignoredLinks?.find((l) => l.taskId === taskId)?.ignored ?? undefined;
+        const unplaced = new Set(res.placement?.unplaced ?? []);
         return ok({
           created: res.tasks.map((t) => ({
             title: t.title,
-            ...taskCreatedSummary(t, droppedFor(t.id), gapsFor(t.id))
+            ...taskCreatedSummary(t, droppedFor(t.id), gapsFor(t.id), !unplaced.has(t.id))
           })),
-          failures: res.failures
+          failures: res.failures,
+          ...res.placement !== undefined ? { placement: res.placement } : {}
         });
       }
       case "promote_to_task": {
@@ -15616,7 +15623,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           author: AUTHOR
         });
         return ok({
-          ...taskCreatedSummary(res.task, res.ignoredLinks),
+          ...taskCreatedSummary(res.task, res.ignoredLinks, undefined, res.placement?.placed),
+          ...res.placement?.goals !== undefined ? { goals: res.placement.goals } : {},
           title: res.task.title,
           quote: res.task.quote
         });

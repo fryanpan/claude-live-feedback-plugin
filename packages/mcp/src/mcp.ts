@@ -77,7 +77,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.36';
+const PLUGIN_VERSION = '0.1.38';
 
 const server = new Server(
   {
@@ -165,9 +165,10 @@ const server = new Server(
       '',
       'WORKSPACE HUB: a hub workspace is a goal + a task board + linked docs.',
       'create_workspace mints one; attach_doc links existing docs/reviews to it;',
-      'create_task / create_tasks (a whole burst in one call) / promote_to_task',
-      'add work (omit `goal` and the task lands in',
-      'Chores awaiting triage — placing it with set_task_goal IS the triage:',
+      'create_tasks (ALWAYS a list — one idea is a one-row list) and',
+      'promote_to_task add work (omit `goal` and the task lands UNPLACED in',
+      'Chores awaiting triage — the create says so and hands you the goal',
+      'bands, and placing it with set_task_goal IS the triage:',
       'pick the goal AND the exact position, and pass riskTier for how dangerous',
       'the ACTION is, not how important the task is). task_transition is the',
       'single gate for status changes — blockers come back in the result, and',
@@ -969,7 +970,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'create_task',
       description:
-        'Create a task on a hub workspace board. For chat-born asks pass `quote` — the human\'s VERBATIM words, kept forever on the task (for thread-born asks use promote_to_task, which captures the quote itself). OMIT `goal` when you have not judged placement yet: the task lands at the bottom of Chores and a triage request is emitted to the live workspace agent (that may be you — place it with set_task_goal). An explicit goal — even "chores" — is a placement and skips triage. `after` lists task ids this depends on ("don\'t start yet" is a dependency, not a status); `afterEnforce` names the subset whose open state hard-blocks transitions. Write the body like a small user story with falsifiable acceptance criteria when the task is for someone else or parked beyond today; a bare title is fine for work you\'ll do within the hour. Returns { taskId, goal, order, status, triagePending } — trimmed, read details back with list_tasks.',
+        'NOT the canonical create — use `create_tasks`, which takes a list and treats one task as a one-row list. This single-row form is kept only so sessions on older bundles keep working, and it is scheduled for removal; everything below is true of a `create_tasks` row too. For chat-born asks pass `quote` — the human\'s VERBATIM words, kept forever on the task (for thread-born asks use promote_to_task, which captures the quote itself). OMIT `goal` when you have not judged placement yet: the task lands UNPLACED at the bottom of Chores and a triage request is emitted to the live workspace agent (that may be you — place it with set_task_goal). An explicit goal — even "chores" — is a placement and skips triage. `after` lists task ids this depends on ("don\'t start yet" is a dependency, not a status); `afterEnforce` names the subset whose open state hard-blocks transitions. A batch-local reference ("#seed") is refused here by name — it only means something inside one `create_tasks` call. Write the body like a small user story with falsifiable acceptance criteria when the task is for someone else or parked beyond today; a bare title is fine for work you\'ll do within the hour. Returns { taskId, goal, order, status, triagePending, placed } plus `goals` — the ordered bands — when nothing placed it.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1031,7 +1032,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'create_tasks',
       description:
-        "Capture a BURST of ideas as tasks in ONE call — the tool to reach for when a conversation just produced five things worth doing, instead of five create_task round trips. Each row takes exactly the fields create_task takes (minus workspaceId), and every rule create_task applies applies per row: an omitted `assignee` means YOU own that row, an omitted `goal` routes that row through triage, an explicit `order` places it. Returns the created tasks IN BOARD ORDER — the ranking you just produced, without a second read — plus `failures: [{index, title, error, message}]` for any row that didn't land. A bad row NEVER rejects the batch: its neighbours are created and it comes back by index, so you fix and re-send that one row. The whole call is refused only when nothing could have landed anyway (unknown workspace, no rows).",
+        'THE way to create tasks — always takes a LIST, and a single task is a one-row list, so reach for this one whether you have one idea or fifteen. Filing 24 things one at a time costs 78s against 13s for the same rows in one call, and that gap is a tooling choice rather than a floor. Each row takes exactly the fields create_task takes (minus workspaceId), and every rule applies per row: an omitted `assignee` means YOU own that row, an omitted `goal` leaves that row UNPLACED at the bottom of Chores and routes it through triage, an explicit `order` places it. A row may name another row of the SAME batch in `after` / `afterEnforce` — by index (`0`) or by a `key` another row declares (`"#seed"`) — so a burst with internal ordering no longer needs a follow-up set_task_dependencies. Returns the created tasks IN BOARD ORDER — the ranking you just produced, without a second read — plus `failures: [{index, title, error, message}]` for any row that didn\'t land, plus `placement` when any row went in unplaced (the unplaced task ids and the ordered goal bands, so you can set_task_goal without reading the board first). A bad row NEVER rejects the batch: its neighbours are created and it comes back by index, so you fix and re-send that one row. The whole call is refused only when nothing could have landed anyway (unknown workspace, no rows).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1039,7 +1040,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           tasks: {
             type: 'array',
             description:
-              'The rows, at most 100 — an oversized batch is refused WHOLE rather than truncated, and a tracker that big belongs in import_tasks_markdown. Each row is a create_task body without `workspaceId`: {title, body?, assignee?, needs?, options?, goal?, order?, after?, afterEnforce?, dueAt?, links?, quote?}. `title` is the only required field — but write a `body` on every row you are not doing yourself within the hour, for the same reason create_task says so: a bare title is not pickup-able by an agent that was not in the conversation. Rows are created in the order given, and `after` can only name a task id you already hold, so dependencies BETWEEN rows of one batch need a follow-up set_task_dependencies.',
+              'The rows, at most 100 — an oversized batch is refused WHOLE rather than truncated, and a tracker that big belongs in import_tasks_markdown. Each row is a create_task body without `workspaceId`: {title, body?, key?, assignee?, needs?, options?, goal?, order?, after?, afterEnforce?, dueAt?, links?, quote?}. `title` is the only required field — but write a `body` on every row you are not doing yourself within the hour: a bare title is not pickup-able by an agent that was not in the conversation. `key` is an optional label THIS batch uses to reference the row; it must be unique in the batch and must not be all digits or start with "#". Rows are created in the order given, so a row can only depend on a row ABOVE it — a forward reference is refused rather than silently dropped, and so is a reference to a row that failed (a task carrying a dependency that never blocks it is worse than a refusal). An entry with no "#" is still an existing task id, exactly as before.',
             items: { type: 'object' },
             maxItems: 100,
           },
@@ -1531,7 +1532,12 @@ interface TaskPayload {
 /** Trimmed create/promote result (§3.10: an edit returns ids + status, not
  *  the object the caller just wrote). `triagePending` tells the caller
  *  whether a triage request was actually delivered to a live agent. */
-function taskCreatedSummary(task: TaskPayload, ignoredLinks?: unknown[], shapeGaps?: string[]) {
+function taskCreatedSummary(
+  task: TaskPayload,
+  ignoredLinks?: unknown[],
+  shapeGaps?: string[],
+  placed?: boolean,
+) {
   return {
     taskId: task.id,
     goal: task.goal,
@@ -1539,6 +1545,11 @@ function taskCreatedSummary(task: TaskPayload, ignoredLinks?: unknown[], shapeGa
     status: task.status,
     assignee: task.assignee,
     triagePending: task.triagePendingTs !== undefined,
+    // Whether the CALLER named a goal — which is not the same question as
+    // `goal === 'chores'`, because an explicit 'chores' is a placement and an
+    // omitted goal that landed there is not. Only the create call can still
+    // tell them apart, so it is the call that has to say.
+    ...(placed !== undefined ? { placed } : {}),
     // Advisory, and only on decisions: which parts of the decision shape the
     // body doesn't visibly have. Returned rather than swallowed for the same
     // reason as ignoredLinks — the call succeeded, and the caller is the only
@@ -2257,8 +2268,19 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             ...(quote !== undefined ? { quote } : {}),
             author: AUTHOR,
           },
-        )) as { task: TaskPayload; ignoredLinks?: unknown[]; shapeGaps?: string[] };
-        return ok(taskCreatedSummary(res.task, res.ignoredLinks, res.shapeGaps));
+        )) as {
+          task: TaskPayload;
+          ignoredLinks?: unknown[];
+          shapeGaps?: string[];
+          placement?: { placed: boolean; goals?: unknown[] };
+        };
+        return ok({
+          ...taskCreatedSummary(res.task, res.ignoredLinks, res.shapeGaps, res.placement?.placed),
+          // The bands this could have been ranked into, present only when
+          // nothing ranked it. Carried here so placing it is the next call
+          // rather than a get_workspace first.
+          ...(res.placement?.goals !== undefined ? { goals: res.placement.goals } : {}),
+        });
       }
       case 'create_tasks': {
         const { workspaceId, tasks } = a as { workspaceId: string; tasks: unknown[] };
@@ -2271,23 +2293,29 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           failures: Array<{ index: number; title?: string; error: string; message?: string }>;
           ignoredLinks?: Array<{ taskId: string; ignored: unknown[] }>;
           shapeGaps?: Array<{ taskId: string; gaps: string[] }>;
+          placement?: { unplaced: string[]; triageDelivered: string[]; goals: unknown[] };
         };
         const gapsFor = (taskId: string) =>
           res.shapeGaps?.find((g) => g.taskId === taskId)?.gaps ?? undefined;
         const droppedFor = (taskId: string) =>
           res.ignoredLinks?.find((l) => l.taskId === taskId)?.ignored ?? undefined;
+        const unplaced = new Set(res.placement?.unplaced ?? []);
         return ok({
           // Board order, carrying the title so the caller can match rows back
           // to what it sent without holding its own index — the returned
           // order is deliberately NOT the order it sent them in.
           created: res.tasks.map((t) => ({
             title: t.title,
-            ...taskCreatedSummary(t, droppedFor(t.id), gapsFor(t.id)),
+            ...taskCreatedSummary(t, droppedFor(t.id), gapsFor(t.id), !unplaced.has(t.id)),
           })),
           // Always present, even when empty: a caller that has to check for
           // the KEY before checking the count reads "no failures" as "the
           // field is missing because this build doesn't report them".
           failures: res.failures,
+          // Absent when every row was placed. One band list for the whole
+          // call — the same answer repeated per row in a hundred-row burst
+          // is noise, and the rows that need naming are the unplaced ones.
+          ...(res.placement !== undefined ? { placement: res.placement } : {}),
         });
       }
       case 'promote_to_task': {
@@ -2318,9 +2346,14 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             ...(links !== undefined ? { links } : {}),
             author: AUTHOR,
           },
-        )) as { task: TaskPayload; ignoredLinks?: unknown[] };
+        )) as {
+          task: TaskPayload;
+          ignoredLinks?: unknown[];
+          placement?: { placed: boolean; goals?: unknown[] };
+        };
         return ok({
-          ...taskCreatedSummary(res.task, res.ignoredLinks),
+          ...taskCreatedSummary(res.task, res.ignoredLinks, undefined, res.placement?.placed),
+          ...(res.placement?.goals !== undefined ? { goals: res.placement.goals } : {}),
           title: res.task.title,
           quote: res.task.quote,
         });
