@@ -3,8 +3,10 @@ import {
   CHORES_ID,
   type HubTask,
   type ReviewThreadItem,
+  advanceWalk,
   decisionRows,
   reviewQueue,
+  walkPosition,
 } from '../src/hub/hub-model.ts';
 import {
   type ReviewStripHandlers,
@@ -501,5 +503,95 @@ describe('renderReviewWalkthrough — comments', () => {
     expect(onStep).toHaveBeenCalledWith(2);
     (root.querySelector('.hub-walk-back') as HTMLElement).click();
     expect(onStep).toHaveBeenLastCalledWith(0);
+  });
+});
+
+/**
+ * The advance is the feature — "when I submit an answer to a request I should
+ * go to the next request in priority order" — and the whole difficulty is that
+ * the list edits itself underneath the reader. These are pure so the off-by-one
+ * is settled by a test rather than by watching a card swap in a browser.
+ */
+describe('walkPosition — an index is not a position on a list that shrinks', () => {
+  const q = (n: number) =>
+    reviewQueue(
+      Array.from({ length: n }, (_, i) => decision({ title: `D${i}` })),
+      [],
+      NOW,
+    );
+
+  it('follows the aimed item when something before it drops out', () => {
+    const before = q(3);
+    const aim = before.items[2]?.key ?? null;
+    expect(walkPosition(before, 2, aim)).toBe(2);
+    // A peer answers the FIRST one. The same index would now show a different
+    // card, and the reader would never learn that the one they were reading
+    // moved rather than vanished.
+    const after = reviewQueue(
+      [before.items[1]?.decision?.task as HubTask, before.items[2]?.decision?.task as HubTask],
+      [],
+      NOW,
+    );
+    expect(after.items[1]?.key).toBe(aim);
+    expect(walkPosition(after, 2, aim)).toBe(1);
+  });
+
+  it('falls back to the index when the aimed item is gone', () => {
+    expect(walkPosition(q(3), 1, 'decision:t-nope')).toBe(1);
+  });
+
+  it('clamps past the end to the done state rather than to the last card', () => {
+    expect(walkPosition(q(2), 9, null)).toBe(2);
+  });
+
+  it('stays closed on a repaint — a negative index is not a position to resolve', () => {
+    const queue = q(2);
+    expect(walkPosition(queue, -1, null)).toBe(-1);
+    expect(walkPosition(queue, -1, queue.items[0]?.key ?? null)).toBe(-1);
+  });
+});
+
+describe('advanceWalk — landing on the NEXT request, not the one after it', () => {
+  const three = () => [
+    decision({ title: 'First' }),
+    decision({ title: 'Second' }),
+    decision({ title: 'Third' }),
+  ];
+
+  it('aims at what was next, so the item that slid into place is not skipped', () => {
+    const tasks = three();
+    const before = reviewQueue(tasks, [], NOW);
+    const finished = before.items[0]?.key as string;
+    const next = before.items[1]?.key as string;
+    // The answered decision leaves the queue, so `index + 1` would land on the
+    // THIRD and step over the second entirely.
+    const after = reviewQueue(tasks.slice(1), [], NOW);
+    expect(after.items[0]?.key).toBe(next);
+    expect(advanceWalk(after, 0, finished, next)).toBe(0);
+  });
+
+  it('steps past the answered item while it is still in the queue', () => {
+    // A decision's answer comes back through the ydoc projection rather than in
+    // the POST's reply, so the queue can still hold it when the write resolves.
+    const queue = reviewQueue(three(), [], NOW);
+    const finished = queue.items[0]?.key as string;
+    expect(advanceWalk(queue, 0, finished, null)).toBe(1);
+  });
+
+  it('lands on the done state when the last one is answered', () => {
+    const tasks = three();
+    const finished = reviewQueue(tasks, [], NOW).items[2]?.key as string;
+    const after = reviewQueue(tasks.slice(0, 2), [], NOW);
+    expect(after.items[2]).toBeUndefined();
+    expect(advanceWalk(after, 2, finished, null)).toBe(2);
+  });
+
+  it('holds the gap when a peer takes the next one too', () => {
+    const tasks = three();
+    const before = reviewQueue(tasks, [], NOW);
+    const finished = before.items[0]?.key as string;
+    const next = before.items[1]?.key as string;
+    const after = reviewQueue([tasks[2] as HubTask], [], NOW);
+    expect(advanceWalk(after, 0, finished, next)).toBe(0);
   });
 });
