@@ -1260,6 +1260,79 @@ Technical discoveries that should persist across sessions for this project.
   from the first commit — the same "true and still proves nothing about the
   caller" shape as `isWhitespaceOnlyChange`.
 
+## A required parameter binds the callers who call you, and nobody else
+
+- **The sequel to the entry above: the repaired guard was correct and still
+  preserved nothing for a whole class of rewrites.** Making the pre-rewrite
+  title and body a REQUIRED parameter of `noteBodyEdited` was meant to stop a
+  new call site from skipping the preservation — and it does, for call sites.
+  But a task body is not a field, it is a live Yjs room at `task:<taskId>`,
+  and `set_doc_content` on that docId never calls the store at all. It wrote
+  the room, returned `ok: true`, and left `quote` empty with no
+  `task.body_edited` row. Reproduced before designing: the capture was gone,
+  the board looked fine, and `get_doc` returned the new text.
+- **The positive control has to run on the same row in the same pass, and it
+  is what caught the probe lying.** The first run reported "no
+  `task.body_edited` emitted" for BOTH the doc route and the named route —
+  the reader was matching `row.type` where the audit log stores `row.event`.
+  A vacuous zero on the path under test is invisible; a vacuous zero on the
+  control is not, which is the whole reason to spend the extra call.
+- **Where a guarantee belongs is decided by where the thing is LOST, not by
+  where a caller announces it.** The preservation moved to
+  `TaskStore.updateBodySnapshot` — the choke point every writer of a body
+  fragment passes through, because they all mutate one Yjs fragment and that
+  is what its observer flushes. That covers doors no route guard could:
+  `find_and_replace` aimed at the same docId, and a person typing on the
+  board. The regression test for it drives `find_and_replace` deliberately,
+  since a whole-doc-rewrite test would pass against a route-level fix.
+- **The two halves do not live in the same place, and pretending they could
+  would be the bug again.** Preservation belongs at the choke point;
+  ATTRIBUTION cannot, because a Yjs observer has no actor and fires on every
+  typing pause. So `task.body_edited` stays with the routes that carry an
+  author, and `POST /api/docs/:id/content` now runs the same ceremony
+  `/api/tasks/:id/body` does. When a caller sends no author the words are
+  still preserved and no row is emitted — an audit row naming nobody is worse
+  than its honest absence.
+- **Refusing was the tempting answer and was worse.** `set_doc_content` could
+  have 400'd on a `task:` room naming `update_task_body` instead — but that
+  tool arrived in 0.1.24, so refusing takes the only body rewrite an older
+  bundle has, to buy a guarantee the branch can simply provide. Serve when you
+  can serve; refuse only when the route genuinely cannot do the thing.
+- Mutation-verified in both directions, each naming a specific test: deleting
+  the choke-point preservation turns 7 red (including the three pre-existing
+  `/body`-route cases, which is the proof the choke point serves that route
+  too); bypassing the doc route's `task:` branch turns 3 red; and *always*
+  emitting the row — the inverse mutation — turns "still preserves when the
+  caller says nothing about who it is" red, which is what makes that absence
+  assertion non-vacuous.
+
+## A four-digit needle in a haystack of timestamps is a time bomb, not a test
+
+- **CI went red on `expect(JSON.stringify(e)).not.toContain('9099')` — and the
+  endpoint it was guarding against was correctly absent.** The record carries
+  three `Date.now()` millisecond stamps, and one of them came back
+  `1786980999099`. The clock spelled the needle. Green locally, green on the
+  previous run, red on a branch that never touched that file — which is the
+  worst version of this, because the first instinct is to go read your own
+  diff.
+- **A substring assertion searches everything in the string, including the
+  parts nothing controls.** `9099` is four digits against ~30 uncontrolled
+  digit positions; at roughly one run in a thousand it fires, forever, on
+  whoever is unlucky. Its sibling case in the same file never tripped only
+  because its timestamps are hand-written constants — so the file contained
+  both the safe and the unsafe spelling of the same idea, and the difference
+  was invisible.
+- **Assert the structure first, then match on something no generator can
+  produce.** `'endpoint' in attachment` is the assertion actually being made;
+  the string check is a backstop, and it should look for the WHOLE endpoint
+  (`http://127.0.0.1:9099/hooks/agent-relay`), which no clock and no id can
+  spell. Mutation-verified: removing the strip in `publicAttachment` turns
+  three named tests red, so the repair did not just make it stop failing.
+- **Rule: a `not.toContain` needle must be impossible for any value in the
+  payload to generate by accident.** Prefer a key check, a parsed field, or a
+  long distinctive literal. Digits, short words, and ids are all things some
+  other field will eventually produce on its own.
+
 ## A malformed anchor crashes a request that never touched the doc
 
 - **`POST /api/docs/:id/threads` takes `anchor` verbatim and validates
