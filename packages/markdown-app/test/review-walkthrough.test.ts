@@ -439,7 +439,10 @@ describe('renderReviewWalkthrough — comments', () => {
   const queueOf = (...items: ReviewThreadItem[]) => reviewQueue([], items, NOW);
 
   it('shows the question, who asked, and how long it has waited', () => {
-    renderReviewWalkthrough(root, queueOf(threadItem()), 0, walk());
+    // `direct` is what makes this a question rather than a status note, which
+    // is what the card claims by saying "asked". The companion below pins the
+    // other wording, so the two cannot quietly converge.
+    renderReviewWalkthrough(root, queueOf(threadItem({ direct: true })), 0, walk());
     expect((root.querySelector('.hub-walk-title') as HTMLElement).textContent).toBe(
       'Ship the widget',
     );
@@ -450,6 +453,17 @@ describe('renderReviewWalkthrough — comments', () => {
     // "not enough to decide" form on a comment.
     expect(root.querySelector('.hub-walk-info')).toBeNull();
     expect(root.querySelector('.hub-walk-options')).toBeNull();
+  });
+
+  // An agent's closing note reaches this card too — deliberately, since
+  // over-including is the safe direction — but it must not be announced as a
+  // question. "Helper asked you" over a deploy note is the card promising
+  // something answerable and delivering something that is not.
+  it('does not call a status note a question', () => {
+    renderReviewWalkthrough(root, queueOf(threadItem({ ask: 'Merged and deployed.' })), 0, walk());
+    const why = root.querySelector('.hub-walk-blocks') as HTMLElement;
+    expect(why.textContent).toContain('Helper posted');
+    expect(why.textContent).not.toContain('asked');
   });
 
   // Going through the queue must not mean leaving the queue on every item —
