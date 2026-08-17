@@ -165,14 +165,25 @@ describe('TaskStore attachment registry', () => {
     // Positive control: the event really carries the record…
     expect(e.attachment.capabilities).toEqual(['tasks.write', 'docs.edit']);
     // …and the absence under test: no endpoint, anywhere in the event.
-    expect(JSON.stringify(e)).not.toContain('9099');
+    //
+    // Matched on the WHOLE endpoint, not on its port. `9099` alone is four
+    // digits, and this record carries three `Date.now()` millisecond stamps —
+    // so the search space includes ~30 digit positions that no test controls.
+    // It duly fired: CI went red on `lastHeartbeat: 1786980999099`, where the
+    // endpoint was correctly absent and the CLOCK spelled the needle. The
+    // sibling `publicAttachment` case above never tripped only because its
+    // timestamps are hand-written constants. Structural check first, since it
+    // is the assertion actually being made.
+    expect('endpoint' in (e.attachment as Record<string, unknown>)).toBe(false);
+    expect(JSON.stringify(e)).not.toContain(ENDPOINT);
 
     // Same for the audit log line (the emit choke point).
     const audit = readAudit(dataDir, ws.id);
     const line = audit.find((l) => l.event === 'agent.attached');
     if (!line) throw new Error('agent.attached missing from events.jsonl');
     expect((line.attachment as Record<string, unknown>).agentId).toBe('relay-agent');
-    expect(JSON.stringify(line)).not.toContain('9099');
+    expect('endpoint' in (line.attachment as Record<string, unknown>)).toBe(false);
+    expect(JSON.stringify(line)).not.toContain(ENDPOINT);
   });
 
   it('is keyed (workspaceId, agentId): one agent attaches to N workspaces; re-attach upserts', () => {
