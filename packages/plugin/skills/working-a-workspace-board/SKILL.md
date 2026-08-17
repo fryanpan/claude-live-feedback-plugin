@@ -38,8 +38,13 @@ work, and a queue you read an hour ago is a queue about a board that no longer
 exists.
 
 You have latitude over the ordering itself: propose a reorder with
-`set_goal_list` when the sequence is wrong, and say why. What you don't have
-is latitude to ignore it silently.
+`reorder_goals(workspaceId, order, parent?)` when the sequence is wrong, and
+say why. It takes ids only — no titles — and it refuses any `order` that is
+not exactly the goals already there, so it cannot lose one to a list you read
+a while ago. Reach for `set_goal_list` only to add, rename or remove a goal;
+reordering with it means restating every title, and any id you leave out
+dumps that goal's open tasks into Chores. What you don't have is latitude to
+ignore the ordering silently.
 
 ## Take the top *set*, not the top row
 
