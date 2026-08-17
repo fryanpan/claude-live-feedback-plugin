@@ -3031,6 +3031,30 @@ export class TaskStore {
     this.scheduleSave(workspaceId);
 
     const batchId = cryptoId('gc');
+    // Ask the lead to re-look at the bucket. Computed HERE — after the sweep
+    // but BEFORE the emits — and both halves are load-bearing.
+    //
+    // After the sweep, because a task THIS edit un-placed (its band was
+    // removed) belongs to the bucket the new band is being offered to;
+    // "replace band A with band B" is where that matters most.
+    //
+    // Before the emits, because `workspace.goals_changed` is what refreshes
+    // the board's projection, and a projection taken before the record exists
+    // does not carry it — with no later event to correct it the chip simply
+    // never appears, and the ask stays invisible until somebody attaches.
+    // This path deliberately emits no store event of its own (a request is a
+    // delivery, not a change, and the audit row for WHAT changed is
+    // `workspace.goals_changed` itself, oldGoals and newGoals and all), so it
+    // rides that one. Safe to depend on: a new band means the list changed,
+    // and a changed list always emits.
+    const bucketReview = this.requestBucketReview(state, {
+      newBands,
+      oldGoals,
+      newGoals: goals,
+      batchId,
+      actor,
+      ts,
+    });
     this.emit({
       type: 'workspace.goals_changed',
       workspaceId,
@@ -3061,17 +3085,7 @@ export class TaskStore {
       changed: true,
       movedToChores: moved.map((m) => m.task.id),
       strandedDone,
-      // AFTER the sweep, deliberately: a task this same edit un-placed (its
-      // band was removed) is in the bucket the new band is being offered to.
-      // "Replace band A with band B" is the case where that matters most.
-      bucketReview: this.requestBucketReview(state, {
-        newBands,
-        oldGoals,
-        newGoals: goals,
-        batchId,
-        actor,
-        ts,
-      }),
+      bucketReview,
     };
   }
 

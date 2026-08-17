@@ -16,6 +16,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { workspaceRoomId } from '../src/task-projection.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'person' };
 const LEAD = 'agent-lead';
@@ -151,6 +152,22 @@ describe('a new goal band asks the bucket to be re-looked-at, over HTTP', () => 
     // reporting it under pendingRetriage would make that record's goal text
     // lie about what changed.
     expect(board.pendingRetriage).toBeUndefined();
+
+    // And in the board ROOM, which is what the hub client actually renders
+    // off — it reads the ydoc workspace map, not this REST payload, so a
+    // field on the payload alone still leaves the chip unrenderable.
+    const room = handle.rooms.get(workspaceRoomId(wsId));
+    if (!room) throw new Error('ws room missing');
+    const projected = room.ydoc.getMap('workspace').get('pendingBucketReview') as
+      | { taskIds: string[]; bandTitles: string[]; byName: string }
+      | undefined;
+    expect(projected?.taskIds).toEqual([first]);
+    expect(projected?.bandTitles).toEqual(['Reviewer trust']);
+    expect(projected?.byName).toBe('Jordan');
+    // Display name only — the projection never carries actor ids, and it
+    // never carries the two full goal lists the board already holds.
+    expect(JSON.stringify(projected)).not.toContain('known-jordan');
+    expect(JSON.stringify(projected)).not.toContain('newGoals');
 
     // Still there on a second read...
     expect((await read()).pendingBucketReview?.taskIds).toEqual([first]);
