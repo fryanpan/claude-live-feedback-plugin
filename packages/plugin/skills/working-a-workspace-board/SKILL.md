@@ -124,7 +124,10 @@ the API argued with.
   unmerged PR stays `in-progress`, and the note says where it is. Marking it
   done because the code exists is reward-hacking your own board.
 - Put the evidence in the transition `note` — the commit, the PR, what you
-  verified and what you couldn't.
+  verified and what you couldn't. If you dropped the `evidence` field or sent
+  a sha you wrote from memory, `amend_evidence(taskId, evidence, note?)`
+  attaches the right one to the move you already made; re-sending the
+  transition just refuses.
 - File what you find as you find it. A defect discovered mid-task becomes its
   own task with its own story line, not a paragraph in a chat message.
 - Leave comment threads **unresolved** unless asked. The owner reads the

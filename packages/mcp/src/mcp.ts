@@ -77,7 +77,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.33';
+const PLUGIN_VERSION = '0.1.34';
 
 const server = new Server(
   {
@@ -1118,7 +1118,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'task_transition',
       description:
-        "The SINGLE gate for task status changes (todo | in-progress | done) — attributed to this agent, appended to the task's audit trail. Attach `evidence` ({commit} and/or {threadRef}) on forward moves or the move is flagged `unproven` (allowed, shaded on the board). Open `after` dependencies come back in `blockers` — an edge marked enforce REFUSES the transition (HTTP 409) until the blocking task closes; read the blocker message, it names what to unblock. The task's riskTier gates forward moves the same way: a RED task refuses outright (a person has to make the move), and a YELLOW one needs `confirmed: true` — which means the human said yes after you showed them the concrete effect, never a flag you set to get past the gate. `usage` ({inputTokens, outputTokens}) reports what the task cost at done. Moving back to todo is never blocked.",
+        "The SINGLE gate for task status changes (todo | in-progress | done) — attributed to this agent, appended to the task's audit trail. Attach `evidence` ({commit} and/or {threadRef}) on forward moves or the move is flagged `unproven` (allowed, shaded on the board); if the evidence was missing or WRONG, do not re-send this call — it refuses with `same-status` — use `amend_evidence`, which appends a correction to the move that already happened. Open `after` dependencies come back in `blockers` — an edge marked enforce REFUSES the transition (HTTP 409) until the blocking task closes; read the blocker message, it names what to unblock. The task's riskTier gates forward moves the same way: a RED task refuses outright (a person has to make the move), and a YELLOW one needs `confirmed: true` — which means the human said yes after you showed them the concrete effect, never a flag you set to get past the gate. `usage` ({inputTokens, outputTokens}) reports what the task cost at done. Moving back to todo is never blocked.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1146,6 +1146,35 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
         },
         required: ['taskId', 'to'],
+      },
+    },
+    {
+      name: 'amend_evidence',
+      description:
+        "Attach evidence to a transition that ALREADY happened — the answer to 'the move was right, the proof was wrong or missing'. Two cases, both real: the `evidence` object never reached the server (the move landed `unproven` and the board shades it), or it arrived and was FALSE — a commit sha written from memory that resolves to nothing, which reads as proof and is worse. Re-sending task_transition fixes neither; it refuses with `same-status`. This APPENDS: the original row keeps saying what it said (with the bad sha struck through, not deleted), and your correction sits beside it with your name and the time. The `unproven` shading clears, because the move now has proof; that it arrived late stays visible in the row. Defaults to the most recent transition — pass `transitionTs` (a ts from the task's transitions) to correct an earlier one. Evidence that claims nothing is refused, so a correction can never blank the proof it was sent to fix. NOT validated: whether the sha resolves — evidence is a bare commit with no repo attached and this server has no checkout to look it up in, so getting it right is on you.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          taskId: { type: 'string' },
+          evidence: {
+            type: 'object',
+            description: 'The proof the move should have carried. At least one of these.',
+            properties: {
+              commit: { type: 'string' },
+              threadRef: { type: 'object' },
+            },
+          },
+          note: {
+            type: 'string',
+            description: 'Why the correction was needed — it lands in the audit trail.',
+          },
+          transitionTs: {
+            type: 'number',
+            description:
+              'Which transition to correct. Omit for the latest — the move you just made.',
+          },
+        },
+        required: ['taskId', 'evidence'],
       },
     },
     {
@@ -2362,6 +2391,36 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           taskId,
           status: res.task.status,
           blockers: res.blockers,
+          unproven: res.unproven,
+        });
+      }
+      case 'amend_evidence': {
+        const { taskId, evidence, note, transitionTs } = a as {
+          taskId: string;
+          evidence: { commit?: string; threadRef?: unknown };
+          note?: string;
+          transitionTs?: number;
+        };
+        const res = (await http('POST', `/api/tasks/${encodeURIComponent(taskId)}/evidence`, {
+          author: AUTHOR,
+          evidence,
+          ...(note !== undefined ? { note } : {}),
+          ...(transitionTs !== undefined ? { transitionTs } : {}),
+        })) as {
+          transition: { ts: number; to: string };
+          amendment: { evidence: unknown; supersedes?: unknown };
+          unproven: boolean;
+        };
+        return ok({
+          taskId,
+          // What the caller needs to see is the EFFECT: which row now carries
+          // what, and whether the shading cleared.
+          transitionTs: res.transition.ts,
+          to: res.transition.to,
+          evidence: res.amendment.evidence,
+          ...(res.amendment.supersedes !== undefined
+            ? { superseded: res.amendment.supersedes }
+            : {}),
           unproven: res.unproven,
         });
       }
