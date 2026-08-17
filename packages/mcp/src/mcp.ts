@@ -77,7 +77,29 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.45';
+const PLUGIN_VERSION = '0.1.51';
+
+/**
+ * What a good `evidence.commit` looks like, said at the one layer that reaches
+ * the caller BEFORE the bad value exists.
+ *
+ * The server cannot check this: evidence is a bare sha with no repo attached,
+ * and this server has no checkout — nor any way to know which of a machine's
+ * repos a given board's shas belong to. So a tool description is the only
+ * available guard, and both tools that accept a commit share this one spelling
+ * of it rather than two that drift.
+ *
+ * The failure it is aimed at is not carelessness, it is the OBVIOUS action
+ * being wrong: `git rev-parse HEAD` on the branch you just finished is the
+ * natural thing to record, resolves perfectly when you record it, and is
+ * discarded by the squash-merge an hour later. Measured on this project's own
+ * board 2026-08-17: of 67 commit values on closed rows, two were `PR #131` /
+ * `PR #132`, one was a sha that no longer resolves anywhere, and one more was a
+ * still-live branch commit on an unmerged branch — the same defect in flight,
+ * counted as proof today and dead the moment its branch lands.
+ */
+const COMMIT_EVIDENCE_DESCRIPTION =
+  'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
 
 const server = new Server(
   {
@@ -817,28 +839,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       inputSchema: { type: 'object', properties: {} },
     },
     {
-      name: 'share_doc',
-      description:
-        "Publish a markdown review doc behind a Cloudflare Access gate so external reviewers (e.g. an outside team's email domain) can access it over the public internet for a bounded window. The doc must already exist via create_review_doc. Returns { share: { shareId, url, hostname, expiresAt, ... } }. Read .claude/live-feedback.json's `share.defaultAllowDomains` first; if a repo has no config, ASK THE USER which domain(s) to allow before calling — never default to 'anyone'. Default ttlSeconds is 72h. Reviewers hitting the share URL get a Cloudflare email-OTP login page; only allowed domains can complete login.",
-      inputSchema: {
-        type: 'object',
-        properties: {
-          docId: { type: 'string' },
-          allowDomains: {
-            type: 'array',
-            items: { type: 'string' },
-            description: "Email domains, e.g. ['@partner-org.example']",
-          },
-          ttlSeconds: { type: 'number' },
-          name: { type: 'string', description: 'Optional slug override for the subdomain' },
-        },
-        required: ['docId', 'allowDomains'],
-      },
-    },
-    {
       name: 'share_workspace',
       description:
-        "Publish a WHOLE workspace (a folder bind or diff review, created by bind_folder / create_diff_review) behind a Cloudflare Access gate, so external reviewers can browse the set — file tree, every member doc, cross-doc links, and per-file comment threads. Use this instead of share_doc whenever the reviewer needs to move between files; a share_doc share covers exactly one doc and renders without the sidebar. Returns { share: {...}, memberCount }. Read .claude/live-feedback.json's `share.defaultAllowDomains` first; if a repo has no config, ASK THE USER which domain(s) to allow before calling — never default to 'anyone'. Default ttlSeconds is 72h. Visitors can read, comment on, and co-edit members through the live editor — but cannot delete docs, replace a doc wholesale, reparse from disk, list other workspaces or docs, open files outside the workspace root, or manage shares.",
+        "Publish a WHOLE workspace behind a Cloudflare Access gate, so external reviewers can browse the set — file tree, every member doc, cross-doc links, and per-file comment threads. A WORKSPACE IS THE UNIT OF SHARING: there is no per-doc share, so to share one document, file it on a workspace (attach_doc, or bind_folder / create_diff_review) and share that. Everything in the workspace is then available to everyone in it. Returns { share: {...}, memberCount }. Read .claude/live-feedback.json's `share.defaultAllowDomains` first; if a repo has no config, ASK THE USER which domain(s) to allow before calling — never default to 'anyone'. Default ttlSeconds is 72h. Visitors can read, comment on, and co-edit members through the live editor — but cannot delete docs, replace a doc wholesale, reparse from disk, list other workspaces or docs, open files outside the workspace root, or manage shares.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -861,22 +864,23 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'share_link',
       description:
-        "Publish a review doc or workspace as an UNGUESSABLE LINK — no sign-in, no Cloudflare Access, no email allow-list. Anyone holding the URL can read, comment, and co-edit until it expires; the scope is identical to an Access share (their own doc or workspace only — no doc enumeration, no deleting, no wholesale rewrite, no share administration). This is the default way to share with someone outside the tailnet. Pass docId for ONE doc, or workspaceId for a whole folder bind / diff review (browsable with its file tree). Default TTL is one week; pass ttlSeconds to change it, or set_share_ttl later. Returns { share: { shareId, url, slug, expiresAt, ... } } — give the human the bare `url` on its own line. Because the link IS the credential, treat it like a password: don't post it anywhere durable, and prefer a short ttlSeconds for anything sensitive. Use share_doc / share_workspace instead when you need verified identities, per-person revocation, or attribution.",
+        "Publish a WORKSPACE as an UNGUESSABLE LINK — no sign-in, no Cloudflare Access, no email allow-list. Anyone holding the URL can read, comment, and co-edit until it expires; the scope is identical to an Access share (that workspace only — no doc enumeration, no deleting, no wholesale rewrite, no share administration). This is the default way to share with someone outside the tailnet. A WORKSPACE IS THE UNIT OF SHARING: there is no docId argument, so to share one document, file it on a workspace (attach_doc, or bind_folder / create_diff_review) and pass that workspaceId. Default TTL is one week; pass ttlSeconds to change it, or set_share_ttl later. Returns { share: { shareId, url, slug, expiresAt, ... } } — give the human the bare `url` on its own line. Because the link IS the credential, treat it like a password: don't post it anywhere durable, and prefer a short ttlSeconds for anything sensitive. Use share_workspace instead when you need verified identities, per-person revocation, or attribution.",
       inputSchema: {
         type: 'object',
         properties: {
-          docId: { type: 'string', description: 'Share exactly this doc.' },
           workspaceId: {
             type: 'string',
-            description: 'Share a whole folder bind / diff review. Mutually exclusive with docId.',
+            description:
+              'The workspace to share — a hub board, or a folder bind / diff review grouping.',
           },
           entryDocId: {
             type: 'string',
-            description: 'Doc the link opens for a workspace share. Defaults to the first member.',
+            description: 'Doc the link opens. Defaults to the first member; omit for a hub board.',
           },
           ttlSeconds: { type: 'number', description: 'Defaults to one week (604800).' },
           label: { type: 'string', description: 'Human label shown in list_shares.' },
         },
+        required: ['workspaceId'],
       },
     },
     {
@@ -1145,7 +1149,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'task_transition',
       description:
-        "The SINGLE gate for task status changes (todo | in-progress | done) — attributed to this agent, appended to the task's audit trail. Attach `evidence` ({commit} and/or {threadRef}) on forward moves or the move is flagged `unproven` (allowed, shaded on the board); if the evidence was missing or WRONG, do not re-send this call — it refuses with `same-status` — use `amend_evidence`, which appends a correction to the move that already happened. Open `after` dependencies come back in `blockers` — an edge marked enforce REFUSES the transition (HTTP 409) until the blocking task closes; read the blocker message, it names what to unblock. The task's riskTier gates forward moves the same way: a RED task refuses outright (a person has to make the move), and a YELLOW one needs `confirmed: true` — which means the human said yes after you showed them the concrete effect, never a flag you set to get past the gate. `usage` ({inputTokens, outputTokens}) reports what the task cost at done. Moving back to todo is never blocked.",
+        "The SINGLE gate for task status changes (todo | in-progress | done) — attributed to this agent, appended to the task's audit trail. Attach `evidence` ({commit} and/or {threadRef}) on forward moves or the move is flagged `unproven` (allowed, shaded on the board) — and read the `commit` field's own description before you fill it, because the obvious value is the wrong one: a branch sha is discarded by the squash-merge, after which the row still reads as proven and points at nothing. If the evidence was missing or WRONG, do not re-send this call — it refuses with `same-status` — use `amend_evidence`, which appends a correction to the move that already happened. Open `after` dependencies come back in `blockers` — an edge marked enforce REFUSES the transition (HTTP 409) until the blocking task closes; read the blocker message, it names what to unblock. The task's riskTier gates forward moves the same way: a RED task refuses outright (a person has to make the move), and a YELLOW one needs `confirmed: true` — which means the human said yes after you showed them the concrete effect, never a flag you set to get past the gate. `usage` ({inputTokens, outputTokens}) reports what the task cost at done. Moving back to todo is never blocked.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1155,7 +1159,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           evidence: {
             type: 'object',
             properties: {
-              commit: { type: 'string' },
+              commit: { type: 'string', description: COMMIT_EVIDENCE_DESCRIPTION },
               threadRef: { type: 'object' },
             },
           },
@@ -1187,7 +1191,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'object',
             description: 'The proof the move should have carried. At least one of these.',
             properties: {
-              commit: { type: 'string' },
+              commit: { type: 'string', description: COMMIT_EVIDENCE_DESCRIPTION },
               threadRef: { type: 'object' },
             },
           },
@@ -2115,26 +2119,6 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       case 'list_watched_docs': {
         return ok({ watching: Array.from(watchers.keys()) });
       }
-      case 'share_doc': {
-        const {
-          docId,
-          allowDomains,
-          ttlSeconds,
-          name: slug,
-        } = a as {
-          docId: string;
-          allowDomains: string[];
-          ttlSeconds?: number;
-          name?: string;
-        };
-        const res = await http('POST', '/api/share/doc', {
-          docId,
-          allowDomains,
-          ttlSeconds,
-          name: slug,
-        });
-        return ok(res);
-      }
       case 'share_workspace': {
         const {
           workspaceId,
@@ -2159,15 +2143,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok(res);
       }
       case 'share_link': {
-        const { docId, workspaceId, entryDocId, ttlSeconds, label } = a as {
-          docId?: string;
-          workspaceId?: string;
+        const { workspaceId, entryDocId, ttlSeconds, label } = a as {
+          workspaceId: string;
           entryDocId?: string;
           ttlSeconds?: number;
           label?: string;
         };
         const res = await http('POST', '/api/share/link', {
-          docId,
           workspaceId,
           entryDocId,
           ttlSeconds,
