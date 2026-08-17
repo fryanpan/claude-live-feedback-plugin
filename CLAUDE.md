@@ -69,9 +69,10 @@ formatting; leave the pre-existing `noExplicitAny` **warnings** alone, they are
 warnings and not failures.
 
 A PR that touches `packages/mcp/src/**` adds `bun run build:mcp` plus the
-committed bundle, and every PR adds the version bump — both below.
+committed bundle, and a PR that touches `packages/plugin/**` adds the version
+bump — both below. A PR that touches neither adds nothing.
 
-## Releasing the plugin (bump the version on every PR)
+## Releasing the plugin (bump the version when the diff touches the plugin)
 
 Peers install by version. `claude plugin update` compares the version string and
 copies nothing when it hasn't moved — **while still reporting success**. An
@@ -79,7 +80,8 @@ unbumped change is invisible on both ends: green push here, unchanged plugin
 there. That is how 25 feature commits sat undelivered between 2026-05-09 and
 2026-08-10.
 
-- **Bump the patch version on every PR. THREE places, identical values** —
+- **Bump the patch version when your diff touches `packages/plugin/**`. THREE
+  places, identical values** —
   `packages/plugin/.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`,
   and the `PLUGIN_VERSION` constant in `packages/mcp/src/mcp.ts` (the serverInfo
   a client sees in the initialize handshake, and — since the drift notice — the
@@ -94,6 +96,30 @@ there. That is how 25 feature commits sat undelivered between 2026-05-09 and
 - **CI enforces the dangerous half.** `bun run check:plugin-version` fails when a
   PR touches `packages/plugin/**` without moving the version forward, or when the
   two manifests disagree. It is not a warning — the build goes red.
+- **A PR that touches neither `packages/plugin/**` nor `packages/mcp/src/**`
+  bumps nothing, and that is correct rather than an oversight.** The gate's
+  `GUARDED_PREFIX` is `packages/plugin/`; a `packages/mcp/src/**` change counts
+  transitively, because `bun run build:mcp` rewrites the tracked
+  `packages/plugin/mcp/index.js`. A server-only or markdown-app-only change ships
+  no plugin and needs no release. Bumping regardless is not free caution — it
+  manufactures a **total merge order across unrelated branches**, so landing
+  0.1.44 leaves a green PR sitting at 0.1.42 unable to merge without a rebase it
+  never needed. This bullet exists because the heading above read "on every PR"
+  for months and agents dutifully bumped changes that shipped nothing.
+- **When several branches are in flight, the number is a merge-queue position —
+  ask the merger for it, don't read it off main.** Three branches independently
+  pushed 0.1.46 on 2026-08-17 with main at 0.1.45, and **nothing went red**:
+  identical strings merge clean because both sides agree, and
+  `check:plugin-version` compares against the *fork point*
+  (`git merge-base origin/main HEAD`), which stays frozen however many times the
+  job re-runs. So re-reading main before you push does not help either — the
+  branch you are about to collide with has not merged, so main cannot tell you
+  about it. Whoever owns the merges hands out numbers and merges in ascending
+  order; **an agent that finds its number taken reports rather than bumps**,
+  because bumping is how it collides with the next one. This matters past
+  tidiness: a merge order that steps the number backwards leaves peers silently
+  un-updated, since `claude plugin update` copies nothing when the string has not
+  moved forward and reports success anyway.
 - **The MCP bundle is checked the same way.** CI rebuilds it and fails if the
   committed `packages/plugin/mcp/index.js` differs from a fresh build, because
   peers load that artifact rather than the TypeScript source. Any PR touching
