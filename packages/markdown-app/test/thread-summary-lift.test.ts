@@ -75,6 +75,7 @@ function opts(ydoc: Y.Doc): ChromeOpts {
     user: { id: 'u', name: 'U', kind: 'known', color: '#000' },
     ydoc,
     surface: fakeSurface(),
+    whenSynced: (cb) => cb(),
     selectHint: '',
     reanchorHint: '',
     getSelection: () => null,

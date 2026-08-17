@@ -161,6 +161,7 @@ function opts(scope: MountScope, extra?: Partial<ChromeOpts>): ChromeOpts {
     user: { id: 'u', name: 'U', kind: 'known', color: '#000' },
     ydoc: new Y.Doc(),
     surface: fakeSurface(),
+    whenSynced: (cb) => cb(),
     selectHint: '',
     reanchorHint: '',
     getSelection: () => null,
