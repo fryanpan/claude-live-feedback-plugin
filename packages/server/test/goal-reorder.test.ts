@@ -371,6 +371,33 @@ describe('TaskStore.reorderGoals names a RESERVED id as reserved', () => {
     expect(res.missingIds).toEqual([]);
   });
 
+  /** Both rows read `reorderable: false`, so the caller's ACTION is the same
+   *  for both — drop it. They are still reported differently on purpose, and
+   *  an independent reviewer read the asymmetry as a bug, so it is pinned
+   *  here with the reason rather than left to be "fixed" into a field name
+   *  that would then be wrong. `chores` is RESERVED: a permanent bucket that
+   *  will never be orderable. An orphan is UNKNOWN: a goal that genuinely
+   *  was removed, and saying "reserved" would imply it is coming back. */
+  it('reports an ORPHANED id as unknown, not reserved — it was removed, not reserved', () => {
+    const wsId = seeded();
+    const t = store.createTask(wsId, { title: 'Trim the bundle', goal: 'g-perf' });
+    if (!t.ok) throw new Error('create failed');
+    store.transition(t.task.id, 'in-progress', { actor: PERSON });
+    store.transition(t.task.id, 'done', { actor: PERSON, evidence: { commit: 'abc1234' } });
+    store.setGoalList(wsId, [GOALS[0], GOALS[2]] as WorkspaceGoal[], { actor: PERSON });
+
+    // Presence control: g-perf really is still a row in the read, which is
+    // the whole reason a caller would send it back.
+    const rows = summarizeGoals(store.listTasks(wsId, {}), store.getWorkspace(wsId)?.goals ?? []);
+    expect(rows.find((r) => r.id === 'g-perf')?.reorderable).toBe(false);
+
+    const res = store.reorderGoals(wsId, ['g-launch', 'g-docs', 'g-perf'], { actor: PERSON });
+    expect(res.ok).toBe(false);
+    if (res.ok || res.error !== 'order-mismatch') throw new Error('expected order-mismatch');
+    expect(res.unknownIds).toEqual(['g-perf']);
+    expect(res.reservedIds).toEqual([]);
+  });
+
   it('still refuses `chores` even when the rest of the order is perfect', () => {
     const wsId = seeded();
     const res = store.reorderGoals(wsId, ['g-docs', 'g-perf', 'g-launch', CHORES_GOAL_ID], {
