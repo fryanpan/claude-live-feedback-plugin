@@ -289,6 +289,91 @@ same limitation the published client release has. And a session that reports no
 version at all is counted as behind, because the field ships in the release
 that reads it; silence means older than this feature, not unknown.
 
+### Neither side of that comparison reads a path (checked, negative result)
+
+Worth stating because it is the natural next worry and re-deriving it costs
+real time. The strip compares two numbers, and **neither is derived from an
+install path, `installed_plugins.json`, or `${CLAUDE_PLUGIN_ROOT}`**, so
+neither can be confidently wrong about which artifact is actually loaded:
+
+- **What the session is running** is `PLUGIN_VERSION` in
+  `packages/mcp/src/mcp.ts` — a compile-time literal **baked into the bundle**
+  and sent on `attach_agent`. It is the artifact describing itself, so it is
+  correct by construction whether that bundle was loaded from the version-keyed
+  cache or straight out of a working tree. The MCP source contains no read of
+  `installed_plugins.json`, `installPath`, or `CLAUDE_PLUGIN_ROOT` at all.
+- **What the deploy source would install** is `readReleasedPluginVersion()`,
+  which reads `packages/plugin/.claude-plugin/plugin.json` out of the checkout
+  the *server process* was started from (resolved from `import.meta.url`). Also
+  no cache, no pointer file.
+
+The server's only reader of `installed_plugins.json` is
+`readInstalledPluginVersion` in `plugin-refresh.ts`, and it has exactly one
+call site: the before/after probe that decides whether `claude plugin update`
+actually copied anything. It reads the `version` field, never `installPath`,
+and it never feeds the strip. So a plugin's **source type — GitHub-source vs
+directory-source — does not change any reading on this page.** (This
+marketplace is GitHub-source, so `${CLAUDE_PLUGIN_ROOT}` does resolve into the
+version-keyed cache; the point is that nothing here depends on that being
+true.)
+
+### The strip reads a board, not the fleet — and that is structural
+
+The third limit is the sharpest, and it is the one that reads wrong rather
+than merely being incomplete. **The strip's domain is "sessions that called
+`attach_agent` on this workspace".** Anything else is not reported as current;
+it is simply absent — and an absent session and a compliant one used to render
+identically, as nothing at all.
+
+Measured 2026-08-17. The board returned `behind: []` over exactly one
+attachment, and a separate enumeration of the machine's sessions — taken
+outside this server, which is what made it a control rather than a second look
+at the same data — found several sessions releases back, including the one
+doing the enumerating. Nothing on the board said so. The sting is that the
+only session the strip had ever named as behind was the session that then
+fixed itself: that took the reading from "names one" straight to "names
+nobody", with no change whatsoever in the actual drift. **A surface whose
+domain is "whoever opted in by attaching" measures participation, not
+delivery** — and the sessions least likely to have attached are exactly the
+stale ones, because attaching is itself something a newer bundle does more of.
+
+**Can the server widen the domain?** Not for versions, no. A plugin version
+reaches this server through exactly one door — the `pluginVersion` field on
+`attach_agent` — and there is no server-wide session registry to compare
+against. The MCP child makes no HTTP call at startup and never opens a
+websocket, so a session that never attaches is invisible to every transport
+the server has. Yjs awareness carries browsers, not agents. So "is the fleet
+behind" is genuinely unanswerable from here, and **the answer is to say what
+the reading covers, not to invent a fleet registry to make a broader sentence
+true.**
+
+That is what ships: every reading now carries its denominator and its domain.
+`GET /api/workspaces/:id/attachments` returns `pluginRelease.checked` — how
+many sessions the `behind` list was computed over, counted from the same
+population the check filtered — and the presence strip renders a quiet line
+even when nobody is behind: *"No attached session is behind 0.1.40 (1
+checked) — only sessions that attach to this board are checked."* A board
+nobody has attached to says *"nothing has been checked"* rather than going
+silent. The only remaining silence is when there is no attachments read at
+all, where even the domain is unknown.
+
+**Consequence for anything that gates on this.** An empty `behind` list is
+not a fleet-wide clearance and must not be used as one. A tool removal, a
+required-version bump, or any other change that breaks an older bundle needs
+its precondition written against sessions actually checked — "no session
+attached to this board is older than X, and that was N sessions" — plus a
+deliberate decision about the peers the board cannot see.
+
+**The one widening that is available, and is not built.** The server does
+record agents that never attached: `activity.jsonl` and each workspace's
+`events.jsonl` carry an actor identity on every row, and those sets are a
+strict superset of the attachment set. Neither carries a version, so it can
+never say a peer is *behind* — but it could say "K agents have acted on this
+board without ever attaching, and none of them has been checked", which turns
+part of the invisible population into a named one. Deliberately left out here:
+it puts a per-request log read on a polled route, and the denominator already
+stops the reading from being mistaken for clearance.
+
 ## Reviewing work before it merges
 
 Never build in the primary checkout to test something. Instead, from a **linked
