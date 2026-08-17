@@ -18,9 +18,9 @@ Every line is a yes/no you can check on a running build, except lines tagged [di
 
 **Priority order (decided 2026-08-13):** the goals below are listed in priority order and numbered accordingly — goal 1 (Tasks), goal 2 (Goal), goal 3 (Best surface), goal 4 (Collaboration); goals 5–6 and the misc list are nice-to-haves. Cross-references throughout the doc use the numbers as listed. (Corrected by ultrareview 2026-08-13: an earlier revision of this line carried a stale pre-reorder numbering that inverted the build order if read literally, and the stale cross-refs in §3.8/§3.9/§5 were fixed to match.) Bryan wants to reach the Collaboration goal within the next day; the minimal-share slice in §3.12 (PR 1, commit 8) is what makes that reachable.
 
-1. **UC1: Tasks are extremely lightweight and designed for agents to move quickly****Pain Point: **When your work surfaces are more efficient and it takes 5 seconds to spawn a new task for an agent and the agent might go do half a day's work in 2-10 minutes, the overhead of managing tasks even for one person and their agent team quickly overwhelms existing standalone task management tools.  
+1. **UC1: Tasks are extremely lightweight and designed for agents to move quickly ****Pain Point: **When your work surfaces are more efficient and it takes 5 seconds to spawn a new task for an agent and the agent might go do half a day's work in 2-10 minutes, the overhead of managing tasks even for one person and their agent team quickly overwhelms existing standalone task management tools.  
   1. Tasks can be easily created from anywhere
-    1. Comment on a doc, and if it's a big enough chunk of work, it turns into a taskA comment thread on any doc/diff/mockup becomes a task in one tool call (agent) or two taps (human), keeping a bidirectional link between doc thread and task, and the task automatically gets proper context in it.
+    1. Comment on a doc, and if it's a big enough chunk of work, it turns into a task A comment thread on any doc/diff/mockup becomes a task in one tool call (agent) or two taps (human), keeping a bidirectional link between doc thread and task, and the task automatically gets proper context in it.
     2. Talk to the agent from the main workspace manager and make multiple tasks at once
     3. Agent can create tasks as it's doing existing work
     4. Decisions can turn into tasks
@@ -29,24 +29,24 @@ Every line is a yes/no you can check on a running build, except lines tagged [di
     1. Deciding if it's worth creating a task, or just doing something quick
     2. Automatically choosing assignee, choosing priority and grouping
     3. Create a detailed enough task description
-    4. Works on tasks according to priority and dependencies(and has the flexibility to spin up additional subagent teams and workflows when needed)
+    4. Works on tasks according to priority and dependencies (and has the flexibility to spin up additional subagent teams and workflows when needed)
   3. All things link to each other (tasks, documents, decisions, etc.) to provide good context and organization
     1. Agents and humans can understand the details of a task by having all relevant links easily available 
-    2. Tasks can be flexibly organized into whatever structure serves the purpose(e.g. an agent can take a minute and create custom views for you in markdown docs)
-2. **UC2: Goals guide all work to optimize value delivery****Pain Point This Solves: **Agents regularly go off task when they're given free rein on harder problems for many hours.  Setting a pervasively recorded goal that governs all work and doesn't just start a "goal loop" is one attempt to get better at this.  This will also allow agents to start taking over some of the product management decisions -- in manual testing, Fable/Opus seem to do okay at these tasks these days.** **
-  1. Each workspace has a `goal` markdown rendered at the top of the hub and editable in placee.g. for one of the fleet's other projects, right now it is to get critical bugs squashed and have the branch ready for PR by EOD
+    2. Tasks can be flexibly organized into whatever structure serves the purpose (e.g. an agent can take a minute and create custom views for you in markdown docs)
+2. **UC2: Goals guide all work to optimize value delivery ****Pain Point This Solves: **Agents regularly go off task when they're given free rein on harder problems for many hours.  Setting a pervasively recorded goal that governs all work and doesn't just start a "goal loop" is one attempt to get better at this.  This will also allow agents to start taking over some of the product management decisions -- in manual testing, Fable/Opus seem to do okay at these tasks these days.** **
+  1. Each workspace has a `goal` markdown rendered at the top of the hub and editable in place e.g. for one of the fleet's other projects, right now it is to get critical bugs squashed and have the branch ready for PR by EOD
   2. Over time, the agent can help to automate work to go after the goal [direction]
-    1. Make prioritization decisions as new tasks are created from anywhere in the workspaceAnd then report on the task how it was prioritized
+    1. Make prioritization decisions as new tasks are created from anywhere in the workspace And then report on the task how it was prioritized
     2. Come up with additional tasks that are needed
-  3. If the goal changes or refines, the agent can execute reprioritization of work(and ask for approval if there's any questions)
-3. **UC3: Work happens on the best surface for that work to improve productivity and joy****Pain Point This Solves: **Chat is rarely the best surface to do work -- it's just the only surface we have.  Other tools (Notion, Google Docs, Confluence, Jira, etc.) also often are rarely the best surface because they have heavyweight, sucky agent interfaces that are in their own silos and divorced from other tools and the project context.  This goal is about doing work in the best surface for that work.  Which will over time may include having custom surfaces for each project -- but for now, I've found that having docs, interactive mockups, folder tree diffs, tasks, and decisions are the most important types to start with.
+  3. If the goal changes or refines, the agent can execute reprioritization of work (and ask for approval if there's any questions)
+3. **UC3: Work happens on the best surface for that work to improve productivity and joy ****Pain Point This Solves: **Chat is rarely the best surface to do work -- it's just the only surface we have.  Other tools (Notion, Google Docs, Confluence, Jira, etc.) also often are rarely the best surface because they have heavyweight, sucky agent interfaces that are in their own silos and divorced from other tools and the project context.  This goal is about doing work in the best surface for that work.  Which will over time may include having custom surfaces for each project -- but for now, I've found that having docs, interactive mockups, folder tree diffs, tasks, and decisions are the most important types to start with.
   1. All surfaces are tuned for usability, speed, etc. [direction]
     1. No long transitions or cute things that don't add value
     2. All layout and formatting is built for speed and comprehension first and delight second
   2. Planning happens in a document with access to full markdown + mermaid
-    1. Human can create using whatever methods are most efficientVoice, typing, asking agent to do research and fill in a section, commenting to agent, etc.
-  3. Task management happens in a task managerDesigned to streamline the most important operations
-    1. Batch and highlight what needs human attention and help make that work smoothWhat's the top hit list for human(s) right now
+    1. Human can create using whatever methods are most efficient Voice, typing, asking agent to do research and fill in a section, commenting to agent, etc.
+  3. Task management happens in a task manager Designed to streamline the most important operations
+    1. Batch and highlight what needs human attention and help make that work smooth What's the top hit list for human(s) right now
     2. Where is the agent at and is it blocked on anything?
   4. All surfaces support the best possible interfaces for target audiences
     1. Experiment with voice interfaces for everyone [direction; the sub-items below are the v1 checks]
@@ -57,22 +57,22 @@ Every line is a yes/no you can check on a running build, except lines tagged [di
       5. **Voice always answers.** Every push-to-talk request gets an explicit ack naming what was heard and which route is handling it (fast path vs workspace agent) — including "agent away, queued".
     2. Hotkeys for Bryan
     3. Future work: prototype interface on iPhone where we use the IR camera for gaze sensing + voice so we know what you're looking at as you talk and you can look at different things as you're talking...sounds like it might be fun :) [direction] 
-  5. Almost nothing happens in a chat screen -- chat is the worst common denominatorBut sadly the frontier labs are stuck in chat world and are moving away from it too slowly
-4. **UC4: Can easily (remote) collaborate on anything saving hours to days a week of Bryan's time coordinating with other people****Pain Point: **Existing review cycles are too slow and managing feedback from collaborators is hard when it all bottlenecks through Bryan.  Instead, why not let collaborators have direct, secure access to the work while it happens?
-  1. **Fast, secure share**Collaborators have a share flow to get secure access to the whole workspace within 1-2 minutes
-  2. **Everything is multiplayer live edit**All of it is multiplayer synchronously updated and satisfies all properties above (agent keeps team on goal, work is lightweight, and humans have the best possible surface for using their expertise)
-  3. **Collaborators can steer the work while it happens**Policy (TBD) can be declared up front somewhere
+  5. Almost nothing happens in a chat screen -- chat is the worst common denominator But sadly the frontier labs are stuck in chat world and are moving away from it too slowly
+4. **UC4: Can easily (remote) collaborate on anything saving hours to days a week of Bryan's time coordinating with other people ****Pain Point: **Existing review cycles are too slow and managing feedback from collaborators is hard when it all bottlenecks through Bryan.  Instead, why not let collaborators have direct, secure access to the work while it happens?
+  1. **Fast, secure share** Collaborators have a share flow to get secure access to the whole workspace within 1-2 minutes
+  2. **Everything is multiplayer live edit **All of it is multiplayer synchronously updated and satisfies all properties above (agent keeps team on goal, work is lightweight, and humans have the best possible surface for using their expertise)
+  3. **Collaborators can steer the work while it happens **Policy (TBD) can be declared up front somewhere
     1. In the future, collaborators may bring their own agents with their own skills and perspectives
-  4. **Everything works on mobile**Need to be able to remotely work from anywhere for both Bryan and collaborators. Availability target (decided 2026-08-13): 99% uptime — the hub is up when you pull out your phone, and recovery after a crash loses no data
-  5. **Ambient Awareness**Agents and humans work slightly different ways, but awareness of what the agent is doing and why is it answering or not can be helpful
-    1. There's a way to see and jump to where each person is in the workspaceAnd go to the place they're at and follow them
-      1. If the person or agent is working on more than one thing(e.g. multiple tabs open)Give affordances to show when they last interacted with each thingAnd let the user choose which active thing they want to follow
-  6. Future Goal (v2+ — the buildable detail lives in §5): Digital Twin for Legacy ApplicationsLegacy applications are slow, but at many companies, they integrate with existing people and processesAnd so they're a necessary evil
+  4. **Everything works on mobile **Need to be able to remotely work from anywhere for both Bryan and collaborators. Availability target (decided 2026-08-13): 99% uptime — the hub is up when you pull out your phone, and recovery after a crash loses no data
+  5. **Ambient Awareness** Agents and humans work slightly different ways, but awareness of what the agent is doing and why is it answering or not can be helpful
+    1. There's a way to see and jump to where each person is in the workspace And go to the place they're at and follow them
+      1. If the person or agent is working on more than one thing (e.g. multiple tabs open) Give affordances to show when they last interacted with each thing And let the user choose which active thing they want to follow
+  6. Future Goal (v2+ — the buildable detail lives in §5): Digital Twin for Legacy Applications Legacy applications are slow, but at many companies, they integrate with existing people and processes And so they're a necessary evil
     1. **Workspace and legacy apps stay in sync**
       1. Workspace is primary, and legacy apps are secondary
     2. **Sync with the workspace breaks down silos**
       1. Workspace is the single unified context that goes across
-      2. Users can collaborate with legacy apps or with the workspacee.g. comments in Confluence show up as comments on the digital twin doc in the workspace and agent replies in workspace get sync'ed back out
+      2. Users can collaborate with legacy apps or with the workspace e.g. comments in Confluence show up as comments on the digital twin doc in the workspace and agent replies in workspace get sync'ed back out
 5. **UC5: Verifiability improves work**
   1. **Evidence is attached.** 
     1. Every transition to `done` or `in-progress` stores evidence (commit hash and/or thread id) and the board renders it as a chip linking to the diff review or thread.
@@ -631,7 +631,7 @@ Two PRs, because PR 2 waits on DNS and Cloudflare setup that isn't done yet — 
 
 **Adaptive delivery (§3.7)** is a parallel workstream in the MCP child — it touches no server state and can land before, between, or inside PR 1.
 
-**Plugin version bump — every PR.** Both manifests, identical values: `packages/plugin/.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` (PR 1 starts at 0.1.9). Any PR touching `packages/mcp/src/**` must run `bun run build:mcp` and commit `packages/plugin/mcp/index.js` — peers load the committed bundle, not the source. CI fails on both.
+**Plugin version bump — every PR.** Both manifests, identical values: `packages/plugin/.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` (PR 1 starts at 0.1.9). (Agent, 2026-08-17: stale — there are three version sites now, not two manifests: packages/plugin/.claude-plugin/plugin.json, .claude-plugin/marketplace.json, and the PLUGIN_VERSION constant in packages/mcp/src/mcp.ts; main is past 0.1.38. See CLAUDE.md for the live source.) Any PR touching `packages/mcp/src/**` must run `bun run build:mcp` and commit `packages/plugin/mcp/index.js` — peers load the committed bundle, not the source. CI fails on both.
 
 Estimate (decided 2026-08-13: weekly-review method — decisions-made as the complexity proxy, not LOC or commit count; baseline scaled ÷20 for Bryan's hands-on time and ÷10 for wall clock). Counting the decisions each commit forces — schema shapes, transition and gate semantics, event contracts, UI judgment calls — PR 1 carries ≈55 decisions (heaviest: task store ~8, hub UI ~10, voice ~8) and PR 2 ≈25. Calibration assumption, stated so it can be checked: ~2 hours of human-engineer work per decision (decide + implement + verify), giving PR 1 ≈ 110 baseline hours (~3 engineer-weeks) and PR 2 ≈ 50 (~1.25). Scaled per the standard: PR 1 ≈ 5–6 hours of Bryan's hands-on time, ≈ 11–14 hours wall clock — a long day and a half of elapsed time; PR 2 ≈ 2.5 hands-on / ≈ 5 wall-clock hours. Note this lands ~5x more aggressive than the earlier gut estimate (1–1.5 weeks for PR 1); the lever is the hours-per-decision calibration, and it is checkable after PR 1 ships — count the actual entries in decisions.md against the clock and recalibrate — when PR 1 lands, record the actual hands-on and wall-clock numbers next to this estimate so the recalibration has something to work with (Team Lead's condition, 2026-08-13). Fleet-standard status: Team Lead audited all 23 projects — two-thirds have empty or missing decisions.md files, and the projects with real records disagree ~5x on what counts as one decision — Bryan then overrode the staged rollout: shipped fleet-wide same day as rule effort-estimates.md — the standard is baseline human-engineer hours (always shown, so it can be argued with), ÷20 for hands-on, ÷10 for wall clock; decision-counting stays the complexity proxy where decision records exist. Team Lead validated the constants against 711 recorded tasks (Apr–Jun 2026): measured medians run 37x hands-on and 9.3x wall clock (83x/26x on ≥10h baselines), so ÷20/÷10 deliberately under-promise and this PR 1 estimate is conservative rather than optimistic. Workflow-pipeline execution (per `workflow-conventions.md`) once approved.
 
