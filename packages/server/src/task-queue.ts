@@ -166,6 +166,10 @@ export interface GoalSummaryRow {
   title: string;
   /** 0 for a top-level goal, 1 for a subgoal (one level max). */
   depth: number;
+  /** The parent goal's id, on subgoal rows only. Depth alone leaves the
+   *  parent to be inferred from row position, and `reorder_goals` needs it
+   *  BY NAME to scope a subgoal reorder — so the read states it. */
+  parent?: string;
   dueAt?: number;
   todo: number;
   inProgress: number;
@@ -190,10 +194,17 @@ export function summarizeGoals(tasks: Task[], goals: WorkspaceGoal[]): GoalSumma
     else c.done++;
     counts.set(t.goal, c);
   }
-  const row = (id: string, title: string, depth: number, dueAt?: number): GoalSummaryRow => ({
+  const row = (
+    id: string,
+    title: string,
+    depth: number,
+    dueAt?: number,
+    parent?: string,
+  ): GoalSummaryRow => ({
     id,
     title,
     depth,
+    ...(parent !== undefined ? { parent } : {}),
     ...(dueAt !== undefined ? { dueAt } : {}),
     ...(counts.get(id) ?? { todo: 0, inProgress: 0, done: 0 }),
   });
@@ -204,7 +215,7 @@ export function summarizeGoals(tasks: Task[], goals: WorkspaceGoal[]): GoalSumma
     out.push(row(g.id, g.title, 0, g.dueAt));
     placed.add(g.id);
     for (const s of g.subgoals ?? []) {
-      out.push(row(s.id, s.title, 1, s.dueAt));
+      out.push(row(s.id, s.title, 1, s.dueAt, g.id));
       placed.add(s.id);
     }
   }
