@@ -15,6 +15,7 @@ not know what the real work is.
 
 This skill is the **contract**: what the lead agent owes when the goal changes.
 For the tool shapes — `set_workspace_goal`, `set_task_goal`, `reorder_goals`,
+`rename_goal`,
 the lead-agent seat — read `live-feedback:running-a-workspace-hub`. For the
 ordinary work loop this interrupts, read
 `live-feedback:working-a-workspace-board`.
@@ -193,16 +194,24 @@ whole rule; send either kind back and you get a 400 that tells you which it
 was — `chores` in `reservedIds` (a permanent bucket you drop from the order),
 an orphaned id in `unknownIds` (the band really was removed).
 
-`set_goal_list` is a full **replace**, and that is the whole hazard: any band id
-you leave out has its open tasks dumped at the bottom of Chores. Including a
+`set_goal_list` is a full **replace** keyed by ID, and that is the whole hazard:
+any band id you leave out is removed, and its open tasks land at the bottom of
+Chores while its done tasks orphan onto an id that no longer exists. Including a
 band another writer added since you last read the list — which is exactly the
 case a goal change makes likely, because a goal edit usually means somebody is
 on the board right now. So:
 
 - To change priority: `reorder_goals`, always.
-- To genuinely add / rename / remove a band: `set_goal_list`, with the ids read
-  **immediately** before the call, and then re-place every id it reports in
-  `movedToChores` rather than leaving them piled there.
+- To change a band's TITLE: `rename_goal(workspaceId, goal, title)`. It edits in
+  place and cannot move a task. Renaming through `set_goal_list` by giving the
+  band a new id is not a rename — it is a removal plus an addition, and the new
+  title appears exactly as if it had worked.
+- To genuinely add / remove a band: `set_goal_list`, with the ids read
+  **immediately** before the call. A removal that would strand work is now
+  REFUSED (`would-strand-tasks`) until you name that id in `drop`, so read what
+  the refusal says the band holds before you acknowledge it. Then re-place every
+  id it reports in `movedToChores` rather than leaving them piled, and decide
+  whether the `strandedDone` rows should be re-placed too.
 - Adding or removing bands changes the owner's structure, not a placement. If
   the new goal seems to need a band that does not exist, ask for it as the
   decision task described in step 7 instead of restructuring the board.

@@ -41,10 +41,14 @@ You have latitude over the ordering itself: propose a reorder with
 `reorder_goals(workspaceId, order, parent?)` when the sequence is wrong, and
 say why. It takes ids only — no titles — and it refuses any `order` that is
 not exactly the goals already there, so it cannot lose one to a list you read
-a while ago. Reach for `set_goal_list` only to add, rename or remove a goal;
-reordering with it means restating every title, and any id you leave out
-dumps that goal's open tasks into Chores. What you don't have is latitude to
-ignore the ordering silently.
+a while ago. To change a band's TITLE, use `rename_goal(workspaceId, goal,
+title)` — it changes the title in place and cannot move a task. Reach for
+`set_goal_list` only to add or remove a goal; it is a full replace keyed by
+id, so reordering with it means restating every title, and renaming through
+it by giving a band a new id is a removal plus an addition that strands
+everything the band held. A removal that would strand work is now refused
+until you name the id in `drop`. What you don't have is latitude to ignore
+the ordering silently.
 
 ## Take the top *set*, not the top row
 
