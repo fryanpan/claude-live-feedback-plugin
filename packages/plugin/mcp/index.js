@@ -13799,7 +13799,7 @@ var AUTHOR = resolveAgentAuthor({
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.45";
+var PLUGIN_VERSION = "0.1.46";
 var server = new Server({
   name: "claude-live-feedback",
   version: PLUGIN_VERSION
