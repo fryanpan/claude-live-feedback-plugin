@@ -327,6 +327,15 @@ describe('classifyExternalContent', () => {
     expect(classifyExternalContent(path, '   \n\n').source).toBe('unknown');
   });
 
+  it('gives up and answers unknown when its time budget is spent', () => {
+    const head = readFileSync(path, 'utf8');
+    // Positive control in the same assertion: this content DOES classify as
+    // git with a normal budget, so a zero budget answering `unknown` is the
+    // budget doing it and not the content being unrecognisable.
+    expect(classifyExternalContent(path, head).source).toBe('git');
+    expect(classifyExternalContent(path, head, 0).source).toBe('unknown');
+  });
+
   it('answers unknown outside a git repository instead of throwing', () => {
     const bare = mkdtempSync(join(tmpdir(), 'lf-nogit-'));
     const outside = join(bare, 'doc.md');
