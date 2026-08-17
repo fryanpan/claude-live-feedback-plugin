@@ -1189,7 +1189,12 @@ export function renderReviewStrip(
     // "Ship the widget" alone is the container, not the question.
     if (item.ask) {
       const ask = document.createElement('span');
-      ask.className = 'hub-review-ask';
+      // A question addressed to the reader is the one row on this strip they
+      // can act on without opening anything, so it is marked as such rather
+      // than left to read like the status notes it sits among.
+      ask.className = item.thread?.direct
+        ? 'hub-review-ask hub-review-ask--direct'
+        : 'hub-review-ask';
       ask.textContent = clip(item.ask, 48);
       chip.append(ask);
     } else if (blocking) {
@@ -2322,7 +2327,7 @@ export function renderTaskDetail(
     // dictated capture transcript (`quoteForCapture`), the human's words on a
     // chat-born `create_tasks` row, the latest HUMAN comment on a
     // `promote_to_task` (agent replies are excluded there by design), and the
-    // row's own pre-rewrite title-and-body preserved by `noteBodyEdited`.
+    // row's own pre-rewrite title-and-body preserved by `updateBodySnapshot`.
     // None of them is an author-chosen quotation, so the field needs no way to
     // say which kind it is and the label cannot lie on a kind it doesn't cover.
     //
