@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   CHORES_ID,
   type HubTask,
+  type ReviewItem,
   type ReviewThreadItem,
   advanceWalk,
   decisionRows,
@@ -507,6 +508,156 @@ describe('renderReviewWalkthrough — comments', () => {
 });
 
 /**
+ * Advancing is only half of it. "The UX should make it clear that I'm doing
+ * that" is the other half, and it is the one that gets dropped — if the next
+ * item simply appears where the last one was, the surface reads as "my answer
+ * did nothing" or "the page reset", which is worse than not advancing because
+ * the reader cannot tell whether their answer landed.
+ */
+describe('renderReviewWalkthrough — saying that the advance happened', () => {
+  const twoDecisions = () =>
+    reviewQueue(
+      [decision({ title: 'Blue or green?' }), decision({ title: 'Ship Friday?' })],
+      [],
+      NOW,
+    );
+
+  it('says nothing about progress before anything has been cleared', () => {
+    renderReviewWalkthrough(root, twoDecisions(), 0, walk());
+    expect(root.querySelector('.hub-walk-advanced')).toBeNull();
+    expect(root.querySelector('.hub-walk-cleared')).toBeNull();
+    // Positive control: the card IS rendered, so the two absences above are
+    // about progress rather than about an empty panel.
+    expect(root.querySelector('.hub-walk-title')?.textContent).toBe('Blue or green?');
+  });
+
+  it('names what was just finished, above the item that replaced it', () => {
+    const queue = twoDecisions();
+    const done = reviewQueue([decision({ title: 'Ship Friday?' })], [], NOW);
+    renderReviewWalkthrough(root, done, 0, walk(), {
+      cleared: 1,
+      last: queue.items[0] as ReviewItem,
+    });
+    const banner = root.querySelector('.hub-walk-advanced') as HTMLElement;
+    expect(banner).toBeTruthy();
+    expect(banner.textContent).toContain('Answered');
+    expect(banner.textContent).toContain('Blue or green?');
+    // And the new card is underneath it, not replaced by it.
+    expect(root.querySelector('.hub-walk-title')?.textContent).toBe('Ship Friday?');
+  });
+
+  it('counts up as the queue counts down, so one number says you moved', () => {
+    const done = reviewQueue([decision({ title: 'Ship Friday?' })], [], NOW);
+    renderReviewWalkthrough(root, done, 0, walk(), { cleared: 3, last: null });
+    const pos = root.querySelector('.hub-walk-pos') as HTMLElement;
+    expect(pos.textContent).toContain('1 of 1');
+    expect((root.querySelector('.hub-walk-cleared') as HTMLElement).textContent).toContain('3');
+  });
+
+  it('reads a reply differently from an answer — it was not a decision', () => {
+    const queue = reviewQueue([], [threadItem({ title: 'Ship the widget' })], NOW);
+    renderReviewWalkthrough(root, reviewQueue([], [], NOW), 0, walk(), {
+      cleared: 1,
+      last: queue.items[0] as ReviewItem,
+    });
+    expect((root.querySelector('.hub-walk-advanced') as HTMLElement).textContent).toContain(
+      'Replied on',
+    );
+  });
+
+  /**
+   * The acceptance line "going back to the item just answered is possible".
+   * Back cannot do it: answering took the item OUT of the queue, so stepping
+   * back lands on whatever preceded it.
+   */
+  it('offers a way back to the item just answered, which Back can no longer reach', () => {
+    const onOpenItem = vi.fn();
+    const onStep = vi.fn();
+    const queue = twoDecisions();
+    const answered = queue.items[0] as ReviewItem;
+    const done = reviewQueue([decision({ title: 'Ship Friday?' })], [], NOW);
+    renderReviewWalkthrough(root, done, 0, walk({ onOpenItem, onStep }), {
+      cleared: 1,
+      last: answered,
+    });
+    (root.querySelector('.hub-walk-advanced-back') as HTMLElement).click();
+    expect(onOpenItem).toHaveBeenCalledWith(answered);
+    // Not a step: the answered item is not at index -1 or anywhere else in
+    // this queue, so a positional move could not have reached it.
+    expect(onStep).not.toHaveBeenCalled();
+  });
+
+  it('finishes with a count, so the end of a sitting is an ending', () => {
+    renderReviewWalkthrough(root, reviewQueue([], [], NOW), 0, walk(), { cleared: 4, last: null });
+    const done = root.querySelector('.hub-walk-done') as HTMLElement;
+    expect(done.textContent).toContain('All caught up');
+    expect((root.querySelector('.hub-walk-done-tally') as HTMLElement).textContent).toContain('4');
+  });
+
+  /**
+   * Answering the LAST one lands on the finished screen, which makes it the
+   * likeliest moment to want the item back — and the one place a card-only
+   * banner would silently not appear.
+   */
+  it('names the last one on the finished screen too, with the way back to it', () => {
+    const onOpenItem = vi.fn();
+    const answered = reviewQueue([decision({ title: 'Blue or green?' })], [], NOW)
+      .items[0] as ReviewItem;
+    renderReviewWalkthrough(root, reviewQueue([], [], NOW), 0, walk({ onOpenItem }), {
+      cleared: 1,
+      last: answered,
+    });
+    expect(root.querySelector('.hub-walk-done')).toBeTruthy();
+    const banner = root.querySelector('.hub-walk-advanced') as HTMLElement;
+    expect(banner.textContent).toContain('Blue or green?');
+    (root.querySelector('.hub-walk-advanced-back') as HTMLElement).click();
+    expect(onOpenItem).toHaveBeenCalledWith(answered);
+  });
+
+  it('a sitting that cleared nothing does not claim a tally', () => {
+    renderReviewWalkthrough(root, reviewQueue([], [], NOW), 0, walk());
+    expect(root.querySelector('.hub-walk-done')).toBeTruthy();
+    expect(root.querySelector('.hub-walk-done-tally')).toBeNull();
+  });
+});
+
+/**
+ * The advance must FOLLOW the write, never race it — an advance is the
+ * confirmation that the answer landed. These cover the composer's half of that
+ * contract; the advance itself is `advanceWalk`, below.
+ */
+describe('the walkthrough composer — one answer per tap, and no lost words', () => {
+  it('locks while the write is in flight, so a second tap is not a second answer', async () => {
+    let release: (ok: boolean) => void = () => {};
+    const onAnswer = vi.fn(() => new Promise<boolean>((r) => (release = r)));
+    renderReviewWalkthrough(root, reviewQueue([decision()], [], NOW), 0, walk({ onAnswer }));
+    const form = root.querySelector('.hub-walk-answer') as HTMLFormElement;
+    const ta = form.querySelector('textarea') as HTMLTextAreaElement;
+    ta.value = 'Blue.';
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    expect(ta.disabled).toBe(true);
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    expect(onAnswer).toHaveBeenCalledTimes(1);
+    release(true);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(ta.disabled).toBe(false);
+    expect(ta.value).toBe('');
+  });
+
+  it('keeps the words when the write is refused', async () => {
+    const onAnswer = vi.fn(() => Promise.resolve(false));
+    renderReviewWalkthrough(root, reviewQueue([decision()], [], NOW), 0, walk({ onAnswer }));
+    const form = root.querySelector('.hub-walk-answer') as HTMLFormElement;
+    const ta = form.querySelector('textarea') as HTMLTextAreaElement;
+    ta.value = 'Green, because the tunnel is up.';
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(ta.value).toBe('Green, because the tunnel is up.');
+    expect(ta.disabled).toBe(false);
+  });
+});
+
+/**
  * The advance is the feature — "when I submit an answer to a request I should
  * go to the next request in priority order" — and the whole difficulty is that
  * the list edits itself underneath the reader. These are pure so the off-by-one
@@ -552,46 +703,50 @@ describe('walkPosition — an index is not a position on a list that shrinks', (
 });
 
 describe('advanceWalk — landing on the NEXT request, not the one after it', () => {
-  const three = () => [
-    decision({ title: 'First' }),
-    decision({ title: 'Second' }),
-    decision({ title: 'Third' }),
-  ];
+  /** Three decisions AND the queue's own view of them. Built together because
+   *  the queue's ordering is its own (enforced edges, dependents, age, id) and
+   *  a test that assumed creation order would pass or fail on how the ids sort.
+   */
+  function three() {
+    const tasks = [decision(), decision(), decision()];
+    const queue = reviewQueue(tasks, [], NOW);
+    /** The queue without its item at `i` — what answering that one leaves. */
+    const without = (i: number) =>
+      reviewQueue(
+        queue.items.filter((_, n) => n !== i).map((it) => it.decision?.task as HubTask),
+        [],
+        NOW,
+      );
+    return { queue, without, keyAt: (i: number) => queue.items[i]?.key as string };
+  }
 
   it('aims at what was next, so the item that slid into place is not skipped', () => {
-    const tasks = three();
-    const before = reviewQueue(tasks, [], NOW);
-    const finished = before.items[0]?.key as string;
-    const next = before.items[1]?.key as string;
+    const { queue, without, keyAt } = three();
+    expect(queue.items).toHaveLength(3);
     // The answered decision leaves the queue, so `index + 1` would land on the
     // THIRD and step over the second entirely.
-    const after = reviewQueue(tasks.slice(1), [], NOW);
-    expect(after.items[0]?.key).toBe(next);
-    expect(advanceWalk(after, 0, finished, next)).toBe(0);
+    const after = without(0);
+    expect(after.items[0]?.key).toBe(keyAt(1));
+    expect(advanceWalk(after, 0, keyAt(0), keyAt(1))).toBe(0);
   });
 
   it('steps past the answered item while it is still in the queue', () => {
     // A decision's answer comes back through the ydoc projection rather than in
     // the POST's reply, so the queue can still hold it when the write resolves.
-    const queue = reviewQueue(three(), [], NOW);
-    const finished = queue.items[0]?.key as string;
-    expect(advanceWalk(queue, 0, finished, null)).toBe(1);
+    const { queue, keyAt } = three();
+    expect(advanceWalk(queue, 0, keyAt(0), null)).toBe(1);
   });
 
   it('lands on the done state when the last one is answered', () => {
-    const tasks = three();
-    const finished = reviewQueue(tasks, [], NOW).items[2]?.key as string;
-    const after = reviewQueue(tasks.slice(0, 2), [], NOW);
+    const { without, keyAt } = three();
+    const after = without(2);
     expect(after.items[2]).toBeUndefined();
-    expect(advanceWalk(after, 2, finished, null)).toBe(2);
+    expect(advanceWalk(after, 2, keyAt(2), null)).toBe(2);
   });
 
   it('holds the gap when a peer takes the next one too', () => {
-    const tasks = three();
-    const before = reviewQueue(tasks, [], NOW);
-    const finished = before.items[0]?.key as string;
-    const next = before.items[1]?.key as string;
-    const after = reviewQueue([tasks[2] as HubTask], [], NOW);
-    expect(advanceWalk(after, 0, finished, next)).toBe(0);
+    const { queue, keyAt } = three();
+    const after = reviewQueue([queue.items[2]?.decision?.task as HubTask], [], NOW);
+    expect(advanceWalk(after, 0, keyAt(0), keyAt(1))).toBe(0);
   });
 });

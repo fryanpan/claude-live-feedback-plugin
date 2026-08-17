@@ -1068,6 +1068,45 @@ body.hub-body {
   color: var(--fg-muted);
   font-variant-numeric: tabular-nums;
 }
+/* What this sitting has taken off the list. "3 of 7" becomes "3 of 6" when you
+   answer — the position does not move and only the total shrinks — so the one
+   number that could say you advanced is the one that counts UP. */
+.hub-walk-cleared {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--accent-wash, rgba(59, 111, 212, 0.07));
+  color: var(--fg);
+  font-weight: 600;
+}
+.hub-walk-cleared::before {
+  content: "✓ ";
+}
+/* "You just answered that; this is the next one." Above the new card, because
+   the question it settles — did my answer land, or did the page reset — is
+   asked the instant the card changes. A toast cannot carry it: this is read on
+   a phone, where a toast is gone before the thumb is back down. */
+.hub-walk-advanced {
+  display: grid;
+  /* minmax(0, …) so a long title wraps instead of widening the panel. */
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: var(--accent-wash, rgba(59, 111, 212, 0.07));
+  font-size: 13px;
+}
+.hub-walk-advanced-said {
+  overflow-wrap: anywhere;
+}
+/* The answered item is OUT of the queue, so Back steps to whatever preceded it
+   — this is the only route to the thing that was actually just answered. */
+.hub-walk-advanced-back {
+  min-height: 36px;
+  white-space: nowrap;
+}
 .hub-walk-close {
   min-height: 36px;
 }
@@ -1199,6 +1238,17 @@ body.hub-body {
 .hub-walk-done p {
   margin: 0;
   color: var(--fg-muted);
+}
+/* What turns this from an empty surface into an ending. A sitting that cleared
+   four things and one that found nothing waiting read identically without it,
+   and the first is the one worth finishing.
+
+   Two classes deliberately: `.hub-walk-done p` above is one class plus one
+   type, so a bare `.hub-walk-done-tally` would lose the colour to it on
+   specificity and render muted like the line it is meant to stand out from. */
+.hub-walk-done .hub-walk-done-tally {
+  font-weight: 600;
+  color: var(--fg);
 }
 
 /* --- board sections (goals ARE the sections) --- */
