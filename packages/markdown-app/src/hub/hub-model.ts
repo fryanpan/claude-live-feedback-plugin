@@ -860,6 +860,74 @@ export function pluginDriftNotice(release: PluginRelease | null | undefined): Dr
   };
 }
 
+/** What the attachments read says about the client this server publishes.
+ *  Owner-only, and absent entirely on a server that publishes nothing. */
+export interface ClientRelease {
+  releaseId: string | null;
+  publishedAt: number | null;
+  ageMs: number | null;
+  sourceRef: string | null;
+  consecutiveFailures: number;
+  failingSince: number | null;
+  lastError: string | null;
+  /** The server's call, not this module's: the arming rule (and its "one
+   *  transient failure is not news" silence) lives next to the ledger it
+   *  reads, so there is exactly one place that decides. */
+  stale: boolean;
+}
+
+/** A build error can be long; the strip is not a log viewer. */
+const MAX_ERROR_CHARS = 200;
+
+/**
+ * "Every browser here is running an old client."
+ *
+ * A failed client build keeps the previous release live — the right call,
+ * stale beats down — but it used to say so ONLY on stderr in a supervisor log,
+ * which is not a surface. A build that keeps failing then means an ever-older
+ * client against an ever-newer server: the exact server-new/client-old split
+ * the release mechanism exists to prevent, reintroduced through the failure
+ * path.
+ *
+ * So the age is the headline. "Stale" alone does not say whether the split is
+ * minutes or a week, and the gap is the whole reason to care.
+ */
+export function clientDriftNotice(
+  release: ClientRelease | null | undefined,
+  now: number,
+): DriftNotice | null {
+  if (!release?.stale) return null;
+  const headline =
+    release.publishedAt === null
+      ? 'No client has ever been published here — the build has never succeeded'
+      : `Every browser here is running a client published ${timeAgo(release.publishedAt, now)}`;
+
+  const parts: string[] = [];
+  const n = release.consecutiveFailures;
+  parts.push(
+    n === 1
+      ? 'The last build failed'
+      : `${n} builds in a row have failed${
+          release.failingSince === null ? '' : ` since ${timeAgo(release.failingSince, now)}`
+        }`,
+  );
+  if (release.sourceRef) parts.push(`the live release was built from ${release.sourceRef}`);
+  if (release.lastError) {
+    const err =
+      release.lastError.length > MAX_ERROR_CHARS
+        ? `${release.lastError.slice(0, MAX_ERROR_CHARS)}…`
+        : release.lastError;
+    parts.push(err);
+  }
+  return {
+    headline,
+    detail: `${parts.join(' · ')}.`,
+    // The restart is the deploy for the browser client: a fixed build changes
+    // nothing for anybody until this server starts again and publishes it.
+    fix: 'Fix the build in the deploy source, then restart the review server — the restart is the client deploy.',
+  };
+}
+
 /** One chip per person and agent (§2.7), people first. Person chips carry the
  *  surface they're on; agent chips carry the derived liveness state — real
  *  signals (heartbeat, last tool call), never guesses. */

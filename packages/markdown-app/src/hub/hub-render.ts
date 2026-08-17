@@ -1256,22 +1256,26 @@ export function renderPresence(
   chips: PresenceChip[],
   followedKey: string | null,
   handlers: PresenceHandlers,
-  drift?: DriftNotice | null,
+  // A LIST, because "what is running where" has two independent answers: the
+  // agents' plugin bundles and the browser's own client. They fail separately
+  // and are fixed separately, so neither may hide the other.
+  drift?: ReadonlyArray<DriftNotice | null | undefined> | null,
 ): void {
   container.replaceChildren();
-  if (chips.length === 0 && !drift) {
+  const notices = (drift ?? []).filter((d): d is DriftNotice => Boolean(d));
+  if (chips.length === 0 && notices.length === 0) {
     container.classList.add('hidden');
     return;
   }
   container.classList.remove('hidden');
-  if (drift) {
+  for (const notice of notices) {
     // Beside the agents, because that is what it is about — and BEFORE the
     // early return that a chipless strip used to take: an away session draws
     // no chip, and an away session is the one most likely to be stranded on
     // a bundle that predates whatever was just merged.
     const note = document.createElement('div');
     note.className = 'hub-drift';
-    note.innerHTML = `<span class="hub-drift-head">${escapeHtml(drift.headline)}</span><span class="hub-drift-who">${escapeHtml(drift.detail)}</span><span class="hub-drift-fix">${escapeHtml(drift.fix)}</span>`;
+    note.innerHTML = `<span class="hub-drift-head">${escapeHtml(notice.headline)}</span><span class="hub-drift-who">${escapeHtml(notice.detail)}</span><span class="hub-drift-fix">${escapeHtml(notice.fix)}</span>`;
     container.append(note);
   }
   for (const chip of chips) {

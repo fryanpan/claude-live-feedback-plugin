@@ -15,6 +15,7 @@ import {
   type ActivityEvent,
   type ActivityFilter,
   type BoardTab,
+  type ClientRelease,
   DEFAULT_DONE_WINDOW,
   DONE_WINDOWS,
   type DoneWindow,
@@ -31,6 +32,7 @@ import {
   type ReviewThreadItem,
   type UptimeReport,
   boardSections,
+  clientDriftNotice,
   goalLabel,
   parseQuickAdd,
   pluginDriftNotice,
@@ -72,6 +74,10 @@ interface HubState {
    *  attached sessions are running something older. Null until the first
    *  attachments read lands. */
   pluginRelease: PluginRelease | null;
+  /** What the browser itself is running, and whether this deployment could
+   *  not replace it. Null on any server that publishes no client release
+   *  (dev, staging) — those must not report the prod machine's deploy. */
+  clientRelease: ClientRelease | null;
   docs: SidebarDoc[];
   threads: SidebarThread[];
   detailTaskId: string | null;
@@ -226,6 +232,7 @@ async function main(): Promise<void> {
     uptime: null,
     agents: [],
     pluginRelease: null,
+    clientRelease: null,
     docs: [],
     threads: [],
     detailTaskId: null,
@@ -595,7 +602,7 @@ async function main(): Promise<void> {
           renderPresenceRegion();
         },
       },
-      pluginDriftNotice(state.pluginRelease),
+      [pluginDriftNotice(state.pluginRelease), clientDriftNotice(state.clientRelease, Date.now())],
     );
   }
 
@@ -841,11 +848,16 @@ async function main(): Promise<void> {
         lastToolCallAt: number;
       }>;
       pluginRelease?: PluginRelease;
+      clientRelease?: ClientRelease;
     }>(`/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`);
     const before = knownAgentIds().join('\n');
     // Which sessions can't run what was merged. Rides the read the board
     // already makes, so nobody has to think to check.
     state.pluginRelease = res?.pluginRelease ?? null;
+    // …and which client every browser here is running. A failed build keeps
+    // the previous release live, which is right — but it announced itself
+    // only on the supervisor's stderr, so the split widened unread.
+    state.clientRelease = res?.clientRelease ?? null;
     state.agents = (res?.attachments ?? []).map((a) => ({
       agentId: a.agentId,
       state: a.state ?? 'away',
