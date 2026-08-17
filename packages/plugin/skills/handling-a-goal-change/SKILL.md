@@ -15,8 +15,8 @@ not know what the real work is.
 
 This skill is the **contract**: what the lead agent owes when the goal changes.
 For the tool shapes — `set_workspace_goal`, `set_task_goal`, `reorder_goals`,
-`rename_goal`,
-the lead-agent seat — read `live-feedback:running-a-workspace-hub`. For the
+`rename_goal`, the lead-agent seat — read
+`live-feedback:running-a-workspace-hub`. For the
 ordinary work loop this interrupts, read
 `live-feedback:working-a-workspace-board`.
 
