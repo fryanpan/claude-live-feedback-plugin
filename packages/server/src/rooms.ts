@@ -62,6 +62,7 @@ import {
 } from './binds.ts';
 import { scanFolderPaths } from './fs-scan.ts';
 import { showFile } from './git-diff.ts';
+import { gitConflictHint } from './git-provenance.ts';
 import {
   deletePrivateMeta,
   isPrivateMetaKey,
@@ -1896,20 +1897,7 @@ export class Rooms {
         return decision;
       }
       if (decision === 'conflict' && binding.writeBack) {
-        const backupPath = this.backupExternalVersion(room.docId, md);
-        binding.lastSyncError = {
-          message:
-            'external file change collided with un-flushed live edits; kept live edits and reasserted them to disk. ' +
-            (backupPath
-              ? `The external version was saved to ${backupPath} — restore it and reparse_from_disk to make it win.`
-              : 'Backup of the external version FAILED — it survives only in your editor/git history.'),
-          at: Date.now(),
-        };
-        console.warn(
-          `[rooms] ${room.docId}: disk↔doc conflict for ${binding.path}; kept live edits, reasserting to disk` +
-            (backupPath ? ` (external version backed up to ${backupPath})` : ''),
-        );
-        this.scheduleFileWrite(room, binding);
+        this.recordConflictReassert(room, binding, md);
         return decision;
       }
       room.ydoc.transact(() => {
@@ -1963,20 +1951,7 @@ export class Rooms {
       // BUT the reassert overwrites the external version on disk — so back it
       // up first, or "recoverable with reparse_from_disk" is a lie (disk
       // would already hold our reassert by the time anyone reparses).
-      const backupPath = this.backupExternalVersion(room.docId, md);
-      binding.lastSyncError = {
-        message:
-          'external file change collided with un-flushed live edits; kept live edits and reasserted them to disk. ' +
-          (backupPath
-            ? `The external version was saved to ${backupPath} — restore it and reparse_from_disk to make it win.`
-            : 'Backup of the external version FAILED — it survives only in your editor/git history.'),
-        at: Date.now(),
-      };
-      console.warn(
-        `[rooms] ${room.docId}: disk↔doc conflict for ${binding.path}; kept live edits, reasserting to disk` +
-          (backupPath ? ` (external version backed up to ${backupPath})` : ''),
-      );
-      this.scheduleFileWrite(room, binding);
+      this.recordConflictReassert(room, binding, md);
       return decision;
     }
     // decision === 'apply' — disk changed externally and the live doc is clean.
@@ -2098,6 +2073,42 @@ export class Rooms {
         console.error(`[rooms] file write failed for ${binding.path}:`, err);
       }
     }, 800);
+  }
+
+  /**
+   * The conflict arm of `reconcileFromDisk`, shared by the prose and the flat
+   * write-back bindings so the two cannot drift apart: back up the external
+   * version, record a `syncError` saying what happened and where the
+   * overwritten bytes went, log it, and re-arm the flush that reasserts the
+   * live doc onto disk.
+   *
+   * The message names GIT when the bytes being overwritten are a blob this
+   * repository already holds. The mtime poll cannot tell `git checkout` /
+   * `git stash` / `git pull` from a person saving in an editor — nothing on
+   * the file says which it was — so before this, a git operation against a doc
+   * with un-flushed live edits was partly undone a second later, with the
+   * operator seeing only a clean `git` exit and, if they happened to look, an
+   * unexplained dirty working tree. The provenance check is advisory: it never
+   * changes which side wins.
+   */
+  private recordConflictReassert(room: DocRoom, binding: FileBinding, external: string): void {
+    const backupPath = this.backupExternalVersion(room.docId, external);
+    const gitHint = gitConflictHint(binding.path, external);
+    binding.lastSyncError = {
+      message:
+        'external file change collided with un-flushed live edits; kept live edits and reasserted them to disk. ' +
+        (backupPath
+          ? `The external version was saved to ${backupPath} — restore it and reparse_from_disk to make it win.`
+          : 'Backup of the external version FAILED — it survives only in your editor/git history.') +
+        gitHint,
+      at: Date.now(),
+    };
+    console.warn(
+      `[rooms] ${room.docId}: disk↔doc conflict for ${binding.path}; kept live edits, reasserting to disk` +
+        (backupPath ? ` (external version backed up to ${backupPath})` : '') +
+        (gitHint ? ' — the overwritten bytes came from git, not an editor save' : ''),
+    );
+    this.scheduleFileWrite(room, binding);
   }
 
   /**
