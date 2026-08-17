@@ -1649,3 +1649,30 @@ Technical discoveries that should persist across sessions for this project.
   on top of `unansweredRun` — at which point it could not fail. Replaced with
   the pre-change predicate written out from scratch, plus an assertion that the
   case list covers both answers so an always-true implementation still fails.
+- **A mutation harness needs its own positive control, and in zsh the obvious
+  one is broken.** A round of 9 mutations reported all 9 "killed" — from
+  `chk "label" $CMD` where `CMD="bun test path"`: **zsh does not word-split
+  unquoted parameters**, so `"$@"` received one unrunnable string and every
+  mutation "died" of a bad command rather than of a failing test. It looked
+  exactly like a perfect result. Two guards, both cheap: run the UNMUTATED tree
+  through the same harness first and require it to PASS, and `cmp` the file
+  after each `perl -0pi` to prove the mutation actually applied. With those in,
+  the same round came back 8 killed and **1 survived** — a real gap in my tests.
+  Same family as "a negative test needs a positive control", pointed at the
+  tool doing the checking.
+- **A guard against "this match is inside quoted code" must test where the
+  NAME sits, not where the match starts.** The address regex begins at a line
+  start or an emphasis run, so `m.index` is routinely OUTSIDE the code span
+  that quotes the address — the first version of the guard read as correct,
+  passed its test, and let `Fixture: \`Name: ship now?\` — worth it?` through.
+  The test passed because a *different* guard (the one on the `?`) happened to
+  catch that fixture; only mutation testing separated them. When two guards can
+  cover the same case, each needs a fixture the other cannot catch.
+- **Re-measure a widened heuristic against the corpus that justified it.**
+  Loosening the sentence-end rule to accept markdown closers fixed 7 of 9 real
+  question forms — and silently re-admitted the quoted-copy class the rule
+  existed to reject, which the unit tests had no reason to cover. The live
+  board's 107 agent comments caught it in one run: 1 match → 2, and the new
+  one's extracted ask was a row of fragments. The corpus is the regression
+  test that unit fixtures cannot be, because nobody invents the input that
+  breaks their own rule.
