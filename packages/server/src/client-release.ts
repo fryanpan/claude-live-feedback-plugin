@@ -101,8 +101,20 @@ export interface ReleaseProvenance {
   /** What the deploy source was on when this was built, if the caller knew.
    *  Freshness of the artifact is not freshness of the source: a stale
    *  checkout builds successfully and stamps a current timestamp on old code,
-   *  so the timestamp alone cannot answer "is this the code I merged". */
+   *  so the timestamp alone cannot answer "is this the code I merged".
+   *
+   *  A `-dirty` suffix means the deploy source had uncommitted changes to
+   *  something this deploy BUILDS OR SERVES. Uncommitted documentation does
+   *  not earn it — see `deploy-source.ts` for the rule and why the list of
+   *  exemptions is closed by default. */
   sourceRef?: string;
+  /** Every modified tracked path in the deploy source at publish time, capped
+   *  (see `MAX_DIRTY_PATHS`) — including the ones that did NOT set `-dirty`,
+   *  so a clean-looking `sourceRef` beside a modified doc is legible rather
+   *  than suspicious. */
+  dirtyPaths?: string[];
+  /** How many modified paths there were in total, listed or not. */
+  dirtyPathCount?: number;
 }
 
 const PROVENANCE_FILE = 'release.json';
@@ -173,6 +185,9 @@ export function publishClientRelease(opts: {
   now?: Date;
   /** The deploy source this build came from (a commit sha, typically). */
   sourceRef?: string;
+  /** Modified tracked paths in that deploy source, for the record. */
+  dirtyPaths?: string[];
+  dirtyPathCount?: number;
 }): ClientRelease {
   const { root, sources, keep = 3, now = new Date(), sourceRef } = opts;
 
@@ -208,6 +223,12 @@ export function publishClientRelease(opts: {
       id,
       publishedAt: now.getTime(),
       ...(sourceRef ? { sourceRef } : {}),
+      ...(opts.dirtyPaths && opts.dirtyPaths.length > 0
+        ? {
+            dirtyPaths: opts.dirtyPaths,
+            dirtyPathCount: opts.dirtyPathCount ?? opts.dirtyPaths.length,
+          }
+        : {}),
     };
     writeFileSync(join(staging, PROVENANCE_FILE), `${JSON.stringify(provenance, null, 2)}\n`);
     releaseDir = join(releases, id);
@@ -309,13 +330,28 @@ export function readReleaseProvenance(releaseDir: string): ReleaseProvenance | n
       id?: unknown;
       publishedAt?: unknown;
       sourceRef?: unknown;
+      dirtyPaths?: unknown;
+      dirtyPathCount?: unknown;
     };
     if (typeof raw.publishedAt === 'number' && Number.isFinite(raw.publishedAt)) {
+      const dirtyPaths =
+        Array.isArray(raw.dirtyPaths) && raw.dirtyPaths.every((p) => typeof p === 'string')
+          ? (raw.dirtyPaths as string[])
+          : null;
       return {
         id: typeof raw.id === 'string' ? raw.id : id,
         publishedAt: raw.publishedAt,
         ...(typeof raw.sourceRef === 'string' && raw.sourceRef.length > 0
           ? { sourceRef: raw.sourceRef }
+          : {}),
+        ...(dirtyPaths && dirtyPaths.length > 0
+          ? {
+              dirtyPaths,
+              dirtyPathCount:
+                typeof raw.dirtyPathCount === 'number' && Number.isFinite(raw.dirtyPathCount)
+                  ? raw.dirtyPathCount
+                  : dirtyPaths.length,
+            }
           : {}),
       };
     }
@@ -480,6 +516,9 @@ export function prepareClientRelease(opts: {
   keep?: number;
   /** The deploy source this build came from (a commit sha, typically). */
   sourceRef?: string;
+  /** Modified tracked paths in that deploy source, for the record. */
+  dirtyPaths?: string[];
+  dirtyPathCount?: number;
   /**
    * The bundler already failed, so do not even look at `sources`. A failed
    * build can leave a dist that passes a file-existence check — the
