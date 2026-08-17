@@ -1122,7 +1122,12 @@ export function renderReviewStrip(
     // "Ship the widget" alone is the container, not the question.
     if (item.ask) {
       const ask = document.createElement('span');
-      ask.className = 'hub-review-ask';
+      // A question addressed to the reader is the one row on this strip they
+      // can act on without opening anything, so it is marked as such rather
+      // than left to read like the status notes it sits among.
+      ask.className = item.thread?.direct
+        ? 'hub-review-ask hub-review-ask--direct'
+        : 'hub-review-ask';
       ask.textContent = clip(item.ask, 48);
       chip.append(ask);
     } else if (blocking) {
