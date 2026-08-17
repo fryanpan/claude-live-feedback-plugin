@@ -2419,16 +2419,35 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const taskId = decodeURIComponent(taskBodyMatch[1] ?? '');
           const body = await safeJson(req);
           const markdown = typeof body?.markdown === 'string' ? body.markdown : '';
+          // Optional: shaping retitles and rewrites in ONE act, so a clipped
+          // capture title is not left behind by the pass that fixed its body.
+          // A blank string is "no new title", never a request to blank one.
+          const title = typeof body?.title === 'string' ? body.title.trim() : '';
           const author = authorFor(body?.author);
           if (!author) return j(400, { error: 'author required' });
           const task = taskStore.getTask(taskId);
           if (!task) return j(404, { ok: false, error: 'not-found' });
           if (!markdown.trim()) return j(400, { ok: false, error: 'empty' });
+          // Read the row's own words BEFORE the rewrite lands — after
+          // setDocContent the snapshot is the new text and the original is
+          // gone from every surface. This is the one place that can still see
+          // it, which is why the store takes it as a required parameter.
+          const previous = {
+            title: task.title,
+            ...(task.body !== undefined ? { body: task.body } : {}),
+          };
           const docId = taskProjection.ensureBodyRoom(task);
           const res = rooms.setDocContent(docId, markdown);
           if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
           taskProjection.flushBodySnapshot(taskId);
-          taskStore.noteBodyEdited(taskId, { actor: author });
+          taskStore.noteBodyEdited(taskId, {
+            actor: author,
+            previous,
+            ...(title ? { title } : {}),
+          });
+          // No hand-refresh of the projection: unlike `/title` (which emits
+          // nothing by design), this act DOES emit, and the projection's own
+          // subscriber re-runs ensureWorkspace off the event.
           return j(200, { ok: true, task: taskStore.getTask(taskId) });
         }
         // assign_task (§3.6 task.assigned): hand a task between the human and

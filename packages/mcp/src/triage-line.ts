@@ -37,6 +37,35 @@ export interface TriageRequestPayload {
 export const RETRIAGE_SKILL = 'live-feedback:handling-a-goal-change';
 
 /**
+ * What triaging ONE task asks for, spelled out in the request itself.
+ *
+ * The line used to read "place task X against the goal (set_task_goal)", and
+ * the board did exactly that: a paragraph typed into quick-capture got a goal
+ * and kept its machine-clipped fragment of a title and its unshaped body
+ * forever, while every component reported success. Capture is deliberately
+ * dumb — it must never lose a word or wait on a network — so the only place
+ * a raw row can become work is here, and nothing here said so.
+ *
+ * Three verbs, in this order, because each one needs the last:
+ *
+ *  - READ the row's own words. `next_tasks` carries the full body; `quote`
+ *    carries what was said when any of it was dictated.
+ *  - DECIDE how many tasks it is. Zero is a real answer — "anyway, make a
+ *    ticket from this" is an instruction ABOUT neighbouring text, not work —
+ *    and so is several. This is a judgement, never a delimiter: capture makes
+ *    exactly one row per submit and cannot tell the difference.
+ *  - REWRITE, then place. A title someone would recognise, a body in the
+ *    story shape this board asks for, then `set_task_goal` at a position.
+ *
+ * `update_task_body` takes the title alongside the markdown so a shaping is
+ * one attributed act; the row's original words are preserved to `quote`
+ * automatically on that first rewrite, so a rewrite can never be the only
+ * record of what was said.
+ */
+const SHAPE_THEN_PLACE =
+  'read its own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each into a title and a story-shaped body with update_task_body, then place with set_task_goal';
+
+/**
  * The part of the request that is the WORK — the exact ids to re-place, and
  * the sentence they were last judged against.
  *
@@ -80,7 +109,7 @@ function retriageDetail(p: TriageRequestPayload): string {
  */
 export function triageRequestLine(p: TriageRequestPayload, selfAgentId: string): string {
   if (p.kind !== 'goal-retriage') {
-    return `[triage.requested] place task ${p.taskId} against the goal (set_task_goal)`;
+    return `[triage.requested] shape and place task ${p.taskId}: ${SHAPE_THEN_PLACE}`;
   }
   const count = p.taskIds?.length ?? '?';
   // Carried into the FYI too: if the mismatch is spurious (a lead whose id

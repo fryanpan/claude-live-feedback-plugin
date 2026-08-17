@@ -1076,6 +1076,32 @@ Technical discoveries that should persist across sessions for this project.
   emitted keys match the ones the case reads. Verified by mutation in both
   directions: delete the case, and blank `taskId` in the emit.
 
+## A guard on a field with two writers is dead before it runs
+
+- **"Preserve the row's original words, but only if this row has never been
+  rewritten" preserved nothing, ever.** The clause was
+  `bodyWrittenAt === undefined`, which reads as exactly the question being
+  asked. But `bodyWrittenAt` has TWO writers: the attributed rewrite
+  (`noteBodyEdited`) and `updateBodySnapshot`, which stamps it on every real
+  body change — and the route flushes the NEW body's snapshot *before* calling
+  the store. So on the very first rewrite the clause was already false, set
+  moments earlier by the same request. Nothing warns; the guard reads as
+  correct, the field means what its comment says, and the feature is simply
+  absent.
+- **Rule: before gating on a field, grep every writer of it and ask whether
+  one of them runs earlier in the same call path.** A field with one writer is
+  a fact; a field with two is a fact plus a race with yourself. Same family as
+  "the route layer silently drops params" — the thing that broke it lived one
+  layer away from where it was read.
+- The fix was to delete the clause, not repair it: the honest question was
+  "does anything hold this row's own words yet", which is `quote === undefined`
+  and has exactly one writer. **A predicate that needs two fields to express
+  one fact is usually a sign the second field is a proxy.**
+- Caught because the test asserted the preserved value rather than that the
+  call returned true. An assertion on the call's success would have passed
+  from the first commit — the same "true and still proves nothing about the
+  caller" shape as `isWhitespaceOnlyChange`.
+
 ## A malformed anchor crashes a request that never touched the doc
 
 - **`POST /api/docs/:id/threads` takes `anchor` verbatim and validates
@@ -1161,6 +1187,45 @@ Technical discoveries that should persist across sessions for this project.
   fixture release root with a failing ledger, and read `.hub-drift` out of a
   real browser. Same method as the `pointercancel` fix, and it is the only
   thing that would have caught a dropped state assignment.
+
+## A tracked file that is also a bound doc turns editing into a deploy signal
+
+- **Every prod release published during one ordinary editing session was
+  stamped `0ef5d92-dirty`.** Nothing was wrong with the build. Prod's deploy
+  source is the primary checkout; a plan under `docs/` was bound to a live doc
+  there, so each MCP edit's ~1s flush left a modified tracked file, and
+  `git describe --always --dirty` at publish read the whole worktree. The
+  negative half was observed too — three minutes later, same server and same
+  build path, the checkout went clean and the next release stamped `a822618`.
+  The file had only just become *tracked*, which is what turned a harmless
+  condition into a permanent one.
+- **The fix is not a quieter marker, it is a marker with a criterion.** A
+  modified path sets `-dirty` when this deploy **builds or serves** it. That
+  makes the list an IGNORE list (`docs/**`, top-level `*.md`) rather than an
+  allowlist of build inputs, and the direction is the load-bearing part:
+  enumerating "what can affect the build" and missing one reports an
+  uncommitted build as clean — the exact failure the marker exists to prevent —
+  while missing one in an ignore list only produces noise. **When a guard has
+  to be narrowed, pick the phrasing whose mistakes fall on the noisy side, and
+  write that sentence next to the list** so the next person widening it knows
+  which way it is supposed to fail.
+- **"It is a bound doc" is not the criterion, and assuming it was would have
+  been wrong.** `demos/` also holds bound docs — and `bin.ts` serves
+  `join(repoRoot, 'demos')` per request, so an uncommitted demo really does
+  change what a browser gets. Check what each candidate path is *consumed by*
+  before exempting a directory because of who edits it.
+- **A bare boolean suffix cannot be judged later, so record what was dirty.**
+  `release.json` now carries `dirtyPaths` / `dirtyPathCount` — every modified
+  path, including the ones that did NOT set the suffix, so a clean `sourceRef`
+  beside a modified doc reads as a decision rather than an oversight.
+- **An unknowable tree is dirty, not clean.** If `git status` fails while
+  `git describe` succeeded, the marker goes on with no path list; the
+  alternative is claiming committed provenance nobody checked.
+- Mutation-verified five ways (never-mark, always-mark, unknown-tree-clean,
+  `demos/` wrongly exempted, rename-origin dropped), each turning specific
+  named tests red — and the "does not mark" cases are asserted beside their
+  "does mark" twins in the same fixture repo, because an absence assertion
+  alone would pass against a function that marks nothing.
 
 ## Removing an MCP tool cannot break a peer — the shared server is where a removal bites
 
