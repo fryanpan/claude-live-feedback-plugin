@@ -13,6 +13,18 @@ export interface HubActor {
   kind: 'person' | 'agent';
 }
 
+/**
+ * Who holds a task, as a KIND rather than a name.
+ *
+ * `unknown` is a third real state, not a placeholder: an owner nobody has
+ * declared and no agent attachment vouches for genuinely is unknown, and the
+ * board says so rather than picking the friendlier of the two answers. The
+ * server owns the judgement (`resolveOwnerKind`) because half its evidence —
+ * the workspace's agent roster — never enters the ydoc, so a browser deriving
+ * it would give a share visitor a different answer from the owner's.
+ */
+export type HubOwnerKind = 'person' | 'agent' | 'unknown';
+
 export interface HubEvidence {
   commit?: string;
   threadRef?: unknown;
@@ -60,6 +72,12 @@ export interface HubTask {
   title: string;
   status: TaskStatus;
   assignee: string;
+  /**
+   * What the server resolved the owner to be. Absent on any row projected
+   * before this field existed, and by a reader that could not know — both of
+   * which read as `unknown` (see `ownerKind`), never as a person.
+   */
+  ownerKind?: HubOwnerKind;
   needs?: 'action' | 'decision';
   goal: string;
   order: number;
@@ -192,11 +210,44 @@ export interface BoardFilters {
   now: number;
 }
 
-/** "A person owns this." The one spelling of it — `taskVisible`'s My-Tasks
- *  branch and the review queue's blocker band both ask the same question, and
- *  a second spelling of it would drift the moment either moved. */
+/**
+ * What kind of somebody holds this task.
+ *
+ * The one reader of the projected field, so "absent means unknown" is
+ * decided once. Everything on the surface that distinguishes a person's work
+ * from an agent's goes through here — a second reading of the same field
+ * with a different default is the bug generator this codebase has already
+ * been bitten by (two spellings of "not found" made a live branch
+ * unreachable while reading as correct).
+ */
+export function ownerKind(task: HubTask): HubOwnerKind {
+  return task.ownerKind ?? 'unknown';
+}
+
+/**
+ * "This is in the unnamed-person bucket" — the reserved `human` owner.
+ *
+ * Deliberately NOT the same question as `ownedByPerson` below, though it was
+ * until people could be named. `human` means "a person, and this board does
+ * not say which one", which on a single-reader board is a fair proxy for the
+ * viewer — so My Tasks keeps using it. Widening this one to every declared
+ * person would file a task owned by SOMEBODY ELSE under the viewer's own tab,
+ * which is a worse answer than the gap it would close.
+ */
 export function assignedToHuman(task: HubTask): boolean {
   return task.assignee === 'human';
+}
+
+/**
+ * "A person is on the hook for this" — whoever they are, named or not.
+ *
+ * The question every surface phrased as "what a human owes" actually wants,
+ * and the one that could not be asked while ownership was the literal
+ * `human`. One spelling, so the blocker band and anything built next to it
+ * cannot drift apart.
+ */
+export function ownedByPerson(task: HubTask): boolean {
+  return ownerKind(task) === 'person';
 }
 
 export function taskVisible(task: HubTask, f: BoardFilters): boolean {
@@ -506,19 +557,21 @@ export type BlockerRow = DecisionRow;
  *   somebody, so without this the same task would appear in both bands and be
  *   counted twice in the number at the top of the board.
  *
- * Known limit, deliberately not closed: ownership here is the literal `human`,
- * so a task handed to a person by NAME is not in this band. `taskVisible`'s
- * My-Tasks branch does match the viewer's own name, and matching it here was
- * considered — but the strip is one shared read of the workspace, and keying
- * it on the viewer would make the count at the top differ per reader and would
- * put every agent-owned blocker in the band for anyone whose typed display
- * name happens to be an agent's, which is the inflation this band's other rule
- * exists to prevent. Closing it properly needs a way to say "this assignee is
- * a person", not a name comparison.
+ * Ownership is the server-resolved `ownerKind`, so a task handed to a person
+ * by NAME is in this band and one held by a named agent is not. That closes a
+ * limit this band shipped with — the literal `human` — without reaching for
+ * either tempting name comparison. Matching the VIEWER's name was rejected
+ * because the strip is one shared read of the workspace and keying it on the
+ * reader would make the count at the top differ per reader; matching a list of
+ * known people was rejected because a reader whose display name happens to be
+ * an agent's would sweep every agent-owned blocker in, which is the inflation
+ * this band's other rules exist to prevent. An owner nobody has declared
+ * resolves to `unknown` and stays OUT — the direction that keeps the strip
+ * short, and the one that a wrong guess costs least.
  */
 export function humanBlockerRows(tasks: HubTask[]): BlockerRow[] {
   const candidates = tasks.filter(
-    (t) => assignedToHuman(t) && t.status !== 'done' && t.needs !== 'decision',
+    (t) => ownedByPerson(t) && t.status !== 'done' && t.needs !== 'decision',
   );
   return dependentsRows(tasks, candidates).filter((r) => r.blocks.length > 0);
 }

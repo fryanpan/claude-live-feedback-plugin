@@ -1,6 +1,7 @@
 import { listThreads, prose } from '@feedback/core';
 import * as Y from 'yjs';
 import type { Rooms } from './rooms.ts';
+import { type OwnerKind, resolveOwnerKind } from './task-owner.ts';
 import type { PremiseNote } from './task-staleness.ts';
 import type { Task, TaskStore, TaskStoreEvent } from './tasks.ts';
 
@@ -105,6 +106,18 @@ export function projectTask(
    * is to open every task.
    */
   commentCount = 0,
+  /**
+   * Person, agent, or nobody-has-said — resolved by the SERVER, because half
+   * the evidence is the workspace's agent roster and that never enters a
+   * ydoc. Deriving it in the browser would give a share visitor a different
+   * answer from the owner's, and the review strip is one shared read of the
+   * workspace: its count has to be the same number for every reader.
+   *
+   * Omitted by the one caller that legitimately cannot know (the SSE event
+   * redactor, which holds a task and no workspace). Every reader treats an
+   * absent value as `unknown`, which is what it is.
+   */
+  ownerKind?: OwnerKind,
 ): Record<string, unknown> {
   return {
     id: task.id,
@@ -113,6 +126,7 @@ export function projectTask(
     title: task.title,
     status: task.status,
     assignee: task.assignee,
+    ...(ownerKind !== undefined ? { ownerKind } : {}),
     ...(task.needs !== undefined ? { needs: task.needs } : {}),
     // Options and info-requests are workspace CONTENT — the board's decision
     // strip and its batch walkthrough render straight off this projection, so
@@ -360,8 +374,26 @@ export class TaskProjection {
     });
     const tasksMap = room.ydoc.getMap('tasks');
     const wsMap = room.ydoc.getMap('workspace');
+    // The workspace's own agent roster, read once per refresh. `onEvent`
+    // funnels every store event through `ensureWorkspace`, and agent.attached
+    // / agent.detached are store events — so the derived half of an owner's
+    // kind re-projects the moment the roster moves, rather than going stale
+    // until something unrelated touches a task.
+    const attached = new Set(
+      this.tasks.listAttachments(workspaceId).map((a) => a.agentId.trim().toLowerCase()),
+    );
+    const isAttachedAgent = (name: string) => attached.has(name.trim().toLowerCase());
     const want = new Map(
-      this.tasks.listTasks(workspaceId).map((t) => [t.id, projectTask(t, this.commentCount(t.id))]),
+      this.tasks
+        .listTasks(workspaceId)
+        .map((t) => [
+          t.id,
+          projectTask(
+            t,
+            this.commentCount(t.id),
+            resolveOwnerKind(t.assignee, t.assigneeKind, isAttachedAgent),
+          ),
+        ]),
     );
     const pending = this.tasks.getPendingRetriage(workspaceId);
     const wsFields: Record<string, unknown> = {

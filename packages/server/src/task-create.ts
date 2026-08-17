@@ -20,6 +20,7 @@ import {
   ASSIGNEE_REQUIRED_ERROR,
   ASSIGNEE_REQUIRED_MESSAGE,
   resolveAssignee,
+  statedOwnerKind,
 } from './task-owner.ts';
 import { type CreateTaskOpts, REF_KINDS, type Ref, isValidRef } from './tasks.ts';
 
@@ -208,6 +209,11 @@ export function parseTaskCreate(
       title: title.trim(),
       body: body.body as string | undefined,
       assignee: owner,
+      // Left undefined when the caller said nothing — the store then derives
+      // it from the author, and derives NOTHING when the owner is somebody
+      // else. Guessing from the name here is exactly what this field exists
+      // to avoid.
+      assigneeKind: statedOwnerKind(body.assigneeKind),
       needs: needs.needs,
       options: options.options,
       // Forward undefined untouched: an omitted goal is what routes the task

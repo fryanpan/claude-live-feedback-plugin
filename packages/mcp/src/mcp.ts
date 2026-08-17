@@ -77,7 +77,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.40';
+const PLUGIN_VERSION = '0.1.41';
 
 const server = new Server(
   {
@@ -986,6 +986,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             description:
               "Who owns this task: 'human' for work only a person can do, or a named identity (another agent, a person). Omit it and YOU own it — the API records your own name. It REFUSES a create whose owner comes out as the bare word 'agent', because that names a category rather than somebody, and a board of tasks owned by \"agent\" cannot answer who is doing what. If you get that refusal, your session was launched without FEEDBACK_AGENT_NAME.",
           },
+          assigneeKind: {
+            type: 'string',
+            enum: ['person', 'agent'],
+            description: 'Declares whether `assignee` is a person or an agent — \'person\' | \'agent\'. Say it whenever you hand work to a NAME that is not your own: the board cannot tell "Bryan" from an agent called "Bryan" by looking, and it refuses to guess, so an undeclared named owner shows as "not recorded" and stays out of every surface built around what a person owes. You never need it for yourself (your own writes are already classified) or for \'human\' (already a person). An agent that has attached to the workspace is known to be an agent regardless of what anyone declares.',
+          },
           needs: {
             type: 'string',
             enum: ['action', 'decision'],
@@ -1063,6 +1068,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           assignee: {
             type: 'string',
             description: "Who owns it. Omit and you do — same rule as create_task's assignee.",
+          },
+          assigneeKind: {
+            type: 'string',
+            enum: ['person', 'agent'],
+            description: "Same as create_task's assigneeKind.",
           },
           needs: { type: 'string', enum: ['action', 'decision'] },
           goal: { type: 'string', description: 'Goal/subgoal id. OMIT to route through triage.' },
@@ -1190,6 +1200,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'string',
             description:
               "'human', a person's name, or an agent's name (yours comes from FEEDBACK_AGENT_NAME). The bare word 'agent' is refused.",
+          },
+          assigneeKind: {
+            type: 'string',
+            enum: ['person', 'agent'],
+            description: 'Declares whether `assignee` is a person or an agent — \'person\' | \'agent\'. Say it whenever you hand work to a NAME that is not your own: the board cannot tell "Bryan" from an agent called "Bryan" by looking, and it refuses to guess, so an undeclared named owner shows as "not recorded" and stays out of every surface built around what a person owes. You never need it for yourself (your own writes are already classified) or for \'human\' (already a person). An agent that has attached to the workspace is known to be an agent regardless of what anyone declares.',
           },
         },
         required: ['taskId', 'assignee'],
@@ -2226,6 +2241,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           title,
           body,
           assignee,
+          assigneeKind,
           needs,
           options,
           goal,
@@ -2240,6 +2256,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           title: string;
           body?: string;
           assignee?: string;
+          assigneeKind?: 'person' | 'agent';
           needs?: 'action' | 'decision';
           options?: unknown[];
           goal?: string;
@@ -2257,6 +2274,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             title,
             ...(body !== undefined ? { body } : {}),
             ...(assignee !== undefined ? { assignee } : {}),
+            ...(assigneeKind !== undefined ? { assigneeKind } : {}),
             ...(needs !== undefined ? { needs } : {}),
             ...(options !== undefined ? { options } : {}),
             ...(goal !== undefined ? { goal } : {}),
@@ -2319,14 +2337,26 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         });
       }
       case 'promote_to_task': {
-        const { docId, threadId, workspaceId, title, body, assignee, needs, goal, dueAt, links } =
-          a as {
+        const {
+          docId,
+          threadId,
+          workspaceId,
+          title,
+          body,
+          assignee,
+          assigneeKind,
+          needs,
+          goal,
+          dueAt,
+          links,
+        } = a as {
             docId: string;
             threadId: string;
             workspaceId: string;
             title?: string;
             body?: string;
             assignee?: string;
+            assigneeKind?: 'person' | 'agent';
             needs?: 'action' | 'decision';
             goal?: string;
             dueAt?: number;
@@ -2340,6 +2370,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             ...(title !== undefined ? { title } : {}),
             ...(body !== undefined ? { body } : {}),
             ...(assignee !== undefined ? { assignee } : {}),
+            ...(assigneeKind !== undefined ? { assigneeKind } : {}),
             ...(needs !== undefined ? { needs } : {}),
             ...(goal !== undefined ? { goal } : {}),
             ...(dueAt !== undefined ? { dueAt } : {}),
@@ -2485,9 +2516,14 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         });
       }
       case 'assign_task': {
-        const { taskId, assignee } = a as { taskId: string; assignee: string };
+        const { taskId, assignee, assigneeKind } = a as {
+          taskId: string;
+          assignee: string;
+          assigneeKind?: 'person' | 'agent';
+        };
         const res = (await http('POST', `/api/tasks/${encodeURIComponent(taskId)}/assignee`, {
           assignee,
+          ...(assigneeKind !== undefined ? { assigneeKind } : {}),
           author: AUTHOR,
         })) as { task: TaskPayload; changed: boolean };
         return ok({ taskId, assignee: res.task.assignee, changed: res.changed });

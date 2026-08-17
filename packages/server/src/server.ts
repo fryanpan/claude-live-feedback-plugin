@@ -71,6 +71,7 @@ import {
   ASSIGNEE_REQUIRED_HANDOVER_MESSAGE,
   ASSIGNEE_REQUIRED_MESSAGE,
   resolveAssignee,
+  statedOwnerKind,
 } from './task-owner.ts';
 import { TaskProjection, taskBodyDocId, taskIdOfBodyDoc } from './task-projection.ts';
 import { buildQueue, placeableGoals, summarizeGoals } from './task-queue.ts';
@@ -2440,7 +2441,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           const author = authorFor(body?.author);
           if (!author) return j(400, { error: 'author required' });
-          const res = taskStore.setAssignee(taskId, assignee, { actor: author });
+          // `assigneeKind` is forwarded here explicitly. The route layer is
+          // the one nothing type-checks, and a param accepted by the tool and
+          // dropped by the route answers 200 while doing nothing — this
+          // codebase has shipped that exact bug.
+          const res = taskStore.setAssignee(taskId, assignee, {
+            actor: author,
+            assigneeKind: body?.assigneeKind,
+          });
           if (!res.ok) return j(404, res);
           // A no-op emits nothing, so nothing would refresh the board room —
           // harmless here (nothing changed) but the changed path is covered
@@ -2654,6 +2662,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             title,
             body: draftBody,
             assignee: promoteOwner,
+            assigneeKind: statedOwnerKind(body?.assigneeKind),
             needs: promoteNeeds.needs,
             options: promoteOptions.options,
             // Forward undefined untouched: an omitted goal is what routes the

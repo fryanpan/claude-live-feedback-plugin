@@ -35,6 +35,7 @@ import {
   describeEvent,
   dropIndexFor,
   dropTarget,
+  ownerKind,
   quoteAfterCapture,
   quoteAfterEdit,
   quoteForCapture,
@@ -339,7 +340,7 @@ function assigneePicker(
   onPick: (assignee: string) => void,
 ): HTMLSelectElement {
   const owner = task.assignee.trim().toLowerCase() === GENERIC_ASSIGNEE ? '' : task.assignee.trim();
-  const kind = owner === '' ? 'none' : owner === 'human' ? 'human' : 'agent';
+  const kind = ownerMarkKind(task, owner);
   const sel = document.createElement('select');
   sel.className = `${className} hub-owner-${kind}`;
   if (owner === '') {
@@ -364,7 +365,7 @@ function assigneePicker(
   // After the options are in the tree — a detached option's selected flag
   // does not survive being appended.
   sel.value = owner;
-  const reads = owner === '' ? 'nobody' : owner;
+  const reads = owner === '' ? 'nobody' : `${owner}${ownerKindSuffix(kind)}`;
   sel.title = `Assignee: ${reads} — pick who takes this`;
   sel.setAttribute('aria-label', `Assignee: ${reads} — pick who takes this`);
   sel.addEventListener('click', (ev) => ev.stopPropagation());
@@ -374,6 +375,56 @@ function assigneePicker(
     if (to && to !== owner) onPick(to);
   });
   return sel;
+}
+
+/** The four states the owner mark can be in. `human` keeps its name because
+ *  it is the class the person styling has always carried; it now covers every
+ *  person, not only the reserved literal. */
+type OwnerMarkKind = 'none' | 'human' | 'agent' | 'unknown';
+
+/**
+ * Which mark to draw for this owner.
+ *
+ * `none` is "nobody has this" and is answered from the assignee alone — a
+ * hole in the board, and a different question from person-or-agent. For
+ * everyone else the answer is the server's `ownerKind`, never the name: a
+ * rule that pattern-matched names would be wrong for somebody, silently, and
+ * the board would keep drawing a plausible mark over it. An owner nobody has
+ * declared gets its own mark rather than being folded into `agent`, which is
+ * what the board did before and is why a person named Bryan was drawn
+ * identically to an agent.
+ */
+function ownerMarkKind(task: HubTask, owner: string): OwnerMarkKind {
+  if (owner === '') return 'none';
+  switch (ownerKind(task)) {
+    case 'person':
+      return 'human';
+    case 'agent':
+      return 'agent';
+    default:
+      return 'unknown';
+  }
+}
+
+/**
+ * The words that carry the distinction for anyone not reading the colour.
+ *
+ * The mark is a coloured circle of initials, and colour alone is not a
+ * distinction — it is invisible to a screen reader and unreliable for a
+ * colour-blind reader. So the kind rides the picker's accessible name and
+ * its tooltip, which is where the owner's full name already lives.
+ */
+function ownerKindSuffix(kind: OwnerMarkKind): string {
+  switch (kind) {
+    case 'human':
+      return ' (person)';
+    case 'agent':
+      return ' (agent)';
+    case 'unknown':
+      return ' (person or agent not recorded)';
+    default:
+      return '';
+  }
 }
 
 /**

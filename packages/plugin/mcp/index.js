@@ -13798,7 +13798,7 @@ var AUTHOR = resolveAgentAuthor({
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.40";
+var PLUGIN_VERSION = "0.1.41";
 var server = new Server({
   name: "claude-live-feedback",
   version: PLUGIN_VERSION
@@ -14640,6 +14640,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "string",
             description: `Who owns this task: 'human' for work only a person can do, or a named identity (another agent, a person). Omit it and YOU own it — the API records your own name. It REFUSES a create whose owner comes out as the bare word 'agent', because that names a category rather than somebody, and a board of tasks owned by "agent" cannot answer who is doing what. If you get that refusal, your session was launched without FEEDBACK_AGENT_NAME.`
           },
+          assigneeKind: {
+            type: "string",
+            enum: ["person", "agent"],
+            description: `Declares whether \`assignee\` is a person or an agent — 'person' | 'agent'. Say it whenever you hand work to a NAME that is not your own: the board cannot tell "Bryan" from an agent called "Bryan" by looking, and it refuses to guess, so an undeclared named owner shows as "not recorded" and stays out of every surface built around what a person owes. You never need it for yourself (your own writes are already classified) or for 'human' (already a person). An agent that has attached to the workspace is known to be an agent regardless of what anyone declares.`
+          },
           needs: {
             type: "string",
             enum: ["action", "decision"],
@@ -14710,6 +14715,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           assignee: {
             type: "string",
             description: "Who owns it. Omit and you do — same rule as create_task's assignee."
+          },
+          assigneeKind: {
+            type: "string",
+            enum: ["person", "agent"],
+            description: "Same as create_task's assigneeKind."
           },
           needs: { type: "string", enum: ["action", "decision"] },
           goal: { type: "string", description: "Goal/subgoal id. OMIT to route through triage." },
@@ -14828,6 +14838,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           assignee: {
             type: "string",
             description: "'human', a person's name, or an agent's name (yours comes from FEEDBACK_AGENT_NAME). The bare word 'agent' is refused."
+          },
+          assigneeKind: {
+            type: "string",
+            enum: ["person", "agent"],
+            description: `Declares whether \`assignee\` is a person or an agent — 'person' | 'agent'. Say it whenever you hand work to a NAME that is not your own: the board cannot tell "Bryan" from an agent called "Bryan" by looking, and it refuses to guess, so an undeclared named owner shows as "not recorded" and stays out of every surface built around what a person owes. You never need it for yourself (your own writes are already classified) or for 'human' (already a person). An agent that has attached to the workspace is known to be an agent regardless of what anyone declares.`
           }
         },
         required: ["taskId", "assignee"]
@@ -15564,6 +15579,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           title,
           body,
           assignee,
+          assigneeKind,
           needs,
           options,
           goal,
@@ -15578,6 +15594,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           title,
           ...body !== undefined ? { body } : {},
           ...assignee !== undefined ? { assignee } : {},
+          ...assigneeKind !== undefined ? { assigneeKind } : {},
           ...needs !== undefined ? { needs } : {},
           ...options !== undefined ? { options } : {},
           ...goal !== undefined ? { goal } : {},
@@ -15610,12 +15627,25 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         });
       }
       case "promote_to_task": {
-        const { docId, threadId, workspaceId, title, body, assignee, needs, goal, dueAt, links } = a;
+        const {
+          docId,
+          threadId,
+          workspaceId,
+          title,
+          body,
+          assignee,
+          assigneeKind,
+          needs,
+          goal,
+          dueAt,
+          links
+        } = a;
         const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/promote`, {
           workspaceId,
           ...title !== undefined ? { title } : {},
           ...body !== undefined ? { body } : {},
           ...assignee !== undefined ? { assignee } : {},
+          ...assigneeKind !== undefined ? { assigneeKind } : {},
           ...needs !== undefined ? { needs } : {},
           ...goal !== undefined ? { goal } : {},
           ...dueAt !== undefined ? { dueAt } : {},
@@ -15711,9 +15741,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         });
       }
       case "assign_task": {
-        const { taskId, assignee } = a;
+        const { taskId, assignee, assigneeKind } = a;
         const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/assignee`, {
           assignee,
+          ...assigneeKind !== undefined ? { assigneeKind } : {},
           author: AUTHOR
         });
         return ok({ taskId, assignee: res.task.assignee, changed: res.changed });
