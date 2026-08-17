@@ -2680,15 +2680,24 @@ export class TaskStore {
     opts: {
       actor: { id: string; name: string; kind?: string };
       /** Declares what the new owner IS. Omitted, the kind is re-derived from
-       *  the caller — which for a hand-over to somebody else means it is
-       *  CLEARED rather than inherited from the previous owner. */
+       *  the caller — which for a hand-over to somebody ELSE means it is
+       *  CLEARED rather than inherited from the previous owner. Re-stating
+       *  the same owner keeps whatever was already declared. */
       assigneeKind?: unknown;
     },
   ): SetAssigneeResult {
     const task = this.getTask(taskId);
     if (!task) return { ok: false, error: 'not-found' };
     const from = task.assignee;
-    const kind = declaredAssigneeKind(assignee, opts.assigneeKind, opts.actor);
+    const declared = declaredAssigneeKind(assignee, opts.assigneeKind, opts.actor);
+    // Re-stating the SAME owner without saying what they are must not erase
+    // what somebody already declared. Every caller that predates this field
+    // sends no `assigneeKind`, so without this an ordinary re-assign would
+    // silently downgrade a declared person to "not recorded" — a write that
+    // changes nothing a caller asked to change. A hand-over to a DIFFERENT
+    // name still clears it: the new owner's kind is genuinely unknown, and
+    // inheriting the old one would assert something nobody said.
+    const kind = declared ?? (from === assignee ? task.assigneeKind : undefined);
     // A kind-only change is a real change. Without the second clause,
     // declaring that the person who already holds this task IS a person
     // would be swallowed as a no-op, and the one call that closes the gap

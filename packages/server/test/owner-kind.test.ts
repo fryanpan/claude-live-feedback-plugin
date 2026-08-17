@@ -243,6 +243,41 @@ describe('owner kind over the real routes', () => {
     expect(projected(wsId, task.id)?.ownerKind).toBe('person');
   });
 
+  it('keeps a declared kind when a caller re-states the same owner without one', async () => {
+    // Every caller written before this field existed sends no `assigneeKind`.
+    // If a re-assign to the SAME name cleared the declaration, an ordinary
+    // hand-back would silently downgrade a known person to "not recorded" —
+    // a write that changes something nobody asked to change.
+    const wsId = await seedWorkspace();
+    const { task } = await jj<{ task: Task }>(
+      await post(`/api/workspaces/${wsId}/tasks`, {
+        title: 'read the survey notes',
+        assignee: 'Ada Fenwick',
+        assigneeKind: 'person',
+        author: AGENT,
+      }),
+    );
+    expect(projected(wsId, task.id)?.ownerKind).toBe('person');
+
+    const res = await jj<{ changed: boolean }>(
+      await post(`/api/tasks/${task.id}/assignee`, {
+        assignee: 'Ada Fenwick',
+        author: AGENT,
+      }),
+    );
+    // Nothing changed, and specifically the kind did not.
+    expect(res.changed).toBe(false);
+    expect(projected(wsId, task.id)?.ownerKind).toBe('person');
+
+    // The positive control that keeps this from being vacuous: the same
+    // undeclared call to a DIFFERENT name still clears, so "kept" above is a
+    // decision about sameness rather than the writer having stopped working.
+    await jj(
+      await post(`/api/tasks/${task.id}/assignee`, { assignee: 'Wren Halloway', author: AGENT }),
+    );
+    expect(projected(wsId, task.id)?.ownerKind).toBe('unknown');
+  });
+
   it('re-projects when the agent roster moves, with no task write in between', async () => {
     // The migration half: tasks created long before this field existed carry
     // no declaration, and must still resolve the moment their owner attaches.
