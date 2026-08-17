@@ -926,7 +926,8 @@ Technical discoveries that should persist across sessions for this project.
   string is precisely the failure that gate exists to prevent — `claude plugin
   update` compares the string, copies nothing when it hasn't moved, **and
   reports success anyway** — so the second one would have merged green and
-  reached nobody.
+  reached nobody. Caught before it landed; #178 was re-bumped and merged as
+  0.1.44.
 - **A passing CI check is evidence about the tree it ran on, not about the tree
   you are merging into.** Any gate that compares your branch against a moving
   target has this hole, and it opens *after* the run that closed it.
@@ -1384,6 +1385,29 @@ Technical discoveries that should persist across sessions for this project.
 - Mutation-tested three ways, each turning a *named* test red: restoring the
   `return null` on an empty `behind`, dropping `checked` from the route
   payload, and dropping the quiet class in the renderer.
+
+## A second spelling for the same value makes accidental duplicates reachable
+
+- **Batch-internal `after` gave one dependency two spellings — `"#warm"` and
+  the index of the row that declared it — and `createTask` never deduped**, so
+  `after: ["#warm", 0]` stored the same id twice and `openBlockers` reported
+  the same task as a blocker twice. `setTaskDependencies` had deduped since it
+  was written; creation had not, and nothing noticed because until there was a
+  second spelling, writing a duplicate meant literally typing the same id
+  twice, which nobody does. **A feature that adds an alias for an existing
+  value silently promotes "nobody would write that" into "a caller can write
+  that without realising".** When you add one, grep for every place that
+  assumed the old spelling was the only one.
+- **Fix it where the value is STORED, not where the alias is resolved.** The
+  batch resolver was the tempting place — it is where the aliases exist — but
+  the same duplicate is writable straight down the single-create route, and a
+  batch-only fix leaves two paths storing identical input differently. Same
+  family as "two spellings of 'not found' is a bug generator".
+- **Only a running server showed it.** The route answers 200 either way and
+  the duplicate lives in the stored edge list, so every status-code assertion
+  passes. It was found by an adversarial probe against a staging instance that
+  read the state back, and the test that pins it asserts on the **blocker list
+  a person is shown**, not just on the array.
 
 ## Four gates, and each one is the only thing that catches its class
 
