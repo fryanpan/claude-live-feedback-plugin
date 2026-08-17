@@ -105,6 +105,27 @@ describe('the phone task row', () => {
     expect(rule).toMatch(/min-width:\s*max-content/);
   });
 
+  it('declares that minimum AFTER the base rule, or it silently loses', () => {
+    // The one that cost a review round. A media query adds NO specificity, so
+    // `min-width: max-content` in this block and `min-width: 0` on the bare
+    // `.hub-task-badges` are one class each and SOURCE ORDER decides. Written
+    // beside the rest of the phone row anatomy it computed to `0px` on a real
+    // 430px coarse-pointer viewport while every other rule in the block
+    // applied — the badges vanished as intended and the guarantee they were
+    // traded for was not there. Nothing about the page looked wrong.
+    const base = CSS.search(/\n\.hub-task-badges\s*\{/);
+    const phone = CSS.indexOf(PHONE_CONDITION);
+    expect(base).toBeGreaterThan(-1);
+    expect(phone).toBeGreaterThan(-1);
+    expect(phone).toBeGreaterThan(base);
+    // Every OTHER `.hub-task-badges` rule in the file must also precede it —
+    // the ≤900px block sets `max-width` on the same selector today, and a
+    // min-width added there tomorrow would win from below.
+    const all = [...CSS.matchAll(/\.hub-task-badges\s*\{/g)].map((m) => m.index);
+    expect(all.length).toBeGreaterThan(1);
+    expect(all.filter((i) => i > phone)).toHaveLength(1); // only this block's own
+  });
+
   it('leaves the wider row alone — this is a phone budget, not a redesign', () => {
     const outside = outsidePhoneBlock();
     // The base strip keeps the zero minimum that lets a wide badge strip
