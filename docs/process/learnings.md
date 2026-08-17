@@ -469,9 +469,50 @@ Technical discoveries that should persist across sessions for this project.
   `dist/BUILD_INFO.txt` against the merge time FIRST. Note the bundle is
   minified, so grepping dist for source identifiers proves nothing — grep for
   string literals (`get("summary")`) or trust BUILD_INFO.
+- **Grepping only the NEW bundle is still a vacuous probe: a literal
+  discriminates only if it is 0 in the OLD bundle and non-zero in the new.**
+  Check both, old one first. On a later deploy two of the first candidate
+  literals were source COMMENTS — which the minifier strips, so their absence
+  said nothing about whether the feature shipped — and a third was already in
+  the pre-deploy bundle, so finding it said nothing either. Pick literals from
+  runtime strings a user could see (visible copy, a CSS class that appears in
+  the stylesheet), never comments or identifiers, both of which a minifier is
+  entitled to remove. The pairs that worked: `Reconnecting` 0→1 and `Keep this
+  tab open` 0→1 in `hub.js`, `save-state--offline` **1→2** in `styles.css` —
+  that last is a COUNT rather than a presence, because the class already
+  existed and only the un-hiding rule was new.
+- **Keeping the previous release on disk is what makes the old-bundle half
+  checkable at all.** The numbered-release mechanism ("Prod no longer serves the
+  client out of a working tree", below) earns its keep as a verification tool,
+  not only as a rollback path.
 - Fix (this PR): prod `serve.ts` rebuilds the widget + markdown-app bundles
   once at startup, before the server spawns — restart == deploy. A failed
   build logs loudly and serves the existing dist (stale beats down).
+
+## The restart that delivers the client cannot be the restart you measure
+
+- **A prod restart IS the client deploy here (the entry above), so "open the
+  page, restart, watch what the tab does" measures the PREVIOUS client.** The
+  restart replaces what the server *hands out*; a tab that already loaded its
+  bundle keeps executing the one it has. Nothing about the observation looks
+  wrong — a real page, reconnecting for real, just not the build under test.
+  Caught mid-verification of the reconnect behaviour only because the bundle
+  being served when the pass started was still the pre-feature one; one step
+  later the feature would have been reported verified against a client that did
+  not contain it.
+- **The sequence that works is restart → reload → restart.** The first restart
+  publishes the new client, the reload gets the tab onto it, and the second
+  restart is the one you actually measure. The first pass is delivery, not
+  evidence.
+- **General rule: when the thing you are testing is DELIVERED BY the event you
+  are testing across, one pass cannot verify it** — one pass to deliver, a
+  second to observe. Same family as "a negative test needs a positive control
+  or it proves nothing" and "A truncated page read is indistinguishable from a
+  page that never rendered": the probe ran, it just measured something other
+  than what it claimed to.
+- Two browser mechanics this verification leaned on — reaching a true 430px
+  viewport, and what timer throttling does to a measured debounce — are written
+  down in the `ux-review` skill, which is where someone checking a UI looks.
 
 ## Reviewing an unmerged build: run a staging instance, never rebuild in the primary checkout
 
