@@ -1043,6 +1043,49 @@ body.hub-body {
   content: "— ";
 }
 
+/* --- unplaced bucket: how many, and how long the oldest has waited ---
+   Deliberately QUIETER than the decisions strip above it. That one is an
+   alarm ("things need you"); this one is a standing reading, and a reading
+   drawn like an alarm teaches everyone to skim the alarm. No yellow, no
+   fill — a muted line sitting on the board it describes. It renders at all
+   only when the bucket is non-empty, so its silence is the empty case. */
+.hub-unplaced {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  margin-bottom: 8px;
+  padding: 0 2px;
+  color: var(--fg-muted);
+}
+.hub-unplaced.hidden {
+  display: none;
+}
+.hub-unplaced-open {
+  /* 36px is the tap target the rest of this board uses; the text itself is
+     13px so the line stays a note rather than a heading. */
+  min-height: 36px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+/* No "·" separator, on purpose: the two halves wrap onto their own lines at
+   phone widths, and a separator authored as a ::before would then lead a
+   line. Turning it off inside a media query is the trap — a media query adds
+   no specificity, so which rule wins is decided by source order rather than
+   by the condition. The gap does the same job at every width. */
+.hub-unplaced-age {
+  font-size: 13px;
+}
+
 /* --- review walkthrough: one at a time, in the derived order --- */
 .hub-walkthrough {
   position: fixed;

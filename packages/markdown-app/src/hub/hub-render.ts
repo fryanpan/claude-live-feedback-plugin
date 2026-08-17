@@ -29,6 +29,7 @@ import {
   type ReviewQueue,
   TASK_STATUS_ORDER,
   type TaskStatus,
+  type UnplacedNotice,
   type UptimeReport,
   activityRows,
   appendDictation,
@@ -861,6 +862,52 @@ export function renderBoard(
   // After the rows exist: the drag/keyboard wiring needs the whole board (a
   // drop can cross into another goal's section), so it can't live on the row.
   wireBoardReorder(container, sections, handlers);
+}
+
+export interface UnplacedStripHandlers {
+  /** Take the reader to the longest-waiting unplaced task. */
+  onOpenOldest: (taskId: string) => void;
+}
+
+/**
+ * "3 tasks have no goal yet · oldest waiting 6d", directly above the board.
+ *
+ * Above it on purpose. The tasks this counts rest at the BOTTOM of Chores,
+ * which is the last thing on the page and the reason the bucket goes unread —
+ * a notice rendered down there would inherit exactly the invisibility it
+ * exists to fix.
+ *
+ * `null` empties the container and hides it. Rendering "0 tasks have no goal"
+ * would be a line that is present on every board forever, and a line that is
+ * always there is a line nobody reads.
+ */
+export function renderUnplacedStrip(
+  container: HTMLElement,
+  notice: UnplacedNotice | null,
+  handlers: UnplacedStripHandlers,
+): void {
+  container.replaceChildren();
+  if (!notice) {
+    container.classList.add('hidden');
+    return;
+  }
+  container.classList.remove('hidden');
+
+  const open = document.createElement('button');
+  open.type = 'button';
+  open.className = 'hub-unplaced-open';
+  open.textContent = notice.label;
+  open.setAttribute(
+    'aria-label',
+    `${notice.label}, ${notice.detail} — open the one that has waited longest`,
+  );
+  open.addEventListener('click', () => handlers.onOpenOldest(notice.oldestTaskId));
+
+  const age = document.createElement('span');
+  age.className = 'hub-unplaced-age';
+  age.textContent = notice.detail;
+
+  container.append(open, age);
 }
 
 // ── Quick capture ──────────────────────────────────────────────────────────
