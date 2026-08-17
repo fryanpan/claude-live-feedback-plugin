@@ -189,3 +189,55 @@ companion doc reuses the whole prose sync stack and the only new machinery —
 flat write-back with a conflict arm — is required for code editing anyway.
 `.md` members do NOT get flat write-back (single-writer per file: edits flow
 through the companion doc). Reversible; revisit if the two-doc UX confuses.
+
+## 2026-08-17 — A workspace is the unit of sharing; per-doc sharing is removed
+
+**Decision (Bryan, verbatim):** "Remove all code for sharing docs, reviews and
+so on individually. Share a workspace. And for anything already shared, please
+work with owning agent to attach it to a workspace or work with the agent to
+wind down the share."
+
+**What went:** the `share_doc` MCP tool, `POST /api/share/doc`, `share_link`'s
+`docId` argument, `Shares.createShareDoc`, `CreateShareDocReq`, and
+`ShareSurface`'s `'doc'` member. `Share.workspaceId` is now required, and
+`shareScopeAllows` refuses everything — including the app shell — for a target
+that names no workspace. The "target.docId is always in scope" base case in
+the gate WAS the per-doc grant; removing it is what makes the removal
+structural rather than cosmetic.
+
+**What stayed, and why it is not per-doc machinery:** visitor identity, the
+private-meta sidecar and `redactMetaForVisitor`, `redactHubEvents`, the
+Access-mode gate and `cf-api`, TTL enforcement, `link-session`, the
+`sharing.json` master switch, `set_share_ttl` / `unshare` / `list_shares` /
+`set_sharing_enabled`. Every one of them is needed *more* by workspace
+sharing, which reaches more content per grant. They sit in
+`packages/server/src/share/` because that is where sharing lives, not because
+they were doc-scoped.
+
+**Nothing had to be wound down.** Measured before removing anything: prod's
+`data/shares.json` was `[]`, `sharing.json` was `{"enabled": false}`, and the
+launchd service sets only `CF_SHARE_PUBLIC_HOSTNAME` — no `CF_ACCOUNT_ID` or
+`CF_ACCESS_TEAM_DOMAIN`, so `cfApi` is null and no Cloudflare Access app could
+ever have been created to outlive the local registry. The registry file is the
+only place a share was ever persisted.
+
+**Legacy records are dropped, not honoured.** `Shares.load` filters out any
+record with no `workspaceId` and rewrites the file, because the gate reads the
+registry rather than the code that wrote it — removing the mint path alone
+would have retired the feature everywhere except where it is exercised.
+
+**Older callers get a sentence, not a 404.** Every peer keeps calling the
+shared `:8787` routes with the payload ITS bundle sends. `POST
+/api/share/doc` and a `docId` in `POST /api/share/link` both answer 410
+`per_doc_sharing_removed` with the replacement named. The guard tests for the
+`docId` KEY rather than a truthy value, because the old bundle sends the same
+five-field body for a workspace share with `docId: undefined` — which
+`JSON.stringify` drops, so an old peer's workspace shares keep working.
+
+**Not settled here, deliberately:** whether a folder bind / diff review
+*grouping* counts as a "workspace" for sharing, or whether only a hub board
+does. The product's own vocabulary calls groupings "doc groupings" and
+reserves "workspace" for a hub board, which would read "reviews … individually"
+as covering them too — but that change requires every review to be reachable
+through a board first, and that is a product prerequisite rather than a
+deletion. Tracked separately.
