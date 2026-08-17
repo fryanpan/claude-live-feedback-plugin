@@ -281,6 +281,76 @@ Technical discoveries that should persist across sessions for this project.
   a test fails intermittently, measure the baseline flakiness on unmodified
   HEAD (run it 5×) BEFORE assuming your change caused it.
 
+## A git command on a bound file is an editor save, and it goes both ways
+
+- **Measured 2026-08-17 in a running server over synthetic git fixtures, not
+  read off the source.** The premise was filed from a code reading; every claim
+  below reproduced, through the real 500ms poll and the real HTTP routes, with
+  an editor-save positive control in the same pass. `git checkout -- <file>`, a
+  branch switch, `git stash` and `git pull` all rewrite the bytes and bump the
+  mtime, and **nothing they leave on the file distinguishes them from a person
+  saving in an editor**. So the poll hands them to `decideReconcile` like
+  anything else, and which of two very different things happens depends
+  entirely on the live doc:
+  - **Live doc idle → `apply`.** The git content lands in the doc. Somebody
+    reading a bound doc watches it change to the other branch, with no
+    `syncError` and nothing on the page saying why. Arguably correct — the doc
+    is a view of the file — and deliberately left alone.
+  - **Live doc has un-flushed edits → `conflict`.** The live doc wins and is
+    reasserted onto the working tree ~800ms later. **git exits 0, `git status`
+    was clean, and a second later the file is modified again.** For `git stash`
+    the result is worse than it sounds: the stash really did consume the
+    change, so the tree comes back dirty holding content that is in neither
+    HEAD nor the stash, and a later `git stash pop` has an unexpected local
+    change to contend with.
+- **The window is the 800ms write debounce after any live edit — and it re-arms
+  on every keystroke**, so a doc somebody is actively typing in is
+  continuously inside it. This is not a rare race on the surface where it
+  matters.
+- **The policy is right and stays.** Letting a git-sourced write win would
+  clobber a human's un-flushed edits, the exact incident class the conflict arm
+  exists to prevent. The harm is not that the wrong side won — it is that
+  **nobody was told**.
+- **Don't reach for a "suspend sync while I run git" call.** A human at a
+  terminal never makes it; an agent shelling out to `git` never makes it either
+  unless taught; and it cannot be made automatic. That is the "a tool somebody
+  has to decide to call" failure this file already records twice. What shipped
+  instead: the conflict `syncError` now names git.
+- **The signal that makes that possible is provenance, checked after the
+  fact.** `git hash-object` the bytes about to be overwritten and ask whether
+  the repo already contains that blob. An editor save produces content the
+  object database has never seen; a checkout, stash, branch switch or pull
+  writes a blob that is in it by construction. Verified to discriminate in both
+  directions — HEAD's content and another ref's blob classify as `git`, typed
+  text does not — and it degrades to `unknown` outside a repo or when the
+  directory is gone. **Advisory only: it never changes which side wins**, so a
+  false positive can at worst name git in a message.
+- **The empty blob is the trap in that check, and a fixture hides it.** Almost
+  every real repository holds an empty blob by accident, so empty content would
+  classify as `git` — while a fixture repo that never committed an empty file
+  reports `unknown` and makes the guard look unnecessary. The fixture now
+  commits an empty file and a whitespace-only one on purpose, which is what
+  turns that case from vacuous into mutation-verifiable.
+- **The test pins the measured BEHAVIOUR, not just the fix**: both directions
+  of the reconcile for all three operations, so a later change to either one
+  goes red — with the editor-save conflict beside them as the control, because
+  a harness where the conflict arm never ran would report the same silence for
+  every git case. Mutation-verified four ways, each turning *named* tests red:
+  an unconditional hint fails the "does NOT blame git" control, a suppressed
+  hint fails all three "names git" cases, removing the empty guard fails that
+  case, and letting the prose conflict arm bypass the shared helper fails all
+  three (which is why the two arms share one).
+- **Assert the shape before the behaviour, again**: each git case checks that
+  the mtime actually moved before checking what the doc did, since a git
+  command that left the file byte-identical would produce a clean-looking
+  "nothing happened" for the wrong reason.
+- Residual, deliberately not fixed here: `syncError` is reachable only through
+  `get_doc` and MCP edit responses, so it reaches an AGENT that touches the doc
+  afterwards, and never the person who typed `git checkout` into a terminal.
+  The watch-channel `syncError` event already in the backlog under the
+  bound-doc sync contract is what would close that, and it is a different
+  change.
+
 ## Serializer must recurse for nested lists (round-trip fidelity)
 
 - **The markdown serializer flattened nested lists + multi-paragraph list
@@ -699,6 +769,15 @@ Technical discoveries that should persist across sessions for this project.
   stick": if the flush reasserted between your write and the reparse, the
   reparse faithfully pulls the OLD bytes back. Known gap: reparse drops
   pending suggestions in rewritten blocks silently (backlog).
+- **A git command counts as a disk write, and both halves of the rule above
+  fire on it.** `git checkout -- <file>`, a branch switch, `git stash` and
+  `git pull` are indistinguishable from an editor save at the poll: against an
+  idle doc the branch's content lands silently, and against un-flushed live
+  edits the live doc wins and is reasserted onto your working tree ~800ms after
+  git exited 0 — so git reports success and the tree goes dirty again a second
+  later. Measured, both directions, all four operations; the `syncError` now
+  names git when it is what got overwritten. Full write-up in "A git command on
+  a bound file is an editor save, and it goes both ways" above.
 - **Diff-review .md members are bound LAZILY** — a companion doc (with
   write-back) exists only once someone opens that file's redline/File view.
   Unopened members are plain files; normal tools are fine. `list_docs`
