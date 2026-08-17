@@ -13788,7 +13788,7 @@ var AUTHOR = resolveAgentAuthor({
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.30";
+var PLUGIN_VERSION = "0.1.31";
 var server = new Server({
   name: "claude-live-feedback",
   version: PLUGIN_VERSION
@@ -14710,7 +14710,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "get_workspace",
-      description: "Read a hub workspace: its north-star goal, and the ORDERED goal list with per-goal task counts (todo / in-progress / done), parent goals followed by their subgoals, Chores last. Order IS priority — the first row is the highest band. Call this before deciding what to work on; without it goal order is invisible (list_tasks returns goal IDS only) and you will work the wrong band. Deliberately cheap — goals and counts, no tasks: pair it with next_tasks, which carries the tasks and their full descriptions. Each row carries `depth` (0 = top-level, 1 = subgoal) and, on subgoals, `parent` — the two fields reorder_goals needs to scope a change, so read here then reorder there with ids alone.",
+      description: 'Read a hub workspace: its north-star goal, and the ORDERED goal list with per-goal task counts (todo / in-progress / done), parent goals followed by their subgoals, Chores last. Order IS priority — the first row is the highest band. Call this before deciding what to work on; without it goal order is invisible (list_tasks returns goal IDS only) and you will work the wrong band. Deliberately cheap — goals and counts, no tasks: pair it with next_tasks, which carries the tasks and their full descriptions. Each row carries `depth` (0 = top-level, 1 = subgoal), `parent` on subgoals, and `reorderable` — the three fields reorder_goals needs, so read here then reorder there with ids alone. `reorderable: false` marks the rows that are APPENDED rather than ordered (Chores, and a goal id left behind on a done task): they look exactly like a band, and sending them back is a 400, so scope a reorder as "the rows at my scope where reorderable is true", never "every depth-0 row".',
       inputSchema: {
         type: "object",
         properties: { workspaceId: { type: "string" } },
@@ -14865,7 +14865,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "reorder_goals",
-      description: "Change the PRIORITY ORDER of a workspace's goals — order IS priority, so this is the gesture for \"work 2.1 before 1.2\". PERMUTATION ONLY: `order` must be exactly the goal ids already at one scope (the top-level list, or the subgoals of `parent`) — same ids, same count, no titles. Nothing is created, renamed, removed or reparented, and no task can move. An order that omits, repeats or invents an id is REFUSED with 400 naming the offending ids, so a list that another writer has changed since you read it makes you re-read rather than silently dropping a goal — which is exactly what set_goal_list does with the same mistake (its omissions dump that goal's open tasks into Chores). Get the ids from get_workspace, which also names each subgoal's `parent`. Reach for set_goal_list only when you actually mean to add, rename or remove a goal.",
+      description: "Change the PRIORITY ORDER of a workspace's goals — order IS priority, so this is the gesture for \"work 2.1 before 1.2\". PERMUTATION ONLY: `order` must be exactly the goal ids already at one scope (the top-level list, or the subgoals of `parent`) — same ids, same count, no titles. Nothing is created, renamed, removed or reparented, and no task can move. An order that omits, repeats or invents an id is REFUSED with 400 naming the offending ids, so a list that another writer has changed since you read it makes you re-read rather than silently dropping a goal — which is exactly what set_goal_list does with the same mistake (its omissions dump that goal's open tasks into Chores). Get the ids from get_workspace and send back every row at your scope whose `reorderable` is true — Chores and orphaned goal rows are marked false, and including one is refused as RESERVED (a separate list from unknownIds, because the fix is to drop it rather than to re-read). Reach for set_goal_list only when you actually mean to add, rename or remove a goal.",
       inputSchema: {
         type: "object",
         properties: {
@@ -14873,7 +14873,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           order: {
             type: "array",
             items: { type: "string" },
-            description: "EVERY goal id at this scope, in the new priority order, highest first. Leaving one out is an error, not a demotion."
+            description: "EVERY reorderable goal id at this scope, in the new priority order, highest first. Leaving one out is an error, not a demotion; including a non-reorderable row (Chores) is an error too."
           },
           parent: {
             type: "string",
