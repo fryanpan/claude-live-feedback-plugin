@@ -1148,6 +1148,33 @@ Technical discoveries that should persist across sessions for this project.
   caller says nothing about who it is" red, which is what makes that absence
   assertion non-vacuous.
 
+## A four-digit needle in a haystack of timestamps is a time bomb, not a test
+
+- **CI went red on `expect(JSON.stringify(e)).not.toContain('9099')` — and the
+  endpoint it was guarding against was correctly absent.** The record carries
+  three `Date.now()` millisecond stamps, and one of them came back
+  `1786980999099`. The clock spelled the needle. Green locally, green on the
+  previous run, red on a branch that never touched that file — which is the
+  worst version of this, because the first instinct is to go read your own
+  diff.
+- **A substring assertion searches everything in the string, including the
+  parts nothing controls.** `9099` is four digits against ~30 uncontrolled
+  digit positions; at roughly one run in a thousand it fires, forever, on
+  whoever is unlucky. Its sibling case in the same file never tripped only
+  because its timestamps are hand-written constants — so the file contained
+  both the safe and the unsafe spelling of the same idea, and the difference
+  was invisible.
+- **Assert the structure first, then match on something no generator can
+  produce.** `'endpoint' in attachment` is the assertion actually being made;
+  the string check is a backstop, and it should look for the WHOLE endpoint
+  (`http://127.0.0.1:9099/hooks/agent-relay`), which no clock and no id can
+  spell. Mutation-verified: removing the strip in `publicAttachment` turns
+  three named tests red, so the repair did not just make it stop failing.
+- **Rule: a `not.toContain` needle must be impossible for any value in the
+  payload to generate by accident.** Prefer a key check, a parsed field, or a
+  long distinctive literal. Digits, short words, and ids are all things some
+  other field will eventually produce on its own.
+
 ## A malformed anchor crashes a request that never touched the doc
 
 - **`POST /api/docs/:id/threads` takes `anchor` verbatim and validates
