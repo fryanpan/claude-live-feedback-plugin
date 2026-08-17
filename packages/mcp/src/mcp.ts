@@ -77,7 +77,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.49';
+const PLUGIN_VERSION = '0.1.51';
 
 /**
  * What a good `evidence.commit` looks like, said at the one layer that reaches
@@ -982,7 +982,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           tasks: {
             type: 'array',
             description:
-              'The rows, at most 100 — an oversized batch is refused WHOLE rather than truncated, and a tracker that big belongs in import_tasks_markdown. Each row is {title, body?, key?, assignee?, needs?, options?, goal?, order?, after?, afterEnforce?, dueAt?, links?, quote?} — the per-field rules are on the row schema below, and they are the same rules the removed single-row create carried. `title` is the only required field — but write a `body` on every row you are not doing yourself within the hour: a bare title is not pickup-able by an agent that was not in the conversation. `key` is an optional label THIS batch uses to reference the row; it must be unique in the batch and must not be all digits or start with "#". Rows are created in the order given, so a row can only depend on a row ABOVE it — a forward reference is refused rather than silently dropped, and so is a reference to a row that failed (a task carrying a dependency that never blocks it is worse than a refusal). An entry with no "#" is still an existing task id, exactly as before.',
+              'The rows, at most 100 — an oversized batch is refused WHOLE rather than truncated, and a tracker that big belongs in import_tasks_markdown. Each row is {title, body?, key?, assignee?, assigneeKind?, needs?, options?, goal?, order?, after?, afterEnforce?, dueAt?, links?, quote?} — the per-field rules are on the row schema below, and they are the same rules the removed single-row create carried. `title` is the only required field — but write a `body` on every row you are not doing yourself within the hour: a bare title is not pickup-able by an agent that was not in the conversation. `key` is an optional label THIS batch uses to reference the row; it must be unique in the batch and must not be all digits or start with "#". Rows are created in the order given, so a row can only depend on a row ABOVE it — a forward reference is refused rather than silently dropped, and so is a reference to a row that failed (a task carrying a dependency that never blocks it is worse than a refusal). An entry with no "#" is still an existing task id, exactly as before.',
             // The row contract used to live on the single-row create verb's
             // declaration, and `tasks` merely pointed at it. Removing that
             // tool would have removed every field description with it — the
@@ -1010,6 +1010,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                   type: 'string',
                   description:
                     "Who owns this row: 'human' for work only a person can do, or a named identity (another agent, a person). Omit it and YOU own it — the API records your own name. It REFUSES a row whose owner comes out as the bare word 'agent', because that names a category rather than somebody, and a board of tasks owned by \"agent\" cannot answer who is doing what. If you get that refusal, your session was launched without FEEDBACK_AGENT_NAME.",
+                },
+                assigneeKind: {
+                  type: 'string',
+                  enum: ['person', 'agent'],
+                  description:
+                    'Declares whether `assignee` is a person or an agent — \'person\' | \'agent\'. Say it whenever you hand a row to a NAME that is not your own: the board cannot tell "Bryan" from an agent called "Bryan" by looking, and it refuses to guess, so an undeclared named owner shows as "not recorded" and stays out of every surface built around what a person owes. You never need it for yourself (your own writes are already classified) or for \'human\' (already a person). An agent that has attached to the workspace is known to be an agent regardless of what anyone declares.',
                 },
                 needs: {
                   type: 'string',
@@ -1081,6 +1087,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'string',
             description:
               "Who owns it. Omit and you do — same rule as a create_tasks row's assignee.",
+          },
+          assigneeKind: {
+            type: 'string',
+            enum: ['person', 'agent'],
+            description:
+              'Declares whether `assignee` is a person or an agent — \'person\' | \'agent\'. Say it whenever you hand work to a NAME that is not your own: the board cannot tell "Bryan" from an agent called "Bryan" by looking, and it refuses to guess, so an undeclared named owner shows as "not recorded" and stays out of every surface built around what a person owes. You never need it for yourself (your own writes are already classified) or for \'human\' (already a person). An agent that has attached to the workspace is known to be an agent regardless of what anyone declares.',
           },
           needs: { type: 'string', enum: ['action', 'decision'] },
           goal: { type: 'string', description: 'Goal/subgoal id. OMIT to route through triage.' },
@@ -1208,6 +1220,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'string',
             description:
               "'human', a person's name, or an agent's name (yours comes from FEEDBACK_AGENT_NAME). The bare word 'agent' is refused.",
+          },
+          assigneeKind: {
+            type: 'string',
+            enum: ['person', 'agent'],
+            description:
+              'Declares whether `assignee` is a person or an agent — \'person\' | \'agent\'. Say it whenever you hand work to a NAME that is not your own: the board cannot tell "Bryan" from an agent called "Bryan" by looking, and it refuses to guess, so an undeclared named owner shows as "not recorded" and stays out of every surface built around what a person owes. You never need it for yourself (your own writes are already classified) or for \'human\' (already a person). An agent that has attached to the workspace is known to be an agent regardless of what anyone declares.',
           },
         },
         required: ['taskId', 'assignee'],
@@ -2268,19 +2286,31 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         });
       }
       case 'promote_to_task': {
-        const { docId, threadId, workspaceId, title, body, assignee, needs, goal, dueAt, links } =
-          a as {
-            docId: string;
-            threadId: string;
-            workspaceId: string;
-            title?: string;
-            body?: string;
-            assignee?: string;
-            needs?: 'action' | 'decision';
-            goal?: string;
-            dueAt?: number;
-            links?: unknown[];
-          };
+        const {
+          docId,
+          threadId,
+          workspaceId,
+          title,
+          body,
+          assignee,
+          assigneeKind,
+          needs,
+          goal,
+          dueAt,
+          links,
+        } = a as {
+          docId: string;
+          threadId: string;
+          workspaceId: string;
+          title?: string;
+          body?: string;
+          assignee?: string;
+          assigneeKind?: 'person' | 'agent';
+          needs?: 'action' | 'decision';
+          goal?: string;
+          dueAt?: number;
+          links?: unknown[];
+        };
         const res = (await http(
           'POST',
           `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/promote`,
@@ -2289,6 +2319,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             ...(title !== undefined ? { title } : {}),
             ...(body !== undefined ? { body } : {}),
             ...(assignee !== undefined ? { assignee } : {}),
+            ...(assigneeKind !== undefined ? { assigneeKind } : {}),
             ...(needs !== undefined ? { needs } : {}),
             ...(goal !== undefined ? { goal } : {}),
             ...(dueAt !== undefined ? { dueAt } : {}),
@@ -2434,12 +2465,26 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         });
       }
       case 'assign_task': {
-        const { taskId, assignee } = a as { taskId: string; assignee: string };
+        const { taskId, assignee, assigneeKind } = a as {
+          taskId: string;
+          assignee: string;
+          assigneeKind?: 'person' | 'agent';
+        };
         const res = (await http('POST', `/api/tasks/${encodeURIComponent(taskId)}/assignee`, {
           assignee,
+          ...(assigneeKind !== undefined ? { assigneeKind } : {}),
           author: AUTHOR,
-        })) as { task: TaskPayload; changed: boolean };
-        return ok({ taskId, assignee: res.task.assignee, changed: res.changed });
+        })) as { task: TaskPayload; changed: boolean; ownerKind?: string };
+        // `ownerKind` is what the BOARD now says this owner is — the answer
+        // the caller actually wanted, and not the same as "the call didn't
+        // error". `unknown` here means the row will draw as "not recorded":
+        // say `assigneeKind` and call again.
+        return ok({
+          taskId,
+          assignee: res.task.assignee,
+          changed: res.changed,
+          ...(res.ownerKind !== undefined ? { ownerKind: res.ownerKind } : {}),
+        });
       }
       case 'update_task_body': {
         const { taskId, markdown, title } = a as {

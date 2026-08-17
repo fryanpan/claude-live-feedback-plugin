@@ -869,27 +869,37 @@ describe('reviewQueue — human-owned work that agent work is waiting on', () =>
     expect(band[1]?.why).toContain('Blocking 2 tasks');
   });
 
-  // Pinning a scope choice, not celebrating it: ownership in this band is the
-  // literal `human`, so a task handed to a person by name is out. Keying the
-  // band on the viewer's own name — the other half of `taskVisible`'s My-Tasks
-  // rule — would make one shared strip count differently per reader, and would
-  // sweep in every agent-owned blocker for a reader whose typed name matches an
-  // agent's. Changing this should be a decision, which is why it has a test.
-  it('does not (yet) recognise a person addressed by display name', () => {
-    const named = t({ id: 'p-1', assignee: 'Jordan', title: 'Sign the renewal' });
+  // Ownership in this band used to be the literal `human`, which left a task
+  // handed to a person by NAME out of it. It is now the kind the server
+  // resolved — so the declaration is what admits a named person, and a name
+  // that nobody declared still does not. The scope choice that stayed: keying
+  // the band on the VIEWER's name would make one shared strip count
+  // differently per reader and would sweep in every agent-owned blocker for a
+  // reader whose typed name matches an agent's.
+  it('recognises a person addressed by display name once the kind is declared', () => {
+    const declared = t({
+      id: 'p-1',
+      assignee: 'Jordan',
+      ownerKind: 'person',
+      title: 'Sign the renewal',
+    });
+    const undeclared = t({ id: 'p-2', assignee: 'Wren Halloway', title: 'Renew the cert' });
     const literal = t({ id: 'h-1', assignee: 'human', title: 'Turn on the tunnel' });
     const tasks = [
-      named,
+      declared,
+      undeclared,
       literal,
       t({ id: 'a-1', assignee: 'Helper', after: ['p-1'] }),
+      t({ id: 'a-3', assignee: 'Helper', after: ['p-2'] }),
       t({ id: 'a-2', assignee: 'Helper', after: ['h-1'] }),
     ];
     const ids = reviewQueue(tasks, [], T0)
       .items.filter((i) => i.kind === 'blocker')
       .map((i) => i.blocker?.task.id);
-    // Positive control: the identical shape with the literal owner IS found,
-    // so this is about the spelling and not about the edge.
-    expect(ids).toEqual(['h-1']);
+    // The named person is in alongside the literal one; the identical shape
+    // with nothing declared about it stays out, on the same read. Order is
+    // the band's own (asserted above), so compare as a set.
+    expect([...ids].sort()).toEqual(['h-1', 'p-1']);
   });
 
   it('gives a blocker a stable key that cannot collide with a decision', () => {
