@@ -282,6 +282,12 @@ describe('classifyExternalContent', () => {
     git(repo, 'init', '-q', '-b', 'main');
     path = join(repo, 'doc.md');
     writeFileSync(path, MAIN_DOC);
+    // Commit an empty and a whitespace-only file, so those blobs really ARE in
+    // this repo's object database. Without them the empty-content guard below
+    // is untestable — `cat-file -e` would miss anyway and the assertion would
+    // pass against a function that has no guard at all.
+    writeFileSync(join(repo, 'empty.txt'), '');
+    writeFileSync(join(repo, 'blank.txt'), '   \n\n');
     git(repo, 'add', '.');
     git(repo, 'commit', '-q', '-m', 'main version');
     git(repo, 'checkout', '-q', '-b', 'other');
@@ -308,6 +314,17 @@ describe('classifyExternalContent', () => {
     expect(
       classifyExternalContent(path, `${MAIN_DOC}\nA sentence nobody committed.\n`).source,
     ).toBe('unknown');
+  });
+
+  it('does not claim git for empty or whitespace-only content', () => {
+    // Positive control for THIS assertion: the fixture committed both blobs,
+    // so a guardless implementation really would answer 'git' here (a
+    // truncated save would get blamed on a checkout). Verified by mutation —
+    // deleting the guard turns this red.
+    expect(
+      classifyExternalContent(path, readFileSync(join(repo, 'empty.txt'), 'utf8')).source,
+    ).toBe('unknown');
+    expect(classifyExternalContent(path, '   \n\n').source).toBe('unknown');
   });
 
   it('answers unknown outside a git repository instead of throwing', () => {
