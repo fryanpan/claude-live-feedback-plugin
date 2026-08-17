@@ -368,6 +368,7 @@ export class TaskProjection {
       this.tasks.listTasks(workspaceId).map((t) => [t.id, projectTask(t, this.commentCount(t.id))]),
     );
     const pending = this.tasks.getPendingRetriage(workspaceId);
+    const pendingBucket = this.tasks.getPendingBucketReview(workspaceId);
     const wsFields: Record<string, unknown> = {
       id: ws.id,
       name: ws.name,
@@ -399,6 +400,24 @@ export class TaskProjection {
               taskIds: pending.taskIds,
               ts: pending.ts,
               byName: pending.actor.name,
+            },
+          }
+        : {}),
+      // A new goal band nobody has re-looked at the bucket against. Its own
+      // key for the same reason it has its own sidecar: the two asks have
+      // different baselines and different answers, so folding it into the
+      // one above would let a board render "a goal edit is waiting" for
+      // something no set_task_goal on those tasks would settle. Trimmed the
+      // same way — band TITLES rather than the two full goal lists, since
+      // the board already carries the list.
+      ...(pendingBucket
+        ? {
+            pendingBucketReview: {
+              batchId: pendingBucket.batchId,
+              taskIds: pendingBucket.taskIds,
+              bandTitles: pendingBucket.newBands.map((b) => b.title),
+              ts: pendingBucket.ts,
+              byName: pendingBucket.actor.name,
             },
           }
         : {}),

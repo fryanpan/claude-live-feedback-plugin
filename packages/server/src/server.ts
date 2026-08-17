@@ -1673,6 +1673,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // attach drains it. Surfaced so "nobody has picked this up" is
             // visible work on the board rather than a silent gap.
             pendingRetriage: taskStore.getPendingRetriage(workspaceId),
+            // A new goal band the lead has not re-looked at the bucket
+            // against. Read-only here too — only an attach drains it — and
+            // separate from the field above because answering one does not
+            // answer the other.
+            pendingBucketReview: taskStore.getPendingBucketReview(workspaceId),
           });
         }
         // The human's queue, to the board's agent-side `next` below: every

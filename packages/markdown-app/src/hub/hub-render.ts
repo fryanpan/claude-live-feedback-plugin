@@ -21,6 +21,7 @@ import {
   type HubEvidence,
   type HubTask,
   type HubTransition,
+  type PendingBucketReviewView,
   type PendingRetriageView,
   type PresenceChip,
   type ReorderTarget,
@@ -240,6 +241,7 @@ export function renderLeadStrip(
   knownAgentIds: string[],
   handlers: LeadStripHandlers,
   pendingRetriage?: PendingRetriageView,
+  pendingBucketReview?: PendingBucketReviewView,
 ): void {
   container.replaceChildren();
   container.classList.toggle('hub-lead-empty', !leadAgentId);
@@ -259,6 +261,24 @@ export function renderLeadStrip(
       ? `Goal edit waiting for the lead — ${n} task${n === 1 ? '' : 's'} to re-place`
       : `Goal edit waiting — ${n} task${n === 1 ? '' : 's'} to re-place, and nobody to do it`;
     waiting.title = `Edited by ${pendingRetriage.byName}`;
+    container.append(waiting);
+  }
+  if (pendingBucketReview && pendingBucketReview.taskIds.length > 0) {
+    // A new goal band nobody has re-looked at the bucket against. Its own
+    // chip rather than a line folded into the one above: the two asks are
+    // answered by different moves, and a board that showed only the
+    // north-star one would report "nothing waiting" while this sat in a
+    // sidecar — the store-has-it/surface-can't-show-it failure, which is
+    // exactly what the projection next door exists to prevent.
+    const n = pendingBucketReview.taskIds.length;
+    const bands = pendingBucketReview.bandTitles;
+    const named = bands.length === 1 ? `“${bands[0]}”` : `${bands.length} new bands`;
+    const waiting = document.createElement('span');
+    waiting.className = 'hub-lead-pending';
+    waiting.textContent = leadAgentId
+      ? `New goal band waiting for the lead — ${n} unplaced task${n === 1 ? '' : 's'} to re-look at`
+      : `New goal band waiting — ${n} unplaced task${n === 1 ? '' : 's'} to re-look at, and nobody to do it`;
+    waiting.title = `${named}, added by ${pendingBucketReview.byName}. Nothing has been placed.`;
     container.append(waiting);
   }
 

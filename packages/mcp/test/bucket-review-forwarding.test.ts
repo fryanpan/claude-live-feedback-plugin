@@ -102,9 +102,17 @@ describe('attach_agent hands over a bucket re-look that was waiting', () => {
 describe('what peers actually load', () => {
   // The bundle is the deliverable; the source is not. A forward that exists
   // only in mcp.ts reaches nobody until `bun run build:mcp` is committed.
-  it('the committed bundle carries both forwards', () => {
-    expect(BUNDLE).toContain('bucketReview');
-    expect(BUNDLE).toContain('pendingBucketReview');
+  //
+  // Assert the FORWARD, not the name. A first draft of this block checked
+  // `BUNDLE.toContain('bucketReview')` — which the tool DESCRIPTIONS satisfy
+  // on their own (set_goal_list's says "`bucketReview.taskIds` is that
+  // bucket", attach_agent's contains the word `pendingBucketReview`), so
+  // deleting the spread from mcp.ts and rebuilding left both green. That is
+  // the same vacuous-probe failure the file exists to guard against, one
+  // layer down. These literals appear only where the value is copied out.
+  it('the committed bundle carries both forwards, not just the words', () => {
+    expect(BUNDLE).toContain('{ bucketReview: res.bucketReview }');
+    expect(BUNDLE).toContain('{ pendingBucketReview: res.pendingBucketReview }');
   });
 
   // The channel line the lead reads is rendered in the bundle too.

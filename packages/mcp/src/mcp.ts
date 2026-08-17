@@ -2327,6 +2327,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           };
           goalSummary: unknown[];
           pendingRetriage?: { batchId: string; newGoal: string; taskIds: string[] };
+          pendingBucketReview?: {
+            batchId: string;
+            newBands: Array<{ id: string; title: string }>;
+            taskIds: string[];
+          };
         };
         return ok({
           workspaceId: res.workspace.id,
@@ -2339,6 +2344,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           // A goal edit nobody has picked up yet. Only attach_agent drains
           // it — reading it here does not.
           pendingRetriage: res.pendingRetriage,
+          // A goal BAND that appeared and has not been re-looked at. Same
+          // read-only rule, and a separate field on purpose: `pendingRetriage`
+          // is answered by re-placing against a changed north star, this one
+          // by checking whether the unplaced bucket has a home now.
+          pendingBucketReview: res.pendingBucketReview,
           goals: res.goalSummary,
         });
       }
