@@ -76,6 +76,7 @@ import { TaskProjection, taskBodyDocId, taskIdOfBodyDoc } from './task-projectio
 import { buildQueue, placeableGoals, summarizeGoals } from './task-queue.ts';
 import {
   type Ref,
+  type Task,
   type TaskStatus,
   TaskStore,
   type WorkspaceGoal,
@@ -599,6 +600,46 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     if (!workspaceId) return;
     sse.broadcast(`ws~${workspaceId}`, payload);
     taskProjection.refresh(workspaceId);
+  };
+  /**
+   * Rewrite a task's description through its live `task:<id>` body room, with
+   * everything the act owes: the room exists, the snapshot the board and
+   * `next_tasks` read is fresh immediately rather than on the debounce, and —
+   * when the caller said who it is — an attributed `task.body_edited` row.
+   *
+   * ONE function because there are TWO routes: `POST /api/tasks/:id/body` and
+   * `POST /api/docs/task:<id>/content`. The second one used to reach
+   * `rooms.setDocContent` directly and got none of this, which is how a
+   * rewrite through `set_doc_content` destroyed a capture with nothing
+   * recorded while both the caller and the board saw success.
+   *
+   * The preservation into `quote` is deliberately NOT here. It lives at
+   * `TaskStore.updateBodySnapshot`, the choke point every writer of a body
+   * fragment passes through — including `find_and_replace` on the same docId
+   * and a person typing on the board, neither of which comes through this
+   * function. Putting it here would rebuild the exact gap being closed, one
+   * layer up.
+   */
+  const rewriteTaskBody = (
+    task: Task,
+    markdown: string,
+    opts: { actor?: { id: string; name: string; kind?: string }; title?: string },
+  ): { ok: true } | { ok: false; error: string } => {
+    const docId = taskProjection.ensureBodyRoom(task);
+    const res = rooms.setDocContent(docId, markdown);
+    if (!res.ok) return res;
+    taskProjection.flushBodySnapshot(task.id);
+    // Attribution is the one half a route can lack: `POST /api/docs/:id/content`
+    // has never required an author, and an audit row naming nobody is worse
+    // than the honest absence of one. The words are safe either way — the
+    // snapshot flush above has already preserved them.
+    if (opts.actor) {
+      taskStore.noteBodyEdited(task.id, {
+        actor: opts.actor,
+        ...(opts.title ? { title: opts.title } : {}),
+      });
+    }
+    return { ok: true };
   };
   // Deploy readiness (§3.12 commit 11): uptime is measured from the same
   // events.jsonl the audit trail lives in. The monitor stamps
@@ -2428,23 +2469,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const task = taskStore.getTask(taskId);
           if (!task) return j(404, { ok: false, error: 'not-found' });
           if (!markdown.trim()) return j(400, { ok: false, error: 'empty' });
-          // Read the row's own words BEFORE the rewrite lands — after
-          // setDocContent the snapshot is the new text and the original is
-          // gone from every surface. This is the one place that can still see
-          // it, which is why the store takes it as a required parameter.
-          const previous = {
-            title: task.title,
-            ...(task.body !== undefined ? { body: task.body } : {}),
-          };
-          const docId = taskProjection.ensureBodyRoom(task);
-          const res = rooms.setDocContent(docId, markdown);
-          if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
-          taskProjection.flushBodySnapshot(taskId);
-          taskStore.noteBodyEdited(taskId, {
+          const res = rewriteTaskBody(task, markdown, {
             actor: author,
-            previous,
             ...(title ? { title } : {}),
           });
+          if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
           // No hand-refresh of the projection: unlike `/title` (which emits
           // nothing by design), this act DOES emit, and the projection's own
           // subscriber re-runs ensureWorkspace off the event.
@@ -3238,6 +3267,23 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             const body = await safeJson(req);
             const markdown = String(body?.markdown ?? '');
             if (markdown.length === 0) return j(400, { error: 'markdown is required' });
+            // A `task:<id>` doc is a task's DESCRIPTION, not a free-standing
+            // document, and rewriting one is an act the board has a name for.
+            // Reachable here by anyone who knows the docId convention, so this
+            // route runs the same ceremony `/api/tasks/:id/body` does rather
+            // than writing the room and walking away. It is not refused: that
+            // would take away the only body-rewrite a bundle older than
+            // `update_task_body` (0.1.24) has, to buy a guarantee this branch
+            // can simply provide.
+            const bodyTaskId = taskIdOfBodyDoc(docId);
+            const bodyTask = bodyTaskId ? taskStore.getTask(bodyTaskId) : undefined;
+            if (bodyTask) {
+              const author = authorFor(body?.author);
+              const res = rewriteTaskBody(bodyTask, markdown, {
+                ...(author ? { actor: author } : {}),
+              });
+              return res.ok ? j(200, { ok: true }) : j(409, res);
+            }
             const res = rooms.setDocContent(docId, markdown);
             return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
           }
