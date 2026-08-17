@@ -2345,9 +2345,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                     message:
                       'order must be exactly the goal ids at this scope. ' +
                       `unknown: [${res.unknownIds.join(', ')}]; ` +
+                      // Named separately because the fix differs: an unknown
+                      // id means re-read, a reserved one means drop it.
+                      `reserved (never ordered — leave these out): [${res.reservedIds.join(', ')}]; ` +
                       `missing: [${res.missingIds.join(', ')}]; ` +
                       `duplicated: [${res.duplicateIds.join(', ')}]. ` +
-                      `Re-read the list with GET /api/workspaces/${workspaceId} and send every id back.`,
+                      `Re-read the list with GET /api/workspaces/${workspaceId} and send back every ` +
+                      'row at this scope whose `reorderable` is true.',
                   }
                 : {};
             return j(res.error === 'workspace-not-found' ? 404 : 400, { ...res, ...detail });

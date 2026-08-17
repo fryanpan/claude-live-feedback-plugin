@@ -42,6 +42,7 @@ import {
   presenceChips,
   refreshReviewItems,
   reviewQueue,
+  reviewRow,
 } from './hub-model.ts';
 import {
   type SidebarDoc,
@@ -328,8 +329,12 @@ async function main(): Promise<void> {
    * (`?thread=`), not the doc's top.
    */
   function openReviewItem(item: ReviewItem): void {
-    if (item.decision) {
-      boardHandlers.onOpenTask(item.decision.task);
+    // A decision and a human-owned blocker are both a task — `reviewRow` is
+    // the one reader for "which task is this row about", so a new band cannot
+    // land in the strip with a chip that taps into nothing.
+    const row = reviewRow(item);
+    if (row) {
+      boardHandlers.onOpenTask(row.task);
       return;
     }
     const t = item.thread;

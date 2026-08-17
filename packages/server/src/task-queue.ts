@@ -170,6 +170,15 @@ export interface GoalSummaryRow {
    *  parent to be inferred from row position, and `reorder_goals` needs it
    *  BY NAME to scope a subgoal reorder — so the read states it. */
   parent?: string;
+  /** Whether `reorder_goals` accepts this id at this scope — i.e. whether the
+   *  row is a member of the ordered goal list at all. False on the two rows
+   *  that are appended rather than ordered: `chores`, and a goal id left
+   *  behind on a done task by a removal. Both render at depth 0 and are
+   *  otherwise shaped exactly like a band, so "every depth-0 row" — the only
+   *  scoping rule the read used to offer — builds an order the write
+   *  REFUSES. This field is what makes the read writable back into the
+   *  write; filter on it, don't infer from depth. */
+  reorderable: boolean;
   dueAt?: number;
   todo: number;
   inProgress: number;
@@ -198,6 +207,7 @@ export function summarizeGoals(tasks: Task[], goals: WorkspaceGoal[]): GoalSumma
     id: string,
     title: string,
     depth: number,
+    reorderable: boolean,
     dueAt?: number,
     parent?: string,
   ): GoalSummaryRow => ({
@@ -205,27 +215,32 @@ export function summarizeGoals(tasks: Task[], goals: WorkspaceGoal[]): GoalSumma
     title,
     depth,
     ...(parent !== undefined ? { parent } : {}),
+    reorderable,
     ...(dueAt !== undefined ? { dueAt } : {}),
     ...(counts.get(id) ?? { todo: 0, inProgress: 0, done: 0 }),
   });
 
   const out: GoalSummaryRow[] = [];
   const placed = new Set<string>();
+  // Everything walked out of `goals` IS the ordered list, at either depth —
+  // so these are exactly the ids `reorderGoals` will accept.
   for (const g of goals) {
-    out.push(row(g.id, g.title, 0, g.dueAt));
+    out.push(row(g.id, g.title, 0, true, g.dueAt));
     placed.add(g.id);
     for (const s of g.subgoals ?? []) {
-      out.push(row(s.id, s.title, 1, s.dueAt, g.id));
+      out.push(row(s.id, s.title, 1, true, s.dueAt, g.id));
       placed.add(s.id);
     }
   }
   // Chores, then anything sitting under a goal id the list no longer has —
   // both would otherwise be invisible in a view whose whole job is "where is
   // the open work", and a task you can't see is a task nobody picks up.
+  // Neither is IN the ordered list, so neither is reorderable: they are
+  // appended by this function, and a caller that sends them back gets a 400.
   for (const id of counts.keys()) {
     if (placed.has(id) || id === CHORES_ID) continue;
-    out.push(row(id, id, 0));
+    out.push(row(id, id, 0, false));
   }
-  if (counts.has(CHORES_ID)) out.push(row(CHORES_ID, 'Chores', 0));
+  if (counts.has(CHORES_ID)) out.push(row(CHORES_ID, 'Chores', 0, false));
   return out;
 }
