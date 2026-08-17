@@ -617,7 +617,10 @@ async function main(): Promise<void> {
           getContext: () => ({ surface: 'hub' }),
           send: async (transcript) => {
             deliver(transcript);
-            return { route: 'capture', ack: 'Added — edit it, then Add' };
+            // Not "Added": nothing has been filed yet. The words are in the
+            // box and stay there until a tap, which is the entire point of
+            // dictating into capture rather than at the agent.
+            return { route: 'capture', ack: 'In the box — edit, then tap Add' };
           },
         }),
     });

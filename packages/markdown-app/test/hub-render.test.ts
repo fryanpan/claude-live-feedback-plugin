@@ -1537,6 +1537,15 @@ describe('renderQuickAdd — dictating into the box', () => {
     expect(onCapture).toHaveBeenCalledWith('review the deploy script', undefined);
   });
 
+  it('mounts the dictation indicator hidden', () => {
+    // `flex-basis: 100%` in a wrapping row: visible from first paint it claims
+    // its own flex line, so the form sheds a row-gap the first time anything
+    // is dictated and never gets it back.
+    const { parts } = mount();
+    expect(parts.indicator.className).toContain('hub-quick-mic-state');
+    expect(parts.indicator.classList.contains('hidden')).toBe(true);
+  });
+
   it('still mounts, and still captures, with no voice layer at all', () => {
     // Positive control for the whole describe: every assertion above depends
     // on mountVoice being called, so a build where speech is unavailable must
@@ -1576,6 +1585,21 @@ describe('hub-app voice wiring', () => {
     // Positive control: this counts real call sites, not zero of them.
     expect(mounts).toBe(2);
     expect(src.split('spaceHotkey: false').length - 1).toBe(mounts - 1);
+  });
+
+  it('the dictation ack does not claim the task was filed', () => {
+    // The whole design point is that dictation does NOT file — it fills the
+    // box and waits for a tap. "Added" is the one word that says it did.
+    const src = code();
+    const mountVoice = src.slice(src.indexOf('mountVoice:'));
+    const body = mountVoice.slice(0, mountVoice.indexOf('\n    });'));
+    const ack = /ack:\s*'([^']*)'/.exec(body)?.[1];
+    // Positive control: the assertions below are about a string we found, not
+    // about `undefined` quietly satisfying every `not.toMatch`.
+    expect(ack).toBeTruthy();
+    expect(ack).not.toMatch(/\b(added|created|filed|captured|saved)\b/i);
+    // And it still names the tap that would file it.
+    expect(ack).toMatch(/\bAdd\b/);
   });
 
   it('never files a dictated task without a human tap', () => {
