@@ -1217,6 +1217,43 @@ Technical discoveries that should persist across sessions for this project.
   invisible to the artifact, so the bundle can look clean while the source
   still documents the thing as present.
 
+## An empty list is a clearance only if you also render the denominator
+
+- **The plugin-drift strip rendered NOTHING when nobody was behind, and
+  nothing reads exactly like all-clear.** Its domain is "sessions that called
+  `attach_agent` on this board", which for most of this board's life has been
+  one member — itself. Measured 2026-08-17: `behind: []` over one attachment,
+  while a fleet enumerated *outside* this server (the positive control: a
+  second source, not a second look at the same data) had sessions releases
+  back. **The only session the strip had ever named as behind was the session
+  that then fixed itself** — which moved the reading from "names one" straight
+  to "names nobody" with zero change in the actual drift. Worse than the
+  filed prediction, which was about a board with *zero* attachments; one does
+  it too, and one is the normal state.
+- **A surface whose domain is "whoever opted in" measures PARTICIPATION, not
+  the thing it is named after** — and the members least likely to have opted
+  in are exactly the ones the surface exists to catch, because opting in is
+  itself something the newer version does more of. Whenever a check runs over
+  a self-selected population, ship the denominator beside the result and let
+  the reader see how small it is.
+- **Reproduce the constraint before working around it.** The honest answer
+  here was "the fleet is unknowable from this server": a plugin version
+  arrives through exactly one door (`attach_agent`'s `pluginVersion`), the MCP
+  child makes no HTTP call at startup and never opens a websocket, and Yjs
+  awareness carries browsers rather than agents. So the fix is to state the
+  domain, NOT to invent a registry that makes a broader sentence true. Note
+  the near-miss: the server *does* record agents that never attached
+  (`activity.jsonl`, per-workspace `events.jsonl`) — but those carry no
+  version, so they can name an unchecked session and can never call one
+  behind. "Unknowable" had to be established per-fact, not per-surface.
+- **The always-on line needs its own visual weight.** A coverage notice
+  renders permanently, so it gets a quiet class; styling it like the alarm
+  would train everyone to skim past the alarm. Same reasoning as an alarm
+  needing a stated silence.
+- Mutation-tested three ways, each turning a *named* test red: restoring the
+  `return null` on an empty `behind`, dropping `checked` from the route
+  payload, and dropping the quiet class in the renderer.
+
 ## gh pr merge --delete-branch switches your working copy to main
 
 - When the branch being deleted is the CURRENT branch of the main

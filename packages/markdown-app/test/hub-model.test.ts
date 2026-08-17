@@ -867,15 +867,17 @@ describe('pluginDriftNotice', () => {
   const rel = (
     version: string | null,
     behind: Array<{ agentId: string; pluginVersion?: string }>,
-  ) => ({ version, behind });
+    checked?: number,
+  ) => ({ version, behind, ...(checked === undefined ? {} : { checked }) });
 
   it('says who is behind, what current is, and both steps of the fix', () => {
     const n = pluginDriftNotice(
       rel('0.1.26', [{ agentId: 'agent-quill', pluginVersion: '0.1.12' }]),
     );
     if (!n) throw new Error('expected a notice');
+    expect(n.kind).toBe('alert');
     expect(n.headline).toBe('1 agent is running an older plugin than 0.1.26');
-    expect(n.detail).toBe('agent-quill 0.1.12');
+    expect(n.detail).toContain('agent-quill 0.1.12');
     // Both steps, in order. Restarting first pulls whatever the cache already
     // holds — which has moved a session BACKWARDS a version.
     // `command` bypasses shell functions and aliases. This machine wraps
@@ -896,26 +898,74 @@ describe('pluginDriftNotice', () => {
       ]),
     );
     expect(n?.headline).toBe('2 agents are running an older plugin than 0.2.0');
-    expect(n?.detail).toBe('agent-quill 0.1.12, agent-vane 0.1.30');
+    expect(n?.detail).toContain('agent-quill 0.1.12, agent-vane 0.1.30');
   });
 
   it('names a session that could not report a version', () => {
     // It is on a bundle older than the one that added the field, so "older
     // than we can name" is the true statement — not a blank.
     const n = pluginDriftNotice(rel('0.1.26', [{ agentId: 'agent-old' }]));
-    expect(n?.detail).toBe('agent-old (too old to report)');
+    expect(n?.detail).toContain('agent-old (too old to report)');
   });
 
-  it('says nothing when everyone is current', () => {
-    // Positive control lives in the cases above: the same shape WITH a behind
-    // entry does produce a notice, so this absence is not vacuous.
-    expect(pluginDriftNotice(rel('0.1.26', []))).toBeNull();
+  it('puts the domain and the denominator on the alarm too', () => {
+    // "1 agent is behind" is also a statement about attached sessions only,
+    // and 1-out-of-1 is a different thing to act on than 1-out-of-9.
+    const n = pluginDriftNotice(rel('0.1.26', [{ agentId: 'agent-quill' }], 9));
+    expect(n?.detail).toContain('of 9 checked');
+    expect(n?.detail).toContain('a peer that never attached is absent here, not current');
   });
 
-  it('says nothing when the released version is unknown', () => {
-    // The manifest was unreadable. Claiming drift would be inventing it.
-    expect(pluginDriftNotice(rel(null, [{ agentId: 'a', pluginVersion: '0.1.0' }]))).toBeNull();
+  // ── The defect this section exists for ────────────────────────────────
+  //
+  // Measured in the field 2026-08-17: the board rendered NOTHING over a
+  // single attachment while sessions elsewhere in the fleet were releases
+  // behind. Nothing reads exactly like all-clear, and fixing that one
+  // session took the reading from "names one" to "names nobody" without
+  // moving the fleet's drift at all.
+
+  it('states its domain and its count instead of going silent when nobody is behind', () => {
+    const n = pluginDriftNotice(rel('0.1.40', [], 1));
+    if (!n) throw new Error('a clear result must still say what it covers');
+    expect(n.kind).toBe('coverage');
+    // The count is the whole point: 1 is not a fleet.
+    expect(n.headline).toBe('No attached session is behind 0.1.40 (1 checked)');
+    expect(n.detail).toContain('Only sessions that attach to this board are checked');
+    expect(n.fix).toContain('Not a fleet-wide clearance');
+  });
+
+  it('a board nobody has attached to reads as unchecked, not as clear', () => {
+    const n = pluginDriftNotice(rel('0.1.40', [], 0));
+    expect(n?.kind).toBe('coverage');
+    expect(n?.headline).toBe(
+      'Nothing has been checked against 0.1.40 — no session has attached to this board',
+    );
+  });
+
+  it('states the domain without inventing a count when the server sent none', () => {
+    // A client can outlive the server release that added `checked`. Guessing
+    // a denominator would be worse than omitting it.
+    const n = pluginDriftNotice(rel('0.1.40', []));
+    expect(n?.headline).toBe('No attached session is behind 0.1.40');
+    expect(n?.headline).not.toContain('checked)');
+    expect(n?.detail).toContain('Only sessions that attach to this board are checked');
+  });
+
+  it('says it cannot check rather than saying nothing when the version is unknown', () => {
+    // The manifest was unreadable. Claiming drift would be inventing it — but
+    // so would silence, which reads as "checked, all fine".
+    const n = pluginDriftNotice(rel(null, [{ agentId: 'a', pluginVersion: '0.1.0' }], 3));
+    expect(n?.kind).toBe('coverage');
+    expect(n?.headline).toBe("Plugin versions can't be checked here");
+    expect(n?.detail).toContain('(3 checked)');
+    expect(n?.fix).toContain('is a clearance until that manifest reads');
+  });
+
+  it('is silent only when there is no attachments read at all', () => {
+    // The one honest silence: the domain itself is unknown, so there is no
+    // sentence to write. Positive control: every case above returns a notice.
     expect(pluginDriftNotice(undefined)).toBeNull();
+    expect(pluginDriftNotice(null)).toBeNull();
   });
 });
 

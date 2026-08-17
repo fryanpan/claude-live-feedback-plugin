@@ -1528,7 +1528,7 @@ describe('renderPresence — plugin drift', () => {
     );
   });
 
-  it('renders nothing extra when every agent is current', () => {
+  it('renders nothing when there is no notice at all', () => {
     const host = document.createElement('div');
     // Positive control: the same call WITH a notice puts a .hub-drift in, so
     // this absence means the notice is what drives it.
@@ -1538,6 +1538,38 @@ describe('renderPresence — plugin drift', () => {
     renderPresence(host, [], null, { onTap: () => {}, onLongPress: () => {} }, [null]);
     expect(host.querySelector('.hub-drift')).toBeNull();
     expect(host.classList.contains('hidden')).toBe(true);
+  });
+
+  it('renders the clear reading quietly, and the alarm loudly', () => {
+    // A coverage line is on the board permanently. If it wore the alarm's
+    // styling it would teach everyone to skim past the alarm — so the class
+    // has to differ, and both halves are asserted in the same pass so
+    // neither is a claim about a world the other does not inhabit.
+    const host = document.createElement('div');
+    const clear = pluginDriftNotice({ version: '0.1.40', behind: [], checked: 1 });
+    renderPresence(host, [], null, { onTap: () => {}, onLongPress: () => {} }, [clear]);
+    const quiet = host.querySelector('.hub-drift');
+    expect(quiet).not.toBeNull();
+    expect(quiet?.classList.contains('hub-drift-quiet')).toBe(true);
+    expect(quiet?.textContent).toContain('No attached session is behind 0.1.40 (1 checked)');
+    expect(quiet?.textContent).toContain('a peer that never attached is absent here');
+
+    renderPresence(host, [], null, { onTap: () => {}, onLongPress: () => {} }, [drift()]);
+    const loud = host.querySelector('.hub-drift');
+    expect(loud?.classList.contains('hub-drift-quiet')).toBe(false);
+  });
+
+  it('a board nobody has attached to does not render as all-clear', () => {
+    // The defect, in the surface: an empty `behind` list used to render as
+    // nothing, and nothing reads exactly like clearance.
+    const host = document.createElement('div');
+    renderPresence(host, [], null, { onTap: () => {}, onLongPress: () => {} }, [
+      pluginDriftNotice({ version: '0.1.40', behind: [], checked: 0 }),
+    ]);
+    expect(host.classList.contains('hidden')).toBe(false);
+    expect(host.querySelector('.hub-drift')?.textContent).toContain(
+      'no session has attached to this board',
+    );
   });
 });
 
