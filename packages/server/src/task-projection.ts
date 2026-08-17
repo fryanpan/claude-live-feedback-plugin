@@ -131,6 +131,10 @@ export function projectTask(
     ...(task.answer !== undefined ? { answer: task.answer } : {}),
     ...(task.triagedAgainst !== undefined ? { triagedAgainst: task.triagedAgainst } : {}),
     ...(task.triagePendingTs !== undefined ? { triagePendingTs: task.triagePendingTs } : {}),
+    // Nobody has named this task's band, and since when. Projected so the
+    // board and the queue can say the sentence out loud without new plumbing
+    // — a field only the store can see is the "flag nobody renders" bug.
+    ...(task.unplacedSince !== undefined ? { unplacedSince: task.unplacedSince } : {}),
     ...(task.riskTier !== undefined ? { riskTier: task.riskTier } : {}),
     transitions: task.transitions.map((t) => ({
       ts: t.ts,
