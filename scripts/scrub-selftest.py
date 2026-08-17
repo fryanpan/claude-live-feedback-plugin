@@ -28,6 +28,9 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRUB = os.path.join(HERE, "scrub-check.py")
 
+sys.path.insert(0, HERE)
+import scrub_git  # noqa: E402
+
 # Invented names. `zephyr-*` is not a real project and never will be; the
 # hyphen matters because the scanner drops short unhyphenated names as too
 # generic to match safely.
@@ -38,6 +41,12 @@ MENTIONABLE_PROJECT = "zephyr-cleared-proj"
 # a hit on it proves the repo-local file was read, and a miss proves it wasn't.
 DECOY_PROJECT = "zephyr-decoy-proj"
 DENY_TOKEN = "quokkaburra"
+# Two more invented tokens, for the push-range cases below. PUBLIC_TOKEN
+# stands for content that is already on main (and therefore already public);
+# NEW_TOKEN for content a push would actually publish. Keeping them distinct
+# is what lets a case say WHICH of the two the gate reacted to.
+PUBLIC_TOKEN = "wibblethorpe"
+NEW_TOKEN = "grimsbyfoyle"
 
 REGISTRY = f"""\
 projects:
@@ -51,13 +60,18 @@ projects:
     mentionable: true
 """
 
-DENYLIST = f"# fixture denylist\n{DENY_TOKEN}\n"
+DENYLIST = f"# fixture denylist\n{DENY_TOKEN}\n{PUBLIC_TOKEN}\n{NEW_TOKEN}\n"
 
 failures: list[str] = []
 
 
 def run(paths: list[str], registry: str | None, denylist: str | None, cwd: str | None = None, **env_extra):
-    env = dict(os.environ)
+    # clean_git_env(), not os.environ: run from the hook, git has exported
+    # GIT_DIR pointing at the repo being pushed, and the cases below pass
+    # cwd=<fixture repo>. Inheriting it, the scanner's own `git log` would
+    # resolve against the real repo while cwd claimed the fixture — the exact
+    # "positive control scanning the wrong data" shape, one layer down.
+    env = clean_git_env()
     env.pop("SCRUB_SKIP", None)
     env.pop("SCRUB_REQUIRE_SOURCES", None)
     # Always set both, so the real machine config can never leak into a case.
@@ -233,9 +247,203 @@ def check_decision_table() -> None:
                f"got {got!r}, wanted {want!r}")
 
 
+IDENT = ["-c", "user.email=selftest@example.invalid", "-c", "user.name=Scrub Selftest"]
+
+
+def build_merge_fixture(root: str, branch_token: str = "", conflict_token: str = "") -> dict:
+    """A repo in the exact shape this project's conventions produce.
+
+    Branch off an OLDER main, make one commit of your own, then merge current
+    main before the final push — which the conventions require, and which is
+    what turned the gate into a blocker on the normal path. `main` carries
+    PUBLIC_TOKEN, so a case can say which content the scanner reacted to.
+
+    Returns the shas the pre-push hook would be handed: `pushed` is the ref's
+    state on the remote (`remote_sha`), `tip` is what is being pushed
+    (`local_sha`).
+    """
+    clean = clean_git_env()
+
+    def g(*args: str) -> str:
+        return subprocess.run(
+            ["git", *IDENT, *args], cwd=root, check=True,
+            capture_output=True, text=True, env=clean,
+        ).stdout.strip()
+
+    def write(rel: str, body: str) -> None:
+        full = os.path.join(root, rel)
+        os.makedirs(os.path.dirname(full), exist_ok=True) if os.path.dirname(rel) else None
+        with open(full, "w") as f:
+            f.write(body)
+
+    os.makedirs(root, exist_ok=True)
+    g("init", "-q")
+    write("README.md", "seed\n")
+    write("docs/notes.md", "a shared line\n")
+    g("add", "-A")
+    g("commit", "-qm", "seed")
+    base = g("rev-parse", "HEAD")
+
+    # main gains content. Public for days by the time the branch merges it.
+    write("docs/notes.md", f"a shared line, edited on main, mentioning {PUBLIC_TOKEN}\n")
+    g("add", "-A")
+    g("commit", "-qm", "main: notes")
+    main = g("rev-parse", "HEAD")
+
+    # the branch: one commit of its own, off the older main, then pushed
+    g("checkout", "-q", "-b", "feature", base)
+    write("README.md", "seed\na branch tweak\n")
+    if conflict_token:
+        write("docs/notes.md", "a shared line, edited on the branch\n")
+    g("add", "-A")
+    g("commit", "-qm", "feature: tweak")
+    pushed = g("rev-parse", "HEAD")
+
+    # `branch_token` goes in a commit made AFTER that push, because that is
+    # what "content this push would publish" means. The first draft of this
+    # fixture put it in the pushed commit and the case failed — correctly: a
+    # commit the remote already has is already public, and re-flagging it is
+    # the bug, not the guard.
+    if branch_token:
+        write("README.md", f"seed\na branch tweak\nand a later one: {branch_token}\n")
+        g("add", "-A")
+        g("commit", "-qm", "feature: more")
+
+    # the conventions-mandated merge
+    subprocess.run(["git", *IDENT, "merge", "--no-edit", main], cwd=root,
+                   capture_output=True, text=True, env=clean)
+    if conflict_token:
+        # Content in NEITHER parent — the only place a merge commit can hide a
+        # leak, and the reason `--cc` is not optional.
+        write("docs/notes.md", f"a shared line, resolved by hand: {conflict_token}\n")
+        g("add", "-A")
+        g("commit", "-qm", "Merge main (resolved)")
+    tip = g("rev-parse", "HEAD")
+
+    # what the remote already has
+    g("update-ref", "refs/remotes/origin/main", main)
+    g("update-ref", "refs/remotes/origin/feature", pushed)
+    return {"base": base, "main": main, "pushed": pushed, "tip": tip}
+
+
+def push_patch_in(root: str, tip: str, pushed: str) -> str:
+    """`scrub_git.push_patch` as the Haiku layer would get it, inside `root`.
+
+    A subprocess because push_patch shells out to git and reads the process
+    cwd; clean_git_env for the same reason run() does.
+    """
+    code = (
+        "import sys; sys.path.insert(0, %r); import scrub_git; "
+        "sys.stdout.write(scrub_git.push_patch("
+        "scrub_git.push_rev_args(%r, 'origin', [%r])))" % (HERE, tip, pushed)
+    )
+    return subprocess.run(
+        [sys.executable, "-c", code], cwd=root, capture_output=True, text=True,
+        env=clean_git_env(),
+    ).stdout
+
+
+def check_push_rev_args() -> None:
+    """The pure half: which revs get excluded, and which arguments say so."""
+    zero = "0" * 40
+    cases = [
+        (("tip", "origin", []), ["tip", "--not", "--remotes=origin"],
+         "no remote_sha to add"),
+        (("tip", "origin", [zero]), ["tip", "--not", "--remotes=origin"],
+         "an all-zero remote_sha (new branch) is dropped, not passed to git"),
+        (("tip", "origin", ["abc"]), ["tip", "--not", "--remotes=origin", "abc"],
+         "the remote's actual sha is excluded alongside the tracking refs"),
+        (("tip", "origin", ["abc", "abc", ""]), ["tip", "--not", "--remotes=origin", "abc"],
+         "duplicates and blanks collapse"),
+        (("tip", None, ["abc"]), ["tip", "--not", "--remotes", "abc"],
+         "an unrecognized remote widens to every remote-tracking ref"),
+    ]
+    for (tip, glob, public), want, label in cases:
+        got = scrub_git.push_rev_args(tip, glob, public)
+        expect(f"push_rev_args: {label}", 0 if got == want else 1, 0,
+               f"got {got!r}, wanted {want!r}")
+
+
+def check_push_range(registry: str, denylist: str) -> None:
+    """The merge false positive, and the three ways it must not become a miss.
+
+    Reported three times in one day by two agents: a push blocked over content
+    that was already on origin/main and appeared zero times in the branch's own
+    diff. Measured cause: the hook asked `git diff remote_sha..local_sha`, a
+    comparison of two TREES, so merging main re-presented everything main had
+    gained as an addition — 7,516 insertions across 64 files for a branch whose
+    own change was two lines.
+
+    Every case here is two-sided on purpose. "The gate passes now" is worth
+    nothing without a companion showing the fixture really does contain
+    something a scanner can see, and without companions showing the same range
+    still catches a leak the push would genuinely publish.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        # --- 1. the false positive itself ---------------------------------
+        repo = os.path.join(tmp, "clean-merge")
+        shas = build_merge_fixture(repo)
+
+        # Positive control: under the OLD question the fixture blocks. Without
+        # this, "the new question passes" could just mean the fixture is empty.
+        r = run(["--diff-range", f"{shas['pushed']}..{shas['tip']}"],
+                registry, denylist, cwd=repo)
+        expect("merge FP: the old tree-diff range flags main's public content",
+               r.returncode, 1, r.stderr)
+
+        r = run(["--push-tip", shas["tip"], "--already-public", shas["pushed"]],
+                registry, denylist, cwd=repo)
+        expect("merge FP: the push range does not", r.returncode, 0, r.stderr)
+
+        # And the Haiku layer's actual input, which is a diff rather than a
+        # file list — the layer that was reported broken. No API call needed:
+        # what changed is what the model is shown.
+        patch = push_patch_in(repo, shas["tip"], shas["pushed"])
+        expect("merge FP: main's public content is absent from the Haiku input",
+               0 if PUBLIC_TOKEN not in patch else 1, 0,
+               f"{PUBLIC_TOKEN!r} still present in {len(patch)} chars of patch")
+
+        # --- 2. a genuine addition in an ordinary commit ------------------
+        repo2 = os.path.join(tmp, "leak-in-commit")
+        shas2 = build_merge_fixture(repo2, branch_token=NEW_TOKEN)
+        r = run(["--push-tip", shas2["tip"], "--already-public", shas2["pushed"]],
+                registry, denylist, cwd=repo2)
+        expect("a leak in the branch's own commit is still caught",
+               r.returncode, 1, r.stderr)
+
+        # --- 3. a genuine addition made INSIDE the merge commit -----------
+        # `git log -p` prints no diff for a merge by default, so without --cc
+        # this is the shape the fix would have started hiding. Probed both
+        # ways before it was written.
+        repo3 = os.path.join(tmp, "leak-in-merge")
+        shas3 = build_merge_fixture(repo3, conflict_token=NEW_TOKEN)
+        r = run(["--push-tip", shas3["tip"], "--already-public", shas3["pushed"]],
+                registry, denylist, cwd=repo3)
+        expect("a leak written during conflict resolution is still caught",
+               r.returncode, 1, r.stderr)
+
+        patch3 = push_patch_in(repo3, shas3["tip"], shas3["pushed"])
+        expect("...and reaches the Haiku input too",
+               0 if NEW_TOKEN in patch3 else 1, 0,
+               "the merge commit's combined diff is missing from the patch (--cc dropped?)")
+
+        # --- 4. a brand-new branch (remote_sha is all zeroes) --------------
+        # The hook passes the zero sha straight through; if it ever reached git
+        # as a rev, every push of a new branch would die with "bad revision".
+        repo4 = os.path.join(tmp, "new-branch")
+        shas4 = build_merge_fixture(repo4, branch_token=NEW_TOKEN)
+        subprocess.run(["git", *IDENT, "update-ref", "-d", "refs/remotes/origin/feature"],
+                       cwd=repo4, check=True, capture_output=True, env=clean_git_env())
+        r = run(["--push-tip", shas4["tip"], "--already-public", "0" * 40],
+                registry, denylist, cwd=repo4)
+        expect("a first push of a new branch still scans its own commits",
+               r.returncode, 1, r.stderr)
+
+
 def main() -> int:
     check_git_env_isolation()
     check_decision_table()
+    check_push_rev_args()
     with tempfile.TemporaryDirectory() as tmp:
         registry = os.path.join(tmp, "registry.yaml")
         denylist = os.path.join(tmp, "denylist.txt")
@@ -331,6 +539,8 @@ def main() -> int:
         # paths that were never theirs.
         r = run([clean], absent, absent, cwd=local_repo)
         expect("a clone with no fleet config still pushes (local registry present)", r.returncode, 0, r.stderr)
+
+        check_push_range(registry, denylist)
 
     if failures:
         print(f"\n{len(failures)} self-test failure(s): {', '.join(failures)}")

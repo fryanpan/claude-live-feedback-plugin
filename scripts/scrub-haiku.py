@@ -8,8 +8,16 @@ can't anticipate: unrecognized real names, contextual identifiers, quotes
 that reveal a private person, financial/health specifics in personal context.
 
 Usage:
+  scrub-haiku.py --push-tip SHA [--remote NAME] [--already-public SHA]...
+                                       # what this push makes public (the hook's mode)
   scrub-haiku.py --diff-range A..B    # scan diff in range
   scrub-haiku.py                       # read diff from stdin
+
+`--push-tip` is the mode the pre-push hook uses. It asks about the COMMITS a
+push would publish rather than comparing two trees, because a tree comparison
+re-presents everything `main` gained since the branch point as an addition the
+moment the branch merges `main` — which the conventions require before the
+final push. See scrub_git.py for the measurement and why `--cc` is load-bearing.
 
 Exit codes:
   0  clean (or Haiku unavailable — defensive non-block)
@@ -28,6 +36,9 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import scrub_git  # noqa: E402
 
 MODEL = "claude-haiku-4-5-20251001"
 API_URL = "https://api.anthropic.com/v1/messages"
@@ -58,11 +69,19 @@ SYSTEM_PROMPT = """You are a sensitive-content scanner. You will be shown a git 
 - Generic placeholders: <user>, <your-tailnet>, your-username/example, my-project, the user
 - Function/variable/class names, programming jargon, code comments about the code itself
 - Standard package descriptions ("a Python module that does X")
-- **Anything on a line starting with `-`.** Those lines are being REMOVED by
-  this push. A commit that deletes a leak is the fix, not the leak; flagging it
-  blocks the one change that improves the situation. Judge only added lines
-  (`+`) and, for context, unchanged ones. If a name appears on a `-` line and
-  not on any `+` line, that is a removal — say nothing.
+- **Anything on a line that is not being ADDED.** A line being removed by this
+  push is not a leak: a commit that deletes one is the fix, not the leak, and
+  flagging it blocks the one change that improves the situation. Judge only
+  added lines and, for context, unchanged ones. If a name appears only on
+  removed lines, that is a removal — say nothing.
+
+  Read the markers carefully, because merge commits are shown as **combined
+  diffs** with TWO marker columns rather than one (`--`, `-` followed by a
+  space, ` -`, `+ `, ` +`, `++`). A line is an addition only if a `+` appears
+  in one of those leading columns. Markers that are only `-` or blank mean the
+  line is being removed or is unchanged — including the very common case where
+  a conflict was resolved by keeping one side, which renders the discarded
+  side as removals. That content is not going anywhere new.
 
 **Output format — respond in EXACTLY this shape:**
 
@@ -75,7 +94,16 @@ LEAKS:
 - <file>:<line> — <one-line description of leak>
 - <file>:<line> — <one-line description of leak>
 
-Be conservative — when borderline, flag it. The human can override with SCRUB_SKIP=1 after reviewing your reasoning."""
+**Only the VERDICT line is read.** A tool blocks or allows the push on that
+word alone; explanatory notes reach a person only after it has already blocked.
+So do not list an item you have concluded is safe and then explain why — apply
+the rules above first, and if nothing survives them, the answer is
+`VERDICT: CLEAN` with no LEAKS section. Listing removed-line content with a
+note saying "this is a removal, the push is safe" blocks the push and says the
+opposite of what you meant.
+
+Be conservative about content that IS being added — when borderline, flag it.
+The human can override with SCRUB_SKIP=1 after reviewing your reasoning."""
 
 
 KEYCHAIN_SERVICE = "scrub-haiku-api-key"
@@ -203,7 +231,15 @@ def main() -> int:
         print(__doc__)
         return 0
 
-    if "--diff-range" in args:
+    try:
+        rev_args = scrub_git.rev_args_from_cli(args)
+    except ValueError as e:
+        print(f"[scrub-haiku] {e}", file=sys.stderr)
+        return 2
+
+    if rev_args is not None:
+        diff = scrub_git.push_patch(rev_args)
+    elif "--diff-range" in args:
         idx = args.index("--diff-range")
         if idx + 1 >= len(args):
             print("[scrub-haiku] --diff-range needs a value", file=sys.stderr)
