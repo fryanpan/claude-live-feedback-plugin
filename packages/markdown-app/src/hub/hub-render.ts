@@ -27,6 +27,8 @@ import {
   describeEvent,
   dropIndexFor,
   dropTarget,
+  quoteAfterCapture,
+  quoteAfterEdit,
   quoteForCapture,
   stepTarget,
   timeAgo,
@@ -871,8 +873,11 @@ export function renderQuickAdd(container: HTMLElement, handlers: QuickAddHandler
       submit.disabled = false;
       if (!ok) return;
       // The utterance belonged to the task that just landed. Carrying it into
-      // the next one would file words about work nobody spoke about.
-      spoken = '';
+      // the next one would file words about work nobody spoke about — but the
+      // box stayed live while the POST was out, so anything dictated SINCE
+      // belongs to the idea still sitting there. Same rule as the text below:
+      // remove what was sent, keep the rest.
+      spoken = quoteAfterCapture(spoken, quote);
       // Only what was sent. Anything typed while it was in flight is a second
       // idea, and clearing the whole box would take it with the first.
       input.value = input.value.trim() === text ? '' : input.value;
@@ -881,10 +886,13 @@ export function renderQuickAdd(container: HTMLElement, handlers: QuickAddHandler
   };
   input.addEventListener('input', () => {
     autosize();
-    // Emptied by hand: the idea the utterance belonged to is gone, so the
-    // utterance goes with it. Any other edit keeps it — correcting a misheard
-    // word must not cost the record of what was actually said.
-    if (input.value.trim() === '') spoken = '';
+    // Edited away: the idea the utterance belonged to is gone, so the
+    // utterance goes with it — whether the box was cleared or retyped over
+    // (a select-all retype is one input event with a NON-empty value, which
+    // is how the previous "empty means forget" test let a retyped task file
+    // the last idea's words). Correcting a misheard word keeps it; the rule
+    // itself lives in the model.
+    spoken = quoteAfterEdit(input.value, spoken);
   });
   // Enter submits, Shift+Enter is a newline — the convention every chat box
   // has, because this is the box people reach for instead of chat.
