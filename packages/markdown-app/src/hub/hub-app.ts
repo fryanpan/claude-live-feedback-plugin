@@ -44,6 +44,7 @@ import {
   refreshReviewItems,
   reviewQueue,
   reviewRow,
+  unplacedNotice,
   walkPosition,
 } from './hub-model.ts';
 import {
@@ -64,6 +65,7 @@ import {
   renderReviewWalkthrough,
   renderTaskDetail,
   renderThreadsSidebar,
+  renderUnplacedStrip,
 } from './hub-render.ts';
 import { sidebarEntriesFor } from './hub-sidebar.ts';
 
@@ -198,6 +200,7 @@ function buildShell(root: HTMLElement, name: string): void {
         </div>
         <div id="hub-decisions" class="hub-decisions hidden"></div>
         <div id="hub-quick" class="hub-quick"></div>
+        <div id="hub-unplaced" class="hub-unplaced hidden"></div>
         <div id="hub-board" class="hub-board"></div>
         <div id="hub-activity" class="hub-activity hidden"></div>
       </section>
@@ -437,6 +440,16 @@ async function main(): Promise<void> {
         : row;
       back?.focus();
     }
+    // Counted over EVERY task, not over the sections just rendered: the tab
+    // and done-window filters decide what is worth looking at right now, and
+    // a bucket that empties itself when you switch to "My Tasks" is a reading
+    // that lies in the quiet direction — which is the whole failure mode.
+    renderUnplacedStrip(el('hub-unplaced'), unplacedNotice(taskList(), filters.now), {
+      onOpenOldest: (taskId) => {
+        const task = state.tasks.get(taskId);
+        if (task) boardHandlers.onOpenTask(task);
+      },
+    });
     renderReviewStrip(el('hub-decisions'), currentQueue(), {
       onOpen: openReviewItem,
       onWalkthrough: () => {

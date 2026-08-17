@@ -392,9 +392,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // effect immediately rather than when a browser's cookie lapses.
     const share = shares.findLive(shareId);
     if (!share || share.mode !== 'link') return null;
-    return share.workspaceId
-      ? { docId: share.docId, workspaceId: share.workspaceId }
-      : { docId: share.docId };
+    return { docId: share.docId, workspaceId: share.workspaceId };
   };
 
   /**
@@ -1002,9 +1000,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               // Access mode (see Shares.findLiveByHostname).
               const s = shares?.findLiveByHostname(h);
               if (!s) return null;
-              return s.workspaceId
-                ? { docId: s.docId, workspaceId: s.workspaceId }
-                : { docId: s.docId };
+              return { docId: s.docId, workspaceId: s.workspaceId };
             },
             linkHost: shares?.publicHostname ?? null,
           });
@@ -1117,28 +1113,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             ...(closedStreams ? { closedStreams } : {}),
           });
         }
+        // `POST /api/share/doc` is GONE — a workspace is the unit of sharing.
+        // It is answered explicitly rather than left to the 404 fall-through
+        // because an older plugin bundle's `share_doc` still POSTs here with
+        // its own payload, and the useful reply names the replacement instead
+        // of reading as "your server is broken".
         if (pathname === '/api/share/doc' && req.method === 'POST') {
-          if (!shares) return j(404, { error: 'sharing not enabled' });
-          const body = await safeJson(req);
-          const docId = (body?.docId as string) ?? '';
-          const allowDomains = (body?.allowDomains as string[]) ?? [];
-          if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
-          if (!rooms.get(docId)) return j(404, { error: 'doc not found' });
-          if (!Array.isArray(allowDomains) || allowDomains.length === 0) {
-            return j(400, { error: 'allowDomains must be a non-empty array' });
-          }
-          try {
-            const share = await shares.createShareDoc({
-              docId,
-              allowDomains,
-              ttlSeconds: typeof body?.ttlSeconds === 'number' ? body.ttlSeconds : undefined,
-              name: typeof body?.name === 'string' ? body.name : undefined,
-            });
-            return j(200, { share });
-          } catch (err) {
-            const error = err instanceof Error ? err.message : 'create_share_failed';
-            return j(502, { error });
-          }
+          return j(410, {
+            error: 'per_doc_sharing_removed',
+            hint: 'A workspace is the unit of sharing. File the doc on a workspace (attach_doc / bind_folder / create_diff_review) and call share_workspace or share_link with workspaceId.',
+          });
         }
         // --- Redeem a share link ---
         // The slug is a bearer credential: exchange it for a signed session
@@ -1172,10 +1156,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // Where to land is resolved NOW, not when the share was minted: a
           // member docId encodes the file's relPath, so renaming or deleting
           // the entry file used to 404 the link with no way to repoint it.
-          // A single-doc share has exactly one answer and skips this.
-          const target = share.workspaceId
-            ? currentWorkspaceEntry(share.workspaceId, share.docId)
-            : share.docId;
+          const target = currentWorkspaceEntry(share.workspaceId, share.docId);
           // An emptied-out workspace has nothing to show; say no more than an
           // unknown slug would.
           if (!target) {
@@ -1201,23 +1182,33 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         if (pathname === '/api/share/link' && req.method === 'POST') {
           if (!shares) return j(404, { error: 'sharing not enabled' });
           const body = await safeJson(req);
-          const docId = body?.docId as string | undefined;
           const workspaceId = body?.workspaceId as string | undefined;
-          if (!docId && !workspaceId) return j(400, { error: 'docId or workspaceId required' });
-          if (docId && workspaceId) return j(400, { error: 'pass docId OR workspaceId, not both' });
+          // A `docId` in the body is an OLDER BUNDLE's share_link asking for a
+          // single-doc share. That grant is gone, and the dangerous reading of
+          // this payload is "ignore the field you don't know and mint
+          // something" — so it is refused by name, before anything is created.
+          // Every peer keeps calling the shared server with the payload ITS
+          // bundle sends, long after this one stopped sending it.
+          if (body?.docId !== undefined) {
+            return j(410, {
+              error: 'per_doc_sharing_removed',
+              hint: 'A workspace is the unit of sharing. Pass workspaceId (the doc must be filed on a workspace) — docId is no longer accepted.',
+            });
+          }
+          if (!workspaceId) return j(400, { error: 'workspaceId required' });
 
           let entryDocId = body?.entryDocId as string | undefined;
           let memberCount: number | undefined;
           // A HUB workspace (§3.12 commit 8) is shareable with zero bound
           // member docs — its entry is the hub page, not a review doc.
-          const isHubShare = workspaceId !== undefined && !!taskStore.getWorkspace(workspaceId);
+          const isHubShare = !!taskStore.getWorkspace(workspaceId);
           if (isHubShare) {
             if (entryDocId) {
               return j(400, {
                 error: 'a hub workspace share opens the hub page — entryDocId is not supported',
               });
             }
-          } else if (workspaceId) {
+          } else {
             const members = rooms.list().filter((m) => m.workspaceId === workspaceId);
             if (members.length === 0) return j(404, { error: 'workspace not found', workspaceId });
             if (entryDocId && !members.some((m) => m.docId === entryDocId)) {
@@ -1225,12 +1216,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             }
             entryDocId = entryDocId ?? members[0]?.docId;
             memberCount = members.length;
-          } else if (!rooms.get(docId ?? '')) {
-            return j(404, { error: 'doc not found' });
           }
           try {
             const share = shares.createShareLink({
-              docId,
               workspaceId,
               entryDocId,
               hub: isHubShare,
