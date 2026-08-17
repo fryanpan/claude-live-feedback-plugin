@@ -20,11 +20,19 @@
  * Both modes share one scope engine — the mode only decides how we answer
  * "which share is this request for?".
  *
+ * **A WORKSPACE is the unit of sharing** (Bryan, 2026-08-17). There is no
+ * per-doc share: `surface: 'doc'` and the `createShareDoc` / `docId`-only
+ * `createShareLink` paths that minted one are gone, and `Shares.load` drops
+ * any legacy record that carries no `workspaceId` rather than keep honouring
+ * a grant the product no longer offers. Share the workspace a doc is filed
+ * on; everything in a workspace is available to everyone in it (see
+ * `.claude/rules/workspace-board.md`).
+ *
  * Dev server and mockup surfaces are scoped for a follow-up: they need
  * additional cloudflared ingress wiring + a small static-file server.
  */
 
-export type ShareSurface = 'doc' | 'workspace' | 'site' | 'mockup';
+export type ShareSurface = 'workspace' | 'site' | 'mockup';
 
 export type ShareMode = 'link' | 'access';
 
@@ -39,16 +47,21 @@ export interface Share {
   /** How a visitor is authorized. Absent on pre-link-mode records = 'access'. */
   mode?: ShareMode;
   /**
-   * The live-feedback docId this share opens. For a workspace share this
-   * is the entry doc — the whole workspace is in scope, see `workspaceId`.
+   * The doc this share's URL OPENS — the workspace's entry doc, or `''` for
+   * a hub share, which lands on the board instead. It is a landing address,
+   * not a grant: scope comes entirely from `workspaceId`, and the entry doc
+   * is reachable because it is a member, not because it is named here.
    */
   docId: string;
   /**
-   * Set for `surface: 'workspace'`. The visitor may reach every member doc
-   * of this workspace plus its navigation endpoints, so the folder or diff
-   * review browses as a set. Absent on a single-doc share.
+   * The workspace in scope. The visitor may reach every member doc plus the
+   * navigation endpoints, so the folder or diff review browses as a set.
+   *
+   * REQUIRED — a workspace is the unit of sharing. It was optional while a
+   * single doc could be shared on its own; a record without it now names a
+   * grant nothing can mint, and `load()` drops it.
    */
-  workspaceId?: string;
+  workspaceId: string;
   /**
    * `link` mode only: the unguessable capability slug (128 bits of CSPRNG).
    * Possession of this grants access until `expiresAt`, so treat it like a
@@ -74,10 +87,10 @@ export interface Share {
 }
 
 export interface CreateShareLinkReq {
-  /** One of these two decides the scope. */
-  docId?: string;
-  workspaceId?: string;
-  /** Doc the link opens. Required for a workspace share, unless `hub`. */
+  /** The workspace in scope. A workspace is the unit of sharing, so there is
+   *  no `docId` alternative: file the doc on a workspace and share that. */
+  workspaceId: string;
+  /** Doc the link opens. Required unless `hub`. */
   entryDocId?: string;
   /**
    * A HUB workspace share (§3.12 commit 8): the visitor lands on the hub
@@ -98,14 +111,6 @@ export interface CreateShareWorkspaceReq {
   entryDocId?: string;
   /** See CreateShareLinkReq.hub — the visitor lands on `/workspaces/<id>`. */
   hub?: boolean;
-  allowDomains: string[];
-  ttlSeconds?: number;
-  /** Optional slug override. Default is `<YYYY-MM-DD>-<3hex>`. */
-  name?: string;
-}
-
-export interface CreateShareDocReq {
-  docId: string;
   allowDomains: string[];
   ttlSeconds?: number;
   /** Optional slug override. Default is `<YYYY-MM-DD>-<3hex>`. */
