@@ -447,10 +447,33 @@ export type AmendEvidenceResult =
       message?: string;
     };
 
+/**
+ * What actually happened to a new task's placement.
+ *
+ * Both fields are MEASURED, never inferred. `placed` is "the caller named a
+ * goal", which is a different fact from "the task's goal is chores" — an
+ * explicit `'chores'` is a placement and an omitted goal that landed there is
+ * not, and only the create call can still tell them apart. `triageDelivered`
+ * is the return value of the delivery bridge, i.e. "a live attachment
+ * received this request", not "this workspace has an agent". The distinction
+ * is the one the summary-pending marker had to learn the hard way: "this
+ * server does X" is not "X is happening for this item".
+ */
+export interface TaskPlacement {
+  /** The caller named a goal — even `'chores'`. False means it fell to the
+   *  Chores resting state without anyone judging it. */
+  placed: boolean;
+  /** A triage request for this task reached a live attachment. Always false
+   *  for a placed task, which asks for no triage. */
+  triageDelivered: boolean;
+}
+
 export type CreateTaskResult =
   | {
       ok: true;
       task: Task;
+      /** Where this task ended up, and whether anyone was told to place it. */
+      placement: TaskPlacement;
       /**
        * Advisory: the parts of the decision shape this body doesn't visibly
        * have (`stakes`, `options`, `blocked`). Only ever set for
@@ -1929,15 +1952,16 @@ export class TaskStore {
     // stamped ONLY when that request actually reached a live attachment.
     // An explicit goal — even an explicit 'chores' — is a placement by the
     // caller, not a triage candidate.
+    let triageDelivered = false;
     if (opts.goal === undefined) {
-      const delivered = this.requestTriage({
+      triageDelivered = this.requestTriage({
         kind: 'task',
         workspaceId,
         taskId: task.id,
         goal: state.workspace.goal,
         ts: now,
       });
-      if (delivered) task.triagePendingTs = Date.now();
+      if (triageDelivered) task.triagePendingTs = Date.now();
     }
 
     this.scheduleSave(workspaceId);
@@ -1960,7 +1984,12 @@ export class TaskStore {
         : {}),
       ts: now,
     });
-    return { ok: true, task, ...(shapeGaps !== undefined ? { shapeGaps } : {}) };
+    return {
+      ok: true,
+      task,
+      placement: { placed: opts.goal !== undefined, triageDelivered },
+      ...(shapeGaps !== undefined ? { shapeGaps } : {}),
+    };
   }
 
   /**

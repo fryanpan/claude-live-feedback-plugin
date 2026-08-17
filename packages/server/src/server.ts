@@ -72,7 +72,7 @@ import {
   resolveAssignee,
 } from './task-owner.ts';
 import { TaskProjection, taskBodyDocId, taskIdOfBodyDoc } from './task-projection.ts';
-import { buildQueue, summarizeGoals } from './task-queue.ts';
+import { buildQueue, placeableGoals, summarizeGoals } from './task-queue.ts';
 import {
   type Ref,
   type TaskStatus,
@@ -1928,6 +1928,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // caller still learns which parts of the shape are missing.
           return j(200, {
             task: res.task,
+            // What happened to the placement, and — only when nobody judged
+            // it — the bands it could have been ranked into. The caller that
+            // just generated this work is the one party that still knows why
+            // it exists; handing it `goal: "chores"` and nothing else is what
+            // let agent-generated work drift out of the goal structure.
+            placement: {
+              ...res.placement,
+              ...(res.placement.placed
+                ? {}
+                : { goals: placeableGoals(taskStore.getWorkspace(workspaceId)?.goals ?? []) }),
+            },
             ...(parsed.ignoredLinks.length > 0 ? { ignoredLinks: parsed.ignoredLinks } : {}),
             ...(res.shapeGaps !== undefined ? { shapeGaps: res.shapeGaps } : {}),
           });
@@ -1977,6 +1988,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }> = [];
           const ignoredLinks: Array<{ taskId: string; ignored: unknown[] }> = [];
           const shapeGaps: Array<{ taskId: string; gaps: unknown[] }> = [];
+          // Placement, collected per row and reported ONCE. Per-row it would
+          // repeat the same band list a hundred times in a hundred-row burst;
+          // the rows that need naming are the unplaced ones, so those are what
+          // it names.
+          const unplaced: string[] = [];
+          const triageDelivered: string[] = [];
           // Batch-local dependency references. Keys are read once, up front,
           // so an ambiguous one is refused where it is DECLARED rather than
           // at every site that reads it; `idByIndex` fills in as rows land,
@@ -2036,6 +2053,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             }
             createdIds.add(res.task.id);
             idByIndex.set(index, res.task.id);
+            if (!res.placement.placed) unplaced.push(res.task.id);
+            if (res.placement.triageDelivered) triageDelivered.push(res.task.id);
             if (parsed.ignoredLinks.length > 0) {
               ignoredLinks.push({ taskId: res.task.id, ignored: parsed.ignoredLinks });
             }
@@ -2050,6 +2069,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             workspaceId,
             tasks,
             failures,
+            // Absent when every row was placed — there is nothing to act on,
+            // and a block that is always there is a block nobody reads.
+            ...(unplaced.length > 0
+              ? {
+                  placement: {
+                    unplaced,
+                    triageDelivered,
+                    goals: placeableGoals(taskStore.getWorkspace(workspaceId)?.goals ?? []),
+                  },
+                }
+              : {}),
             ...(ignoredLinks.length > 0 ? { ignoredLinks } : {}),
             ...(shapeGaps.length > 0 ? { shapeGaps } : {}),
           });
