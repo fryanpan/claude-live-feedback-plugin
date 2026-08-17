@@ -376,13 +376,18 @@ export interface Task {
    * person or agent who filed it. Triage now RESHAPES a row — a raw capture's
    * clipped title and unedited paragraph become a user story — so the words a
    * task started with are words a later pass can replace, and something has
-   * to hold them. That something is this field: `noteBodyEdited` fills it from
-   * the pre-rewrite row on a first rewrite, so a shaped task can always be
-   * read back to what was actually said.
+   * to hold them. That something is this field: `updateBodySnapshot` fills it
+   * from the pre-rewrite row the first time a body actually changes, so a
+   * shaped task can always be read back to what was actually said.
    *
    * Write-once by construction. A dictated transcript, a promotion snippet and
    * a preserved original all answer the same question, and the earliest answer
    * is the closest to the source — so a filled quote is never overwritten.
+   *
+   * ONE writer for the rewrite case, deliberately, and it is the snapshot
+   * rather than the named rewrite route: a body is a live Yjs room with
+   * several doors into it, and the preservation belongs where the words are
+   * lost, not where one caller announces it is about to lose them.
    *
    * ONE FIELD, ONE MEANING — deliberately, and the detail panel's "Original
    * words" label depends on it. Asked whether this needed to distinguish a
@@ -391,7 +396,7 @@ export interface Task {
    * capture transcript, the human's words on a chat-born `create_tasks` row,
    * the latest HUMAN comment on a `promote_to_task` (agent replies are
    * excluded there by design), and this row's own pre-rewrite title-and-body
-   * from `noteBodyEdited`. A discriminator would be four writers to keep
+   * from `updateBodySnapshot`. A discriminator would be four writers to keep
    * honest and a migration for every existing row, to draw a line nothing
    * downstream reads. **If you ever add a writer that puts words here which
    * the task did NOT come from, that label starts lying** — add the
@@ -2600,23 +2605,30 @@ export class TaskStore {
    * the activity feed. Passing no `title` leaves the title alone, so every
    * existing caller keeps its meaning.
    *
-   * `previous` is REQUIRED, not optional, and that is the guard: a rewrite may
-   * never be the only record of what the row said. Its words go to `quote`
-   * when nothing has claimed that field yet — which is exactly the case for a
-   * raw capture, where the body IS the utterance. A quote already present
-   * always wins — a dictated transcript is closer to the source than the box's
-   * text, and on a row that has been rewritten before, the quote the FIRST
-   * rewrite preserved is closer to the source than the words this one is
-   * replacing.
+   * This does NOT preserve the row's prior words — `updateBodySnapshot` does,
+   * at the choke point every writer of a body passes through. It used to
+   * happen here, taking the pre-rewrite title and body as a required
+   * parameter so a new call site could not quietly skip it. That guard worked
+   * exactly as far as it could reach and no further: `set_doc_content` on the
+   * `task:<id>` room never called this method at all, so it destroyed the
+   * capture with nothing preserved and nothing recorded, and the caller and
+   * the board both saw success. A parameter can only bind the callers who
+   * call you. So `quote` now has ONE writer, sitting where the body actually
+   * changes, and this method is left with the half only a route can do:
+   * saying WHO, and when.
+   *
+   * The predicate over there is `quote` being empty and NOTHING else. The
+   * obvious second clause — "and this row has never been rewritten", i.e.
+   * `bodyWrittenAt === undefined` — is unusable and looks correct:
+   * `updateBodySnapshot` stamps `bodyWrittenAt` on every real body change, so
+   * the clause is false by the time anything downstream reads it. It silently
+   * preserved nothing, ever. Emptiness of `quote` is the honest question
+   * anyway — "does anything hold this row's own words yet".
    */
   noteBodyEdited(
     taskId: string,
     opts: {
       actor: { id: string; name: string; kind?: string };
-      /** The row's own title and body as they stood BEFORE this rewrite. The
-       *  caller reads them off the task; making it a parameter is what stops a
-       *  new call site from quietly skipping the preservation. */
-      previous: { title: string; body?: string };
       /** The title this act gives the row. Omit to leave it unchanged. */
       title?: string;
     },
@@ -2624,28 +2636,6 @@ export class TaskStore {
     const task = this.getTask(taskId);
     if (!task) return false;
     const ts = Date.now();
-    // Write-once, and BEFORE the title moves — the words being preserved are
-    // the ones this call is about to replace.
-    //
-    // The predicate is `quote` being empty and NOTHING else. The obvious
-    // second clause — "and this row has never been rewritten", i.e.
-    // `bodyWrittenAt === undefined` — is unusable here and looks correct:
-    // `updateBodySnapshot` stamps `bodyWrittenAt` on every real body change,
-    // and the route flushes the NEW body's snapshot before calling this, so
-    // that clause is false by the time it is read on the very first rewrite.
-    // It silently preserved nothing, ever. Emptiness of `quote` is the honest
-    // question anyway — "does anything hold this row's own words yet".
-    //
-    // Its one over-inclusion, deliberately kept: a row rewritten before this
-    // existed has no quote, so its next rewrite preserves an already-edited
-    // description as though it were the origin. That is one row's worth of a
-    // slightly-too-late snapshot against losing the words entirely, and the
-    // distinction was never recorded, so there is nothing on disk to read it
-    // from.
-    if (task.quote === undefined) {
-      const original = opts.previous.body?.trim() || opts.previous.title.trim();
-      if (original) task.quote = original;
-    }
     const titleFrom = task.title;
     const nextTitle = opts.title?.trim();
     if (nextTitle && nextTitle !== titleFrom) task.title = nextTitle;
@@ -3197,6 +3187,24 @@ export class TaskStore {
     const task = this.getTask(taskId);
     if (!task) return false;
     if (task.body === body) return true;
+    // THE CHOKE POINT for "this row's description was replaced". Every door
+    // into a task body converges here — `update_task_body`, `set_doc_content`
+    // on the `task:<id>` room, `find_and_replace` and the other prose edit
+    // tools aimed at that docId, and a person typing on the board — because
+    // they all mutate one Yjs fragment and this is what its observer flushes.
+    // So the preservation hangs here rather than on any one route: a route
+    // guard is only a guarantee for the callers who use that route, and the
+    // reason this is being fixed is that one of them didn't.
+    //
+    // Write-once, predicate `quote` empty and NOTHING else — see the note on
+    // `noteBodyEdited`, which used to hold this and could not see the doorways
+    // that skipped it. Placed AFTER the equality guard above so a no-op flush
+    // (the seed round-trip when a body room is first opened, measured stable)
+    // preserves nothing: there is no rewrite there to preserve against.
+    if (task.quote === undefined) {
+      const original = task.body?.trim() || task.title.trim();
+      if (original) task.quote = original;
+    }
     task.body = body;
     // The one thing this path DOES record: when the description changed.
     // Stamped only on a real change (the equality guard above returns first),
