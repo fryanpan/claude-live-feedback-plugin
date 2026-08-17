@@ -13764,7 +13764,27 @@ tasks: ${ids.join(", ")}` : "";
 previous goal (what those placements were judged against): ${p.oldGoal}` : "";
   return `${tasks}${baseline}`;
 }
+function bucketReviewDetail(p) {
+  const bands = (p.newBands ?? []).map((b) => b.title && b.id ? `"${b.title}" (${b.id})` : b.title ?? b.id).filter((s) => typeof s === "string" && s.length > 0);
+  const banded = bands.length > 0 ? `
+new band(s): ${bands.join(", ")}` : "";
+  const ids = p.taskIds ?? [];
+  const tasks = ids.length > 0 ? `
+unplaced tasks: ${ids.join(", ")}` : "";
+  return `${banded}${tasks}`;
+}
 function triageRequestLine(p, selfAgentId) {
+  if (p.kind === "bucket-review") {
+    const count2 = p.taskIds?.length ?? "?";
+    const batch2 = p.batchId ? `, passing batchId "${p.batchId}" on each` : "";
+    const detail2 = bucketReviewDetail(p);
+    const ask = `re-look at ${count2} unplaced task(s) — a new goal band appeared, so some of them may ` + `have a home now. Place the ones that do with set_task_goal${batch2}; leaving the rest ` + "unplaced is fine, that is what the bucket is for.";
+    const lead2 = p.leadAgentId;
+    if (lead2 !== undefined && lead2 !== selfAgentId) {
+      return `[triage.requested] FYI — ${ask} Addressed to lead agent ${lead2}. Act only if that is you.${detail2}`;
+    }
+    return `[triage.requested] ${ask}${detail2}`;
+  }
   if (p.kind !== "goal-retriage") {
     return `[triage.requested] shape and place task ${p.taskId}: ${SHAPE_THEN_PLACE}`;
   }
@@ -13799,7 +13819,7 @@ var AUTHOR = resolveAgentAuthor({
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.43";
+var PLUGIN_VERSION = "0.1.46";
 var server = new Server({
   name: "claude-live-feedback",
   version: PLUGIN_VERSION
@@ -14874,7 +14894,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "set_goal_list",
-      description: 'Replace a workspace\'s ORDERED goal list — use this to ADD or REMOVE a goal. To RENAME one, use rename_goal: this call is keyed by ID, so submitting a new id with the new title is not a rename, it is a removal plus an addition, and it strands everything the old band held. To only change PRIORITY ORDER, use reorder_goals: it is permutation-only and cannot lose a goal. Each goal: {id, title, dueAt?, subgoals?: [{id, title, dueAt?}]} — one subgoal level max. "chores" is reserved (always rendered last, never in the list). DESTRUCTIVE EDGE, now GATED: this is a full REPLACE, so any id you leave out is removed — and if that id still holds tasks the call is REFUSED with error "would-strand-tasks", naming each band with its open and done counts. Nothing is written on a refusal. Removing a band that holds work therefore takes a second, deliberate call listing its id in `drop`; removing an EMPTY one needs no ceremony. On success the result reports movedToChores (open tasks swept to the bottom of Chores — re-place each with set_task_goal rather than leaving them piled) and strandedDone (done tasks still pointing at the removed id, which is what leaves a bare row in get_workspace).',
+      description: 'Replace a workspace\'s ORDERED goal list — use this to ADD or REMOVE a goal. To RENAME one, use rename_goal: this call is keyed by ID, so submitting a new id with the new title is not a rename, it is a removal plus an addition, and it strands everything the old band held. To only change PRIORITY ORDER, use reorder_goals: it is permutation-only and cannot lose a goal. Each goal: {id, title, dueAt?, subgoals?: [{id, title, dueAt?}]} — one subgoal level max. "chores" is reserved (always rendered last, never in the list). DESTRUCTIVE EDGE, now GATED: this is a full REPLACE, so any id you leave out is removed — and if that id still holds tasks the call is REFUSED with error "would-strand-tasks", naming each band with its open and done counts. Nothing is written on a refusal. Removing a band that holds work therefore takes a second, deliberate call listing its id in `drop`; removing an EMPTY one needs no ceremony. On success the result reports movedToChores (open tasks swept to the bottom of Chores — re-place each with set_task_goal rather than leaving them piled) and strandedDone (done tasks still pointing at the removed id, which is what leaves a bare row in get_workspace). ADDING a band also asks the workspace\'s LEAD AGENT to re-look at the unknown-goal bucket, since a task nobody could place may have a home now: `bucketReview.taskIds` is that bucket, `requested` says the ask reached the lead live and `queued` says it is waiting for their next attach_agent. Nothing is placed by this call — the ask is to LOOK, and leaving a task unplaced stays a valid answer. A reorder or a retitle reveals no new band and asks nothing.',
       inputSchema: {
         type: "object",
         properties: {
@@ -15058,7 +15078,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "attach_agent",
-      description: "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep — and sweeping one means SHAPING it, not only filing it: read the row's own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each with update_task_body into a title and a story-shaped body, then set_task_goal. A capture arrives with a machine-clipped title and its raw utterance for a body, and this is the only step that turns it into work. Then queuedVoice — voice change-requests that arrived while no agent was live; act on each transcript verbatim — and, if you LEAD this workspace, pendingRetriage: a goal edit made while you were away, whose taskIds you re-place with set_task_goal (echo its batchId on each). All three are drained by this call. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments with a fresh heartbeat, and after ~5 minutes of silence the hub shows you as away and requests queue.",
+      description: "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep — and sweeping one means SHAPING it, not only filing it: read the row's own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each with update_task_body into a title and a story-shaped body, then set_task_goal. A capture arrives with a machine-clipped title and its raw utterance for a body, and this is the only step that turns it into work. Then queuedVoice — voice change-requests that arrived while no agent was live; act on each transcript verbatim — and, if you LEAD this workspace, pendingRetriage: a goal edit made while you were away, whose taskIds you re-place with set_task_goal (echo its batchId on each), plus pendingBucketReview: a goal BAND that appeared while you were away, with the unplaced tasks worth re-looking at against it — place the ones that now have a home, and leave the rest, since nothing has moved them. All four are drained by this call. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments with a fresh heartbeat, and after ~5 minutes of silence the hub shows you as away and requests queue.",
       inputSchema: {
         type: "object",
         properties: {
@@ -15724,7 +15744,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           workspaceId,
           changed: res.changed,
           movedToChores: res.movedToChores,
-          strandedDone: res.strandedDone
+          strandedDone: res.strandedDone,
+          ...res.bucketReview ? { bucketReview: res.bucketReview } : {}
         });
       }
       case "rename_goal": {
@@ -15828,7 +15849,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           lead: res.lead ?? false,
           untriaged: res.untriaged ?? [],
           queuedVoice: res.queuedVoice ?? [],
-          ...res.pendingRetriage ? { pendingRetriage: { ...res.pendingRetriage, contract: RETRIAGE_SKILL } } : {}
+          ...res.pendingRetriage ? { pendingRetriage: { ...res.pendingRetriage, contract: RETRIAGE_SKILL } } : {},
+          ...res.pendingBucketReview ? { pendingBucketReview: res.pendingBucketReview } : {}
         });
       }
       case "heartbeat": {
