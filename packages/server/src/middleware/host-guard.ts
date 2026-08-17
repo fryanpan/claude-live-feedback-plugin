@@ -63,6 +63,46 @@ export interface TrustedHostOpts {
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '::1', '0.0.0.0']);
 
 /**
+ * Is this PEER ADDRESS loopback — i.e. did the request come from a process on
+ * this machine?
+ *
+ * Deliberately not a Host check, and the difference is the whole point.
+ * Everything else in this file classifies the `Host` header, which is
+ * client-controlled: measured 2026-08-17 against a real `Bun.serve`, a LAN
+ * client (`192.168.x.x`) and a tailnet client (`100.x.x.x`) both connected
+ * while sending `Host: localhost:1`, and both were classified local. A gate
+ * built on the Host header is therefore spoofable by exactly the callers it
+ * would exist to exclude. `server.requestIP(req)` reports the address the
+ * kernel saw, which a client cannot choose.
+ *
+ * Two shapes that are easy to get wrong, both pinned by tests:
+ *
+ * - Bun reports an IPv4 loopback peer as **`::ffff:127.0.0.1`** (IPv4-mapped
+ *   IPv6). An `=== '127.0.0.1'` comparison refuses the only caller this is
+ *   meant to allow.
+ * - Loopback is the whole of `127.0.0.0/8`, not just `127.0.0.1`.
+ *
+ * `null` answers false. `requestIP` returns null for a socket that has
+ * already gone away, and "I could not read the peer" must never authorise a
+ * privileged operation. `0.0.0.0` and `::` are bind wildcards rather than
+ * peer addresses, so they answer false too — they appear in the Host-matching
+ * set above for a different question.
+ */
+export function isLoopbackAddress(addr: string | null | undefined): boolean {
+  if (!addr) return false;
+  const a = addr.trim().toLowerCase();
+  if (a === '::1') return true;
+  // Unwrap IPv4-mapped IPv6 (`::ffff:127.0.0.1`) before matching v4.
+  const v4 = a.startsWith('::ffff:') ? a.slice('::ffff:'.length) : a;
+  // Anchored and fully numeric: `127.0.0.1.evil.example` must not match.
+  const m = v4.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!m) return false;
+  const octets = m.slice(1).map(Number);
+  if (octets.some((o) => o > 255)) return false;
+  return octets[0] === 127;
+}
+
+/**
  * Is this Host header one of OUR local names (loopback / tailnet / LAN)?
  * Only these bypass authentication. Matching is exact — no suffix matching,
  * because `evil-mac-mini.attacker.com` must not match `mac-mini.local`.

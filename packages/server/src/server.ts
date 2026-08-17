@@ -26,6 +26,7 @@ import { type CfAccessOptions, createCfAccessVerifier } from './middleware/cf-ac
 import {
   type ShareTarget,
   classifyHost,
+  isLoopbackAddress,
   isTrustedLocalHost,
   shareScopeAllows,
 } from './middleware/host-guard.ts';
@@ -2863,8 +2864,39 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                 'deploy not enabled on this server (dev and staging deliberately cannot pull or restart the deploy source)',
             });
           }
+          // Reading is not deploying: a board surface that shows deploy state
+          // is served over the tailnet, and reporting what already happened
+          // cannot restart anything. So the read stays at trusted-local, the
+          // same level as every other operator read on this server.
           if (req.method === 'GET') return j(200, { deploy: deployer.last() });
           if (req.method === 'POST') {
+            // Triggering one is different, and this is the narrow default.
+            //
+            // `local` in the host guard means "the Host header names one of
+            // our own names", which covers every client on the tailnet and
+            // the LAN — measured, not assumed. The refresh route next door is
+            // safe at that width because it cannot interrupt anybody; a
+            // deploy ends this process and drops every live editor socket on
+            // the box, so it does not inherit that argument.
+            //
+            // Checked on the PEER ADDRESS rather than the Host header,
+            // because the Host header is client-controlled: a LAN and a
+            // tailnet client both reached this server sending
+            // `Host: localhost` in the same measurement. See
+            // `isLoopbackAddress`.
+            //
+            // TO LOOSEN (Bryan's call): drop this block and the route is
+            // reachable by any trusted-local caller again. That is one
+            // deletion, which is why the default is the narrow one — the
+            // mistake it can make is refusing a caller who can retry from
+            // the box, not restarting prod for somebody who should not have
+            // been able to.
+            if (!isLoopbackAddress(server.requestIP(req)?.address)) {
+              return j(403, {
+                error:
+                  'deploy must be triggered from this machine (loopback only) — a deploy restarts the server and drops every live editor',
+              });
+            }
             const body = (await safeJson(req)) ?? {};
             const force = body.force === true;
             const requestedBy = typeof body.requestedBy === 'string' ? body.requestedBy : undefined;
