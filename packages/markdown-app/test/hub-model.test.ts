@@ -608,6 +608,88 @@ describe('reviewQueue', () => {
     expect(q.items.map((i) => i.thread?.threadId)).toEqual(['older', 'newer']);
   });
 
+  // A question addressed to the reader outranks a note left for them, even a
+  // much older one. Age alone put status updates at the top of the band — the
+  // part of the strip that actually gets read — while the answerable rows sank.
+  it('puts a direct question above an older status note', () => {
+    const q = reviewQueue(
+      [],
+      [
+        threadItem({ threadId: 'note-old', since: T0 - 90_000 }),
+        threadItem({ threadId: 'asked', since: T0 - 1_000, direct: true }),
+      ],
+      T0,
+    );
+    expect(q.items.map((i) => i.thread?.threadId)).toEqual(['asked', 'note-old']);
+  });
+
+  it('still ranks by longest wait among the questions themselves', () => {
+    const q = reviewQueue(
+      [],
+      [
+        threadItem({ threadId: 'newer-ask', since: T0 - 1_000, direct: true }),
+        threadItem({ threadId: 'older-ask', since: T0 - 90_000, direct: true }),
+      ],
+      T0,
+    );
+    expect(q.items.map((i) => i.thread?.threadId)).toEqual(['older-ask', 'newer-ask']);
+  });
+
+  // "asked you" is a claim that there is a question. A row that makes it over
+  // a status note is the strip promising something it cannot deliver.
+  it('says asked you only for a question, and posted otherwise', () => {
+    const q = reviewQueue(
+      [],
+      [
+        threadItem({ threadId: 'a', direct: true }),
+        threadItem({ threadId: 'b', kind: 'doc-thread' }),
+      ],
+      T0,
+    );
+    expect(q.items[0].why).toContain('asked you');
+    expect(q.items[1].why).toContain('posted');
+    expect(q.items[1].why).not.toContain('asked');
+  });
+
+  // The clock beside "asked" is the QUESTION's, not the run's. An agent that
+  // posts status for a day and only then asks has a run starting a day ago and
+  // a question minutes old; reading `since` there told the reader they had been
+  // sitting on something they were just handed. Ranking still uses `since`.
+  it('dates asked you from the question, not from the start of the wait', () => {
+    const q = reviewQueue(
+      [],
+      [threadItem({ threadId: 'a', direct: true, since: T0 - 86_400_000, askedAt: T0 - 60_000 })],
+      T0,
+    );
+    expect(q.items[0].why).toContain('asked you 1m ago');
+    expect(q.items[0].why).not.toContain('1d ago');
+    // The wait itself is unchanged — this is a wording fix, not a re-rank.
+    expect(q.items[0].since).toBe(T0 - 86_400_000);
+  });
+
+  it('falls back to the wait when an older server sends no askedAt', () => {
+    const q = reviewQueue(
+      [],
+      [threadItem({ threadId: 'a', direct: true, since: T0 - 60_000 })],
+      T0,
+    );
+    expect(q.items[0].why).toContain('asked you 1m ago');
+  });
+
+  // A payload from a server that predates the field must order exactly as it
+  // did before — undefined is not "true".
+  it('treats a missing direct flag as a note', () => {
+    const q = reviewQueue(
+      [],
+      [
+        threadItem({ threadId: 'newer', since: T0 - 1_000 }),
+        threadItem({ threadId: 'older', since: T0 - 90_000 }),
+      ],
+      T0,
+    );
+    expect(q.items.map((i) => i.thread?.threadId)).toEqual(['older', 'newer']);
+  });
+
   // An answered decision is gone from the board's strip today, and the same
   // has to be true of the merged queue — otherwise the count at the top keeps
   // promising work that is finished.
