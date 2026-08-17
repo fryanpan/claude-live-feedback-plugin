@@ -424,6 +424,44 @@ Technical discoveries that should persist across sessions for this project.
   test for one belongs at the route layer: `postComment` is reachable three
   ways and the route is the layer no unit test covers.
 
+## A flag nobody renders is not a feature — check the surface before believing the report
+
+- **The task said "the board shades unproven moves". It didn't.** `unproven`
+  was computed at transition time, returned to the caller, and put on the
+  event — and consumed only by a transient toast in `hub-app.ts`. It was never
+  persisted on the row and no surface rendered it. So the acceptance criterion
+  "the shading clears once evidence lands" required first BUILDING the
+  shading; taken literally it was satisfiable by changing nothing anyone could
+  see.
+- **Same family as "the store has it is not the surface can show it", inverted.**
+  There the data existed and the UI could not reach it. Here the *bug report*
+  assumed a surface that was never built — so the premise to reproduce is not
+  only "does the bug happen", it is "does the thing the bug is about exist".
+  A field on an event is not a feature until something renders it, and the
+  distance between those two is invisible from the server side, where every
+  check comes back correct.
+
+## A media query adds no specificity, and forcing one ON for a test must not grant it any
+
+- **A rule inside `@media` loses to an equal-specificity base rule LATER in
+  the file.** Wrapping a declaration in a media query changes when it applies,
+  never how strongly — so the phone row's `min-width: max-content` was
+  authored, matched, and still lost to the plain rule below it. Nothing warns:
+  the media query matches, devtools shows the rule, and the computed value
+  comes from somewhere else.
+- **A harness that forces media rules on must mutate `CSSMediaRule.media.mediaText`
+  IN PLACE.** The first one unwrapped them into a fresh `<style>` appended to
+  the document — which hands every unwrapped rule last-wins position and
+  measures a cascade no browser produces. It reported `min-width: max-content`
+  as applied while production computed `0px`. The harness was not merely
+  imprecise; it inverted the exact ordering the bug lived in.
+- Caught by `codex review`, confirmed in-browser, now covered by an ordering
+  test. The reusable half is the second bullet: when a probe has to put the
+  page into a state (a viewport, a media condition, a feature flag), reaching
+  that state by REBUILDING the artifact instead of re-conditioning it is how a
+  probe ends up measuring something the product never does. Same family as
+  "a positive control scanning the wrong data".
+
 ## A touch gesture has TWO endings, and `pointercancel` is the common one
 
 - **The comment pill was dead on mobile after the first scroll**, because
