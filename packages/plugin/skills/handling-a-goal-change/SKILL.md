@@ -187,10 +187,11 @@ omits, repeats or invents an id — naming the offending ids so you re-read
 instead of guessing.
 
 **Scope it as "every row at my scope whose `reorderable` is true", never
-"every depth-0 row".** Chores and orphaned goal rows sit at depth 0 and are not
-in the ordered list, so including one is refused as reserved — reported
-separately from unknown ids, because the fix is to drop it rather than to
-re-read.
+"every depth-0 row".** Chores and orphaned goal rows sit at depth 0, look
+exactly like a band, and are not in the ordered list. That one filter is the
+whole rule; send either kind back and you get a 400 that tells you which it
+was — `chores` in `reservedIds` (a permanent bucket you drop from the order),
+an orphaned id in `unknownIds` (the band really was removed).
 
 `set_goal_list` is a full **replace**, and that is the whole hazard: any band id
 you leave out has its open tasks dumped at the bottom of Chores. Including a
