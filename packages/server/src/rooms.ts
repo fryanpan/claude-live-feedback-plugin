@@ -2076,12 +2076,6 @@ export class Rooms {
   }
 
   /**
-   * Snapshot an external file version we are about to overwrite into
-   * `<dataDir>/clobber-backups/`, so a conflict reassert is recoverable
-   * instead of destructive. Returns the backup path, or null on failure —
-   * never throws (the reconcile must proceed either way).
-   */
-  /**
    * The conflict arm of `reconcileFromDisk`, shared by the prose and flat
    * write-back bindings so the two cannot drift apart: back the external
    * version up, record a `syncError` explaining what happened and where the
@@ -2117,6 +2111,12 @@ export class Rooms {
     this.scheduleFileWrite(room, binding);
   }
 
+  /**
+   * Snapshot an external file version we are about to overwrite into
+   * `<dataDir>/clobber-backups/`, so a conflict reassert is recoverable
+   * instead of destructive. Returns the backup path, or null on failure —
+   * never throws (the reconcile must proceed either way).
+   */
   private backupExternalVersion(docId: string, content: string, label = 'external'): string | null {
     try {
       const dir = join(this.cfg.dataDir, 'clobber-backups');

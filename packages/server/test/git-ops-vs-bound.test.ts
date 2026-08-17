@@ -1,6 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { classifyExternalContent } from '../src/git-provenance.ts';
@@ -36,7 +46,7 @@ import { createWebhookDispatcher } from '../src/webhooks.ts';
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** One poll tick (500ms) + read debounce (150ms) + write debounce (800ms). */
-const SETTLE_MS = 1600;
+const SETTLE_MS = 2400;
 
 function cleanEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
@@ -412,6 +422,41 @@ describe('classifyExternalContent', () => {
     expect(classifyExternalContent(path, '   \n\n').source).toBe('unknown');
   });
 
+  it('treats a basename as a filename, not a glob', () => {
+    // `ls-files -- 'a?.md'` matches BOTH of these, and the code takes [0]. The
+    // decoy is named to SORT FIRST ('1' < '?'), because a decoy sorting after
+    // the wildcard file lets [0] return the right one by accident — measured:
+    writeFileSync(join(repo, 'a1.md'), 'decoy neighbour\n');
+    const wild = join(repo, 'a?.md');
+    writeFileSync(wild, OTHER_DOC);
+    // --literal-pathspecs is a GLOBAL option: before the subcommand, not after.
+    git(repo, '--literal-pathspecs', 'add', '--', 'a1.md', 'a?.md');
+    git(repo, 'commit', '-q', '-m', 'wildcard-named file');
+
+    const v = classifyExternalContent(wild, OTHER_DOC);
+    expect(v.source).toBe('git');
+    // The detail must name THIS file, not the decoy the glob also matched.
+
+    expect(v.detail).toContain('a?.md');
+    expect(v.detail).not.toContain('a1.md');
+  });
+
+  it('follows a symlinked bound path into the repo that actually holds it', () => {
+    // `scheduleFileWrite` writes through realpathSync, so a doc bound by a
+    // symlink from outside the repo has its bytes overwritten inside it. If
+    // classify used the link's own directory it would find no repo and every
+    // such conflict would silently answer `unknown`.
+    const outside = join(root, 'outside');
+    mkdirSync(outside, { recursive: true });
+    const link = join(outside, 'linked.md');
+    symlinkSync(path, link);
+
+    // Positive control: the link's own directory really is repo-less, so a
+    // pass here is the symlink being followed and not the dir happening to work.
+    expect(classifyExternalContent(join(outside, 'plain.md'), OTHER_DOC).source).toBe('unknown');
+    expect(classifyExternalContent(link, readFileSync(path, 'utf8')).source).toBe('git');
+  });
+
   it('gives up and answers unknown when its time budget is spent', () => {
     const head = readFileSync(path, 'utf8');
     // Positive control in the same assertion: this content DOES classify as
@@ -420,6 +465,47 @@ describe('classifyExternalContent', () => {
     expect(classifyExternalContent(path, head).source).toBe('git');
     expect(classifyExternalContent(path, head, 0).source).toBe('unknown');
   });
+
+  /**
+   * The budget above is measured with budget 0, which returns BEFORE spawning
+   * anything — so it cannot see whether a slow call is actually cut off, and
+   * it stays green with the timeout deleted entirely. This one spawns.
+   *
+   * It matters because `spawnSync`'s `timeout` sends `killSignal` and then
+   * keeps waiting: under the default SIGTERM a child that ignores the signal
+   * blocks this synchronous call, and the budget is advisory. That is not
+   * hypothetical here — `hash-object --path` invokes the repository's
+   * configured clean filter, i.e. arbitrary user-configured code.
+   */
+  it('cuts off a git that ignores SIGTERM instead of blocking the event loop', () => {
+    const shimDir = join(root, 'shim');
+    const ranMarker = join(root, 'shim-ran');
+    mkdirSync(shimDir, { recursive: true });
+    const shim = join(shimDir, 'git');
+    // Touch a marker BEFORE hanging, so the assertion below can tell "the
+    // hanging git was cut off" from "PATH didn't take and real git answered".
+    writeFileSync(shim, `#!/bin/sh\ntrap '' TERM\n: > ${JSON.stringify(ranMarker)}\nsleep 30\n`);
+    chmodSync(shim, 0o755);
+
+    const realPath = process.env.PATH;
+    process.env.PATH = `${shimDir}:${realPath ?? ''}`;
+    let elapsed: number;
+    let verdict: string;
+    try {
+      const started = Date.now();
+      verdict = classifyExternalContent(path, 'content that is not empty', 800).source;
+      elapsed = Date.now() - started;
+    } finally {
+      process.env.PATH = realPath;
+    }
+
+    // Positive control: the hanging shim really is what we measured.
+    expect(existsSync(ranMarker)).toBe(true);
+    // Without `killSignal: 'SIGKILL'` this is ~30_000ms. Generous threshold so
+    // the failure is the signal handling, never a slow machine.
+    expect(elapsed).toBeLessThan(5_000);
+    expect(verdict).toBe('unknown');
+  }, 60_000);
 
   it('answers unknown outside a git repository instead of throwing', () => {
     const bare = mkdtempSync(join(tmpdir(), 'lf-nogit-'));
