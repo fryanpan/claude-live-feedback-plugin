@@ -131,9 +131,13 @@ there. That is how 25 feature commits sat undelivered between 2026-05-09 and
   `attach_agent` and nowhere else). So the strip now always states its
   denominator — "no attached session is behind 0.1.40 (1 checked)" — because
   an empty list rendered as silence, and silence read as a fleet-wide
-  all-clear while most of the fleet was several releases back. **Never gate a
-  tool removal on an empty `behind` list alone**; see "The strip reads a
-  board, not the fleet" in [docs/process/delivery.md](docs/process/delivery.md).
+  all-clear while most of the fleet was several releases back. **An empty
+  `behind` list is not a fleet-wide clearance — never let one alone satisfy a
+  delivery gate.** (Removing a *tool* needs no such gate at all; see the entry
+  below it in learnings.md. What does bite is narrowing something old callers
+  still send or read on the shared server, and the strip cannot tell you who
+  those callers are.) See "The strip reads a board, not the fleet" in
+  [docs/process/delivery.md](docs/process/delivery.md).
 - **An agent CAN run the update; the shell makes it look otherwise.** On this
   machine `claude` resolves to a shell function that injects flags ahead of the
   subcommand, so `claude plugin update …` is parsed as a prompt and dies with
