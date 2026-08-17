@@ -103,6 +103,20 @@ describe('hub UI routes (plan §3.12 commit 7)', () => {
       expect(htmlB).toContain('view="beta"');
     });
 
+    // Without this attribute the widget keeps its identity under its own `cfw:`
+    // prefix — correct on a stranger's page, wrong here, because the hub has
+    // already asked this reader their name under the UNPREFIXED key. The
+    // observed symptom was a board greeting the reader by the name they gave,
+    // while every comment the widget posted from that same page was signed
+    // "Anonymous <animal>".
+    it('tells the widget to adopt the hub page own identity', async () => {
+      const id = await seedWorkspace('gamma');
+      const html = await (await fetch(`${base}/workspaces/${id}`)).text();
+      // Positive control first: the widget is on this page at all.
+      expect(html).toContain('<claude-feedback-widget');
+      expect(html).toContain('identity-scope="host"');
+    });
+
     // The doc must be findable by an agent that never opened a hub — a room
     // conjured by the first `/y/<id>` connect has no title and no type.
     it('materializes the shared feedback doc at startup', async () => {
