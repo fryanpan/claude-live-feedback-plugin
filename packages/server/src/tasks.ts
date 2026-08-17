@@ -384,10 +384,24 @@ export interface Task {
    * a preserved original all answer the same question, and the earliest answer
    * is the closest to the source — so a filled quote is never overwritten.
    *
-   * ONE writer, deliberately, and it is the snapshot rather than the named
-   * rewrite route: a body is a live Yjs room with several doors into it, and
-   * the preservation belongs where the words are lost, not where one caller
-   * announces it is about to lose them.
+   * ONE writer for the rewrite case, deliberately, and it is the snapshot
+   * rather than the named rewrite route: a body is a live Yjs room with
+   * several doors into it, and the preservation belongs where the words are
+   * lost, not where one caller announces it is about to lose them.
+   *
+   * ONE FIELD, ONE MEANING — deliberately, and the detail panel's "Original
+   * words" label depends on it. Asked whether this needed to distinguish a
+   * preserved capture from an author-chosen quotation: it does not, because
+   * there is no author-quote writer. All four are provenance — the dictated
+   * capture transcript, the human's words on a chat-born `create_tasks` row,
+   * the latest HUMAN comment on a `promote_to_task` (agent replies are
+   * excluded there by design), and this row's own pre-rewrite title-and-body
+   * from `updateBodySnapshot`. A discriminator would be four writers to keep
+   * honest and a migration for every existing row, to draw a line nothing
+   * downstream reads. **If you ever add a writer that puts words here which
+   * the task did NOT come from, that label starts lying** — add the
+   * discriminator in the same change rather than widening this field's
+   * meaning quietly.
    */
   quote?: string;
   /** Decisions keep the verbatim answer. `optionId` records WHICH candidate
