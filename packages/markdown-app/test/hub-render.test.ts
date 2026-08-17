@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type BoardFilters,
@@ -13,6 +15,7 @@ import {
 } from '../src/hub/hub-model.ts';
 import {
   type BoardHandlers,
+  type QuickAddHandlers,
   type TaskThread,
   discussionIsBusy,
   renderActivity,
@@ -1258,7 +1261,7 @@ describe('renderQuickAdd', () => {
     );
     expect(onCapture).not.toHaveBeenCalled();
     box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-    expect(onCapture).toHaveBeenCalledWith('Rework the strip');
+    expect(onCapture).toHaveBeenCalledWith('Rework the strip', undefined);
     // Cleared, so the next idea starts empty rather than appended to the last.
     await Promise.resolve();
     expect(box.value).toBe('');
@@ -1420,5 +1423,192 @@ describe('renderPresence — plugin drift', () => {
     renderPresence(host, [], null, { onTap: () => {}, onLongPress: () => {} }, null);
     expect(host.querySelector('.hub-drift')).toBeNull();
     expect(host.classList.contains('hidden')).toBe(true);
+  });
+});
+
+describe('renderQuickAdd — dictating into the box', () => {
+  /** The parts `mountVoice` is handed, captured at mount. */
+  type VoiceParts = Parameters<NonNullable<QuickAddHandlers['mountVoice']>>[0];
+  function mount(onCapture = vi.fn(() => Promise.resolve(true))) {
+    const sink: VoiceParts[] = [];
+    renderQuickAdd(root, { onCapture, mountVoice: (p) => void sink.push(p) });
+    const parts = sink[0];
+    if (!parts) throw new Error('mountVoice was never called');
+    return {
+      onCapture,
+      parts,
+      box: root.querySelector('.hub-quick-input') as HTMLTextAreaElement,
+    };
+  }
+
+  it('hands the voice layer a button that lives inside the form', () => {
+    // Inside the form, not floating next to it: the mic has to be reachable
+    // with the thumb that is already on the box, on a phone.
+    const { parts } = mount();
+    expect(parts.button.closest('.hub-quick-form')).not.toBeNull();
+    expect(parts.button.type).toBe('button'); // never submits the form
+  });
+
+  it('appends what was said to what was typed, and files both with the quote', async () => {
+    const { onCapture, parts, box } = mount();
+    box.value = 'Fix the goal card';
+    parts.deliver('it is too tall on a phone');
+    expect(box.value).toBe('Fix the goal card it is too tall on a phone');
+    box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(onCapture).toHaveBeenCalledWith(
+      'Fix the goal card it is too tall on a phone',
+      'it is too tall on a phone',
+    );
+    await Promise.resolve();
+  });
+
+  it('does not file the previous utterance as the next task’s quote', async () => {
+    // The failure this guards: dictate one task, file it, TYPE the next one,
+    // and the second task carries words its author never said about it.
+    const { onCapture, parts, box } = mount();
+    parts.deliver('add a mic to the board');
+    box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await Promise.resolve();
+    expect(box.value).toBe('');
+
+    box.value = 'ship the release notes';
+    box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(onCapture).toHaveBeenLastCalledWith('ship the release notes', undefined);
+  });
+
+  it('forgets the utterance when the person clears the box themselves', () => {
+    const { onCapture, parts, box } = mount();
+    parts.deliver('add a mic to the board');
+    box.value = '';
+    box.dispatchEvent(new Event('input', { bubbles: true }));
+    box.value = 'something else entirely';
+    box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(onCapture).toHaveBeenCalledWith('something else entirely', undefined);
+  });
+
+  it('keeps the quote when a misheard word is corrected before filing', () => {
+    // Editing the text must NOT drop the quote — the agent seeing both the
+    // corrected task and the raw utterance is the reason to keep one.
+    const { onCapture, parts, box } = mount();
+    parts.deliver('add a mike to the board');
+    box.value = 'add a mic to the board';
+    box.dispatchEvent(new Event('input', { bubbles: true }));
+    box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(onCapture).toHaveBeenCalledWith('add a mic to the board', 'add a mike to the board');
+  });
+
+  it('keeps an utterance dictated while the previous capture was in flight', async () => {
+    // The box deliberately stays live during the POST. `deliver` appends, so
+    // the accumulated quote is now BOTH utterances — clearing it wholesale on
+    // the resolve files the second idea with no record of what was said.
+    let settle: ((ok: boolean) => void) | undefined;
+    const onCapture = vi.fn(
+      () =>
+        new Promise<boolean>((r) => {
+          settle = r;
+        }),
+    );
+    const { parts, box } = mount(onCapture);
+    parts.deliver('fix the login bug');
+    box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(onCapture).toHaveBeenCalledWith('fix the login bug', 'fix the login bug');
+
+    parts.deliver('also update the docs');
+    settle?.(true);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(onCapture).toHaveBeenLastCalledWith(
+      'fix the login bug also update the docs',
+      'also update the docs',
+    );
+  });
+
+  it('drops the quote when the box is retyped from scratch', () => {
+    // Select-all-and-retype is ONE input event with a non-empty value, so the
+    // "emptied by hand" reset never fires and the new task would be filed
+    // quoting an utterance about entirely different work.
+    const { onCapture, parts, box } = mount();
+    parts.deliver('buy milk');
+    box.value = 'review the deploy script';
+    box.dispatchEvent(new Event('input', { bubbles: true }));
+    box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(onCapture).toHaveBeenCalledWith('review the deploy script', undefined);
+  });
+
+  it('mounts the dictation indicator hidden', () => {
+    // `flex-basis: 100%` in a wrapping row: visible from first paint it claims
+    // its own flex line, so the form sheds a row-gap the first time anything
+    // is dictated and never gets it back.
+    const { parts } = mount();
+    expect(parts.indicator.className).toContain('hub-quick-mic-state');
+    expect(parts.indicator.classList.contains('hidden')).toBe(true);
+  });
+
+  it('still mounts, and still captures, with no voice layer at all', () => {
+    // Positive control for the whole describe: every assertion above depends
+    // on mountVoice being called, so a build where speech is unavailable must
+    // be shown to leave the typed path exactly as it was.
+    const onCapture = vi.fn(() => Promise.resolve(true));
+    renderQuickAdd(root, { onCapture });
+    const box = root.querySelector('.hub-quick-input') as HTMLTextAreaElement;
+    box.value = 'typed only';
+    box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(onCapture).toHaveBeenCalledWith('typed only', undefined);
+  });
+});
+
+/**
+ * Wiring, asserted against the source, because the failure is silent.
+ *
+ * `hub-app.ts` mounts two voice captures on one page. Space is a singleton
+ * gesture: if both bind it, one press starts both recognizers and each
+ * finalizes its own transcript — the utterance goes to the agent AND into the
+ * capture box, and nothing errors. Only one of the two may own Space, and no
+ * unit test on `createVoiceCapture` can see which mounts opted out.
+ */
+describe('hub-app voice wiring', () => {
+  /** Comment lines stripped — prose ABOUT `spaceHotkey: false` must not count
+   *  as a call site that sets it. (It did, on the first run of this test.) */
+  function code(): string {
+    const src = readFileSync(resolve('packages/markdown-app/src/hub/hub-app.ts'), 'utf8');
+    return src
+      .split('\n')
+      .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+      .join('\n');
+  }
+
+  it('mounts exactly one capture that owns the Space hotkey', () => {
+    const src = code();
+    const mounts = src.split('createVoiceCapture({').length - 1;
+    // Positive control: this counts real call sites, not zero of them.
+    expect(mounts).toBe(2);
+    expect(src.split('spaceHotkey: false').length - 1).toBe(mounts - 1);
+  });
+
+  it('the dictation ack does not claim the task was filed', () => {
+    // The whole design point is that dictation does NOT file — it fills the
+    // box and waits for a tap. "Added" is the one word that says it did.
+    const src = code();
+    const mountVoice = src.slice(src.indexOf('mountVoice:'));
+    const body = mountVoice.slice(0, mountVoice.indexOf('\n    });'));
+    const ack = /ack:\s*'([^']*)'/.exec(body)?.[1];
+    // Positive control: the assertions below are about a string we found, not
+    // about `undefined` quietly satisfying every `not.toMatch`.
+    expect(ack).toBeTruthy();
+    expect(ack).not.toMatch(/\b(added|created|filed|captured|saved)\b/i);
+    // And it still names the tap that would file it.
+    expect(ack).toMatch(/\bAdd\b/);
+  });
+
+  it('never files a dictated task without a human tap', () => {
+    // The quick-add mic delivers into the box; only Add / Enter files. A
+    // `send` that POSTed would file whatever the recognizer heard.
+    const src = code();
+    const mountVoice = src.slice(src.indexOf('mountVoice:'));
+    const body = mountVoice.slice(0, mountVoice.indexOf('\n    });'));
+    expect(body).toContain('deliver(transcript)');
+    expect(body).not.toContain('captureTask');
   });
 });

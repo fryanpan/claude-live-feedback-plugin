@@ -602,7 +602,28 @@ async function main(): Promise<void> {
   function renderAll(): void {
     // Mounted, not rendered: `renderQuickAdd` is a no-op after the first call
     // so a board repaint can never take the caret out of a half-typed idea.
-    renderQuickAdd(el('hub-quick'), { onCapture: (text) => captureTask(text) });
+    renderQuickAdd(el('hub-quick'), {
+      onCapture: (text, quote) => captureTask(text, quote),
+      // Dictation FILLS the box; it never files. The board-wide dock routes an
+      // utterance to the agent, which is right when you're talking to it and
+      // wrong when you're capturing — a misheard task filed silently costs
+      // more than one tap on Add. `spaceHotkey: false` because the dock owns
+      // Space: two captures on one press would both record and both finalize.
+      mountVoice: ({ button, indicator, deliver }) =>
+        void createVoiceCapture({
+          button,
+          indicator,
+          spaceHotkey: false,
+          getContext: () => ({ surface: 'hub' }),
+          send: async (transcript) => {
+            deliver(transcript);
+            // Not "Added": nothing has been filed yet. The words are in the
+            // box and stay there until a tap, which is the entire point of
+            // dictating into capture rather than at the agent.
+            return { route: 'capture', ack: 'In the box — edit, then tap Add' };
+          },
+        }),
+    });
     renderGoal();
     renderLead();
     renderBoardRegion();
@@ -783,12 +804,16 @@ async function main(): Promise<void> {
    * discussing it with you" — an idea he captures is one he wants picked up,
    * not one he means to file to himself and never see again.
    */
-  async function captureTask(text: string): Promise<boolean> {
+  async function captureTask(text: string, quote?: string): Promise<boolean> {
     const parsed = parseQuickAdd(text);
     if (!parsed) return false;
     const res = await send(`/api/workspaces/${encodeURIComponent(workspaceId)}/tasks`, 'POST', {
       title: parsed.title,
       ...(parsed.body !== undefined ? { body: parsed.body } : {}),
+      // What was actually said, when any of it was dictated. Kept verbatim so
+      // a misheard word corrected in the box doesn't cost the agent the
+      // phrasing it was corrected from.
+      ...(quote !== undefined ? { quote } : {}),
       ...(state.info?.leadAgentId ? { assignee: state.info.leadAgentId } : {}),
       author,
     });
