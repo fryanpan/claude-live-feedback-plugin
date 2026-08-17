@@ -1807,6 +1807,18 @@ export interface DetailHandlers {
    *  from the review queue. Marked and scrolled to — "open the task" is not
    *  the promise the strip makes on a task with six discussions. */
   focusThreadId?: string;
+  /**
+   * Which conversation the single composer is pointed at: a thread id, `null`
+   * for a new thread, `undefined` for "nobody has chosen" (take the default).
+   *
+   * Three states rather than two, because the default has to be re-derivable
+   * on every repaint AND an explicit choice has to survive one. A repaint that
+   * re-applied the default would silently move a reader who had just tapped
+   * "New thread" back onto a reply.
+   */
+  replyThreadId?: string | null;
+  /** Point the composer somewhere else. `null` means a new thread. */
+  onReplyTarget?: (threadId: string | null) => void;
 }
 
 export interface TaskComment {
@@ -1819,6 +1831,19 @@ export interface TaskThread {
   id: string;
   status: 'open' | 'resolved';
   comments: TaskComment[];
+  /**
+   * The passage of the task's description this thread hangs off, when it has
+   * one. Absent for a subject-anchored thread, which is about the task as a
+   * whole.
+   *
+   * This is what makes a task's threads distinguishable, and the surface used
+   * to throw it away: on the live board 34 of 37 task threads carry one (they
+   * are agents' `create_thread(docId: 'task:…', find: …)` calls) and only 3 do
+   * not. Rendering author-and-text alone turned every one of them into an
+   * indistinguishable pile, which is the reason a reply needed a box of its
+   * own to be routable at all.
+   */
+  anchorText?: string;
 }
 
 /**
@@ -1902,11 +1927,61 @@ export function discussionIsBusy(root: ParentNode): boolean {
   return composers.some((ta) => ta.value.trim() !== '' || ta === ta.ownerDocument.activeElement);
 }
 
+/**
+ * Which conversation the composer is pointed at, and whether that thread is
+ * still there to be pointed at.
+ *
+ * `undefined` from the caller means nobody has chosen, so take the default:
+ * the thread the review queue aimed at, else the last one on screen — which is
+ * the thread the composer sits directly under, and on the common single-thread
+ * task is the only reply anyone means. `null` is an explicit "new thread" and
+ * survives repaints. A chosen id that no longer resolves falls back to a new
+ * thread rather than to a box that posts nowhere.
+ */
+export function composerTarget(
+  threads: TaskThread[],
+  chosen: string | null | undefined,
+  focusThreadId?: string,
+): TaskThread | null {
+  const wanted =
+    chosen === undefined ? (focusThreadId ?? threads[threads.length - 1]?.id ?? null) : chosen;
+  if (wanted === null) return null;
+  return threads.find((t) => t.id === wanted) ?? null;
+}
+
+/** How a thread reads when it has to be named in one line: the passage of the
+ *  description it hangs off, else who opened it. */
+function threadLabel(t: TaskThread): string {
+  const anchor = t.anchorText?.trim();
+  if (anchor) return `“${clip(anchor.replace(/\s+/g, ' '), 44)}”`;
+  const who = t.comments[0]?.author;
+  return who ? `${who}’s thread` : 'this thread';
+}
+
+/**
+ * The task's Discussion.
+ *
+ * ONE composer, always at the bottom, whose target is named above it.
+ *
+ * It used to be N + 1 — a reply box inside every thread plus a new-thread box
+ * under them all — so the ordinary single-thread task ended in two stacked
+ * boxes whose only difference was placeholder text. Bryan read that as "why do
+ * I have two reply boxes… are we supporting threaded replies unnecessarily?",
+ * and the honest answer is that threading is doing real work here (see
+ * `TaskThread.anchorText`) but the surface was hiding the evidence of it and
+ * then asking the reader to disambiguate anyway.
+ *
+ * So the fix is not fewer threads, it is: show what each thread is ABOUT, and
+ * charge one decision instead of two. Anything proposing a second always-present
+ * composer is proposing that state again — see docs/product/decisions.md.
+ */
 function renderDiscussion(
   task: HubTask,
   discussion: TaskDiscussion,
   onComment: (task: HubTask, text: string, threadId?: string) => Promise<boolean>,
   focusThreadId?: string,
+  replyThreadId?: string | null,
+  onReplyTarget?: (threadId: string | null) => void,
 ): HTMLElement {
   const section = document.createElement('section');
   section.className = 'hub-discussion';
@@ -1928,6 +2003,8 @@ function renderDiscussion(
     section.append(p);
   }
 
+  const target = composerTarget(discussion.threads, replyThreadId, focusThreadId);
+
   for (const t of discussion.threads) {
     const el = document.createElement('div');
     // Resolved threads stay VISIBLE. A resolved thread is still part of the
@@ -1935,13 +2012,22 @@ function renderDiscussion(
     // existed in the store with no surface that could reach it.
     el.className = `hub-thread${t.status === 'resolved' ? ' resolved' : ''}${
       t.id === focusThreadId ? ' hub-thread-focus' : ''
-    }`;
+    }${t.id === target?.id ? ' hub-thread-target' : ''}`;
     el.dataset.threadId = t.id;
     if (t.status === 'resolved') {
       const badge = document.createElement('span');
       badge.className = 'hub-thread-status';
       badge.textContent = 'Resolved';
       el.append(badge);
+    }
+    // What this conversation is about. Without it two threads on one task are
+    // two piles of comments, and picking between them is guesswork.
+    const anchor = t.anchorText?.trim();
+    if (anchor) {
+      const quote = document.createElement('blockquote');
+      quote.className = 'hub-thread-anchor';
+      quote.textContent = clip(anchor.replace(/\s+/g, ' '), 140);
+      el.append(quote);
     }
     for (const c of t.comments) {
       const row = document.createElement('div');
@@ -1958,20 +2044,50 @@ function renderDiscussion(
       row.append(who, body);
       el.append(row);
     }
-    el.append(
-      commentForm('hub-reply-form', 'Reply…', 'Reply', (text) => onComment(task, text, t.id)),
-    );
+    // A button rather than a box. Pointing the one composer at this thread is
+    // the whole job, and it is also the only way back to a thread once the
+    // composer has been switched to a new one — including a RESOLVED thread,
+    // which stays replyable exactly as it was.
+    const reply = document.createElement('button');
+    reply.type = 'button';
+    reply.className = 'hub-btn hub-thread-reply';
+    reply.textContent = t.id === target?.id ? 'Replying below' : 'Reply';
+    reply.setAttribute('aria-pressed', t.id === target?.id ? 'true' : 'false');
+    reply.addEventListener('click', () => onReplyTarget?.(t.id));
+    el.append(reply);
     section.append(el);
   }
 
-  section.append(
-    commentForm(
-      'hub-comment-form',
-      discussion.threads.length > 0 ? 'Start another thread…' : 'Say something about this task…',
-      'Comment',
-      (text) => onComment(task, text),
-    ),
+  const form = commentForm(
+    'hub-comment-form',
+    target ? `Reply to ${threadLabel(target)}…` : 'Say something about this task…',
+    target ? 'Reply' : 'Comment',
+    (text) => onComment(task, text, target?.id),
   );
+  // The target row rides INSIDE the form, above the box, so what the button
+  // will do is readable without moving your eyes off it. Omitted when there is
+  // nothing to disambiguate — a task with no threads has one possible action.
+  if (discussion.threads.length > 0) {
+    const bar = document.createElement('div');
+    bar.className = 'hub-composer-target';
+    const label = document.createElement('span');
+    label.className = 'hub-composer-target-label';
+    label.textContent = target ? `Replying to ${threadLabel(target)}` : 'Starting a new thread';
+    bar.append(label);
+    // One-directional: this switches AWAY from a thread. The way back is the
+    // Reply button on the thread itself, which names which one — a generic
+    // "reply instead" here could not.
+    if (target) {
+      const fresh = document.createElement('button');
+      fresh.type = 'button';
+      fresh.className = 'hub-btn hub-composer-switch';
+      fresh.textContent = 'New thread';
+      fresh.addEventListener('click', () => onReplyTarget?.(null));
+      bar.append(fresh);
+    }
+    form.prepend(bar);
+  }
+  section.append(form);
   return section;
 }
 
@@ -2216,7 +2332,16 @@ export function renderTaskDetail(
   panel.append(body);
 
   if (discussion && handlers.onComment) {
-    panel.append(renderDiscussion(task, discussion, handlers.onComment, handlers.focusThreadId));
+    panel.append(
+      renderDiscussion(
+        task,
+        discussion,
+        handlers.onComment,
+        handlers.focusThreadId,
+        handlers.replyThreadId,
+        handlers.onReplyTarget,
+      ),
+    );
   }
 
   if (task.transitions.length > 0) {

@@ -99,6 +99,11 @@ interface HubState {
    */
   discussion: TaskDiscussion;
   discussionTaskId: string | null;
+  /** Which conversation the discussion's one composer is pointed at: a thread
+   *  id, `null` for a new thread, `undefined` for "nobody has chosen yet, take
+   *  the default". Reset when the panel moves to another task — a target is
+   *  about a discussion, not about the reader. */
+  replyThreadId: string | null | undefined;
   /**
    * The thread-shaped half of "what needs you" — task discussions and doc
    * comments whose newest word is an agent's. Server-computed, because
@@ -257,6 +262,7 @@ async function main(): Promise<void> {
     detailThreadId: null,
     discussion: { loading: false, threads: [] },
     discussionTaskId: null,
+    replyThreadId: undefined,
     reviewItems: [],
     walkIndex: -1,
     walkKey: null,
@@ -482,7 +488,14 @@ async function main(): Promise<void> {
     // (row tap, `o`, deep link, voice navigate) — one of them would be missed
     // otherwise, and the miss looks like a task with no discussion. Safe from
     // recursion: loadDiscussion claims the id before it re-renders.
-    if (task && state.discussionTaskId !== task.id) void loadDiscussion(task);
+    if (task && state.discussionTaskId !== task.id) {
+      // Here rather than at each of the four places that open the panel, for
+      // the same reason the fetch is: a composer target belongs to a
+      // discussion, not to the reader, and carrying one across would point
+      // this task's box at another task's thread.
+      state.replyThreadId = undefined;
+      void loadDiscussion(task);
+    }
     if (!task) state.discussionTaskId = null;
     // Only pass a discussion that belongs to the task on screen. An in-flight
     // load for a task the reader has left must not paint under this one.
@@ -506,6 +519,16 @@ async function main(): Promise<void> {
         knownAgentIds: knownAgentIds(),
         goalLabel: (id) => goalLabel(state.info?.goals ?? [], id),
         onComment: (t, text, threadId) => postTaskComment(t, text, threadId),
+        replyThreadId: state.replyThreadId,
+        onReplyTarget: (threadId) => {
+          state.replyThreadId = threadId;
+          renderDetail();
+          // Re-render first, then take the caret: the panel is rebuilt, so the
+          // textarea this focuses is the one the new render made. Focusing
+          // before would put the caret in a node about to be thrown away, and
+          // the tap would look like it did nothing.
+          document.querySelector<HTMLTextAreaElement>('.hub-comment-form textarea')?.focus();
+        },
         ...(state.detailThreadId ? { focusThreadId: state.detailThreadId } : {}),
       },
       task ? discussion : undefined,
@@ -531,6 +554,7 @@ async function main(): Promise<void> {
       threads?: Array<{
         id: string;
         status?: string;
+        anchor?: { kind?: string; snippet?: { text?: string } };
         comments?: Array<{ author?: { name?: string }; text?: string; ts?: number }>;
       }>;
     }>(`/api/docs/${encodeURIComponent(task.bodyDocId)}/threads`);
@@ -539,6 +563,12 @@ async function main(): Promise<void> {
     const threads: TaskThread[] = (payload?.threads ?? []).map((t) => ({
       id: t.id,
       status: t.status === 'resolved' ? 'resolved' : 'open',
+      // Only a text-range anchor names a passage. A subject anchor is the
+      // whole task, which the panel is already showing — quoting it would put
+      // the description above every one of its own threads.
+      ...(t.anchor?.kind === 'text-range' && t.anchor.snippet?.text
+        ? { anchorText: t.anchor.snippet.text }
+        : {}),
       comments: (t.comments ?? []).map((c) => ({
         author: c.author?.name ?? 'Someone',
         text: c.text ?? '',
@@ -570,6 +600,12 @@ async function main(): Promise<void> {
       showToast('Posting the comment failed — your text is still in the box');
       return false;
     }
+    // Stay where the comment went. A reply keeps its thread; a NEW thread goes
+    // back to the default, which is the last thread on screen — and after the
+    // reload that is the one just created. Either way the next thing typed
+    // lands in the conversation the reader just joined, rather than starting
+    // another one beside it.
+    state.replyThreadId = threadId;
     await loadDiscussion(task);
     return true;
   }
