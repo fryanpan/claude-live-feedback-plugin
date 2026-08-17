@@ -126,6 +126,40 @@ describe('a new goal band asks the bucket to be re-looked-at, over HTTP', () => 
     expect(back.pendingBucketReview?.newBands.map((b) => b.id)).toEqual(['g2']);
   });
 
+  // A request that only exists in a sidecar until somebody attaches is the
+  // store-has-it/surface-can't-show-it failure by construction: `queued: true`
+  // comes back to the caller and then no reader can see it. The board's own
+  // read has to carry it — and must NOT drain it, because reading a board is
+  // not answering its ask.
+  it('a queued ask is visible on the board read, and reading it does not drain it', async () => {
+    const wsId = await makeHub('visible-board', LEAD);
+    const first = await addUnplaced(wsId, 'figure out og-images');
+    // The lead never attaches, so the ask can only be waiting.
+    const queued = await setGoals(wsId, [{ id: 'g1', title: 'Reviewer trust' }]);
+    expect(queued.bucketReview?.queued).toBe(true);
+
+    type BoardRead = {
+      pendingRetriage?: unknown;
+      pendingBucketReview?: { batchId: string; taskIds: string[]; newBands: Array<{ id: string }> };
+    };
+    const read = async () => (await (await local(`/api/workspaces/${wsId}`)).json()) as BoardRead;
+
+    const board = await read();
+    expect(board.pendingBucketReview?.taskIds).toEqual([first]);
+    expect(board.pendingBucketReview?.newBands.map((b) => b.id)).toEqual(['g1']);
+    // It is its OWN field: a goal-list edit does not touch the north star, so
+    // reporting it under pendingRetriage would make that record's goal text
+    // lie about what changed.
+    expect(board.pendingRetriage).toBeUndefined();
+
+    // Still there on a second read...
+    expect((await read()).pendingBucketReview?.taskIds).toEqual([first]);
+    // ...and the drain is still the attach. (Positive control for the
+    // absence below: this is the call that empties it.)
+    expect((await attach(wsId, LEAD)).pendingBucketReview?.taskIds).toEqual([first]);
+    expect((await read()).pendingBucketReview).toBeUndefined();
+  });
+
   it('a reorder over the route asks nothing', async () => {
     const wsId = await makeHub('reorder-board', LEAD);
     await addUnplaced(wsId, 'figure out og-images');

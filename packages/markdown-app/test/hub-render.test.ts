@@ -704,6 +704,76 @@ describe('renderLeadStrip', () => {
     renderLeadStrip(root, 'agent-relay', ['agent-relay'], { onLeadCommit: vi.fn() }, pending([]));
     expect(root.querySelector('.hub-lead-pending')).toBeNull();
   });
+
+  // A NEW goal band nobody has re-looked at the bucket against. Its own chip,
+  // because the two asks are settled by different moves — and because a board
+  // that rendered only the north-star one would say "nothing waiting" while
+  // this sat in a sidecar, which is the store-has-it/surface-can't-show-it
+  // failure the projection next to it exists to prevent.
+  const bucket = (taskIds: string[], bandTitles = ['Reviewer trust']) => ({
+    batchId: 'b-2',
+    taskIds,
+    bandTitles,
+    ts: 1_700_000_000_000,
+    byName: 'Jordan',
+  });
+
+  it('a new goal band waiting on the lead is counted and named', () => {
+    renderLeadStrip(
+      root,
+      'agent-relay',
+      ['agent-relay'],
+      { onLeadCommit: vi.fn() },
+      undefined,
+      bucket(['t-1', 't-2']),
+    );
+    const waiting = root.querySelector('.hub-lead-pending') as HTMLElement;
+    expect(waiting.textContent).toContain('2 unplaced tasks');
+    expect(waiting.textContent).toContain('New goal band waiting for the lead');
+    expect(waiting.title).toContain('Reviewer trust');
+    // It asks for a LOOK. A reader who takes this as "the bucket got emptied"
+    // has been told the opposite of what happened.
+    expect(waiting.title).toContain('Nothing has been placed');
+  });
+
+  it('with no lead at all the waiting band says nobody is going to do it', () => {
+    renderLeadStrip(root, undefined, [], { onLeadCommit: vi.fn() }, undefined, bucket(['t-1']));
+    const waiting = root.querySelector('.hub-lead-pending') as HTMLElement;
+    expect(waiting.textContent).toContain('1 unplaced task');
+    expect(waiting.textContent).toContain('nobody to do it');
+  });
+
+  it('both asks can be waiting at once, and each gets its own chip', () => {
+    renderLeadStrip(
+      root,
+      'agent-relay',
+      ['agent-relay'],
+      { onLeadCommit: vi.fn() },
+      pending(['t-1']),
+      bucket(['t-2'], ['Reviewer trust', 'Mobile review']),
+    );
+    const chips = Array.from(root.querySelectorAll('.hub-lead-pending')) as HTMLElement[];
+    expect(chips).toHaveLength(2);
+    expect(chips[0]?.textContent).toContain('to re-place');
+    expect(chips[1]?.textContent).toContain('to re-look at');
+    // Two bands are counted rather than one being picked to stand for both.
+    expect(chips[1]?.title).toContain('2 new bands');
+  });
+
+  it('says nothing about a band when none is waiting', () => {
+    // Non-vacuous because the three tests above render this same chip.
+    renderLeadStrip(root, 'agent-relay', ['agent-relay'], { onLeadCommit: vi.fn() });
+    expect(root.textContent).not.toContain('re-look at');
+    renderLeadStrip(
+      root,
+      'agent-relay',
+      ['agent-relay'],
+      { onLeadCommit: vi.fn() },
+      undefined,
+      bucket([]),
+    );
+    expect(root.textContent).not.toContain('re-look at');
+  });
 });
 
 describe('renderActivity', () => {

@@ -28,7 +28,7 @@
  * All fixtures are synthetic. The repo is public.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -405,13 +405,145 @@ describe('a new goal band asks the bucket to be re-looked-at', () => {
       expect(attach.pendingBucketReview?.newBands).toEqual([{ id: 'g1', title: 'Reviewer trust' }]);
     });
 
-    it('(control) an unrenamed band keeps the title it appeared with', () => {
+    // The control above this one used to be "add a band, don't rename it, see
+    // the title survive" — which passes whether the title came from the record
+    // or from the live list, because with no rename the two are identical. It
+    // established nothing about WHICH list was read. This does: two bands
+    // appear together and only one is renamed, so replaying from the record
+    // gets the first wrong and rebuilding blindly (or dropping the untouched
+    // band) gets the second wrong. Only reading the live list per id passes.
+    it('refreshes the renamed band and leaves its untouched sibling alone', () => {
       const { ws } = board({ lead: null });
-      store.setGoalList(ws.id, [{ id: 'g1', title: 'Reviewer trust' }], { actor: PERSON });
+      store.setGoalList(
+        ws.id,
+        [
+          { id: 'g1', title: 'Provisional name' },
+          { id: 'g2', title: 'Reviewer trust' },
+        ],
+        { actor: PERSON },
+      );
+      store.renameGoal(ws.id, 'g1', { title: 'Mobile review' }, { actor: PERSON });
       const attach = store.attachAgent(ws.id, { agentId: LEAD, runtime: 'claude-code-local' });
       if (!attach.ok) throw new Error('attach failed');
-      expect(attach.pendingBucketReview?.newBands).toEqual([{ id: 'g1', title: 'Reviewer trust' }]);
+      expect(attach.pendingBucketReview?.newBands).toEqual([
+        { id: 'g1', title: 'Mobile review' },
+        { id: 'g2', title: 'Reviewer trust' },
+      ]);
     });
+  });
+
+  // The record's stored ids are its provenance; the bucket is re-read live.
+  // Intersecting against the snapshot could only ever SHRINK, which drops a
+  // task filed after the edit out of the one ask it belongs in — while the
+  // same attach response lists it under `untriaged`, which is how the gap
+  // would have presented: two fields on one response disagreeing.
+  describe('the bucket is read as it stands now, in both directions', () => {
+    it('includes a task filed AFTER the band appeared', () => {
+      const { ws, ids } = board({ lead: null });
+      store.setGoalList(ws.id, [{ id: 'g1', title: 'Ship it' }], { actor: PERSON });
+      const later = store.createTask(ws.id, { title: 'check the print stylesheet' });
+      if (!later.ok) throw new Error('fixture');
+      const attach = store.attachAgent(ws.id, { agentId: LEAD, runtime: 'claude-code-local' });
+      if (!attach.ok) throw new Error('attach failed');
+      expect(attach.pendingBucketReview?.taskIds.sort()).toEqual(
+        [...ids, later.task.id].sort(),
+      );
+      // And it agrees with the other half of the same response.
+      expect(attach.pendingBucketReview?.taskIds.sort()).toEqual([...attach.untriaged].sort());
+    });
+
+    it('still drops a task placed since, so the ask is never work already done', () => {
+      const { ws, ids } = board({ lead: null });
+      store.setGoalList(ws.id, [{ id: 'g1', title: 'Ship it' }], { actor: PERSON });
+      const [first, second] = ids;
+      if (!first || !second) throw new Error('fixture');
+      store.setTaskGoal(first, 'g1', { actor: PERSON });
+      const attach = store.attachAgent(ws.id, { agentId: LEAD, runtime: 'claude-code-local' });
+      if (!attach.ok) throw new Error('attach failed');
+      expect(attach.pendingBucketReview?.taskIds).toEqual([second]);
+    });
+  });
+
+  describe('a coalesced record is described honestly', () => {
+    it('the second ack reports the bands actually waiting, not just its own', () => {
+      const { ws } = board({ lead: null });
+      store.setGoalList(ws.id, [{ id: 'g1', title: 'One' }], { actor: PERSON });
+      const second = store.setGoalList(
+        ws.id,
+        [
+          { id: 'g1', title: 'One' },
+          { id: 'g2', title: 'Two' },
+        ],
+        { actor: PERSON },
+      );
+      expect(second.ok).toBe(true);
+      if (!second.ok) return;
+      expect(second.bucketReview.queued).toBe(true);
+      // `queued: true` and `newBands` have to be about the same object: the
+      // lead will be handed both bands, so an ack naming only g2 describes
+      // something narrower than what is on disk.
+      expect(second.bucketReview.newBands.map((b) => b.id).sort()).toEqual(['g1', 'g2']);
+    });
+
+    it('keeps time and actor from the same (first) edit', () => {
+      const { ws } = board({ lead: null });
+      const other = { id: 'known-sam', name: 'Sam', kind: 'person' };
+      store.setGoalList(ws.id, [{ id: 'g1', title: 'One' }], { actor: PERSON });
+      const before = store.getPendingBucketReview(ws.id);
+      const firstTs = before?.ts;
+      store.setGoalList(
+        ws.id,
+        [
+          { id: 'g1', title: 'One' },
+          { id: 'g2', title: 'Two' },
+        ],
+        { actor: other },
+      );
+      const merged = store.getPendingBucketReview(ws.id);
+      // Taking the clock from one edit and the person from another produces a
+      // pair that reads as "this person did this then" and is true of nobody
+      // — the shape a strip renders as "Edited by <name>" beside a time.
+      expect(merged?.ts).toBe(firstTs as number);
+      expect(merged?.actor.id).toBe(PERSON.id);
+    });
+  });
+
+  // A sidecar missing a field the TYPE says is required loads as `undefined`
+  // and goes straight back onto the wire inside a `TriageRequest` that
+  // declares it `WorkspaceGoal[]` — the next reader of that field is the one
+  // who finds out. Validate everything non-optional, not just what today's
+  // readers happen to touch.
+  it('a truncated sidecar loses the ask, not the workspace', () => {
+    const { ws } = board({ lead: null });
+    store.setGoalList(ws.id, [{ id: 'g1', title: 'Reviewer trust' }], { actor: PERSON });
+    const path = pendingBucketReviewPath(dataDir, ws.id);
+    const full = JSON.parse(readFileSync(path, 'utf8')) as { pending: PendingBucketReview };
+    // Flush the workspace itself, or every reload below reports "no such
+    // workspace" and the absences are vacuous for the wrong reason.
+    store.stop();
+
+    const reload = () => {
+      const s = new TaskStore({ dataDir, debounceMs: 5 });
+      wire(s);
+      const got = s.getPendingBucketReview(ws.id);
+      s.stop();
+      return got;
+    };
+    // Positive control: the intact record round-trips through a fresh store,
+    // so a refusal below is about the missing field and not about the reload.
+    expect(reload()?.newBands.map((b) => b.id)).toEqual(['g1']);
+
+    for (const key of ['oldGoals', 'newGoals', 'ts', 'actor'] as const) {
+      const { [key]: _dropped, ...rest } = full.pending;
+      writeFileSync(path, `${JSON.stringify({ pending: rest }, null, 2)}\n`);
+      expect(reload(), `a sidecar missing ${key} must not load`).toBeUndefined();
+    }
+    // ...and the intact record still loads afterwards, so the loop is not
+    // passing because something earlier in it broke the fixture.
+    writeFileSync(path, `${JSON.stringify({ pending: full.pending }, null, 2)}\n`);
+    expect(reload()?.newBands.map((b) => b.id)).toEqual(['g1']);
+
+    store = new TaskStore({ dataDir, debounceMs: 5 });
   });
 
   it('delete_workspace removes the sidecar', () => {

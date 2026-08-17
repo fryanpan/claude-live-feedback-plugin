@@ -3138,19 +3138,36 @@ export class TaskStore {
         ts: edit.ts,
       });
     }
-    return { requested, queued, taskIds, newBands: edit.newBands, batchId: edit.batchId };
+    // When it QUEUED, report the record that is actually waiting — a second
+    // edit during the same gap merges into the first, so this edit's bands
+    // alone would describe something narrower than what the lead is handed.
+    // `queued: true` and `newBands` have to be about the same object.
+    const waiting = queued ? state.pendingBucketReview : undefined;
+    return {
+      requested,
+      queued,
+      taskIds: waiting?.taskIds ?? taskIds,
+      newBands: waiting?.newBands ?? edit.newBands,
+      batchId: edit.batchId,
+    };
   }
 
   /**
    * The bucket re-look waiting for this workspace's lead, or undefined.
    *
-   * Read-and-PRUNE, for the same reason `getPendingRetriage` prunes: this
+   * Read-and-REFRESH, for the same reason `getPendingRetriage` prunes: this
    * describes the board as it stands NOW, not as it stood when the band
    * appeared. Two things can go stale, and each retires the ask outright when
    * it empties:
    *
-   *  - a task that has since been PLACED (or closed) is no longer in the
-   *    bucket, so re-asking about it is asking for work already done;
+   *  - the BUCKET moves in both directions. A task placed or closed since the
+   *    edit is gone from it, so re-asking about it is asking for work already
+   *    done — and a task FILED since the edit is newly in it, unplaced, with
+   *    the same new band available to it. Intersecting against the stored
+   *    snapshot could only ever shrink, which quietly dropped that second
+   *    task from the one ask it belongs in while the same attach response
+   *    listed it under `untriaged`. So the bucket is re-read live rather
+   *    than filtered; the stored ids are provenance, not the answer;
    *  - a band that has since been REMOVED is not apparent any more, and a
    *    request naming a band that no longer exists is the field-that-lies
    *    failure this record's own slot exists to avoid.
@@ -3167,10 +3184,7 @@ export class TaskStore {
     const state = this.workspaces.get(workspaceId);
     if (!state?.pendingBucketReview) return undefined;
     const pending = state.pendingBucketReview;
-    const liveTasks = pending.taskIds.filter((id) => {
-      const task = state.tasks.get(id);
-      return task !== undefined && task.status !== 'done' && task.unplacedSince !== undefined;
-    });
+    const liveTasks = this.listUntriaged(workspaceId).map((t) => t.id);
     const current = new Map(flattenGoals(state.workspace.goals).map((g) => [g.id, g.title]));
     const liveBands: GoalBand[] = pending.newBands
       .filter((b) => current.has(b.id))
@@ -3179,10 +3193,12 @@ export class TaskStore {
       this.clearPendingBucketReview(state);
       return undefined;
     }
-    // Compare the bands by VALUE, not by length: a rename keeps the count and
-    // is exactly the change this has to persist.
+    // Compare BOTH by value, not by length: a rename keeps the band count,
+    // and one task placed while another is filed keeps the task count. A
+    // length compare on either is a guard that passes on the exact edit it
+    // exists to catch.
     if (
-      liveTasks.length !== pending.taskIds.length ||
+      JSON.stringify(liveTasks) !== JSON.stringify(pending.taskIds) ||
       JSON.stringify(liveBands) !== JSON.stringify(pending.newBands)
     ) {
       state.pendingBucketReview = { ...pending, taskIds: liveTasks, newBands: liveBands };
@@ -3192,9 +3208,16 @@ export class TaskStore {
   }
 
   /** Coalesce with anything already waiting: the FIRST undelivered edit keeps
-   *  the baseline (`oldGoals`, `ts`), the newest wins on list and batch, and
-   *  bands and tasks union. Synchronous write, like the re-triage queue: the
-   *  caller is about to be told the ask is waiting. */
+   *  the baseline (`oldGoals`) and the provenance (`ts`, `actor`), the newest
+   *  wins on list and batch, and bands and tasks union. Synchronous write,
+   *  like the re-triage queue: the caller is about to be told the ask is
+   *  waiting.
+   *
+   *  `ts` and `actor` move together on purpose. Taking the clock from the
+   *  first edit and the person from the last produces a pair that reads as
+   *  "this person did this then" and is true of nobody — the shape a strip
+   *  renders as `Edited by <name>` beside a relative time. The ask began with
+   *  the first edit, so both come from it. */
   private queuePendingBucketReview(state: WorkspaceState, next: PendingBucketReview): boolean {
     const prev = state.pendingBucketReview;
     if (prev) {
@@ -3208,7 +3231,7 @@ export class TaskStore {
         taskIds: Array.from(new Set([...prev.taskIds, ...next.taskIds])),
         oldGoals: prev.oldGoals,
         newGoals: next.newGoals,
-        actor: next.actor,
+        actor: prev.actor,
         ts: prev.ts,
       };
     } else {
@@ -3248,11 +3271,20 @@ export class TaskStore {
     try {
       const parsed = JSON.parse(readFileSync(path, 'utf8')) as { pending?: PendingBucketReview };
       const pending = parsed.pending;
+      // Every field the type declares non-optional, not just the ones a
+      // reader happens to touch today: a truncated sidecar that loads with
+      // `oldGoals` undefined puts that undefined straight back on the wire
+      // inside a `TriageRequest` that declares it `WorkspaceGoal[]`, and the
+      // next reader of that field is the one who finds out.
       if (
         !pending ||
         typeof pending.batchId !== 'string' ||
+        typeof pending.ts !== 'number' ||
         !Array.isArray(pending.taskIds) ||
-        !Array.isArray(pending.newBands)
+        !Array.isArray(pending.newBands) ||
+        !Array.isArray(pending.oldGoals) ||
+        !Array.isArray(pending.newGoals) ||
+        typeof pending.actor?.id !== 'string'
       ) {
         return undefined;
       }
