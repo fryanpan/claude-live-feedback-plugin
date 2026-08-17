@@ -69,6 +69,68 @@ export function taskIdOfBodyDoc(docId: string): string | null {
 }
 
 /**
+ * Doc operations that stay legal on a task's body room.
+ *
+ * A task body is a live doc, so every generic `/api/docs/<docId>/…` route can
+ * reach it by knowing the `task:<taskId>` convention — including the ones
+ * that replace or delete its content. Those skip the write-once `quote`
+ * preservation and the `task.body_edited` audit row that `noteBodyEdited`
+ * runs, so a rewrite through them destroyed the captured words with nothing
+ * preserved and nothing recorded, and every surface reported success.
+ *
+ * This list is what a task body doc is FOR — discussing it and annotating it.
+ * Everything else that mutates is refused, which is deliberately the
+ * closed-by-default direction: a mutating route added later is refused until
+ * someone decides it belongs here, and the cost of that mistake is an agent
+ * reading an error that names `update_task_body`, against the cost of the
+ * other mistake, which is a capture destroyed with no record that it existed.
+ *
+ * The browser never calls any of these — it edits the body over the Yjs
+ * websocket — so this reaches agent callers only.
+ */
+const TASK_BODY_ALLOWED_MUTATIONS: ReadonlySet<string> = new Set([
+  // Discussion: the documented reason a task has a body room at all.
+  'threads',
+  'threads/by_find',
+  // Annotation and bookkeeping, none of which rewrite body text.
+  'agent_anchors',
+  'activity',
+  'hooks/fire',
+  'suggestions/resolve_all',
+  // Deleting the ROOM is deliberately still allowed, and the reason is worth
+  // stating because it looks like the most destructive call here. It isn't:
+  // the description lives in the task store (`task.body`), the room is a live
+  // surface over that snapshot, and `ensureBodyRoom` reseeds a missing one —
+  // which `POST /api/tasks/<id>/body` relies on and has a test for. So a
+  // delete costs the room's comment threads, not the captured words, and the
+  // preservation this guard exists for is not what is at stake.
+  '',
+]);
+
+/** Thread and suggestion sub-routes carry an id, so they are matched by
+ *  shape rather than by literal. Only the ones that leave body TEXT alone
+ *  are here: `insert_after`, `insert_blocks_after` and `rewrite_region`
+ *  edit the document and are deliberately absent. */
+const TASK_BODY_ALLOWED_PATTERNS: readonly RegExp[] = [
+  /^threads\/[^/]+$/,
+  /^threads\/[^/]+\/(comments|resolve|reopen|promote|summary)$/,
+  /^agent_anchors\/[^/]+$/,
+  /^suggestions\/[^/]+\/reject$/,
+];
+
+/**
+ * May this doc-route operation run against a task's body room?
+ *
+ * Pure and total so the policy can be read and tested without a server. GET
+ * is always allowed — reading a task body is what `get_doc` does.
+ */
+export function taskBodyOpAllowed(rest: string, method: string): boolean {
+  if (method === 'GET' || method === 'HEAD') return true;
+  if (TASK_BODY_ALLOWED_MUTATIONS.has(rest)) return true;
+  return TASK_BODY_ALLOWED_PATTERNS.some((re) => re.test(rest));
+}
+
+/**
  * How much of a description the board projection carries.
  *
  * A task body is a live doc anyone can paste a plan into, and the ws room
