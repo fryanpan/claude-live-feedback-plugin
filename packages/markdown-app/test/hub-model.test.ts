@@ -22,6 +22,8 @@ import {
   pluginDriftNotice,
   positionBetween,
   presenceChips,
+  quoteAfterCapture,
+  quoteAfterEdit,
   quoteForCapture,
   reviewQueue,
   stepTarget,
@@ -744,5 +746,64 @@ describe('quoteForCapture', () => {
   it('treats a blank utterance as no quote rather than an empty one', () => {
     // An empty string would file `quote: ''` — a claim that words were spoken.
     expect(quoteForCapture('   ')).toBeUndefined();
+  });
+});
+
+describe('quoteAfterCapture', () => {
+  it('drops the utterance the filed task carried away with it', () => {
+    expect(quoteAfterCapture('add a mic to the board', 'add a mic to the board')).toBe('');
+  });
+
+  it('keeps what was dictated while the capture was still in flight', () => {
+    // The POST is pending, the box deliberately stays live, and a second
+    // utterance lands. Only the filed half leaves; the rest belongs to the
+    // idea still sitting in the box.
+    expect(quoteAfterCapture('fix the login bug also update the docs', 'fix the login bug')).toBe(
+      'also update the docs',
+    );
+  });
+
+  it('keeps an accumulation that no longer starts with what was filed', () => {
+    // The box was cleared mid-flight, so the quote was already dropped and
+    // re-accumulated from a fresh utterance. Removing a prefix that isn't
+    // there would eat words nobody has filed.
+    expect(quoteAfterCapture('a brand new thought', 'fix the login bug')).toBe(
+      'a brand new thought',
+    );
+  });
+
+  it('keeps everything when the filed task carried no quote', () => {
+    expect(quoteAfterCapture('said after a typed task filed', undefined)).toBe(
+      'said after a typed task filed',
+    );
+  });
+});
+
+describe('quoteAfterEdit', () => {
+  it('keeps the quote when a misheard word is corrected', () => {
+    // "mike" → "mic": the box still holds the utterance, one word off. This
+    // is the case the quote exists for.
+    expect(quoteAfterEdit('add a mic to the board', 'add a mike to the board')).toBe(
+      'add a mike to the board',
+    );
+  });
+
+  it('keeps the quote when the person keeps typing after dictating', () => {
+    expect(quoteAfterEdit('buy milk and oats on the way home', 'buy milk')).toBe('buy milk');
+  });
+
+  it('drops the quote when the box is retyped from scratch', () => {
+    // Select-all-and-retype fires ONE input event with a non-empty value, so
+    // "cleared to empty" never happens — and the new task would otherwise be
+    // filed quoting words about entirely different work.
+    expect(quoteAfterEdit('review the deploy script', 'buy milk')).toBe('');
+  });
+
+  it('drops the quote when the box is emptied by hand', () => {
+    expect(quoteAfterEdit('', 'buy milk')).toBe('');
+  });
+
+  it('has nothing to keep when nothing was spoken', () => {
+    expect(quoteAfterEdit('typed only', '')).toBe('');
   });
 });

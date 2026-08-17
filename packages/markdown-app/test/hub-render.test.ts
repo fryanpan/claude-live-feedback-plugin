@@ -1497,6 +1497,46 @@ describe('renderQuickAdd — dictating into the box', () => {
     expect(onCapture).toHaveBeenCalledWith('add a mic to the board', 'add a mike to the board');
   });
 
+  it('keeps an utterance dictated while the previous capture was in flight', async () => {
+    // The box deliberately stays live during the POST. `deliver` appends, so
+    // the accumulated quote is now BOTH utterances — clearing it wholesale on
+    // the resolve files the second idea with no record of what was said.
+    let settle: ((ok: boolean) => void) | undefined;
+    const onCapture = vi.fn(
+      () =>
+        new Promise<boolean>((r) => {
+          settle = r;
+        }),
+    );
+    const { parts, box } = mount(onCapture);
+    parts.deliver('fix the login bug');
+    box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(onCapture).toHaveBeenCalledWith('fix the login bug', 'fix the login bug');
+
+    parts.deliver('also update the docs');
+    settle?.(true);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(onCapture).toHaveBeenLastCalledWith(
+      'fix the login bug also update the docs',
+      'also update the docs',
+    );
+  });
+
+  it('drops the quote when the box is retyped from scratch', () => {
+    // Select-all-and-retype is ONE input event with a non-empty value, so the
+    // "emptied by hand" reset never fires and the new task would be filed
+    // quoting an utterance about entirely different work.
+    const { onCapture, parts, box } = mount();
+    parts.deliver('buy milk');
+    box.value = 'review the deploy script';
+    box.dispatchEvent(new Event('input', { bubbles: true }));
+    box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(onCapture).toHaveBeenCalledWith('review the deploy script', undefined);
+  });
+
   it('still mounts, and still captures, with no voice layer at all', () => {
     // Positive control for the whole describe: every assertion above depends
     // on mountVoice being called, so a build where speech is unavailable must
