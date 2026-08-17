@@ -1046,6 +1046,29 @@ export type SetGoalListResult =
     }
   | { ok: false; error: 'workspace-not-found' | 'reserved-goal-id' | 'duplicate-goal-id' };
 
+export type ReorderGoalsResult =
+  | {
+      ok: true;
+      workspace: HubWorkspace;
+      /** False when `order` already matched — no event, nothing written. */
+      changed: boolean;
+      /** The order now in effect at the requested scope. */
+      order: string[];
+    }
+  | { ok: false; error: 'workspace-not-found' | 'parent-not-found' }
+  | {
+      ok: false;
+      error: 'order-mismatch';
+      /** Ids in `order` that are not goals at this scope — a goal removed or
+       *  renamed since the caller read the list, or simply invented. */
+      unknownIds: string[];
+      /** Ids at this scope that `order` left out. These are precisely the
+       *  goals `setGoalList` would have emptied into Chores. */
+      missingIds: string[];
+      /** Ids repeated within `order`. */
+      duplicateIds: string[];
+    };
+
 export interface ListTasksFilter {
   goal?: string;
   status?: TaskStatus;
@@ -2357,6 +2380,104 @@ export class TaskStore {
       });
     }
     return { ok: true, workspace, changed: true, movedToChores: moved.map((m) => m.task.id) };
+  }
+
+  /**
+   * Reorder goals at ONE scope — the top-level list, or the subgoals of
+   * `parent` — and nothing else. The priority gesture, separated from the
+   * edit.
+   *
+   * PERMUTATION ONLY, and that constraint is the entire point. `setGoalList`
+   * is a full replace, so reordering through it means restating every id and
+   * title, and any id a stale caller omits sends that goal's open tasks to
+   * the bottom of Chores — the most ordinary gesture on a board carrying the
+   * most destructive edge in the API. Here an `order` that is not exactly
+   * the current id set (same ids, same count) is REFUSED with the unknown /
+   * missing / duplicated ids named, rather than merged best-effort. So a
+   * caller working from a list another writer has since changed gets an
+   * error it can re-read and retry — never a silent goal loss. Whether that
+   * refusal is well-formed is checked over HTTP too, because the route layer
+   * is where a param quietly disappears.
+   *
+   * Titles, dueAt and subgoal arrays ride along untouched, and no task can
+   * move: there is no reachable input to this method that regroups anything.
+   * Emits the existing `workspace.goals_changed` with kind 'reorder' — the
+   * event the board projection and the activity feed already render — so
+   * nothing downstream needs a new case.
+   */
+  reorderGoals(
+    workspaceId: string,
+    order: string[],
+    opts: { parent?: string; actor: { id: string; name: string; kind?: string } },
+  ): ReorderGoalsResult {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return { ok: false, error: 'workspace-not-found' };
+    const workspace = state.workspace;
+
+    // Scope: the top-level list, or one parent's subgoals. A SUBGOAL id as
+    // `parent` finds nothing here, which is the right answer — nesting is
+    // one level deep by design (§3.2), so it has no subgoals to order.
+    const parentId = opts.parent;
+    const parentGoal =
+      parentId === undefined ? undefined : workspace.goals.find((g) => g.id === parentId);
+    if (parentId !== undefined && !parentGoal) return { ok: false, error: 'parent-not-found' };
+    const current: Array<WorkspaceGoal | WorkspaceSubgoal> = parentGoal
+      ? (parentGoal.subgoals ?? [])
+      : workspace.goals;
+
+    const currentIds = current.map((g) => g.id);
+    const currentSet = new Set(currentIds);
+    const seen = new Set<string>();
+    const unknownIds: string[] = [];
+    const duplicateIds: string[] = [];
+    for (const id of order) {
+      // 'chores' is never in goals[], so it lands here as unknown rather
+      // than as a position nobody honours.
+      if (!currentSet.has(id) && !unknownIds.includes(id)) unknownIds.push(id);
+      if (seen.has(id) && !duplicateIds.includes(id)) duplicateIds.push(id);
+      seen.add(id);
+    }
+    const missingIds = currentIds.filter((id) => !seen.has(id));
+    if (unknownIds.length > 0 || duplicateIds.length > 0 || missingIds.length > 0) {
+      return { ok: false, error: 'order-mismatch', unknownIds, missingIds, duplicateIds };
+    }
+
+    if (currentIds.every((id, i) => order[i] === id)) {
+      return { ok: true, workspace, changed: false, order: currentIds };
+    }
+
+    // Build a NEW top-level array either way. `oldGoals` on the event aliases
+    // the array we are replacing, so mutating in place would make the event
+    // report the new order on both sides and the audit row would say nothing.
+    const oldGoals = workspace.goals;
+    let newGoals: WorkspaceGoal[];
+    if (parentGoal) {
+      const byId = new Map((parentGoal.subgoals ?? []).map((s) => [s.id, s]));
+      const subgoals = order.map((id) => byId.get(id) as WorkspaceSubgoal);
+      newGoals = oldGoals.map((g) => (g.id === parentGoal.id ? { ...g, subgoals } : g));
+    } else {
+      const byId = new Map(oldGoals.map((g) => [g.id, g]));
+      newGoals = order.map((id) => byId.get(id) as WorkspaceGoal);
+    }
+    workspace.goals = newGoals;
+    this.scheduleSave(workspaceId);
+
+    this.emit({
+      type: 'workspace.goals_changed',
+      workspaceId,
+      batchId: cryptoId('gc'),
+      kind: 'reorder',
+      oldGoals,
+      newGoals,
+      actor: {
+        id: opts.actor.id,
+        name: opts.actor.name,
+        kind: classifyActor(opts.actor),
+      },
+      movedToChores: [],
+      ts: Date.now(),
+    });
+    return { ok: true, workspace, changed: true, order: [...order] };
   }
 
   /**
