@@ -33,7 +33,35 @@ import { basename, dirname } from 'node:path';
  * a backup file and logging.
  */
 
-const GIT_TIMEOUT_MS = 5_000;
+/**
+ * Total wall-clock this check may spend, across ALL of its git calls.
+ *
+ * These are `spawnSync`, on the event loop: `reconcileFromDisk` is synchronous
+ * and runs from a `setTimeout` in the mtime poll, so every millisecond spent
+ * here is a millisecond the whole server is not serving anyone. A per-call
+ * timeout alone is not a bound — a classification makes up to four calls, so
+ * a generous per-call limit multiplies. The budget is what makes the ceiling
+ * a number rather than a product.
+ *
+ * Staying synchronous is deliberate. Making it async would mean making
+ * `reconcileFromDisk` async — the most incident-prone path in this file — and
+ * would publish the `syncError` in two stages, so a reader landing between
+ * them sees the un-annotated message. A hint is not worth that. What the hint
+ * IS worth is bounded: normal calls are single-digit milliseconds, and an
+ * answer that needs longer than this is one we would rather not have.
+ * Overrunning simply yields `unknown`, which is the same thing this returns
+ * for a file outside a repo — a case every caller already handles.
+ */
+export const PROVENANCE_BUDGET_MS = 1_200;
+
+/** Ceiling for any single git call; the budget still caps the total. */
+const GIT_CALL_TIMEOUT_MS = 400;
+
+/** Remaining-time closure. Returns 0 once the budget is spent. */
+function deadlineFrom(budgetMs: number): () => number {
+  const endsAt = Date.now() + budgetMs;
+  return () => Math.max(0, endsAt - Date.now());
+}
 
 /**
  * Run git with every `GIT_*` key stripped from the environment.
@@ -45,7 +73,15 @@ const GIT_TIMEOUT_MS = 5_000;
  * learnings.md ("git exports GIT_DIR into hooks, and `git init` inherits it"),
  * but it is the same "which repo am I even talking to" hazard.
  */
-function git(cwd: string, args: string[], input?: string): { ok: boolean; stdout: string } {
+function git(
+  cwd: string,
+  args: string[],
+  remainingMs: () => number,
+  input?: string,
+): { ok: boolean; stdout: string } {
+  const left = remainingMs();
+  // Budget already spent — don't start another subprocess just to abandon it.
+  if (left <= 0) return { ok: false, stdout: '' };
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
     if (!k.startsWith('GIT_') && v !== undefined) env[k] = v;
@@ -56,7 +92,7 @@ function git(cwd: string, args: string[], input?: string): { ok: boolean; stdout
       env,
       input,
       encoding: 'utf8',
-      timeout: GIT_TIMEOUT_MS,
+      timeout: Math.min(GIT_CALL_TIMEOUT_MS, left),
       maxBuffer: 8 * 1024 * 1024,
     });
     return { ok: res.status === 0, stdout: typeof res.stdout === 'string' ? res.stdout : '' };
@@ -84,7 +120,11 @@ export type ExternalContentSource =
  * use in a message. Everything else — including "not in a repo at all" — is
  * `unknown`.
  */
-export function classifyExternalContent(filePath: string, content: string): ExternalContentSource {
+export function classifyExternalContent(
+  filePath: string,
+  content: string,
+  budgetMs: number = PROVENANCE_BUDGET_MS,
+): ExternalContentSource {
   // An empty or whitespace-only blob is in nearly every repository's object
   // database by accident, so a match on one says nothing about who wrote it.
   // Erring toward `unknown` keeps the check one-directional.
@@ -92,10 +132,11 @@ export function classifyExternalContent(filePath: string, content: string): Exte
 
   const cwd = dirname(filePath);
   const name = basename(filePath);
+  const remainingMs = deadlineFrom(budgetMs);
 
   // Repo-relative path, so the message names the file the way git does — and
   // so the hash below can apply this path's clean filter, if it has one.
-  const listed = git(cwd, ['ls-files', '--full-name', '--', name]);
+  const listed = git(cwd, ['ls-files', '--full-name', '--', name], remainingMs);
   const rel = listed.ok ? listed.stdout.split('\n')[0].trim() : '';
 
   // Hash through git rather than reimplementing it, so sha1 and sha256
@@ -107,12 +148,12 @@ export function classifyExternalContent(filePath: string, content: string): Exte
   const hashArgs = rel
     ? ['hash-object', '-t', 'blob', '--path', rel, '--stdin']
     : ['hash-object', '-t', 'blob', '--stdin'];
-  const hashed = git(cwd, hashArgs, content);
+  const hashed = git(cwd, hashArgs, remainingMs, content);
   const hash = hashed.stdout.trim();
   if (!hashed.ok || !isObjectId(hash)) return { source: 'unknown' };
 
   if (rel) {
-    const head = git(cwd, ['rev-parse', '--verify', '--quiet', `HEAD:${rel}`]);
+    const head = git(cwd, ['rev-parse', '--verify', '--quiet', `HEAD:${rel}`], remainingMs);
     if (head.ok && head.stdout.trim() === hash) {
       return { source: 'git', detail: `identical to HEAD:${rel}` };
     }
@@ -120,7 +161,7 @@ export function classifyExternalContent(filePath: string, content: string): Exte
 
   // Not HEAD's version, but git still knows this content — a pull, a rebase
   // step, a stash restore, or a checkout of some other ref.
-  if (git(cwd, ['cat-file', '-e', `${hash}^{blob}`]).ok) {
+  if (git(cwd, ['cat-file', '-e', `${hash}^{blob}`], remainingMs).ok) {
     return {
       source: 'git',
       detail: rel
