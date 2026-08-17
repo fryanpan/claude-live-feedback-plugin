@@ -450,6 +450,31 @@ describe('a new goal band asks the bucket to be re-looked-at', () => {
       expect(attach.pendingBucketReview?.taskIds.sort()).toEqual([...attach.untriaged].sort());
     });
 
+    // The case a LENGTH compare cannot see, and the reason the guard compares
+    // values: one task leaves the bucket and another joins it, so the count is
+    // unchanged and the set is completely different. A count-only guard
+    // decides nothing needs re-persisting and hands back the stale ids —
+    // naming a task already placed and omitting the one that still needs a
+    // home, which is both halves of the mistake at once.
+    it('one task placed and another filed in the same gap keeps no stale id', () => {
+      const { ws, ids } = board({ lead: null });
+      store.setGoalList(ws.id, [{ id: 'g1', title: 'Ship it' }], { actor: PERSON });
+      const [first, second] = ids;
+      if (!first || !second) throw new Error('fixture');
+      store.setTaskGoal(first, 'g1', { actor: PERSON });
+      const later = store.createTask(ws.id, { title: 'check the print stylesheet' });
+      if (!later.ok) throw new Error('fixture');
+
+      const got = store.getPendingBucketReview(ws.id);
+      expect(got?.taskIds.length).toBe(2); // same COUNT as when it was queued
+      expect(got?.taskIds.slice().sort()).toEqual([second, later.task.id].sort());
+      // And the refresh was persisted, not just computed for this caller.
+      const onDisk = JSON.parse(readFileSync(pendingBucketReviewPath(dataDir, ws.id), 'utf8')) as {
+        pending: PendingBucketReview;
+      };
+      expect(onDisk.pending.taskIds.slice().sort()).toEqual([second, later.task.id].sort());
+    });
+
     it('still drops a task placed since, so the ask is never work already done', () => {
       const { ws, ids } = board({ lead: null });
       store.setGoalList(ws.id, [{ id: 'g1', title: 'Ship it' }], { actor: PERSON });
