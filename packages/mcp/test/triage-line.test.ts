@@ -7,6 +7,8 @@ const RETRIAGE = {
   kind: 'goal-retriage',
   taskIds: ['t-a', 't-b', 't-c'],
   batchId: 'b-1',
+  oldGoal: 'Old goal: ship the widget by Friday.',
+  newGoal: 'New goal: ship the board.',
 };
 
 describe('triageRequestLine', () => {
@@ -83,6 +85,93 @@ describe('triageRequestLine', () => {
   it('does not name it on a single-task placement', () => {
     const line = triageRequestLine({ kind: 'task', taskId: 't-z' }, 'agent-whoever');
     expect(line).not.toContain(RETRIAGE_SKILL);
+  });
+});
+
+/**
+ * The LIVE path must not carry LESS than the replayed one.
+ *
+ * The server broadcasts the whole `TriageRequest` — `oldGoal`, `newGoal`, the
+ * full `taskIds`, `batchId`, `leadAgentId` — on `triage.requested`. This
+ * renderer used to reduce all of that to a COUNT and a batchId, so the lead
+ * who was AT THEIR DESK got strictly less than the lead who was away and
+ * picked the same edit up as `pendingRetriage` on attach. The shipped skill
+ * papered over it by rebuilding the set with `list_tasks` and by telling the
+ * reader that `oldGoal` was gone on this path — neither of which was ever
+ * true of the wire, only of what this function chose to render.
+ */
+describe('parity with the replayed payload', () => {
+  it('lists every task id, so the lead does not have to rebuild the set', () => {
+    const line = triageRequestLine({ ...RETRIAGE, leadAgentId: 'agent-lead' }, 'agent-lead');
+    for (const id of RETRIAGE.taskIds) expect(line).toContain(id);
+  });
+
+  // Not a clip. The skill's own step 4 says re-triaging against the first 120
+  // characters of a goal is how the second half of an edit gets ignored, and
+  // the baseline is the input to "does this task still belong where it is".
+  it('carries oldGoal verbatim — it is recoverable from nowhere else', () => {
+    const line = triageRequestLine({ ...RETRIAGE, leadAgentId: 'agent-lead' }, 'agent-lead');
+    expect(line).toContain(RETRIAGE.oldGoal);
+  });
+
+  // Same reason the batchId already rides along: a lead whose id moved reads
+  // the FYI, and if they conclude the sweep IS theirs they need the whole
+  // payload, not a count.
+  it('carries both in the FYI as well', () => {
+    const line = triageRequestLine({ ...RETRIAGE, leadAgentId: 'agent-lead' }, 'agent-bystander');
+    for (const id of RETRIAGE.taskIds) expect(line).toContain(id);
+    expect(line).toContain(RETRIAGE.oldGoal);
+  });
+
+  // The count and the list are two renderings of one array; if they can
+  // disagree, one of them is lying and the reader cannot tell which.
+  it('the count matches the number of ids it lists', () => {
+    const line = triageRequestLine({ ...RETRIAGE, leadAgentId: 'agent-lead' }, 'agent-lead');
+    expect(line).toContain('re-triage 3 open task(s)');
+    expect(line.match(/t-[abc]/g)).toHaveLength(3);
+  });
+
+  // No cap, deliberately: a cap is exactly "the present lead gets less", in a
+  // smaller form. The replayed payload has no cap either.
+  it('does not truncate a long list', () => {
+    const many = Array.from({ length: 40 }, (_, i) => `t-${i}`);
+    const line = triageRequestLine(
+      { ...RETRIAGE, taskIds: many, leadAgentId: 'agent-lead' },
+      'agent-lead',
+    );
+    for (const id of many) expect(line).toContain(id);
+  });
+
+  // Degradation, both directions — a missing field must vanish, never render
+  // as the word "undefined" next to an instruction to act on it.
+  it('omits the task list rather than printing an empty one', () => {
+    const line = triageRequestLine(
+      { kind: 'goal-retriage', batchId: 'b-2', oldGoal: 'Old.' },
+      'agent-whoever',
+    );
+    expect(line).toContain('re-triage ? open task(s)');
+    expect(line).not.toContain('undefined');
+    expect(line).not.toMatch(/tasks:\s*$/m);
+  });
+
+  it('omits the baseline line when there was no previous goal', () => {
+    const line = triageRequestLine(
+      { kind: 'goal-retriage', batchId: 'b-3', taskIds: ['t-a'], oldGoal: '' },
+      'agent-whoever',
+    );
+    expect(line).toContain('t-a');
+    expect(line).not.toContain('undefined');
+    expect(line.toLowerCase()).not.toContain('previous goal');
+  });
+
+  // The smaller ask never had a goal change behind it, so neither addition
+  // may leak onto it.
+  it('adds neither to a single-task placement', () => {
+    const line = triageRequestLine(
+      { kind: 'task', taskId: 't-z', taskIds: ['t-a'], oldGoal: 'Old.' },
+      'agent-whoever',
+    );
+    expect(line).toBe('[triage.requested] place task t-z against the goal (set_task_goal)');
   });
 });
 
