@@ -47,8 +47,14 @@ that would be a decision for the tailnet owner rather than a step here.
 ### 1. Publish the mapping
 
 ```bash
-tailscale serve --bg 443 http://127.0.0.1:8787
+tailscale serve --https=443 --bg http://127.0.0.1:8787
 ```
+
+Note the flag form. A bare `tailscale serve --bg 443 http://127.0.0.1:8787`
+does NOT mean "serve 443 from that URL" — `serve` takes a single `<target>`,
+so the port has to arrive as `--https=`, and the positional form would be read
+as the target itself. This is the exact invocation that was validated (on a
+spare port).
 
 What it does: registers a persistent, node-local serve mapping. Tailscale
 obtains and renews a publicly-trusted certificate for the node's own name and
