@@ -14,8 +14,15 @@
  *
  * Plus the two boundaries the plan states: visitors are READ-ONLY on the
  * gate (every task/goal/decision mutation route refuses visitor auth) and
- * may post comments only; and a DOC-scoped invite gets none of the three —
- * task chips inside a doc resolve via GET /api/docs/<id>/tasks instead.
+ * may post comments only; and a visitor scoped to a DIFFERENT workspace gets
+ * none of the three.
+ *
+ * That last one used to be a DOC-scoped invite. A workspace is now the unit
+ * of sharing (2026-08-17) and there is no per-doc share to hold, so the
+ * out-of-scope visitor is a share on a second workspace — which is the same
+ * assertion (a share that is not THIS workspace's reaches none of these
+ * transports) proven with a grant that still exists. The removal itself is
+ * asserted rather than dropped: `share_link` with a `docId` answers 410.
  *
  * All fixtures are synthetic — invented names in the jordan@partner.example
  * register. The repo is public.
@@ -130,7 +137,11 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
   let decisionId: string;
   let hubShare: { shareId: string; slug: string };
   let hubCookie: string;
-  let docCookie: string;
+  /** A second, unrelated hub workspace and a live share on it. This is the
+   *  "authorized visitor who is not in THIS workspace" — the shape that
+   *  replaces the doc-scoped invite. */
+  let otherId: string;
+  let otherCookie: string;
 
   const ATTACHED = 'plan-doc';
   const PRIVATE = 'private-doc';
@@ -228,15 +239,25 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
       ).status,
     ).toBe(200);
 
-    // Shares: the whole hub workspace, and the attached doc ALONE.
+    // A second workspace nobody here belongs to. It needs no docs of its own:
+    // a hub workspace is shareable with zero bound members, and its only job
+    // is to authorize a visitor who is legitimately in SOME workspace.
+    const other = await post('/api/workspaces', {
+      name: 'billing-cleanup',
+      goal: 'Unrelated work.',
+    });
+    expect(other.status).toBe(200);
+    otherId = ((await other.json()) as { workspace: { id: string } }).workspace.id;
+
+    // Shares: the whole hub workspace, and the unrelated workspace.
     const hs = await post('/api/share/link', { workspaceId: hubId, label: 'hub share' });
     expect(hs.status).toBe(200);
     hubShare = ((await hs.json()) as { share: typeof hubShare }).share;
     hubCookie = await redeem(hubShare.slug);
 
-    const ds = await post('/api/share/link', { docId: ATTACHED, label: 'doc share' });
-    expect(ds.status).toBe(200);
-    docCookie = await redeem(((await ds.json()) as { share: { slug: string } }).share.slug);
+    const os = await post('/api/share/link', { workspaceId: otherId, label: 'other share' });
+    expect(os.status).toBe(200);
+    otherCookie = await redeem(((await os.json()) as { share: { slug: string } }).share.slug);
   });
 
   afterAll(async () => {
@@ -254,6 +275,29 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
       expect(r.status).toBe(302);
       expect(r.headers.get('location')).toBe(`/workspaces/${hubId}`);
     });
+
+    /**
+     * The doc-scoped invite this file used to mint for ATTACHED is gone —
+     * a workspace is the unit of sharing, and a doc filed on one is reached
+     * because it is a member. The refusal names the replacement rather than
+     * 404ing, because an older plugin bundle's `share_link` keeps sending
+     * `docId` to this same server long after this one stopped.
+     */
+    it('refuses to mint a share scoped to one doc, and names the replacement', async () => {
+      const r = await post('/api/share/link', { docId: ATTACHED, label: 'doc share' });
+      expect(r.status).toBe(410);
+      const body = (await r.json()) as { error: string; hint?: string };
+      expect(body.error).toBe('per_doc_sharing_removed');
+      expect(body.hint).toContain('workspaceId');
+      // Positive control: the workspace ATTACHED is filed on shares fine, and
+      // that share is what reaches the doc (see the doc block further down).
+      const ok = await post('/api/share/link', { workspaceId: hubId });
+      expect(ok.status).toBe(200);
+      await local(
+        `/api/share/${((await ok.json()) as { share: { shareId: string } }).share.shareId}`,
+        { method: 'DELETE' },
+      );
+    });
   });
 
   describe('transport 1: the hub page', () => {
@@ -264,9 +308,12 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
       expect(html).toContain('search-revamp'); // the real shell, not a stub
     });
 
-    it('refuses it without a session, and to a DOC-scoped visitor (absence)', async () => {
+    it('refuses it without a session, and to another workspace’s visitor (absence)', async () => {
       expect((await pub(`/workspaces/${hubId}`)).status).toBe(401);
-      expect((await pub(`/workspaces/${hubId}`, docCookie)).status).toBe(403);
+      // Positive control: the same cookie serves its OWN hub page, so the
+      // 403 is the scope check rather than a dead session.
+      expect((await pub(`/workspaces/${otherId}`, otherCookie)).status).toBe(200);
+      expect((await pub(`/workspaces/${hubId}`, otherCookie)).status).toBe(403);
     });
 
     // The hub-feedback doc is SHARED BY EVERY WORKSPACE, and Yjs sync is a
@@ -317,13 +364,13 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
       }
     });
 
-    it('refuses the socket to a DOC-scoped visitor whose socket auth otherwise works (absence)', async () => {
-      // Positive control: the SAME doc cookie passes the guard for its own
-      // doc (426 = past the guard, upgrade-required on a plain fetch).
+    it('refuses the socket to another workspace’s visitor whose socket auth otherwise works (absence)', async () => {
+      // Positive control: the SAME cookie passes the guard for its own board
+      // room (426 = past the guard, upgrade-required on a plain fetch).
       expect(
-        (await pub(`/y/${ATTACHED}`, docCookie, { headers: { host: PUBLIC_HOST } })).status,
+        (await pub(`/y/ws%3A${otherId}`, otherCookie, { headers: { host: PUBLIC_HOST } })).status,
       ).toBe(426);
-      expect((await pub(`/y/ws%3A${hubId}`, docCookie)).status).toBe(403);
+      expect((await pub(`/y/ws%3A${hubId}`, otherCookie)).status).toBe(403);
       expect((await pub(`/y/ws%3A${hubId}`)).status).toBe(401);
     });
   });
@@ -364,8 +411,12 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
       expect((payload?.actor as Record<string, unknown>).id).toBe(PERSON.id);
     });
 
-    it('refuses the feed to a DOC-scoped visitor (absence)', async () => {
-      expect((await pub(`/events/workspace/${hubId}`, docCookie)).status).toBe(403);
+    it('refuses the feed to another workspace’s visitor (absence)', async () => {
+      // Positive control: that cookie opens its OWN workspace feed.
+      const own = await pub(`/events/workspace/${otherId}`, otherCookie);
+      expect(own.status).toBe(200);
+      await own.body?.cancel().catch(() => {});
+      expect((await pub(`/events/workspace/${hubId}`, otherCookie)).status).toBe(403);
       expect((await pub(`/events/workspace/${hubId}`)).status).toBe(401);
     });
 
@@ -417,13 +468,15 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
   // doors have to agree; `fetchJson` swallows a non-ok, so the disagreement
   // was silent.
   describe('the hub page’s own REST reads are in scope', () => {
-    it('serves the workspace record to a workspace visitor, refuses a doc visitor', async () => {
+    it('serves the workspace record to its own visitor, refuses another workspace’s', async () => {
       const r = await pub(`/api/workspaces/${hubId}`, hubCookie);
       expect(r.status).toBe(200);
       const { workspace } = (await r.json()) as { workspace: { name: string; goal: string } };
       expect(workspace.name).toBe('search-revamp'); // the page title, not the id
       expect(workspace.goal).toBe('Ship the new search.'); // goal text is in-contract
-      expect((await pub(`/api/workspaces/${hubId}`, docCookie)).status).toBe(403);
+      // Positive control for the refusal: the other cookie reads ITS record.
+      expect((await pub(`/api/workspaces/${otherId}`, otherCookie)).status).toBe(200);
+      expect((await pub(`/api/workspaces/${hubId}`, otherCookie)).status).toBe(403);
       expect((await pub(`/api/workspaces/${hubId}`)).status).toBe(401);
     });
 
@@ -433,12 +486,13 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
      * leaves a visitor a strip that silently drops every question — the same
      * split-transport failure as the two reads above.
      */
-    it('serves the review queue to a workspace visitor, refuses a doc visitor', async () => {
+    it('serves the review queue to its own visitor, refuses another workspace’s', async () => {
       const r = await pub(`/api/workspaces/${hubId}/review-items`, hubCookie);
       expect(r.status).toBe(200);
       const seen = (await r.json()) as { items: unknown[] };
       expect(Array.isArray(seen.items)).toBe(true);
-      expect((await pub(`/api/workspaces/${hubId}/review-items`, docCookie)).status).toBe(403);
+      expect((await pub(`/api/workspaces/${otherId}/review-items`, otherCookie)).status).toBe(200);
+      expect((await pub(`/api/workspaces/${hubId}/review-items`, otherCookie)).status).toBe(403);
       expect((await pub(`/api/workspaces/${hubId}/review-items`)).status).toBe(401);
       // Read-only, like every other allowance on this gate.
       expect((await pub(`/api/workspaces/${hubId}/tasks`, hubCookie)).status).toBe(403);
@@ -468,7 +522,8 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
       expect(seen.attachments[0]?.state).toBeDefined();
       // …and never where it lives.
       expect(seen.attachments[0]?.endpoint).toBeUndefined();
-      expect((await pub(`/api/workspaces/${hubId}/attachments`, docCookie)).status).toBe(403);
+      expect((await pub(`/api/workspaces/${otherId}/attachments`, otherCookie)).status).toBe(200);
+      expect((await pub(`/api/workspaces/${hubId}/attachments`, otherCookie)).status).toBe(403);
     });
   });
 
@@ -632,9 +687,18 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
     });
   });
 
-  describe('task chips resolve via REST — a doc invite never syncs the board', () => {
-    it('GET /api/docs/<id>/tasks returns the §3.3 rule-2 chip shape, nothing more', async () => {
-      const r = await pub(`/api/docs/${ATTACHED}/tasks`, docCookie);
+  /**
+   * The chip endpoint used to be justified by the doc-scoped invite: a
+   * visitor who could see a doc but not the board still had to resolve the
+   * task chips inside it. That visitor no longer exists — everyone who can
+   * read a doc is in its workspace, and can sync the board room. What did
+   * NOT change is the contract: the endpoint answers the §3.3 rule-2 shape
+   * and stays scoped, so it is still not a task enumeration oracle for a
+   * visitor holding some other workspace's link.
+   */
+  describe('task chips resolve via REST, in the §3.3 rule-2 shape', () => {
+    it('GET /api/docs/<id>/tasks returns the chip shape, nothing more', async () => {
+      const r = await pub(`/api/docs/${ATTACHED}/tasks`, hubCookie);
       expect(r.status).toBe(200);
       const { tasks } = (await r.json()) as { tasks: Array<Record<string, unknown>> };
       const chip = tasks.find((t) => t.id === taskId);
@@ -645,7 +709,10 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
     });
 
     it('the chip endpoint stays scoped — not a task enumeration oracle', async () => {
-      expect((await pub(`/api/docs/${PRIVATE}/tasks`, docCookie)).status).toBe(403);
+      // A doc in no shared workspace, and a doc in someone else's — both
+      // refused, next to the 200 the in-scope read gets above.
+      expect((await pub(`/api/docs/${PRIVATE}/tasks`, hubCookie)).status).toBe(403);
+      expect((await pub(`/api/docs/${ATTACHED}/tasks`, otherCookie)).status).toBe(403);
     });
   });
 
