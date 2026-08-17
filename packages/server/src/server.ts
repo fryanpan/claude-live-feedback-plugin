@@ -230,6 +230,19 @@ export interface ServerOptions {
    */
   allowedOrigins?: string[];
   /**
+   * The external base URL this deployment is reached on, when something in
+   * front terminates TLS (`tailscale serve` → this process on loopback).
+   * Already normalized — bin.ts runs `normalizePublicBaseUrl` on
+   * `LF_PUBLIC_BASE_URL` at boot so a typo fails there rather than here.
+   *
+   * Every human-facing URL the server emits (`reviewUrl`, `entryUrl`, the
+   * import banner's `hubUrl`) is built from this when set. Unset — the
+   * default, and every test that doesn't care — falls back to
+   * `http://<discovered host>:<port>`, which is what a server with nothing
+   * in front of it is actually reachable on.
+   */
+  publicBaseUrl?: string;
+  /**
    * Cloudflare Access JWT verification config. When set, every non-OPTIONS
    * request must carry a valid `Cf-Access-Jwt-Assertion` header (or
    * `CF_Authorization` cookie) signed by the team's JWKS and matching the
@@ -1925,7 +1938,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // pull the banner into the live doc too — reparse right after our
           // own write, so disk (which we just wrote) wins the race with the
           // doc's debounced flush.
-          const hubUrl = `${publicBaseUrl(server.port ?? port)}/workspaces/${encodeURIComponent(workspaceId)}`;
+          const hubUrl = `${externalBaseUrl()}/workspaces/${encodeURIComponent(workspaceId)}`;
           writeFileSync(
             path,
             importBanner({
@@ -3599,6 +3612,23 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     },
   });
 
+  /**
+   * The base every human-facing URL this server emits is built on.
+   *
+   * One function, so the operator override cannot reach some links and miss
+   * others. That is not hypothetical tidiness: the links are the deliverable
+   * of a TLS deploy — a `reviewUrl` still pointing at `http://<host>:<port>`
+   * sends the reader back to the origin the deploy existed to leave, where
+   * the browser refuses the microphone. Missing one call site would look
+   * entirely fine until someone pressed the mic on that particular link.
+   *
+   * A function rather than a captured constant because `server.port` is only
+   * known after `Bun.serve` resolves port 0.
+   */
+  function externalBaseUrl(): string {
+    return opts.publicBaseUrl ?? publicBaseUrl(server.port ?? port);
+  }
+
   // Decorate doc metadata with a `reviewUrl` that's actually reachable from
   // other devices on the tailnet / LAN. Markdown docs render at /review/...;
   // mockup docs bound to a file on disk render at /mockup/<docId> — same
@@ -3608,7 +3638,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   function withReviewUrl<T extends { docId: string; type: DocType; sourceUrl?: string }>(
     meta: T,
   ): T & { reviewUrl?: string } {
-    const base = publicBaseUrl(server.port ?? port);
+    const base = externalBaseUrl();
     if (contentKind(meta.type) !== 'none') {
       // Every doc kind with LF-held content (markdown/code/diff) shares the
       // SPA route; the app branches the editor on the doc's type at boot.
