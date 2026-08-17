@@ -77,7 +77,29 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.46';
+const PLUGIN_VERSION = '0.1.48';
+
+/**
+ * What a good `evidence.commit` looks like, said at the one layer that reaches
+ * the caller BEFORE the bad value exists.
+ *
+ * The server cannot check this: evidence is a bare sha with no repo attached,
+ * and this server has no checkout — nor any way to know which of a machine's
+ * repos a given board's shas belong to. So a tool description is the only
+ * available guard, and both tools that accept a commit share this one spelling
+ * of it rather than two that drift.
+ *
+ * The failure it is aimed at is not carelessness, it is the OBVIOUS action
+ * being wrong: `git rev-parse HEAD` on the branch you just finished is the
+ * natural thing to record, resolves perfectly when you record it, and is
+ * discarded by the squash-merge an hour later. Measured on this project's own
+ * board 2026-08-17: of 67 commit values on closed rows, two were `PR #131` /
+ * `PR #132`, one was a sha that no longer resolves anywhere, and one more was a
+ * still-live branch commit on an unmerged branch — the same defect in flight,
+ * counted as proof today and dead the moment its branch lands.
+ */
+const COMMIT_EVIDENCE_DESCRIPTION =
+  'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
 
 const server = new Server(
   {
@@ -1115,7 +1137,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'task_transition',
       description:
-        "The SINGLE gate for task status changes (todo | in-progress | done) — attributed to this agent, appended to the task's audit trail. Attach `evidence` ({commit} and/or {threadRef}) on forward moves or the move is flagged `unproven` (allowed, shaded on the board); if the evidence was missing or WRONG, do not re-send this call — it refuses with `same-status` — use `amend_evidence`, which appends a correction to the move that already happened. Open `after` dependencies come back in `blockers` — an edge marked enforce REFUSES the transition (HTTP 409) until the blocking task closes; read the blocker message, it names what to unblock. The task's riskTier gates forward moves the same way: a RED task refuses outright (a person has to make the move), and a YELLOW one needs `confirmed: true` — which means the human said yes after you showed them the concrete effect, never a flag you set to get past the gate. `usage` ({inputTokens, outputTokens}) reports what the task cost at done. Moving back to todo is never blocked.",
+        "The SINGLE gate for task status changes (todo | in-progress | done) — attributed to this agent, appended to the task's audit trail. Attach `evidence` ({commit} and/or {threadRef}) on forward moves or the move is flagged `unproven` (allowed, shaded on the board) — and read the `commit` field's own description before you fill it, because the obvious value is the wrong one: a branch sha is discarded by the squash-merge, after which the row still reads as proven and points at nothing. If the evidence was missing or WRONG, do not re-send this call — it refuses with `same-status` — use `amend_evidence`, which appends a correction to the move that already happened. Open `after` dependencies come back in `blockers` — an edge marked enforce REFUSES the transition (HTTP 409) until the blocking task closes; read the blocker message, it names what to unblock. The task's riskTier gates forward moves the same way: a RED task refuses outright (a person has to make the move), and a YELLOW one needs `confirmed: true` — which means the human said yes after you showed them the concrete effect, never a flag you set to get past the gate. `usage` ({inputTokens, outputTokens}) reports what the task cost at done. Moving back to todo is never blocked.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1125,7 +1147,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           evidence: {
             type: 'object',
             properties: {
-              commit: { type: 'string' },
+              commit: { type: 'string', description: COMMIT_EVIDENCE_DESCRIPTION },
               threadRef: { type: 'object' },
             },
           },
@@ -1157,7 +1179,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'object',
             description: 'The proof the move should have carried. At least one of these.',
             properties: {
-              commit: { type: 'string' },
+              commit: { type: 'string', description: COMMIT_EVIDENCE_DESCRIPTION },
               threadRef: { type: 'object' },
             },
           },
