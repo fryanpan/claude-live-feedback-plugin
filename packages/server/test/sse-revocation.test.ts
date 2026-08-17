@@ -81,13 +81,22 @@ describe('a revoked share loses its event stream', () => {
         },
       });
 
+    // A workspace is the unit of sharing: the doc is filed on `ws-shared` and
+    // the link covers that workspace. `shared` is its only member, so the
+    // stream under test — /events/shared — is still exactly the one this
+    // share authorized, which is what revocation has to reach.
     await local('/api/docs', {
       method: 'POST',
-      body: JSON.stringify({ docId: 'shared', type: 'markdown', sourceUrl: docPath }),
+      body: JSON.stringify({
+        docId: 'shared',
+        type: 'markdown',
+        sourceUrl: docPath,
+        workspaceId: 'ws-shared',
+      }),
     });
     const mint = await local('/api/share/link', {
       method: 'POST',
-      body: JSON.stringify({ docId: 'shared' }),
+      body: JSON.stringify({ workspaceId: 'ws-shared' }),
     });
     const { share } = (await mint.json()) as { share: { slug: string; shareId: string } };
     const redeemed = await fetch(`${base}/s/${share.slug}`, {
