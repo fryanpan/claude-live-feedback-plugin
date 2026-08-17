@@ -1062,6 +1062,13 @@ export type ReorderGoalsResult =
       /** Ids in `order` that are not goals at this scope — a goal removed or
        *  renamed since the caller read the list, or simply invented. */
       unknownIds: string[];
+      /** Reserved ids the caller tried to position: `chores` today. Split out
+       *  of `unknownIds` because they are not mistakes of the same kind —
+       *  `chores` is a real, visible row that simply is not part of the
+       *  order, so calling it "unknown" sends the caller hunting for a typo
+       *  when the answer is "drop it from the list". `get_workspace` marks it
+       *  `reorderable: false` for the same reason. */
+      reservedIds: string[];
       /** Ids at this scope that `order` left out. These are precisely the
        *  goals `setGoalList` would have emptied into Chores. */
       missingIds: string[];
@@ -2429,17 +2436,36 @@ export class TaskStore {
     const currentSet = new Set(currentIds);
     const seen = new Set<string>();
     const unknownIds: string[] = [];
+    const reservedIds: string[] = [];
     const duplicateIds: string[] = [];
     for (const id of order) {
-      // 'chores' is never in goals[], so it lands here as unknown rather
-      // than as a position nobody honours.
-      if (!currentSet.has(id) && !unknownIds.includes(id)) unknownIds.push(id);
+      // 'chores' is never in goals[], so it is refused — but it is refused as
+      // RESERVED, not unknown. It is a row the caller genuinely saw in the
+      // read, and it always renders last, so a caller who put it first cannot
+      // be obeyed and a caller who put it last must not be silently trimmed:
+      // accepting either would be a position nobody honours.
+      if (!currentSet.has(id)) {
+        const bucket = id === CHORES_GOAL_ID ? reservedIds : unknownIds;
+        if (!bucket.includes(id)) bucket.push(id);
+      }
       if (seen.has(id) && !duplicateIds.includes(id)) duplicateIds.push(id);
       seen.add(id);
     }
     const missingIds = currentIds.filter((id) => !seen.has(id));
-    if (unknownIds.length > 0 || duplicateIds.length > 0 || missingIds.length > 0) {
-      return { ok: false, error: 'order-mismatch', unknownIds, missingIds, duplicateIds };
+    if (
+      unknownIds.length > 0 ||
+      reservedIds.length > 0 ||
+      duplicateIds.length > 0 ||
+      missingIds.length > 0
+    ) {
+      return {
+        ok: false,
+        error: 'order-mismatch',
+        unknownIds,
+        reservedIds,
+        missingIds,
+        duplicateIds,
+      };
     }
 
     if (currentIds.every((id, i) => order[i] === id)) {
