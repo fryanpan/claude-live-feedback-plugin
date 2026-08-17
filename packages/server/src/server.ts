@@ -13,6 +13,7 @@ import {
 import { needsCall } from '@feedback/core/summary-prompt';
 import type { Server as BunServer } from 'bun';
 import { classifyActor } from './activity.ts';
+import { clientReleaseStatus } from './client-release.ts';
 import { showFile } from './git-diff.ts';
 import {
   LOOPBACK_HOSTS,
@@ -182,6 +183,19 @@ export interface ServerOptions {
    * means a CI run can never trigger a deploy.
    */
   pluginRefresher?: PluginRefresher;
+  /**
+   * The client release root this deployment publishes into (see
+   * client-release.ts), enabling the "your browser is running an old client"
+   * signal on the board.
+   *
+   * Set in ONE place — scripts/serve.ts --no-watch, via bin.ts — because only
+   * the process that PUBLISHES a release may report on it. `bun run dev` and
+   * `bun run staging` serve their own checkout's dist while sharing this
+   * machine's default release root, so reading it there would report prod's
+   * deploy state on a server that is not serving prod's client. Same seam
+   * rule as `pluginRefresher`.
+   */
+  clientReleaseRootDir?: string | null;
   /** Absolute path to the built widget dist dir, or null to skip. */
   widgetDistDir?: string | null;
   /** Absolute path to the built markdown-app dist dir. */
@@ -292,6 +306,7 @@ export interface ServerHandle {
 export function createServer(opts: ServerOptions = {}): ServerHandle {
   const port = opts.port ?? DEFAULT_PORT;
   const dataDir = opts.dataDir ?? join(process.cwd(), 'data');
+  const clientReleaseRootDir = opts.clientReleaseRootDir ?? null;
   const widgetDist = opts.widgetDistDir ?? null;
   const markdownAppDist = opts.markdownAppDistDir ?? null;
   const demosDir = opts.demosDir ?? null;
@@ -2391,9 +2406,21 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // it says which tools an agent here can use, so a visitor sees it
           // for the same reason they see who is attached.
           const released = readReleasedPluginVersion();
+          // The other half of "what is running where": the plugin drift above
+          // is about the agents, this is about the browser the reader is
+          // holding. A failed client build keeps the previous release live and
+          // used to say so only on stderr, so the split widened in silence.
+          //
+          // Owner-only: `lastError` is a build error off this machine's disk
+          // (absolute paths), and which release is live is a fact about the
+          // host's deploy rather than workspace content — the same line the
+          // `endpoint` redaction draws.
+          const clientRelease =
+            clientReleaseRootDir && !visitor ? clientReleaseStatus(clientReleaseRootDir) : null;
           return j(200, {
             workspaceId,
             attachments,
+            ...(clientRelease ? { clientRelease } : {}),
             pluginRelease: {
               version: released,
               behind: agentsBehind(released, attachments).map((a) => ({

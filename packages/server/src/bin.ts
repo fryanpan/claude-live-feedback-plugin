@@ -37,6 +37,14 @@ const { widget: widgetDist, markdownApp: markdownAppDist } = resolveClientDists(
 });
 const demosDir = pathOrNull(join(repoRoot, 'demos'));
 
+// The release root this deployment PUBLISHES into, which is what lets the
+// board say "your browser is running a client from three days ago because the
+// build has been failing". PROD passes it (scripts/serve.ts --no-watch);
+// nothing else may, because dev and staging serve their own checkout's dist
+// while sharing this machine's default release root — they would report prod's
+// deploy state as their own. Same seam rule as the plugin refresher.
+const clientReleaseRootDir = arg('client-release-root') ?? null;
+
 // Extra hostnames to treat as LOCAL. Loopback, the tailnet name, this
 // machine's LAN names, and private IPv4 ranges are detected automatically;
 // this covers anything we can't detect (a reverse proxy in front, a custom
@@ -164,6 +172,7 @@ for (let i = 0; i < 20 && !handle; i++) {
       dataDir,
       widgetDistDir: widgetDist,
       markdownAppDistDir: markdownAppDist,
+      clientReleaseRootDir,
       demosDir,
       trustedHosts,
       allowedOrigins,

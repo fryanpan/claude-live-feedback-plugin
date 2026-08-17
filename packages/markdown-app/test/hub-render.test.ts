@@ -7,6 +7,7 @@ import {
   type HubTask,
   type UptimeReport,
   boardSections,
+  clientDriftNotice,
   goalLabel,
   pluginDriftNotice,
   reviewQueue,
@@ -1400,7 +1401,7 @@ describe('renderPresence — plugin drift', () => {
     // most likely to be stranded on an old bundle. Hiding the region on
     // "no chips" would hide the drift with it.
     const host = document.createElement('div');
-    renderPresence(host, [], null, { onTap: () => {}, onLongPress: () => {} }, drift());
+    renderPresence(host, [], null, { onTap: () => {}, onLongPress: () => {} }, [drift()]);
     expect(host.classList.contains('hidden')).toBe(false);
     const note = host.querySelector('.hub-drift');
     expect(note?.textContent).toContain('older plugin than 0.1.26');
@@ -1414,10 +1415,71 @@ describe('renderPresence — plugin drift', () => {
     const host = document.createElement('div');
     // Positive control: the same call WITH a notice puts a .hub-drift in, so
     // this absence means the notice is what drives it.
-    renderPresence(host, [], null, { onTap: () => {}, onLongPress: () => {} }, drift());
+    renderPresence(host, [], null, { onTap: () => {}, onLongPress: () => {} }, [drift()]);
     expect(host.querySelector('.hub-drift')).not.toBeNull();
 
-    renderPresence(host, [], null, { onTap: () => {}, onLongPress: () => {} }, null);
+    renderPresence(host, [], null, { onTap: () => {}, onLongPress: () => {} }, [null]);
+    expect(host.querySelector('.hub-drift')).toBeNull();
+    expect(host.classList.contains('hidden')).toBe(true);
+  });
+});
+
+describe('renderPresence — client release drift', () => {
+  const now = Date.UTC(2026, 7, 16, 12, 0, 0);
+  const stale = () =>
+    clientDriftNotice(
+      {
+        releaseId: '20260813T014455123Z-000003',
+        publishedAt: now - 72 * 60 * 60 * 1000,
+        ageMs: 72 * 60 * 60 * 1000,
+        sourceRef: 'a1b2c3d',
+        consecutiveFailures: 2,
+        failingSince: now - 10 * 60 * 60 * 1000,
+        lastError: 'client release: markdownApp bundle is incomplete — app.js missing',
+        stale: true,
+      },
+      now,
+    );
+  const pluginDrift = () =>
+    pluginDriftNotice({
+      version: '0.1.26',
+      behind: [{ agentId: 'agent-quill', pluginVersion: '0.1.12' }],
+    });
+
+  it('shows the stale-client notice on a board with nobody present', () => {
+    // Nobody being present is not a reason to hide it — it is about every
+    // browser that loads this board, including the one reading it now.
+    const host = document.createElement('div');
+    renderPresence(host, [], null, { onTap: () => {}, onLongPress: () => {} }, [stale()]);
+    expect(host.classList.contains('hidden')).toBe(false);
+    const note = host.querySelector('.hub-drift');
+    expect(note?.textContent).toContain('3d ago');
+    expect(note?.textContent).toContain('app.js missing');
+    expect(note?.textContent).toContain('restart');
+  });
+
+  it('shows both drifts at once — they are different problems', () => {
+    // The agents being behind on the plugin and the browser being behind on
+    // the client are independent failures with different fixes; one must not
+    // hide the other.
+    const host = document.createElement('div');
+    renderPresence(host, [], null, { onTap: () => {}, onLongPress: () => {} }, [
+      pluginDrift(),
+      stale(),
+    ]);
+    const notes = [...host.querySelectorAll('.hub-drift')];
+    expect(notes.length).toBe(2);
+    expect(notes[0]?.textContent).toContain('older plugin than 0.1.26');
+    expect(notes[1]?.textContent).toContain('published 3d ago');
+  });
+
+  it('draws nothing when neither drift is real', () => {
+    const host = document.createElement('div');
+    // Positive control first, so the absence below means something.
+    renderPresence(host, [], null, { onTap: () => {}, onLongPress: () => {} }, [stale()]);
+    expect(host.querySelector('.hub-drift')).not.toBeNull();
+
+    renderPresence(host, [], null, { onTap: () => {}, onLongPress: () => {} }, [null, null]);
     expect(host.querySelector('.hub-drift')).toBeNull();
     expect(host.classList.contains('hidden')).toBe(true);
   });
