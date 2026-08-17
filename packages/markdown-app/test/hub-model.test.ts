@@ -7,6 +7,7 @@ import {
   DEFAULT_DONE_WINDOW,
   type HubGoal,
   type HubTask,
+  type ReviewItem,
   type ReviewThreadItem,
   TASK_STATUS_ORDER,
   type UptimeReport,
@@ -28,6 +29,7 @@ import {
   quoteAfterEdit,
   quoteForCapture,
   reviewQueue,
+  reviewRow,
   stepTarget,
   taskVisible,
   timeAgo,
@@ -589,6 +591,173 @@ describe('reviewQueue', () => {
     const q = reviewQueue([gate, waiting], [threadItem()], T0);
     expect(q.blocking).toBe(1);
     expect(q.total).toBe(2);
+  });
+});
+
+describe('reviewQueue — human-owned work that agent work is waiting on', () => {
+  const T0 = 1_700_000_000_000;
+  const t = (over: Partial<HubTask>): HubTask => task({ createdAt: T0, updatedAt: T0, ...over });
+
+  /**
+   * A board with edges, and nothing else contrived about it. Every id is
+   * spelled out so the expectation below can be re-derived from the `after`
+   * arrays rather than copied off the implementation's output.
+   */
+  function boardWithEdges(): HubTask[] {
+    return [
+      t({ id: 'h-tunnel', assignee: 'human', title: 'Turn on the tunnel' }),
+      t({ id: 'h-key', assignee: 'human', title: 'Grant the deploy key' }),
+      // Human-owned and open, but nothing names it: criterion 3's case.
+      t({ id: 'h-retro', assignee: 'human', title: 'Read the retro' }),
+      // An agent's task that other agent work waits on. Blocking, but nobody
+      // needs a person for it — the band is about what a person is holding.
+      t({ id: 'a-gate', assignee: 'Helper', title: 'Land the schema change' }),
+      t({ id: 'a-1', assignee: 'Helper', after: ['h-tunnel'] }),
+      t({ id: 'a-2', assignee: 'Helper', after: ['h-tunnel', 'h-key'], afterEnforce: ['h-key'] }),
+      // Finished work waits on nothing — this edge must not count.
+      t({ id: 'a-3', assignee: 'Helper', after: ['h-key'], status: 'done' }),
+      t({ id: 'a-4', assignee: 'Helper', after: ['a-gate'] }),
+    ];
+  }
+
+  /** What a reader would say by hand, read off the edges — not off the code. */
+  function blockersByHand(tasks: HubTask[]): Map<string, number> {
+    const open = tasks.filter((x) => x.status !== 'done');
+    const out = new Map<string, number>();
+    for (const h of open) {
+      // Decisions have their own band; this one is about everything else a
+      // person owns.
+      if (h.assignee !== 'human' || h.needs === 'decision') continue;
+      const waiting = open.filter((x) => x.id !== h.id && x.after.includes(h.id));
+      if (waiting.length > 0) out.set(h.id, waiting.length);
+    }
+    return out;
+  }
+
+  // Criterion 2, as a relationship rather than a number: whatever the fixture
+  // says, the band says the same thing.
+  it('surfaces exactly the human tasks the edges point at, with the same counts', () => {
+    const tasks = boardWithEdges();
+    const byHand = blockersByHand(tasks);
+    // The fixture is not vacuous — it has edges to find.
+    expect(byHand.size).toBeGreaterThan(0);
+
+    const q = reviewQueue(tasks, [], T0);
+    const band = q.items.filter((i) => i.kind === 'blocker');
+    expect(new Set(band.map((i) => i.blocker?.task.id))).toEqual(new Set(byHand.keys()));
+    for (const item of band) {
+      expect(item.blocker?.blocks.length).toBe(byHand.get(item.blocker?.task.id ?? ''));
+    }
+  });
+
+  // Criterion 3. The decision band shows a decision with nothing waiting on it
+  // ("Nothing is waiting on this yet"); this band must not, or every human task
+  // on the board joins the strip.
+  it('leaves out a human task nothing depends on', () => {
+    const tasks = boardWithEdges();
+    const q = reviewQueue(tasks, [], T0);
+    const ids = q.items.filter((i) => i.kind === 'blocker').map((i) => i.blocker?.task.id);
+    // Positive control first: the band can see a human task at all.
+    expect(ids).toContain('h-tunnel');
+    expect(ids).not.toContain('h-retro');
+  });
+
+  // A decision is also assigned to somebody. Counting it in both bands would
+  // double it in the number at the top of the board.
+  it('never counts a decision twice — it stays in the decision band only', () => {
+    const d = t({ id: 'd-1', assignee: 'human', needs: 'decision', title: 'Blue or green?' });
+    const waiting = t({ id: 'a-1', assignee: 'Helper', after: ['d-1'] });
+    const q = reviewQueue([d, waiting], [], T0);
+    expect(q.items.filter((i) => i.kind === 'decision')).toHaveLength(1);
+    expect(q.items.filter((i) => i.kind === 'blocker')).toHaveLength(0);
+    expect(q.total).toBe(1);
+    expect(q.blocking).toBe(1);
+  });
+
+  it('drops a human blocker once it is done, and ignores done dependents', () => {
+    const finished = t({ id: 'h-done', assignee: 'human', status: 'done' });
+    const open = t({ id: 'h-open', assignee: 'human' });
+    const waits = [
+      t({ id: 'a-1', assignee: 'Helper', after: ['h-done'] }),
+      t({ id: 'a-2', assignee: 'Helper', after: ['h-open'], status: 'done' }),
+    ];
+    const q = reviewQueue([finished, open, ...waits], [], T0);
+    expect(q.items.filter((i) => i.kind === 'blocker')).toHaveLength(0);
+  });
+
+  // The count at the top means "act now". A blocker is blocking by definition
+  // — that is the condition for being in the band — so it belongs in it.
+  it('counts blockers as blocking, alongside decisions', () => {
+    const q = reviewQueue(boardWithEdges(), [], T0);
+    expect(q.blocking).toBe(2);
+    expect(q.total).toBe(2);
+  });
+
+  it('bands blockers under decisions and above the comment bands', () => {
+    const d = t({ id: 'd-1', assignee: 'human', needs: 'decision' });
+    const tasks = [...boardWithEdges(), d, t({ id: 'a-9', assignee: 'Helper', after: ['d-1'] })];
+    const q = reviewQueue(
+      tasks,
+      [
+        {
+          kind: 'task-thread',
+          docId: 'task:a-1',
+          threadId: 'th-1',
+          taskId: 'a-1',
+          title: 'Ship it',
+          ask: 'Which repo?',
+          askedBy: 'Helper',
+          since: T0 - 1_000,
+        },
+      ],
+      T0,
+    );
+    expect(q.items.map((i) => i.kind)).toEqual(['decision', 'blocker', 'blocker', 'task-thread']);
+  });
+
+  // Same rule the decision band uses: an enforced edge outranks a bigger soft
+  // one, because that work cannot proceed at all.
+  it('orders by what is enforced first, then by how much is waiting', () => {
+    const q = reviewQueue(boardWithEdges(), [], T0);
+    const band = q.items.filter((i) => i.kind === 'blocker');
+    expect(band.map((i) => i.blocker?.task.id)).toEqual(['h-key', 'h-tunnel']);
+    expect(band[0]?.blocker?.hard).toBe(true);
+    expect(band[0]?.why).toContain('Hard-blocking');
+    expect(band[1]?.why).toContain('Blocking 2 tasks');
+  });
+
+  it('gives a blocker a stable key that cannot collide with a decision', () => {
+    const q = reviewQueue(boardWithEdges(), [], T0);
+    const keys = q.items.map((i) => i.key);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(keys).toContain('blocker:h-tunnel');
+  });
+});
+
+describe('reviewRow — the row an item carries, whichever band it came from', () => {
+  it('answers for a decision and a blocker, and not for a comment', () => {
+    const T0 = 1_700_000_000_000;
+    const d = task({ id: 'd-1', assignee: 'human', needs: 'decision', createdAt: T0 });
+    const h = task({ id: 'h-1', assignee: 'human', createdAt: T0 });
+    const q = reviewQueue(
+      [d, h, task({ id: 'a-1', after: ['d-1'] }), task({ id: 'a-2', after: ['h-1'] })],
+      [
+        {
+          kind: 'doc-thread',
+          docId: 'doc-1',
+          threadId: 'th-1',
+          title: 'Launch plan',
+          ask: 'Still true?',
+          askedBy: 'Helper',
+          since: T0,
+        },
+      ],
+      T0,
+    );
+    const rowOf = (kind: string) => reviewRow(q.items.find((i) => i.kind === kind) as ReviewItem);
+    expect(rowOf('decision')?.task.id).toBe('d-1');
+    expect(rowOf('blocker')?.task.id).toBe('h-1');
+    expect(rowOf('doc-thread')).toBeUndefined();
   });
 });
 
