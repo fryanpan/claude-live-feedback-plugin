@@ -103,6 +103,15 @@ export interface VoiceCaptureOpts {
   createRecognition?: () => RecognitionLike | null;
   /** The page's origin facts — injectable so the gate is testable. */
   readOrigin?: () => OriginFacts;
+  /**
+   * Bind hold-Space on `document`. Default true.
+   *
+   * Space is a SINGLETON gesture: two captures listening for it both start on
+   * one press and both finalize their own transcript, so exactly one capture
+   * per page may own it. The board-wide voice dock does; the mic on the
+   * quick-add box is a button and opts out.
+   */
+  spaceHotkey?: boolean;
 }
 
 export interface VoiceCapture {
@@ -380,8 +389,11 @@ export function createVoiceCapture(opts: VoiceCaptureOpts): VoiceCapture {
     button.setAttribute('aria-label', blockedAtMount);
   }
 
-  document.addEventListener('keydown', onKeyDown);
-  document.addEventListener('keyup', onKeyUp);
+  const spaceHotkey = opts.spaceHotkey ?? true;
+  if (spaceHotkey) {
+    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('keyup', onKeyUp);
+  }
   window.addEventListener('blur', onBlur);
   button.addEventListener('pointerdown', onPointerDown);
   button.addEventListener('pointerup', onPointerEnd);
@@ -392,8 +404,10 @@ export function createVoiceCapture(opts: VoiceCaptureOpts): VoiceCapture {
   return {
     holding: () => holding,
     destroy: () => {
-      document.removeEventListener('keydown', onKeyDown);
-      document.removeEventListener('keyup', onKeyUp);
+      if (spaceHotkey) {
+        document.removeEventListener('keydown', onKeyDown);
+        document.removeEventListener('keyup', onKeyUp);
+      }
       window.removeEventListener('blur', onBlur);
       button.removeEventListener('pointerdown', onPointerDown);
       button.removeEventListener('pointerup', onPointerEnd);

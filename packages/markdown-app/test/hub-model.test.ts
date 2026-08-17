@@ -10,6 +10,7 @@ import {
   TASK_STATUS_ORDER,
   type UptimeReport,
   activityRows,
+  appendDictation,
   boardSections,
   decisionRows,
   describeEvent,
@@ -21,6 +22,7 @@ import {
   pluginDriftNotice,
   positionBetween,
   presenceChips,
+  quoteForCapture,
   reviewQueue,
   stepTarget,
   taskVisible,
@@ -681,5 +683,66 @@ describe('pluginDriftNotice', () => {
     // The manifest was unreadable. Claiming drift would be inventing it.
     expect(pluginDriftNotice(rel(null, [{ agentId: 'a', pluginVersion: '0.1.0' }]))).toBeNull();
     expect(pluginDriftNotice(undefined)).toBeNull();
+  });
+});
+
+// ── Dictation into the capture box ─────────────────────────────────────────
+
+describe('appendDictation', () => {
+  it('fills an empty box and makes the transcript the quote', () => {
+    expect(appendDictation('', '  file a bug about the mic  ')).toEqual({
+      text: 'file a bug about the mic',
+      quote: 'file a bug about the mic',
+    });
+  });
+
+  it('appends to what is already there rather than replacing it', () => {
+    // Someone types half an idea, then finishes it out loud. Replacing would
+    // eat the typed half — the one failure this whole box exists to prevent.
+    expect(appendDictation('Fix the goal card', 'it is too tall on a phone')).toEqual({
+      text: 'Fix the goal card it is too tall on a phone',
+      quote: 'it is too tall on a phone',
+    });
+  });
+
+  it('accumulates the quote across two utterances', () => {
+    const first = appendDictation('', 'add a mic to the board');
+    const second = appendDictation(first.text, 'and keep what I said', first.quote);
+    expect(second.text).toBe('add a mic to the board and keep what I said');
+    // Both utterances are what was SAID, so both belong to the quote.
+    expect(second.quote).toBe('add a mic to the board and keep what I said');
+  });
+
+  it('quotes only the spoken half, never the typed half', () => {
+    // The point of the quote: the agent gets the phrasing as spoken. Text
+    // that was typed is already the task; it was never a quote of anyone.
+    const r = appendDictation('typed words', 'spoken words');
+    expect(r.quote).toBe('spoken words');
+    expect(r.quote).not.toContain('typed');
+  });
+
+  it('an empty transcript changes nothing', () => {
+    expect(appendDictation('already here', '   ', 'said before')).toEqual({
+      text: 'already here',
+      quote: 'said before',
+    });
+  });
+});
+
+describe('quoteForCapture', () => {
+  it('survives an edit to the text it was dictated into', () => {
+    // Dictation heard "mike"; he fixed it to "mic" before filing. The quote is
+    // still what he SAID — the agent seeing both is the whole reason to keep
+    // one, so this must NOT be conditioned on the text still matching.
+    expect(quoteForCapture('add a mike to the board')).toBe('add a mike to the board');
+  });
+
+  it('has no quote for a task nobody spoke', () => {
+    expect(quoteForCapture(undefined)).toBeUndefined();
+  });
+
+  it('treats a blank utterance as no quote rather than an empty one', () => {
+    // An empty string would file `quote: ''` — a claim that words were spoken.
+    expect(quoteForCapture('   ')).toBeUndefined();
   });
 });
