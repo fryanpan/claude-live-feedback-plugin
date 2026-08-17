@@ -333,6 +333,23 @@ describe('shareScopeAllows (workspace-hub surfaces — §3.12 commit 8)', () => 
     expect(shareScopeAllows(`/workspaces/${encodeURIComponent('hub-1')}`, 'GET', HUB)).toBe(true);
   });
 
+  it('never lets a share host reach the plugin refresh', () => {
+    // The only route that acts on the HOST rather than on workspace content:
+    // it runs `claude plugin update`, which rewrites this machine's plugin
+    // cache. Holding a share link is not a reason to be able to run a deploy
+    // step on someone's laptop. The allowlist is closed-by-default so this
+    // was already true the moment the route existed — this pins it, because
+    // "closed by default" is a property of a file somebody can edit.
+    for (const target of [HUB, DOC]) {
+      expect(shareScopeAllows('/api/plugin/refresh', 'POST', target, workspaceOf)).toBe(false);
+      expect(shareScopeAllows('/api/plugin/refresh', 'GET', target, workspaceOf)).toBe(false);
+    }
+    // Positive control: the same targets DO reach their own surfaces, so the
+    // refusals above are about this path and not about the fixture.
+    expect(shareScopeAllows('/workspaces/hub-1', 'GET', HUB, workspaceOf)).toBe(true);
+    expect(shareScopeAllows(`/api/docs/${DOC.docId}`, 'GET', DOC, workspaceOf)).toBe(true);
+  });
+
   it('allows the ws:<id> board room socket (workspaceOf returns null for it)', () => {
     // The room is not a member doc — its allowance is explicit, so pass a
     // resolver that knows nothing about it and watch it still pass.
