@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveClientDists } from './client-release.ts';
+import { createPluginRefresher } from './plugin-refresh.ts';
 import { lanHostnames, tailscaleHost } from './public-host.ts';
 import { createServer } from './server.ts';
 import { readKeychainPassword } from './share/keychain.ts';
@@ -136,6 +137,20 @@ const summarizer = new ThreadSummarizer();
 // Absent key → null → the fast path is off and voice routes to the agent.
 const voiceComplete = haikuVoiceComplete();
 
+// The ONLY place a real plugin refresher is constructed — same seam rule as
+// the summarizer above, and here it also means no test run and no `bun run
+// staging` can mutate this machine's plugin cache. A deploy has to be asked
+// for by the process that IS the deploy.
+//
+// PROD passes --plugin-refresh-interval-ms (see scripts/serve.ts). Absent, no
+// refresher exists and /api/plugin/refresh answers 501, which is what dev and
+// staging want: they are copies, not the machine everyone installs from.
+const pluginRefreshIntervalMs = Number(arg('plugin-refresh-interval-ms', '0'));
+const pluginRefresher =
+  Number.isFinite(pluginRefreshIntervalMs) && pluginRefreshIntervalMs > 0
+    ? createPluginRefresher()
+    : null;
+
 // Try the requested port first; if it's taken (e.g. another agent owns it),
 // walk up to the next 20 ports. This keeps `bun run dev` working without
 // conflicts when multiple agents are on the same machine.
@@ -157,6 +172,7 @@ for (let i = 0; i < 20 && !handle; i++) {
       share,
       summarizer,
       ...(voiceComplete ? { voiceComplete } : {}),
+      ...(pluginRefresher ? { pluginRefresher } : {}),
     });
   } catch (err) {
     lastErr = err;
@@ -229,6 +245,40 @@ if (['1', 'true', 'yes'].includes((process.env.LF_SUMMARY_BACKFILL ?? '').trim()
   );
 }
 
+// The update runs off the merge, not off somebody remembering.
+//
+// Eleven releases once sat undelivered because delivery had exactly one
+// trigger: a person deciding to run one command. Nothing was broken and
+// nothing said so. `claude plugin update` fetches from the marketplace, so
+// polling it on a timer means a merge reaches this machine's cache on its own
+// — and the only step left is the peer's own restart.
+//
+// This cannot interrupt anyone: it rewrites a version-keyed cache directory,
+// and every running session keeps loading the path it resolved at launch. It
+// is also the reason this is safe to arm without asking.
+//
+// Once at startup, because a prod restart is already the deploy for the
+// browser client and there is no reason for the plugin to be the one artifact
+// that waits.
+let pluginRefreshTimer: ReturnType<typeof setInterval> | null = null;
+if (pluginRefresher) {
+  const say = (why: string) => {
+    void pluginRefresher.refresh().then((r) => {
+      // Only speak up when something changed or broke. A quiet no-op every
+      // half hour in a log people read is how they stop reading it.
+      if (r.changed || !r.ok) console.log(`[feedback]   plugin(${why}): ${r.message}`);
+    });
+  };
+  say('boot');
+  pluginRefreshTimer = setInterval(() => say('poll'), pluginRefreshIntervalMs);
+  // Never hold the process open for a cache update.
+  pluginRefreshTimer.unref();
+  console.log(
+    `[feedback]   plugin:     auto-refresh every ${Math.round(pluginRefreshIntervalMs / 60_000)} min ` +
+      '(cache only — peers pick it up on their next restart)',
+  );
+}
+
 // Graceful shutdown
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, async () => {
@@ -236,6 +286,7 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const) {
     // Cancels an in-flight backfill; without it a paced drain keeps spending
     // on a process that is on its way out.
     summarizer.dispose();
+    if (pluginRefreshTimer) clearInterval(pluginRefreshTimer);
     await handle.stop();
     process.exit(0);
   });
