@@ -125,6 +125,24 @@ export interface PublishLedger {
 
 const LEDGER_FILE = 'publish-log.json';
 
+/** Distinguishes two ledger writes from the same process, as the pid
+ *  distinguishes two processes. See `ledgerTmpPath`. */
+let ledgerSeq = 0;
+
+/**
+ * Where one ledger write stages its bytes before the rename that commits it.
+ *
+ * Per-attempt, never a fixed name: two supervisors starting against the same
+ * release root (a launchd respawn overlapping a manual start) would otherwise
+ * write the SAME temp path, and one rename would commit the other's outcome —
+ * losing a failure, or clearing a streak that is still live. Same reason
+ * `current` is staged as `.current-<id>` rather than `.current`.
+ */
+export function ledgerTmpPath(root: string): string {
+  ledgerSeq = (ledgerSeq + 1) % 1_000_000;
+  return join(root, `.${LEDGER_FILE}.${process.pid}.${ledgerSeq}.tmp`);
+}
+
 /** A client older than this is worth shouting about even on a single failure —
  *  see `decideClientReleaseStale`. */
 export const CLIENT_STALE_AFTER_MS = 24 * 60 * 60 * 1000;
@@ -344,16 +362,17 @@ export function recordPublishAttempt(
         firstFailureAt: prev?.firstFailureAt ?? now,
         lastError: outcome.error,
       };
+  // Write beside, then rename: a reader never sees half a ledger, and a crash
+  // mid-write leaves the previous answer rather than none.
+  const tmp = ledgerTmpPath(root);
   try {
     mkdirSync(root, { recursive: true });
-    // Write beside, then rename: a reader never sees half a ledger, and a
-    // crash mid-write leaves the previous answer rather than none.
-    const tmp = join(root, `.${LEDGER_FILE}.tmp`);
     writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`);
     renameSync(tmp, join(root, LEDGER_FILE));
   } catch {
     // The ledger is a signal, not the deploy. Failing to write it must never
     // take down a server that has a perfectly good client to serve.
+    rmSync(tmp, { force: true });
   }
   return next;
 }

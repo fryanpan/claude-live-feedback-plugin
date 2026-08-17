@@ -16,12 +16,13 @@
  * Fixtures are synthetic.
  */
 import { describe, expect, it } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   CLIENT_STALE_AFTER_MS,
   clientReleaseStatus,
+  ledgerTmpPath,
   prepareClientRelease,
   publishClientRelease,
   readPublishLedger,
@@ -132,6 +133,24 @@ describe('the publish ledger', () => {
       expect(ledger?.firstFailureAt).toBeUndefined();
     } finally {
       for (const d of [root, broken.dir, good.dir]) rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it('stages each write under its own name, and leaves nothing behind', () => {
+    // Two supervisors can start against the same release root — a launchd
+    // respawn overlapping a manual start. A fixed temp name lets one rename
+    // commit the other's outcome, which loses a failure or clears a streak
+    // that is still live.
+    const root = tmpRoot();
+    const good = fakeBuild('gen-1');
+    const broken = brokenBuild('gen-2');
+    try {
+      expect(ledgerTmpPath(root)).not.toBe(ledgerTmpPath(root));
+      prepareClientRelease({ root, sources: broken, now: 1000 });
+      prepareClientRelease({ root, sources: good, now: 2000 });
+      expect(readdirSync(root).filter((n) => n.endsWith('.tmp'))).toEqual([]);
+    } finally {
+      for (const d of [root, good.dir, broken.dir]) rmSync(d, { recursive: true, force: true });
     }
   });
 
