@@ -10,6 +10,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
+import { type StoredGoalSummary, goalTextHash } from '@feedback/core/goal-summary';
 import { classifyActor } from './activity.ts';
 import {
   type DecisionShapeGap,
@@ -144,6 +145,21 @@ export interface HubWorkspace {
   /** The north-star statement triage judges against. Markdown. */
   goal: string;
   goalUpdatedAt: number;
+  /**
+   * A ≤20-word line to DISPLAY in place of the goal, so the board's goal
+   * strip and every task's "Triaged against" row stay scannable on a phone.
+   *
+   * Optional, and its absence is not a gap: every surface falls back to a
+   * deterministic clip of the goal's own opening words (`goalDisplay` in
+   * `@feedback/core/goal-summary`). Nothing renders worse for want of one,
+   * which is why writing it never blocks a goal edit and why no surface
+   * waits on a model to produce it.
+   *
+   * Dropped whenever the goal changes without a replacement summary in the
+   * same call — a line describing a goal that no longer exists is the one
+   * failure a short display must not have.
+   */
+  goalSummary?: StoredGoalSummary;
   /** Ordered by priority — board sections ARE the goals. `chores` is a
    *  reserved out-of-band id, never present here (§3.2 edit contract). */
   goals: WorkspaceGoal[];
@@ -1310,6 +1326,39 @@ export class TaskStore {
   }
 
   /**
+   * Write (or clear) the ≤20-word line the surfaces display in place of the
+   * goal. Blank text clears it — an empty summary is not a compliant short
+   * one, it is the absence of one, and the clip is what should show.
+   *
+   * Deliberately quiet: no event, no re-triage, no `goalUpdatedAt` bump. This
+   * changes how the goal READS, never what it says, so nothing downstream of
+   * the goal has anything to reconsider. The board sees it through the same
+   * projection refresh as every other workspace field.
+   */
+  setGoalSummary(
+    workspaceId: string,
+    summary: string,
+  ): { ok: true; workspace: HubWorkspace } | { ok: false; error: 'workspace-not-found' } {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return { ok: false, error: 'workspace-not-found' };
+    this.applyGoalSummary(workspaceId, summary);
+    this.scheduleSave(workspaceId);
+    return { ok: true, workspace: state.workspace };
+  }
+
+  /** The one place the field is written, so the hash can never be computed
+   *  against a goal other than the one currently stored. */
+  private applyGoalSummary(workspaceId: string, summary: string): void {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return;
+    const text = summary.trim();
+    state.workspace.goalSummary =
+      text === ''
+        ? undefined
+        : { text, goalHash: goalTextHash(state.workspace.goal), ts: Date.now() };
+  }
+
+  /**
    * Edit the workspace's north-star goal (§3.4: the input to every intake
    * decision). Emits `workspace.goal_updated` (old goal, new goal, actor)
    * and requests a re-triage of the OPEN tasks — done stays put. The
@@ -1320,11 +1369,15 @@ export class TaskStore {
    * the lead away it is persisted and handed over on their next attach — a
    * goal edit made while nobody was looking used to vanish with nothing but
    * a `delivered:false` row to show for it.
+   *
+   * `opts.summary` sets the ≤20-word display line in the same call. It is
+   * applied whether or not the goal text moved, so re-wording the line is a
+   * one-field edit rather than a re-statement of the whole north star.
    */
   setWorkspaceGoal(
     workspaceId: string,
     goal: string,
-    opts: { actor: { id: string; name: string; kind?: string } },
+    opts: { actor: { id: string; name: string; kind?: string }; summary?: string },
   ): SetWorkspaceGoalResult {
     const state = this.workspaces.get(workspaceId);
     if (!state) return { ok: false, error: 'workspace-not-found' };
@@ -1332,7 +1385,16 @@ export class TaskStore {
 
     if (goal === workspace.goal) {
       // Nothing changed, so nothing to announce and nothing to re-triage —
-      // every placement's triagedAgainst is still accurate.
+      // every placement's triagedAgainst is still accurate. A summary sent
+      // alongside it still lands: it describes the same goal. And it has to
+      // be SAVED here — this branch returns before the write below, so a
+      // summary-only edit was surviving in memory and in the projection
+      // (which is what a reviewer sees) while disappearing at the next
+      // restart. The two together are exactly how a lost write hides.
+      if (opts.summary !== undefined) {
+        this.applyGoalSummary(workspaceId, opts.summary);
+        this.scheduleSave(workspaceId);
+      }
       return {
         ok: true,
         workspace,
@@ -1345,6 +1407,13 @@ export class TaskStore {
     const oldGoal = workspace.goal;
     workspace.goal = goal;
     workspace.goalUpdatedAt = ts;
+    // The old display line described the old goal. Keeping it would leave the
+    // most-viewed text on the board saying something the workspace is no
+    // longer aiming at, which is the one thing a shortened goal must not do.
+    // A caller that has a better line supplies it in the same call; anyone
+    // else sees the deterministic clip of the NEW goal until one arrives.
+    workspace.goalSummary = undefined;
+    if (opts.summary !== undefined) this.applyGoalSummary(workspaceId, opts.summary);
     this.scheduleSave(workspaceId);
 
     const actor: TaskActor = {

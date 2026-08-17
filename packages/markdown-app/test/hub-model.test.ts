@@ -3,6 +3,7 @@ import {
   type ActivityEvent,
   type BoardFilters,
   CHORES_ID,
+  type ClientRelease,
   DEFAULT_DONE_WINDOW,
   type HubGoal,
   type HubTask,
@@ -10,7 +11,9 @@ import {
   TASK_STATUS_ORDER,
   type UptimeReport,
   activityRows,
+  appendDictation,
   boardSections,
+  clientDriftNotice,
   decisionRows,
   describeEvent,
   doneAt,
@@ -21,6 +24,9 @@ import {
   pluginDriftNotice,
   positionBetween,
   presenceChips,
+  quoteAfterCapture,
+  quoteAfterEdit,
+  quoteForCapture,
   reviewQueue,
   stepTarget,
   taskVisible,
@@ -681,5 +687,184 @@ describe('pluginDriftNotice', () => {
     // The manifest was unreadable. Claiming drift would be inventing it.
     expect(pluginDriftNotice(rel(null, [{ agentId: 'a', pluginVersion: '0.1.0' }]))).toBeNull();
     expect(pluginDriftNotice(undefined)).toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Client release notice — "every browser here is running an old client"
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('clientDriftNotice', () => {
+  const HOUR = 60 * 60 * 1000;
+  const now = Date.UTC(2026, 7, 16, 12, 0, 0);
+  const release = (over: Partial<ClientRelease> = {}): ClientRelease => ({
+    releaseId: '20260813T014455123Z-000003',
+    publishedAt: now - 72 * HOUR,
+    ageMs: 72 * HOUR,
+    sourceRef: 'a1b2c3d',
+    consecutiveFailures: 2,
+    failingSince: now - 10 * HOUR,
+    lastError: 'client release: markdownApp bundle is incomplete — app.js missing',
+    stale: true,
+    ...over,
+  });
+
+  it('says how old the served client is, since when the build has failed, and why', () => {
+    const n = clientDriftNotice(release(), now);
+    if (!n) throw new Error('expected a notice');
+    // The age is the point: "stale" alone does not say whether the split is
+    // minutes or a week, and the gap is what makes it urgent.
+    expect(n.headline).toContain('3d ago');
+    expect(n.detail).toContain('2 builds');
+    expect(n.detail).toContain('10h ago');
+    expect(n.detail).toContain('app.js missing');
+    // Freshness of the artifact is not freshness of the source, so the
+    // commit it was built from is part of the reading.
+    expect(n.detail).toContain('a1b2c3d');
+    // The restart IS the client deploy — without it a fixed build changes
+    // nothing for any browser.
+    expect(n.fix).toContain('restart');
+  });
+
+  it('says nothing while the deployment is healthy', () => {
+    // Positive control: the same shape with stale:true does produce one.
+    expect(clientDriftNotice(release(), now)).not.toBeNull();
+    expect(clientDriftNotice(release({ stale: false }), now)).toBeNull();
+    expect(clientDriftNotice(null, now)).toBeNull();
+    expect(clientDriftNotice(undefined, now)).toBeNull();
+  });
+
+  it('does not invent an age when nothing was ever published', () => {
+    const n = clientDriftNotice(
+      release({ releaseId: null, publishedAt: null, ageMs: null, sourceRef: null }),
+      now,
+    );
+    expect(n?.headline).not.toContain('NaN');
+    expect(n?.headline.toLowerCase()).toContain('no client');
+  });
+
+  it('does not name a source the release never recorded', () => {
+    const n = clientDriftNotice(release({ sourceRef: null }), now);
+    expect(n?.detail).not.toContain('built from');
+  });
+});
+
+// ── Dictation into the capture box ─────────────────────────────────────────
+
+describe('appendDictation', () => {
+  it('fills an empty box and makes the transcript the quote', () => {
+    expect(appendDictation('', '  file a bug about the mic  ')).toEqual({
+      text: 'file a bug about the mic',
+      quote: 'file a bug about the mic',
+    });
+  });
+
+  it('appends to what is already there rather than replacing it', () => {
+    // Someone types half an idea, then finishes it out loud. Replacing would
+    // eat the typed half — the one failure this whole box exists to prevent.
+    expect(appendDictation('Fix the goal card', 'it is too tall on a phone')).toEqual({
+      text: 'Fix the goal card it is too tall on a phone',
+      quote: 'it is too tall on a phone',
+    });
+  });
+
+  it('accumulates the quote across two utterances', () => {
+    const first = appendDictation('', 'add a mic to the board');
+    const second = appendDictation(first.text, 'and keep what I said', first.quote);
+    expect(second.text).toBe('add a mic to the board and keep what I said');
+    // Both utterances are what was SAID, so both belong to the quote.
+    expect(second.quote).toBe('add a mic to the board and keep what I said');
+  });
+
+  it('quotes only the spoken half, never the typed half', () => {
+    // The point of the quote: the agent gets the phrasing as spoken. Text
+    // that was typed is already the task; it was never a quote of anyone.
+    const r = appendDictation('typed words', 'spoken words');
+    expect(r.quote).toBe('spoken words');
+    expect(r.quote).not.toContain('typed');
+  });
+
+  it('an empty transcript changes nothing', () => {
+    expect(appendDictation('already here', '   ', 'said before')).toEqual({
+      text: 'already here',
+      quote: 'said before',
+    });
+  });
+});
+
+describe('quoteForCapture', () => {
+  it('survives an edit to the text it was dictated into', () => {
+    // Dictation heard "mike"; he fixed it to "mic" before filing. The quote is
+    // still what he SAID — the agent seeing both is the whole reason to keep
+    // one, so this must NOT be conditioned on the text still matching.
+    expect(quoteForCapture('add a mike to the board')).toBe('add a mike to the board');
+  });
+
+  it('has no quote for a task nobody spoke', () => {
+    expect(quoteForCapture(undefined)).toBeUndefined();
+  });
+
+  it('treats a blank utterance as no quote rather than an empty one', () => {
+    // An empty string would file `quote: ''` — a claim that words were spoken.
+    expect(quoteForCapture('   ')).toBeUndefined();
+  });
+});
+
+describe('quoteAfterCapture', () => {
+  it('drops the utterance the filed task carried away with it', () => {
+    expect(quoteAfterCapture('add a mic to the board', 'add a mic to the board')).toBe('');
+  });
+
+  it('keeps what was dictated while the capture was still in flight', () => {
+    // The POST is pending, the box deliberately stays live, and a second
+    // utterance lands. Only the filed half leaves; the rest belongs to the
+    // idea still sitting in the box.
+    expect(quoteAfterCapture('fix the login bug also update the docs', 'fix the login bug')).toBe(
+      'also update the docs',
+    );
+  });
+
+  it('keeps an accumulation that no longer starts with what was filed', () => {
+    // The box was cleared mid-flight, so the quote was already dropped and
+    // re-accumulated from a fresh utterance. Removing a prefix that isn't
+    // there would eat words nobody has filed.
+    expect(quoteAfterCapture('a brand new thought', 'fix the login bug')).toBe(
+      'a brand new thought',
+    );
+  });
+
+  it('keeps everything when the filed task carried no quote', () => {
+    expect(quoteAfterCapture('said after a typed task filed', undefined)).toBe(
+      'said after a typed task filed',
+    );
+  });
+});
+
+describe('quoteAfterEdit', () => {
+  it('keeps the quote when a misheard word is corrected', () => {
+    // "mike" → "mic": the box still holds the utterance, one word off. This
+    // is the case the quote exists for.
+    expect(quoteAfterEdit('add a mic to the board', 'add a mike to the board')).toBe(
+      'add a mike to the board',
+    );
+  });
+
+  it('keeps the quote when the person keeps typing after dictating', () => {
+    expect(quoteAfterEdit('buy milk and oats on the way home', 'buy milk')).toBe('buy milk');
+  });
+
+  it('drops the quote when the box is retyped from scratch', () => {
+    // Select-all-and-retype fires ONE input event with a non-empty value, so
+    // "cleared to empty" never happens — and the new task would otherwise be
+    // filed quoting words about entirely different work.
+    expect(quoteAfterEdit('review the deploy script', 'buy milk')).toBe('');
+  });
+
+  it('drops the quote when the box is emptied by hand', () => {
+    expect(quoteAfterEdit('', 'buy milk')).toBe('');
+  });
+
+  it('has nothing to keep when nothing was spoken', () => {
+    expect(quoteAfterEdit('typed only', '')).toBe('');
   });
 });
