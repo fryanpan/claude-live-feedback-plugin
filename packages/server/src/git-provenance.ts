@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { realpathSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
 /**
@@ -42,6 +43,13 @@ import { basename, dirname } from 'node:path';
  * timeout alone is not a bound — a classification makes up to four calls, so
  * a generous per-call limit multiplies. The budget is what makes the ceiling
  * a number rather than a product.
+ *
+ * The budget is only enforceable because every call also passes
+ * `killSignal: 'SIGKILL'`. `spawnSync`'s `timeout` sends the signal and then
+ * keeps waiting, so under the default SIGTERM this ceiling is advisory and a
+ * child that ignores the signal blocks for as long as it wants — measured at
+ * 30,352ms against this 1,200ms figure before the signal was changed. Read the
+ * two together; neither is a bound on its own.
  *
  * Staying synchronous is deliberate. Making it async would mean making
  * `reconcileFromDisk` async — the most incident-prone path in this file — and
@@ -93,6 +101,17 @@ function git(
       input,
       encoding: 'utf8',
       timeout: Math.min(GIT_CALL_TIMEOUT_MS, left),
+      // SIGKILL, not the default SIGTERM. `timeout` sends `killSignal` and then
+      // KEEPS WAITING — it does not guarantee the child dies — so a process
+      // that ignores SIGTERM blocks this synchronous call for as long as it
+      // likes. Measured: a child running `trap '' TERM; sleep 30` held the
+      // event loop for 30,352ms against this 1,200ms budget; the same child
+      // under SIGKILL returns on time. This is not a tail risk here, because
+      // `--path` below deliberately invokes the repository's configured clean
+      // filter, which is arbitrary user-configured code under no obligation to
+      // handle SIGTERM. SIGKILL cannot be trapped, so the budget becomes
+      // enforceable rather than advisory.
+      killSignal: 'SIGKILL',
       maxBuffer: 8 * 1024 * 1024,
     });
     return { ok: res.status === 0, stdout: typeof res.stdout === 'string' ? res.stdout : '' };
@@ -130,13 +149,33 @@ export function classifyExternalContent(
   // Erring toward `unknown` keeps the check one-directional.
   if (content.trim() === '') return { source: 'unknown' };
 
-  const cwd = dirname(filePath);
-  const name = basename(filePath);
+  // Resolve symlinks, because `scheduleFileWrite` writes through
+  // `realpathSync` — so a doc bound via a symlink from outside the repo has
+  // its bytes overwritten INSIDE the repo while `dirname(filePath)` points
+  // somewhere with no git at all, and every such conflict silently classifies
+  // `unknown`. Fall back to the literal path if the target is gone; that only
+  // costs us the hint, which is what an unresolvable path would have got.
+  let resolved = filePath;
+  try {
+    resolved = realpathSync(filePath);
+  } catch {
+    // Missing or dangling — leave it; the git calls below will simply fail.
+  }
+  const cwd = dirname(resolved);
+  const name = basename(resolved);
   const remainingMs = deadlineFrom(budgetMs);
 
   // Repo-relative path, so the message names the file the way git does — and
   // so the hash below can apply this path's clean filter, if it has one.
-  const listed = git(cwd, ['ls-files', '--full-name', '--', name], remainingMs);
+  // `--literal-pathspecs`: a basename is a FILENAME here, never a pattern.
+  // Without it git reads `* ? [` as globs — `-- 'a?.md'` matches both `a1.md`
+  // and `ab.md`, and taking `[0]` would name a different file — and a leading
+  // `:` as pathspec magic, which returns nothing.
+  const listed = git(
+    cwd,
+    ['--literal-pathspecs', 'ls-files', '--full-name', '--', name],
+    remainingMs,
+  );
   const rel = listed.ok ? listed.stdout.split('\n')[0].trim() : '';
 
   // Hash through git rather than reimplementing it, so sha1 and sha256
