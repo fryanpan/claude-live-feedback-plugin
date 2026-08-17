@@ -166,6 +166,15 @@ if (noWatch) {
 // PROD (--no-watch) runs neither watcher: the server is a plain long-lived
 // process serving a client release published above, which nothing can change
 // while it runs.
+const pluginRefreshMinutes = (() => {
+  const raw = Number(process.env.LF_PLUGIN_REFRESH_MINUTES ?? '30');
+  return Number.isFinite(raw) && raw >= 0 ? raw : 30;
+})();
+const pluginRefreshArgs =
+  noWatch && pluginRefreshMinutes > 0
+    ? ['--plugin-refresh-interval-ms', String(Math.round(pluginRefreshMinutes * 60_000))]
+    : [];
+
 const serverArgs = [
   'run',
   join(repoRoot, 'packages', 'server', 'src', 'bin.ts'),
@@ -174,6 +183,13 @@ const serverArgs = [
   // PROD only: the published release to serve. Empty in dev, where the
   // bundler watches this checkout's dist and the server should follow it.
   ...clientArgs,
+  // PROD only: keep this machine's plugin cache current on a timer, so a
+  // merge reaches peers without anyone remembering to run the update. Dev and
+  // staging must NOT do this — they are copies of the deploy source, and a
+  // `bun run staging` that quietly updated the fleet's plugin would be the
+  // same class of accident as building bundles in the primary checkout.
+  // Override the cadence with LF_PLUGIN_REFRESH_MINUTES; 0 turns it off.
+  ...pluginRefreshArgs,
 ];
 if (!noWatch) serverArgs.unshift('--watch');
 const server = spawn('bun', serverArgs, {

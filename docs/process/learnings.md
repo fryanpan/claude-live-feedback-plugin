@@ -784,6 +784,43 @@ Technical discoveries that should persist across sessions for this project.
   broken"). Read the port the run actually bound before pointing anything at
   it; same shape as a positive control scanning the wrong data.
 
+## What makes a fleet-wide action safe is that it can't interrupt anybody
+
+- **The condition for letting every peer trigger a plugin refresh was that it
+  must not interrupt work in progress — and the honest answer was that the
+  mechanism already couldn't.** `claude plugin update` writes a version-keyed
+  cache directory and moves a pointer; every running session keeps loading the
+  path it resolved at launch. The thing that interrupts is the RESTART, and
+  that stays the peer's. So "requests a refresh rather than forcing one" is a
+  property of what the operation touches, not a queue or a consent protocol
+  bolted on top. **Before designing the safety mechanism, check whether the
+  operation is already safe** — the first design here was a request queue with
+  per-peer safe points, for an action that cannot reach another session at all.
+- **Then it also runs on a timer, and that is the actual fix.** A tool every
+  peer *can* call is still a tool somebody has to decide to call, which is the
+  same failure that let eleven releases go undelivered. Prod polls the update
+  every 30 minutes, so a merge lands in the cache with nobody involved.
+- **Never trust the updater's own account of what it did.** `claude plugin
+  update` prints success when it copies nothing. `changed` is computed by
+  reading `installed_plugins.json` before and after — mutation-tested by
+  switching it to parse the CLI's "updated from X to Y" prose, which turns the
+  test red. Same family as "a peer agent's 'it worked' means the call didn't
+  error".
+- **A capability that spawns a process needs a seam, and the seam is the
+  test-safety story.** The refresher is constructed in exactly one place
+  (`bin.ts`, behind a flag only `serve.ts --no-watch` passes), so no test run,
+  no `bun run staging`, and no embedded server can mutate this machine's plugin
+  cache. Without that, a CI run would be a fleet deploy. Same rule the
+  summarizer follows, for the same reason.
+- **The route-level auth check was unreachable, and my test for it passed with
+  the check deleted.** `shareScopeAllows` is a closed-by-default allowlist that
+  runs before any route, so a share host never reaches `/api/plugin/refresh`
+  and `visitor` can never be truthy there. The end-to-end test was measuring
+  the allowlist while claiming to measure the route. Fixed by asserting at the
+  layer the gate lives in (with a positive control), and by labelling the route
+  check as the defense-in-depth it actually is. **Mutation-test a guard you
+  just added; "it returns 403" does not tell you which line said so.**
+
 ## git exports GIT_DIR into hooks, and `git init` inherits it
 
 - **`git push` → `pre-push` hook → a script that runs `git init` somewhere
