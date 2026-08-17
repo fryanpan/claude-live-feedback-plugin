@@ -213,6 +213,29 @@ const TASK_STATUSES: ReadonlySet<string> = new Set(['todo', 'in-progress', 'done
 /** Reserved catch-all section id for no-goal work. Never in `goals[]`. */
 export const CHORES_GOAL_ID = 'chores';
 
+/**
+ * Goal ids the SERVER owns. Every other goal id is generated (`newGoalId`)
+ * and opaque; these are literals on purpose, and the distinction is stated
+ * here rather than implied so that the next reserved bucket is added to a
+ * list instead of to a chain of `=== CHORES_GOAL_ID` comparisons.
+ *
+ * A reserved id is one that code and agents must be able to SAY without a
+ * lookup — `chores` is referenced across this store, named in the shipped
+ * skills, and is the answer to "where does unplaced work go". A generated id
+ * could not carry that meaning. Reserved ids are therefore exempt from the
+ * generation rule, not an oversight in it, and they stay reachable by their
+ * literal from every read and every `setTaskGoal`.
+ *
+ * They are still refused by every WRITE that would create, rename, remove or
+ * reorder a goal — a reserved bucket exists, it is not authored.
+ */
+export const RESERVED_GOAL_IDS: ReadonlySet<string> = new Set([CHORES_GOAL_ID]);
+
+/** Whether `id` is a server-owned bucket rather than an authored goal. */
+export function isReservedGoalId(id: string): boolean {
+  return RESERVED_GOAL_IDS.has(id);
+}
+
 /** Every goal and subgoal as one flat list, parent before its children. The
  *  ordered list is two levels deep and three call sites had each walked it by
  *  hand; a fourth that forgot the inner loop would silently ignore subgoals,
@@ -1250,12 +1273,43 @@ export type SetTaskGoalResult =
     }
   | { ok: false; error: 'not-found' | 'unknown-goal' };
 
+/**
+ * One entry of a submitted goal list. The id is OPTIONAL, and which way it
+ * goes is the whole contract (§3.2, restated once goal ids are generated):
+ *
+ *  - **`id` present** — "this is the band you already have". It must name a
+ *    goal or subgoal this board holds right now; anything else is refused as
+ *    `unknown-goal-id`. That is the refusal that makes a re-key
+ *    unexpressible: there is no input here that can hand an existing band a
+ *    different id, and no input that can hand a NEW band an id of the
+ *    caller's choosing.
+ *  - **`id` absent** — "create this band". The server generates an opaque id
+ *    (`newGoalId`) and reports it in `created`, in submission order.
+ *
+ * So submitting a list now means: these are my bands, in this order, and the
+ * ones I did not name an id for are new. Everything else the call could ever
+ * do it still does — reorder, retitle, reparent, remove (gated) — none of
+ * which touch an id.
+ */
+export interface GoalListEntry {
+  /** Omit to CREATE. Present = must already exist on this board. */
+  id?: string;
+  title: string;
+  dueAt?: number;
+  subgoals?: Array<{ id?: string; title: string; dueAt?: number }>;
+}
+
 export type SetGoalListResult =
   | {
       ok: true;
       workspace: HubWorkspace;
       /** False when the new list deep-equals the old — no event, no moves. */
       changed: boolean;
+      /** Goals and subgoals this call CREATED, in submission order (parents
+       *  before their subgoals), with the id the server generated for each.
+       *  The only way a caller learns a new band's id — which is the point:
+       *  they never chose it. */
+      created: Array<{ id: string; title: string; parent?: string }>;
       /** Open tasks whose goal or subgoal id disappeared, moved to Chores —
        *  reported so the caller can re-place them (§3.2 edit contract). */
       movedToChores: string[];
@@ -1268,6 +1322,15 @@ export type SetGoalListResult =
       strandedDone: string[];
     }
   | { ok: false; error: 'workspace-not-found' | 'reserved-goal-id' | 'duplicate-goal-id' }
+  | {
+      ok: false;
+      error: 'unknown-goal-id';
+      /** Ids the submitted list names that this board does not hold. Either
+       *  the caller meant to CREATE (omit the id) or is working from a list
+       *  whose bands have since been removed — and inventing the id would be
+       *  the re-key this whole scheme exists to make unexpressible. */
+      unknownIds: string[];
+    }
   | {
       ok: false;
       error: 'would-strand-tasks';
@@ -1355,6 +1418,26 @@ function cryptoId(prefix: string): string {
   // 9 random bytes → 12 base64url chars. URL-safe, filename-safe, and every
   // char is legal in a docId (the future `task:<id>` body rooms need that).
   return `${prefix}-${randomBytes(9).toString('base64url')}`;
+}
+
+/**
+ * The id of a NEWLY CREATED goal. Opaque and server-generated, exactly like a
+ * task id, and for the same reason: an identifier is the one thing that must
+ * never move, so nothing about it may encode something that does.
+ *
+ * The scheme this replaces was caller-supplied slugs (`g1-loop`, `g2-reach`),
+ * which put PRIORITY — the fastest-moving property a board has — inside the
+ * identity. Renaming a band then meant re-keying it, and re-keying it through
+ * the full-replace `setGoalList` reads as one goal removed and a different one
+ * added: the band's open tasks swept to Chores, its done tasks orphaned. The
+ * `would-strand-tasks` refusal defends against that; generated ids make it
+ * unexpressible, which is the stronger move.
+ *
+ * Existing slug ids keep working forever — they are just ids. This generates
+ * the ones created from here on; nothing renumbers what a board already has.
+ */
+export function newGoalId(): string {
+  return cryptoId('g');
 }
 
 export class TaskStore {
@@ -2773,6 +2856,18 @@ export class TaskStore {
 
   /**
    * Replace the workspace's ordered goal list (§3.2 goal-list edit contract).
+   *
+   * WHAT SUBMITTING A LIST MEANS, now that ids are generated: "these are my
+   * bands, in this order". An entry that names an `id` is a band the board
+   * already has — an id it does not have is REFUSED (`unknown-goal-id`),
+   * never created under the caller's name. An entry with no `id` is new, and
+   * the server mints an opaque one (`newGoalId`) and reports it in `created`.
+   * A caller therefore cannot choose an id, and cannot change one: the two
+   * gestures that used to strand a band's work are no longer expressible,
+   * where before they were merely refused after the fact. Everything the call
+   * always did — reorder, retitle, reparent, remove — is untouched, and none
+   * of it moves an id.
+   *
    * 'chores' is reserved and never present in goals[]; open tasks whose goal
    * or subgoal id disappears are moved to Chores, each emitting a
    * `task.regrouped` batched (via `partOf`) under the one
@@ -2795,7 +2890,7 @@ export class TaskStore {
    */
   setGoalList(
     workspaceId: string,
-    goals: WorkspaceGoal[],
+    entries: GoalListEntry[],
     opts: {
       actor: { id: string; name: string; kind?: string };
       /** Goal/subgoal ids the caller INTENDS to remove even though they hold
@@ -2808,17 +2903,73 @@ export class TaskStore {
     if (!state) return { ok: false, error: 'workspace-not-found' };
     const workspace = state.workspace;
 
+    // Resolve every entry to an id BEFORE anything is compared or written:
+    // an id the caller named must already exist, and an id the caller omitted
+    // is generated here and nowhere else. Both refusals are computed over the
+    // whole list first, so a rejected call names every offending id at once
+    // rather than making the caller fix them one round trip at a time.
+    const existingIds = new Set(flattenGoals(workspace.goals).map((g) => g.id));
+    const submittedIds: string[] = [];
+    const unknownIds: string[] = [];
+    const reserved: string[] = [];
+    const noteId = (id: string | undefined): void => {
+      if (id === undefined) return;
+      submittedIds.push(id);
+      if (isReservedGoalId(id)) {
+        if (!reserved.includes(id)) reserved.push(id);
+        return;
+      }
+      if (!existingIds.has(id) && !unknownIds.includes(id)) unknownIds.push(id);
+    };
+    for (const g of entries) {
+      noteId(g.id);
+      for (const s of g.subgoals ?? []) noteId(s.id);
+    }
+    if (reserved.length > 0) return { ok: false, error: 'reserved-goal-id' };
+    if (new Set(submittedIds).size !== submittedIds.length) {
+      return { ok: false, error: 'duplicate-goal-id' };
+    }
+    if (unknownIds.length > 0) return { ok: false, error: 'unknown-goal-id', unknownIds };
+
+    // Materialise the list the board will hold. An entry with no id becomes a
+    // new band with a generated one; nothing else about an entry can change
+    // an id, because an id is never read from the entry again after this.
+    const created: Array<{ id: string; title: string; parent?: string }> = [];
+    const goals: WorkspaceGoal[] = entries.map((g) => {
+      const id = g.id ?? newGoalId();
+      if (g.id === undefined) created.push({ id, title: g.title });
+      const subgoals = g.subgoals?.map((s) => {
+        const subId = s.id ?? newGoalId();
+        if (s.id === undefined) created.push({ id: subId, title: s.title, parent: id });
+        return {
+          id: subId,
+          title: s.title,
+          ...(s.dueAt !== undefined ? { dueAt: s.dueAt } : {}),
+        };
+      });
+      return {
+        id,
+        title: g.title,
+        ...(g.dueAt !== undefined ? { dueAt: g.dueAt } : {}),
+        ...(subgoals !== undefined ? { subgoals } : {}),
+      };
+    });
     const ids: string[] = [];
     for (const g of goals) {
       ids.push(g.id);
       for (const s of g.subgoals ?? []) ids.push(s.id);
     }
-    if (ids.includes(CHORES_GOAL_ID)) return { ok: false, error: 'reserved-goal-id' };
-    if (new Set(ids).size !== ids.length) return { ok: false, error: 'duplicate-goal-id' };
 
     const oldGoals = workspace.goals;
     if (JSON.stringify(oldGoals) === JSON.stringify(goals)) {
-      return { ok: true, workspace, changed: false, movedToChores: [], strandedDone: [] };
+      return {
+        ok: true,
+        workspace,
+        changed: false,
+        created: [],
+        movedToChores: [],
+        strandedDone: [],
+      };
     }
 
     // What this replace would REMOVE, and what each removal holds. Computed
@@ -2925,6 +3076,7 @@ export class TaskStore {
       ok: true,
       workspace,
       changed: true,
+      created,
       movedToChores: moved.map((m) => m.task.id),
       strandedDone,
     };
@@ -2982,7 +3134,7 @@ export class TaskStore {
     const state = this.workspaces.get(workspaceId);
     if (!state) return { ok: false, error: 'workspace-not-found' };
     const workspace = state.workspace;
-    if (goalId === CHORES_GOAL_ID) return { ok: false, error: 'reserved-goal-id' };
+    if (isReservedGoalId(goalId)) return { ok: false, error: 'reserved-goal-id' };
 
     const oldGoals = workspace.goals;
     const current = flattenGoals(oldGoals).find((g) => g.id === goalId);
@@ -3111,7 +3263,7 @@ export class TaskStore {
       // be obeyed and a caller who put it last must not be silently trimmed:
       // accepting either would be a position nobody honours.
       if (!currentSet.has(id)) {
-        const bucket = id === CHORES_GOAL_ID ? reservedIds : unknownIds;
+        const bucket = isReservedGoalId(id) ? reservedIds : unknownIds;
         if (!bucket.includes(id)) bucket.push(id);
       }
       if (seen.has(id) && !duplicateIds.includes(id)) duplicateIds.push(id);
@@ -3349,7 +3501,7 @@ export class TaskStore {
   }
 
   private goalIdExists(workspace: HubWorkspace, goalId: string): boolean {
-    if (goalId === CHORES_GOAL_ID) return true;
+    if (isReservedGoalId(goalId)) return true;
     return workspace.goals.some(
       (g) => g.id === goalId || (g.subgoals ?? []).some((s) => s.id === goalId),
     );

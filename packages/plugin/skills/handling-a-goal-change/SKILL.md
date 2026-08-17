@@ -214,10 +214,12 @@ on the board right now. So:
 - To change priority: `reorder_goals`, always.
 - To change a band's TITLE: `rename_goal(workspaceId, goal, title)`. It edits in
   place and cannot move a task. Renaming through `set_goal_list` by giving the
-  band a new id is not a rename — it is a removal plus an addition, and the new
-  title appears exactly as if it had worked.
+  band a new id is not a rename and no longer even lands — goal ids are
+  generated and permanent, so an id the board does not hold is refused
+  (`unknown-goal-id`).
 - To genuinely add / remove a band: `set_goal_list`, with the ids read
-  **immediately** before the call. A removal that would strand work is now
+  **immediately** before the call. A NEW band goes in with no `id` at all and
+  the server mints one, returned in `created`. A removal that would strand work is now
   REFUSED (`would-strand-tasks`) until you name that id in `drop`, so read what
   the refusal says the band holds before you acknowledge it. Then re-place every
   id it reports in `movedToChores` rather than leaving them piled, and decide
