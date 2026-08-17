@@ -72,36 +72,45 @@ name. The task you are holding was chosen by a ranking that just changed.
   sits — branch, PR, what is verified — in a comment on `task:<taskId>`.
   `in-progress` with no note reads as an agent still working.
 
-## 3. Get the task list out of the request — the two paths differ
+## 3. Get the task list out of the request — both paths carry it
 
-**If it arrived on your attach** (`attach_agent` returned `pendingRetriage`):
-the payload is `{ batchId, oldGoal, newGoal, taskIds, contract }`. Save
-`batchId`, `taskIds` **and `oldGoal`** somewhere that survives you — your todo
-list, a scratch file, a note on the task you are holding.
+Whichever way the request reached you, it names the tasks to re-place and the
+sentence they were last judged against. Save `batchId`, `taskIds` **and
+`oldGoal`** somewhere that survives you — your todo list, a scratch file, a
+note on the task you are holding.
 
-Two reasons, both of which have burned somebody:
+- **On your attach** (`attach_agent` returned `pendingRetriage`) they arrive as
+  a payload: `{ batchId, oldGoal, newGoal, taskIds, contract }`.
+- **Live in your channel** they arrive in the message: the count and `batchId`
+  in the first line, then a `tasks:` line naming every id, then the previous
+  goal in full.
 
-- **The queued request is delivered exactly once.** `attach_agent` drains it as
-  it hands it to you and nothing will ever offer it again. (`get_workspace`
-  shows it too, but reading there does not drain it.) An agent that takes the
-  drain, gets compacted, and comes back holding a summary has silently eaten a
-  person's goal edit — and the board will say it was delivered.
+Two reasons to write them down, both of which have burned somebody:
+
+- **The request is delivered exactly once, on either path.** `attach_agent`
+  drains the queued one as it hands it to you and nothing will ever offer it
+  again. (`get_workspace` shows it too, but reading there does not drain it.)
+  The live one is a channel message: it scrolls past and is not replayed. An
+  agent that takes the delivery, gets compacted, and comes back holding a
+  summary has silently eaten a person's goal edit — and the board will say it
+  was delivered.
 - **`oldGoal` is not recoverable from anywhere else.** It is the sentence every
   current placement was judged against, which is the input to "does this task
-  still belong where it is". Once the payload is gone, `get_workspace` will
-  only ever show you the new text.
+  still belong where it is". Once the message is behind you, `get_workspace`
+  will only ever show you the new text.
 
-**If it arrived live in your channel**, there is no payload — the line carries
-a count and a `batchId`, and that is all. Build the set yourself:
+**If the request reaches you with no `tasks:` line**, rebuild the set yourself
+— an agent on an older plugin bundle gets the count-only wording, and peers sit
+on different versions for days:
 
 ```
 list_tasks(workspaceId)   → every row whose status is not "done"
 ```
 
-That is exactly the filter the server used to count them, so your set should
-be the size the message named; if it is not, someone is editing the board while
-you sweep — re-read rather than guess. On this path `oldGoal` is genuinely
-gone: judge against the new text alone.
+That is exactly the filter the server counted with, so your set should be the
+size the message named; if it is not, someone is editing the board while you
+sweep — re-read rather than guess. Judging against the new text alone is the
+fallback there, not the contract.
 
 ## 4. Re-read the goal — the whole goal
 
@@ -111,9 +120,10 @@ get_workspace(workspaceId)
 ```
 
 `goal` is the full north-star statement. **Read it from here, not from the
-event.** The channel line for a goal edit carries a 120-character clip and the
-re-triage line carries no goal text at all. Re-triaging against the first 120
-characters of a paragraph is how the second half of an edit gets ignored.
+event.** The `workspace.goal_updated` line carries a 120-character clip of the
+new goal, and the re-triage line carries the *previous* goal, not the new one.
+Re-triaging against the first 120 characters of a paragraph is how the second
+half of an edit gets ignored.
 
 `goals` is the **ordered** list of bands — priority order, parents followed by
 their subgoals, each with todo / in-progress / done counts. That list is the
