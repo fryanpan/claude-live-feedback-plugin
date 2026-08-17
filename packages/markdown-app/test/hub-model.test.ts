@@ -33,6 +33,7 @@ import {
   stepTarget,
   taskVisible,
   timeAgo,
+  unplacedNotice,
   uptimeSummary,
 } from '../src/hub/hub-model.ts';
 
@@ -1250,5 +1251,80 @@ describe('quoteAfterEdit', () => {
 
   it('has nothing to keep when nothing was spoken', () => {
     expect(quoteAfterEdit('typed only', '')).toBe('');
+  });
+});
+
+describe('unplacedNotice — the quiet bucket says how many and how long', () => {
+  const DAY = 24 * HOUR;
+
+  it('is silent on an empty bucket rather than rendering a zero', () => {
+    // Positive control first: the same call with one unplaced task DOES
+    // answer, so "null" here is a decision and not a broken selection.
+    const placed = [task({ goal: 'g-pr' }), task({ goal: CHORES_ID })];
+    expect(unplacedNotice([...placed, task({ unplacedSince: NOW - DAY })], NOW)).not.toBeNull();
+    expect(unplacedNotice(placed, NOW)).toBeNull();
+    expect(unplacedNotice([], NOW)).toBeNull();
+  });
+
+  it('counts how many and dates the oldest', () => {
+    const n = unplacedNotice(
+      [
+        task({ unplacedSince: NOW - 2 * DAY }),
+        task({ unplacedSince: NOW - 6 * DAY }),
+        task({ unplacedSince: NOW - HOUR }),
+      ],
+      NOW,
+    );
+    expect(n?.count).toBe(3);
+    expect(n?.label).toBe('3 tasks have no goal yet');
+    expect(n?.detail).toBe('oldest waiting 6d');
+    expect(n?.oldestSince).toBe(NOW - 6 * DAY);
+  });
+
+  it('drops the comparison when there is only one to compare', () => {
+    const n = unplacedNotice([task({ unplacedSince: NOW - 3 * HOUR })], NOW);
+    expect(n?.label).toBe('1 task has no goal yet');
+    expect(n?.detail).toBe('waiting 3h');
+  });
+
+  it('names the longest-waiting task so the strip can open it', () => {
+    const old = task({ id: 't-oldest', unplacedSince: NOW - 9 * DAY });
+    const n = unplacedNotice([task({ unplacedSince: NOW - DAY }), old], NOW);
+    expect(n?.oldestTaskId).toBe('t-oldest');
+  });
+
+  it('breaks a tie on id so the strip names the same task twice running', () => {
+    const ts = NOW - DAY;
+    const a = task({ id: 't-aaa', unplacedSince: ts });
+    const b = task({ id: 't-bbb', unplacedSince: ts });
+    expect(unplacedNotice([a, b], NOW)?.oldestTaskId).toBe('t-aaa');
+    expect(unplacedNotice([b, a], NOW)?.oldestTaskId).toBe('t-aaa');
+  });
+
+  it('reads unplacedSince, not "is it in Chores" — the proxy that was wrong both ways', () => {
+    // Direction 1: an explicit `goal: 'chores'` IS a placement. It sits in
+    // Chores with no marker and must not be counted.
+    const deliberateChore = task({ goal: CHORES_ID });
+    // Direction 2: a task swept out of a removed band keeps the
+    // `triagedAgainst` of the placement it lost, so the old predicate never
+    // saw it. The marker does.
+    const swept = task({
+      goal: CHORES_ID,
+      triagedAgainst: { goalId: 'g-gone', goal: 'A band that was deleted', ts: NOW - 5 * DAY },
+      unplacedSince: NOW - 5 * DAY,
+    });
+    const n = unplacedNotice([deliberateChore, swept], NOW);
+    expect(n?.count).toBe(1);
+    expect(n?.oldestTaskId).toBe(swept.id);
+  });
+
+  it('stops counting a task once it is done, marker or not', () => {
+    const open = task({ unplacedSince: NOW - DAY });
+    const finished = task({ status: 'done', unplacedSince: NOW - 8 * DAY });
+    const n = unplacedNotice([open, finished], NOW);
+    expect(n?.count).toBe(1);
+    // The done task is the OLDER one, so a selection that leaked it would
+    // show up in the age as well as the count.
+    expect(n?.detail).toBe('waiting 1d');
   });
 });
