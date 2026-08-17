@@ -24,6 +24,7 @@ import type { ElementAnchor, Thread, User } from '@feedback/core';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { workspaceRoomId } from '../src/task-projection.ts';
 import type { Task, TaskStoreEvent } from '../src/tasks.ts';
+import { type GoalIds, seedGoalsOverHttp } from './goal-seed.ts';
 
 const PERSON: User = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
 const AGENT: User = {
@@ -76,33 +77,39 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       body: JSON.stringify(body),
     });
 
-  /** A fresh hub workspace with a north-star goal + two board goals. */
-  async function seedWorkspace(): Promise<string> {
+  /** A fresh hub workspace with a north-star goal + two board goals. The ids
+   *  are minted by the server, so the bands come back keyed by the labels this
+   *  file used to hard-code as ids (`g1`, `g1a`, `g2`). */
+  async function seedWorkspace(): Promise<{ wsId: string; G: GoalIds }> {
     const { workspace } = await jj<{ workspace: { id: string } }>(
       await post('/api/workspaces', { name: 'search-revamp', goal: 'Ship search v2.' }),
     );
-    await jj(
-      await put(`/api/workspaces/${workspace.id}/goals`, {
-        goals: [
-          {
-            id: 'g1',
-            title: '1. Get the PR out',
-            subgoals: [{ id: 'g1a', title: 'Post-PR tickets' }],
-          },
-          { id: 'g2', title: '2. Blog post' },
-        ],
-        author: PERSON,
-      }),
+    const G = await seedGoalsOverHttp(
+      base,
+      workspace.id,
+      [
+        {
+          key: 'g1',
+          title: '1. Get the PR out',
+          subgoals: [{ key: 'g1a', title: 'Post-PR tickets' }],
+        },
+        { key: 'g2', title: '2. Blog post' },
+      ],
+      PERSON,
     );
-    return workspace.id;
+    return { wsId: workspace.id, G };
   }
 
-  async function seedTask(workspaceId: string, opts: Record<string, unknown> = {}): Promise<Task> {
+  async function seedTask(
+    workspaceId: string,
+    goal: string,
+    opts: Record<string, unknown> = {},
+  ): Promise<Task> {
     const { task } = await jj<{ task: Task }>(
       await post(`/api/workspaces/${workspaceId}/tasks`, {
         author: AGENT,
         title: 'tune the ranking',
-        goal: 'g1',
+        goal,
         ...opts,
       }),
     );
@@ -152,22 +159,36 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       );
       const goals = [
         {
-          id: 'a',
           title: 'First',
           dueAt: 1765000000000,
-          subgoals: [{ id: 'a1', title: 'Sub one', dueAt: 1766000000000 }],
+          subgoals: [{ title: 'Sub one', dueAt: 1766000000000 }],
         },
-        { id: 'b', title: 'Second' },
+        { title: 'Second' },
       ];
-      const res = await jj<{ ok: true; changed: boolean }>(
-        await put(`/api/workspaces/${workspace.id}/goals`, { goals, author: PERSON }),
-      );
+      const res = await jj<{
+        ok: true;
+        changed: boolean;
+        created: Array<{ id: string; title: string; parent?: string }>;
+      }>(await put(`/api/workspaces/${workspace.id}/goals`, { goals, author: PERSON }));
       expect(res.changed).toBe(true);
+      // The ids come back from the server, in submission order: each entry,
+      // then its subgoals.
+      expect(res.created.map((c) => c.title)).toEqual(['First', 'Sub one', 'Second']);
+      const [first, sub, second] = res.created.map((c) => c.id) as [string, string, string];
+      expect(res.created[1]?.parent).toBe(first);
 
-      const got = await jj<{ workspace: { goals: typeof goals } }>(
+      const got = await jj<{ workspace: { goals: unknown } }>(
         await fetch(`${base}/api/workspaces/${workspace.id}`),
       );
-      expect(got.workspace.goals).toEqual(goals);
+      expect(got.workspace.goals).toEqual([
+        {
+          id: first,
+          title: 'First',
+          dueAt: 1765000000000,
+          subgoals: [{ id: sub, title: 'Sub one', dueAt: 1766000000000 }],
+        },
+        { id: second, title: 'Second' },
+      ]);
     });
 
     it('forwards the author into the goals_changed event (person and agent both classify)', async () => {
@@ -179,13 +200,13 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       try {
         await jj(
           await put(`/api/workspaces/${workspace.id}/goals`, {
-            goals: [{ id: 'p', title: 'Person set this' }],
+            goals: [{ title: 'Person set this' }],
             author: PERSON,
           }),
         );
         await jj(
           await put(`/api/workspaces/${workspace.id}/goals`, {
-            goals: [{ id: 'q', title: 'Agent set this' }],
+            goals: [{ title: 'Agent set this' }],
             author: AGENT,
           }),
         );
@@ -199,12 +220,12 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
     });
 
     it('moves open tasks of a vanished goal to Chores and reports them', async () => {
-      const wsId = await seedWorkspace();
-      const task = await seedTask(wsId, { goal: 'g2' });
+      const { wsId, G } = await seedWorkspace();
+      const task = await seedTask(wsId, G.g2);
       const res = await jj<{ movedToChores: string[] }>(
         await put(`/api/workspaces/${wsId}/goals`, {
-          goals: [{ id: 'g1', title: '1. Get the PR out' }],
-          drop: ['g2'],
+          goals: [{ id: G.g1, title: '1. Get the PR out' }],
+          drop: [G.g2],
           author: PERSON,
         }),
       );
@@ -214,29 +235,58 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
     });
 
     it('rejects malformed lists, the reserved id, duplicates, a missing author, and an unknown workspace', async () => {
-      const wsId = await seedWorkspace();
-      const cases: Array<[string, unknown, number]> = [
-        [wsId, { goals: [{ title: 'no id' }], author: PERSON }, 400],
+      const { wsId, G } = await seedWorkspace();
+      // An id-less entry used to head this table as "malformed"; it is now the
+      // CREATE path, so the structural case it stood for is an empty title.
+      // The rows that share a 400 also assert WHICH refusal, since
+      // `duplicate-goal-id` and `unknown-goal-id` are no longer told apart by
+      // the status alone.
+      const cases: Array<[string, unknown, number, string?]> = [
+        [wsId, { goals: [{ title: '' }], author: PERSON }, 400],
         [wsId, { goals: 'not-a-list', author: PERSON }, 400],
-        [wsId, { goals: [{ id: 'chores', title: 'Reserved' }], author: PERSON }, 400],
+        [
+          wsId,
+          { goals: [{ id: 'chores', title: 'Reserved' }], author: PERSON },
+          400,
+          'reserved-goal-id',
+        ],
         [
           wsId,
           {
             goals: [
-              { id: 'x', title: 'One' },
-              { id: 'x', title: 'Two' },
+              { id: G.g1, title: 'One' },
+              { id: G.g1, title: 'Two' },
             ],
             author: PERSON,
           },
           400,
+          'duplicate-goal-id',
         ],
-        [wsId, { goals: [{ id: 'ok', title: 'Fine' }] }, 400],
-        ['w-missing', { goals: [{ id: 'ok', title: 'Fine' }], author: PERSON }, 404],
+        [
+          wsId,
+          { goals: [{ id: 'g-not-on-this-board', title: 'Invented' }], author: PERSON },
+          400,
+          'unknown-goal-id',
+        ],
+        [wsId, { goals: [{ title: 'Fine' }] }, 400],
+        ['w-missing', { goals: [{ title: 'Fine' }], author: PERSON }, 404],
       ];
-      for (const [id, body, status] of cases) {
+      for (const [id, body, status, error] of cases) {
         const r = await put(`/api/workspaces/${id}/goals`, body);
         expect(r.status, JSON.stringify(body)).toBe(status);
+        if (error) expect(((await r.json()) as { error: string }).error).toBe(error);
       }
+
+      // Positive control for the inverted row: the same list with no `id` at
+      // all is accepted, and the minted id comes back in `created`.
+      const ok = await jj<{ created: Array<{ id: string; title: string }> }>(
+        await put(`/api/workspaces/${wsId}/goals`, {
+          goals: [{ title: 'Newly minted' }],
+          author: PERSON,
+        }),
+      );
+      expect(ok.created.map((c) => c.title)).toEqual(['Newly minted']);
+      expect(ok.created[0]?.id).toMatch(/^g-[A-Za-z0-9_-]{12}$/);
     });
   });
 
@@ -244,21 +294,21 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
 
   describe('POST /api/tasks/:id/goal', () => {
     it('forwards goal + position + riskTier + author; emits task.regrouped', async () => {
-      const wsId = await seedWorkspace();
-      const task = await seedTask(wsId);
+      const { wsId, G } = await seedWorkspace();
+      const task = await seedTask(wsId, G.g1);
       const events: TaskStoreEvent[] = [];
       const off = handle.tasks.onEvent((e) => events.push(e));
       try {
         const res = await jj<{ task: Task; changed: boolean }>(
           await post(`/api/tasks/${task.id}/goal`, {
-            goal: 'g2',
+            goal: G.g2,
             position: 1.5,
             riskTier: 'yellow',
             author: AGENT,
           }),
         );
         expect(res.changed).toBe(true);
-        expect(res.task.goal).toBe('g2');
+        expect(res.task.goal).toBe(G.g2);
         expect(res.task.order).toBe(1.5);
         expect(res.task.riskTier).toBe('yellow');
       } finally {
@@ -266,7 +316,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       }
       // Read the stored effect back over HTTP, not just the response echo.
       const stored = (await getTasks(wsId)).find((t) => t.id === task.id);
-      expect(stored?.goal).toBe('g2');
+      expect(stored?.goal).toBe(G.g2);
       expect(stored?.order).toBe(1.5);
       expect(stored?.riskTier).toBe('yellow');
 
@@ -274,8 +324,8 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       expect(regrouped.length).toBe(1);
       expect(regrouped[0]).toMatchObject({
         taskId: task.id,
-        fromGoal: 'g1',
-        toGoal: 'g2',
+        fromGoal: G.g1,
+        toGoal: G.g2,
         order: 1.5,
         actor: { name: 'Search Revamp', kind: 'agent' },
       });
@@ -289,21 +339,21 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
     // (which is `first.order - 1`, i.e. zero or negative), and `chores` —
     // reserved, absent from goals[], and a legitimate drop target on screen.
     it('carries the board reorder: a person, a fractional position, and a drop above the top row', async () => {
-      const wsId = await seedWorkspace();
-      const top = await seedTask(wsId, { goal: 'g1', order: 1 });
-      const bottom = await seedTask(wsId, { goal: 'g1', order: 2 });
-      const mover = await seedTask(wsId, { goal: 'g2', order: 1 });
+      const { wsId, G } = await seedWorkspace();
+      const top = await seedTask(wsId, G.g1, { order: 1 });
+      const bottom = await seedTask(wsId, G.g1, { order: 2 });
+      const mover = await seedTask(wsId, G.g2, { order: 1 });
 
       // Dropped between the two g1 rows: the midpoint of their orders.
       const between = await jj<{ task: Task; changed: boolean }>(
-        await post(`/api/tasks/${mover.id}/goal`, { goal: 'g1', position: 1.5, author: PERSON }),
+        await post(`/api/tasks/${mover.id}/goal`, { goal: G.g1, position: 1.5, author: PERSON }),
       );
       expect(between.changed).toBe(true);
       expect(between.task.order).toBe(1.5);
 
       // …and dragged again to the very top, which is below the first order.
       const above = await jj<{ task: Task }>(
-        await post(`/api/tasks/${mover.id}/goal`, { goal: 'g1', position: 0, author: PERSON }),
+        await post(`/api/tasks/${mover.id}/goal`, { goal: G.g1, position: 0, author: PERSON }),
       );
       expect(above.task.order).toBe(0);
 
@@ -329,26 +379,26 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
     });
 
     it('accepts a subgoal id as the target', async () => {
-      const wsId = await seedWorkspace();
-      const task = await seedTask(wsId);
+      const { wsId, G } = await seedWorkspace();
+      const task = await seedTask(wsId, G.g1);
       const res = await jj<{ task: Task }>(
-        await post(`/api/tasks/${task.id}/goal`, { goal: 'g1a', author: AGENT }),
+        await post(`/api/tasks/${task.id}/goal`, { goal: G.g1a, author: AGENT }),
       );
-      expect(res.task.goal).toBe('g1a');
+      expect(res.task.goal).toBe(G.g1a);
     });
 
     it('defaults the position to the bottom of the target goal', async () => {
-      const wsId = await seedWorkspace();
-      const existing = await seedTask(wsId, { goal: 'g2', order: 7 });
-      const task = await seedTask(wsId);
+      const { wsId, G } = await seedWorkspace();
+      const existing = await seedTask(wsId, G.g2, { order: 7 });
+      const task = await seedTask(wsId, G.g1);
       const res = await jj<{ task: Task }>(
-        await post(`/api/tasks/${task.id}/goal`, { goal: 'g2', author: AGENT }),
+        await post(`/api/tasks/${task.id}/goal`, { goal: G.g2, author: AGENT }),
       );
       expect(res.task.order).toBeGreaterThan(existing.order);
     });
 
     it('placement IS triage: stamps triagedAgainst with the goal text and clears the pending marker', async () => {
-      const wsId = await seedWorkspace();
+      const { wsId, G } = await seedWorkspace();
       // A live attachment makes the triage request deliverable, which is the
       // only path that stamps triagePendingTs (grounded-pending rule).
       await jj(
@@ -368,28 +418,28 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       expect(task.triagedAgainst).toBeUndefined();
 
       const res = await jj<{ task: Task }>(
-        await post(`/api/tasks/${task.id}/goal`, { goal: 'g1', author: AGENT }),
+        await post(`/api/tasks/${task.id}/goal`, { goal: G.g1, author: AGENT }),
       );
       expect(res.task.triagePendingTs).toBeUndefined();
-      expect(res.task.triagedAgainst).toMatchObject({ goalId: 'g1', goal: 'Ship search v2.' });
+      expect(res.task.triagedAgainst).toMatchObject({ goalId: G.g1, goal: 'Ship search v2.' });
       expect(res.task.triagedAgainst?.ts).toBeGreaterThan(0);
     });
 
     it('same goal + same position → changed:false and NO task.regrouped, but the triage stamp still lands', async () => {
-      const wsId = await seedWorkspace();
-      const task = await seedTask(wsId);
+      const { wsId, G } = await seedWorkspace();
+      const task = await seedTask(wsId, G.g1);
       const events: TaskStoreEvent[] = [];
       const off = handle.tasks.onEvent((e) => events.push(e));
       try {
         // Positive control: a real move DOES reach this listener.
-        await jj(await post(`/api/tasks/${task.id}/goal`, { goal: 'g2', author: AGENT }));
+        await jj(await post(`/api/tasks/${task.id}/goal`, { goal: G.g2, author: AGENT }));
         expect(events.filter((e) => e.type === 'task.regrouped').length).toBe(1);
         // The no-op confirm: same goal, no position.
         const res = await jj<{ task: Task; changed: boolean }>(
-          await post(`/api/tasks/${task.id}/goal`, { goal: 'g2', author: AGENT }),
+          await post(`/api/tasks/${task.id}/goal`, { goal: G.g2, author: AGENT }),
         );
         expect(res.changed).toBe(false);
-        expect(res.task.triagedAgainst?.goalId).toBe('g2');
+        expect(res.task.triagedAgainst?.goalId).toBe(G.g2);
         expect(events.filter((e) => e.type === 'task.regrouped').length).toBe(1);
       } finally {
         off();
@@ -397,25 +447,25 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
     });
 
     it('rejects an unknown goal id, an unknown task, a bad riskTier, and missing fields', async () => {
-      const wsId = await seedWorkspace();
-      const task = await seedTask(wsId);
+      const { wsId, G } = await seedWorkspace();
+      const task = await seedTask(wsId, G.g1);
       expect(
         (await post(`/api/tasks/${task.id}/goal`, { goal: 'nope', author: AGENT })).status,
       ).toBe(400);
-      expect((await post('/api/tasks/t-missing/goal', { goal: 'g1', author: AGENT })).status).toBe(
+      expect((await post('/api/tasks/t-missing/goal', { goal: G.g1, author: AGENT })).status).toBe(
         404,
       );
       expect(
         (
           await post(`/api/tasks/${task.id}/goal`, {
-            goal: 'g1',
+            goal: G.g1,
             riskTier: 'purple',
             author: AGENT,
           })
         ).status,
       ).toBe(400);
       expect((await post(`/api/tasks/${task.id}/goal`, { author: AGENT })).status).toBe(400);
-      expect((await post(`/api/tasks/${task.id}/goal`, { goal: 'g1' })).status).toBe(400);
+      expect((await post(`/api/tasks/${task.id}/goal`, { goal: G.g1 })).status).toBe(400);
     });
   });
 
@@ -429,10 +479,10 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
 
   describe('POST /api/tasks/:id/assignee', () => {
     it('forwards the assignee + author, emits task.assigned, and the projection follows', async () => {
-      const wsId = await seedWorkspace();
+      const { wsId, G } = await seedWorkspace();
       // Created BY the agent, so it starts owned by the agent — the route
       // below is what hands it to a person.
-      const task = await seedTask(wsId);
+      const task = await seedTask(wsId, G.g1);
       expect(task.assignee).toBe(AGENT.name);
       const events: TaskStoreEvent[] = [];
       const off = handle.tasks.onEvent((e) => events.push(e));
@@ -468,8 +518,8 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
     });
 
     it('a re-assignment to the same name changes nothing and emits nothing', async () => {
-      const wsId = await seedWorkspace();
-      const task = await seedTask(wsId, { assignee: 'human' });
+      const { wsId, G } = await seedWorkspace();
+      const task = await seedTask(wsId, G.g1, { assignee: 'human' });
       const events: TaskStoreEvent[] = [];
       const off = handle.tasks.onEvent((e) => events.push(e));
       try {
@@ -491,8 +541,8 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
     });
 
     it('rejects an unknown task and the missing fields', async () => {
-      const wsId = await seedWorkspace();
-      const task = await seedTask(wsId);
+      const { wsId, G } = await seedWorkspace();
+      const task = await seedTask(wsId, G.g1);
       expect(
         (await post('/api/tasks/t-missing/assignee', { assignee: 'human', author: PERSON })).status,
       ).toBe(404);
@@ -510,8 +560,8 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
 
   describe('POST /api/tasks/:id/answer', () => {
     it('forwards the verbatim text + author; the event carries the links checklist', async () => {
-      const wsId = await seedWorkspace();
-      const decision = await seedTask(wsId, {
+      const { wsId, G } = await seedWorkspace();
+      const decision = await seedTask(wsId, G.g1, {
         title: 'ship now or wait for the index rebuild?',
         assignee: 'human',
         needs: 'decision',
@@ -548,16 +598,16 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
     });
 
     it('refuses a non-decision task (positive control above proves the happy path)', async () => {
-      const wsId = await seedWorkspace();
-      const plain = await seedTask(wsId);
+      const { wsId, G } = await seedWorkspace();
+      const plain = await seedTask(wsId, G.g1);
       const r = await post(`/api/tasks/${plain.id}/answer`, { text: 'nope', author: PERSON });
       expect(r.status).toBe(400);
       expect(((await r.json()) as { error: string }).error).toBe('not-a-decision');
     });
 
     it('404s an unknown task; 400s missing text or author', async () => {
-      const wsId = await seedWorkspace();
-      const decision = await seedTask(wsId, {
+      const { wsId, G } = await seedWorkspace();
+      const decision = await seedTask(wsId, G.g1, {
         assignee: 'human',
         needs: 'decision',
         body: DECISION_BODY,
@@ -574,7 +624,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
 
   describe('POST /api/docs/:docId/threads/:threadId/promote', () => {
     it('captures origin, quotes the latest HUMAN comment, drafts title+body, and backlinks the thread', async () => {
-      const wsId = await seedWorkspace();
+      const { wsId } = await seedWorkspace();
       const { docId, threadId } = await seedThread();
       // An agent reply lands AFTER the person's comment — the quote must
       // still be the person's words, not the most recent comment.
@@ -605,7 +655,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
     });
 
     it('forwards every explicit opt: title, assignee, needs, goal, body, dueAt, links', async () => {
-      const wsId = await seedWorkspace();
+      const { wsId, G } = await seedWorkspace();
       const { docId, threadId } = await seedThread();
       const res = await jj<{ task: Task }>(
         await post(`/api/docs/${docId}/threads/${threadId}/promote`, {
@@ -613,7 +663,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
           title: 'Flip the ranking clause',
           assignee: 'human',
           needs: 'action',
-          goal: 'g1a',
+          goal: G.g1a,
           body: 'Custom body wins over the draft.',
           dueAt: 1767000000000,
           links: [{ kind: 'doc', docId: 'related-doc' }],
@@ -622,7 +672,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       expect(res.task.title).toBe('Flip the ranking clause');
       expect(res.task.assignee).toBe('human');
       expect(res.task.needs).toBe('action');
-      expect(res.task.goal).toBe('g1a');
+      expect(res.task.goal).toBe(G.g1a);
       expect(res.task.body).toBe('Custom body wins over the draft.');
       expect(res.task.dueAt).toBe(1767000000000);
       expect(res.task.links).toEqual([{ kind: 'doc', docId: 'related-doc' }]);
@@ -633,7 +683,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       // `placement` on two of three is being taught the field is unreliable —
       // and the goal semantics here are identical, so there is nothing to
       // justify the difference.
-      const wsId = await seedWorkspace();
+      const { wsId, G } = await seedWorkspace();
       const unplacedSeed = await seedThread();
       const unplaced = await jj<{
         placement: { placed: boolean; goals?: Array<{ id: string }> };
@@ -653,7 +703,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
         await post(`/api/docs/${placedSeed.docId}/threads/${placedSeed.threadId}/promote`, {
           workspaceId: wsId,
           author: AGENT,
-          goal: 'g1',
+          goal: G.g1,
         }),
       );
       expect(placed.placement.placed).toBe(true);
@@ -661,7 +711,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
     });
 
     it('an omitted goal is a triage candidate; an explicit goal is a placement', async () => {
-      const wsId = await seedWorkspace();
+      const { wsId, G } = await seedWorkspace();
       await jj(
         await post(`/api/workspaces/${wsId}/attachments`, {
           agentId: 'agent-search-revamp',
@@ -682,7 +732,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       const placed = await jj<{ task: Task }>(
         await post(`/api/docs/${b.docId}/threads/${b.threadId}/promote`, {
           workspaceId: wsId,
-          goal: 'g1',
+          goal: G.g1,
           author: AGENT,
         }),
       );
@@ -690,7 +740,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
     });
 
     it('404s an unknown thread, doc, or workspace; 400s a missing workspaceId', async () => {
-      const wsId = await seedWorkspace();
+      const { wsId } = await seedWorkspace();
       const { docId, threadId } = await seedThread();
       expect(
         (
@@ -720,9 +770,9 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
 
   describe('TaskStore.setTaskGoal ordering', () => {
     it('an empty target goal starts at order 1', async () => {
-      const wsId = await seedWorkspace();
-      const task = await seedTask(wsId);
-      const res = handle.tasks.setTaskGoal(task.id, 'g2', { actor: AGENT });
+      const { wsId, G } = await seedWorkspace();
+      const task = await seedTask(wsId, G.g1);
+      const res = handle.tasks.setTaskGoal(task.id, G.g2, { actor: AGENT });
       expect(res.ok && res.task.order).toBe(1);
     });
   });

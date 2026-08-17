@@ -13799,7 +13799,7 @@ var AUTHOR = resolveAgentAuthor({
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.47";
+var PLUGIN_VERSION = "0.1.49";
 var COMMIT_EVIDENCE_DESCRIPTION = 'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
 var server = new Server({
   name: "claude-live-feedback",
@@ -14857,7 +14857,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "set_goal_list",
-      description: 'Replace a workspace\'s ORDERED goal list — use this to ADD or REMOVE a goal. To RENAME one, use rename_goal: this call is keyed by ID, so submitting a new id with the new title is not a rename, it is a removal plus an addition, and it strands everything the old band held. To only change PRIORITY ORDER, use reorder_goals: it is permutation-only and cannot lose a goal. Each goal: {id, title, dueAt?, subgoals?: [{id, title, dueAt?}]} — one subgoal level max. "chores" is reserved (always rendered last, never in the list). DESTRUCTIVE EDGE, now GATED: this is a full REPLACE, so any id you leave out is removed — and if that id still holds tasks the call is REFUSED with error "would-strand-tasks", naming each band with its open and done counts. Nothing is written on a refusal. Removing a band that holds work therefore takes a second, deliberate call listing its id in `drop`; removing an EMPTY one needs no ceremony. On success the result reports movedToChores (open tasks swept to the bottom of Chores — re-place each with set_task_goal rather than leaving them piled) and strandedDone (done tasks still pointing at the removed id, which is what leaves a bare row in get_workspace).',
+      description: 'Replace a workspace\'s ORDERED goal list — use this to ADD or REMOVE a goal. Submitting a list means "these are my bands, in this order". GOAL IDS ARE GENERATED AND PERMANENT: to ADD a band, send the entry with NO `id` at all and the server mints an opaque one, returned in `created` (that is the only way to learn it — get_workspace also shows it). To KEEP a band, send its `id` exactly as get_workspace reports it. An `id` this board does not hold is REFUSED with error "unknown-goal-id" naming it, because that is how a re-key arrives: there is no input here that gives an existing band a different id, and no input that lets you choose a new one. To RENAME, use rename_goal (title only, cannot move a task). To only change PRIORITY ORDER, use reorder_goals: permutation-only, cannot lose a goal. Each entry: {id?, title, dueAt?, subgoals?: [{id?, title, dueAt?}]} — one subgoal level max. "chores" is reserved (always rendered last, never in the list). DESTRUCTIVE EDGE, still GATED: this is a full REPLACE, so any id you leave out is removed — and if that id still holds tasks the call is REFUSED with error "would-strand-tasks", naming each band with its open and done counts. Nothing is written on a refusal. Removing a band that holds work therefore takes a second, deliberate call listing its id in `drop`; removing an EMPTY one needs no ceremony. On success the result reports created (new bands with their minted ids, in submission order), movedToChores (open tasks swept to the bottom of Chores — re-place each with set_task_goal rather than leaving them piled) and strandedDone (done tasks still pointing at the removed id, which is what leaves a bare row in get_workspace).',
       inputSchema: {
         type: "object",
         properties: {
@@ -14867,7 +14867,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             items: {
               type: "object",
               properties: {
-                id: { type: "string" },
+                id: {
+                  type: "string",
+                  description: "OMIT to create this band — the server mints an opaque id and returns it in `created`. Include it, exactly as get_workspace reports it, to keep a band you already have. An id this board does not hold is refused."
+                },
                 title: { type: "string" },
                 dueAt: { type: "number" },
                 subgoals: {
@@ -14875,15 +14878,18 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                   items: {
                     type: "object",
                     properties: {
-                      id: { type: "string" },
+                      id: {
+                        type: "string",
+                        description: "Omit to create; include to keep. Same rule as a goal id."
+                      },
                       title: { type: "string" },
                       dueAt: { type: "number" }
                     },
-                    required: ["id", "title"]
+                    required: ["title"]
                   }
                 }
               },
-              required: ["id", "title"]
+              required: ["title"]
             }
           },
           drop: {
@@ -14897,7 +14903,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "rename_goal",
-      description: "Change a goal's or subgoal's TITLE in place, by id — the safe way to rename a band. Use this instead of set_goal_list whenever the id is staying the same, which is almost always: set_goal_list is a full replace keyed by id, so renaming through it means restating every other band from a list that may have moved, and giving the band a NEW id there reads as a removal plus an addition (its open tasks swept to Chores, its done tasks orphaned onto an id that no longer exists). Nothing can move here: a task's band IS its goal id, and no input to this call changes an id. `dueAt` is optional — a number sets it, null clears it, omitting it leaves it alone. Fires the same workspace.goals_changed edit the board and activity feed already render. `chores` is refused: its label is fixed.",
+      description: "Change a goal's or subgoal's TITLE in place, by id — the safe way to rename a band. Use this instead of set_goal_list whenever the id is staying the same, which is now ALWAYS: set_goal_list is a full replace keyed by id, so renaming through it means restating every other band from a list that may have moved — and giving the band a NEW id there is not a rename at all, it is refused as \"unknown-goal-id\", because goal ids are generated and permanent. Nothing can move here: a task's band IS its goal id, and no input to this call changes an id. `dueAt` is optional — a number sets it, null clears it, omitting it leaves it alone. Fires the same workspace.goals_changed edit the board and activity feed already render. `chores` is refused: its label is fixed.",
       inputSchema: {
         type: "object",
         properties: {
@@ -14917,7 +14923,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "reorder_goals",
-      description: "Change the PRIORITY ORDER of a workspace's goals — order IS priority, so this is the gesture for \"work 2.1 before 1.2\". PERMUTATION ONLY: `order` must be exactly the goal ids already at one scope (the top-level list, or the subgoals of `parent`) — same ids, same count, no titles. Nothing is created, renamed, removed or reparented, and no task can move. An order that omits, repeats or invents an id is REFUSED with 400 naming the offending ids, so a list that another writer has changed since you read it makes you re-read rather than silently dropping a goal — which is exactly what set_goal_list does with the same mistake (its omissions dump that goal's open tasks into Chores). Get the ids from get_workspace and send back every row at your scope whose `reorderable` is true — that one filter is the whole rule, and it covers both kinds of row that are marked false (Chores, and a goal id left behind on a done task). Including either is a 400: `chores` comes back in `reservedIds` because it is a permanent bucket you simply drop, an orphaned id comes back in `unknownIds` because the goal really was removed. Reach for set_goal_list only when you actually mean to add, rename or remove a goal.",
+      description: "Change the PRIORITY ORDER of a workspace's goals — order IS priority, so this is the gesture for \"work 2.1 before 1.2\". PERMUTATION ONLY: `order` must be exactly the goal ids already at one scope (the top-level list, or the subgoals of `parent`) — same ids, same count, no titles. Nothing is created, renamed, removed or reparented, and no task can move. An order that omits, repeats or invents an id is REFUSED with 400 naming the offending ids, so a list that another writer has changed since you read it makes you re-read rather than silently dropping a goal — which is exactly what set_goal_list does with the same mistake (its omissions dump that goal's open tasks into Chores). Get the ids from get_workspace and send back every row at your scope whose `reorderable` is true — that one filter is the whole rule, and it covers both kinds of row that are marked false (Chores, and a goal id left behind on a done task). Including either is a 400: `chores` comes back in `reservedIds` because it is a permanent bucket you simply drop, an orphaned id comes back in `unknownIds` because the goal really was removed. Reach for set_goal_list only when you actually mean to add or remove a goal (a new band goes in with no `id`; the server mints it).",
       inputSchema: {
         type: "object",
         properties: {
@@ -14990,7 +14996,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "import_tasks_markdown",
-      description: "Import a hand-maintained markdown task tracker (group headings + status tables) into a hub workspace — adoption is not re-keying. THE DEFAULT IS A DRY-RUN: it returns the mapping (headings → board goals, table rows → tasks with normalized todo/in-progress/done status, plus what was skipped and which columns were ignored) and creates NOTHING. Review the mapping with the human, then call again with apply:true. Apply appends the new goals (existing goals matched by title are reused, never clobbered), creates the tasks as explicit placements (no triage), walks imported statuses through the transition gate, and STAMPS the source file with a banner + hub link so the old tracker cannot quietly stay a second source of truth — a stamped file refuses re-import (409). Headings map to goals; rows before any heading land in Chores; a leading H1 is the document title, not a group.",
+      description: "Import a hand-maintained markdown task tracker (group headings + status tables) into a hub workspace — adoption is not re-keying. THE DEFAULT IS A DRY-RUN: it returns the mapping (headings → board goals, table rows → tasks with normalized todo/in-progress/done status, plus what was skipped and which columns were ignored) and creates NOTHING. Review the mapping with the human, then call again with apply:true. Apply appends the new goals (existing goals matched by title are reused, never clobbered), creates the tasks as explicit placements (no triage), walks imported statuses through the transition gate, and STAMPS the source file with a banner + hub link so the old tracker cannot quietly stay a second source of truth — a stamped file refuses re-import (409). Headings map to goals; rows before any heading land in Chores; a leading H1 is the document title, not a group. In the DRY-RUN, a mapped goal that does not exist yet carries a readable PLACEHOLDER id: goal ids are minted at apply time, so read the dry run for its titles and structure, and take the real ids from the apply result's goalsCreated.",
       inputSchema: {
         type: "object",
         properties: {
@@ -15691,6 +15697,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok({
           workspaceId,
           changed: res.changed,
+          created: res.created,
           movedToChores: res.movedToChores,
           strandedDone: res.strandedDone
         });

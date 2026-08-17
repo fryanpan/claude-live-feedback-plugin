@@ -22,6 +22,13 @@
  *      Removing an EMPTY goal needs no ceremony — the guard can only refuse
  *      a call that was about to lose track of real work.
  *
+ * Goal ids are generated now, so the re-key spelling of a rename ("submit
+ * the list with a new id") is refused earlier still, as `unknown-goal-id` —
+ * a caller cannot name an id the board does not hold. The removal the
+ * stranding guard exists for is therefore reached the only way that is left:
+ * by OMITTING a band that is still there. Every fixture below seeds its bands
+ * through `seedGoals` and refers to them by the ids that came back.
+ *
  * The route layer gets its own describe block because it is the layer
  * nothing type-checks: `drop` is precisely the shape of param a hand-copying
  * handler accepts and discards while still answering 200 (the `groups`
@@ -39,26 +46,65 @@ import { type ServerHandle, createServer } from '../src/server.ts';
 import { type GoalSummaryRow, summarizeGoals } from '../src/task-queue.ts';
 import {
   CHORES_GOAL_ID,
+  type GoalListEntry,
   type Task,
   TaskStore,
   type TaskStoreEvent,
   type WorkspaceGoal,
 } from '../src/tasks.ts';
+import { type GoalIds, type SeedGoalSpec, seedGoals, seedGoalsOverHttp } from './goal-seed.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'known' };
 const AGENT = { id: 'agent-search-revamp', name: 'Search Revamp', kind: 'known' };
 
-const GOALS: WorkspaceGoal[] = [
+/** The board every test starts from. Labels stand in for what used to be
+ *  hard-coded ids (`launch` was `g-launch`); the ids themselves are minted by
+ *  the store and read back out of `seedGoals`. */
+const GOAL_SPEC: SeedGoalSpec[] = [
   {
-    id: 'g-launch',
+    key: 'launch',
     title: '1. Ship the launch post',
     dueAt: 1766000000000,
     subgoals: [
-      { id: 'g-launch-qa', title: '1.1 QA pass' },
-      { id: 'g-launch-copy', title: '1.2 Copy edit', dueAt: 1767000000000 },
+      { key: 'launchQa', title: '1.1 QA pass' },
+      { key: 'launchCopy', title: '1.2 Copy edit', dueAt: 1767000000000 },
     ],
   },
-  { id: 'g-perf', title: '2. Cut page weight' },
+  { key: 'perf', title: '2. Cut page weight' },
+];
+
+type Bands = Record<'launch' | 'launchQa' | 'launchCopy' | 'perf', string>;
+
+/** The seed map, narrowed to the labels these tests index. A missing label is
+ *  a broken fixture, not an undefined id flowing into an assertion. */
+function bands(ids: GoalIds): Bands {
+  const at = (key: string): string => {
+    const id = ids[key];
+    if (id === undefined) throw new Error(`seed produced no id for "${key}"`);
+    return id;
+  };
+  return {
+    launch: at('launch'),
+    launchQa: at('launchQa'),
+    launchCopy: at('launchCopy'),
+    perf: at('perf'),
+  };
+}
+
+/** The seeded board restated as a submittable list. `setGoalList` is still a
+ *  full replace, so "leave the list as it is" means naming every band by the
+ *  id the seed minted — and it doubles as the expected stored shape. */
+const boardFor = (G: Bands): WorkspaceGoal[] => [
+  {
+    id: G.launch,
+    title: '1. Ship the launch post',
+    dueAt: 1766000000000,
+    subgoals: [
+      { id: G.launchQa, title: '1.1 QA pass' },
+      { id: G.launchCopy, title: '1.2 Copy edit', dueAt: 1767000000000 },
+    ],
+  },
+  { id: G.perf, title: '2. Cut page weight' },
 ];
 
 describe('TaskStore.renameGoal', () => {
@@ -80,37 +126,33 @@ describe('TaskStore.renameGoal', () => {
 
   /** A board with work under the band being renamed, at both statuses and
    *  both depths. Without tasks on it "nothing moved" is vacuously true. */
-  function seed(): { wsId: string; open: string; done: string; sub: string } {
+  function seed(): { wsId: string; G: Bands; open: string; done: string; sub: string } {
     const ws = store.createWorkspace('search-revamp', 'Ship search v2.');
-    store.setGoalList(ws.id, GOALS, { actor: PERSON });
+    const G = bands(seedGoals(store, ws.id, GOAL_SPEC, PERSON));
     const mk = (title: string, goal: string): string => {
       const res = store.createTask(ws.id, { title, goal, actor: AGENT });
       if (!res.ok) throw new Error(`fixture create failed: ${res.error}`);
       return res.task.id;
     };
-    const open = mk('draft the announcement', 'g-launch');
-    const done = mk('book the slot', 'g-launch');
-    const sub = mk('proof the headline', 'g-launch-qa');
+    const open = mk('draft the announcement', G.launch);
+    const done = mk('book the slot', G.launch);
+    const sub = mk('proof the headline', G.launchQa);
     store.transition(done, 'in-progress', { actor: AGENT });
     store.transition(done, 'done', { actor: AGENT });
     events.length = 0;
-    return { wsId: ws.id, open, done, sub };
+    return { wsId: ws.id, G, open, done, sub };
   }
 
   const goalOf = (id: string): string | undefined => store.getTask(id)?.goal;
 
   it('retitles a top-level goal and moves nothing', () => {
-    const { wsId, open, done, sub } = seed();
+    const { wsId, G, open, done, sub } = seed();
     // Positive control: the probe can see tasks under this band right now.
-    expect([goalOf(open), goalOf(done), goalOf(sub)]).toEqual([
-      'g-launch',
-      'g-launch',
-      'g-launch-qa',
-    ]);
+    expect([goalOf(open), goalOf(done), goalOf(sub)]).toEqual([G.launch, G.launch, G.launchQa]);
 
     const res = store.renameGoal(
       wsId,
-      'g-launch',
+      G.launch,
       { title: '1. Ship the relaunch post' },
       {
         actor: PERSON,
@@ -122,25 +164,21 @@ describe('TaskStore.renameGoal', () => {
     expect(res.goal.title).toBe('1. Ship the relaunch post');
 
     const goals = store.getWorkspace(wsId)?.goals ?? [];
-    expect(goals.map((g) => g.id)).toEqual(['g-launch', 'g-perf']);
+    expect(goals.map((g) => g.id)).toEqual([G.launch, G.perf]);
     expect(goals[0]?.title).toBe('1. Ship the relaunch post');
     // The id is untouched, so every task keeps its band — including the done
     // one, which is the half the replace path leaves orphaned.
-    expect([goalOf(open), goalOf(done), goalOf(sub)]).toEqual([
-      'g-launch',
-      'g-launch',
-      'g-launch-qa',
-    ]);
+    expect([goalOf(open), goalOf(done), goalOf(sub)]).toEqual([G.launch, G.launch, G.launchQa]);
     // And no orphan row appears in the read.
     const rows = summarizeGoals(store.listTasks(wsId), goals);
     expect(rows.filter((r) => !r.reorderable && r.id !== CHORES_GOAL_ID)).toEqual([]);
   });
 
   it('retitles a SUBGOAL, leaving the parent and its sibling untouched', () => {
-    const { wsId, sub } = seed();
+    const { wsId, G, sub } = seed();
     const res = store.renameGoal(
       wsId,
-      'g-launch-qa',
+      G.launchQa,
       { title: '1.1 Editorial pass' },
       {
         actor: PERSON,
@@ -151,19 +189,19 @@ describe('TaskStore.renameGoal', () => {
     const goals = store.getWorkspace(wsId)?.goals ?? [];
     expect(goals[0]?.title).toBe('1. Ship the launch post');
     expect(goals[0]?.subgoals?.map((s) => [s.id, s.title])).toEqual([
-      ['g-launch-qa', '1.1 Editorial pass'],
-      ['g-launch-copy', '1.2 Copy edit'],
+      [G.launchQa, '1.1 Editorial pass'],
+      [G.launchCopy, '1.2 Copy edit'],
     ]);
     // dueAt on the untouched sibling rides along.
     expect(goals[0]?.subgoals?.[1]?.dueAt).toBe(1767000000000);
-    expect(goalOf(sub)).toBe('g-launch-qa');
+    expect(goalOf(sub)).toBe(G.launchQa);
   });
 
   it('sets and clears dueAt without touching the title of anything else', () => {
-    const { wsId } = seed();
+    const { wsId, G } = seed();
     store.renameGoal(
       wsId,
-      'g-perf',
+      G.perf,
       { title: '2. Cut page weight', dueAt: 1768000000000 },
       {
         actor: PERSON,
@@ -172,7 +210,7 @@ describe('TaskStore.renameGoal', () => {
     expect(store.getWorkspace(wsId)?.goals[1]?.dueAt).toBe(1768000000000);
     store.renameGoal(
       wsId,
-      'g-perf',
+      G.perf,
       { title: '2. Cut page weight', dueAt: null },
       {
         actor: PERSON,
@@ -184,8 +222,8 @@ describe('TaskStore.renameGoal', () => {
   });
 
   it('emits goals_changed with the OLD title on oldGoals and nothing moved', () => {
-    const { wsId } = seed();
-    store.renameGoal(wsId, 'g-launch', { title: '1. Ship the relaunch post' }, { actor: PERSON });
+    const { wsId, G } = seed();
+    store.renameGoal(wsId, G.launch, { title: '1. Ship the relaunch post' }, { actor: PERSON });
     const changed = events.filter((e) => e.type === 'workspace.goals_changed');
     expect(changed).toHaveLength(1);
     const ev = changed[0] as Extract<TaskStoreEvent, { type: 'workspace.goals_changed' }>;
@@ -200,21 +238,21 @@ describe('TaskStore.renameGoal', () => {
   });
 
   it('refuses an unknown id, and `chores` as RESERVED rather than unknown', () => {
-    const { wsId } = seed();
+    const { wsId, G } = seed();
     const unknown = store.renameGoal(wsId, 'g-nope', { title: 'x' }, { actor: PERSON });
     expect(unknown).toEqual({ ok: false, error: 'goal-not-found' });
     const chores = store.renameGoal(wsId, CHORES_GOAL_ID, { title: 'Errands' }, { actor: PERSON });
     expect(chores).toEqual({ ok: false, error: 'reserved-goal-id' });
     // Nothing was written on either refusal.
-    expect(store.getWorkspace(wsId)?.goals).toEqual(GOALS);
+    expect(store.getWorkspace(wsId)?.goals).toEqual(boardFor(G));
     expect(events.filter((e) => e.type === 'workspace.goals_changed')).toEqual([]);
   });
 
   it('is a no-op when the title already matches — no event', () => {
-    const { wsId } = seed();
+    const { wsId, G } = seed();
     const res = store.renameGoal(
       wsId,
-      'g-perf',
+      G.perf,
       { title: '2. Cut page weight' },
       {
         actor: PERSON,
@@ -242,39 +280,41 @@ describe('TaskStore.setGoalList — the stranding guard', () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  function seed(): { wsId: string; open: string; done: string; sub: string } {
+  function seed(): { wsId: string; G: Bands; open: string; done: string; sub: string } {
     const ws = store.createWorkspace('search-revamp', 'Ship search v2.');
-    store.setGoalList(ws.id, GOALS, { actor: PERSON });
+    const G = bands(seedGoals(store, ws.id, GOAL_SPEC, PERSON));
     const mk = (title: string, goal: string): string => {
       const res = store.createTask(ws.id, { title, goal, actor: AGENT });
       if (!res.ok) throw new Error(`fixture create failed: ${res.error}`);
       return res.task.id;
     };
-    const open = mk('draft the announcement', 'g-launch');
-    const done = mk('book the slot', 'g-launch');
-    const sub = mk('proof the headline', 'g-launch-qa');
+    const open = mk('draft the announcement', G.launch);
+    const done = mk('book the slot', G.launch);
+    const sub = mk('proof the headline', G.launchQa);
     store.transition(done, 'in-progress', { actor: AGENT });
     store.transition(done, 'done', { actor: AGENT });
     events.length = 0;
-    return { wsId: ws.id, open, done, sub };
+    return { wsId: ws.id, G, open, done, sub };
   }
 
-  /** The exact gesture reproduced against the live server: same band, new id,
-   *  new title. Before the guard this succeeded and emptied the band. */
+  /** The gesture reproduced against the live server — "same band, new title,
+   *  new identity" — as it can still be spelled now that a caller cannot
+   *  invent an id: the replacement band is submitted with NO id (a create),
+   *  its subgoals ride across by their real ids, and the old band is simply
+   *  left out. Before the guard this succeeded and emptied the band. */
   it('refuses a rename-by-new-id, naming the old id and what it holds', () => {
-    const { wsId, open, done } = seed();
+    const { wsId, G, open, done } = seed();
     const res = store.setGoalList(
       wsId,
       [
         {
-          id: 'g-launch-v2',
           title: '1. Ship the relaunch post',
           subgoals: [
-            { id: 'g-launch-qa', title: '1.1 QA pass' },
-            { id: 'g-launch-copy', title: '1.2 Copy edit', dueAt: 1767000000000 },
+            { id: G.launchQa, title: '1.1 QA pass' },
+            { id: G.launchCopy, title: '1.2 Copy edit', dueAt: 1767000000000 },
           ],
         },
-        { id: 'g-perf', title: '2. Cut page weight' },
+        { id: G.perf, title: '2. Cut page weight' },
       ],
       { actor: PERSON },
     );
@@ -283,48 +323,48 @@ describe('TaskStore.setGoalList — the stranding guard', () => {
     expect(res.error).toBe('would-strand-tasks');
     if (res.error !== 'would-strand-tasks') return;
     expect(res.stranding).toEqual([
-      { id: 'g-launch', title: '1. Ship the launch post', openTasks: 1, doneTasks: 1 },
+      { id: G.launch, title: '1. Ship the launch post', openTasks: 1, doneTasks: 1 },
     ]);
     // Nothing happened: not the goals, not the tasks, not one event.
-    expect(store.getWorkspace(wsId)?.goals).toEqual(GOALS);
-    expect(store.getTask(open)?.goal).toBe('g-launch');
-    expect(store.getTask(done)?.goal).toBe('g-launch');
+    expect(store.getWorkspace(wsId)?.goals).toEqual(boardFor(G));
+    expect(store.getTask(open)?.goal).toBe(G.launch);
+    expect(store.getTask(done)?.goal).toBe(G.launch);
     expect(events).toEqual([]);
   });
 
   it('refuses when the dropped band holds ONLY done tasks — the silent half', () => {
-    const { wsId, open, done } = seed();
-    // Move the open one out, so `g-launch` holds nothing but history. The old
-    // behaviour reported this case in NO field at all: movedToChores was empty
-    // and the caller saw a clean success.
-    store.setTaskGoal(open, 'g-perf', { actor: AGENT });
+    const { wsId, G, open, done } = seed();
+    // Move the open one out, so the launch band holds nothing but history. The
+    // old behaviour reported this case in NO field at all: movedToChores was
+    // empty and the caller saw a clean success.
+    store.setTaskGoal(open, G.perf, { actor: AGENT });
     events.length = 0;
 
-    const res = store.setGoalList(wsId, [GOALS[1] as WorkspaceGoal], { actor: PERSON });
+    const res = store.setGoalList(wsId, [boardFor(G)[1] as WorkspaceGoal], { actor: PERSON });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error).toBe('would-strand-tasks');
     if (res.error !== 'would-strand-tasks') return;
     expect(res.stranding.map((row) => [row.id, row.openTasks, row.doneTasks])).toEqual([
-      ['g-launch', 0, 1],
+      [G.launch, 0, 1],
       // The subgoal disappears with its parent and it holds an open task.
-      ['g-launch-qa', 1, 0],
+      [G.launchQa, 1, 0],
     ]);
-    expect(store.getTask(done)?.goal).toBe('g-launch');
+    expect(store.getTask(done)?.goal).toBe(G.launch);
     expect(events).toEqual([]);
   });
 
   it('allows dropping a band that holds NOTHING — the guard is one-directional', () => {
-    const { wsId } = seed();
-    // g-perf and g-launch-copy are empty; g-launch and g-launch-qa are not.
+    const { wsId, G } = seed();
+    // perf and launchCopy are empty; launch and launchQa are not.
     const res = store.setGoalList(
       wsId,
       [
         {
-          id: 'g-launch',
+          id: G.launch,
           title: '1. Ship the launch post',
           dueAt: 1766000000000,
-          subgoals: [{ id: 'g-launch-qa', title: '1.1 QA pass' }],
+          subgoals: [{ id: G.launchQa, title: '1.1 QA pass' }],
         },
       ],
       { actor: PERSON },
@@ -334,14 +374,14 @@ describe('TaskStore.setGoalList — the stranding guard', () => {
     expect(res.changed).toBe(true);
     expect(res.movedToChores).toEqual([]);
     expect(res.strandedDone).toEqual([]);
-    expect(store.getWorkspace(wsId)?.goals.map((g) => g.id)).toEqual(['g-launch']);
+    expect(store.getWorkspace(wsId)?.goals.map((g) => g.id)).toEqual([G.launch]);
   });
 
   it('proceeds when the caller NAMES the id in `drop`, and reports both halves', () => {
-    const { wsId, open, done, sub } = seed();
-    const res = store.setGoalList(wsId, [GOALS[1] as WorkspaceGoal], {
+    const { wsId, G, open, done, sub } = seed();
+    const res = store.setGoalList(wsId, [boardFor(G)[1] as WorkspaceGoal], {
       actor: PERSON,
-      drop: ['g-launch', 'g-launch-qa', 'g-launch-copy'],
+      drop: [G.launch, G.launchQa, G.launchCopy],
     });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
@@ -350,30 +390,34 @@ describe('TaskStore.setGoalList — the stranding guard', () => {
     // …and the done task, which stays put, is now REPORTED rather than
     // silently left pointing at a vanished id.
     expect(res.strandedDone).toEqual([done]);
-    expect(store.getTask(done)?.goal).toBe('g-launch');
+    expect(store.getTask(done)?.goal).toBe(G.launch);
     expect(store.getTask(open)?.goal).toBe(CHORES_GOAL_ID);
   });
 
   it('ignores a `drop` entry for an id that is not being removed', () => {
-    const { wsId } = seed();
-    const res = store.setGoalList(wsId, GOALS.concat({ id: 'g-new', title: '3. Docs' }), {
+    const { wsId, G } = seed();
+    // The added band carries no id — that is what a create is now — so its
+    // id comes back in `created` rather than being chosen here.
+    const entries: GoalListEntry[] = [...boardFor(G), { title: '3. Docs' }];
+    const res = store.setGoalList(wsId, entries, {
       actor: PERSON,
-      drop: ['g-launch'],
+      drop: [G.launch],
     });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.movedToChores).toEqual([]);
     expect(res.strandedDone).toEqual([]);
+    expect(res.created.map((c) => c.title)).toEqual(['3. Docs']);
     expect(store.getWorkspace(wsId)?.goals.map((g) => g.id)).toEqual([
-      'g-launch',
-      'g-perf',
-      'g-new',
+      G.launch,
+      G.perf,
+      res.created[0]?.id,
     ]);
   });
 
   it('still short-circuits an unchanged list without asking for `drop`', () => {
-    const { wsId } = seed();
-    const res = store.setGoalList(wsId, GOALS, { actor: PERSON });
+    const { wsId, G } = seed();
+    const res = store.setGoalList(wsId, boardFor(G), { actor: PERSON });
     expect(res.ok && res.changed).toBe(false);
     expect(events).toEqual([]);
   });
@@ -414,19 +458,19 @@ describe('the goal routes', () => {
     return res.json() as Promise<T>;
   };
 
-  /** A board carrying an open AND a done task under `g-launch`. */
-  async function seedWorkspace(): Promise<{ wsId: string; open: string; done: string }> {
+  /** A board carrying an open AND a done task under the launch band. */
+  async function seedWorkspace(): Promise<{ wsId: string; G: Bands; open: string; done: string }> {
     const { workspace } = await jj<{ workspace: { id: string } }>(
       await post('/api/workspaces', { name: 'search-revamp', goal: 'Ship search v2.' }),
     );
-    await jj(await put(`/api/workspaces/${workspace.id}/goals`, { goals: GOALS, author: PERSON }));
+    const G = bands(await seedGoalsOverHttp(base, workspace.id, GOAL_SPEC, PERSON));
     const mk = async (title: string) =>
       (
         await jj<{ task: { id: string } }>(
           await post(`/api/workspaces/${workspace.id}/tasks`, {
             author: AGENT,
             title,
-            goal: 'g-launch',
+            goal: G.launch,
           }),
         )
       ).task.id;
@@ -441,7 +485,7 @@ describe('the goal routes', () => {
         }),
       );
     }
-    return { wsId: workspace.id, open, done };
+    return { wsId: workspace.id, G, open, done };
   }
 
   const readGoals = async (wsId: string): Promise<WorkspaceGoal[]> =>
@@ -455,10 +499,10 @@ describe('the goal routes', () => {
     (await jj<{ tasks: Task[] }>(await fetch(`${base}/api/workspaces/${wsId}/tasks`))).tasks;
 
   it('forwards `goal`, `title` and `dueAt` — the stored list reads them back', async () => {
-    const { wsId, open, done } = await seedWorkspace();
+    const { wsId, G, open, done } = await seedWorkspace();
     const res = await jj<{ changed: boolean; goal: { id: string; title: string } }>(
       await post(`/api/workspaces/${wsId}/goals/rename`, {
-        goal: 'g-launch',
+        goal: G.launch,
         title: '1. Ship the relaunch post',
         dueAt: 1769000000000,
         author: PERSON,
@@ -471,16 +515,16 @@ describe('the goal routes', () => {
     expect(goals[0]?.title).toBe('1. Ship the relaunch post');
     expect(goals[0]?.dueAt).toBe(1769000000000);
     // The subgoals rode along untouched, and no task moved.
-    expect(goals[0]?.subgoals?.map((s) => s.id)).toEqual(['g-launch-qa', 'g-launch-copy']);
+    expect(goals[0]?.subgoals?.map((s) => s.id)).toEqual([G.launchQa, G.launchCopy]);
     const byId = new Map((await readTasks(wsId)).map((t) => [t.id, t.goal]));
-    expect([byId.get(open), byId.get(done)]).toEqual(['g-launch', 'g-launch']);
+    expect([byId.get(open), byId.get(done)]).toEqual([G.launch, G.launch]);
   });
 
   it('renames a SUBGOAL through the same route', async () => {
-    const { wsId } = await seedWorkspace();
+    const { wsId, G } = await seedWorkspace();
     await jj(
       await post(`/api/workspaces/${wsId}/goals/rename`, {
-        goal: 'g-launch-copy',
+        goal: G.launchCopy,
         title: '1.2 Line edit',
         author: PERSON,
       }),
@@ -516,10 +560,12 @@ describe('the goal routes', () => {
   /** The param the route layer is most likely to accept and discard. Both
    *  directions in one test: without `drop` the same body is refused, with it
    *  the same body succeeds — so a handler that dropped the field would fail
-   *  the second half rather than pass both. */
+   *  the second half rather than pass both. The body is the replacement band
+   *  with no id (a create), which is how "rename by replacing the band" is
+   *  spelled now that ids cannot be invented; it still drops the old band. */
   it('refuses a stranding replace, and accepts the same body once `drop` names the id', async () => {
-    const { wsId, open, done } = await seedWorkspace();
-    const goals = [{ id: 'g-launch-v2', title: '1. Ship the relaunch post' }];
+    const { wsId, G, open, done } = await seedWorkspace();
+    const goals = [{ title: '1. Ship the relaunch post' }];
 
     const refused = await put(`/api/workspaces/${wsId}/goals`, { goals, author: PERSON });
     expect(refused.status).toBe(400);
@@ -532,32 +578,34 @@ describe('the goal routes', () => {
     // Only the ids that actually hold work — the empty subgoals vanishing
     // with their parent need no acknowledgement, because losing track of
     // nothing is not a loss.
-    expect(body.stranding.map((s) => [s.id, s.openTasks, s.doneTasks])).toEqual([
-      ['g-launch', 1, 1],
-    ]);
+    expect(body.stranding.map((s) => [s.id, s.openTasks, s.doneTasks])).toEqual([[G.launch, 1, 1]]);
     // The refusal has to name the way out, or it is just a wall.
     expect(body.message).toContain('rename_goal');
     expect(body.message).toContain('drop');
     // Presence control: the board is untouched by the refusal.
-    expect((await readGoals(wsId)).map((g) => g.id)).toEqual(['g-launch', 'g-perf']);
+    expect((await readGoals(wsId)).map((g) => g.id)).toEqual([G.launch, G.perf]);
 
-    const okRes = await jj<{ movedToChores: string[]; strandedDone: string[] }>(
+    const okRes = await jj<{
+      movedToChores: string[];
+      strandedDone: string[];
+      created: Array<{ id: string }>;
+    }>(
       await put(`/api/workspaces/${wsId}/goals`, {
         goals,
-        drop: ['g-launch'],
+        drop: [G.launch],
         author: PERSON,
       }),
     );
     expect(okRes.movedToChores).toEqual([open]);
     expect(okRes.strandedDone).toEqual([done]);
-    expect((await readGoals(wsId)).map((g) => g.id)).toEqual(['g-launch-v2']);
+    expect((await readGoals(wsId)).map((g) => g.id)).toEqual([okRes.created[0]?.id]);
   });
 
   it('rejects a malformed `drop` rather than treating it as absent', async () => {
-    const { wsId } = await seedWorkspace();
+    const { wsId, G } = await seedWorkspace();
     const res = await put(`/api/workspaces/${wsId}/goals`, {
-      goals: GOALS,
-      drop: 'g-launch',
+      goals: boardFor(G),
+      drop: G.launch,
       author: PERSON,
     });
     expect(res.status).toBe(400);
@@ -567,18 +615,18 @@ describe('the goal routes', () => {
   /** The read has to keep working for the caller who DID mean the removal:
    *  the orphan row is still there, still not reorderable. */
   it('an acknowledged drop still leaves a non-reorderable orphan row in the read', async () => {
-    const { wsId } = await seedWorkspace();
+    const { wsId, G } = await seedWorkspace();
     await jj(
       await put(`/api/workspaces/${wsId}/goals`, {
-        goals: [{ id: 'g-perf', title: '2. Cut page weight' }],
-        drop: ['g-launch'],
+        goals: [{ id: G.perf, title: '2. Cut page weight' }],
+        drop: [G.launch],
         author: PERSON,
       }),
     );
     const { goalSummary } = await jj<{ goalSummary: GoalSummaryRow[] }>(
       await fetch(`${base}/api/workspaces/${wsId}`),
     );
-    const orphan = goalSummary.find((r) => r.id === 'g-launch');
+    const orphan = goalSummary.find((r) => r.id === G.launch);
     expect(orphan).toMatchObject({ reorderable: false, done: 1 });
   });
 });
