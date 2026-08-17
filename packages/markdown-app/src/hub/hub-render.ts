@@ -923,7 +923,11 @@ export function renderQuickAdd(container: HTMLElement, handlers: QuickAddHandler
   mic.setAttribute('aria-label', 'Hold to dictate a task — hold Space or Enter');
   mic.textContent = '🎤';
   const indicator = document.createElement('span');
-  indicator.className = 'hub-quick-mic-state';
+  // Hidden until there is something to say — it takes a flex line of its own
+  // (`flex-basis: 100%`), so mounting it visible puts a row-gap under the form
+  // that vanishes for good the first time anything is dictated. The capture
+  // un-hides it; this is the same start the board-wide dock's indicator has.
+  indicator.className = 'hub-quick-mic-state hidden';
   indicator.setAttribute('aria-live', 'polite');
   // Before Add, not after: the two thumb targets on a phone are the box and
   // the mic, and Add is the one that ends the interaction.
