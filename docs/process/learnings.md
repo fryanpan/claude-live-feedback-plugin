@@ -1346,6 +1346,79 @@ Technical discoveries that should persist across sessions for this project.
   from the first commit — the same "true and still proves nothing about the
   caller" shape as `isWhitespaceOnlyChange`.
 
+## A required parameter binds the callers who call you, and nobody else
+
+- **The sequel to the entry above: the repaired guard was correct and still
+  preserved nothing for a whole class of rewrites.** Making the pre-rewrite
+  title and body a REQUIRED parameter of `noteBodyEdited` was meant to stop a
+  new call site from skipping the preservation — and it does, for call sites.
+  But a task body is not a field, it is a live Yjs room at `task:<taskId>`,
+  and `set_doc_content` on that docId never calls the store at all. It wrote
+  the room, returned `ok: true`, and left `quote` empty with no
+  `task.body_edited` row. Reproduced before designing: the capture was gone,
+  the board looked fine, and `get_doc` returned the new text.
+- **The positive control has to run on the same row in the same pass, and it
+  is what caught the probe lying.** The first run reported "no
+  `task.body_edited` emitted" for BOTH the doc route and the named route —
+  the reader was matching `row.type` where the audit log stores `row.event`.
+  A vacuous zero on the path under test is invisible; a vacuous zero on the
+  control is not, which is the whole reason to spend the extra call.
+- **Where a guarantee belongs is decided by where the thing is LOST, not by
+  where a caller announces it.** The preservation moved to
+  `TaskStore.updateBodySnapshot` — the choke point every writer of a body
+  fragment passes through, because they all mutate one Yjs fragment and that
+  is what its observer flushes. That covers doors no route guard could:
+  `find_and_replace` aimed at the same docId, and a person typing on the
+  board. The regression test for it drives `find_and_replace` deliberately,
+  since a whole-doc-rewrite test would pass against a route-level fix.
+- **The two halves do not live in the same place, and pretending they could
+  would be the bug again.** Preservation belongs at the choke point;
+  ATTRIBUTION cannot, because a Yjs observer has no actor and fires on every
+  typing pause. So `task.body_edited` stays with the routes that carry an
+  author, and `POST /api/docs/:id/content` now runs the same ceremony
+  `/api/tasks/:id/body` does. When a caller sends no author the words are
+  still preserved and no row is emitted — an audit row naming nobody is worse
+  than its honest absence.
+- **Refusing was the tempting answer and was worse.** `set_doc_content` could
+  have 400'd on a `task:` room naming `update_task_body` instead — but that
+  tool arrived in 0.1.24, so refusing takes the only body rewrite an older
+  bundle has, to buy a guarantee the branch can simply provide. Serve when you
+  can serve; refuse only when the route genuinely cannot do the thing.
+- Mutation-verified in both directions, each naming a specific test: deleting
+  the choke-point preservation turns 7 red (including the three pre-existing
+  `/body`-route cases, which is the proof the choke point serves that route
+  too); bypassing the doc route's `task:` branch turns 3 red; and *always*
+  emitting the row — the inverse mutation — turns "still preserves when the
+  caller says nothing about who it is" red, which is what makes that absence
+  assertion non-vacuous.
+
+## A four-digit needle in a haystack of timestamps is a time bomb, not a test
+
+- **CI went red on `expect(JSON.stringify(e)).not.toContain('9099')` — and the
+  endpoint it was guarding against was correctly absent.** The record carries
+  three `Date.now()` millisecond stamps, and one of them came back
+  `1786980999099`. The clock spelled the needle. Green locally, green on the
+  previous run, red on a branch that never touched that file — which is the
+  worst version of this, because the first instinct is to go read your own
+  diff.
+- **A substring assertion searches everything in the string, including the
+  parts nothing controls.** `9099` is four digits against ~30 uncontrolled
+  digit positions; at roughly one run in a thousand it fires, forever, on
+  whoever is unlucky. Its sibling case in the same file never tripped only
+  because its timestamps are hand-written constants — so the file contained
+  both the safe and the unsafe spelling of the same idea, and the difference
+  was invisible.
+- **Assert the structure first, then match on something no generator can
+  produce.** `'endpoint' in attachment` is the assertion actually being made;
+  the string check is a backstop, and it should look for the WHOLE endpoint
+  (`http://127.0.0.1:9099/hooks/agent-relay`), which no clock and no id can
+  spell. Mutation-verified: removing the strip in `publicAttachment` turns
+  three named tests red, so the repair did not just make it stop failing.
+- **Rule: a `not.toContain` needle must be impossible for any value in the
+  payload to generate by accident.** Prefer a key check, a parsed field, or a
+  long distinctive literal. Digits, short words, and ids are all things some
+  other field will eventually produce on its own.
+
 ## A malformed anchor crashes a request that never touched the doc
 
 - **`POST /api/docs/:id/threads` takes `anchor` verbatim and validates
@@ -1680,3 +1753,85 @@ Technical discoveries that should persist across sessions for this project.
   but your working tree just silently changed branches, so files appear to
   "revert" to pre-branch content. Bit us twice in one session. Run the
   merge from a checkout that is NOT on the branch, or expect the switch.
+
+## A false premise can still sit on top of a real bug — and the shipped feature is what lets you see it
+
+- **A task said questions asked in a thread reply never reach the review
+  strip. They had, for three days, since PR #143.** That is the sixth
+  already-shipped claim in a week, so the reproduce-first rule paid again. What
+  was NEW is what happened next: the item WAS on the strip, and reading its
+  actual `ask` field showed it quoting a PR announcement while the open
+  question sat four comments back. **The disproof is not the end of the
+  investigation, it is the start of a better one** — a working feature you can
+  point at is a far better instrument than the absence the task described.
+  Retiring the task as "already done" would have left two live defects.
+- **Measure a heuristic over the real corpus before defending it in prose.**
+  The question was "which agent comments are actually asking a person
+  something", and every plausible rule was testable against all 86 agent
+  comments on the board. `?` alone fires on 19 — URL query strings
+  (`…/board?tab=open`), `anchor.snippet?.`, `` `in listUntriaged?` ``, section
+  headings, quoted UI copy. Address alone fires on 2. Both together fire on 1,
+  which is the question. Recall is the honest cost and it is 1 of 3. None of
+  that was guessable; all of it took one script against data already on disk.
+- **A priority signal computed from the wrong end starves exactly what it was
+  built to protect.** The band sorts oldest-first so nothing rots at the
+  bottom, but `since` came from the NEWEST comment — so an agent posting
+  follow-ups on its own thread reset its own clock. 20 of 42 open threads were
+  understating their wait, the two worst by 62.7h and 60.1h: waiting two and a
+  half days, sorting as though fresh. Sort keys deserve the same "is this the
+  fact or a proxy for it" audit as predicates.
+- **Make the risky half of a change provably inert.** The safety property here
+  is that `unansweredRun` is non-empty EXACTLY where the old predicate was, so
+  the SET of threads on the strip cannot move — the change only re-ranks and
+  re-labels. That is what makes an imperfect detector affordable: its false
+  negatives cost a promotion, never a disappearance. Prefer a shape where the
+  failure mode is bounded by construction over one where it is bounded by the
+  detector being good.
+- **Two hand-written regexes that must agree WILL drift, and the drift lands in
+  the feature's own subject.** The detector and the extractor each kept a copy
+  of the address pattern; the extractor's had lost the newline branch and ran
+  after a whitespace flatten that destroys the very newlines the anchor is made
+  of. Net effect: a comment the detector accepted got clipped from character
+  zero, truncating away the question the change existed to surface. Found by
+  `codex review`, not by 21 passing tests. One matcher, used by both.
+- **A conjunction implemented as "both are true somewhere" is not the
+  conjunction you argued for.** "A question mark AND a direct address" was
+  written as `text.includes('?') && addressMatches`, so a status note linking
+  `?tab=open` was announced as a question — the exact false positive the second
+  half existed to prevent. The relationship mattered: the question must follow
+  the address, in its paragraph, and be sentence-ending (a `?` followed by
+  whitespace or end-of-text, which is what separates prose from a query string
+  or optional chaining).
+- **Watch for a test that became a tautology when you refactored under it.**
+  An equivalence test comparing `unansweredRun` to `awaitingPerson` was written
+  while they were independent and kept after `awaitingPerson` was reimplemented
+  on top of `unansweredRun` — at which point it could not fail. Replaced with
+  the pre-change predicate written out from scratch, plus an assertion that the
+  case list covers both answers so an always-true implementation still fails.
+- **A mutation harness needs its own positive control, and in zsh the obvious
+  one is broken.** A round of 9 mutations reported all 9 "killed" — from
+  `chk "label" $CMD` where `CMD="bun test path"`: **zsh does not word-split
+  unquoted parameters**, so `"$@"` received one unrunnable string and every
+  mutation "died" of a bad command rather than of a failing test. It looked
+  exactly like a perfect result. Two guards, both cheap: run the UNMUTATED tree
+  through the same harness first and require it to PASS, and `cmp` the file
+  after each `perl -0pi` to prove the mutation actually applied. With those in,
+  the same round came back 8 killed and **1 survived** — a real gap in my tests.
+  Same family as "a negative test needs a positive control", pointed at the
+  tool doing the checking.
+- **A guard against "this match is inside quoted code" must test where the
+  NAME sits, not where the match starts.** The address regex begins at a line
+  start or an emphasis run, so `m.index` is routinely OUTSIDE the code span
+  that quotes the address — the first version of the guard read as correct,
+  passed its test, and let `Fixture: \`Name: ship now?\` — worth it?` through.
+  The test passed because a *different* guard (the one on the `?`) happened to
+  catch that fixture; only mutation testing separated them. When two guards can
+  cover the same case, each needs a fixture the other cannot catch.
+- **Re-measure a widened heuristic against the corpus that justified it.**
+  Loosening the sentence-end rule to accept markdown closers fixed 7 of 9 real
+  question forms — and silently re-admitted the quoted-copy class the rule
+  existed to reject, which the unit tests had no reason to cover. The live
+  board's 107 agent comments caught it in one run: 1 match → 2, and the new
+  one's extracted ask was a row of fragments. The corpus is the regression
+  test that unit fixtures cannot be, because nobody invents the input that
+  breaks their own rule.

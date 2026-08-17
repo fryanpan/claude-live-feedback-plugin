@@ -13799,7 +13799,7 @@ var AUTHOR = resolveAgentAuthor({
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.46";
+var PLUGIN_VERSION = "0.1.47";
 var COMMIT_EVIDENCE_DESCRIPTION = 'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
 var server = new Server({
   name: "claude-live-feedback",
@@ -14042,7 +14042,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "set_doc_content",
-      description: "Replace the WHOLE document with new markdown — the safe path for a comprehensive rewrite/restructure. Applies as a block-level diff on the live doc: blocks you didn't change keep their identity, so comment threads anchored to them survive, connected editors update live, and the result flushes to the bound .md within ~1s like any other edit. Use this INSTEAD of Write-ing the bound file (then reparse_from_disk) or the delete_doc → Write → create_review_doc dance — both race the write-back and have clobbered files in practice, and the latter orphans every comment thread. Returns ok:false with error 'unsupported' (code/diff docs are read-only), 'empty' (won't wipe a doc to nothing — use delete_doc if you mean that), 'parse-failed', or 'not-found'.",
+      description: "Replace the WHOLE document with new markdown — the safe path for a comprehensive rewrite/restructure. Applies as a block-level diff on the live doc: blocks you didn't change keep their identity, so comment threads anchored to them survive, connected editors update live, and the result flushes to the bound .md within ~1s like any other edit. Use this INSTEAD of Write-ing the bound file (then reparse_from_disk) or the delete_doc → Write → create_review_doc dance — both race the write-back and have clobbered files in practice, and the latter orphans every comment thread. On a `task:<taskId>` docId (a task's description) this now does everything `update_task_body` does except retitle — preserves the row's original words into `quote` and records an attributed `task.body_edited` — so it no longer silently erases a capture; prefer `update_task_body` anyway, since it also retitles and hands back the `quote` it preserved. Returns ok:false with error 'unsupported' (code/diff docs are read-only), 'empty' (won't wipe a doc to nothing — use delete_doc if you mean that), 'parse-failed', or 'not-found'.",
       inputSchema: {
         type: "object",
         properties: {
@@ -15192,7 +15192,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       case "set_doc_content": {
         const { docId, markdown } = a;
         const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/content`, {
-          markdown
+          markdown,
+          author: AUTHOR
         });
         return ok(res);
       }
