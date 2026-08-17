@@ -37,6 +37,36 @@ Re-run `next_tasks` after every task you finish — priorities move while you
 work, and a queue you read an hour ago is a queue about a board that no longer
 exists.
 
+## A description is a measurement with a date on it
+
+Every task body was written on some particular day and reads ever after in the
+present tense, about a codebase that moves several times a day. So a row that
+says "there is no route that does X" is telling you what somebody measured
+then, not what is true now — five times in one week a task on this project
+claimed something was missing that had already shipped, twice within hours of
+the task being filed. Building against a premise that has moved usually
+produces the wrong **size** of fix: a whole second path beside one that
+already worked.
+
+`next_tasks` gives you two things to read before you trust a description:
+
+- **`bodyWrittenAt`** — when the description was last written. On every row.
+- **`premise`** — present only when that description has stood still for over
+  a day while people kept commenting on the task. Its `notes` carry those
+  comments verbatim, which is where a previous reader recorded what they found
+  when they reproduced it. Read them first; they have often already done the
+  reproducing, and they routinely shrink the work.
+
+`premise` is not a status and never appears on a done task — most rows
+carrying it still have real work left. When you have established what is
+actually true, **rewrite the description** with `update_task_body`, which
+clears the notice. Keep what the body originally claimed and add the
+correction with your name and the date: the original measurement is evidence
+about when it was taken, not a mistake to erase.
+
+None of this replaces reproducing before you build. It tells you where
+somebody already did.
+
 You have latitude over the ordering itself: propose a reorder with
 `reorder_goals(workspaceId, order, parent?)` when the sequence is wrong, and
 say why. It takes ids only — no titles — and it refuses any `order` that is
