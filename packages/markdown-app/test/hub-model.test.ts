@@ -251,6 +251,29 @@ describe('describeEvent', () => {
     expect(s).not.toContain('task.body_edited');
   });
 
+  it('names BOTH titles when a rewrite reshaped the row', () => {
+    // Triage shaping a raw capture replaces the clipped fragment the person
+    // filed. "rewrote the description of <new title>" is useless to them —
+    // the new title is one they have never seen, and the old one survives
+    // nowhere else on the board once the row is shaped. The old name is the
+    // only handle back to what they typed.
+    const s = describeEvent(
+      {
+        event: 'task.body_edited',
+        ts: NOW,
+        taskId: 't-1',
+        actor: { id: 'agent-x', name: 'Search Revamp', kind: 'agent' },
+        titleFrom: 'And also it is really hard to go from one shel…',
+        titleTo: 'Moving between shelves loses your place',
+      },
+      titleOf,
+    );
+    expect(s).toContain('Search Revamp');
+    expect(s).toContain('And also it is really hard to go from one shel…');
+    expect(s).toContain('Moving between shelves loses your place');
+    expect(s).not.toContain('task.body_edited');
+  });
+
   it('says what an evidence amendment corrected, and what it replaced', () => {
     // Same shape as the row above: the fallback would print
     // `task.evidence_amended` and read as a log line in a view built for

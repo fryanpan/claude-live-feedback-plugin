@@ -976,13 +976,22 @@ export function describeEvent(ev: ActivityEvent, titleOf: (taskId: string) => st
       return `${actorName(ev)} assigned ${title()}: ${String(ev.from)} → ${String(ev.to)}`;
     case 'task.regrouped':
       return `${actorName(ev)} regrouped ${title()}: ${String(ev.fromGoal)} → ${String(ev.toGoal)}`;
-    case 'task.body_edited':
+    case 'task.body_edited': {
       // Typing in a task body is deliberately NOT activity (the snapshot
       // fires no event at all). This row is the other thing: a wholesale
       // rewrite through the body route, which is how a thin task gets its
       // acceptance criteria — worth a line, because the reader who filed it
       // is looking at different words than the ones they wrote.
+      //
+      // When the same act retitled the row (triage shaping a raw capture),
+      // the old title has to be in the line: it is the ONLY name the person
+      // who filed it would recognise, and after the rewrite it survives
+      // nowhere else on the board.
+      const from = ev.titleFrom as string | undefined;
+      const to = ev.titleTo as string | undefined;
+      if (from && to) return `${actorName(ev)} reshaped “${from}” into “${to}”`;
       return `${actorName(ev)} rewrote the description of ${title()}`;
+    }
     case 'task.evidence_amended': {
       // Two different sentences, because the two cases mean different things
       // to a reader of the trail. Filling a gap says the work was proven all
