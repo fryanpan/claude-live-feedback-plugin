@@ -292,7 +292,43 @@ board derives a decision's urgency from what points at it, and there is
 deliberately no urgency field. It replaces the whole edge set, so pass the full
 list; an empty `after` clears the edges.
 
-## Triage: placement is the write half
+## Triage: shape it, then place it
+
+Triage is **two** verbs, and for a long time only the second one was written
+down. A paragraph typed into quick-capture became one row whose title was the
+first line clipped mid-word and whose body was the raw utterance; triage gave
+it a goal, and it kept that fragment title forever while every component
+reported success. Placement alone does not make a row pickup-able.
+
+**Shape first.**
+
+```
+update_task_body(taskId, markdown: "…", title: "…")
+```
+
+- **Read the row's own words.** `next_tasks` carries the full body; `quote`
+  carries what was actually said when any of it was dictated.
+- **Decide how many tasks it is — zero, one, or several.** *"Anyway, make a
+  ticket from this"* is an instruction about neighbouring text, and files
+  **zero** tasks. A paragraph holding two complaints is two. This is a
+  judgement, and it is why the step is yours: capture makes exactly one row
+  per submit and cannot tell an idea from an aside.
+- **Write it like a task somebody else will pick up** — `<persona> can <do x>
+  so that <goal y>`, plus falsifiable done-when criteria — and give it a title
+  that names the work rather than starting the sentence.
+- **The original words are safe.** The first rewrite of a row copies its
+  pre-rewrite words into `quote` automatically, and a quote that is already
+  there is never overwritten. So shaping can never be the only record of what
+  was said — which is what makes rewriting somebody else's capture a
+  reasonable thing to do without asking first.
+- **When one capture is several tasks**, the row you were handed keeps the
+  first result — retitled and rewritten in place, so any comment thread on it
+  stays on the thing it was about. File the rest with `create_tasks` and
+  `link_refs` them back to it. **When it is zero tasks**, do not delete the
+  row: close it with `task_transition` and say on it what the words were an
+  instruction *for*. Nothing here ever destroys a capture.
+
+**Then place.**
 
 ```
 set_task_goal(taskId, goal: "latency", position: 2.5, riskTier: "yellow", batchId?)
@@ -322,7 +358,9 @@ Defaults: `agentId` = this agent's MCP identity, `runtime` =
 `claude-code-local`. This is the fresh-context briefing:
 
 - `gating` — a one-line summary of open decisions gating tasks.
-- `untriaged` — task ids to sweep with `set_task_goal`.
+- `untriaged` — task ids to sweep. Sweeping one means **shaping it and then
+  placing it**, not filing it under a goal and moving on. See "Triage: shape
+  it, then place it" above.
 - `queuedVoice` — voice change-requests that arrived while no agent was live.
   Act on each transcript **verbatim**.
 - `lead` — whether you hold the lead seat. An **empty** seat is claimed by the
