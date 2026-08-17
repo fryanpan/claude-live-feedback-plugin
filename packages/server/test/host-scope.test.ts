@@ -3,13 +3,21 @@
  *
  *   A. Default-deny by host — an unknown hostname arriving over the tunnel
  *      must be refused, not waved past the Access gate.
- *   B. Share scoping — passing Access for ONE shared doc must not grant the
- *      rest of the server.
+ *   B. Share scoping — passing Access for ONE shared workspace must not grant
+ *      the rest of the server.
  *
  * host-guard.test.ts covers the predicates. These tests drive the real route
  * table, because the route layer is the part nothing type-checks — a gate
  * that returns the right decision but is wired in the wrong place, or after
  * a route that already answered, would still pass the unit tests.
+ *
+ * A WORKSPACE is the unit of sharing (2026-08-17). The first suite used to
+ * mint a doc-scoped share over `POST /api/share/doc`; that grant is gone, so
+ * its fixture is now two one-doc grouping workspaces — `WS_SHARED` holds the
+ * doc the visitor was invited to, `WS_OTHER` holds the one they must not
+ * reach. Every scope assertion below is unchanged: what a share reaches, and
+ * what it must not, is the same question it always was. The removal itself is
+ * asserted in its own test ("per-doc sharing is gone").
  */
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -74,6 +82,12 @@ describe('host gate + share scoping over HTTP', () => {
 
   const SHARED = 'shared-doc';
   const OTHER = 'other-doc';
+  // Two grouping workspaces, one doc each. Docs sharing a `workspaceId` ARE a
+  // grouping workspace (the same shape a diff review has), so this is the
+  // smallest honest workspace share: exactly the reach the old per-doc share
+  // had, expressed in the unit that still exists.
+  const WS_SHARED = 'ws-shared-doc';
+  const WS_OTHER = 'ws-other-doc';
 
   /** Request against the real server with an arbitrary Host header. */
   const req = (path: string, host: string, init: RequestInit = {}) =>
@@ -121,25 +135,37 @@ describe('host gate + share scoping over HTTP', () => {
     });
     base = `http://localhost:${handle.port}`;
 
-    // Two file-backed docs; only one of them gets shared.
-    for (const id of [SHARED, OTHER]) {
+    // Two file-backed docs in two separate workspaces; only one workspace
+    // gets shared. Two workspaces rather than two loose docs because scope is
+    // workspace membership now — a doc filed nowhere is reachable by nobody,
+    // which would make "CANNOT read another doc" pass for the wrong reason.
+    for (const [id, ws] of [
+      [SHARED, WS_SHARED],
+      [OTHER, WS_OTHER],
+    ] as const) {
       const path = join(dataDir, `${id}.md`);
       writeFileSync(path, `# ${id}\n\nBody.\n`);
       const r = await fetch(`${base}/api/docs`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ docId: id, type: 'markdown', sourceUrl: path }),
+        body: JSON.stringify({ docId: id, type: 'markdown', sourceUrl: path, workspaceId: ws }),
       });
       expect(r.status).toBe(200);
     }
 
-    const sr = await fetch(`${base}/api/share/doc`, {
+    const sr = await fetch(`${base}/api/share/workspace`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ docId: SHARED, allowDomains: ['partner.example'] }),
+      body: JSON.stringify({ workspaceId: WS_SHARED, allowDomains: ['partner.example'] }),
     });
     expect(sr.status).toBe(200);
-    const shareBody = (await sr.json()) as { share: { hostname: string; audience: string } };
+    const shareBody = (await sr.json()) as {
+      share: { hostname: string; audience: string; docId: string; workspaceId: string };
+    };
+    // The URL still opens the doc — it is the workspace's entry — but the
+    // GRANT is the workspace, which is what every assertion below measures.
+    expect(shareBody.share.docId).toBe(SHARED);
+    expect(shareBody.share.workspaceId).toBe(WS_SHARED);
     shareHost = shareBody.share.hostname;
     shareJwt = await signJwt(shareBody.share.audience);
   });
@@ -262,12 +288,28 @@ describe('host gate + share scoping over HTTP', () => {
 
     it('CANNOT list, mint, or revoke shares', async () => {
       expect((await asVisitor('/api/share')).status).toBe(403);
-      const mint = await asVisitor('/api/share/doc', {
+      // Both live mint routes, and the retired one. `/api/share/doc` answers
+      // 410 to a LOCAL caller — 403 here is the point: the gate is an
+      // allowlist that runs before any route, so a visitor never learns which
+      // share routes exist, let alone which were removed.
+      const mintWs = await asVisitor('/api/share/workspace', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId: WS_OTHER, allowDomains: ['attacker.example'] }),
+      });
+      expect(mintWs.status).toBe(403);
+      const mintLink = await asVisitor('/api/share/link', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId: WS_OTHER }),
+      });
+      expect(mintLink.status).toBe(403);
+      const mintDoc = await asVisitor('/api/share/doc', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ docId: OTHER, allowDomains: ['attacker.example'] }),
       });
-      expect(mint.status).toBe(403);
+      expect(mintDoc.status).toBe(403);
       expect((await asVisitor('/api/share/some-id', { method: 'DELETE' })).status).toBe(403);
     });
 
@@ -308,16 +350,101 @@ describe('host gate + share scoping over HTTP', () => {
       expect(r.status).toBe(403);
     });
 
-    it('CANNOT list a workspace tree — a DOC share stays one doc', async () => {
-      // Sharing one doc never widens to its workspace. share_workspace
-      // (below) is the way to let a reviewer browse the whole set.
-      expect((await asVisitor('/api/workspaces/ws-1/tree')).status).toBe(403);
-      expect((await asVisitor('/api/workspaces/ws-1/grouped')).status).toBe(403);
-      expect((await asVisitor('/api/workspaces/ws-1/files')).status).toBe(403);
+    it('CANNOT list ANOTHER workspace’s tree — the share is one workspace', async () => {
+      // This used to read "a DOC share stays one doc": sharing a doc never
+      // widened to the workspace holding it. There is no doc share left to
+      // widen, so what it now proves is the boundary that replaced it — a
+      // workspace share reaches its OWN workspace and stops at the edge of it.
+      // Positive control first, or the refusals below would pass on a visitor
+      // who can reach no workspace at all.
+      expect((await asVisitor(`/api/workspaces/${WS_SHARED}/tree`)).status).toBe(200);
+      // `grouped` and `files` answer 404 on a one-doc grouping (no diff groups,
+      // no repo root) — asserting 200 would be asserting the fixture. What is
+      // under test is the GATE, so: past it for its own workspace, refused for
+      // the other one.
+      for (const sub of ['tree', 'grouped', 'files']) {
+        expect((await asVisitor(`/api/workspaces/${WS_SHARED}/${sub}`)).status, sub).not.toBe(403);
+        expect((await asVisitor(`/api/workspaces/${WS_OTHER}/${sub}`)).status, sub).toBe(403);
+      }
     });
 
     it('can load the app shell it needs to render the review', async () => {
       expect((await asVisitor('/app/app.js')).status).not.toBe(403);
+    });
+  });
+
+  describe('B. per-doc sharing is gone — a workspace is the unit', () => {
+    // The suite above used to mint its share with `POST /api/share/doc`. That
+    // grant is retired, and these are LOCAL calls (the visitor can reach
+    // neither route — a sibling test proves that) so what they measure is the
+    // mint path itself, not the host gate.
+    it('refuses to mint a doc share, and names the replacement', async () => {
+      const r = await req('/api/share/doc', `localhost:${handle.port}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ docId: OTHER, allowDomains: ['partner.example'] }),
+      });
+      expect(r.status).toBe(410);
+      const body = (await r.json()) as { error: string; hint?: string };
+      expect(body.error).toBe('per_doc_sharing_removed');
+      expect(body.hint).toContain('workspace');
+    });
+
+    it('refuses a share_link that still carries a docId', async () => {
+      // An older plugin bundle keeps POSTing the payload ITS build sends. The
+      // dangerous reading is "ignore the field you don't know and mint
+      // something" — a link scoped to a workspace the caller never named.
+      const list = async () => {
+        const listed = await req('/api/share', `localhost:${handle.port}`);
+        return ((await listed.json()) as { shares: Array<{ docId: string }> }).shares;
+      };
+      const before = await list();
+      const r = await req('/api/share/link', `localhost:${handle.port}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ docId: OTHER }),
+      });
+      expect(r.status).toBe(410);
+      expect((await r.json()) as { error: string }).toMatchObject({
+        error: 'per_doc_sharing_removed',
+      });
+      // …and nothing was created behind the refusal. Asserted as a COUNT, not
+      // as "no share names OTHER": the refusal has to be that no share was
+      // minted, whatever it would have been scoped to.
+      expect(await list()).toHaveLength(before.length);
+    });
+
+    it('POSITIVE CONTROL: a workspace share still mints', async () => {
+      // Without this the two refusals above would pass on a server that has
+      // stopped minting shares altogether. Access mode, because this fixture
+      // configures no `publicHostname` — link mode's own mint is controlled
+      // the same way in share-grouping-scope.test.ts.
+      const mint = await req('/api/share/workspace', `localhost:${handle.port}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId: WS_OTHER, allowDomains: ['partner.example'] }),
+      });
+      expect(mint.status).toBe(200);
+      const { share } = (await mint.json()) as {
+        share: { shareId: string; workspaceId: string; docId: string };
+      };
+      expect(share.workspaceId).toBe(WS_OTHER);
+      expect(share.docId).toBe(OTHER);
+      // Clean up so the expiry suite below still finds exactly one Access
+      // share on `shareHost`.
+      await req(`/api/share/${share.shareId}`, `localhost:${handle.port}`, { method: 'DELETE' });
+    });
+
+    it('refuses a share_link with no workspace at all', async () => {
+      const r = await req('/api/share/link', `localhost:${handle.port}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ label: 'nothing in scope' }),
+      });
+      expect(r.status).toBe(400);
+      expect((await r.json()) as { error: string }).toMatchObject({
+        error: 'workspaceId required',
+      });
     });
   });
 

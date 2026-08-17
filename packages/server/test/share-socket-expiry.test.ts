@@ -113,17 +113,21 @@ describe('expired shares lose their sockets', () => {
         },
       });
 
+    // A workspace is the unit of sharing, so the doc is filed on one and the
+    // share covers that. `shared` is its only member, which keeps the socket
+    // under test — /y/shared — exactly the one the share authorized.
     await local('/api/docs', {
       method: 'POST',
       body: JSON.stringify({
         docId: 'shared',
         type: 'markdown',
         sourceUrl: join(dataDir, 'notes.md'),
+        workspaceId: 'ws-shared',
       }),
     });
     const mint = await local('/api/share/link', {
       method: 'POST',
-      body: JSON.stringify({ docId: 'shared' }),
+      body: JSON.stringify({ workspaceId: 'ws-shared' }),
     });
     const { share } = (await mint.json()) as { share: { slug: string; shareId: string } };
     const redeemed = await fetch(`${base}/s/${share.slug}`, {

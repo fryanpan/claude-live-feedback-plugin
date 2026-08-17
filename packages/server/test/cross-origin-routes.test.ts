@@ -285,13 +285,21 @@ describe('the public share host is same-origin only', () => {
         ...i,
         headers: { host: `localhost:${handle.port}`, 'content-type': 'application/json' },
       });
+    // A workspace is the unit of sharing: file the doc on one, share that.
+    // `shared` is its only member, so the visitor's reach — and therefore what
+    // a forged origin could steal through it — is exactly what it was.
     await local('/api/docs', {
       method: 'POST',
-      body: JSON.stringify({ docId: 'shared', type: 'markdown', sourceUrl: docPath }),
+      body: JSON.stringify({
+        docId: 'shared',
+        type: 'markdown',
+        sourceUrl: docPath,
+        workspaceId: 'ws-shared',
+      }),
     });
     const mint = await local('/api/share/link', {
       method: 'POST',
-      body: JSON.stringify({ docId: 'shared' }),
+      body: JSON.stringify({ workspaceId: 'ws-shared' }),
     });
     const { share } = (await mint.json()) as { share: { slug: string } };
     const redeemed = await fetch(`${base}/s/${share.slug}`, {

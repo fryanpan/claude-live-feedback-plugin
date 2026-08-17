@@ -107,6 +107,15 @@ export interface HubTask {
    *  server omits the key rather than projecting a zero, so a row is marked
    *  only when there is something to read. */
   commentCount?: number;
+  /** Since when nobody has named a goal for this task. A TIMESTAMP rather
+   *  than a flag, so a reading can say how long the wait has been and not
+   *  only that there is one. Cleared the moment a goal is named; absent on
+   *  every placed task. The server is the only writer — never re-derive it
+   *  from "is this row under Chores", the proxy it replaced, which was wrong
+   *  in both directions (an explicit `goal: 'chores'` IS a placement, and a
+   *  task swept into Chores by a band removal keeps its old
+   *  `triagedAgainst`). */
+  unplacedSince?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -357,6 +366,73 @@ export function goalLabel(goals: HubGoal[], goalId: string): string {
     for (const sub of g.subgoals ?? []) if (sub.id === goalId) return sub.title;
   }
   return CHORES_TITLE;
+}
+
+/** How many tasks nobody has placed, and how long the oldest has waited. */
+export interface UnplacedNotice {
+  count: number;
+  /** The `unplacedSince` of the longest-waiting task — kept alongside the
+   *  rendered strings so a caller can sort or threshold on it without
+   *  re-deriving the selection. */
+  oldestSince: number;
+  /** The longest-waiting task, so the strip can take a reader straight to it.
+   *  Named rather than assumed: both writers of `unplacedSince` land a task in
+   *  Chores today, but "scroll to the Chores header" would bake that proxy
+   *  back into the surface through the back door. */
+  oldestTaskId: string;
+  /** "3 tasks have no goal yet" — how many. */
+  label: string;
+  /** "oldest waiting 6d" — how long. */
+  detail: string;
+}
+
+/**
+ * The bucket's whole risk is that it is QUIET. Unplaced work rests at the
+ * bottom of Chores, which is the band nobody scrolls to, so the failure mode
+ * is tasks accumulating there for weeks while every check comes back correct.
+ *
+ * So this is a reading rather than an obligation: it fires on every render,
+ * for everybody, without anyone deciding to look — the same shape as the
+ * description-staleness notice. Two rules follow from that:
+ *
+ *  - **Silent when the bucket is empty.** `null`, not a zero. A permanent
+ *    "0 unplaced" is a line people learn to skim, and skimming is what the
+ *    notice exists to prevent.
+ *  - **Inform, don't shame.** How many and how old, and nothing else. A
+ *    scolding strip gets ignored, which costs more than saying nothing.
+ *
+ * Selection mirrors the server's `listUntriaged` EXACTLY — open, and carrying
+ * an `unplacedSince`. Deliberately no `goal === chores` clause: that proxy was
+ * wrong in both directions, and re-introducing it here would make the board
+ * disagree with the sweep an agent actually runs.
+ */
+export function unplacedNotice(tasks: HubTask[], now: number): UnplacedNotice | null {
+  let count = 0;
+  let oldest: HubTask | null = null;
+  for (const t of tasks) {
+    if (t.status === 'done' || t.unplacedSince === undefined) continue;
+    count += 1;
+    // Tie broken by id so the strip names the same task on every render —
+    // task order in the projection is a Map iteration, not a promise.
+    if (
+      oldest === null ||
+      t.unplacedSince < (oldest.unplacedSince as number) ||
+      (t.unplacedSince === oldest.unplacedSince && t.id < oldest.id)
+    ) {
+      oldest = t;
+    }
+  }
+  if (oldest === null) return null;
+  const oldestSince = oldest.unplacedSince as number;
+  const waited = fmtDuration(now - oldestSince);
+  return {
+    count,
+    oldestSince,
+    oldestTaskId: oldest.id,
+    label: count === 1 ? '1 task has no goal yet' : `${count} tasks have no goal yet`,
+    // With one task "oldest" would be a comparison against nothing.
+    detail: count === 1 ? `waiting ${waited}` : `oldest waiting ${waited}`,
+  };
 }
 
 // ── Reordering (the drag handle and its keyboard twin) ─────────────────────
