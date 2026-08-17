@@ -40,11 +40,24 @@ else
 fi
 BUN_DIR="$(dirname "${BUN_BIN}")"
 
+# The external origin the server should build its human-facing links on, when
+# something in front of it terminates TLS. Baked into the plist at install
+# time because launchd agents inherit no shell environment.
+#
+#   LF_PUBLIC_BASE_URL=https://<host> scripts/launchd/install.sh
+#
+# Empty (the default) keeps the current behaviour exactly: links are built
+# from the discovered hostname and the listening port, over plain http.
+# Re-running the installer without it therefore REVERTS the setting, which is
+# the intended rollback path — see docs/process/tailnet-https.md.
+PUBLIC_BASE_URL="${LF_PUBLIC_BASE_URL:-}"
+
 echo "[install] label:    ${LABEL}"
 echo "[install] repo:     ${REPO_DIR}"
 echo "[install] bun:      ${BUN_BIN}"
 echo "[install] plist:    ${PLIST_DEST}"
 echo "[install] logs:     ${LOG_DIR}/${LABEL}.{out,err}.log"
+echo "[install] links:    ${PUBLIC_BASE_URL:-<discovered host>:<port> over http}"
 
 DOMAIN="gui/$(id -u)"
 
@@ -94,6 +107,7 @@ sed \
     -e "s|{{BUN_DIR}}|${BUN_DIR}|g" \
     -e "s|{{HOME_DIR}}|${HOME}|g" \
     -e "s|{{LOG_DIR}}|${LOG_DIR}|g" \
+    -e "s|{{PUBLIC_BASE_URL}}|${PUBLIC_BASE_URL}|g" \
     "${TEMPLATE}" > "${PLIST_DEST}"
 
 launchctl bootstrap "${DOMAIN}" "${PLIST_DEST}"
