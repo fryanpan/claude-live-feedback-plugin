@@ -13788,7 +13788,7 @@ var AUTHOR = resolveAgentAuthor({
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.29";
+var PLUGIN_VERSION = "0.1.30";
 var server = new Server({
   name: "claude-live-feedback",
   version: PLUGIN_VERSION
@@ -14890,9 +14890,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         type: "object",
         properties: {
           workspaceId: { type: "string" },
-          goal: { type: "string", description: "The new north-star statement (markdown)." }
+          goal: { type: "string", description: "The new north-star statement (markdown)." },
+          summary: {
+            type: "string",
+            description: "A ≤20-word line to DISPLAY in place of the goal — the board's goal strip and every task's 'Triaged against' row show this, with the full text one tap away. Send it WITHOUT `goal` to re-word just the display line (no re-triage, no event). Omit it and the surfaces show a deterministic clip of the goal's own opening words, which is a fine answer — never leave the goal unset waiting to write one. A goal edit that arrives without a summary DROPS the previous one, because it described the old goal. Empty string clears it."
+          }
         },
-        required: ["workspaceId", "goal"]
+        required: ["workspaceId"]
       }
     },
     {
@@ -15669,12 +15673,17 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         });
       }
       case "set_workspace_goal": {
-        const { workspaceId, goal } = a;
+        const { workspaceId, goal, summary } = a;
         const res = await http("PUT", `/api/workspaces/${encodeURIComponent(workspaceId)}/goal`, {
-          goal,
+          ...goal !== undefined ? { goal } : {},
+          ...summary !== undefined ? { summary } : {},
           author: AUTHOR
         });
-        return ok({ workspaceId, changed: res.changed, retriage: res.retriage });
+        return ok({
+          workspaceId,
+          changed: res.changed,
+          retriage: res.retriage ?? { requested: false, queued: false, taskIds: [] }
+        });
       }
       case "answer_decision": {
         const { taskId, text, optionId } = a;

@@ -4,6 +4,7 @@
  * no fetch — so the board's grouping/filter/ordering rules are unit-testable
  * without a browser.
  */
+import type { StoredGoalSummary } from '@feedback/core/goal-summary';
 
 export type TaskStatus = 'todo' | 'in-progress' | 'done';
 
@@ -97,6 +98,9 @@ export interface HubWorkspaceInfo {
   name: string;
   goal: string;
   goalUpdatedAt: number;
+  /** The ≤20-word line the strip displays instead of the goal. Absent = show
+   *  the deterministic clip; the board never waits for one to arrive. */
+  goalSummary?: StoredGoalSummary;
   goals: HubGoal[];
   docIds: string[];
   /** The agent responsible for this board. Absent = the seat is empty, and

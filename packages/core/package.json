@@ -10,7 +10,8 @@
     ".": "./src/index.ts",
     "./anchor": "./src/anchor/index.ts",
     "./types": "./src/types.ts",
-    "./summary-prompt": "./src/summary-prompt.ts"
+    "./summary-prompt": "./src/summary-prompt.ts",
+    "./goal-summary": "./src/goal-summary.ts"
   },
   "dependencies": {
     "lib0": "^0.2.117",
