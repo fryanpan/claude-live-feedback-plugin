@@ -1,7 +1,10 @@
 /**
  * Hold-to-talk voice capture (§2.4 / §3.8), shared by the hub, the doc
- * surface, and the task detail. Hold Space anywhere (never while typing) or
- * hold the mic button; dictation streams live into the indicator while held;
+ * surface, and the task detail. Hold Space anywhere (never while typing), hold
+ * the mic button, or hold Space/Enter while the mic button has focus — the
+ * last being the only route for someone who never uses a pointer, since a
+ * mount that opts out of the document hotkey would otherwise have no keyboard
+ * path at all. Dictation streams live into the indicator while held;
  * the full transcript sends on release with the per-surface context —
  * `{surface, docId?, taskId?, visibleHeading?}` — and the server's ack (which
  * ALWAYS names what was heard and which route handles it) replaces it.
@@ -103,6 +106,15 @@ export interface VoiceCaptureOpts {
   createRecognition?: () => RecognitionLike | null;
   /** The page's origin facts — injectable so the gate is testable. */
   readOrigin?: () => OriginFacts;
+  /**
+   * Bind hold-Space on `document`. Default true.
+   *
+   * Space is a SINGLETON gesture: two captures listening for it both start on
+   * one press and both finalize their own transcript, so exactly one capture
+   * per page may own it. The board-wide voice dock does; the mic on the
+   * quick-add box is a button and opts out.
+   */
+  spaceHotkey?: boolean;
 }
 
 export interface VoiceCapture {
@@ -369,6 +381,43 @@ export function createVoiceCapture(opts: VoiceCaptureOpts): VoiceCapture {
   };
   const onPointerEnd = (): void => endHold();
 
+  /**
+   * The same hold, from a keyboard, while the BUTTON has focus.
+   *
+   * `onPointerDown` calls `preventDefault()`, so a tap never focuses the mic —
+   * and without this the button was reachable by Tab and did nothing at all,
+   * while its label promised "hold to dictate". The board-wide Space hotkey is
+   * not the answer: it routes the utterance to the agent, not into the box the
+   * mic sits in, and the quick-add mount opts out of it entirely.
+   *
+   * Why this cannot resurrect the singleton-gesture bug `spaceHotkey` exists
+   * to prevent: that bug is TWO captures starting on ONE press, because
+   * `document` hears every press regardless of where focus is. These handlers
+   * are bound to a BUTTON, which belongs to exactly one capture — so a press
+   * can only ever reach its own instance, at most twice (at the target, then
+   * bubbling to that instance's own document listener). `beginHold` returns
+   * early while already holding and `endHold` while not, so the second pass is
+   * a no-op rather than a second recognizer. Asserted in voice-capture.test.ts
+   * by counting `start()` calls for one press with both bound.
+   */
+  const HOLD_KEYS: ReadonlySet<string> = new Set(['Space', 'Enter', 'NumpadEnter']);
+  const onButtonKeyDown = (ev: KeyboardEvent): void => {
+    if (!HOLD_KEYS.has(ev.code) || ev.repeat) return;
+    if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
+    // Space scrolls the page; Enter fires the button's click. Neither is what
+    // holding the mic means.
+    ev.preventDefault();
+    beginHold();
+  };
+  const onButtonKeyUp = (ev: KeyboardEvent): void => {
+    if (!HOLD_KEYS.has(ev.code)) return;
+    endHold();
+  };
+  // A key hold has the same two endings as a touch: the release, or focus
+  // moving away mid-press — after which the keyup lands somewhere else and the
+  // mic would stay open for the rest of the page load.
+  const onButtonBlur = (): void => endHold();
+
   // Say up front that this origin can't record, so the mic doesn't read as a
   // working control. Deliberately NOT `disabled`: a disabled button swallows
   // the press, and the press is how someone gets the explanation. It stays
@@ -380,24 +429,35 @@ export function createVoiceCapture(opts: VoiceCaptureOpts): VoiceCapture {
     button.setAttribute('aria-label', blockedAtMount);
   }
 
-  document.addEventListener('keydown', onKeyDown);
-  document.addEventListener('keyup', onKeyUp);
+  const spaceHotkey = opts.spaceHotkey ?? true;
+  if (spaceHotkey) {
+    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('keyup', onKeyUp);
+  }
   window.addEventListener('blur', onBlur);
   button.addEventListener('pointerdown', onPointerDown);
   button.addEventListener('pointerup', onPointerEnd);
   // The common ending on mobile: the system took the touch (scroll,
   // long-press menu). Settle exactly like a release.
   button.addEventListener('pointercancel', onPointerEnd);
+  button.addEventListener('keydown', onButtonKeyDown);
+  button.addEventListener('keyup', onButtonKeyUp);
+  button.addEventListener('blur', onButtonBlur);
 
   return {
     holding: () => holding,
     destroy: () => {
-      document.removeEventListener('keydown', onKeyDown);
-      document.removeEventListener('keyup', onKeyUp);
+      if (spaceHotkey) {
+        document.removeEventListener('keydown', onKeyDown);
+        document.removeEventListener('keyup', onKeyUp);
+      }
       window.removeEventListener('blur', onBlur);
       button.removeEventListener('pointerdown', onPointerDown);
       button.removeEventListener('pointerup', onPointerEnd);
       button.removeEventListener('pointercancel', onPointerEnd);
+      button.removeEventListener('keydown', onButtonKeyDown);
+      button.removeEventListener('keyup', onButtonKeyUp);
+      button.removeEventListener('blur', onButtonBlur);
       if (clearTimer) clearTimeout(clearTimer);
       if (watchdog) clearTimeout(watchdog);
       try {

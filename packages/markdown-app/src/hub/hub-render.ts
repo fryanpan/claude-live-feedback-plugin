@@ -5,6 +5,12 @@
  * the two-filter activity view) are testable under happy-dom.
  */
 import { escapeHtml } from '@feedback/core';
+import {
+  GOAL_SUMMARY_MAX_WORDS,
+  type StoredGoalSummary,
+  clipGoal,
+  goalDisplay,
+} from '@feedback/core/goal-summary';
 import { renderCommentMarkdown } from '../comment-markdown.ts';
 import {
   type ActivityEvent,
@@ -23,9 +29,13 @@ import {
   type TaskStatus,
   type UptimeReport,
   activityRows,
+  appendDictation,
   describeEvent,
   dropIndexFor,
   dropTarget,
+  quoteAfterCapture,
+  quoteAfterEdit,
+  quoteForCapture,
   stepTarget,
   timeAgo,
   uptimeSummary,
@@ -94,24 +104,45 @@ function wireInPlaceTitle(
 // ── Goal strip ─────────────────────────────────────────────────────────────
 
 export interface GoalStripHandlers {
-  onGoalCommit: (goal: string) => void;
+  /** `summary` is the ≤20-word display line. Empty string clears it, which
+   *  is how a reviewer goes back to the deterministic clip. */
+  onGoalCommit: (goal: string, summary: string) => void;
 }
 
-/** Read-first, editable in place, markdown (§3.9). Empty goal → the §3.9
- *  "start planning" lead-in instead of an empty strip. */
+/**
+ * Read-first, editable in place, markdown (§3.9). Empty goal → the §3.9
+ * "start planning" lead-in instead of an empty strip.
+ *
+ * A goal longer than twenty words collapses to its summary with a "Show full
+ * goal" toggle; a short one renders in full, markdown and all, with no toggle
+ * — a control that reveals nothing is noise. The toggle is a `<button>` with
+ * `aria-expanded`, never a hover reveal: this strip is read on a phone, where
+ * there is no hover and the full-length card measured 517px tall.
+ */
 export function renderGoalStrip(
   container: HTMLElement,
   goal: string,
   handlers: GoalStripHandlers,
+  storedSummary?: StoredGoalSummary,
+  expanded = false,
 ): void {
   container.replaceChildren();
+  const display = goalDisplay(goal, storedSummary);
   const body = document.createElement('div');
   body.className = 'hub-goal-body';
-  if (goal.trim()) {
-    body.innerHTML = renderCommentMarkdown(goal);
-  } else {
+  if (!goal.trim()) {
     body.innerHTML =
       '<p class="hub-goal-empty">No goal yet — start planning: set the goal this workspace drives toward.</p>';
+  } else if (display.truncated && !expanded) {
+    // Plain text on purpose: a summary is one line, and markdown source in a
+    // clip would put `**` and `](http://…` on the most-viewed line of the
+    // board. The expanded view below renders the real markdown.
+    const p = document.createElement('p');
+    p.className = 'hub-goal-summary';
+    p.textContent = display.summary;
+    body.append(p);
+  } else {
+    body.innerHTML = renderCommentMarkdown(goal);
   }
   const edit = document.createElement('button');
   edit.type = 'button';
@@ -125,6 +156,18 @@ export function renderGoalStrip(
     const ta = document.createElement('textarea');
     ta.value = goal;
     ta.rows = Math.min(10, Math.max(3, goal.split('\n').length + 1));
+    // The short line is editable right here, because whoever wrote the goal
+    // is the person best placed to say what its twenty words are — and a
+    // compression somebody else chose is a rewrite of their statement.
+    const summaryLabel = document.createElement('label');
+    summaryLabel.className = 'hub-goal-summary-label';
+    summaryLabel.textContent = `Short version (${GOAL_SUMMARY_MAX_WORDS} words or fewer, shown on the board)`;
+    const summaryInput = document.createElement('input');
+    summaryInput.type = 'text';
+    summaryInput.className = 'hub-goal-summary-input';
+    summaryInput.value = storedSummary?.text ?? '';
+    summaryInput.placeholder = clipGoal(goal);
+    summaryLabel.append(summaryInput);
     const save = document.createElement('button');
     save.type = 'button';
     save.textContent = 'Save goal';
@@ -133,16 +176,42 @@ export function renderGoalStrip(
     cancel.type = 'button';
     cancel.textContent = 'Cancel';
     cancel.className = 'hub-btn';
-    save.addEventListener('click', () => handlers.onGoalCommit(ta.value));
-    cancel.addEventListener('click', () => renderGoalStrip(container, goal, handlers));
+    save.addEventListener('click', () => {
+      // The field is PRE-FILLED with the stored line, so an untouched one
+      // ships back with the save — and the server, which cannot tell a
+      // resubmission from a fresh answer, would hash it against the NEW goal
+      // and bless a sentence describing the old one. That is the exact
+      // failure the hash exists to prevent, laundered through the UI. So a
+      // line left exactly as it was, on a goal that moved, is dropped: the
+      // strip falls back to the clip of the new goal, and the cost is a line
+      // the reviewer can retype rather than a board asserting an abandoned
+      // aim. Retyping it is the reconfirmation.
+      const untouched = summaryInput.value.trim() === (storedSummary?.text ?? '').trim();
+      const stale = ta.value !== goal && untouched;
+      handlers.onGoalCommit(ta.value, stale ? '' : summaryInput.value);
+    });
+    cancel.addEventListener('click', () =>
+      renderGoalStrip(container, goal, handlers, storedSummary, expanded),
+    );
     const row = document.createElement('div');
     row.className = 'hub-goal-editor-actions';
     row.append(save, cancel);
-    editor.append(ta, row);
+    editor.append(ta, summaryLabel, row);
     container.replaceChildren(editor);
     ta.focus();
   });
   container.append(body, edit);
+  if (display.truncated) {
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'hub-goal-more';
+    more.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    more.textContent = expanded ? 'Show less' : 'Show full goal';
+    more.addEventListener('click', () =>
+      renderGoalStrip(container, goal, handlers, storedSummary, !expanded),
+    );
+    container.append(more);
+  }
 }
 
 // ── Lead-agent strip ───────────────────────────────────────────────────────
@@ -808,8 +877,26 @@ export interface QuickAddHandlers {
    *  Resolves true when the task actually exists. The box clears on THAT, not
    *  on dispatch: a phone in a lift would otherwise eat the idea and hand back
    *  a toast, which is the one failure this box exists to prevent, at the
-   *  moment it costs most. */
-  onCapture: (text: string) => Promise<boolean>;
+   *  moment it costs most.
+   *
+   *  `quote` is the speaker's own words when any of the text was dictated —
+   *  kept verbatim even after the text is edited, so a misheard word can be
+   *  fixed without losing what was actually said. */
+  onCapture: (text: string, quote?: string) => Promise<boolean>;
+  /** Wire speech to the box. Called once at mount with the parts to drive;
+   *  omitted entirely where speech is unavailable, and the typed path is then
+   *  exactly what it was.
+   *
+   *  The split is deliberate: this module owns the DOM, and the caller owns
+   *  the policy (which recognizer, what it costs, when it may listen). */
+  mountVoice?: (parts: {
+    button: HTMLButtonElement;
+    indicator: HTMLElement;
+    /** A finished utterance. Appends to the box; never files anything —
+     *  dictation mishears, and a wrong task filed silently is worse than one
+     *  more tap on Add. */
+    deliver: (transcript: string) => void;
+  }) => void;
 }
 
 export function renderQuickAdd(container: HTMLElement, handlers: QuickAddHandlers): void {
@@ -837,22 +924,41 @@ export function renderQuickAdd(container: HTMLElement, handlers: QuickAddHandler
   // the first appears to do nothing — files the idea twice, because the text
   // now stays in the box until the task lands.
   let inFlight = false;
+  // What was SAID, accumulated across utterances, for as long as the box still
+  // holds the idea it belongs to.
+  let spoken = '';
   const capture = () => {
     const text = input.value.trim();
     if (!text || inFlight) return;
     inFlight = true;
     submit.disabled = true;
-    void handlers.onCapture(text).then((ok) => {
+    const quote = quoteForCapture(spoken);
+    void handlers.onCapture(text, quote).then((ok) => {
       inFlight = false;
       submit.disabled = false;
       if (!ok) return;
+      // The utterance belonged to the task that just landed. Carrying it into
+      // the next one would file words about work nobody spoke about — but the
+      // box stayed live while the POST was out, so anything dictated SINCE
+      // belongs to the idea still sitting there. Same rule as the text below:
+      // remove what was sent, keep the rest.
+      spoken = quoteAfterCapture(spoken, quote);
       // Only what was sent. Anything typed while it was in flight is a second
       // idea, and clearing the whole box would take it with the first.
       input.value = input.value.trim() === text ? '' : input.value;
       autosize();
     });
   };
-  input.addEventListener('input', autosize);
+  input.addEventListener('input', () => {
+    autosize();
+    // Edited away: the idea the utterance belonged to is gone, so the
+    // utterance goes with it — whether the box was cleared or retyped over
+    // (a select-all retype is one input event with a NON-empty value, which
+    // is how the previous "empty means forget" test let a retyped task file
+    // the last idea's words). Correcting a misheard word keeps it; the rule
+    // itself lives in the model.
+    spoken = quoteAfterEdit(input.value, spoken);
+  });
   // Enter submits, Shift+Enter is a newline — the convention every chat box
   // has, because this is the box people reach for instead of chat.
   input.addEventListener('keydown', (ev) => {
@@ -869,6 +975,43 @@ export function renderQuickAdd(container: HTMLElement, handlers: QuickAddHandler
   });
   form.append(input, submit);
   container.append(form);
+
+  if (!handlers.mountVoice) return;
+  const mic = document.createElement('button');
+  // Not a submit: a press-and-hold on a button inside a form files the box on
+  // release in some browsers, which would send a half-dictated idea.
+  mic.type = 'button';
+  mic.className = 'hub-btn hub-quick-mic';
+  // Names the key, because the hold is genuinely available from the keyboard
+  // (the capture binds Space/Enter on this button) and nothing else on the
+  // page would tell someone who never taps that it is.
+  mic.setAttribute('aria-label', 'Hold to dictate a task — hold Space or Enter');
+  mic.textContent = '🎤';
+  const indicator = document.createElement('span');
+  // Hidden until there is something to say — it takes a flex line of its own
+  // (`flex-basis: 100%`), so mounting it visible puts a row-gap under the form
+  // that vanishes for good the first time anything is dictated. The capture
+  // un-hides it; this is the same start the board-wide dock's indicator has.
+  indicator.className = 'hub-quick-mic-state hidden';
+  indicator.setAttribute('aria-live', 'polite');
+  // Before Add, not after: the two thumb targets on a phone are the box and
+  // the mic, and Add is the one that ends the interaction.
+  form.insertBefore(mic, submit);
+  form.append(indicator);
+  handlers.mountVoice({
+    button: mic,
+    indicator,
+    deliver: (transcript) => {
+      const next = appendDictation(input.value, transcript, spoken);
+      input.value = next.text;
+      spoken = next.quote;
+      autosize();
+      // So the next words land after these, and Enter files without a hunt
+      // for the box.
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    },
+  });
 }
 
 // ── Decisions strip ────────────────────────────────────────────────────────
@@ -1451,6 +1594,39 @@ export function renderThreadsSidebar(container: HTMLElement, threads: SidebarThr
 
 // ── Task detail (opens instantly, no transition — §3.9) ────────────────────
 
+/**
+ * A meta row whose value is long prose: the clip inline, the whole thing
+ * behind a tap. Nothing is dropped — `full` is in the DOM the moment the
+ * reader asks for it, and the toggle is a `<button>` so a thumb can reach it.
+ *
+ * Re-renders in place rather than toggling a CSS class, so the collapsed row
+ * is short in the DOM as well as on screen — a hidden 180-word paragraph is
+ * still 180 words for anything reading the panel out loud.
+ */
+function addCollapsibleMeta(meta: HTMLElement, key: string, full: string): void {
+  const dt = document.createElement('dt');
+  dt.textContent = key;
+  const dd = document.createElement('dd');
+  dd.className = 'hub-meta-collapsible';
+  const short = clipGoal(full);
+  const paint = (expanded: boolean): void => {
+    dd.replaceChildren();
+    const text = document.createElement('span');
+    text.textContent = expanded ? full : short;
+    dd.append(text);
+    if (short === full) return;
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'hub-meta-more';
+    more.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    more.textContent = expanded ? 'Less' : 'More';
+    more.addEventListener('click', () => paint(!expanded));
+    dd.append(more);
+  };
+  paint(false);
+  meta.append(dt, dd);
+}
+
 export interface DetailHandlers {
   onClose: () => void;
   onStatusSet: (task: HubTask, to: TaskStatus) => void;
@@ -1718,7 +1894,12 @@ export function renderTaskDetail(
   if (task.dueAt !== undefined) addMeta('Due', new Date(task.dueAt).toLocaleDateString());
   if (task.after.length > 0) addMeta('After', task.after.join(', '));
   if (task.triagedAgainst) {
-    addMeta('Triaged against', task.triagedAgainst.goal);
+    // The goal text this task was judged against, verbatim, on every task —
+    // identical across the whole board, so at full length it pushes the one
+    // thing that DOES differ (the description) off the screen while telling
+    // two tasks apart not at all. No stored summary applies: this is the
+    // goal as it stood at triage time, which may no longer be the goal.
+    addCollapsibleMeta(meta, 'Triaged against', task.triagedAgainst.goal);
   }
   panel.append(meta);
 
