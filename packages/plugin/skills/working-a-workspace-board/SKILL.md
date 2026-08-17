@@ -84,6 +84,11 @@ lines cannot overwrite each other's files. Priority still governs *within* the
 batch: if you can only staff three lines, they are the top three, not the
 three that look fun.
 
+Each line still owes the project's full verification set before its PR — and
+**look that set up, don't recite it**. Briefing several runners at once is
+exactly when a check falls off the list from memory, and an omission made once
+reaches every line in the batch at the same time.
+
 ### What actually forces a sequence
 
 Four things — and it matters enormously which part of the work each one
@@ -97,7 +102,9 @@ sequences:
 - **A version or manifest bump every PR has to make.** Concurrent branches all
   move the same number, and the last to push is the one that's wrong. The fix
   is to re-read that number off `origin/main` immediately before each push —
-  never to hold the other branches back. A CI run that went green *before* a
+  never to hold the other branches back. Eight PRs can be **developed at once
+  and land one at a time**, each re-reading before it pushes; that is the
+  normal shape, not a special case. A CI run that went green *before* a
   colliding merge landed is not evidence your number is still ahead.
 - **Merges.** They land one at a time, in an order somebody chooses, each
   branch taking a fresh `main` merge before its final commit.
