@@ -371,3 +371,65 @@ describe('createVoiceCapture on an insecure origin', () => {
     cap.destroy();
   });
 });
+
+describe('createVoiceCapture without the Space hotkey', () => {
+  /**
+   * The board is about to have TWO mics: the board-wide voice dock, and one
+   * on the quick-add box. `document`-level Space is a singleton gesture — two
+   * captures listening for it both start recording on one press, and both
+   * then finalize their own transcript. Only the dock owns Space; the
+   * quick-add mic is a button.
+   */
+  let button: HTMLButtonElement;
+  let indicator: HTMLDivElement;
+  let rec: FakeRecognition;
+
+  const secureOrigin = (): OriginFacts => ({
+    isSecureContext: true,
+    protocol: 'https:',
+    hostname: 'feedback.example.com',
+    port: '',
+    pathname: '/workspaces/w-1',
+    search: '',
+  });
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    button = document.createElement('button');
+    indicator = document.createElement('div');
+    document.body.append(button, indicator);
+    rec = new FakeRecognition();
+  });
+
+  const mount = (spaceHotkey: boolean) =>
+    createVoiceCapture({
+      button,
+      indicator,
+      spaceHotkey,
+      getContext: () => ({ surface: 'hub' }),
+      send: () => Promise.resolve(null),
+      createRecognition: () => rec,
+      readOrigin: secureOrigin,
+    });
+
+  it('ignores Space, and still records from its own button', () => {
+    const cap = mount(false);
+    keydown(document.body);
+    expect(rec.started).toBe(0);
+    expect(cap.holding()).toBe(false);
+
+    // Positive control beside the absence: the button still works, so the
+    // silence above is about the hotkey and not about a dead capture.
+    button.dispatchEvent(new Event('pointerdown', { bubbles: true, cancelable: true }));
+    expect(rec.started).toBe(1);
+    expect(cap.holding()).toBe(true);
+    cap.destroy();
+  });
+
+  it('the default is unchanged — Space still starts the dock', () => {
+    const cap = mount(true);
+    keydown(document.body);
+    expect(rec.started).toBe(1);
+    cap.destroy();
+  });
+});

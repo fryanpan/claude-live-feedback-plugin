@@ -596,6 +596,44 @@ export function parseQuickAdd(raw: string): QuickAdd | null {
   };
 }
 
+/**
+ * A finished utterance joins whatever is already in the capture box.
+ *
+ * Dictation APPENDS rather than replaces, and the reason is the same one
+ * `parseQuickAdd` exists for: someone types half an idea, then finishes it out
+ * loud. Replacing would eat the typed half, which is the single failure this
+ * box was built to make impossible.
+ *
+ * The transcript is also accumulated separately as `quote`, so the task can
+ * carry the speaker's own words even after the box is edited. Only the SPOKEN
+ * half is ever quoted — typed text is already the task, and was never a quote
+ * of anyone.
+ */
+export function appendDictation(
+  existing: string,
+  transcript: string,
+  priorQuote?: string,
+): { text: string; quote: string } {
+  const said = transcript.trim();
+  const quote = [priorQuote?.trim(), said].filter(Boolean).join(' ');
+  if (said === '') return { text: existing, quote };
+  return { text: existing.trim() === '' ? said : `${existing.trimEnd()} ${said}`, quote };
+}
+
+/**
+ * The verbatim quote to file with a captured task, if any.
+ *
+ * A misheard word fixed before filing must NOT drop the quote — the agent
+ * seeing both what was typed and what was said is the point of keeping one.
+ * But a quote whose utterance the person cleared away entirely would attribute
+ * words to them about work they never mentioned, so the caller drops the
+ * accumulated quote when the box empties and this returns nothing.
+ */
+export function quoteForCapture(spoken: string | undefined): string | undefined {
+  const quote = spoken?.trim();
+  return quote ? quote : undefined;
+}
+
 // ── Status control ─────────────────────────────────────────────────────────
 
 /**
