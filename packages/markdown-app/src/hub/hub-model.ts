@@ -615,6 +615,15 @@ export interface ReviewThreadItem {
   ask: string;
   askedBy: string;
   since: number;
+  /** The run contains a question addressed to a person by name. Ranks the item
+   *  to the top of its band and changes the line the row reads. Absent on a
+   *  payload from a server older than this field, which reads as false — the
+   *  pre-existing ordering, which is the safe direction. */
+  direct?: boolean;
+  /** When the question was asked, when there is one. Absent from an older
+   *  server's payload, in which case the row falls back to `since` — the
+   *  pre-existing wording. */
+  askedAt?: number;
 }
 
 /**
@@ -737,16 +746,36 @@ export function reviewQueue(
     });
   }
 
-  const byAge = (a: ReviewThreadItem, b: ReviewThreadItem) =>
-    a.since - b.since || a.threadId.localeCompare(b.threadId);
+  // A question somebody asked you comes before a note somebody left you, and
+  // only then oldest-first. Without the first key the two are interleaved by
+  // age alone, so a status update posted this morning outranks a question that
+  // has been waiting since Tuesday — and the top of the strip, which is the
+  // part that actually gets read, fills with things there is nothing to answer.
+  // This ranks rather than filters: every thread that appears today still
+  // appears, which is what keeps a misjudged `direct` cheap.
+  const byAsk = (a: ReviewThreadItem, b: ReviewThreadItem) =>
+    Number(b.direct ?? false) - Number(a.direct ?? false) ||
+    a.since - b.since ||
+    a.threadId.localeCompare(b.threadId);
   for (const kind of ['task-thread', 'doc-thread'] as const) {
-    for (const t of threadItems.filter((i) => i.kind === kind).sort(byAge)) {
+    for (const t of threadItems.filter((i) => i.kind === kind).sort(byAsk)) {
+      const where = kind === 'task-thread' ? 'on this task' : 'on this doc';
       items.push({
         key: `${t.kind}:${t.docId}:${t.threadId}`,
         kind,
         title: t.title,
         ask: t.ask,
-        why: `${t.askedBy} asked ${timeAgo(t.since, now)} · ${kind === 'task-thread' ? 'on this task' : 'on this doc'}`,
+        // "asked" is a claim about there being a question. Say it only when
+        // there is one; otherwise the row promises an answerable thing and
+        // delivers a status note, which is how a strip stops being believed.
+        // The clock beside "asked" has to be the QUESTION's, not the run's.
+        // The run can start days before the ask — status, status, then a
+        // question — and quoting the run's start there tells the reader they
+        // have been sitting on something they were handed minutes ago.
+        // Ranking still uses `since`; only the sentence changes.
+        why: t.direct
+          ? `${t.askedBy} asked you ${timeAgo(t.askedAt ?? t.since, now)} · ${where}`
+          : `${t.askedBy} posted ${timeAgo(t.since, now)} · ${where}`,
         since: t.since,
         thread: t,
       });
