@@ -349,7 +349,28 @@ next_tasks(workspaceId, assignee: "<your name>")
 Each row carries its **full description**, plus `blockedBy` (open dependencies;
 only `enforce` ones hold it back) and `ready`. Hard-blocked rows are omitted
 unless `includeBlocked: true`. Call it at the top of a session **and again
-after every task you finish** — priorities move while you work.
+whenever a line of work finishes** — priorities move while you work.
+
+**The lead decides the shape of the fan-out.** That queue reaches everyone
+identically; what this seat adds is deciding how many lines run at once and in
+what order their merges land. The default is every ready row that doesn't
+collide, and the criteria — what counts as a collision, and what forces a
+sequence of the merge rather than of the work — are in
+`live-feedback:working-a-workspace-board`. Don't re-derive them here. Two
+things only the lead can do about it:
+
+- **Make the board judgeable.** A batch is planned by reading descriptions
+  against each other, so thin bodies are what forces a session to run serial.
+  Same for a real ordering constraint left in somebody's head instead of in
+  `after` / `afterEnforce` — the queue can only respect an edge that exists.
+- **Watch what the board says is running.** Several `in-progress` rows with
+  one agent attached is a batch nobody is actually working; one `in-progress`
+  row with a long ready queue behind it is the failure this default exists to
+  prevent. `list_attachments` and the per-goal counts are the reading.
+
+`assign_task` is also how a line gets an owner — a staffed batch is several
+tasks each assigned to the agent running it, so `next_tasks(assignee: …)`
+answers for each of them.
 
 **Move status through the one gate.**
 
