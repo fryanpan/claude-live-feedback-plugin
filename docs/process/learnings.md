@@ -604,6 +604,34 @@ Technical discoveries that should persist across sessions for this project.
   data dir. So the shape is: evaluate on staging pre-merge, then do the real
   work once, after the merge. Don't ask a reviewer to enter real content twice.
 
+## A session restart orphans a subagent's worktree, and the shell falls back to the primary checkout without saying so
+
+- **A subagent was working in `.claude/worktrees/<name>`; the parent session
+  restarted mid-flight, the worktree was destroyed, and the agent's next `cd`
+  silently resolved to the primary checkout — on `main`, where its first
+  excision landed.** It caught this on the next `git rev-parse --show-toplevel`
+  and reverted with `git checkout --`; no bundle was built there, so nothing
+  deployed. The other direction is the expensive one: that checkout is prod's
+  **deploy source**, so bundles built in it ship to the whole fleet at the next
+  restart (see the entry below, and the `bun run staging` entry above).
+- **A missing directory does not announce itself.** A shell whose cwd has been
+  deleted keeps running and resolves relative paths somewhere else entirely —
+  no error, no prompt, and `git status` in the place it landed looks perfectly
+  healthy, because it *is* a healthy repo. Nothing in the session reads as
+  wrong until you check which tree you are in.
+- **Rule: re-run `git rev-parse --show-toplevel` after any shell restart, after
+  any unexplained error, and before the first write of a session.** Compare it
+  against `git rev-parse --git-common-dir` while you are there — equal to
+  `--git-dir` means you are in the primary checkout, which is the one place a
+  build is a deploy.
+- **An absolute path is not protection, and this entry has its own instance.**
+  The first Edit writing these four entries went into the *primary checkout's*
+  copy of this file, because that was the absolute path already in context from
+  reading it there — the call was correct about a file and wrong about which
+  tree. Reverted with `git checkout --` and confirmed by an empty
+  `git status --porcelain`. Check the tree the path names, not merely that the
+  path is absolute.
+
 ## Prod no longer serves the client out of a working tree — publish, then switch
 
 - **Two entries above say prod serves `packages/markdown-app/dist` from the
@@ -888,6 +916,44 @@ Technical discoveries that should persist across sessions for this project.
   wrong answer (no `pluginRelease` at all, which reads as "my feature is
   broken"). Read the port the run actually bound before pointing anything at
   it; same shape as a positive control scanning the wrong data.
+
+## A version number is only free until somebody else merges
+
+- **PR #178 was built, went green, and carried 0.1.43 — and #176 merged first
+  and took 0.1.43.** Neither PR did anything wrong: #178's branch was cut when
+  `origin/main` was at 0.1.42, so 0.1.43 was the correct next patch *at build
+  time*, and `check:plugin-version` agreed. Two releases sharing a version
+  string is precisely the failure that gate exists to prevent — `claude plugin
+  update` compares the string, copies nothing when it hasn't moved, **and
+  reports success anyway** — so the second one would have merged green and
+  reached nobody.
+- **A passing CI check is evidence about the tree it ran on, not about the tree
+  you are merging into.** Any gate that compares your branch against a moving
+  target has this hole, and it opens *after* the run that closed it.
+- **Re-running CI would not have caught it either, which is the part worth
+  reading the script for.** `scripts/check-plugin-version.ts` takes
+  `mergeBase = git merge-base origin/main HEAD` and reads the base version from
+  `git show ${mergeBase}:packages/plugin/.claude-plugin/plugin.json` — the fork
+  point, not the current tip. The comparand is frozen at the moment the branch
+  was cut and stays frozen however many times the job re-runs. Only a rebase, a
+  merge of main into the branch, or a branch-protection rule requiring the
+  branch be up to date before merging moves it.
+- **Two rules, and both are needed because they cover different actors.** The
+  author re-reads the version off `origin/main` immediately before pushing; the
+  **merger re-checks it at merge time**. The author cannot cover this alone —
+  the collision is created by someone else's merge, which can land after the
+  author's last push. That is exactly the sequence here.
+- **The bump is conditional, not blanket, and CLAUDE.md currently reads as
+  though it applies to every PR.** `GUARDED_PREFIX` is `packages/plugin/`, so
+  the gate only demands a bump when the diff touches that tree — which a
+  `packages/mcp/src/**` change does transitively, because `bun run build:mcp`
+  rewrites the tracked `packages/plugin/mcp/index.js`. #179 merged with no bump
+  at all and was correct: it touched neither. Bumping on every PR manufactures a
+  **total merge order across unrelated branches** — land 0.1.44 and a green PR
+  sitting at 0.1.42 can no longer merge without a rebase it never needed.
+- Same family as "Drift you have to go and look for is drift nobody looks for",
+  one layer earlier: there a merged release failed to reach the fleet, here two
+  releases collide before they get the chance.
 
 ## What makes a fleet-wide action safe is that it can't interrupt anybody
 
@@ -1318,6 +1384,60 @@ Technical discoveries that should persist across sessions for this project.
 - Mutation-tested three ways, each turning a *named* test red: restoring the
   `return null` on an empty `behind`, dropping `checked` from the route
   payload, and dropping the quiet class in the renderer.
+
+## Four gates, and each one is the only thing that catches its class
+
+- **`bunx vitest run`, `bun test packages/server/test` (~100s),
+  `bun run typecheck`, `bun run lint` — "run the tests" means all four, and the
+  two test runners are disjoint by CONFIGURATION, not by habit.**
+  `vitest.config.ts` includes `packages/*/test/**/*.test.ts` +
+  `packages/*/src/**/*.test.ts` and carries an explicit
+  `exclude: ['packages/server/test/**']`, so the server suite is literally the
+  tree vitest is told to skip. Vitest does not typecheck, so a type error is
+  green across both runners. And `bun run lint` is `biome check .`, which
+  *reports* lint and formatting violations and writes nothing —
+  `bun run format` / `bunx biome check --write` is the half that applies them.
+- **The failure mode is not forgetting to verify, it is reciting the list from
+  memory**, which on one day briefed a fan-out of parallel agents with an
+  incomplete set. CLAUDE.md now carries the canonical block ("The four gates —
+  run all of them before you push", landed in #170). Read it, don't recall it.
+- The pre-existing `noExplicitAny` output is **warnings**, and `biome check`
+  exits 0 over warnings — don't chase them, and don't read a trailing
+  "Found 2 warnings" as a failure.
+- **A worktree with no `node_modules` fails typecheck with a wall of TS2307 /
+  TS7006 that reads exactly like a real regression.** `bun install
+  --frozen-lockfile` first. And check the EXIT CODE, not the tail of the
+  output: piping `tsc` through `tail` hands you `tail`'s status, which is 0 no
+  matter what typecheck said — a green-looking run over a screenful of errors.
+
+## CI red at "Set up job" is infrastructure, and the status code says whose
+
+- **PR #174's first run failed before a single test executed**, at the
+  `Set up job` step — the only step the job ever reached (attempt 1 of run
+  `32040172641`). The log: `Failed to download action
+  'https://codeload.github.com/oven-sh/setup-bun/tar.gz/<sha>'. Error: Response
+  status code does not indicate success: 503 (Service Unavailable) … Back off
+  18.245 seconds before retry.` Attempt 2 went green with no code change. In
+  the run list it reads identically to a test failure.
+- **Two details the first account of this got wrong, and both change the
+  diagnosis.** It was **503, not 429** — a GitHub-side outage, not rate
+  limiting. And it died fetching the setup-bun **action repository itself**,
+  before setup-bun ran and before any toolchain download. GitHub's GraphQL API
+  was returning 503 in the same window (reproduced while writing this entry:
+  `gh pr view 178` answered `HTTP 503: No server is currently available`), which
+  is what an incident looks like — and not what a session's own API fan-out
+  looks like, since the runner's action download is unauthenticated and carries
+  none of this account's tokens. **Blaming your own footprint is the
+  comfortable diagnosis; read the status code before accepting it.**
+- **Rule: read WHICH step failed before diagnosing anything.** A failure above
+  the first test step is not your code — `gh run rerun <id> --failed`, then
+  read.
+- **When `gh` starts returning 503 on GraphQL, fall back to REST:**
+  `gh api repos/<owner>/<repo>/...`. Every `gh pr view` / `--json` call failed
+  in that window while `/pulls/178`, `/actions/runs?branch=…` and
+  `/pulls/179/files` answered normally throughout. `gh run view --job <id>
+  --log` is REST too, which is the only reason the log above was readable at
+  all.
 
 ## gh pr merge --delete-branch switches your working copy to main
 
