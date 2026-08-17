@@ -1,6 +1,6 @@
 import { type User, connect, escapeHtml, readDocMeta, suggestOps } from '@feedback/core';
 import { mountCode } from './code/code-app.ts';
-import { watchConnection } from './connection-state.ts';
+import { saveStateView, settlePending, watchConnection } from './connection-state.ts';
 import { renderDiffNav, setActiveFile } from './diff-nav.ts';
 import { type EditorHandle, createEditor } from './editor.ts';
 import { trackGesture } from './gesture.ts';
@@ -811,26 +811,29 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   const saveStateEl = el<HTMLElement>('save-state');
   let pendingLocalEdits = 0;
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
-  // Optimistic at mount, because the socket is always 'connecting' for the
-  // first moments of every page load and every doc navigation — starting at
-  // false painted the offline chip on each one and took it straight back
-  // down. watchConnection below only flips this once a drop has LASTED.
-  let wsOnline = true;
+  // TWO facts, deliberately not one. `wsOnline` is the raw socket, updated
+  // the instant it changes, and it decides whether an edit may be called
+  // saved. `reconnecting` is the graced VIEW, and it decides what the chip
+  // says — so a blip never repaints, while nothing is ever reported as saved
+  // to a server that isn't there.
+  let wsOnline = false;
+  let reconnecting = false;
   function renderSaveState(): void {
     saveStateEl.classList.remove('save-state--saved', 'save-state--dirty', 'save-state--offline');
-    if (!wsOnline) {
-      // Not "Offline": a restart is the usual cause and it is coming back.
-      saveStateEl.textContent = 'Reconnecting…';
-      saveStateEl.classList.add('save-state--offline');
-      return;
+    switch (saveStateView({ reconnecting, pendingEdits: pendingLocalEdits })) {
+      case 'reconnecting':
+        // Not "Offline": a restart is the usual cause and it is coming back.
+        saveStateEl.textContent = 'Reconnecting…';
+        saveStateEl.classList.add('save-state--offline');
+        return;
+      case 'dirty':
+        saveStateEl.textContent = 'Unsaved changes';
+        saveStateEl.classList.add('save-state--dirty');
+        return;
+      default:
+        saveStateEl.textContent = 'All changes saved';
+        saveStateEl.classList.add('save-state--saved');
     }
-    if (pendingLocalEdits > 0) {
-      saveStateEl.textContent = 'Unsaved changes';
-      saveStateEl.classList.add('save-state--dirty');
-      return;
-    }
-    saveStateEl.textContent = 'All changes saved';
-    saveStateEl.classList.add('save-state--saved');
   }
   // ydoc.on('update') is released when the client destroys the ydoc on close.
   ydoc.on('update', (_update, origin) => {
@@ -842,19 +845,37 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     renderSaveState();
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
-      pendingLocalEdits = 0;
+      // "Typing stopped" only means "saved" if there was a server listening.
+      pendingLocalEdits = settlePending(pendingLocalEdits, wsOnline);
       renderSaveState();
     }, 500);
   });
+  // Raw status: the truth half. Nothing visible hangs off it directly, so it
+  // can flip as often as the backoff does without any flicker.
+  client.onStatus((s) => {
+    if (scope.disposed) return;
+    const was = wsOnline;
+    wsOnline = s === 'open';
+    // Coming back is what the debounce was waiting for. Edits it refused to
+    // settle while offline settle now, without needing another keystroke.
+    if (wsOnline && !was && pendingLocalEdits > 0) {
+      if (saveTimer) clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => {
+        pendingLocalEdits = settlePending(pendingLocalEdits, wsOnline);
+        renderSaveState();
+      }, 500);
+    }
+    renderSaveState();
+  });
   // One reading of the connection, shared with the board: a drop is only
-  // worth showing once it has outlasted the grace window, and it clears the
+  // worth SHOWING once it has outlasted the grace window, and it clears the
   // moment the socket returns — no reload. The disposed guard matters because
   // the grace timer can outlive the mount that armed it.
   watchConnection({
     onStatus: (cb) => client.onStatus(cb),
     onView: (view) => {
       if (scope.disposed) return;
-      wsOnline = view === 'online';
+      reconnecting = view === 'reconnecting';
       renderSaveState();
     },
   });

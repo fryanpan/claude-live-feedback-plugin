@@ -73,6 +73,34 @@ export function watchConnection(opts: ConnectionWatchOptions): void {
 }
 
 /**
+ * The grace window governs what is SHOWN. It must never govern what is TRUE.
+ *
+ * The review surface has no per-update server ack, so "saved" is inferred
+ * from "typing stopped and nothing went out for 500ms". That inference is
+ * only valid if there was a server on the other end — with the socket down
+ * the edit is still purely local no matter how long the reader has paused.
+ * Letting the debounce settle inside the grace window therefore printed "All
+ * changes saved" over a disconnected doc, which is a reassuring lie about the
+ * one thing this indicator exists to be honest about.
+ */
+export function settlePending(pendingEdits: number, wsOnline: boolean): number {
+  return wsOnline ? 0 : pendingEdits;
+}
+
+export type SaveView = 'reconnecting' | 'dirty' | 'saved';
+
+/**
+ * `reconnecting` is the graced VIEW (from watchConnection), not the raw
+ * socket status — a blip must not repaint the chip. `pendingEdits` carries
+ * the truth through, because settlePending refuses to zero it while offline.
+ */
+export function saveStateView(o: { reconnecting: boolean; pendingEdits: number }): SaveView {
+  if (o.reconnecting) return 'reconnecting';
+  if (o.pendingEdits > 0) return 'dirty';
+  return 'saved';
+}
+
+/**
  * The board's banner. Sits in the document flow directly under the topbar, so
  * it pushes the page down instead of covering a control — at 430px there is
  * no spare room to overlay anything a reader might be reaching for.

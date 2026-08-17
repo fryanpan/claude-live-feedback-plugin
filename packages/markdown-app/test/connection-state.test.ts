@@ -4,6 +4,8 @@ import {
   type ConnectionView,
   RECONNECT_GRACE_MS,
   renderConnectionBanner,
+  saveStateView,
+  settlePending,
   watchConnection,
 } from '../src/connection-state.ts';
 
@@ -159,5 +161,53 @@ describe('renderConnectionBanner', () => {
 
   it('does nothing when the element is absent', () => {
     expect(() => renderConnectionBanner(null, 'reconnecting')).not.toThrow();
+  });
+});
+
+/**
+ * The grace window is a rule about what to SHOW, and it must not become a
+ * rule about what is TRUE. Codex caught the first cut letting one leak into
+ * the other: with the socket already down but the banner not yet due, an edit
+ * made in that window hit the 500ms "typing stopped" debounce and was
+ * reported as "All changes saved" — a claim about a server that wasn't there.
+ * The lie is in the reassuring direction, which is the one that costs work.
+ */
+describe('settlePending', () => {
+  it('lets the debounce settle to saved when there is a server to save to', () => {
+    // POSITIVE CONTROL: proves the debounce can still clear at all.
+    expect(settlePending(3, true)).toBe(0);
+  });
+
+  it('refuses to settle while the socket is down, however long typing stopped', () => {
+    expect(settlePending(3, false)).toBe(3);
+  });
+
+  it('keys on the live socket, not on whether the banner is showing yet', () => {
+    // The whole point: inside the grace window the socket is ALREADY down.
+    expect(settlePending(1, false)).toBe(1);
+  });
+});
+
+describe('saveStateView', () => {
+  it('shows the reconnecting state once the drop has earned it', () => {
+    expect(saveStateView({ reconnecting: true, pendingEdits: 0 })).toBe('reconnecting');
+    // …and it outranks pending edits: the connection is the bigger news.
+    expect(saveStateView({ reconnecting: true, pendingEdits: 4 })).toBe('reconnecting');
+  });
+
+  it('shows dirty while edits are outstanding', () => {
+    expect(saveStateView({ reconnecting: false, pendingEdits: 2 })).toBe('dirty');
+  });
+
+  it('shows saved only with nothing outstanding', () => {
+    expect(saveStateView({ reconnecting: false, pendingEdits: 0 })).toBe('saved');
+  });
+
+  it('never claims saved during a silent outage — the regression', () => {
+    // Socket down, banner not yet due, edits made in the window. settlePending
+    // has kept them pending, so the view has something to report and does not
+    // fall through to "All changes saved".
+    const pending = settlePending(1, /* wsOnline */ false);
+    expect(saveStateView({ reconnecting: false, pendingEdits: pending })).not.toBe('saved');
   });
 });
