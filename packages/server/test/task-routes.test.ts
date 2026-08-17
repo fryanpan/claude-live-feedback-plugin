@@ -319,6 +319,32 @@ describe('hub workspace + task routes', () => {
       expect(noWs.status).toBe(404);
     });
 
+    // Dedupe belongs to creation, not to the batch resolver that surfaced the
+    // gap: the same duplicate is writable straight down this route, and a fix
+    // that lived only in the batch layer would leave the two spelling the same
+    // stored state differently.
+    it('stores one edge when the caller names the same dependency twice', async () => {
+      const gate = (await (
+        await post(`/api/workspaces/${wsId}/tasks`, {
+          author: AGENT,
+          title: 'your go',
+          needs: 'decision',
+          body: DECISION_BODY,
+        })
+      ).json()) as { task: Task };
+
+      const dup = await post(`/api/workspaces/${wsId}/tasks`, {
+        author: AGENT,
+        title: 'Open the PR',
+        after: [gate.task.id, gate.task.id],
+        afterEnforce: [gate.task.id, gate.task.id],
+      });
+      expect(dup.status).toBe(200);
+      const { task } = (await dup.json()) as { task: Task };
+      expect(task.after).toEqual([gate.task.id]);
+      expect(task.afterEnforce).toEqual([gate.task.id]);
+    });
+
     // `afterEnforce` is a SUBSET of `after` — openBlockers walks `after` and
     // uses afterEnforce only as a lookup set, so an id in one array and not
     // the other is never visited and hard-blocks nothing. Accepting it
