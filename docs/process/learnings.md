@@ -912,6 +912,56 @@ Technical discoveries that should persist across sessions for this project.
   paths or `--diff-range` and **ignores stdin**, so piping content at it
   scans nothing and exits 0.
 
+## A merge commit re-presents public content as an addition
+
+- **The pre-push gate blocked pushes over content that was already on
+  `origin/main`** — reported three times in one day by two agents, each time
+  with the flagged strings appearing ZERO times in the branch's own three-dot
+  diff. Cause: the hook asked `git diff <remote_sha>..<local_sha>`, which
+  compares two TREES. The moment a branch merges `main` — which the conventions
+  require before the final push, and which is the only way to get CI to run on
+  a dirty PR — everything `main` gained since the branch point is an addition
+  in that comparison. Measured on this repo: a branch whose own change was two
+  README lines presented **7,516 insertions across 64 files**, 509 of them in
+  `learnings.md` alone. So the gate fired on the normal path, over content it
+  had already let through, and the only available response was `SCRUB_SKIP=1`.
+  Same family as "A false positive on a REMOVAL is the worst false positive
+  available", one level up: there the fix was to judge added lines only, and on
+  a merge commit "added" is the wrong question.
+- **The trigger is content-dependent, which is why counter-samples exist.** A
+  peer reported two merges that passed clean, and a 12-commit merge of real
+  `main` came back CLEAN from Haiku in this investigation while presenting all
+  7,516 lines. The exposure is present on EVERY merge; whether it fires is a
+  coin flip on what `main` happened to gain and how the model reads it that
+  run. "It passed last time" is not evidence the gate is asking the right
+  question.
+- **Ask about COMMITS, not trees** (`scripts/scrub_git.py`): everything
+  reachable from the pushed tip that is not reachable from a ref the remote
+  already has. A commit drops out only when it is already public, so the change
+  can only remove false positives. The regex layer had the same defect latent —
+  deterministic, so `main`'s content passed it every time, but the day a name is
+  ADDED to the registry the next branch to merge `main` is blocked on
+  weeks-old public content. Both layers now ask one shared question.
+- **`--cc` is load-bearing, and probing both ways is what proved it.** `git log
+  -p` prints NO diff for a merge commit by default, and a merge is exactly where
+  conflict resolution can introduce text present in neither parent. With `--cc`
+  a string written during a resolution appears; without it, it does not. The
+  self-test case for it goes red when `--cc` is removed.
+- **The fix introduced a NEW false positive one layer over, and only the
+  end-to-end pass caught it.** With `--cc`, a conflict resolved by discarding
+  the other side renders that side as REMOVALS — and Haiku listed them, then
+  appended "these are all on removed lines... the push is safe", while emitting
+  `VERDICT: LEAKS_FOUND`. Its reasoning was right and its verdict was wrong,
+  and the verdict is the only thing the script reads. Two prompt changes: the
+  removal rule now describes combined-diff marker COLUMNS (`++`, `-` + space,
+  ` -`) rather than "a line starting with `-`", and the output contract says
+  the VERDICT line is the only thing read, so an item you have concluded is
+  safe must not be listed at all. Verified over three passes.
+- **Trading a common false positive for a rarer one you created is not a fix.**
+  The unit tests were green and the self-test was green before that second bug
+  was found; what found it was running the real layer against a fixture built
+  for the OTHER case and reading the output instead of the exit code.
+
 ## A self-test is green until it runs on a machine that isn't yours
 
 - **The fix for the gate above shipped with two bugs, and every one of its
