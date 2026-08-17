@@ -13714,6 +13714,22 @@ function knownUserForName(nameOrKey) {
     return null;
   return { id: `known-${key}`, kind: "known", name: meta2.name, color: meta2.color };
 }
+function agentSlug(name) {
+  const trimmed = name.trim();
+  const slug = trimmed.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  if (slug)
+    return slug;
+  let h = 0;
+  for (let i = 0;i < trimmed.length; i++)
+    h = h * 31 + trimmed.charCodeAt(i) >>> 0;
+  return h.toString(36);
+}
+function agentIdForName(name) {
+  const known = knownUserForName(name.trim());
+  if (known)
+    return known.id;
+  return `agent-${agentSlug(name)}`;
+}
 
 // packages/mcp/src/author.ts
 function resolveAgentAuthor(env) {
@@ -13721,14 +13737,7 @@ function resolveAgentAuthor(env) {
   const known = knownUserForName(name);
   if (known)
     return known;
-  let slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-  if (!slug) {
-    let h = 0;
-    for (let i = 0;i < name.length; i++)
-      h = h * 31 + name.charCodeAt(i) >>> 0;
-    slug = h.toString(36);
-  }
-  return { name, color: hashToColor(name), id: `agent-${slug}`, kind: "known" };
+  return { name, color: hashToColor(name), id: agentIdForName(name), kind: "known" };
 }
 
 // packages/mcp/src/thread-create.ts
@@ -13799,7 +13808,7 @@ var AUTHOR = resolveAgentAuthor({
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.49";
+var PLUGIN_VERSION = "0.1.51";
 var COMMIT_EVIDENCE_DESCRIPTION = 'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
 var server = new Server({
   name: "claude-live-feedback",
@@ -14617,7 +14626,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           workspaceId: { type: "string" },
           tasks: {
             type: "array",
-            description: 'The rows, at most 100 — an oversized batch is refused WHOLE rather than truncated, and a tracker that big belongs in import_tasks_markdown. Each row is {title, body?, key?, assignee?, needs?, options?, goal?, order?, after?, afterEnforce?, dueAt?, links?, quote?} — the per-field rules are on the row schema below, and they are the same rules the removed single-row create carried. `title` is the only required field — but write a `body` on every row you are not doing yourself within the hour: a bare title is not pickup-able by an agent that was not in the conversation. `key` is an optional label THIS batch uses to reference the row; it must be unique in the batch and must not be all digits or start with "#". Rows are created in the order given, so a row can only depend on a row ABOVE it — a forward reference is refused rather than silently dropped, and so is a reference to a row that failed (a task carrying a dependency that never blocks it is worse than a refusal). An entry with no "#" is still an existing task id, exactly as before.',
+            description: 'The rows, at most 100 — an oversized batch is refused WHOLE rather than truncated, and a tracker that big belongs in import_tasks_markdown. Each row is {title, body?, key?, assignee?, assigneeKind?, needs?, options?, goal?, order?, after?, afterEnforce?, dueAt?, links?, quote?} — the per-field rules are on the row schema below, and they are the same rules the removed single-row create carried. `title` is the only required field — but write a `body` on every row you are not doing yourself within the hour: a bare title is not pickup-able by an agent that was not in the conversation. `key` is an optional label THIS batch uses to reference the row; it must be unique in the batch and must not be all digits or start with "#". Rows are created in the order given, so a row can only depend on a row ABOVE it — a forward reference is refused rather than silently dropped, and so is a reference to a row that failed (a task carrying a dependency that never blocks it is worse than a refusal). An entry with no "#" is still an existing task id, exactly as before.',
             items: {
               type: "object",
               properties: {
@@ -14633,6 +14642,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                 assignee: {
                   type: "string",
                   description: `Who owns this row: 'human' for work only a person can do, or a named identity (another agent, a person). Omit it and YOU own it — the API records your own name. It REFUSES a row whose owner comes out as the bare word 'agent', because that names a category rather than somebody, and a board of tasks owned by "agent" cannot answer who is doing what. If you get that refusal, your session was launched without FEEDBACK_AGENT_NAME.`
+                },
+                assigneeKind: {
+                  type: "string",
+                  enum: ["person", "agent"],
+                  description: `Declares whether \`assignee\` is a person or an agent — 'person' | 'agent'. Say it whenever you hand a row to a NAME that is not your own: the board cannot tell "Bryan" from an agent called "Bryan" by looking, and it refuses to guess, so an undeclared named owner shows as "not recorded" and stays out of every surface built around what a person owes. You never need it for yourself (your own writes are already classified) or for 'human' (already a person). An agent that has attached to the workspace is known to be an agent regardless of what anyone declares.`
                 },
                 needs: {
                   type: "string",
@@ -14695,6 +14709,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           assignee: {
             type: "string",
             description: "Who owns it. Omit and you do — same rule as a create_tasks row's assignee."
+          },
+          assigneeKind: {
+            type: "string",
+            enum: ["person", "agent"],
+            description: `Declares whether \`assignee\` is a person or an agent — 'person' | 'agent'. Say it whenever you hand work to a NAME that is not your own: the board cannot tell "Bryan" from an agent called "Bryan" by looking, and it refuses to guess, so an undeclared named owner shows as "not recorded" and stays out of every surface built around what a person owes. You never need it for yourself (your own writes are already classified) or for 'human' (already a person). An agent that has attached to the workspace is known to be an agent regardless of what anyone declares.`
           },
           needs: { type: "string", enum: ["action", "decision"] },
           goal: { type: "string", description: "Goal/subgoal id. OMIT to route through triage." },
@@ -14813,6 +14832,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           assignee: {
             type: "string",
             description: "'human', a person's name, or an agent's name (yours comes from FEEDBACK_AGENT_NAME). The bare word 'agent' is refused."
+          },
+          assigneeKind: {
+            type: "string",
+            enum: ["person", "agent"],
+            description: `Declares whether \`assignee\` is a person or an agent — 'person' | 'agent'. Say it whenever you hand work to a NAME that is not your own: the board cannot tell "Bryan" from an agent called "Bryan" by looking, and it refuses to guess, so an undeclared named owner shows as "not recorded" and stays out of every surface built around what a person owes. You never need it for yourself (your own writes are already classified) or for 'human' (already a person). An agent that has attached to the workspace is known to be an agent regardless of what anyone declares.`
           }
         },
         required: ["taskId", "assignee"]
@@ -15554,12 +15578,25 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         });
       }
       case "promote_to_task": {
-        const { docId, threadId, workspaceId, title, body, assignee, needs, goal, dueAt, links } = a;
+        const {
+          docId,
+          threadId,
+          workspaceId,
+          title,
+          body,
+          assignee,
+          assigneeKind,
+          needs,
+          goal,
+          dueAt,
+          links
+        } = a;
         const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/promote`, {
           workspaceId,
           ...title !== undefined ? { title } : {},
           ...body !== undefined ? { body } : {},
           ...assignee !== undefined ? { assignee } : {},
+          ...assigneeKind !== undefined ? { assigneeKind } : {},
           ...needs !== undefined ? { needs } : {},
           ...goal !== undefined ? { goal } : {},
           ...dueAt !== undefined ? { dueAt } : {},
@@ -15655,12 +15692,18 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         });
       }
       case "assign_task": {
-        const { taskId, assignee } = a;
+        const { taskId, assignee, assigneeKind } = a;
         const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/assignee`, {
           assignee,
+          ...assigneeKind !== undefined ? { assigneeKind } : {},
           author: AUTHOR
         });
-        return ok({ taskId, assignee: res.task.assignee, changed: res.changed });
+        return ok({
+          taskId,
+          assignee: res.task.assignee,
+          changed: res.changed,
+          ...res.ownerKind !== undefined ? { ownerKind: res.ownerKind } : {}
+        });
       }
       case "update_task_body": {
         const { taskId, markdown, title } = a;

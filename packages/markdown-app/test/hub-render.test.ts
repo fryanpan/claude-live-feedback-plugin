@@ -457,18 +457,31 @@ describe('the row assignee', () => {
   // 'human' and a named agent are the two answers a reader acts on
   // differently, so they cannot look the same at a glance — and the mobile
   // pill is narrow enough that the text alone will not carry it.
-  it('marks a person, an agent, and nobody apart from each other', () => {
+  // Four states, not three. A named owner used to be drawn as an agent
+  // whatever they were — so a person named Bryan and an agent were the same
+  // mark — and the row now reads the kind the SERVER resolved (`ownerKind`)
+  // rather than inferring one from the name. `hub-owner-unknown` is the state
+  // that fold used to hide.
+  it('marks a person, an agent, an undeclared owner and nobody apart', () => {
     const h = handlers({ knownAgentIds: ['Index Rebuild'] });
     const rows = [
       task({ goal: 'g-pr', order: 1, assignee: 'human' }),
-      task({ goal: 'g-pr', order: 2, assignee: 'Index Rebuild' }),
-      task({ goal: 'g-pr', order: 3, assignee: 'agent' }),
+      task({ goal: 'g-pr', order: 2, assignee: 'Index Rebuild', ownerKind: 'agent' }),
+      task({ goal: 'g-pr', order: 3, assignee: 'Wren Halloway', ownerKind: 'person' }),
+      task({ goal: 'g-pr', order: 4, assignee: 'Wren Halloway' }),
+      task({ goal: 'g-pr', order: 5, assignee: 'agent' }),
     ];
     renderBoard(root, boardSections(GOALS, rows, filters), h);
     const classes = [...root.querySelectorAll('.hub-row-assignee')].map((el) =>
       [...el.classList].filter((c) => c.startsWith('hub-owner-')).join(),
     );
-    expect(classes).toEqual(['hub-owner-human', 'hub-owner-agent', 'hub-owner-none']);
+    expect(classes).toEqual([
+      'hub-owner-human',
+      'hub-owner-agent',
+      'hub-owner-human',
+      'hub-owner-unknown',
+      'hub-owner-none',
+    ]);
   });
 
   // It used to be a badge that rendered only when the assignee was not the
