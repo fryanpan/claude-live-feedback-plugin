@@ -85,6 +85,17 @@ describe('ownerKind', () => {
     expect(ownedByPerson(task({ assignee: 'Ada Fenwick' }))).toBe(false);
   });
 
+  it('reads the reserved bucket the same way in both readers', () => {
+    // These two disagreed for one release: `ownerKind` case-folded and
+    // `assignedToHuman` did not, so a row stored `Human` drew the person mark
+    // and was still missing from My Tasks. One question, one spelling.
+    const shouty = task({ assignee: 'Human' });
+    expect(ownerKind(shouty)).toBe('person');
+    expect(assignedToHuman(shouty)).toBe(true);
+    // Positive control: the fold is on the reserved WORD, not on every name.
+    expect(assignedToHuman(task({ assignee: 'Ada Fenwick' }))).toBe(false);
+  });
+
   it('separates "a person owns it" from "it is in the unnamed-person bucket"', () => {
     const named = task({ assignee: 'Ada Fenwick', ownerKind: 'person' });
     const unnamed = task({ assignee: 'human', ownerKind: 'person' });

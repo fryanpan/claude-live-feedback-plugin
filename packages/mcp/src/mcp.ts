@@ -2482,8 +2482,17 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           assignee,
           ...(assigneeKind !== undefined ? { assigneeKind } : {}),
           author: AUTHOR,
-        })) as { task: TaskPayload; changed: boolean };
-        return ok({ taskId, assignee: res.task.assignee, changed: res.changed });
+        })) as { task: TaskPayload; changed: boolean; ownerKind?: string };
+        // `ownerKind` is what the BOARD now says this owner is — the answer
+        // the caller actually wanted, and not the same as "the call didn't
+        // error". `unknown` here means the row will draw as "not recorded":
+        // say `assigneeKind` and call again.
+        return ok({
+          taskId,
+          assignee: res.task.assignee,
+          changed: res.changed,
+          ...(res.ownerKind !== undefined ? { ownerKind: res.ownerKind } : {}),
+        });
       }
       case 'update_task_body': {
         const { taskId, markdown, title } = a as {

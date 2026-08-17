@@ -16,6 +16,7 @@
  * DECLARED (`declaredAssigneeKind`) and read back with the workspace's own
  * agent roster as the standing evidence (`resolveOwnerKind`).
  */
+import { agentIdCandidates } from '@feedback/core';
 import { classifyActor } from './activity.ts';
 
 /** The old default. It names a category, not somebody, so it is not an owner. */
@@ -92,6 +93,32 @@ export function statedOwnerKind(value: unknown): DeclaredOwnerKind | undefined {
   return v === 'person' || v === 'agent' ? v : undefined;
 }
 
+export const BAD_ASSIGNEE_KIND_ERROR = 'bad-assignee-kind';
+
+/** Says how to satisfy the refusal, and names the confusion that causes it. */
+export const BAD_ASSIGNEE_KIND_MESSAGE =
+  "`assigneeKind` must be 'person' or 'agent'. It says what the owner IS, which is not " +
+  "the same vocabulary as `assignee` — 'human' is a valid assignee and not a valid kind.";
+
+/**
+ * A caller-supplied `assigneeKind`, or a refusal.
+ *
+ * Silently dropping a value the caller DID send is the worst of the three
+ * options here: the request answers 200, the row lands undeclared, the board
+ * draws "not recorded", and nothing anywhere says why. The likeliest mistake
+ * is `assigneeKind: 'human'`, because `assignee: 'human'` is the canonical
+ * spelling of the field right next to it — so the one plausible typo is
+ * exactly the one that has to be caught. Same treatment `parseNeeds` gets,
+ * for the same reason.
+ */
+export function parseAssigneeKind(
+  raw: unknown,
+): { ok: true; assigneeKind?: DeclaredOwnerKind } | { ok: false } {
+  if (raw === undefined || raw === null) return { ok: true };
+  const stated = statedOwnerKind(raw);
+  return stated ? { ok: true, assigneeKind: stated } : { ok: false };
+}
+
 /**
  * The kind to STORE when a task is created or handed over.
  *
@@ -117,6 +144,28 @@ export function declaredAssigneeKind(
   if (!author) return undefined;
   if (author.name.trim().toLowerCase() !== assignee.trim().toLowerCase()) return undefined;
   return classifyActor(author);
+}
+
+/**
+ * "Is this display name one of the workspace's attached agents?"
+ *
+ * A task records its owner as a DISPLAY NAME (`Live Feedback`); an
+ * attachment records an identity ID (`agent-live-feedback` by default, or
+ * whatever the attaching session passed — `quick-build` and the display name
+ * itself both occur in the field). Comparing the two directly matches almost
+ * nothing, which is how the roster half of `resolveOwnerKind` came to be
+ * dead in production while every fixture that attached under the display
+ * name passed. `agentIdCandidates` is the shared derivation, so the id the
+ * MCP process mints and the id the board looks for cannot drift apart.
+ */
+export function attachedAgentTest(agentIds: Iterable<string>): (name: string) => boolean {
+  const roster = new Set<string>();
+  for (const id of agentIds) {
+    const key = id.trim().toLowerCase();
+    if (key !== '') roster.add(key);
+  }
+  if (roster.size === 0) return () => false;
+  return (name: string) => agentIdCandidates(name).some((c) => roster.has(c));
 }
 
 /**

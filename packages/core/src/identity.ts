@@ -150,6 +150,58 @@ export function knownUserForName(nameOrKey: string): User | null {
   return { id: `known-${key}`, kind: 'known', name: meta.name, color: meta.color };
 }
 
+/**
+ * The id-safe form of a display name: `Live Feedback` → `live-feedback`.
+ *
+ * Names with no alphanumerics (emoji, punctuation) must not all collapse to
+ * the same id, so those fall back to a content hash of the raw name.
+ */
+export function agentSlug(name: string): string {
+  const trimmed = name.trim();
+  const slug = trimmed
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  if (slug) return slug;
+  let h = 0;
+  for (let i = 0; i < trimmed.length; i++) h = (h * 31 + trimmed.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
+/**
+ * The identity id an agent calling itself `name` attaches under.
+ *
+ * ONE derivation with two callers: the MCP process mints its own id with it,
+ * and the board matches a task's OWNER against the workspace's agent roster
+ * with it. Spelled separately they drift, and the drift is silent — a roster
+ * that stops matching does not fail, it just answers "not recorded" forever.
+ * That is not hypothetical: this function exists because the two sides were
+ * spelled differently, so a board whose own lead agent was attached read 83
+ * of its rows as having an unrecorded owner.
+ */
+export function agentIdForName(name: string): string {
+  const known = knownUserForName(name.trim());
+  if (known) return known.id;
+  return `agent-${agentSlug(name)}`;
+}
+
+/**
+ * Every id a roster could plausibly hold for this display name, lowercased.
+ *
+ * A roster entry is whatever the attaching session passed — its derived
+ * identity id (`agent-live-feedback`), a hand-supplied slug (`quick-build`),
+ * or the display name itself. All three occur in the field, so matching one
+ * spelling matches roughly none of the fleet.
+ */
+export function agentIdCandidates(name: string): string[] {
+  const trimmed = name.trim();
+  if (trimmed === '') return [];
+  const slug = agentSlug(trimmed);
+  return Array.from(
+    new Set([trimmed.toLowerCase(), slug, `agent-${slug}`, agentIdForName(trimmed).toLowerCase()]),
+  );
+}
+
 /** Persist the user's chosen display name (first-arrival prompt, or seeded from
  *  `?as=`). Hard 40-char cap — the prompt's maxlength is advisory; the name is
  *  broadcast in every awareness packet and stored on every comment. */
