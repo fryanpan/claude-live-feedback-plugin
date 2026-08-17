@@ -169,7 +169,11 @@ describe('premise drift over the work-queue route', () => {
   });
 
   it('clears itself when the description is rewritten — no separate acknowledge step', async () => {
-    const id = await makeTask(workspaceId, 'Corrected row', 'oldGoal is unrecoverable on the live path.');
+    const id = await makeTask(
+      workspaceId,
+      'Corrected row',
+      'oldGoal is unrecoverable on the live path.',
+    );
     await comment(id, 'oldGoal', 'Checked the wire: oldGoal was never missing. One renderer.');
     // Positive control: it is armed right now.
     expect((await nextRows(workspaceId)).find((r) => r.id === id)?.premise).toBeDefined();

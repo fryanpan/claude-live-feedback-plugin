@@ -31,10 +31,10 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  bodyWrittenAtOf,
-  decidePremiseDrift,
   PREMISE_STALE_AFTER_MS,
   type PremiseNote,
+  bodyWrittenAtOf,
+  decidePremiseDrift,
 } from '../src/task-staleness';
 import { TaskStore } from '../src/tasks.ts';
 
@@ -76,7 +76,11 @@ describe('decidePremiseDrift — arming', () => {
     // Four of the five instances still had real work in them after the
     // premise was corrected. The one thing this notice must never be read as
     // is a completion.
-    const drift = decidePremiseDrift({ status: 'in-progress', bodyWrittenAt: T0, notes: [note(3 * DAY)] });
+    const drift = decidePremiseDrift({
+      status: 'in-progress',
+      bodyWrittenAt: T0,
+      notes: [note(3 * DAY)],
+    });
     expect(drift!.headline).toContain('description');
     expect(drift!.advice).toContain('says nothing about whether the task is done');
   });
@@ -138,13 +142,30 @@ describe('decidePremiseDrift — the five instances that produced this', () => {
    * that task, measured off the live board. Titles and note text are
    * synthetic; only the timings are real.
    */
-  const instances: { label: string; gapHours: number; status: 'todo' | 'in-progress' | 'done' }[] = [
-    { label: 'read claimed missing; it shipped 32 minutes after filing', gapHours: 78.2, status: 'todo' },
-    { label: 'measurement table overtaken by its own earlier PR', gapHours: 70.3, status: 'todo' },
-    { label: 'route claimed absent; it answered correctly', gapHours: 80.1, status: 'todo' },
-    { label: 'queue-and-replay claimed missing; already shipped', gapHours: 80.4, status: 'todo' },
-    { label: 'intra-batch refs claimed to be the new work; then built', gapHours: 65.0, status: 'todo' },
-  ];
+  const instances: { label: string; gapHours: number; status: 'todo' | 'in-progress' | 'done' }[] =
+    [
+      {
+        label: 'read claimed missing; it shipped 32 minutes after filing',
+        gapHours: 78.2,
+        status: 'todo',
+      },
+      {
+        label: 'measurement table overtaken by its own earlier PR',
+        gapHours: 70.3,
+        status: 'todo',
+      },
+      { label: 'route claimed absent; it answered correctly', gapHours: 80.1, status: 'todo' },
+      {
+        label: 'queue-and-replay claimed missing; already shipped',
+        gapHours: 80.4,
+        status: 'todo',
+      },
+      {
+        label: 'intra-batch refs claimed to be the new work; then built',
+        gapHours: 65.0,
+        status: 'todo',
+      },
+    ];
 
   for (const inst of instances) {
     it(`flags: ${inst.label}`, () => {

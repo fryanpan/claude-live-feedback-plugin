@@ -28,10 +28,10 @@
  * someone stated on purpose; the judgment half stays with the reader.
  */
 import {
-  bodyWrittenAtOf,
-  decidePremiseDrift,
   type PremiseDrift,
   type PremiseNote,
+  bodyWrittenAtOf,
+  decidePremiseDrift,
 } from './task-staleness.ts';
 import type { Task, TaskStatus, WorkspaceGoal } from './tasks.ts';
 

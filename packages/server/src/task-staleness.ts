@@ -131,8 +131,8 @@ export function decidePremiseDrift(input: {
     headline: `This description has not changed in the ${span(agedMs)} since the newest note on this task.`,
     advice:
       `Read the ${since.length} note${since.length === 1 ? '' : 's'} below before you reproduce what the ` +
-      `description claims — they postdate it and may already have corrected it. ` +
-      `This says nothing about whether the task is done.`,
+      'description claims — they postdate it and may already have corrected it. ' +
+      'This says nothing about whether the task is done.',
     notes: since,
   };
 }
