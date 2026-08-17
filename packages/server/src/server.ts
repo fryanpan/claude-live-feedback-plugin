@@ -3577,8 +3577,9 @@ h1{font-size:1.25rem;margin:0 0 .5rem}p{color:#555;margin:0}
  * third-party host page's storage — but this page is ours, and the hub has
  * already asked the reader their name (`ensureUserIdentity`, unprefixed keys).
  * Without this attribute the same page holds two identities for one human: the
- * presence strip says "Bryan (you)" while every comment the widget posts is
- * signed "Anonymous Hedgehog". Observed in a browser on 2026-08-17.
+ * presence strip greets the reader by the name they gave, while every comment
+ * the widget posts from that same page is signed "Anonymous <animal>".
+ * Observed in a browser on 2026-08-17.
  *
  * Declarative `<claude-feedback-widget>` rather than `FeedbackWidget.init` on
  * purpose: a module script is deferred, so a plain inline script calling

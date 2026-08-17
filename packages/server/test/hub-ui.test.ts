@@ -106,8 +106,9 @@ describe('hub UI routes (plan §3.12 commit 7)', () => {
     // Without this attribute the widget keeps its identity under its own `cfw:`
     // prefix — correct on a stranger's page, wrong here, because the hub has
     // already asked this reader their name under the UNPREFIXED key. The
-    // observed symptom was a board greeting "Bryan (you)" while every comment
-    // the widget posted from that same page was signed "Anonymous Hedgehog".
+    // observed symptom was a board greeting the reader by the name they gave,
+    // while every comment the widget posted from that same page was signed
+    // "Anonymous <animal>".
     it('tells the widget to adopt the hub page own identity', async () => {
       const id = await seedWorkspace('gamma');
       const html = await (await fetch(`${base}/workspaces/${id}`)).text();
