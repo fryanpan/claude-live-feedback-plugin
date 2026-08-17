@@ -1,5 +1,7 @@
 import * as Y from 'yjs';
 import {
+  type TextSlice,
+  coveringInlineMarks,
   getProseFragment,
   insertTextWithMarks,
   resolveRelativePositionRaw,
@@ -330,15 +332,30 @@ export function resolveAllSuggestions(
 }
 
 /**
+ * The marks a proposed replacement must carry, so that accepting it produces
+ * exactly what the direct edit path would have produced.
+ *
+ * Both paths now read the marks off the text being REPLACED
+ * (`coveringInlineMarks`) rather than relying on Yjs' left-inheritance, which
+ * answers with whatever precedes the match and therefore dropped the marks of
+ * any span the match started at. Call this BEFORE mutating: `format(…,
+ * {suggestDelete})` rewrites the delta.
+ *
+ * A zero-length range (a pure insertion at a point) has no replaced text to
+ * read, so it keeps the old positional answer.
+ */
+function markedAttrsForSlices(
+  slices: TextSlice[],
+  fallback: { node: Y.XmlText; offset: number },
+): Record<string, unknown> {
+  const total = slices.reduce((n, s) => n + Math.max(0, s.length), 0);
+  if (total === 0) return inlineAttrsAt(fallback.node, fallback.offset);
+  return coveringInlineMarks(slices).attributes;
+}
+
+/**
  * Inline-mark attributes carried by the character at `offset`, with the
  * suggestion marks stripped out.
- *
- * The direct edit path (`findAndReplace`) inserts with NO attributes, so Yjs
- * inherits the surrounding formatting and a replacement inside a bold span
- * stays bold. The suggestion path can't do that — it MUST pass
- * `suggestInsert`, and explicit attributes REPLACE the inherited ones — so it
- * reads the marks off the text being replaced and merges them back in. Call
- * this BEFORE mutating: `format(…, {suggestDelete})` rewrites the delta.
  *
  * An offset past the end falls back to the last op's marks, matching the
  * left-inheritance Yjs would have applied to an unattributed insert.
@@ -419,7 +436,10 @@ export function suggestReplace(
   // Read the replaced text's marks BEFORE the suggestDelete format rewrites
   // the delta, so the proposal carries the same bold/italic/code/link the
   // direct edit path would have inherited.
-  const inherited = inlineAttrsAt(segment.node, offsetInNode);
+  const inherited = markedAttrsForSlices([{ node: segment.node, offset: offsetInNode, length }], {
+    node: segment.node,
+    offset: offsetInNode,
+  });
   const sid = newSid();
   // Attribute types are load-bearing (the Yjs heading-level learnings):
   // four strings + a NUMBER ts, exactly what readers expect.
@@ -488,7 +508,13 @@ export function suggestRewriteRange(
   if (start.node === end.node) {
     const from = Math.min(start.offset, end.offset);
     const to = Math.max(start.offset, end.offset);
-    const inherited = inlineAttrsAt(start.node, from);
+    const inherited = markedAttrsForSlices(
+      [{ node: start.node, offset: from, length: to - from }],
+      {
+        node: start.node,
+        offset: from,
+      },
+    );
     doc.transact(() => {
       if (to > from) {
         start.node.format(from, to - from, { [SUGGEST_DELETE_MARK]: attrs });
@@ -522,7 +548,14 @@ export function suggestRewriteRange(
   const lastIdx = blockSegments.indexOf(lastSeg);
   const touched = blockSegments.slice(firstIdx, lastIdx + 1);
 
-  const inherited = inlineAttrsAt(touched[0]!.node, firstOffset);
+  const inherited = markedAttrsForSlices(
+    touched.map((seg, i) => ({
+      node: seg.node,
+      offset: i === 0 ? firstOffset : 0,
+      length: (i === touched.length - 1 ? lastOffset : seg.length) - (i === 0 ? firstOffset : 0),
+    })),
+    { node: touched[0]!.node, offset: firstOffset },
+  );
   doc.transact(() => {
     for (let i = 0; i < touched.length; i++) {
       const seg = touched[i]!;

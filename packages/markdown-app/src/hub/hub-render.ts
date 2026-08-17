@@ -1574,7 +1574,9 @@ export function renderPresence(
     // no chip, and an away session is the one most likely to be stranded on
     // a bundle that predates whatever was just merged.
     const note = document.createElement('div');
-    note.className = 'hub-drift';
+    // A coverage line is always on the board, so it gets the quiet treatment.
+    // Styling it like the alarm would train people to skim past the alarm.
+    note.className = notice.kind === 'coverage' ? 'hub-drift hub-drift-quiet' : 'hub-drift';
     note.innerHTML = `<span class="hub-drift-head">${escapeHtml(notice.headline)}</span><span class="hub-drift-who">${escapeHtml(notice.detail)}</span><span class="hub-drift-fix">${escapeHtml(notice.fix)}</span>`;
     container.append(note);
   }

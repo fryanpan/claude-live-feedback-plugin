@@ -24,6 +24,15 @@
         <string>{{HOME_DIR}}</string>
         <key>PATH</key>
         <string>{{BUN_DIR}}:/usr/local/bin:/usr/bin:/bin</string>
+        <!-- The external origin this deployment is reached on, when something
+             in front terminates TLS (`tailscale serve` → this process on
+             loopback). The server cannot discover it: from in here the socket
+             is plain http. Left EMPTY the server falls back to
+             `http://<discovered host>:<port>`, which is what it is directly
+             reachable on and the correct answer with nothing in front.
+             See docs/process/tailnet-https.md. -->
+        <key>LF_PUBLIC_BASE_URL</key>
+        <string>{{PUBLIC_BASE_URL}}</string>
     </dict>
 
     <key>RunAtLoad</key>

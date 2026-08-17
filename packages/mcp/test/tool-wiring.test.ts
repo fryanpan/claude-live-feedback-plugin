@@ -32,8 +32,8 @@ describe('MCP tool wiring', () => {
   it('found both lists (the assertions below are otherwise vacuous)', () => {
     expect(declared.size).toBeGreaterThan(20);
     expect(dispatched.size).toBeGreaterThan(20);
-    expect(declared.has('create_task')).toBe(true);
-    expect(dispatched.has('create_task')).toBe(true);
+    expect(declared.has('create_tasks')).toBe(true);
+    expect(dispatched.has('create_tasks')).toBe(true);
   });
 
   it('advertises nothing it cannot answer', () => {
