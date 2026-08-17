@@ -138,6 +138,22 @@ export function projectTask(
       by: { name: t.by.name, kind: t.by.kind },
       ...(t.note !== undefined ? { note: t.note } : {}),
       ...(t.evidence !== undefined ? { evidence: t.evidence } : {}),
+      // Corrections attached after the fact. The board renders from this
+      // projection and nothing else, so an amendment dropped here is one no
+      // reviewer can ever see — the store-has-it/surface-can't-show-it
+      // failure, in the layer that has produced it before. Actors are
+      // display-only, the same §3.3 contract the transition row itself keeps.
+      ...(t.amendments !== undefined
+        ? {
+            amendments: t.amendments.map((a) => ({
+              ts: a.ts,
+              by: { name: a.by.name, kind: a.by.kind },
+              evidence: a.evidence,
+              ...(a.note !== undefined ? { note: a.note } : {}),
+              ...(a.supersedes !== undefined ? { supersedes: a.supersedes } : {}),
+            })),
+          }
+        : {}),
       ...(t.usage !== undefined ? { usage: t.usage } : {}),
     })),
     bodyDocId: taskBodyDocId(task.id),

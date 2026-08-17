@@ -4,7 +4,7 @@
  * so the interaction contracts (the status dropdown, in-place title edits,
  * the two-filter activity view) are testable under happy-dom.
  */
-import { escapeHtml } from '@feedback/core';
+import { escapeHtml, evidenceSuperseded, transitionUnproven } from '@feedback/core';
 import {
   GOAL_SUMMARY_MAX_WORDS,
   type StoredGoalSummary,
@@ -18,7 +18,9 @@ import {
   type BoardSection,
   type DecisionRow,
   type DriftNotice,
+  type HubEvidence,
   type HubTask,
+  type HubTransition,
   type PendingRetriageView,
   type PresenceChip,
   type ReorderTarget,
@@ -37,6 +39,7 @@ import {
   quoteAfterEdit,
   quoteForCapture,
   reviewRow,
+  shortCommit,
   stepTarget,
   timeAgo,
   uptimeSummary,
@@ -1854,6 +1857,69 @@ function renderDiscussion(
   return section;
 }
 
+/** How a piece of evidence reads in the history: the commit if there is one,
+ *  else the fact that a thread was cited. */
+function evidenceLabel(evidence: HubEvidence | undefined): string {
+  const commit = shortCommit(evidence?.commit);
+  if (commit) return `commit ${commit}`;
+  return evidence?.threadRef !== undefined ? 'thread ref' : '';
+}
+
+/**
+ * One row of a task's audit trail, and the only surface that tells the whole
+ * truth about how well proven a move is.
+ *
+ * Three states, and the middle one is the reason this exists:
+ *
+ *  - no proof at all → marked `unproven`, which is the board's shading;
+ *  - proof that was later CORRECTED → never unproven, before or after, so
+ *    the shading is silent about it. The superseded commit is struck here
+ *    instead, because a sha that resolves to nothing reads as evidence and
+ *    nothing looks wrong until someone tries to follow it;
+ *  - proof attached after the fact → the mark clears (there IS proof now),
+ *    and the row keeps the narrower fact that it arrived late.
+ */
+function renderTransitionRow(t: HubTransition): HTMLLIElement {
+  const li = document.createElement('li');
+  li.title = new Date(t.ts).toLocaleString();
+  const head = document.createElement('span');
+  const bits = [`${t.by.name} · ${t.from} → ${t.to}`];
+  if (t.note) bits.push(t.note);
+  head.textContent = bits.join(' — ');
+  li.append(head);
+
+  const original = evidenceLabel(t.evidence);
+  if (original) {
+    const span = document.createElement('span');
+    span.className = evidenceSuperseded(t) ? 'hub-evidence-superseded' : 'hub-evidence';
+    span.textContent = ` — ${original}`;
+    if (evidenceSuperseded(t)) span.title = 'Superseded by a later correction — do not follow this';
+    li.append(span);
+  }
+
+  if (transitionUnproven(t)) {
+    li.classList.add('unproven');
+    const mark = document.createElement('span');
+    mark.className = 'hub-unproven-mark';
+    mark.textContent = ' — no evidence';
+    li.append(mark);
+  }
+
+  for (const a of t.amendments ?? []) {
+    const line = document.createElement('div');
+    line.className = 'hub-evidence-amendment';
+    const label = evidenceLabel(a.evidence) || 'evidence';
+    const parts = [
+      `${label} added by ${a.by.name}${a.supersedes !== undefined ? ', replacing the entry above' : ''}`,
+    ];
+    if (a.note) parts.push(a.note);
+    line.textContent = parts.join(' — ');
+    line.title = new Date(a.ts).toLocaleString();
+    li.append(line);
+  }
+  return li;
+}
+
 export function renderTaskDetail(
   container: HTMLElement,
   task: HubTask | null,
@@ -2043,13 +2109,7 @@ export function renderTaskDetail(
     const list = document.createElement('ul');
     list.className = 'hub-detail-transitions';
     for (const t of [...task.transitions].reverse()) {
-      const li = document.createElement('li');
-      const bits = [`${t.by.name} · ${t.from} → ${t.to}`];
-      if (t.note) bits.push(t.note);
-      if (t.evidence?.commit) bits.push(`commit ${t.evidence.commit.slice(0, 10)}`);
-      li.textContent = bits.join(' — ');
-      li.title = new Date(t.ts).toLocaleString();
-      list.append(li);
+      list.append(renderTransitionRow(t));
     }
     panel.append(list);
   }

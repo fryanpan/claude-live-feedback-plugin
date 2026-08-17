@@ -13,13 +13,31 @@ export interface HubActor {
   kind: 'person' | 'agent';
 }
 
+export interface HubEvidence {
+  commit?: string;
+  threadRef?: unknown;
+}
+
+/** Evidence attached to a move AFTER it was recorded — see
+ *  `@feedback/core/evidence` for why this appends instead of rewriting. */
+export interface HubTransitionAmendment {
+  ts: number;
+  by: HubActor;
+  evidence: HubEvidence;
+  note?: string;
+  /** The claim this replaced. Present only for a CORRECTION; absent when the
+   *  amendment filled a gap. */
+  supersedes?: HubEvidence;
+}
+
 export interface HubTransition {
   ts: number;
   from: string;
   to: string;
   by: HubActor;
   note?: string;
-  evidence?: { commit?: string; threadRef?: unknown };
+  evidence?: HubEvidence;
+  amendments?: HubTransitionAmendment[];
   usage?: { inputTokens: number; outputTokens: number };
 }
 
@@ -927,6 +945,14 @@ function actorName(ev: ActivityEvent): string {
   return actor?.name ?? 'someone';
 }
 
+/** A commit as a human reads it. Undefined stays undefined — a blank sha is
+ *  not a short sha, and printing `commit ` with nothing after it is worse
+ *  than saying "evidence". */
+export function shortCommit(commit: string | undefined): string | undefined {
+  const trimmed = commit?.trim() ?? '';
+  return trimmed.length > 0 ? trimmed.slice(0, 10) : undefined;
+}
+
 function taskTitle(ev: ActivityEvent, titleOf: (taskId: string) => string): string {
   const task = ev.task as { id?: string; title?: string } | undefined;
   if (task?.title) return task.title;
@@ -957,6 +983,19 @@ export function describeEvent(ev: ActivityEvent, titleOf: (taskId: string) => st
       // acceptance criteria — worth a line, because the reader who filed it
       // is looking at different words than the ones they wrote.
       return `${actorName(ev)} rewrote the description of ${title()}`;
+    case 'task.evidence_amended': {
+      // Two different sentences, because the two cases mean different things
+      // to a reader of the trail. Filling a gap says the work was proven all
+      // along and the metadata slipped. A correction says the sha printed
+      // against that move is one nobody should follow — and someone may have
+      // followed it already.
+      const commit = shortCommit((ev.evidence as { commit?: string } | undefined)?.commit);
+      const old = shortCommit((ev.supersedes as { commit?: string } | undefined)?.commit);
+      const what = commit ? `commit ${commit}` : 'evidence';
+      return old
+        ? `${actorName(ev)} corrected the evidence on ${title()}: ${what} replaces ${old}`
+        : `${actorName(ev)} attached ${what} to an earlier move on ${title()}`;
+    }
     case 'task.gate_refused':
       return `the gate refused ${actorName(ev)} on ${title()}: ${String(ev.riskTier)}-tier, → ${String(ev.to)}`;
     case 'decision.answered': {

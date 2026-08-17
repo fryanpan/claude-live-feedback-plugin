@@ -2053,6 +2053,28 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           return j(200, res);
         }
+        // Evidence for a move that already happened. Not a second status
+        // door — it never touches `status` — but the answer to the one case
+        // the gate above has to refuse: the move was right and the proof was
+        // wrong or missing. Appends; the original row is never rewritten.
+        const taskEvidenceMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/evidence$/);
+        if (taskEvidenceMatch && req.method === 'POST') {
+          const taskId = decodeURIComponent(taskEvidenceMatch[1] ?? '');
+          const body = await safeJson(req);
+          const author = authorFor(body?.author);
+          const evidence = body?.evidence as { commit?: string; threadRef?: Ref } | undefined;
+          if (!author || evidence === undefined) {
+            return j(400, { error: 'author + evidence required' });
+          }
+          const res = taskStore.amendEvidence(taskId, {
+            actor: author,
+            evidence,
+            note: body?.note as string | undefined,
+            transitionTs: body?.transitionTs as number | undefined,
+          });
+          if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
+          return j(200, res);
+        }
         // Cross-references (§3.10 `.../links`): links are STORED on the
         // task; backlinks are COMPUTED per read, never stored, so the two
         // directions can't drift.

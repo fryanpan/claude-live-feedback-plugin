@@ -320,6 +320,14 @@ task_transition(taskId, to: "done", note: "merged in #142",
   trail. **This is the only way status changes.**
 - **Attach `evidence` (`{commit}` and/or `{threadRef}`) on forward moves** or
   the move comes back `unproven: true` — allowed, but shaded on the board.
+- **Got the evidence wrong, or forgot it? Don't re-send the transition** — it
+  refuses with `same-status`. Use `amend_evidence(taskId, evidence, note?)`,
+  which APPENDS a correction to the move that already happened: the original
+  row keeps what it said (a wrong sha is struck, not deleted), your correction
+  sits beside it attributed and timestamped, and the `unproven` shading
+  clears. A false sha is the case worth caring about — it reads as proof, so
+  nothing looks wrong until someone tries to follow it. Nothing validates that
+  a sha resolves; this server has no checkout to look it up in.
 - Open `after` dependencies come back in `blockers`; an edge marked **enforce
   refuses the transition (409)** until the blocking task closes. Read the
   message, it names what to unblock.

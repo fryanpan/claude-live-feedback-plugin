@@ -640,6 +640,144 @@ describe('hub workspace + task routes', () => {
     });
   });
 
+  describe('POST /api/tasks/:id/evidence', () => {
+    let wsId: string;
+
+    beforeAll(async () => {
+      const r = await post('/api/workspaces', { name: 'evidence-ws' });
+      wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
+    });
+
+    const mkTask = async (title: string): Promise<Task> => {
+      const r = await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, title });
+      return ((await r.json()) as { task: Task }).task;
+    };
+
+    /** Read the task back through the API, never off the in-process store —
+     *  this whole file exists because the route is the layer that silently
+     *  drops fields. */
+    const readBack = async (taskId: string): Promise<Task | undefined> => {
+      const listed = (await (await local(`/api/workspaces/${wsId}/tasks`)).json()) as {
+        tasks: Task[];
+      };
+      return listed.tasks.find((x) => x.id === taskId);
+    };
+
+    it('forwards evidence + note through the route onto a move that had none', async () => {
+      const t = await mkTask('dropped evidence');
+      const moved = await post(`/api/tasks/${t.id}/transition`, { to: 'done', author: AGENT });
+      expect(((await moved.json()) as { unproven: boolean }).unproven).toBe(true);
+
+      const r = await post(`/api/tasks/${t.id}/evidence`, {
+        author: AGENT,
+        evidence: { commit: '621f371' },
+        note: 'the field was dropped on my side',
+      });
+      expect(r.status).toBe(200);
+      const body = (await r.json()) as { ok: boolean; unproven: boolean };
+      expect(body.unproven).toBe(false);
+
+      const stored = await readBack(t.id);
+      const row = stored?.transitions.at(-1);
+      expect(row?.evidence).toBeUndefined(); // appended, not rewritten
+      expect(row?.amendments?.[0]?.evidence).toEqual({ commit: '621f371' });
+      expect(row?.amendments?.[0]?.note).toBe('the field was dropped on my side');
+      expect(row?.amendments?.[0]?.by).toEqual({
+        id: 'agent-search-revamp',
+        name: 'Search Revamp',
+        kind: 'agent',
+      });
+    });
+
+    it('forwards a threadRef, which a commit-only route would silently drop', async () => {
+      const t = await mkTask('thread evidence');
+      await post(`/api/tasks/${t.id}/transition`, { to: 'done', author: AGENT });
+      const r = await post(`/api/tasks/${t.id}/evidence`, {
+        author: PERSON,
+        evidence: { threadRef: { kind: 'thread', docId: 'hub-plan-doc', threadId: 'th-9' } },
+      });
+      expect(r.status).toBe(200);
+      const row = (await readBack(t.id))?.transitions.at(-1);
+      expect(row?.amendments?.[0]?.evidence?.threadRef).toEqual({
+        kind: 'thread',
+        docId: 'hub-plan-doc',
+        threadId: 'th-9',
+      });
+    });
+
+    it('corrects evidence that was present and wrong, keeping the false claim on the record', async () => {
+      const t = await mkTask('wrong sha');
+      await post(`/api/tasks/${t.id}/transition`, {
+        to: 'done',
+        author: AGENT,
+        evidence: { commit: 'b2ba21e' },
+      });
+      const r = await post(`/api/tasks/${t.id}/evidence`, {
+        author: AGENT,
+        evidence: { commit: '621f371' },
+        note: 'wrote it from memory; it resolves to nothing',
+      });
+      expect(r.status).toBe(200);
+      const row = (await readBack(t.id))?.transitions.at(-1);
+      expect(row?.evidence).toEqual({ commit: 'b2ba21e' });
+      expect(row?.amendments?.[0]?.supersedes).toEqual({ commit: 'b2ba21e' });
+      expect(row?.amendments?.[0]?.evidence).toEqual({ commit: '621f371' });
+    });
+
+    it('forwards transitionTs, so an earlier move can be the one corrected', async () => {
+      const t = await mkTask('two moves');
+      await post(`/api/tasks/${t.id}/transition`, { to: 'in-progress', author: AGENT });
+      await new Promise((r) => setTimeout(r, 2)); // distinct ts — ts is the address
+      await post(`/api/tasks/${t.id}/transition`, { to: 'done', author: AGENT });
+      const before = await readBack(t.id);
+      const first = before?.transitions[0];
+      expect(first?.ts).not.toBe(before?.transitions[1]?.ts);
+
+      const r = await post(`/api/tasks/${t.id}/evidence`, {
+        author: AGENT,
+        evidence: { commit: 'aaa1111' },
+        transitionTs: first?.ts,
+      });
+      expect(r.status).toBe(200);
+      const after = await readBack(t.id);
+      // Without the route forwarding transitionTs this lands on the LAST row
+      // and both assertions flip — which is exactly the silent-drop shape.
+      expect(after?.transitions[0]?.amendments?.length).toBe(1);
+      expect(after?.transitions[1]?.amendments).toBeUndefined();
+    });
+
+    it('400s empty evidence, 400s a missing author, 404s an unknown task', async () => {
+      const t = await mkTask('evidence errors');
+      await post(`/api/tasks/${t.id}/transition`, { to: 'done', author: AGENT });
+      const empty = await post(`/api/tasks/${t.id}/evidence`, { author: AGENT, evidence: {} });
+      expect(empty.status).toBe(400);
+      expect(((await empty.json()) as { error: string }).error).toBe('empty-evidence');
+      const noAuthor = await post(`/api/tasks/${t.id}/evidence`, { evidence: { commit: 'abc' } });
+      expect(noAuthor.status).toBe(400);
+      const ghost = await post('/api/tasks/t-ghost/evidence', {
+        author: AGENT,
+        evidence: { commit: 'abc' },
+      });
+      expect(ghost.status).toBe(404);
+      // The refusals left nothing behind.
+      expect((await readBack(t.id))?.transitions.at(-1)?.amendments).toBeUndefined();
+    });
+
+    it('tells a same-status caller where to take the evidence instead', async () => {
+      const t = await mkTask('same status');
+      await post(`/api/tasks/${t.id}/transition`, { to: 'done', author: AGENT });
+      const retry = await post(`/api/tasks/${t.id}/transition`, {
+        to: 'done',
+        author: AGENT,
+        evidence: { commit: '621f371' },
+      });
+      expect(retry.status).toBe(400);
+      const body = (await retry.json()) as { error: string; message?: string };
+      expect(body.error).toBe('same-status');
+      expect(body.message ?? '').toContain('/evidence');
+    });
+  });
+
   describe('PUT /api/workspaces/:id/goal', () => {
     let wsId: string;
 
