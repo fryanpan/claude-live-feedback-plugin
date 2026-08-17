@@ -7,6 +7,7 @@
  * which the server would revert.
  */
 import { type User, connect, escapeHtml } from '@feedback/core';
+import type { StoredGoalSummary } from '@feedback/core/goal-summary';
 import { ensureUserIdentity } from '../identity-prompt.ts';
 import { eventPath, typingInPath } from '../keyboard-target.ts';
 import { installStaleClientNotice } from '../stale-client.ts';
@@ -263,6 +264,9 @@ async function main(): Promise<void> {
         name: String(wsMap.get('name') ?? workspaceId),
         goal: String(wsMap.get('goal') ?? ''),
         goalUpdatedAt: Number(wsMap.get('goalUpdatedAt') ?? 0),
+        ...(wsMap.get('goalSummary')
+          ? { goalSummary: wsMap.get('goalSummary') as StoredGoalSummary }
+          : {}),
         goals: (wsMap.get('goals') as HubGoal[] | undefined) ?? [],
         docIds: (wsMap.get('docIds') as string[] | undefined) ?? [],
         ...(wsMap.get('leadAgentId') ? { leadAgentId: String(wsMap.get('leadAgentId')) } : {}),
@@ -336,9 +340,12 @@ async function main(): Promise<void> {
   }
 
   function renderGoal(): void {
-    renderGoalStrip(el('hub-goal'), state.info?.goal ?? '', {
-      onGoalCommit: (goal) => void saveGoal(goal),
-    });
+    renderGoalStrip(
+      el('hub-goal'),
+      state.info?.goal ?? '',
+      { onGoalCommit: (goal, summary) => void saveGoal(goal, summary) },
+      state.info?.goalSummary,
+    );
   }
 
   function renderLead(): void {
@@ -686,9 +693,13 @@ async function main(): Promise<void> {
     if (!res.ok) showToast('Goal rename failed');
   }
 
-  async function saveGoal(goal: string): Promise<void> {
+  async function saveGoal(goal: string, summary: string): Promise<void> {
     const res = await send(`/api/workspaces/${encodeURIComponent(workspaceId)}/goal`, 'PUT', {
       goal,
+      // Always sent, including empty — clearing the short line is how a
+      // reviewer goes back to the deterministic clip, and an omitted field
+      // would silently mean "keep whatever was there".
+      summary,
       author,
     });
     if (!res.ok) {
