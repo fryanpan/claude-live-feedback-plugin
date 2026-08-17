@@ -14743,7 +14743,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "get_workspace",
-      description: 'Read a hub workspace: its north-star goal, and the ORDERED goal list with per-goal task counts (todo / in-progress / done), parent goals followed by their subgoals, Chores last. Order IS priority — the first row is the highest band. Call this before deciding what to work on; without it goal order is invisible (list_tasks returns goal IDS only) and you will work the wrong band. Deliberately cheap — goals and counts, no tasks: pair it with next_tasks, which carries the tasks and their full descriptions. Each row carries `depth` (0 = top-level, 1 = subgoal), `parent` on subgoals, and `reorderable` — the three fields reorder_goals needs, so read here then reorder there with ids alone. `reorderable: false` marks the rows that are APPENDED rather than ordered (Chores, and a goal id left behind on a done task): they look exactly like a band, and sending them back is a 400, so scope a reorder as "the rows at my scope where reorderable is true", never "every depth-0 row".',
+      description: 'Read a hub workspace: its north-star goal, and the ORDERED goal list with per-goal task counts (todo / in-progress / done), parent goals followed by their subgoals, Chores last. Order IS priority — the first row is the highest band. Call this before deciding what to work on; without it goal order is invisible (list_tasks returns goal IDS only) and you will work the wrong band. Deliberately cheap — goals and counts, no tasks: pair it with next_tasks, which carries the tasks and their full descriptions. Each row carries `depth` (0 = top-level, 1 = subgoal), `parent` on subgoals, and `reorderable` — the three fields reorder_goals needs, so read here then reorder there with ids alone. `reorderable: false` marks the rows that are APPENDED rather than ordered (Chores, and a goal id left behind on a done task): they look exactly like a band, and sending them back is a 400, so scope a reorder as "the rows at my scope where reorderable is true", never "every depth-0 row". Also reports what the LEAD has not picked up yet — `pendingRetriage` (a north-star edit) and `pendingBucketReview` (a goal BAND that appeared, with the unplaced tasks worth re-looking at against it). Reading them here does NOT drain them; only attach_agent does.',
       inputSchema: {
         type: "object",
         properties: { workspaceId: { type: "string" } },
@@ -15629,6 +15629,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           goalUpdatedAt: res.workspace.goalUpdatedAt,
           leadAgentId: res.workspace.leadAgentId,
           pendingRetriage: res.pendingRetriage,
+          pendingBucketReview: res.pendingBucketReview,
           goals: res.goalSummary
         });
       }
