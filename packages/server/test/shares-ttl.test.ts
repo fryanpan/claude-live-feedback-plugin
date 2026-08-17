@@ -5,12 +5,12 @@
  * Every fixture below names a workspace, because a workspace is the unit of
  * sharing (2026-08-17). The calls that used to pass a bare `{docId}` are
  * rewritten as workspace links with an entry doc, and the removal gets its
- * own assertions: `createShareLink` refuses a workspace-less request, and
- * `load()` drops a legacy doc-scoped record rather than keep honouring a
- * grant nothing can mint.
+ * own assertions at the bottom: `createShareLink` refuses a request that
+ * names no workspace. What a legacy record ALREADY on disk does is the other
+ * half of that removal and lives in per-doc-share-removed.test.ts.
  */
 import { describe, expect, it } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Shares } from '../src/share/shares.ts';
@@ -98,11 +98,13 @@ describe('TTL validation at the registry', () => {
 
 /**
  * A workspace is the unit of sharing, so a record without one names a grant
- * nothing can mint. Two halves, and shipping either alone would be wrong:
- * the mint path refuses new ones, and `load()` drops the ones already on
- * disk — because the gate reads the registry rather than the code that wrote
- * it, so leaving those standing would retire the feature everywhere except
- * where it is actually exercised.
+ * nothing can mint. This block is the MINT half, at the registry layer where
+ * `createShareLink` validates its argument — the other half (a legacy record
+ * already on disk being dropped at `load()`, and its slug no longer
+ * resolving) lives in per-doc-share-removed.test.ts, which owns the removal
+ * end to end. Both halves matter: the gate reads the registry rather than the
+ * code that wrote it, so removing only the mint path would retire the feature
+ * everywhere except where it is actually exercised.
  */
 describe('a share must name a workspace', () => {
   it('refuses to mint a link with no workspace', () => {
@@ -130,62 +132,6 @@ describe('a share must name a workspace', () => {
       expect(hub.workspaceId).toBe('ws1');
     } finally {
       cleanup();
-    }
-  });
-
-  it('drops a legacy doc-scoped record on load, and keeps the workspace one', () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'shares-legacy-'));
-    try {
-      const now = Date.now();
-      writeFileSync(
-        join(dataDir, 'shares.json'),
-        JSON.stringify([
-          // Written before workspaces were the unit of sharing: scope was
-          // the docId alone, and there is no workspaceId at all.
-          {
-            shareId: 'legacy01',
-            surface: 'doc',
-            mode: 'link',
-            docId: 'd1',
-            slug: 'a'.repeat(32),
-            hostname: 'feedback.example.com',
-            url: `https://feedback.example.com/s/${'a'.repeat(32)}`,
-            createdAt: now,
-            expiresAt: now + 86_400_000,
-          },
-          {
-            shareId: 'current1',
-            surface: 'workspace',
-            mode: 'link',
-            docId: 'd2',
-            workspaceId: 'ws1',
-            slug: 'b'.repeat(32),
-            hostname: 'feedback.example.com',
-            url: `https://feedback.example.com/s/${'b'.repeat(32)}`,
-            createdAt: now,
-            expiresAt: now + 86_400_000,
-          },
-        ]),
-      );
-      const shares = new Shares({
-        dataDir,
-        config: { publicHostname: 'feedback.example.com' },
-      });
-      // Positive control FIRST: the loader can see this file at all — the
-      // workspace record came through, live and redeemable.
-      expect(shares.list().map((s) => s.shareId)).toEqual(['current1']);
-      expect(shares.findBySlug('b'.repeat(32))?.shareId).toBe('current1');
-      // …and the doc-scoped one is revoked, on every lookup the gate uses.
-      expect(shares.findBySlug('a'.repeat(32))).toBeNull();
-      expect(shares.findLive('legacy01')).toBeNull();
-
-      // The drop is written back, so a later process does not re-read it.
-      const onDisk = JSON.parse(readFileSync(join(dataDir, 'shares.json'), 'utf8')) as Array<{
-        shareId: string;
-      }>;
-      expect(onDisk.map((s) => s.shareId)).toEqual(['current1']);
-    } finally {
-      rmSync(dataDir, { recursive: true, force: true });
     }
   });
 });

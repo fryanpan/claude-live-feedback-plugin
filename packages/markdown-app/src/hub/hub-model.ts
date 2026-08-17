@@ -690,6 +690,60 @@ function blockingLine(row: DecisionRow): string {
   return `${row.hard ? 'Hard-blocking' : 'Blocking'} ${n === 1 ? '1 task' : `${n} tasks`}`;
 }
 
+// ── Where the walkthrough is standing ──────────────────────────────────────
+
+/**
+ * The position the walkthrough should render, given where it was AIMED.
+ *
+ * The queue is re-derived on every render and shrinks underneath the reader —
+ * their own answer removes an item, and so does a peer's. A bare index is
+ * therefore not a position: when anything BEFORE it drops out, the same index
+ * silently lands one item further on, and the reader never sees the one that
+ * was skipped. So the aim is a `ReviewItem.key`, and the index is only the
+ * fallback for the two cases a key cannot express — the aimed item is gone,
+ * and the walk has run off the end into the done state.
+ *
+ * A negative index means closed, and stays closed: resolving it against the
+ * queue would reopen the panel on every repaint.
+ */
+export function walkPosition(queue: ReviewQueue, index: number, key: string | null): number {
+  if (index < 0) return -1;
+  if (key) {
+    const at = queue.items.findIndex((i) => i.key === key);
+    if (at !== -1) return at;
+  }
+  return Math.min(Math.max(index, 0), queue.items.length);
+}
+
+/**
+ * Where to stand after the item at `index` was answered or replied to.
+ *
+ * Answering usually takes the item OUT of the queue, so `index + 1` steps over
+ * whatever slid into its place — the classic off-by-one of a list that edits
+ * itself. Aim instead at the item that was NEXT when the answer was submitted,
+ * by identity.
+ *
+ * Two fallbacks, both real: the answered item can still be in the queue when
+ * the write lands (a decision's answer arrives back through the ydoc
+ * projection, not in the POST's response), in which case stepping past it is
+ * right; and the next item can be gone too, when a peer answered it while this
+ * one was being written — then the gap left behind is as good a place as any.
+ */
+export function advanceWalk(
+  queue: ReviewQueue,
+  index: number,
+  finishedKey: string,
+  nextKey: string | null,
+): number {
+  if (nextKey) {
+    const at = queue.items.findIndex((i) => i.key === nextKey);
+    if (at !== -1) return at;
+  }
+  const still = queue.items.findIndex((i) => i.key === finishedKey);
+  if (still !== -1) return still + 1;
+  return Math.min(Math.max(index, 0), queue.items.length);
+}
+
 // ── Quick capture ──────────────────────────────────────────────────────────
 
 /** Longer than this and the line stops being a title. Chosen to fit a phone
@@ -976,13 +1030,22 @@ export function describeEvent(ev: ActivityEvent, titleOf: (taskId: string) => st
       return `${actorName(ev)} assigned ${title()}: ${String(ev.from)} → ${String(ev.to)}`;
     case 'task.regrouped':
       return `${actorName(ev)} regrouped ${title()}: ${String(ev.fromGoal)} → ${String(ev.toGoal)}`;
-    case 'task.body_edited':
+    case 'task.body_edited': {
       // Typing in a task body is deliberately NOT activity (the snapshot
       // fires no event at all). This row is the other thing: a wholesale
       // rewrite through the body route, which is how a thin task gets its
       // acceptance criteria — worth a line, because the reader who filed it
       // is looking at different words than the ones they wrote.
+      //
+      // When the same act retitled the row (triage shaping a raw capture),
+      // the old title has to be in the line: it is the ONLY name the person
+      // who filed it would recognise, and after the rewrite it survives
+      // nowhere else on the board.
+      const from = ev.titleFrom as string | undefined;
+      const to = ev.titleTo as string | undefined;
+      if (from && to) return `${actorName(ev)} reshaped “${from}” into “${to}”`;
       return `${actorName(ev)} rewrote the description of ${title()}`;
+    }
     case 'task.evidence_amended': {
       // Two different sentences, because the two cases mean different things
       // to a reader of the trail. Filling a gap says the work was proven all
@@ -1079,48 +1142,121 @@ export interface PluginRelease {
    *  manifest could not be read. */
   version: string | null;
   behind: Array<{ agentId: string; pluginVersion?: string }>;
+  /** How many sessions `behind` was computed over — the DOMAIN of the check.
+   *  Optional because a client can outlive the server release that added it;
+   *  when it is missing the notice states the domain without a count rather
+   *  than guessing one. */
+  checked?: number;
 }
 
 export interface DriftNotice {
   headline: string;
   detail: string;
   fix: string;
+  /**
+   * `alert` — something is wrong and there is a fix to run.
+   * `coverage` — nothing is wrong *within what was checked*, and this says
+   * what that was. Rendered quietly: a line that is always there must not
+   * look like an alarm, or it trains people to stop reading the alarms.
+   */
+  kind?: 'alert' | 'coverage';
 }
 
 /**
- * "Some of your agents can't do what you just merged."
+ * What this reading can see. Said in the surface, every time, because the
+ * alternative was measured: the strip rendered NOTHING over one attachment
+ * while the wider fleet was several releases back, and nothing reads exactly
+ * like all-clear.
+ */
+const PLUGIN_DOMAIN =
+  'Only sessions that attach to this board are checked — a peer that never attached is absent here, not current.';
+
+/** Two steps, and the ORDER is load-bearing.
+ *
+ * `command` — because `claude` is a shell FUNCTION on this machine that
+ * injects flags ahead of the subcommand, so the bare form is parsed as a
+ * prompt and dies with a message that reads like a permission refusal. An
+ * agent already filed that as "deploying is not mine to run". Printing a
+ * remediation known to fail is worse than printing none; `command` is inert
+ * wherever no such wrapper exists.
+ *
+ * Restarting FIRST re-resolves the cache as it stands, which has moved a
+ * session BACKWARDS a version in exactly this situation.
+ */
+const PLUGIN_FIX =
+  'Run: command claude plugin update live-feedback@claude-live-feedback — then restart that session.';
+
+/** `(2 checked)`, or nothing at all when the server did not send a count. */
+function checkedClause(checked: number | undefined): string {
+  return checked === undefined ? '' : ` (${checked} checked)`;
+}
+
+/**
+ * "Some of your agents can't do what you just merged" — and, when none of
+ * them are, what "none of them" was counted over.
  *
  * A merge does not deliver: the plugin resolves from a version-keyed cache,
  * so somebody has to run the update and the session then has to restart. That
  * went unnoticed for eleven releases because the only way to find out was to
  * go and look. This is the looking, done by the board.
  *
- * Two things it deliberately will not do: invent a claim when the released
- * version is unknown, and print a blank where a session is too old to report
- * its version — "too old to name" is the true statement there, and it is the
- * state every peer is in the moment this ships.
+ * It used to return null whenever nobody was behind, which is the same defect
+ * one level up. The strip's domain is "sessions that called `attach_agent` on
+ * THIS board" and there is no server-wide session registry to widen it with —
+ * so silence means "nothing I can see is behind", and it was read as "no
+ * session is behind". Measured 2026-08-17: `behind: []` over a single
+ * attachment, while sessions elsewhere in the fleet sat releases back. Fixing
+ * that one session took the reading from naming one to naming nobody without
+ * touching the drift. So a clear result now SAYS it is clear-within-a-domain
+ * and how big that domain was; only the alarm is silent when there is nothing
+ * to raise.
+ *
+ * Three things it still deliberately will not do: invent a claim when the
+ * released version is unknown (it says it cannot check instead of saying
+ * nothing), print a blank where a session is too old to report its version
+ * ("too old to name" is the true statement there), and imply that an empty
+ * `behind` list clears anything outside the count beside it.
  */
 export function pluginDriftNotice(release: PluginRelease | null | undefined): DriftNotice | null {
-  const version = release?.version;
-  const behind = release?.behind ?? [];
-  if (!version || behind.length === 0) return null;
+  // No attachments read at all — not even the domain is known yet, so there
+  // is genuinely nothing to say. This is the ONLY silent branch.
+  if (!release) return null;
+  const { version, checked } = release;
+  const behind = release.behind ?? [];
+
+  if (!version) {
+    // The manifest was unreadable. Claiming drift would be inventing it —
+    // but so would saying nothing, which reads as "checked, all fine".
+    return {
+      kind: 'coverage',
+      headline: "Plugin versions can't be checked here",
+      detail: `This server could not read its deploy source's plugin manifest, so no session's bundle has been compared${checkedClause(checked)}.`,
+      fix: 'Nothing on this strip is a clearance until that manifest reads.',
+    };
+  }
+
+  if (behind.length === 0) {
+    return {
+      kind: 'coverage',
+      headline:
+        checked === 0
+          ? `Nothing has been checked against ${version} — no session has attached to this board`
+          : `No attached session is behind ${version}${checkedClause(checked)}`,
+      detail: PLUGIN_DOMAIN,
+      fix: 'Not a fleet-wide clearance: a session that has not attached here is unchecked, not current.',
+    };
+  }
+
   return {
+    kind: 'alert',
     headline: `${behind.length} ${behind.length === 1 ? 'agent is' : 'agents are'} running an older plugin than ${version}`,
-    detail: behind
+    // The domain rides the alarm too. "1 agent is behind" is also a statement
+    // about attached sessions only, and a count of 1-out-of-1 is a different
+    // thing to act on than 1-out-of-9.
+    detail: `${behind
       .map((b) => `${b.agentId} ${b.pluginVersion ?? '(too old to report)'}`.trim())
-      .join(', '),
-    // Two things this one sentence has to get right.
-    //
-    // `command` — because `claude` is a shell FUNCTION on this machine that
-    // injects flags ahead of the subcommand, so the bare form is parsed as a
-    // prompt and dies with a message that reads like a permission refusal.
-    // An agent already filed that as "deploying is not mine to run". Printing
-    // a remediation known to fail is worse than printing none; `command` is
-    // inert wherever no such wrapper exists.
-    //
-    // The ORDER — restarting first re-resolves the cache as it stands, which
-    // has moved a session BACKWARDS a version in exactly this situation.
-    fix: 'Run: command claude plugin update live-feedback@claude-live-feedback — then restart that session.',
+      .join(', ')}${checked === undefined ? '' : ` — of ${checked} checked`}. ${PLUGIN_DOMAIN}`,
+    fix: PLUGIN_FIX,
   };
 }
 

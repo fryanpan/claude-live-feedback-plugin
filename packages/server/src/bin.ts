@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveClientDists } from './client-release.ts';
 import { createPluginRefresher } from './plugin-refresh.ts';
-import { lanHostnames, tailscaleHost } from './public-host.ts';
+import { lanHostnames, normalizePublicBaseUrl, tailscaleHost } from './public-host.ts';
 import { createServer } from './server.ts';
 import { readKeychainPassword } from './share/keychain.ts';
 import { ThreadSummarizer } from './summarize.ts';
@@ -36,6 +36,14 @@ const { widget: widgetDist, markdownApp: markdownAppDist } = resolveClientDists(
   repoRoot,
 });
 const demosDir = pathOrNull(join(repoRoot, 'demos'));
+
+// The external origin this deployment is reached on, when something in front
+// terminates TLS. Validated HERE, at boot, so a typo is a startup failure
+// somebody reads rather than a server that runs happily while handing out
+// links to an origin nobody meant to publish. Unset is the normal case and
+// falls back to `http://<discovered host>:<port>`.
+const publicBaseUrlOverride =
+  normalizePublicBaseUrl(arg('public-base-url') ?? process.env.LF_PUBLIC_BASE_URL) ?? undefined;
 
 // The release root this deployment PUBLISHES into, which is what lets the
 // board say "your browser is running a client from three days ago because the
@@ -176,6 +184,7 @@ for (let i = 0; i < 20 && !handle; i++) {
       demosDir,
       trustedHosts,
       allowedOrigins,
+      publicBaseUrl: publicBaseUrlOverride,
       sharingEnvLocked,
       cfAccess,
       share,
@@ -199,6 +208,12 @@ const lan = lanHostnames();
 console.log(`[feedback] listening on :${port}`);
 console.log(`[feedback]   local:      http://localhost:${port}`);
 if (ts) console.log(`[feedback]   tailscale:  http://${ts}:${port}`);
+// Which base every reviewUrl / entryUrl the server hands out is built on.
+// Printed only when it is NOT the obvious one, because that is the case
+// where a reader would otherwise assume wrong — and because a TLS frontend
+// is invisible from in here, this line is the only place the process says
+// which origin its links point at.
+if (publicBaseUrlOverride) console.log(`[feedback]   links use:  ${publicBaseUrlOverride}`);
 for (const h of lan) console.log(`[feedback]   lan:        http://${h}:${port}`);
 if (trustedHosts.length) console.log(`[feedback]   trusted:    ${trustedHosts.join(', ')}`);
 if (allowedOrigins.length) console.log(`[feedback]   origins:    ${allowedOrigins.join(', ')}`);

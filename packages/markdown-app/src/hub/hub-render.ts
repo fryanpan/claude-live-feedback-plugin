@@ -1142,13 +1142,20 @@ export function renderReviewStrip(
 
 export interface WalkthroughHandlers {
   /** Record a verbatim answer. `optionId` rides along when the answer came
-   *  from tapping one of the asker's candidates. */
-  onAnswer: (task: HubTask, text: string, optionId?: string) => void;
-  /** "I can't answer this yet" — a question back to the asker, not an answer. */
-  onMoreInfo: (task: HubTask, question: string) => void;
+   *  from tapping one of the asker's candidates.
+   *
+   *  Resolves to whether the write LANDED. The advance is the confirmation
+   *  that it did, so it has to follow the write rather than race it — and a
+   *  refused write must leave the reader on the card with their words still in
+   *  the box, which is the one direction that cannot lose anything. */
+  onAnswer: (task: HubTask, text: string, optionId?: string) => Promise<boolean>;
+  /** "I can't answer this yet" — a question back to the asker, not an answer.
+   *  Deliberately does NOT advance: the decision stays open and this card is
+   *  still the one that needs you. */
+  onMoreInfo: (task: HubTask, question: string) => Promise<boolean>;
   /** Answer a thread without leaving the queue. Posts a reply on the thread the
    *  item came from, wherever that thread lives. */
-  onReply: (item: ReviewItem, text: string) => void;
+  onReply: (item: ReviewItem, text: string) => Promise<boolean>;
   /** Go to the exact place instead of answering here — the task's discussion at
    *  that thread, the doc anchored on that comment. */
   onOpenItem: (item: ReviewItem) => void;
@@ -1181,12 +1188,21 @@ function blocksLine(row: DecisionRow): string {
   return `${row.hard ? 'Hard-blocking' : 'Blocking'} ${titles.length === 1 ? '1 task' : `${titles.length} tasks`}: ${shown}${rest}`;
 }
 
-/** A textarea + submit pair; the submit is ignored when the field is blank. */
+/**
+ * A textarea + submit pair; the submit is ignored when the field is blank.
+ *
+ * Locked while the write is in flight, for the same reason the discussion's
+ * composer is: the walkthrough's answer does not come back through the POST —
+ * a decision's answer arrives later over the ydoc — so between the tap and the
+ * card swapping there is a window in which nothing on screen has changed and
+ * the button still works. Every extra tap in that window is another recorded
+ * answer.
+ */
 function promptForm(
   className: string,
   placeholder: string,
   submitLabel: string,
-  onSubmit: (text: string) => void,
+  onSubmit: (text: string) => Promise<boolean>,
 ): HTMLFormElement {
   const form = document.createElement('form');
   form.className = className;
@@ -1198,10 +1214,30 @@ function promptForm(
   submit.className = 'hub-btn hub-btn-primary';
   submit.textContent = submitLabel;
   form.append(ta, submit);
+  // A flag, not just the disabled attributes: disabling the CONTROLS stops a
+  // second tap, and a form can still be submitted around them (Enter in the
+  // field, a programmatic submit). The guard has to be on the handler.
+  let busy = false;
   form.addEventListener('submit', (ev) => {
     ev.preventDefault();
     const text = ta.value.trim();
-    if (text) onSubmit(text);
+    if (!text || busy) return;
+    busy = true;
+    ta.disabled = true;
+    submit.disabled = true;
+    void Promise.resolve(onSubmit(text))
+      .then((ok) => {
+        // Cleared only on an acknowledged write. A handler that answers
+        // nothing at all keeps the text, which is the safe direction: the
+        // usual outcome there is that the card is replaced anyway.
+        if (ok === true) ta.value = '';
+      })
+      .catch(() => {})
+      .finally(() => {
+        busy = false;
+        ta.disabled = false;
+        submit.disabled = false;
+      });
   });
   return form;
 }
@@ -1227,6 +1263,54 @@ function walkNav(index: number, total: number, handlers: WalkthroughHandlers): H
 }
 
 /**
+ * What this sitting has cleared so far.
+ *
+ * Without it the advance is invisible. The queue shrinks as it is worked, so
+ * answering item 3 of 7 leaves you at "3 of 6" — the number that says WHERE
+ * YOU ARE does not move, and the only thing that changed is a total that got
+ * smaller. To a reader that is indistinguishable from "my answer did nothing"
+ * or "the page reset", which is worse than not advancing at all, because they
+ * cannot tell whether the answer landed.
+ */
+export interface WalkProgress {
+  /** How many items this sitting has finished. */
+  cleared: number;
+  /** The one just finished. It is no longer in the queue, so Back cannot
+   *  reach it — the banner is the only way back to something you answered by
+   *  mistake, which is why it holds the whole item rather than a title. */
+  last: ReviewItem | null;
+}
+
+/** How the thing you just finished reads in the banner. */
+function clearedVerb(kind: ReviewKind): string {
+  return kind === 'decision' ? 'Answered' : 'Replied on';
+}
+
+/**
+ * "You just did that, here is the next one" — the half of the advance that
+ * turns a jump-cut into a queue.
+ */
+function advancedBanner(progress: WalkProgress, handlers: WalkthroughHandlers): HTMLElement | null {
+  const last = progress.last;
+  if (!last) return null;
+  const bar = document.createElement('div');
+  bar.className = 'hub-walk-advanced';
+  const said = document.createElement('span');
+  said.className = 'hub-walk-advanced-said';
+  said.textContent = `✓ ${clearedVerb(last.kind)} “${clip(last.title, 60)}”`;
+  const back = document.createElement('button');
+  back.type = 'button';
+  back.className = 'hub-btn hub-walk-advanced-back';
+  back.textContent = 'Back to it';
+  // Not `onStep(index - 1)`: the answered item LEFT the queue, so stepping
+  // back lands on whatever preceded it. Opening it where it lives is the only
+  // route to the thing that was actually just answered.
+  back.addEventListener('click', () => handlers.onOpenItem(last));
+  bar.append(said, back);
+  return bar;
+}
+
+/**
  * One item at a time, in the derived order, with the way out at every
  * step: tap one of the asker's options, write your own answer, ask for more
  * information, or skip. Six answers should be one sitting, not six
@@ -1241,6 +1325,7 @@ export function renderReviewWalkthrough(
   queue: ReviewQueue,
   index: number,
   handlers: WalkthroughHandlers,
+  progress: WalkProgress = { cleared: 0, last: null },
 ): void {
   container.replaceChildren();
   if (index < 0) {
@@ -1262,16 +1347,34 @@ export function renderReviewWalkthrough(
   if (!item) {
     const done = document.createElement('div');
     done.className = 'hub-walk-done';
+    // Answering the LAST one lands here, which makes this the likeliest moment
+    // to want the item back — so the banner belongs on the finished screen too,
+    // not only on the card that replaces something.
+    const lastBanner = advancedBanner(progress, handlers);
+    if (lastBanner) done.append(lastBanner);
     const h = document.createElement('h2');
     h.textContent = 'All caught up';
     const p = document.createElement('p');
     p.textContent = 'Nothing else is waiting on you right now.';
+    done.append(h, p);
+    // The count is what makes this an ENDING rather than an empty surface: a
+    // sitting that cleared four things and one that found nothing waiting read
+    // identically otherwise, and the first is the one worth finishing.
+    if (progress.cleared > 0) {
+      const tally = document.createElement('p');
+      tally.className = 'hub-walk-done-tally';
+      tally.textContent =
+        progress.cleared === 1
+          ? 'You cleared 1 in this sitting.'
+          : `You cleared ${progress.cleared} in this sitting.`;
+      done.append(tally);
+    }
     const close = document.createElement('button');
     close.type = 'button';
     close.className = 'hub-btn hub-btn-primary';
     close.textContent = 'Back to the board';
     close.addEventListener('click', () => handlers.onClose());
-    done.append(h, p, close);
+    done.append(close);
     panel.append(done);
     container.append(panel);
     return;
@@ -1281,7 +1384,16 @@ export function renderReviewWalkthrough(
   head.className = 'hub-walk-head';
   const pos = document.createElement('span');
   pos.className = 'hub-walk-pos';
+  // Two readings, because the queue shrinks as it is worked and neither number
+  // alone says you moved: where you are in what REMAINS, and what this sitting
+  // has taken off the list.
   pos.textContent = `${index + 1} of ${queue.items.length}`;
+  if (progress.cleared > 0) {
+    const cleared = document.createElement('span');
+    cleared.className = 'hub-walk-cleared';
+    cleared.textContent = `${progress.cleared} cleared`;
+    pos.append(cleared);
+  }
   const close = document.createElement('button');
   close.type = 'button';
   close.className = 'hub-btn hub-walk-close';
@@ -1293,6 +1405,12 @@ export function renderReviewWalkthrough(
 
   const card = document.createElement('div');
   card.className = `hub-walk-card hub-walk-${item.kind}`;
+
+  // First thing on the card, above the new item: what you just finished. It
+  // belongs here rather than in a toast because this is read on a phone, where
+  // a toast is gone before the thumb has come back down.
+  const banner = advancedBanner(progress, handlers);
+  if (banner) card.append(banner);
 
   const kind = document.createElement('p');
   kind.className = 'hub-walk-kind';
@@ -1456,7 +1574,9 @@ export function renderPresence(
     // no chip, and an away session is the one most likely to be stranded on
     // a bundle that predates whatever was just merged.
     const note = document.createElement('div');
-    note.className = 'hub-drift';
+    // A coverage line is always on the board, so it gets the quiet treatment.
+    // Styling it like the alarm would train people to skim past the alarm.
+    note.className = notice.kind === 'coverage' ? 'hub-drift hub-drift-quiet' : 'hub-drift';
     note.innerHTML = `<span class="hub-drift-head">${escapeHtml(notice.headline)}</span><span class="hub-drift-who">${escapeHtml(notice.detail)}</span><span class="hub-drift-fix">${escapeHtml(notice.fix)}</span>`;
     container.append(note);
   }
@@ -1689,6 +1809,18 @@ export interface DetailHandlers {
    *  from the review queue. Marked and scrolled to — "open the task" is not
    *  the promise the strip makes on a task with six discussions. */
   focusThreadId?: string;
+  /**
+   * Which conversation the single composer is pointed at: a thread id, `null`
+   * for a new thread, `undefined` for "nobody has chosen" (take the default).
+   *
+   * Three states rather than two, because the default has to be re-derivable
+   * on every repaint AND an explicit choice has to survive one. A repaint that
+   * re-applied the default would silently move a reader who had just tapped
+   * "New thread" back onto a reply.
+   */
+  replyThreadId?: string | null;
+  /** Point the composer somewhere else. `null` means a new thread. */
+  onReplyTarget?: (threadId: string | null) => void;
 }
 
 export interface TaskComment {
@@ -1701,6 +1833,19 @@ export interface TaskThread {
   id: string;
   status: 'open' | 'resolved';
   comments: TaskComment[];
+  /**
+   * The passage of the task's description this thread hangs off, when it has
+   * one. Absent for a subject-anchored thread, which is about the task as a
+   * whole.
+   *
+   * This is what makes a task's threads distinguishable, and the surface used
+   * to throw it away: on the live board 34 of 37 task threads carry one (they
+   * are agents' `create_thread(docId: 'task:…', find: …)` calls) and only 3 do
+   * not. Rendering author-and-text alone turned every one of them into an
+   * indistinguishable pile, which is the reason a reply needed a box of its
+   * own to be routable at all.
+   */
+  anchorText?: string;
 }
 
 /**
@@ -1784,11 +1929,61 @@ export function discussionIsBusy(root: ParentNode): boolean {
   return composers.some((ta) => ta.value.trim() !== '' || ta === ta.ownerDocument.activeElement);
 }
 
+/**
+ * Which conversation the composer is pointed at, and whether that thread is
+ * still there to be pointed at.
+ *
+ * `undefined` from the caller means nobody has chosen, so take the default:
+ * the thread the review queue aimed at, else the last one on screen — which is
+ * the thread the composer sits directly under, and on the common single-thread
+ * task is the only reply anyone means. `null` is an explicit "new thread" and
+ * survives repaints. A chosen id that no longer resolves falls back to a new
+ * thread rather than to a box that posts nowhere.
+ */
+export function composerTarget(
+  threads: TaskThread[],
+  chosen: string | null | undefined,
+  focusThreadId?: string,
+): TaskThread | null {
+  const wanted =
+    chosen === undefined ? (focusThreadId ?? threads[threads.length - 1]?.id ?? null) : chosen;
+  if (wanted === null) return null;
+  return threads.find((t) => t.id === wanted) ?? null;
+}
+
+/** How a thread reads when it has to be named in one line: the passage of the
+ *  description it hangs off, else who opened it. */
+function threadLabel(t: TaskThread): string {
+  const anchor = t.anchorText?.trim();
+  if (anchor) return `“${clip(anchor.replace(/\s+/g, ' '), 44)}”`;
+  const who = t.comments[0]?.author;
+  return who ? `${who}’s thread` : 'this thread';
+}
+
+/**
+ * The task's Discussion.
+ *
+ * ONE composer, always at the bottom, whose target is named above it.
+ *
+ * It used to be N + 1 — a reply box inside every thread plus a new-thread box
+ * under them all — so the ordinary single-thread task ended in two stacked
+ * boxes whose only difference was placeholder text. Bryan read that as "why do
+ * I have two reply boxes… are we supporting threaded replies unnecessarily?",
+ * and the honest answer is that threading is doing real work here (see
+ * `TaskThread.anchorText`) but the surface was hiding the evidence of it and
+ * then asking the reader to disambiguate anyway.
+ *
+ * So the fix is not fewer threads, it is: show what each thread is ABOUT, and
+ * charge one decision instead of two. Anything proposing a second always-present
+ * composer is proposing that state again — see docs/product/decisions.md.
+ */
 function renderDiscussion(
   task: HubTask,
   discussion: TaskDiscussion,
   onComment: (task: HubTask, text: string, threadId?: string) => Promise<boolean>,
   focusThreadId?: string,
+  replyThreadId?: string | null,
+  onReplyTarget?: (threadId: string | null) => void,
 ): HTMLElement {
   const section = document.createElement('section');
   section.className = 'hub-discussion';
@@ -1810,6 +2005,8 @@ function renderDiscussion(
     section.append(p);
   }
 
+  const target = composerTarget(discussion.threads, replyThreadId, focusThreadId);
+
   for (const t of discussion.threads) {
     const el = document.createElement('div');
     // Resolved threads stay VISIBLE. A resolved thread is still part of the
@@ -1817,13 +2014,22 @@ function renderDiscussion(
     // existed in the store with no surface that could reach it.
     el.className = `hub-thread${t.status === 'resolved' ? ' resolved' : ''}${
       t.id === focusThreadId ? ' hub-thread-focus' : ''
-    }`;
+    }${t.id === target?.id ? ' hub-thread-target' : ''}`;
     el.dataset.threadId = t.id;
     if (t.status === 'resolved') {
       const badge = document.createElement('span');
       badge.className = 'hub-thread-status';
       badge.textContent = 'Resolved';
       el.append(badge);
+    }
+    // What this conversation is about. Without it two threads on one task are
+    // two piles of comments, and picking between them is guesswork.
+    const anchor = t.anchorText?.trim();
+    if (anchor) {
+      const quote = document.createElement('blockquote');
+      quote.className = 'hub-thread-anchor';
+      quote.textContent = clip(anchor.replace(/\s+/g, ' '), 140);
+      el.append(quote);
     }
     for (const c of t.comments) {
       const row = document.createElement('div');
@@ -1840,20 +2046,50 @@ function renderDiscussion(
       row.append(who, body);
       el.append(row);
     }
-    el.append(
-      commentForm('hub-reply-form', 'Reply…', 'Reply', (text) => onComment(task, text, t.id)),
-    );
+    // A button rather than a box. Pointing the one composer at this thread is
+    // the whole job, and it is also the only way back to a thread once the
+    // composer has been switched to a new one — including a RESOLVED thread,
+    // which stays replyable exactly as it was.
+    const reply = document.createElement('button');
+    reply.type = 'button';
+    reply.className = 'hub-btn hub-thread-reply';
+    reply.textContent = t.id === target?.id ? 'Replying below' : 'Reply';
+    reply.setAttribute('aria-pressed', t.id === target?.id ? 'true' : 'false');
+    reply.addEventListener('click', () => onReplyTarget?.(t.id));
+    el.append(reply);
     section.append(el);
   }
 
-  section.append(
-    commentForm(
-      'hub-comment-form',
-      discussion.threads.length > 0 ? 'Start another thread…' : 'Say something about this task…',
-      'Comment',
-      (text) => onComment(task, text),
-    ),
+  const form = commentForm(
+    'hub-comment-form',
+    target ? `Reply to ${threadLabel(target)}…` : 'Say something about this task…',
+    target ? 'Reply' : 'Comment',
+    (text) => onComment(task, text, target?.id),
   );
+  // The target row rides INSIDE the form, above the box, so what the button
+  // will do is readable without moving your eyes off it. Omitted when there is
+  // nothing to disambiguate — a task with no threads has one possible action.
+  if (discussion.threads.length > 0) {
+    const bar = document.createElement('div');
+    bar.className = 'hub-composer-target';
+    const label = document.createElement('span');
+    label.className = 'hub-composer-target-label';
+    label.textContent = target ? `Replying to ${threadLabel(target)}` : 'Starting a new thread';
+    bar.append(label);
+    // One-directional: this switches AWAY from a thread. The way back is the
+    // Reply button on the thread itself, which names which one — a generic
+    // "reply instead" here could not.
+    if (target) {
+      const fresh = document.createElement('button');
+      fresh.type = 'button';
+      fresh.className = 'hub-btn hub-composer-switch';
+      fresh.textContent = 'New thread';
+      fresh.addEventListener('click', () => onReplyTarget?.(null));
+      bar.append(fresh);
+    }
+    form.prepend(bar);
+  }
+  section.append(form);
   return section;
 }
 
@@ -2098,7 +2334,16 @@ export function renderTaskDetail(
   panel.append(body);
 
   if (discussion && handlers.onComment) {
-    panel.append(renderDiscussion(task, discussion, handlers.onComment, handlers.focusThreadId));
+    panel.append(
+      renderDiscussion(
+        task,
+        discussion,
+        handlers.onComment,
+        handlers.focusThreadId,
+        handlers.replyThreadId,
+        handlers.onReplyTarget,
+      ),
+    );
   }
 
   if (task.transitions.length > 0) {
