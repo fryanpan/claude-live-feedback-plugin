@@ -2397,6 +2397,15 @@ body.is-reading-width #editor .ProseMirror {
   .save-state {
     display: none;
   }
+  /* …except the reconnecting one. design-mobile.md hides the save-state
+     badge on the phone because "All changes saved" is nice-to-have — but
+     "we lost the server for a moment" is the opposite of nice-to-have, and
+     a deploy usually catches Bryan on his phone. The crumb next to it
+     already has `min-width: 0` + ellipsis, so the path truncates to make
+     room rather than the chip being pushed off. */
+  .save-state--offline {
+    display: inline-block;
+  }
 }
 
 #editor .ProseMirror code {
@@ -3390,6 +3399,30 @@ body.composer-open #editor .ProseMirror ::selection {
   opacity: 0;
   transform: translateX(-50%) translateY(12px);
   pointer-events: none;
+}
+
+/* ================= CONNECTION STATE =================
+   The board's "we're reconnecting" strip. Next to the stale-client notice
+   because it is its sibling: both are things the page says about the server
+   rather than about the document.
+
+   Deliberately IN FLOW under the topbar rather than docked/fixed like the
+   toast — at 430px there is no spare room to overlay, and an outage lasts as
+   long as it lasts, so anything covering a control would cover it for the
+   whole restart. Pushing the page down 30px is the cheap half of the trade. */
+
+.conn-banner {
+  padding: 7px 14px;
+  border-bottom: 1px solid rgba(220, 53, 69, 0.28);
+  background: rgba(220, 53, 69, 0.1);
+  color: #7a0f14;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-align: center;
+  /* Wraps to a second line on a narrow phone instead of scrolling the page
+     sideways — the copy is a sentence, not a label. */
+  overflow-wrap: anywhere;
 }
 
 /* ================= STALE CLIENT NOTICE =================
