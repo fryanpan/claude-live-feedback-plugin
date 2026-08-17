@@ -55,7 +55,24 @@ export function workspaceRoomId(workspaceId: string): string {
   return `ws:${workspaceId}`;
 }
 
-/** The docId of a task's live body room. */
+/**
+ * The docId of a task's live body room.
+ *
+ * DECIDED, so nobody has to re-derive it: `task:<taskId>` is a RESERVED
+ * PATTERN, not an alias and not a caller-chosen doc id. The `task:` and `ws:`
+ * prefixes belong to the server, and everything after the prefix is an
+ * already-opaque generated id (`t-…`, `w-…`) — so the address inherits its
+ * opacity from the task rather than needing an identity of its own. There is
+ * nothing here for a readable-alias layer to protect: no person bookmarks a
+ * body room, it is derived on demand from a task the reader already has, and
+ * it changes only when the task itself ceases to exist.
+ *
+ * What that settles, deliberately: a body room never gets a second, prettier
+ * name, so the alias layer that generated DOC ids need does not extend here.
+ * `isHubOwnedRoom` (rooms.ts) is already the prefix authority; making the
+ * prefixes unwritable by an outside caller belongs with the doc-id half of
+ * this work, and is noted there rather than claimed here.
+ */
 export function taskBodyDocId(taskId: string): string {
   return `task:${taskId}`;
 }

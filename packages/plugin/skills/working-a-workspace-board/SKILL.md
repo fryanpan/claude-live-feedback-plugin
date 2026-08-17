@@ -47,10 +47,10 @@ not exactly the goals already there, so it cannot lose one to a list you read
 a while ago. To change a band's TITLE, use `rename_goal(workspaceId, goal,
 title)` — it changes the title in place and cannot move a task. Reach for
 `set_goal_list` only to add or remove a goal; it is a full replace keyed by
-id, so reordering with it means restating every title, and renaming through
-it by giving a band a new id is a removal plus an addition that strands
-everything the band held. A removal that would strand work is now refused
-until you name the id in `drop`. What you don't have is latitude to ignore
+id, so reordering with it means restating every title. A new band goes in
+with no `id` — goal ids are generated and permanent, so you cannot choose one
+and an id the board does not hold is refused. A removal that would strand
+work is refused until you name the id in `drop`. What you don't have is latitude to ignore
 the ordering silently.
 
 ## The unit of pickup is a batch, not a task
