@@ -679,7 +679,9 @@ async function main(): Promise<void> {
       showToast('Status change failed');
     } else {
       const unproven = res.data?.unproven;
-      if (unproven) showToast('Marked without evidence — attach a commit or thread when you can');
+      // Not a dead end any more: the mark clears when evidence is attached
+      // afterwards, so the toast says the move is still open to proof.
+      if (unproven) showToast('Marked without evidence — a commit or thread can still be attached');
     }
   }
 
@@ -1004,6 +1006,7 @@ async function main(): Promise<void> {
   for (const name of [
     'task.created',
     'task.transitioned',
+    'task.evidence_amended',
     'task.regrouped',
     'decision.answered',
     'decision.info_requested',

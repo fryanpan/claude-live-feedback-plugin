@@ -251,6 +251,43 @@ describe('describeEvent', () => {
     expect(s).not.toContain('task.body_edited');
   });
 
+  it('says what an evidence amendment corrected, and what it replaced', () => {
+    // Same shape as the row above: the fallback would print
+    // `task.evidence_amended` and read as a log line in a view built for
+    // people. Two facts have to survive — that proof arrived late, and
+    // whether it REPLACED a claim that was wrong.
+    const filled = describeEvent(
+      {
+        event: 'task.evidence_amended',
+        ts: NOW,
+        taskId: 't-1',
+        evidence: { commit: '621f371abc' },
+        actor: { id: 'agent-x', name: 'Search Revamp', kind: 'agent' },
+      },
+      titleOf,
+    );
+    expect(filled).toContain('Search Revamp');
+    expect(filled).toContain('Fix ranking');
+    expect(filled).toContain('621f371');
+    expect(filled).not.toContain('task.evidence_amended');
+
+    const corrected = describeEvent(
+      {
+        event: 'task.evidence_amended',
+        ts: NOW,
+        taskId: 't-1',
+        evidence: { commit: '621f371abc' },
+        supersedes: { commit: 'b2ba21edef' },
+        actor: { id: 'agent-x', name: 'Search Revamp', kind: 'agent' },
+      },
+      titleOf,
+    );
+    // The wrong-sha case has to read differently from filling a gap — the
+    // superseded sha is the one someone may already have tried to follow.
+    expect(corrected).toContain('b2ba21e');
+    expect(corrected).not.toBe(filled);
+  });
+
   it('falls back to the event name for unknown rows', () => {
     expect(describeEvent({ event: 'voice.request', ts: NOW }, titleOf)).toContain('voice.request');
   });
