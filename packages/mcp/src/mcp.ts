@@ -1010,7 +1010,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                 assigneeKind: {
                   type: 'string',
                   enum: ['person', 'agent'],
-                  description: 'Declares whether `assignee` is a person or an agent — \'person\' | \'agent\'. Say it whenever you hand a row to a NAME that is not your own: the board cannot tell "Bryan" from an agent called "Bryan" by looking, and it refuses to guess, so an undeclared named owner shows as "not recorded" and stays out of every surface built around what a person owes. You never need it for yourself (your own writes are already classified) or for \'human\' (already a person). An agent that has attached to the workspace is known to be an agent regardless of what anyone declares.',
+                  description:
+                    'Declares whether `assignee` is a person or an agent — \'person\' | \'agent\'. Say it whenever you hand a row to a NAME that is not your own: the board cannot tell "Bryan" from an agent called "Bryan" by looking, and it refuses to guess, so an undeclared named owner shows as "not recorded" and stays out of every surface built around what a person owes. You never need it for yourself (your own writes are already classified) or for \'human\' (already a person). An agent that has attached to the workspace is known to be an agent regardless of what anyone declares.',
                 },
                 needs: {
                   type: 'string',
@@ -1086,7 +1087,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           assigneeKind: {
             type: 'string',
             enum: ['person', 'agent'],
-            description: 'Declares whether `assignee` is a person or an agent — \'person\' | \'agent\'. Say it whenever you hand work to a NAME that is not your own: the board cannot tell "Bryan" from an agent called "Bryan" by looking, and it refuses to guess, so an undeclared named owner shows as "not recorded" and stays out of every surface built around what a person owes. You never need it for yourself (your own writes are already classified) or for \'human\' (already a person). An agent that has attached to the workspace is known to be an agent regardless of what anyone declares.',
+            description:
+              'Declares whether `assignee` is a person or an agent — \'person\' | \'agent\'. Say it whenever you hand work to a NAME that is not your own: the board cannot tell "Bryan" from an agent called "Bryan" by looking, and it refuses to guess, so an undeclared named owner shows as "not recorded" and stays out of every surface built around what a person owes. You never need it for yourself (your own writes are already classified) or for \'human\' (already a person). An agent that has attached to the workspace is known to be an agent regardless of what anyone declares.',
           },
           needs: { type: 'string', enum: ['action', 'decision'] },
           goal: { type: 'string', description: 'Goal/subgoal id. OMIT to route through triage.' },
