@@ -13,6 +13,7 @@ import {
   goalLabel,
   pluginDriftNotice,
   reviewQueue,
+  unplacedNotice,
 } from '../src/hub/hub-model.ts';
 import {
   type BoardHandlers,
@@ -27,6 +28,7 @@ import {
   renderQuickAdd,
   renderReviewStrip,
   renderTaskDetail,
+  renderUnplacedStrip,
 } from '../src/hub/hub-render.ts';
 
 /** All fixtures are synthetic — invented names, jordan@partner.example register. */
@@ -2007,5 +2009,74 @@ describe('hub-app voice wiring', () => {
     const body = mountVoice.slice(0, mountVoice.indexOf('\n    });'));
     expect(body).toContain('deliver(transcript)');
     expect(body).not.toContain('captureTask');
+  });
+});
+
+describe('renderUnplacedStrip', () => {
+  const HOUR = 3_600_000;
+  const DAY = 24 * HOUR;
+
+  function host(): HTMLElement {
+    const el = document.createElement('div');
+    el.className = 'hub-unplaced hidden';
+    document.body.append(el);
+    return el;
+  }
+
+  it('renders nothing and stays hidden on an empty bucket', () => {
+    const el = host();
+    // Positive control: the same container DOES fill when there is something
+    // to say, so an empty one is the renderer's decision, not a dead call.
+    renderUnplacedStrip(el, unplacedNotice([task({ unplacedSince: NOW - DAY })], NOW), {
+      onOpenOldest: () => {},
+    });
+    expect(el.textContent).toContain('1 task has no goal yet');
+    expect(el.classList.contains('hidden')).toBe(false);
+
+    renderUnplacedStrip(el, unplacedNotice([task({ goal: 'g-pr' })], NOW), {
+      onOpenOldest: () => {},
+    });
+    expect(el.childElementCount).toBe(0);
+    expect(el.textContent).toBe('');
+    expect(el.classList.contains('hidden')).toBe(true);
+  });
+
+  it('says how many and how old, and opens the longest-waiting task', () => {
+    const el = host();
+    const old = task({ id: 't-waited-longest', unplacedSince: NOW - 6 * DAY });
+    const opened: string[] = [];
+    renderUnplacedStrip(el, unplacedNotice([task({ unplacedSince: NOW - HOUR }), old], NOW), {
+      onOpenOldest: (id) => opened.push(id),
+    });
+    expect(el.textContent).toContain('2 tasks have no goal yet');
+    expect(el.textContent).toContain('oldest waiting 6d');
+
+    const btn = el.querySelector<HTMLButtonElement>('.hub-unplaced-open');
+    expect(btn).not.toBeNull();
+    btn?.click();
+    expect(opened).toEqual(['t-waited-longest']);
+  });
+
+  it('informs rather than scolds', () => {
+    // A strip that reads as an accusation gets ignored, and an ignored strip
+    // is the same as the silence it was built to break.
+    const el = host();
+    renderUnplacedStrip(el, unplacedNotice([task({ unplacedSince: NOW - 9 * DAY })], NOW), {
+      onOpenOldest: () => {},
+    });
+    expect(el.textContent).not.toMatch(/\b(overdue|neglect\w*|ignored|stale|forgotten|should)\b/i);
+    expect(el.textContent).not.toMatch(/[!⚠]/);
+  });
+
+  it('is drawn quieter than the decisions alarm above it', () => {
+    // Same reason the coverage line is quieter than the drift alarm: if the
+    // standing reading looks like the alarm, people learn to skim the alarm.
+    const css = readFileSync(resolve(import.meta.dirname, '../src/styles.css'), 'utf8');
+    const strip = css.slice(css.indexOf('.hub-unplaced {'));
+    const block = strip.slice(0, strip.indexOf('.hub-walkthrough {'));
+    expect(block).toContain('--fg-muted');
+    expect(block).not.toContain('--yellow');
+    // The tap target still has to be reachable on a phone.
+    expect(block).toMatch(/min-height:\s*36px/);
   });
 });
