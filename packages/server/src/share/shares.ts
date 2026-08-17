@@ -3,7 +3,6 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CfApi } from './cf-api.ts';
 import {
-  type CreateShareDocReq,
   type CreateShareLinkReq,
   type CreateShareWorkspaceReq,
   DEFAULT_TTL_SECONDS,
@@ -50,11 +49,6 @@ export class Shares {
     this.load();
   }
 
-  /** Share ONE doc: the visitor reaches that doc and nothing else. */
-  async createShareDoc(req: CreateShareDocReq): Promise<Share> {
-    return this.create({ ...req, surface: 'doc', docId: req.docId });
-  }
-
   /**
    * Share a whole workspace (folder bind / diff review). The visitor reaches
    * every member doc plus the navigation endpoints, so the set browses with
@@ -75,9 +69,13 @@ export class Shares {
   }
 
   /**
-   * Share by unguessable link. No Cloudflare Access app, no email policy —
-   * possession of the slug is the credential until `expiresAt`. Pass either
-   * `docId` (one doc) or `workspaceId` (+ `entryDocId`, the whole set).
+   * Share a workspace by unguessable link. No Cloudflare Access app, no email
+   * policy — possession of the slug is the credential until `expiresAt`.
+   *
+   * There is no single-doc form: a workspace is the unit of sharing. The old
+   * `docId` argument minted a share scoped to one doc, which is exactly the
+   * grant that went away, so an older caller still sending it is refused at
+   * the route rather than quietly re-scoped to something it did not ask for.
    */
   createShareLink(req: CreateShareLinkReq): Share {
     if (!this.config.publicHostname) {
@@ -85,14 +83,12 @@ export class Shares {
         'link shares need config.publicHostname (the single hostname the tunnel serves)',
       );
     }
-    const docId = req.workspaceId ? (req.entryDocId ?? '') : (req.docId ?? '');
+    if (!req.workspaceId) throw new Error('workspaceId is required');
+    const docId = req.entryDocId ?? '';
     // A hub workspace share deliberately has NO entry doc — redemption
     // lands on the hub page, and the guard scopes by workspaceId alone.
-    if (!docId && !(req.workspaceId && req.hub)) {
-      throw new Error('docId (or entryDocId for a workspace) is required');
-    }
-    if (req.docId && req.workspaceId) {
-      throw new Error('pass docId OR workspaceId, not both');
+    if (!docId && !req.hub) {
+      throw new Error('entryDocId is required (or pass hub for a hub workspace share)');
     }
 
     const slug = randomBytes(SLUG_BYTES).toString('hex');
@@ -100,10 +96,10 @@ export class Shares {
     const ttl = assertTtl(req.ttlSeconds ?? this.config.defaultTtlSeconds ?? DEFAULT_TTL_SECONDS);
     const share: Share = {
       shareId: randomHex(8),
-      surface: req.workspaceId ? 'workspace' : 'doc',
+      surface: 'workspace',
       mode: 'link',
       docId,
-      ...(req.workspaceId ? { workspaceId: req.workspaceId } : {}),
+      workspaceId: req.workspaceId,
       slug,
       hostname,
       url: `https://${hostname}/s/${slug}`,
@@ -150,7 +146,7 @@ export class Shares {
   private async create(req: {
     surface: ShareSurface;
     docId: string;
-    workspaceId?: string;
+    workspaceId: string;
     allowDomains: string[];
     ttlSeconds?: number;
     name?: string;
@@ -165,7 +161,7 @@ export class Shares {
     // A hub workspace share (empty docId) opens the hub page directly.
     const url = req.docId
       ? `https://${hostname}/review/${encodeURIComponent(req.docId)}`
-      : `https://${hostname}/workspaces/${encodeURIComponent(req.workspaceId ?? '')}`;
+      : `https://${hostname}/workspaces/${encodeURIComponent(req.workspaceId)}`;
     const ttl = req.ttlSeconds ?? this.config.defaultTtlSeconds ?? DEFAULT_TTL_SECONDS;
     const expiresAt = Date.now() + ttl * 1000;
 
@@ -188,7 +184,7 @@ export class Shares {
       shareId,
       surface: req.surface,
       docId: req.docId,
-      ...(req.workspaceId ? { workspaceId: req.workspaceId } : {}),
+      workspaceId: req.workspaceId,
       hostname,
       url,
       audience: app.aud,
@@ -258,12 +254,34 @@ export class Shares {
     return this.findByHostname(host)?.audience ?? null;
   };
 
+  /**
+   * Read the registry, dropping any record that predates workspace-only
+   * sharing.
+   *
+   * A workspace is the unit of sharing, and nothing can mint a doc-scoped
+   * share any more — but a record already on disk would keep being honoured
+   * by every lookup below, because the gate reads the registry rather than
+   * the code that wrote it. Removing the mint path and leaving the grants
+   * standing would retire the feature everywhere except where it is actually
+   * exercised. A dropped record is a revoked share, which is the intended
+   * end state; it is logged rather than silently discarded so an operator can
+   * see it happen and re-mint against a workspace.
+   */
   private load(): void {
     const path = join(this.dataDir, REGISTRY_FILENAME);
     if (!existsSync(path)) return;
     try {
       const parsed = JSON.parse(readFileSync(path, 'utf8'));
-      if (Array.isArray(parsed)) this.shares = parsed as Share[];
+      if (!Array.isArray(parsed)) return;
+      const all = parsed as Share[];
+      this.shares = all.filter((s) => typeof s?.workspaceId === 'string' && s.workspaceId !== '');
+      const dropped = all.length - this.shares.length;
+      if (dropped > 0) {
+        console.warn(
+          `[feedback] dropped ${dropped} legacy doc-scoped share(s) from ${REGISTRY_FILENAME} — a workspace is the unit of sharing; re-share the workspace the doc is filed on`,
+        );
+        this.save();
+      }
     } catch {
       // Corrupt registry — start clean. Better than crashing the server.
       this.shares = [];
