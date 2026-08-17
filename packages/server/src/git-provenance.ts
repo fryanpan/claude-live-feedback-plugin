@@ -186,7 +186,6 @@ export function gitConflictHint(filePath: string, overwritten: string): string {
     ' rebase) — not an editor save — is what changed this file, and that git operation is now' +
     ' partly undone: this doc has been written back over it, so the working tree no longer' +
     ' matches what git left and `git status` will show the file modified. Let the doc go idle' +
-    ' (~1s after its last edit) before re-running the git command, or reparse_from_disk to let' +
-    ' the git version win.'
+    ' (~1s after its last edit) and then re-run the git command.'
   );
 }

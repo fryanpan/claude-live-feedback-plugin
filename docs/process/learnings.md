@@ -325,6 +325,21 @@ Technical discoveries that should persist across sessions for this project.
   a repo or when the directory is gone. It is **advisory only and never
   changes which side wins**, so a false positive can at worst name git in a
   message; it cannot lose anyone's work.
+- **A recovery instruction is a claim, and this one was false in the first
+  draft.** The hint ended "…or `reparse_from_disk` to let the git version win",
+  which cannot work for the reason the comment three lines above the call site
+  already gave: the reassert reaches disk first, so a reparse faithfully pulls
+  our own content back. Measured — reparse returns ok, the doc is unchanged,
+  **and the syncError is cleared**, so following the advice also throws away
+  the only pointer to the backup holding the git version. A recovery step that
+  returns ok and changes nothing is the worst available shape: it reads as
+  success to the one person who just lost something. The advice that works is
+  what the pre-existing half of the same message already said — restore the
+  backup, or let the doc go idle and re-run the git command. **Rule: an
+  instruction embedded in an error message needs the same test as a code
+  path.** Nothing else will ever execute it, so it fails silently by
+  definition. Found by an independent second measurement of the same premise,
+  not by this branch's own review — which is the argument for running one.
 - **The test that pins this measures behaviour, not the fix.** It asserts both
   directions of the reconcile for all four operations, so a later change that
   alters either one goes red — with an editor-save positive control in the

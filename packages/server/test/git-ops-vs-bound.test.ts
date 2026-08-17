@@ -163,6 +163,24 @@ describe('git operations against a bound doc', () => {
       expect(dirty()).toBe('');
     });
 
+    it('git stash takes the doc back to HEAD and leaves the tree clean', async () => {
+      writeFileSync(path, MAIN_DOC.replace('Intro paragraph on main.', 'Working-tree scratch.'));
+      await sleep(SETTLE_MS);
+      expect(liveText()).toContain('Working-tree scratch.');
+
+      const before = statSync(path).mtimeMs;
+      git(repo, 'stash');
+      expect(statSync(path).mtimeMs).not.toBe(before);
+
+      await sleep(SETTLE_MS);
+      // The stash stands: no reassert re-dirties the tree, because the doc had
+      // nothing un-flushed to defend.
+      expect(liveText()).toContain('Intro paragraph on main.');
+      expect(liveText()).not.toContain('Working-tree scratch.');
+      expect(dirty()).toBe('');
+      expect(rooms.getSyncError('d1')).toBeUndefined();
+    });
+
     it('git pull fast-forwards the doc along with the working tree', async () => {
       // A second clone acting as the remote's consumer.
       const upstream = join(root, 'upstream');
@@ -253,6 +271,73 @@ describe('git operations against a bound doc', () => {
       expect(err?.message).toContain('git command');
       expect(err?.message).toContain('identical to HEAD:doc.md');
       expect(err?.message).toContain('git status');
+    });
+
+    it('git pull is reasserted away too — and the discarded content came from a remote', async () => {
+      // The most consequential cell in the matrix: what the reassert overwrites
+      // here arrived from a REMOTE, so the operator's "my tree is at
+      // origin/main" is now false. In the checkout and stash cases what was
+      // discarded was merely local.
+      const upstream = join(root, 'upstream-unflushed');
+      git(root, 'clone', '-q', repo, upstream);
+      writeFileSync(path, MAIN_DOC.replace('Intro paragraph on main.', 'Arrived from the remote.'));
+      git(repo, 'commit', '-q', '-am', 'remote advance');
+
+      const clonePath = join(upstream, 'doc.md');
+      rooms.getOrCreate('d3', { type: 'markdown', sourceUrl: clonePath });
+      expect(rooms.attachFile('d3', clonePath).ok).toBe(true);
+      expect(
+        rooms.findAndReplace('d3', {
+          find: 'Intro paragraph on main.',
+          replace: 'Live edit, not yet flushed.',
+        }).ok,
+      ).toBe(true);
+
+      git(upstream, 'pull', '-q', '--ff-only', 'origin', 'main');
+      // git exits 0 and the tree is clean at this instant.
+      expect(readFileSync(clonePath, 'utf8')).toContain('Arrived from the remote.');
+      expect(git(upstream, 'status', '--porcelain').trim()).toBe('');
+
+      await sleep(SETTLE_MS);
+
+      // ...and the pulled content is gone from the working tree a second later.
+      expect(readFileSync(clonePath, 'utf8')).toContain('Live edit, not yet flushed.');
+      expect(readFileSync(clonePath, 'utf8')).not.toContain('Arrived from the remote.');
+      expect(git(upstream, 'status', '--porcelain').trim()).toContain('doc.md');
+      expect(rooms.getSyncError('d3')?.message).toContain('git command');
+    });
+
+    /**
+     * The hint tells the operator how to recover, so the advice it gives has to
+     * be advice that WORKS. The failure mode guarded here is a recovery step
+     * that returns ok and changes nothing — which reads as success to the one
+     * person who just lost something.
+     */
+    it('a bare reparse_from_disk does NOT bring the git version back; the backup does', async () => {
+      liveEdit('Intro paragraph on main.');
+      git(repo, 'checkout', '-q', 'other');
+      await sleep(SETTLE_MS);
+
+      // The reassert already landed, so disk holds the LIVE text, not git's.
+      expect(diskText()).toContain('Live edit, not yet flushed.');
+      const message = rooms.getSyncError('d1')?.message ?? '';
+
+      expect(rooms.reparseFromDisk('d1').ok).toBe(true); // ...and yet:
+      expect(liveText()).toContain('Live edit, not yet flushed.');
+      expect(liveText()).not.toContain('Intro paragraph on the other branch.');
+      // Worse than a no-op: the reparse clears the syncError, so following this
+      // as advice also throws away the only pointer to the backup below.
+      expect(rooms.getSyncError('d1')).toBeUndefined();
+
+      // That backup is what actually holds the git version, which is why the
+      // hint must send the operator there (or back to git) rather than to a
+      // bare reparse.
+      const backup = /\S*clobber-backups\S+/.exec(message)?.[0];
+      expect(backup).toBeDefined();
+      expect(readFileSync(backup as string, 'utf8')).toContain(
+        'Intro paragraph on the other branch.',
+      );
+      expect(message).not.toContain('reparse_from_disk to let');
     });
 
     it('an ordinary editor save conflicting the same way does NOT blame git', async () => {
