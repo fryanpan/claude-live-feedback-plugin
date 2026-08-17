@@ -335,11 +335,20 @@ silent. The only remaining silence is when there is no attachments read at
 all, where even the domain is unknown.
 
 **Consequence for anything that gates on this.** An empty `behind` list is
-not a fleet-wide clearance and must not be used as one. A tool removal, a
-required-version bump, or any other change that breaks an older bundle needs
-its precondition written against sessions actually checked — "no session
+not a fleet-wide clearance and must not be used as one. Any precondition that
+leans on it has to be written against sessions actually checked — "no session
 attached to this board is older than X, and that was N sessions" — plus a
 deliberate decision about the peers the board cannot see.
+
+Note what this does *not* argue for. Removing an MCP **tool** needs no
+delivery gate at all: each session launches its own MCP child from its own
+version-keyed cache, both halves of a tool live in that one bundle, and the
+restart that delivers a deletion is the same restart that delivers its
+replacement — so a session that has not restarted never sees the removal.
+What genuinely bites is **narrowing something old callers still send or still
+read on the shared server**, and that is exactly the case where the strip
+cannot tell you who those callers are, because the ones that never attached
+are the ones you would most want named.
 
 **The one widening that is available, and is not built.** The server does
 record agents that never attached: `activity.jsonl` and each workspace's
