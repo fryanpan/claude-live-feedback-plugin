@@ -370,6 +370,11 @@ of N unexplained regroupings.
 `get_workspace` also surfaces `pendingRetriage`, but **reading it there does not
 drain it** — only `attach_agent` does.
 
+The calls above are the write half. What the lead actually owes on a goal
+change — re-reading the goal, sweeping every open task, reordering without
+losing a band, and flagging what the edit made obsolete *without* closing
+somebody's work — is `live-feedback:handling-a-goal-change`.
+
 ## Adopting an existing tracker
 
 A hand-maintained markdown tracker (group headings + status tables) moves onto

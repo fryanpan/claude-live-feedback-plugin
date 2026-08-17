@@ -1,5 +1,7 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { triageRequestLine } from '../src/triage-line.ts';
+import { RETRIAGE_SKILL, triageRequestLine } from '../src/triage-line.ts';
 
 const RETRIAGE = {
   kind: 'goal-retriage',
@@ -57,5 +59,41 @@ describe('triageRequestLine', () => {
   it('says "?" rather than a wrong count when taskIds is missing', () => {
     const line = triageRequestLine({ kind: 'goal-retriage', batchId: 'b-2' }, 'agent-whoever');
     expect(line).toContain('re-triage ? open task(s)');
+  });
+
+  // Delivery without instructions is what this request kept producing: the
+  // addressee learned that N tasks needed re-placing and had to invent the
+  // rest of the contract. The skill name travels in the line itself because
+  // that is the only thing the recipient is guaranteed to read.
+  it('names the contract skill in the imperative', () => {
+    const line = triageRequestLine({ ...RETRIAGE, leadAgentId: 'agent-lead' }, 'agent-lead');
+    expect(line).toContain(RETRIAGE_SKILL);
+    expect(RETRIAGE_SKILL).toBe('live-feedback:handling-a-goal-change');
+  });
+
+  // Same reason the batchId rides along: a lead whose id moved reads the FYI,
+  // and if they conclude it IS theirs they need the contract too.
+  it('names the contract skill in the FYI as well', () => {
+    const line = triageRequestLine({ ...RETRIAGE, leadAgentId: 'agent-lead' }, 'agent-bystander');
+    expect(line).toContain(RETRIAGE_SKILL);
+  });
+
+  // The single-task placement is a different, much smaller ask — the goal did
+  // not change — so the goal-change contract must NOT be attached to it.
+  it('does not name it on a single-task placement', () => {
+    const line = triageRequestLine({ kind: 'task', taskId: 't-z' }, 'agent-whoever');
+    expect(line).not.toContain(RETRIAGE_SKILL);
+  });
+});
+
+describe('RETRIAGE_SKILL', () => {
+  // The name is a promise that a skill by that name SHIPS. A rename that
+  // moves the directory and leaves the constant pointing at nothing produces
+  // a message telling an agent to read something that does not exist.
+  it('resolves to a skill directory in the plugin', () => {
+    const dir = RETRIAGE_SKILL.split(':')[1] as string;
+    const path = join(import.meta.dirname, '..', '..', 'plugin', 'skills', dir, 'SKILL.md');
+    expect(existsSync(path)).toBe(true);
+    expect(readFileSync(path, 'utf8')).toContain(`name: ${dir}`);
   });
 });

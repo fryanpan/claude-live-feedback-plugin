@@ -7,7 +7,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { resolveAgentAuthor } from './author.ts';
 import { type ThreadCreateInput, threadCreateRequest } from './thread-create.ts';
-import { triageRequestLine } from './triage-line.ts';
+import { RETRIAGE_SKILL, triageRequestLine } from './triage-line.ts';
 
 /**
  * Thin MCP server that proxies tool calls to a running feedback server
@@ -77,7 +77,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.30';
+const PLUGIN_VERSION = '0.1.31';
 
 const server = new Server(
   {
@@ -2570,8 +2570,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           // you lead this board. Walk its taskIds with set_task_goal against
           // the NEW goal, passing its batchId on each so the moves read as
           // one edit. It is drained by this call — nothing will offer it
-          // again.
-          ...(res.pendingRetriage ? { pendingRetriage: res.pendingRetriage } : {}),
+          // again. `contract` names the same skill the live channel line
+          // does: an away lead only ever sees THIS path, so leaving it off
+          // here would tell half the fleet what to do and half of it only
+          // that something happened.
+          ...(res.pendingRetriage
+            ? { pendingRetriage: { ...res.pendingRetriage, contract: RETRIAGE_SKILL } }
+            : {}),
         });
       }
       case 'heartbeat': {
