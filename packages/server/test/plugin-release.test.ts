@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   agentsBehind,
+  checkableAttachments,
   compareSemver,
   moduleDir,
   readReleasedPluginVersion,
@@ -105,6 +106,51 @@ describe('agentsBehind', () => {
     // The manifest is unreadable — we do not know what current IS, so
     // reporting drift would be inventing it.
     expect(agentsBehind(null, [local('a', '0.1.12')])).toEqual([]);
+  });
+});
+
+describe('checkableAttachments — the denominator beside the list', () => {
+  const local = (agentId: string, pluginVersion?: string) => ({
+    agentId,
+    runtime: 'claude-code-local' as const,
+    ...(pluginVersion !== undefined ? { pluginVersion } : {}),
+  });
+
+  test('counts exactly the population agentsBehind filters', () => {
+    // The point of sharing the filter: "who was checked" and "who came back
+    // behind" must never answer over different populations, or the surface
+    // renders a fraction whose numerator and denominator disagree.
+    const attachments = [
+      { agentId: 'hook', runtime: 'webhook' as const },
+      { agentId: 'cloud', runtime: 'managed-agent' as const },
+      local('stale', '0.1.12'),
+      local('current', '0.1.26'),
+    ];
+    expect(checkableAttachments(attachments).map((a) => a.agentId)).toEqual(['stale', 'current']);
+    // The relationship, not the values: everyone behind was checkable.
+    const behind = agentsBehind('0.1.26', attachments);
+    const checkable = new Set(checkableAttachments(attachments).map((a) => a.agentId));
+    expect(behind.length).toBeGreaterThan(0);
+    for (const b of behind) expect(checkable.has(b.agentId)).toBe(true);
+    expect(behind.length).toBeLessThanOrEqual(checkableAttachments(attachments).length);
+  });
+
+  test('a board nobody has attached to checks nobody', () => {
+    // This is the reading that was rendering as all-clear: zero behind out of
+    // zero checked. The count is what separates it from a real clearance.
+    expect(checkableAttachments([])).toEqual([]);
+    expect(agentsBehind('0.1.26', [])).toEqual([]);
+  });
+
+  test('a board with only non-plugin runtimes checks nobody either', () => {
+    // Both lists are empty for entirely different reasons than "everyone is
+    // current", and only the denominator can tell them apart.
+    const attachments = [
+      { agentId: 'hook', runtime: 'webhook' as const },
+      { agentId: 'cloud', runtime: 'managed-agent' as const },
+    ];
+    expect(checkableAttachments(attachments)).toEqual([]);
+    expect(agentsBehind('0.1.26', attachments)).toEqual([]);
   });
 });
 

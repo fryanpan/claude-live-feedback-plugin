@@ -1088,48 +1088,121 @@ export interface PluginRelease {
    *  manifest could not be read. */
   version: string | null;
   behind: Array<{ agentId: string; pluginVersion?: string }>;
+  /** How many sessions `behind` was computed over — the DOMAIN of the check.
+   *  Optional because a client can outlive the server release that added it;
+   *  when it is missing the notice states the domain without a count rather
+   *  than guessing one. */
+  checked?: number;
 }
 
 export interface DriftNotice {
   headline: string;
   detail: string;
   fix: string;
+  /**
+   * `alert` — something is wrong and there is a fix to run.
+   * `coverage` — nothing is wrong *within what was checked*, and this says
+   * what that was. Rendered quietly: a line that is always there must not
+   * look like an alarm, or it trains people to stop reading the alarms.
+   */
+  kind?: 'alert' | 'coverage';
 }
 
 /**
- * "Some of your agents can't do what you just merged."
+ * What this reading can see. Said in the surface, every time, because the
+ * alternative was measured: the strip rendered NOTHING over one attachment
+ * while the wider fleet was several releases back, and nothing reads exactly
+ * like all-clear.
+ */
+const PLUGIN_DOMAIN =
+  'Only sessions that attach to this board are checked — a peer that never attached is absent here, not current.';
+
+/** Two steps, and the ORDER is load-bearing.
+ *
+ * `command` — because `claude` is a shell FUNCTION on this machine that
+ * injects flags ahead of the subcommand, so the bare form is parsed as a
+ * prompt and dies with a message that reads like a permission refusal. An
+ * agent already filed that as "deploying is not mine to run". Printing a
+ * remediation known to fail is worse than printing none; `command` is inert
+ * wherever no such wrapper exists.
+ *
+ * Restarting FIRST re-resolves the cache as it stands, which has moved a
+ * session BACKWARDS a version in exactly this situation.
+ */
+const PLUGIN_FIX =
+  'Run: command claude plugin update live-feedback@claude-live-feedback — then restart that session.';
+
+/** `(2 checked)`, or nothing at all when the server did not send a count. */
+function checkedClause(checked: number | undefined): string {
+  return checked === undefined ? '' : ` (${checked} checked)`;
+}
+
+/**
+ * "Some of your agents can't do what you just merged" — and, when none of
+ * them are, what "none of them" was counted over.
  *
  * A merge does not deliver: the plugin resolves from a version-keyed cache,
  * so somebody has to run the update and the session then has to restart. That
  * went unnoticed for eleven releases because the only way to find out was to
  * go and look. This is the looking, done by the board.
  *
- * Two things it deliberately will not do: invent a claim when the released
- * version is unknown, and print a blank where a session is too old to report
- * its version — "too old to name" is the true statement there, and it is the
- * state every peer is in the moment this ships.
+ * It used to return null whenever nobody was behind, which is the same defect
+ * one level up. The strip's domain is "sessions that called `attach_agent` on
+ * THIS board" and there is no server-wide session registry to widen it with —
+ * so silence means "nothing I can see is behind", and it was read as "no
+ * session is behind". Measured 2026-08-17: `behind: []` over a single
+ * attachment, while sessions elsewhere in the fleet sat releases back. Fixing
+ * that one session took the reading from naming one to naming nobody without
+ * touching the drift. So a clear result now SAYS it is clear-within-a-domain
+ * and how big that domain was; only the alarm is silent when there is nothing
+ * to raise.
+ *
+ * Three things it still deliberately will not do: invent a claim when the
+ * released version is unknown (it says it cannot check instead of saying
+ * nothing), print a blank where a session is too old to report its version
+ * ("too old to name" is the true statement there), and imply that an empty
+ * `behind` list clears anything outside the count beside it.
  */
 export function pluginDriftNotice(release: PluginRelease | null | undefined): DriftNotice | null {
-  const version = release?.version;
-  const behind = release?.behind ?? [];
-  if (!version || behind.length === 0) return null;
+  // No attachments read at all — not even the domain is known yet, so there
+  // is genuinely nothing to say. This is the ONLY silent branch.
+  if (!release) return null;
+  const { version, checked } = release;
+  const behind = release.behind ?? [];
+
+  if (!version) {
+    // The manifest was unreadable. Claiming drift would be inventing it —
+    // but so would saying nothing, which reads as "checked, all fine".
+    return {
+      kind: 'coverage',
+      headline: "Plugin versions can't be checked here",
+      detail: `This server could not read its deploy source's plugin manifest, so no session's bundle has been compared${checkedClause(checked)}.`,
+      fix: 'Nothing on this strip is a clearance until that manifest reads.',
+    };
+  }
+
+  if (behind.length === 0) {
+    return {
+      kind: 'coverage',
+      headline:
+        checked === 0
+          ? `Nothing has been checked against ${version} — no session has attached to this board`
+          : `No attached session is behind ${version}${checkedClause(checked)}`,
+      detail: PLUGIN_DOMAIN,
+      fix: 'Not a fleet-wide clearance: a session that has not attached here is unchecked, not current.',
+    };
+  }
+
   return {
+    kind: 'alert',
     headline: `${behind.length} ${behind.length === 1 ? 'agent is' : 'agents are'} running an older plugin than ${version}`,
-    detail: behind
+    // The domain rides the alarm too. "1 agent is behind" is also a statement
+    // about attached sessions only, and a count of 1-out-of-1 is a different
+    // thing to act on than 1-out-of-9.
+    detail: `${behind
       .map((b) => `${b.agentId} ${b.pluginVersion ?? '(too old to report)'}`.trim())
-      .join(', '),
-    // Two things this one sentence has to get right.
-    //
-    // `command` — because `claude` is a shell FUNCTION on this machine that
-    // injects flags ahead of the subcommand, so the bare form is parsed as a
-    // prompt and dies with a message that reads like a permission refusal.
-    // An agent already filed that as "deploying is not mine to run". Printing
-    // a remediation known to fail is worse than printing none; `command` is
-    // inert wherever no such wrapper exists.
-    //
-    // The ORDER — restarting first re-resolves the cache as it stands, which
-    // has moved a session BACKWARDS a version in exactly this situation.
-    fix: 'Run: command claude plugin update live-feedback@claude-live-feedback — then restart that session.',
+      .join(', ')}${checked === undefined ? '' : ` — of ${checked} checked`}. ${PLUGIN_DOMAIN}`,
+    fix: PLUGIN_FIX,
   };
 }
 

@@ -347,9 +347,35 @@ Technical discoveries that should persist across sessions for this project.
 - Can't split list items. `replace='item-a\n\nitem-b'` produces a paragraph
   break inside one list item, not a sibling item. Backlog: a dedicated
   `insert_list_item_after_text` or `insert_blocks_after_thread` extension.
-- Can't add new inline marks. Replacement strings with `**bold**` /
-  `*italic*` / `[link](url)` syntax land as literal characters, not marks.
-  Backlog: a dedicated `apply_mark` tool.
+- Can't add new inline marks by default. Replacement strings with `**bold**`
+  / `*italic*` / `[link](url)` syntax land as literal characters unless you
+  pass `parseInlineMarks: true`, which interprets them as marks.
+- **It used to DELETE marks that were already there, silently — that half is
+  fixed, and it was data loss rather than a missing feature.** Until the
+  covering-marks fix, the replacement was re-inserted with NO attributes, and
+  Yjs' unattributed `insert` inherits the marks of the character to the LEFT
+  of the insertion point. So a match starting strictly inside a bold run kept
+  its bold (which is why most replaces looked fine), while a match starting at
+  the run's FIRST character inherited the unmarked text in front of it — and
+  when the match covered the whole run (a bold label, a link, an inline-code
+  span) the mark disappeared from the document with `ok: true` and nothing
+  else to see. Found in the field on two list labels whose siblings kept their
+  bold, caught only because someone counted `**` markers before and after.
+  **The one-sentence trigger: the replacement inherited from the left instead
+  of from the text it replaced, so any match beginning at a marked run's first
+  character lost that run's marks.**
+- Both edit paths now read the marks off the text being REPLACED
+  (`coveringInlineMarks`), which is what the suggestion path always did — so
+  before the fix, `suggest: true` + accept PRESERVED the bold that the plain
+  call destroyed. When two paths are supposed to produce the same state, test
+  them against each other; the disagreement is the bug report.
+- **Marks covering only PART of a match still cannot be carried** — one
+  replacement string has no correspondence to the runs it replaces — so those
+  come back as `marksDropped: ['bold']` plus a `warning` on the 200 response.
+  That is the actual fix: the loss that remains is the loss that gets
+  reported. Widening the match to include an unmarked character is also how
+  you deliberately REMOVE a mark.
+- Backlog: a dedicated `apply_mark` tool.
 
 ## A "we're working on it" UI state must be grounded in the work, not inferred
 
@@ -1190,6 +1216,43 @@ Technical discoveries that should persist across sessions for this project.
   literal from a comment proves nothing about the bundle"): comments are
   invisible to the artifact, so the bundle can look clean while the source
   still documents the thing as present.
+
+## An empty list is a clearance only if you also render the denominator
+
+- **The plugin-drift strip rendered NOTHING when nobody was behind, and
+  nothing reads exactly like all-clear.** Its domain is "sessions that called
+  `attach_agent` on this board", which for most of this board's life has been
+  one member — itself. Measured 2026-08-17: `behind: []` over one attachment,
+  while a fleet enumerated *outside* this server (the positive control: a
+  second source, not a second look at the same data) had sessions releases
+  back. **The only session the strip had ever named as behind was the session
+  that then fixed itself** — which moved the reading from "names one" straight
+  to "names nobody" with zero change in the actual drift. Worse than the
+  filed prediction, which was about a board with *zero* attachments; one does
+  it too, and one is the normal state.
+- **A surface whose domain is "whoever opted in" measures PARTICIPATION, not
+  the thing it is named after** — and the members least likely to have opted
+  in are exactly the ones the surface exists to catch, because opting in is
+  itself something the newer version does more of. Whenever a check runs over
+  a self-selected population, ship the denominator beside the result and let
+  the reader see how small it is.
+- **Reproduce the constraint before working around it.** The honest answer
+  here was "the fleet is unknowable from this server": a plugin version
+  arrives through exactly one door (`attach_agent`'s `pluginVersion`), the MCP
+  child makes no HTTP call at startup and never opens a websocket, and Yjs
+  awareness carries browsers rather than agents. So the fix is to state the
+  domain, NOT to invent a registry that makes a broader sentence true. Note
+  the near-miss: the server *does* record agents that never attached
+  (`activity.jsonl`, per-workspace `events.jsonl`) — but those carry no
+  version, so they can name an unchecked session and can never call one
+  behind. "Unknowable" had to be established per-fact, not per-surface.
+- **The always-on line needs its own visual weight.** A coverage notice
+  renders permanently, so it gets a quiet class; styling it like the alarm
+  would train everyone to skim past the alarm. Same reasoning as an alarm
+  needing a stated silence.
+- Mutation-tested three ways, each turning a *named* test red: restoring the
+  `return null` on an empty `behind`, dropping `checked` from the route
+  payload, and dropping the quiet class in the renderer.
 
 ## gh pr merge --delete-branch switches your working copy to main
 

@@ -29,7 +29,7 @@ import {
   shareScopeAllows,
 } from './middleware/host-guard.ts';
 import type { PluginRefresher } from './plugin-refresh.ts';
-import { agentsBehind, readReleasedPluginVersion } from './plugin-release.ts';
+import { agentsBehind, checkableAttachments, readReleasedPluginVersion } from './plugin-release.ts';
 import { localHostnames, publicBaseUrl } from './public-host.ts';
 import { reviewThreadItems } from './review-queue.ts';
 import { type FeedbackWs, Rooms, type WorkspaceDirNode, type WorkspaceFileNode } from './rooms.ts';
@@ -2783,6 +2783,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                 agentId: a.agentId,
                 ...(a.pluginVersion !== undefined ? { pluginVersion: a.pluginVersion } : {}),
               })),
+              // How many sessions the `behind` list was computed OVER. It
+              // ships beside the list because the list alone cannot be read:
+              // empty means "none of the ones checked", and for this board
+              // that has normally been one session — its own. Without the
+              // denominator the surface renders participation as clearance.
+              checked: checkableAttachments(attachments).length,
             },
           });
         }
