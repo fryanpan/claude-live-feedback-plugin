@@ -16,6 +16,22 @@
  * GitHub". A checkout nobody pulled reports its own staleness as current;
  * that is the same limitation the client release has, and it is honest about
  * being about the deploy source rather than about the remote.
+ *
+ * The other limit is the DOMAIN, and it is the sharper one. A session becomes
+ * known to this server by calling `attach_agent` on a workspace, and that is
+ * the ONLY way — there is no server-wide session registry to compare against.
+ * So this module can only ever answer "is any session that attached to this
+ * board behind", never "is the fleet behind". Measured in the field on
+ * 2026-08-17: the board read `behind: []` over one attachment while a
+ * separately-enumerated fleet had sessions three and twenty-eight releases
+ * back. Fixing that one session moved the reading from "names one" to "names
+ * nobody" with no change in the fleet's drift.
+ *
+ * The answer is NOT to invent a fleet registry here. It is that every reading
+ * carries its domain and its count, so an empty `behind` list can be read as
+ * what it is — "nothing attached here is behind" — instead of as a clearance.
+ * `checkableAttachments` exists to make that count come from the same
+ * population the check ran over.
  */
 
 import { readFileSync } from 'node:fs';
@@ -112,11 +128,28 @@ export function agentsBehind<T extends VersionedAttachment>(
   attachments: readonly T[],
 ): T[] {
   if (!released) return [];
-  return attachments.filter(
-    (a) =>
-      // A webhook or a managed agent has no plugin cache to update, so it can
-      // never be behind — and must not inflate a count of fixable things.
-      a.runtime === 'claude-code-local' &&
-      (a.pluginVersion === undefined || compareSemver(a.pluginVersion, released) < 0),
+  return checkableAttachments(attachments).filter(
+    (a) => a.pluginVersion === undefined || compareSemver(a.pluginVersion, released) < 0,
   );
+}
+
+/**
+ * The attachments this check can say anything about at all — i.e. its DOMAIN.
+ *
+ * Exported, and used by `agentsBehind` rather than duplicated inside it, so
+ * "who was checked" and "who came back behind" can never answer over
+ * different populations. That pairing is the whole point: an empty `behind`
+ * list is only a clearance to the extent that this number is large, and for
+ * most of this project's life it has been 1 — the single session that
+ * attaches to its own board. A drift surface whose domain is "sessions that
+ * opted in by attaching" measures PARTICIPATION, and the sessions least
+ * likely to have attached are exactly the stale ones.
+ *
+ * A webhook or a managed agent has no plugin cache to update, so it can never
+ * be behind — and must not inflate either count.
+ */
+export function checkableAttachments<T extends VersionedAttachment>(
+  attachments: readonly T[],
+): T[] {
+  return attachments.filter((a) => a.runtime === 'claude-code-local');
 }
