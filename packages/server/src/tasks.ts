@@ -368,7 +368,22 @@ export interface Task {
   links: Ref[];
   /** The thread/doc this was promoted from. */
   origin?: Ref;
-  /** The human's verbatim words at promotion or creation. */
+  /**
+   * The words this task CAME FROM, verbatim, and never rewritten.
+   *
+   * Originally "the human's verbatim words at promotion or creation", which
+   * was the whole of it while a description could only ever be typed by the
+   * person or agent who filed it. Triage now RESHAPES a row — a raw capture's
+   * clipped title and unedited paragraph become a user story — so the words a
+   * task started with are words a later pass can replace, and something has
+   * to hold them. That something is this field: `noteBodyEdited` fills it from
+   * the pre-rewrite row on a first rewrite, so a shaped task can always be
+   * read back to what was actually said.
+   *
+   * Write-once by construction. A dictated transcript, a promotion snippet and
+   * a preserved original all answer the same question, and the earliest answer
+   * is the closest to the source — so a filled quote is never overwritten.
+   */
   quote?: string;
   /** Decisions keep the verbatim answer. `optionId` records WHICH candidate
    *  the words came from when one was tapped — the text stays the answer. */
@@ -384,6 +399,31 @@ export interface Task {
    * outlive it) and by the agent's eventual placement.
    */
   triagePendingTs?: number;
+  /**
+   * When this task's placement stopped being named by anybody — the durable
+   * form of "it's in the bucket" (Bryan, 2026-08-17: "a bucket of tasks with
+   * unknown goal that's the lowest priority… tasks from there should get
+   * attached to a goal later if a goal becomes apparent").
+   *
+   * Two writers, one meaning:
+   *  - a create that named no `goal` (an explicit `goal: 'chores'` is a
+   *    PLACEMENT and stamps nothing — the same distinction `placement.placed`
+   *    draws, and deliberately not `goal !== chores`);
+   *  - a goal-list edit that removed the band an open task was placed under,
+   *    which un-names a placement somebody DID make.
+   * Cleared by `setTaskGoal`, the one write half of placement.
+   *
+   * SURVIVES hydrate, unlike `triagePendingTs` directly above — and the
+   * contrast is the point. That marker promises an in-flight request a restart
+   * killed; this records a review still OWED, which a restart does not answer.
+   * Before this field the distinction lived only in the create RESPONSE, so
+   * after a restart an unplaced task and a deliberate chore were identical.
+   *
+   * A timestamp rather than a boolean because "how long has this waited" is
+   * the question a reading has to answer, and a flag cannot tell minutes from
+   * a week.
+   */
+  unplacedSince?: number;
   /** Stamped by triage at placement time; keyed to the ACTION's damage. */
   riskTier?: 'green' | 'yellow' | 'red';
   /** Append-only audit trail. */
@@ -893,6 +933,12 @@ export interface TaskBodyEditedEvent {
   workspaceId: string;
   taskId: string;
   actor: TaskActor;
+  /** Present ONLY when the rewrite also retitled the row — the shaping case.
+   *  Both ends, because the trail's reader knows the row by the title they
+   *  filed it under, and after a shaping that title is gone from every other
+   *  surface. */
+  titleFrom?: string;
+  titleTo?: string;
   ts: number;
 }
 
@@ -2022,6 +2068,11 @@ export class TaskStore {
     // caller, not a triage candidate.
     let triageDelivered = false;
     if (opts.goal === undefined) {
+      // The DURABLE half, written before the request is attempted and
+      // deliberately not conditioned on it: delivery decides whether a
+      // request went out, never whether a placement was named. An undelivered
+      // request used to leave no trace of the review it owed.
+      task.unplacedSince = now;
       triageDelivered = this.requestTriage({
         kind: 'task',
         workspaceId,
@@ -2061,13 +2112,28 @@ export class TaskStore {
   }
 
   /**
-   * Open Chores tasks no triage has placed (`triagedAgainst` unset) — what
-   * an agent sweeps when it attaches to a workspace that had no attachment
-   * when the tasks arrived (§3.4).
+   * Open tasks nobody has named a goal for — what an agent sweeps when it
+   * attaches to a workspace that had no attachment when the tasks arrived
+   * (§3.4), and the bucket a later "a goal became apparent" re-look reads.
+   *
+   * Keyed on `unplacedSince`, which replaced the proxy this used to select on
+   * ("in Chores and `triagedAgainst` unset"). That proxy was wrong in BOTH
+   * directions, and each was reproduced before the field existed:
+   *
+   *  - it re-asked forever about a task whose caller explicitly said
+   *    `goal: 'chores'` — a placement, per `placement.placed`;
+   *  - it never surfaced a task swept into Chores by a band removal, because
+   *    that task KEEPS the `triagedAgainst` of its old placement, pointing at
+   *    a goal id that no longer exists.
+   *
+   * No `goal === chores` clause: the two writers of `unplacedSince` both land
+   * the task in Chores, so the clause would be a second spelling of the same
+   * fact — and a future writer that got it wrong would be hidden by it rather
+   * than surfaced.
    */
   listUntriaged(workspaceId: string): Task[] {
-    return this.listTasks(workspaceId, { goal: CHORES_GOAL_ID }).filter(
-      (t) => t.status !== 'done' && t.triagedAgainst === undefined,
+    return this.listTasks(workspaceId).filter(
+      (t) => t.status !== 'done' && t.unplacedSince !== undefined,
     );
   }
 
@@ -2497,20 +2563,71 @@ export class TaskStore {
   }
 
   /**
-   * Record that somebody replaced a task's description. The text itself
-   * lives in the `task:<id>` doc room and reaches this store as a snapshot,
-   * so this does not take the markdown — it exists so the rewrite has an
-   * attributed row in the audit log, which is the half `set_doc_content` on
-   * the body room could never provide (a doc edit knows nothing about
-   * tasks).
+   * Record that somebody replaced a task's description — and, when the same
+   * act gave the row a new title, retitle it here rather than in a second
+   * call. The markdown itself lives in the `task:<id>` doc room and reaches
+   * this store as a snapshot, so this does not take it; what this provides is
+   * the half `set_doc_content` on the body room never could (a doc edit knows
+   * nothing about tasks): an attributed audit row, the body clock, the
+   * preserved original, and the title.
+   *
+   * The title rides along because SHAPING is one act. A capture arrives with a
+   * machine-clipped fragment for a title and its whole utterance for a body,
+   * and triage turns both into a task worth picking up; splitting that across
+   * `/title` (which deliberately emits nothing — it is the board's inline
+   * edit) and `/body` would leave the half a reader most notices invisible in
+   * the activity feed. Passing no `title` leaves the title alone, so every
+   * existing caller keeps its meaning.
+   *
+   * `previous` is REQUIRED, not optional, and that is the guard: a rewrite may
+   * never be the only record of what the row said. Its words go to `quote`
+   * when nothing has claimed that field yet — which is exactly the case for a
+   * raw capture, where the body IS the utterance. A quote already present
+   * always wins — a dictated transcript is closer to the source than the box's
+   * text, and on a row that has been rewritten before, the quote the FIRST
+   * rewrite preserved is closer to the source than the words this one is
+   * replacing.
    */
   noteBodyEdited(
     taskId: string,
-    opts: { actor: { id: string; name: string; kind?: string } },
+    opts: {
+      actor: { id: string; name: string; kind?: string };
+      /** The row's own title and body as they stood BEFORE this rewrite. The
+       *  caller reads them off the task; making it a parameter is what stops a
+       *  new call site from quietly skipping the preservation. */
+      previous: { title: string; body?: string };
+      /** The title this act gives the row. Omit to leave it unchanged. */
+      title?: string;
+    },
   ): boolean {
     const task = this.getTask(taskId);
     if (!task) return false;
     const ts = Date.now();
+    // Write-once, and BEFORE the title moves — the words being preserved are
+    // the ones this call is about to replace.
+    //
+    // The predicate is `quote` being empty and NOTHING else. The obvious
+    // second clause — "and this row has never been rewritten", i.e.
+    // `bodyWrittenAt === undefined` — is unusable here and looks correct:
+    // `updateBodySnapshot` stamps `bodyWrittenAt` on every real body change,
+    // and the route flushes the NEW body's snapshot before calling this, so
+    // that clause is false by the time it is read on the very first rewrite.
+    // It silently preserved nothing, ever. Emptiness of `quote` is the honest
+    // question anyway — "does anything hold this row's own words yet".
+    //
+    // Its one over-inclusion, deliberately kept: a row rewritten before this
+    // existed has no quote, so its next rewrite preserves an already-edited
+    // description as though it were the origin. That is one row's worth of a
+    // slightly-too-late snapshot against losing the words entirely, and the
+    // distinction was never recorded, so there is nothing on disk to read it
+    // from.
+    if (task.quote === undefined) {
+      const original = opts.previous.body?.trim() || opts.previous.title.trim();
+      if (original) task.quote = original;
+    }
+    const titleFrom = task.title;
+    const nextTitle = opts.title?.trim();
+    if (nextTitle && nextTitle !== titleFrom) task.title = nextTitle;
     task.updatedAt = ts;
     task.bodyWrittenAt = ts;
     this.scheduleSave(task.workspaceId);
@@ -2519,6 +2636,10 @@ export class TaskStore {
       workspaceId: task.workspaceId,
       taskId: task.id,
       actor: { id: opts.actor.id, name: opts.actor.name, kind: classifyActor(opts.actor) },
+      // Both ends, only when the title actually moved. A reader of the trail
+      // needs the old one to recognise the row they filed: "rewrote X" says
+      // nothing when X is a title they have never seen.
+      ...(task.title !== titleFrom ? { titleFrom, titleTo: task.title } : {}),
       ts,
     });
     return true;
@@ -2619,6 +2740,10 @@ export class TaskStore {
     // Assignment, not delete (biome noDelete); JSON.stringify drops it from
     // the sidecar either way, same as the hydrate-time clear.
     task.triagePendingTs = undefined;
+    // Somebody has now named this task's band — including a confirm-in-place
+    // into Chores, which is a judgement rather than a fallback. The owed
+    // review is answered, so it must not be asked again.
+    task.unplacedSince = undefined;
     if (opts.riskTier !== undefined) task.riskTier = opts.riskTier;
     task.updatedAt = ts;
     this.scheduleSave(task.workspaceId);
@@ -2754,6 +2879,12 @@ export class TaskStore {
       choresMax += 1;
       task.goal = CHORES_GOAL_ID;
       task.order = choresMax;
+      // The band this was placed under is gone, so its placement is no longer
+      // named — the bucket's other entrance. `triagedAgainst` deliberately
+      // stays: it records what the placement was judged against at the time,
+      // which is history. It is not a claim that the task is placed NOW, and
+      // reading it as one is what hid these tasks from the sweep.
+      task.unplacedSince = ts;
       task.updatedAt = ts;
     }
     this.scheduleSave(workspaceId);
@@ -3686,6 +3817,25 @@ export class TaskStore {
           // must not outlive it (grounded-pending, §3.4): the task goes back
           // to plainly sitting in Chores until an agent attaches and sweeps.
           task.triagePendingTs = undefined;
+          // `unplacedSince` is deliberately NOT cleared here — see the field.
+          // But every task written before it existed lacks it, and the sweep
+          // now keys on it, so a writer-only fix would empty the bucket for
+          // the entire existing board at the deploy. Reproduce the membership
+          // rule the old predicate used (Chores + open + never placed) and
+          // date it from `createdAt`, the only honest timestamp available.
+          //
+          // It over-includes a legacy explicit `goal: 'chores'` create, and
+          // it has to: that distinction was never recorded, so there is
+          // nothing on disk to read it from. Over-including asks about one
+          // extra task; under-including silently drops real ones.
+          if (
+            task.unplacedSince === undefined &&
+            task.goal === CHORES_GOAL_ID &&
+            task.status !== 'done' &&
+            task.triagedAgainst === undefined
+          ) {
+            task.unplacedSince = task.createdAt;
+          }
           tasks.set(task.id, task);
           this.taskIndex.set(task.id, workspace.id);
         }

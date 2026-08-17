@@ -49,6 +49,28 @@ The feedback widget that ships Linear tickets in `~/dev/health-tool` and `~/dev/
 - **Edit Bryan's bound docs directly; don't default to `suggest: true`.** Concurrent editing is the norm — he's in the doc while you work and expects your changes to land. Reserve `suggest: true` for judgment calls where a one-tap approve/reject genuinely beats a silent rewrite (voice, framing, a claim you're unsure of). Mechanical fixes, typos, and anything he explicitly asked for go in as plain edits.
 - **Mobile UX is load-bearing.** Bryan reviews on his phone. Any UI change touching the editor, widget, or landing page must follow [docs/product/design-mobile.md](docs/product/design-mobile.md) — verify at 430px wide before shipping.
 
+## The four gates — run all of them before you push
+
+```bash
+bunx vitest run                 # unit + client suites
+bun test packages/server/test   # server suite (NOT covered by vitest)
+bun run typecheck               # tsc --noEmit; vitest does not typecheck
+bun run lint                    # biome; nothing else formats
+```
+
+They are **four separate gates and each one catches what the others cannot** —
+`vitest` does not typecheck, `typecheck` does not lint, and none of them
+format. A single over-long string has taken CI red on its own.
+
+Written down here because the failure mode is not forgetting to verify, it is
+**reciting the list from memory** — which on one day briefed eight agents with
+an incomplete set. Read it, don't recall it. `bunx biome check --write` fixes
+formatting; leave the pre-existing `noExplicitAny` **warnings** alone, they are
+warnings and not failures.
+
+A PR that touches `packages/mcp/src/**` adds `bun run build:mcp` plus the
+committed bundle, and every PR adds the version bump — both below.
+
 ## Releasing the plugin (bump the version on every PR)
 
 Peers install by version. `claude plugin update` compares the version string and
@@ -101,8 +123,21 @@ there. That is how 25 feature commits sat undelivered between 2026-05-09 and
   `attach_agent`, and the workspace's presence strip names any session older
   than the version this server's deploy source would install. That is the
   answer to "does my peer have this yet" — read it there rather than asking.
-  Its one honest limit: "released" means *this checkout's manifest*, so a
-  checkout nobody pulled reports its own staleness as current.
+  Two honest limits. "Released" means *this checkout's manifest*, so a
+  checkout nobody pulled reports its own staleness as current. And the strip
+  only sees **sessions that attached to that board** — a peer that never
+  attached is absent, not current, and there is no server-wide session
+  registry to widen it with (a plugin version reaches the server through
+  `attach_agent` and nowhere else). So the strip now always states its
+  denominator — "no attached session is behind 0.1.40 (1 checked)" — because
+  an empty list rendered as silence, and silence read as a fleet-wide
+  all-clear while most of the fleet was several releases back. **An empty
+  `behind` list is not a fleet-wide clearance — never let one alone satisfy a
+  delivery gate.** (Removing a *tool* needs no such gate at all; see the entry
+  below it in learnings.md. What does bite is narrowing something old callers
+  still send or read on the shared server, and the strip cannot tell you who
+  those callers are.) See "The strip reads a board, not the fleet" in
+  [docs/process/delivery.md](docs/process/delivery.md).
 - **An agent CAN run the update; the shell makes it look otherwise.** On this
   machine `claude` resolves to a shell function that injects flags ahead of the
   subcommand, so `claude plugin update …` is parsed as a prompt and dies with
