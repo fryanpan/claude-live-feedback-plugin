@@ -1136,6 +1136,61 @@ Technical discoveries that should persist across sessions for this project.
   real browser. Same method as the `pointercancel` fix, and it is the only
   thing that would have caught a dropped state assignment.
 
+## Removing an MCP tool cannot break a peer — the shared server is where a removal bites
+
+- **`create_task` was left reachable for five releases behind a stated
+  precondition — "no session older than 0.1.36" — and the precondition was
+  unnecessary.** The reasoning it encoded ("a release that deletes the tool
+  breaks every session still running an older bundle and still calling it")
+  does not survive reading the code. Each session launches its OWN MCP child
+  from its OWN version-keyed cache (`.mcp.json` → `${CLAUDE_PLUGIN_ROOT}/mcp/index.js`),
+  and BOTH halves of a tool live in that one file: the declaration is a static
+  array literal in the `ListToolsRequestSchema` handler (no `await`, no
+  `http()`, no `fetch` anywhere in its ~1,300 lines), and the dispatch is a
+  `switch` in the same bundle. A session that has not restarted never sees the
+  deletion; the restart that delivers it is the same restart that delivers the
+  replacement. The shared server on :8787 has **no knowledge of the tool
+  surface at all** — grep it for `tools/list`, `ListTools`, `toolNames`,
+  `allowedTools`: zero hits. It never negotiates or serves a tool list, and
+  `pluginVersion` reaches it only as a value to *display* on the drift strip,
+  never as a gate.
+- **The hazard the precondition was reaching for is real, but it is one layer
+  down: the REST route, not the verb.** An old bundle keeps calling
+  `POST /api/workspaces/:id/tasks` with whatever payload *that* bundle sends,
+  and gets a failure it cannot explain from its own version. So the question
+  worth asking at a removal is never "did I delete a tool somebody still
+  calls" — it is **"did I narrow anything the old callers still send or still
+  read"**. Diffing tool lists cannot see that.
+- **Test the OLD payload, not the current one.** A route test written against
+  what today's code sends passes by construction and detects nothing. The
+  guard here transcribes the request keys and the dereferenced response fields
+  out of the committed bundle at the oldest release plausibly still in the
+  field (0.1.20 — verified byte-identical at 0.1.25/0.1.30/0.1.34/0.1.36) and
+  sends exactly those. Mutation-verified: making the route drop `quote` turns
+  it red.
+- **Same shape as "What makes a fleet-wide action safe is that it can't
+  interrupt anybody", one entry up.** There a whole consent mechanism was
+  designed for an operation that already could not reach another session.
+  Here a delivery gate held a removal for five releases against a breakage
+  that was structurally impossible. Both times the fix was to read what the
+  operation actually touches before designing around what it might.
+  **Cost of checking: about twenty minutes of reading. Cost of not checking:
+  a blocked task, a blocked dependent, and a session restart requested to
+  satisfy a gate that was measuring nothing.**
+- **An absence assertion on a name that is a PREFIX of the surviving name is
+  the trap here.** `create_task` is a substring of `create_tasks`, so
+  `BUNDLE.includes('create_task')` is true forever and an absence test written
+  that way can never fail. Use `/create_task\b/` (no boundary between `k` and
+  `s`), and assert the naive form still matches, so the guard fails loudly if
+  the surviving verb is ever renamed.
+- **Assert the absence in the SOURCE as well as the bundle, and expect them to
+  disagree.** The first run had the bundle test green and the source test red
+  — because the only remaining mention was in a code COMMENT, which the
+  bundler strips. That is the mirror of the deploy-verification rule ("a
+  literal from a comment proves nothing about the bundle"): comments are
+  invisible to the artifact, so the bundle can look clean while the source
+  still documents the thing as present.
+
 ## gh pr merge --delete-branch switches your working copy to main
 
 - When the branch being deleted is the CURRENT branch of the main

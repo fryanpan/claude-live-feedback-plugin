@@ -399,6 +399,31 @@ export interface Task {
    * outlive it) and by the agent's eventual placement.
    */
   triagePendingTs?: number;
+  /**
+   * When this task's placement stopped being named by anybody — the durable
+   * form of "it's in the bucket" (Bryan, 2026-08-17: "a bucket of tasks with
+   * unknown goal that's the lowest priority… tasks from there should get
+   * attached to a goal later if a goal becomes apparent").
+   *
+   * Two writers, one meaning:
+   *  - a create that named no `goal` (an explicit `goal: 'chores'` is a
+   *    PLACEMENT and stamps nothing — the same distinction `placement.placed`
+   *    draws, and deliberately not `goal !== chores`);
+   *  - a goal-list edit that removed the band an open task was placed under,
+   *    which un-names a placement somebody DID make.
+   * Cleared by `setTaskGoal`, the one write half of placement.
+   *
+   * SURVIVES hydrate, unlike `triagePendingTs` directly above — and the
+   * contrast is the point. That marker promises an in-flight request a restart
+   * killed; this records a review still OWED, which a restart does not answer.
+   * Before this field the distinction lived only in the create RESPONSE, so
+   * after a restart an unplaced task and a deliberate chore were identical.
+   *
+   * A timestamp rather than a boolean because "how long has this waited" is
+   * the question a reading has to answer, and a flag cannot tell minutes from
+   * a week.
+   */
+  unplacedSince?: number;
   /** Stamped by triage at placement time; keyed to the ACTION's damage. */
   riskTier?: 'green' | 'yellow' | 'red';
   /** Append-only audit trail. */
@@ -2043,6 +2068,11 @@ export class TaskStore {
     // caller, not a triage candidate.
     let triageDelivered = false;
     if (opts.goal === undefined) {
+      // The DURABLE half, written before the request is attempted and
+      // deliberately not conditioned on it: delivery decides whether a
+      // request went out, never whether a placement was named. An undelivered
+      // request used to leave no trace of the review it owed.
+      task.unplacedSince = now;
       triageDelivered = this.requestTriage({
         kind: 'task',
         workspaceId,
@@ -2082,13 +2112,28 @@ export class TaskStore {
   }
 
   /**
-   * Open Chores tasks no triage has placed (`triagedAgainst` unset) — what
-   * an agent sweeps when it attaches to a workspace that had no attachment
-   * when the tasks arrived (§3.4).
+   * Open tasks nobody has named a goal for — what an agent sweeps when it
+   * attaches to a workspace that had no attachment when the tasks arrived
+   * (§3.4), and the bucket a later "a goal became apparent" re-look reads.
+   *
+   * Keyed on `unplacedSince`, which replaced the proxy this used to select on
+   * ("in Chores and `triagedAgainst` unset"). That proxy was wrong in BOTH
+   * directions, and each was reproduced before the field existed:
+   *
+   *  - it re-asked forever about a task whose caller explicitly said
+   *    `goal: 'chores'` — a placement, per `placement.placed`;
+   *  - it never surfaced a task swept into Chores by a band removal, because
+   *    that task KEEPS the `triagedAgainst` of its old placement, pointing at
+   *    a goal id that no longer exists.
+   *
+   * No `goal === chores` clause: the two writers of `unplacedSince` both land
+   * the task in Chores, so the clause would be a second spelling of the same
+   * fact — and a future writer that got it wrong would be hidden by it rather
+   * than surfaced.
    */
   listUntriaged(workspaceId: string): Task[] {
-    return this.listTasks(workspaceId, { goal: CHORES_GOAL_ID }).filter(
-      (t) => t.status !== 'done' && t.triagedAgainst === undefined,
+    return this.listTasks(workspaceId).filter(
+      (t) => t.status !== 'done' && t.unplacedSince !== undefined,
     );
   }
 
@@ -2694,6 +2739,10 @@ export class TaskStore {
     // Assignment, not delete (biome noDelete); JSON.stringify drops it from
     // the sidecar either way, same as the hydrate-time clear.
     task.triagePendingTs = undefined;
+    // Somebody has now named this task's band — including a confirm-in-place
+    // into Chores, which is a judgement rather than a fallback. The owed
+    // review is answered, so it must not be asked again.
+    task.unplacedSince = undefined;
     if (opts.riskTier !== undefined) task.riskTier = opts.riskTier;
     task.updatedAt = ts;
     this.scheduleSave(task.workspaceId);
@@ -2829,6 +2878,12 @@ export class TaskStore {
       choresMax += 1;
       task.goal = CHORES_GOAL_ID;
       task.order = choresMax;
+      // The band this was placed under is gone, so its placement is no longer
+      // named — the bucket's other entrance. `triagedAgainst` deliberately
+      // stays: it records what the placement was judged against at the time,
+      // which is history. It is not a claim that the task is placed NOW, and
+      // reading it as one is what hid these tasks from the sweep.
+      task.unplacedSince = ts;
       task.updatedAt = ts;
     }
     this.scheduleSave(workspaceId);
@@ -3761,6 +3816,25 @@ export class TaskStore {
           // must not outlive it (grounded-pending, §3.4): the task goes back
           // to plainly sitting in Chores until an agent attaches and sweeps.
           task.triagePendingTs = undefined;
+          // `unplacedSince` is deliberately NOT cleared here — see the field.
+          // But every task written before it existed lacks it, and the sweep
+          // now keys on it, so a writer-only fix would empty the bucket for
+          // the entire existing board at the deploy. Reproduce the membership
+          // rule the old predicate used (Chores + open + never placed) and
+          // date it from `createdAt`, the only honest timestamp available.
+          //
+          // It over-includes a legacy explicit `goal: 'chores'` create, and
+          // it has to: that distinction was never recorded, so there is
+          // nothing on disk to read it from. Over-including asks about one
+          // extra task; under-including silently drops real ones.
+          if (
+            task.unplacedSince === undefined &&
+            task.goal === CHORES_GOAL_ID &&
+            task.status !== 'done' &&
+            task.triagedAgainst === undefined
+          ) {
+            task.unplacedSince = task.createdAt;
+          }
           tasks.set(task.id, task);
           this.taskIndex.set(task.id, workspace.id);
         }
