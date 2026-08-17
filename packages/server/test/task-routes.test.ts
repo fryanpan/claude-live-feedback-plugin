@@ -155,6 +155,81 @@ describe('hub workspace + task routes', () => {
       wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
     });
 
+    /**
+     * Removing the `create_task` MCP tool (0.1.41) does NOT remove this route,
+     * and that distinction is the whole safety argument for the removal. A
+     * peer sitting on an older bundle keeps its own copy of that tool and its
+     * own handler, and that handler keeps POSTing here — so the hazard is not
+     * the vanished tool, it is a route that quietly stops honouring the shape
+     * the old handler sends. A test written against what the CURRENT code
+     * sends cannot detect a narrowed contract; this one is written against
+     * what the OLD bundle sends.
+     *
+     * Request and response shapes below are transcribed from the committed
+     * `packages/plugin/mcp/index.js` at 0.1.20 (the oldest release still
+     * plausibly in the field) and verified byte-identical at 0.1.25, 0.1.30,
+     * 0.1.34 and 0.1.36 — the payload never moved across those releases.
+     */
+    it('still honours the payload an OLDER bundle sends, and returns what it reads', async () => {
+      const gate = (await (
+        await post(`/api/workspaces/${wsId}/tasks`, {
+          author: AGENT,
+          title: 'gate for the legacy-shape check',
+        })
+      ).json()) as { task: Task };
+
+      // Exactly the 13 keys the 0.1.20 handler puts on the wire, no more.
+      const legacyPayload = {
+        title: 'Legacy-shape create',
+        body: 'Which of the two? The second costs a migration. Blocked until answered: the rollout.',
+        assignee: 'human',
+        needs: 'decision',
+        options: [{ label: 'the first one' }, { label: 'the second one', detail: 'a migration' }],
+        goal: 'chores',
+        order: 3,
+        after: [gate.task.id],
+        afterEnforce: [gate.task.id],
+        dueAt: 1770000000000,
+        links: [{ kind: 'doc', docId: 'hub-plan-doc' }],
+        quote: 'pick one of these for me',
+        author: AGENT,
+      };
+
+      const r = await post(`/api/workspaces/${wsId}/tasks`, legacyPayload);
+      expect(r.status).toBe(200);
+
+      const payload = (await r.json()) as { task: Task };
+      // The old handler dereferences res.task.<field> with no guard, so a
+      // route that stopped returning `task` would throw inside a peer we
+      // cannot fix. Assert each field it reads, by name.
+      expect(payload.task).toBeDefined();
+      expect(typeof payload.task.id).toBe('string');
+      expect(payload.task.goal).toBe('chores');
+      expect(payload.task.order).toBe(3);
+      expect(payload.task.status).toBe('todo');
+      expect(payload.task.assignee).toBe('human');
+      // `triagePendingTs` is read as a presence test, so undefined is a valid
+      // answer — what must hold is that the KEY is not repurposed into
+      // something truthy for a row that was explicitly placed.
+      expect(payload.task.triagePendingTs).toBeUndefined();
+
+      // And every param it sent actually landed — read back through the list
+      // route rather than trusting the create response.
+      const listed = (await (await local(`/api/workspaces/${wsId}/tasks`)).json()) as {
+        tasks: Task[];
+      };
+      const stored = listed.tasks.find((t) => t.id === payload.task.id);
+      expect(stored?.title).toBe('Legacy-shape create');
+      expect(stored?.needs).toBe('decision');
+      expect(stored?.quote).toBe('pick one of these for me');
+      expect(stored?.dueAt).toBe(1770000000000);
+      expect(stored?.links).toEqual([{ kind: 'doc', docId: 'hub-plan-doc' }]);
+      expect(stored?.after).toEqual([gate.task.id]);
+      expect(stored?.afterEnforce).toEqual([gate.task.id]);
+      expect(stored?.options?.length).toBe(2);
+      expect(stored?.body).toContain('Which of the two?');
+    });
+
     it('forwards EVERY create param through the route (the groups lesson)', async () => {
       const r = await post(`/api/workspaces/${wsId}/tasks`, {
         title: 'Pick the palette',

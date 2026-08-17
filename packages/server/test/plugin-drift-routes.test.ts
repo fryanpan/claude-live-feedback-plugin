@@ -44,6 +44,7 @@ describe('plugin drift over the attachment routes', () => {
     pluginRelease: {
       version: string | null;
       behind: Array<{ agentId: string; pluginVersion?: string }>;
+      checked?: number;
     };
   };
 
@@ -131,5 +132,62 @@ describe('plugin drift over the attachment routes', () => {
     expect(body.attachments.find((a) => a.agentId === 'agent-persisted')?.pluginVersion).toBe(
       '0.9.9',
     );
+  });
+
+  // ── The denominator (the defect measured 2026-08-17) ────────────────────
+  //
+  // `behind: []` was the whole answer, and it rendered as "no session is
+  // behind" when it only ever meant "nothing that attached HERE is behind".
+  // On this board that domain has normally held exactly one member: the
+  // session reading the strip. The count has to survive the same trip the
+  // list does — it is a new field on a hand-built payload, which is this
+  // codebase's most reliable place to drop one.
+
+  it('an empty behind list arrives with the count it was computed over', async () => {
+    const wsId = await makeWorkspace('drift-domain-1');
+    const manifest = readReleasedPluginVersion(join(import.meta.dir, '../../..'));
+    if (!manifest) throw new Error('this repo must have a plugin manifest to test against');
+
+    // Nobody attached yet: zero behind out of zero checked. Indistinguishable
+    // from a real clearance without the second number.
+    let body = (await (await local(`/api/workspaces/${wsId}/attachments`)).json()) as ListBody;
+    expect(body.pluginRelease.behind).toEqual([]);
+    expect(body.pluginRelease.checked).toBe(0);
+
+    // One current session: still zero behind, but now out of one — which is
+    // the exact reading that was mistaken for a fleet-wide all-clear.
+    await post(`/api/workspaces/${wsId}/attachments`, {
+      agentId: 'agent-current',
+      runtime: 'claude-code-local',
+      pluginVersion: manifest,
+    });
+    body = (await (await local(`/api/workspaces/${wsId}/attachments`)).json()) as ListBody;
+    expect(body.pluginRelease.behind).toEqual([]);
+    expect(body.pluginRelease.checked).toBe(1);
+  });
+
+  it('counts the population the check ran over, not every attachment', async () => {
+    // A webhook cannot be behind, so it must not pad the denominator either —
+    // otherwise "0 behind of 3 checked" claims two checks that never happened.
+    const wsId = await makeWorkspace('drift-domain-2');
+    await post(`/api/workspaces/${wsId}/attachments`, {
+      agentId: 'agent-session',
+      runtime: 'claude-code-local',
+      pluginVersion: '0.0.1',
+    });
+    await post(`/api/workspaces/${wsId}/attachments`, {
+      agentId: 'agent-hook',
+      runtime: 'webhook',
+    });
+    await post(`/api/workspaces/${wsId}/attachments`, {
+      agentId: 'agent-cloud',
+      runtime: 'managed-agent',
+    });
+
+    const body = (await (await local(`/api/workspaces/${wsId}/attachments`)).json()) as ListBody;
+    // Positive control beside the count: three attachments really did land.
+    expect(body.attachments.length).toBe(3);
+    expect(body.pluginRelease.checked).toBe(1);
+    expect(body.pluginRelease.behind.map((b) => b.agentId)).toEqual(['agent-session']);
   });
 });
