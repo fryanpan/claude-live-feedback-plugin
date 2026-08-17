@@ -368,7 +368,22 @@ export interface Task {
   links: Ref[];
   /** The thread/doc this was promoted from. */
   origin?: Ref;
-  /** The human's verbatim words at promotion or creation. */
+  /**
+   * The words this task CAME FROM, verbatim, and never rewritten.
+   *
+   * Originally "the human's verbatim words at promotion or creation", which
+   * was the whole of it while a description could only ever be typed by the
+   * person or agent who filed it. Triage now RESHAPES a row — a raw capture's
+   * clipped title and unedited paragraph become a user story — so the words a
+   * task started with are words a later pass can replace, and something has
+   * to hold them. That something is this field: `noteBodyEdited` fills it from
+   * the pre-rewrite row on a first rewrite, so a shaped task can always be
+   * read back to what was actually said.
+   *
+   * Write-once by construction. A dictated transcript, a promotion snippet and
+   * a preserved original all answer the same question, and the earliest answer
+   * is the closest to the source — so a filled quote is never overwritten.
+   */
   quote?: string;
   /** Decisions keep the verbatim answer. `optionId` records WHICH candidate
    *  the words came from when one was tapped — the text stays the answer. */
@@ -918,6 +933,12 @@ export interface TaskBodyEditedEvent {
   workspaceId: string;
   taskId: string;
   actor: TaskActor;
+  /** Present ONLY when the rewrite also retitled the row — the shaping case.
+   *  Both ends, because the trail's reader knows the row by the title they
+   *  filed it under, and after a shaping that title is gone from every other
+   *  surface. */
+  titleFrom?: string;
+  titleTo?: string;
   ts: number;
 }
 
@@ -2542,20 +2563,71 @@ export class TaskStore {
   }
 
   /**
-   * Record that somebody replaced a task's description. The text itself
-   * lives in the `task:<id>` doc room and reaches this store as a snapshot,
-   * so this does not take the markdown — it exists so the rewrite has an
-   * attributed row in the audit log, which is the half `set_doc_content` on
-   * the body room could never provide (a doc edit knows nothing about
-   * tasks).
+   * Record that somebody replaced a task's description — and, when the same
+   * act gave the row a new title, retitle it here rather than in a second
+   * call. The markdown itself lives in the `task:<id>` doc room and reaches
+   * this store as a snapshot, so this does not take it; what this provides is
+   * the half `set_doc_content` on the body room never could (a doc edit knows
+   * nothing about tasks): an attributed audit row, the body clock, the
+   * preserved original, and the title.
+   *
+   * The title rides along because SHAPING is one act. A capture arrives with a
+   * machine-clipped fragment for a title and its whole utterance for a body,
+   * and triage turns both into a task worth picking up; splitting that across
+   * `/title` (which deliberately emits nothing — it is the board's inline
+   * edit) and `/body` would leave the half a reader most notices invisible in
+   * the activity feed. Passing no `title` leaves the title alone, so every
+   * existing caller keeps its meaning.
+   *
+   * `previous` is REQUIRED, not optional, and that is the guard: a rewrite may
+   * never be the only record of what the row said. Its words go to `quote`
+   * when nothing has claimed that field yet — which is exactly the case for a
+   * raw capture, where the body IS the utterance. A quote already present
+   * always wins — a dictated transcript is closer to the source than the box's
+   * text, and on a row that has been rewritten before, the quote the FIRST
+   * rewrite preserved is closer to the source than the words this one is
+   * replacing.
    */
   noteBodyEdited(
     taskId: string,
-    opts: { actor: { id: string; name: string; kind?: string } },
+    opts: {
+      actor: { id: string; name: string; kind?: string };
+      /** The row's own title and body as they stood BEFORE this rewrite. The
+       *  caller reads them off the task; making it a parameter is what stops a
+       *  new call site from quietly skipping the preservation. */
+      previous: { title: string; body?: string };
+      /** The title this act gives the row. Omit to leave it unchanged. */
+      title?: string;
+    },
   ): boolean {
     const task = this.getTask(taskId);
     if (!task) return false;
     const ts = Date.now();
+    // Write-once, and BEFORE the title moves — the words being preserved are
+    // the ones this call is about to replace.
+    //
+    // The predicate is `quote` being empty and NOTHING else. The obvious
+    // second clause — "and this row has never been rewritten", i.e.
+    // `bodyWrittenAt === undefined` — is unusable here and looks correct:
+    // `updateBodySnapshot` stamps `bodyWrittenAt` on every real body change,
+    // and the route flushes the NEW body's snapshot before calling this, so
+    // that clause is false by the time it is read on the very first rewrite.
+    // It silently preserved nothing, ever. Emptiness of `quote` is the honest
+    // question anyway — "does anything hold this row's own words yet".
+    //
+    // Its one over-inclusion, deliberately kept: a row rewritten before this
+    // existed has no quote, so its next rewrite preserves an already-edited
+    // description as though it were the origin. That is one row's worth of a
+    // slightly-too-late snapshot against losing the words entirely, and the
+    // distinction was never recorded, so there is nothing on disk to read it
+    // from.
+    if (task.quote === undefined) {
+      const original = opts.previous.body?.trim() || opts.previous.title.trim();
+      if (original) task.quote = original;
+    }
+    const titleFrom = task.title;
+    const nextTitle = opts.title?.trim();
+    if (nextTitle && nextTitle !== titleFrom) task.title = nextTitle;
     task.updatedAt = ts;
     task.bodyWrittenAt = ts;
     this.scheduleSave(task.workspaceId);
@@ -2564,6 +2636,10 @@ export class TaskStore {
       workspaceId: task.workspaceId,
       taskId: task.id,
       actor: { id: opts.actor.id, name: opts.actor.name, kind: classifyActor(opts.actor) },
+      // Both ends, only when the title actually moved. A reader of the trail
+      // needs the old one to recognise the row they filed: "rewrote X" says
+      // nothing when X is a title they have never seen.
+      ...(task.title !== titleFrom ? { titleFrom, titleTo: task.title } : {}),
       ts,
     });
     return true;
