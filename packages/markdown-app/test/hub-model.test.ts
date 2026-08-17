@@ -3,6 +3,7 @@ import {
   type ActivityEvent,
   type BoardFilters,
   CHORES_ID,
+  type ClientRelease,
   DEFAULT_DONE_WINDOW,
   type HubGoal,
   type HubTask,
@@ -12,6 +13,7 @@ import {
   activityRows,
   appendDictation,
   boardSections,
+  clientDriftNotice,
   decisionRows,
   describeEvent,
   doneAt,
@@ -685,6 +687,65 @@ describe('pluginDriftNotice', () => {
     // The manifest was unreadable. Claiming drift would be inventing it.
     expect(pluginDriftNotice(rel(null, [{ agentId: 'a', pluginVersion: '0.1.0' }]))).toBeNull();
     expect(pluginDriftNotice(undefined)).toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Client release notice — "every browser here is running an old client"
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('clientDriftNotice', () => {
+  const HOUR = 60 * 60 * 1000;
+  const now = Date.UTC(2026, 7, 16, 12, 0, 0);
+  const release = (over: Partial<ClientRelease> = {}): ClientRelease => ({
+    releaseId: '20260813T014455123Z-000003',
+    publishedAt: now - 72 * HOUR,
+    ageMs: 72 * HOUR,
+    sourceRef: 'a1b2c3d',
+    consecutiveFailures: 2,
+    failingSince: now - 10 * HOUR,
+    lastError: 'client release: markdownApp bundle is incomplete — app.js missing',
+    stale: true,
+    ...over,
+  });
+
+  it('says how old the served client is, since when the build has failed, and why', () => {
+    const n = clientDriftNotice(release(), now);
+    if (!n) throw new Error('expected a notice');
+    // The age is the point: "stale" alone does not say whether the split is
+    // minutes or a week, and the gap is what makes it urgent.
+    expect(n.headline).toContain('3d ago');
+    expect(n.detail).toContain('2 builds');
+    expect(n.detail).toContain('10h ago');
+    expect(n.detail).toContain('app.js missing');
+    // Freshness of the artifact is not freshness of the source, so the
+    // commit it was built from is part of the reading.
+    expect(n.detail).toContain('a1b2c3d');
+    // The restart IS the client deploy — without it a fixed build changes
+    // nothing for any browser.
+    expect(n.fix).toContain('restart');
+  });
+
+  it('says nothing while the deployment is healthy', () => {
+    // Positive control: the same shape with stale:true does produce one.
+    expect(clientDriftNotice(release(), now)).not.toBeNull();
+    expect(clientDriftNotice(release({ stale: false }), now)).toBeNull();
+    expect(clientDriftNotice(null, now)).toBeNull();
+    expect(clientDriftNotice(undefined, now)).toBeNull();
+  });
+
+  it('does not invent an age when nothing was ever published', () => {
+    const n = clientDriftNotice(
+      release({ releaseId: null, publishedAt: null, ageMs: null, sourceRef: null }),
+      now,
+    );
+    expect(n?.headline).not.toContain('NaN');
+    expect(n?.headline.toLowerCase()).toContain('no client');
+  });
+
+  it('does not name a source the release never recorded', () => {
+    const n = clientDriftNotice(release({ sourceRef: null }), now);
+    expect(n?.detail).not.toContain('built from');
   });
 });
 
