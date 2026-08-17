@@ -77,7 +77,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.43';
+const PLUGIN_VERSION = '0.1.45';
 
 const server = new Server(
   {
@@ -336,7 +336,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'set_doc_content',
       description:
-        "Replace the WHOLE document with new markdown — the safe path for a comprehensive rewrite/restructure. Applies as a block-level diff on the live doc: blocks you didn't change keep their identity, so comment threads anchored to them survive, connected editors update live, and the result flushes to the bound .md within ~1s like any other edit. Use this INSTEAD of Write-ing the bound file (then reparse_from_disk) or the delete_doc → Write → create_review_doc dance — both race the write-back and have clobbered files in practice, and the latter orphans every comment thread. Returns ok:false with error 'unsupported' (code/diff docs are read-only), 'empty' (won't wipe a doc to nothing — use delete_doc if you mean that), 'parse-failed', or 'not-found'.",
+        "Replace the WHOLE document with new markdown — the safe path for a comprehensive rewrite/restructure. Applies as a block-level diff on the live doc: blocks you didn't change keep their identity, so comment threads anchored to them survive, connected editors update live, and the result flushes to the bound .md within ~1s like any other edit. Use this INSTEAD of Write-ing the bound file (then reparse_from_disk) or the delete_doc → Write → create_review_doc dance — both race the write-back and have clobbered files in practice, and the latter orphans every comment thread. NOT for a task's description: a `task:<taskId>` docId is refused with error 'task-body-doc', because rewriting a task body here would drop the captured words it replaces and record nothing — use update_task_body, which preserves the previous description into the task's `quote` when nothing holds it yet and emits task.body_edited. (Comments and anchors on a task body doc are unaffected; only content rewrites are refused.) Returns ok:false with error 'unsupported' (code/diff docs are read-only), 'empty' (won't wipe a doc to nothing — use delete_doc if you mean that), 'parse-failed', or 'not-found'.",
       inputSchema: {
         type: 'object',
         properties: {
