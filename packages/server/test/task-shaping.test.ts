@@ -226,6 +226,125 @@ describe('triage shaping', () => {
     expect((await readTask(wsId, task.id)).quote).toBe(CAPTURE.body);
   });
 
+  /**
+   * The preservation used to live on `noteBodyEdited`, which only the
+   * `/api/tasks/:id/body` route calls — so a rewrite through any OTHER door
+   * into the same body destroyed the capture with nothing preserved and
+   * nothing recorded, and the caller and the board both saw success.
+   *
+   * A task body is a live Yjs room at `task:<taskId>`, and there are several
+   * doors: `set_doc_content` on that docId, the prose edit tools aimed at it,
+   * and a person typing on the board. They converge on one place —
+   * `updateBodySnapshot`, which is what the fragment observer flushes — so
+   * that is where `quote` is filled now. These cases drive the doors that are
+   * reachable over HTTP; each asserts the preserved value rather than that
+   * the call returned ok, because a success assertion passed the whole time
+   * the feature was absent.
+   */
+  describe('every door into a task body preserves the capture', () => {
+    const docContent = (taskId: string) =>
+      `/api/docs/${encodeURIComponent(`task:${taskId}`)}/content`;
+
+    it('preserves the capture when the rewrite comes through set_doc_content', async () => {
+      const wsId = await seedWorkspace();
+      const { task } = await capture(wsId);
+      // Positive control: nothing holds those words yet, and the row's body
+      // really is the capture — so the assertions below are about the rewrite.
+      expect((await readTask(wsId, task.id)).quote).toBeUndefined();
+      expect((await readTask(wsId, task.id)).body).toBe(CAPTURE.body);
+
+      await jj(
+        await post(docContent(task.id), {
+          author: AGENT,
+          markdown: 'A story-shaped body written straight at the doc room.',
+        }),
+      );
+
+      const shaped = await readTask(wsId, task.id);
+      // The rewrite landed — without this the preservation assertion could
+      // pass on a write that never happened.
+      expect(shaped.body).toContain('straight at the doc room');
+      expect(shaped.quote).toBe(CAPTURE.body);
+      expect(shaped.quote).toContain('Make a ticket from this or multiple');
+    });
+
+    it('records an attributed row for the doc-route rewrite too', async () => {
+      const wsId = await seedWorkspace();
+      const { task } = await capture(wsId);
+      const events: TaskStoreEvent[] = [];
+      const off = handle?.tasks.onEvent((e) => events.push(e));
+      try {
+        await jj(await post(docContent(task.id), { author: AGENT, markdown: 'Rewritten.' }));
+      } finally {
+        off?.();
+      }
+      const row = events.find((e) => e.type === 'task.body_edited');
+      expect(row).toBeDefined();
+      expect(row?.taskId).toBe(task.id);
+      expect(row?.actor.name).toBe('Shelf Planner');
+      expect(row?.actor.kind).toBe('agent');
+    });
+
+    it('still preserves when the caller says nothing about who it is', async () => {
+      // `POST /api/docs/:id/content` has never required an author, so an
+      // older caller sends none. An audit row naming nobody would be worse
+      // than its honest absence — but the WORDS are not optional, and they
+      // are preserved by the snapshot rather than by the attributed call.
+      const wsId = await seedWorkspace();
+      const { task } = await capture(wsId);
+      const events: TaskStoreEvent[] = [];
+      const off = handle?.tasks.onEvent((e) => events.push(e));
+      try {
+        await jj(await post(docContent(task.id), { markdown: 'Rewritten anonymously.' }));
+      } finally {
+        off?.();
+      }
+      const shaped = await readTask(wsId, task.id);
+      expect(shaped.body).toContain('anonymously');
+      expect(shaped.quote).toBe(CAPTURE.body);
+      // The absence is meaningful only next to the presence asserted in the
+      // case above, on the same route and the same shape of row.
+      expect(events.find((e) => e.type === 'task.body_edited')).toBeUndefined();
+    });
+
+    it('preserves when the words go through a targeted edit rather than a whole-doc rewrite', async () => {
+      // find_and_replace is the door no route-level guard would ever have
+      // covered: it does not go through `rewriteTaskBody` at all, it just
+      // mutates the fragment. If the preservation were still hanging off a
+      // rewrite route this would come back undefined.
+      const wsId = await seedWorkspace();
+      const { task } = await capture(wsId);
+      expect((await readTask(wsId, task.id)).quote).toBeUndefined();
+
+      await jj(
+        await post(`/api/docs/${encodeURIComponent(`task:${task.id}`)}/find_and_replace`, {
+          find: 'I keep losing my place.',
+          replace: 'The place indicator is lost on shelf change.',
+        }),
+      );
+      // The snapshot is debounced on this path — there is no flush to ride.
+      await Bun.sleep(1200);
+
+      const edited = await readTask(wsId, task.id);
+      expect(edited.body).toContain('The place indicator is lost');
+      expect(edited.quote).toBe(CAPTURE.body);
+    });
+
+    it('does not quote a row whose body nobody has changed', async () => {
+      // The guard sits after the equality check, so opening a body room and
+      // letting it snapshot must not look like a rewrite. Paired with the
+      // cases above, which show the same probe filling `quote` when there IS
+      // a change — otherwise "still undefined" would prove nothing.
+      const wsId = await seedWorkspace();
+      const { task } = await capture(wsId);
+      await jj<{ plainText: string }>(await fetch(`${base}${docContent(task.id)}`));
+      await Bun.sleep(1200);
+      const untouched = await readTask(wsId, task.id);
+      expect(untouched.body).toBe(CAPTURE.body);
+      expect(untouched.quote).toBeUndefined();
+    });
+  });
+
   it('retitles inside the SAME act, and the event carries both names', async () => {
     const wsId = await seedWorkspace();
     const { task } = await capture(wsId);

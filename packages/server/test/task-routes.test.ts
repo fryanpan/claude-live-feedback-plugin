@@ -1149,6 +1149,68 @@ describe('hub workspace + task routes', () => {
       expect(((await after.json()) as { items: unknown[] }).items).toEqual([]);
     });
 
+    /**
+     * `direct` and the roster it depends on, end-to-end.
+     *
+     * The unit tests hand `reviewThreadItems` a source they build themselves,
+     * so they cannot see WHICH threads the route feeds it — and the route
+     * filters to open threads, which is right for "what is waiting" and wrong
+     * for "who is a person here". Resolving an unrelated thread on a different
+     * task used to empty the roster and silently downgrade a live question.
+     */
+    it('marks a question addressed to a person, and keeps it marked when an unrelated thread resolves', async () => {
+      const r = await post('/api/workspaces', { name: 'direct-ws', goal: 'Answer things.' });
+      const wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
+      const mkTask = async (title: string) => {
+        const t = await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, title });
+        return `task:${((await t.json()) as { task: { id: string } }).task.id}`;
+      };
+      const seedDoc = await mkTask('Somewhere a person spoke');
+      const askDoc = await mkTask('Pick a colour');
+      const mkThread = async (docId: string, body: Record<string, unknown>) => {
+        const made = await post(`/api/docs/${encodeURIComponent(docId)}/threads`, {
+          anchor: { kind: 'subject' },
+          ...body,
+        });
+        expect(made.status).toBe(200);
+        return ((await made.json()) as { thread: { id: string } }).thread.id;
+      };
+
+      const seedThread = await mkThread(seedDoc, { author: PERSON, text: 'have a look' });
+      await mkThread(askDoc, {
+        author: AGENT,
+        text: `**${PERSON.name} — this one is yours:** should the banner be (a) green or (b) blue?`,
+      });
+
+      const askItem = async () => {
+        const res = await local(`/api/workspaces/${wsId}/review-items`);
+        expect(res.status).toBe(200);
+        const { items } = (await res.json()) as {
+          items: Array<{ docId: string; direct?: boolean; askedAt?: number; ask: string }>;
+        };
+        return items.find((i) => i.docId === askDoc);
+      };
+
+      // Positive control: the field arrives through the route at all, and the
+      // extracted ask is the question rather than a clip from character zero.
+      const before = await askItem();
+      expect(before?.direct).toBe(true);
+      expect(before?.ask).toContain('(a) green or (b) blue?');
+      expect(typeof before?.askedAt).toBe('number');
+
+      // Resolving the person's own thread on ANOTHER task must not change who
+      // counts as a person.
+      const closed = await local(
+        `/api/docs/${encodeURIComponent(seedDoc)}/threads/${encodeURIComponent(seedThread)}/resolve`,
+        { method: 'POST' },
+      );
+      expect(closed.status).toBe(200);
+
+      const after = await askItem();
+      expect(after?.direct).toBe(true);
+      expect(after?.ask).toContain('(a) green or (b) blue?');
+    });
+
     it('404s an unknown workspace rather than answering with an empty queue', async () => {
       const res = await local('/api/workspaces/w-does-not-exist/review-items');
       expect(res.status).toBe(404);
