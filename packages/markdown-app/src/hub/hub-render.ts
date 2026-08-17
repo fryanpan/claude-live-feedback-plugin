@@ -2245,10 +2245,37 @@ export function renderTaskDetail(
   if (linkChips) panel.append(linkChips);
 
   if (task.quote) {
+    // An unlabelled blockquote above a rewritten description is silent about
+    // what it is, and the two readings it invites want opposite reactions:
+    // "here is what you said, check I understood it" versus "here is a source
+    // somebody chose to quote". The label settles it.
+    //
+    // ONE label serves every quote, because `quote` has exactly one meaning.
+    // All four writers fill it with the words the task came from, verbatim: a
+    // dictated capture transcript (`quoteForCapture`), the human's words on a
+    // chat-born `create_tasks` row, the latest HUMAN comment on a
+    // `promote_to_task` (agent replies are excluded there by design), and the
+    // row's own pre-rewrite title-and-body preserved by `noteBodyEdited`.
+    // None of them is an author-chosen quotation, so the field needs no way to
+    // say which kind it is and the label cannot lie on a kind it doesn't cover.
+    //
+    // "Original words" rather than anything that names a person: the preserved
+    // pre-rewrite body of an agent-created row is not something a human said,
+    // so "in their words" / "what Bryan said" would be false on that case — and
+    // a label that lies is worse than no label. `figure` + `figcaption` is the
+    // markup for a quotation with its own attribution, so the caption is read
+    // as belonging to the quote rather than as a heading over the panel.
+    const fig = document.createElement('figure');
+    fig.className = 'hub-detail-quote-block';
+    const cap = document.createElement('figcaption');
+    cap.className = 'hub-detail-quote-label';
+    cap.textContent = 'Original words';
+    cap.title = 'The words this task came from, kept verbatim.';
     const q = document.createElement('blockquote');
     q.className = 'hub-detail-quote';
     q.textContent = task.quote;
-    panel.append(q);
+    fig.append(cap, q);
+    panel.append(fig);
   }
 
   if (task.answer) {
