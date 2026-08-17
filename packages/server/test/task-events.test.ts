@@ -238,7 +238,10 @@ describe('task store events + audit log', () => {
       if (!open.ok || !closed.ok) throw new Error('create failed');
       store.transition(closed.task.id, 'done', { actor: AGENT, evidence: { commit: 'fff0000' } });
       events.length = 0;
-      const res = store.setGoalList(ws.id, [GOALS[0] as WorkspaceGoal], { actor: PERSON });
+      const res = store.setGoalList(ws.id, [GOALS[0] as WorkspaceGoal], {
+        actor: PERSON,
+        drop: ['g-perf'],
+      });
       expect(res.ok).toBe(true);
       if (!res.ok) return;
       expect(res.movedToChores).toEqual([open.task.id]);

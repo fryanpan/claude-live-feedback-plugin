@@ -213,6 +213,29 @@ const TASK_STATUSES: ReadonlySet<string> = new Set(['todo', 'in-progress', 'done
 /** Reserved catch-all section id for no-goal work. Never in `goals[]`. */
 export const CHORES_GOAL_ID = 'chores';
 
+/** Every goal and subgoal as one flat list, parent before its children. The
+ *  ordered list is two levels deep and three call sites had each walked it by
+ *  hand; a fourth that forgot the inner loop would silently ignore subgoals,
+ *  which is exactly the kind of half-coverage the goal-list edits keep
+ *  producing. Ordering is the read order, so callers can report in it. */
+export function flattenGoals(
+  goals: WorkspaceGoal[],
+): Array<{ id: string; title: string; dueAt?: number; parent?: string }> {
+  const out: Array<{ id: string; title: string; dueAt?: number; parent?: string }> = [];
+  for (const g of goals) {
+    out.push({ id: g.id, title: g.title, ...(g.dueAt !== undefined ? { dueAt: g.dueAt } : {}) });
+    for (const s of g.subgoals ?? []) {
+      out.push({
+        id: s.id,
+        title: s.title,
+        ...(s.dueAt !== undefined ? { dueAt: s.dueAt } : {}),
+        parent: g.id,
+      });
+    }
+  }
+  return out;
+}
+
 export interface TaskActor {
   id: string;
   name: string;
@@ -1190,8 +1213,37 @@ export type SetGoalListResult =
       /** Open tasks whose goal or subgoal id disappeared, moved to Chores —
        *  reported so the caller can re-place them (§3.2 edit contract). */
       movedToChores: string[];
+      /** DONE tasks left pointing at a goal id the list no longer has. They
+       *  deliberately stay put — a done placement is history, not a claim
+       *  about current priorities — but they are what produces the bare
+       *  `reorderable: false` row in `get_workspace`, and until this field
+       *  existed nothing reported them at all. Re-place them with
+       *  `set_task_goal` if you want the row gone. */
+      strandedDone: string[];
     }
-  | { ok: false; error: 'workspace-not-found' | 'reserved-goal-id' | 'duplicate-goal-id' };
+  | { ok: false; error: 'workspace-not-found' | 'reserved-goal-id' | 'duplicate-goal-id' }
+  | {
+      ok: false;
+      error: 'would-strand-tasks';
+      /** Every goal or subgoal id the submitted list drops that still holds
+       *  tasks, with what it holds. Nothing was written — the caller either
+       *  meant a RENAME (use `renameGoal`, which cannot move a task) or
+       *  meant the removal, in which case naming these ids in `drop` says so
+       *  explicitly. A caller working from a stale read cannot name a goal it
+       *  never saw, which is the exact case this refuses. */
+      stranding: Array<{ id: string; title: string; openTasks: number; doneTasks: number }>;
+    };
+
+export type RenameGoalResult =
+  | {
+      ok: true;
+      workspace: HubWorkspace;
+      /** False when the title (and dueAt) already matched — no event. */
+      changed: boolean;
+      /** The row as it now stands. */
+      goal: { id: string; title: string; dueAt?: number };
+    }
+  | { ok: false; error: 'workspace-not-found' | 'goal-not-found' | 'reserved-goal-id' };
 
 export type ReorderGoalsResult =
   | {
@@ -2596,11 +2648,29 @@ export class TaskStore {
    * the caller can re-place them. Deliberately NO re-triage request fires —
    * a reorder changes no placement's accuracy, and a removal already lands
    * every affected task where the caller is told to look.
+   *
+   * A DROP THAT WOULD STRAND WORK IS REFUSED unless `drop` names the id.
+   * This is a full replace keyed by id, so the natural way to rename a band —
+   * submit the list with a new id and the new title — reads here as one goal
+   * removed and a different one added: the old band's open tasks swept to
+   * Chores, its done tasks left pointing at an id that is gone, and a
+   * successful-looking result. The damage is proportional to how much the
+   * band held, and it surfaces days later as "why is my top band empty".
+   * `renameGoal` is the non-destructive way to change a title; this guard is
+   * what makes the destructive path stop being the DEFAULT one. It fires
+   * only for ids that actually hold tasks, so it can never refuse a call
+   * that was about to lose nothing.
    */
   setGoalList(
     workspaceId: string,
     goals: WorkspaceGoal[],
-    opts: { actor: { id: string; name: string; kind?: string } },
+    opts: {
+      actor: { id: string; name: string; kind?: string };
+      /** Goal/subgoal ids the caller INTENDS to remove even though they hold
+       *  tasks. Consulted only as a lookup set: an entry for an id that is
+       *  not being removed does nothing, so it can never widen the replace. */
+      drop?: string[];
+    },
   ): SetGoalListResult {
     const state = this.workspaces.get(workspaceId);
     if (!state) return { ok: false, error: 'workspace-not-found' };
@@ -2616,8 +2686,33 @@ export class TaskStore {
 
     const oldGoals = workspace.goals;
     if (JSON.stringify(oldGoals) === JSON.stringify(goals)) {
-      return { ok: true, workspace, changed: false, movedToChores: [] };
+      return { ok: true, workspace, changed: false, movedToChores: [], strandedDone: [] };
     }
+
+    // What this replace would REMOVE, and what each removal holds. Computed
+    // before a single byte is written, because a refusal has to leave the
+    // board exactly as the caller found it.
+    const keptIds = new Set(ids);
+    const acknowledged = new Set(opts.drop ?? []);
+    const stranding: Array<{ id: string; title: string; openTasks: number; doneTasks: number }> =
+      [];
+    for (const removed of flattenGoals(oldGoals)) {
+      if (keptIds.has(removed.id) || acknowledged.has(removed.id)) continue;
+      let openTasks = 0;
+      let doneTasks = 0;
+      for (const task of state.tasks.values()) {
+        if (task.goal !== removed.id) continue;
+        if (task.status === 'done') doneTasks += 1;
+        else openTasks += 1;
+      }
+      // Both halves count. The open one is swept to Chores (loud-ish, it is
+      // reported); the done one silently orphans, and is the half nothing
+      // used to mention.
+      if (openTasks + doneTasks > 0) {
+        stranding.push({ id: removed.id, title: removed.title, openTasks, doneTasks });
+      }
+    }
+    if (stranding.length > 0) return { ok: false, error: 'would-strand-tasks', stranding };
 
     // Same members in a different order = the priority gesture; anything
     // else (add / remove / retitle / dueAt) = an edit. Sorting by id makes
@@ -2639,6 +2734,7 @@ export class TaskStore {
     // is history, not a claim about current priorities.
     const newIds = new Set([...ids, CHORES_GOAL_ID]);
     const moved: Array<{ task: Task; fromGoal: string }> = [];
+    const strandedDone: string[] = [];
     let choresMax = Math.max(
       0,
       ...Array.from(state.tasks.values())
@@ -2646,7 +2742,14 @@ export class TaskStore {
         .map((t) => t.order),
     );
     for (const task of state.tasks.values()) {
-      if (task.status === 'done' || newIds.has(task.goal)) continue;
+      if (newIds.has(task.goal)) continue;
+      // Done tasks stay put, but they are now NAMED: this is the half that
+      // used to leave a bare row in the read with nothing in the write's
+      // answer pointing at it.
+      if (task.status === 'done') {
+        strandedDone.push(task.id);
+        continue;
+      }
       moved.push({ task, fromGoal: task.goal });
       choresMax += 1;
       task.goal = CHORES_GOAL_ID;
@@ -2680,7 +2783,138 @@ export class TaskStore {
         ts,
       });
     }
-    return { ok: true, workspace, changed: true, movedToChores: moved.map((m) => m.task.id) };
+    return {
+      ok: true,
+      workspace,
+      changed: true,
+      movedToChores: moved.map((m) => m.task.id),
+      strandedDone,
+    };
+  }
+
+  /**
+   * Change a goal's TITLE (and optionally its dueAt) in place, at either
+   * scope, without touching its id — the common half of what `set_goal_list`
+   * was being used for, separated from the destructive half.
+   *
+   * The whole contract is that nothing can move. A task's band is its goal
+   * ID, and no reachable input here changes an id, so a rename cannot sweep
+   * open work to Chores and cannot orphan a done task. That is the point:
+   * before this existed, the natural gesture for "rename this band" was to
+   * submit the full list with a new id, which the store reads as a removal
+   * plus an addition and which strands everything the band held.
+   *
+   * `chores` is refused as RESERVED rather than not-found — it is a real row
+   * a caller genuinely saw in the read, and its label is fixed, so "no such
+   * goal" would send them hunting for a typo. Same split `reorderGoals`
+   * draws for the same reason.
+   *
+   * Emits the existing `workspace.goals_changed` with kind 'edit' (a retitle
+   * IS an edit under that taxonomy), so nothing downstream needs a new case.
+   *
+   * DELIBERATELY NOT A RE-KEY. This verb changes the title and never the id,
+   * and the obvious next proposal — "let it take a NEW id and carry the
+   * band's tasks across" — is the one to resist. Read this before adding it:
+   *
+   *  - The demand for re-keying was never a demand for re-keying. It was
+   *    people renaming, and reaching for the only verb that could restate a
+   *    title. With a retitle that works, "give this band a different id" has
+   *    no caller left that isn't already better served here.
+   *  - It would be a SECOND bulk task-mover living beside `setTaskGoal`, on
+   *    the path that has already produced this file's worst bug. Every band
+   *    it moved would be moved implicitly, as a side effect of an edit that
+   *    reads like a label change — which is precisely the shape of the
+   *    silent stranding the `would-strand-tasks` refusal exists to end.
+   *  - The honest way to genuinely retire an id is already reachable and is
+   *    two explicit steps: `setGoalList` with the old id named in `drop`,
+   *    then `setTaskGoal` per task. The refusal message names both, so the
+   *    caller who really wanted a re-key is told where to go rather than
+   *    handed a verb that moves work on their behalf.
+   */
+  renameGoal(
+    workspaceId: string,
+    goalId: string,
+    patch: {
+      title: string;
+      /** A number sets it; `null` clears it; omitted leaves it alone. */
+      dueAt?: number | null;
+    },
+    opts: { actor: { id: string; name: string; kind?: string } },
+  ): RenameGoalResult {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return { ok: false, error: 'workspace-not-found' };
+    const workspace = state.workspace;
+    if (goalId === CHORES_GOAL_ID) return { ok: false, error: 'reserved-goal-id' };
+
+    const oldGoals = workspace.goals;
+    const current = flattenGoals(oldGoals).find((g) => g.id === goalId);
+    if (!current) return { ok: false, error: 'goal-not-found' };
+
+    const nextDueAt =
+      patch.dueAt === undefined ? current.dueAt : patch.dueAt === null ? undefined : patch.dueAt;
+    if (current.title === patch.title && current.dueAt === nextDueAt) {
+      return {
+        ok: true,
+        workspace,
+        changed: false,
+        goal: {
+          id: goalId,
+          title: current.title,
+          ...(current.dueAt !== undefined ? { dueAt: current.dueAt } : {}),
+        },
+      };
+    }
+
+    /** Rebuild the row with dueAt present only when it has a value — an
+     *  explicit `dueAt: undefined` key would survive JSON.stringify
+     *  comparisons differently from an absent one. */
+    const retitled = <T extends { id: string; title: string; dueAt?: number }>(row: T): T => ({
+      ...row,
+      title: patch.title,
+      ...(nextDueAt !== undefined ? { dueAt: nextDueAt } : { dueAt: undefined }),
+    });
+    const strip = <T extends object>(row: T): T =>
+      Object.fromEntries(Object.entries(row).filter(([, v]) => v !== undefined)) as T;
+
+    // A NEW array either way: `oldGoals` rides on the event, so mutating in
+    // place would make both sides report the new title and the audit row
+    // would say nothing (the same trap `reorderGoals` documents).
+    const newGoals: WorkspaceGoal[] = oldGoals.map((g) => {
+      if (g.id === goalId) return strip(retitled(g));
+      if (!g.subgoals?.some((s) => s.id === goalId)) return g;
+      return {
+        ...g,
+        subgoals: g.subgoals.map((s) => (s.id === goalId ? strip(retitled(s)) : s)),
+      };
+    });
+    workspace.goals = newGoals;
+    this.scheduleSave(workspaceId);
+
+    this.emit({
+      type: 'workspace.goals_changed',
+      workspaceId,
+      batchId: cryptoId('gc'),
+      kind: 'edit',
+      oldGoals,
+      newGoals,
+      actor: {
+        id: opts.actor.id,
+        name: opts.actor.name,
+        kind: classifyActor(opts.actor),
+      },
+      movedToChores: [],
+      ts: Date.now(),
+    });
+    return {
+      ok: true,
+      workspace,
+      changed: true,
+      goal: {
+        id: goalId,
+        title: patch.title,
+        ...(nextDueAt !== undefined ? { dueAt: nextDueAt } : {}),
+      },
+    };
   }
 
   /**

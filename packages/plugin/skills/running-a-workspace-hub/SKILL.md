@@ -74,11 +74,33 @@ set_goal_list(workspaceId, goals: [
   level — never invent one.
 - `"chores"` is **reserved**: it always renders last and must not appear in the
   list you pass.
-- **Destructive edge:** this is a full REPLACE, so open tasks whose goal id is
-  not in the list you send move to the bottom of Chores — including a goal
-  another writer added since you last read. The result reports
-  `movedToChores` — re-place each one with `set_task_goal` rather than leaving
-  them piled.
+- **Destructive edge, now gated:** this is a full REPLACE, so any id you leave
+  out is removed — including a goal another writer added since you last read.
+  If a removed id still holds tasks the call is **refused** with
+  `would-strand-tasks`, naming each band and how many open and done tasks it
+  holds, and nothing is written. Removing a band that holds work is therefore
+  a second, deliberate call that lists its id in `drop`; removing an empty one
+  needs no ceremony. On success the result reports `movedToChores` (open tasks
+  swept to the bottom of Chores — re-place each with `set_task_goal` rather
+  than leaving them piled) and `strandedDone` (done tasks still pointing at
+  the removed id, which is what leaves a bare row in `get_workspace`).
+
+## Rename a goal with `rename_goal`, not `set_goal_list`
+
+```
+rename_goal(workspaceId, goal: "latency", title: "Cut p95 latency to 200ms")
+rename_goal(workspaceId, goal: "index",   title: "Index shape", dueAt: null)
+```
+
+- **The id never changes, so nothing moves.** A task's band IS its goal id.
+- This is the reason the verb exists: `set_goal_list` is keyed by id, so
+  "renaming" a band there by giving it a new id is a removal plus an addition
+  — its open tasks land in Chores and its done tasks orphan onto an id that no
+  longer exists, and the new title appears exactly as if it had worked. The
+  damage is proportional to how much the band held, and it surfaces days later
+  as "why is my top band empty".
+- `dueAt` is optional: a number sets it, `null` clears it, omitting it leaves
+  it alone. `chores` is refused — its label is fixed.
 
 ## Change priority with `reorder_goals`, not `set_goal_list`
 

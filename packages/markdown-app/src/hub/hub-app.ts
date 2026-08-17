@@ -717,26 +717,21 @@ async function main(): Promise<void> {
     if (!res.ok) showToast('Rename failed');
   }
 
+  /**
+   * Retitle one band. This used to clone the client's copy of the goal list,
+   * edit one title in it, and PUT the whole thing back — which is a full
+   * REPLACE keyed by id built from a read that may be minutes old. A band
+   * another writer added in between was simply absent from the clone, so the
+   * replace removed it: its open tasks to Chores, its done tasks orphaned.
+   * The rename route touches one row by id and cannot move a task, so the
+   * stale copy stops being able to do damage at all.
+   */
   async function retitleGoal(sectionId: string, title: string): Promise<void> {
-    const goals = structuredClone(state.info?.goals ?? []);
-    let hit = false;
-    for (const g of goals) {
-      if (g.id === sectionId) {
-        g.title = title;
-        hit = true;
-      }
-      for (const sg of g.subgoals ?? []) {
-        if (sg.id === sectionId) {
-          sg.title = title;
-          hit = true;
-        }
-      }
-    }
-    if (!hit) return;
-    const res = await send(`/api/workspaces/${encodeURIComponent(workspaceId)}/goals`, 'PUT', {
-      goals,
-      author,
-    });
+    const res = await send(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/goals/rename`,
+      'POST',
+      { goal: sectionId, title, author },
+    );
     if (!res.ok) showToast('Goal rename failed');
   }
 

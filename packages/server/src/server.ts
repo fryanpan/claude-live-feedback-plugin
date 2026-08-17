@@ -6,6 +6,7 @@ import {
   type DocType,
   type User,
   type WebhookPayload,
+  anchors,
   contentKind,
   suggestOps,
   summaryHash,
@@ -2461,8 +2462,85 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!goals) {
             return j(400, { error: 'goals must be [{id, title, dueAt?, subgoals?}]' });
           }
-          const res = taskStore.setGoalList(workspaceId, goals, { actor: author });
-          if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
+          // `drop` is the caller's explicit "yes, remove that band even
+          // though it holds work". A malformed value must NOT read as absent
+          // — silently treating a string as no acknowledgement would turn a
+          // typo into a refusal the caller cannot explain.
+          const drop = body?.drop;
+          if (
+            drop !== undefined &&
+            (!Array.isArray(drop) || drop.some((id) => typeof id !== 'string' || id.length === 0))
+          ) {
+            return j(400, { error: 'drop must be an array of goal ids' });
+          }
+          const res = taskStore.setGoalList(workspaceId, goals, {
+            actor: author,
+            ...(drop !== undefined ? { drop: drop as string[] } : {}),
+          });
+          if (!res.ok) {
+            // The refusal is the whole feature, so it has to name the way
+            // out: the MCP layer surfaces this body verbatim as the error
+            // text an agent reads.
+            const detail =
+              res.error === 'would-strand-tasks'
+                ? {
+                    message:
+                      'this replace would strand work filed under ' +
+                      `${res.stranding
+                        .map(
+                          (s) => `"${s.title}" (${s.id}: ${s.openTasks} open, ${s.doneTasks} done)`,
+                        )
+                        .join('; ')}. ` +
+                      'If you meant to RENAME a band, use rename_goal — it changes the title ' +
+                      'in place and cannot move a task. If you meant to remove it, say so by ' +
+                      'listing its id in `drop`; open tasks then land at the bottom of Chores ' +
+                      'and done tasks keep pointing at the removed id, both reported back.',
+                  }
+                : {};
+            return j(res.error === 'workspace-not-found' ? 404 : 400, { ...res, ...detail });
+          }
+          return j(200, res);
+        }
+        // rename_goal (§3.2): change a band's TITLE without touching its id.
+        // Its own route rather than a flag on the PUT above, because the
+        // whole value is that it cannot reach the replace path at all — a
+        // task's band IS its goal id, and nothing here changes an id.
+        const wsRenameMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/goals\/rename$/);
+        if (wsRenameMatch && req.method === 'POST') {
+          const workspaceId = decodeURIComponent(wsRenameMatch[1] ?? '');
+          const body = await safeJson(req);
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const goalId = body?.goal;
+          if (typeof goalId !== 'string' || goalId.length === 0) {
+            return j(400, { error: 'goal must be a goal id' });
+          }
+          const title = body?.title;
+          if (typeof title !== 'string' || title.trim().length === 0) {
+            return j(400, { error: 'title must be a non-empty string' });
+          }
+          // `null` clears dueAt, a number sets it, absent leaves it alone —
+          // three distinct meanings, so the parse keeps them distinct.
+          const dueAt = body?.dueAt;
+          if (dueAt !== undefined && dueAt !== null && typeof dueAt !== 'number') {
+            return j(400, { error: 'dueAt must be a number, or null to clear it' });
+          }
+          const res = taskStore.renameGoal(
+            workspaceId,
+            goalId,
+            {
+              title: title.trim(),
+              ...(dueAt !== undefined ? { dueAt: dueAt as number | null } : {}),
+            },
+            { actor: author },
+          );
+          if (!res.ok) {
+            // `chores` is a 400, not a 404: it is a row the caller really
+            // saw, so "no such goal" would send them hunting for a typo.
+            const status =
+              res.error === 'reserved-goal-id' ? 400 : res.error === 'goal-not-found' ? 404 : 404;
+            return j(status, res);
+          }
           return j(200, res);
         }
         // reorder_goals (§3.2): the priority gesture, permutation-only. A
@@ -3025,6 +3103,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               const body = await safeJson(req);
               const anchor = body?.anchor as Anchor | undefined;
               if (!anchor) return j(400, { error: 'anchor required' });
+              // Same gate as thread creation: this route can plant a
+              // malformed anchor on an EXISTING thread just as easily.
+              const reanchorCheck = anchors.validateAnchor(anchor);
+              if (!reanchorCheck.ok) return j(400, { error: reanchorCheck.error });
               const t = rooms.reanchor(docId, threadId, anchor);
               return t ? j(200, { thread: t }) : j(404, { error: 'thread not found' });
             }
@@ -3070,6 +3152,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             if (!user || !text || !anchor) {
               return j(400, { error: 'author + text + anchor required' });
             }
+            // Validate BEFORE the write. An anchor whose startRel/endRel
+            // don't decode is accepted silently by the CRDT and then kills
+            // the re-anchor sweep from inside a Yjs observer, i.e. on
+            // whatever request happens to be in flight minutes later. The
+            // caller that wrote it has to be the one that hears about it.
+            const anchorCheck = anchors.validateAnchor(anchor);
+            if (!anchorCheck.ok) return j(400, { error: anchorCheck.error });
             const t = await rooms.postComment(docId, null, user, text, anchor, {
               generate: !visitor,
             });
@@ -3712,6 +3801,15 @@ h1{font-size:1.25rem;margin:0 0 .5rem}p{color:#555;margin:0}
  * which hub it came from; `view` adds the workspace NAME so the thread reads
  * without anyone resolving an id.
  *
+ * `identity-scope="host"` is what makes the feedback ATTRIBUTED. The widget
+ * normally keeps its identity under a `cfw:` prefix so it cannot touch a
+ * third-party host page's storage — but this page is ours, and the hub has
+ * already asked the reader their name (`ensureUserIdentity`, unprefixed keys).
+ * Without this attribute the same page holds two identities for one human: the
+ * presence strip greets the reader by the name they gave, while every comment
+ * the widget posts from that same page is signed "Anonymous <animal>".
+ * Observed in a browser on 2026-08-17.
+ *
  * Declarative `<claude-feedback-widget>` rather than `FeedbackWidget.init` on
  * purpose: a module script is deferred, so a plain inline script calling
  * `init` would run before the module that defines it. The element upgrades on
@@ -3733,7 +3831,7 @@ function renderHubShell(
   const widget = opts.feedback
     ? `
     <script type="module" src="/widget.esm.js"></script>
-    <claude-feedback-widget doc-id="${escape(HUB_FEEDBACK_DOC_ID)}" view="${safeName}"></claude-feedback-widget>`
+    <claude-feedback-widget doc-id="${escape(HUB_FEEDBACK_DOC_ID)}" view="${safeName}" identity-scope="host"></claude-feedback-widget>`
     : '';
   return `<!doctype html>
 <html lang="en">

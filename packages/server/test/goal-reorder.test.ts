@@ -241,8 +241,11 @@ describe('TaskStore.reorderGoals', () => {
     // Positive control for the assertion above: the SAME omission expressed
     // through set_goal_list is exactly what dumps a goal's tasks into Chores,
     // which is the hazard reorderGoals cannot express.
+    // `drop` names the band being removed — the acknowledgement the guard
+    // now asks for. It changes who has to SAY the removal, not what one does.
     const dropped = store.setGoalList(wsId, [GOALS[2], GOALS[1]] as WorkspaceGoal[], {
       actor: PERSON,
+      drop: ['g-launch-copy'],
     });
     expect(dropped.ok).toBe(true);
     if (dropped.ok) expect(dropped.movedToChores).toEqual([b.task.id]);
@@ -323,7 +326,10 @@ describe('summarizeGoals marks which rows a reorder accepts', () => {
       // into Chores, which is the other synthetic row.
       s.transition(t.task.id, 'in-progress', { actor: PERSON });
       s.transition(t.task.id, 'done', { actor: PERSON, evidence: { commit: 'abc1234' } });
-      s.setGoalList(wsId, [GOALS[0], GOALS[2]] as WorkspaceGoal[], { actor: PERSON });
+      s.setGoalList(wsId, [GOALS[0], GOALS[2]] as WorkspaceGoal[], {
+        actor: PERSON,
+        drop: ['g-perf'],
+      });
     });
     const orphan = rows.find((r) => r.id === 'g-perf');
     expect(orphan).toBeDefined();
@@ -384,7 +390,10 @@ describe('TaskStore.reorderGoals names a RESERVED id as reserved', () => {
     if (!t.ok) throw new Error('create failed');
     store.transition(t.task.id, 'in-progress', { actor: PERSON });
     store.transition(t.task.id, 'done', { actor: PERSON, evidence: { commit: 'abc1234' } });
-    store.setGoalList(wsId, [GOALS[0], GOALS[2]] as WorkspaceGoal[], { actor: PERSON });
+    store.setGoalList(wsId, [GOALS[0], GOALS[2]] as WorkspaceGoal[], {
+      actor: PERSON,
+      drop: ['g-perf'],
+    });
 
     // Presence control: g-perf really is still a row in the read, which is
     // the whole reason a caller would send it back.
@@ -636,10 +645,12 @@ describe('POST /api/workspaces/:id/goals/reorder', () => {
         );
       }
       // Remove g-perf: the done task stays put, so its goal id becomes an
-      // orphan row rather than disappearing.
+      // orphan row rather than disappearing. `drop` is what makes that
+      // removal deliberate rather than the accident a stale list produces.
       await jj(
         await put(`/api/workspaces/${wsId}/goals`, {
           goals: [GOALS[0], GOALS[2]],
+          drop: ['g-perf'],
           author: PERSON,
         }),
       );

@@ -1,4 +1,5 @@
 import type { EditorState } from '@codemirror/state';
+import { anchors } from '@feedback/core';
 import * as Y from 'yjs';
 
 /**
@@ -22,7 +23,12 @@ export function encodeOffsetRel(content: Y.Text, offset: number): Uint8Array {
 /** Resolve a serialized relative position to an absolute CM offset. Returns
  *  null when the anchor no longer references a valid point in `content`. */
 export function resolveRelOffset(ydoc: Y.Doc, encoded: Uint8Array): number | null {
-  const abs = Y.createAbsolutePositionFromRelativePosition(Y.decodeRelativePosition(encoded), ydoc);
+  // An anchor written before the routes validated them can carry undecodable
+  // bytes. Answer null (renders as unresolved) rather than throwing — an
+  // exception here takes the whole surface down instead of one comment.
+  const rel = anchors.decodeRelativePositionSafe(encoded);
+  if (!rel) return null;
+  const abs = Y.createAbsolutePositionFromRelativePosition(rel, ydoc);
   if (!abs) return null;
   return abs.index;
 }
