@@ -1861,12 +1861,30 @@ a.hub-link-chip:hover {
 .hub-link-internal {
   color: var(--fg-muted);
 }
-.hub-detail-quote {
+/* A preserved capture, labelled. The caption is what separates "here is what
+   you said" from "here is a source" — see the comment at its call site. It
+   sits INSIDE the figure's left rule so the label and the words it names read
+   as one block; at 430px the caption wraps to its own line before the quote
+   does, which is why the rule is on the figure and not on the blockquote. */
+.hub-detail-quote-block {
   margin: 0 0 12px;
   padding: 6px 12px;
   border-left: 3px solid var(--border-strong);
+}
+.hub-detail-quote-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  margin-bottom: 4px;
+}
+.hub-detail-quote {
+  margin: 0;
+  padding: 0;
   color: var(--fg-muted);
   font-family: var(--prose);
+  overflow-wrap: anywhere;
 }
 .hub-detail-answer {
   font-weight: 600;
