@@ -10,7 +10,7 @@
       "name": "live-feedback",
       "source": "./packages/plugin",
       "description": "MCP tools + /feedback commands + PreToolUse hook + live review surface (markdown + injectable widget).",
-      "version": "0.1.43",
+      "version": "0.1.45",
       "homepage": "https://github.com/fryanpan/claude-live-feedback-plugin"
     }
   ]
