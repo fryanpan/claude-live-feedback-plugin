@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import type { Task, TaskStoreEvent, TriageRequest } from '../src/tasks.ts';
+import { type GoalIds, seedGoalsOverHttp } from './goal-seed.ts';
 
 const PERSON = { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' };
 const AGENT = { id: 'agent-search-revamp', name: 'Search Revamp', kind: 'known', color: '#888888' };
@@ -970,27 +971,24 @@ describe('hub workspace + task routes', () => {
 
   describe('GET /api/workspaces/:id/next (the work queue)', () => {
     /** Goals a, b + a chores task, so priority order is observable. */
-    async function seed(): Promise<{ wsId: string; ids: Record<string, string> }> {
+    async function seed(): Promise<{ wsId: string; ids: Record<string, string>; G: GoalIds }> {
       const r = await post('/api/workspaces', { name: 'queue-ws', goal: 'Ship it.' });
       const wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
-      const g = await local(`/api/workspaces/${wsId}/goals`, {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          goals: [
-            {
-              id: 'g-ship',
-              title: '1. Ship',
-              subgoals: [
-                { id: 'g-blockers', title: '1.1 Blockers' },
-                { id: 'g-loop', title: '1.2 Loop' },
-              ],
-            },
-          ],
-          author: PERSON,
-        }),
-      });
-      expect(g.status).toBe(200);
+      const G = await seedGoalsOverHttp(
+        base,
+        wsId,
+        [
+          {
+            key: 'ship',
+            title: '1. Ship',
+            subgoals: [
+              { key: 'blockers', title: '1.1 Blockers' },
+              { key: 'loop', title: '1.2 Loop' },
+            ],
+          },
+        ],
+        PERSON,
+      );
       const mk = async (opts: Record<string, unknown>): Promise<string> => {
         const res = await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, ...opts });
         expect(res.status).toBe(200);
@@ -998,13 +996,13 @@ describe('hub workspace + task routes', () => {
       };
       const ids: Record<string, string> = {};
       ids.chore = await mk({ title: 'A chore', goal: 'chores' });
-      ids.loop = await mk({ title: 'Loop work', goal: 'g-loop' });
+      ids.loop = await mk({ title: 'Loop work', goal: G.loop });
       ids.blocker = await mk({
         title: 'Delivery blocker',
-        goal: 'g-blockers',
+        goal: G.blockers,
         body: 'Agent can ship so that peers get the fix.\n\nDone when: merged.',
       });
-      return { wsId, ids };
+      return { wsId, ids, G };
     }
 
     it('answers in priority order, with the goal title and the description line', async () => {
@@ -1062,30 +1060,26 @@ describe('hub workspace + task routes', () => {
 
   describe('GET /api/workspaces/:id (goal summary)', () => {
     it('returns the ordered goals with counts, parent then subgoals, Chores last', async () => {
-      const { wsId } = await (async () => {
+      const { wsId, G } = await (async () => {
         const r = await post('/api/workspaces', { name: 'summary-ws', goal: 'Ship it.' });
         const id = ((await r.json()) as { workspace: { id: string } }).workspace.id;
-        await local(`/api/workspaces/${id}/goals`, {
-          method: 'PUT',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            goals: [
-              { id: 'g-one', title: '1. One', subgoals: [{ id: 'g-one-a', title: '1.1 One A' }] },
-            ],
-            author: PERSON,
-          }),
-        });
+        const goals = await seedGoalsOverHttp(
+          base,
+          id,
+          [{ key: 'one', title: '1. One', subgoals: [{ key: 'oneA', title: '1.1 One A' }] }],
+          PERSON,
+        );
         await post(`/api/workspaces/${id}/tasks`, {
           author: AGENT,
           title: 'in a subgoal',
-          goal: 'g-one-a',
+          goal: goals.oneA,
         });
         await post(`/api/workspaces/${id}/tasks`, {
           author: AGENT,
           title: 'a chore',
           goal: 'chores',
         });
-        return { wsId: id };
+        return { wsId: id, G: goals };
       })();
 
       const res = await local(`/api/workspaces/${wsId}`);
@@ -1093,9 +1087,9 @@ describe('hub workspace + task routes', () => {
       const { goalSummary } = (await res.json()) as {
         goalSummary: Array<{ id: string; title: string; depth: number; todo: number }>;
       };
-      expect(goalSummary.map((g) => g.id)).toEqual(['g-one', 'g-one-a', 'chores']);
+      expect(goalSummary.map((g) => g.id)).toEqual([G.one, G.oneA, 'chores']);
       expect(goalSummary.map((g) => g.depth)).toEqual([0, 1, 0]);
-      expect(goalSummary.find((g) => g.id === 'g-one-a')?.todo).toBe(1);
+      expect(goalSummary.find((g) => g.id === G.oneA)?.todo).toBe(1);
       expect(goalSummary.find((g) => g.id === 'chores')?.todo).toBe(1);
     });
   });

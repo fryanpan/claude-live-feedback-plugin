@@ -27,10 +27,13 @@ import {
   parseTrackerMarkdown,
 } from '../src/task-import.ts';
 import type { Task, TaskStoreEvent, WorkspaceGoal } from '../src/tasks.ts';
+import { seedGoalsOverHttp } from './goal-seed.ts';
 
 const FIXTURE = join(import.meta.dir, 'fixtures', 'tracker-harborlight.md');
 const PERSON: User = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
 const PUBLIC_HOST = 'feedback.example.com';
+/** `g-` plus 12 base64url chars — the id the SERVER mints for a new band. */
+const GENERATED = /^g-[A-Za-z0-9_-]{12}$/;
 
 const emptyWorkspace = { goals: [] as WorkspaceGoal[] };
 
@@ -375,6 +378,11 @@ describe('import route (dry-run first, apply stamps the file)', () => {
     expect(res.dryRun).toBe(true);
     expect(res.mapping.tasks).toHaveLength(6);
     expect(res.mapping.goals).toHaveLength(2);
+    // Every mapped goal here is NEW, so its id is a parse-local placeholder
+    // that keys rows to their heading — not a board id, and not the id the
+    // apply will mint. Nothing that reads a board may be pointed at it.
+    expect(res.mapping.goals.every((g) => !g.existing)).toBe(true);
+    expect(res.mapping.goals.some((g) => GENERATED.test(g.id))).toBe(false);
     // Nothing created, file untouched (the absence half — apply below is the
     // positive control that this route CAN create and stamp).
     expect(await getTasks(workspaceId)).toHaveLength(0);
@@ -402,20 +410,26 @@ describe('import route (dry-run first, apply stamps the file)', () => {
     );
     unsubscribe();
     expect(res.ok).toBe(true);
-    expect(res.goalsCreated.map((g) => g.id)).toEqual([
-      '1-launch-the-vendor-directory',
-      '2-newsletter-signup',
+    // The ids are the server's to mint, so what the import owes the caller is
+    // the band it CREATED for each heading, in tracker order — an opaque id,
+    // never a slug derived from the heading.
+    expect(res.goalsCreated.map((g) => g.title)).toEqual([
+      '1. Launch the vendor directory',
+      '2. Newsletter signup',
     ]);
+    for (const g of res.goalsCreated) expect(g.id).toMatch(GENERATED);
     expect(res.tasksCreated).toHaveLength(6);
     expect(res.hubUrl).toContain(`/workspaces/${workspaceId}`);
 
-    // The board goals actually exist on the workspace.
+    // The board goals actually exist on the workspace — the reported ids are
+    // the board's ids, which is the whole claim `goalsCreated` makes.
     const { workspace } = await jj<{ workspace: { goals: WorkspaceGoal[] } }>(
       await fetch(`${base}/api/workspaces/${workspaceId}`),
     );
-    expect(workspace.goals.map((g) => g.id)).toEqual([
-      '1-launch-the-vendor-directory',
-      '2-newsletter-signup',
+    expect(workspace.goals.map((g) => g.id)).toEqual(res.goalsCreated.map((g) => g.id));
+    expect(workspace.goals.map((g) => g.title)).toEqual([
+      '1. Launch the vendor directory',
+      '2. Newsletter signup',
     ]);
 
     // Tasks landed with normalized statuses; imported statuses went through
@@ -425,7 +439,10 @@ describe('import route (dry-run first, apply stamps the file)', () => {
     const byTitle = new Map(tasks.map((t) => [t.title, t]));
     const done = byTitle.get('Draft the vendor listing page');
     expect(done?.status).toBe('done');
-    expect(done?.goal).toBe('1-launch-the-vendor-directory');
+    // The row landed in the band its heading created — asserted as the
+    // relationship, since neither side's id is knowable in advance.
+    expect(done?.goal).toBe(res.goalsCreated[0]?.id);
+    expect(byTitle.get('Pick an email provider')?.goal).toBe(res.goalsCreated[1]?.id);
     expect(done?.assignee).toBe('jordan');
     expect(done?.body).toBe('Copy approved by the co-op board');
     expect(done?.transitions).toHaveLength(1);
@@ -480,19 +497,15 @@ describe('import route (dry-run first, apply stamps the file)', () => {
 
   it('importing into a workspace with existing goals appends, never clobbers', async () => {
     const workspaceId = await seedWorkspace();
-    await jj(
-      await fetch(`${base}/api/workspaces/${workspaceId}/goals`, {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          goals: [{ id: 'g-vendor', title: 'Launch the vendor directory' }],
-          author: PERSON,
-        }),
-      }),
+    const G = await seedGoalsOverHttp(
+      base,
+      workspaceId,
+      [{ key: 'vendor', title: 'Launch the vendor directory' }],
+      PERSON,
     );
     const path = trackerCopy();
     const res = await jj<{
-      goalsCreated: Array<{ id: string }>;
+      goalsCreated: Array<{ id: string; title: string }>;
       tasksCreated: Array<{ id: string; goal: string; title: string }>;
     }>(
       await post(`/api/workspaces/${workspaceId}/import-tasks`, {
@@ -502,13 +515,19 @@ describe('import route (dry-run first, apply stamps the file)', () => {
       }),
     );
     // The matched heading reuses the existing goal; only the other is created.
-    expect(res.goalsCreated.map((g) => g.id)).toEqual(['2-newsletter-signup']);
+    expect(res.goalsCreated.map((g) => g.title)).toEqual(['2. Newsletter signup']);
+    expect(res.goalsCreated[0]?.id).toMatch(GENERATED);
     const { workspace } = await jj<{ workspace: { goals: WorkspaceGoal[] } }>(
       await fetch(`${base}/api/workspaces/${workspaceId}`),
     );
-    expect(workspace.goals.map((g) => g.id)).toEqual(['g-vendor', '2-newsletter-signup']);
+    expect(workspace.goals.map((g) => g.id)).toEqual([G.vendor, res.goalsCreated[0]?.id]);
+    // The matched heading's rows went to the goal that was already there —
+    // untouched by the mint, which is the "appends, never clobbers" half.
     expect(res.tasksCreated.find((t) => t.title === 'Draft the vendor listing page')?.goal).toBe(
-      'g-vendor',
+      G.vendor,
+    );
+    expect(res.tasksCreated.find((t) => t.title === 'Pick an email provider')?.goal).toBe(
+      res.goalsCreated[0]?.id,
     );
   });
 

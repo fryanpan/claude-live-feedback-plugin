@@ -61,19 +61,29 @@ Then give it sections:
 
 ```
 set_goal_list(workspaceId, goals: [
-  { id: "latency", title: "Cut p95 latency",
-    subgoals: [{ id: "index", title: "Index shape" }] },
-  { id: "recall",  title: "Hold recall at parity", dueAt: 1767225600000 },
+  { title: "Cut p95 latency",
+    subgoals: [{ title: "Index shape" }] },
+  { title: "Hold recall at parity", dueAt: 1767225600000 },
 ])
+→ created: [{ id: "g-7Kf9xQ2mVbNc", title: "Cut p95 latency" }, …]
 ```
 
+- **You do not name a goal's id — the server does.** Send an entry with NO
+  `id` and an opaque one is minted and handed back in `created`; that is the
+  only place you learn it, so keep it (or re-read `get_workspace`). To keep a
+  band you already have, send its `id` exactly as `get_workspace` reports it.
+  An id this board does not hold is **refused** with `unknown-goal-id`,
+  because that is how a re-key arrives: nothing here can give an existing band
+  a different id, and nothing here lets you choose one. The human-visible
+  handle is the **title**, and that is editable — see `rename_goal` below.
 - **Order IS priority.** The first goal is the highest band. To CHANGE that
   order, use `reorder_goals` (below) rather than this call — it fires the same
   `workspace.goals_changed`, never a re-triage, and it cannot lose a goal.
 - One subgoal level, maximum. `dueAt` is epoch ms and optional at every
   level — never invent one.
 - `"chores"` is **reserved**: it always renders last and must not appear in the
-  list you pass.
+  list you pass. It is the one goal id you can say out loud — every other one
+  you look up.
 - **Destructive edge, now gated:** this is a full REPLACE, so any id you leave
   out is removed — including a goal another writer added since you last read.
   If a removed id still holds tasks the call is **refused** with
@@ -94,11 +104,12 @@ rename_goal(workspaceId, goal: "index",   title: "Index shape", dueAt: null)
 
 - **The id never changes, so nothing moves.** A task's band IS its goal id.
 - This is the reason the verb exists: `set_goal_list` is keyed by id, so
-  "renaming" a band there by giving it a new id is a removal plus an addition
-  — its open tasks land in Chores and its done tasks orphan onto an id that no
-  longer exists, and the new title appears exactly as if it had worked. The
-  damage is proportional to how much the band held, and it surfaces days later
-  as "why is my top band empty".
+  "renaming" a band there by giving it a new id used to be a removal plus an
+  addition — open tasks into Chores, done tasks orphaned onto an id that no
+  longer exists, and the new title appearing exactly as if it had worked. That
+  gesture is now refused outright (`unknown-goal-id`), because ids are
+  generated and permanent. `rename_goal` is where a title change belongs, and
+  a title is the only part of a band anyone was ever really renaming.
 - `dueAt` is optional: a number sets it, `null` clears it, omitting it leaves
   it alone. `chores` is refused — its label is fixed.
 
