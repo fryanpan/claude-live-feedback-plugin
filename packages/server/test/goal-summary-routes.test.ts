@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import { goalTextHash } from '@feedback/core/goal-summary';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { workspaceRoomId } from '../src/task-projection.ts';
+import { TaskStore } from '../src/tasks.ts';
 
 const PERSON = { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' };
 
@@ -156,6 +157,36 @@ describe('workspace goal summary', () => {
 
     await put(`/api/workspaces/${id}/goal`, { summary: '   ', author: PERSON });
     expect((await readWorkspace(id)).goalSummary).toBeUndefined();
+  });
+
+  it('survives a restart — a summary written beside an unchanged goal is persisted', async () => {
+    // The board's editor resubmits the current goal whenever it changes only
+    // the short line, so this path carries real edits. In memory the change
+    // shows up instantly through the projection, which is exactly what would
+    // hide a missing write until the next restart lost it.
+    const store = new TaskStore({ dataDir, debounceMs: 1 });
+    const id = store.createWorkspace('intake', LONG_GOAL).id;
+    // Let the CREATE's own debounced save settle first. Without this pause
+    // the pending write from `createWorkspace` picks the summary up on its
+    // way out and the test passes whether or not this path schedules one —
+    // the assertion would be true and prove nothing.
+    await new Promise((r) => setTimeout(r, 30));
+    store.setWorkspaceGoal(id, LONG_GOAL, {
+      actor: PERSON,
+      summary: 'Intake, then reporting, then the rest.',
+    });
+    // Positive control: in memory it is there, so the assertion below is
+    // about persistence rather than about the write itself.
+    expect(store.getWorkspace(id)?.goalSummary?.text).toBe(
+      'Intake, then reporting, then the rest.',
+    );
+
+    await new Promise((r) => setTimeout(r, 30));
+    const reborn = new TaskStore({ dataDir, debounceMs: 1 });
+    expect(reborn.getWorkspace(id)?.goal).toBe(LONG_GOAL);
+    expect(reborn.getWorkspace(id)?.goalSummary?.text).toBe(
+      'Intake, then reporting, then the rest.',
+    );
   });
 
   it('still refuses a request that names neither a goal nor a summary', async () => {

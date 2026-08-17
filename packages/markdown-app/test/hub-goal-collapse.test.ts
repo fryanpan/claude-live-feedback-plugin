@@ -134,6 +134,48 @@ describe('goal strip', () => {
     (root.querySelector('.hub-btn-primary') as HTMLElement).click();
     expect(onGoalCommit).toHaveBeenCalledWith(ta.value, 'Intake, then reporting, then the rest.');
   });
+
+  it('does not resubmit an untouched summary alongside a rewritten goal', () => {
+    // The editor pre-fills the short line, so an unchanged field ships back
+    // with the save — and the server would hash it against the NEW goal and
+    // bless a line describing the old one. The staleness guard is meaningless
+    // if the UI launders it, so the field must come back empty here.
+    const onGoalCommit = vi.fn();
+    const stored = { text: 'Intake, then reporting, then the rest.', goalHash: 'h', ts: 1 };
+    renderGoalStrip(root, LONG_GOAL, { onGoalCommit }, stored);
+    (root.querySelector('.hub-goal-edit') as HTMLElement).click();
+    const ta = root.querySelector('textarea') as HTMLTextAreaElement;
+    ta.value = 'Actually: stop everything and fix the outage, then write the postmortem.';
+    (root.querySelector('.hub-btn-primary') as HTMLElement).click();
+    expect(onGoalCommit).toHaveBeenCalledWith(ta.value, '');
+  });
+
+  it('keeps a summary the reviewer retyped for the new goal', () => {
+    // Positive control for the guard above: it drops an UNTOUCHED line, not
+    // every line that arrives with a goal edit.
+    const onGoalCommit = vi.fn();
+    const stored = { text: 'Intake, then reporting, then the rest.', goalHash: 'h', ts: 1 };
+    renderGoalStrip(root, LONG_GOAL, { onGoalCommit }, stored);
+    (root.querySelector('.hub-goal-edit') as HTMLElement).click();
+    const ta = root.querySelector('textarea') as HTMLTextAreaElement;
+    ta.value = 'Actually: stop everything and fix the outage, then write the postmortem.';
+    const summary = root.querySelector('.hub-goal-summary-input') as HTMLInputElement;
+    summary.value = 'Fix the outage, then write it up.';
+    (root.querySelector('.hub-btn-primary') as HTMLElement).click();
+    expect(onGoalCommit).toHaveBeenCalledWith(ta.value, 'Fix the outage, then write it up.');
+  });
+
+  it('keeps an untouched summary when only the short line was being edited', () => {
+    // The goal did not move, so the stored line still describes it. Dropping
+    // it here would delete a reviewer's wording every time they opened the
+    // editor and saved.
+    const onGoalCommit = vi.fn();
+    const stored = { text: 'Intake, then reporting, then the rest.', goalHash: 'h', ts: 1 };
+    renderGoalStrip(root, LONG_GOAL, { onGoalCommit }, stored);
+    (root.querySelector('.hub-goal-edit') as HTMLElement).click();
+    (root.querySelector('.hub-btn-primary') as HTMLElement).click();
+    expect(onGoalCommit).toHaveBeenCalledWith(LONG_GOAL, 'Intake, then reporting, then the rest.');
+  });
 });
 
 describe('task detail — triaged against', () => {

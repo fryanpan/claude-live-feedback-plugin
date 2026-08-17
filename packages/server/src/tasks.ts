@@ -1363,8 +1363,15 @@ export class TaskStore {
     if (goal === workspace.goal) {
       // Nothing changed, so nothing to announce and nothing to re-triage —
       // every placement's triagedAgainst is still accurate. A summary sent
-      // alongside it still lands: it describes the same goal.
-      if (opts.summary !== undefined) this.applyGoalSummary(workspaceId, opts.summary);
+      // alongside it still lands: it describes the same goal. And it has to
+      // be SAVED here — this branch returns before the write below, so a
+      // summary-only edit was surviving in memory and in the projection
+      // (which is what a reviewer sees) while disappearing at the next
+      // restart. The two together are exactly how a lost write hides.
+      if (opts.summary !== undefined) {
+        this.applyGoalSummary(workspaceId, opts.summary);
+        this.scheduleSave(workspaceId);
+      }
       return {
         ok: true,
         workspace,

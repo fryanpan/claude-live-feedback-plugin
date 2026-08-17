@@ -172,7 +172,20 @@ export function renderGoalStrip(
     cancel.type = 'button';
     cancel.textContent = 'Cancel';
     cancel.className = 'hub-btn';
-    save.addEventListener('click', () => handlers.onGoalCommit(ta.value, summaryInput.value));
+    save.addEventListener('click', () => {
+      // The field is PRE-FILLED with the stored line, so an untouched one
+      // ships back with the save — and the server, which cannot tell a
+      // resubmission from a fresh answer, would hash it against the NEW goal
+      // and bless a sentence describing the old one. That is the exact
+      // failure the hash exists to prevent, laundered through the UI. So a
+      // line left exactly as it was, on a goal that moved, is dropped: the
+      // strip falls back to the clip of the new goal, and the cost is a line
+      // the reviewer can retype rather than a board asserting an abandoned
+      // aim. Retyping it is the reconfirmation.
+      const untouched = summaryInput.value.trim() === (storedSummary?.text ?? '').trim();
+      const stale = ta.value !== goal && untouched;
+      handlers.onGoalCommit(ta.value, stale ? '' : summaryInput.value);
+    });
     cancel.addEventListener('click', () =>
       renderGoalStrip(container, goal, handlers, storedSummary, expanded),
     );
