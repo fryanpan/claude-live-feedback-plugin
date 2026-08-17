@@ -62,6 +62,7 @@ function opts(scope: MountScope, docId = 'd1'): ChromeOpts {
     user: { id: 'u', name: 'U', kind: 'known', color: '#000' },
     ydoc: new Y.Doc(),
     surface: fakeSurface(),
+    whenSynced: (cb) => cb(),
     selectHint: '',
     reanchorHint: '',
     getSelection: () => null,

@@ -162,6 +162,7 @@ export async function mountCode(
     user,
     ydoc,
     surface,
+    whenSynced: (cb) => client.onReady(cb),
     scope,
     labelHint: ctx.sourceUrl || ctx.relPath || undefined,
     selectHint: 'Click a line number, or select some lines, to leave a comment.',

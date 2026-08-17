@@ -48,10 +48,29 @@ export class ThreadPanel {
   private threads: Thread[] = [];
   private statusMap = new Map<string, 'open' | 'resolved' | 'orphan'>();
   private tab: ThreadTab = 'open';
+  /**
+   * Has this doc's content arrived over the websocket yet? The panel is
+   * handed `[]` at mount, long before the first sync lands, so without this
+   * an unsynced doc and a genuinely empty one render the identical
+   * "No open comments" — an absence presented as a fact, on the surface
+   * where a missing comment reads as data loss.
+   *
+   * One-directional by construction: it only ever moves false → true, so the
+   * worst it can do is keep saying "Loading" a beat too long. It can never
+   * claim an emptiness it has no way to know.
+   */
+  private synced = false;
   /** Hash of what we last rendered. Skip re-render when nothing display-relevant changed. */
   private lastRenderKey = '';
 
   constructor(private opts: ThreadPanelOpts) {}
+
+  /** The first sync landed — from here on, an empty list really is empty. */
+  markSynced(): void {
+    if (this.synced) return;
+    this.synced = true;
+    this.render();
+  }
 
   setThreads(threads: Thread[]): void {
     this.threads = threads;
@@ -208,7 +227,11 @@ export class ThreadPanel {
       const status = this.statusMap.get(t.id);
       parts.push(`${t.id}:${status}:${t.commentCount}:${t.lastActivity}:${summaryKey(t)}`);
     }
-    return `${this.tab}|${this.activeId ?? ''}|${parts.join('|')}`;
+    // `synced` belongs in the key: the empty state's TEXT depends on it while
+    // the thread list stays `[]` either side of the transition, so leaving it
+    // out means the memo short-circuits and the drawer keeps the pre-sync
+    // wording forever.
+    return `${this.tab}|${this.synced ? 's' : 'u'}|${this.activeId ?? ''}|${parts.join('|')}`;
   }
 
   private filtered(): Thread[] {
@@ -241,8 +264,11 @@ export class ThreadPanel {
     if (visible.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'threads-empty';
-      empty.textContent =
-        this.tab === 'open'
+      // Before the first sync every one of these sentences would be a claim
+      // about content that has not arrived. Say what is actually true.
+      empty.textContent = !this.synced
+        ? 'Loading comments…'
+        : this.tab === 'open'
           ? 'No open comments. Select text in the doc to leave one.'
           : this.tab === 'resolved'
             ? 'Nothing resolved yet.'
