@@ -468,6 +468,37 @@ export interface ReviewThreadItem {
   since: number;
 }
 
+/**
+ * "The request did not complete" is not "there is nothing here."
+ *
+ * The board's REST-backed regions refresh on a timer and on SSE nudges, and
+ * `fetchJson` answers null for every failure — a dead socket, a 502, a server
+ * mid-restart. Reading that as an empty payload made the board blank its own
+ * review strip during a deploy: everything waiting on the reader became
+ * nothing, which is the falling-over reading the reconnect banner exists to
+ * prevent, arriving through a different door.
+ *
+ * The guard keys strictly on whether the payload arrived. An empty LIST is a
+ * real answer — a workspace whose last thread was resolved must still be
+ * allowed to say so — so only `null` holds the previous value.
+ */
+export function applyRefresh<R, V>(current: V, res: R | null, read: (r: R) => V): V {
+  if (res === null) return current;
+  return read(res);
+}
+
+/**
+ * The review strip's refresh, kept here rather than inline in hub-app so the
+ * survives-an-outage behaviour is driven by a test instead of asserted about.
+ */
+export async function refreshReviewItems(
+  state: { reviewItems: ReviewThreadItem[] },
+  fetchItems: () => Promise<{ items?: ReviewThreadItem[] } | null>,
+): Promise<void> {
+  const res = await fetchItems();
+  state.reviewItems = applyRefresh(state.reviewItems, res, (r) => r.items ?? []);
+}
+
 export type ReviewKind = 'decision' | 'task-thread' | 'doc-thread';
 
 export interface ReviewItem {
