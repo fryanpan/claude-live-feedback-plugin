@@ -13754,6 +13754,7 @@ function threadCreateRequest(input, author) {
 }
 
 // packages/mcp/src/triage-line.ts
+var RETRIAGE_SKILL = "live-feedback:handling-a-goal-change";
 function triageRequestLine(p, selfAgentId) {
   if (p.kind !== "goal-retriage") {
     return `[triage.requested] place task ${p.taskId} against the goal (set_task_goal)`;
@@ -13762,9 +13763,9 @@ function triageRequestLine(p, selfAgentId) {
   const batch = p.batchId ? `, passing batchId "${p.batchId}" on each` : "";
   const lead = p.leadAgentId;
   if (lead !== undefined && lead !== selfAgentId) {
-    return `[triage.requested] FYI — goal changed; re-triaging ${count} open task(s) is addressed to lead agent ${lead}${batch}. Act only if that is you.`;
+    return `[triage.requested] FYI — goal changed; re-triaging ${count} open task(s) is addressed to lead agent ${lead}${batch}. Act only if that is you (${RETRIAGE_SKILL}).`;
   }
-  return `[triage.requested] goal changed — re-triage ${count} open task(s) with set_task_goal${batch}`;
+  return `[triage.requested] goal changed — re-triage ${count} open task(s) with set_task_goal${batch}. What you owe on a goal change: ${RETRIAGE_SKILL}`;
 }
 
 // packages/mcp/src/mcp.ts
@@ -13788,7 +13789,7 @@ var AUTHOR = resolveAgentAuthor({
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.32";
+var PLUGIN_VERSION = "0.1.33";
 var server = new Server({
   name: "claude-live-feedback",
   version: PLUGIN_VERSION
@@ -15749,7 +15750,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           lead: res.lead ?? false,
           untriaged: res.untriaged ?? [],
           queuedVoice: res.queuedVoice ?? [],
-          ...res.pendingRetriage ? { pendingRetriage: res.pendingRetriage } : {}
+          ...res.pendingRetriage ? { pendingRetriage: { ...res.pendingRetriage, contract: RETRIAGE_SKILL } } : {}
         });
       }
       case "heartbeat": {
