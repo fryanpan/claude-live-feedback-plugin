@@ -564,12 +564,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // A goal-retriage is addressed to the workspace's LEAD agent specifically:
   // it asks someone to re-place the whole board against a new north star,
   // and "whoever happened to be connected" is how that request reached
-  // nobody accountable. A task placement stays any-live-agent — a new task
-  // can be placed by whoever is home. Undelivered goal-retriages are not
-  // lost either way; the store persists them for the lead's next attach.
+  // nobody accountable. A bucket-review is addressed the same way for the
+  // same reason — deciding which band a pile of unplaced work belongs under
+  // is a board-wide ranking judgment, not first-come work. A task placement
+  // stays any-live-agent: a new task can be placed by whoever is home.
+  // Undelivered lead-addressed requests are not lost either way; the store
+  // persists each for the lead's next attach.
   taskStore.setTriageDelivery((req) => {
     const live =
-      req.kind === 'goal-retriage'
+      req.kind === 'goal-retriage' || req.kind === 'bucket-review'
         ? taskStore.hasLiveLeadAttachment(req.workspaceId)
         : taskStore.hasLiveAttachment(req.workspaceId);
     if (!live) return false;
