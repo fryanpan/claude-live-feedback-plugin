@@ -60,6 +60,7 @@ describe('share visitors never spend the summary API key', () => {
   let cookie: string;
   const priorEnv = process.env.LF_SUMMARIES;
   const DOC = 'gate-doc';
+  const WS = 'ws-gate';
 
   const local = (path: string, init: RequestInit = {}) =>
     fetch(`${base}${path}`, {
@@ -101,16 +102,20 @@ describe('share visitors never spend the summary API key', () => {
 
     const file = join(dataDir, `${DOC}.md`);
     writeFileSync(file, `# Doc\n\n${SNIPPET}\n\nA second paragraph to find.\n`);
+    // A workspace is the unit of sharing: the doc is filed on `ws-gate` and
+    // the link covers that. The visitor's reach is unchanged — `gate-doc` is
+    // the only member — so every route exercised below is still one a real
+    // visitor can call, which is the premise the whole suite rests on.
     await local('/api/docs', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ docId: DOC, type: 'markdown', sourceUrl: file }),
+      body: JSON.stringify({ docId: DOC, type: 'markdown', sourceUrl: file, workspaceId: WS }),
     });
 
     const mk = await local('/api/share/link', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ docId: DOC, label: 'external review' }),
+      body: JSON.stringify({ workspaceId: WS, label: 'external review' }),
     });
     expect(mk.status).toBe(200);
     const { share } = (await mk.json()) as { share: { slug: string } };
