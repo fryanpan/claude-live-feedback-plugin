@@ -3768,6 +3768,15 @@ h1{font-size:1.25rem;margin:0 0 .5rem}p{color:#555;margin:0}
  * which hub it came from; `view` adds the workspace NAME so the thread reads
  * without anyone resolving an id.
  *
+ * `identity-scope="host"` is what makes the feedback ATTRIBUTED. The widget
+ * normally keeps its identity under a `cfw:` prefix so it cannot touch a
+ * third-party host page's storage — but this page is ours, and the hub has
+ * already asked the reader their name (`ensureUserIdentity`, unprefixed keys).
+ * Without this attribute the same page holds two identities for one human: the
+ * presence strip greets the reader by the name they gave, while every comment
+ * the widget posts from that same page is signed "Anonymous <animal>".
+ * Observed in a browser on 2026-08-17.
+ *
  * Declarative `<claude-feedback-widget>` rather than `FeedbackWidget.init` on
  * purpose: a module script is deferred, so a plain inline script calling
  * `init` would run before the module that defines it. The element upgrades on
@@ -3789,7 +3798,7 @@ function renderHubShell(
   const widget = opts.feedback
     ? `
     <script type="module" src="/widget.esm.js"></script>
-    <claude-feedback-widget doc-id="${escape(HUB_FEEDBACK_DOC_ID)}" view="${safeName}"></claude-feedback-widget>`
+    <claude-feedback-widget doc-id="${escape(HUB_FEEDBACK_DOC_ID)}" view="${safeName}" identity-scope="host"></claude-feedback-widget>`
     : '';
   return `<!doctype html>
 <html lang="en">

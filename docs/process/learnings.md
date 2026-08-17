@@ -1001,6 +1001,38 @@ Technical discoveries that should persist across sessions for this project.
   therefore entails "at least one section in the DOM". When a browser
   observation and the code cannot both be true, suspect the observation first.
 
+## A modal the page AWAITS makes every absence on that page vacuous
+
+- **Verifying that the feedback widget correctly does NOT render for a share
+  visitor, the first probe found no widget — and no board, no sections, no
+  rows either.** That second half is what saved it: hub `main()` *awaits*
+  `ensureUserIdentity`, and a first-time visitor is held at the "Who's
+  reviewing?" prompt, so until someone answers it `#hub-root` has zero
+  children. The widget was genuinely absent, on a page where *everything* was
+  absent, which proves nothing about the suppression under test. Dismissing
+  the prompt and re-running gave a fully rendered board with the widget still
+  gone — that is the result worth reporting.
+- **The positive control has to be a peer of the thing you're asserting away,
+  on the same page, in the same pass.** "The server responded 200" and "the
+  bundle loaded" were both true here and neither distinguishes the two
+  worlds. What distinguished them was counting board rows next to the missing
+  widget. Same family as "a negative test needs a positive control" and "a
+  truncated page read is indistinguishable from a page that never rendered",
+  with the blinding one layer earlier: not a truncated read of a rendered
+  page, but a complete read of a page that had not rendered yet.
+- **An await in front of a render is invisible from the server side**, where
+  every check comes back correct — so grep the client entry point for what it
+  awaits before mounting, and satisfy each of those before measuring anything
+  about the DOM. A blocking prompt, a permission request, an auth redirect,
+  and a lazy import all produce the same empty-container reading.
+- Two mechanics that cost a pass each while getting there: Chrome will not
+  store a `Secure` share cookie on a non-trustworthy origin, so a
+  `*.nip.io`-style host silently drops the visitor session (`*.localhost` is
+  trustworthy AND resolves to loopback, and an exact-match trusted-local
+  check still classifies it as a share host); and screenshot coordinates are
+  not CSS pixels — measure the scale with a `pointerdown` logger and recompute
+  from `getBoundingClientRect()` rather than clicking where the picture says.
+
 ## A new emitted event reaches the surface as a bare slug
 
 - **`task.body_edited` rode the existing SSE + `events.jsonl` path to the
