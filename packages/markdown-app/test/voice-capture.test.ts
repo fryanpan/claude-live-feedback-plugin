@@ -433,3 +433,114 @@ describe('createVoiceCapture without the Space hotkey', () => {
     cap.destroy();
   });
 });
+
+describe('createVoiceCapture from the keyboard', () => {
+  /**
+   * The mic promises "hold to dictate" to everyone, including someone who
+   * never touches a pointer. `pointerdown` calls `preventDefault()` so the
+   * button never takes focus from a tap — but focused via Tab, holding Space
+   * or Enter has to do what holding the button does.
+   */
+  let button: HTMLButtonElement;
+  let indicator: HTMLDivElement;
+  let rec: FakeRecognition;
+  let sent: string[];
+
+  const secureOrigin = (): OriginFacts => ({
+    isSecureContext: true,
+    protocol: 'https:',
+    hostname: 'feedback.example.com',
+    port: '',
+    pathname: '/workspaces/w-1',
+    search: '',
+  });
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    button = document.createElement('button');
+    indicator = document.createElement('div');
+    document.body.append(button, indicator);
+    rec = new FakeRecognition();
+    sent = [];
+  });
+
+  const mount = (spaceHotkey: boolean) =>
+    createVoiceCapture({
+      button,
+      indicator,
+      spaceHotkey,
+      getContext: () => ({ surface: 'hub' }),
+      send: (transcript) => {
+        sent.push(transcript);
+        return Promise.resolve(null);
+      },
+      createRecognition: () => rec,
+      readOrigin: secureOrigin,
+    });
+
+  it('records a held Space on the button, and sends on release', async () => {
+    const cap = mount(false);
+    keydown(button);
+    expect(rec.started).toBe(1);
+    expect(cap.holding()).toBe(true);
+    rec.emit([{ text: 'file a bug about the mic', final: true }]);
+    keyup(button);
+    expect(cap.holding()).toBe(false);
+    await flush();
+    expect(sent).toEqual(['file a bug about the mic']);
+    cap.destroy();
+  });
+
+  it('records a held Enter too', () => {
+    const cap = mount(false);
+    keydown(button, 'Enter');
+    expect(rec.started).toBe(1);
+    keyup(button, 'Enter');
+    expect(rec.stopped).toBe(1);
+    cap.destroy();
+  });
+
+  it('does not start on a key that is neither Space nor Enter', () => {
+    // Negative beside the positives above: Tab moving on, or a typed letter
+    // reaching a focused button, must not open the mic.
+    const cap = mount(false);
+    keydown(button, 'KeyA');
+    keydown(button, 'Tab');
+    expect(rec.started).toBe(0);
+    cap.destroy();
+  });
+
+  it('one press records once even when this capture also owns Space', () => {
+    // The singleton-gesture bug is TWO captures on one press. It cannot
+    // happen here: the button-scoped handler and the document hotkey belong
+    // to the SAME capture, and the press reaches its own instance twice —
+    // once at the target, once on the way up — where `beginHold`/`endHold`
+    // are idempotent. Assert the count, because a second recognizer per
+    // press would be silent.
+    const cap = mount(true);
+    keydown(button);
+    expect(rec.started).toBe(1);
+    keyup(button);
+    expect(rec.stopped).toBe(1);
+    expect(cap.holding()).toBe(false);
+    cap.destroy();
+  });
+
+  it('settles the hold when focus leaves mid-press', () => {
+    // The keyup lands wherever focus went, so the button would never hear it
+    // and the mic would stay open for the rest of the page load.
+    const cap = mount(false);
+    keydown(button);
+    expect(cap.holding()).toBe(true);
+    button.dispatchEvent(new FocusEvent('blur'));
+    expect(cap.holding()).toBe(false);
+    cap.destroy();
+  });
+
+  it('unbinds the button keys on destroy', () => {
+    const cap = mount(false);
+    cap.destroy();
+    keydown(button);
+    expect(rec.started).toBe(0);
+  });
+});
