@@ -292,7 +292,43 @@ board derives a decision's urgency from what points at it, and there is
 deliberately no urgency field. It replaces the whole edge set, so pass the full
 list; an empty `after` clears the edges.
 
-## Triage: placement is the write half
+## Triage: shape it, then place it
+
+Triage is **two** verbs, and for a long time only the second one was written
+down. A paragraph typed into quick-capture became one row whose title was the
+first line clipped mid-word and whose body was the raw utterance; triage gave
+it a goal, and it kept that fragment title forever while every component
+reported success. Placement alone does not make a row pickup-able.
+
+**Shape first.**
+
+```
+update_task_body(taskId, markdown: "…", title: "…")
+```
+
+- **Read the row's own words.** `next_tasks` carries the full body; `quote`
+  carries what was actually said when any of it was dictated.
+- **Decide how many tasks it is — zero, one, or several.** *"Anyway, make a
+  ticket from this"* is an instruction about neighbouring text, and files
+  **zero** tasks. A paragraph holding two complaints is two. This is a
+  judgement, and it is why the step is yours: capture makes exactly one row
+  per submit and cannot tell an idea from an aside.
+- **Write it like a task somebody else will pick up** — `<persona> can <do x>
+  so that <goal y>`, plus falsifiable done-when criteria — and give it a title
+  that names the work rather than starting the sentence.
+- **The original words are safe.** The first rewrite of a row copies its
+  pre-rewrite words into `quote` automatically, and a quote that is already
+  there is never overwritten. So shaping can never be the only record of what
+  was said — which is what makes rewriting somebody else's capture a
+  reasonable thing to do without asking first.
+- **When one capture is several tasks**, the row you were handed keeps the
+  first result — retitled and rewritten in place, so any comment thread on it
+  stays on the thing it was about. File the rest with `create_tasks` and
+  `link_refs` them back to it. **When it is zero tasks**, do not delete the
+  row: close it with `task_transition` and say on it what the words were an
+  instruction *for*. Nothing here ever destroys a capture.
+
+**Then place.**
 
 ```
 set_task_goal(taskId, goal: "latency", position: 2.5, riskTier: "yellow", batchId?)
@@ -322,7 +358,9 @@ Defaults: `agentId` = this agent's MCP identity, `runtime` =
 `claude-code-local`. This is the fresh-context briefing:
 
 - `gating` — a one-line summary of open decisions gating tasks.
-- `untriaged` — task ids to sweep with `set_task_goal`.
+- `untriaged` — task ids to sweep. Sweeping one means **shaping it and then
+  placing it**, not filing it under a goal and moving on. See "Triage: shape
+  it, then place it" above.
 - `queuedVoice` — voice change-requests that arrived while no agent was live.
   Act on each transcript **verbatim**.
 - `lead` — whether you hold the lead seat. An **empty** seat is claimed by the
@@ -349,7 +387,28 @@ next_tasks(workspaceId, assignee: "<your name>")
 Each row carries its **full description**, plus `blockedBy` (open dependencies;
 only `enforce` ones hold it back) and `ready`. Hard-blocked rows are omitted
 unless `includeBlocked: true`. Call it at the top of a session **and again
-after every task you finish** — priorities move while you work.
+whenever a line of work finishes** — priorities move while you work.
+
+**The lead decides the shape of the fan-out.** That queue reaches everyone
+identically; what this seat adds is deciding how many lines run at once and in
+what order their merges land. The default is every ready row that doesn't
+collide, and the criteria — what counts as a collision, and what forces a
+sequence of the merge rather than of the work — are in
+`live-feedback:working-a-workspace-board`. Don't re-derive them here. Two
+things only the lead can do about it:
+
+- **Make the board judgeable.** A batch is planned by reading descriptions
+  against each other, so thin bodies are what forces a session to run serial.
+  Same for a real ordering constraint left in somebody's head instead of in
+  `after` / `afterEnforce` — the queue can only respect an edge that exists.
+- **Watch what the board says is running.** Several `in-progress` rows with
+  one agent attached is a batch nobody is actually working; one `in-progress`
+  row with a long ready queue behind it is the failure this default exists to
+  prevent. `list_attachments` and the per-goal counts are the reading.
+
+`assign_task` is also how a line gets an owner — a staffed batch is several
+tasks each assigned to the agent running it, so `next_tasks(assignee: …)`
+answers for each of them.
 
 **Move status through the one gate.**
 

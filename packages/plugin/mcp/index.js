@@ -13755,6 +13755,7 @@ function threadCreateRequest(input, author) {
 
 // packages/mcp/src/triage-line.ts
 var RETRIAGE_SKILL = "live-feedback:handling-a-goal-change";
+var SHAPE_THEN_PLACE = "read its own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each into a title and a story-shaped body with update_task_body, then place with set_task_goal";
 function retriageDetail(p) {
   const ids = p.taskIds ?? [];
   const tasks = ids.length > 0 ? `
@@ -13765,7 +13766,7 @@ previous goal (what those placements were judged against): ${p.oldGoal}` : "";
 }
 function triageRequestLine(p, selfAgentId) {
   if (p.kind !== "goal-retriage") {
-    return `[triage.requested] place task ${p.taskId} against the goal (set_task_goal)`;
+    return `[triage.requested] shape and place task ${p.taskId}: ${SHAPE_THEN_PLACE}`;
   }
   const count = p.taskIds?.length ?? "?";
   const batch = p.batchId ? `, passing batchId "${p.batchId}" on each` : "";
@@ -13798,7 +13799,7 @@ var AUTHOR = resolveAgentAuthor({
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.41";
+var PLUGIN_VERSION = "0.1.45";
 var server = new Server({
   name: "claude-live-feedback",
   version: PLUGIN_VERSION
@@ -14625,76 +14626,77 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       }
     },
     {
-      name: "create_task",
-      description: 'NOT the canonical create — use `create_tasks`, which takes a list and treats one task as a one-row list. This single-row form is kept only so sessions on older bundles keep working, and it is scheduled for removal; everything below is true of a `create_tasks` row too. For chat-born asks pass `quote` — the human\'s VERBATIM words, kept forever on the task (for thread-born asks use promote_to_task, which captures the quote itself). OMIT `goal` when you have not judged placement yet: the task lands UNPLACED at the bottom of Chores and a triage request is emitted to the live workspace agent (that may be you — place it with set_task_goal). An explicit goal — even "chores" — is a placement and skips triage. `after` lists task ids this depends on ("don\'t start yet" is a dependency, not a status); `afterEnforce` names the subset whose open state hard-blocks transitions. A batch-local reference ("#seed") is refused here by name — it only means something inside one `create_tasks` call. Write the body like a small user story with falsifiable acceptance criteria when the task is for someone else or parked beyond today; a bare title is fine for work you\'ll do within the hour. Returns { taskId, goal, order, status, triagePending, placed } plus `goals` — the ordered bands — when nothing placed it.',
-      inputSchema: {
-        type: "object",
-        properties: {
-          workspaceId: { type: "string" },
-          title: { type: "string" },
-          body: {
-            type: "string",
-            description: "The description. Not schema-required — but WRITE ONE ANYWAY, on every task: a bare title is not pickup-able by an agent that was not in the conversation, and reconstructing intent from a title is how the wrong thing gets built. Shape it as a compact user story — `<persona> can <do x> so that <goal y>`, one persona (Agent / Bryan / Collaborator) — and add falsifiable \"done when\" criteria for anything handed to someone else or parked beyond today. Proportionate: work you will finish within the hour needs the story line and nothing more. Markdown; it renders on the task itself and comes back whole from next_tasks, so do not create a separate doc to hold it.\n\nWhen `needs` is 'decision' this is REQUIRED and has a different shape — the question in one line, what is at stake in two or three, the options with what each one costs, then what is blocked until it is answered. A body with no question in it is REFUSED, because the failure this catches is filing a progress report as a decision: the field is populated, every check passes, and the person asked to decide has nothing to decide from. The other three parts come back as advisory `shapeGaps` on a successful create."
-          },
-          assignee: {
-            type: "string",
-            description: `Who owns this task: 'human' for work only a person can do, or a named identity (another agent, a person). Omit it and YOU own it — the API records your own name. It REFUSES a create whose owner comes out as the bare word 'agent', because that names a category rather than somebody, and a board of tasks owned by "agent" cannot answer who is doing what. If you get that refusal, your session was launched without FEEDBACK_AGENT_NAME.`
-          },
-          assigneeKind: {
-            type: "string",
-            enum: ["person", "agent"],
-            description: `Declares whether \`assignee\` is a person or an agent — 'person' | 'agent'. Say it whenever you hand work to a NAME that is not your own: the board cannot tell "Bryan" from an agent called "Bryan" by looking, and it refuses to guess, so an undeclared named owner shows as "not recorded" and stays out of every surface built around what a person owes. You never need it for yourself (your own writes are already classified) or for 'human' (already a person). An agent that has attached to the workspace is known to be an agent regardless of what anyone declares.`
-          },
-          needs: {
-            type: "string",
-            enum: ["action", "decision"],
-            description: "Only meaningful when assignee is a human. 'decision' makes it a decision task (answer_decision records the verbatim answer). A decision REQUIRES a decision-shaped `body` — see that field."
-          },
-          options: {
-            type: "array",
-            description: 'Candidate answers, decision tasks only: [{label, detail?}]. `label` is the text recorded VERBATIM as the answer if it is picked; `detail` is what picking it costs. Supply them whenever you already have candidates in mind — that is the normal case, and without them the person deciding has to compose prose to say "the second one". They are a SHORTCUT, never a closed set: writing a different answer and asking for more information stay available next to them, so do not pad the list to look exhaustive. Two or more, or don\'t bother.',
-            items: { type: "object" }
-          },
-          goal: {
-            type: "string",
-            description: 'Goal/subgoal id, or "chores". OMIT to route through triage.'
-          },
-          order: { type: "number", description: "Fractional position within the goal." },
-          after: {
-            type: "array",
-            items: { type: "string" },
-            description: "Task ids this waits on."
-          },
-          afterEnforce: {
-            type: "array",
-            items: { type: "string" },
-            description: "Subset of `after` that hard-blocks transitions while open. Every id here MUST also appear in `after` — the gate walks `after` and reads this as a lookup set, so an id in this array alone would gate nothing; the call is refused rather than silently widening `after`."
-          },
-          dueAt: {
-            type: "number",
-            description: "Epoch ms. Optional at every level — never invent one."
-          },
-          links: {
-            type: "array",
-            description: "Refs this task mentions: {kind:'doc',docId} | {kind:'thread',docId,threadId} | {kind:'task',taskId} | {kind:'diff',workspaceId} | {kind:'url',url}. Backlinks are computed. Use `url` for anything outside this server — a pull request, a decision page, a dashboard; http(s) only, since a ref is rendered as a clickable chip. Refs are NOT existence-checked, so a link that points nowhere is accepted and harmless. A malformed ref does not fail the call: it is dropped and returned in `ignoredLinks`, and the task is still created.",
-            items: { type: "object" }
-          },
-          quote: { type: "string", description: "The human's verbatim words, for chat-born asks." }
-        },
-        required: ["workspaceId", "title"]
-      }
-    },
-    {
       name: "create_tasks",
-      description: 'THE way to create tasks — always takes a LIST, and a single task is a one-row list, so reach for this one whether you have one idea or fifteen. Filing 24 things one at a time costs 78s against 13s for the same rows in one call, and that gap is a tooling choice rather than a floor. Each row takes exactly the fields create_task takes (minus workspaceId), and every rule applies per row: an omitted `assignee` means YOU own that row, an omitted `goal` leaves that row UNPLACED at the bottom of Chores and routes it through triage, an explicit `order` places it. A row may name another row of the SAME batch in `after` / `afterEnforce` — by index (`0`) or by a `key` another row declares (`"#seed"`) — so a burst with internal ordering no longer needs a follow-up set_task_dependencies. Returns the created tasks IN BOARD ORDER — the ranking you just produced, without a second read — plus `failures: [{index, title, error, message}]` for any row that didn\'t land, plus `placement` when any row went in unplaced (the unplaced task ids and the ordered goal bands, so you can set_task_goal without reading the board first). A bad row NEVER rejects the batch: its neighbours are created and it comes back by index, so you fix and re-send that one row. The whole call is refused only when nothing could have landed anyway (unknown workspace, no rows).',
+      description: 'THE way to create tasks — always takes a LIST, and a single task is a one-row list, so reach for this one whether you have one idea or fifteen. Filing 24 things one at a time costs 78s against 13s for the same rows in one call, and that gap is a tooling choice rather than a floor. It is the ONLY create verb — the single-row form it replaced is gone, so there is no second way to file work that skips the batch and the placement report. Every rule applies PER ROW: an omitted `assignee` means YOU own that row, an omitted `goal` leaves that row UNPLACED at the bottom of Chores and routes it through triage, an explicit `order` places it. A row may name another row of the SAME batch in `after` / `afterEnforce` — by index (`0`) or by a `key` another row declares (`"#seed"`) — so a burst with internal ordering no longer needs a follow-up set_task_dependencies. Returns the created tasks IN BOARD ORDER — the ranking you just produced, without a second read — plus `failures: [{index, title, error, message}]` for any row that didn\'t land, plus `placement` when any row went in unplaced (the unplaced task ids and the ordered goal bands, so you can set_task_goal without reading the board first). A bad row NEVER rejects the batch: its neighbours are created and it comes back by index, so you fix and re-send that one row. The whole call is refused only when nothing could have landed anyway (unknown workspace, no rows).',
       inputSchema: {
         type: "object",
         properties: {
           workspaceId: { type: "string" },
           tasks: {
             type: "array",
-            description: 'The rows, at most 100 — an oversized batch is refused WHOLE rather than truncated, and a tracker that big belongs in import_tasks_markdown. Each row is a create_task body without `workspaceId`: {title, body?, key?, assignee?, needs?, options?, goal?, order?, after?, afterEnforce?, dueAt?, links?, quote?}. `title` is the only required field — but write a `body` on every row you are not doing yourself within the hour: a bare title is not pickup-able by an agent that was not in the conversation. `key` is an optional label THIS batch uses to reference the row; it must be unique in the batch and must not be all digits or start with "#". Rows are created in the order given, so a row can only depend on a row ABOVE it — a forward reference is refused rather than silently dropped, and so is a reference to a row that failed (a task carrying a dependency that never blocks it is worse than a refusal). An entry with no "#" is still an existing task id, exactly as before.',
-            items: { type: "object" },
+            description: 'The rows, at most 100 — an oversized batch is refused WHOLE rather than truncated, and a tracker that big belongs in import_tasks_markdown. Each row is {title, body?, key?, assignee?, assigneeKind?, needs?, options?, goal?, order?, after?, afterEnforce?, dueAt?, links?, quote?} — the per-field rules are on the row schema below, and they are the same rules the removed single-row create carried. `title` is the only required field — but write a `body` on every row you are not doing yourself within the hour: a bare title is not pickup-able by an agent that was not in the conversation. `key` is an optional label THIS batch uses to reference the row; it must be unique in the batch and must not be all digits or start with "#". Rows are created in the order given, so a row can only depend on a row ABOVE it — a forward reference is refused rather than silently dropped, and so is a reference to a row that failed (a task carrying a dependency that never blocks it is worse than a refusal). An entry with no "#" is still an existing task id, exactly as before.',
+            items: {
+              type: "object",
+              properties: {
+                title: { type: "string" },
+                body: {
+                  type: "string",
+                  description: "The description. Not schema-required — but WRITE ONE ANYWAY, on every row: a bare title is not pickup-able by an agent that was not in the conversation, and reconstructing intent from a title is how the wrong thing gets built. Shape it as a compact user story — `<persona> can <do x> so that <goal y>`, one persona (Agent / Bryan / Collaborator) — and add falsifiable \"done when\" criteria for anything handed to someone else or parked beyond today. Proportionate: work you will finish within the hour needs the story line and nothing more. Markdown; it renders on the task itself and comes back whole from next_tasks, so do not create a separate doc to hold it.\n\nWhen `needs` is 'decision' this is REQUIRED and has a different shape — the question in one line, what is at stake in two or three, the options with what each one costs, then what is blocked until it is answered. A row with no question in it is REFUSED, because the failure this catches is filing a progress report as a decision: the field is populated, every check passes, and the person asked to decide has nothing to decide from. The other three parts come back as advisory `shapeGaps` on a successful create."
+                },
+                key: {
+                  type: "string",
+                  description: 'An optional label THIS batch uses to reference the row from a later row\'s `after` / `afterEnforce`. Unique within the batch; not all digits; must not start with "#". Means nothing outside this call.'
+                },
+                assignee: {
+                  type: "string",
+                  description: `Who owns this row: 'human' for work only a person can do, or a named identity (another agent, a person). Omit it and YOU own it — the API records your own name. It REFUSES a row whose owner comes out as the bare word 'agent', because that names a category rather than somebody, and a board of tasks owned by "agent" cannot answer who is doing what. If you get that refusal, your session was launched without FEEDBACK_AGENT_NAME.`
+                },
+                assigneeKind: {
+                  type: "string",
+                  enum: ["person", "agent"],
+                  description: `Declares whether \`assignee\` is a person or an agent — 'person' | 'agent'. Say it whenever you hand a row to a NAME that is not your own: the board cannot tell "Bryan" from an agent called "Bryan" by looking, and it refuses to guess, so an undeclared named owner shows as "not recorded" and stays out of every surface built around what a person owes. You never need it for yourself (your own writes are already classified) or for 'human' (already a person). An agent that has attached to the workspace is known to be an agent regardless of what anyone declares.`
+                },
+                needs: {
+                  type: "string",
+                  enum: ["action", "decision"],
+                  description: "Only meaningful when assignee is a human. 'decision' makes it a decision task (answer_decision records the verbatim answer). A decision REQUIRES a decision-shaped `body` — see that field."
+                },
+                options: {
+                  type: "array",
+                  description: 'Candidate answers, decision rows only: [{label, detail?}]. `label` is the text recorded VERBATIM as the answer if it is picked; `detail` is what picking it costs. Supply them whenever you already have candidates in mind — that is the normal case, and without them the person deciding has to compose prose to say "the second one". They are a SHORTCUT, never a closed set: writing a different answer and asking for more information stay available next to them, so do not pad the list to look exhaustive. Two or more, or don\'t bother.',
+                  items: { type: "object" }
+                },
+                goal: {
+                  type: "string",
+                  description: 'Goal/subgoal id, or "chores". OMIT to leave this row UNPLACED at the bottom of Chores and route it through triage. An explicit goal — even "chores" — is a placement and skips triage.'
+                },
+                order: { type: "number", description: "Fractional position within the goal." },
+                after: {
+                  type: "array",
+                  items: { type: "string" },
+                  description: 'What this row waits on ("don\'t start yet" is a dependency, not a status). An existing task id, or a row of THIS batch by index (`0`) or by another row\'s `key` (`"#seed"`).'
+                },
+                afterEnforce: {
+                  type: "array",
+                  items: { type: "string" },
+                  description: "Subset of `after` that hard-blocks transitions while open. Every entry here MUST also appear in `after` — the gate walks `after` and reads this as a lookup set, so an entry in this array alone would gate nothing; the row is refused rather than silently widening `after`."
+                },
+                dueAt: {
+                  type: "number",
+                  description: "Epoch ms. Optional at every level — never invent one."
+                },
+                links: {
+                  type: "array",
+                  description: "Refs this task mentions: {kind:'doc',docId} | {kind:'thread',docId,threadId} | {kind:'task',taskId} | {kind:'diff',workspaceId} | {kind:'url',url}. Backlinks are computed. Use `url` for anything outside this server — a pull request, a decision page, a dashboard; http(s) only, since a ref is rendered as a clickable chip. Refs are NOT existence-checked, so a link that points nowhere is accepted and harmless. A malformed ref does not fail the row: it is dropped and returned in `ignoredLinks`, and the task is still created.",
+                  items: { type: "object" }
+                },
+                quote: {
+                  type: "string",
+                  description: "The human's VERBATIM words, for chat-born asks — kept forever on the task. (For thread-born asks use promote_to_task, which captures the quote itself.)"
+                }
+              },
+              required: ["title"]
+            },
             maxItems: 100
           }
         },
@@ -14703,7 +14705,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "promote_to_task",
-      description: "Promote a comment thread into a task. Captures the origin ref (the thread backlinks to the task automatically), the latest HUMAN comment as the verbatim `quote` (agent replies never become the quote), and drafts a title + body from the quote when you don't supply them. Same goal semantics as create_task: omit `goal` to route the placement through triage. Returns { taskId, title, goal, order, quote } — trimmed.",
+      description: "Promote a comment thread into a task. Captures the origin ref (the thread backlinks to the task automatically), the latest HUMAN comment as the verbatim `quote` (agent replies never become the quote), and drafts a title + body from the quote when you don't supply them. Same goal semantics as create_tasks: omit `goal` to route the placement through triage. Returns { taskId, title, goal, order, quote } — trimmed.",
       inputSchema: {
         type: "object",
         properties: {
@@ -14714,12 +14716,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           body: { type: "string", description: "Override the drafted body." },
           assignee: {
             type: "string",
-            description: "Who owns it. Omit and you do — same rule as create_task's assignee."
+            description: "Who owns it. Omit and you do — same rule as a create_tasks row's assignee."
           },
           assigneeKind: {
             type: "string",
             enum: ["person", "agent"],
-            description: "Same as create_task's assigneeKind."
+            description: `Declares whether \`assignee\` is a person or an agent — 'person' | 'agent'. Say it whenever you hand work to a NAME that is not your own: the board cannot tell "Bryan" from an agent called "Bryan" by looking, and it refuses to guess, so an undeclared named owner shows as "not recorded" and stays out of every surface built around what a person owes. You never need it for yourself (your own writes are already classified) or for 'human' (already a person). An agent that has attached to the workspace is known to be an agent regardless of what anyone declares.`
           },
           needs: { type: "string", enum: ["action", "decision"] },
           goal: { type: "string", description: "Goal/subgoal id. OMIT to route through triage." },
@@ -14740,7 +14742,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "next_tasks",
-      description: "The work queue: what to pick up next, in priority order (goal band, then task order), already filtered to what you can actually DO. Each row carries its FULL description, so you can decide from this one call — including whether two tasks touch the same code and can therefore run in parallel; that judgment is yours to make from the text, not a field to look up. Also on each row: `blockedBy` (open dependencies — only `enforce` ones hold a task back) and `ready`. Hard-blocked rows are omitted unless includeBlocked. Pass assignee to get just your own queue. Make this call at the top of a work session and again after every task you finish — priorities move while you work.\n\nREAD `bodyWrittenAt` AND `premise` BEFORE YOU TRUST A DESCRIPTION. A body is a measurement taken on the day it was filed and rendered ever after in the present tense, on a codebase that moves several times a day — so `bodyWrittenAt` (on every row) tells you how old the claim is. `premise` appears only when that description has stood still for over a day while somebody kept commenting on the task, and it carries those comments VERBATIM in `notes`. That is where a previous reader wrote down what they found when they reproduced it: five times in one week a task claimed something was missing that had already shipped, twice within hours of the task being filed, and each time the correction existed as a comment nobody on the pickup path could see. Read the notes first — they may already have done the reproducing for you, and they routinely change the SIZE of the work. `premise` says NOTHING about whether the task is done; it never appears on a done task, and most rows carrying it still have real work left. It clears itself when the description is rewritten (update_task_body), which is the right move once you know what is actually true — attribute and date the correction, and keep what the body originally claimed, since the original measurement is evidence about when it was taken rather than a mistake to erase.",
+      description: "The work queue: what to pick up next, in priority order (goal band, then task order), already filtered to what you can actually DO. TAKE THE WHOLE READY SET, NOT THE TOP ROW — starting every ready row that does not collide with another is the default, and holding one task while the rest of the queue waits is the slowest way to work a board. Each row carries its FULL description, which is what tells you whether two tasks touch the same code and therefore have to be sequenced; that judgment is made from the text, not from a field. Also on each row: `blockedBy` (open dependencies — only `enforce` ones hold a task back) and `ready`. Hard-blocked rows are omitted unless includeBlocked. Pass assignee to get just your own queue. Make this call at the top of a work session and again whenever a line of work finishes — priorities move while you work.\n\nREAD `bodyWrittenAt` AND `premise` BEFORE YOU TRUST A DESCRIPTION. A body is a measurement taken on the day it was filed and rendered ever after in the present tense, on a codebase that moves several times a day — so `bodyWrittenAt` (on every row) tells you how old the claim is. `premise` appears only when that description has stood still for over a day while somebody kept commenting on the task, and it carries those comments VERBATIM in `notes`. That is where a previous reader wrote down what they found when they reproduced it: five times in one week a task claimed something was missing that had already shipped, twice within hours of the task being filed, and each time the correction existed as a comment nobody on the pickup path could see. Read the notes first — they may already have done the reproducing for you, and they routinely change the SIZE of the work. `premise` says NOTHING about whether the task is done; it never appears on a done task, and most rows carrying it still have real work left. It clears itself when the description is rewritten (update_task_body), which is the right move once you know what is actually true — attribute and date the correction, and keep what the body originally claimed, since the original measurement is evidence about when it was taken rather than a mistake to erase.",
       inputSchema: {
         type: "object",
         properties: {
@@ -14850,7 +14852,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "update_task_body",
-      description: "Replace a task's description after it was created — the fix for a task filed thin, or one whose acceptance criteria turned out to be wrong. Whole-body replace, so send the full markdown you want the task to have; there is no partial edit. Written through the task's live body doc as a block-level diff, which means comment threads anchored to paragraphs you did not change keep their anchors, and anyone reading the task on the board watches it update. Recorded as task.body_edited, attributed to you. Keep the shape a task body owes its next reader — a compact user story plus falsifiable done-when criteria — because rewriting is also the moment to add the ones that were missing. Refuses an empty body: blanking a description is not an edit, and if the task should not exist, say so on it instead.",
+      description: "Rewrite a task so it can be picked up — its description, and in the SAME act its title. The fix for a task filed thin, one whose acceptance criteria turned out to be wrong, and the write half of triage's shaping step: a raw capture arrives with a machine-clipped fragment for a title and its whole unedited utterance for a body, and this is what turns both into work. Whole-body replace, so send the full markdown you want the task to have; there is no partial edit. Pass `title` whenever the title no longer names what the task is (omit it to leave the title alone). Written through the task's live body doc as a block-level diff, so comment threads anchored to paragraphs you did not change keep their anchors and anyone reading the task on the board watches it update. Recorded as ONE task.body_edited carrying both titles, attributed to you, and the activity feed renders the rename with the old name — the only name the person who filed it would recognise. The row's ORIGINAL words are preserved to `quote` automatically on the first rewrite, so a rewrite is never the only record of what was said; a quote already there (a dictated transcript) is never overwritten. Keep the shape a task body owes its next reader — a compact user story plus falsifiable done-when criteria — because rewriting is also the moment to add the ones that were missing. Refuses an empty body: blanking a description is not an edit, and if the task should not exist, say so on it instead.",
       inputSchema: {
         type: "object",
         properties: {
@@ -14858,6 +14860,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           markdown: {
             type: "string",
             description: "The FULL new description. Replaces what is there."
+          },
+          title: {
+            type: "string",
+            description: "A new title for the row, applied as part of the same act. Omit to keep the current one."
           }
         },
         required: ["taskId", "markdown"]
@@ -15067,7 +15073,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "attach_agent",
-      description: "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep with set_task_goal, queuedVoice — voice change-requests that arrived while no agent was live; act on each transcript verbatim — and, if you LEAD this workspace, pendingRetriage: a goal edit made while you were away, whose taskIds you re-place with set_task_goal (echo its batchId on each). All three are drained by this call. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments with a fresh heartbeat, and after ~5 minutes of silence the hub shows you as away and requests queue.",
+      description: "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep — and sweeping one means SHAPING it, not only filing it: read the row's own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each with update_task_body into a title and a story-shaped body, then set_task_goal. A capture arrives with a machine-clipped title and its raw utterance for a body, and this is the only step that turns it into work. Then queuedVoice — voice change-requests that arrived while no agent was live; act on each transcript verbatim — and, if you LEAD this workspace, pendingRetriage: a goal edit made while you were away, whose taskIds you re-place with set_task_goal (echo its batchId on each). All three are drained by this call. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments with a fresh heartbeat, and after ~5 minutes of silence the hub shows you as away and requests queue.",
       inputSchema: {
         type: "object",
         properties: {
@@ -15573,44 +15579,6 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         });
         return ok({ ok: true, workspaceId, docIds: res.workspace?.docIds ?? [] });
       }
-      case "create_task": {
-        const {
-          workspaceId,
-          title,
-          body,
-          assignee,
-          assigneeKind,
-          needs,
-          options,
-          goal,
-          order,
-          after,
-          afterEnforce,
-          dueAt,
-          links,
-          quote
-        } = a;
-        const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/tasks`, {
-          title,
-          ...body !== undefined ? { body } : {},
-          ...assignee !== undefined ? { assignee } : {},
-          ...assigneeKind !== undefined ? { assigneeKind } : {},
-          ...needs !== undefined ? { needs } : {},
-          ...options !== undefined ? { options } : {},
-          ...goal !== undefined ? { goal } : {},
-          ...order !== undefined ? { order } : {},
-          ...after !== undefined ? { after } : {},
-          ...afterEnforce !== undefined ? { afterEnforce } : {},
-          ...dueAt !== undefined ? { dueAt } : {},
-          ...links !== undefined ? { links } : {},
-          ...quote !== undefined ? { quote } : {},
-          author: AUTHOR
-        });
-        return ok({
-          ...taskCreatedSummary(res.task, res.ignoredLinks, res.shapeGaps, res.placement?.placed),
-          ...res.placement?.goals !== undefined ? { goals: res.placement.goals } : {}
-        });
-      }
       case "create_tasks": {
         const { workspaceId, tasks } = a;
         const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/tasks/batch`, { tasks, author: AUTHOR });
@@ -15750,12 +15718,18 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok({ taskId, assignee: res.task.assignee, changed: res.changed });
       }
       case "update_task_body": {
-        const { taskId, markdown } = a;
+        const { taskId, markdown, title } = a;
         const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/body`, {
           markdown,
+          ...title !== undefined ? { title } : {},
           author: AUTHOR
         });
-        return ok({ taskId, title: res.task?.title, body: res.task?.body });
+        return ok({
+          taskId,
+          title: res.task?.title,
+          body: res.task?.body,
+          quote: res.task?.quote
+        });
       }
       case "set_task_goal": {
         const { taskId, goal, position, riskTier, batchId } = a;

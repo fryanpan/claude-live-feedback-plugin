@@ -38,6 +38,7 @@ import {
   clientReleaseRoot,
   prepareClientRelease,
 } from '../packages/server/src/client-release.ts';
+import { readDeploySource } from '../packages/server/src/deploy-source.ts';
 
 const args = process.argv.slice(2);
 function arg(name: string): string | undefined {
@@ -86,29 +87,17 @@ function isPortListening(port: number, host = '127.0.0.1'): Promise<boolean> {
   });
 }
 
-/**
- * What this deploy source is parked on, stamped into the release so the served
- * client can say what it was built from. `--dirty` matters: prod's checkout is
- * also where people build, and "current timestamp, uncommitted tree" is a
- * different claim from "current timestamp, this commit".
- *
- * Best-effort — no git, no repo, a slow filesystem, and the publish carries on
- * with a timestamp alone rather than failing a deploy over a label.
- */
-function deploySourceRef(): string | undefined {
-  try {
-    const r = spawnSync('git', ['describe', '--always', '--dirty'], {
-      cwd: repoRoot,
-      encoding: 'utf8',
-      timeout: 5000,
-    });
-    const out = r.status === 0 ? r.stdout.trim() : '';
-    return out.length > 0 ? out : undefined;
-  } catch {
-    return undefined;
-  }
-}
-const sourceRef = noWatch ? deploySourceRef() : undefined;
+// What this deploy source is parked on, stamped into the release so the served
+// client can say what it was built from. `-dirty` is NOT `git describe
+// --dirty`: this checkout also hosts bound review documents, so a modified
+// tracked file under `docs/` is an ordinary editing session rather than an
+// uncommitted build. See `packages/server/src/deploy-source.ts` for the rule,
+// which is an ignore list closed by default — anything this deploy builds or
+// serves still earns the suffix.
+//
+// Best-effort: no git, no repo, a slow filesystem, and the publish carries on
+// with a timestamp alone rather than failing a deploy over a label.
+const deploySource = noWatch ? readDeploySource(repoRoot) : null;
 
 const port = await pickFreePort(requestedPort);
 
@@ -158,8 +147,9 @@ if (noWatch) {
     // What the served client was built FROM. Freshness of the artifact is not
     // freshness of the source: a checkout parked on an old commit builds
     // successfully and stamps a current timestamp on old code, so the release
-    // has to carry the commit as well as the clock.
-    ...(sourceRef ? { sourceRef } : {}),
+    // has to carry the commit as well as the clock — and the modified paths,
+    // so a reader can judge the `-dirty` decision instead of trusting it.
+    ...(deploySource ?? {}),
     ...(failures.length > 0 ? { buildError: `${failures.join(' + ')} build failed` } : {}),
   });
 
@@ -172,7 +162,13 @@ if (noWatch) {
           : 'and there is no previous release, so no client will be served'),
     );
   } else {
-    console.log(`[supervisor] client release: ${prepared.releaseDir}`);
+    console.log(
+      `[supervisor] client release: ${prepared.releaseDir}` +
+        (deploySource ? ` (source ${deploySource.sourceRef})` : '') +
+        // Named rather than counted: "3 modified files" makes a reader go
+        // looking, which is the cost this is meant to remove.
+        (deploySource?.dirtyPaths ? ` modified: ${deploySource.dirtyPaths.join(', ')}` : ''),
+    );
   }
 
   if (prepared.widget) clientArgs.push('--widget-dist', prepared.widget);

@@ -697,6 +697,17 @@ body.hub-body {
 .hub-drift-head {
   font-weight: 650;
 }
+/* The "here is what this reading covers" variant. It is on the board even
+   when nothing is wrong, so it must not wear the alarm's yellow border — a
+   permanent warning is a warning nobody reads. Declared AFTER the base rules
+   it overrides, so it wins on order as well as on specificity. */
+.hub-drift-quiet {
+  border-color: var(--border);
+}
+.hub-drift-quiet .hub-drift-head {
+  font-weight: 600;
+  color: var(--fg-muted);
+}
 .hub-drift-who,
 .hub-drift-fix {
   color: var(--fg-muted);
@@ -1068,6 +1079,45 @@ body.hub-body {
   color: var(--fg-muted);
   font-variant-numeric: tabular-nums;
 }
+/* What this sitting has taken off the list. "3 of 7" becomes "3 of 6" when you
+   answer — the position does not move and only the total shrinks — so the one
+   number that could say you advanced is the one that counts UP. */
+.hub-walk-cleared {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--accent-wash, rgba(59, 111, 212, 0.07));
+  color: var(--fg);
+  font-weight: 600;
+}
+.hub-walk-cleared::before {
+  content: "✓ ";
+}
+/* "You just answered that; this is the next one." Above the new card, because
+   the question it settles — did my answer land, or did the page reset — is
+   asked the instant the card changes. A toast cannot carry it: this is read on
+   a phone, where a toast is gone before the thumb is back down. */
+.hub-walk-advanced {
+  display: grid;
+  /* minmax(0, …) so a long title wraps instead of widening the panel. */
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: var(--accent-wash, rgba(59, 111, 212, 0.07));
+  font-size: 13px;
+}
+.hub-walk-advanced-said {
+  overflow-wrap: anywhere;
+}
+/* The answered item is OUT of the queue, so Back steps to whatever preceded it
+   — this is the only route to the thing that was actually just answered. */
+.hub-walk-advanced-back {
+  min-height: 36px;
+  white-space: nowrap;
+}
 .hub-walk-close {
   min-height: 36px;
 }
@@ -1199,6 +1249,17 @@ body.hub-body {
 .hub-walk-done p {
   margin: 0;
   color: var(--fg-muted);
+}
+/* What turns this from an empty surface into an ending. A sitting that cleared
+   four things and one that found nothing waiting read identically without it,
+   and the first is the one worth finishing.
+
+   Two classes deliberately: `.hub-walk-done p` above is one class plus one
+   type, so a bare `.hub-walk-done-tally` would lose the colour to it on
+   specificity and render muted like the line it is meant to stand out from. */
+.hub-walk-done .hub-walk-done-tally {
+  font-weight: 600;
+  color: var(--fg);
 }
 
 /* --- board sections (goals ARE the sections) --- */
@@ -1924,6 +1985,12 @@ a.hub-link-chip:hover {
   background: var(--accent-wash, rgba(59, 111, 212, 0.07));
   border-radius: 0 6px 6px 0;
 }
+/* The conversation the one composer is pointed at. Paired with the target row
+   inside the composer itself: two signals for one fact, because the composer
+   can be a scroll away from the thread it will post into. */
+.hub-thread-target {
+  border-left-color: var(--fg-muted);
+}
 .hub-thread-status {
   display: inline-block;
   font-size: 11px;
@@ -1931,6 +1998,27 @@ a.hub-link-chip:hover {
   letter-spacing: 0.04em;
   color: var(--fg-muted);
   margin-bottom: 4px;
+}
+/* What this thread is ABOUT — the passage of the description an agent anchored
+   it to. Without it two threads on one task are two piles of comments and
+   choosing between them is guesswork, which is how a task ended up needing a
+   reply box per thread just to be routable. */
+.hub-thread-anchor {
+  margin: 0 0 8px;
+  padding: 4px 0 4px 8px;
+  border-left: 2px solid var(--border);
+  color: var(--fg-muted);
+  font-family: var(--prose);
+  font-size: 13px;
+  font-style: italic;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+/* Points the composer here. A button, not a second box — see the composer
+   comment in hub-render's renderDiscussion. */
+.hub-thread-reply {
+  min-height: 36px;
+  margin-top: 4px;
 }
 .hub-comment {
   margin: 0 0 8px;
@@ -1955,16 +2043,35 @@ a.hub-link-chip:hover {
 .hub-comment-body > :last-child {
   margin-bottom: 0;
 }
-.hub-comment-form,
-.hub-reply-form {
+.hub-comment-form {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 6px;
   margin: 6px 0 0;
 }
-.hub-comment-form textarea,
-.hub-reply-form textarea {
+/* Says where the box will post, immediately above the box, so what the button
+   will do is readable without moving your eyes off it. This is the whole of
+   what the second composer used to communicate by existing. */
+.hub-composer-target {
+  display: grid;
+  /* minmax(0, …): a quoted anchor is prose and must wrap, not widen the panel
+     past a 430px viewport. */
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+.hub-composer-target-label {
+  overflow-wrap: anywhere;
+}
+.hub-composer-switch {
+  min-height: 36px;
+  white-space: nowrap;
+}
+.hub-comment-form textarea {
   width: 100%;
   /* The panel is a grid/flex child; without this a long unbroken paste sets
      the textarea's intrinsic width and pushes the panel past the viewport. */

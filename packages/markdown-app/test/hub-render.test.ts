@@ -1210,25 +1210,170 @@ describe('renderTaskDetail — discussion', () => {
     expect(onComment).toHaveBeenCalledWith(
       expect.objectContaining({ id: t.id }),
       'This assumes the index ships first.',
+      undefined,
     );
   });
 
-  it('replies go to the thread they were typed under', () => {
+  /**
+   * The acceptance line for the two-composers report: "a task with one thread
+   * presents exactly one obvious way to reply". It used to present two — a
+   * reply box inside the thread and a new-thread box under it, distinguishable
+   * only by placeholder text.
+   */
+  it('offers exactly one composer, whatever the thread count', () => {
+    for (const threads of [
+      [],
+      [thread({ id: 'th-1' })],
+      [thread({ id: 'th-1' }), thread({ id: 'th-2' }), thread({ id: 'th-3' })],
+    ]) {
+      renderTaskDetail(root, task(), detailHandlers(), { loading: false, threads });
+      expect(root.querySelectorAll('.hub-discussion textarea')).toHaveLength(1);
+    }
+    // Positive control: the last pass really did render three threads, so the
+    // count above is one composer over three conversations, not an empty panel.
+    expect(root.querySelectorAll('.hub-thread')).toHaveLength(3);
+  });
+
+  it('defaults to replying to the thread the composer sits under', () => {
     const onComment = vi.fn();
     const t = task();
     renderTaskDetail(root, t, detailHandlers({ onComment }), {
       loading: false,
-      threads: [thread({ id: 'th-77' })],
+      threads: [thread({ id: 'th-1' }), thread({ id: 'th-77' })],
     });
-    const reply = root.querySelector('.hub-reply-form') as HTMLFormElement;
-    const ta = reply.querySelector('textarea') as HTMLTextAreaElement;
+    expect((root.querySelector('.hub-composer-target') as HTMLElement).textContent).toContain(
+      'Replying to',
+    );
+    const form = root.querySelector('.hub-comment-form') as HTMLFormElement;
+    const ta = form.querySelector('textarea') as HTMLTextAreaElement;
     ta.value = 'Because it unblocks two others.';
-    reply.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
     expect(onComment).toHaveBeenCalledWith(
       expect.objectContaining({ id: t.id }),
       'Because it unblocks two others.',
       'th-77',
     );
+  });
+
+  it('a thread’s Reply button points the composer at THAT thread', () => {
+    const onReplyTarget = vi.fn();
+    renderTaskDetail(root, task(), detailHandlers({ onReplyTarget }), {
+      loading: false,
+      threads: [thread({ id: 'th-1' }), thread({ id: 'th-2' })],
+    });
+    const buttons = [...root.querySelectorAll<HTMLElement>('.hub-thread-reply')];
+    expect(buttons).toHaveLength(2);
+    buttons[0]?.click();
+    expect(onReplyTarget).toHaveBeenCalledWith('th-1');
+  });
+
+  it('switching to a new thread survives the next repaint', () => {
+    const onComment = vi.fn();
+    const t = task();
+    const threads = [thread({ id: 'th-1' })];
+    // An explicit null, which is what the "New thread" button sends. A repaint
+    // that re-applied the default would silently move the reader back onto a
+    // reply — and they would find out by reading their own words in the wrong
+    // conversation.
+    renderTaskDetail(root, t, detailHandlers({ onComment, replyThreadId: null }), {
+      loading: false,
+      threads,
+    });
+    expect((root.querySelector('.hub-composer-target') as HTMLElement).textContent).toContain(
+      'Starting a new thread',
+    );
+    const form = root.querySelector('.hub-comment-form') as HTMLFormElement;
+    (form.querySelector('textarea') as HTMLTextAreaElement).value = 'Separate point.';
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    expect(onComment).toHaveBeenCalledWith(
+      expect.objectContaining({ id: t.id }),
+      'Separate point.',
+      undefined,
+    );
+  });
+
+  it('the queue’s aim wins over the default, so you answer what you were sent for', () => {
+    const onComment = vi.fn();
+    renderTaskDetail(root, task(), detailHandlers({ onComment, focusThreadId: 'th-1' }), {
+      loading: false,
+      threads: [thread({ id: 'th-1' }), thread({ id: 'th-2' })],
+    });
+    const form = root.querySelector('.hub-comment-form') as HTMLFormElement;
+    (form.querySelector('textarea') as HTMLTextAreaElement).value = 'Yes, ship it.';
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    expect(onComment).toHaveBeenLastCalledWith(expect.anything(), 'Yes, ship it.', 'th-1');
+  });
+
+  it('a target that no longer resolves posts a new thread, not into nowhere', () => {
+    const onComment = vi.fn();
+    renderTaskDetail(root, task(), detailHandlers({ onComment, replyThreadId: 'th-deleted' }), {
+      loading: false,
+      threads: [thread({ id: 'th-1' })],
+    });
+    const form = root.querySelector('.hub-comment-form') as HTMLFormElement;
+    (form.querySelector('textarea') as HTMLTextAreaElement).value = 'Still worth saying.';
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    expect(onComment).toHaveBeenLastCalledWith(expect.anything(), 'Still worth saying.', undefined);
+  });
+
+  /**
+   * The premise correction behind the whole change. Task threads are NOT
+   * arbitrary groupings: on the live board 34 of 37 carry a text-range anchor
+   * into the description (agents' `create_thread(… find: …)` calls) and 3 do
+   * not. The surface rendered none of them, which is what made two threads
+   * look like two indistinguishable piles.
+   */
+  it('shows what each thread is anchored to, and names it in the composer', () => {
+    renderTaskDetail(root, task(), detailHandlers(), {
+      loading: false,
+      threads: [
+        thread({ id: 'th-1' }),
+        thread({ id: 'th-2', anchorText: 'the mtime poll runs every 500ms' }),
+      ],
+    });
+    const anchors = [...root.querySelectorAll('.hub-thread-anchor')];
+    // One of the two, not both: a subject-anchored thread is about the task as
+    // a whole, and quoting the description above its own thread says nothing.
+    expect(anchors).toHaveLength(1);
+    expect(anchors[0]?.textContent).toContain('the mtime poll runs every 500ms');
+    expect((root.querySelector('.hub-composer-target') as HTMLElement).textContent).toContain(
+      'the mtime poll runs every 500ms',
+    );
+  });
+
+  it('names a subject-anchored thread by who opened it', () => {
+    renderTaskDetail(root, task(), detailHandlers(), {
+      loading: false,
+      threads: [thread({ id: 'th-1', comments: [{ author: 'Jordan', text: 'Why?', ts: NOW }] })],
+    });
+    expect((root.querySelector('.hub-composer-target') as HTMLElement).textContent).toContain(
+      'Jordan',
+    );
+  });
+
+  /**
+   * Nothing an agent posts may stop arriving. An agent's comment lands as a
+   * thread on `task:<id>` — anchored or not — and a person has to be able to
+   * answer it. Both shapes, in the same pass.
+   */
+  it('every thread stays replyable, anchored or not, open or resolved', () => {
+    const onReplyTarget = vi.fn();
+    renderTaskDetail(root, task(), detailHandlers({ onReplyTarget }), {
+      loading: false,
+      threads: [
+        thread({ id: 'th-open', anchorText: 'a line of the description' }),
+        thread({ id: 'th-subject' }),
+        thread({ id: 'th-done', status: 'resolved' }),
+      ],
+    });
+    const rows = [...root.querySelectorAll<HTMLElement>('.hub-thread')];
+    expect(rows.map((r) => r.dataset.threadId)).toEqual(['th-open', 'th-subject', 'th-done']);
+    for (const row of rows) {
+      const btn = row.querySelector<HTMLElement>('.hub-thread-reply');
+      expect(btn).toBeTruthy();
+      btn?.click();
+    }
+    expect(onReplyTarget.mock.calls.map((c) => c[0])).toEqual(['th-open', 'th-subject', 'th-done']);
   });
 
   /**
@@ -1541,7 +1686,7 @@ describe('renderPresence — plugin drift', () => {
     );
   });
 
-  it('renders nothing extra when every agent is current', () => {
+  it('renders nothing when there is no notice at all', () => {
     const host = document.createElement('div');
     // Positive control: the same call WITH a notice puts a .hub-drift in, so
     // this absence means the notice is what drives it.
@@ -1551,6 +1696,38 @@ describe('renderPresence — plugin drift', () => {
     renderPresence(host, [], null, { onTap: () => {}, onLongPress: () => {} }, [null]);
     expect(host.querySelector('.hub-drift')).toBeNull();
     expect(host.classList.contains('hidden')).toBe(true);
+  });
+
+  it('renders the clear reading quietly, and the alarm loudly', () => {
+    // A coverage line is on the board permanently. If it wore the alarm's
+    // styling it would teach everyone to skim past the alarm — so the class
+    // has to differ, and both halves are asserted in the same pass so
+    // neither is a claim about a world the other does not inhabit.
+    const host = document.createElement('div');
+    const clear = pluginDriftNotice({ version: '0.1.40', behind: [], checked: 1 });
+    renderPresence(host, [], null, { onTap: () => {}, onLongPress: () => {} }, [clear]);
+    const quiet = host.querySelector('.hub-drift');
+    expect(quiet).not.toBeNull();
+    expect(quiet?.classList.contains('hub-drift-quiet')).toBe(true);
+    expect(quiet?.textContent).toContain('No attached session is behind 0.1.40 (1 checked)');
+    expect(quiet?.textContent).toContain('a peer that never attached is absent here');
+
+    renderPresence(host, [], null, { onTap: () => {}, onLongPress: () => {} }, [drift()]);
+    const loud = host.querySelector('.hub-drift');
+    expect(loud?.classList.contains('hub-drift-quiet')).toBe(false);
+  });
+
+  it('a board nobody has attached to does not render as all-clear', () => {
+    // The defect, in the surface: an empty `behind` list used to render as
+    // nothing, and nothing reads exactly like clearance.
+    const host = document.createElement('div');
+    renderPresence(host, [], null, { onTap: () => {}, onLongPress: () => {} }, [
+      pluginDriftNotice({ version: '0.1.40', behind: [], checked: 0 }),
+    ]);
+    expect(host.classList.contains('hidden')).toBe(false);
+    expect(host.querySelector('.hub-drift')?.textContent).toContain(
+      'no session has attached to this board',
+    );
   });
 });
 
