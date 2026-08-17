@@ -42,8 +42,22 @@ const CSS = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8'
 const PHONE_CONDITION =
   '@media (hover: none) and (max-width: 560px), (pointer: coarse) and (max-width: 560px) {';
 
-/** Body of the phone block that styles the badge strip. */
+/**
+ * Comments stripped, because these assertions are about the CASCADE and a
+ * comment is not in it — the "no bare `.hub-badge`" check reads its own
+ * explanation of the bare rule as the bare rule otherwise.
+ */
+function declarationsOnly(css: string): string {
+  return css.replace(/\/\*[\s\S]*?\*\//g, '');
+}
+
+/** Body of the phone block that styles the badge strip, declarations only. */
 function phoneRowBlock(): string {
+  return declarationsOnly(rawPhoneRowBlock());
+}
+
+/** The same block with its comments, for the source-order arithmetic below. */
+function rawPhoneRowBlock(): string {
   let from = 0;
   for (;;) {
     const at = CSS.indexOf(PHONE_CONDITION, from);
@@ -64,8 +78,8 @@ function phoneRowBlock(): string {
 
 /** Everything OUTSIDE that block — what a desktop row still gets. */
 function outsidePhoneBlock(): string {
-  const body = phoneRowBlock();
-  return body === '' ? CSS : CSS.replace(body, '');
+  const body = rawPhoneRowBlock();
+  return declarationsOnly(body === '' ? CSS : CSS.replace(body, ''));
 }
 
 describe('the phone task row', () => {
@@ -81,15 +95,32 @@ describe('the phone task row', () => {
 
   it('drops the word badges from the strip', () => {
     const body = phoneRowBlock();
-    expect(/\.hub-badge\s*\{[^}]*display:\s*none/.test(body)).toBe(true);
+    expect(/\.hub-task-badges \.hub-badge\s*\{[^}]*display:\s*none/.test(body)).toBe(true);
+  });
+
+  it('drops them from the STRIP only — the same class labels a goal section', () => {
+    // `renderBoard` puts `hub-badge hub-badge-due` in `.hub-section-title` for
+    // a goal's own due date: one per section, not per row, and it costs the
+    // title nothing. A bare `.hub-badge { display: none }` took it with them.
+    const selectors = phoneRowBlock()
+      .split('}')
+      .map((chunk) => chunk.split('{')[0]?.trim() ?? '')
+      .filter((s) => s !== '');
+    // Positive control: the block does have selectors to judge.
+    expect(selectors.length).toBeGreaterThan(0);
+    expect(selectors).not.toContain('.hub-badge');
+    // And every badge selector it does carry is under the strip.
+    for (const s of selectors) {
+      if (s.includes('.hub-badge')) expect(s.startsWith('.hub-task-badges ')).toBe(true);
+    }
   });
 
   it('keeps the discussion mark, after the drop so it wins', () => {
     const body = phoneRowBlock();
-    const hide = body.search(/\.hub-badge\s*\{/);
-    const show = body.search(/\.hub-badge-comments\s*\{/);
+    const hide = body.search(/\.hub-task-badges \.hub-badge\s*\{/);
+    const show = body.search(/\.hub-task-badges \.hub-badge-comments\s*\{/);
     expect(show).toBeGreaterThan(-1);
-    // Same specificity (one class each), so source order decides.
+    // Same specificity (two classes each), so source order decides.
     expect(show).toBeGreaterThan(hide);
     const rule = /\.hub-badge-comments\s*\{([^}]*)\}/.exec(body)?.[1] ?? '';
     // Asserted positively, in two parts: `display:\s*(?!none)` is satisfied BY

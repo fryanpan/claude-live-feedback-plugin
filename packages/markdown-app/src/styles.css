@@ -2131,10 +2131,14 @@ a.hub-link-chip:hover {
    second red 10px dot beside the risk dot would say two different things in
    one shape. It stays one tap away, in the panel. */
 @media (hover: none) and (max-width: 560px), (pointer: coarse) and (max-width: 560px) {
-  .hub-badge {
+  /* Scoped to the strip, NOT to `.hub-badge`. The same class also draws a
+     goal SECTION's due date in `.hub-section-title` (`renderBoard`), which is
+     one badge per section rather than per row and costs the title nothing —
+     a bare `.hub-badge { display: none }` took that with it. */
+  .hub-task-badges .hub-badge {
     display: none;
   }
-  .hub-badge-comments {
+  .hub-task-badges .hub-badge-comments {
     display: inline-block;
   }
   /* The half that makes “whole or not at all” structural rather than
