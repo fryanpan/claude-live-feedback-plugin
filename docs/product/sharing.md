@@ -7,10 +7,20 @@ then have their access expire automatically.
 
 ## Mental model
 
-Sharing is **purely additive**. You still bind a markdown doc with
-`create_review_doc` (or embed the widget in a dev site / mockup) the same
-way you do for private Tailscale review. The `share_doc` MCP tool wraps
-that surface in a public, gated URL. Same comment threads, same agent
+**A workspace is the unit of sharing** (Bryan, 2026-08-17). There is no
+per-doc share: `share_doc` is gone and `share_link` no longer takes a
+`docId`. You bind docs the way you always did — `create_review_doc`,
+`bind_folder`, `create_diff_review` — and then you share the WORKSPACE they
+are filed on. To publish a single document, file it on a workspace first
+(`attach_doc`).
+
+That is a deliberate narrowing rather than a missing feature. Everything in a
+workspace is available to everyone in it (`.claude/rules/workspace-board.md`),
+so the workspace is the boundary a person can actually reason about; a share
+per doc made the real audience of a review impossible to see. Decide what
+belongs in the workspace *before* you share it.
+
+Beyond that, sharing is **purely additive**: same comment threads, same agent
 watching, just a different audience.
 
 ```mermaid
@@ -92,28 +102,41 @@ The agent reads this when you ask it to share. If the repo has no
 `share` section, the agent will **ask before sharing** rather than
 default to "anyone."
 
-## Day-to-day: sharing a markdown doc
+## Day-to-day: sharing a workspace
 
 Tell the agent something like:
 
-> "Publish this draft to the appdev team for a 72h review."
+> "Publish this review to the partner team for a 72h review."
 
 The agent will:
 
-1. Confirm the doc is bound via `create_review_doc`.
-2. Read `share.defaultAllowDomains` from `.claude/live-feedback.json`.
-3. Call the `share_doc` MCP tool with that allow-list.
-4. Hand you a URL like `https://share-2026-05-07-a3f.tunnel.fryanpan.com/review/<docId>`.
-5. Watch the doc so external comments arrive on the same channel as
+1. Confirm the docs are filed on a workspace — binding the folder
+   (`bind_folder`), creating the diff review, or `attach_doc`-ing a loose
+   doc onto a board.
+2. Check what else that workspace contains, because the visitor gets all of
+   it. For a diff review the workspace root is the whole repo, so `files` /
+   `context-file` reach every file in it; a folder bind confines them to a
+   directory.
+3. Read `share.defaultAllowDomains` from `.claude/live-feedback.json`.
+4. Call the `share_workspace` MCP tool with that allow-list.
+5. Hand you a URL like `https://share-2026-05-07-a3f.tunnel.example.com/review/<entryDocId>`.
+6. Watch the docs so external comments arrive on the same channel as
    yours.
+
+For a link share with no sign-in at all, `share_link({ workspaceId })` mints an
+unguessable URL instead. The slug IS the credential, so keep the TTL short.
 
 You can also drive it manually with the CLI:
 
 ```sh
-bun share doc <docId> --allow-domain @partner-org.example --ttl 72h
+bun share workspace <workspaceId> --allow-domain @partner-org.example --ttl 72h
 bun share list
 bun share revoke <shareId>
 ```
+
+`bun share doc` and `POST /api/share/doc` still exist as refusals rather than
+as routes: they answer with the replacement, so an older plugin bundle calling
+them gets a sentence instead of a 404.
 
 ## What the reviewer sees
 
@@ -143,7 +166,7 @@ becomes useless.
 
 ## Limitations (current build)
 
-- `share_doc` (markdown) is implemented. `share_site` (dev server) and
+- Markdown / code / diff workspaces are implemented. `share_site` (dev server) and
   `share_mockup` (static HTML) are scoped for the next iteration — they
   need the cloudflared ingress YAML mutator and (for mockup) a small
   static-file server.

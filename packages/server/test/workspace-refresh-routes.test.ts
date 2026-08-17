@@ -496,12 +496,43 @@ describe('workspace refresh routes', () => {
       expect(probe.status).toBe(403);
     });
 
-    it('leaves a single-doc share pointing at exactly its doc', async () => {
+    it('cannot mint a single-doc share — but a one-member workspace still lands on its doc', async () => {
+      // This used to read "leaves a single-doc share pointing at exactly its
+      // doc": the entry-repair machinery above must not go rewriting a link
+      // that names one doc and nothing else. A workspace is the unit of
+      // sharing now, so the doc-scoped mint is refused outright — and the
+      // property that mattered survives one level up, on a workspace whose
+      // only member IS that doc: redemption still lands on it, unrepaired.
       const path = join(dataDir, 'solo.md');
       writeFileSync(path, '# Solo\n\nBody.\n');
-      await post('/api/docs', { docId: 'solo-doc', type: 'markdown', sourceUrl: path });
-      const mint = await post('/api/share/link', { docId: 'solo-doc' });
-      const share = ((await mint.json()) as { share: { slug: string } }).share;
+      await post('/api/docs', {
+        docId: 'solo-doc',
+        type: 'markdown',
+        sourceUrl: path,
+        workspaceId: 'ws-solo',
+      });
+
+      const refusedLink = await post('/api/share/link', { docId: 'solo-doc' });
+      expect(refusedLink.status).toBe(410);
+      expect((await refusedLink.json()) as { error: string }).toMatchObject({
+        error: 'per_doc_sharing_removed',
+      });
+      const refusedDoc = await post('/api/share/doc', {
+        docId: 'solo-doc',
+        allowDomains: ['partner.example'],
+      });
+      expect(refusedDoc.status).toBe(410);
+      expect((await refusedDoc.json()) as { error: string }).toMatchObject({
+        error: 'per_doc_sharing_removed',
+      });
+
+      // POSITIVE CONTROL, and the surviving assertion in one: the same doc,
+      // reached through the workspace it is filed on, still mints and still
+      // redeems to exactly `/review/solo-doc`.
+      const mint = await post('/api/share/link', { workspaceId: 'ws-solo' });
+      expect(mint.status).toBe(200);
+      const share = ((await mint.json()) as { share: { slug: string; docId: string } }).share;
+      expect(share.docId).toBe('solo-doc');
       const r = await fetch(`${base}/s/${share.slug}`, {
         redirect: 'manual',
         headers: { host: PUBLIC_HOST },
