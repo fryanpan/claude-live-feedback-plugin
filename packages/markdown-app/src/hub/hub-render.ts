@@ -36,6 +36,7 @@ import {
   quoteAfterCapture,
   quoteAfterEdit,
   quoteForCapture,
+  reviewRow,
   stepTarget,
   timeAgo,
   uptimeSummary,
@@ -1033,11 +1034,13 @@ function clip(text: string, max = 60): string {
  *  reader has to know which one a row will take them to before they tap it. */
 const REVIEW_MARK: Record<ReviewKind, string> = {
   decision: '◆',
+  blocker: '⛔',
   'task-thread': '💬',
   'doc-thread': '📄',
 };
 const REVIEW_KIND_LABEL: Record<ReviewKind, string> = {
   decision: 'Decision',
+  blocker: 'Your task, blocking',
   'task-thread': 'Task comment',
   'doc-thread': 'Doc comment',
 };
@@ -1099,7 +1102,10 @@ export function renderReviewStrip(
   for (const item of queue.items) {
     const chip = document.createElement('button');
     chip.type = 'button';
-    const blocking = (item.decision?.blocks.length ?? 0) > 0;
+    // Both banded kinds carry a row; read it through the one helper so a new
+    // band cannot be styled as blocking on one line and not on the next.
+    const row = reviewRow(item);
+    const blocking = (row?.blocks.length ?? 0) > 0;
     chip.className = `hub-decision-chip hub-review-${item.kind}${blocking ? ' hub-decision-blocking' : ''}`;
     const mark = document.createElement('span');
     mark.className = 'hub-review-mark';
@@ -1119,7 +1125,7 @@ export function renderReviewStrip(
     } else if (blocking) {
       const blocks = document.createElement('span');
       blocks.className = 'hub-decision-chip-blocks';
-      blocks.textContent = `blocks ${item.decision?.blocks.length}`;
+      blocks.textContent = `blocks ${row?.blocks.length}`;
       chip.append(blocks);
     }
     chip.title = `${REVIEW_KIND_LABEL[item.kind]}: ${item.title}${item.ask ? ` — ${item.ask}` : ''} · ${item.why}`;
@@ -1146,6 +1152,22 @@ export interface WalkthroughHandlers {
   /** Move to another position in the queue (skip forward, step back). */
   onStep: (index: number) => void;
   onClose: () => void;
+}
+
+/** The task's own description, or an honest line saying there isn't one.
+ *  Shared by the decision and blocker cards — both are a task. */
+function walkBody(task: HubTask): HTMLElement {
+  const body = document.createElement('div');
+  // `renderCommentMarkdown` escapes first and only adds known-safe tags, so a
+  // body written by anyone with write access is inert markup either way.
+  if (task.body?.trim()) {
+    body.className = 'hub-walk-body';
+    body.innerHTML = renderCommentMarkdown(task.body);
+  } else {
+    body.className = 'hub-walk-body hub-walk-body-empty';
+    body.textContent = 'No context was written for this one.';
+  }
+  return body;
 }
 
 function blocksLine(row: DecisionRow): string {
@@ -1230,6 +1252,9 @@ export function renderReviewWalkthrough(
   panel.setAttribute('aria-modal', 'true');
 
   const item = queue.items[index];
+  // Only a decision gets the answer furniture. A blocker carries the same row
+  // shape but was never a question, so writing an `answer` onto it would be a
+  // lie about what happened.
   const row = item?.decision;
   if (!item) {
     const done = document.createElement('div');
@@ -1276,6 +1301,27 @@ export function renderReviewWalkthrough(
   title.textContent = item.title;
   card.append(title);
 
+  // ── A blocker: your own task, and the work standing behind it. There is
+  // nothing to answer and nothing to reply to — the only move is to go and do
+  // it — so the card says what is waiting and hands you the task.
+  const blocker = item.blocker;
+  if (blocker) {
+    const blocks = document.createElement('p');
+    blocks.className = 'hub-walk-blocks hub-walk-blocking';
+    blocks.textContent = blocksLine(blocker);
+    card.append(blocks, walkBody(blocker.task));
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'hub-btn hub-btn-primary hub-walk-open';
+    open.textContent = 'Open the task';
+    open.addEventListener('click', () => handlers.onOpenItem(item));
+    card.append(open);
+    panel.append(card);
+    panel.append(walkNav(index, queue.items.length, handlers));
+    container.append(panel);
+    return;
+  }
+
   // ── A thread: the question, a reply box, and the way out to the surface it
   // lives on. Answering here is the point — going through the queue must not
   // mean leaving the queue on every item — but a comment sometimes only makes
@@ -1311,17 +1357,7 @@ export function renderReviewWalkthrough(
   blocks.textContent = blocksLine(row);
   card.append(blocks);
 
-  const body = document.createElement('div');
-  // `renderCommentMarkdown` escapes first and only adds known-safe tags, so a
-  // body written by anyone with write access is inert markup either way.
-  if (task.body?.trim()) {
-    body.className = 'hub-walk-body';
-    body.innerHTML = renderCommentMarkdown(task.body);
-  } else {
-    body.className = 'hub-walk-body hub-walk-body-empty';
-    body.textContent = 'No context was written for this one.';
-  }
-  card.append(body);
+  card.append(walkBody(task));
 
   if (task.infoRequests && task.infoRequests.length > 0) {
     const asked = document.createElement('p');

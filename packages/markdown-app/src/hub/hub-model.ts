@@ -174,10 +174,17 @@ export interface BoardFilters {
   now: number;
 }
 
+/** "A person owns this." The one spelling of it — `taskVisible`'s My-Tasks
+ *  branch and the review queue's blocker band both ask the same question, and
+ *  a second spelling of it would drift the moment either moved. */
+export function assignedToHuman(task: HubTask): boolean {
+  return task.assignee === 'human';
+}
+
 export function taskVisible(task: HubTask, f: BoardFilters): boolean {
   if (f.tab === 'mine') {
     const mine =
-      task.assignee === 'human' || task.assignee.toLowerCase() === f.userName.trim().toLowerCase();
+      assignedToHuman(task) || task.assignee.toLowerCase() === f.userName.trim().toLowerCase();
     if (!mine) return false;
   }
   if (task.status === 'done') {
@@ -421,10 +428,23 @@ export interface DecisionQueue {
  * first, then by how many tasks are waiting, then oldest.
  */
 export function decisionQueue(tasks: HubTask[]): DecisionQueue {
-  const open = decisionRows(tasks);
-  if (open.length === 0) return { rows: [], total: 0, blocking: 0, waiting: 0 };
+  const rows = dependentsRows(tasks, decisionRows(tasks));
+  const blocking = rows.filter((r) => r.blocks.length > 0).length;
+  return { rows, total: rows.length, blocking, waiting: rows.length - blocking };
+}
 
-  const byId = new Map(open.map((d) => [d.id, { task: d, blocks: [] as HubTask[], hard: false }]));
+/**
+ * "What open work is waiting on each of these?" — the engine behind both bands.
+ *
+ * The walk is generic on purpose: only the candidate set says which question is
+ * being asked. Ordering is what it blocks, not which goal it sits under:
+ * enforced edges first, then by how many tasks are waiting, then oldest.
+ */
+function dependentsRows(tasks: HubTask[], candidates: HubTask[]): DecisionRow[] {
+  if (candidates.length === 0) return [];
+  const byId = new Map(
+    candidates.map((d) => [d.id, { task: d, blocks: [] as HubTask[], hard: false }]),
+  );
   for (const t of tasks) {
     // Finished work waits on nothing, and a task can't block on itself.
     if (t.status === 'done') continue;
@@ -438,16 +458,41 @@ export function decisionQueue(tasks: HubTask[]): DecisionQueue {
       if (t.afterEnforce?.includes(id)) row.hard = true;
     }
   }
-
-  const rows = [...byId.values()].sort(
+  return [...byId.values()].sort(
     (a, b) =>
       Number(b.hard) - Number(a.hard) ||
       b.blocks.length - a.blocks.length ||
       a.task.createdAt - b.task.createdAt ||
       a.task.id.localeCompare(b.task.id),
   );
-  const blocking = rows.filter((r) => r.blocks.length > 0).length;
-  return { rows, total: rows.length, blocking, waiting: rows.length - blocking };
+}
+
+/** A task and the open work waiting on it. The decision band and the blocker
+ *  band carry the same shape because it is the same computation. */
+export type BlockerRow = DecisionRow;
+
+/**
+ * Open, human-owned tasks that other open work names in `after`.
+ *
+ * The board's six real dependency edges pointed at none of its decisions —
+ * they pointed at a person's own tasks (turn on the tunnel, merge the PR), and
+ * no surface said so. Two rules make this band different from the decision one
+ * and both are load-bearing:
+ *
+ * - **Nothing waiting means not here.** The decision band deliberately shows a
+ *   decision with no dependents ("Nothing is waiting on this yet") because an
+ *   unanswered question is itself the ask. A task is not an ask, so a human
+ *   task nobody is waiting on would put the whole personal backlog in the strip
+ *   and make the count mean nothing.
+ * - **A decision is not a blocker.** Every decision is also assigned to
+ *   somebody, so without this the same task would appear in both bands and be
+ *   counted twice in the number at the top of the board.
+ */
+export function humanBlockerRows(tasks: HubTask[]): BlockerRow[] {
+  const candidates = tasks.filter(
+    (t) => assignedToHuman(t) && t.status !== 'done' && t.needs !== 'decision',
+  );
+  return dependentsRows(tasks, candidates).filter((r) => r.blocks.length > 0);
 }
 
 // ── The review queue: everything waiting on a person, in one list ──────────
@@ -468,7 +513,7 @@ export interface ReviewThreadItem {
   since: number;
 }
 
-export type ReviewKind = 'decision' | 'task-thread' | 'doc-thread';
+export type ReviewKind = 'decision' | 'blocker' | 'task-thread' | 'doc-thread';
 
 export interface ReviewItem {
   /** Stable across re-fetches. The walkthrough steps by position and the list
@@ -484,16 +529,27 @@ export interface ReviewItem {
   since: number;
   /** Set on a decision — the row the answer form and the blocks line need. */
   decision?: DecisionRow;
+  /** Set on a human-owned blocker — the same row shape, but there is no
+   *  question to answer here, only work to unblock. */
+  blocker?: BlockerRow;
   /** Set on either thread kind — where the reply gets written. */
   thread?: ReviewThreadItem;
+}
+
+/** The task-and-dependents row an item carries, for the two bands that have
+ *  one. One reader for both, so "open the thing this is about" cannot learn
+ *  about a new band and forget the other. */
+export function reviewRow(item: ReviewItem): DecisionRow | undefined {
+  return item.decision ?? item.blocker;
 }
 
 export interface ReviewQueue {
   items: ReviewItem[];
   total: number;
-  /** How many are holding other work up right now. Decisions only: a thread
-   *  blocks nothing structurally, and counting it would inflate the one
-   *  number that is supposed to mean "act now". */
+  /** How many are holding other work up right now: decisions with dependents,
+   *  plus every human-owned blocker (which has dependents by definition). Not
+   *  threads — a comment blocks nothing structurally, and counting it would
+   *  inflate the one number that is supposed to mean "act now". */
   blocking: number;
 }
 
@@ -524,13 +580,27 @@ export function reviewQueue(
     kind: 'decision' as const,
     title: row.task.title,
     ask: '',
-    why:
-      row.blocks.length === 0
-        ? 'Nothing is waiting on this yet'
-        : `${row.hard ? 'Hard-blocking' : 'Blocking'} ${row.blocks.length === 1 ? '1 task' : `${row.blocks.length} tasks`}`,
+    why: row.blocks.length === 0 ? 'Nothing is waiting on this yet' : blockingLine(row),
     since: row.task.createdAt,
     decision: row,
   }));
+
+  // Second band: a person's own open tasks that other work is waiting on. They
+  // sit under decisions and above every comment because, like a decision with
+  // dependents, they are structurally holding work up — and unlike a comment,
+  // nobody else can move them.
+  const blockers = humanBlockerRows(tasks);
+  for (const row of blockers) {
+    items.push({
+      key: `blocker:${row.task.id}`,
+      kind: 'blocker',
+      title: row.task.title,
+      ask: '',
+      why: blockingLine(row),
+      since: row.task.createdAt,
+      blocker: row,
+    });
+  }
 
   const byAge = (a: ReviewThreadItem, b: ReviewThreadItem) =>
     a.since - b.since || a.threadId.localeCompare(b.threadId);
@@ -548,7 +618,17 @@ export function reviewQueue(
     }
   }
 
-  return { items, total: items.length, blocking: decisions.blocking };
+  // Every blocker is blocking — that is the condition for being in the band —
+  // so it belongs in the number that means "act now". A thread still does not:
+  // it blocks nothing structurally, and counting it would inflate the one
+  // number that is supposed to mean act now.
+  return { items, total: items.length, blocking: decisions.blocking + blockers.length };
+}
+
+/** "Blocking 2 tasks" / "Hard-blocking 1 task". One phrasing, both bands. */
+function blockingLine(row: DecisionRow): string {
+  const n = row.blocks.length;
+  return `${row.hard ? 'Hard-blocking' : 'Blocking'} ${n === 1 ? '1 task' : `${n} tasks`}`;
 }
 
 // ── Quick capture ──────────────────────────────────────────────────────────
