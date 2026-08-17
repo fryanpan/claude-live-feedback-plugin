@@ -21,6 +21,18 @@ export interface TriageRequestPayload {
 }
 
 /**
+ * The contract a goal-change re-triage asks the reader to follow: re-read the
+ * goal, re-place every open task, reorder, flag what the edit made obsolete
+ * WITHOUT closing it, report on the board. Named in the request itself because
+ * delivery without instructions is what the request kept producing — the
+ * addressee knew N tasks needed re-placing and had to invent the rest.
+ *
+ * Exported so the same name reaches the OTHER delivery path (a queued edit
+ * handed over on `attach_agent`), which is the one a lead who was away gets.
+ */
+export const RETRIAGE_SKILL = 'live-feedback:handling-a-goal-change';
+
+/**
  * Render the one-line body for a `triage.requested` event as seen by
  * `selfAgentId`.
  *
@@ -40,7 +52,7 @@ export function triageRequestLine(p: TriageRequestPayload, selfAgentId: string):
   const batch = p.batchId ? `, passing batchId "${p.batchId}" on each` : '';
   const lead = p.leadAgentId;
   if (lead !== undefined && lead !== selfAgentId) {
-    return `[triage.requested] FYI — goal changed; re-triaging ${count} open task(s) is addressed to lead agent ${lead}${batch}. Act only if that is you.`;
+    return `[triage.requested] FYI — goal changed; re-triaging ${count} open task(s) is addressed to lead agent ${lead}${batch}. Act only if that is you (${RETRIAGE_SKILL}).`;
   }
-  return `[triage.requested] goal changed — re-triage ${count} open task(s) with set_task_goal${batch}`;
+  return `[triage.requested] goal changed — re-triage ${count} open task(s) with set_task_goal${batch}. What you owe on a goal change: ${RETRIAGE_SKILL}`;
 }
