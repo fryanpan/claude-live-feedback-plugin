@@ -1067,6 +1067,33 @@ Technical discoveries that should persist across sessions for this project.
   baseline the worktree (1 failure), then remove only the new TEST file —
   green. That sequence proves the source innocent before you start reading
   it, and points at the fixture.
+- **Fixed in two halves, and shipping either alone would have been wrong.**
+  `anchors.validateAnchor` refuses the write at the route with a 400 that
+  names the field — which only helps NEW writes. Docs written before it
+  existed still carry bad anchors, so every reader also goes through
+  `decodeRelativePositionSafe`, which answers null where Yjs would throw.
+  Null is indistinguishable at the call site from "this position no longer
+  resolves", the case every reader already handles — so a legacy bad anchor
+  doesn't merely stop crashing, the snippet sweep re-anchors it and the doc
+  repairs itself. **A validation-only fix leaves the already-broken docs
+  broken, and those are the ones somebody is looking at.**
+- Two more things the fix had to reach that the report didn't name. The
+  `/threads/<id>/reanchor` route takes an anchor verbatim too — it can plant
+  the same thing on an EXISTING thread. And `anchor.snippet.text` is the same
+  deferred crash one property deeper: `snippet` is required by the type and by
+  nothing that enforces it, and the sweep is where a missing one is first
+  read. When a route accepts a structure verbatim, grep for every route that
+  accepts that same structure, and for every property the readers dereference
+  without a guard.
+- **The test that proves it asserts on a request to a different doc.** The
+  edit that arms the sweep returns 200 either way; the failure lands ~250ms
+  later on a bystander doc with no threads. A `process.on('uncaughtException')`
+  collector is what makes it attributable — without one the run just dies
+  somewhere else, which is the entire diagnosis cost. Mutation-tested five
+  ways: removing either route guard, un-guarding the decode, and un-guarding
+  the snippet read each turn a specific named test red, with the original
+  `decoder.arr.length` error and the `# Unhandled error between tests` banner
+  reproduced verbatim.
 
 ## A fallback that only logs is a fallback nobody knows they are on
 
