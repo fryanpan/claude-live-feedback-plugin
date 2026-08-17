@@ -23,9 +23,13 @@ import {
   type TaskStatus,
   type UptimeReport,
   activityRows,
+  appendDictation,
   describeEvent,
   dropIndexFor,
   dropTarget,
+  quoteAfterCapture,
+  quoteAfterEdit,
+  quoteForCapture,
   stepTarget,
   timeAgo,
   uptimeSummary,
@@ -808,8 +812,26 @@ export interface QuickAddHandlers {
    *  Resolves true when the task actually exists. The box clears on THAT, not
    *  on dispatch: a phone in a lift would otherwise eat the idea and hand back
    *  a toast, which is the one failure this box exists to prevent, at the
-   *  moment it costs most. */
-  onCapture: (text: string) => Promise<boolean>;
+   *  moment it costs most.
+   *
+   *  `quote` is the speaker's own words when any of the text was dictated —
+   *  kept verbatim even after the text is edited, so a misheard word can be
+   *  fixed without losing what was actually said. */
+  onCapture: (text: string, quote?: string) => Promise<boolean>;
+  /** Wire speech to the box. Called once at mount with the parts to drive;
+   *  omitted entirely where speech is unavailable, and the typed path is then
+   *  exactly what it was.
+   *
+   *  The split is deliberate: this module owns the DOM, and the caller owns
+   *  the policy (which recognizer, what it costs, when it may listen). */
+  mountVoice?: (parts: {
+    button: HTMLButtonElement;
+    indicator: HTMLElement;
+    /** A finished utterance. Appends to the box; never files anything —
+     *  dictation mishears, and a wrong task filed silently is worse than one
+     *  more tap on Add. */
+    deliver: (transcript: string) => void;
+  }) => void;
 }
 
 export function renderQuickAdd(container: HTMLElement, handlers: QuickAddHandlers): void {
@@ -837,22 +859,41 @@ export function renderQuickAdd(container: HTMLElement, handlers: QuickAddHandler
   // the first appears to do nothing — files the idea twice, because the text
   // now stays in the box until the task lands.
   let inFlight = false;
+  // What was SAID, accumulated across utterances, for as long as the box still
+  // holds the idea it belongs to.
+  let spoken = '';
   const capture = () => {
     const text = input.value.trim();
     if (!text || inFlight) return;
     inFlight = true;
     submit.disabled = true;
-    void handlers.onCapture(text).then((ok) => {
+    const quote = quoteForCapture(spoken);
+    void handlers.onCapture(text, quote).then((ok) => {
       inFlight = false;
       submit.disabled = false;
       if (!ok) return;
+      // The utterance belonged to the task that just landed. Carrying it into
+      // the next one would file words about work nobody spoke about — but the
+      // box stayed live while the POST was out, so anything dictated SINCE
+      // belongs to the idea still sitting there. Same rule as the text below:
+      // remove what was sent, keep the rest.
+      spoken = quoteAfterCapture(spoken, quote);
       // Only what was sent. Anything typed while it was in flight is a second
       // idea, and clearing the whole box would take it with the first.
       input.value = input.value.trim() === text ? '' : input.value;
       autosize();
     });
   };
-  input.addEventListener('input', autosize);
+  input.addEventListener('input', () => {
+    autosize();
+    // Edited away: the idea the utterance belonged to is gone, so the
+    // utterance goes with it — whether the box was cleared or retyped over
+    // (a select-all retype is one input event with a NON-empty value, which
+    // is how the previous "empty means forget" test let a retyped task file
+    // the last idea's words). Correcting a misheard word keeps it; the rule
+    // itself lives in the model.
+    spoken = quoteAfterEdit(input.value, spoken);
+  });
   // Enter submits, Shift+Enter is a newline — the convention every chat box
   // has, because this is the box people reach for instead of chat.
   input.addEventListener('keydown', (ev) => {
@@ -869,6 +910,43 @@ export function renderQuickAdd(container: HTMLElement, handlers: QuickAddHandler
   });
   form.append(input, submit);
   container.append(form);
+
+  if (!handlers.mountVoice) return;
+  const mic = document.createElement('button');
+  // Not a submit: a press-and-hold on a button inside a form files the box on
+  // release in some browsers, which would send a half-dictated idea.
+  mic.type = 'button';
+  mic.className = 'hub-btn hub-quick-mic';
+  // Names the key, because the hold is genuinely available from the keyboard
+  // (the capture binds Space/Enter on this button) and nothing else on the
+  // page would tell someone who never taps that it is.
+  mic.setAttribute('aria-label', 'Hold to dictate a task — hold Space or Enter');
+  mic.textContent = '🎤';
+  const indicator = document.createElement('span');
+  // Hidden until there is something to say — it takes a flex line of its own
+  // (`flex-basis: 100%`), so mounting it visible puts a row-gap under the form
+  // that vanishes for good the first time anything is dictated. The capture
+  // un-hides it; this is the same start the board-wide dock's indicator has.
+  indicator.className = 'hub-quick-mic-state hidden';
+  indicator.setAttribute('aria-live', 'polite');
+  // Before Add, not after: the two thumb targets on a phone are the box and
+  // the mic, and Add is the one that ends the interaction.
+  form.insertBefore(mic, submit);
+  form.append(indicator);
+  handlers.mountVoice({
+    button: mic,
+    indicator,
+    deliver: (transcript) => {
+      const next = appendDictation(input.value, transcript, spoken);
+      input.value = next.text;
+      spoken = next.quote;
+      autosize();
+      // So the next words land after these, and Enter files without a hunt
+      // for the box.
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    },
+  });
 }
 
 // ── Decisions strip ────────────────────────────────────────────────────────
