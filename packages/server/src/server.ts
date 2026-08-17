@@ -619,17 +619,40 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * out in host-guard, never a resolver side effect.
    */
   const shareWorkspacesOf = (id: string): string[] => {
-    const out: string[] = [];
+    const out = new Set<string>();
     const grouping = rooms.get(id)?.meta.workspaceId;
-    if (grouping) out.push(grouping);
-    const direct = taskStore.workspaceOfDoc(id);
-    if (direct) out.push(direct);
-    if (grouping) {
-      const board = taskStore.workspaceOfDoc(grouping);
-      if (board && board !== direct) out.push(board);
-    }
-    return out;
+    if (grouping) out.add(grouping);
+    for (const board of hubWorkspacesHolding(id)) out.add(board);
+    if (grouping) for (const board of hubWorkspacesHolding(grouping)) out.add(board);
+    return Array.from(out);
   };
+
+  /**
+   * EVERY hub board an attachment is linked to — not the first one.
+   *
+   * `attachDoc` links, it does not move: only the default holding pen is
+   * unfiled on the way (see `unfileFromDefault`), so a review deliberately
+   * put on two real boards is on both. `taskStore.workspaceOfDoc` answers
+   * with whichever the store iterates first, which for share scoping means
+   * the visitors of every OTHER board holding it are refused the row their
+   * own board shows them — the exact 403-on-your-own-share failure
+   * `unfileFromDefault` records, surviving in the case it cannot fix,
+   * because there both links are legitimate and neither may be dropped.
+   *
+   * `task:<id>` keeps the store's own resolution: a task body belongs to its
+   * task's workspace, which is a field rather than a link, so it has one
+   * answer by construction.
+   */
+  function hubWorkspacesHolding(attachmentId: string): string[] {
+    if (attachmentId.startsWith('task:')) {
+      const w = taskStore.workspaceOfDoc(attachmentId);
+      return w ? [w] : [];
+    }
+    return taskStore
+      .listWorkspaces()
+      .filter((w) => w.docIds.includes(attachmentId))
+      .map((w) => w.id);
+  }
 
   /**
    * ── Two things wear the word "workspace". Read this before touching any

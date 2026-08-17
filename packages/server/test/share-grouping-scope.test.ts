@@ -399,4 +399,53 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
       expect((await pub(`/api/workspaces/${folderGroupingA}/tree`, docCookie)).status).toBe(403);
     });
   });
+
+  /**
+   * A review can sit on TWO boards at once — `attach_doc` links, it does not
+   * move, and only the default holding pen is unfiled on the way. So "which
+   * board is this on" has no single answer, and a resolver that returns the
+   * first match refuses the visitors of every board after it.
+   *
+   * This is the same failure the `unfileFromDefault` comment records — a
+   * workspace visitor 403'd on the very doc their share was created for —
+   * surviving in the case that comment could not fix, because two REAL boards
+   * are both legitimate homes and neither may be dropped.
+   */
+  describe('a review on two boards opens from BOTH of them', () => {
+    it('serves the shared review to a visitor of either board', async () => {
+      const secondBoard = await newBoard('board-gamma');
+      const shared = await newDiffOn(boardA, 'rev-shared');
+      const sharedMember = shared.files[0]?.docId ?? '';
+      expect(sharedMember).not.toBe('');
+      // Link the SAME review to a second real board. Both keep it.
+      expect(
+        (await post(`/api/workspaces/${secondBoard}/docs`, { docId: 'rev-shared' })).status,
+      ).toBe(200);
+      expect(handle.tasks.getWorkspace(boardA)?.docIds).toContain('rev-shared');
+      expect(handle.tasks.getWorkspace(secondBoard)?.docIds).toContain('rev-shared');
+
+      const gs = await post('/api/share/link', { workspaceId: secondBoard });
+      const gammaCookie = await redeem(
+        ((await gs.json()) as { share: { slug: string } }).share.slug,
+      );
+
+      // Positive control: the gamma visitor is a real visitor on its board.
+      expect((await pub(`/api/workspaces/${secondBoard}`, gammaCookie)).status).toBe(200);
+
+      // Both boards reach it — neither link is the "first" one.
+      for (const cookie of [cookieA, gammaCookie]) {
+        expect((await pub('/api/workspaces/rev-shared/tree', cookie)).status).toBe(200);
+        expect((await pub(`/api/docs/${sharedMember}`, cookie)).status).toBe(200);
+      }
+
+      // …and a third board that was never linked still gets nothing.
+      const bs = await post('/api/share/link', { workspaceId: boardB });
+      const betaCookie = await redeem(
+        ((await bs.json()) as { share: { slug: string } }).share.slug,
+      );
+      expect((await pub(`/api/workspaces/${boardB}`, betaCookie)).status).toBe(200); // control
+      expect((await pub('/api/workspaces/rev-shared/tree', betaCookie)).status).toBe(403);
+      expect((await pub(`/api/docs/${sharedMember}`, betaCookie)).status).toBe(403);
+    });
+  });
 });
