@@ -155,9 +155,10 @@ neighbours are created, and you re-send that one row. So don't hold ideas back
 waiting until you're sure of all of them — capture the burst, then fix the row
 the API argued with.
 
-(`create_task` — the single-row form — still answers, so a session on an older
-bundle keeps working. It is no longer the way to file work, and it is going
-away.)
+(The single-row form this replaced is gone as of 0.1.41. A session running an
+older bundle still has it — its own copy, calling the same REST route — and
+keeps working until it restarts, at which point it gets `create_tasks`
+instead.)
 
 ### A row can depend on another row of the same batch
 
