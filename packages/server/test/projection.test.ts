@@ -137,6 +137,7 @@ type ProjectedTask = {
   id: string;
   title: string;
   titleGaps?: string[];
+  bodyGaps?: string[];
   status: string;
   assignee: string;
   goal: string;
@@ -232,6 +233,42 @@ describe('ydoc projection + workspace room', () => {
     const clean = map.get(standard) as ProjectedTask | undefined;
     expect(clean?.title).toBe('Agents can rank a backlog by reading the goal order first');
     expect(clean?.titleGaps).toBeUndefined();
+  });
+
+  it('projects bodyGaps onto the row, so the board can render the description nudge', async () => {
+    // Same argument as the titleGaps case above, and it is not hypothetical:
+    // deleting the projection's bodyGaps line left every route-level test
+    // green, because those read the list route rather than this map. The
+    // board renders from HERE.
+    const wsId = await makeWorkspace('body-projection');
+    const report = await makeTask(wsId, {
+      title: 'Agents can rank a backlog by reading the goal order first',
+      assignee: 'Bryan',
+      goal: 'chores',
+      body: 'Round 5 delivered: 133 candidates ranked and appended to the doc.',
+    });
+    const story = await makeTask(wsId, {
+      title: 'Agents can rank a backlog by reading the goal order first',
+      assignee: 'Bryan',
+      goal: 'chores',
+      body: 'Agents can rank a backlog by reading the goal order so that the top row matters most.',
+    });
+    const decision = await makeTask(wsId, {
+      title: 'Bryan can settle doc ids by choosing opaque or readable ones',
+      assignee: 'Bryan',
+      goal: 'chores',
+      body: '**Should doc ids become opaque identifiers, or stay readable slugs?**',
+    });
+    const room = handle.rooms.get(workspaceRoomId(wsId));
+    if (!room) throw new Error('ws room was not created');
+    const map = room.ydoc.getMap('tasks');
+
+    expect((map.get(report) as ProjectedTask | undefined)?.bodyGaps).toContain('no-story');
+    // POSITIVE CONTROLS, same map in the same pass — one for each way a body
+    // can be clean, so "absent" is a judgement rather than a field the
+    // projection never learned.
+    expect((map.get(story) as ProjectedTask | undefined)?.bodyGaps).toBeUndefined();
+    expect((map.get(decision) as ProjectedTask | undefined)?.bodyGaps).toBeUndefined();
   });
 
   it('a REST-created task appears in the ws room tasks map, and a transition updates it', async () => {

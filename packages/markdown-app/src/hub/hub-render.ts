@@ -554,6 +554,20 @@ function taskBadges(task: HubTask): HTMLElement {
       `This title doesn't meet the standard (${task.titleGaps.join(', ')}). Aim for "<Person> can <achieve goal X> by <describe action>", under 70 characters.`,
     );
   }
+  // The description's own badge, separate from the title's because they are
+  // separate fixes: a row can be perfectly named and still not say who the
+  // work is for. Same quiet styling and the same one-badge-whatever-the-count
+  // rule, for the same reason.
+  if (task.bodyGaps && task.bodyGaps.length > 0) {
+    const empty = task.bodyGaps.includes('empty');
+    add(
+      'hub-badge-body-gap',
+      empty ? 'no description' : 'why?',
+      empty
+        ? 'This task has no description at all.'
+        : 'The description does not open with a user story. Aim for "<Person> can <achieve goal X> so that <goal Y>" — or state the question outright if this is a decision.',
+    );
+  }
   return badges;
 }
 
