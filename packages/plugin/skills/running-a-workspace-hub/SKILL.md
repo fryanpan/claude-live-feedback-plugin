@@ -1,9 +1,9 @@
 ---
 name: running-a-workspace-hub
-description: Use when you need to stand up or drive a live-feedback workspace hub with the MCP tools — create_workspace, set_goal_list, create_tasks, set_task_goal, attach_agent, task_transition, answer_decision, link_refs. Covers the north-star goal, the ordered goal list, story-shaped task bodies, triage, the work loop, decisions, and the lead-agent seat.
+description: Use when you need to stand up or drive a claude-workspaces workspace hub with the MCP tools — create_workspace, set_goal_list, create_tasks, set_task_goal, attach_agent, task_transition, answer_decision, link_refs. Covers the north-star goal, the ordered goal list, story-shaped task bodies, triage, the work loop, decisions, and the lead-agent seat.
 ---
 
-# Running a live-feedback workspace hub
+# Running a claude-workspaces workspace hub
 
 A hub workspace is a **north-star goal + an ordered task board + linked docs**,
 rendered at `/workspaces/<workspaceId>`. Everything on it is reachable from

@@ -1,6 +1,6 @@
 ---
 allowed-tools: Bash(curl *)
-description: List open comment threads on a live-feedback doc
+description: List open comment threads on a claude-workspaces doc
 argument-hint: [docId]
 ---
 

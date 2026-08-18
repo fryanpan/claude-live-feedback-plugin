@@ -239,7 +239,7 @@ const mdApp: ChildProcess | null = noWatch
     );
 const children = (): ChildProcess[] => (mdApp ? [server, mdApp] : [server]);
 
-// Publish the live port so the live-feedback MCP (and any other local
+// Publish the live port so the claude-workspaces MCP (and any other local
 // agent tooling) can discover whichever port `scripts/serve.ts` ended
 // up on. The MCP reads this file if $FEEDBACK_BASE_URL isn't set.
 const discoveryDir = join(homedir(), '.claude', 'live-feedback');

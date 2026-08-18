@@ -55,7 +55,7 @@ After setup, ask Claude things like:
    bun install
    ```
 
-2. Enable channel events for live-feedback. Add this one-line alias to your shell init file (e.g., `~/.zshrc`):
+2. Enable channel events for the plugin. Add this one-line alias to your shell init file (e.g., `~/.zshrc`):
 
    ```sh
    claude() { /path/to/claude --dangerously-load-development-channels plugin:claude-workspaces@claude-workspaces "$@"; }

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Thin share CLI. Calls into the live-feedback server's /api/share REST
+ * Thin share CLI. Calls into the claude-workspaces server's /api/share REST
  * routes — same path the MCP tools take. The server (started by
  * scripts/serve.ts) owns the actual share state.
  *
@@ -33,7 +33,7 @@ function resolveBaseUrl(): string {
     }
   }
   throw new Error(
-    'live-feedback server not running — start it with `bun run dev` (or set FEEDBACK_BASE_URL).',
+    'claude-workspaces server not running — start it with `bun run dev` (or set FEEDBACK_BASE_URL).',
   );
 }
 

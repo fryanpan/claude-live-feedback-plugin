@@ -1,11 +1,11 @@
 ---
 name: working-a-workspace-board
-description: Use when this session is working from a live-feedback workspace — you have a workspaceId, you are calling next_tasks / task_transition, or someone told you "the board is your task list". Covers priority order, taking a whole batch in parallel by default, what actually forces a sequence, what a description owes the next agent, keeping the board current, and why finishing a task is not a reason to stop.
+description: Use when this session is working from a claude-workspaces workspace — you have a workspaceId, you are calling next_tasks / task_transition, or someone told you "the board is your task list". Covers priority order, taking a whole batch in parallel by default, what actually forces a sequence, what a description owes the next agent, keeping the board current, and why finishing a task is not a reason to stop.
 ---
 
-# Working a live-feedback workspace board
+# Working a claude-workspaces workspace board
 
-If this session is working a live-feedback workspace, **the board is your task
+If this session is working a claude-workspaces workspace, **the board is your task
 list** — not the harness's todo tool, and not a plan in your head. This applies
 to whoever is working the board: a lead agent, a peer picking up one task, a
 subagent handed a workspaceId. If you are touching the board at all, this is

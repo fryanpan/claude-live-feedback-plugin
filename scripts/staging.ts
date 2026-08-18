@@ -1,5 +1,5 @@
 /**
- * Run an unmerged branch as a second live-feedback instance, so peers and
+ * Run an unmerged branch as a second claude-workspaces instance, so peers and
  * people can review a build BEFORE it lands on main.
  *
  *   bun run staging [--port 8788] [--data-dir <path>]
@@ -17,7 +17,7 @@
  *    `--git-common-dir`: they're equal only in the main checkout.
  *
  * 2. **It starts the server via `bin.ts`, never `scripts/serve.ts`.**
- *    `serve.ts` publishes the live port to the file the live-feedback MCP uses
+ *    `serve.ts` publishes the live port to the file the claude-workspaces MCP uses
  *    for discovery — running it here would silently repoint every agent in the
  *    fleet at the staging build. `bin.ts` takes `--port` and `--data-dir` and
  *    publishes nothing.

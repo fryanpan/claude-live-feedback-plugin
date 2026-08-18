@@ -307,7 +307,7 @@ Peers and people can review an unmerged build without merging it. From a **linke
 bun run staging            # builds this worktree's bundles, serves :8788 with a throwaway data dir
 ```
 
-Prod stays on 8787 with its own data throughout. The script refuses to run from the primary checkout, because that checkout is prod's deploy source: every prod start rebuilds the bundles there and publishes them as the client release the whole fleet loads, so a "test build" there ships at the next restart. It also starts the server via `bin.ts` rather than `scripts/serve.ts`, because `serve.ts` publishes the live port that the live-feedback MCP discovers, which would silently repoint every agent in the fleet at the staging build.
+Prod stays on 8787 with its own data throughout. The script refuses to run from the primary checkout, because that checkout is prod's deploy source: every prod start rebuilds the bundles there and publishes them as the client release the whole fleet loads, so a "test build" there ships at the next restart. It also starts the server via `bin.ts` rather than `scripts/serve.ts`, because `serve.ts` publishes the live port that the claude-workspaces MCP discovers, which would silently repoint every agent in the fleet at the staging build.
 
 To put an *agent* on staging: `FEEDBACK_BASE_URL=http://<host>:8788` in its launch env (read once at session start, so it needs a restart). Staging data never migrates to prod — evaluate pre-merge, do the real work once, after.
 
