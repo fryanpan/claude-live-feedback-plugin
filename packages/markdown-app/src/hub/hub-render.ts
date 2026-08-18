@@ -46,6 +46,7 @@ import {
   reviewAskedLine,
   reviewBadge,
   reviewBannerText,
+  reviewHeadline,
   reviewRowTitle,
   shortCommit,
   stepTarget,
@@ -1571,7 +1572,9 @@ function walkCardHead(item: ReviewItem, handlers: WalkthroughHandlers, now: numb
   title.className = 'hub-walk-title';
   // The QUESTION, not the subject — the same title the queue row shows, so
   // tapping a row and stepping onto it cannot read as two different items.
-  title.textContent = reviewRowTitle(item);
+  // In its heading form: a typed question is often a paragraph, and the whole
+  // of it is on the card already, in the quote below.
+  title.textContent = reviewHeadline(reviewRowTitle(item));
   head.append(kind, title);
 
   const context = handlers.contextLabel?.(item);
@@ -1824,16 +1827,21 @@ export function renderReviewWalkthrough(
   if (!row) {
     const where = walkWhere(item, handlers);
     if (where) card.append(where);
-    const box = document.createElement('div');
-    box.className = 'hub-walk-askbox';
-    const askHead = document.createElement('h4');
-    askHead.className = 'hub-walk-ask-head';
-    askHead.textContent = 'What I need from you';
-    const ask = document.createElement('blockquote');
-    ask.className = 'hub-walk-ask';
-    ask.textContent = item.ask;
-    box.append(askHead, ask);
-    card.append(box);
+    // The mockup's "What I need from you" block — rendered only when it says
+    // more than the heading already did. A one-line question fits in the
+    // heading, and quoting it again underneath is the card repeating itself.
+    if (reviewHeadline(item.ask) !== item.ask.trim().replace(/\s+/g, ' ')) {
+      const box = document.createElement('div');
+      box.className = 'hub-walk-askbox';
+      const askHead = document.createElement('h4');
+      askHead.className = 'hub-walk-ask-head';
+      askHead.textContent = 'What I need from you';
+      const ask = document.createElement('blockquote');
+      ask.className = 'hub-walk-ask';
+      ask.textContent = item.ask;
+      box.append(askHead, ask);
+      card.append(box);
+    }
     card.append(
       promptForm('hub-walk-answer', 'Reply…', 'Send', (text) => handlers.onReply(item, text)),
     );

@@ -514,13 +514,32 @@ describe('renderReviewWalkthrough — comments', () => {
     expect((root.querySelector('.hub-walk-where') as HTMLElement).textContent).toContain(
       'Ship the widget',
     );
-    expect((root.querySelector('.hub-walk-ask') as HTMLElement).textContent).toBe('Green or blue?');
+    // A one-line question fits in the heading, so the card does not also quote
+    // it underneath — that is the same words twice on a small screen.
+    expect(root.querySelector('.hub-walk-ask')).toBeNull();
     const why = root.querySelector('.hub-walk-ctx') as HTMLElement;
     expect(why.textContent).toContain('Asked by Helper');
     // The decision-only furniture is absent: there is no options block and no
     // "not enough to decide" form on a comment.
     expect(root.querySelector('.hub-walk-info')).toBeNull();
     expect(root.querySelector('.hub-walk-options')).toBeNull();
+  });
+
+  // A typed question is regularly a paragraph. The mockup's card is a SHORT
+  // title plus the ask in full, and we have no short title to read — so the
+  // heading is derived and the quote carries the words.
+  it('headlines a long question and keeps the whole of it in the quote', () => {
+    const ask =
+      'The card head puts the wait at the end of the line, which wraps onto its own row at 430px. ' +
+      'Do you want it kept there, or moved under the title where it has the width?';
+    renderReviewWalkthrough(root, queueOf(threadItem({ ask, direct: true })), 0, walk());
+    const title = (root.querySelector('.hub-walk-title') as HTMLElement).textContent ?? '';
+    expect(title.length).toBeLessThan(ask.length);
+    expect(title.startsWith('The card head puts the wait')).toBe(true);
+    // Nothing is lost: the quote is verbatim, and the two really do differ, so
+    // this is not the same string rendered twice.
+    expect((root.querySelector('.hub-walk-ask') as HTMLElement).textContent).toBe(ask);
+    expect(title).not.toBe(ask);
   });
 
   // An agent's closing note reaches this card too — deliberately, since
@@ -586,7 +605,8 @@ describe('renderReviewWalkthrough — comments', () => {
       NOW,
     );
     renderReviewWalkthrough(root, queue, 1, walk({ onStep }));
-    expect(root.querySelector('.hub-walk-ask')).not.toBeNull();
+    // Presence first: the card under the nav really is the comment one.
+    expect(root.querySelector('.hub-walk-card')?.className).toContain('hub-walk-task-thread');
     expect((root.querySelector('.hub-walk-back') as HTMLButtonElement).disabled).toBe(false);
     (root.querySelector('.hub-walk-skip') as HTMLElement).click();
     expect(onStep).toHaveBeenCalledWith(2);
