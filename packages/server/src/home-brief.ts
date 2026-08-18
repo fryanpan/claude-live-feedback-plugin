@@ -240,7 +240,9 @@ export function deterministicBrief(input: BriefInput): string {
     lines.push('Quiet since you last caught up — nothing moved on the board.');
   } else {
     if (done.length > 0)
-      lines.push(`**Finished:** ${listOf(done)} (${done.length} ${plural(done.length, 'task', 'tasks')}).`);
+      lines.push(
+        `**Finished:** ${listOf(done)} (${done.length} ${plural(done.length, 'task', 'tasks')}).`,
+      );
     if (started.length > 0) lines.push(`**Started:** ${listOf(started)}.`);
     if (created.length > 0)
       lines.push(
@@ -301,7 +303,7 @@ export function buildBriefPrompt(
     'links, or outcomes, and never claim something shipped unless a digest line says it finished.',
     'Do not address the reader with a preamble; start with the content. Output ONLY the brief markdown.',
     '',
-    'The reader\'s standing instructions for this brief:',
+    "The reader's standing instructions for this brief:",
     instructions,
   ].join('\n');
   const user = [
@@ -370,11 +372,13 @@ export class HomeBriefStore {
       try {
         const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<HomeSidecar>;
         state = {
-          ...(typeof parsed.instructions === 'string'
-            ? { instructions: parsed.instructions }
-            : {}),
+          ...(typeof parsed.instructions === 'string' ? { instructions: parsed.instructions } : {}),
           ...(Array.isArray(parsed.instructionsHistory)
-            ? { instructionsHistory: parsed.instructionsHistory.filter((s) => typeof s === 'string') }
+            ? {
+                instructionsHistory: parsed.instructionsHistory.filter(
+                  (s) => typeof s === 'string',
+                ),
+              }
             : {}),
           readers: parsed.readers && typeof parsed.readers === 'object' ? parsed.readers : {},
           briefs: parsed.briefs && typeof parsed.briefs === 'object' ? parsed.briefs : {},

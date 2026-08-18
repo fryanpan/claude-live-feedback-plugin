@@ -1489,8 +1489,7 @@ export function renderHomeBrief(
   since.className = 'hub-home-since';
   // "Updating…" is grounded in the server's own generating flag — the flag is
   // written at the point the call is queued, never inferred here.
-  since.textContent =
-    homeSinceLabel(payload, now) + (payload.generating ? ' · Updating…' : '');
+  since.textContent = homeSinceLabel(payload, now) + (payload.generating ? ' · Updating…' : '');
   card.append(since);
 
   const body = document.createElement('div');

@@ -585,11 +585,9 @@ async function main(): Promise<void> {
   }
 
   async function markCaughtUp(): Promise<void> {
-    const res = await send(
-      `/api/workspaces/${encodeURIComponent(workspaceId)}/home/read`,
-      'POST',
-      { author },
-    );
+    const res = await send(`/api/workspaces/${encodeURIComponent(workspaceId)}/home/read`, 'POST', {
+      author,
+    });
     if (!res.ok) {
       showToast('Could not mark caught up — try again.');
       return;
