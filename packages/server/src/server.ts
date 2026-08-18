@@ -4164,7 +4164,7 @@ function serveStatic(p: string): Response | null {
 
 function renderMockupNotFound(docId: string): string {
   const safe = escape(docId);
-  return `<!doctype html><meta charset="utf-8"><title>Mockup not found · Live Feedback</title>
+  return `<!doctype html><meta charset="utf-8"><title>Mockup not found · Workspaces</title>
 <style>body{font:15px/1.55 system-ui, sans-serif;margin:60px auto;max-width:560px;color:#222;padding:0 20px}
 h1{font-size:22px}code{background:#f3f3f3;padding:1px 5px;border-radius:3px;font-size:90%}
 small{color:#777}</style>
@@ -4252,7 +4252,7 @@ function renderHubShell(
 
 function renderHubNotFound(workspaceId: string): string {
   const safe = escape(workspaceId);
-  return `<!doctype html><meta charset="utf-8"><title>Workspace not found · Live Feedback</title>
+  return `<!doctype html><meta charset="utf-8"><title>Workspace not found · Workspaces</title>
 <style>body{font:15px/1.55 system-ui, sans-serif;margin:60px auto;max-width:560px;color:#222;padding:0 20px}
 h1{font-size:22px}code{background:#f3f3f3;padding:1px 5px;border-radius:3px;font-size:90%}
 small{color:#777}</style>
@@ -4265,7 +4265,7 @@ created by an agent calling <code>create_workspace</code> (or
 
 function renderReviewNotFound(docId: string): string {
   const safe = escape(docId);
-  return `<!doctype html><meta charset="utf-8"><title>Doc not found · Live Feedback</title>
+  return `<!doctype html><meta charset="utf-8"><title>Doc not found · Workspaces</title>
 <style>body{font:15px/1.55 system-ui, sans-serif;margin:60px auto;max-width:560px;color:#222;padding:0 20px}
 h1{font-size:22px}code{background:#f3f3f3;padding:1px 5px;border-radius:3px;font-size:90%}
 small{color:#777}</style>
@@ -4729,12 +4729,12 @@ function renderLanding(model: LandingModel): string {
       ? '<div class="empty">No workspaces yet — POST /api/docs to create one.</div>'
       : `<ul>${model.groups.map(renderGroupRow).join('')}</ul>`;
   return landingShell(
-    'Live Feedback',
-    `<h1>Live Feedback</h1>
+    'Workspaces',
+    `<h1>Workspaces</h1>
 <div class="summary">${model.totalArtifacts} artifact${model.totalArtifacts === 1 ? '' : 's'} · ${model.totalOpen} open thread${model.totalOpen === 1 ? '' : 's'} · ${model.groups.length} workspace${model.groups.length === 1 ? '' : 's'}</div>
 <h2>Needs you <span class="count">${escape(denom)}</span></h2>
 ${needs}
-<h2>Workspaces <span class="count">${model.groups.length}</span></h2>
+<h2>All workspaces <span class="count">${model.groups.length}</span></h2>
 ${groups}`,
   );
 }
@@ -4750,7 +4750,7 @@ function renderProjectPage(owner: string, artifacts: LandingArtifact[]): string 
       : `<ul>${artifacts.map(renderLandingArtifact).join('')}</ul>`;
   const open = artifacts.reduce((sum, a) => sum + a.openCount, 0);
   return landingShell(
-    `${projectLabel(owner)} · Live Feedback`,
+    `${projectLabel(owner)} · Workspaces`,
     `<a class="back" href="/">← all workspaces</a>
 <h1>${escape(projectLabel(owner))}</h1>
 <div class="summary">${escape(owner)}</div>
