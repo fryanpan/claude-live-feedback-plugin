@@ -610,6 +610,17 @@ body.hub-body {
   border-color: var(--accent);
   color: #fff;
 }
+/* The mockup's `.btn.primary`: ink-dark, used by the Home pane's Mark read /
+   Review All / Save & Update Summary and the board's Go to Home. Tokens, not
+   hex, so a dark theme inverts it with everything else. */
+.hub-btn-ink {
+  background: var(--fg);
+  border-color: var(--fg);
+  color: var(--bg-panel);
+}
+.hub-btn-ink:hover {
+  background: color-mix(in srgb, var(--fg) 85%, var(--bg-panel));
+}
 
 /* --- lead-agent strip: who is responsible for this board --- */
 .hub-lead {
@@ -832,6 +843,9 @@ body.hub-body {
    unmounting — the board keeps its realtime projection warm underneath. */
 .hub-main--home {
   grid-template-columns: max-content minmax(0, 1fr);
+  /* The rail should reach the foot of the viewport like the mockup's, even
+     when the Home column is short. 64px ≈ the topbar + page padding. */
+  min-height: calc(100vh - 64px);
 }
 .hub-main--home .hub-side,
 .hub-main--home .hub-board-col {
@@ -1410,17 +1424,27 @@ body.hub-body {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  position: sticky;
-  top: 10px;
+  align-self: stretch;
+  width: 170px;
+  padding: 10px 8px;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+  transition: width 150ms ease;
+}
+.hub-nav--collapsed {
+  width: 58px;
+}
+.hub-nav--collapsed .hub-nav-label {
+  display: none;
 }
 .hub-nav-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   min-height: 38px;
-  padding: 6px 12px;
+  padding: 8px 10px;
   border: none;
-  border-radius: var(--radius);
+  border-radius: 8px;
   background: none;
   font: inherit;
   font-size: 14px;
@@ -1432,22 +1456,43 @@ body.hub-body {
 }
 .hub-nav-item:hover {
   color: var(--fg);
-  background: var(--bg-hover);
 }
 .hub-nav-item-active {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   color: var(--accent);
 }
+/* The Collapse affordance sits at the FOOT of the rail (mockup). */
+.hub-nav-collapse {
+  margin-top: auto;
+  font-weight: 500;
+}
 .hub-nav-icon {
   flex: none;
-  font-size: 16px;
-  line-height: 1;
+  width: 20px;
+  height: 20px;
+}
+.hub-nav-icon svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+/* Home is a clean frame: rail + content only. The board chrome — presence
+   strip (which carries the plugin-drift notices), lead row, goal banner —
+   belongs to the board pane and does not render here (rejected review,
+   2026-08-18: the mockup's frame wins). */
+.hub-root--home .hub-presence,
+.hub-root--home .hub-lead,
+.hub-root--home .hub-goal {
+  display: none;
 }
 /* A reading column, not the full stage — the brief is prose and a full-width
    line is unreadable. The phone already has this width and needs no case. */
 .hub-home {
+  width: 100%;
   max-width: 860px;
   min-width: 0;
+  margin: 0 auto;
+  padding: 16px 0 24px;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -1481,12 +1526,17 @@ body.hub-body {
   padding: 12px 14px;
 }
 .hub-home-since {
-  margin: 0 0 8px;
-  font-size: 13px;
+  margin: 0;
+  font-size: 12.5px;
   color: var(--fg-muted);
 }
+/* In the brief head the window rides right beside "What's New?" (mockup),
+   so the heading gives up the flex:1 the queue head uses to push its button
+   to the far edge. */
+.hub-home-brief-card .hub-home-heading {
+  flex: 0 0 auto;
+}
 .hub-home-brief-body {
-  font-family: var(--prose);
   font-size: 15px;
   line-height: 1.55;
   overflow-wrap: anywhere;
@@ -1506,8 +1556,11 @@ body.hub-body {
   padding-top: 11px;
   border-top: 1px solid var(--border);
 }
+.hub-home-mark-read {
+  margin-left: auto;
+}
 /* A button that reads as a link — for the actions that iterate on the page
-   rather than act on the work, so they never compete with Mark caught up. */
+   rather than act on the work, so they never compete with Mark read. */
 .hub-linklike {
   min-height: 36px;
   padding: 0;
@@ -1564,18 +1617,59 @@ body.hub-body {
   font-size: 14px;
   color: var(--fg-muted);
 }
+/* The For Your Review card: the mockup's ranked list — one panel, hairline
+   rows, the question as the row title, the wait as the subline, the top row
+   highlighted because it is the one Review All opens on. */
+.hub-home-review-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+}
+.hub-home-review-card .hub-home-review-head {
+  margin-bottom: 4px;
+}
+.hub-review-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 8px;
+  border: none;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.hub-review-row:hover {
+  background: var(--bg-hover);
+}
+.hub-review-row-title {
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+.hub-review-row-sub {
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--fg-muted);
+}
+.hub-review-row-current {
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  border-radius: 8px;
+  border-top-color: transparent;
+}
 /* Rows answered this sitting: still in the stack, visibly done (approved) —
    an answered item vanishing outright reads as the page losing things. */
-.hub-review-settled {
-  margin-top: 8px;
-}
-.hub-decision-chip.hub-review-done {
-  border-style: dashed;
+.hub-review-row-done .hub-review-row-title {
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--fg-muted) 55%, transparent);
   color: var(--fg-muted);
-  background: var(--bg);
-}
-.hub-decision-chip.hub-review-done .hub-review-mark {
-  color: var(--green);
 }
 
 /* --- board sections (goals ARE the sections) --- */
@@ -2565,12 +2659,26 @@ a.hub-link-chip:hover {
   .hub-main {
     grid-template-columns: minmax(0, 1fr);
   }
-  /* The nav rail becomes a horizontal row above the stack. Below 900px the
-     phone block turns it into the fixed bottom bar instead. */
+  /* The nav rail becomes a horizontal strip above the stack. Below 900px
+     the phone block turns it into the fixed bottom bar instead. The base
+     rule's rail styling (width, panel bg, right border) is undone here —
+     a media query adds no specificity, so every base declaration that must
+     not apply needs an explicit override. */
   .hub-nav {
-    position: static;
     flex-direction: row;
     order: -1;
+    width: auto;
+    align-self: auto;
+    padding: 6px 8px;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+  /* No rail to collapse when the nav is a strip or a bar. */
+  .hub-nav-collapse {
+    display: none;
+  }
+  .hub-home {
+    padding-top: 4px;
   }
   .hub-board-col {
     order: 0;
@@ -2593,16 +2701,21 @@ a.hub-link-chip:hover {
     position: fixed;
     left: 0;
     right: 0;
-    /* `top: auto` is load-bearing: the desktop rail is sticky with `top: 10px`,
-       and fixed + top + bottom stretches the bar to the full viewport. */
     top: auto;
     bottom: 0;
     z-index: 60;
     flex-direction: row;
     gap: 0;
+    width: auto;
+    align-self: auto;
+    padding: 0;
     background: var(--bg-panel);
+    border-right: none;
     border-top: 1px solid var(--border);
     padding-bottom: var(--safe-bottom);
+  }
+  .hub-nav-collapse {
+    display: none;
   }
   .hub-nav-item {
     flex: 1;
@@ -2615,7 +2728,8 @@ a.hub-link-chip:hover {
     font-size: 11.5px;
   }
   .hub-nav-icon {
-    font-size: 18px;
+    width: 18px;
+    height: 18px;
   }
   /* Everything bottom-docked has to clear the 54px bar: the page's own tail,
      and the hold-to-talk mic + its indicator, which are fixed bottom-left at
