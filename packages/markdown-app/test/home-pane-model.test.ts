@@ -139,13 +139,15 @@ describe('reviewBannerText', () => {
     expect(reviewBannerText(reviewQueue([], [], NOW))).toBeNull();
   });
 
-  it('singular and plural, counting every kind', () => {
+  it('states presence without a count, whatever the size (Bryan: "Remove the count")', () => {
     expect(reviewBannerText(reviewQueue([decision('t-1')], [], NOW))).toBe(
-      '1 item is waiting for your review',
+      'Something is waiting for your review',
     );
     expect(reviewBannerText(reviewQueue([decision('t-1')], [thread], NOW))).toBe(
-      '2 items are waiting for your review',
+      'Something is waiting for your review',
     );
+    // The regression this pins: no digit may leak back into the line.
+    expect(reviewBannerText(reviewQueue([decision('t-1')], [thread], NOW))).not.toMatch(/\d/);
   });
 });
 
