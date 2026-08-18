@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
-import type { DocMeta, User } from '@feedback/core';
+import type { DocMeta } from '@feedback/core';
 
 /**
  * The "hands-on activity" event stream. One JSON object per line, append-only,
@@ -63,8 +63,14 @@ export interface Event {
   ts: string;
   type: ActivityType;
   actor: ActorKind;
-  actorId: string;
-  actorName: string;
+  /** Absent when the persisted author carried no readable id/name. These were
+   *  typed as required `string` and were never guaranteed to be either: an
+   *  author is whatever some writer put in the CRDT, so `JSON.stringify` has
+   *  been omitting these keys for such rows since they were written. Making
+   *  them optional emits not one different byte — it stops the type asserting
+   *  something the file on disk already contradicts. */
+  actorId?: string;
+  actorName?: string;
   isOwner: boolean;
   threadId?: string;
   doc: EventDoc;
@@ -149,7 +155,44 @@ export function payloadDigest(input: string | undefined | null): string {
  *    resurrect a thread a human just resolved), whereas a person filed as an
  *    agent only over-filters a view.
  */
-export function classifyActor(author: Pick<User, 'id' | 'name'> & { kind?: string }): ActorKind {
+/**
+ * Read `id` and `name` off a comment author of unknown shape.
+ *
+ * The TYPE says `User`; the DATA does not. Authors are persisted in the CRDT
+ * by whatever wrote them, across months and several shapes of the field, and
+ * nothing revalidates a CRDT on load. Measured on the live corpus: 26 of 1,825
+ * comments carry an author that is a bare STRING — `"author": "claude"` sitting
+ * in the same thread as a well-formed `{ id: 'known-bryan', name: 'Bryan' }`.
+ *
+ * That string is the author's NAME, so it is recoverable, and every reader was
+ * discarding it. `activity-backfill.ts` wrote those rows with `actorName:
+ * undefined` — no crash, which is why it went unnoticed, but the weekly review
+ * reads that stream and 26 of its rows named nobody.
+ *
+ * One reader for all three call sites, because the failure they share is
+ * reading a field off a value whose shape they assumed. Returns `undefined`
+ * for anything it cannot read as a string rather than passing the wrong type
+ * through — a numeric `id` reaching a consumer that expects a string is the
+ * same class of bug one layer further on.
+ */
+export function authorFields(author: unknown): { id?: string; name?: string } {
+  if (typeof author === 'string') return { id: undefined, name: author };
+  const a: { id?: unknown; name?: unknown } =
+    author && typeof author === 'object' ? (author as { id?: unknown; name?: unknown }) : {};
+  return {
+    id: typeof a.id === 'string' ? a.id : undefined,
+    name: typeof a.name === 'string' ? a.name : undefined,
+  };
+}
+
+// `unknown`, not `Pick<User, 'id' | 'name'>`. The old signature asserted a
+// shape this function exists BECAUSE the data does not have — it was written
+// at a boundary years of CRDT writes ago, nothing revalidates a persisted doc
+// on load, and the reward for believing it was a 500 on every page that reads
+// across docs. A parameter type that lies costs more than it buys: it makes
+// the malformed case unrepresentable in a test while leaving it reachable in
+// production.
+export function classifyActor(author: unknown): ActorKind {
   // The TYPE says this is a User; the DATA does not. Comment authors are
   // persisted in the CRDT by whatever wrote them, across months and several
   // shapes of the field, so an old row can carry an author with no `id` — or
@@ -161,10 +204,8 @@ export function classifyActor(author: Pick<User, 'id' | 'name'> & { kind?: strin
   // input that HAS them. An author we cannot read declares nothing, which is
   // the same state as `kind == null` — and that already falls through to
   // `agent`, in the safe direction argued for above.
-  const a: { id?: unknown; name?: unknown; kind?: unknown } =
-    author && typeof author === 'object' ? author : {};
-  const id = typeof a.id === 'string' ? a.id : '';
-  const name = typeof a.name === 'string' ? a.name : '';
+  const a: { kind?: unknown } = author && typeof author === 'object' ? author : {};
+  const { id = '', name = '' } = authorFields(author);
   // Case-folded because the field is hand-populated by outside callers, and
   // `kind: 'Agent'` matching nothing would fall all the way through to the
   // `person` default — reintroducing the exact misfiling this function was
@@ -188,8 +229,13 @@ export function wordCount(text: string): number {
 
 /** Bryan is the doc owner / known person on this single-user fleet. A person
  *  whose author id resolves to the known Bryan identity is the owner. */
-export function isOwnerActor(author: Pick<User, 'id' | 'name'>): boolean {
-  return author.id === 'known-bryan' || author.name === 'Bryan';
+export function isOwnerActor(author: unknown): boolean {
+  // Same normalization as `classifyActor`, for the same reason: a legacy
+  // string author naming the owner IS the owner, and `author.id` on a null
+  // author throws. Both spellings below are load-bearing — the id is the
+  // browser identity, the name is what a REST/MCP caller sends.
+  const { id, name } = authorFields(author);
+  return id === 'known-bryan' || name === 'Bryan';
 }
 
 const repoCache = new Map<string, EventDocRepo | null>();
