@@ -19,7 +19,7 @@ import {
   decisionShapeMessage,
 } from './decision-shape.ts';
 import { type DeclaredOwnerKind, declaredAssigneeKind } from './task-owner.ts';
-import { type TitleGap, bodyDrift, bodyHead, taskTitleGaps } from './task-title.ts';
+import { bodyHead } from './task-title.ts';
 
 /**
  * The hub task store: server-owned state for Workspace Hub workspaces and
@@ -518,21 +518,6 @@ export interface Task {
    * head-change trigger for that row and nothing else.
    */
   titleHead?: string;
-  /**
-   * Accumulated fraction of the body's words that have changed since the
-   * title was last authored, 0..1.
-   *
-   * ACCUMULATED rather than compared, because comparing needs a second copy
-   * of the body stored per task to compare against. `updateBodySnapshot` holds
-   * both the old and the new body at the moment of every change, so the
-   * increment is free exactly there — and only there, which is a second
-   * reason the staleness hangs off that choke point rather than off a route.
-   *
-   * Monotone until a title is re-authored. A revert therefore ADDS drift
-   * rather than cancelling it, which is the noisy direction: two real edits
-   * did happen, and the cost of saying so is one advisory.
-   */
-  titleDrift?: number;
 }
 
 export interface CreateTaskOpts {
@@ -752,6 +737,37 @@ export type TriageRequest =
       batchId: string;
       actor: TaskActor;
       ts: number;
+    }
+  | {
+      /**
+       * Somebody wrote to this row — created it placed, renamed it, or
+       * rewrote its body — so the ask is a REVIEW by the lead: the one
+       * party with project context. The JUDGMENT of the title/body standard
+       * lives in the reviewing skill's prompt, not in this server (Bryan,
+       * 2026-08-18: the code-written format check moved into an LLM
+       * prompt), so every attributed non-lead write routes and the reviewer
+       * decides fine as-is / rewrite / ask the filer. Never a refusal — the
+       * write this request is about has already landed.
+       *
+       * PLACED creates only: an unplaced create is already owned by the
+       * shape-and-place `kind: 'task'` ask (live) or the untriaged sweep
+       * (attach), and a second request would say the same thing twice.
+       * Renames and body edits route regardless of placement.
+       */
+      kind: 'task-review';
+      workspaceId: string;
+      taskId: string;
+      /** The name the row has NOW — what the reviewer judges. */
+      title: string;
+      /** What just happened to the row. */
+      trigger: TaskReviewTrigger;
+      /** Addressed to the lead, same rule as `goal-retriage`: judging a
+       *  title against the project is the lead's seat, not first-come work. */
+      leadAgentId?: string;
+      /** Who wrote the title/body this asks about — the addressee of any
+       *  follow-up question, and whose own echo the MCP watch suppresses. */
+      actor?: TaskActor;
+      ts: number;
     };
 
 /** A goal or subgoal named as a place a task could go. */
@@ -890,6 +906,35 @@ export interface GatingSummary {
   summary: string;
 }
 
+/** What happened to a row to earn it a review. */
+export type TaskReviewTrigger = 'created' | 'renamed' | 'edited';
+
+/**
+ * One row of the lead's review queue: a task somebody wrote to while the
+ * lead was away, or whose live request went undelivered. QUEUED rather than
+ * derived: the judgment of the title/body standard lives in the reviewing
+ * skill's prompt now, so the server cannot re-derive "which rows fall
+ * short" — it can only remember which rows changed. Coalesced by taskId,
+ * pruned of done rows on read, and persisted to its own sidecar for the
+ * same reason the re-triage queue is: a promise that lives only in memory
+ * dies with the process.
+ */
+export interface PendingTaskReview {
+  taskId: string;
+  /** The LATEST undelivered write's kind. */
+  trigger: TaskReviewTrigger;
+  /** Who wrote it — the addressee of any follow-up question. Latest wins. */
+  actor?: TaskActor;
+  /** When the FIRST undelivered write happened, so the queue ages honestly. */
+  ts: number;
+}
+
+/** Where a workspace's undelivered task reviews wait. Exported so tests
+ *  assert the real contract path rather than a re-implementation of it. */
+export function pendingTaskReviewsPath(dataDir: string, workspaceId: string): string {
+  return join(dataDir, 'workspaces', `${workspaceId}.taskreviews.json`);
+}
+
 export type AttachAgentResult =
   | {
       ok: true;
@@ -914,6 +959,13 @@ export type AttachAgentResult =
        *  SEPARATE field: the two asks have different baselines and answering
        *  one is not answering the other. */
       pendingBucketReview?: PendingBucketReview;
+      /** The correction loop's pickup: rows written to while the lead was
+       *  away (or whose live ask went undelivered), waiting for the
+       *  reviewing skill's pass. Lead only, like `pendingRetriage`, and
+       *  drained the same way — delivered here and cleared, so a re-attach
+       *  never asks for the same look twice. Absent when nothing waits or
+       *  the attacher is not the lead. */
+      taskReviews?: PendingTaskReview[];
       /** Is THIS attachment the workspace's lead agent — either because it
        *  already held the seat, or because it just claimed an empty one? The
        *  lead is the addressee for goal-edit re-triage, so a fresh context
@@ -1560,6 +1612,9 @@ interface WorkspaceState {
   /** The "a band appeared" bucket re-look waiting for the lead agent,
    *  mirrored from its own sidecar. */
   pendingBucketReview?: PendingBucketReview;
+  /** Task writes waiting for the lead's review pass, mirrored from their
+   *  own sidecar. */
+  pendingTaskReviews?: PendingTaskReview[];
 }
 
 /** Where a workspace's sidecar lives. Exported so tests assert the real
@@ -1807,6 +1862,7 @@ export class TaskStore {
       voiceQueuePath(this.dataDir, workspaceId),
       pendingRetriagePath(this.dataDir, workspaceId),
       pendingBucketReviewPath(this.dataDir, workspaceId),
+      pendingTaskReviewsPath(this.dataDir, workspaceId),
     ]) {
       try {
         rmSync(path, { force: true });
@@ -2154,6 +2210,30 @@ export class TaskStore {
       });
       if (delivered) this.clearPendingBucketReview(state);
     }
+    // Waiting task reviews are addressed to the same seat. Re-deliver each
+    // to the new live occupant; whatever fails to go out stays queued.
+    const reviews = this.getPendingTaskReviews(workspaceId);
+    if (reviews && this.hasLiveLeadAttachment(workspaceId)) {
+      const undelivered = reviews.filter((r) => {
+        const reviewTask = state.tasks.get(r.taskId);
+        if (!reviewTask) return false;
+        return !this.requestTriage({
+          kind: 'task-review',
+          workspaceId,
+          taskId: r.taskId,
+          title: reviewTask.title,
+          trigger: r.trigger,
+          leadAgentId: next,
+          ...(r.actor !== undefined ? { actor: r.actor } : {}),
+          ts: r.ts,
+        });
+      });
+      if (undelivered.length === 0) this.clearPendingTaskReviews(state);
+      else {
+        state.pendingTaskReviews = undelivered;
+        this.writePendingTaskReviews(state);
+      }
+    }
     return { ok: true, workspace, changed: true };
   }
 
@@ -2380,6 +2460,10 @@ export class TaskStore {
         : {}),
       ts: now,
     });
+    // The correction loop, PLACED rows only: an unplaced create's shaping is
+    // already the placement request's ask (and the untriaged sweep's, when
+    // nobody was home), so asking again here would say the same thing twice.
+    if (opts.goal !== undefined) this.requestTaskReview(task, 'created', opts.actor);
     return {
       ok: true,
       task,
@@ -2818,40 +2902,151 @@ export class TaskStore {
    * for that door's callers only, which is exactly how the `quote`
    * preservation came to be skipped by the one caller that mattered.
    *
-   * What it stamps is the pair of marks staleness is measured against:
+   * What it stamps is the pair of marks a reviewer reads a rename against:
    * WHEN the row was named, and WHAT the description said at the time. Both
    * reset here and nowhere else, so "the title has been re-authored" has one
-   * writer and cannot disagree with itself.
+   * writer and cannot disagree with itself. The marks are part of the
+   * capture record — the soft-delete guarantee — not a format check.
    *
    * Deliberately NOT a validator. Nothing is refused, rewritten, or
-   * normalized on the way through — the shape check is derived on read
-   * (`titleGapsOf`) so a raw capture still lands. See task-title.ts for why
-   * this is advisory.
+   * normalized on the way through — the standard's judgment lives in the
+   * reviewing skill's prompt, reached by `requestTaskReview` — so a raw
+   * capture still lands.
    */
   private applyTitle(task: Task, title: string): void {
     task.title = title;
     task.titleWrittenAt = Date.now();
     task.titleHead = bodyHead(task.body);
-    task.titleDrift = 0;
   }
 
   /**
-   * Every way this row's title currently falls short of the standard —
-   * derived, never stored.
+   * The correction loop's trigger. Called after an attributed write of a
+   * title or body; the workspace's LEAD is asked to review the row over the
+   * same delivery bridge every triage request rides. The JUDGMENT — does
+   * the title read as `<Person> can <achieve goal X> by <action>`, does the
+   * body open with the story — lives in the reviewing skill's prompt, not
+   * here (Bryan, 2026-08-18: the code-written format check moved into an
+   * LLM prompt), so EVERY write routes and the reviewer decides fine as-is
+   * / rewrite / ask the filer. Decision rows route too: they are exempt
+   * from the story shape, and the prompt knows that, but a muddy question
+   * is exactly what a reviewer with context can sharpen.
    *
-   * `commentsSinceTitle` comes from the caller because the discussion lives
-   * in the task's body ROOM rather than in this store, the same reason
-   * `projectTask` takes `commentCount` as a parameter. Omitted, the
-   * discussion clause simply does not fire; it is never guessed.
+   * Fire-and-forget for the writer — the write has already landed and
+   * nothing here can refuse it. An undelivered ask is not lost: it is
+   * queued to the workspace's sidecar and drained on the lead's next
+   * attach.
+   *
+   * The one exemption: the LEAD's own writes are never re-addressed to the
+   * lead. Its rewrites ARE the review, and a lead sweeping a board must not
+   * generate one request per pass of its own.
    */
-  titleGapsOf(task: Task, commentsSinceTitle?: number): TitleGap[] {
-    return taskTitleGaps({
+  private requestTaskReview(
+    task: Task,
+    trigger: TaskReviewTrigger,
+    actor?: { id: string; name: string; kind?: string },
+  ): void {
+    const state = this.workspaces.get(task.workspaceId);
+    if (!state) return;
+    if (actor !== undefined && actor.id === state.workspace.leadAgentId) return;
+    const ts = Date.now();
+    const taskActor: TaskActor | undefined =
+      actor !== undefined
+        ? { id: actor.id, name: actor.name, kind: classifyActor(actor) }
+        : undefined;
+    const delivered = this.requestTriage({
+      kind: 'task-review',
+      workspaceId: task.workspaceId,
+      taskId: task.id,
       title: task.title,
-      ...(task.body !== undefined ? { body: task.body } : {}),
-      ...(task.titleHead !== undefined ? { titleHead: task.titleHead } : {}),
-      ...(task.titleDrift !== undefined ? { titleDrift: task.titleDrift } : {}),
-      ...(commentsSinceTitle !== undefined ? { commentsSinceTitle } : {}),
+      trigger,
+      ...(state.workspace.leadAgentId !== undefined
+        ? { leadAgentId: state.workspace.leadAgentId }
+        : {}),
+      ...(taskActor !== undefined ? { actor: taskActor } : {}),
+      ts,
     });
+    if (!delivered) {
+      this.queuePendingTaskReview(state, {
+        taskId: task.id,
+        trigger,
+        ...(taskActor !== undefined ? { actor: taskActor } : {}),
+        ts,
+      });
+    }
+  }
+
+  /**
+   * The task reviews waiting for this workspace's lead, pruned read-time:
+   * rows that have since gone done (or vanished) drop out — same reasoning
+   * as `getPendingRetriage`, "which rows still need a look" is a question
+   * about the CURRENT board, not about a snapshot taken when they queued.
+   */
+  getPendingTaskReviews(workspaceId: string): PendingTaskReview[] | undefined {
+    const state = this.workspaces.get(workspaceId);
+    if (!state?.pendingTaskReviews) return undefined;
+    const live = state.pendingTaskReviews.filter((r) => {
+      const task = state.tasks.get(r.taskId);
+      return task !== undefined && task.status !== 'done';
+    });
+    if (live.length === 0) {
+      this.clearPendingTaskReviews(state);
+      return undefined;
+    }
+    if (live.length !== state.pendingTaskReviews.length) {
+      state.pendingTaskReviews = live;
+      this.writePendingTaskReviews(state);
+    }
+    return state.pendingTaskReviews;
+  }
+
+  /** Coalesce by row: a second undelivered write to the same task updates
+   *  the trigger and the addressee but keeps the FIRST `ts` — one review
+   *  per row, aged from when it started waiting. Synchronous write, same
+   *  contract as the re-triage queue: the queue is a promise, and a promise
+   *  grounded in a debounce a crash can drop is a lie. */
+  private queuePendingTaskReview(state: WorkspaceState, next: PendingTaskReview): void {
+    const prev = state.pendingTaskReviews ?? [];
+    const existing = prev.find((r) => r.taskId === next.taskId);
+    state.pendingTaskReviews = existing
+      ? prev.map((r) => (r.taskId === next.taskId ? { ...next, ts: existing.ts } : r))
+      : [...prev, next];
+    this.writePendingTaskReviews(state);
+  }
+
+  private writePendingTaskReviews(state: WorkspaceState): void {
+    const path = pendingTaskReviewsPath(this.dataDir, state.workspace.id);
+    try {
+      const dir = join(this.dataDir, 'workspaces');
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      writeFileSync(path, `${JSON.stringify({ pending: state.pendingTaskReviews }, null, 2)}\n`);
+    } catch (err) {
+      console.error(`[tasks] failed to queue task review for ${state.workspace.id}:`, err);
+    }
+  }
+
+  private clearPendingTaskReviews(state: WorkspaceState): void {
+    if (state.pendingTaskReviews === undefined) return;
+    state.pendingTaskReviews = undefined;
+    try {
+      rmSync(pendingTaskReviewsPath(this.dataDir, state.workspace.id), { force: true });
+    } catch {}
+  }
+
+  /** Load a workspace's waiting task reviews, if any. A corrupt sidecar
+   *  loses the queue, never the workspace. */
+  private loadPendingTaskReviews(workspaceId: string): PendingTaskReview[] | undefined {
+    const path = pendingTaskReviewsPath(this.dataDir, workspaceId);
+    if (!existsSync(path)) return undefined;
+    try {
+      const parsed = JSON.parse(readFileSync(path, 'utf8')) as { pending?: PendingTaskReview[] };
+      const pending = parsed.pending;
+      if (!Array.isArray(pending)) return undefined;
+      const rows = pending.filter((r) => typeof r?.taskId === 'string');
+      return rows.length > 0 ? rows : undefined;
+    } catch (err) {
+      console.error(`[tasks] unreadable task-review sidecar for ${workspaceId} — skipped:`, err);
+      return undefined;
+    }
   }
 
   /**
@@ -2863,7 +3058,7 @@ export class TaskStore {
   renameTask(
     taskId: string,
     title: string,
-    _opts: { actor: { id: string; name: string } },
+    opts: { actor: { id: string; name: string } },
   ): RenameTaskResult {
     const task = this.getTask(taskId);
     if (!task) return { ok: false, error: 'not-found' };
@@ -2871,6 +3066,7 @@ export class TaskStore {
     this.applyTitle(task, title);
     task.updatedAt = Date.now();
     this.scheduleSave(task.workspaceId);
+    this.requestTaskReview(task, 'renamed', opts.actor);
     return { ok: true, task, changed: true };
   }
 
@@ -2939,6 +3135,7 @@ export class TaskStore {
       ...(task.title !== titleFrom ? { titleFrom, titleTo: task.title } : {}),
       ts,
     });
+    this.requestTaskReview(task, 'edited', opts.actor);
     return true;
   }
 
@@ -3847,16 +4044,6 @@ export class TaskStore {
       const original = task.body?.trim() || task.title.trim();
       if (original) task.quote = original;
     }
-    // How far the description has moved since anybody last named this row.
-    // Measured HERE because this is the only place that holds both the old
-    // and the new body, and accumulated rather than compared so no second
-    // copy of the body has to be stored to compare against. Clamped, so a
-    // long-lived task cannot run the number off past "completely different".
-    //
-    // The head clause of staleness needs no accumulation — it re-reads
-    // `titleHead` against the current body on every read — so only the drift
-    // half lives here.
-    task.titleDrift = Math.min(1, (task.titleDrift ?? 0) + bodyDrift(task.body, body));
     task.body = body;
     // The one thing this path DOES record: when the description changed.
     // Stamped only on a real change (the equality guard above returns first),
@@ -4072,6 +4259,12 @@ export class TaskStore {
     // answering one is not answering the other.
     const pendingBucketReview = lead ? this.getPendingBucketReview(workspaceId) : undefined;
     if (pendingBucketReview) this.clearPendingBucketReview(state);
+    // The correction loop's durable half: writes whose live request never
+    // reached anyone (or that arrived while the lead was away), drained the
+    // same way the re-triage is — delivered in the one payload a fresh
+    // attachment is guaranteed to read, then cleared.
+    const taskReviews = lead ? this.getPendingTaskReviews(workspaceId) : undefined;
+    if (taskReviews) this.clearPendingTaskReviews(state);
     // Emitted LAST, after every state change above: the projection refreshes
     // off this event, so an earlier emit would repaint the board with a
     // pending re-triage this very call just drained.
@@ -4090,6 +4283,7 @@ export class TaskStore {
       queuedVoice: this.drainVoiceQueue(workspaceId),
       ...(pendingRetriage ? { pendingRetriage } : {}),
       ...(pendingBucketReview ? { pendingBucketReview } : {}),
+      ...(taskReviews !== undefined && taskReviews.length > 0 ? { taskReviews } : {}),
       lead,
     };
   }
@@ -4508,6 +4702,7 @@ export class TaskStore {
         }
         const pendingRetriage = this.loadPendingRetriage(workspace.id);
         const pendingBucketReview = this.loadPendingBucketReview(workspace.id);
+        const pendingTaskReviews = this.loadPendingTaskReviews(workspace.id);
         this.workspaces.set(workspace.id, {
           workspace,
           tasks,
@@ -4519,6 +4714,9 @@ export class TaskStore {
           // Same reasoning: a band appeared and nobody has looked at the
           // bucket yet — a restart does not answer that.
           ...(pendingBucketReview ? { pendingBucketReview } : {}),
+          // And again: a row somebody wrote to is still waiting for its
+          // review pass — a restart does not perform it.
+          ...(pendingTaskReviews ? { pendingTaskReviews } : {}),
         });
       } catch (err) {
         // A corrupt sidecar loses that one workspace, never the server.
