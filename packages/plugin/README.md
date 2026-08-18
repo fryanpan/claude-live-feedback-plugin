@@ -34,7 +34,7 @@ doc editor + injectable widget) as a single install.
 ## Install
 
 ```bash
-claude plugin marketplace add fryanpan/claude-live-feedback-plugin
+claude plugin marketplace add fryanpan/claude-workspaces-plugin
 claude plugin install live-feedback@claude-live-feedback
 ```
 
@@ -48,8 +48,8 @@ To run the **browser review surfaces** (markdown + widget), you still
 need a clone on the machine that'll host the server:
 
 ```bash
-git clone https://github.com/fryanpan/claude-live-feedback-plugin.git
-cd claude-live-feedback-plugin
+git clone https://github.com/fryanpan/claude-workspaces-plugin.git
+cd claude-workspaces-plugin
 bun install
 bun run dev
 ```
@@ -106,7 +106,7 @@ The MCP server auto-starts on demand via the plugin's `.mcp.json`. For
 the browser review surfaces, run the HTTP server separately:
 
 ```bash
-cd /path/to/claude-live-feedback-plugin
+cd /path/to/claude-workspaces-plugin
 bun run dev
 ```
 

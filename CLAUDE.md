@@ -1,4 +1,4 @@
-# Project: claude-live-feedback-plugin
+# Project: claude-workspaces-plugin
 
 ## The Goal
 
