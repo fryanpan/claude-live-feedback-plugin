@@ -260,7 +260,7 @@ describe('ADVERSARIAL: landing project->artifacts + delete_workspace guardrail',
   let workspaceId: string;
   let files: Map<string, BindFile>;
 
-  it('GET / groups by project and shows the workspace as ONE artifact with a count', async () => {
+  it('GET / rows the project, and /projects/<owner> shows the workspace as ONE artifact', async () => {
     const r = await fetch(`${base}/api/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -287,15 +287,24 @@ describe('ADVERSARIAL: landing project->artifacts + delete_workspace guardrail',
     }
 
     const html = await (await fetch(`${base}/`)).text();
-    // Grouped under the project owner basename.
+    // One row for the project, by owner basename, and the folder counts as a
+    // SINGLE artifact there.
     expect(html).toContain('adv');
-    // ONE expandable folder artifact, nesting its members.
-    expect(html).toContain('<details');
-    expect(html).toContain(workspaceId);
-    expect(html).toContain('README.md');
-    expect(html).toContain('src/index.ts');
-    // The folder is a single artifact (count of 1).
     expect(html).toContain('1 artifact');
+    // …and none of its contents: the per-artifact detail is what moved off the
+    // landing response. The presences above are this absence's positive
+    // control — a real page rendered, it just does not carry the file list.
+    expect(html).not.toContain('<details');
+    expect(html).not.toContain('src/index.ts');
+
+    // The detail lives one hop away, and it is still ONE expandable folder
+    // artifact nesting its members.
+    const proj = await (await fetch(`${base}/projects/${encodeURIComponent('/proj/adv')}`)).text();
+    expect(proj).toContain('<details');
+    expect(proj).toContain(workspaceId);
+    expect(proj).toContain('README.md');
+    expect(proj).toContain('src/index.ts');
+    expect(proj).toContain('1 artifact');
   });
 
   it('DELETE /api/workspaces/:id without force is refused all-or-nothing with an open thread', async () => {
