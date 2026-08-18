@@ -85,7 +85,7 @@ describe('home routes — deterministic server (no summarizer)', () => {
     expect(payload.brief.source).toBe('deterministic');
     expect(payload.generating).toBe(false);
     expect(payload.brief.markdown).toContain('queued for your review');
-    expect(payload.instructions).toContain('Under 150 words');
+    expect(payload.instructions).toContain('Under 110 words');
   });
 
   it('board changes since the marker show up in the brief; the queue counts open decisions', async () => {
@@ -242,7 +242,7 @@ describe('home routes — generated brief (stub summarizer)', () => {
     expect(sent.messages[0].content).toContain(
       `[Ship the fuzzy matcher](/workspaces/${encodeURIComponent(ws)}?task=`,
     );
-    expect(sent.system).toContain('Under 150 words');
+    expect(sent.system).toContain('Under 110 words');
     expect(sent.system).toContain('never fabricate a URL');
   });
 

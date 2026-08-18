@@ -699,17 +699,15 @@ export function inlineMarksToDelta(
       }
     }
 
-    // [text](url)
+    // [text](url) — the label is parsed recursively so `[**b**](u)` (which
+    // is what the serializer emits for a bold link: link outermost) reads
+    // back as bold+link rather than as a link whose text is literally `**b**`.
     if (r.startsWith('[')) {
       const rb = r.indexOf(']');
       if (rb > 0 && r[rb + 1] === '(') {
         const rp = r.indexOf(')', rb + 2);
         if (rp > 0) {
-          flush();
-          out.push({
-            insert: r.slice(1, rb),
-            attributes: { link: { href: r.slice(rb + 2, rp) } },
-          });
+          emitWith(r.slice(1, rb), { link: { href: r.slice(rb + 2, rp) } });
           i += rp + 1;
           continue;
         }
@@ -730,7 +728,7 @@ export function inlineMarksToDelta(
     let matched = false;
     for (const m of ['**', '__'] as const) {
       if (r.startsWith(m)) {
-        const close = r.indexOf(m, m.length);
+        const close = findEmphasisClose(r, m);
         if (close > m.length) {
           emitWith(r.slice(m.length, close), { bold: true });
           i += close + m.length;
@@ -751,7 +749,7 @@ export function inlineMarksToDelta(
       // and round-trip back to `estimated*effort*h` — which broke bound-doc
       // editing of any doc full of snake_case field names.
       if (m === '_' && /\w/.test(i > 0 ? (text[i - 1] ?? '') : '')) continue;
-      const close = r.indexOf(m, 1);
+      const close = findEmphasisClose(r, m);
       if (close > 1 && r[close - 1] !== ' ') {
         if (m === '_' && /\w/.test(r[close + 1] ?? '')) continue;
         emitWith(r.slice(1, close), { italic: true });
@@ -767,6 +765,66 @@ export function inlineMarksToDelta(
   }
   flush();
   return out;
+}
+
+/**
+ * Find the index (in `r`) of the delimiter run that closes an emphasis span
+ * opened by `delim` (`*`, `**`, `_` or `__`) at the start of `r`. Returns -1
+ * when there is no closer.
+ *
+ * A plain `indexOf` cannot read nested emphasis: in `**a *b***` the first
+ * `**` after the opener is INSIDE the closing `***`, so the bold ended one
+ * character early and the italic never parsed. The serializer legitimately
+ * emits exactly that shape (bold containing an italic that ends where the
+ * bold ends), so the parser has to read it back or the round-trip loses the
+ * mark. The rule: walk delimiter RUNS, not characters. A run of the other
+ * width toggles an "inner span is open" flag and is skipped; a run of our own
+ * width closes; a mixed run (odd length ≥ 3) is the inner span's closer glued
+ * to ours — inner closes first when an inner span is open, otherwise the outer
+ * closer comes first and the remainder is left for the caller (`*a***b**` is
+ * italic a then bold b, per CommonMark).
+ *
+ * Underscore runs inside a word (`snake_case`) are never delimiters.
+ */
+function findEmphasisClose(r: string, delim: '*' | '**' | '_' | '__'): number {
+  const ch = delim[0] as string;
+  const want = delim.length;
+  let innerOpen = false;
+  let p = want;
+  while (p < r.length) {
+    if (r[p] !== ch) {
+      p++;
+      continue;
+    }
+    let len = 1;
+    while (r[p + len] === ch) len++;
+    const intraWord = ch === '_' && /\w/.test(r[p - 1] ?? '') && /\w/.test(r[p + len] ?? '');
+    if (intraWord) {
+      p += len;
+      continue;
+    }
+    if (want === 1) {
+      if (len === 1) return p;
+      if (len % 2 === 0) {
+        if ((len / 2) % 2 === 1) innerOpen = !innerOpen;
+        p += len;
+        continue;
+      }
+      // Odd run ≥ 3: `**…` plus our single closer.
+      return innerOpen ? p + len - 1 : p;
+    }
+    // want === 2
+    if (len === 1) {
+      innerOpen = !innerOpen;
+      p += 1;
+      continue;
+    }
+    if (len === 2) return p;
+    // Run ≥ 3: our `**` closer plus a single. When an inner italic is open it
+    // closes first (`***`), so our closer is the LAST two.
+    return len % 2 === 1 && innerOpen ? p + len - 2 : p;
+  }
+  return -1;
 }
 
 function insertDeltaInto(xmlText: Y.XmlText, delta: ReturnType<typeof inlineMarksToDelta>): void {
@@ -1018,13 +1076,36 @@ export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
         const [sub, next] = parseListAt(k, ind);
         li.insert(li.length, [sub]);
         k = next;
+      } else if (isFence((lines[k] ?? '').trim())) {
+        // A fenced code block inside the item. The serializer emits it
+        // indented one level under the marker; read it back as a codeBlock
+        // child (stripping that indent from every line) instead of letting
+        // the paragraph gatherer below join its lines with spaces — which
+        // flattened multi-line code onto one line on every round-trip.
+        const fenceLine = (lines[k] ?? '').trim();
+        const lang = fenceLine.replace(/^```/, '').trim();
+        const strip = (s: string) => (indentOf(s) >= ind ? s.slice(ind) : s.trimStart());
+        k++;
+        const code: string[] = [];
+        while (k < lines.length && !isFence((lines[k] ?? '').trim())) {
+          code.push(strip(lines[k] ?? ''));
+          k++;
+        }
+        if (k < lines.length) k++; // closing fence
+        const cb = new Y.XmlElement('codeBlock');
+        if (lang) cb.setAttribute('language', lang);
+        const t = new Y.XmlText();
+        t.insert(0, code.join('\n'));
+        cb.insert(0, [t]);
+        li.insert(li.length, [cb]);
       } else {
         const paraLines: string[] = [];
         while (
           k < lines.length &&
           (lines[k] ?? '').trim() !== '' &&
           indentOf(lines[k] ?? '') > baseIndent &&
-          !isListItemLine(lines[k] ?? '')
+          !isListItemLine(lines[k] ?? '') &&
+          !isFence((lines[k] ?? '').trim())
         ) {
           paraLines.push((lines[k] ?? '').trim());
           k++;
@@ -1432,18 +1513,118 @@ function textWithMarks(xmlText: Y.XmlText): string {
     attributes?: Record<string, unknown>;
   }>;
   let out = '';
-  for (const op of delta) {
-    if (typeof op.insert !== 'string') continue;
-    // THE SERIALIZER RULE (suggested edits): disk always holds the ACCEPTED
-    // state. Text carrying a pending insert-suggestion is omitted here — and
-    // ONLY here, because every doc→disk path (write-back, reconcile's
-    // currentSerialized, lastWritten, normalizeMarkdown) funnels through this
-    // function. Text carrying `suggestDelete` falls through and is emitted
-    // WITHOUT the mark: wrapMarks only re-emits the real inline marks
-    // (bold/italic/code/strike/link) and ignores suggestion attributes.
-    if (op.attributes?.[SUGGEST_INSERT_MARK] != null) continue;
-    out += wrapMarks(op.insert, op.attributes);
+  // Marks currently open, outermost first. A Yjs delta is a flat sequence of
+  // ops each carrying a SET of marks — it has no notion of which mark is
+  // "outer" — so nesting is decided here, by MARK precedence (link outermost,
+  // code innermost). A mark stays open across ops as long as every op still
+  // carries it; the moment an op drops a mark, that mark and everything opened
+  // inside it is closed (innermost first), and whatever the op still carries
+  // is re-opened. This is what makes `**a *b* c**` come out as one bold run
+  // rather than three — the old per-op `wrapMarks` closed and re-opened bold
+  // around the italic, doubling the delimiters into `**a ****b**** c**` and
+  // corrupting every bound file that held such a run.
+  const active: InlineMark[] = [];
+  for (const seg of expelEmphasisWhitespace(delta)) {
+    const marks = seg.marks;
+    let keep = 0;
+    while (keep < active.length && marks.some((m) => m.key === active[keep]!.key)) keep++;
+    for (let k = active.length - 1; k >= keep; k--) out += active[k]!.close;
+    active.length = keep;
+    // A whitespace segment never OPENS a mark: an emphasis delimiter must sit
+    // against a word, so a run that has to be (re)opened opens after the
+    // space, on the word that follows.
+    if (!seg.ws) {
+      for (const m of marks) {
+        if (active.some((a) => a.key === m.key)) continue;
+        out += m.open;
+        active.push(m);
+      }
+    }
+    out += seg.text;
   }
+  for (let k = active.length - 1; k >= 0; k--) out += active[k]!.close;
+  return out;
+}
+
+type InlineMark = { key: string; open: string; close: string };
+type InlineSegment = { text: string; marks: InlineMark[]; ws?: boolean };
+
+const EMPHASIS_KEYS = new Set(['bold', 'italic', 'strike']);
+
+/**
+ * Turn a Yjs delta into the segments the serializer walks, moving whitespace
+ * OUT from under emphasis marks at their edges. Markdown emphasis cannot open
+ * before a space or close after one (`** word**`, `*word *` are literal
+ * asterisks in CommonMark and in this file's own parser), and an editor
+ * selection routinely bolds a trailing space. So an op's leading whitespace
+ * keeps only the emphasis it shares with the PREVIOUS op, its trailing
+ * whitespace only what it shares with the NEXT one, and a whitespace-only op
+ * only what both neighbours carry — the delimiters land against a word on
+ * both sides. Link and code are not emphasis and keep their whitespace; a code
+ * op is never split at all.
+ *
+ * Also applies THE SERIALIZER RULE for suggested edits: disk always holds the
+ * ACCEPTED state, so text carrying a pending insert-suggestion is dropped here
+ * — and ONLY here, because every doc→disk path (write-back, reconcile's
+ * currentSerialized, lastWritten, normalizeMarkdown) funnels through
+ * textWithMarks. Text carrying `suggestDelete` falls through and is emitted
+ * WITHOUT the mark: inlineMarksOf reads only the real inline marks.
+ */
+function expelEmphasisWhitespace(
+  delta: Array<{ insert?: string; attributes?: Record<string, unknown> }>,
+): InlineSegment[] {
+  const ops = delta.filter(
+    (op): op is { insert: string; attributes?: Record<string, unknown> } =>
+      typeof op.insert === 'string' &&
+      op.insert.length > 0 &&
+      op.attributes?.[SUGGEST_INSERT_MARK] == null,
+  );
+  const out: InlineSegment[] = [];
+  const shared = (marks: InlineMark[], neighbour: InlineMark[] | undefined) =>
+    marks.filter((m) => !EMPHASIS_KEYS.has(m.key) || neighbour?.some((n) => n.key === m.key));
+  for (let i = 0; i < ops.length; i++) {
+    const op = ops[i]!;
+    const marks = inlineMarksOf(op.attributes);
+    const hasEmphasis = marks.some((m) => EMPHASIS_KEYS.has(m.key));
+    const isCode = marks.some((m) => m.key === 'code');
+    if (!hasEmphasis || isCode) {
+      out.push({ text: op.insert, marks });
+      continue;
+    }
+    const prev = i > 0 ? inlineMarksOf(ops[i - 1]!.attributes) : undefined;
+    const next = i + 1 < ops.length ? inlineMarksOf(ops[i + 1]!.attributes) : undefined;
+    const m = op.insert.match(/^(\s*)(.*?)(\s*)$/s);
+    const lead = m?.[1] ?? '';
+    const core = m?.[2] ?? '';
+    const trail = m?.[3] ?? '';
+    if (core.length === 0) {
+      out.push({ text: op.insert, marks: shared(shared(marks, prev), next), ws: true });
+      continue;
+    }
+    if (lead) out.push({ text: lead, marks: shared(marks, prev), ws: true });
+    out.push({ text: core, marks });
+    if (trail) out.push({ text: trail, marks: shared(marks, next), ws: true });
+  }
+  return out;
+}
+
+/**
+ * The inline marks an op carries, in NESTING order — outermost first. Link
+ * wraps everything (`[**b**](u)`), code sits innermost so no delimiter ever
+ * lands inside a code span. Suggestion bookkeeping attributes are not marks
+ * and are ignored here.
+ */
+function inlineMarksOf(attrs: Record<string, unknown> | undefined): InlineMark[] {
+  if (!attrs) return [];
+  const out: InlineMark[] = [];
+  if (attrs.link && typeof attrs.link === 'object' && attrs.link !== null) {
+    const href = (attrs.link as { href?: string }).href ?? '';
+    if (href) out.push({ key: `link:${href}`, open: '[', close: `](${href})` });
+  }
+  if (attrs.strike) out.push({ key: 'strike', open: '~~', close: '~~' });
+  if (attrs.bold) out.push({ key: 'bold', open: '**', close: '**' });
+  if (attrs.italic) out.push({ key: 'italic', open: '*', close: '*' });
+  if (attrs.code) out.push({ key: 'code', open: '`', close: '`' });
   return out;
 }
 
@@ -1477,21 +1658,6 @@ function isEntirelySuggestedInsert(node: Y.XmlElement): boolean {
     return true;
   };
   return visit(node) && sawText;
-}
-
-function wrapMarks(text: string, attrs: Record<string, unknown> | undefined): string {
-  if (!attrs || text.length === 0) return text;
-  let s = text;
-  // Order matters: inner marks wrap first, outer last. Link goes outermost.
-  if (attrs.code) s = `\`${s}\``;
-  if (attrs.italic) s = `*${s}*`;
-  if (attrs.bold) s = `**${s}**`;
-  if (attrs.strike) s = `~~${s}~~`;
-  if (attrs.link && typeof attrs.link === 'object' && attrs.link !== null) {
-    const href = (attrs.link as { href?: string }).href ?? '';
-    if (href) s = `[${s}](${href})`;
-  }
-  return s;
 }
 
 /**
