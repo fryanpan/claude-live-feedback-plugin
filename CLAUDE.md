@@ -74,11 +74,39 @@ The feedback widget that ships Linear tickets in `~/dev/health-tool` and `~/dev/
     keep accepting the old payload. Old plugin bundles keep calling it from
     sessions that have not restarted — see "Removing an MCP tool cannot break a
     peer" in [docs/process/learnings.md](docs/process/learnings.md).
+    **Scope, added 2026-08-18: Bryan has waived compatibility shims for
+    surfaces still in the prototyping phase** — something nobody outside this
+    machine depends on yet can simply change shape, and carrying a shim for it
+    buys nothing. The bullet stays in force for **the shared server's REST
+    routes**, which is where the hazard actually lives: an old bundle keeps
+    calling the route it was built against, from a session that has not
+    restarted, and gets a failure it cannot explain from its own version. So
+    the question at a narrowing is never "is this verb old" — it is *"is there
+    a caller I cannot restart"*.
 - TypeScript strict mode.
 - Widget bundle size is a hard constraint — measure and report it on every PR that touches widget code.
 - **Don't append new CSS at the end of `packages/markdown-app/src/styles.css`.** It's a single ~2,700-line file organized into `/* ===== SECTION ===== */` banners, and parallel branches that both append at EOF conflict every time. Put rules in the banner section they belong to; a genuinely new feature gets a new banner next to related sections, not at the bottom.
 - **Edit Bryan's bound docs directly; don't default to `suggest: true`.** Concurrent editing is the norm — he's in the doc while you work and expects your changes to land. Reserve `suggest: true` for judgment calls where a one-tap approve/reject genuinely beats a silent rewrite (voice, framing, a claim you're unsure of). Mechanical fixes, typos, and anything he explicitly asked for go in as plain edits.
 - **Mobile UX is load-bearing.** Bryan reviews on his phone. Any UI change touching the editor, widget, or landing page must follow [docs/product/design-mobile.md](docs/product/design-mobile.md) — verify at 430px wide before shipping.
+
+## When to open a PR
+
+- **PR after each task is done.** (Bryan, 2026-08-18: *"It's fine to PR after
+  each task is done."*) Finishing a task is the moment to open the PR — don't
+  bank several tasks into one push waiting for a tidier moment.
+- **A cohesive feature is ONE PR with ordered commits, not a fragment per
+  file.** The two rules above meet at the unit of work: one *task* gets one PR,
+  and if a feature genuinely spans several commits, they ride in that one PR in
+  the order they should be read. Splitting one coherent change into many small
+  PRs costs a review pass each and hides the shape of the thing.
+- **Mockups and sketches never enter the repo.** (Bryan verbatim: *"mockups,
+  sketches, and so on never enter repo — serve with bind mock."*) Write the
+  HTML somewhere outside the working tree and serve it with `bind_mock(docId,
+  sourceHtmlPath)`; the reviewer gets a URL and comment threads, and the repo
+  gets no artifact to prune later. A mockup committed once becomes a tracked
+  file somebody has to keep building — and if it sits in the primary checkout
+  it also makes every prod release stamp `-dirty` while anyone edits it.
+
 
 ## The four gates — run all of them before you push
 
