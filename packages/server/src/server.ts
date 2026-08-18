@@ -715,6 +715,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     const events = briefEvents(readEventRows(dataDir, workspace.id), since);
     const items = reviewItemsFor(workspace);
     return {
+      workspaceId: workspace.id,
       events,
       queue: { total: homeQueueTotal(workspace, items) },
       titleOf: (taskId) => taskStore.getTask(taskId)?.title,
