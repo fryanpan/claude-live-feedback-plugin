@@ -198,6 +198,80 @@ describe('parity with the replayed payload', () => {
   });
 });
 
+/**
+ * A band appeared in the goal list, so the unknown-goal bucket is worth
+ * re-looking at. A THIRD kind, not a `goal-retriage`: the north-star text did
+ * not move, so rendering it through that branch would tell the lead their
+ * placements were judged against a goal that never changed.
+ *
+ * The ask is to LOOK. The server never places anything in answer to it, and
+ * the line must not read as though it did — "leave it unplaced" is a valid
+ * answer, and the bucket exists precisely because nobody has made that call.
+ */
+describe('a bucket re-look (kind: bucket-review)', () => {
+  const REVIEW = {
+    kind: 'bucket-review',
+    taskIds: ['t-a', 't-b'],
+    batchId: 'gc-1',
+    newBands: [{ id: 'g2', title: 'Reviewer trust' }],
+  };
+
+  it('names the band that appeared and every task in the bucket', () => {
+    const line = triageRequestLine({ ...REVIEW, leadAgentId: 'agent-lead' }, 'agent-lead');
+    expect(line).toContain('Reviewer trust');
+    expect(line).toContain('g2');
+    for (const id of REVIEW.taskIds) expect(line).toContain(id);
+    expect(line).toContain('set_task_goal');
+  });
+
+  // The count and the list are two renderings of one array.
+  it('the count matches the number of ids it lists', () => {
+    const line = triageRequestLine({ ...REVIEW, leadAgentId: 'agent-lead' }, 'agent-lead');
+    expect(line).toContain('2 unplaced task(s)');
+    expect(line.match(/t-[ab]/g)).toHaveLength(2);
+  });
+
+  // Placing is the lead's judgment, so the line has to say that leaving one
+  // where it is remains an answer. Without it the reader treats the request
+  // as "empty this bucket", which is the auto-assign Bryan ruled out, made of
+  // words instead of code.
+  it('says that leaving a task unplaced is a valid answer', () => {
+    const line = triageRequestLine({ ...REVIEW, leadAgentId: 'agent-lead' }, 'agent-lead');
+    expect(line.toLowerCase()).toContain('unplaced is fine');
+  });
+
+  it('addresses a non-lead as an FYI, carrying the whole payload', () => {
+    const line = triageRequestLine({ ...REVIEW, leadAgentId: 'agent-lead' }, 'agent-bystander');
+    expect(line).toContain('Act only if that is you');
+    expect(line).toContain('agent-lead');
+    for (const id of REVIEW.taskIds) expect(line).toContain(id);
+    expect(line).toContain('Reviewer trust');
+  });
+
+  // Positive control for the assertion above: the same payload renders the
+  // imperative when the reader IS the addressee.
+  it('renders the imperative for that same payload when the reader is the lead', () => {
+    const line = triageRequestLine(
+      { ...REVIEW, leadAgentId: 'agent-bystander' },
+      'agent-bystander',
+    );
+    expect(line).not.toContain('Act only if');
+  });
+
+  // It is not a north-star change, so the goal-change contract must not be
+  // attached to it — that skill asks for a re-triage of every OPEN task
+  // against a new north star, which is a much larger and different ask.
+  it('does not name the goal-change contract skill', () => {
+    const line = triageRequestLine({ ...REVIEW, leadAgentId: 'agent-lead' }, 'agent-lead');
+    expect(line).not.toContain(RETRIAGE_SKILL);
+  });
+
+  it('never renders "undefined" when the payload is thin', () => {
+    const line = triageRequestLine({ kind: 'bucket-review', batchId: 'gc-2' }, 'agent-whoever');
+    expect(line).not.toContain('undefined');
+  });
+});
+
 describe('RETRIAGE_SKILL', () => {
   // The name is a promise that a skill by that name SHIPS. A rename that
   // moves the directory and leaves the constant pointing at nothing produces
