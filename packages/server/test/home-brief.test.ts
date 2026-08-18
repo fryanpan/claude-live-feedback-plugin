@@ -249,6 +249,35 @@ describe('acceptBrief', () => {
     const real = '**Finished:** the retry helper rewrite landed.\n\n2 items are queued below.';
     expect(acceptBrief(real)).toBe(real);
   });
+
+  it('refuses a reply that stops inside a markdown token, and accepts the closed twin', () => {
+    // The production shape (2026-08-18): a brief cut inside a link URL, which
+    // renders as visible `](/workspaces/…?task=t-` in the card. The pairs are
+    // written closed-then-cut so the refusal cannot be vacuous — each `null`
+    // has a sibling that the same function accepts.
+    const closed = '**Finished:** [the retry helper](/workspaces/ws-1?task=t-1) landed today.';
+    expect(acceptBrief(closed)).toBe(closed);
+    expect(acceptBrief('**Finished:** [the retry helper](/workspaces/ws-1?task=t-')).toBeNull();
+    expect(acceptBrief('**Finished:** the helper landed. See [the retry helper')).toBeNull();
+
+    const bold = '**Finished:** the retry helper landed today, and the queue is clear.';
+    expect(acceptBrief(bold)).toBe(bold);
+    expect(acceptBrief('**Finished:** the retry helper landed. **Started')).toBeNull();
+
+    const code = 'The `retry` helper landed today, and the review queue is clear.';
+    expect(acceptBrief(code)).toBe(code);
+    expect(acceptBrief('The `retry` helper landed today. Also `resolveThre')).toBeNull();
+  });
+
+  it('a parenthesis after the last link does not read as an unclosed one', () => {
+    // The guard looks for a `](` with no `)` after it; ordinary prose that
+    // uses brackets or parentheses later in the line must survive, or the
+    // reader loses a perfectly good brief on every read.
+    const md = '**Finished:** [the retry helper](/workspaces/ws-1?task=t-1) (and its tests).';
+    expect(acceptBrief(md)).toBe(md);
+    const listy = '- [one](/workspaces/ws-1?task=t-1)\n- [two](/workspaces/ws-1?task=t-2)';
+    expect(acceptBrief(listy)).toBe(listy);
+  });
 });
 
 describe('briefIsFresh', () => {
@@ -258,6 +287,17 @@ describe('briefIsFresh', () => {
     expect(briefIsFresh(stored, 200, 3)).toBe(false); // marker moved
     expect(briefIsFresh(stored, 100, 4)).toBe(false); // board moved
     expect(briefIsFresh(undefined, 100, 3)).toBe(false);
+  });
+
+  it('a brief persisted mid-link is never fresh, so it stops being served', () => {
+    // Sidecars written before the truncation guard hold cut text, and by
+    // every other measure they are fresh — same marker, same event count —
+    // so without this they render forever. The whole twin is asserted first,
+    // which is what makes the refusal a statement about the TEXT.
+    const whole = { ...stored, markdown: '**Finished:** [a task](/workspaces/ws-1?task=t-1).' };
+    const cut = { ...stored, markdown: '**Finished:** [a task](/workspaces/ws-1?task=t-' };
+    expect(briefIsFresh(whole, 100, 3)).toBe(true);
+    expect(briefIsFresh(cut, 100, 3)).toBe(false);
   });
 });
 
