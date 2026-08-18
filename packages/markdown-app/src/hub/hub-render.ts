@@ -45,11 +45,12 @@ import {
   quoteAfterEdit,
   quoteForCapture,
   reviewBannerText,
-  reviewRow,
+  reviewRowTitle,
   shortCommit,
   stepTarget,
   timeAgo,
   uptimeSummary,
+  waitingLabel,
 } from './hub-model.ts';
 
 const STATUS_LABEL: Record<TaskStatus, string> = {
@@ -72,6 +73,7 @@ function wireInPlaceTitle(
   el: HTMLElement,
   current: () => string,
   commit: (v: string) => void,
+  keepKey?: string,
 ): void {
   el.addEventListener('keydown', (ev) => {
     if (el.querySelector('input')) return; // the input owns its own keys
@@ -87,6 +89,7 @@ function wireInPlaceTitle(
     const input = document.createElement('input');
     input.type = 'text';
     input.className = 'hub-title-input';
+    if (keepKey) input.dataset.keep = keepKey;
     input.value = original;
     el.replaceChildren(input);
     input.focus();
@@ -1179,9 +1182,11 @@ export function renderHomeReview(
   queue: ReviewQueue,
   handlers: ReviewStripHandlers,
   settled: ReviewItem[] = [],
+  now: number = Date.now(),
 ): void {
   container.replaceChildren();
   container.classList.remove('hidden');
+  container.classList.add('hub-home-review-card');
 
   const titleRow = document.createElement('div');
   titleRow.className = 'hub-home-review-head';
@@ -1189,13 +1194,13 @@ export function renderHomeReview(
   heading.className = 'hub-home-heading';
   heading.textContent = 'For Your Review';
   titleRow.append(heading);
-  // The walkthrough entry, right-aligned beside the heading (approved
-  // design). Only offered when there is something to walk through.
+  // The walkthrough entry: the mockup's dark "Review All", top-right of the
+  // section head. Only offered when there is something to walk through.
   if (queue.total > 0) {
     const go = document.createElement('button');
     go.type = 'button';
-    go.className = 'hub-btn hub-btn-primary hub-review-go';
-    go.textContent = 'Review';
+    go.className = 'hub-btn hub-btn-ink hub-review-go';
+    go.textContent = 'Review All';
     go.setAttribute('aria-label', 'Go through these one at a time');
     go.addEventListener('click', () => handlers.onWalkthrough());
     titleRow.append(go);
@@ -1214,170 +1219,62 @@ export function renderHomeReview(
     quiet.className = 'hub-home-quiet';
     quiet.textContent = 'Nothing is waiting for your review right now.';
     container.append(quiet);
-    appendSettledRows(container, done, handlers);
+    appendSettledRows(container, done, handlers, now);
     return;
   }
 
   /**
-   * A thread row that ended with an agent speaking but contains no question.
-   *
-   * These are the "shipped it, PR is green" notes agents leave on threads
-   * nobody closed. They qualify for the queue — its rule is that the newest
-   * comment is an agent's — and they are not asks. Measured on the live board
-   * 2026-08-17: 23 items, 0 direct, so ALL of them were rendered as equal
-   * claims on the reader's attention, each one an ellipsis-clipped PR
-   * announcement. That wall is the reported bug.
-   *
-   * Deliberately NOT a filter and NOT a score: nothing leaves the strip, the
-   * rows are grouped and labelled for what they are. The membership rule is
-   * the server's and stays the server's, so this can only change reading
-   * order — it can never make a row disappear.
+   * The mockup's row anatomy, exactly: a ranked vertical list, hairlines
+   * between rows, the QUESTION as the row title (`reviewRowTitle` — the ask
+   * when the item carries one, the subject when the subject is the question),
+   * "waiting N days" as the subline, and the top row highlighted because it
+   * is the one Review All opens on. The old title-chip strip was the board
+   * component moved over, which is what got this page rejected.
    */
-  const isUpdate = (item: ReviewItem): boolean =>
-    item.thread !== undefined && item.thread.direct !== true;
-  const asks = queue.items.filter((i) => !isUpdate(i));
-  const updates = queue.items.filter(isUpdate);
+  queue.items.forEach((item, i) => {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = `hub-review-row hub-review-${item.kind}${i === 0 ? ' hub-review-row-current' : ''}`;
+    const title = document.createElement('span');
+    title.className = 'hub-review-row-title';
+    title.textContent = reviewRowTitle(item);
+    const sub = document.createElement('span');
+    sub.className = 'hub-review-row-sub';
+    sub.textContent = waitingLabel(item.since, now);
+    row.append(title, sub);
+    row.title = `${REVIEW_KIND_LABEL[item.kind]}: ${item.title}${item.ask ? ` — ${item.ask}` : ''} · ${item.why}`;
+    row.addEventListener('click', () => handlers.onOpen(item));
+    container.append(row);
+  });
 
-  const head = document.createElement('div');
-  head.className = 'hub-decisions-head';
-
-  const count = document.createElement('button');
-  count.type = 'button';
-  count.className = 'hub-decisions-count';
-  // Still the whole queue, because this button STARTS THE WALKTHROUGH and the
-  // walkthrough steps through all of it. A headline that counted only the
-  // top group would promise a shorter sitting than the button delivers, which
-  // is a second lie in place of the first.
-  count.textContent = queue.total === 1 ? '1 thing needs you' : `${queue.total} things need you`;
-  count.setAttribute('aria-label', `${count.textContent} — go through them one at a time`);
-  count.addEventListener('click', () => handlers.onWalkthrough());
-
-  const urgency = document.createElement('span');
-  urgency.className = 'hub-decisions-urgency';
-  // "0 blocking" reads like a metric nobody asked for; say the fact instead.
-  const rest = queue.total - queue.blocking;
-  urgency.textContent =
-    queue.blocking === 0
-      ? 'Nothing is blocked on them yet'
-      : rest === 0
-        ? `${queue.blocking} blocking work now`
-        : `${queue.blocking} blocking work now · ${rest} can wait`;
-
-  head.append(count, urgency);
-  container.append(head);
-
-  // The split, stated once, when there is one to state. This is what turns
-  // "23 things need you" from a number the reader distrusts into a number
-  // they can act on: how many of the 23 have their name on them.
-  if (updates.length > 0 && asks.length > 0) {
-    const split = document.createElement('p');
-    split.className = 'hub-decisions-split';
-    split.textContent = `${asks.length} addressed to you · ${updates.length} waiting on a reply`;
-    container.append(split);
-  }
-
-  const chipFor = (item: ReviewItem): HTMLElement => {
-    const chip = document.createElement('button');
-    chip.type = 'button';
-    // Both banded kinds carry a row; read it through the one helper so a new
-    // band cannot be styled as blocking on one line and not on the next.
-    const row = reviewRow(item);
-    const blocking = (row?.blocks.length ?? 0) > 0;
-    chip.className = `hub-decision-chip hub-review-${item.kind}${blocking ? ' hub-decision-blocking' : ''}`;
-    const mark = document.createElement('span');
-    mark.className = 'hub-review-mark';
-    mark.textContent = REVIEW_MARK[item.kind];
-    mark.setAttribute('aria-hidden', 'true');
-    const label = document.createElement('span');
-    label.className = 'hub-decision-chip-title';
-    label.textContent = clip(item.title);
-    chip.append(mark, label);
-    // The ask on a thread is the thing that tells you whether to open it —
-    // "Ship the widget" alone is the container, not the question.
-    if (item.ask) {
-      const ask = document.createElement('span');
-      // A question addressed to the reader is the one row on this strip they
-      // can act on without opening anything, so it is marked as such rather
-      // than left to read like the status notes it sits among.
-      ask.className = item.thread?.direct
-        ? 'hub-review-ask hub-review-ask--direct'
-        : 'hub-review-ask';
-      ask.textContent = clip(item.ask, 48);
-      chip.append(ask);
-    } else if (blocking) {
-      const blocks = document.createElement('span');
-      blocks.className = 'hub-decision-chip-blocks';
-      blocks.textContent = `blocks ${row?.blocks.length}`;
-      chip.append(blocks);
-    }
-    chip.title = `${REVIEW_KIND_LABEL[item.kind]}: ${item.title}${item.ask ? ` — ${item.ask}` : ''} · ${item.why}`;
-    chip.addEventListener('click', () => handlers.onOpen(item));
-    return chip;
-  };
-
-  const group = (items: ReviewItem[], className: string): HTMLElement => {
-    const chips = document.createElement('div');
-    chips.className = className;
-    for (const item of items) chips.append(chipFor(item));
-    return chips;
-  };
-
-  if (asks.length > 0) {
-    container.append(group(asks, 'hub-decision-chips'));
-  }
-
-  if (updates.length > 0) {
-    // Collapsed, because on the board that produced this measurement it is the
-    // whole list. An always-open section of 23 status notes is the wall the
-    // reader is complaining about, whatever heading sits on top of it.
-    const det = document.createElement('details');
-    det.className = 'hub-decision-updates';
-    const sum = document.createElement('summary');
-    sum.className = 'hub-decision-updates-label';
-    // "Not addressed to you by name" and NOT "no question found". `direct` is
-    // exactly the former; treating it as the latter over-claims, and the
-    // over-claim lands on real questions — the flag's recall was measured at
-    // 1 in 3, so a genuine "which repo does this land in?" that names nobody
-    // is `direct: false`. A label may under-promise here; it may not lie.
-    sum.textContent =
-      updates.length === 1
-        ? '1 more waiting on a reply — not addressed to you by name'
-        : `${updates.length} more waiting on a reply — not addressed to you by name`;
-    det.append(sum, group(updates, 'hub-decision-chips'));
-    container.append(det);
-  }
-
-  appendSettledRows(container, done, handlers);
+  appendSettledRows(container, done, handlers, now);
 }
 
-/** What this sitting already cleared, kept in the stack and marked done. */
+/** What this sitting already cleared: kept in the stack as struck-through
+ *  rows, same anatomy as the live ones (mockup: answered items stay put). */
 function appendSettledRows(
   container: HTMLElement,
   done: ReviewItem[],
   handlers: ReviewStripHandlers,
+  now: number,
 ): void {
-  if (done.length === 0) return;
-  const rows = document.createElement('div');
-  rows.className = 'hub-decision-chips hub-review-settled';
   for (const item of done) {
-    const chip = document.createElement('button');
-    chip.type = 'button';
-    chip.className = 'hub-decision-chip hub-review-done';
-    const mark = document.createElement('span');
-    mark.className = 'hub-review-mark';
-    mark.textContent = '✓';
-    mark.setAttribute('aria-hidden', 'true');
-    const label = document.createElement('span');
-    label.className = 'hub-decision-chip-title';
-    label.textContent = clip(item.title);
-    chip.append(mark, label);
-    chip.title = `Done this sitting: ${item.title}`;
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'hub-review-row hub-review-row-done';
+    const title = document.createElement('span');
+    title.className = 'hub-review-row-title';
+    title.textContent = reviewRowTitle(item);
+    const sub = document.createElement('span');
+    sub.className = 'hub-review-row-sub';
+    sub.textContent = `${waitingLabel(item.since, now)} · answered this sitting`;
+    row.append(title, sub);
+    row.title = `Done this sitting: ${item.title}`;
     // Still a way back to the thing that was just answered — the row is the
     // only pointer left once the queue dropped it.
-    chip.addEventListener('click', () => handlers.onOpen(item));
-    rows.append(chip);
+    row.addEventListener('click', () => handlers.onOpen(item));
+    container.append(row);
   }
-  container.append(rows);
 }
 
 /**
@@ -1408,7 +1305,7 @@ export function renderReviewBanner(
   line.textContent = text;
   const go = document.createElement('button');
   go.type = 'button';
-  go.className = 'hub-btn hub-btn-primary hub-review-banner-go';
+  go.className = 'hub-btn hub-btn-ink hub-review-banner-go';
   go.textContent = 'Go to Home';
   go.addEventListener('click', () => handlers.onGoHome());
   container.append(line, go);
@@ -1454,12 +1351,14 @@ export function renderHomeBrief(
     return;
   }
 
-  const since = document.createElement('p');
+  // The window, beside the heading (mockup: "What's New?  From Friday,
+  // 6:12 pm until now"). "Updating…" is grounded in the server's own
+  // generating flag — the flag is written at the point the call is queued,
+  // never inferred here.
+  const since = document.createElement('span');
   since.className = 'hub-home-since';
-  // "Updating…" is grounded in the server's own generating flag — the flag is
-  // written at the point the call is queued, never inferred here.
   since.textContent = homeSinceLabel(payload, now) + (payload.generating ? ' · Updating…' : '');
-  card.append(since);
+  head.append(since);
 
   const body = document.createElement('div');
   body.className = 'hub-home-brief-body';
@@ -1468,19 +1367,21 @@ export function renderHomeBrief(
   body.innerHTML = renderCommentMarkdown(payload.brief.markdown);
   card.append(body);
 
+  // The mockup's footer, verbatim: "Edit how this gets generated" as a plain
+  // link bottom-left, "Mark read" as the dark button bottom-right.
   const actions = document.createElement('div');
   actions.className = 'hub-home-brief-actions';
-  const mark = document.createElement('button');
-  mark.type = 'button';
-  mark.className = 'hub-btn hub-btn-primary hub-home-mark-read';
-  mark.textContent = 'Mark caught up';
-  mark.addEventListener('click', () => handlers.onMarkCaughtUp());
   const edit = document.createElement('button');
   edit.type = 'button';
   edit.className = 'hub-linklike hub-home-edit-recipe';
   edit.textContent = 'Edit how this gets generated';
   edit.addEventListener('click', () => handlers.onEditRecipe(!editingRecipe));
-  actions.append(mark, edit);
+  const mark = document.createElement('button');
+  mark.type = 'button';
+  mark.className = 'hub-btn hub-btn-ink hub-home-mark-read';
+  mark.textContent = 'Mark read';
+  mark.addEventListener('click', () => handlers.onMarkCaughtUp());
+  actions.append(edit, mark);
   card.append(actions);
 
   if (editingRecipe) {
@@ -1498,7 +1399,7 @@ export function renderHomeBrief(
     buttons.className = 'hub-home-recipe-buttons';
     const save = document.createElement('button');
     save.type = 'button';
-    save.className = 'hub-btn hub-btn-primary hub-home-recipe-save';
+    save.className = 'hub-btn hub-btn-ink hub-home-recipe-save';
     save.textContent = 'Save & Update Summary';
     save.addEventListener('click', () => {
       const text = ta.value.trim();
@@ -2272,17 +2173,83 @@ export interface TaskDiscussion {
  * believes they said it. A handler that never resolves true
  * therefore keeps its text — the safe direction.
  */
+// ── What a repaint owes the person typing ──────────────────────────────────
+
+type TextControl = HTMLTextAreaElement | HTMLInputElement;
+
+/** What one text control held the instant before a repaint threw it away. */
+export interface KeptField {
+  value: string;
+  focused: boolean;
+  selectionStart: number | null;
+  selectionEnd: number | null;
+  selectionDirection: 'forward' | 'backward' | 'none';
+}
+
+/**
+ * Snapshot every text control under `root` that carries a `data-keep` key.
+ *
+ * The detail panel is repainted by `replaceChildren` on every board change —
+ * a task transition arriving over SSE, a reply landing, a picker list moving —
+ * and a repaint rebuilds the composer, so whatever was typed and wherever the
+ * caret was went with the old DOM. `discussionIsBusy` holds back one of those
+ * doors (a discussion reload) and cannot see the others, so the guarantee
+ * belongs here, at the one point every repaint passes through: read the
+ * fields out before the swap, put them back after.
+ *
+ * The key is stamped by whoever builds the control and includes the task id,
+ * so a draft belongs to the task it was typed on — the panel is one shared
+ * container, and a half-typed comment must never follow the reader onto a
+ * different task.
+ */
+export function keepFields(root: ParentNode): Map<string, KeptField> {
+  const kept = new Map<string, KeptField>();
+  for (const el of root.querySelectorAll<TextControl>('textarea[data-keep], input[data-keep]')) {
+    const key = el.dataset.keep;
+    if (!key) continue;
+    kept.set(key, {
+      value: el.value,
+      focused: el === el.ownerDocument.activeElement,
+      selectionStart: el.selectionStart,
+      selectionEnd: el.selectionEnd,
+      selectionDirection: el.selectionDirection ?? 'none',
+    });
+  }
+  return kept;
+}
+
+/**
+ * Put a `keepFields` snapshot back into the freshly built controls under
+ * `root`. Value always; focus and caret only for the field that HAD focus —
+ * a draft the reader tapped away from is restored where it was, without
+ * pulling focus back from wherever they went.
+ */
+export function restoreFields(root: ParentNode, kept: Map<string, KeptField>): void {
+  for (const el of root.querySelectorAll<TextControl>('textarea[data-keep], input[data-keep]')) {
+    const snap = el.dataset.keep ? kept.get(el.dataset.keep) : undefined;
+    if (!snap) continue;
+    el.value = snap.value;
+    if (!snap.focused) continue;
+    el.focus();
+    if (snap.selectionStart !== null && snap.selectionEnd !== null) {
+      el.setSelectionRange(snap.selectionStart, snap.selectionEnd, snap.selectionDirection);
+    }
+  }
+}
+
 function commentForm(
   className: string,
   placeholder: string,
   submitLabel: string,
   onSubmit: (text: string) => Promise<boolean>,
+  keepKey: string,
 ): HTMLFormElement {
   const form = document.createElement('form');
   form.className = className;
   const ta = document.createElement('textarea');
   ta.placeholder = placeholder;
   ta.rows = 2;
+  ta.dataset.keep = keepKey;
   const submit = document.createElement('button');
   submit.type = 'submit';
   submit.className = 'hub-btn';
@@ -2493,6 +2460,10 @@ function renderDiscussion(
     target ? `Reply to ${threadLabel(target)}…` : 'Say something about this task…',
     target ? 'Reply' : 'Comment',
     (text) => onComment(task, text, target?.id),
+    // Keyed by task, not by target: a draft follows a "Reply" / "New thread"
+    // retarget, which is the reader deciding where words they already have
+    // should go. It never follows them onto another task.
+    `discussion:${task.id}`,
   );
   // The target row rides INSIDE the form, above the box, so what the button
   // will do is readable without moving your eyes off it. Omitted when there is
@@ -2669,6 +2640,7 @@ function renderAskPanel(
       direct ? 'Answer here…' : 'Reply here…',
       'Send reply',
       (t) => handlers.onComment?.(task, t, item.threadId) ?? Promise.resolve(false),
+      `ask:${task.id}:${item.threadId}`,
     );
     const note = document.createElement('p');
     note.className = 'hub-detail-ask-note';
@@ -2753,14 +2725,24 @@ export function renderTaskDetail(
   handlers: DetailHandlers,
   discussion?: TaskDiscussion,
 ): void {
+  // Read what the reader has typed BEFORE the swap throws it away — see
+  // `keepFields`. Every repaint of this panel comes through here, which is
+  // what makes this the one place the guarantee can live.
+  //
+  // Two things a repaint must not destroy, and they need opposite mechanisms.
+  // A text control can be rebuilt and refilled, because its whole state is a
+  // string and a caret offset; an editor cannot, because its state is a
+  // ProseMirror view bound to a Yjs room. So drafts are SNAPSHOT and restored,
+  // and the description slot is KEPT — see `keptBodySlot`.
+  const keptDrafts = keepFields(container);
   if (!task) {
     container.replaceChildren();
     container.classList.add('hidden');
     return;
   }
   container.classList.remove('hidden');
-  const kept = keptBodySlot(container, task);
-  const panel = kept?.parentElement ?? document.createElement('div');
+  const keptSlot = keptBodySlot(container, task);
+  const panel = keptSlot?.parentElement ?? document.createElement('div');
   panel.className = 'hub-detail-panel';
   panel.setAttribute('role', 'dialog');
   panel.setAttribute('aria-modal', 'true');
@@ -2776,10 +2758,12 @@ export function renderTaskDetail(
   const title = document.createElement('h2');
   title.className = 'hub-detail-title';
   title.textContent = task.title;
+  const titleKeepKey = `title:${task.id}`;
   wireInPlaceTitle(
     title,
     () => task.title,
     (v) => handlers.onTitleCommit(task, v),
+    titleKeepKey,
   );
   const close = document.createElement('button');
   close.type = 'button';
@@ -2938,6 +2922,7 @@ export function renderTaskDetail(
     const ta = document.createElement('textarea');
     ta.placeholder = 'Record your answer, verbatim…';
     ta.rows = 3;
+    ta.dataset.keep = `answer:${task.id}`;
     const submit = document.createElement('button');
     submit.type = 'submit';
     submit.className = 'hub-btn hub-btn-primary';
@@ -2958,7 +2943,7 @@ export function renderTaskDetail(
   // change it on two different pages. The slot below is where hub-app.ts
   // mounts the live editor over the task's body room; see `bodySlot` for what
   // it holds until then.
-  const slot = kept ?? bodySlot(task);
+  const slot = keptSlot ?? bodySlot(task);
 
   const body = document.createElement('p');
   body.className = 'hub-detail-body-link';
@@ -3007,10 +2992,10 @@ export function renderTaskDetail(
     after.push(list);
   }
 
-  if (kept) {
+  if (keptSlot) {
     // Repaint around the slot, never through it — see `keptBodySlot`.
-    for (const child of [...panel.childNodes]) if (child !== kept) child.remove();
-    for (const n of before) panel.insertBefore(n, kept);
+    for (const child of [...panel.childNodes]) if (child !== keptSlot) child.remove();
+    for (const n of before) panel.insertBefore(n, keptSlot);
     panel.append(...after);
   } else {
     panel.append(...before, slot, ...after);
@@ -3040,4 +3025,12 @@ export function renderTaskDetail(
   if (focus && typeof focus.scrollIntoView === 'function') {
     focus.scrollIntoView({ block: 'center' });
   }
+
+  // Last, after the thread-centring above: restoring focus scrolls the field
+  // back into view, so the composer someone is typing in wins over a centred
+  // thread rather than losing to it. The title editor is a control that only
+  // exists mid-edit, so a repaint does not merely empty it — it closes it;
+  // reopen it first so there is a field for the restore to find.
+  if (keptDrafts.has(titleKeepKey)) title.click();
+  restoreFields(container, keptDrafts);
 }

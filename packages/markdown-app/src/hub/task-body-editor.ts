@@ -49,6 +49,11 @@ export interface TaskBodyEditorDeps {
   onMounted?: (taskId: string) => void;
 }
 
+/** What the reader is told when the editor's chunk cannot be fetched. The
+ *  link below the slot still reaches the same room in the full surface. */
+export const LOAD_FAILED_TEXT =
+  'The editor could not load here — open the full editor to change this.';
+
 export interface TaskBodyEditorHost {
   /** Called after every panel repaint with the task on screen (or null) and
    *  the slot the panel is showing for it. Idempotent for the same pair. */
@@ -69,6 +74,10 @@ export const PLACEHOLDER_TEXT = 'Describe the task — what someone can do once 
 
 export function createTaskBodyEditorHost(deps: TaskBodyEditorDeps): TaskBodyEditorHost {
   let mount: Mount | null = null;
+  // One failed chunk fetch retires the feature for this page load. Without it
+  // every repaint would rebuild the slot, find it un-mounted, and try the
+  // import again — a retry loop nobody asked for, one websocket per turn.
+  let loadFailed = false;
 
   const teardown = () => {
     if (!mount) return;
@@ -81,8 +90,19 @@ export function createTaskBodyEditorHost(deps: TaskBodyEditorDeps): TaskBodyEdit
 
   const sync = (task: TaskBodyTarget | null, slot: HTMLElement | null) => {
     if (mount && (!task || !slot || mount.taskId !== task.id || mount.slot !== slot)) teardown();
-    if (!task || !slot || mount) return;
+    if (!task || !slot || mount || loadFailed) return;
 
+    // Claimed SYNCHRONOUSLY, before the chunk is even asked for. The panel
+    // repaints several times in the first moment a task is opened (the
+    // discussion fetch alone is two), and a slot that only became live once
+    // the editor mounted would be rebuilt under each of those — so the mount
+    // in flight would be torn down and re-made, with a fresh websocket each
+    // time, until the repaints happened to stop.
+    //
+    // The cost is that the fallback text stops following the projection for
+    // as long as the load takes. That is the right way round: it is corrected
+    // the moment the editor paints the room, which is the same text or newer.
+    slot.classList.add(BODY_LIVE_CLASS);
     const client = deps.connect(task.bodyDocId);
     const m: Mount = { taskId: task.id, slot, client, handle: null };
     mount = m;
@@ -93,11 +113,6 @@ export function createTaskBodyEditorHost(deps: TaskBodyEditorDeps): TaskBodyEdit
         // the chunk was in flight; a late mount would put an editor for the
         // wrong task into a slot that no longer shows it.
         if (mount !== m) return;
-        // Marked live BEFORE the editor is created, and before the projection
-        // fallback is cleared: from here on the panel's repaint keeps this
-        // node rather than rebuilding it, which is the property the editor
-        // needs from its parent.
-        slot.classList.add(BODY_LIVE_CLASS);
         slot.replaceChildren();
         const extra = mod.placeholder ? [mod.placeholder(PLACEHOLDER_TEXT)] : [];
         m.handle = mod.createEditor({
@@ -110,16 +125,19 @@ export function createTaskBodyEditorHost(deps: TaskBodyEditorDeps): TaskBodyEdit
         deps.onMounted?.(task.id);
       })
       .catch(() => {
+        loadFailed = true;
         if (mount !== m) return;
-        // The fallback text is still in the slot; say why it is not editable
-        // rather than leaving a static description that looks like a broken
-        // editor. The link out below the slot still reaches the room.
-        const note = document.createElement('p');
-        note.className = 'hub-detail-body-more';
-        note.textContent = 'The editor could not load here — open the full editor to change this.';
-        slot.append(note);
         mount = null;
         client.close();
+        // Hand the slot back to the repaint — the description it holds is the
+        // projection's and must go on tracking it — but say once, here, why
+        // it cannot be typed in. The note lives until the next repaint; the
+        // link below the slot is the durable way through.
+        slot.classList.remove(BODY_LIVE_CLASS);
+        const note = document.createElement('p');
+        note.className = 'hub-detail-body-more';
+        note.textContent = LOAD_FAILED_TEXT;
+        slot.append(note);
       });
   };
 
