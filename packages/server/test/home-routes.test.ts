@@ -85,7 +85,7 @@ describe('home routes — deterministic server (no summarizer)', () => {
     expect(payload.brief.source).toBe('deterministic');
     expect(payload.generating).toBe(false);
     expect(payload.brief.markdown).toContain('queued for your review');
-    expect(payload.instructions).toContain('Under 200 words');
+    expect(payload.instructions).toContain('Under 150 words');
   });
 
   it('board changes since the marker show up in the brief; the queue counts open decisions', async () => {
@@ -106,8 +106,8 @@ describe('home routes — deterministic server (no summarizer)', () => {
     const payload = await home();
     expect(payload.brief.markdown).toContain('**Filed:** 2 new tasks');
     expect(payload.brief.markdown).toContain('Rewrite the retry helper');
-    // The denominator counts the open decision.
-    expect(payload.brief.markdown).toContain('**1** item is queued for your review below.');
+    // The closing line states presence, never a number (t-0iestDQdJTOZ).
+    expect(payload.brief.markdown).toContain('What needs your review is queued below.');
   });
 
   it('mark caught up moves the marker per PERSON, the brief covers from it, and undo restores', async () => {
@@ -134,9 +134,9 @@ describe('home routes — deterministic server (no summarizer)', () => {
     expect(after.since).toBe(markedBody.lastReadAt);
     // Everything before the marker is read: the brief goes quiet.
     expect(after.brief.markdown).toContain('Quiet since you last caught up');
-    // …but the denominator still renders — an empty brief with no
-    // denominator would read as an all-clear over a queue with an open item.
-    expect(after.brief.markdown).toContain('**1** item is queued for your review below.');
+    // …but the presence line still renders — a quiet brief with no line
+    // would read as an all-clear over a queue with an open item.
+    expect(after.brief.markdown).toContain('What needs your review is queued below.');
 
     // Undo: post the previous value back.
     const undone = await h.post(`/api/workspaces/${ws}/home/read`, {
@@ -230,15 +230,20 @@ describe('home routes — generated brief (stub summarizer)', () => {
     expect(payload.brief.markdown).toBe(REPLY);
     expect(payload.generating).toBe(false);
 
-    // The digest that left the machine named the real task and carried the
+    // The digest that left the machine named the real task AS A DEEP LINK
+    // into this workspace (the route is the layer that supplies the id — a
+    // unit test over the pure half cannot prove it was wired), carried the
     // instructions — and the burst of polls cost ONE call.
     expect(calls.length).toBe(1);
     const sent = JSON.parse(calls[0] ?? '{}') as {
       system: string;
       messages: [{ content: string }];
     };
-    expect(sent.messages[0].content).toContain('Ship the fuzzy matcher');
-    expect(sent.system).toContain('Under 200 words');
+    expect(sent.messages[0].content).toContain(
+      `[Ship the fuzzy matcher](/workspaces/${encodeURIComponent(ws)}?task=`,
+    );
+    expect(sent.system).toContain('Under 150 words');
+    expect(sent.system).toContain('never fabricate a URL');
   });
 
   it('a fresh generated brief is served from the cache without a second call', async () => {
