@@ -24,7 +24,12 @@ interface HomePayload {
   lastReadAt: number;
   since: number;
   instructions: string;
-  brief: { markdown: string; generatedAt: number; source: 'generated' | 'deterministic' };
+  brief: {
+    markdown: string;
+    generatedAt: number;
+    source: 'generated' | 'deterministic';
+    coversFrom: number;
+  };
   generating: boolean;
 }
 
@@ -83,6 +88,10 @@ describe('home routes — deterministic server (no summarizer)', () => {
     const payload = await home();
     expect(payload.lastReadAt).toBe(0);
     expect(payload.brief.source).toBe('deterministic');
+    // The card labels the brief with where its CONTENT starts, so the payload
+    // has to carry that separately from the reader's window. Uncapped, the two
+    // agree — which is the positive control for the capped case below.
+    expect(payload.brief.coversFrom).toBe(payload.since);
     expect(payload.generating).toBe(false);
     expect(payload.brief.markdown).toContain('queued for your review');
     expect(payload.instructions).toContain('Under 110 words');
@@ -244,6 +253,15 @@ describe('home routes — generated brief (stub summarizer)', () => {
     );
     expect(sent.system).toContain('Under 110 words');
     expect(sent.system).toContain('never fabricate a URL');
+    // Nothing was dropped from this window, so the prompt says so plainly and
+    // the served brief reports the window's own start.
+    expect(sent.messages[0].content).toContain('Covering: everything since ');
+    expect(sent.messages[0].content).not.toContain('most recent changes');
+    // `coversFrom` is frozen at GENERATION time, while a fresh reader's window
+    // slides with the clock — so these are close, not equal, and asserting
+    // equality here fails by the tens of milliseconds the polls take.
+    expect(payload.brief.coversFrom).toBeGreaterThan(first.since - 60_000);
+    expect(payload.brief.coversFrom).toBeLessThanOrEqual(payload.since);
   });
 
   it('a fresh generated brief is served from the cache without a second call', async () => {

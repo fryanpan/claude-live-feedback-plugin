@@ -11,9 +11,11 @@ import {
   BRIEF_EVENT_TYPES,
   type BriefEventRow,
   DEFAULT_INSTRUCTIONS,
+  DIGEST_MAX_EVENTS,
   FIRST_VISIT_WINDOW_MS,
   HomeBriefStore,
   acceptBrief,
+  briefCoverage,
   briefEvents,
   briefIsFresh,
   buildBriefPrompt,
@@ -44,6 +46,9 @@ const ev = (event: string, ts: number, rest: Record<string, unknown> = {}): Brie
   ts,
   ...rest,
 });
+
+/** The coverage of a window nothing was dropped from. */
+const uncapped = (since: number) => ({ from: since, capped: false, shown: 0, total: 0 });
 
 describe('briefEvents', () => {
   it('keeps only brief-relevant types, strictly after the marker, oldest first', () => {
@@ -159,11 +164,11 @@ describe('buildBriefPrompt', () => {
         4,
       ),
       'My standing instructions',
-      'since Friday',
+      uncapped(NOW),
     );
     expect(system).toContain('My standing instructions');
     expect(system).toContain('never invent');
-    expect(user).toContain('Covering: since Friday.');
+    expect(user).toContain(`Covering: everything since ${new Date(NOW).toUTCString()}.`);
     expect(user).toContain(
       'task.transitioned todo→done · [Ship the fuzzy matcher](/workspaces/ws-1?task=t-1) · by Beacon',
     );
@@ -184,7 +189,7 @@ describe('buildBriefPrompt', () => {
         ev('workspace.goal_updated', NOW + 2, { actor: 'Beacon' }),
       ]),
       'x',
-      'y',
+      uncapped(NOW),
     );
     const rows = user.split('\n').filter((l) => l.startsWith('- '));
     expect(rows).toHaveLength(2);
@@ -195,7 +200,7 @@ describe('buildBriefPrompt', () => {
   });
 
   it('the guardrail permits copying digest links and forbids inventing them', () => {
-    const { system } = buildBriefPrompt(input([]), 'x', 'y');
+    const { system } = buildBriefPrompt(input([]), 'x', uncapped(NOW));
     expect(system).toContain('copied exactly');
     expect(system).toContain('never fabricate a URL');
     // The old flat prohibition — "never invent names, numbers, links" — is
@@ -219,7 +224,7 @@ describe('buildBriefPrompt', () => {
   it('the default instructions are the only place the word budget is stated', () => {
     // A second number anywhere in the prompt contradicts a reader who edits
     // these instructions — which is the whole reason the budget lives here.
-    const { system, user } = buildBriefPrompt(input([], 0), DEFAULT_INSTRUCTIONS, 'y');
+    const { system, user } = buildBriefPrompt(input([], 0), DEFAULT_INSTRUCTIONS, uncapped(NOW));
     const budgets = `${system}\n${user}`.match(/\b\d+ words\b/g) ?? [];
     expect(budgets).toEqual(['110 words']);
   });
@@ -233,9 +238,72 @@ describe('buildBriefPrompt', () => {
     const many = Array.from({ length: 200 }, (_, i) =>
       ev('task.created', NOW + i, { taskId: 't-1' }),
     );
-    const { user } = buildBriefPrompt(input(many, 0), 'x', 'y');
+    const { user } = buildBriefPrompt(input(many, 0), 'x', briefCoverage(many, NOW));
     expect(user).toContain('(newest 120 of 200)');
     expect(user.split('\n').filter((l) => l.startsWith('- ')).length).toBe(120);
+  });
+
+  it("states the digest's REAL start when the cap drops the older half of the window", () => {
+    // Bryan, 2026-08-18: "Summary claims to include all work from the start of
+    // time ... it seems to be only summarizing the last few days?" The window
+    // and the digest are different spans whenever the cap bites, and the prompt
+    // used to name the window. Measured on the live board the same day: 553
+    // events in the 7-day window, 120 kept, spanning 6.7 hours — so the model
+    // was told "the last 7 days" over a third of a day of evidence.
+    const stamp = (i: number) => NOW + i * 60_000;
+    const many = Array.from({ length: 200 }, (_, i) =>
+      ev('task.created', stamp(i), { taskId: 't-1' }),
+    );
+    const coverage = briefCoverage(many, NOW);
+    // The oldest row that survives the cap is the digest's real start.
+    expect(coverage.from).toBe(stamp(200 - DIGEST_MAX_EVENTS));
+    expect(coverage.from).toBeGreaterThan(NOW);
+
+    const { user } = buildBriefPrompt(input(many, 0), 'x', coverage);
+    expect(user).toContain(
+      `Covering: the 120 most recent changes, starting ${new Date(coverage.from).toUTCString()}.`,
+    );
+    expect(user).toContain('(200 in total)');
+    expect(user).toContain('never say the brief covers a week, a month');
+    // And the window's own start must NOT be presented as the coverage start.
+    expect(user).not.toContain(`Covering: everything since ${new Date(NOW).toUTCString()}.`);
+  });
+});
+
+describe('briefCoverage', () => {
+  it('an uncapped window covers itself, and reports its own denominator', () => {
+    const rows = Array.from({ length: 3 }, (_, i) =>
+      ev('task.created', NOW + i, { taskId: 't-1' }),
+    );
+    expect(briefCoverage(rows, NOW)).toEqual({ from: NOW, capped: false, shown: 3, total: 3 });
+    // The boundary is inclusive: exactly at the cap nothing is dropped.
+    const exact = Array.from({ length: DIGEST_MAX_EVENTS }, (_, i) =>
+      ev('task.created', NOW + i, { taskId: 't-1' }),
+    );
+    expect(briefCoverage(exact, NOW).capped).toBe(false);
+    expect(briefCoverage(exact, NOW).from).toBe(NOW);
+  });
+
+  it('a capped window starts at the oldest row that survived, not at the marker', () => {
+    const stamp = (i: number) => NOW + 1_000 + i;
+    const rows = Array.from({ length: DIGEST_MAX_EVENTS + 1 }, (_, i) =>
+      ev('task.created', stamp(i), { taskId: 't-1' }),
+    );
+    const cov = briefCoverage(rows, NOW);
+    expect(cov.capped).toBe(true);
+    expect(cov.shown).toBe(DIGEST_MAX_EVENTS);
+    expect(cov.total).toBe(DIGEST_MAX_EVENTS + 1);
+    expect(cov.from).toBe(stamp(1));
+    expect(cov.from).not.toBe(NOW);
+  });
+
+  it('falls back to the marker when the surviving rows carry no usable ts', () => {
+    // briefEvents guarantees numeric ts, but coverage is also handed stored
+    // rows; a missing stamp must not produce `from: undefined` on the payload.
+    const rows = Array.from({ length: DIGEST_MAX_EVENTS + 1 }, () => ({
+      event: 'task.created',
+    })) as BriefEventRow[];
+    expect(briefCoverage(rows, NOW).from).toBe(NOW);
   });
 });
 

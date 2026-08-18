@@ -36,6 +36,15 @@ export interface StoredHomeBrief {
   markdown: string;
   /** The read marker this brief covers FROM. A moved marker is a stale brief. */
   since: number;
+  /**
+   * Where this brief's CONTENT starts — `briefCoverage(...).from` at
+   * generation time, which is the window start unless the digest cap dropped
+   * older events. Distinct from `since`, which is the marker (0 for a reader
+   * who has never marked read) and says nothing about what the model saw.
+   * Optional because sidecars written before it exists have no answer; the
+   * route falls back to the window start there.
+   */
+  coversFrom?: number;
   /** How many brief-relevant events existed when generation started. A new
    *  event since then is a stale brief. */
   eventCount: number;
@@ -323,12 +332,58 @@ export function deterministicBrief(input: BriefInput): string {
 
 /** Bound the digest so a marker that has not moved for a month cannot ship an
  *  unbounded prompt. The newest rows are the ones a catch-up is about. */
-const DIGEST_MAX_EVENTS = 120;
+export const DIGEST_MAX_EVENTS = 120;
+
+/**
+ * What a GENERATED brief can actually see, which is not the same as the
+ * window the reader is told about.
+ *
+ * The cap above is deliberate and stays. What was wrong is that nothing
+ * downstream knew it had bitten: the prompt said "the last 7 days" and the
+ * card said "From <a week ago> until now" while the model had been handed
+ * the newest 120 rows. Measured on the live board 2026-08-18 — 553
+ * brief-relevant events in the 7-day window, of which the digest held 120,
+ * spanning **6.7 hours**. So a brief written from a third of a day was
+ * presented as a week of news, which is exactly the "claims to include all
+ * work ... seems to be only summarizing the last few days" report.
+ *
+ * `from` is therefore the first moment the brief's content really starts at:
+ * the window start when every event fits, the oldest SURVIVING row when it
+ * does not. The deterministic brief is not capped — it counts every event in
+ * the window — so it keeps `since`, and the two briefs legitimately state
+ * different windows.
+ */
+export interface BriefCoverage {
+  /** Where the brief's content really begins. */
+  from: number;
+  /** True when the digest cap dropped older events inside the window. */
+  capped: boolean;
+  /** Rows the model sees, and rows there were. */
+  shown: number;
+  total: number;
+}
+
+export function briefCoverage(events: BriefEventRow[], since: number): BriefCoverage {
+  const total = events.length;
+  if (total <= DIGEST_MAX_EVENTS) return { from: since, capped: false, shown: total, total };
+  const kept = events.slice(-DIGEST_MAX_EVENTS);
+  const oldest = kept[0]?.ts;
+  return {
+    // A row that reached `briefEvents` has a numeric ts by construction; the
+    // fallback keeps the honest direction if that ever stops being true —
+    // claiming a WIDER window is the failure being fixed, so an unreadable
+    // stamp falls back to the window start rather than to "now".
+    from: typeof oldest === 'number' ? oldest : since,
+    capped: true,
+    shown: kept.length,
+    total,
+  };
+}
 
 export function buildBriefPrompt(
   input: BriefInput,
   instructions: string,
-  sinceLabel: string,
+  coverage: BriefCoverage,
 ): { system: string; user: string } {
   const rows = input.events.slice(-DIGEST_MAX_EVENTS);
   const digest = rows
@@ -363,8 +418,20 @@ export function buildBriefPrompt(
     "The reader's standing instructions for this brief:",
     instructions,
   ].join('\n');
+  // What the model is told it covers must be what it was GIVEN. When the cap
+  // bites, saying "everything since <the reader's marker>" invites exactly
+  // the brief that shipped — one headed "Completed This Week", written from
+  // six hours of board activity.
+  const covering = coverage.capped
+    ? [
+        `Covering: the ${coverage.shown} most recent changes, starting ${new Date(coverage.from).toUTCString()}.`,
+        `Older changes in the reader's window are NOT in this digest (${coverage.total} in total).`,
+        'Describe only what is listed below, and never say the brief covers a week, a month, or',
+        'everything since the reader was last here.',
+      ].join('\n')
+    : `Covering: everything since ${new Date(coverage.from).toUTCString()}.`;
   const user = [
-    `Covering: ${sinceLabel}.`,
+    covering,
     `Events, oldest first${input.events.length > rows.length ? ` (newest ${rows.length} of ${input.events.length})` : ''}:`,
     digest || '(none — the board did not move)',
     '',

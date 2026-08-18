@@ -1748,6 +1748,14 @@ export function panePath(workspaceId: string, pane: HubPane): string {
 export interface HomeBriefView {
   markdown: string;
   generatedAt: number;
+  /**
+   * Where THIS brief's content actually starts. Not the same as the
+   * payload's `since`: a generated brief is written from a capped digest, so
+   * when the board has been busy it covers less of the window than the
+   * window is. The card states this rather than `since`, because the window
+   * is what the reader was promised and this is what they got.
+   */
+  coversFrom?: number;
   source: 'generated' | 'deterministic';
 }
 
@@ -1792,12 +1800,19 @@ export function sincePointLabel(ts: number, now: number): string {
 
 /**
  * What the brief covers, as the mockup words it: "From Friday, 6:12 pm until
- * now". `since` is the window's real start — the reader's own marker when
- * they have one, the server's bound on a first visit — so the sentence is
- * the actual coverage either way, never a canned "last 7 days".
+ * now".
+ *
+ * The point named is the BRIEF's own coverage start, not the window's. Those
+ * differ whenever the board has been busy enough for the digest cap to bite:
+ * on the live board 2026-08-18 the window held 553 changes over 7 days and
+ * the generated brief was written from the newest 120 of them, 6.7 hours'
+ * worth — and the card said "From Aug 11" over it. Reported as "claims to
+ * include all work ... seems to be only summarizing the last few days", and
+ * the reader was right. `since` remains the fallback for a payload that
+ * predates the field.
  */
-export function homeSinceLabel(payload: Pick<HomePayload, 'since'>, now: number): string {
-  return `From ${sincePointLabel(payload.since, now)} until now`;
+export function homeSinceLabel(payload: Pick<HomePayload, 'since' | 'brief'>, now: number): string {
+  return `From ${sincePointLabel(payload.brief?.coversFrom ?? payload.since, now)} until now`;
 }
 
 /** "waiting 2 days" — the queue row's subline. Same unit boundaries as
