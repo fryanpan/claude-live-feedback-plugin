@@ -13910,6 +13910,9 @@ var server = new Server({
     '<channel source="live-feedback" doc_id="..." thread_id="..." event="..." author="..." sent_at="...">body</channel>',
     "messages. Treat each as an explicit ask from the reviewer; read, decide if it",
     "is in your domain, act via an edit tool. unwatch_doc when you're done.",
+    "Watches are remembered on the server under this agent name (FEEDBACK_AGENT_NAME)",
+    "and re-wired when the session respawns; list_watched_docs says whether the",
+    "current set was restored from the server or is session-only.",
     "",
     "CLEANUP: review docs are usually short-lived — bound for a ~30-minute",
     "feedback pass, then obsolete. When you no longer need one, call",
@@ -14505,7 +14508,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "watch_doc",
-      description: "Start pushing live feedback events for this doc into the current Claude Code session as <channel source='live-feedback' …> messages. Every thread.created / thread.replied / thread.resolved / thread.reopened on the doc arrives as a channel event until you call unwatch_doc. NOTE: this is normally redundant — `create_review_doc`, `bind_mock`, and most other docId-bearing tools auto-subscribe the caller on first touch. Use `watch_doc` explicitly when you want to subscribe to a doc you haven't otherwise interacted with (e.g., a peer's doc you only want to observe). Idempotent.",
+      description: "Start pushing live feedback events for this doc into the current Claude Code session as <channel source='live-feedback' …> messages. Every thread.created / thread.replied / thread.resolved / thread.reopened on the doc arrives as a channel event until you call unwatch_doc. NOTE: this is normally redundant — `create_review_doc`, `bind_mock`, and most other docId-bearing tools auto-subscribe the caller on first touch. Use `watch_doc` explicitly when you want to subscribe to a doc you haven't otherwise interacted with (e.g., a peer's doc you only want to observe). Idempotent. DURABLE: the watch is also recorded on the server under this agent's identity (FEEDBACK_AGENT_NAME), so a session respawn re-wires it without a call from you — the response says `persisted: false` when it could not be (no stable identity, or the server was unreachable), which means a restart WILL drop it.",
       inputSchema: {
         type: "object",
         properties: { docId: { type: "string" } },
@@ -14514,7 +14517,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "unwatch_doc",
-      description: "Stop pushing channel events for this doc.",
+      description: "Stop pushing channel events for this doc, and forget it on the server so a respawn does not bring it back.",
       inputSchema: {
         type: "object",
         properties: { docId: { type: "string" } },
@@ -14523,7 +14526,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "list_watched_docs",
-      description: "Return the docIds this session is currently subscribed to for channel events.",
+      description: "Return the docIds this session is currently subscribed to for channel events, WITH PROVENANCE: `restore.status` says whether this session re-wired its set from the server after a respawn ('restored'), never had a server set to restore ('restored' with an empty list), could not reach the server ('failed', with the error — retry by calling again), or has no stable identity so nothing survives a restart ('session-only'). An empty `watching` list therefore no longer means both 'never watched' and 'watched, then respawned' — read `restore` to tell them apart.",
       inputSchema: { type: "object", properties: {} }
     },
     {
@@ -15194,6 +15197,7 @@ async function maybeAutoWatch(name, args) {
 server.setRequestHandler(CallToolRequestSchema, async (req) => {
   const { name, arguments: a = {} } = req.params;
   try {
+    await ensureWatchesRestored();
     await maybeAutoWatch(name, a);
     switch (name) {
       case "list_docs": {
@@ -15494,16 +15498,35 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       }
       case "watch_doc": {
         const { docId } = a;
-        await watchDoc(docId);
-        return ok({ docId, watching: Array.from(watchers.keys()) });
+        const persisted = await watchDoc(docId);
+        return ok({
+          docId,
+          watching: Array.from(watchers.keys()),
+          persisted,
+          persistence: watchPersistenceMode()
+        });
       }
       case "unwatch_doc": {
         const { docId } = a;
-        unwatchDoc(docId);
-        return ok({ docId, watching: Array.from(watchers.keys()) });
+        const persisted = await unwatchDoc(docId);
+        return ok({
+          docId,
+          watching: Array.from(watchers.keys()),
+          persisted,
+          persistence: watchPersistenceMode()
+        });
       }
       case "list_watched_docs": {
-        return ok({ watching: Array.from(watchers.keys()) });
+        return ok({
+          watching: Array.from(watchers.keys()),
+          persistence: {
+            mode: watchPersistenceMode(),
+            agentId: AUTHOR.id,
+            ...IDENTITY_IS_SHARED ? { reason: SHARED_IDENTITY_REASON } : {}
+          },
+          restore: restoreState,
+          ...lastPersistError ? { lastPersistError } : {}
+        });
       }
       case "share_workspace": {
         const {
@@ -15920,40 +15943,129 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   }
 });
 var watchers = new Map;
-async function watchDoc(docId) {
-  if (watchers.has(docId))
+var IDENTITY_IS_SHARED = AUTHOR.id === "known-agent";
+var SHARED_IDENTITY_REASON = "FEEDBACK_AGENT_NAME is not set, so this session has no identity to key its watches on; " + "they will not survive a restart. Set it in the launch environment and restart the session.";
+var restoreState = IDENTITY_IS_SHARED ? { status: "session-only", from: "session", restored: [], pruned: [], attempts: 0 } : { status: "pending", from: "session", restored: [], pruned: [], attempts: 0 };
+var restoreInFlight = null;
+var restoreRetryAt = 0;
+var lastPersistError;
+function watchPersistenceMode() {
+  return IDENTITY_IS_SHARED ? "session-only" : "server";
+}
+var watchesPath = () => `/api/agents/${encodeURIComponent(AUTHOR.id)}/watches`;
+async function persistWatchChange(change) {
+  if (IDENTITY_IS_SHARED)
+    return false;
+  try {
+    await http("POST", watchesPath(), { ...change, name: AUTHOR.name });
+    lastPersistError = undefined;
+    return true;
+  } catch (err) {
+    lastPersistError = err instanceof Error ? err.message : String(err);
+    console.error("[live-feedback-mcp] could not persist watch change:", lastPersistError);
+    return false;
+  }
+}
+async function ensureWatchesRestored() {
+  if (restoreState.status === "restored" || restoreState.status === "session-only")
     return;
-  const controller = new AbortController;
-  watchers.set(docId, { controller, docId });
-  runSseLoop(docId, `/events/${encodeURIComponent(docId)}`, controller.signal).catch((err) => {
-    console.error(`[live-feedback-mcp] watcher ${docId} crashed:`, err);
-    watchers.delete(docId);
+  if (restoreInFlight)
+    return restoreInFlight;
+  if (restoreState.status === "failed" && Date.now() < restoreRetryAt)
+    return;
+  restoreInFlight = (async () => {
+    const attempts = restoreState.attempts + 1;
+    try {
+      const res = await http("GET", watchesPath());
+      const keys = (res.watches ?? []).map((w) => w.key);
+      const restored = [];
+      for (const key of keys) {
+        if (watchers.has(key))
+          continue;
+        if (key.startsWith("ws:"))
+          await watchWorkspace(key.slice("ws:".length), false);
+        else
+          await watchDoc(key, false);
+        restored.push(key);
+      }
+      restoreState = {
+        status: "restored",
+        from: "server",
+        restored,
+        pruned: res.pruned ?? [],
+        at: new Date().toISOString(),
+        attempts
+      };
+      if (restored.length > 0 || (res.pruned ?? []).length > 0) {
+        await emitRestoreNotice(restoreState).catch(() => {});
+      }
+    } catch (err) {
+      restoreState = {
+        ...restoreState,
+        status: "failed",
+        error: err instanceof Error ? err.message : String(err),
+        attempts
+      };
+      restoreRetryAt = Date.now() + Math.min(30000, 1000 * 2 ** attempts);
+    } finally {
+      restoreInFlight = null;
+    }
+  })();
+  return restoreInFlight;
+}
+async function emitRestoreNotice(state) {
+  const n = state.restored.length;
+  const dropped = state.pruned.length > 0 ? `; ${state.pruned.length} dropped (doc gone)` : "";
+  await server.notification({
+    method: "notifications/claude/channel",
+    params: {
+      source: "live-feedback",
+      sent_at: state.at ?? new Date().toISOString(),
+      content: `[watches restored] ${n} watch${n === 1 ? "" : "es"} re-wired from the server for ${AUTHOR.name} after restart${dropped}: ${state.restored.join(", ")}`,
+      meta: { event: "watches.restored", restored: state.restored, pruned: state.pruned }
+    }
   });
 }
-async function watchWorkspace(workspaceId) {
+async function watchDoc(docId, persist = true) {
+  if (!watchers.has(docId)) {
+    const controller = new AbortController;
+    watchers.set(docId, { controller, docId });
+    await startSseLoop(docId, `/events/${encodeURIComponent(docId)}`, controller);
+  }
+  return persist ? persistWatchChange({ add: [docId] }) : false;
+}
+async function watchWorkspace(workspaceId, persist = true) {
   const key = `ws:${workspaceId}`;
-  if (watchers.has(key))
-    return;
-  const controller = new AbortController;
-  watchers.set(key, { controller, docId: key });
-  runSseLoop(key, `/events/workspace/${encodeURIComponent(workspaceId)}`, controller.signal).catch((err) => {
-    console.error(`[live-feedback-mcp] workspace watcher ${workspaceId} crashed:`, err);
-    watchers.delete(key);
-  });
+  if (!watchers.has(key)) {
+    const controller = new AbortController;
+    watchers.set(key, { controller, docId: key });
+    await startSseLoop(key, `/events/workspace/${encodeURIComponent(workspaceId)}`, controller);
+  }
+  return persist ? persistWatchChange({ add: [key] }) : false;
 }
-function unwatchDoc(docId) {
+async function unwatchDoc(docId) {
   const w = watchers.get(docId);
-  if (!w)
-    return;
-  w.controller.abort();
-  watchers.delete(docId);
+  if (w) {
+    w.controller.abort();
+    watchers.delete(docId);
+  }
+  return persistWatchChange({ remove: [docId] });
 }
-async function runSseLoop(label, path, signal) {
+async function runSseLoop(label, path, signal, onFirstAttempt) {
+  let first = onFirstAttempt;
+  const settleFirst = () => {
+    if (!first)
+      return;
+    const f = first;
+    first = undefined;
+    f();
+  };
   while (!signal.aborted) {
     try {
       const res = await fetch(`${resolveBaseUrl()}${path}`, {
         signal
       });
+      settleFirst();
       if (!res.ok || !res.body)
         throw new Error(`sse ${path} → ${res.status}`);
       const reader = res.body.getReader();
@@ -15977,12 +16089,28 @@ async function runSseLoop(label, path, signal) {
         }
       }
     } catch (err) {
+      settleFirst();
       if (signal.aborted)
         return;
       console.error(`[live-feedback-mcp] ${label} sse error, retrying:`, err);
     }
     await new Promise((r) => setTimeout(r, 1500));
   }
+  settleFirst();
+}
+function startSseLoop(label, path, controller) {
+  return new Promise((resolve) => {
+    const cap = setTimeout(resolve, 3000);
+    runSseLoop(label, path, controller.signal, () => {
+      clearTimeout(cap);
+      resolve();
+    }).catch((err) => {
+      console.error(`[live-feedback-mcp] watcher ${label} crashed:`, err);
+      watchers.delete(label);
+      clearTimeout(cap);
+      resolve();
+    });
+  });
 }
 async function handleFrame(raw) {
   const lines = raw.split(`
@@ -16170,6 +16298,9 @@ function err(message) {
   };
 }
 var transport = new StdioServerTransport;
+server.oninitialized = () => {
+  ensureWatchesRestored();
+};
 await server.connect(transport);
 var bannerBase;
 try {
