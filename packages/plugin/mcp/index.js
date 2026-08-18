@@ -13808,7 +13808,7 @@ var AUTHOR = resolveAgentAuthor({
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.51";
+var PLUGIN_VERSION = "0.1.52";
 var COMMIT_EVIDENCE_DESCRIPTION = 'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
 var server = new Server({
   name: "claude-live-feedback",
@@ -14630,7 +14630,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             items: {
               type: "object",
               properties: {
-                title: { type: "string" },
+                title: {
+                  type: "string",
+                  description: 'The row\'s one-line name, and the thing a person scanning thirty rows actually reads. Say WHO it is for, WHAT they get, and HOW — `<Person> can <achieve goal X> by <describe action>`, under 70 characters (100 is the hard ceiling). e.g. "Bryan can review across tasks faster with clearer task descriptions and UX", "Agents can revise goal priority with a tool to reorder goals". The failure this exists to stop is a title that states an OBSERVATION — "A decision-answered event promises a link checklist" names something somebody noticed, so ten of them in a column give no sense of the plan and the board cannot be prioritised. Never REFUSED: a rough capture still lands, and the response comes back with `titleGaps` naming what is missing (too long, no persona, no action, clipped mid-thought) so triage can fix it.'
+                },
                 body: {
                   type: "string",
                   description: "The description. Not schema-required — but WRITE ONE ANYWAY, on every row: a bare title is not pickup-able by an agent that was not in the conversation, and reconstructing intent from a title is how the wrong thing gets built. Shape it as a compact user story — `<persona> can <do x> so that <goal y>`, one persona (Agent / Bryan / Collaborator) — and add falsifiable \"done when\" criteria for anything handed to someone else or parked beyond today. Proportionate: work you will finish within the hour needs the story line and nothing more. Markdown; it renders on the task itself and comes back whole from next_tasks, so do not create a separate doc to hold it.\n\nWhen `needs` is 'decision' this is REQUIRED and has a different shape — the question in one line, what is at stake in two or three, the options with what each one costs, then what is blocked until it is answered. A row with no question in it is REFUSED, because the failure this catches is filing a progress report as a decision: the field is populated, every check passes, and the person asked to decide has nothing to decide from. The other three parts come back as advisory `shapeGaps` on a successful create."
@@ -14704,7 +14707,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           docId: { type: "string" },
           threadId: { type: "string" },
           workspaceId: { type: "string", description: "Hub workspace the task lands in." },
-          title: { type: "string", description: "Override the drafted title." },
+          title: {
+            type: "string",
+            description: "Override the drafted title. Worth sending: the drafted one is a clip of somebody’s comment, so it names what was SAID rather than what will be done. The standard is `<Person> can <achieve goal X> by <describe action>`, under 70 characters."
+          },
           body: { type: "string", description: "Override the drafted body." },
           assignee: {
             type: "string",
@@ -14855,7 +14861,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           title: {
             type: "string",
-            description: "A new title for the row, applied as part of the same act. Omit to keep the current one."
+            description: "A new title for the row, applied as part of the same act. Omit to keep the current one. " + 'The row\'s one-line name, and the thing a person scanning thirty rows actually reads. Say WHO it is for, WHAT they get, and HOW — `<Person> can <achieve goal X> by <describe action>`, under 70 characters (100 is the hard ceiling). e.g. "Bryan can review across tasks faster with clearer task descriptions and UX", "Agents can revise goal priority with a tool to reorder goals". The failure this exists to stop is a title that states an OBSERVATION — "A decision-answered event promises a link checklist" names something somebody noticed, so ten of them in a column give no sense of the plan and the board cannot be prioritised. Never REFUSED: a rough capture still lands, and the response comes back with `titleGaps` naming what is missing (too long, no persona, no action, clipped mid-thought) so triage can fix it.' + " Send one whenever the rewrite changed what this task IS: the response carries `titleGaps`, and a body that has moved substantially since anyone last named the row reports `stale-body` until somebody does."
           }
         },
         required: ["taskId", "markdown"]
@@ -15566,11 +15572,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const { workspaceId, tasks } = a;
         const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/tasks/batch`, { tasks, author: AUTHOR });
         const gapsFor = (taskId) => res.shapeGaps?.find((g) => g.taskId === taskId)?.gaps ?? undefined;
+        const titleGapsFor = (taskId) => res.titleGaps?.find((g) => g.taskId === taskId)?.gaps ?? undefined;
         const droppedFor = (taskId) => res.ignoredLinks?.find((l) => l.taskId === taskId)?.ignored ?? undefined;
         const unplaced = new Set(res.placement?.unplaced ?? []);
         return ok({
           created: res.tasks.map((t) => ({
             title: t.title,
+            ...titleGapsFor(t.id) !== undefined ? { titleGaps: titleGapsFor(t.id) } : {},
             ...taskCreatedSummary(t, droppedFor(t.id), gapsFor(t.id), !unplaced.has(t.id))
           })),
           failures: res.failures,
@@ -15716,7 +15724,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           taskId,
           title: res.task?.title,
           body: res.task?.body,
-          quote: res.task?.quote
+          quote: res.task?.quote,
+          ...res.titleGaps !== undefined ? { titleGaps: res.titleGaps } : {},
+          ...res.titleMessage !== undefined ? { titleMessage: res.titleMessage } : {}
         });
       }
       case "set_task_goal": {
