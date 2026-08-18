@@ -42,6 +42,9 @@ const API_URL = 'https://api.anthropic.com/v1/messages';
 /** Long enough to coalesce a burst of edits, short enough to feel live. */
 export const DEBOUNCE_MS = 3_000;
 const MAX_TOKENS = 200;
+/** A brief is a ~200-word page-top, not a card line — it needs more room
+ *  than a thread summary, and its budget is still a hard cap. */
+const BRIEF_MAX_TOKENS = 600;
 const TIMEOUT_MS = 20_000;
 
 export interface SummarizerOpts {
@@ -308,12 +311,45 @@ export class ThreadSummarizer {
   }
 
   /**
+   * The Home pane's "What's New?" brief — one call, the caller's prompt.
+   *
+   * Lives on this class rather than in `home-brief.ts` so the brief rides
+   * the SAME seam and the same consent as thread summaries: the only real
+   * summarizer is constructed in `bin.ts`, the key is the dedicated
+   * Keychain entry, and every test / staging server that omits the
+   * summarizer (or passes `apiKey: null`) cannot reach the network. What
+   * leaves the machine here is the workspace's event digest (task titles,
+   * actor names, event types) plus the reader's own instructions — the same
+   * class of content as the comment text already approved for this key.
+   *
+   * Returns the raw reply text, or null when generation is off or anything
+   * fails; the caller (`home-brief.ts`'s `acceptBrief`) decides whether the
+   * reply is usable, and the deterministic brief stands otherwise.
+   */
+  async generateHomeBrief(prompt: { system: string; user: string }): Promise<string | null> {
+    if (!this.enabled || !this.key) return null;
+    if (!announcedOn) {
+      announcedOn = true;
+      console.log(
+        '[summarize] thread summaries ON: comment text and the anchored line ' +
+          'are sent to api.anthropic.com. Turn off with LF_SUMMARIES=0.',
+      );
+    }
+    return await this.post(
+      prompt.system,
+      [{ role: 'user', content: prompt.user }],
+      BRIEF_MAX_TOKENS,
+    );
+  }
+
+  /**
    * One HTTP round trip: messages in, raw reply text out, null on ANY
    * failure. The key stays in the header, never the logs.
    */
   private async post(
     system: string,
     messages: Array<{ role: 'user' | 'assistant'; content: string }>,
+    maxTokens: number = MAX_TOKENS,
   ): Promise<string | null> {
     if (!this.key) return null;
     const ctl = new AbortController();
@@ -326,7 +362,7 @@ export class ThreadSummarizer {
           'x-api-key': this.key,
           'anthropic-version': '2023-06-01',
         },
-        body: JSON.stringify({ model: MODEL, max_tokens: MAX_TOKENS, system, messages }),
+        body: JSON.stringify({ model: MODEL, max_tokens: maxTokens, system, messages }),
         signal: ctl.signal,
       });
       if (!res.ok) {
