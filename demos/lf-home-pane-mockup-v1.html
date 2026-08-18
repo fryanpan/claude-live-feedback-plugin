@@ -1,0 +1,1031 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Home pane — catch up, then decide (mockup v1)</title>
+<style>
+  /* ============================================================================
+     TOKENS — taken unchanged from demos/lf-workspace-hub-mockup-v2.html, because
+     Home is a second pane of the same product as the board. The card, comment and
+     reply grammar below is carried from demos/streamlined-review-mobile.html and
+     re-tokenised onto these names (--fg→--ink, --border→--line, --bg-panel→--bg).
+     That rename is the one deliberate deviation; see the design note at the foot.
+     ========================================================================= */
+  :root {
+    --bg: #f7f8fa; --panel: #fff; --ink: #1c2330; --muted: #667085; --line: #e4e7ec;
+    --accent: #2e7dd7; --accent-soft: #eaf2fc;
+    --amber: #b25e09; --amber-soft: #fff4e5; --amber-line: #f0c88a;
+    --green: #067647; --green-soft: #e7f6ef;
+    --radius: 10px; --t: 150ms;
+    --serif: Charter, "Iowan Old Style", "Source Serif Pro", Georgia, serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #e7ebef; color: var(--ink);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    overflow-wrap: anywhere; word-break: break-word; -webkit-text-size-adjust: 100%;
+  }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; }
+  a { color: var(--accent); }
+
+  /* ===== MOCKUP CHROME — not part of the product =====
+     Same convention as demos/streamlined-review-mobile.html: the pill row and the
+     legend are the harness, and are labelled as such so nobody builds them. */
+  .chrome { max-width: 1180px; margin: 0 auto; padding: 16px 16px 0; }
+  .chrome h1 { font-size: 19px; margin: 0 0 4px; }
+  .chrome .sub { color: var(--muted); font-size: 13px; margin: 0 0 12px; line-height: 1.5; max-width: 70ch; }
+  .controls { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; margin: 0 0 6px; }
+  .controls .grp { display: flex; gap: 6px; align-items: center; }
+  .controls .lbl { font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; font-weight: 700; }
+  .controls button {
+    font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 99px; min-height: 30px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--accent); cursor: pointer;
+  }
+  .controls button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .legend { font-size: 12.5px; color: var(--muted); line-height: 1.55; margin: 8px 0 14px; max-width: 78ch; }
+  .legend b { color: var(--ink); font-weight: 650; }
+
+  /* ===== STAGE =====
+     container-type lets the phone view REACH the real mobile rules rather than
+     re-implementing them: every responsive rule below is a @container query, so
+     narrowing the stage to 430px and loading the page on a 430px phone execute the
+     SAME declarations. (Rebuilding the rules for a harness is how a probe ends up
+     measuring a cascade the product never produces — learnings.md, media queries.) */
+  .stage-wrap { max-width: 1180px; margin: 0 auto; padding: 0 16px 40px; }
+  .stage {
+    container-type: inline-size; container-name: app;
+    background: var(--bg); border: 1px solid #d7dce3; border-radius: 14px; overflow: hidden;
+    box-shadow: 0 6px 24px rgba(16,24,40,.08); margin: 0 auto; transition: max-width var(--t) ease;
+  }
+  .stage.phone { max-width: 430px; border-radius: 26px; }
+  .stage.phone .statusbar { display: flex; }
+
+  .statusbar { display: none; align-items: center; justify-content: space-between;
+    padding: 7px 20px 3px; font-size: 11.5px; font-weight: 600; background: var(--panel); }
+
+  /* ===== TOPBAR + PANE TABS ===== */
+  .topbar {
+    display: flex; align-items: center; gap: 10px; padding: 10px 16px;
+    background: var(--panel); border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; z-index: 30;
+  }
+  .topbar .who { margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); }
+  .brand { font-weight: 650; font-size: 16px; }
+  .panes { display: flex; gap: 4px; border-bottom: 1px solid var(--line); background: var(--panel); padding: 0 10px; }
+  .pane-tab {
+    border: none; background: none; font: inherit; font-weight: 650; color: var(--muted);
+    padding: 9px 14px; cursor: pointer; min-height: 40px; border-bottom: 2px solid transparent;
+  }
+  .pane-tab.active { color: var(--ink); border-bottom-color: var(--ink); }
+  .pane-tab .count { background: var(--amber-soft); color: var(--amber); border-radius: 10px;
+    padding: 1px 7px; font-size: 12px; margin-left: 5px; }
+
+  /* A reading column, not the full stage. The brief is prose and a 1,100px line is
+     unreadable; the phone view already has this width and needs no special case. */
+  .body { padding: 16px; max-width: 860px; margin: 0 auto; }
+  @container app (max-width: 720px) { .body { padding: 12px 14px; } }
+
+  /* ===== SHARED CARD — the .thread card from streamlined-review-mobile ===== */
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 12px 14px; margin-bottom: 12px;
+  }
+  .card.amber { border-color: var(--amber-line); background: var(--amber-soft); }
+  .card-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+  .card-head h2 { margin: 0; font-size: 15px; font-weight: 650; flex: 1; min-width: 0; }
+  .k {
+    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+    color: var(--muted); background: #f2f4f7; border-radius: 4px; padding: 2px 7px; white-space: nowrap;
+  }
+  .k.decision { background: var(--amber-soft); color: var(--amber); }
+  .k.reply { background: var(--accent-soft); color: var(--accent); }
+  .k.count { background: transparent; border: 1px solid var(--line); }
+  .btn {
+    border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+    border-radius: 8px; padding: 8px 14px; font: inherit; font-size: 14px; font-weight: 550;
+    cursor: pointer; min-height: 36px;
+  }
+  .btn:hover { box-shadow: 0 1px 4px rgba(16,24,40,.10); }
+  .btn.primary { background: var(--ink); border-color: var(--ink); color: #fff; }
+  .btn.small { padding: 5px 11px; min-height: 32px; font-size: 13px; }
+  .btn.ghost { border-color: transparent; background: none; color: var(--muted); }
+  /* design-mobile.md's 36px floor. A compact button is fine under a cursor and is not
+     fine under a thumb, so the smaller sizes only shrink where there is a pointer. */
+  @container app (max-width: 720px) { .btn.small { min-height: 36px; } }
+
+  /* ===== THE BRIEF ===== */
+  .brief-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .brief-head h2 { margin: 0; font-size: 16px; font-weight: 650; }
+  .brief-since { color: var(--muted); font-size: 12.5px; }
+  .brief-md { font-size: 15px; line-height: 1.55; }
+  .brief-md h3 { font-size: 13px; margin: 14px 0 2px; letter-spacing: .01em; }
+  .brief-md h3:first-child { margin-top: 4px; }
+  .brief-md p { margin: 0 0 8px; }
+  .brief-md .lede { color: var(--muted); }
+  .brief-foot {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    margin-top: 12px; padding-top: 11px; border-top: 1px solid var(--line);
+  }
+  .brief-foot .prov { color: var(--muted); font-size: 12.5px; flex: 1; min-width: 180px; }
+  .wordcap { font-size: 11.5px; color: var(--muted); font-family: ui-monospace, Menlo, monospace; }
+  .wordcap.over { color: #b91c1c; font-weight: 700; }
+  .brief-read { display: flex; align-items: center; gap: 10px; font-size: 13.5px; color: var(--muted); }
+  .brief-read b { color: var(--green); }
+
+  /* recipe panel — "a way to iterate on the summary process itself" */
+  .recipe { display: none; margin-top: 12px; border-top: 1px solid var(--line); padding-top: 12px; }
+  .recipe.show { display: block; }
+  .recipe label { display: block; font-size: 12px; text-transform: uppercase; letter-spacing: .05em;
+    color: var(--muted); font-weight: 700; margin: 10px 0 4px; }
+  .recipe textarea, .recipe input, .recipe select {
+    width: 100%; font: inherit; font-size: 13.5px; border: 1px solid var(--line);
+    border-radius: 8px; padding: 9px 10px; background: var(--panel); color: var(--ink); outline: none;
+  }
+  .recipe textarea { min-height: 108px; resize: vertical; line-height: 1.5; }
+  .recipe textarea:focus, .recipe input:focus { border-color: var(--accent); }
+  .recipe .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+  .recipe .hint { font-size: 12.5px; color: var(--muted); line-height: 1.5; margin: 6px 0 0; }
+
+  /* ===== QUEUE ===== */
+  .queue-head { display: flex; align-items: center; gap: 8px; margin: 20px 0 8px; flex-wrap: wrap; }
+  .queue-head h2 { margin: 0; font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  .stepper { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+  .stepper .pos { font-size: 12.5px; color: var(--muted); font-family: ui-monospace, Menlo, monospace; }
+  .navbtn {
+    font: inherit; font-size: 15px; line-height: 1; width: 34px; height: 34px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--muted); cursor: pointer;
+  }
+  .navbtn[disabled] { opacity: .35; cursor: default; }
+  @container app (max-width: 720px) { .navbtn { width: 36px; height: 36px; } }
+  .rank { font-size: 12px; font-weight: 700; color: var(--muted); font-family: ui-monospace, Menlo, monospace; }
+  .why { color: var(--muted); font-size: 12.5px; line-height: 1.45; margin: 0 0 10px; }
+  .why b { color: var(--ink); font-weight: 650; }
+
+  /* --- decision, in the AskUserQuestion shape --- */
+  .opts { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 10px; }
+  .opt {
+    display: block; width: 100%; text-align: left; font: inherit; cursor: pointer;
+    border: 1px solid var(--line); background: var(--panel); border-radius: var(--radius);
+    padding: 11px 13px; min-height: 44px;
+  }
+  .opt:hover { border-color: var(--accent); box-shadow: 0 1px 6px rgba(46,125,215,.14); }
+  .opt .ot { font-weight: 700; font-size: 14.5px; display: block; margin-bottom: 3px; }
+  .opt .ob { font-size: 13.5px; line-height: 1.5; color: var(--ink); }
+  .opt .ob code { background: #f2f4f7; border-radius: 4px; padding: 0 4px; }
+  .ctx {
+    font-size: 13px; line-height: 1.5; color: var(--muted);
+    border-left: 3px solid var(--line); padding: 2px 0 2px 11px; margin: 0 0 12px;
+  }
+  .ctx div { margin: 0 0 2px; }
+  .ctx div:last-child { margin: 0; }
+
+  /* --- task ask + reply --- */
+  .ask {
+    background: var(--accent-soft); border: 1px solid #cfe2f7; border-radius: var(--radius);
+    padding: 12px 14px; margin: 0 0 10px;
+  }
+  .ask h3 {
+    margin: 0 0 7px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--accent);
+    display: flex; align-items: baseline; gap: 8px;
+  }
+  .ask h3 .wordcap { margin-left: auto; }
+  .ask p { margin: 0 0 8px; font-size: 14.5px; line-height: 1.55; }
+  .ask p:last-child { margin: 0; }
+  .ask ul { margin: 0 0 8px; padding-left: 20px; font-size: 14.5px; line-height: 1.55; }
+  .replybox { display: flex; gap: 8px; align-items: flex-end; }
+  .replybox textarea {
+    flex: 1; min-width: 0; font: inherit; font-size: 14.5px; padding: 9px 11px; min-height: 62px;
+    border: 1px solid var(--line); border-radius: 8px; background: var(--panel); resize: vertical; outline: none;
+  }
+  .replybox textarea:focus { border-color: var(--accent); }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+  .actions .long { margin-left: auto; }
+  @container app (max-width: 720px) {
+    .replybox { flex-direction: column; align-items: stretch; }
+    .replybox .btn { width: 100%; }
+    .actions .long { margin-left: 0; width: 100%; }
+  }
+
+  /* --- the detail behind the ask: description + flat comments --- */
+  .detail-scroll { max-height: 260px; overflow-y: auto; border: 1px solid var(--line);
+    border-radius: var(--radius); background: var(--bg); padding: 12px; margin: 0 0 10px; position: relative; }
+  .scroll-hint { font-size: 12px; color: var(--muted); text-align: center; padding: 2px 0 8px; }
+  .disclosure { border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); margin: 10px 0 0; }
+  .disclosure > summary { cursor: pointer; padding: 10px 12px; font-size: 13.5px; font-weight: 600; color: var(--muted); }
+  .disclosure > summary::marker { color: var(--muted); }
+  .disclosure[open] > summary { border-bottom: 1px solid var(--line); }
+  .disclosure .inner { padding: 12px; }
+  .desc { font-size: 14px; line-height: 1.55; }
+  .desc h4 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  .desc p { margin: 0 0 8px; }
+
+  /* One flat thread. Author, role and time on every comment, and a rule between
+     them — the run of undifferentiated text is the thing being fixed. */
+  .cmt { display: flex; gap: 9px; padding: 11px 0; border-top: 1px solid var(--line); font-size: 14px; line-height: 1.5; }
+  .cmt:first-of-type { border-top: none; padding-top: 4px; }
+  .av { width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    font-size: 10.5px; font-weight: 700; color: #fff; flex: none; }
+  .av.you { background: #3d4b63; }
+  .av.agent { background: #98a2b3; }
+  .cmt .b { min-width: 0; flex: 1; }
+  .cmt .nm { font-weight: 650; font-size: 13.5px; }
+  .cmt .role { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--muted); background: #f2f4f7; border-radius: 4px; padding: 1px 6px; margin-left: 6px; }
+  .cmt .when { color: var(--muted); font-size: 12px; margin-left: 6px; white-space: nowrap; }
+  .cmt.asks { background: var(--amber-soft); border-radius: 8px; padding: 11px 10px; margin-top: 8px; border-top: none; }
+  .cmt .flag { display: inline-block; font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .04em; color: var(--amber); background: #fff; border: 1px solid var(--amber-line);
+    border-radius: 4px; padding: 1px 6px; margin-left: 6px; }
+
+  /* ===== THE RUNNING ORDER (bounded, denominator always stated) ===== */
+  .bound {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 12px 14px; margin-top: 20px;
+  }
+  .bound h2 { margin: 0 0 4px; font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  .denom { font-size: 13px; line-height: 1.55; color: var(--muted); margin: 0 0 4px; }
+  .denom b { color: var(--ink); font-weight: 650; }
+  .denom .rest { display: block; margin-top: 3px; }
+  .row {
+    display: flex; align-items: center; gap: 10px; padding: 10px 2px; border-top: 1px solid var(--line);
+  }
+  .row .m { flex: 1; min-width: 0; }
+  .row .t { font-weight: 600; line-height: 1.35; }
+  .row .s { color: var(--muted); font-size: 12.5px; line-height: 1.4; margin-top: 2px; }
+  .row .ctrl { display: flex; gap: 4px; flex: none; align-items: center; }
+  .row .ctrl button {
+    font: inherit; font-size: 12px; min-width: 32px; min-height: 32px; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--muted); cursor: pointer; padding: 0 7px;
+  }
+  .row .ctrl button:hover { border-color: var(--accent); color: var(--accent); }
+  .row.current { background: var(--accent-soft); border-radius: 8px; }
+  .wait { font-size: 12px; color: var(--muted); font-family: ui-monospace, Menlo, monospace; white-space: nowrap; }
+  .wait.old { color: var(--amber); }
+  @container app (max-width: 720px) {
+    .row { flex-wrap: wrap; }
+    .row .ctrl { width: 100%; justify-content: flex-end; }
+    .row .ctrl button { min-width: 36px; min-height: 36px; }
+  }
+
+  /* ===== BOARD STUB ===== */
+  .board-note {
+    border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 10px 12px;
+    border-radius: 0 var(--radius) var(--radius) 0; font-size: 13px; line-height: 1.55; margin: 0 0 14px;
+  }
+  .strike { text-decoration: line-through; text-decoration-color: #c3c9d4; color: var(--muted); }
+  .group-head { display: flex; align-items: center; gap: 8px; padding: 4px 2px; margin-top: 14px; }
+  .group-head h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0; }
+  .task {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 10px 12px; margin-top: 8px; display: flex; align-items: center; gap: 10px;
+  }
+  .task .t-main { flex: 1; min-width: 0; }
+  .task .t-title { font-weight: 600; line-height: 1.35; }
+  .task .t-sub { color: var(--muted); font-size: 12.5px; margin-top: 1px; }
+  .st { font-size: 12px; font-weight: 650; border-radius: 999px; padding: 2px 9px; white-space: nowrap; flex: none; }
+  .st.todo { background: #f2f4f7; color: var(--muted); }
+  .st.inprogress { background: var(--accent-soft); color: var(--accent); }
+  .st.decision { background: var(--amber-soft); color: var(--amber); }
+
+  .empty { text-align: center; padding: 26px 12px; color: var(--muted); font-size: 14px; line-height: 1.6; }
+  .empty b { color: var(--ink); }
+
+  /* ===== TOAST ===== */
+  .toast {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%) translateY(90px);
+    background: var(--ink); color: #fff; border-radius: 10px; padding: 10px 16px; font-size: 13px;
+    z-index: 70; transition: transform .25s; max-width: min(520px, calc(100vw - 32px)); line-height: 1.45;
+  }
+  .toast.show { transform: translateX(-50%) translateY(0); }
+  .toast code { color: #9dc4f0; }
+
+  /* ===== DESIGN NOTE (not part of the product) ===== */
+  .note-wrap { max-width: 900px; margin: 26px auto 60px; padding: 0 16px; }
+  .note {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 18px 20px; font-size: 14px; line-height: 1.6;
+  }
+  .note h2 { font-size: 16px; margin: 0 0 4px; }
+  .note h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 20px 0 6px; }
+  .note p { margin: 0 0 10px; }
+  .note ul { margin: 0 0 10px; padding-left: 20px; }
+  .note li { margin-bottom: 6px; }
+  .note .q { border-left: 3px solid var(--amber-line); background: var(--amber-soft); padding: 8px 12px;
+    border-radius: 0 8px 8px 0; margin: 0 0 8px; }
+  .note .q b { display: block; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation-duration: 0ms !important; transition-duration: 0ms !important; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ============================ MOCKUP CHROME ============================ -->
+<div class="chrome">
+  <h1>Home — catch up, then decide</h1>
+  <p class="sub">A mockup, not a build. Everything here is invented: the projects, the people, the
+  numbers in the brief. The board pane is a stub, shown only to make visible what moves
+  <em>out</em> of it. Two choices I could not make for you are built both ways and labelled
+  <b>A</b> / <b>B</b> below — pick one per row.</p>
+
+  <div class="controls" id="controls"></div>
+  <p class="legend" id="legend"></p>
+</div>
+
+<div class="stage-wrap">
+  <div class="stage" id="stage">
+    <div class="statusbar"><span>9:41</span><span>▮▮▮ ⌁ 100%</span></div>
+    <header class="topbar">
+      <span class="brand">Live Feedback</span>
+      <span class="who"><span class="av you">B</span> you</span>
+    </header>
+    <nav class="panes" id="panes"></nav>
+    <div class="body" id="app"></div>
+  </div>
+</div>
+
+<div class="note-wrap"><div class="note" id="designNote"></div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ===========================================================================
+   MOCKUP STATE. Nothing persists; no network. All content is synthetic.
+   =========================================================================== */
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+/* A deliberately tiny markdown renderer. The brief is authored and stored as
+   MARKDOWN, not HTML, because the summary recipe below has to be able to show you
+   its own output as text — and because "well-formatted markdown" is the contract
+   with whatever writes it. */
+function md(src) {
+  const inline = (s) => esc(s)
+    .replace(/\[([^\]]+)\]\(([^)]*)\)/g,
+      (_m, label) => `<a href="#" onclick="return toast('Opens ${label.replace(/'/g, '&#39;')} — inline links stay brief on purpose')">${label}</a>`)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  // Single newlines are soft wraps in the source, not line breaks. Collapsing them is what
+  // lets the stored markdown be edited at a sane width without changing what renders.
+  const flow = (b) => b.replace(/\s*\n\s*/g, ' ');
+  return src.trim().split(/\n{2,}/).map((block) => {
+    const b = block.trim();
+    // A heading owns its own line, not its whole block — otherwise the paragraph
+    // underneath it silently becomes part of the heading.
+    if (b.startsWith('### ')) {
+      const nl = b.indexOf('\n');
+      const head = `<h3>${inline(nl === -1 ? b.slice(4) : b.slice(4, nl))}</h3>`;
+      return nl === -1 ? head : head + `<p>${inline(flow(b.slice(nl + 1)))}</p>`;
+    }
+    if (b.startsWith('> ')) return `<p class="lede">${inline(flow(b.replace(/^> /gm, '')))}</p>`;
+    return `<p>${inline(flow(b))}</p>`;
+  }).join('');
+}
+/* The word cap is a product invariant, so the mockup counts and shows it rather
+   than asserting it in prose. Markdown syntax is not words. */
+function words(src) {
+  return src.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/[#*`>_]/g, '')
+    .split(/\s+/).filter(Boolean).length;
+}
+
+const BRIEF_SINCE = 'Friday, 6:12 pm';
+const BRIEF_EVENTS = 41;
+const BRIEF_PROJECTS = 4;
+
+let BRIEF = `### Harbor — search relevance
+Fuzzy match is behind the \`search.typo\` flag; six of nine stages are committed. The device
+re-run is blocked on one number — [how far to expand synonyms](#).
+
+### Kestrel — billing retries
+Rae rewrote the retry helper so the original error survives the last attempt. Two callers still
+read the old degraded response, so she stopped rather than guess and [asked you](#).
+
+### Tideline — onboarding
+Quiet. The empty-state pass is drafted and waiting on the copy review you booked for Thursday.
+
+### Almanac — data import
+Ivo's importer landed. Column order is not stable across exports, and the next batch runs
+Monday, so he [wants a decision](#) before then.
+
+**Not moving, on purpose:** launch notes (waiting on the PR), device-pool re-run (waiting on Harbor).
+
+> Five things are queued below, ranked. Nothing else has waited more than a day.`;
+
+let RECIPE = `Write for someone who has been away 2-4 days and reads on a phone.
+
+- Under 200 words. One short section per project that MOVED; name the projects that
+  did not, in one line, so silence is never ambiguous.
+- Lead each section with the change, not the process. No "the agent then".
+- Link only where the link is the next action. At most one link per section.
+- End with what is queued and what is NOT waiting on anyone.
+- Never restate a decision that is already in the queue below — say it is there.`;
+
+/* --------------------------------------------------------------------------
+   THE RUNNING ORDER. The queue and the list are ONE list: the queue steps
+   through the top of it. Ranking is by (blocked-on-human, task priority, wait),
+   where wait is the thread's own last activity — never a doc-level
+   lastActivityAt, which a server-side snapshot rewrite refreshes for every doc
+   at once and would silently sort everything as "just now".
+   -------------------------------------------------------------------------- */
+const ITEMS = [
+  {
+    id: 'd1', kind: 'decision', project: 'Harbor', title: 'How far should synonym expansion go?',
+    wait: '2 days', old: false,
+    why: 'Blocks <b>two</b> tasks · oldest unanswered decision · you are the only one who can answer it',
+    ctx: [
+      'Asked by <b>Harbor agent</b> · Saturday 09:14 · blocks <i>Re-run relevance eval</i>',
+      'The plan said "generous expansion" and never fixed a number.',
+      'Three hops doubles the index; the device pool has 1.8&nbsp;GB free.',
+      'Every option needs a prune or a re-run, so none of them is free.',
+      '<a href="#" onclick="return toast(\'Opens relevance-eval-plan.md at § Expansion budget\')">relevance-eval-plan.md § Expansion budget</a> · <a href="#" onclick="return toast(\'Opens the thread — 4 comments\')">the thread</a>',
+    ],
+    options: [
+      { t: 'Two hops', b: 'Index stays at **1.2 GB**. Costs **0.4 recall** on the eval set. Ships this week with no prune.' },
+      { t: 'Three hops', b: 'Buys the **0.4 recall** back. Index goes to **2.4 GB**, so the device pool needs a prune first — about a day.' },
+      { t: 'Measure both', b: 'Run both overnight on the pool and answer Thursday. Nothing ships until then.' },
+    ],
+    long: { label: 'Read the eval plan instead (20 min)', note: 'the numbers, both eval runs, and the thread' },
+  },
+  {
+    id: 't1', kind: 'task', project: 'Kestrel', title: 'Drop the degraded response path?',
+    wait: '1 day', old: false,
+    why: 'You are the last word on <b>your own</b> thread · Rae is blocked on the answer',
+    ask: `Rae rewrote the retry helper so the original error is rethrown on the last attempt.
+That part is done, reviewed and green.
+
+The open question is the fallback. Two callers — the nightly reconciler and the mobile
+client — still read the degraded response when all three attempts fail. Removing it makes
+both fail loudly instead of quietly returning yesterday's totals.
+
+**A useful reply names one of:** keep the fallback and document it; remove it and let both
+callers fail; or keep it for the reconciler only and give the mobile client the error.
+
+If the reconciler's behaviour is the part you are unsure about, that is the [one file worth
+reading](#) — everything else in the change is the rethrow.`,
+    desc: `<h4>Task</h4><p>Rethrow the underlying error from the retry helper instead of collapsing
+      every failure into a timeout. Raised on <a href="#" onclick="return toast('Opens retry-policy.md')">retry-policy.md</a>,
+      picked up by Rae on Thursday.</p>
+      <p>Scope stopped at the rethrow. The fallback path was left in place deliberately, pending this answer.</p>`,
+    comments: [
+      { who: 'Rae', role: 'person', av: '#9a5bb5', when: 'Thu 14:02 · 4 days ago',
+        text: 'Taking this. The retry loop swallows the underlying error, so a caller only ever sees the final timeout — that is why last week\'s incident looked like a network problem for three hours.' },
+      { who: 'Kestrel agent', role: 'agent', av: null, when: 'Thu 16:40 · 4 days ago',
+        text: 'Rethrow is in, 11 files. Two callers read the degraded response on total failure: the nightly reconciler and the mobile client. I did not touch either.' },
+      { who: 'Rae', role: 'person', av: '#9a5bb5', when: 'Fri 09:11 · 3 days ago',
+        text: 'The mobile client one is easy — it already has an error state nobody has seen in production. The reconciler is the one I do not want to decide alone: failing loudly there means the nightly job stops instead of publishing stale totals.' },
+      { who: 'You', role: 'you', av: null, when: 'Fri 18:02 · 3 days ago',
+        text: 'Stale totals have burned us before. Let me look at the reconciler.' },
+      { who: 'Rae', role: 'person', av: '#9a5bb5', when: 'Sun 11:20 · 1 day ago', asks: true,
+        text: 'Bumping this — the change is otherwise ready to merge and I would rather not sit on it. Keep the fallback, drop it, or keep it for the reconciler only?' },
+    ],
+    long: { label: 'Open the diff review (20 min)', note: '11 files · the fallback is in two of them' },
+  },
+  {
+    id: 'd2', kind: 'decision', project: 'Almanac', title: 'CSV column order is not stable across exports',
+    wait: '4 hours', old: false,
+    why: 'Next import batch runs <b>Monday</b> · cheap to answer now, expensive to answer late',
+    ctx: [
+      'Asked by <b>Ivo</b> · today 07:40 · blocks <i>Import batch 4</i>',
+      'Two of the last five exports moved a column without warning.',
+      'Positional parsing silently mis-files a whole batch; header matching fails loudly instead.',
+      '<a href="#" onclick="return toast(\'Opens import-notes.md\')">import-notes.md § Column drift</a>',
+    ],
+    options: [
+      { t: 'Match headers', b: 'Parse by column **name**. A renamed column fails the batch loudly instead of mis-filing it. Half a day.' },
+      { t: 'Pin the order', b: 'Assert the exact order and **reject** any export that differs. Fastest, and it will reject a valid export sooner or later.' },
+      { t: 'Both', b: 'Match by header, and warn when the order changes so we learn how often it does. A day.' },
+    ],
+    long: { label: 'Read the import notes (15 min)', note: 'five exports, diffed' },
+  },
+  {
+    id: 't2', kind: 'task', project: 'Tideline', title: 'Empty-state copy — which voice?',
+    wait: '3 days', old: false,
+    why: 'Waiting on <b>you</b> since Friday · not blocking anyone else',
+    ask: `Nadia drafted three empty states and they came out in two different voices, which is
+the real question — not which sentence is best.
+
+The instructional voice ("Add your first route to see it here") explains the product. The
+plain voice ("Nothing here yet") gets out of the way. We have both on screen today and it
+reads like two products.
+
+**A useful reply picks a voice**, not a sentence. Nadia will rewrite all three to match and
+put them back in the doc.
+
+No deadline on this one — it is queued above the launch notes only because it has been
+waiting longer.`,
+    desc: `<h4>Task</h4><p>Three empty states for the onboarding flow — routes, invites, and the
+      first sync. Drafted in <a href="#" onclick="return toast('Opens onboarding-copy.md')">onboarding-copy.md</a>.</p>`,
+    comments: [
+      { who: 'Nadia', role: 'person', av: '#0f766e', when: 'Fri 10:30 · 3 days ago',
+        text: 'Three drafts are in the doc. I hedged on voice, so they are not consistent with each other yet — deliberately, so you can see the two options side by side.' },
+      { who: 'Tideline agent', role: 'agent', av: null, when: 'Fri 10:52 · 3 days ago',
+        text: 'Cross-checked against the rest of the product: 9 of 11 existing empty states use the plain voice. The two instructional ones are both in the settings area.' },
+      { who: 'Nadia', role: 'person', av: '#0f766e', when: 'Fri 11:15 · 3 days ago', asks: true,
+        text: 'That is a good argument for plain, but the onboarding flow is the one place a person has no idea what goes in the box. Which voice do you want?' },
+    ],
+    long: { label: 'Read all three in the doc (15 min)', note: 'onboarding-copy.md · 3 threads' },
+  },
+  {
+    id: 't3', kind: 'task', project: 'Harbor', title: 'Launch notes — keep the raw timings?',
+    wait: '6 days', old: true,
+    why: 'Oldest thing still ranked · <b>nothing</b> is blocked on it',
+    ask: `The launch notes quote the real numbers, including the two runs where the index rebuild
+took 40 minutes. Keeping them is honest and invites a question nobody has a short answer to.
+
+**A useful reply is keep or cut.** If you want them kept, one sentence of framing from you
+is worth more than a paragraph from me.
+
+This has waited six days and blocks nothing, so it is fine to leave it. It is ranked last
+here so you can see that it exists and choose to skip it — the alternative is that it drops
+off the page and rots.`,
+    desc: `<h4>Task</h4><p>Draft launch notes for the typo-tolerance work, with figures. Waiting on
+      the PR either way.</p>`,
+    comments: [
+      { who: 'Harbor agent', role: 'agent', av: null, when: 'Tue 08:20 · 6 days ago', asks: true,
+        text: 'Draft is in the doc. I left the two 40-minute rebuild runs in the timing table rather than dropping them quietly. Keep or cut?' },
+    ],
+    long: { label: 'Read the draft (15 min)', note: 'launch-notes.md' },
+  },
+];
+
+const EXCLUDED = { total: 358, projects: 20, over30: 291, belowCut: 62 };
+
+/* --------------------------------------------------------------------------
+   Modes. Both A/B pairs are MOCKUP CHROME — the product ships one of each.
+   -------------------------------------------------------------------------- */
+let pane = 'home';
+let queueMode = 'focus';   // focus | stack
+let detailMode = 'scroll'; // scroll | disclosure
+let phone = false;
+let cursor = 0;
+let briefRead = false;
+let recipeOpen = false;
+let order = ITEMS.map((i) => i.id);
+const settled = new Map();  // id -> what you answered
+
+const byId = (id) => ITEMS.find((i) => i.id === id);
+const live = () => order.filter((id) => !settled.has(id));
+
+/* ===================== RENDER ===================== */
+
+function paneTabs() {
+  const n = live().length;
+  return `
+    <button class="pane-tab ${pane === 'home' ? 'active' : ''}" onclick="setPane('home')">
+      Home ${n ? `<span class="count">${n}</span>` : ''}</button>
+    <button class="pane-tab ${pane === 'board' ? 'active' : ''}" onclick="setPane('board')">Board</button>`;
+}
+
+function briefCard() {
+  const w = words(BRIEF);
+  const foot = briefRead
+    ? `<div class="brief-read"><b>✓ Caught up</b> as of just now.
+         <button class="btn small ghost" onclick="unread()">Undo</button></div>`
+    : `<button class="btn primary" onclick="markRead()">Mark caught up</button>`;
+  return `
+  <section class="card" id="brief">
+    <div class="brief-head">
+      <h2>Since you last caught up</h2>
+      <span class="brief-since">${esc(BRIEF_SINCE)} · ${BRIEF_EVENTS} events · ${BRIEF_PROJECTS} projects</span>
+    </div>
+    <div class="brief-md">${md(BRIEF)}</div>
+    <div class="brief-foot">
+      <span class="prov">
+        <span class="wordcap ${w > 200 ? 'over' : ''}">${w} words / 200</span> ·
+        <a href="#" onclick="return toggleRecipe()">How this gets written</a>
+      </span>
+      ${foot}
+    </div>
+    <div class="recipe ${recipeOpen ? 'show' : ''}">
+      <p class="hint"><b>This is the part that has to be iterable.</b> The summary is written to
+      these instructions every time. Edit them, re-run, and the next brief follows the new
+      version — the instructions are the artifact, not the one summary you happen to be reading.</p>
+      <label for="rcp">Instructions</label>
+      <textarea id="rcp" spellcheck="false">${esc(RECIPE)}</textarea>
+      <label for="scope">Cover</label>
+      <select id="scope">
+        <option>Everything since I last marked caught up (Friday, 6:12 pm)</option>
+        <option>The last 24 hours</option>
+        <option>The last 7 days</option>
+      </select>
+      <div class="row">
+        <button class="btn primary" onclick="rerun()">Save &amp; re-run</button>
+        <button class="btn small" onclick="nudge('Too long — cut it to five sentences.')">Too long</button>
+        <button class="btn small" onclick="nudge('You missed the Almanac import. Say what changed, not that something changed.')">Missed something</button>
+        <button class="btn small ghost" onclick="showSource()">Show the markdown</button>
+      </div>
+      <p class="hint">The two grey buttons append a line to the instructions rather than editing
+      this one brief — a correction you make once should hold next week.</p>
+    </div>
+  </section>`;
+}
+
+function optBody(s) {
+  return esc(s).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/`([^`]+)`/g, '<code>$1</code>');
+}
+
+function itemCard(it, rank) {
+  const settledAs = settled.get(it.id);
+  const head = `
+    <div class="card-head">
+      <span class="k ${it.kind === 'decision' ? 'decision' : 'reply'}">${it.kind === 'decision' ? 'Decision' : 'Needs your reply'}</span>
+      <h2>${esc(it.title)}</h2>
+      <span class="k count">${esc(it.project)}</span>
+      <span class="wait ${it.old ? 'old' : ''}">${esc(it.wait)}</span>
+    </div>
+    <p class="why"><span class="rank">#${rank}</span> — ${it.why}</p>`;
+
+  if (settledAs) {
+    return `<section class="card">${head}
+      <div class="empty" style="padding:14px"><b>Answered:</b> ${esc(settledAs)}
+      <div style="margin-top:8px"><button class="btn small" onclick="undoAnswer('${it.id}')">Undo</button></div></div>
+    </section>`;
+  }
+
+  const longBtn = `<button class="btn long" onclick="toast('Opens ${esc(it.long.note)} — the 15-30 minute version')">${esc(it.long.label)}</button>`;
+
+  if (it.kind === 'decision') {
+    return `<section class="card">${head}
+      <div class="ctx">${it.ctx.map((c) => `<div>${c}</div>`).join('')}</div>
+      <div class="opts">
+        ${it.options.map((o, i) => `
+          <button class="opt" onclick="answer('${it.id}', ${i})">
+            <span class="ot">${esc(o.t)}</span>
+            <span class="ob">${optBody(o.b)}</span>
+          </button>`).join('')}
+      </div>
+      <div class="replybox">
+        <textarea id="free-${it.id}" placeholder="…or answer in your own words — the agent gets your text verbatim"></textarea>
+        <button class="btn primary" onclick="answerFree('${it.id}')">Send</button>
+      </div>
+      <div class="actions"><button class="btn small ghost" onclick="skip('${it.id}')">Skip for now</button>${longBtn}</div>
+    </section>`;
+  }
+
+  const asked = it.ask;
+  const w = words(asked);
+  const askBlock = `
+    <div class="ask">
+      <h3>What I need from you <span class="wordcap ${w > 200 ? 'over' : ''}">${w} words / 200</span></h3>
+      ${md(asked)}
+    </div>
+    <div class="replybox">
+      <textarea id="free-${it.id}" placeholder="Reply…"></textarea>
+      <button class="btn primary" onclick="answerFree('${it.id}')">Send</button>
+    </div>
+    <div class="actions"><button class="btn small ghost" onclick="skip('${it.id}')">Skip for now</button>${longBtn}</div>`;
+
+  const thread = `
+    <div class="desc">${it.desc}</div>
+    ${it.comments.map(cmtHtml).join('')}`;
+
+  if (detailMode === 'scroll') {
+    // A — the detail sits ABOVE, already scrolled to its end, so the ask and the
+    // reply box are what you land on. Scrolling up is the way back through the
+    // conversation.
+    return `<section class="card">${head}
+      <div class="scroll-hint">↑ scroll up for the task and all ${it.comments.length} comments</div>
+      <div class="detail-scroll" data-bottom="1">${thread}</div>
+      ${askBlock}
+    </section>`;
+  }
+  // B — the ask leads; the detail is a disclosure that opens downwards.
+  return `<section class="card">${head}
+    ${askBlock}
+    <details class="disclosure">
+      <summary>Full context — the task and all ${it.comments.length} comments</summary>
+      <div class="inner">${thread}</div>
+    </details>
+  </section>`;
+}
+
+function cmtHtml(c) {
+  const av = c.role === 'you'
+    ? '<span class="av you">B</span>'
+    : c.role === 'agent'
+      ? '<span class="av agent">A</span>'
+      : `<span class="av" style="background:${c.av}">${esc(c.who[0])}</span>`;
+  const role = c.role === 'agent' ? '<span class="role">agent</span>'
+    : c.role === 'you' ? '<span class="role">you</span>' : '';
+  return `<div class="cmt ${c.asks ? 'asks' : ''}">${av}
+    <div class="b">
+      <div><span class="nm">${esc(c.who)}</span>${role}<span class="when">${esc(c.when)}</span>
+        ${c.asks ? '<span class="flag">asks you</span>' : ''}</div>
+      <div>${esc(c.text)}</div>
+    </div></div>`;
+}
+
+function queueSection() {
+  const ids = live();
+  if (!ids.length) {
+    return `<div class="queue-head"><h2>Queue</h2></div>
+      <div class="card"><div class="empty"><b>Nothing is waiting on you.</b><br>
+      ${EXCLUDED.total - ITEMS.length} older threads are still in the backlog — they were not
+      ranked in, and they have not gone anywhere.
+      <div style="margin-top:10px"><button class="btn small" onclick="resetAll()">Reset the mockup</button></div></div></div>`;
+  }
+  if (queueMode === 'stack') {
+    return `<div class="queue-head"><h2>Queue — all ${ids.length}, in order</h2>
+        <span class="stepper"><span class="pos">B · stack</span></span></div>
+      ${ids.map((id, i) => itemCard(byId(id), order.indexOf(id) + 1)).join('')}`;
+  }
+  const i = Math.min(cursor, ids.length - 1);
+  const it = byId(ids[i]);
+  return `<div class="queue-head"><h2>Queue</h2>
+      <span class="stepper">
+        <button class="navbtn" onclick="step(-1)" ${i === 0 ? 'disabled' : ''} aria-label="Previous item">‹</button>
+        <span class="pos">${i + 1} of ${ids.length}</span>
+        <button class="navbtn" onclick="step(1)" ${i >= ids.length - 1 ? 'disabled' : ''} aria-label="Next item">›</button>
+      </span></div>
+    ${itemCard(it, order.indexOf(it.id) + 1)}`;
+}
+
+/* The denominator is rendered from the same numbers the list is cut from, and it
+   is rendered whether the list is full, short or empty — an empty list with no
+   denominator reads as an all-clear. */
+function boundSection() {
+  const ids = live();
+  const shown = ITEMS.length;
+  const rest = EXCLUDED.total - shown;
+  return `
+  <section class="bound">
+    <h2>The running order</h2>
+    <p class="denom"><b>${shown} shown.</b> Ranked out of <b>${EXCLUDED.total}</b> open threads
+      that name you, across <b>${EXCLUDED.projects}</b> projects.
+      <span class="rest">The other ${rest} are not here: ${EXCLUDED.over30} have waited over 30 days,
+      ${EXCLUDED.belowCut} rank below the cut. Nothing was resolved, hidden or deleted —
+      <a href="#" onclick="return toast('Opens the backlog: all ${EXCLUDED.total} threads, newest first')">open the backlog</a>.</span></p>
+    ${order.map((id, i) => {
+      const it = byId(id);
+      const done = settled.get(id);
+      const isCur = queueMode === 'focus' && live()[Math.min(cursor, Math.max(0, live().length - 1))] === id;
+      return `<div class="row ${isCur ? 'current' : ''}">
+        <span class="rank">#${i + 1}</span>
+        <div class="m">
+          <div class="t" ${done ? 'style="text-decoration:line-through;color:var(--muted)"' : ''}>${esc(it.title)}</div>
+          <div class="s">${esc(it.project)} · ${it.kind === 'decision' ? 'decision' : 'needs your reply'} ·
+            waiting ${esc(it.wait)}${done ? ` · answered: ${esc(done)}` : ''}</div>
+        </div>
+        <div class="ctrl">
+          <button onclick="move('${id}',-1)" aria-label="Rank higher" title="I disagree — this is more urgent">↑</button>
+          <button onclick="move('${id}',1)" aria-label="Rank lower" title="I disagree — this can wait">↓</button>
+          <button onclick="notMine('${id}')" title="Not mine to answer — hand it back">not mine</button>
+        </div>
+      </div>`;
+    }).join('')}
+    <p class="denom" style="margin-top:10px">Reordering here is a signal, not just a sort:
+      the agent is told which way you moved it and why the guess was wrong.</p>
+  </section>`;
+}
+
+function boardStub() {
+  return `
+  <div class="board-note"><b>What moved out of this pane.</b> Status catch-up and decision
+  review now live on Home. The board is for planning: what exists, what order it is in, what
+  is blocked. The two things below are shown struck through only to make the change visible —
+  they would simply be gone.</div>
+
+  <div class="card">
+    <div class="strike" style="padding:6px 0"><b>3 quick decisions</b> — Answer in batch</div>
+    <div class="strike" style="padding:6px 0"><b>Open threads · last word is yours</b> — 2 threads</div>
+    <p style="margin:8px 0 0;font-size:13px;color:var(--muted)">Replaced by one line in the
+    topbar: <b>Home <span class="count" style="background:var(--amber-soft);color:var(--amber);border-radius:10px;padding:1px 7px;font-size:12px">${live().length}</span></b>.</p>
+  </div>
+
+  <div class="group-head"><h3>1 · Typo-tolerance behind a flag</h3></div>
+  <div class="task"><div class="t-main"><div class="t-title">Ship typo-tolerance behind a flag</div>
+    <div class="t-sub">Stages 1–6 committed; 7–9 running</div></div><span class="st inprogress">in progress</span></div>
+  <div class="task"><div class="t-main"><div class="t-title">How far should synonym expansion go?</div>
+    <div class="t-sub">Queued on Home · #1</div></div><span class="st decision">on Home</span></div>
+
+  <div class="group-head"><h3>2 · Relevance eval holds on devices</h3></div>
+  <div class="task"><div class="t-main"><div class="t-title">Re-run relevance eval on the device pool</div>
+    <div class="t-sub">After typo-tolerance</div></div><span class="st todo">todo</span></div>
+
+  <div class="group-head"><h3>Chores</h3></div>
+  <div class="task"><div class="t-main"><div class="t-title">Prune the device pool</div></div><span class="st todo">todo</span></div>`;
+}
+
+function render() {
+  document.getElementById('panes').innerHTML = paneTabs();
+  document.getElementById('app').innerHTML =
+    pane === 'home' ? briefCard() + queueSection() + boundSection() : boardStub();
+  document.getElementById('stage').classList.toggle('phone', phone);
+  renderControls();
+  // A: the detail pane opens already scrolled to its end, so the ask is what you land on.
+  for (const el of document.querySelectorAll('.detail-scroll[data-bottom]')) el.scrollTop = el.scrollHeight;
+}
+
+/* ===================== CHROME ===================== */
+const LEGEND = {
+  focus: '<b>A · One at a time.</b> The queue shows a single item with a stepper. You answer or skip, and the next one arrives. This is what the task asked for — the cost is that you cannot see item 4 while deciding item 1.',
+  stack: '<b>B · The whole stack.</b> Every queued item rendered in order, scrollable. Cheaper to skim and to disagree with the ranking; easier to bounce off, because the page is long again — which is the failure this page exists to fix.',
+  scroll: '<b>A · Ask last, detail above.</b> The card opens scrolled to its end: the ask and the reply box are what you land on, and the conversation is up. Literally what the task describes. The cost is a nested scroller, which is awkward on a phone.',
+  disclosure: '<b>B · Ask first, detail folded.</b> The ask and reply sit at the top; the task and comments open downward behind one control. No nested scrolling, and the ask is unmissable — but "scroll up for more" becomes "tap to expand", which is a thing you have to know to do.',
+};
+function renderControls() {
+  document.getElementById('controls').innerHTML = `
+    <span class="grp"><span class="lbl">Queue</span>
+      <button class="${queueMode === 'focus' ? 'on' : ''}" onclick="setQueue('focus')">A · one at a time</button>
+      <button class="${queueMode === 'stack' ? 'on' : ''}" onclick="setQueue('stack')">B · the whole stack</button></span>
+    <span class="grp"><span class="lbl">Detail</span>
+      <button class="${detailMode === 'scroll' ? 'on' : ''}" onclick="setDetail('scroll')">A · ask last, scroll up</button>
+      <button class="${detailMode === 'disclosure' ? 'on' : ''}" onclick="setDetail('disclosure')">B · ask first, fold</button></span>
+    <span class="grp"><span class="lbl">Width</span>
+      <button class="${!phone ? 'on' : ''}" onclick="setPhone(false)">desktop</button>
+      <button class="${phone ? 'on' : ''}" onclick="setPhone(true)">phone 430</button></span>
+    <span class="grp"><button onclick="resetAll()">reset</button></span>`;
+  document.getElementById('legend').innerHTML =
+    `${LEGEND[queueMode]}<br>${LEGEND[detailMode]}`;
+}
+
+function setPane(p) { pane = p; render(); }
+function setQueue(m) { queueMode = m; cursor = 0; render(); }
+function setDetail(m) { detailMode = m; render(); }
+function setPhone(v) { phone = v; render(); }
+function step(d) { const n = live().length; cursor = Math.max(0, Math.min(n - 1, cursor + d)); render(); }
+
+function markRead() {
+  briefRead = true;
+  toast('<code>brief.marked_read</code> — the read boundary moves to now. The next brief covers only what happens after this moment.');
+  render();
+}
+function unread() { briefRead = false; render(); }
+function toggleRecipe() { recipeOpen = !recipeOpen; render(); return false; }
+function rerun() {
+  RECIPE = document.getElementById('rcp').value;
+  toast('Instructions saved, brief re-written. In the product this is a stored recipe with a history — you can see what changed and roll back.');
+  render();
+}
+function nudge(line) {
+  RECIPE = `${document.getElementById('rcp').value.trim()}\n- ${line}`;
+  toast('Appended to the instructions, not to this brief — so the correction holds next week too.');
+  render();
+}
+function showSource() {
+  toast('The brief is stored as markdown; this is the source the recipe produced.');
+  alert(BRIEF);
+}
+
+function answer(id, i) {
+  const it = byId(id);
+  settled.set(id, it.options[i].t);
+  toast(`<code>decision.answered</code> → <b>${esc(it.options[i].t)}</b>. The agent gets the option title and your words, verbatim.`);
+  cursor = 0; render();
+}
+function answerFree(id) {
+  const box = document.getElementById(`free-${id}`);
+  const text = (box?.value || '').trim();
+  if (!text) { toast('Nothing to send — type a reply, or pick an option.'); return; }
+  settled.set(id, text.length > 46 ? `${text.slice(0, 46)}…` : text);
+  toast('Sent verbatim. The thread stays open until whoever asked closes it.');
+  cursor = 0; render();
+}
+function undoAnswer(id) { settled.delete(id); render(); }
+function skip(id) {
+  const at = order.indexOf(id);
+  order.splice(at, 1); order.push(id);
+  toast('Skipped — moved to the end of today\'s order, not hidden.');
+  render();
+}
+function notMine(id) {
+  settled.set(id, 'handed back — not mine to answer');
+  toast('<code>thread.handed_back</code> — the asker is told, and it leaves your order. It does not leave the thread.');
+  render();
+}
+function move(id, d) {
+  const at = order.indexOf(id);
+  const to = Math.max(0, Math.min(order.length - 1, at + d));
+  if (at === to) return;
+  order.splice(to, 0, order.splice(at, 1)[0]);
+  toast(`<code>ranking.disagreed</code> — moved ${d < 0 ? 'up' : 'down'}. The agent is told which way and by how much, so the next ranking is different.`);
+  render();
+}
+function resetAll() {
+  settled.clear(); order = ITEMS.map((i) => i.id); cursor = 0; briefRead = false; render();
+}
+
+let toastT;
+function toast(html) {
+  const el = document.getElementById('toast');
+  el.innerHTML = html;
+  el.classList.add('show');
+  clearTimeout(toastT);
+  toastT = setTimeout(() => el.classList.remove('show'), 4200);
+  return false;
+}
+
+/* ===================== DESIGN NOTE ===================== */
+document.getElementById('designNote').innerHTML = `
+<h2>Design note</h2>
+<p><b>Started from</b> <code>demos/streamlined-review-mobile.html</code> (the card, the comment
+row, the reply box, the <code>‹ ›</code> stepper, the mockup-chrome pill row and legend, the
+reduced-motion rule) and <code>demos/lf-workspace-hub-mockup-v2.html</code> (every colour
+token, the <code>.btn</code> set, the section headings, the amber = waiting-on-you rule, the
+toast). Carried over unchanged: the token values, the "colour only where it means
+something" rule, and the convention that harness controls are labelled as not part of the
+product. The 36&nbsp;px minimum tap target is enforced at the phone width, where a finger
+is the pointer; the compact controls (<code>‹ ›</code>, the reorder arrows, Skip) stay at
+32-34&nbsp;px on the desktop width and grow under the container query. Measured in-browser
+at 430&nbsp;px: no control under 36&nbsp;px, and no horizontal overflow.</p>
+
+<h3>Deviations, and why</h3>
+<ul>
+<li><b>Token names were unified on the hub's.</b> The two files disagree
+(<code>--fg</code>/<code>--border</code> vs <code>--ink</code>/<code>--line</code>) for the same
+colours. Home sits beside the board, so it takes the board's names. Nothing about the
+appearance changes.</li>
+<li><b>The morph is not here.</b> The 150&nbsp;ms two-phase expand belongs to a card that is
+summary-first and detail-on-demand. A queue item is detail-first by definition — you are on
+this screen to answer it. Mode <b>B</b> below has one fold, and it is a plain disclosure
+rather than the morph, because there is no summary line for it to grow out of.</li>
+<li><b>The phone view is a container query, not a second stylesheet.</b> The stage declares
+<code>container-type: inline-size</code> and every responsive rule is
+<code>@container app (max-width: 720px)</code>. Narrowing the stage to 430&nbsp;px and loading
+this page on a 430&nbsp;px phone therefore run the same declarations, rather than the harness
+re-creating a layout the product never produces.</li>
+</ul>
+
+<h3>What I chose</h3>
+<ul>
+<li><b>The queue and the list are one list.</b> "Step through items one at a time" and "let me
+disagree with the ranking" want the same underlying order. So the running order at the foot
+is the queue, and reordering it reorders what comes next.</li>
+<li><b>The denominator is a sentence, always rendered.</b> 5 shown out of 358 across 20
+projects, with the remainder broken down (291 over 30 days, 62 below the cut) and a link to
+all of them. It renders when the list is empty too — an empty list with no denominator reads
+as an all-clear, and the measurement says 82% of open threads name you, so an all-clear would
+be false roughly always.</li>
+<li><b>Bounded by a budget, not by a filter.</b> The measurement is that no filter over the
+available signals turns 358 into an inbox. So the page takes a fixed number off the top of a
+ranking and says so out loud, rather than pretending a cut-off is a criterion.</li>
+<li><b>Every item shows why it is ranked where it is</b>, in one line, above the content. That
+is what makes disagreeing possible — you cannot argue with a sort you cannot see the reason
+for.</li>
+<li><b>Word caps are rendered, not asserted.</b> The brief and each ask show
+<code>N words / 200</code>. The cap is the product requirement; showing the count is how it
+stays true after the first week.</li>
+<li><b>The correction goes into the recipe, not the brief.</b> "Too long" and "missed
+something" append a line to the instructions rather than editing the summary you are looking
+at, so a correction you make once holds next week.</li>
+<li><b>Ranking uses the thread's own last activity.</b> Noted here because it is a trap
+already measured: a doc-level <code>lastActivityAt</code> is derived from file mtime, and a
+server-side rewrite refreshes every doc at once — ranking on it sorts 3,700 docs as "just
+now".</li>
+</ul>
+
+<h3>What I rejected</h3>
+<ul>
+<li><b>A number-only header</b> ("322 artifacts, 432 open threads"). It is a denominator with
+no numerator and no action; it makes the page feel like a dump before you have read a word.</li>
+<li><b>Auto-marking the brief read on scroll.</b> The read boundary decides what the next
+brief contains. Moving it because a phone scrolled in a pocket is a silent data loss with no
+undo — so it is a button, and the button has an undo.</li>
+<li><b>Threaded replies.</b> One flat thread, per the task. Authorship, role and timestamp on
+every comment, a rule between them, and the comment that actually asks something is flagged
+and tinted.</li>
+<li><b>A "snooze until" picker.</b> Skip moves an item to the end of today's order and says
+so. Dates on things nobody is waiting for is how a queue becomes a calendar.</li>
+<li><b>Grouping the queue by project.</b> Tried it; it reintroduces the choose-where-to-start
+problem the ranking exists to remove.</li>
+</ul>
+
+<h3>Open questions — I could not answer these for you</h3>
+<div class="q"><b>1. Which of each A/B pair?</b> Queue: one-at-a-time (matches what you asked
+for; you cannot see item 4 while deciding item 1) or the whole stack (skimmable, and long
+again). Detail: ask-last-scroll-up (literally what you described; nested scroller on a phone)
+or ask-first-fold (no nested scroll; "scroll up for more" becomes a tap you have to know
+about).</div>
+<div class="q"><b>2. Should the brief cover since-last-read, or a fixed window?</b> Since-read
+is right for a Monday morning. But an agent that runs all night produces a brief covering 14
+hours and 200 events, and the 200-word cap then hides more than it reports. Options: keep
+since-read and let the brief say "and 180 more events, unsummarised"; cap the window at 24h
+and show older separately; or make the cap elastic when the window is long.</div>
+<div class="q"><b>3. What does "mark caught up" do to items you did not answer?</b> Right now:
+nothing — the queue survives the brief. The alternative is that catching up clears the whole
+page, which is cleaner and loses things.</div>
+<div class="q"><b>4. Is 5-6 the right budget?</b> It is a guess. The measured shape is 358
+threads with a 12-day median wait, so any budget starves the tail; the question is whether
+you want 5 per sitting with an honest remainder, or 15 and a scroll.</div>
+<div class="q"><b>5. Who writes the ask?</b> Every ask here is 130-200 words, written by
+whoever wants the answer. If the person asking writes it, it is accurate and often skipped;
+if an agent writes it from the thread, it always exists and is sometimes wrong. Which failure
+do you prefer?</div>
+<div class="q"><b>6. Should "not mine" exist?</b> It is the only control here that hands work
+back to a person rather than answering it. It may be the most-used button on the page, or it
+may be an escape hatch that quietly re-queues the same thread next week.</div>
+<div class="q"><b>7. Does the board keep a decision count at all?</b> This mockup strips the
+decision strip and the threads rail from the board and replaces both with the Home badge. If
+you work the board directly for an hour, that badge is the only thing telling you something
+arrived.</div>
+
+<h3>Not built</h3>
+<p>Search, notifications, the backlog view behind "open the backlog", the workspace switcher,
+and the board itself past a four-row stub. The board stub exists only to show what leaves it.</p>
+`;
+
+render();
+</script>
+</body>
+</html>
