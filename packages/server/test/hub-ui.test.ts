@@ -131,7 +131,7 @@ describe('hub UI routes (plan §3.12 commit 7)', () => {
     // presence above proves the doc actually exists to be hidden.
     it('keeps the feedback doc out of the landing index', async () => {
       const html = await (await fetch(`${base}/`)).text();
-      expect(html).toContain('Live Feedback'); // the real landing page
+      expect(html).toContain('Workspaces'); // the real landing page
       expect(html).not.toContain(HUB_FEEDBACK_DOC_ID);
       expect(html).not.toContain('Hub feedback (all workspaces)');
     });
