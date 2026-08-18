@@ -1715,6 +1715,55 @@ Technical discoveries that should persist across sessions for this project.
   looks like X" is honest and useful; "X is the case" is a measurement that was
   never taken.
 
+## After a destructive operation, the missing thing's absence is the PREDICTED consequence — not evidence the warning was wrong
+
+- **A peer audited my warning by checking whether the endangered file still
+  existed, found it gone, and concluded the warning had been false.** The
+  warning was that renaming a session transcript from a worktree-encoded
+  project dir onto the canonical one would overwrite a much larger file of the
+  same name. Twelve hours later the peer measured "no such pair exists, nothing
+  over 50MB anywhere" — a correct `find`, correctly read — and filed it as one
+  of three wrong measurements.
+- **Both hypotheses predict the identical observation, which is what makes this
+  a trap rather than a mistake.** *"The pair never existed"* and *"the pair
+  existed and the rename destroyed it"* are indistinguishable from the
+  post-hoc listing alone. The audit ran **after** the operation it was auditing,
+  so the state it read was the state the warning was about.
+- **What separates them is birth time, and it was free.** At the time of the
+  warning, `stat` reported `size=214967259 birth=Jun 29` at the canonical path
+  and `size=1013315 birth=Aug 17 12:44:32` at the worktree path. Afterwards the
+  canonical path holds a file whose birth is `Aug 17 12:44:32` — the *worktree*
+  file's — whose earliest record is `19:44:32.743Z`, while the worktree file is
+  gone and no file of the original size survives anywhere under `~/.claude`.
+  `mv` within a filesystem is a rename, so it carries birthtime along; that one
+  field is what identifies which file is now standing at the path.
+- **Rule: when the question is whether a destructive operation was justified,
+  the artifact's absence is the weakest possible evidence, because it is what
+  BOTH answers predict. Reach for an identity field that survives the
+  operation** — birthtime, inode, a first-record timestamp, a content hash —
+  and compare it against what the earlier observation recorded. If the earlier
+  observation didn't record one, that is the gap to fix next time, not a reason
+  to trust the later reading.
+- **Same family as "A positive control must be a peer in TIME as well as in
+  kind", with the mechanism inverted.** There, a too-early read made an absence
+  vacuous while other writers were appending. Here the read is too LATE, and
+  the mutation between the two observations was caused by the very action under
+  review — so the audit destroys its own evidence and then cites the result.
+- **The corollary for the writer of the warning: quote the measurement into the
+  warning itself.** The numbers above survived only because they were pasted
+  from `stat` into the message at the time. Had the warning said "this would
+  overwrite a much larger file", it would have been unfalsifiable afterwards
+  and the audit's conclusion would have stood unchallenged.
+- Two smaller findings from the same review, both about attributing a claim
+  before grading it. One item on the wrong-measurement list was a correction I
+  had *made* to a peer's relayed advice, which that peer had already
+  acknowledged in writing — the correction got recorded as the error. And a
+  count of tool calls ("two of them") was taken from the shape of a nested path
+  rather than from the calls, which are in the transcript and can be counted.
+  **Before grading a measurement, establish whose it was and what produced
+  it** — a review that mis-attributes is worse than one that is merely wrong,
+  because it teaches the wrong party the wrong lesson.
+
 ## A truncated page read is indistinguishable from a page that never rendered
 
 - **An orchestrating session read the live workspace board in Chrome, reported
