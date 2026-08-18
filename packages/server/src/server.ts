@@ -4,10 +4,13 @@ import {
   type Anchor,
   type DocMeta,
   type DocType,
+  type ReviewPayload,
   type User,
   type WebhookPayload,
   anchors,
+  checkReviewPayload,
   contentKind,
+  reviewPayloadMessage,
   suggestOps,
   summaryHash,
 } from '@feedback/core';
@@ -198,6 +201,30 @@ function anchorSnippetText(anchor: Anchor): string | undefined {
     return anchor.original.snippet?.text;
   }
   return anchor.snippet?.text;
+}
+
+/**
+ * A comment's optional Review Item declaration, checked at the door.
+ *
+ * Every route that writes a comment calls this, because a payload that gets
+ * past one of them is stored in the CRDT and renders on Bryan's Home queue
+ * with a headline that does not fit two lines on a phone — which is the
+ * defect the whole feature exists to remove, re-created by the feature.
+ *
+ * **Refuse rather than truncate.** Clipping a long headline is exactly what
+ * produced the "titles are random detailed text" rows this replaces, and it
+ * teaches the author nothing: the call returns 200, the row looks wrong, and
+ * nobody connects the two. A 400 quoting every problem lands in a retrying
+ * model's context, where it can be acted on.
+ *
+ * Returns `undefined` for an absent declaration — an ordinary comment is
+ * still an ordinary comment, and the overwhelming majority are.
+ */
+function reviewFromBody(raw: unknown): { ok: true; review?: ReviewPayload } | { ok: false; error: string } {
+  if (raw === undefined || raw === null) return { ok: true };
+  const check = checkReviewPayload(raw);
+  if (!check.ok) return { ok: false, error: reviewPayloadMessage(check) };
+  return { ok: true, review: raw as ReviewPayload };
 }
 
 /** Attribution for a write that arrived with no author at all. Deliberately
@@ -3601,11 +3628,41 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               const user = authorFor(body?.author);
               const text = body?.text as string | undefined;
               if (!user || !text) return j(400, { error: 'author + text required' });
+              const declared = reviewFromBody(body?.review);
+              if (!declared.ok) return j(400, { error: declared.error });
               const t = await rooms.postComment(docId, threadId, user, text, undefined, {
                 // A share visitor must not be able to spend the API key.
                 generate: !visitor,
+                ...(declared.review ? { review: declared.review } : {}),
               });
               return t ? j(200, { thread: t }) : j(404, { error: 'thread not found' });
+            }
+            // Answering a Review Item. Deliberately a thin wrapper over the
+            // reply above rather than a second write path: `text` is always
+            // the verbatim answer, and `optionId` only records which offered
+            // option those words came from. A person who types their own
+            // answer sends no id and is not answering any less.
+            if (threadRest === '/answer' && req.method === 'POST') {
+              const body = await safeJson(req);
+              const user = authorFor(body?.author);
+              const text = body?.text as string | undefined;
+              const commentId = body?.commentId as string | undefined;
+              if (!user || !text || !commentId) {
+                return j(400, { error: 'author + text + commentId required' });
+              }
+              const res = await rooms.answerReviewItem(
+                docId,
+                threadId,
+                commentId,
+                user,
+                text,
+                typeof body?.optionId === 'string' ? body.optionId : undefined,
+                { generate: !visitor },
+              );
+              if (!res.ok) {
+                return j(res.error === 'no-doc' ? 404 : 400, { error: res.error });
+              }
+              return j(200, { thread: res.thread });
             }
             if (threadRest === '/summary' && req.method === 'POST') {
               // On-demand generation. The scheduled path is debounced and
@@ -3722,8 +3779,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // caller that wrote it has to be the one that hears about it.
             const anchorCheck = anchors.validateAnchor(anchor);
             if (!anchorCheck.ok) return j(400, { error: anchorCheck.error });
+            const declared = reviewFromBody(body?.review);
+            if (!declared.ok) return j(400, { error: declared.error });
             const t = await rooms.postComment(docId, null, user, text, anchor, {
               generate: !visitor,
+              ...(declared.review ? { review: declared.review } : {}),
             });
             return t ? j(200, { thread: t }) : j(500, { error: 'could not create thread' });
           }
@@ -3735,6 +3795,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             if (!author || !text || find.length === 0) {
               return j(400, { error: 'author + text + find required' });
             }
+            const declared = reviewFromBody(body?.review);
+            if (!declared.ok) return j(400, { error: declared.error });
             const res = await rooms.createThreadByFind(
               docId,
               {
@@ -3747,7 +3809,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               author,
               text,
               // Visitor-authored text becomes the entire prompt on this route.
-              { generate: !visitor },
+              { generate: !visitor, ...(declared.review ? { review: declared.review } : {}) },
             );
             return res.ok ? j(200, { thread: res.thread }) : j(409, res);
           }
