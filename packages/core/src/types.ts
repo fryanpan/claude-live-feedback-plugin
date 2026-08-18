@@ -315,6 +315,8 @@ export interface StoredSummary {
   topic: string;
   discussion: string;
   hash: string;
+  /** Prompt generation this was written under; absent = 1. See `needsCall`. */
+  promptVersion?: number;
 }
 
 /** Payload POSTed to a host integration webhook for a thread event. */
