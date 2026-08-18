@@ -19,6 +19,7 @@ import {
   decisionShapeMessage,
 } from './decision-shape.ts';
 import { type DeclaredOwnerKind, declaredAssigneeKind } from './task-owner.ts';
+import { type TitleGap, bodyDrift, bodyHead, taskTitleGaps } from './task-title.ts';
 
 /**
  * The hub task store: server-owned state for Workspace Hub workspaces and
@@ -497,6 +498,39 @@ export interface Task {
    * `createdAt`, which is when a never-edited body was in fact written.
    */
   bodyWrittenAt?: number;
+  /**
+   * When somebody last NAMED this row — stamped by `applyTitle`, the single
+   * writer of `title`.
+   *
+   * Distinct from `bodyWrittenAt` and from `updatedAt` for the same reason
+   * those two are distinct from each other: the question here is "has anybody
+   * looked at the title since the task moved", and a row clock cannot answer
+   * it.
+   */
+  titleWrittenAt?: number;
+  /**
+   * `bodyHead` of the description at the moment the title was last authored —
+   * the user-story line the title compresses.
+   *
+   * Absent on a row filed before the standard existed, which suppresses the
+   * head-change trigger for that row and nothing else.
+   */
+  titleHead?: string;
+  /**
+   * Accumulated fraction of the body's words that have changed since the
+   * title was last authored, 0..1.
+   *
+   * ACCUMULATED rather than compared, because comparing needs a second copy
+   * of the body stored per task to compare against. `updateBodySnapshot` holds
+   * both the old and the new body at the moment of every change, so the
+   * increment is free exactly there — and only there, which is a second
+   * reason the staleness hangs off that choke point rather than off a route.
+   *
+   * Monotone until a title is re-authored. A revert therefore ADDS drift
+   * rather than cancelling it, which is the noisy direction: two real edits
+   * did happen, and the cost of saying so is one advisory.
+   */
+  titleDrift?: number;
 }
 
 export interface CreateTaskOpts {
@@ -2182,6 +2216,12 @@ export class TaskStore {
     };
     state.tasks.set(task.id, task);
     this.taskIndex.set(task.id, workspaceId);
+    // Through the choke point like every other write of a title, so a created
+    // row carries the same marks a renamed one does. Without this a task
+    // would be measured for staleness against a body-head nobody ever
+    // recorded, and the head clause would be dead for the whole life of every
+    // task that was never renamed — which is most of them.
+    this.applyTitle(task, task.title);
 
     // Triage hook (§3.4): an OMITTED goal means "needs placing" — the task
     // has already landed at the bottom of Chores (the resting state; the
@@ -2667,6 +2707,56 @@ export class TaskStore {
   }
 
   /**
+   * THE CHOKE POINT for "this row got a name" — the ONLY assignment of
+   * `task.title` in the store, and every door into a title converges on it.
+   *
+   * There were three assignment sites before this: the `createTask` object
+   * literal, `renameTask`, and `noteBodyEdited`. Seven doors sit above them
+   * (`create_tasks` single and batch, `promote_to_task`,
+   * `import_tasks_markdown`, the board's inline rename, `update_task_body`,
+   * and `set_doc_content` on a `task:<id>` room), and no two of them share a
+   * reading — `parseTaskCreate` fronts two, promote and import build their
+   * own. So a title standard enforced at any one door would be a guarantee
+   * for that door's callers only, which is exactly how the `quote`
+   * preservation came to be skipped by the one caller that mattered.
+   *
+   * What it stamps is the pair of marks staleness is measured against:
+   * WHEN the row was named, and WHAT the description said at the time. Both
+   * reset here and nowhere else, so "the title has been re-authored" has one
+   * writer and cannot disagree with itself.
+   *
+   * Deliberately NOT a validator. Nothing is refused, rewritten, or
+   * normalized on the way through — the shape check is derived on read
+   * (`titleGapsOf`) so a raw capture still lands. See task-title.ts for why
+   * this is advisory.
+   */
+  private applyTitle(task: Task, title: string): void {
+    task.title = title;
+    task.titleWrittenAt = Date.now();
+    task.titleHead = bodyHead(task.body);
+    task.titleDrift = 0;
+  }
+
+  /**
+   * Every way this row's title currently falls short of the standard —
+   * derived, never stored.
+   *
+   * `commentsSinceTitle` comes from the caller because the discussion lives
+   * in the task's body ROOM rather than in this store, the same reason
+   * `projectTask` takes `commentCount` as a parameter. Omitted, the
+   * discussion clause simply does not fire; it is never guessed.
+   */
+  titleGapsOf(task: Task, commentsSinceTitle?: number): TitleGap[] {
+    return taskTitleGaps({
+      title: task.title,
+      ...(task.body !== undefined ? { body: task.body } : {}),
+      ...(task.titleHead !== undefined ? { titleHead: task.titleHead } : {}),
+      ...(task.titleDrift !== undefined ? { titleDrift: task.titleDrift } : {}),
+      ...(commentsSinceTitle !== undefined ? { commentsSinceTitle } : {}),
+    });
+  }
+
+  /**
    * Rename a task — the board's in-place title edit (§3.9: tap the title
    * text, Enter commits). No event fires: §3.6's exhaustive table has no
    * task.renamed row, so callers (the route) must refresh the projection by
@@ -2680,7 +2770,7 @@ export class TaskStore {
     const task = this.getTask(taskId);
     if (!task) return { ok: false, error: 'not-found' };
     if (task.title === title) return { ok: true, task, changed: false };
-    task.title = title;
+    this.applyTitle(task, title);
     task.updatedAt = Date.now();
     this.scheduleSave(task.workspaceId);
     return { ok: true, task, changed: true };
@@ -2736,7 +2826,7 @@ export class TaskStore {
     const ts = Date.now();
     const titleFrom = task.title;
     const nextTitle = opts.title?.trim();
-    if (nextTitle && nextTitle !== titleFrom) task.title = nextTitle;
+    if (nextTitle && nextTitle !== titleFrom) this.applyTitle(task, nextTitle);
     task.updatedAt = ts;
     task.bodyWrittenAt = ts;
     this.scheduleSave(task.workspaceId);
@@ -3394,6 +3484,16 @@ export class TaskStore {
       const original = task.body?.trim() || task.title.trim();
       if (original) task.quote = original;
     }
+    // How far the description has moved since anybody last named this row.
+    // Measured HERE because this is the only place that holds both the old
+    // and the new body, and accumulated rather than compared so no second
+    // copy of the body has to be stored to compare against. Clamped, so a
+    // long-lived task cannot run the number off past "completely different".
+    //
+    // The head clause of staleness needs no accumulation — it re-reads
+    // `titleHead` against the current body on every read — so only the drift
+    // half lives here.
+    task.titleDrift = Math.min(1, (task.titleDrift ?? 0) + bodyDrift(task.body, body));
     task.body = body;
     // The one thing this path DOES record: when the description changed.
     // Stamped only on a real change (the equality guard above returns first),

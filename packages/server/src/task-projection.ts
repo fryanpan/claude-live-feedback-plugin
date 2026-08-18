@@ -135,12 +135,23 @@ export function projectTask(
    * absent value as `unknown`, which is what it is.
    */
   ownerKind?: OwnerKind,
+  /**
+   * How this row's title falls short of the standard, derived by the caller
+   * for the same reason `commentCount` is: the discussion clause needs the
+   * body room, which the store cannot see.
+   *
+   * On the projection rather than only on a create response, because the
+   * reader who most needs it is somebody scanning a whole board — and they
+   * never saw the response to the call that named any of these rows.
+   */
+  titleGaps?: readonly string[],
 ): Record<string, unknown> {
   return {
     id: task.id,
     ...(commentCount > 0 ? { commentCount } : {}),
     workspaceId: task.workspaceId,
     title: task.title,
+    ...(titleGaps !== undefined && titleGaps.length > 0 ? { titleGaps: [...titleGaps] } : {}),
     status: task.status,
     assignee: task.assignee,
     ...(ownerKind !== undefined ? { ownerKind } : {}),
@@ -424,7 +435,10 @@ export class TaskProjection {
     const want = new Map(
       this.tasks
         .listTasks(workspaceId)
-        .map((t) => [t.id, projectTask(t, this.commentCount(t.id), ownerKindOf(t))]),
+        .map((t) => [
+          t.id,
+          projectTask(t, this.commentCount(t.id), ownerKindOf(t), this.titleGaps(t)),
+        ]),
     );
     const pending = this.tasks.getPendingRetriage(workspaceId);
     const wsFields: Record<string, unknown> = {
@@ -532,6 +546,19 @@ export class TaskProjection {
    * common case, since a room is created lazily and an empty one has no
    * threads either way.
    */
+  /**
+   * The title advisory for one row, including the discussion clause — which
+   * needs comment timestamps, and those live here rather than in the store.
+   *
+   * `titleWrittenAt ?? createdAt` is the honest fallback for a row filed
+   * before the standard existed: nobody has named it since it was created.
+   */
+  private titleGaps(task: Task): readonly string[] {
+    const since = task.titleWrittenAt ?? task.createdAt;
+    const commentsSinceTitle = this.discussionNotes(task.id).filter((n) => n.ts > since).length;
+    return this.tasks.titleGapsOf(task, commentsSinceTitle);
+  }
+
   private commentCount(taskId: string): number {
     const room = this.rooms.get(taskBodyDocId(taskId));
     if (!room) return 0;
