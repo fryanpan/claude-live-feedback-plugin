@@ -554,8 +554,17 @@ body.hub-body {
   overflow: auto;
   font-size: 16px;
 }
+/* 1500px, not 1280. The board is a LIST OF SENTENCES and the page's width is
+   the only thing that decides how much of one a row shows: at 1280 the board
+   column came out 712px and a row's title 578px, which is 78 characters of a
+   title people are asked to keep to about 100 (Bryan, 2026-08-18: "on desktop,
+   feel free to widen the task list so more can fit"). Measured in a browser,
+   not derived — see `task-title-lines-css.test.ts` for the method and the
+   numbers. Widening the container is what buys it; the row itself has nothing
+   left to give, its fixed chrome being 134px of handle, open zone, status,
+   owner, gaps and padding. */
 #hub-root {
-  max-width: 1280px;
+  max-width: 1500px;
   margin: 0 auto;
   padding: 0 14px calc(24px + var(--safe-bottom));
 }
@@ -799,10 +808,19 @@ body.hub-body {
   margin-top: 8px;
 }
 
-/* --- main 3-column layout --- */
+/* --- main 3-column layout ---
+   The side columns pay 50px into the board (220→200 and 280→260), which is
+   the half of the widening that helps a 1280px or 1440px window too — those
+   never reach `#hub-root`'s max-width, so raising it alone does nothing for
+   them. Both sidebars hold links that already wrap (`.hub-side-list a` sets
+   `overflow-wrap: anywhere`), so what they spend is height, on a column that
+   is nowhere near the height of the board beside it. The centre track stays
+   `minmax(0, 1fr)`: `1fr` is `minmax(auto, 1fr)`, and its content-driven
+   minimum is what lets one long unbreakable title push the whole page wider
+   than the viewport. */
 .hub-main {
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr) 280px;
+  grid-template-columns: 200px minmax(0, 1fr) 260px;
   gap: 20px;
   align-items: start;
 }
@@ -2320,10 +2338,27 @@ a.hub-link-chip:hover {
   display: none;
 }
 
-/* --- mobile (≤720px per design-mobile.md): single-column stack, board
-       first, sidebars after — a sidebar above the board would push the
-       morning's 90-second read below the fold. --- */
-@media (max-width: 900px) {
+/* --- single-column stack: board first, sidebars after — a sidebar above the
+       board would push the morning's 90-second read below the fold. ---
+
+   ≤1100px, not ≤900px, and the extra 200px is the band this was moved for.
+   The two side columns and their gaps cost a flat 500px whatever the window
+   is, so the three-column layout gets steadily worse as the window narrows
+   and falls off a cliff at the bottom of its own range: measured at a 901px
+   viewport the board column came out 373px and a row's TITLE 239px — about
+   32 characters, worse than the same board on a 430px phone, on a layout
+   whose whole justification is having room to spare. One pixel narrower it
+   stacks and the title gets 938px. Moving the stack up to 1100 puts the
+   narrowest three-column row at 439px of title (60 characters), which is the
+   floor `task-title-lines-css.test.ts` pins.
+
+   Only the STACK moved. Everything else in this file that keys off 900px —
+   the full-screen detail panel, the full-screen walkthrough, the badge drops,
+   the row padding — is about a phone-shaped screen rather than about column
+   arithmetic, and stays where it was. 901–1100 dropping its sidebars matches
+   what `design-mobile.md` already documents for the doc surface in exactly
+   that band. */
+@media (max-width: 1100px) {
   .hub-main {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -2336,6 +2371,10 @@ a.hub-link-chip:hover {
   .hub-side-threads {
     order: 2;
   }
+}
+
+/* --- mobile (≤720px per design-mobile.md) --- */
+@media (max-width: 900px) {
   .hub-section.hub-subgoal {
     margin-left: 10px;
   }
@@ -2484,6 +2523,53 @@ a.hub-link-chip:hover {
      nothing (max-content over no visible children is 0). */
   .hub-task-badges {
     min-width: max-content;
+  }
+}
+
+/* --- the task TITLE on a narrow viewport: two lines, then an ellipsis ---
+   The row is one grid line at every width and stays that way (the ≤900px
+   block says why). What changes here is how many lines the TITLE gets inside
+   its own track, which costs the layout nothing and the row about 20px of
+   height.
+
+   Measured on a real build in a 430px viewport with the coarse-pointer rules
+   forced on: the row is 402px and the title track 288px, so ONE line showed 39
+   characters of a 96-character title — the other 57 behind an ellipsis, on the
+   surface whose only job is telling two tasks apart. Two lines show about 78.
+   That is short of 100 and deliberately not chased further: the levers left
+   are the 16px body size (`design-mobile.md` calls 15px the floor and this is
+   the surface that argument was about) and a third line, and Bryan asked for
+   "up to two lines".
+
+   WIDTH ONLY, unlike the badge block above it. That one is scoped to a coarse
+   pointer as well because it spends the 32px handle that the coarse block
+   puts in the row — a pointer fact. How many lines a sentence needs is a
+   width fact: a desktop window dragged to 430px has exactly the same problem
+   and gets the same answer.
+
+   POSITION IS LOAD-BEARING. A media query adds NO specificity, so
+   `white-space: normal` here and `white-space: nowrap` on the bare
+   `.hub-task-title` are one class each and SOURCE ORDER decides. Above the
+   base rule this block would match, appear in devtools, and compute to
+   `nowrap` — every declaration in it inert, nothing on the page looking
+   wrong. It sits after the base rule and after both blocks that touch the
+   row, so anything added to those from here on outranks it — check this block
+   when you touch them.
+
+   `overflow-wrap: anywhere` is the unbreakable-token half. `minmax(0, 1fr)`
+   already stops the TRACK from growing, but a single token longer than the
+   line still overflows its own line box and gets clipped mid-glyph with no
+   ellipsis anywhere near it; breaking it keeps the clamp's ellipsis as the
+   only way a title ever ends. */
+@media (max-width: 560px) {
+  .hub-task-title {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.3;
   }
 }
 
