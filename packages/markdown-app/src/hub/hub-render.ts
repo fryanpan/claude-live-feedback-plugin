@@ -537,6 +537,23 @@ function taskBadges(task: HubTask): HTMLElement {
     );
   }
   if (task.triagePendingTs !== undefined) add('hub-badge-triage', 'triaging…');
+  // The title standard's only surface on the board. A gap computed on the
+  // server and rendered nowhere is not a check — it is a field, and this
+  // codebase has shipped that mistake before (`unproven`, which reached an
+  // event and a toast and never a row).
+  //
+  // Deliberately quiet: one badge whatever the gap count, and the specifics
+  // in the tooltip rather than in the strip. A row that needs renaming is a
+  // nudge for whoever next touches it, not an alarm — and a loud marker on
+  // what will initially be most of the board is a marker everyone learns to
+  // skim past.
+  if (task.titleGaps && task.titleGaps.length > 0) {
+    add(
+      'hub-badge-title-gap',
+      'name?',
+      `This title doesn't meet the standard (${task.titleGaps.join(', ')}). Aim for "<Person> can <achieve goal X> by <describe action>", under 70 characters.`,
+    );
+  }
   return badges;
 }
 
