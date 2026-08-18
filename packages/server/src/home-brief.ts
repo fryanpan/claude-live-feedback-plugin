@@ -377,6 +377,30 @@ export function buildBriefPrompt(
 }
 
 /**
+ * Does this text stop in the middle of a markdown token?
+ *
+ * The signature of a cut reply, and the one a reader sees: a link whose URL
+ * never closes renders its `](/workspaces/…?task=t-` as visible text at the
+ * end of the card. Each rule asks only whether an OPENER has no closer AFTER
+ * it, so ordinary prose using brackets or parentheses later in the same line
+ * is untouched — a false positive here costs a generated brief on this read,
+ * never a blank card, but it costs it on EVERY read (nothing is stored, so
+ * the next visit regenerates), which is why the rules are the unambiguous
+ * ones and not a general markdown parser.
+ *
+ * Returns the name of the unterminated token, or null when the text is whole.
+ */
+export function unterminatedMarkdownToken(text: string): string | null {
+  const openUrl = text.lastIndexOf('](');
+  if (openUrl !== -1 && text.indexOf(')', openUrl) === -1) return 'link url';
+  const openLabel = text.lastIndexOf('[');
+  if (openLabel !== -1 && text.indexOf(']', openLabel) === -1) return 'link label';
+  if ((text.match(/\*\*/g) ?? []).length % 2 !== 0) return 'bold';
+  if ((text.match(/`/g) ?? []).length % 2 !== 0) return 'code span';
+  return null;
+}
+
+/**
  * Accept a model reply as a brief, or refuse it. Refusal keeps the
  * deterministic brief — so every guard here is one-directional: it can cost
  * us a generated brief, it can never blank the card. An empty or absurdly
@@ -384,12 +408,22 @@ export function buildBriefPrompt(
  * can DELETE the thing it was asked to fix": any validation phrased purely
  * as an upper bound is satisfied by emptiness, so the lower bound is stated
  * too).
+ *
+ * The mid-token check is the backstop for the same failure the summarizer
+ * now catches at its source by reading `stop_reason`. Both exist because
+ * they fail differently: `stop_reason` is exact but speaks only for the
+ * token ceiling, while this one catches any reply that arrives broken. It is
+ * also what `briefIsFresh` reuses, so a brief PERSISTED broken before either
+ * guard existed stops being served — a validation-only fix leaves the
+ * already-broken ones on screen, and those are the ones somebody is looking
+ * at.
  */
 export function acceptBrief(reply: string | null): string | null {
   if (reply === null) return null;
   const text = reply.trim();
   if (text.length < 20) return null;
   if (text.length > 4000) return null;
+  if (unterminatedMarkdownToken(text) !== null) return null;
   return text;
 }
 
@@ -397,14 +431,26 @@ export function acceptBrief(reply: string | null): string | null {
 
 /**
  * Is this stored brief still the one to show? Fresh means: covers the same
- * marker, and nothing brief-relevant has happened since it was generated.
+ * marker, nothing brief-relevant has happened since it was generated, and the
+ * text is whole.
+ *
+ * That last clause is what reaches the briefs already on disk. Guarding only
+ * the WRITE would leave a brief persisted mid-link rendering forever — it is
+ * fresh by every other measure, so nothing would ever replace it — and the
+ * reader whose card ends in a broken URL is the reason this exists. Refusing
+ * it here costs one model call and puts the deterministic brief up meanwhile.
  */
 export function briefIsFresh(
   stored: StoredHomeBrief | undefined,
   since: number,
   eventCount: number,
 ): stored is StoredHomeBrief {
-  return stored !== undefined && stored.since === since && stored.eventCount === eventCount;
+  return (
+    stored !== undefined &&
+    stored.since === since &&
+    stored.eventCount === eventCount &&
+    unterminatedMarkdownToken(stored.markdown) === null
+  );
 }
 
 // ── The store ──────────────────────────────────────────────────────────────
