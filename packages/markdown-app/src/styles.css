@@ -982,10 +982,38 @@ body.hub-body {
   font-size: 13px;
   color: var(--fg-muted);
 }
+/* How the headline count splits. Rendered only when BOTH groups exist, so it
+   never restates a number the reader can already see. */
+.hub-decisions-split {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--fg-muted);
+}
 .hub-decision-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+/* Threads that qualified for the queue without containing a question — the
+   "shipped it, PR is green" notes agents leave on threads nobody closed.
+   Collapsed, because on the board that produced this measurement they were
+   the ENTIRE list (23 of 23), and an open section of 23 status notes is the
+   wall the reader is complaining about whatever heading sits on top of it.
+   Nothing is filtered out; a row moved here is still one tap away. */
+.hub-decision-updates {
+  margin-top: 8px;
+}
+.hub-decision-updates-label {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+.hub-decision-updates .hub-decision-chips {
+  margin-top: 6px;
 }
 .hub-decision-chip {
   display: inline-flex;
