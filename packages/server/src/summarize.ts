@@ -28,6 +28,7 @@ import {
   type StoredSummary,
   buildRetryNudge,
   buildSummaryPrompt,
+  findDeliveryClaim,
   needsCall,
   parseSummaryResponse,
 } from '@feedback/core/summary-prompt';
@@ -262,6 +263,7 @@ export class ThreadSummarizer {
     // or fails, the first answer ships whole. Never truncate here: a
     // complete 15-word line beats a chopped 12-word one.
     const hasReplies = thread.comments.length > 1;
+    const firstClaim = findDeliveryClaim(parsed);
     const nudge = buildRetryNudge(parsed, { hasReplies });
     if (nudge) {
       const retry = await this.post(system, [
@@ -279,6 +281,27 @@ export class ThreadSummarizer {
         const keepsTopic = parsed.topic === '' || reparsed.topic !== '';
         const keepsDiscussion = parsed.discussion === '' || reparsed.discussion !== '';
         if (keepsTopic && keepsDiscussion) return { ...reparsed, hash };
+      }
+      // An over-long first answer SHIPS as the fallback below, because a
+      // complete 15-word line beats a chopped 12-word one. A first answer that
+      // asserted delivery status must not: shipping it is shipping the false
+      // claim the guard exists to stop, and it is compact and confident, which
+      // is exactly what makes it believed. So the precedence inverts here.
+      if (firstClaim) {
+        // An answer that is merely over budget but makes no delivery claim is
+        // better than one that is compact and wrong — length is a display
+        // annoyance, a false "PR merged" is a lie on the board.
+        const clean =
+          reparsed &&
+          !findDeliveryClaim(reparsed) &&
+          (parsed.discussion === '' || reparsed.discussion !== '');
+        if (clean && reparsed) return { ...reparsed, hash };
+        // Both answers asserted delivery status. Store nothing: `threadLines`
+        // then keeps the deterministic lines, which are quoted from the thread
+        // and therefore cannot contradict it. Worse writing, never a false
+        // shipping claim.
+        console.error(`[summarize] dropped a summary asserting delivery status: "${firstClaim}"`);
+        return null;
       }
     }
     return { ...parsed, hash };
