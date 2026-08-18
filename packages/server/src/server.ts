@@ -666,7 +666,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       .discussionNotes(task.id)
       .filter((n) => n.ts > since).length;
     const gaps = taskStore.titleGapsOf(task, commentsSinceTitle);
-    const bGaps = bodyShapeGaps(task.body);
+    const bGaps = bodyShapeGaps(task.body, task.needs);
     const bMessage = bodyGapMessage(bGaps);
     const bodyPart =
       bGaps.length === 0
@@ -2294,7 +2294,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                 .map((t) => ({ taskId: t.id, gaps: taskStore.titleGapsOf(t) }))
                 .filter((r) => r.gaps.length > 0);
               const bodyRows = tasks
-                .map((t) => ({ taskId: t.id, gaps: bodyShapeGaps(t.body) }))
+                .map((t) => ({ taskId: t.id, gaps: bodyShapeGaps(t.body, t.needs) }))
                 .filter((r) => r.gaps.length > 0);
               return {
                 ...(rows.length > 0 ? { titleGaps: rows } : {}),

@@ -76,19 +76,33 @@ describe('bodyShapeGaps', () => {
     expect(bodyShapeGaps(body)).toEqual([]);
   });
 
-  it('accepts a decision task that opens with its question', () => {
-    // The measured false-positive class. A decision task has no "can ... so
-    // that" opening and is not deficient; its question IS its statement.
+  it('defers entirely on a row DECLARED as a decision', () => {
+    // The measured false-positive class. A decision row is not a story and is
+    // correct not to be; `decision-shape.ts` owns that field and already
+    // refuses a decision body with no question in it.
     const body = [
       '**Should a board share transitively grant repo-file access?**',
       '',
       'Options: refuse, report, or scope per review.',
     ].join('\n');
-    expect(bodyShapeGaps(body)).toEqual([]);
+    expect(bodyShapeGaps(body, 'decision')).toEqual([]);
   });
 
-  it('accepts an unbolded decision question', () => {
-    expect(bodyShapeGaps('Which ids should docs use, opaque or readable?')).toEqual([]);
+  it('defers on a decision row whose question is PLAIN PROSE, not a bold opener', () => {
+    // The case a prose-sniffing rule gets wrong in the expensive direction.
+    // Measured on the live board: inferring the genre found 4 decision rows
+    // where there were 7, and two of the misses were being flagged deficient.
+    const body =
+      'The question: for the review on Wednesday, is the requirement read-only or full editing?';
+    expect(bodyShapeGaps(body, 'decision')).toEqual([]);
+    // Positive control: the SAME body on a non-decision row is still flagged,
+    // so the deferral is the declared field talking and not the text.
+    expect(bodyShapeGaps(body, 'action')).toEqual(['no-story']);
+  });
+
+  it('does not excuse a non-decision row just because it opens with a question', () => {
+    // The other direction of the same proxy failure.
+    expect(bodyShapeGaps('Should we ship the thing this week?')).toEqual(['no-story']);
   });
 
   it('reports no-story for a status report opening', () => {

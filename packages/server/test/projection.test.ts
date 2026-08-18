@@ -258,6 +258,8 @@ describe('ydoc projection + workspace room', () => {
       assignee: 'Bryan',
       goal: 'chores',
       body: '**Should doc ids become opaque identifiers, or stay readable slugs?**',
+      needs: 'decision',
+      options: [{ label: 'Opaque' }, { label: 'Readable slugs' }],
     });
     const room = handle.rooms.get(workspaceRoomId(wsId));
     if (!room) throw new Error('ws room was not created');

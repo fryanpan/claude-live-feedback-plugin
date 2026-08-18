@@ -19,6 +19,12 @@
  * demanding more content would have been answering a problem the corpus does
  * not have.
  *
+ * **The decision genre is READ, not sniffed.** A decision task states its
+ * question rather than a story and is correct to; `needs: 'decision'` is a
+ * declared field and `decision-shape.ts` already owns those bodies. Inferring
+ * the genre from the prose instead measured 4 decision rows where the board
+ * had 7, and flagged two of the misses as deficient.
+ *
  * **Two rules were measured and rejected, which is worth recording so they
  * are not re-proposed.** A "states a done-when" gap fires on 8 otherwise
  * excellent rows, four of them decision tasks (which have a question rather
@@ -57,25 +63,6 @@ const PERSONAS = [
   'anyone',
   'everyone',
   'someone',
-];
-
-/** Openers that make a first paragraph a QUESTION rather than a statement. */
-const QUESTION_OPENERS = [
-  'should',
-  'what',
-  'which',
-  'who',
-  'when',
-  'where',
-  'how',
-  'is',
-  'are',
-  'do',
-  'does',
-  'can',
-  'could',
-  'would',
-  'will',
 ];
 
 export type BodyGap = 'empty' | 'no-story';
@@ -142,34 +129,28 @@ function opensWithPersona(paragraph: string): boolean {
 }
 
 /**
- * A decision task states its question instead of a story, and is correct to.
- *
- * This genre is here because of the measurement, not in anticipation of it:
- * four open rows were being flagged by a story-only rule, and every one of
- * them was shaped exactly as a decision task should be. Recognising it is
- * what keeps this detector from crying wolf on a whole legitimate category.
- */
-function isDecisionQuestion(paragraph: string): boolean {
-  if (!paragraph.includes('?')) return false;
-  const first =
-    paragraph
-      .split(/\s+/)[0]
-      ?.toLowerCase()
-      .replace(/[^a-z]/g, '') ?? '';
-  return QUESTION_OPENERS.includes(first);
-}
-
-/**
  * The gaps a description's own text can reveal, with no other context.
  *
  * `empty` short-circuits: a body with no words has exactly one thing wrong
  * with it, and reporting a missing story as well would read as two problems
  * where there is one.
  */
-export function bodyShapeGaps(body: string | undefined): BodyGap[] {
+export function bodyShapeGaps(body: string | undefined, needs?: 'action' | 'decision'): BodyGap[] {
+  // A decision row is not a story and is correct not to be, so this defers
+  // entirely rather than second-guessing `decision-shape.ts` — which already
+  // owns that field, already REFUSES a decision body with no question in it,
+  // and already returns its own advisory gaps. Two advisories composed beat a
+  // third that re-derives one of them.
+  //
+  // Read from the DECLARED field, never sniffed from the prose. A first cut
+  // inferred the genre from "opens with a bolded question" and was measured
+  // against the live board: it excused 4 rows, and the board actually had 7.
+  // The three it missed included two whose authors wrote the question as
+  // plain prose and which were being flagged as deficient — the exact
+  // expensive-direction failure a proxy for an available field produces.
+  if (needs === 'decision') return [];
   const paragraph = plain(firstParagraph(body));
   if (paragraph.length === 0) return ['empty'];
-  if (isDecisionQuestion(paragraph)) return [];
   if (opensWithPersona(paragraph) && /\bso that\b/i.test(paragraph)) return [];
   return ['no-story'];
 }
