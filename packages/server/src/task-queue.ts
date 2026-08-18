@@ -59,7 +59,6 @@ export interface QueueRow {
   status: TaskStatus;
   assignee: string;
   needs?: 'action' | 'decision';
-  riskTier?: 'green' | 'yellow' | 'red';
   blockedBy: QueueBlocker[];
   /** No ENFORCED open blocker. Advisory (`after`-only) blockers leave this
    *  true, exactly as the transition gate treats them. */
@@ -187,7 +186,6 @@ export function buildQueue(
       status: task.status,
       assignee: task.assignee,
       ...(task.needs !== undefined ? { needs: task.needs } : {}),
-      ...(task.riskTier !== undefined ? { riskTier: task.riskTier } : {}),
       blockedBy,
       ready: !blockedBy.some((b) => b.enforce),
       bodyWrittenAt,

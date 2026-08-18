@@ -18,6 +18,8 @@ import {
   checkDecisionShape,
   decisionShapeMessage,
 } from './decision-shape.ts';
+import { type DeclaredOwnerKind, declaredAssigneeKind } from './task-owner.ts';
+import { type TitleGap, bodyDrift, bodyHead, taskTitleGaps } from './task-title.ts';
 
 /**
  * The hub task store: server-owned state for Workspace Hub workspaces and
@@ -213,6 +215,29 @@ const TASK_STATUSES: ReadonlySet<string> = new Set(['todo', 'in-progress', 'done
 /** Reserved catch-all section id for no-goal work. Never in `goals[]`. */
 export const CHORES_GOAL_ID = 'chores';
 
+/**
+ * Goal ids the SERVER owns. Every other goal id is generated (`newGoalId`)
+ * and opaque; these are literals on purpose, and the distinction is stated
+ * here rather than implied so that the next reserved bucket is added to a
+ * list instead of to a chain of `=== CHORES_GOAL_ID` comparisons.
+ *
+ * A reserved id is one that code and agents must be able to SAY without a
+ * lookup — `chores` is referenced across this store, named in the shipped
+ * skills, and is the answer to "where does unplaced work go". A generated id
+ * could not carry that meaning. Reserved ids are therefore exempt from the
+ * generation rule, not an oversight in it, and they stay reachable by their
+ * literal from every read and every `setTaskGoal`.
+ *
+ * They are still refused by every WRITE that would create, rename, remove or
+ * reorder a goal — a reserved bucket exists, it is not authored.
+ */
+export const RESERVED_GOAL_IDS: ReadonlySet<string> = new Set([CHORES_GOAL_ID]);
+
+/** Whether `id` is a server-owned bucket rather than an authored goal. */
+export function isReservedGoalId(id: string): boolean {
+  return RESERVED_GOAL_IDS.has(id);
+}
+
 /** Every goal and subgoal as one flat list, parent before its children. The
  *  ordered list is two levels deep and three call sites had each walked it by
  *  hand; a fourth that forgot the inner loop would silently ignore subgoals,
@@ -294,9 +319,9 @@ export interface TaskTransition {
   amendments?: TaskEvidenceAmendment[];
   /** Agent-reported cost at done. */
   usage?: { inputTokens: number; outputTokens: number };
-  /** The human's live confirmation, required for an agent to move a
-   *  yellow-tier task forward (§3.4). Recorded so the after-the-fact review
-   *  can see the confirmation was asked for and given. */
+  /** Was the human's live confirmation on a yellow-tier agent move (§3.4).
+   *  No longer WRITTEN — the risk gate was removed 2026-08-18 — but kept on
+   *  the type because transitions already persisted carry it. */
   confirmed?: boolean;
 }
 
@@ -341,6 +366,14 @@ export interface Task {
    *  resolves this from the caller and REFUSES the generic word (see
    *  task-owner.ts), so a stored 'agent' is a pre-enforcement row. */
   assignee: string;
+  /**
+   * What KIND of somebody the assignee is, as DECLARED — never as guessed
+   * from the name. Absent means nobody has said, which reads as `unknown`
+   * (see `resolveOwnerKind`), not as a person. Cleared on a hand-over that
+   * declares nothing, because inheriting the previous owner's kind would
+   * label the new one by accident.
+   */
+  assigneeKind?: DeclaredOwnerKind;
   /** Only meaningful when the assignee is a human. */
   needs?: 'action' | 'decision';
   /**
@@ -443,8 +476,10 @@ export interface Task {
    * a week.
    */
   unplacedSince?: number;
-  /** Stamped by triage at placement time; keyed to the ACTION's damage. */
-  riskTier?: 'green' | 'yellow' | 'red';
+  /* `riskTier` was here, stamped by triage and keyed to the ACTION's damage.
+     Removed from the type 2026-08-18 with the gate that read it. Tasks already
+     persisted still carry the value in their sidecar; nothing reads it and no
+     migration strips it, because rewriting every row is the larger risk. */
   /** Append-only audit trail. */
   transitions: TaskTransition[];
   createdAt: number;
@@ -465,12 +500,49 @@ export interface Task {
    * `createdAt`, which is when a never-edited body was in fact written.
    */
   bodyWrittenAt?: number;
+  /**
+   * When somebody last NAMED this row — stamped by `applyTitle`, the single
+   * writer of `title`.
+   *
+   * Distinct from `bodyWrittenAt` and from `updatedAt` for the same reason
+   * those two are distinct from each other: the question here is "has anybody
+   * looked at the title since the task moved", and a row clock cannot answer
+   * it.
+   */
+  titleWrittenAt?: number;
+  /**
+   * `bodyHead` of the description at the moment the title was last authored —
+   * the user-story line the title compresses.
+   *
+   * Absent on a row filed before the standard existed, which suppresses the
+   * head-change trigger for that row and nothing else.
+   */
+  titleHead?: string;
+  /**
+   * Accumulated fraction of the body's words that have changed since the
+   * title was last authored, 0..1.
+   *
+   * ACCUMULATED rather than compared, because comparing needs a second copy
+   * of the body stored per task to compare against. `updateBodySnapshot` holds
+   * both the old and the new body at the moment of every change, so the
+   * increment is free exactly there — and only there, which is a second
+   * reason the staleness hangs off that choke point rather than off a route.
+   *
+   * Monotone until a title is re-authored. A revert therefore ADDS drift
+   * rather than cancelling it, which is the noisy direction: two real edits
+   * did happen, and the cost of saying so is one advisory.
+   */
+  titleDrift?: number;
 }
 
 export interface CreateTaskOpts {
   title: string;
   body?: string;
   assignee?: string;
+  /** Declares whether `assignee` is a person or an agent. Omitted, the store
+   *  falls back to the author's own classification when the caller is
+   *  assigning to itself. */
+  assigneeKind?: DeclaredOwnerKind;
   needs?: 'action' | 'decision';
   /** Candidate answers. Decision tasks only; ids are minted here. */
   options?: Array<{ label: string; detail?: string }>;
@@ -504,18 +576,8 @@ export type TransitionResult =
   | { ok: true; task: Task; blockers: TransitionBlocker[]; unproven: boolean }
   | {
       ok: false;
-      error:
-        | 'not-found'
-        | 'bad-status'
-        | 'same-status'
-        | 'blocked'
-        // §3.4 risk tiers, agent actors only, forward moves only:
-        // red is refused outright; yellow needs the human's live
-        // confirmation on the request.
-        | 'risk-refused'
-        | 'needs-confirmation';
+      error: 'not-found' | 'bad-status' | 'same-status' | 'blocked';
       blockers?: TransitionBlocker[];
-      riskTier?: 'green' | 'yellow' | 'red';
       /** Refusal text shaped to land verbatim in an agent's context. */
       message?: string;
     };
@@ -914,9 +976,9 @@ export interface TaskTransitionedEvent {
   evidence?: TaskEvidence;
   /** What the task cost in tokens (agent-reported at done). */
   usage?: { inputTokens: number; outputTokens: number };
-  /** The human's live confirmation on a yellow-tier agent move (§3.4) —
-   *  in the audit log, so the after-the-fact review can see the gate was
-   *  answered rather than absent. */
+  /** Was the human's live confirmation on a yellow-tier agent move (§3.4).
+   *  Never emitted since the risk gate was removed 2026-08-18; kept so a
+   *  reader of an older `events.jsonl` row still types. */
   confirmed?: boolean;
   /** A forward move with no evidence attached — allowed, flagged (§7.1). */
   unproven: boolean;
@@ -946,10 +1008,13 @@ export interface TaskEvidenceAmendedEvent {
 }
 
 /**
- * A gate refusal (§3.4 risk tiers). Not in §3.6's table, which predates the
- * tier arm having any consumer — §3.9's Decisions filter promises "gate
- * refusals" as rows, and a refusal that emits nothing can never appear
- * there. It carries no task, because nothing about the task changed.
+ * A gate refusal (§3.4 risk tiers). NOTHING EMITS THIS since the risk gate was
+ * removed on 2026-08-18 — it is retained, along with the client's
+ * `describeEvent` case for it, because rows are already in `events.jsonl` and
+ * a type the feed no longer knows renders as the bare slug `task.gate_refused`
+ * in a view built for people. Deleting an event type is not free once it has
+ * been written down. It carries no task, because nothing about the task
+ * changed.
  */
 export interface TaskGateRefusedEvent {
   type: 'task.gate_refused';
@@ -1351,12 +1416,43 @@ export type SetTaskGoalResult =
     }
   | { ok: false; error: 'not-found' | 'unknown-goal' };
 
+/**
+ * One entry of a submitted goal list. The id is OPTIONAL, and which way it
+ * goes is the whole contract (§3.2, restated once goal ids are generated):
+ *
+ *  - **`id` present** — "this is the band you already have". It must name a
+ *    goal or subgoal this board holds right now; anything else is refused as
+ *    `unknown-goal-id`. That is the refusal that makes a re-key
+ *    unexpressible: there is no input here that can hand an existing band a
+ *    different id, and no input that can hand a NEW band an id of the
+ *    caller's choosing.
+ *  - **`id` absent** — "create this band". The server generates an opaque id
+ *    (`newGoalId`) and reports it in `created`, in submission order.
+ *
+ * So submitting a list now means: these are my bands, in this order, and the
+ * ones I did not name an id for are new. Everything else the call could ever
+ * do it still does — reorder, retitle, reparent, remove (gated) — none of
+ * which touch an id.
+ */
+export interface GoalListEntry {
+  /** Omit to CREATE. Present = must already exist on this board. */
+  id?: string;
+  title: string;
+  dueAt?: number;
+  subgoals?: Array<{ id?: string; title: string; dueAt?: number }>;
+}
+
 export type SetGoalListResult =
   | {
       ok: true;
       workspace: HubWorkspace;
       /** False when the new list deep-equals the old — no event, no moves. */
       changed: boolean;
+      /** Goals and subgoals this call CREATED, in submission order (parents
+       *  before their subgoals), with the id the server generated for each.
+       *  The only way a caller learns a new band's id — which is the point:
+       *  they never chose it. */
+      created: Array<{ id: string; title: string; parent?: string }>;
       /** Open tasks whose goal or subgoal id disappeared, moved to Chores —
        *  reported so the caller can re-place them (§3.2 edit contract). */
       movedToChores: string[];
@@ -1383,6 +1479,15 @@ export type SetGoalListResult =
       };
     }
   | { ok: false; error: 'workspace-not-found' | 'reserved-goal-id' | 'duplicate-goal-id' }
+  | {
+      ok: false;
+      error: 'unknown-goal-id';
+      /** Ids the submitted list names that this board does not hold. Either
+       *  the caller meant to CREATE (omit the id) or is working from a list
+       *  whose bands have since been removed — and inventing the id would be
+       *  the re-key this whole scheme exists to make unexpressible. */
+      unknownIds: string[];
+    }
   | {
       ok: false;
       error: 'would-strand-tasks';
@@ -1473,6 +1578,26 @@ function cryptoId(prefix: string): string {
   // 9 random bytes → 12 base64url chars. URL-safe, filename-safe, and every
   // char is legal in a docId (the future `task:<id>` body rooms need that).
   return `${prefix}-${randomBytes(9).toString('base64url')}`;
+}
+
+/**
+ * The id of a NEWLY CREATED goal. Opaque and server-generated, exactly like a
+ * task id, and for the same reason: an identifier is the one thing that must
+ * never move, so nothing about it may encode something that does.
+ *
+ * The scheme this replaces was caller-supplied slugs (`g1-loop`, `g2-reach`),
+ * which put PRIORITY — the fastest-moving property a board has — inside the
+ * identity. Renaming a band then meant re-keying it, and re-keying it through
+ * the full-replace `setGoalList` reads as one goal removed and a different one
+ * added: the band's open tasks swept to Chores, its done tasks orphaned. The
+ * `would-strand-tasks` refusal defends against that; generated ids make it
+ * unexpressible, which is the stronger move.
+ *
+ * Existing slug ids keep working forever — they are just ids. This generates
+ * the ones created from here on; nothing renumbers what a board already has.
+ */
+export function newGoalId(): string {
+  return cryptoId('g');
 }
 
 export class TaskStore {
@@ -2174,6 +2299,7 @@ export class TaskStore {
     }
 
     const now = Date.now();
+    const assigneeKind = declaredAssigneeKind(opts.assignee ?? '', opts.assigneeKind, opts.actor);
     const inGoal = Array.from(state.tasks.values()).filter((t) => t.goal === goal);
     const order = opts.order ?? Math.max(0, ...inGoal.map((t) => t.order)) + 1;
     const task: Task = {
@@ -2185,6 +2311,7 @@ export class TaskStore {
       // before it gets here (task-owner.ts), so this only covers a direct
       // in-process call that named nobody.
       assignee: opts.assignee ?? 'agent',
+      ...(assigneeKind !== undefined ? { assigneeKind } : {}),
       ...(opts.needs !== undefined ? { needs: opts.needs } : {}),
       ...(options.length > 0 ? { options } : {}),
       goal,
@@ -2202,6 +2329,12 @@ export class TaskStore {
     };
     state.tasks.set(task.id, task);
     this.taskIndex.set(task.id, workspaceId);
+    // Through the choke point like every other write of a title, so a created
+    // row carries the same marks a renamed one does. Without this a task
+    // would be measured for staleness against a body-head nobody ever
+    // recorded, and the head clause would be dead for the whole life of every
+    // task that was never renamed — which is most of them.
+    this.applyTitle(task, task.title);
 
     // Triage hook (§3.4): an OMITTED goal means "needs placing" — the task
     // has already landed at the bottom of Chores (the resting state; the
@@ -2313,13 +2446,10 @@ export class TaskStore {
    *  - `unproven` marks a forward move that attached no evidence: allowed,
    *    flagged, never refused (§7.1 — the worst this can do is draw attention
    *    to something that turned out to be fine).
-   *  - `riskTier` (§3.4) gates the ACTOR, not the task's importance: an
-   *    AGENT moving a `red` task forward is refused outright, and a `yellow`
-   *    one needs the human's live confirmation on the request. A person is
-   *    never gated (the override is one tap) and neither is moving back to
-   *    todo. Honest reach: this binds LF-MEDIATED mutations only — actions
-   *    an agent runs in its own runtime never touch this server, where the
-   *    tier stays advisory and the fleet's permission rules enforce.
+   *  - there is no longer a risk arm. `riskTier` gated an agent's forward
+   *    move (red refused, yellow needed `confirmed: true`) until 2026-08-18;
+   *    the reasoning for removing it, and what is deliberately still accepted
+   *    on the wire, is in the note where `riskRefusal` used to be.
    */
   transition(
     taskId: string,
@@ -2329,7 +2459,11 @@ export class TaskStore {
       note?: string;
       evidence?: TaskEvidence;
       usage?: { inputTokens: number; outputTokens: number };
-      /** The human's live confirmation for a yellow-tier forward move. */
+      /** Accepted and IGNORED since 2026-08-18. It carried the human's live
+       *  confirmation for a yellow-tier forward move; the risk gate is gone,
+       *  but peers on older bundles keep sending this until they restart and
+       *  a payload that suddenly fails validation is how a removal breaks
+       *  them. Do not turn this into a rejection. */
       confirmed?: boolean;
     },
   ): TransitionResult {
@@ -2361,23 +2495,9 @@ export class TaskStore {
       name: opts.actor.name,
       kind: classifyActor(opts.actor),
     };
-    const refusal = forward && by.kind === 'agent' ? this.riskRefusal(task, opts.confirmed) : null;
-    if (refusal) {
-      // A refusal is a decision the after-the-fact review has to be able to
-      // see (§3.9's Decisions filter promises gate refusals), so it emits —
-      // the task itself is unchanged.
-      this.emit({
-        type: 'task.gate_refused',
-        workspaceId: task.workspaceId,
-        taskId: task.id,
-        to,
-        riskTier: task.riskTier ?? 'green',
-        reason: refusal.error,
-        actor: by,
-        ts: Date.now(),
-      });
-      return { ok: false, ...refusal, blockers };
-    }
+    // The risk arm of the gate used to sit here — see the note where
+    // `riskRefusal` was, below `openBlockers`. `opts.confirmed` is still read
+    // off the wire and deliberately goes nowhere: older peers keep sending it.
     const entry: TaskTransition = {
       ts: Date.now(),
       from: task.status,
@@ -2386,7 +2506,6 @@ export class TaskStore {
       ...(opts.note !== undefined ? { note: opts.note } : {}),
       ...(opts.evidence !== undefined ? { evidence: opts.evidence } : {}),
       ...(opts.usage !== undefined ? { usage: opts.usage } : {}),
-      ...(opts.confirmed === true ? { confirmed: true } : {}),
     };
     task.transitions.push(entry);
     task.status = to;
@@ -2408,7 +2527,6 @@ export class TaskStore {
       ...(opts.note !== undefined ? { note: opts.note } : {}),
       ...(opts.evidence !== undefined ? { evidence: opts.evidence } : {}),
       ...(opts.usage !== undefined ? { usage: opts.usage } : {}),
-      ...(opts.confirmed === true ? { confirmed: true } : {}),
       unproven,
       ts: entry.ts,
     });
@@ -2687,6 +2805,56 @@ export class TaskStore {
   }
 
   /**
+   * THE CHOKE POINT for "this row got a name" — the ONLY assignment of
+   * `task.title` in the store, and every door into a title converges on it.
+   *
+   * There were three assignment sites before this: the `createTask` object
+   * literal, `renameTask`, and `noteBodyEdited`. Seven doors sit above them
+   * (`create_tasks` single and batch, `promote_to_task`,
+   * `import_tasks_markdown`, the board's inline rename, `update_task_body`,
+   * and `set_doc_content` on a `task:<id>` room), and no two of them share a
+   * reading — `parseTaskCreate` fronts two, promote and import build their
+   * own. So a title standard enforced at any one door would be a guarantee
+   * for that door's callers only, which is exactly how the `quote`
+   * preservation came to be skipped by the one caller that mattered.
+   *
+   * What it stamps is the pair of marks staleness is measured against:
+   * WHEN the row was named, and WHAT the description said at the time. Both
+   * reset here and nowhere else, so "the title has been re-authored" has one
+   * writer and cannot disagree with itself.
+   *
+   * Deliberately NOT a validator. Nothing is refused, rewritten, or
+   * normalized on the way through — the shape check is derived on read
+   * (`titleGapsOf`) so a raw capture still lands. See task-title.ts for why
+   * this is advisory.
+   */
+  private applyTitle(task: Task, title: string): void {
+    task.title = title;
+    task.titleWrittenAt = Date.now();
+    task.titleHead = bodyHead(task.body);
+    task.titleDrift = 0;
+  }
+
+  /**
+   * Every way this row's title currently falls short of the standard —
+   * derived, never stored.
+   *
+   * `commentsSinceTitle` comes from the caller because the discussion lives
+   * in the task's body ROOM rather than in this store, the same reason
+   * `projectTask` takes `commentCount` as a parameter. Omitted, the
+   * discussion clause simply does not fire; it is never guessed.
+   */
+  titleGapsOf(task: Task, commentsSinceTitle?: number): TitleGap[] {
+    return taskTitleGaps({
+      title: task.title,
+      ...(task.body !== undefined ? { body: task.body } : {}),
+      ...(task.titleHead !== undefined ? { titleHead: task.titleHead } : {}),
+      ...(task.titleDrift !== undefined ? { titleDrift: task.titleDrift } : {}),
+      ...(commentsSinceTitle !== undefined ? { commentsSinceTitle } : {}),
+    });
+  }
+
+  /**
    * Rename a task — the board's in-place title edit (§3.9: tap the title
    * text, Enter commits). No event fires: §3.6's exhaustive table has no
    * task.renamed row, so callers (the route) must refresh the projection by
@@ -2700,7 +2868,7 @@ export class TaskStore {
     const task = this.getTask(taskId);
     if (!task) return { ok: false, error: 'not-found' };
     if (task.title === title) return { ok: true, task, changed: false };
-    task.title = title;
+    this.applyTitle(task, title);
     task.updatedAt = Date.now();
     this.scheduleSave(task.workspaceId);
     return { ok: true, task, changed: true };
@@ -2756,7 +2924,7 @@ export class TaskStore {
     const ts = Date.now();
     const titleFrom = task.title;
     const nextTitle = opts.title?.trim();
-    if (nextTitle && nextTitle !== titleFrom) task.title = nextTitle;
+    if (nextTitle && nextTitle !== titleFrom) this.applyTitle(task, nextTitle);
     task.updatedAt = ts;
     task.bodyWrittenAt = ts;
     this.scheduleSave(task.workspaceId);
@@ -2784,14 +2952,36 @@ export class TaskStore {
   setAssignee(
     taskId: string,
     assignee: string,
-    opts: { actor: { id: string; name: string; kind?: string } },
+    opts: {
+      actor: { id: string; name: string; kind?: string };
+      /** Declares what the new owner IS. Omitted, the kind is re-derived from
+       *  the caller — which for a hand-over to somebody ELSE means it is
+       *  CLEARED rather than inherited from the previous owner. Re-stating
+       *  the same owner keeps whatever was already declared. */
+      assigneeKind?: unknown;
+    },
   ): SetAssigneeResult {
     const task = this.getTask(taskId);
     if (!task) return { ok: false, error: 'not-found' };
     const from = task.assignee;
-    if (from === assignee) return { ok: true, task, changed: false };
+    const declared = declaredAssigneeKind(assignee, opts.assigneeKind, opts.actor);
+    // Re-stating the SAME owner without saying what they are must not erase
+    // what somebody already declared. Every caller that predates this field
+    // sends no `assigneeKind`, so without this an ordinary re-assign would
+    // silently downgrade a declared person to "not recorded" — a write that
+    // changes nothing a caller asked to change. A hand-over to a DIFFERENT
+    // name still clears it: the new owner's kind is genuinely unknown, and
+    // inheriting the old one would assert something nobody said.
+    const kind = declared ?? (from === assignee ? task.assigneeKind : undefined);
+    // A kind-only change is a real change. Without the second clause,
+    // declaring that the person who already holds this task IS a person
+    // would be swallowed as a no-op, and the one call that closes the gap
+    // for an existing row would do nothing while answering ok:true.
+    if (from === assignee && task.assigneeKind === kind) return { ok: true, task, changed: false };
     const ts = Date.now();
     task.assignee = assignee;
+    if (kind === undefined) task.assigneeKind = undefined;
+    else task.assigneeKind = kind;
     task.updatedAt = ts;
     this.scheduleSave(task.workspaceId);
     this.emit({
@@ -2814,9 +3004,7 @@ export class TaskStore {
    *
    * Placement IS triage, so every call — moved or confirmed in place —
    * stamps `triagedAgainst` with the goal text it was judged against and
-   * clears the triage-pending marker; `riskTier` is stamped when supplied
-   * (§3.4: stored at decision time, so the after-the-fact review grades the
-   * agent against what it knew). A goal or position change emits
+   * clears the triage-pending marker. A goal or position change emits
    * `task.regrouped`; a pure confirm emits nothing — §3.6 has no
    * task.triaged row, and a no-move event would be noise in every feed.
    */
@@ -2828,6 +3016,10 @@ export class TaskStore {
       /** Fractional position within the goal. Omitted → bottom of the goal
        *  (an unchanged goal keeps the current position). */
       position?: number;
+      /** Accepted and IGNORED since 2026-08-18, along with the risk gate that
+       *  read it. Older peers keep sending it on every placement until they
+       *  restart; the field stays in the signature so those calls type and
+       *  succeed rather than 400. */
       riskTier?: 'green' | 'yellow' | 'red';
       /** The `workspace.retriaged` batch this placement fulfils, echoed from
        *  the triage request. Stamped on `task.regrouped` as `partOf` so the
@@ -2873,7 +3065,6 @@ export class TaskStore {
     // into Chores, which is a judgement rather than a fallback. The owed
     // review is answered, so it must not be asked again.
     task.unplacedSince = undefined;
-    if (opts.riskTier !== undefined) task.riskTier = opts.riskTier;
     task.updatedAt = ts;
     this.scheduleSave(task.workspaceId);
 
@@ -2895,6 +3086,18 @@ export class TaskStore {
 
   /**
    * Replace the workspace's ordered goal list (§3.2 goal-list edit contract).
+   *
+   * WHAT SUBMITTING A LIST MEANS, now that ids are generated: "these are my
+   * bands, in this order". An entry that names an `id` is a band the board
+   * already has — an id it does not have is REFUSED (`unknown-goal-id`),
+   * never created under the caller's name. An entry with no `id` is new, and
+   * the server mints an opaque one (`newGoalId`) and reports it in `created`.
+   * A caller therefore cannot choose an id, and cannot change one: the two
+   * gestures that used to strand a band's work are no longer expressible,
+   * where before they were merely refused after the fact. Everything the call
+   * always did — reorder, retitle, reparent, remove — is untouched, and none
+   * of it moves an id.
+   *
    * 'chores' is reserved and never present in goals[]; open tasks whose goal
    * or subgoal id disappears are moved to Chores, each emitting a
    * `task.regrouped` batched (via `partOf`) under the one
@@ -2917,7 +3120,7 @@ export class TaskStore {
    */
   setGoalList(
     workspaceId: string,
-    goals: WorkspaceGoal[],
+    entries: GoalListEntry[],
     opts: {
       actor: { id: string; name: string; kind?: string };
       /** Goal/subgoal ids the caller INTENDS to remove even though they hold
@@ -2930,13 +3133,62 @@ export class TaskStore {
     if (!state) return { ok: false, error: 'workspace-not-found' };
     const workspace = state.workspace;
 
+    // Resolve every entry to an id BEFORE anything is compared or written:
+    // an id the caller named must already exist, and an id the caller omitted
+    // is generated here and nowhere else. Both refusals are computed over the
+    // whole list first, so a rejected call names every offending id at once
+    // rather than making the caller fix them one round trip at a time.
+    const existingIds = new Set(flattenGoals(workspace.goals).map((g) => g.id));
+    const submittedIds: string[] = [];
+    const unknownIds: string[] = [];
+    const reserved: string[] = [];
+    const noteId = (id: string | undefined): void => {
+      if (id === undefined) return;
+      submittedIds.push(id);
+      if (isReservedGoalId(id)) {
+        if (!reserved.includes(id)) reserved.push(id);
+        return;
+      }
+      if (!existingIds.has(id) && !unknownIds.includes(id)) unknownIds.push(id);
+    };
+    for (const g of entries) {
+      noteId(g.id);
+      for (const s of g.subgoals ?? []) noteId(s.id);
+    }
+    if (reserved.length > 0) return { ok: false, error: 'reserved-goal-id' };
+    if (new Set(submittedIds).size !== submittedIds.length) {
+      return { ok: false, error: 'duplicate-goal-id' };
+    }
+    if (unknownIds.length > 0) return { ok: false, error: 'unknown-goal-id', unknownIds };
+
+    // Materialise the list the board will hold. An entry with no id becomes a
+    // new band with a generated one; nothing else about an entry can change
+    // an id, because an id is never read from the entry again after this.
+    const created: Array<{ id: string; title: string; parent?: string }> = [];
+    const goals: WorkspaceGoal[] = entries.map((g) => {
+      const id = g.id ?? newGoalId();
+      if (g.id === undefined) created.push({ id, title: g.title });
+      const subgoals = g.subgoals?.map((s) => {
+        const subId = s.id ?? newGoalId();
+        if (s.id === undefined) created.push({ id: subId, title: s.title, parent: id });
+        return {
+          id: subId,
+          title: s.title,
+          ...(s.dueAt !== undefined ? { dueAt: s.dueAt } : {}),
+        };
+      });
+      return {
+        id,
+        title: g.title,
+        ...(g.dueAt !== undefined ? { dueAt: g.dueAt } : {}),
+        ...(subgoals !== undefined ? { subgoals } : {}),
+      };
+    });
     const ids: string[] = [];
     for (const g of goals) {
       ids.push(g.id);
       for (const s of g.subgoals ?? []) ids.push(s.id);
     }
-    if (ids.includes(CHORES_GOAL_ID)) return { ok: false, error: 'reserved-goal-id' };
-    if (new Set(ids).size !== ids.length) return { ok: false, error: 'duplicate-goal-id' };
 
     const oldGoals = workspace.goals;
     if (JSON.stringify(oldGoals) === JSON.stringify(goals)) {
@@ -2944,6 +3196,7 @@ export class TaskStore {
         ok: true,
         workspace,
         changed: false,
+        created: [],
         movedToChores: [],
         strandedDone: [],
         bucketReview: { requested: false, queued: false, taskIds: [], newBands: [] },
@@ -3087,6 +3340,7 @@ export class TaskStore {
       ok: true,
       workspace,
       changed: true,
+      created,
       movedToChores: moved.map((m) => m.task.id),
       strandedDone,
       bucketReview,
@@ -3374,7 +3628,7 @@ export class TaskStore {
     const state = this.workspaces.get(workspaceId);
     if (!state) return { ok: false, error: 'workspace-not-found' };
     const workspace = state.workspace;
-    if (goalId === CHORES_GOAL_ID) return { ok: false, error: 'reserved-goal-id' };
+    if (isReservedGoalId(goalId)) return { ok: false, error: 'reserved-goal-id' };
 
     const oldGoals = workspace.goals;
     const current = flattenGoals(oldGoals).find((g) => g.id === goalId);
@@ -3503,7 +3757,7 @@ export class TaskStore {
       // be obeyed and a caller who put it last must not be silently trimmed:
       // accepting either would be a position nobody honours.
       if (!currentSet.has(id)) {
-        const bucket = id === CHORES_GOAL_ID ? reservedIds : unknownIds;
+        const bucket = isReservedGoalId(id) ? reservedIds : unknownIds;
         if (!bucket.includes(id)) bucket.push(id);
       }
       if (seen.has(id) && !duplicateIds.includes(id)) duplicateIds.push(id);
@@ -3593,6 +3847,16 @@ export class TaskStore {
       const original = task.body?.trim() || task.title.trim();
       if (original) task.quote = original;
     }
+    // How far the description has moved since anybody last named this row.
+    // Measured HERE because this is the only place that holds both the old
+    // and the new body, and accumulated rather than compared so no second
+    // copy of the body has to be stored to compare against. Clamped, so a
+    // long-lived task cannot run the number off past "completely different".
+    //
+    // The head clause of staleness needs no accumulation — it re-reads
+    // `titleHead` against the current body on every read — so only the drift
+    // half lives here.
+    task.titleDrift = Math.min(1, (task.titleDrift ?? 0) + bodyDrift(task.body, body));
     task.body = body;
     // The one thing this path DOES record: when the description changed.
     // Stamped only on a real change (the equality guard above returns first),
@@ -3719,47 +3983,27 @@ export class TaskStore {
     return out;
   }
 
-  /**
-   * The §3.4 risk arm of the gate, for an AGENT actor moving forward.
-   *
-   * Red = the D-class stops made general (irreversible deletes, force
-   * pushes, breaking default-branch merges, credentials, one-way doors):
-   * refused outright. Yellow = outward-facing or hard to reverse: allowed
-   * only with the human's confirmation carried on the request. Green (and
-   * an untriaged task with no tier yet) passes untouched — a tier that
-   * blocks by DEFAULT would stop ordinary work on every task triage hasn't
-   * reached, which is the opposite of what §3.4 asks for.
-   *
-   * The message is written to land verbatim in the agent's context, the
-   * same way an enforce blocker's does.
-   */
-  private riskRefusal(
-    task: Task,
-    confirmed: boolean | undefined,
-  ): {
-    error: 'risk-refused' | 'needs-confirmation';
-    riskTier: 'yellow' | 'red';
-    message: string;
-  } | null {
-    if (task.riskTier === 'red') {
-      return {
-        error: 'risk-refused',
-        riskTier: 'red',
-        message: `refused: ${task.id} is red-tier ('${task.title}') — a person has to make this move`,
-      };
-    }
-    if (task.riskTier === 'yellow' && confirmed !== true) {
-      return {
-        error: 'needs-confirmation',
-        riskTier: 'yellow',
-        message: `blocked: ${task.id} is yellow-tier ('${task.title}') — ask the human, show them the concrete effect, then retry with confirmed:true`,
-      };
-    }
-    return null;
-  }
+  /* REMOVED 2026-08-18 (Bryan): `riskRefusal`, the §3.4 risk arm of the gate.
+     A red task refused an agent's forward move outright and a yellow one
+     required `confirmed: true` on the request. His call, and his reasoning:
+     "when to ask a human" already lives in the fleet's own skills, so this was
+     a second mechanism for one judgement — and the gate had fired exactly
+     twice on his board, both yellow, both on `→ done`.
+
+     Three things deliberately NOT done with it, each with a reason:
+      - `confirmed` and `riskTier` are still ACCEPTED on the wire and ignored.
+        Peers keep sending them from older bundles until each one restarts, and
+        narrowing what old callers send is where a removal actually bites (see
+        "Removing an MCP tool cannot break a peer" in learnings.md).
+      - `task.gate_refused` keeps its event type below and its `describeEvent`
+        case in the client. Nothing emits it again, but rows already in
+        `events.jsonl` still have to render as sentences rather than as a bare
+        slug.
+      - Persisted `riskTier` values are left alone. Nothing reads them; a
+        migration that rewrote everyone's rows would be the riskier change. */
 
   private goalIdExists(workspace: HubWorkspace, goalId: string): boolean {
-    if (goalId === CHORES_GOAL_ID) return true;
+    if (isReservedGoalId(goalId)) return true;
     return workspace.goals.some(
       (g) => g.id === goalId || (g.subgoals ?? []).some((s) => s.id === goalId),
     );

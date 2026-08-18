@@ -124,4 +124,9 @@ Sequential (each layer feeds the next); no subagent fan-out needed for implement
 - **E2E (isolated)**: run `bun packages/server/src/bin.ts --port 8891 --data-dir <scratchpad>/lf-diff-data` from THIS worktree (never :8787). Create a diff review for a partner project-3945 (`5273a7717..cb178fa02`), open in Chrome: verify per-file render, hunks, old/new numbers, line comment round-trip (create in browser → SSE event → `post_reply` → appears live → `resolve_thread`), toggle both views + comment in full-file view, 430px pass.
 - **Scale**: Maps diff (`e8c6e64..37ea03a`, ~65 files) binds < a few seconds, tree navigates, biggest file renders.
 - Full `bun run test` + `typecheck` + `lint`; build all bundles.
-- After merge: production server restart is Bryan/Team-Lead's call (isolation rule).
+- After merge: restart prod to deploy the client — `git pull --ff-only origin main`
+  in the primary checkout, then `launchctl kickstart -k gui/$(id -u)/com.fryanpan.live-feedback`,
+  then verify `release.json`'s `sourceRef`. (This line read "production server
+  restart is Bryan/Team-Lead's call (isolation rule)" until 2026-08-17, when
+  Bryan reversed it: the restart is an agent action. See
+  [delivery.md](../../process/delivery.md).)

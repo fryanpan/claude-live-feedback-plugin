@@ -17,6 +17,13 @@ import { classifyActor } from './activity.ts';
 import { clientReleaseStatus } from './client-release.ts';
 import { showFile } from './git-diff.ts';
 import {
+  type LandingGroupRow,
+  type LandingInputDoc,
+  type LandingModel,
+  type NeedsYouRow,
+  buildLandingModel,
+} from './landing.ts';
+import {
   LOOPBACK_HOSTS,
   corsHeadersFor,
   isAllowedBrowserOrigin,
@@ -57,6 +64,7 @@ import { sanitizeVisitorAuthor } from './share/visitor-identity.ts';
 import { SseHub, openSseStream } from './sse.ts';
 import { KEYCHAIN_SERVICE, ThreadSummarizer } from './summarize.ts';
 import { indexBatchKeys, resolveRowRefs } from './task-batch-refs.ts';
+import { type BodyGap, bodyGapMessage, bodyShapeGaps } from './task-body.ts';
 import {
   BAD_OPTIONS_ERROR,
   BAD_REF_ERROR,
@@ -70,17 +78,20 @@ import {
   ASSIGNEE_REQUIRED_ERROR,
   ASSIGNEE_REQUIRED_HANDOVER_MESSAGE,
   ASSIGNEE_REQUIRED_MESSAGE,
+  BAD_ASSIGNEE_KIND_ERROR,
+  BAD_ASSIGNEE_KIND_MESSAGE,
+  parseAssigneeKind,
   resolveAssignee,
 } from './task-owner.ts';
 import { TaskProjection, taskBodyDocId, taskIdOfBodyDoc } from './task-projection.ts';
 import { buildQueue, placeableGoals, summarizeGoals } from './task-queue.ts';
+import { type TitleGap, clipToWordBoundary, titleGapMessage } from './task-title.ts';
 import {
+  type GoalListEntry,
   type Ref,
   type Task,
   type TaskStatus,
   TaskStore,
-  type WorkspaceGoal,
-  type WorkspaceSubgoal,
   eventsLogPath,
   isAttachmentRuntime,
   isValidRef,
@@ -103,34 +114,40 @@ const MAX_BATCH_TASKS = 100;
  * dropped rather than persisted — the sidecar shape is a contract, not a
  * junk drawer. ONE subgoal level max (§3.2); a subgoal with subgoals is
  * malformed, not silently flattened.
+ *
+ * `id` is OPTIONAL and that is the create/keep switch (see `GoalListEntry`):
+ * omitted means "create this band, mint me an id", present means "the band
+ * you already have with this id". A present-but-empty id is still malformed —
+ * it is a caller trying to say something, not a caller omitting the key, and
+ * reading it as "create" would turn a bug into a silent new band.
  */
-function parseGoalList(raw: unknown): WorkspaceGoal[] | null {
+function parseGoalList(raw: unknown): GoalListEntry[] | null {
   if (!Array.isArray(raw)) return null;
-  const goals: WorkspaceGoal[] = [];
+  const goals: GoalListEntry[] = [];
   for (const entry of raw) {
     const g = entry as Record<string, unknown>;
-    if (typeof g?.id !== 'string' || g.id.length === 0) return null;
+    if (g?.id !== undefined && (typeof g.id !== 'string' || g.id.length === 0)) return null;
     if (typeof g?.title !== 'string' || g.title.length === 0) return null;
     if (g.dueAt !== undefined && typeof g.dueAt !== 'number') return null;
-    let subgoals: WorkspaceSubgoal[] | undefined;
+    let subgoals: Array<{ id?: string; title: string; dueAt?: number }> | undefined;
     if (g.subgoals !== undefined) {
       if (!Array.isArray(g.subgoals)) return null;
       subgoals = [];
       for (const sub of g.subgoals) {
         const s = sub as Record<string, unknown>;
-        if (typeof s?.id !== 'string' || s.id.length === 0) return null;
+        if (s?.id !== undefined && (typeof s.id !== 'string' || s.id.length === 0)) return null;
         if (typeof s?.title !== 'string' || s.title.length === 0) return null;
         if (s.dueAt !== undefined && typeof s.dueAt !== 'number') return null;
         if (s.subgoals !== undefined) return null;
         subgoals.push({
-          id: s.id,
+          ...(s.id !== undefined ? { id: s.id as string } : {}),
           title: s.title,
           ...(s.dueAt !== undefined ? { dueAt: s.dueAt as number } : {}),
         });
       }
     }
     goals.push({
-      id: g.id,
+      ...(g.id !== undefined ? { id: g.id as string } : {}),
       title: g.title,
       ...(g.dueAt !== undefined ? { dueAt: g.dueAt as number } : {}),
       ...(subgoals !== undefined ? { subgoals } : {}),
@@ -621,6 +638,59 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * function. Putting it here would rebuild the exact gap being closed, one
    * layer up.
    */
+  /**
+   * The title standard, as an advisory a caller actually receives.
+   *
+   * Spread onto every response whose act wrote a title, and onto every row
+   * the list route returns — because a check nothing renders is not a check.
+   * Empty for a title that meets the standard, so a clean row adds no keys and
+   * an agent can treat the presence of `titleGaps` as the whole signal.
+   *
+   * The discussion clause is computed HERE rather than in the store because
+   * the comments live in the task's body room, which the store cannot see —
+   * the same split that makes `projectTask` take `commentCount` as an
+   * argument. `titleWrittenAt ?? createdAt` is the honest fallback for a row
+   * filed before the standard existed: nobody has named it since it was
+   * created, which is exactly the state being complained about.
+   */
+  /**
+   * The shape advisories a caller gets back on any write that touches a task.
+   *
+   * Both halves are ADVISORY and neither can refuse: the response carries what
+   * is missing, and the write has already landed. Named for the task rather
+   * than the title because it now covers the description too — Bryan expanded
+   * the standard on 2026-08-17, and a helper still called `titleAdvisory`
+   * while returning `bodyGaps` is the kind of drift that makes the next
+   * reader trust the name over the code.
+   */
+  const taskAdvisory = (
+    task: Task,
+  ): {
+    titleGaps?: TitleGap[];
+    titleMessage?: string;
+    bodyGaps?: BodyGap[];
+    bodyMessage?: string;
+  } => {
+    const since = task.titleWrittenAt ?? task.createdAt;
+    const commentsSinceTitle = taskProjection
+      .discussionNotes(task.id)
+      .filter((n) => n.ts > since).length;
+    const gaps = taskStore.titleGapsOf(task, commentsSinceTitle);
+    const bGaps = bodyShapeGaps(task.body, task.needs);
+    const bMessage = bodyGapMessage(bGaps);
+    const bodyPart =
+      bGaps.length === 0
+        ? {}
+        : { bodyGaps: bGaps, ...(bMessage !== undefined ? { bodyMessage: bMessage } : {}) };
+    if (gaps.length === 0) return bodyPart;
+    const message = titleGapMessage(gaps);
+    return {
+      titleGaps: gaps,
+      ...(message !== undefined ? { titleMessage: message } : {}),
+      ...bodyPart,
+    };
+  };
+
   const rewriteTaskBody = (
     task: Task,
     markdown: string,
@@ -2031,7 +2101,20 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               ? { needs: url.searchParams.get('needs') as 'action' | 'decision' }
               : {}),
           });
-          return j(200, { workspaceId, tasks });
+          // The kind the BOARD resolves, not just the one somebody declared.
+          // An agent has no other way to ask "which of my rows read as an
+          // unrecorded owner" — the resolved value lives in a ydoc it cannot
+          // read, and the two answers differ exactly where it matters (an
+          // undeclared row whose owner is an attached agent reads `agent`).
+          const ownerKindOf = taskProjection.ownerKindReader(workspaceId);
+          return j(200, {
+            workspaceId,
+            // `titleGaps` rides every row, not just the response to the act
+            // that wrote one. A caller reviewing a board is the reader who
+            // most needs to know which rows do not say what they will do, and
+            // it cannot get that from a create response it never saw.
+            tasks: tasks.map((t) => ({ ...t, ownerKind: ownerKindOf(t), ...taskAdvisory(t) })),
+          });
         }
         if (wsTasksMatch && req.method === 'POST') {
           const workspaceId = decodeURIComponent(wsTasksMatch[1] ?? '');
@@ -2071,6 +2154,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             },
             ...(parsed.ignoredLinks.length > 0 ? { ignoredLinks: parsed.ignoredLinks } : {}),
             ...(res.shapeGaps !== undefined ? { shapeGaps: res.shapeGaps } : {}),
+            // Same reasoning one field over: the task WAS created, and the
+            // caller still learns that its title doesn't say who this is for
+            // or what will be built. Advisory on purpose — refusing here
+            // would make a rough capture impossible to file at all.
+            ...taskAdvisory(res.task),
           });
         }
         /**
@@ -2212,6 +2300,22 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               : {}),
             ...(ignoredLinks.length > 0 ? { ignoredLinks } : {}),
             ...(shapeGaps.length > 0 ? { shapeGaps } : {}),
+            // Per row and by id, the same sidecar shape as `shapeGaps` — a
+            // burst capture is exactly where clipped, persona-less titles
+            // arrive, and reporting only a total would leave the caller
+            // diffing to find which of eight rows needs naming.
+            ...(() => {
+              const rows = tasks
+                .map((t) => ({ taskId: t.id, gaps: taskStore.titleGapsOf(t) }))
+                .filter((r) => r.gaps.length > 0);
+              const bodyRows = tasks
+                .map((t) => ({ taskId: t.id, gaps: bodyShapeGaps(t.body, t.needs) }))
+                .filter((r) => r.gaps.length > 0);
+              return {
+                ...(rows.length > 0 ? { titleGaps: rows } : {}),
+                ...(bodyRows.length > 0 ? { bodyGaps: bodyRows } : {}),
+              };
+            })(),
           });
         }
         // The single gate for status changes: attributed, evidence-stamped,
@@ -2228,17 +2332,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             note: body?.note as string | undefined,
             evidence: body?.evidence as { commit?: string; threadRef?: Ref } | undefined,
             usage: body?.usage as { inputTokens: number; outputTokens: number } | undefined,
-            // The human's live confirmation for a yellow-tier move (§3.4).
-            confirmed: body?.confirmed === true,
           });
+          // `body.confirmed` is read by nothing now (the risk gate was removed
+          // 2026-08-18) and is deliberately NOT validated: peers on older
+          // bundles keep sending it until they restart, and a request that
+          // starts failing over a field the server no longer cares about is
+          // exactly how a removal breaks a caller it never meant to touch.
           if (!res.ok) {
             // A gate refusal is a refusal, not a malformed request: same 409
             // an enforce-marked blocker returns, so callers have one shape
             // for "the gate said no".
-            const refused =
-              res.error === 'blocked' ||
-              res.error === 'risk-refused' ||
-              res.error === 'needs-confirmation';
+            const refused = res.error === 'blocked';
             const status = res.error === 'not-found' ? 404 : refused ? 409 : 400;
             return j(status, res);
           }
@@ -2315,10 +2419,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           taskProjection.ensureWorkspace(res.task.workspaceId);
           return j(200, { ok: true, changed: res.changed, task: res.task });
         }
-        // set_task_goal (§3.10): goal/subgoal + exact position + riskTier —
-        // the write half of triage and the board's regroup gesture. Every
-        // field here is hand-copied; each has an HTTP-level test in
-        // task-tool-routes.test.ts.
+        // set_task_goal (§3.10): goal/subgoal + exact position — the write
+        // half of triage and the board's regroup gesture. Every field here is
+        // hand-copied; each has an HTTP-level test in task-tool-routes.test.ts.
+        //
+        // `riskTier` used to be validated here and forwarded to the store. It
+        // is now IGNORED, not refused: an older peer sends it on every
+        // placement until it restarts, and the 400 this route used to be able
+        // to return would now fire on a field that means nothing. Accept the
+        // old payload shape; there is an HTTP-level test that sends it.
         const taskGoalMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/goal$/);
         if (taskGoalMatch && req.method === 'POST') {
           const taskId = decodeURIComponent(taskGoalMatch[1] ?? '');
@@ -2329,15 +2438,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           const author = authorFor(body?.author);
           if (!author) return j(400, { error: 'author required' });
-          const riskTier = body?.riskTier;
-          if (
-            riskTier !== undefined &&
-            riskTier !== 'green' &&
-            riskTier !== 'yellow' &&
-            riskTier !== 'red'
-          ) {
-            return j(400, { error: 'riskTier must be green | yellow | red' });
-          }
           const batchId = body?.batchId;
           if (batchId !== undefined && typeof batchId !== 'string') {
             return j(400, { error: 'batchId must be a string' });
@@ -2345,13 +2445,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const res = taskStore.setTaskGoal(taskId, goal, {
             actor: author,
             position: typeof body?.position === 'number' ? Number(body.position) : undefined,
-            riskTier,
             batchId,
           });
           if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
           // A confirm-in-place (changed:false) mutates gated fields
-          // (triagedAgainst, triagePendingTs, riskTier) without emitting an
-          // event — refresh the projection by hand, same as attachDoc.
+          // (triagedAgainst, triagePendingTs) without emitting an event —
+          // refresh the projection by hand, same as attachDoc.
           if (!res.changed) taskProjection.ensureWorkspace(res.task.workspaceId);
           return j(200, res);
         }
@@ -2444,7 +2543,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const res = taskStore.renameTask(taskId, title, { actor: author });
           if (!res.ok) return j(404, res);
           taskProjection.ensureWorkspace(res.task.workspaceId);
-          return j(200, res);
+          return j(200, { ...res, ...taskAdvisory(res.task) });
         }
         // update_task_body: replace a task's description after creation.
         // The body is a live `task:<id>` doc room, so this goes THROUGH that
@@ -2478,7 +2577,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // No hand-refresh of the projection: unlike `/title` (which emits
           // nothing by design), this act DOES emit, and the projection's own
           // subscriber re-runs ensureWorkspace off the event.
-          return j(200, { ok: true, task: taskStore.getTask(taskId) });
+          const rewritten = taskStore.getTask(taskId);
+          return j(200, {
+            ok: true,
+            task: rewritten,
+            // Shaping is one act, so the advisory on the title this act set
+            // belongs on this response — and when the caller sent no title,
+            // this is where a rewrite that moved the body far enough reports
+            // that the old name no longer fits.
+            ...(rewritten ? taskAdvisory(rewritten) : {}),
+          });
         }
         // assign_task (§3.6 task.assigned): hand a task between the human and
         // the agent (or a named identity). Status is untouched — a hand-off
@@ -2502,13 +2610,34 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           const author = authorFor(body?.author);
           if (!author) return j(400, { error: 'author required' });
-          const res = taskStore.setAssignee(taskId, assignee, { actor: author });
+          // `assigneeKind` is forwarded here explicitly. The route layer is
+          // the one nothing type-checks, and a param accepted by the tool and
+          // dropped by the route answers 200 while doing nothing — this
+          // codebase has shipped that exact bug. Refused rather than dropped
+          // for the same reason: the plausible typo here is 'human', which is
+          // a valid ASSIGNEE, and swallowing it would answer 200 while the
+          // row lands undeclared.
+          const handoverKind = parseAssigneeKind(body?.assigneeKind);
+          if (!handoverKind.ok) {
+            return j(400, {
+              error: BAD_ASSIGNEE_KIND_ERROR,
+              message: BAD_ASSIGNEE_KIND_MESSAGE,
+            });
+          }
+          const res = taskStore.setAssignee(taskId, assignee, {
+            actor: author,
+            assigneeKind: handoverKind.assigneeKind,
+          });
           if (!res.ok) return j(404, res);
           // A no-op emits nothing, so nothing would refresh the board room —
           // harmless here (nothing changed) but the changed path is covered
           // by the task.assigned event's own projection hook.
           if (!res.changed) taskProjection.ensureWorkspace(res.task.workspaceId);
-          return j(200, res);
+          // Echo what the board now says this owner IS. Without it the caller
+          // learns only that the call didn't error — which is exactly what a
+          // declaration that silently failed to land also reports.
+          const ownerKind = taskProjection.ownerKindReader(res.task.workspaceId)(res.task);
+          return j(200, { ...res, ownerKind });
         }
         // set_goal_list (§3.2 edit contract): replace the ordered board
         // sections. Structural validation happens HERE because the store
@@ -2522,7 +2651,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!author) return j(400, { error: 'author required' });
           const goals = parseGoalList(body?.goals);
           if (!goals) {
-            return j(400, { error: 'goals must be [{id, title, dueAt?, subgoals?}]' });
+            return j(400, { error: 'goals must be [{id?, title, dueAt?, subgoals?}]' });
           }
           // `drop` is the caller's explicit "yes, remove that band even
           // though it holds work". A malformed value must NOT read as absent
@@ -2543,22 +2672,38 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // The refusal is the whole feature, so it has to name the way
             // out: the MCP layer surfaces this body verbatim as the error
             // text an agent reads.
+            // An id this board does not hold is the re-key gesture arriving
+            // by its other spelling ("submit the list with a new id"), so the
+            // message has to name both ways out rather than just saying no.
             const detail =
-              res.error === 'would-strand-tasks'
+              res.error === 'unknown-goal-id'
                 ? {
                     message:
-                      'this replace would strand work filed under ' +
-                      `${res.stranding
-                        .map(
-                          (s) => `"${s.title}" (${s.id}: ${s.openTasks} open, ${s.doneTasks} done)`,
-                        )
-                        .join('; ')}. ` +
-                      'If you meant to RENAME a band, use rename_goal — it changes the title ' +
-                      'in place and cannot move a task. If you meant to remove it, say so by ' +
-                      'listing its id in `drop`; open tasks then land at the bottom of Chores ' +
-                      'and done tasks keep pointing at the removed id, both reported back.',
+                      `this board has no goal with id ${res.unknownIds
+                        .map((id) => `"${id}"`)
+                        .join(', ')}. ` +
+                      'Goal ids are generated and permanent: to CREATE a band, send the entry ' +
+                      'with no `id` at all and the new id comes back in `created`; to change a ' +
+                      "band's title, use rename_goal, which cannot move a task. There is no " +
+                      "way to give an existing band a different id, because a task's band IS " +
+                      'its goal id — re-keying one is what strands everything filed under it.',
                   }
-                : {};
+                : res.error === 'would-strand-tasks'
+                  ? {
+                      message:
+                        'this replace would strand work filed under ' +
+                        `${res.stranding
+                          .map(
+                            (s) =>
+                              `"${s.title}" (${s.id}: ${s.openTasks} open, ${s.doneTasks} done)`,
+                          )
+                          .join('; ')}. ` +
+                        'If you meant to RENAME a band, use rename_goal — it changes the title ' +
+                        'in place and cannot move a task. If you meant to remove it, say so by ' +
+                        'listing its id in `drop`; open tasks then land at the bottom of Chores ' +
+                        'and done tasks keep pointing at the removed id, both reported back.',
+                    }
+                  : {};
             return j(res.error === 'workspace-not-found' ? 404 : 400, { ...res, ...detail });
           }
           return j(200, res);
@@ -2686,9 +2831,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const title =
             typeof body?.title === 'string' && body.title.trim().length > 0
               ? body.title.trim()
-              : titleSource.length > 80
-                ? `${titleSource.slice(0, 79)}…`
-                : titleSource;
+              : // A word boundary, not a character count. This clip used to be
+                // `slice(0, 79)`, which is where the board's *"For tasks, I get
+                // dumped o…"* came from — the GENERATOR produced that, not
+                // whoever spoke it. The replacement is a prefix of the same
+                // prefix, so it can only ever read better.
+                clipToWordBoundary(titleSource, 80);
           const draftBody =
             typeof body?.body === 'string'
               ? body.body
@@ -2705,6 +2853,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // Same rule as a plain create: a promoted thread lands owned by
           // whoever promoted it unless the call names someone else.
           const promotedBy = authorFor(body?.author);
+          const promoteKind = parseAssigneeKind(body?.assigneeKind);
+          if (!promoteKind.ok) {
+            return j(400, {
+              error: BAD_ASSIGNEE_KIND_ERROR,
+              message: BAD_ASSIGNEE_KIND_MESSAGE,
+            });
+          }
           const promoteOwner = resolveAssignee(body?.assignee, promotedBy);
           if (!promoteOwner) {
             return j(400, {
@@ -2716,6 +2871,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             title,
             body: draftBody,
             assignee: promoteOwner,
+            assigneeKind: promoteKind.assigneeKind,
             needs: promoteNeeds.needs,
             options: promoteOptions.options,
             // Forward undefined untouched: an omitted goal is what routes the
@@ -2743,6 +2899,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             },
             ...(promoteLinks.ignored.length > 0 ? { ignoredLinks: promoteLinks.ignored } : {}),
             ...(res.shapeGaps !== undefined ? { shapeGaps: res.shapeGaps } : {}),
+            // Third create path, third report — and the one most likely to
+            // need it, since an unnamed promote derives its title from
+            // somebody's comment rather than from a decision to name a row.
+            ...taskAdvisory(res.task),
           });
         }
         // --- REST: plugin refresh ---
@@ -3640,7 +3800,27 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
 
         // --- Landing ---
         if (pathname === '/') {
-          return new Response(renderLanding(buildLandingModel(rooms, withReviewUrl)), {
+          const model = buildLandingModel(collectLandingDocs(rooms, taskStore), Date.now());
+          return new Response(renderLanding(model), {
+            headers: { 'content-type': 'text/html; charset=utf-8' },
+          });
+        }
+
+        // --- One project's artifacts, on demand ---
+        // The landing page deliberately does not carry these. Work here is
+        // proportional to the project somebody actually opened, not to every
+        // room on the server.
+        if (pathname.startsWith('/projects/')) {
+          let owner: string;
+          try {
+            owner = decodeURIComponent(pathname.slice('/projects/'.length));
+          } catch {
+            return new Response('bad project', { status: 400 });
+          }
+          if (owner === '') return new Response('not found', { status: 404 });
+          const artifacts = buildProjectArtifacts(rooms, withReviewUrl, owner);
+          return new Response(renderProjectPage(owner, artifacts), {
+            status: artifacts.length === 0 ? 404 : 200,
             headers: { 'content-type': 'text/html; charset=utf-8' },
           });
         }
@@ -4011,19 +4191,6 @@ interface LandingArtifact {
   files?: LandingFile[];
 }
 
-interface LandingProject {
-  /** Project key = creating agent's cwd, or 'ungrouped'. */
-  owner: string;
-  totalOpen: number;
-  artifacts: LandingArtifact[];
-}
-
-interface LandingModel {
-  projects: LandingProject[];
-  totalArtifacts: number;
-  totalOpen: number;
-}
-
 // Glyph + human label per artifact kind. The glyph keeps the kinds visually
 // distinct at a glance; the label disambiguates for screen readers / clarity.
 const ARTIFACT_KIND: Record<ArtifactKind, { glyph: string; label: string }> = {
@@ -4051,58 +4218,138 @@ function flattenWorkspaceFiles(node: WorkspaceDirNode | WorkspaceFileNode): Land
  * Build the project → artifacts model from the live rooms. Pure data shaping —
  * all HTML lives in `renderLanding`. Exported-shape via the route only.
  */
-function buildLandingModel(
+/**
+ * Is the thing this doc reviews still on disk?
+ *
+ * Two shapes, one question. A standalone doc reviews a FILE, so its
+ * `sourceUrl` is the thing to look for; a workspace member reviews one file of
+ * a bound FOLDER, and the honest per-artifact question there is whether the
+ * folder itself survives — a diff review routinely contains members whose
+ * files are deleted on purpose, so asking per member would report every normal
+ * deletion as an abandoned review.
+ *
+ * `seen` memoizes within one request. 3,500 docs mostly share a few hundred
+ * roots, and this runs on a page that already walks every room.
+ */
+function reviewSourceMissing(meta: DocMeta, seen: Map<string, boolean>): boolean {
+  const target = meta.workspaceId ? meta.workspaceRoot : meta.sourceUrl;
+  // A dev-server or mockup doc points at a URL, not a path — nothing on this
+  // machine's filesystem answers for it, so it is never "gone".
+  if (!target || /^https?:\/\//.test(target)) return false;
+  const cached = seen.get(target);
+  if (cached !== undefined) return cached;
+  let missing = false;
+  try {
+    missing = !existsSync(target);
+  } catch {
+    // Unknowable is not missing: an unreadable path would otherwise flag every
+    // artifact under it as abandoned on the strength of a permissions error.
+    missing = false;
+  }
+  seen.set(target, missing);
+  return missing;
+}
+
+/**
+ * Every room the landing page can say something about, as the pure model
+ * wants it.
+ *
+ * Two kinds arrive here and only one of them is an artifact. A review doc is
+ * something a person put up for review, and it belongs to a PROJECT (the
+ * creating agent's cwd). A `task:<id>` room is a task's discussion on a hub
+ * board — not an artifact, so it carries no `artifactId` and inflates nobody's
+ * count, but its unanswered questions are exactly the cross-workspace "someone
+ * needs you" the page exists to surface, so its threads come along. `ws:<id>`
+ * board rooms carry no threads of their own and are skipped outright.
+ */
+function collectLandingDocs(rooms: Rooms, taskStore: TaskStore): LandingInputDoc[] {
+  const out: LandingInputDoc[] = [];
+  const seen = new Map<string, boolean>();
+  for (const meta of rooms.list()) {
+    // Infrastructure, not an artifact: the shared hub-feedback doc exists on
+    // every install from startup, and the board rooms are surfaces the server
+    // owns. Same exclusions the previous index made, for the same reasons.
+    if (meta.docId === HUB_FEEDBACK_DOC_ID) continue;
+    if (meta.docId.startsWith('ws:')) continue;
+
+    if (meta.docId.startsWith('task:')) {
+      const taskId = meta.docId.slice('task:'.length);
+      const task = taskStore.getTask(taskId);
+      // A finished task's discussion is not a queue item — answering it
+      // changes nothing, which is the same call `review-queue` makes.
+      if (!task || task.status === 'done') continue;
+      const ws = taskStore.getWorkspace(task.workspaceId);
+      if (!ws) continue;
+      out.push({
+        groupKey: `ws:${ws.id}`,
+        groupLabel: ws.name,
+        groupKind: 'workspace',
+        groupHref: `/workspaces/${encodeURIComponent(ws.id)}`,
+        name: task.title,
+        link: { kind: 'task', workspaceId: ws.id, taskId: task.id },
+        threads: rooms.listThreads(meta.docId),
+      });
+      continue;
+    }
+
+    const owner = meta.owner || 'ungrouped';
+    out.push({
+      groupKey: owner,
+      groupLabel: projectLabel(owner),
+      groupKind: 'project',
+      groupHref: `/projects/${encodeURIComponent(owner)}`,
+      name:
+        meta.relPath ?? (meta.sourceUrl ? basenameOf(meta.sourceUrl) : meta.title || meta.docId),
+      link: { kind: 'doc', docId: meta.docId },
+      threads: rooms.listThreads(meta.docId),
+      // Every member of a bound folder / diff review shares ONE artifact id,
+      // so a 60-file review counts as the single thing somebody put up.
+      artifactId: meta.workspaceId ?? meta.docId,
+      ...(reviewSourceMissing(meta, seen) ? { sourceMissing: true } : {}),
+    });
+  }
+  return out;
+}
+
+/**
+ * One project's artifacts, built only when somebody opens that project.
+ *
+ * This is the old whole-server index, narrowed to a single owner: the same
+ * rollup of workspace members into one expandable row, the same per-artifact
+ * open counts. What changed is WHEN it runs — `buildWorkspaceTree` per
+ * workspace and a nested file list per artifact was the bulk of both the 910
+ * KB and the per-request work on a page that mostly nobody scrolled.
+ */
+function buildProjectArtifacts(
   rooms: Rooms,
   decorate: <T extends { docId: string; type: DocType; sourceUrl?: string }>(
     meta: T,
   ) => T & { reviewUrl?: string },
-): LandingModel {
-  // workspaceId → accumulating workspace artifact (filled from buildWorkspaceTree).
+  owner: string,
+): LandingArtifact[] {
   const workspaceArtifacts = new Map<string, LandingArtifact>();
-  // owner → its standalone + workspace artifacts.
-  const projects = new Map<string, LandingProject>();
-
-  const ensureProject = (owner: string): LandingProject => {
-    let p = projects.get(owner);
-    if (!p) {
-      p = { owner, totalOpen: 0, artifacts: [] };
-      projects.set(owner, p);
-    }
-    return p;
-  };
+  const artifacts: LandingArtifact[] = [];
 
   for (const meta of rooms.list()) {
-    // The shared hub-feedback doc is infrastructure, not an artifact someone
-    // put up for review: it exists on every install, from startup, and it
-    // would sit in "Ungrouped" forever inflating the artifact count. Still
-    // reachable at /review/<id> — hidden from the index, not from the server.
     if (meta.docId === HUB_FEEDBACK_DOC_ID) continue;
-    // Same reasoning for the projection's own rooms: a `ws:<id>` board and a
-    // `task:<id>` body are surfaces the SERVER owns for the hub, not things
-    // anyone put up for review, and each one carried its workspace/task name
-    // into the index as a phantom artifact. Latent since the projection
-    // landed — invisible only because hub workspaces were rare; now that an
-    // unfiled doc materializes one, every install would grow the row.
     if (meta.docId.startsWith('ws:') || meta.docId.startsWith('task:')) continue;
+    if ((meta.owner || 'ungrouped') !== owner) continue;
+
     const threads = rooms.listThreads(meta.docId);
     const openCount = threads.filter((t) => t.status === 'open').length;
-    const lastActivity = Math.max(
-      meta.lastActivityAt ?? 0,
-      threads.reduce((max, t) => Math.max(max, t.lastActivity), 0),
-    );
-    const owner = meta.owner || 'ungrouped';
+    // Thread activity, never `meta.lastActivityAt` — see the header note in
+    // landing.ts. That field is the `.ydoc` mtime and a snapshot rewrite
+    // refreshes it, so it ranks by persistence noise.
+    const lastActivity = threads.reduce((max, t) => Math.max(max, t.lastActivity), 0);
 
     if (meta.workspaceId) {
-      // Workspace member — fold into (or create) the workspace artifact. The
-      // per-file detail comes from buildWorkspaceTree; here we just track the
-      // owner/lastActivity rollup and ensure the artifact is registered.
       let art = workspaceArtifacts.get(meta.workspaceId);
       if (!art) {
         const tree = rooms.buildWorkspaceTree(meta.workspaceId);
         const files = flattenWorkspaceFiles(tree.tree);
-        // Clicking the workspace opens its entry file directly (the
-        // biggest change for a diff review, first file otherwise);
-        // expansion is a separate affordance in the renderer.
+        // Clicking the workspace opens its entry file directly (the biggest
+        // change for a diff review, first file otherwise); expansion is a
+        // separate affordance in the renderer.
         const treeFiles = flattenTreeFileNodes(tree.tree);
         const entry = treeFiles.reduce(
           (best, f) =>
@@ -4123,23 +4370,20 @@ function buildLandingModel(
           files,
         };
         workspaceArtifacts.set(meta.workspaceId, art);
-        ensureProject(owner).artifacts.push(art);
+        artifacts.push(art);
       }
-      // A diff member marks the whole workspace as a diff review (members
-      // can also include plain 'code' context docs — any diff doc wins).
+      // A diff member marks the whole workspace as a diff review (members can
+      // also include plain 'code' context docs — any diff doc wins).
       if (meta.type === 'diff') art.kind = 'diff';
       art.threadCount += threads.length;
       if (lastActivity > art.lastActivity) art.lastActivity = lastActivity;
       continue;
     }
 
-    // Standalone artifact (single file / mockup / dev).
     const decorated = decorate(meta);
-    const kind = (meta.type as ArtifactKind) ?? 'markdown';
-    const name = meta.sourceUrl ? basenameOf(meta.sourceUrl) : meta.title || meta.docId;
-    ensureProject(owner).artifacts.push({
-      kind,
-      name,
+    artifacts.push({
+      kind: (meta.type as ArtifactKind) ?? 'markdown',
+      name: meta.sourceUrl ? basenameOf(meta.sourceUrl) : meta.title || meta.docId,
       id: meta.docId,
       reviewUrl: decorated.reviewUrl,
       openCount,
@@ -4148,24 +4392,12 @@ function buildLandingModel(
     });
   }
 
-  // Sort artifacts within each project, then projects by total open desc.
-  const projectList = Array.from(projects.values());
-  for (const p of projectList) {
-    p.totalOpen = p.artifacts.reduce((sum, a) => sum + a.openCount, 0);
-    p.artifacts.sort((a, b) => {
-      if (a.openCount !== b.openCount) return b.openCount - a.openCount;
-      if (a.lastActivity !== b.lastActivity) return b.lastActivity - a.lastActivity;
-      return a.name.localeCompare(b.name);
-    });
-  }
-  projectList.sort((a, b) => {
-    if (a.totalOpen !== b.totalOpen) return b.totalOpen - a.totalOpen;
-    return a.owner.localeCompare(b.owner);
+  artifacts.sort((a, b) => {
+    if (a.openCount !== b.openCount) return b.openCount - a.openCount;
+    if (a.lastActivity !== b.lastActivity) return b.lastActivity - a.lastActivity;
+    return a.name.localeCompare(b.name);
   });
-
-  const totalArtifacts = projectList.reduce((sum, p) => sum + p.artifacts.length, 0);
-  const totalOpen = projectList.reduce((sum, p) => sum + p.totalOpen, 0);
-  return { projects: projectList, totalArtifacts, totalOpen };
+  return artifacts;
 }
 
 function basenameOf(p: string): string {
@@ -4240,61 +4472,171 @@ function renderLandingArtifact(a: LandingArtifact): string {
   </li>`;
 }
 
-function renderLanding(model: LandingModel): string {
-  const projectsHtml = model.projects
-    .map((p) => {
-      const openBadge =
-        p.totalOpen > 0 ? `<span class="badge badge-open">${p.totalOpen} open</span>` : '';
-      const arts = p.artifacts.map(renderLandingArtifact).join('');
-      return `<section class="project">
-        <h2 class="project-head">${escape(projectLabel(p.owner))}${openBadge}</h2>
-        <ul class="artifacts">${arts}</ul>
-      </section>`;
-    })
-    .join('');
-  const summary =
-    model.totalArtifacts === 0
-      ? ''
-      : `${model.totalArtifacts} artifact${model.totalArtifacts === 1 ? '' : 's'} · ${model.totalOpen} open thread${model.totalOpen === 1 ? '' : 's'}`;
-  return `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Live Feedback</title>
-<style>
-body{font:14px/1.5 system-ui, -apple-system, sans-serif;margin:32px auto;max-width:760px;padding:0 16px;color:#1b1f23}
-h1{font-size:22px;margin:0 0 4px}
-.summary{color:#6e7781;font-size:12px;margin-bottom:20px}
+/**
+ * Shared chrome for the two server-rendered pages (`/` and `/projects/<owner>`).
+ *
+ * Mobile is load-bearing here — this is the page Bryan lands on from his
+ * phone. Every rule is authored for a 430px viewport first: single column, no
+ * fixed widths, and `min-width: 0` on every flex child that holds prose, which
+ * is the flex twin of the `minmax(0, 1fr)` grid footgun in
+ * docs/product/design-mobile.md. Nothing here reaches into styles.css: the
+ * landing page is server-rendered and owns its own styles, so the client
+ * bundle's cascade cannot move it.
+ */
+const LANDING_CSS = `
+*{box-sizing:border-box}
+body{font:15px/1.55 system-ui,-apple-system,sans-serif;margin:0 auto;max-width:760px;padding:20px 14px 40px;color:#1b1f23;overflow-wrap:anywhere}
+h1{font-size:20px;margin:0 0 2px}
+h2{font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#57606a;margin:26px 0 8px;display:flex;flex-wrap:wrap;align-items:baseline;gap:8px}
+.count{font-size:11px;font-weight:500;letter-spacing:0;text-transform:none;color:#8b95a1}
+.summary{color:#6e7781;font-size:12px;margin:0 0 4px}
 ul{padding:0;list-style:none;margin:0}
-.project{margin-bottom:26px}
-.project-head{font-size:13px;font-weight:600;color:#57606a;margin:0 0 8px;display:flex;align-items:center;gap:8px;text-transform:none;border-bottom:1px solid #eef0f2;padding-bottom:6px}
-li.artifact{padding:10px 0;border-bottom:1px solid #f3f4f6}
+a{color:#2e7dd7;text-decoration:none}
+a:hover{text-decoration:underline}
+.need{border-left:3px solid #e36f1e;background:#fffaf5;border-radius:0 6px 6px 0;margin-bottom:6px}
+.need a{display:block;padding:9px 12px;color:inherit}
+.need a:hover{text-decoration:none;background:#fff3e8}
+.need-top{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;font-size:12px;color:#8b95a1}
+.need-wait{font-weight:700;color:#bf5b16;flex-shrink:0}
+.need-where{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.need-ask{margin-top:2px;font-size:15px;color:#1b1f23}
+.grp{border-bottom:1px solid #f0f2f4}
+.grp-link{display:block;padding:10px 4px;color:inherit;min-height:44px}
+.grp-link:hover{text-decoration:none;background:#f8f9fb}
+.grp-row{display:flex;align-items:baseline;gap:8px}
+.grp-name{flex:1;min-width:0;font-weight:600;font-size:15px;color:#2e7dd7;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.grp-meta{color:#8b95a1;font-size:12px;margin-top:2px}
+.badge{font-size:10.5px;padding:1.5px 7px;border-radius:99px;background:#f6f8fa;color:#6e7781;font-weight:500;flex-shrink:0}
+.badge-open{background:#fff1e6;color:#bf5b16}
+.badge-need{background:#e36f1e;color:#fff;font-weight:700}
+.badge-resolved{background:#e8f5ed;color:#2da44e}
+.badge-kind{background:#f6f8fa;color:#8b95a1}
+.badge-gone{background:#fdecec;color:#b42318}
+.badges{display:flex;gap:4px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end}
+li.artifact{padding:9px 0;border-bottom:1px solid #f3f4f6}
 li.artifact.has-open{border-left:3px solid #e36f1e;padding-left:10px;margin-left:-13px}
 .row{display:flex;align-items:baseline;gap:8px}
 .art-glyph{flex-shrink:0;font-size:13px;width:1.4em;text-align:center}
 .art-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.art-name a{color:#2e7dd7;text-decoration:none;font-weight:600;font-size:15px}
-.art-name a:hover{text-decoration:underline}
+/* 36px minimum tap target (design-mobile.md). An inline link is ~23px tall,
+   so every link a thumb aims at gets vertical padding rather than a bigger
+   font — this page is read on a phone. */
+.art-name a{font-weight:600;display:inline-block;padding:7px 0}
 .art-sub{color:#8b95a1;font-size:11px;flex-shrink:0}
-.badges{display:flex;gap:4px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end}
-.badge{font-size:10.5px;padding:1.5px 7px;border-radius:99px;background:#f6f8fa;color:#6e7781;font-weight:500}
-.badge-open{background:#fff1e6;color:#bf5b16}
-.badge-resolved{background:#e8f5ed;color:#2da44e}
-.badge-kind{background:#f6f8fa;color:#8b95a1}
 .meta{color:#8b95a1;font-size:11px;margin-top:3px;padding-left:1.4em}
-details > summary{display:flex;align-items:baseline;gap:8px;cursor:pointer;list-style:none}
+details > summary{display:flex;align-items:baseline;gap:8px;cursor:pointer;list-style:none;min-height:36px;align-items:center}
 details > summary::-webkit-details-marker{display:none}
-details > summary::before{content:'▸';color:#8b95a1;font-size:11px;flex-shrink:0}
-details[open] > summary::before{content:'▾'}
+details > summary::before{content:'\\25B8';color:#8b95a1;font-size:11px;flex-shrink:0}
+details[open] > summary::before{content:'\\25BE'}
 .ws-files{margin:6px 0 0 1.8em;border-left:1px solid #eef0f2;padding-left:10px}
 .ws-file{display:flex;align-items:baseline;gap:8px;padding:3px 0}
 .ws-file-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
-.ws-file-name a{color:#2e7dd7;text-decoration:none}
-.ws-file-name a:hover{text-decoration:underline}
+.ws-file-name a{display:inline-block;padding:9px 0}
 .ws-file.empty{color:#8b95a1;font-style:italic}
-.empty{color:#6e7781;padding:24px 0;text-align:center;font-style:italic}
-footer{margin-top:24px;color:#8b95a1;font-size:11px}
-</style>
-<h1>Live Feedback</h1>
-<div class="summary">${summary}</div>
-${projectsHtml || '<div class="empty">No docs yet — POST /api/docs to create one.</div>'}
+.empty{color:#6e7781;padding:18px 0;font-style:italic;font-size:13px}
+.back{font-size:13px;display:inline-block;padding:8px 0;margin-bottom:4px}
+footer{margin-top:28px;color:#8b95a1;font-size:11px}
+`;
+
+function landingShell(title: string, body: string): string {
+  return `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escape(title)}</title>
+<style>${LANDING_CSS}</style>
+${body}
 <footer>POST /api/docs · /widget.iife.js · /demos/mockup</footer>`;
+}
+
+/** A duration, at the coarsest unit that still says something. Distinct from
+ *  `formatRelative`, which takes a timestamp — the band already computed its
+ *  own elapsed time against a single `now`, and re-reading the clock per row
+ *  would let two rows on one page disagree about what time it is. */
+function formatWait(ms: number): string {
+  if (ms < 60_000) return 'just now';
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
+  if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h`;
+  return `${Math.round(ms / 86_400_000)}d`;
+}
+
+function renderNeedsYouRow(r: NeedsYouRow): string {
+  return `<li class="need"><a href="${escape(r.href)}">
+    <div class="need-top"><span class="need-wait">${escape(formatWait(r.waitedMs))}</span><span class="need-where">${escape(r.group)} · ${escape(r.name)}</span></div>
+    <div class="need-ask">${escape(r.ask)}</div>
+    <div class="need-top">${escape(r.askedBy)}</div>
+  </a></li>`;
+}
+
+function renderGroupRow(g: LandingGroupRow): string {
+  const needBadge =
+    g.needsYou > 0 ? `<span class="badge badge-need">${g.needsYou} need you</span>` : '';
+  const openBadge =
+    g.openThreads > 0 ? `<span class="badge badge-open">${g.openThreads} open</span>` : '';
+  // What each row COUNTS differs by kind, and saying "0 artifacts" on a board
+  // that has none would read as an empty project rather than a different kind
+  // of thing.
+  const size =
+    g.kind === 'workspace' ? 'board' : `${g.artifacts} artifact${g.artifacts === 1 ? '' : 's'}`;
+  const activity =
+    g.lastActivity > 0 ? `last comment ${formatRelative(g.lastActivity)}` : 'no comments yet';
+  // Forgetting, made visible, and nothing more. No row is hidden, nothing is
+  // acted on, and no cleanup affordance sits next to this badge: archiving is
+  // a separate step that has not been built yet (soft delete is the project
+  // rule), so the honest thing is a fact with no verb attached.
+  const gone =
+    g.missingSources > 0
+      ? `<span class="badge badge-gone">${g.missingSources} source${g.missingSources === 1 ? '' : 's'} gone</span>`
+      : '';
+  // The whole row is the tap target, not the name inside it. An inline text
+  // link is ~21px tall, under the 36px floor in docs/product/design-mobile.md,
+  // and this is the page Bryan opens on a phone.
+  return `<li class="grp"><a class="grp-link" href="${escape(g.href)}">
+    <div class="grp-row"><span class="grp-name">${escape(g.label)}</span><span class="badges">${needBadge}${openBadge}${gone}</span></div>
+    <div class="grp-meta">${escape(size)} · ${escape(activity)}</div>
+  </a></li>`;
+}
+
+function renderLanding(model: LandingModel): string {
+  // The denominator ships whatever the numerator is — including zero. An
+  // empty list with no denominator reads as a fleet-wide all-clear, which is
+  // the failure written up as "An empty list is a clearance only if you also
+  // render the denominator" in docs/process/learnings.md.
+  const shown = model.needsYou.length;
+  const denom = `${shown} of ${model.needsYouTotal} shown`;
+  const needs =
+    shown === 0
+      ? `<div class="empty">Nothing is waiting on you (0 of ${model.needsYouTotal}).</div>`
+      : `<ul>${model.needsYou.map(renderNeedsYouRow).join('')}</ul>`;
+  const groups =
+    model.groups.length === 0
+      ? '<div class="empty">No workspaces yet — POST /api/docs to create one.</div>'
+      : `<ul>${model.groups.map(renderGroupRow).join('')}</ul>`;
+  return landingShell(
+    'Live Feedback',
+    `<h1>Live Feedback</h1>
+<div class="summary">${model.totalArtifacts} artifact${model.totalArtifacts === 1 ? '' : 's'} · ${model.totalOpen} open thread${model.totalOpen === 1 ? '' : 's'} · ${model.groups.length} workspace${model.groups.length === 1 ? '' : 's'}</div>
+<h2>Needs you <span class="count">${escape(denom)}</span></h2>
+${needs}
+<h2>Workspaces <span class="count">${model.groups.length}</span></h2>
+${groups}`,
+  );
+}
+
+/** The "artifacts on demand" half: one project's contents, fetched only when
+ *  somebody asks for that project. Keeping this off `/` is what took the
+ *  landing response from ~910 KB to a few KB — the nested per-file lists were
+ *  most of the bytes and none of the reason anyone opened the page. */
+function renderProjectPage(owner: string, artifacts: LandingArtifact[]): string {
+  const body =
+    artifacts.length === 0
+      ? '<div class="empty">No artifacts in this project.</div>'
+      : `<ul>${artifacts.map(renderLandingArtifact).join('')}</ul>`;
+  const open = artifacts.reduce((sum, a) => sum + a.openCount, 0);
+  return landingShell(
+    `${projectLabel(owner)} · Live Feedback`,
+    `<a class="back" href="/">← all workspaces</a>
+<h1>${escape(projectLabel(owner))}</h1>
+<div class="summary">${escape(owner)}</div>
+<div class="summary">${artifacts.length} artifact${artifacts.length === 1 ? '' : 's'} · ${open} open thread${open === 1 ? '' : 's'}</div>
+${body}`,
+  );
 }
 
 function formatRelative(ts: number): string {

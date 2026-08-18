@@ -77,7 +77,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.53';
+const PLUGIN_VERSION = '0.1.57';
 
 /**
  * What a good `evidence.commit` looks like, said at the one layer that reaches
@@ -191,8 +191,7 @@ const server = new Server(
       'promote_to_task add work (omit `goal` and the task lands UNPLACED in',
       'Chores awaiting triage — the create says so and hands you the goal',
       'bands, and placing it with set_task_goal IS the triage:',
-      'pick the goal AND the exact position, and pass riskTier for how dangerous',
-      'the ACTION is, not how important the task is). task_transition is the',
+      'pick the goal AND the exact position). task_transition is the',
       'single gate for status changes — blockers come back in the result, and',
       'attach evidence ({commit} or {threadRef}) or the move is flagged unproven.',
       'attach_agent registers you as the workspace agent (heartbeat every few',
@@ -982,7 +981,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           tasks: {
             type: 'array',
             description:
-              'The rows, at most 100 — an oversized batch is refused WHOLE rather than truncated, and a tracker that big belongs in import_tasks_markdown. Each row is {title, body?, key?, assignee?, needs?, options?, goal?, order?, after?, afterEnforce?, dueAt?, links?, quote?} — the per-field rules are on the row schema below, and they are the same rules the removed single-row create carried. `title` is the only required field — but write a `body` on every row you are not doing yourself within the hour: a bare title is not pickup-able by an agent that was not in the conversation. `key` is an optional label THIS batch uses to reference the row; it must be unique in the batch and must not be all digits or start with "#". Rows are created in the order given, so a row can only depend on a row ABOVE it — a forward reference is refused rather than silently dropped, and so is a reference to a row that failed (a task carrying a dependency that never blocks it is worse than a refusal). An entry with no "#" is still an existing task id, exactly as before.',
+              'The rows, at most 100 — an oversized batch is refused WHOLE rather than truncated, and a tracker that big belongs in import_tasks_markdown. Each row is {title, body?, key?, assignee?, assigneeKind?, needs?, options?, goal?, order?, after?, afterEnforce?, dueAt?, links?, quote?} — the per-field rules are on the row schema below, and they are the same rules the removed single-row create carried. `title` is the only required field — but write a `body` on every row you are not doing yourself within the hour: a bare title is not pickup-able by an agent that was not in the conversation. `key` is an optional label THIS batch uses to reference the row; it must be unique in the batch and must not be all digits or start with "#". Rows are created in the order given, so a row can only depend on a row ABOVE it — a forward reference is refused rather than silently dropped, and so is a reference to a row that failed (a task carrying a dependency that never blocks it is worse than a refusal). An entry with no "#" is still an existing task id, exactly as before.',
             // The row contract used to live on the single-row create verb's
             // declaration, and `tasks` merely pointed at it. Removing that
             // tool would have removed every field description with it — the
@@ -995,11 +994,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             items: {
               type: 'object',
               properties: {
-                title: { type: 'string' },
+                title: {
+                  type: 'string',
+                  description:
+                    'The row\'s one-line name, and the thing a person scanning thirty rows actually reads. Say WHO it is for, WHAT they get, and HOW — `<Person> can <achieve goal X> by <describe action>`, under 70 characters (100 is the hard ceiling). e.g. "Bryan can review across tasks faster with clearer task descriptions and UX", "Agents can revise goal priority with a tool to reorder goals". The failure this exists to stop is a title that states an OBSERVATION — "A decision-answered event promises a link checklist" names something somebody noticed, so ten of them in a column give no sense of the plan and the board cannot be prioritised. Never REFUSED: a rough capture still lands, and the response comes back with `titleGaps` naming what is missing (too long, no persona, no action, clipped mid-thought) so triage can fix it.',
+                },
                 body: {
                   type: 'string',
                   description:
-                    'The description. Not schema-required — but WRITE ONE ANYWAY, on every row: a bare title is not pickup-able by an agent that was not in the conversation, and reconstructing intent from a title is how the wrong thing gets built. Shape it as a compact user story — `<persona> can <do x> so that <goal y>`, one persona (Agent / Bryan / Collaborator) — and add falsifiable "done when" criteria for anything handed to someone else or parked beyond today. Proportionate: work you will finish within the hour needs the story line and nothing more. Markdown; it renders on the task itself and comes back whole from next_tasks, so do not create a separate doc to hold it.\n\nWhen `needs` is \'decision\' this is REQUIRED and has a different shape — the question in one line, what is at stake in two or three, the options with what each one costs, then what is blocked until it is answered. A row with no question in it is REFUSED, because the failure this catches is filing a progress report as a decision: the field is populated, every check passes, and the person asked to decide has nothing to decide from. The other three parts come back as advisory `shapeGaps` on a successful create.',
+                    'The description. Not schema-required — but WRITE ONE ANYWAY, on every row: a bare title is not pickup-able by an agent that was not in the conversation, and reconstructing intent from a title is how the wrong thing gets built. Shape it as a compact user story — `<persona> can <do x> so that <goal y>`, one persona (Agent / Bryan / Collaborator) — and add falsifiable "done when" criteria for anything handed to someone else or parked beyond today. Proportionate: work you will finish within the hour needs the story line and nothing more. Markdown; it renders on the task itself and comes back whole from next_tasks, so do not create a separate doc to hold it.\n\nWhen `needs` is \'decision\' this is REQUIRED and has a different shape — the question in one line, what is at stake in two or three, the options with what each one costs, then what is blocked until it is answered. A row with no question in it is REFUSED, because the failure this catches is filing a progress report as a decision: the field is populated, every check passes, and the person asked to decide has nothing to decide from. The other three parts come back as advisory `shapeGaps` on a successful create. Never REFUSED either: the response carries `bodyGaps` when the description does not open with the story (`no-story`) or is missing entirely (`empty`). A row declared `needs` = decision is exempt entirely — it is not a story and should not be, and its own `shapeGaps` already cover it.',
                 },
                 key: {
                   type: 'string',
@@ -1010,6 +1013,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                   type: 'string',
                   description:
                     "Who owns this row: 'human' for work only a person can do, or a named identity (another agent, a person). Omit it and YOU own it — the API records your own name. It REFUSES a row whose owner comes out as the bare word 'agent', because that names a category rather than somebody, and a board of tasks owned by \"agent\" cannot answer who is doing what. If you get that refusal, your session was launched without FEEDBACK_AGENT_NAME.",
+                },
+                assigneeKind: {
+                  type: 'string',
+                  enum: ['person', 'agent'],
+                  description:
+                    'Declares whether `assignee` is a person or an agent — \'person\' | \'agent\'. Say it whenever you hand a row to a NAME that is not your own: the board cannot tell "Bryan" from an agent called "Bryan" by looking, and it refuses to guess, so an undeclared named owner shows as "not recorded" and stays out of every surface built around what a person owes. You never need it for yourself (your own writes are already classified) or for \'human\' (already a person). An agent that has attached to the workspace is known to be an agent regardless of what anyone declares.',
                 },
                 needs: {
                   type: 'string',
@@ -1075,12 +1084,22 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           docId: { type: 'string' },
           threadId: { type: 'string' },
           workspaceId: { type: 'string', description: 'Hub workspace the task lands in.' },
-          title: { type: 'string', description: 'Override the drafted title.' },
+          title: {
+            type: 'string',
+            description:
+              'Override the drafted title. Worth sending: the drafted one is a clip of somebody\u2019s comment, so it names what was SAID rather than what will be done. The standard is `<Person> can <achieve goal X> by <describe action>`, under 70 characters.',
+          },
           body: { type: 'string', description: 'Override the drafted body.' },
           assignee: {
             type: 'string',
             description:
               "Who owns it. Omit and you do — same rule as a create_tasks row's assignee.",
+          },
+          assigneeKind: {
+            type: 'string',
+            enum: ['person', 'agent'],
+            description:
+              'Declares whether `assignee` is a person or an agent — \'person\' | \'agent\'. Say it whenever you hand work to a NAME that is not your own: the board cannot tell "Bryan" from an agent called "Bryan" by looking, and it refuses to guess, so an undeclared named owner shows as "not recorded" and stays out of every surface built around what a person owes. You never need it for yourself (your own writes are already classified) or for \'human\' (already a person). An agent that has attached to the workspace is known to be an agent regardless of what anyone declares.',
           },
           needs: { type: 'string', enum: ['action', 'decision'] },
           goal: { type: 'string', description: 'Goal/subgoal id. OMIT to route through triage.' },
@@ -1137,7 +1156,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'task_transition',
       description:
-        "The SINGLE gate for task status changes (todo | in-progress | done) — attributed to this agent, appended to the task's audit trail. Attach `evidence` ({commit} and/or {threadRef}) on forward moves or the move is flagged `unproven` (allowed, shaded on the board) — and read the `commit` field's own description before you fill it, because the obvious value is the wrong one: a branch sha is discarded by the squash-merge, after which the row still reads as proven and points at nothing. If the evidence was missing or WRONG, do not re-send this call — it refuses with `same-status` — use `amend_evidence`, which appends a correction to the move that already happened. Open `after` dependencies come back in `blockers` — an edge marked enforce REFUSES the transition (HTTP 409) until the blocking task closes; read the blocker message, it names what to unblock. The task's riskTier gates forward moves the same way: a RED task refuses outright (a person has to make the move), and a YELLOW one needs `confirmed: true` — which means the human said yes after you showed them the concrete effect, never a flag you set to get past the gate. `usage` ({inputTokens, outputTokens}) reports what the task cost at done. Moving back to todo is never blocked.",
+        "The SINGLE gate for task status changes (todo | in-progress | done) — attributed to this agent, appended to the task's audit trail. Attach `evidence` ({commit} and/or {threadRef}) on forward moves or the move is flagged `unproven` (allowed, shaded on the board) — and read the `commit` field's own description before you fill it, because the obvious value is the wrong one: a branch sha is discarded by the squash-merge, after which the row still reads as proven and points at nothing. If the evidence was missing or WRONG, do not re-send this call — it refuses with `same-status` — use `amend_evidence`, which appends a correction to the move that already happened. Open `after` dependencies come back in `blockers` — an edge marked enforce REFUSES the transition (HTTP 409) until the blocking task closes; read the blocker message, it names what to unblock. `usage` ({inputTokens, outputTokens}) reports what the task cost at done. Moving back to todo is never blocked.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1157,11 +1176,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
               inputTokens: { type: 'number' },
               outputTokens: { type: 'number' },
             },
-          },
-          confirmed: {
-            type: 'boolean',
-            description:
-              "The human confirmed THIS move on a yellow-tier task, after being shown what it does. Not a retry flag — if they haven't answered, don't send it.",
           },
         },
         required: ['taskId', 'to'],
@@ -1209,6 +1223,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             description:
               "'human', a person's name, or an agent's name (yours comes from FEEDBACK_AGENT_NAME). The bare word 'agent' is refused.",
           },
+          assigneeKind: {
+            type: 'string',
+            enum: ['person', 'agent'],
+            description:
+              'Declares whether `assignee` is a person or an agent — \'person\' | \'agent\'. Say it whenever you hand work to a NAME that is not your own: the board cannot tell "Bryan" from an agent called "Bryan" by looking, and it refuses to guess, so an undeclared named owner shows as "not recorded" and stays out of every surface built around what a person owes. You never need it for yourself (your own writes are already classified) or for \'human\' (already a person). An agent that has attached to the workspace is known to be an agent regardless of what anyone declares.',
+          },
         },
         required: ['taskId', 'assignee'],
       },
@@ -1216,7 +1236,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'update_task_body',
       description:
-        "Rewrite a task so it can be picked up — its description, and in the SAME act its title. The fix for a task filed thin, one whose acceptance criteria turned out to be wrong, and the write half of triage's shaping step: a raw capture arrives with a machine-clipped fragment for a title and its whole unedited utterance for a body, and this is what turns both into work. Whole-body replace, so send the full markdown you want the task to have; there is no partial edit. Pass `title` whenever the title no longer names what the task is (omit it to leave the title alone). Written through the task's live body doc as a block-level diff, so comment threads anchored to paragraphs you did not change keep their anchors and anyone reading the task on the board watches it update. Recorded as ONE task.body_edited carrying both titles, attributed to you, and the activity feed renders the rename with the old name — the only name the person who filed it would recognise. The row's ORIGINAL words are preserved to `quote` automatically on the first rewrite, so a rewrite is never the only record of what was said; a quote already there (a dictated transcript) is never overwritten. Keep the shape a task body owes its next reader — a compact user story plus falsifiable done-when criteria — because rewriting is also the moment to add the ones that were missing. Refuses an empty body: blanking a description is not an edit, and if the task should not exist, say so on it instead.",
+        "Rewrite a task so it can be picked up — its description, and in the SAME act its title. The fix for a task filed thin, one whose acceptance criteria turned out to be wrong, and the write half of triage's shaping step: a raw capture arrives with a machine-clipped fragment for a title and its whole unedited utterance for a body, and this is what turns both into work. Whole-body replace, so send the full markdown you want the task to have; there is no partial edit. Pass `title` whenever the title no longer names what the task is (omit it to leave the title alone). Written through the task's live body doc as a block-level diff, so comment threads anchored to paragraphs you did not change keep their anchors and anyone reading the task on the board watches it update. Recorded as ONE task.body_edited carrying both titles, attributed to you, and the activity feed renders the rename with the old name — the only name the person who filed it would recognise. The row's ORIGINAL words are preserved to `quote` automatically on the first rewrite, so a rewrite is never the only record of what was said; a quote already there (a dictated transcript) is never overwritten. Keep the shape a task body owes its next reader — a compact user story plus falsifiable done-when criteria — because rewriting is also the moment to add the ones that were missing. Refuses an empty body: blanking a description is not an edit, and if the task should not exist, say so on it instead. The response carries `bodyGaps` when the rewritten description still does not open with the user story, so a rewrite that fixed the criteria but left the opening unshaped says so rather than looking done.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1228,7 +1248,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           title: {
             type: 'string',
             description:
-              'A new title for the row, applied as part of the same act. Omit to keep the current one.',
+              'A new title for the row, applied as part of the same act. Omit to keep the current one. ' +
+              'The row\'s one-line name, and the thing a person scanning thirty rows actually reads. Say WHO it is for, WHAT they get, and HOW — `<Person> can <achieve goal X> by <describe action>`, under 70 characters (100 is the hard ceiling). e.g. "Bryan can review across tasks faster with clearer task descriptions and UX", "Agents can revise goal priority with a tool to reorder goals". The failure this exists to stop is a title that states an OBSERVATION — "A decision-answered event promises a link checklist" names something somebody noticed, so ten of them in a column give no sense of the plan and the board cannot be prioritised. Never REFUSED: a rough capture still lands, and the response comes back with `titleGaps` naming what is missing (too long, no persona, no action, clipped mid-thought) so triage can fix it.' +
+              ' Send one whenever the rewrite changed what this task IS: the response carries `titleGaps`, and a body that has moved substantially since anyone last named the row reports `stale-body` until somebody does.',
           },
         },
         required: ['taskId', 'markdown'],
@@ -1237,14 +1259,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'set_task_goal',
       description:
-        "Place a task under a goal (or subgoal) at an exact position — this IS triage's write half: pick the spot, not just the bucket. Stamps triagedAgainst with the goal text judged against and clears the triage-pending marker; every move is recorded and fires task.regrouped, so regroup freely — the safety is the record, not asking first. When a move would cross a human's earlier placement, leave a task comment referencing it. Pass `riskTier` for how dangerous EXECUTING the task is (green: reversible/contained; yellow: outward-facing or hard to reverse; red: irreversible/one-way) — keyed to the action's damage, never its importance. `position` is fractional — there is always room between two tasks; omitted = bottom of the goal.",
+        "Place a task under a goal (or subgoal) at an exact position — this IS triage's write half: pick the spot, not just the bucket. Stamps triagedAgainst with the goal text judged against and clears the triage-pending marker; every move is recorded and fires task.regrouped, so regroup freely — the safety is the record, not asking first. When a move would cross a human's earlier placement, leave a task comment referencing it. `position` is fractional — there is always room between two tasks; omitted = bottom of the goal.",
       inputSchema: {
         type: 'object',
         properties: {
           taskId: { type: 'string' },
           goal: { type: 'string', description: 'Goal/subgoal id, or "chores".' },
           position: { type: 'number' },
-          riskTier: { type: 'string', enum: ['green', 'yellow', 'red'] },
           batchId: {
             type: 'string',
             description:
@@ -1257,7 +1278,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'set_goal_list',
       description:
-        'Replace a workspace\'s ORDERED goal list — use this to ADD or REMOVE a goal. To RENAME one, use rename_goal: this call is keyed by ID, so submitting a new id with the new title is not a rename, it is a removal plus an addition, and it strands everything the old band held. To only change PRIORITY ORDER, use reorder_goals: it is permutation-only and cannot lose a goal. Each goal: {id, title, dueAt?, subgoals?: [{id, title, dueAt?}]} — one subgoal level max. "chores" is reserved (always rendered last, never in the list). DESTRUCTIVE EDGE, now GATED: this is a full REPLACE, so any id you leave out is removed — and if that id still holds tasks the call is REFUSED with error "would-strand-tasks", naming each band with its open and done counts. Nothing is written on a refusal. Removing a band that holds work therefore takes a second, deliberate call listing its id in `drop`; removing an EMPTY one needs no ceremony. On success the result reports movedToChores (open tasks swept to the bottom of Chores — re-place each with set_task_goal rather than leaving them piled) and strandedDone (done tasks still pointing at the removed id, which is what leaves a bare row in get_workspace). ADDING a band also asks the workspace\'s LEAD AGENT to re-look at the unknown-goal bucket, since a task nobody could place may have a home now: `bucketReview.taskIds` is that bucket, `requested` says the ask reached the lead live and `queued` says it is waiting for their next attach_agent. Nothing is placed by this call — the ask is to LOOK, and leaving a task unplaced stays a valid answer. A reorder or a retitle reveals no new band and asks nothing.',
+        'Replace a workspace\'s ORDERED goal list — use this to ADD or REMOVE a goal. Submitting a list means "these are my bands, in this order". GOAL IDS ARE GENERATED AND PERMANENT: to ADD a band, send the entry with NO `id` at all and the server mints an opaque one, returned in `created` (that is the only way to learn it — get_workspace also shows it). To KEEP a band, send its `id` exactly as get_workspace reports it. An `id` this board does not hold is REFUSED with error "unknown-goal-id" naming it, because that is how a re-key arrives: there is no input here that gives an existing band a different id, and no input that lets you choose a new one. To RENAME, use rename_goal (title only, cannot move a task). To only change PRIORITY ORDER, use reorder_goals: permutation-only, cannot lose a goal. Each entry: {id?, title, dueAt?, subgoals?: [{id?, title, dueAt?}]} — one subgoal level max. "chores" is reserved (always rendered last, never in the list). DESTRUCTIVE EDGE, still GATED: this is a full REPLACE, so any id you leave out is removed — and if that id still holds tasks the call is REFUSED with error "would-strand-tasks", naming each band with its open and done counts. Nothing is written on a refusal. Removing a band that holds work therefore takes a second, deliberate call listing its id in `drop`; removing an EMPTY one needs no ceremony. On success the result reports created (new bands with their minted ids, in submission order), movedToChores (open tasks swept to the bottom of Chores — re-place each with set_task_goal rather than leaving them piled) and strandedDone (done tasks still pointing at the removed id, which is what leaves a bare row in get_workspace). ADDING a band also asks the workspace\'s LEAD AGENT to re-look at the unknown-goal bucket, since a task nobody could place may have a home now: `bucketReview.taskIds` is that bucket, `requested` says the ask reached the lead live and `queued` says it is waiting for their next attach_agent. Nothing is placed by this call — the ask is to LOOK, and leaving a task unplaced stays a valid answer. A reorder or a retitle reveals no new band and asks nothing.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1267,7 +1288,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             items: {
               type: 'object',
               properties: {
-                id: { type: 'string' },
+                id: {
+                  type: 'string',
+                  description:
+                    'OMIT to create this band — the server mints an opaque id and returns it in `created`. Include it, exactly as get_workspace reports it, to keep a band you already have. An id this board does not hold is refused.',
+                },
                 title: { type: 'string' },
                 dueAt: { type: 'number' },
                 subgoals: {
@@ -1275,15 +1300,18 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                   items: {
                     type: 'object',
                     properties: {
-                      id: { type: 'string' },
+                      id: {
+                        type: 'string',
+                        description: 'Omit to create; include to keep. Same rule as a goal id.',
+                      },
                       title: { type: 'string' },
                       dueAt: { type: 'number' },
                     },
-                    required: ['id', 'title'],
+                    required: ['title'],
                   },
                 },
               },
-              required: ['id', 'title'],
+              required: ['title'],
             },
           },
           drop: {
@@ -1299,7 +1327,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'rename_goal',
       description:
-        "Change a goal's or subgoal's TITLE in place, by id — the safe way to rename a band. Use this instead of set_goal_list whenever the id is staying the same, which is almost always: set_goal_list is a full replace keyed by id, so renaming through it means restating every other band from a list that may have moved, and giving the band a NEW id there reads as a removal plus an addition (its open tasks swept to Chores, its done tasks orphaned onto an id that no longer exists). Nothing can move here: a task's band IS its goal id, and no input to this call changes an id. `dueAt` is optional — a number sets it, null clears it, omitting it leaves it alone. Fires the same workspace.goals_changed edit the board and activity feed already render. `chores` is refused: its label is fixed.",
+        "Change a goal's or subgoal's TITLE in place, by id — the safe way to rename a band. Use this instead of set_goal_list whenever the id is staying the same, which is now ALWAYS: set_goal_list is a full replace keyed by id, so renaming through it means restating every other band from a list that may have moved — and giving the band a NEW id there is not a rename at all, it is refused as \"unknown-goal-id\", because goal ids are generated and permanent. Nothing can move here: a task's band IS its goal id, and no input to this call changes an id. `dueAt` is optional — a number sets it, null clears it, omitting it leaves it alone. Fires the same workspace.goals_changed edit the board and activity feed already render. `chores` is refused: its label is fixed.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1320,7 +1348,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'reorder_goals',
       description:
-        'Change the PRIORITY ORDER of a workspace\'s goals — order IS priority, so this is the gesture for "work 2.1 before 1.2". PERMUTATION ONLY: `order` must be exactly the goal ids already at one scope (the top-level list, or the subgoals of `parent`) — same ids, same count, no titles. Nothing is created, renamed, removed or reparented, and no task can move. An order that omits, repeats or invents an id is REFUSED with 400 naming the offending ids, so a list that another writer has changed since you read it makes you re-read rather than silently dropping a goal — which is exactly what set_goal_list does with the same mistake (its omissions dump that goal\'s open tasks into Chores). Get the ids from get_workspace and send back every row at your scope whose `reorderable` is true — that one filter is the whole rule, and it covers both kinds of row that are marked false (Chores, and a goal id left behind on a done task). Including either is a 400: `chores` comes back in `reservedIds` because it is a permanent bucket you simply drop, an orphaned id comes back in `unknownIds` because the goal really was removed. Reach for set_goal_list only when you actually mean to add, rename or remove a goal.',
+        'Change the PRIORITY ORDER of a workspace\'s goals — order IS priority, so this is the gesture for "work 2.1 before 1.2". PERMUTATION ONLY: `order` must be exactly the goal ids already at one scope (the top-level list, or the subgoals of `parent`) — same ids, same count, no titles. Nothing is created, renamed, removed or reparented, and no task can move. An order that omits, repeats or invents an id is REFUSED with 400 naming the offending ids, so a list that another writer has changed since you read it makes you re-read rather than silently dropping a goal — which is exactly what set_goal_list does with the same mistake (its omissions dump that goal\'s open tasks into Chores). Get the ids from get_workspace and send back every row at your scope whose `reorderable` is true — that one filter is the whole rule, and it covers both kinds of row that are marked false (Chores, and a goal id left behind on a done task). Including either is a 400: `chores` comes back in `reservedIds` because it is a permanent bucket you simply drop, an orphaned id comes back in `unknownIds` because the goal really was removed. Reach for set_goal_list only when you actually mean to add or remove a goal (a new band goes in with no `id`; the server mints it).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1403,7 +1431,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'import_tasks_markdown',
       description:
-        'Import a hand-maintained markdown task tracker (group headings + status tables) into a hub workspace — adoption is not re-keying. THE DEFAULT IS A DRY-RUN: it returns the mapping (headings → board goals, table rows → tasks with normalized todo/in-progress/done status, plus what was skipped and which columns were ignored) and creates NOTHING. Review the mapping with the human, then call again with apply:true. Apply appends the new goals (existing goals matched by title are reused, never clobbered), creates the tasks as explicit placements (no triage), walks imported statuses through the transition gate, and STAMPS the source file with a banner + hub link so the old tracker cannot quietly stay a second source of truth — a stamped file refuses re-import (409). Headings map to goals; rows before any heading land in Chores; a leading H1 is the document title, not a group.',
+        "Import a hand-maintained markdown task tracker (group headings + status tables) into a hub workspace — adoption is not re-keying. THE DEFAULT IS A DRY-RUN: it returns the mapping (headings → board goals, table rows → tasks with normalized todo/in-progress/done status, plus what was skipped and which columns were ignored) and creates NOTHING. Review the mapping with the human, then call again with apply:true. Apply appends the new goals (existing goals matched by title are reused, never clobbered), creates the tasks as explicit placements (no triage), walks imported statuses through the transition gate, and STAMPS the source file with a banner + hub link so the old tracker cannot quietly stay a second source of truth — a stamped file refuses re-import (409). Headings map to goals; rows before any heading land in Chores; a leading H1 is the document title, not a group. In the DRY-RUN, a mapped goal that does not exist yet carries a readable PLACEHOLDER id: goal ids are minted at apply time, so read the dry run for its titles and structure, and take the real ids from the apply result's goalsCreated.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -2235,10 +2263,19 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           failures: Array<{ index: number; title?: string; error: string; message?: string }>;
           ignoredLinks?: Array<{ taskId: string; ignored: unknown[] }>;
           shapeGaps?: Array<{ taskId: string; gaps: string[] }>;
+          titleGaps?: Array<{ taskId: string; gaps: string[] }>;
+          bodyGaps?: Array<{ taskId: string; gaps: string[] }>;
           placement?: { unplaced: string[]; triageDelivered: string[]; goals: unknown[] };
         };
         const gapsFor = (taskId: string) =>
           res.shapeGaps?.find((g) => g.taskId === taskId)?.gaps ?? undefined;
+        // Hand-copied like every other field here, and that is exactly why it
+        // needs saying: the route returns this sidecar and a caller that
+        // never sees it has an advisory nothing acts on.
+        const titleGapsFor = (taskId: string) =>
+          res.titleGaps?.find((g) => g.taskId === taskId)?.gaps ?? undefined;
+        const bodyGapsFor = (taskId: string) =>
+          res.bodyGaps?.find((g) => g.taskId === taskId)?.gaps ?? undefined;
         const droppedFor = (taskId: string) =>
           res.ignoredLinks?.find((l) => l.taskId === taskId)?.ignored ?? undefined;
         const unplaced = new Set(res.placement?.unplaced ?? []);
@@ -2248,6 +2285,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           // order is deliberately NOT the order it sent them in.
           created: res.tasks.map((t) => ({
             title: t.title,
+            ...(titleGapsFor(t.id) !== undefined ? { titleGaps: titleGapsFor(t.id) } : {}),
+            ...(bodyGapsFor(t.id) !== undefined ? { bodyGaps: bodyGapsFor(t.id) } : {}),
             ...taskCreatedSummary(t, droppedFor(t.id), gapsFor(t.id), !unplaced.has(t.id)),
           })),
           // Always present, even when empty: a caller that has to check for
@@ -2261,19 +2300,31 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         });
       }
       case 'promote_to_task': {
-        const { docId, threadId, workspaceId, title, body, assignee, needs, goal, dueAt, links } =
-          a as {
-            docId: string;
-            threadId: string;
-            workspaceId: string;
-            title?: string;
-            body?: string;
-            assignee?: string;
-            needs?: 'action' | 'decision';
-            goal?: string;
-            dueAt?: number;
-            links?: unknown[];
-          };
+        const {
+          docId,
+          threadId,
+          workspaceId,
+          title,
+          body,
+          assignee,
+          assigneeKind,
+          needs,
+          goal,
+          dueAt,
+          links,
+        } = a as {
+          docId: string;
+          threadId: string;
+          workspaceId: string;
+          title?: string;
+          body?: string;
+          assignee?: string;
+          assigneeKind?: 'person' | 'agent';
+          needs?: 'action' | 'decision';
+          goal?: string;
+          dueAt?: number;
+          links?: unknown[];
+        };
         const res = (await http(
           'POST',
           `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/promote`,
@@ -2282,6 +2333,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             ...(title !== undefined ? { title } : {}),
             ...(body !== undefined ? { body } : {}),
             ...(assignee !== undefined ? { assignee } : {}),
+            ...(assigneeKind !== undefined ? { assigneeKind } : {}),
             ...(needs !== undefined ? { needs } : {}),
             ...(goal !== undefined ? { goal } : {}),
             ...(dueAt !== undefined ? { dueAt } : {}),
@@ -2383,13 +2435,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         });
       }
       case 'task_transition': {
-        const { taskId, to, note, evidence, usage, confirmed } = a as {
+        const { taskId, to, note, evidence, usage } = a as {
           taskId: string;
           to: string;
           note?: string;
           evidence?: { commit?: string; threadRef?: unknown };
           usage?: { inputTokens: number; outputTokens: number };
-          confirmed?: boolean;
         };
         const res = (await http('POST', `/api/tasks/${encodeURIComponent(taskId)}/transition`, {
           to,
@@ -2397,7 +2448,6 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...(note !== undefined ? { note } : {}),
           ...(evidence !== undefined ? { evidence } : {}),
           ...(usage !== undefined ? { usage } : {}),
-          ...(confirmed === true ? { confirmed } : {}),
         })) as { task: TaskPayload; blockers: unknown[]; unproven: boolean };
         return ok({
           taskId,
@@ -2437,12 +2487,26 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         });
       }
       case 'assign_task': {
-        const { taskId, assignee } = a as { taskId: string; assignee: string };
+        const { taskId, assignee, assigneeKind } = a as {
+          taskId: string;
+          assignee: string;
+          assigneeKind?: 'person' | 'agent';
+        };
         const res = (await http('POST', `/api/tasks/${encodeURIComponent(taskId)}/assignee`, {
           assignee,
+          ...(assigneeKind !== undefined ? { assigneeKind } : {}),
           author: AUTHOR,
-        })) as { task: TaskPayload; changed: boolean };
-        return ok({ taskId, assignee: res.task.assignee, changed: res.changed });
+        })) as { task: TaskPayload; changed: boolean; ownerKind?: string };
+        // `ownerKind` is what the BOARD now says this owner is — the answer
+        // the caller actually wanted, and not the same as "the call didn't
+        // error". `unknown` here means the row will draw as "not recorded":
+        // say `assigneeKind` and call again.
+        return ok({
+          taskId,
+          assignee: res.task.assignee,
+          changed: res.changed,
+          ...(res.ownerKind !== undefined ? { ownerKind: res.ownerKind } : {}),
+        });
       }
       case 'update_task_body': {
         const { taskId, markdown, title } = a as {
@@ -2454,7 +2518,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           markdown,
           ...(title !== undefined ? { title } : {}),
           author: AUTHOR,
-        })) as { task: TaskPayload };
+        })) as {
+          task: TaskPayload;
+          titleGaps?: string[];
+          titleMessage?: string;
+          bodyGaps?: string[];
+          bodyMessage?: string;
+        };
         // `quote` back, because this call is the one that can have filled it:
         // the caller sees the words it just preserved without a second read.
         return ok({
@@ -2462,21 +2532,27 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           title: res.task?.title,
           body: res.task?.body,
           quote: res.task?.quote,
+          // The title advisory for the name this row now has — including
+          // `stale-body` when the rewrite moved the description and the
+          // caller sent no new title, which is the case this whole gate
+          // exists for.
+          ...(res.titleGaps !== undefined ? { titleGaps: res.titleGaps } : {}),
+          ...(res.titleMessage !== undefined ? { titleMessage: res.titleMessage } : {}),
+          ...(res.bodyGaps !== undefined ? { bodyGaps: res.bodyGaps } : {}),
+          ...(res.bodyMessage !== undefined ? { bodyMessage: res.bodyMessage } : {}),
         });
       }
       case 'set_task_goal': {
-        const { taskId, goal, position, riskTier, batchId } = a as {
+        const { taskId, goal, position, batchId } = a as {
           taskId: string;
           goal: string;
           position?: number;
-          riskTier?: 'green' | 'yellow' | 'red';
           batchId?: string;
         };
         const res = (await http('POST', `/api/tasks/${encodeURIComponent(taskId)}/goal`, {
           goal,
           author: AUTHOR,
           ...(position !== undefined ? { position } : {}),
-          ...(riskTier !== undefined ? { riskTier } : {}),
           ...(batchId !== undefined ? { batchId } : {}),
         })) as { task: TaskPayload; changed: boolean };
         return ok({ taskId, goal: res.task.goal, order: res.task.order, changed: res.changed });
@@ -2493,6 +2569,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           author: AUTHOR,
         })) as {
           changed: boolean;
+          created: Array<{ id: string; title: string; parent?: string }>;
           movedToChores: string[];
           strandedDone: string[];
           bucketReview?: {
@@ -2506,6 +2583,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok({
           workspaceId,
           changed: res.changed,
+          // The ONLY place a caller learns the id of a band it just created —
+          // it never chose one. Dropping this here would make the create
+          // gesture unusable while every layer under it reported success.
+          created: res.created,
           movedToChores: res.movedToChores,
           // Reported so the caller sees the half that used to be silent —
           // done tasks left pointing at an id the list no longer has.
@@ -2939,6 +3020,9 @@ async function emitHubChannelMessage(event: string, rawPayload: unknown): Promis
     case 'task.regrouped':
       body = `[task.regrouped] ${p.taskId}: ${p.fromGoal} → ${p.toGoal}${by}`;
       break;
+    // Nothing emits this since the risk gate was removed (2026-08-18). Kept
+    // so a replayed or historical row still relays as a sentence rather than
+    // falling through to the bare-slug default.
     case 'task.gate_refused':
       body = `[task.gate_refused] ${p.taskId}: ${p.riskTier}-tier ${p.reason}${by} — → ${p.to} did NOT happen`;
       break;

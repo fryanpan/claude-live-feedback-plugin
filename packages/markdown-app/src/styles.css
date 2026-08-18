@@ -982,10 +982,38 @@ body.hub-body {
   font-size: 13px;
   color: var(--fg-muted);
 }
+/* How the headline count splits. Rendered only when BOTH groups exist, so it
+   never restates a number the reader can already see. */
+.hub-decisions-split {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--fg-muted);
+}
 .hub-decision-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+/* Threads that qualified for the queue without containing a question — the
+   "shipped it, PR is green" notes agents leave on threads nobody closed.
+   Collapsed, because on the board that produced this measurement they were
+   the ENTIRE list (23 of 23), and an open section of 23 status notes is the
+   wall the reader is complaining about whatever heading sits on top of it.
+   Nothing is filtered out; a row moved here is still one tap away. */
+.hub-decision-updates {
+  margin-top: 8px;
+}
+.hub-decision-updates-label {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+.hub-decision-updates .hub-decision-chips {
+  margin-top: 6px;
 }
 .hub-decision-chip {
   display: inline-flex;
@@ -1344,21 +1372,26 @@ body.hub-body {
   margin: 2px 0 0;
 }
 /* A task list is read by SKIMMING down a column, not by reading each row.
-   So the row is a grid with fixed tracks — handle, open zone, status, risk,
-   title, badges, assignee — and every cell in a column lines up with the one
+   So the row is a grid with fixed tracks — handle, open zone, status, title,
+   badges, assignee — and every cell in a column lines up with the one
    above it. A flex row with `flex-wrap` (what this was) re-flows per row: a
    long title pushes its own badges to a second line, the next row's don't
    move, and the status controls end up at four different x-positions down
    the page. `minmax(0, 1fr)` on the title is what lets it ellipsize instead
    of forcing the grid wider than the viewport.
 
-   Every row emits every child, always — auto-placement fills CONSECUTIVE
-   tracks, so a row that dropped one (the done row's handle, a missing risk
-   dot) would slide every later cell one track left. Children that don't
-   apply are inert, never absent. */
+   THE TRACK COUNT AND THE CHILD COUNT MUST MATCH, and the title must land on
+   the `minmax(0, 1fr)` track. Every row emits every child, always —
+   auto-placement fills CONSECUTIVE tracks, so a row that dropped one (the
+   done row's handle) would slide every later cell one track left. Children
+   that don't apply are inert, never absent. A seventh track lived here for
+   the risk dot until 2026-08-18; removing the child and the track together is
+   safe, removing only one of them is the zero-width-title bug described where
+   `riskDot` used to live. `hub-render.test.ts` pins the two counts against
+   each other by parsing this declaration. */
 .hub-task-row {
   display: grid;
-  grid-template-columns: auto auto auto auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto auto auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 8px;
   min-height: 40px;
@@ -1568,6 +1601,19 @@ body.hub-body {
   border-color: var(--border);
   background-color: var(--bg-subtle, #fafafa);
 }
+/* Somebody owns it and nothing on the board says whether they are a person or
+   an agent. It is drawn as its own state rather than folded into the agent
+   mark, because that fold is the bug: a person named Bryan was rendered
+   identically to an agent, so the board could not answer the one question the
+   mark exists for. Muted like the agent mark (it is not an alarm) but with the
+   dotted edge that reads as "not stated" — and the words are in the picker's
+   accessible name, since colour alone is not a distinction. */
+.hub-owner-avatar.hub-owner-unknown {
+  color: var(--fg-muted);
+  border-style: dotted;
+  border-color: var(--fg-muted);
+  background: none;
+}
 /* Nobody owns it — a hole in the board, drawn as one. */
 .hub-owner-avatar.hub-owner-none {
   color: var(--fg-muted);
@@ -1628,17 +1674,20 @@ body.hub-body {
     min-height: 36px;
   }
 }
-/* The risk dot always occupies its track, tier or no tier (see `riskDot`).
-   A previous attempt collapsed the track with
-   `:not(:has(.hub-risk)) { grid-template-columns: auto 0 ... }` and dropped
-   the child instead — but auto-placement fills consecutive tracks, so the
-   title slid into the collapsed 0 track and rendered at zero width on every
-   row without a risk tier, which is most of them. Fixed width, never
-   conditional. */
-.hub-risk-slot {
-  flex: 0 0 auto;
-  width: 10px;
-}
+/* The row's risk dot (`.hub-risk-slot` / `.hub-risk-green|yellow|red`) was
+   removed here on 2026-08-18 at Bryan's request — it spent a track of every
+   row on a signal nothing this week needed. `riskTier` itself is untouched:
+   it still gates `task_transition` on the server and still shows as a text
+   line in the task DETAIL panel.
+
+   What the deleted comment warned about, kept because it is the trap anyone
+   editing this grid can still fall into: a previous attempt collapsed the
+   dot's track with `:not(:has(.hub-risk)) { grid-template-columns: auto 0 … }`
+   while dropping the child, and auto-placement fills CONSECUTIVE tracks, so
+   the title slid into the collapsed 0 track and rendered at zero width on
+   every row without a tier — which was most of them. Removing the child AND
+   the track together (what this change does) has no such failure mode; a
+   conditional collapse always does. */
 .hub-task-title {
   min-width: 0;
   overflow: hidden;
@@ -1707,21 +1756,6 @@ body.hub-body {
 .hub-chip-current {
   font-weight: 700;
 }
-.hub-risk {
-  flex: 0 0 auto;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-}
-.hub-risk-green {
-  background: var(--green);
-}
-.hub-risk-yellow {
-  background: var(--yellow);
-}
-.hub-risk-red {
-  background: var(--red);
-}
 .hub-task-badges {
   display: inline-flex;
   gap: 4px;
@@ -1747,6 +1781,16 @@ body.hub-body {
 }
 .hub-badge-triage {
   font-style: italic;
+}
+/* The title-standard nudge. Quiet on purpose — it will be on most rows the
+   day it lands, and a marker styled like the overdue one would train
+   everyone to skim past the overdue one. Dotted, muted, no colour of its
+   own. */
+.hub-badge-title-gap,
+.hub-badge-body-gap {
+  border-style: dashed;
+  opacity: 0.75;
+  cursor: help;
 }
 
 /* --- activity view (exactly two filters — §3.9) --- */
@@ -1917,11 +1961,14 @@ a.hub-link-chip:hover {
 .hub-link-internal {
   color: var(--fg-muted);
 }
-/* A preserved capture, labelled. The caption is what separates "here is what
-   you said" from "here is a source" — see the comment at its call site. It
-   sits INSIDE the figure's left rule so the label and the words it names read
-   as one block; at 430px the caption wraps to its own line before the quote
-   does, which is why the rule is on the figure and not on the blockquote. */
+/* A preserved capture, labelled and COLLAPSED, below the description rather
+   than above it. The label is what separates "here is what you said" from
+   "here is a source" — see the comment at its call site — and it survives the
+   move onto the <summary>. What changed is the position and the default state:
+   these are superseded words, and rendering them open above the description
+   showed a reader their own old text before the text they maintain.
+   The rule sits on the <details> so the label and the words it names read as
+   one block; at 430px the label wraps to its own line before the quote does. */
 .hub-detail-quote-block {
   margin: 0 0 12px;
   padding: 6px 12px;
@@ -1934,6 +1981,13 @@ a.hub-link-chip:hover {
   text-transform: uppercase;
   color: var(--fg-muted);
   margin-bottom: 4px;
+  cursor: pointer;
+  /* A summary is a tap target on a phone; the default marker box is smaller
+     than a finger, so the row itself carries the height. */
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 .hub-detail-quote {
   margin: 0;
@@ -1941,6 +1995,57 @@ a.hub-link-chip:hover {
   color: var(--fg-muted);
   font-family: var(--prose);
   overflow-wrap: anywhere;
+}
+/* "What we need from you" — the first thing under the title, with its own
+   reply box, so answering costs no scroll on a 430px phone. The box is what
+   makes it a loop rather than a signpost: a button that scrolls to a composer
+   further down satisfies "answer without leaving the screen" on a desktop
+   only. */
+.hub-detail-ask {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-subtle, transparent);
+}
+/* A run that contains a real question addressed to a person gets the accent;
+   one that does not is deliberately quiet, because it is a status note and
+   the reader is meant to be able to skip it on sight. */
+.hub-detail-ask--direct {
+  border-color: var(--accent, #2e7dd7);
+  border-left-width: 3px;
+}
+.hub-detail-ask-kicker {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.hub-detail-ask-text {
+  font-family: var(--prose);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.hub-detail-ask-text > :first-child {
+  margin-top: 0;
+}
+.hub-detail-ask-text > :last-child {
+  margin-bottom: 0;
+}
+.hub-detail-ask-meta {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.hub-detail-ask-form {
+  margin-top: 10px;
+}
+.hub-detail-ask-note {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--fg-muted);
 }
 .hub-detail-answer {
   font-weight: 600;
@@ -2087,11 +2192,30 @@ a.hub-link-chip:hover {
      panel — the detail sits in a 430px column on a phone. */
   overflow-wrap: anywhere;
 }
+/* Who said it and when, on one line, both as TEXT. The time used to live only
+   in a title attribute — a hover tooltip, on a surface whose whole point is
+   that it is read on a phone, where nothing hovers. */
+.hub-comment-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 .hub-comment-author {
-  display: block;
   font-size: 12px;
   font-weight: 600;
   color: var(--fg-muted);
+}
+.hub-comment-when {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+/* A thread the SERVER's review queue still lists as waiting on a person.
+   Louder than the Resolved badge it shares a class with, because this one is
+   a claim on the reader rather than a fact about the past. */
+.hub-thread-needs-you {
+  color: var(--accent, #2e7dd7);
+  font-weight: 700;
 }
 .hub-comment-body {
   font-family: var(--prose);
@@ -2321,22 +2445,22 @@ a.hub-link-chip:hover {
    — check this block when you touch them.
 
    Measured on a real build at a true 430px with the touch rules forced on: the
-   row is 402px and its fixed chrome (handle 32 · open zone 0 · status 24 ·
-   risk 10 · owner 24 · six 6px gaps = 126px) leaves 276px for the title and
+   row was 402px and its fixed chrome (handle 32 · open zone 0 · status 24 ·
+   risk 10 · owner 24 · six 6px gaps = 126px) left 276px for the title and
    the badges TOGETHER. Each word badge is 55–75px of that. `decision` + `💬 3`
    put the title at 167px; `💬 3` + `due Aug 19` put it at 152px — 38% of the
    row, about 22 characters, on a list whose only job is telling two tasks
-   apart. Seven of thirty-three rows came out under half.
+   apart. Seven of thirty-three rows came out under half. Since 2026-08-18 the
+   risk dot and its 6px gap are gone, so the chrome is 110px and the title
+   starts 16px wider — the argument for the block is unchanged, only softened.
 
-   So the phone strip carries one mark: the discussion count — the one the row
-   would otherwise have no tell for at all, and the one `taskBadges` already
-   says must not be the one lost. The others each say in eight characters what
-   the detail panel says in a sentence, and a task that `needs: decision` is
-   named again by the board's own review strip. Same trade the status word and
-   the owner name already made on this row. What is genuinely given up is the
-   overdue mark: at 75px it cannot coexist with a half-width title, and a
-   second red 10px dot beside the risk dot would say two different things in
-   one shape. It stays one tap away, in the panel. */
+   The phone strip used to keep exactly one mark, the discussion count. That
+   badge was removed board-wide on 2026-08-18 at Bryan's request (see the note
+   in `taskBadges`), so this block now hides the whole strip on a phone and the
+   row is title-only. `min-width: max-content` below therefore resolves to 0
+   today; it is kept as the standing guarantee for whatever badge is shown on a
+   phone next, because getting it wrong is silent. What was given up here
+   before and is still given up: the overdue mark, one tap away in the panel. */
 @media (hover: none) and (max-width: 560px), (pointer: coarse) and (max-width: 560px) {
   /* Scoped to the strip, NOT to `.hub-badge`. The same class also draws a
      goal SECTION's due date in `.hub-section-title` (`renderBoard`), which is
@@ -2345,22 +2469,19 @@ a.hub-link-chip:hover {
   .hub-task-badges .hub-badge {
     display: none;
   }
-  .hub-task-badges .hub-badge-comments {
-    display: inline-block;
-  }
   /* The half that makes “whole or not at all” structural rather than
      arithmetic. The base rule's `min-width: 0` (with `overflow: hidden`) makes
      this grid track contribute a ZERO minimum, so the `minmax(0, 1fr)` title
-     could squeeze it to 11px and render `💬 3` as the left third of a speech
-     bubble with no number — which reads as a rendering fault rather than as
-     information. With a max-content minimum the track can never go under its
-     own content: the title's track floor is 0, so the TITLE absorbs any
-     shortfall and the chip is either there whole or not there.
+     could squeeze a chip to 11px and render `💬 3` as the left third of a
+     speech bubble with no number — which reads as a rendering fault rather
+     than as information. With a max-content minimum the track can never go
+     under its own content: the title's track floor is 0, so the TITLE absorbs
+     any shortfall and a chip is either there whole or not there.
 
      It also outranks the `max-width: 30vw` ceiling in the ≤900px block, since
      a min-width always beats a max-width. That is the priority we want — never
-     clip a chip — and it costs nothing here, because with one chip in the
-     strip max-content is ~40px against a 129px ceiling at 430px. */
+     clip a chip. With the strip empty on a phone today it costs literally
+     nothing (max-content over no visible children is 0). */
   .hub-task-badges {
     min-width: max-content;
   }
