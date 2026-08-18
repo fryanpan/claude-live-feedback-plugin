@@ -995,7 +995,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             items: {
               type: 'object',
               properties: {
-                title: { type: 'string' },
+                title: {
+                  type: 'string',
+                  description:
+                    'The row\'s one-line name, and the thing a person scanning thirty rows actually reads. Say WHO it is for, WHAT they get, and HOW — `<Person> can <achieve goal X> by <describe action>`, under 70 characters (100 is the hard ceiling). e.g. "Bryan can review across tasks faster with clearer task descriptions and UX", "Agents can revise goal priority with a tool to reorder goals". The failure this exists to stop is a title that states an OBSERVATION — "A decision-answered event promises a link checklist" names something somebody noticed, so ten of them in a column give no sense of the plan and the board cannot be prioritised. Never REFUSED: a rough capture still lands, and the response comes back with `titleGaps` naming what is missing (too long, no persona, no action, clipped mid-thought) so triage can fix it.',
+                },
                 body: {
                   type: 'string',
                   description:
@@ -1081,7 +1085,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           docId: { type: 'string' },
           threadId: { type: 'string' },
           workspaceId: { type: 'string', description: 'Hub workspace the task lands in.' },
-          title: { type: 'string', description: 'Override the drafted title.' },
+          title: {
+            type: 'string',
+            description:
+              'Override the drafted title. Worth sending: the drafted one is a clip of somebody\u2019s comment, so it names what was SAID rather than what will be done. The standard is `<Person> can <achieve goal X> by <describe action>`, under 70 characters.',
+          },
           body: { type: 'string', description: 'Override the drafted body.' },
           assignee: {
             type: 'string',
@@ -1246,7 +1254,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           title: {
             type: 'string',
             description:
-              'A new title for the row, applied as part of the same act. Omit to keep the current one.',
+              'A new title for the row, applied as part of the same act. Omit to keep the current one. ' +
+              'The row\'s one-line name, and the thing a person scanning thirty rows actually reads. Say WHO it is for, WHAT they get, and HOW — `<Person> can <achieve goal X> by <describe action>`, under 70 characters (100 is the hard ceiling). e.g. "Bryan can review across tasks faster with clearer task descriptions and UX", "Agents can revise goal priority with a tool to reorder goals". The failure this exists to stop is a title that states an OBSERVATION — "A decision-answered event promises a link checklist" names something somebody noticed, so ten of them in a column give no sense of the plan and the board cannot be prioritised. Never REFUSED: a rough capture still lands, and the response comes back with `titleGaps` naming what is missing (too long, no persona, no action, clipped mid-thought) so triage can fix it.' +
+              ' Send one whenever the rewrite changed what this task IS: the response carries `titleGaps`, and a body that has moved substantially since anyone last named the row reports `stale-body` until somebody does.',
           },
         },
         required: ['taskId', 'markdown'],
@@ -2260,10 +2270,16 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           failures: Array<{ index: number; title?: string; error: string; message?: string }>;
           ignoredLinks?: Array<{ taskId: string; ignored: unknown[] }>;
           shapeGaps?: Array<{ taskId: string; gaps: string[] }>;
+          titleGaps?: Array<{ taskId: string; gaps: string[] }>;
           placement?: { unplaced: string[]; triageDelivered: string[]; goals: unknown[] };
         };
         const gapsFor = (taskId: string) =>
           res.shapeGaps?.find((g) => g.taskId === taskId)?.gaps ?? undefined;
+        // Hand-copied like every other field here, and that is exactly why it
+        // needs saying: the route returns this sidecar and a caller that
+        // never sees it has an advisory nothing acts on.
+        const titleGapsFor = (taskId: string) =>
+          res.titleGaps?.find((g) => g.taskId === taskId)?.gaps ?? undefined;
         const droppedFor = (taskId: string) =>
           res.ignoredLinks?.find((l) => l.taskId === taskId)?.ignored ?? undefined;
         const unplaced = new Set(res.placement?.unplaced ?? []);
@@ -2273,6 +2289,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           // order is deliberately NOT the order it sent them in.
           created: res.tasks.map((t) => ({
             title: t.title,
+            ...(titleGapsFor(t.id) !== undefined ? { titleGaps: titleGapsFor(t.id) } : {}),
             ...taskCreatedSummary(t, droppedFor(t.id), gapsFor(t.id), !unplaced.has(t.id)),
           })),
           // Always present, even when empty: a caller that has to check for
@@ -2496,7 +2513,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           markdown,
           ...(title !== undefined ? { title } : {}),
           author: AUTHOR,
-        })) as { task: TaskPayload };
+        })) as { task: TaskPayload; titleGaps?: string[]; titleMessage?: string };
         // `quote` back, because this call is the one that can have filled it:
         // the caller sees the words it just preserved without a second read.
         return ok({
@@ -2504,6 +2521,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           title: res.task?.title,
           body: res.task?.body,
           quote: res.task?.quote,
+          // The title advisory for the name this row now has — including
+          // `stale-body` when the rewrite moved the description and the
+          // caller sent no new title, which is the case this whole gate
+          // exists for.
+          ...(res.titleGaps !== undefined ? { titleGaps: res.titleGaps } : {}),
+          ...(res.titleMessage !== undefined ? { titleMessage: res.titleMessage } : {}),
         });
       }
       case 'set_task_goal': {
