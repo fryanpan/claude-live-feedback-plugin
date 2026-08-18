@@ -2,9 +2,9 @@
 alwaysApply: true
 ---
 
-# Live-Feedback as the Default Review Surface
+# Claude Workspaces as the Default Review Surface
 
-When you want Bryan to review a markdown doc OR a dev server / interactive preview, **bind it to the live-feedback widget by default** rather than just sending him a file path or a URL. The plugin is stable and is the fleet-wide standard.
+When you want Bryan to review a markdown doc OR a dev server / interactive preview, **bind it to the claude-workspaces widget by default** rather than just sending him a file path or a URL. The plugin is stable and is the fleet-wide standard.
 
 ## When this applies
 
@@ -16,12 +16,12 @@ When you want Bryan to review a markdown doc OR a dev server / interactive previ
 ## When to skip
 
 - One-or-two-line acks where there's no review surface
-- Code review already happening on a GitHub PR — don't duplicate the surface unless Bryan asks for a live-feedback pass
+- Code review already happening on a GitHub PR — don't duplicate the surface unless Bryan asks for a claude-workspaces review pass
 - Your own logs / private notes (no Bryan input expected)
 
 ## Finding the tools
 
-The live-feedback tools are **deferred** — they do NOT appear in your direct function list, and searching the single-segment name `mcp__plugin_claude-workspaces__*` finds nothing. The real prefix has a **doubled segment** (plugin name, then MCP-server name): `mcp__plugin_claude-workspaces_claude-workspaces__<tool>`. Load them with:
+The claude-workspaces tools are **deferred** — they do NOT appear in your direct function list, and searching the single-segment name `mcp__plugin_claude-workspaces__*` finds nothing. The real prefix has a **doubled segment** (plugin name, then MCP-server name): `mcp__plugin_claude-workspaces_claude-workspaces__<tool>`. Load them with:
 
 ```
 ToolSearch → select:mcp__plugin_claude-workspaces_claude-workspaces__create_review_doc,mcp__plugin_claude-workspaces_claude-workspaces__watch_doc,mcp__plugin_claude-workspaces_claude-workspaces__resolve_thread
@@ -37,6 +37,6 @@ If that returns nothing, THEN the plugin isn't enabled for your session — but 
 
 **Git diffs** — `create_diff_review(repo, base)` → share the returned `entryUrl` (bare URL on its own line). Default diffs base against the LIVE working tree: keep editing and Bryan's view re-renders in ~1s, his comments riding along (orphaning into the outdated-comments flow if their line disappears). Pass `target` only to pin a finished range. One doc per changed file; comments arrive per file via the auto-watch; `delete_workspace(reviewId)` when done.
 
-**Apply Bryan's comments via the live-feedback edit tools** — once a doc is bound, NEVER edit the .md file directly with Write/Edit. Use `find_and_replace`, `rewrite_thread_region`, `insert_blocks_after_thread`, etc. The plugin serializes the live doc back to disk ~1s after every change; direct filesystem edits get silently clobbered by the next flush. See the `claude-workspaces:editing-review-docs` skill for the full pattern.
+**Apply Bryan's comments via the claude-workspaces edit tools** — once a doc is bound, NEVER edit the .md file directly with Write/Edit. Use `find_and_replace`, `rewrite_thread_region`, `insert_blocks_after_thread`, etc. The plugin serializes the live doc back to disk ~1s after every change; direct filesystem edits get silently clobbered by the next flush. See the `claude-workspaces:editing-review-docs` skill for the full pattern.
 
 **Watch for comments** via `watch_doc(docId)` — comment events arrive as `<channel source="live-feedback" doc_id="..." thread_id="..." event="...">` blocks. Resolve threads when you've addressed the feedback (`resolve_thread`).

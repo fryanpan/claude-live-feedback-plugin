@@ -1,6 +1,6 @@
 ---
 name: handling-a-goal-change
-description: Use when the north-star goal of a live-feedback workspace changes while you are working it — a "[triage.requested] goal changed" message arrives in your channel, attach_agent hands you a pendingRetriage, or you see workspace.goal_updated. Covers what the lead agent owes: re-read the goal, re-triage every open task, reorder priorities safely, flag what the new goal makes obsolete without destroying it, and report on the board.
+description: Use when the north-star goal of a claude-workspaces workspace changes while you are working it — a "[triage.requested] goal changed" message arrives in your channel, attach_agent hands you a pendingRetriage, or you see workspace.goal_updated. Covers what the lead agent owes: re-read the goal, re-triage every open task, reorder priorities safely, flag what the new goal makes obsolete without destroying it, and report on the board.
 ---
 
 # When the goal changes under you

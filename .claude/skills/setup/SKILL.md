@@ -1,6 +1,6 @@
 ---
 name: setup
-description: First-time setup for a fresh clone of claude-workspaces-plugin. Installs JS deps, wires the dev-channels shell alias, registers + installs the plugin user-wide, and optionally installs the macOS launchd supervisor so the server survives reboots. Run this once after cloning the repo, then ask Claude to start using the live-feedback tools.
+description: First-time setup for a fresh clone of claude-workspaces-plugin. Installs JS deps, wires the dev-channels shell alias, registers + installs the plugin user-wide, and optionally installs the macOS launchd supervisor so the server survives reboots. Run this once after cloning the repo, then ask Claude to start using the claude-workspaces tools.
 user-invocable: true
 ---
 
@@ -15,7 +15,7 @@ Brings a fresh checkout of this repo to a working state:
 1. Installs JS dependencies (`bun install`)
 2. Wires the shell alias that enables Claude Channels for `plugin:claude-workspaces@claude-workspaces`
 3. Registers the local repo as a Claude Code marketplace and installs the plugin at user scope
-4. (Optional) Installs the macOS launchd supervisor so the live-feedback server survives logout / Mac reboot / crashes
+4. (Optional) Installs the macOS launchd supervisor so the claude-workspaces server survives logout / Mac reboot / crashes
 5. (Optional on macs with home on a non-default volume) Surfaces the Full Disk Access prereq for the launchd-spawned bun
 
 ## Steps
@@ -66,14 +66,14 @@ claude plugin marketplace add .
 claude plugin install claude-workspaces@claude-workspaces --scope user
 ```
 
-Explain: the first command registers this checkout as a local plugin marketplace; the second installs the live-feedback plugin user-wide so it's available in every Claude Code session.
+Explain: the first command registers this checkout as a local plugin marketplace; the second installs the claude-workspaces plugin user-wide so it's available in every Claude Code session.
 
 There is **no `npm link` step** — the MCP server bundle is vendored into the plugin tree at `packages/plugin/mcp/index.js` and invoked via `${CLAUDE_PLUGIN_ROOT}` substitution in `.mcp.json`. (See PR #35 for why we moved off the `npm link` install path.)
 
 After install, the plugin's tools should appear when they ask Claude things like:
-- "Show me the doc `<your doc name>` with live feedback"
-- "Show me a mockup with live feedback"
-- "Show me the dev server with live feedback"
+- "Show me the doc `<your doc name>` in a workspace"
+- "Show me a mockup in a workspace"
+- "Show me the dev server in a workspace"
 
 ### 5. (Optional) Start the server
 
@@ -167,7 +167,7 @@ Full rationale, the measured before/after table, the non-vacuous verification
 Recap in one line: "Setup complete. Plugin installed at user scope; server <foreground / launchd-supervised>."
 
 Then suggest the natural next move:
-- "Bind a markdown file you want to review: ask me `please bring docs/foo.md into live feedback` — I'll create the review doc and give you a URL."
+- "Bind a markdown file you want to review: ask me `please bring docs/foo.md into a workspace` — I'll create the review doc and give you a URL."
 - "Or try the demo mockup at `http://<host>:8788/demos/mockup` to see the comment widget in action."
 
 ## What to avoid

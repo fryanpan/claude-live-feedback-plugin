@@ -101,7 +101,7 @@ describe('plugin MCP launcher', () => {
     );
     expect(reply.result.serverInfo.version).toBe(manifest.version);
     // The NAME had the same freedom to drift and no gate: it read
-    // `claude-live-feedback` while the manifest said `live-feedback`, and
+    // `claude-workspaces` while the manifest said `live-feedback`, and
     // nothing anywhere compared them. Tie it to the manifest so the next
     // rename cannot leave a stale handshake behind.
     expect(reply.result.serverInfo.name).toBe(manifest.name);

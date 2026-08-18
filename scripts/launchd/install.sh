@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the live-feedback server as a launchd-managed service.
+# Install the claude-workspaces server as a launchd-managed service.
 #
 # Runs as a per-user LaunchAgent (loads on login, not at boot). Survives
 # Claude Code session restarts, terminal logout, and Mac reboot. Auto-restarts

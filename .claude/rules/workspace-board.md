@@ -1,4 +1,4 @@
-# Working From a Live-Feedback Workspace Board
+# Working From a Claude Workspaces Board
 
 **The contract now ships with the plugin.** How to work a board — priority
 order, taking the whole ready batch in parallel by default and what actually

@@ -30,7 +30,7 @@ reversing an earlier rule that read the other way).
 
 ## The plugin ships through a GitHub marketplace
 
-The marketplace `claude-live-feedback` resolves to the GitHub repo
+The marketplace `claude-workspaces` resolves to the GitHub repo
 `fryanpan/claude-workspaces-plugin` (since 2026-08-13; it used to point at a
 local directory). Installing or updating fetches the repo, reads
 `.claude-plugin/marketplace.json`, and copies the plugin into a
@@ -54,11 +54,11 @@ claude plugin update claude-workspaces@claude-workspaces
 plugin.** Swapping the source (local directory → GitHub, or a rename) is
 therefore remove-then-add-then-*reinstall*, and between the remove and the
 install there is a window with no plugin at all — sessions started in that
-window come up with no live-feedback tools. Do the three commands back to
+window come up with no claude-workspaces tools. Do the three commands back to
 back:
 
 ```bash
-claude plugin marketplace remove claude-live-feedback
+claude plugin marketplace remove claude-workspaces
 claude plugin marketplace add fryanpan/claude-workspaces-plugin
 claude plugin install claude-workspaces@claude-workspaces --scope user
 ```
@@ -455,7 +455,7 @@ bun run staging      # builds this worktree's bundles, serves :8788, throwaway d
 Prod keeps serving 8787 with its own data throughout. The script refuses to run
 from the primary checkout (that is prod's deploy source), and starts the server
 via `packages/server/src/bin.ts` rather than `scripts/serve.ts` — because
-`serve.ts` publishes the live port that the live-feedback MCP discovers, and
+`serve.ts` publishes the live port that the claude-workspaces MCP discovers, and
 running it would silently repoint every agent on the machine at the staging
 build.
 
