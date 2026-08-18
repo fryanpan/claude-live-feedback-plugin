@@ -2518,6 +2518,29 @@ describe('the walkthrough page reserves launcher clearance on a phone', () => {
   });
 });
 
+/**
+ * happy-dom does no layout, so what is checkable here is the rule that makes
+ * the phone layout work. Measured in a real 430px frame: the kind badge takes
+ * ~180px of the line, and a title free to shrink to zero comes out about
+ * 110px wide — a one-line question stacked seven words tall. The floor is
+ * what makes the head WRAP instead, which is what the mockup draws.
+ */
+describe('the walkthrough card head keeps a readable title on a phone', () => {
+  it('gives the title a width floor rather than letting it shrink to nothing', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const css = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
+    const rule = css.match(/\.hub-walk-title\s*\{([^}]*)\}/)?.[1] ?? '';
+    // Positive control: the rule this asserts about was found and is the one
+    // that lays the title out.
+    expect(rule).toMatch(/flex:\s*1/);
+    const floor = rule.match(/min-width:\s*(\d+)px/)?.[1];
+    expect(Number(floor ?? 0)).toBeGreaterThanOrEqual(120);
+    // The floor only works because a long unbroken token has its own escape.
+    expect(rule).toMatch(/overflow-wrap:\s*anywhere/);
+  });
+});
+
 describe('renderPresence — plugin drift', () => {
   const drift = () =>
     pluginDriftNotice({
