@@ -291,10 +291,13 @@ export function deterministicBrief(input: BriefInput): string {
       );
     }
   }
+  // No count in the closing line (Bryan, 2026-08-18, t-0iestDQdJTOZ:
+  // "Remove the count. Don't think I need it.") — the queue below IS the
+  // list; the brief only says whether it is empty.
   lines.push(
     input.queue.total === 0
       ? 'Nothing is queued for your review right now.'
-      : `**${input.queue.total}** ${plural(input.queue.total, 'item is', 'items are')} queued for your review below.`,
+      : 'What needs your review is queued below.',
   );
   return lines.join('\n\n');
 }
@@ -348,7 +351,9 @@ export function buildBriefPrompt(
     `Events, oldest first${input.events.length > rows.length ? ` (newest ${rows.length} of ${input.events.length})` : ''}:`,
     digest || '(none — the board did not move)',
     '',
-    `Right now, ${input.queue.total} item(s) are queued for the reader's review below the brief.`,
+    input.queue.total === 0
+      ? "Nothing is queued for the reader's review below the brief."
+      : "Items needing the reader's review are queued below the brief — never state how many.",
     'Write the brief now.',
   ].join('\n');
   return { system, user };
