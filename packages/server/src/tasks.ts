@@ -1490,7 +1490,47 @@ export type SetTaskGoalResult =
        *  No task.regrouped fires for it, but the triage stamp still lands. */
       changed: boolean;
     }
-  | { ok: false; error: 'not-found' | 'unknown-goal' };
+  | { ok: false; error: 'not-found' | 'unknown-goal' | 'unknown-after' };
+
+/** The board's sort, spelled once. `order` is a float a caller chose and
+ *  nothing has ever forced it to be unique within a goal, so the two
+ *  tiebreaks are reachable in ordinary data rather than theoretical. The
+ *  browser's `byBoardOrder` (hub-model.ts) must stay identical to this — a
+ *  placement computed at one end and applied at the other is only meaningful
+ *  while both agree on what "after" means. */
+export function byBoardOrder(
+  a: { order: number; createdAt: number; id: string },
+  b: { order: number; createdAt: number; id: string },
+): number {
+  return a.order - b.order || a.createdAt - b.createdAt || a.id.localeCompare(b.id);
+}
+
+/**
+ * The sequence a goal should hold once `moving` is placed directly behind the
+ * row `after` names — `null` meaning the top of the goal.
+ *
+ * `siblings` is the goal's other rows ALREADY in board order. Returns null
+ * when `after` names none of them, which is the caller's cue to refuse rather
+ * than to guess: a placement relative to a row that is not there is a request
+ * whose meaning we do not know, and dropping the row at the bottom (the
+ * tempting fallback) is indistinguishable to the person who dragged it from
+ * the bug this whole path exists to fix.
+ */
+export function sequenceAfter<T extends { id: string }>(
+  siblings: readonly T[],
+  moving: T,
+  after: string | null,
+): T[] | null {
+  let index: number;
+  if (after === null) {
+    index = 0;
+  } else {
+    const at = siblings.findIndex((t) => t.id === after);
+    if (at === -1) return null;
+    index = at + 1;
+  }
+  return [...siblings.slice(0, index), moving, ...siblings.slice(index)];
+}
 
 /**
  * One entry of a submitted goal list. The id is OPTIONAL, and which way it
@@ -3253,8 +3293,22 @@ export class TaskStore {
     opts: {
       actor: { id: string; name: string; kind?: string };
       /** Fractional position within the goal. Omitted → bottom of the goal
-       *  (an unchanged goal keeps the current position). */
+       *  (an unchanged goal keeps the current position).
+       *
+       *  Cannot express a drop between two rows that SHARE an order, which is
+       *  the ordinary state of a board nobody has renumbered: any number
+       *  greater than the first is also greater than the second, and the
+       *  createdAt tiebreak then decides where the row really goes. `after`
+       *  below is the spelling that can. This one stays because every caller
+       *  built before it — the MCP tools, and any browser tab that has not
+       *  reloaded — still sends it, and `after` wins when both arrive. */
       position?: number;
+      /** Place the task directly behind the row this names, or at the top of
+       *  the goal when `null`. An ID rather than an index because the two
+       *  ends count different rows: the board's list is filtered (done
+       *  window, "mine" tab) and this one is not. Refused when it names a row
+       *  outside the target goal. */
+      after?: string | null;
       /** Accepted and IGNORED since 2026-08-18, along with the risk gate that
        *  read it. Older peers keep sending it on every placement until they
        *  restart; the field stays in the signature so those calls type and
@@ -3281,20 +3335,42 @@ export class TaskStore {
       kind: classifyActor(opts.actor),
     };
     const fromGoal = task.goal;
-    const order =
-      opts.position ??
-      (goal === fromGoal
-        ? task.order
-        : Math.max(
-            0,
-            ...Array.from(state.tasks.values())
-              .filter((t) => t.goal === goal && t.id !== taskId)
-              .map((t) => t.order),
-          ) + 1);
+
+    // Placement by neighbour renumbers the goal 1..N rather than searching for
+    // a float between two rows, because between two rows that share an order
+    // there is no such float — and a goal that keeps its ties needs the same
+    // step-around on every future drag. So the drop that had to work around a
+    // tie is also the drop that removes it. `updatedAt` is deliberately left
+    // alone on the rows this shifts: their position relative to each other did
+    // not change, and the staleness sweep and the activity feed both read that
+    // field as "somebody touched this task".
+    let renumbered: Task[] | null = null;
+    let order: number;
+    if (opts.after !== undefined) {
+      const siblings = Array.from(state.tasks.values())
+        .filter((t) => t.goal === goal && t.id !== taskId)
+        .sort(byBoardOrder);
+      const sequence = sequenceAfter(siblings, task, opts.after);
+      if (!sequence) return { ok: false, error: 'unknown-after' };
+      renumbered = sequence;
+      order = sequence.indexOf(task) + 1;
+    } else {
+      order =
+        opts.position ??
+        (goal === fromGoal
+          ? task.order
+          : Math.max(
+              0,
+              ...Array.from(state.tasks.values())
+                .filter((t) => t.goal === goal && t.id !== taskId)
+                .map((t) => t.order),
+            ) + 1);
+    }
     const changed = goal !== fromGoal || order !== task.order;
 
     task.goal = goal;
     task.order = order;
+    if (renumbered) for (const [i, t] of renumbered.entries()) t.order = i + 1;
     task.triagedAgainst = { goalId: goal, goal: state.workspace.goal, ts };
     // The placement fulfils whatever triage request stamped the marker.
     // Assignment, not delete (biome noDelete); JSON.stringify drops it from

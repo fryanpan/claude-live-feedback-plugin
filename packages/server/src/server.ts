@@ -2642,9 +2642,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (batchId !== undefined && typeof batchId !== 'string') {
             return j(400, { error: 'batchId must be a string' });
           }
+          // `after` names the row this one lands behind, or null for the top
+          // of the goal — the only spelling that can express a drop between
+          // two rows sharing an `order`, which `position` cannot. Absent means
+          // the caller is an older bundle still sending `position` alone.
+          const after = body?.after;
+          if (after !== undefined && after !== null && typeof after !== 'string') {
+            return j(400, { error: 'after must be a task id or null' });
+          }
           const res = taskStore.setTaskGoal(taskId, goal, {
             actor: author,
             position: typeof body?.position === 'number' ? Number(body.position) : undefined,
+            ...(after !== undefined ? { after: after as string | null } : {}),
             batchId,
           });
           if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);

@@ -641,7 +641,7 @@ describe('keyboard reordering', () => {
     handle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
     expect(h.onReorder).toHaveBeenCalledWith(expect.objectContaining({ id: 'k-a' }), {
       goal: 'g-pr',
-      position: 2.5,
+      after: 'k-b',
     });
   });
 
@@ -656,7 +656,7 @@ describe('keyboard reordering', () => {
     );
     expect(h.onReorder).toHaveBeenCalledWith(expect.objectContaining({ id: 'k-c' }), {
       goal: 'g-pr',
-      position: 1.5,
+      after: 'k-a',
     });
   });
 

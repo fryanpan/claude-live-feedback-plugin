@@ -1048,16 +1048,21 @@ async function main(): Promise<void> {
   }
 
   /**
-   * A drag or an arrow-key move, sent as the placement it already is: goal +
-   * fractional position, the same `set_task_goal` write an agent performs.
-   * There is deliberately no reordering API of its own — `task.order` has
-   * always been fractional, so "between these two rows" is a number, and a
-   * cross-goal drop is this same call with a different goal.
+   * A drag or an arrow-key move, sent as the placement it already is — the
+   * same `set_task_goal` write an agent performs, so there is deliberately no
+   * reordering API of its own, and a cross-goal drop is this call with a
+   * different goal.
+   *
+   * It sends `after` and NOT `position`. The two are alternative spellings of
+   * one placement and the server prefers `after`, so sending both would just
+   * be a number nobody reads — and a number the drop cannot compute correctly
+   * anyway, which is the bug this replaced (see the reordering section of
+   * hub-model.ts).
    */
   async function placeTask(task: HubTask, target: ReorderTarget): Promise<void> {
     const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/goal`, 'POST', {
       goal: target.goal,
-      position: target.position,
+      after: target.after,
       author,
     });
     if (!res.ok) showToast('Move failed');
