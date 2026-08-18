@@ -820,9 +820,22 @@ body.hub-body {
    than the viewport. */
 .hub-main {
   display: grid;
-  grid-template-columns: 200px minmax(0, 1fr) 260px;
+  /* First track is the Home/Board nav rail (see the HOME PANE banner below);
+     the three content tracks are unchanged. `max-content` so the rail costs
+     exactly its labels and nothing when collapsed by a media query. */
+  grid-template-columns: max-content 200px minmax(0, 1fr) 260px;
   gap: 20px;
   align-items: start;
+}
+/* Home showing: the board's three content columns leave the grid entirely and
+   the Home section takes the one remaining content track. Hiding rather than
+   unmounting — the board keeps its realtime projection warm underneath. */
+.hub-main--home {
+  grid-template-columns: max-content minmax(0, 1fr);
+}
+.hub-main--home .hub-side,
+.hub-main--home .hub-board-col {
+  display: none;
 }
 .hub-side {
   min-width: 0;
@@ -963,16 +976,28 @@ body.hub-body {
 }
 
 /* --- decisions strip: the count first, the list second --- */
+/* Since the Home pane took the full queue, this container carries ONE line —
+   "N items are waiting for your review" + Go to Home — so it lays out as a
+   row. It keeps the yellow alarm skin: the banner exists only while items
+   are open, which is exactly the alarm condition. */
 .hub-decisions {
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
   padding: 8px 10px;
   margin-bottom: 10px;
   border: 1px solid var(--yellow);
   border-radius: var(--radius);
   background: color-mix(in srgb, var(--yellow) 8%, var(--bg));
+}
+.hub-review-banner-text {
+  font-size: 15px;
+  font-weight: 600;
+  min-width: 0;
+}
+.hub-review-banner-go {
+  margin-left: auto;
 }
 .hub-decisions-head {
   display: flex;
@@ -1329,13 +1354,26 @@ body.hub-body {
   padding-top: 10px;
   border-top: 1px solid var(--border);
 }
+/* The ‹ › stepper wrapping the position readout, in the panel HEAD (approved
+   design) — stepping must not mean scrolling past a long card to find the
+   buttons. Square-ish targets: a glyph button narrower than its height is a
+   miss under a thumb. */
 .hub-walk-nav {
-  display: flex;
-  justify-content: space-between;
+  display: inline-flex;
+  align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 .hub-walk-nav .hub-btn {
   min-height: 44px;
+  min-width: 44px;
+  padding: 4px 10px;
+  font-size: 18px;
+  line-height: 1;
+}
+.hub-walk-nav .hub-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 .hub-walk-done {
   display: flex;
@@ -1362,6 +1400,182 @@ body.hub-body {
 .hub-walk-done .hub-walk-done-tally {
   font-weight: 600;
   color: var(--fg);
+}
+
+/* --- HOME PANE (What's New brief + For Your Review) + Home/Board nav ---
+   The per-workspace Home page (approved mockup a30a15d): the since-last-read
+   brief first, then the review queue, on a reading column. The nav is a left
+   rail on desktop and a bottom bar on a phone (rules in the ≤900px block). */
+.hub-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  position: sticky;
+  top: 10px;
+}
+.hub-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 6px 12px;
+  border: none;
+  border-radius: var(--radius);
+  background: none;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+}
+.hub-nav-item:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+.hub-nav-item-active {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+}
+.hub-nav-icon {
+  flex: none;
+  font-size: 16px;
+  line-height: 1;
+}
+/* A reading column, not the full stage — the brief is prose and a full-width
+   line is unreadable. The phone already has this width and needs no case. */
+.hub-home {
+  max-width: 860px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+/* One heading style across both sections (approved): 16px, 650, normal case,
+   ink — NOT the muted uppercase `.hub-side-title` treatment. */
+.hub-home-heading {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+  color: var(--fg);
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* Heading row shared by the brief card and the queue: heading left, one
+   action right. */
+.hub-home-review-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.hub-review-go {
+  margin-left: auto;
+}
+.hub-home-brief-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+}
+.hub-home-since {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+.hub-home-brief-body {
+  font-family: var(--prose);
+  font-size: 15px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.hub-home-brief-body > :first-child {
+  margin-top: 0;
+}
+.hub-home-brief-body > :last-child {
+  margin-bottom: 0;
+}
+.hub-home-brief-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px 14px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  padding-top: 11px;
+  border-top: 1px solid var(--border);
+}
+/* A button that reads as a link — for the actions that iterate on the page
+   rather than act on the work, so they never compete with Mark caught up. */
+.hub-linklike {
+  min-height: 36px;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.hub-linklike:hover {
+  color: var(--fg);
+}
+/* The generation-instructions editor, folded open under the brief. */
+.hub-home-recipe {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.hub-home-recipe-hint {
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: var(--fg-muted);
+  line-height: 1.5;
+}
+.hub-home-recipe-text {
+  width: 100%;
+  min-height: 108px;
+  resize: vertical;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+}
+.hub-home-recipe-text:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+.hub-home-recipe-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+/* Empty states and the loading line: quiet, never an alarm. */
+.hub-home-quiet {
+  margin: 0;
+  font-size: 14px;
+  color: var(--fg-muted);
+}
+/* Rows answered this sitting: still in the stack, visibly done (approved) —
+   an answered item vanishing outright reads as the page losing things. */
+.hub-review-settled {
+  margin-top: 8px;
+}
+.hub-decision-chip.hub-review-done {
+  border-style: dashed;
+  color: var(--fg-muted);
+  background: var(--bg);
+}
+.hub-decision-chip.hub-review-done .hub-review-mark {
+  color: var(--green);
 }
 
 /* --- board sections (goals ARE the sections) --- */
@@ -2362,6 +2576,13 @@ a.hub-link-chip:hover {
   .hub-main {
     grid-template-columns: minmax(0, 1fr);
   }
+  /* The nav rail becomes a horizontal row above the stack. Below 900px the
+     phone block turns it into the fixed bottom bar instead. */
+  .hub-nav {
+    position: static;
+    flex-direction: row;
+    order: -1;
+  }
   .hub-board-col {
     order: 0;
   }
@@ -2375,6 +2596,47 @@ a.hub-link-chip:hover {
 
 /* --- mobile (≤720px per design-mobile.md) --- */
 @media (max-width: 900px) {
+  /* Home/Board nav: the bottom bar from the approved mockup. Fixed, so the
+     switch is under the thumb wherever the board has scrolled to. z-index 60:
+     below the walkthrough/detail overlays (70), which are full-screen here
+     and are meant to cover it. */
+  .hub-nav {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 60;
+    flex-direction: row;
+    gap: 0;
+    background: var(--bg-panel);
+    border-top: 1px solid var(--border);
+    padding-bottom: var(--safe-bottom);
+  }
+  .hub-nav-item {
+    flex: 1;
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
+    min-height: 54px;
+    padding: 7px 4px 9px;
+    border-radius: 0;
+    font-size: 11.5px;
+  }
+  .hub-nav-icon {
+    font-size: 18px;
+  }
+  /* Everything bottom-docked has to clear the 54px bar: the page's own tail,
+     and the hold-to-talk mic + its indicator, which are fixed bottom-left at
+     the same corner the bar now owns. */
+  #hub-root {
+    padding-bottom: calc(24px + 58px + var(--safe-bottom));
+  }
+  body.hub-body .voice-mic {
+    bottom: calc(16px + 58px + var(--kb-bottom, 0px) + var(--safe-bottom, 0px));
+  }
+  body.hub-body .voice-indicator {
+    bottom: calc(68px + 58px + var(--kb-bottom, 0px) + var(--safe-bottom, 0px));
+  }
   .hub-section.hub-subgoal {
     margin-left: 10px;
   }
@@ -2438,30 +2700,14 @@ a.hub-link-chip:hover {
     width: 100%;
     border-radius: 0;
   }
-  /* Sticky, because the way out must not be a scroll away on a long body.
-     Inset past BOTH bottom-docked launchers: the hold-to-talk mic bottom-left
-     (fixed at the same stacking level by design — it is meant to sit above the
-     detail panel) and the feedback widget's own pencil bottom-right, which is
-     injected into this page like any other and sits above everything. Without
-     the right inset the pencil lands on the end of Skip. */
-  .hub-walk-nav {
-    position: sticky;
-    bottom: 0;
-    padding: 8px 68px calc(4px + var(--safe-bottom, 0px)) 68px;
-    background: var(--bg);
-  }
-  /* A sticky bar takes its space back from the scroller, so the tail of the
-     card scrolls UNDER it and stops there. On the decision card the tail is
-     "Tell me more" — the button for the case where you can't decide yet, i.e.
-     exactly the one a stuck reviewer reaches for — and it was covered and
-     unclickable at 430px, with 2px of it below the fold. Reserve the bar's
-     height so the last control can always be scrolled clear. */
+  /* The ‹ › stepper lives in the panel HEAD now, so there is no sticky bottom
+     bar — but the card's tail still ends over two bottom-docked launchers:
+     the hold-to-talk mic bottom-left and the feedback widget's pencil
+     bottom-right, both fixed above this panel by design. Reserve their height
+     so the last control ("Tell me more" on a decision card — exactly the one
+     a stuck reviewer reaches for) can always be scrolled clear of them. */
   .hub-walk-card {
-    /* Fill the panel so the nav is pinned to the bottom of the SCREEN on a
-       short card, not left floating mid-panel above a half-screen of white.
-       On a long card this does nothing and the sticky rule takes over. */
-    flex: 1 1 auto;
-    padding-bottom: 60px;
+    padding-bottom: calc(60px + var(--safe-bottom, 0px));
   }
 }
 
