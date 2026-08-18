@@ -86,7 +86,8 @@ describe('deterministicBrief', () => {
   it('says quiet when nothing happened, and still renders the queue denominator', () => {
     const md = deterministicBrief(input([], 3));
     expect(md).toContain('Quiet since you last caught up');
-    expect(md).toContain('**3** items are queued for your review below.');
+    expect(md).toContain('What needs your review is queued below.');
+    expect(md).not.toContain('**3**');
   });
 
   it('an empty queue is stated, not omitted — an absent line reads as an all-clear', () => {
@@ -120,7 +121,7 @@ describe('deterministicBrief', () => {
       '**Decided:** 1 decision was answered — [Rewrite the retry helper](/workspaces/ws-1?task=t-2).',
     );
     expect(md).toContain('**Goals:** edited once.');
-    expect(md).toContain('**2** items are queued for your review below.');
+    expect(md).toContain('What needs your review is queued below.');
   });
 
   it('caps long title lists instead of shipping a wall', () => {
@@ -144,7 +145,7 @@ describe('deterministicBrief', () => {
 });
 
 describe('buildBriefPrompt', () => {
-  it('carries the instructions, the since label, the digest, and the queue count', () => {
+  it('carries the instructions, the since label, the digest, and a countless queue line', () => {
     const { system, user } = buildBriefPrompt(
       input(
         [
@@ -166,7 +167,10 @@ describe('buildBriefPrompt', () => {
     expect(user).toContain(
       'task.transitioned todo→done · [Ship the fuzzy matcher](/workspaces/ws-1?task=t-1) · by Beacon',
     );
-    expect(user).toContain('4 item(s) are queued');
+    expect(user).toContain(
+      "Items needing the reader's review are queued below the brief — never state how many.",
+    );
+    expect(user).not.toContain('4 item(s)');
   });
 
   it('a task row carries its deep link; a row with no task carries no link at all', () => {

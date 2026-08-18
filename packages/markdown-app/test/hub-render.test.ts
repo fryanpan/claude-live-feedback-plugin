@@ -771,7 +771,7 @@ describe('renderReviewBanner', () => {
     const d = task({ needs: 'decision', assignee: 'human' });
     renderReviewBanner(root, reviewQueue([d], [], NOW), { onGoHome });
     expect(root.querySelector('.hub-review-banner-text')?.textContent).toBe(
-      '1 item is waiting for your review',
+      'Something is waiting for your review',
     );
     (root.querySelector('.hub-review-banner-go') as HTMLElement).click();
     expect(onGoHome).toHaveBeenCalledTimes(1);
@@ -782,7 +782,7 @@ describe('renderReviewBanner', () => {
     expect(root.children).toHaveLength(0);
   });
 
-  it('counts every kind, plural', () => {
+  it('still renders one countless line when several kinds are waiting', () => {
     const d = task({ needs: 'decision', assignee: 'human' });
     const thread = {
       kind: 'task-thread' as const,
@@ -794,9 +794,9 @@ describe('renderReviewBanner', () => {
       since: NOW - 60_000,
     };
     renderReviewBanner(root, reviewQueue([d], [thread], NOW), { onGoHome: vi.fn() });
-    expect(root.querySelector('.hub-review-banner-text')?.textContent).toBe(
-      '2 items are waiting for your review',
-    );
+    const text = root.querySelector('.hub-review-banner-text')?.textContent;
+    expect(text).toBe('Something is waiting for your review');
+    expect(text).not.toMatch(/\d/);
   });
 });
 
@@ -2169,6 +2169,196 @@ describe('discussionIsBusy', () => {
     const ta = root.querySelector('.hub-discussion textarea') as HTMLTextAreaElement;
     ta.focus();
     expect(discussionIsBusy(root)).toBe(true);
+  });
+});
+
+/**
+ * The half `discussionIsBusy` cannot cover. That guard holds back a discussion
+ * RELOAD while someone is typing, but a task transition arriving over SSE
+ * repaints the whole panel through a different door (the tasks map observer),
+ * and the repaint rebuilds the composer — typed-but-unsent text and focus were
+ * gone and the caret dropped to body. Found while verifying the voice fix in
+ * PR #222: the voice symptom went away, the text loss stayed.
+ *
+ * So the fix is at the choke point every repaint funnels through:
+ * `renderTaskDetail` snapshots what each text control holds the instant
+ * before it throws the old DOM away, and puts it back into the new one —
+ * value, focus, and caret.
+ */
+describe('a repaint of the detail panel keeps what was typed', () => {
+  let root: HTMLElement;
+  beforeEach(() => {
+    root = document.createElement('div');
+    document.body.replaceChildren(root);
+  });
+
+  const handlers = () => ({
+    onClose: vi.fn(),
+    onStatusSet: vi.fn(),
+    onTitleCommit: vi.fn(),
+    onAnswer: vi.fn(),
+    onAssign: vi.fn(),
+    onComment: vi.fn(),
+  });
+
+  const thread = (id: string): TaskThread => ({
+    id,
+    status: 'open',
+    comments: [{ author: 'Jordan', text: `Question in ${id}?`, ts: NOW }],
+  });
+
+  const ask = (taskId: string, threadId: string) => ({
+    kind: 'task-thread' as const,
+    docId: `task:${taskId}`,
+    threadId,
+    taskId,
+    title: 'Some task',
+    ask: 'Bryan: which one?',
+    askedBy: 'Live Feedback',
+    since: NOW - 3_600_000,
+    direct: true,
+  });
+
+  const paint = (t: HubTask, extra: Record<string, unknown> = {}) =>
+    renderTaskDetail(
+      root,
+      t,
+      { ...handlers(), ...extra },
+      { loading: false, threads: [thread('th-1'), thread('th-2')] },
+    );
+
+  const composer = () => root.querySelector('.hub-discussion textarea') as HTMLTextAreaElement;
+
+  /** Type into a control the way a person does: value, focus, caret. */
+  const typeInto = (el: HTMLTextAreaElement | HTMLInputElement, text: string, caret: number) => {
+    el.value = text;
+    el.focus();
+    el.setSelectionRange(caret, caret);
+  };
+
+  it('the discussion composer survives a task transition — text, focus AND caret', () => {
+    const t = task({ status: 'todo' });
+    paint(t);
+    const before = composer();
+    typeInto(before, 'I think this is below the API work because', 12);
+    expect(document.activeElement).toBe(before);
+
+    // The SSE-driven repaint: same task, new status.
+    paint({ ...t, status: 'in-progress' });
+
+    // Positive control, two ways: the panel really was rebuilt (the chip
+    // moved, and the composer is a NEW node), so a pass below is a restore
+    // and not a repaint that never happened.
+    expect(root.querySelector('.hub-chip-current')?.textContent).toBe('In progress');
+    const after = composer();
+    expect(after).not.toBe(before);
+
+    expect(after.value).toBe('I think this is below the API work because');
+    expect(document.activeElement).toBe(after);
+    expect(after.selectionStart).toBe(12);
+    expect(after.selectionEnd).toBe(12);
+  });
+
+  // The caret is restored where it was, not at the end — someone editing the
+  // middle of a sentence keeps their place.
+  it('keeps a mid-text selection, direction included', () => {
+    const t = task();
+    paint(t);
+    const ta = composer();
+    ta.value = 'drop the second half';
+    ta.focus();
+    ta.setSelectionRange(9, 20, 'backward');
+    paint({ ...t, updatedAt: NOW + 1 });
+    const after = composer();
+    expect(after.selectionStart).toBe(9);
+    expect(after.selectionEnd).toBe(20);
+    expect(after.selectionDirection).toBe('backward');
+  });
+
+  // Text without focus is still a draft — the reader tapped away to read a
+  // thread and is coming back to it. Restored, but the caret is left alone:
+  // focusing a field the person left would steal it from wherever they went.
+  it('keeps unfocused draft text without stealing focus', () => {
+    const t = task();
+    paint(t);
+    composer().value = 'half a thought';
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    document.body.focus();
+    paint({ ...t, updatedAt: NOW + 1 });
+    expect(composer().value).toBe('half a thought');
+    expect(document.activeElement).not.toBe(composer());
+  });
+
+  // The other text controls on the panel go through the same repaint and lose
+  // the same way, so they ride the same fix.
+  it('the ask panel reply box survives too', () => {
+    const t = task();
+    paint(t, { asks: [ask(t.id, 'th-1')] });
+    const box = root.querySelector('.hub-detail-ask-form textarea') as HTMLTextAreaElement;
+    expect(box).toBeTruthy();
+    typeInto(box, 'Keep threading.', 4);
+    paint({ ...t, status: 'in-progress' }, { asks: [ask(t.id, 'th-1')] });
+    const after = root.querySelector('.hub-detail-ask-form textarea') as HTMLTextAreaElement;
+    expect(after).not.toBe(box);
+    expect(after.value).toBe('Keep threading.');
+    expect(document.activeElement).toBe(after);
+    expect(after.selectionStart).toBe(4);
+  });
+
+  it('a decision answer being recorded survives too', () => {
+    const t = task({ needs: 'decision' });
+    paint(t);
+    const box = root.querySelector('.hub-answer-form textarea') as HTMLTextAreaElement;
+    expect(box).toBeTruthy();
+    typeInto(box, 'Option B, because', 8);
+    paint({ ...t, updatedAt: NOW + 1 });
+    const after = root.querySelector('.hub-answer-form textarea') as HTMLTextAreaElement;
+    expect(after).not.toBe(box);
+    expect(after.value).toBe('Option B, because');
+    expect(document.activeElement).toBe(after);
+    expect(after.selectionStart).toBe(8);
+  });
+
+  // The title editor is a control that only exists mid-edit, so a repaint
+  // does not merely empty it — it closes it. Reopened with the typed text.
+  it('a title being renamed survives, editor reopened with the typed text', () => {
+    const t = task({ title: 'Old name' });
+    paint(t);
+    (root.querySelector('.hub-detail-title') as HTMLElement).click();
+    const input = root.querySelector('.hub-title-input') as HTMLInputElement;
+    expect(input).toBeTruthy();
+    typeInto(input, 'Old name, sharper', 3);
+    paint({ ...t, updatedAt: NOW + 1 });
+    const after = root.querySelector('.hub-title-input') as HTMLInputElement;
+    expect(after).toBeTruthy();
+    expect(after).not.toBe(input);
+    expect(after.value).toBe('Old name, sharper');
+    expect(document.activeElement).toBe(after);
+    expect(after.selectionStart).toBe(3);
+  });
+
+  // The boundary of the guarantee: a draft belongs to the task it was typed
+  // on. Opening a DIFFERENT task in the same panel starts clean — carrying a
+  // half-typed comment from one task onto another would post it in the wrong
+  // place, which is worse than losing it.
+  it('does not carry a draft from one task onto another', () => {
+    const a = task();
+    const b = task();
+    paint(a);
+    typeInto(composer(), 'about task A', 5);
+    paint(b);
+    expect(composer().value).toBe('');
+    expect(document.activeElement).not.toBe(composer());
+  });
+
+  // A control that starts empty stays empty: the snapshot is not inventing
+  // values, and a repaint of an untouched panel is a no-op for the fields.
+  it('an untouched panel repaints untouched', () => {
+    const t = task();
+    paint(t);
+    paint({ ...t, updatedAt: NOW + 1 });
+    expect(composer().value).toBe('');
+    expect(document.activeElement).not.toBe(composer());
   });
 });
 
