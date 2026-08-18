@@ -87,7 +87,7 @@ if (marketplaces.stdout.includes('claude-live-feedback')) {
 console.log('\n3. Installing the `live-feedback` plugin at user scope…');
 const plugins = run(claude, ['plugin', 'list']);
 if (
-  plugins.stdout.includes('live-feedback@claude-live-feedback') &&
+  plugins.stdout.includes('claude-workspaces@claude-workspaces') &&
   plugins.stdout.includes('enabled')
 ) {
   console.log('   ✓ plugin already installed and enabled');
@@ -95,7 +95,7 @@ if (
   const install = run(claude, [
     'plugin',
     'install',
-    'live-feedback@claude-live-feedback',
+    'claude-workspaces@claude-workspaces',
     '--scope',
     'user',
   ]);
@@ -111,7 +111,7 @@ console.log('Add this flag to however you launch `claude`, so channel events');
 console.log('(thread.created / replied / resolved) reach the agent session:');
 console.log('');
 console.log(
-  '    --dangerously-load-development-channels plugin:live-feedback@claude-live-feedback',
+  '    --dangerously-load-development-channels plugin:claude-workspaces@claude-workspaces',
 );
 console.log('');
 console.log('e.g. in your ~/.zshrc:');
@@ -119,7 +119,7 @@ console.log('');
 console.log('    claude() {');
 console.log('      /path/to/claude \\');
 console.log(
-  '        --dangerously-load-development-channels plugin:live-feedback@claude-live-feedback \\',
+  '        --dangerously-load-development-channels plugin:claude-workspaces@claude-workspaces \\',
 );
 console.log('        "$@"');
 console.log('    }');

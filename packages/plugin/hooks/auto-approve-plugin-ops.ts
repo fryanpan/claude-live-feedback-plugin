@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * PreToolUse hook for the live-feedback plugin.
+ * PreToolUse hook for the claude-workspaces plugin.
  *
  * Auto-approves tool calls that fall inside the plugin's own surface so
  * users don't have to "Allow Claude to use <tool>" for every new MCP tool
@@ -11,9 +11,9 @@
  * Two categories, evaluated independently:
  *
  *   1. **MCP tools published by this plugin**
- *      Tool name matches `mcp__plugin_live-feedback_live-feedback__*` → approve.
+ *      Tool name matches `mcp__plugin_claude-workspaces_claude-workspaces__*` → approve.
  *      Rationale: the user opted into the entire MCP surface when they ran
- *      `claude plugin install live-feedback@…`. Making them re-opt-in per
+ *      `claude plugin install claude-workspaces@…`. Making them re-opt-in per
  *      tool is friction without security value — the MCP server is the
  *      trust boundary, not the individual tool names. Auto-approving here
  *      means new tools shipped in plugin updates don't require every user
@@ -53,7 +53,7 @@ type HookDecision = {
   reason?: string;
 };
 
-const MCP_PREFIX = 'mcp__plugin_live-feedback_live-feedback__';
+const MCP_PREFIX = 'mcp__plugin_claude-workspaces_claude-workspaces__';
 const SERVICE_LABEL = 'com.fryanpan.live-feedback';
 
 /**
@@ -118,7 +118,7 @@ async function main(): Promise<void> {
   if (tool.startsWith(MCP_PREFIX)) {
     const out: HookDecision = {
       decision: 'approve',
-      reason: 'live-feedback plugin MCP tool — user already opted in via plugin install',
+      reason: 'claude-workspaces plugin MCP tool — user already opted in via plugin install',
     };
     process.stdout.write(JSON.stringify(out));
     process.exit(0);

@@ -41,13 +41,13 @@ A peer installs, once:
 
 ```bash
 claude plugin marketplace add fryanpan/claude-workspaces-plugin
-claude plugin install live-feedback@claude-live-feedback --scope user
+claude plugin install claude-workspaces@claude-workspaces --scope user
 ```
 
 and afterwards updates with:
 
 ```bash
-claude plugin update live-feedback@claude-live-feedback
+claude plugin update claude-workspaces@claude-workspaces
 ```
 
 **Sharp edge — `claude plugin marketplace remove <name>` also uninstalls the
@@ -60,7 +60,7 @@ back:
 ```bash
 claude plugin marketplace remove claude-live-feedback
 claude plugin marketplace add fryanpan/claude-workspaces-plugin
-claude plugin install live-feedback@claude-live-feedback --scope user
+claude plugin install claude-workspaces@claude-workspaces --scope user
 ```
 
 ## Three version sites, one value
@@ -300,7 +300,7 @@ another process does to the cache reaches it; only its own relaunch does.
 
 Prod polls it. `scripts/serve.ts --no-watch` passes
 `--plugin-refresh-interval-ms`, and the server then runs
-`claude plugin update live-feedback@claude-live-feedback` at boot and every 30
+`claude plugin update claude-workspaces@claude-workspaces` at boot and every 30
 minutes (`LF_PLUGIN_REFRESH_MINUTES`; `0` turns it off). A merge therefore
 reaches this machine's cache on its own, within the window.
 
@@ -330,7 +330,7 @@ resolves to a wrapper that injects flags ahead of the subcommand, so
 `claude plugin update …` is parsed as a prompt and dies with *"Input must be
 provided either through stdin or as a prompt argument when using --print"*,
 which reads like a permission refusal and was once written up as one. Use
-`command claude plugin update live-feedback@claude-live-feedback` — `command`
+`command claude plugin update claude-workspaces@claude-workspaces` — `command`
 bypasses functions and aliases. (The server never hits this: it spawns the
 resolved binary path with an argv array and no shell.)
 

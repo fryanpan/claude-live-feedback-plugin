@@ -13,7 +13,7 @@ First-time setup for a fresh clone of `claude-workspaces-plugin`. Walk the user 
 Brings a fresh checkout of this repo to a working state:
 
 1. Installs JS dependencies (`bun install`)
-2. Wires the shell alias that enables Claude Channels for `plugin:live-feedback@claude-live-feedback`
+2. Wires the shell alias that enables Claude Channels for `plugin:claude-workspaces@claude-workspaces`
 3. Registers the local repo as a Claude Code marketplace and installs the plugin at user scope
 4. (Optional) Installs the macOS launchd supervisor so the live-feedback server survives logout / Mac reboot / crashes
 5. (Optional on macs with home on a non-default volume) Surfaces the Full Disk Access prereq for the launchd-spawned bun
@@ -45,7 +45,7 @@ Verify: `node_modules/` exists at the repo root.
 The plugin uses Claude Code's channel events (push notifications from the server to the agent session). That feature is currently behind the `--dangerously-load-development-channels` flag. Easiest way to keep it active is a shell function in their `~/.zshrc` (or `~/.bashrc` if they use bash):
 
 ```sh
-claude() { /path/to/claude --dangerously-load-development-channels plugin:live-feedback@claude-live-feedback "$@"; }
+claude() { /path/to/claude --dangerously-load-development-channels plugin:claude-workspaces@claude-workspaces "$@"; }
 ```
 
 Important:
@@ -63,7 +63,7 @@ From the repo root:
 
 ```sh
 claude plugin marketplace add .
-claude plugin install live-feedback@claude-live-feedback --scope user
+claude plugin install claude-workspaces@claude-workspaces --scope user
 ```
 
 Explain: the first command registers this checkout as a local plugin marketplace; the second installs the live-feedback plugin user-wide so it's available in every Claude Code session.

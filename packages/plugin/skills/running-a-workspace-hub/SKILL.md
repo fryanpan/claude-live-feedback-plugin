@@ -19,7 +19,7 @@ file.
 
 This skill is the tool contract. The **discipline** of working an existing
 board — priority order, fanning out, when to stop — lives in
-`live-feedback:working-a-workspace-board`. Read both.
+`claude-workspaces:working-a-workspace-board`. Read both.
 
 ## First: two different things are called "workspace"
 
@@ -408,7 +408,7 @@ identically; what this seat adds is deciding how many lines run at once and in
 what order their merges land. The default is every ready row that doesn't
 collide, and the criteria — what counts as a collision, and what forces a
 sequence of the merge rather than of the work — are in
-`live-feedback:working-a-workspace-board`. Don't re-derive them here. Two
+`claude-workspaces:working-a-workspace-board`. Don't re-derive them here. Two
 things only the lead can do about it:
 
 - **Make the board judgeable.** A batch is planned by reading descriptions
@@ -533,7 +533,7 @@ exists precisely because nobody has made that call yet.
 The calls above are the write half. What the lead actually owes on a goal
 change — re-reading the goal, sweeping every open task, reordering without
 losing a band, and flagging what the edit made obsolete *without* closing
-somebody's work — is `live-feedback:handling-a-goal-change`.
+somebody's work — is `claude-workspaces:handling-a-goal-change`.
 
 ## Adopting an existing tracker
 

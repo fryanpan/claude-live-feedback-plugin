@@ -9,13 +9,13 @@ import { describe, expect, it } from 'vitest';
  * an interactive shell — launchd, a GUI app, cron. `"command": "node"` did not:
  * on a machine where node comes from nvm, PATH is built in ~/.zshrc, so `node`
  * resolves interactively and nowhere else. Those sessions got a bare ENOENT and
- * no live-feedback tools at all.
+ * no workspace tools at all.
  *
  * These tests run the launcher with a PATH that deliberately has no node on it.
  */
 
 const REPO = resolve(__dirname, '../../..');
-const LAUNCHER = resolve(REPO, 'packages/plugin/bin/live-feedback-mcp.sh');
+const LAUNCHER = resolve(REPO, 'packages/plugin/bin/claude-workspaces-mcp.sh');
 const BUNDLE = resolve(REPO, 'packages/plugin/mcp/index.js');
 const MCP_JSON = resolve(REPO, 'packages/plugin/.mcp.json');
 
@@ -96,10 +96,15 @@ describe('plugin MCP launcher', () => {
 
     // The version a client sees had drifted three minor releases behind the
     // plugin manifest, because nothing tied the two together.
-    const pluginVersion = JSON.parse(
+    const manifest = JSON.parse(
       readFileSync(resolve(REPO, 'packages/plugin/.claude-plugin/plugin.json'), 'utf8'),
-    ).version;
-    expect(reply.result.serverInfo.version).toBe(pluginVersion);
+    );
+    expect(reply.result.serverInfo.version).toBe(manifest.version);
+    // The NAME had the same freedom to drift and no gate: it read
+    // `claude-live-feedback` while the manifest said `live-feedback`, and
+    // nothing anywhere compared them. Tie it to the manifest so the next
+    // rename cannot leave a stale handshake behind.
+    expect(reply.result.serverInfo.name).toBe(manifest.name);
   });
 
   it('runs clean with no HOME and no PATH at all', async () => {
@@ -160,7 +165,7 @@ describe('plugin MCP launcher', () => {
 
 describe('plugin MCP registration', () => {
   const config = JSON.parse(readFileSync(MCP_JSON, 'utf8'));
-  const server = config.mcpServers['live-feedback'];
+  const server = config.mcpServers['claude-workspaces'];
 
   it('does not invoke a bare interpreter name from PATH', () => {
     // The regression itself: `command` must be an absolute path, since whatever
@@ -169,9 +174,16 @@ describe('plugin MCP registration', () => {
     expect(server.command).not.toBe('node');
   });
 
-  it('keeps the server name that existing tool permissions are keyed to', () => {
-    // Approved entries across the fleet read mcp__plugin_live-feedback_live-feedback__*.
-    // Renaming this key silently invalidates every one of them.
-    expect(Object.keys(config.mcpServers)).toEqual(['live-feedback']);
+  it('names the one server the plugin ships, and names it after the plugin', () => {
+    // This key is half of the tool prefix a session sees —
+    // mcp__plugin_<plugin>_<server>__* — so every approved permission entry on
+    // every machine is keyed to it. The 2026-08-18 rename moved it from
+    // `live-feedback` to `claude-workspaces` deliberately, and that invalidated
+    // the old entries; peers re-approve once. Pin it to the manifest so it can
+    // only ever move again on purpose.
+    const pluginName = JSON.parse(
+      readFileSync(resolve(REPO, 'packages/plugin/.claude-plugin/plugin.json'), 'utf8'),
+    ).name;
+    expect(Object.keys(config.mcpServers)).toEqual([pluginName]);
   });
 });

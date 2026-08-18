@@ -34,7 +34,7 @@ import { join } from 'node:path';
 import { compareSemver } from './plugin-release.ts';
 
 /** The one plugin this server knows the released version of. */
-export const PLUGIN_REF = 'live-feedback@claude-live-feedback';
+export const PLUGIN_REF = 'claude-workspaces@claude-workspaces';
 
 /** How long a spawned update gets before it is killed. A hung fetch must not
  *  hold the single-flight slot open forever. */

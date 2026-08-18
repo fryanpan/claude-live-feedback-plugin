@@ -35,7 +35,7 @@ doc editor + injectable widget) as a single install.
 
 ```bash
 claude plugin marketplace add fryanpan/claude-workspaces-plugin
-claude plugin install live-feedback@claude-live-feedback
+claude plugin install claude-workspaces@claude-workspaces
 ```
 
 That's the entire client install. The plugin's `plugin.json`, `.mcp.json`,
@@ -75,7 +75,7 @@ hook to fire.
 
 ```bash
 claude plugin marketplace update claude-live-feedback
-claude plugin update live-feedback@claude-live-feedback
+claude plugin update claude-workspaces@claude-workspaces
 ```
 
 Commands, hooks, and the MCP tool surface are pinned to the plugin's
@@ -86,7 +86,7 @@ have a stale MCP binary.
 ## Uninstall
 
 ```bash
-claude plugin uninstall live-feedback@claude-live-feedback
+claude plugin uninstall claude-workspaces@claude-workspaces
 claude plugin marketplace remove claude-live-feedback
 ```
 

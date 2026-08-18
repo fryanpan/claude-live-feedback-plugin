@@ -1,13 +1,13 @@
 {
-  "name": "claude-live-feedback",
+  "name": "claude-workspaces",
   "owner": {
     "name": "Bryan Chan",
     "url": "https://github.com/fryanpan"
   },
-  "description": "Home for the live-feedback plugin — point-and-comment review for Claude Code agents.",
+  "description": "Home for the claude-workspaces plugin — point-and-comment review for Claude Code agents.",
   "plugins": [
     {
-      "name": "live-feedback",
+      "name": "claude-workspaces",
       "source": "./packages/plugin",
       "description": "MCP tools + /feedback commands + PreToolUse hook + live review surface (markdown + injectable widget).",
       "version": "0.1.60",

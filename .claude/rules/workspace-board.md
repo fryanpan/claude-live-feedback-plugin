@@ -5,7 +5,7 @@ order, taking the whole ready batch in parallel by default and what actually
 forces a sequence, what a description owes the next agent, keeping the board
 current, asking for feedback on the task, and why finishing a task is not a
 reason to stop — lives in the
-`live-feedback:working-a-workspace-board` skill
+`claude-workspaces:working-a-workspace-board` skill
 (`packages/plugin/skills/working-a-workspace-board/SKILL.md`). Read it at
 session start if this session has a workspace, and follow it.
 
