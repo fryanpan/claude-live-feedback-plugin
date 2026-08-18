@@ -79,14 +79,6 @@ export interface HubTask {
    */
   ownerKind?: HubOwnerKind;
   needs?: 'action' | 'decision';
-  /**
-   * How this row's title falls short of the standard — computed by the
-   * server, because two of the clauses need the body room and the workspace
-   * that the browser does not hold. Absent on a row whose title is fine, so
-   * presence IS the signal.
-   */
-  titleGaps?: string[];
-  bodyGaps?: string[];
   goal: string;
   order: number;
   after: string[];
