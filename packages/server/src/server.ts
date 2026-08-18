@@ -40,7 +40,19 @@ import {
 import type { PluginRefresher } from './plugin-refresh.ts';
 import { agentsBehind, checkableAttachments, readReleasedPluginVersion } from './plugin-release.ts';
 import { localHostnames, publicBaseUrl } from './public-host.ts';
-import { reviewThreadItems } from './review-queue.ts';
+import {
+  type BriefInput,
+  HomeBriefStore,
+  acceptBrief,
+  briefEvents,
+  briefIsFresh,
+  buildBriefPrompt,
+  deterministicBrief,
+  effectiveSince,
+  readEventRows,
+  readerKey,
+} from './home-brief.ts';
+import { type ReviewThreadItem, reviewThreadItems } from './review-queue.ts';
 import { type FeedbackWs, Rooms, type WorkspaceDirNode, type WorkspaceFileNode } from './rooms.ts';
 import { isWithinRoot } from './safe-path.ts';
 import { CfApi } from './share/cf-api.ts';
@@ -90,6 +102,7 @@ import { buildQueue, placeableGoals, summarizeGoals } from './task-queue.ts';
 import { type TitleGap, clipToWordBoundary, titleGapMessage } from './task-title.ts';
 import {
   type GoalListEntry,
+  type HubWorkspace,
   type Ref,
   type Task,
   type TaskStatus,
@@ -633,6 +646,147 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     if (!workspaceId) return;
     sse.broadcast(`ws~${workspaceId}`, payload);
     taskProjection.refresh(workspaceId);
+  };
+
+  // ── Home pane: per-person read markers + the "What's New?" brief ─────────
+  // (Approved design: docs/product/mockups/home-pane. Summaries cover
+  // everything since the reader last marked caught up; instructions are
+  // workspace-wide and editable; generation is the summarizer seam or
+  // nothing — a server with no summarizer serves the deterministic brief.)
+  const homeBriefs = new HomeBriefStore(dataDir);
+  /** One generation in flight per workspace+reader: the client polls while
+   *  `generating`, and N polls must cost one call, not N. */
+  const homeBriefInflight = new Set<string>();
+
+  /** The thread-shaped review items exactly as GET /review-items ships them.
+   *  ONE builder for that route and for the brief's queue count, so the
+   *  number the brief prints cannot drift from the queue rendered under it. */
+  const reviewItemsFor = (workspace: HubWorkspace): ReviewThreadItem[] =>
+    reviewThreadItems({
+      tasks: taskStore.listTasks(workspace.id).map((t) => ({
+        id: t.id,
+        title: t.title,
+        bodyDocId: taskBodyDocId(t.id),
+        done: t.status === 'done',
+      })),
+      docs: workspace.docIds.map((docId) => {
+        const meta = rooms.get(docId)?.meta;
+        // Title, else the file's BASENAME — never `relPath` whole and
+        // never `sourceUrl`. Those describe the host machine, and a
+        // share visitor reads this route (§3.3): a label is workspace
+        // content, a path is not.
+        const base = meta?.relPath?.split('/').pop();
+        return { docId, title: meta?.title || base || docId };
+      }),
+      source: {
+        threadsOf: (docId) => rooms.listThreads(docId, { status: 'open' }),
+        // Unfiltered, and only for the roster: who counts as a person
+        // here must not depend on whether their thread is still open.
+        allThreadsOf: (docId) => rooms.listThreads(docId),
+      },
+    });
+
+  /**
+   * How many items the Home queue holds right now: open unanswered
+   * decisions, person-owned blockers with open dependents, and the thread
+   * items — the same three bands `reviewQueue` (hub-model) derives in the
+   * browser. Mirrored rather than shared because the queue logic lives
+   * client-side over the ydoc projection; this count feeds only the brief's
+   * closing denominator line.
+   */
+  const homeQueueTotal = (workspace: HubWorkspace, items: ReviewThreadItem[]): number => {
+    const tasks = taskStore.listTasks(workspace.id);
+    const ownerKindOf = taskProjection.ownerKindReader(workspace.id);
+    const open = tasks.filter((t) => t.status !== 'done');
+    const decisions = open.filter((t) => t.needs === 'decision' && !t.answer);
+    const blockers = open.filter(
+      (t) =>
+        t.needs !== 'decision' &&
+        ownerKindOf(t) === 'person' &&
+        open.some((o) => o.id !== t.id && o.after.includes(t.id)),
+    );
+    return decisions.length + blockers.length + items.length;
+  };
+
+  const homeBriefInput = (workspace: HubWorkspace, since: number): BriefInput => {
+    const events = briefEvents(readEventRows(dataDir, workspace.id), since);
+    const items = reviewItemsFor(workspace);
+    return {
+      events,
+      queue: { total: homeQueueTotal(workspace, items) },
+      titleOf: (taskId) => taskStore.getTask(taskId)?.title,
+    };
+  };
+
+  /** Fire-and-forget one generation; the client re-reads when it lands. */
+  const generateHomeBriefFor = (
+    workspace: HubWorkspace,
+    person: string,
+    marker: number,
+    input: BriefInput,
+  ): void => {
+    const key = `${workspace.id} ${readerKey(person)}`;
+    if (homeBriefInflight.has(key)) return;
+    homeBriefInflight.add(key);
+    const sinceLabel =
+      marker > 0 ? `everything since ${new Date(marker).toUTCString()}` : 'the last 7 days';
+    const prompt = buildBriefPrompt(input, homeBriefs.instructions(workspace.id), sinceLabel);
+    void (async () => {
+      try {
+        const accepted = acceptBrief((await summarizer?.generateHomeBrief(prompt)) ?? null);
+        // A refused reply stores nothing: the deterministic brief stands, and
+        // the next read simply tries again. Never store an empty brief over
+        // a rendered one.
+        if (accepted !== null) {
+          homeBriefs.storeBrief(workspace.id, person, {
+            markdown: accepted,
+            since: marker,
+            eventCount: input.events.length,
+            generatedAt: Date.now(),
+          });
+        }
+      } finally {
+        homeBriefInflight.delete(key);
+      }
+    })();
+  };
+
+  /**
+   * Everything GET /home answers, also returned by the instructions PUT so
+   * the client repaints from one shape. Freshness keys on the MARKER (not
+   * the derived window start, which for a never-read reader slides with the
+   * clock and would re-queue a generation on every read) plus the count of
+   * brief-relevant events — see BRIEF_EVENT_TYPES for why heartbeats are
+   * excluded from that count.
+   */
+  const homePayload = (workspace: HubWorkspace, person: string, now: number) => {
+    const marker = homeBriefs.lastReadAt(workspace.id, person);
+    const since = effectiveSince(marker, now);
+    const input = homeBriefInput(workspace, since);
+    const stored = homeBriefs.brief(workspace.id, person);
+    const fresh = briefIsFresh(stored, marker, input.events.length);
+    // `generating` is grounded in work actually queued — it is true exactly
+    // when a call is (or is being put) in flight, never inferred.
+    let generating = false;
+    if (!fresh && summarizer?.enabled) {
+      generating = true;
+      generateHomeBriefFor(workspace, person, marker, input);
+    }
+    const brief = fresh
+      ? {
+          markdown: stored.markdown,
+          generatedAt: stored.generatedAt,
+          source: 'generated' as const,
+        }
+      : { markdown: deterministicBrief(input), generatedAt: now, source: 'deterministic' as const };
+    return {
+      workspaceId: workspace.id,
+      lastReadAt: marker,
+      since,
+      instructions: homeBriefs.instructions(workspace.id),
+      brief,
+      generating,
+    };
   };
   /**
    * Rewrite a task's description through its live `task:<id>` body room, with
@@ -1839,32 +1993,62 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const workspaceId = decodeURIComponent(wsReviewMatch[1] ?? '');
           const workspace = taskStore.getWorkspace(workspaceId);
           if (!workspace) return j(404, { error: 'workspace not found' });
-          return j(200, {
-            workspaceId,
-            items: reviewThreadItems({
-              tasks: taskStore.listTasks(workspaceId).map((t) => ({
-                id: t.id,
-                title: t.title,
-                bodyDocId: taskBodyDocId(t.id),
-                done: t.status === 'done',
-              })),
-              docs: workspace.docIds.map((docId) => {
-                const meta = rooms.get(docId)?.meta;
-                // Title, else the file's BASENAME — never `relPath` whole and
-                // never `sourceUrl`. Those describe the host machine, and a
-                // share visitor reads this route (§3.3): a label is workspace
-                // content, a path is not.
-                const base = meta?.relPath?.split('/').pop();
-                return { docId, title: meta?.title || base || docId };
-              }),
-              source: {
-                threadsOf: (docId) => rooms.listThreads(docId, { status: 'open' }),
-                // Unfiltered, and only for the roster: who counts as a person
-                // here must not depend on whether their thread is still open.
-                allThreadsOf: (docId) => rooms.listThreads(docId),
-              },
-            }),
-          });
+          return j(200, { workspaceId, items: reviewItemsFor(workspace) });
+        }
+        // ── Home pane (§ approved home-pane design) ──────────────────────
+        // GET: the brief + marker + instructions for ONE person. `user` is
+        // required because everything in the payload is per person — an
+        // anonymous read would silently share one marker between everyone.
+        const wsHomeMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/home$/);
+        if (wsHomeMatch && req.method === 'GET') {
+          const workspaceId = decodeURIComponent(wsHomeMatch[1] ?? '');
+          const workspace = taskStore.getWorkspace(workspaceId);
+          if (!workspace) return j(404, { error: 'workspace not found' });
+          const person = (url.searchParams.get('user') ?? '').trim();
+          if (person === '') {
+            return j(400, { error: 'user is required — the read marker and brief are per person' });
+          }
+          return j(200, homePayload(workspace, person, Date.now()));
+        }
+        // "Mark caught up": move the reader's marker. `at` supports undo —
+        // the response names what it replaced, and posting that value back
+        // restores it (0 = never read). A removal must be reversible.
+        const wsHomeReadMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/home\/read$/);
+        if (wsHomeReadMatch && req.method === 'POST') {
+          const workspaceId = decodeURIComponent(wsHomeReadMatch[1] ?? '');
+          const workspace = taskStore.getWorkspace(workspaceId);
+          if (!workspace) return j(404, { error: 'workspace not found' });
+          const body = await safeJson(req);
+          const person = String((body?.author as { name?: unknown } | undefined)?.name ?? '').trim();
+          if (person === '') return j(400, { error: 'author.name is required' });
+          const at =
+            typeof body?.at === 'number' && Number.isFinite(body.at) && body.at >= 0
+              ? body.at
+              : Date.now();
+          return j(200, { ok: true, ...homeBriefs.markRead(workspaceId, person, at) });
+        }
+        // "Save & Update Summary": the instructions persist workspace-wide
+        // and apply to this summary and future summaries. Every cached brief
+        // is dropped (they were written under the old instructions), and the
+        // response is the full home payload so the caller repaints — with
+        // `generating` true when a summarizer is wired, because the drop
+        // makes every brief stale by construction.
+        const wsHomeInstrMatch = pathname.match(
+          /^\/api\/workspaces\/([^/]+)\/home\/instructions$/,
+        );
+        if (wsHomeInstrMatch && req.method === 'PUT') {
+          const workspaceId = decodeURIComponent(wsHomeInstrMatch[1] ?? '');
+          const workspace = taskStore.getWorkspace(workspaceId);
+          if (!workspace) return j(404, { error: 'workspace not found' });
+          const body = await safeJson(req);
+          const person = String((body?.author as { name?: unknown } | undefined)?.name ?? '').trim();
+          if (person === '') return j(400, { error: 'author.name is required' });
+          const instructions = typeof body?.instructions === 'string' ? body.instructions : '';
+          if (instructions.trim() === '') {
+            return j(400, { error: 'instructions are required — to reset, save the default text' });
+          }
+          homeBriefs.setInstructions(workspaceId, instructions);
+          return j(200, homePayload(workspace, person, Date.now()));
         }
         // The work queue: priority order, dependency-aware, grouped into
         // waves that can run at once (§3.9 agent side).
@@ -3828,7 +4012,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // The shell is server-rendered (like the landing page) so the route
         // works — and 404s crisply — whether or not the app bundle has been
         // built; the page's behavior all lives in /app/hub.js.
-        const hubPageMatch = pathname.match(/^\/workspaces\/([^/]+)$/);
+        // `/home` serves the same shell: which pane renders is the client's
+        // routing (`paneFromPath` in hub-model), so Home is deep-linkable —
+        // the board banner's "Go to Home" and a phone bookmark both land on
+        // the pane, not on the board with a hint.
+        const hubPageMatch = pathname.match(/^\/workspaces\/([^/]+?)(?:\/home)?$/);
         if (hubPageMatch && req.method === 'GET') {
           const workspaceId = decodeURIComponent(hubPageMatch[1] ?? '');
           const workspace = taskStore.getWorkspace(workspaceId);
