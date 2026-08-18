@@ -31,7 +31,7 @@ reversing an earlier rule that read the other way).
 ## The plugin ships through a GitHub marketplace
 
 The marketplace `claude-live-feedback` resolves to the GitHub repo
-`fryanpan/claude-live-feedback-plugin` (since 2026-08-13; it used to point at a
+`fryanpan/claude-workspaces-plugin` (since 2026-08-13; it used to point at a
 local directory). Installing or updating fetches the repo, reads
 `.claude-plugin/marketplace.json`, and copies the plugin into a
 **version-keyed** cache path — `.../plugins/cache/<marketplace>/<plugin>/<version>/`.
@@ -40,7 +40,7 @@ Everything downstream follows from that path containing the version number.
 A peer installs, once:
 
 ```bash
-claude plugin marketplace add fryanpan/claude-live-feedback-plugin
+claude plugin marketplace add fryanpan/claude-workspaces-plugin
 claude plugin install live-feedback@claude-live-feedback --scope user
 ```
 
@@ -59,7 +59,7 @@ back:
 
 ```bash
 claude plugin marketplace remove claude-live-feedback
-claude plugin marketplace add fryanpan/claude-live-feedback-plugin
+claude plugin marketplace add fryanpan/claude-workspaces-plugin
 claude plugin install live-feedback@claude-live-feedback --scope user
 ```
 
