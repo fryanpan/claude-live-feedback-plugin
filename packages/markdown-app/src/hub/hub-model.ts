@@ -481,36 +481,41 @@ export function unplacedNotice(tasks: HubTask[], now: number): UnplacedNotice | 
 
 // ── Reordering (the drag handle and its keyboard twin) ─────────────────────
 //
-// `task.order` is fractional and `set_task_goal` already takes a fractional
-// `position`, so "drop between these two rows" is arithmetic over the orders
-// either side — no new ordering API, no renumbering pass, and a cross-goal
-// drop is the same call with a different `goal`. Everything here is pure: the
-// only browser-shaped input is a list of row rectangles, which `dropIndexFor`
-// takes as plain numbers so the decision is testable without layout.
+// A drop says WHICH ROW it lands behind, not what number to write.
+//
+// The first cut computed a fractional `position` between the two neighbours'
+// orders, on the reading that `task.order` is fractional and therefore always
+// has room between any two values. It does not: nothing forces `order` to be
+// distinct within a goal — every caller of `set_task_goal` picks the number
+// itself, and agents pick round ones — and between two rows that SHARE an
+// order there is no number at all. Any value above the first is also above
+// the second, so the board's `(order, createdAt, id)` tiebreak decides where
+// the row really goes, and it lands past the row it was dropped in front of.
+// Measured on a live board: 5 of the 12 visible rows in one goal shared an
+// order with a neighbour, and 14% of that board's expressible drops landed
+// somewhere other than where the pointer put them. Bryan reported it as
+// "cannot reorder items in the task list", which is the honest description —
+// two visibly different drop targets produced one identical result.
+//
+// The old code carried a tie GUARD (`mid > before.order ? mid : +0.5`) and it
+// is worth being exact about why it did not help: it was aimed at the server
+// answering `changed: false`, so it bought a request that registers as a move
+// while still landing the row in the wrong place. A silent no-op became a
+// visible wrong answer.
+//
+// So the target names a neighbour and the server resolves it against the rows
+// it actually holds. An ID rather than an index, because the two ends count
+// different rows — this list is filtered (done window, "mine" tab) and the
+// server's is not. Everything here is still pure: the only browser-shaped
+// input is a list of row rectangles, which `dropIndexFor` takes as plain
+// numbers so the decision is testable without layout.
 
 /** The `set_task_goal` call a drop resolves to. */
 export interface ReorderTarget {
   goal: string;
-  position: number;
-}
-
-/**
- * The order a row takes when it lands between `before` and `after` (either
- * side may be missing at the ends of a section).
- *
- * The tie guard matters: orders are only guaranteed dense *within* a goal, so
- * two rows either side of a drop can carry the same number. A plain midpoint
- * would then equal both, the server would compute `changed: false`, and the
- * drop would look like it worked and do nothing.
- */
-export function positionBetween(before?: HubTask, after?: HubTask): number {
-  if (before && after) {
-    const mid = (before.order + after.order) / 2;
-    return mid > before.order ? mid : before.order + 0.5;
-  }
-  if (before) return before.order + 1;
-  if (after) return after.order - 1;
-  return 0;
+  /** The row the dragged one lands directly behind; null for the top of the
+   *  goal. */
+  after: string | null;
 }
 
 /**
@@ -554,7 +559,7 @@ export function dropTarget(
     const currentIndex = section.tasks.findIndex((t) => t.id === taskId);
     if (currentIndex === clamped) return null;
   }
-  return { goal: section.id, position: positionBetween(rest[clamped - 1], rest[clamped]) };
+  return { goal: section.id, after: rest[clamped - 1]?.id ?? null };
 }
 
 /**
