@@ -212,6 +212,18 @@ const serverArgs = [
   // same class of accident as building bundles in the primary checkout.
   // Override the cadence with LF_PLUGIN_REFRESH_MINUTES; 0 turns it off.
   ...pluginRefreshArgs,
+  // PROD only: let this server pull its own deploy source and restart
+  // itself, so shipping stops needing a person with a shell in the primary
+  // checkout. Dev and staging must NOT — they are copies of that checkout,
+  // and a `bun run staging` that fast-forwarded it and bounced the launchd
+  // service would be the same class of accident as building bundles there.
+  //
+  // Note what enabling this presumes and what it does not: the restart is a
+  // `launchctl kickstart` of the supervised job, which re-reads the plist
+  // launchd already has. It does not reinstall the plist, so the environment
+  // baked in at install time (LF_PUBLIC_BASE_URL) is carried across a deploy
+  // untouched. Changing that is still `scripts/launchd/install.sh`.
+  ...(noWatch ? ['--deploy'] : []),
 ];
 if (!noWatch) serverArgs.unshift('--watch');
 const server = spawn('bun', serverArgs, {

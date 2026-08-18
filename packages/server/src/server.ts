@@ -15,6 +15,7 @@ import { needsCall } from '@feedback/core/summary-prompt';
 import type { Server as BunServer } from 'bun';
 import { classifyActor } from './activity.ts';
 import { clientReleaseStatus } from './client-release.ts';
+import type { Deployer } from './deploy.ts';
 import { showFile } from './git-diff.ts';
 import {
   type LandingGroupRow,
@@ -32,6 +33,7 @@ import { type CfAccessOptions, createCfAccessVerifier } from './middleware/cf-ac
 import {
   type ShareTarget,
   classifyHost,
+  isLoopbackAddress,
   isTrustedLocalHost,
   shareScopeAllows,
 } from './middleware/host-guard.ts';
@@ -203,6 +205,18 @@ export interface ServerOptions {
    * means a CI run can never trigger a deploy.
    */
   pluginRefresher?: PluginRefresher;
+  /**
+   * Pulls this deployment's deploy source and restarts the service — as one
+   * operation, because a restart over an unpulled checkout republishes the
+   * same client and reports success. See deploy.ts.
+   *
+   * Absent by default and constructed in ONE place (bin.ts, behind a flag
+   * only `scripts/serve.ts --no-watch` passes), so no test, no embedded
+   * server and no `bun run staging` can pull or restart the fleet's server.
+   * Same seam rule as `pluginRefresher`, and load-bearing twice over here:
+   * this one writes to a git checkout.
+   */
+  deployer?: Deployer;
   /**
    * The client release root this deployment publishes into (see
    * client-release.ts), enabling the "your browser is running an old client"
@@ -537,6 +551,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // See ServerOptions.summarizer for why constructing one here was wrong.
   const summarizer = opts.summarizer ?? null;
   const pluginRefresher = opts.pluginRefresher ?? null;
+  const deployer = opts.deployer ?? null;
   // Late-bound because Rooms is constructed before the task store and the
   // projection it needs. Nothing can fire through it until a room exists,
   // which is after both.
@@ -2921,6 +2936,72 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           if (req.method === 'GET') return j(200, { refresh: pluginRefresher.last() });
           if (req.method === 'POST') return j(200, { refresh: await pluginRefresher.refresh() });
+          return j(405, { error: 'method not allowed' });
+        }
+        // --- REST: deploy this server ---
+        // Pull the deploy source and restart, as one operation. There is no
+        // "just restart" verb here or anywhere below it: a restart re-runs
+        // the supervisor out of the deploy source, so over an unpulled
+        // checkout it rebuilds the same bundles, republishes the same client,
+        // and prints a successful deploy. See deploy.ts.
+        //
+        // Unlike the refresh above, this one DOES interrupt: it ends this
+        // process a moment after answering. That is why the response is sent
+        // before the restart fires and why the result is written to disk —
+        // the reporter does not survive to be asked again.
+        if (pathname === '/api/deploy') {
+          // Same shape and same reasoning as the refresh route's check: a
+          // share host never reaches here (`shareScopeAllows` is a
+          // closed-by-default allowlist that runs first, pinned by
+          // host-guard.test.ts), so this is defense in depth against a later
+          // allowlisting rather than the gate that stops a visitor today.
+          if (visitor) return j(403, { error: 'not available to share visitors' });
+          if (!deployer) {
+            return j(501, {
+              error:
+                'deploy not enabled on this server (dev and staging deliberately cannot pull or restart the deploy source)',
+            });
+          }
+          // Reading is not deploying: a board surface that shows deploy state
+          // is served over the tailnet, and reporting what already happened
+          // cannot restart anything. So the read stays at trusted-local, the
+          // same level as every other operator read on this server.
+          if (req.method === 'GET') return j(200, { deploy: deployer.last() });
+          if (req.method === 'POST') {
+            // Triggering one is different, and this is the narrow default.
+            //
+            // `local` in the host guard means "the Host header names one of
+            // our own names", which covers every client on the tailnet and
+            // the LAN — measured, not assumed. The refresh route next door is
+            // safe at that width because it cannot interrupt anybody; a
+            // deploy ends this process and drops every live editor socket on
+            // the box, so it does not inherit that argument.
+            //
+            // Checked on the PEER ADDRESS rather than the Host header,
+            // because the Host header is client-controlled: a LAN and a
+            // tailnet client both reached this server sending
+            // `Host: localhost` in the same measurement. See
+            // `isLoopbackAddress`.
+            //
+            // TO LOOSEN (Bryan's call): drop this block and the route is
+            // reachable by any trusted-local caller again. That is one
+            // deletion, which is why the default is the narrow one — the
+            // mistake it can make is refusing a caller who can retry from
+            // the box, not restarting prod for somebody who should not have
+            // been able to.
+            if (!isLoopbackAddress(server.requestIP(req)?.address)) {
+              return j(403, {
+                error:
+                  'deploy must be triggered from this machine (loopback only) — a deploy restarts the server and drops every live editor',
+              });
+            }
+            const body = (await safeJson(req)) ?? {};
+            const force = body.force === true;
+            const requestedBy = typeof body.requestedBy === 'string' ? body.requestedBy : undefined;
+            return j(200, {
+              deploy: await deployer.deploy({ force, ...(requestedBy ? { requestedBy } : {}) }),
+            });
+          }
           return j(405, { error: 'method not allowed' });
         }
         // --- REST: agent attachments (§4) ---
