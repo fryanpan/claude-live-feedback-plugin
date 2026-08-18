@@ -3,7 +3,13 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     environment: 'happy-dom',
-    include: ['packages/*/test/**/*.test.ts', 'packages/*/src/**/*.test.ts'],
+    include: [
+      'packages/*/test/**/*.test.ts',
+      'packages/*/src/**/*.test.ts',
+      // Repo-level scripts are gates (release, leak, bundle size); they need
+      // covering too, and they are not under packages/.
+      'scripts/**/*.test.ts',
+    ],
     exclude: ['packages/server/test/**', 'node_modules/**', 'dist/**'],
     coverage: {
       provider: 'v8',
