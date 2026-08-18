@@ -316,6 +316,35 @@ describe('describeEvent', () => {
     expect(describeEvent({ event: 'voice.request', ts: NOW }, titleOf)).toContain('voice.request');
   });
 
+  // The risk gate was removed on 2026-08-18 and nothing emits this again —
+  // which is exactly why the case has to stay. Rows are already in
+  // `events.jsonl` (two on the live board), and a type with no case falls
+  // through to the test above's bare-slug behaviour: a log line in a feed
+  // written for people. Same trap as "A new emitted event reaches the surface
+  // as a bare slug" in learnings.md, running backwards.
+  it('still describes a historical gate refusal rather than printing its slug', () => {
+    const s = describeEvent(
+      {
+        event: 'task.gate_refused',
+        ts: NOW,
+        taskId: 't-1',
+        to: 'done',
+        riskTier: 'yellow',
+        reason: 'needs-confirmation',
+        actor: { id: 'agent-x', name: 'Search Revamp', kind: 'agent' },
+      },
+      titleOf,
+    );
+    // The sentence, not the key: actor, task title, tier and target status.
+    expect(s).toContain('Search Revamp');
+    expect(s).toContain('Fix ranking');
+    expect(s).toContain('yellow');
+    expect(s).toContain('done');
+    // And the discriminating assertion — the fallback would have produced
+    // exactly this string, so nothing above rules it out on its own.
+    expect(s).not.toContain('task.gate_refused');
+  });
+
   it('names a server restart plainly', () => {
     expect(describeEvent({ event: 'server.started', ts: NOW }, titleOf)).toBe('server restarted');
   });

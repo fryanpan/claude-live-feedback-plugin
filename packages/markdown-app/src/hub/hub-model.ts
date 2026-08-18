@@ -79,6 +79,14 @@ export interface HubTask {
    */
   ownerKind?: HubOwnerKind;
   needs?: 'action' | 'decision';
+  /**
+   * How this row's title falls short of the standard — computed by the
+   * server, because two of the clauses need the body room and the workspace
+   * that the browser does not hold. Absent on a row whose title is fine, so
+   * presence IS the signal.
+   */
+  titleGaps?: string[];
+  bodyGaps?: string[];
   goal: string;
   order: number;
   after: string[];
@@ -96,7 +104,6 @@ export interface HubTask {
   answer?: { text: string; by: string; ts: number; optionId?: string };
   triagedAgainst?: { goalId: string; goal: string; ts: number };
   triagePendingTs?: number;
-  riskTier?: 'green' | 'yellow' | 'red';
   transitions: HubTransition[];
   bodyDocId: string;
   /** The description, as markdown. Capped by the server projection — see
@@ -1232,6 +1239,13 @@ export function describeEvent(ev: ActivityEvent, titleOf: (taskId: string) => st
         ? `${actorName(ev)} corrected the evidence on ${title()}: ${what} replaces ${old}`
         : `${actorName(ev)} attached ${what} to an earlier move on ${title()}`;
     }
+    // The risk gate was removed on 2026-08-18, so nothing emits this again.
+    // The case STAYS: rows are already in `events.jsonl`, and a type this
+    // switch has no case for falls through to the bare slug
+    // `task.gate_refused` — a log line in a feed written for people. Same trap
+    // as "A new emitted event reaches the surface as a bare slug" in
+    // learnings.md, running backwards. `ev.riskTier` is read off the stored
+    // row, not off the task.
     case 'task.gate_refused':
       return `the gate refused ${actorName(ev)} on ${title()}: ${String(ev.riskTier)}-tier, → ${String(ev.to)}`;
     case 'decision.answered': {

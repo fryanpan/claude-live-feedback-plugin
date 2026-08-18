@@ -6,14 +6,18 @@ import { describe, expect, it } from 'vitest';
  * The phone task row's width budget.
  *
  * Measured at a true 430px viewport with the coarse-pointer rules forced on,
- * the row is 402px and its fixed chrome (handle 32 · open zone 0 · status 24 ·
- * risk 10 · owner 24 · six 6px gaps) costs 126px. What is left is shared by the
+ * the row was 402px and its fixed chrome (handle 32 · open zone 0 · status 24 ·
+ * risk 10 · owner 24 · six 6px gaps) cost 126px. What was left is shared by the
  * title and the badge strip — and the word badges are 55–75px EACH, so a row
  * carrying `decision` + `💬 3` gave its title 167px (42% of the row) and a row
  * carrying `💬 3` + `due Aug 19` gave it 152px (38%). Seven of thirty-three
- * rows fell under half.
+ * rows fell under half. The risk dot and one 6px gap left the row on
+ * 2026-08-18, so the chrome is 110px now; the budget got 16px looser, not
+ * loose.
  *
- * So on a phone the strip carries one mark: the discussion count. The word
+ * So on a phone the strip is hidden. It used to keep exactly one mark — the
+ * discussion count — and that badge was removed from the row board-wide on
+ * 2026-08-18 at Bryan's request, so there is nothing left to except. The word
  * badges say in eight characters what the detail panel says in a sentence, and
  * `needs: decision` additionally has the board's own review strip. Same trade
  * the status word and the owner name already made on this row. "A phone" is
@@ -25,7 +29,10 @@ import { describe, expect, it } from 'vitest';
  * track can then never be squeezed below its content, so a chip is never
  * clipped mid-glyph — the title (whose track floor is 0) absorbs the shortfall
  * instead. The base rule's `min-width: 0` is what let the track contribute a
- * zero minimum and render `💬 3` as an 11px sliver of a speech bubble.
+ * zero minimum and render `💬 3` as an 11px sliver of a speech bubble. It
+ * resolves to 0 today (no visible children on a phone) and is kept as the
+ * standing guarantee for the next badge shown here, since getting it wrong is
+ * silent.
  *
  * happy-dom has no layout engine and resolves no media queries, so this
  * asserts the CASCADE SHAPE. The rendered 430px row is measured in a browser
@@ -115,19 +122,20 @@ describe('the phone task row', () => {
     }
   });
 
-  it('keeps the discussion mark, after the drop so it wins', () => {
+  // Until 2026-08-18 this block carried an exception that re-showed the
+  // discussion count after the drop, and this case asserted the source order
+  // that made it win. The badge is gone from the row entirely (Bryan's call —
+  // see `taskBadges`), so the exception went with it and the phone strip is
+  // now empty. Asserted as an absence with the drop rule as its control,
+  // because an extractor returning '' would satisfy the absence on its own.
+  it('carries no un-hiding exception — the phone strip is empty, not selective', () => {
     const body = phoneRowBlock();
-    const hide = body.search(/\.hub-task-badges \.hub-badge\s*\{/);
-    const show = body.search(/\.hub-task-badges \.hub-badge-comments\s*\{/);
-    expect(show).toBeGreaterThan(-1);
-    // Same specificity (two classes each), so source order decides.
-    expect(show).toBeGreaterThan(hide);
-    const rule = /\.hub-badge-comments\s*\{([^}]*)\}/.exec(body)?.[1] ?? '';
-    // Asserted positively, in two parts: `display:\s*(?!none)` is satisfied BY
-    // `display: none`, because \s* backtracks to zero width and the lookahead
-    // then sees the space.
-    expect(rule).toMatch(/display:\s*\S/);
-    expect(rule).not.toMatch(/display:\s*none/);
+    // Control: the rule the exception would have had to outrank is present.
+    expect(body).toMatch(/\.hub-task-badges \.hub-badge\s*\{[^}]*display:\s*none/);
+    expect(body).not.toMatch(/display:\s*inline/);
+    expect(body).not.toContain('hub-badge-comments');
+    // And the class is gone from the whole stylesheet, not merely from here.
+    expect(declarationsOnly(CSS)).not.toContain('hub-badge-comments');
   });
 
   it('gives the strip a track minimum, so a chip is never clipped mid-glyph', () => {

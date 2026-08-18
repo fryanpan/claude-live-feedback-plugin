@@ -19,6 +19,7 @@ import {
   decisionShapeMessage,
 } from './decision-shape.ts';
 import { type DeclaredOwnerKind, declaredAssigneeKind } from './task-owner.ts';
+import { type TitleGap, bodyDrift, bodyHead, taskTitleGaps } from './task-title.ts';
 
 /**
  * The hub task store: server-owned state for Workspace Hub workspaces and
@@ -318,9 +319,9 @@ export interface TaskTransition {
   amendments?: TaskEvidenceAmendment[];
   /** Agent-reported cost at done. */
   usage?: { inputTokens: number; outputTokens: number };
-  /** The human's live confirmation, required for an agent to move a
-   *  yellow-tier task forward (§3.4). Recorded so the after-the-fact review
-   *  can see the confirmation was asked for and given. */
+  /** Was the human's live confirmation on a yellow-tier agent move (§3.4).
+   *  No longer WRITTEN — the risk gate was removed 2026-08-18 — but kept on
+   *  the type because transitions already persisted carry it. */
   confirmed?: boolean;
 }
 
@@ -475,8 +476,10 @@ export interface Task {
    * a week.
    */
   unplacedSince?: number;
-  /** Stamped by triage at placement time; keyed to the ACTION's damage. */
-  riskTier?: 'green' | 'yellow' | 'red';
+  /* `riskTier` was here, stamped by triage and keyed to the ACTION's damage.
+     Removed from the type 2026-08-18 with the gate that read it. Tasks already
+     persisted still carry the value in their sidecar; nothing reads it and no
+     migration strips it, because rewriting every row is the larger risk. */
   /** Append-only audit trail. */
   transitions: TaskTransition[];
   createdAt: number;
@@ -497,6 +500,39 @@ export interface Task {
    * `createdAt`, which is when a never-edited body was in fact written.
    */
   bodyWrittenAt?: number;
+  /**
+   * When somebody last NAMED this row — stamped by `applyTitle`, the single
+   * writer of `title`.
+   *
+   * Distinct from `bodyWrittenAt` and from `updatedAt` for the same reason
+   * those two are distinct from each other: the question here is "has anybody
+   * looked at the title since the task moved", and a row clock cannot answer
+   * it.
+   */
+  titleWrittenAt?: number;
+  /**
+   * `bodyHead` of the description at the moment the title was last authored —
+   * the user-story line the title compresses.
+   *
+   * Absent on a row filed before the standard existed, which suppresses the
+   * head-change trigger for that row and nothing else.
+   */
+  titleHead?: string;
+  /**
+   * Accumulated fraction of the body's words that have changed since the
+   * title was last authored, 0..1.
+   *
+   * ACCUMULATED rather than compared, because comparing needs a second copy
+   * of the body stored per task to compare against. `updateBodySnapshot` holds
+   * both the old and the new body at the moment of every change, so the
+   * increment is free exactly there — and only there, which is a second
+   * reason the staleness hangs off that choke point rather than off a route.
+   *
+   * Monotone until a title is re-authored. A revert therefore ADDS drift
+   * rather than cancelling it, which is the noisy direction: two real edits
+   * did happen, and the cost of saying so is one advisory.
+   */
+  titleDrift?: number;
 }
 
 export interface CreateTaskOpts {
@@ -540,18 +576,8 @@ export type TransitionResult =
   | { ok: true; task: Task; blockers: TransitionBlocker[]; unproven: boolean }
   | {
       ok: false;
-      error:
-        | 'not-found'
-        | 'bad-status'
-        | 'same-status'
-        | 'blocked'
-        // §3.4 risk tiers, agent actors only, forward moves only:
-        // red is refused outright; yellow needs the human's live
-        // confirmation on the request.
-        | 'risk-refused'
-        | 'needs-confirmation';
+      error: 'not-found' | 'bad-status' | 'same-status' | 'blocked';
       blockers?: TransitionBlocker[];
-      riskTier?: 'green' | 'yellow' | 'red';
       /** Refusal text shaped to land verbatim in an agent's context. */
       message?: string;
     };
@@ -906,9 +932,9 @@ export interface TaskTransitionedEvent {
   evidence?: TaskEvidence;
   /** What the task cost in tokens (agent-reported at done). */
   usage?: { inputTokens: number; outputTokens: number };
-  /** The human's live confirmation on a yellow-tier agent move (§3.4) —
-   *  in the audit log, so the after-the-fact review can see the gate was
-   *  answered rather than absent. */
+  /** Was the human's live confirmation on a yellow-tier agent move (§3.4).
+   *  Never emitted since the risk gate was removed 2026-08-18; kept so a
+   *  reader of an older `events.jsonl` row still types. */
   confirmed?: boolean;
   /** A forward move with no evidence attached — allowed, flagged (§7.1). */
   unproven: boolean;
@@ -938,10 +964,13 @@ export interface TaskEvidenceAmendedEvent {
 }
 
 /**
- * A gate refusal (§3.4 risk tiers). Not in §3.6's table, which predates the
- * tier arm having any consumer — §3.9's Decisions filter promises "gate
- * refusals" as rows, and a refusal that emits nothing can never appear
- * there. It carries no task, because nothing about the task changed.
+ * A gate refusal (§3.4 risk tiers). NOTHING EMITS THIS since the risk gate was
+ * removed on 2026-08-18 — it is retained, along with the client's
+ * `describeEvent` case for it, because rows are already in `events.jsonl` and
+ * a type the feed no longer knows renders as the bare slug `task.gate_refused`
+ * in a view built for people. Deleting an event type is not free once it has
+ * been written down. It carries no task, because nothing about the task
+ * changed.
  */
 export interface TaskGateRefusedEvent {
   type: 'task.gate_refused';
@@ -2182,6 +2211,12 @@ export class TaskStore {
     };
     state.tasks.set(task.id, task);
     this.taskIndex.set(task.id, workspaceId);
+    // Through the choke point like every other write of a title, so a created
+    // row carries the same marks a renamed one does. Without this a task
+    // would be measured for staleness against a body-head nobody ever
+    // recorded, and the head clause would be dead for the whole life of every
+    // task that was never renamed — which is most of them.
+    this.applyTitle(task, task.title);
 
     // Triage hook (§3.4): an OMITTED goal means "needs placing" — the task
     // has already landed at the bottom of Chores (the resting state; the
@@ -2293,13 +2328,10 @@ export class TaskStore {
    *  - `unproven` marks a forward move that attached no evidence: allowed,
    *    flagged, never refused (§7.1 — the worst this can do is draw attention
    *    to something that turned out to be fine).
-   *  - `riskTier` (§3.4) gates the ACTOR, not the task's importance: an
-   *    AGENT moving a `red` task forward is refused outright, and a `yellow`
-   *    one needs the human's live confirmation on the request. A person is
-   *    never gated (the override is one tap) and neither is moving back to
-   *    todo. Honest reach: this binds LF-MEDIATED mutations only — actions
-   *    an agent runs in its own runtime never touch this server, where the
-   *    tier stays advisory and the fleet's permission rules enforce.
+   *  - there is no longer a risk arm. `riskTier` gated an agent's forward
+   *    move (red refused, yellow needed `confirmed: true`) until 2026-08-18;
+   *    the reasoning for removing it, and what is deliberately still accepted
+   *    on the wire, is in the note where `riskRefusal` used to be.
    */
   transition(
     taskId: string,
@@ -2309,7 +2341,11 @@ export class TaskStore {
       note?: string;
       evidence?: TaskEvidence;
       usage?: { inputTokens: number; outputTokens: number };
-      /** The human's live confirmation for a yellow-tier forward move. */
+      /** Accepted and IGNORED since 2026-08-18. It carried the human's live
+       *  confirmation for a yellow-tier forward move; the risk gate is gone,
+       *  but peers on older bundles keep sending this until they restart and
+       *  a payload that suddenly fails validation is how a removal breaks
+       *  them. Do not turn this into a rejection. */
       confirmed?: boolean;
     },
   ): TransitionResult {
@@ -2341,23 +2377,9 @@ export class TaskStore {
       name: opts.actor.name,
       kind: classifyActor(opts.actor),
     };
-    const refusal = forward && by.kind === 'agent' ? this.riskRefusal(task, opts.confirmed) : null;
-    if (refusal) {
-      // A refusal is a decision the after-the-fact review has to be able to
-      // see (§3.9's Decisions filter promises gate refusals), so it emits —
-      // the task itself is unchanged.
-      this.emit({
-        type: 'task.gate_refused',
-        workspaceId: task.workspaceId,
-        taskId: task.id,
-        to,
-        riskTier: task.riskTier ?? 'green',
-        reason: refusal.error,
-        actor: by,
-        ts: Date.now(),
-      });
-      return { ok: false, ...refusal, blockers };
-    }
+    // The risk arm of the gate used to sit here — see the note where
+    // `riskRefusal` was, below `openBlockers`. `opts.confirmed` is still read
+    // off the wire and deliberately goes nowhere: older peers keep sending it.
     const entry: TaskTransition = {
       ts: Date.now(),
       from: task.status,
@@ -2366,7 +2388,6 @@ export class TaskStore {
       ...(opts.note !== undefined ? { note: opts.note } : {}),
       ...(opts.evidence !== undefined ? { evidence: opts.evidence } : {}),
       ...(opts.usage !== undefined ? { usage: opts.usage } : {}),
-      ...(opts.confirmed === true ? { confirmed: true } : {}),
     };
     task.transitions.push(entry);
     task.status = to;
@@ -2388,7 +2409,6 @@ export class TaskStore {
       ...(opts.note !== undefined ? { note: opts.note } : {}),
       ...(opts.evidence !== undefined ? { evidence: opts.evidence } : {}),
       ...(opts.usage !== undefined ? { usage: opts.usage } : {}),
-      ...(opts.confirmed === true ? { confirmed: true } : {}),
       unproven,
       ts: entry.ts,
     });
@@ -2667,6 +2687,56 @@ export class TaskStore {
   }
 
   /**
+   * THE CHOKE POINT for "this row got a name" — the ONLY assignment of
+   * `task.title` in the store, and every door into a title converges on it.
+   *
+   * There were three assignment sites before this: the `createTask` object
+   * literal, `renameTask`, and `noteBodyEdited`. Seven doors sit above them
+   * (`create_tasks` single and batch, `promote_to_task`,
+   * `import_tasks_markdown`, the board's inline rename, `update_task_body`,
+   * and `set_doc_content` on a `task:<id>` room), and no two of them share a
+   * reading — `parseTaskCreate` fronts two, promote and import build their
+   * own. So a title standard enforced at any one door would be a guarantee
+   * for that door's callers only, which is exactly how the `quote`
+   * preservation came to be skipped by the one caller that mattered.
+   *
+   * What it stamps is the pair of marks staleness is measured against:
+   * WHEN the row was named, and WHAT the description said at the time. Both
+   * reset here and nowhere else, so "the title has been re-authored" has one
+   * writer and cannot disagree with itself.
+   *
+   * Deliberately NOT a validator. Nothing is refused, rewritten, or
+   * normalized on the way through — the shape check is derived on read
+   * (`titleGapsOf`) so a raw capture still lands. See task-title.ts for why
+   * this is advisory.
+   */
+  private applyTitle(task: Task, title: string): void {
+    task.title = title;
+    task.titleWrittenAt = Date.now();
+    task.titleHead = bodyHead(task.body);
+    task.titleDrift = 0;
+  }
+
+  /**
+   * Every way this row's title currently falls short of the standard —
+   * derived, never stored.
+   *
+   * `commentsSinceTitle` comes from the caller because the discussion lives
+   * in the task's body ROOM rather than in this store, the same reason
+   * `projectTask` takes `commentCount` as a parameter. Omitted, the
+   * discussion clause simply does not fire; it is never guessed.
+   */
+  titleGapsOf(task: Task, commentsSinceTitle?: number): TitleGap[] {
+    return taskTitleGaps({
+      title: task.title,
+      ...(task.body !== undefined ? { body: task.body } : {}),
+      ...(task.titleHead !== undefined ? { titleHead: task.titleHead } : {}),
+      ...(task.titleDrift !== undefined ? { titleDrift: task.titleDrift } : {}),
+      ...(commentsSinceTitle !== undefined ? { commentsSinceTitle } : {}),
+    });
+  }
+
+  /**
    * Rename a task — the board's in-place title edit (§3.9: tap the title
    * text, Enter commits). No event fires: §3.6's exhaustive table has no
    * task.renamed row, so callers (the route) must refresh the projection by
@@ -2680,7 +2750,7 @@ export class TaskStore {
     const task = this.getTask(taskId);
     if (!task) return { ok: false, error: 'not-found' };
     if (task.title === title) return { ok: true, task, changed: false };
-    task.title = title;
+    this.applyTitle(task, title);
     task.updatedAt = Date.now();
     this.scheduleSave(task.workspaceId);
     return { ok: true, task, changed: true };
@@ -2736,7 +2806,7 @@ export class TaskStore {
     const ts = Date.now();
     const titleFrom = task.title;
     const nextTitle = opts.title?.trim();
-    if (nextTitle && nextTitle !== titleFrom) task.title = nextTitle;
+    if (nextTitle && nextTitle !== titleFrom) this.applyTitle(task, nextTitle);
     task.updatedAt = ts;
     task.bodyWrittenAt = ts;
     this.scheduleSave(task.workspaceId);
@@ -2816,9 +2886,7 @@ export class TaskStore {
    *
    * Placement IS triage, so every call — moved or confirmed in place —
    * stamps `triagedAgainst` with the goal text it was judged against and
-   * clears the triage-pending marker; `riskTier` is stamped when supplied
-   * (§3.4: stored at decision time, so the after-the-fact review grades the
-   * agent against what it knew). A goal or position change emits
+   * clears the triage-pending marker. A goal or position change emits
    * `task.regrouped`; a pure confirm emits nothing — §3.6 has no
    * task.triaged row, and a no-move event would be noise in every feed.
    */
@@ -2830,6 +2898,10 @@ export class TaskStore {
       /** Fractional position within the goal. Omitted → bottom of the goal
        *  (an unchanged goal keeps the current position). */
       position?: number;
+      /** Accepted and IGNORED since 2026-08-18, along with the risk gate that
+       *  read it. Older peers keep sending it on every placement until they
+       *  restart; the field stays in the signature so those calls type and
+       *  succeed rather than 400. */
       riskTier?: 'green' | 'yellow' | 'red';
       /** The `workspace.retriaged` batch this placement fulfils, echoed from
        *  the triage request. Stamped on `task.regrouped` as `partOf` so the
@@ -2875,7 +2947,6 @@ export class TaskStore {
     // into Chores, which is a judgement rather than a fallback. The owed
     // review is answered, so it must not be asked again.
     task.unplacedSince = undefined;
-    if (opts.riskTier !== undefined) task.riskTier = opts.riskTier;
     task.updatedAt = ts;
     this.scheduleSave(task.workspaceId);
 
@@ -3394,6 +3465,16 @@ export class TaskStore {
       const original = task.body?.trim() || task.title.trim();
       if (original) task.quote = original;
     }
+    // How far the description has moved since anybody last named this row.
+    // Measured HERE because this is the only place that holds both the old
+    // and the new body, and accumulated rather than compared so no second
+    // copy of the body has to be stored to compare against. Clamped, so a
+    // long-lived task cannot run the number off past "completely different".
+    //
+    // The head clause of staleness needs no accumulation — it re-reads
+    // `titleHead` against the current body on every read — so only the drift
+    // half lives here.
+    task.titleDrift = Math.min(1, (task.titleDrift ?? 0) + bodyDrift(task.body, body));
     task.body = body;
     // The one thing this path DOES record: when the description changed.
     // Stamped only on a real change (the equality guard above returns first),
@@ -3520,44 +3601,24 @@ export class TaskStore {
     return out;
   }
 
-  /**
-   * The §3.4 risk arm of the gate, for an AGENT actor moving forward.
-   *
-   * Red = the D-class stops made general (irreversible deletes, force
-   * pushes, breaking default-branch merges, credentials, one-way doors):
-   * refused outright. Yellow = outward-facing or hard to reverse: allowed
-   * only with the human's confirmation carried on the request. Green (and
-   * an untriaged task with no tier yet) passes untouched — a tier that
-   * blocks by DEFAULT would stop ordinary work on every task triage hasn't
-   * reached, which is the opposite of what §3.4 asks for.
-   *
-   * The message is written to land verbatim in the agent's context, the
-   * same way an enforce blocker's does.
-   */
-  private riskRefusal(
-    task: Task,
-    confirmed: boolean | undefined,
-  ): {
-    error: 'risk-refused' | 'needs-confirmation';
-    riskTier: 'yellow' | 'red';
-    message: string;
-  } | null {
-    if (task.riskTier === 'red') {
-      return {
-        error: 'risk-refused',
-        riskTier: 'red',
-        message: `refused: ${task.id} is red-tier ('${task.title}') — a person has to make this move`,
-      };
-    }
-    if (task.riskTier === 'yellow' && confirmed !== true) {
-      return {
-        error: 'needs-confirmation',
-        riskTier: 'yellow',
-        message: `blocked: ${task.id} is yellow-tier ('${task.title}') — ask the human, show them the concrete effect, then retry with confirmed:true`,
-      };
-    }
-    return null;
-  }
+  /* REMOVED 2026-08-18 (Bryan): `riskRefusal`, the §3.4 risk arm of the gate.
+     A red task refused an agent's forward move outright and a yellow one
+     required `confirmed: true` on the request. His call, and his reasoning:
+     "when to ask a human" already lives in the fleet's own skills, so this was
+     a second mechanism for one judgement — and the gate had fired exactly
+     twice on his board, both yellow, both on `→ done`.
+
+     Three things deliberately NOT done with it, each with a reason:
+      - `confirmed` and `riskTier` are still ACCEPTED on the wire and ignored.
+        Peers keep sending them from older bundles until each one restarts, and
+        narrowing what old callers send is where a removal actually bites (see
+        "Removing an MCP tool cannot break a peer" in learnings.md).
+      - `task.gate_refused` keeps its event type below and its `describeEvent`
+        case in the client. Nothing emits it again, but rows already in
+        `events.jsonl` still have to render as sentences rather than as a bare
+        slug.
+      - Persisted `riskTier` values are left alone. Nothing reads them; a
+        migration that rewrote everyone's rows would be the riskier change. */
 
   private goalIdExists(workspace: HubWorkspace, goalId: string): boolean {
     if (isReservedGoalId(goalId)) return true;

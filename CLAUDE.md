@@ -43,6 +43,37 @@ The feedback widget that ships Linear tickets in `~/dev/health-tool` and `~/dev/
 
 - Lead with goals, not implementation. Top-level docs answer "what becomes possible" before "how it works."
 - Public repo with branch protection on main — all changes via PR.
+- **Never hard delete user content. Soft delete.** (Bryan, 2026-08-17, asked
+  and answered as a project-wide rule: *"Generally don't do hard delete. Use
+  soft delete."*) A removal must be reversible, and the reason is not caution
+  in the abstract — **the `.ydoc` is the durable record, not a cache.**
+  `docs/process/activity-data-completeness.md` states the Weekly Review agent's
+  guarantee as valid *"for every doc whose `.ydoc` still exists (live data dir +
+  archive)"*, and `data/activity.jsonl` is a DERIVED index that
+  `activity-backfill.ts` rebuilds from those ydocs. So a hard delete does not
+  merely remove a document — it silently truncates the historical window an
+  analysis depends on, and no surface anywhere reports that it happened.
+  `reopen` / `read_session` / `doc_open` are live-capture only and are not
+  reconstructable at all, so that log must not be pruned per-doc either.
+  - The mechanism already exists and is half-built: `data/_archive/` works
+    because `hydrateFromDisk` reads only the top level of the data dir (so an
+    archived doc stops loading, and stops costing memory and a poll) while
+    `activity-backfill.ts` explicitly scans `_archive` (so it still feeds
+    analysis). What is missing is a writer — nothing moves anything there.
+    `stagePersisted` / `unstagePersisted` in `rooms.ts` is an existing
+    reversible-rename primitive of the same shape.
+  - `purgePersisted` (`rooms.ts`) is the hard path — `rmSync` on the `.ydoc`
+    plus the private-meta sidecar — and `delete_doc` / `delete_workspace` reach
+    it. Calling it is a decision, never a default.
+  - **The rule is about user content and history, not about transient files.**
+    Pruning old client releases and cleaning up `.tmp`/staging paths are correct
+    as hard deletes. Stated in this direction deliberately: a rule read too
+    broadly leaves litter, while one read too narrowly destroys a record nobody
+    can rebuild.
+  - When you narrow what an existing delete verb does, change its MEANING and
+    keep accepting the old payload. Old plugin bundles keep calling it from
+    sessions that have not restarted — see "Removing an MCP tool cannot break a
+    peer" in [docs/process/learnings.md](docs/process/learnings.md).
 - TypeScript strict mode.
 - Widget bundle size is a hard constraint — measure and report it on every PR that touches widget code.
 - **Don't append new CSS at the end of `packages/markdown-app/src/styles.css`.** It's a single ~2,700-line file organized into `/* ===== SECTION ===== */` banners, and parallel branches that both append at EOF conflict every time. Put rules in the banner section they belong to; a genuinely new feature gets a new banner next to related sections, not at the bottom.
@@ -109,15 +140,20 @@ there. That is how 25 feature commits sat undelivered between 2026-05-09 and
 - **When several branches are in flight, the number is a merge-queue position —
   ask the merger for it, don't read it off main.** Three branches independently
   pushed 0.1.46 on 2026-08-17 with main at 0.1.45, and **nothing went red**:
-  identical strings merge clean because both sides agree, and
-  `check:plugin-version` compares against the *fork point*
-  (`git merge-base origin/main HEAD`), which stays frozen however many times the
-  job re-runs. So re-reading main before you push does not help either — the
-  branch you are about to collide with has not merged, so main cannot tell you
-  about it. Whoever owns the merges hands out numbers and merges in ascending
-  order; **an agent that finds its number taken reports rather than bumps**,
-  because bumping is how it collides with the next one. This matters past
-  tidiness: a merge order that steps the number backwards leaves peers silently
+  identical strings merge clean because both sides agree, and at the time
+  `check:plugin-version` compared against the *fork point*, which stays frozen
+  however many times the job re-runs. **That half is now fixed** — the gate
+  compares against `origin/main`'s TIP, so a stale number goes red instead of
+  green (see "A gate that compares against the merge-base is green precisely
+  when the regression is largest" in learnings.md). It is a narrowing, not a
+  closure: CI runs at push time, so main can still move between your last green
+  run and the merge. And re-reading main before you push still does not help
+  with the other half — the branch you are about to collide with has not merged,
+  so main cannot tell you about it. Whoever owns the merges hands out numbers
+  and merges in ascending order; **an agent that finds its number taken reports
+  rather than bumps**, because bumping is how it collides with the next one.
+  This matters past tidiness: a merge order that steps the number backwards
+  leaves peers silently
   un-updated, since `claude plugin update` copies nothing when the string has not
   moved forward and reports success anyway.
 - **The MCP bundle is checked the same way.** CI rebuilds it and fails if the
@@ -132,8 +168,11 @@ there. That is how 25 feature commits sat undelivered between 2026-05-09 and
   it is safe to expose because the update rewrites a version-keyed cache and
   never touches a running session. Dev and staging deliberately can't do it
   (they're copies of the deploy source); there the route answers 501.
-- **The restart is still the peer's, and the order is still load-bearing:
-  update, THEN restart.** The cache path is version-keyed and a running session
+- **A peer's SESSION restart is still the peer's, and the order is still
+  load-bearing: update, THEN restart.** (This is the one restart an agent cannot
+  run for someone else. Restarting the prod *server* is a different act on a
+  different artifact and it IS yours — see the bullet below.) The cache path is
+  version-keyed and a running session
   resolved it at launch, so restarting first pulls whatever the cache already
   holds — which has demonstrably moved a session *backwards*, from a working-tree
   0.1.15 to a cached 0.1.12, in the same restart that was meant to deliver new
@@ -171,16 +210,44 @@ there. That is how 25 feature commits sat undelivered between 2026-05-09 and
   using --print". That reads exactly like a permission refusal, and it was
   written up in a ticket as one. `command` bypasses functions and aliases, so
   the invocation that works is `command claude plugin update
-  live-feedback@claude-live-feedback`. The restart is still the human step.
+  live-feedback@claude-live-feedback`. The peer's session restart is still the
+  human step; restarting prod is not.
   (The server's own refresh never hits this — it spawns the resolved binary
   path with an argv array and no shell, which is why a fixed argv and no shell
   are load-bearing there rather than stylistic.)
 
+- **Restarting prod is an agent action. Do it; don't ask, and don't route it
+  through Bryan.** (Bryan, 2026-08-17, reversing the older "the production
+  restart is Bryan's call" rule that used to sit in this file and still sat in
+  the diff-review plan.) The command is
+  `launchctl kickstart -k gui/$(id -u)/com.fryanpan.live-feedback`.
+- **The restart deploys whatever the primary checkout is parked on, so pulling
+  comes FIRST.** Prod rebuilds the browser bundles from its deploy source at
+  every start, and that source is the primary checkout — not `origin/main`. On
+  2026-08-17 a kickstart run to deploy a just-merged client came up in five
+  seconds, answered 200, and republished the **previous** client, because the
+  checkout was sitting 10 commits behind `origin/main` with a clean tree.
+  Nothing anywhere said so: a healthy server serving a stale bundle looks
+  exactly like a healthy server serving a fresh one. The deploy is therefore
+  three steps and the last two are not optional —
+
+  ```bash
+  git pull --ff-only origin main      # in the PRIMARY checkout, prod's deploy source
+  launchctl kickstart -k gui/$(id -u)/com.fryanpan.live-feedback
+  cat ~/.local/state/live-feedback/client/current/release.json
+  ```
+
+  — and the deploy is done when that `release.json`'s `sourceRef` matches the
+  commit you meant to ship, not when the restart returns. Verify a feature
+  literal in the served bundle too, old-bundle-first, per "A prod restart
+  reloads server code but NOT the served app bundle" in
+  [docs/process/learnings.md](docs/process/learnings.md).
+
 **The whole delivery model is written down once, in
 [docs/process/delivery.md](docs/process/delivery.md)**: how the plugin travels
 (GitHub marketplace), which artifacts are tracked vs built on the box, why a
-prod restart is the browser deploy, and the one human step left. Read it before
-answering "why doesn't my peer / my browser have this yet".
+prod restart is the browser deploy, and which restart delivers which artifact.
+Read it before answering "why doesn't my peer / my browser have this yet".
 
 ## Reviewing a branch before it merges (`bun run staging`)
 

@@ -136,6 +136,8 @@ function auditLines(dataDir: string, workspaceId: string): number {
 type ProjectedTask = {
   id: string;
   title: string;
+  titleGaps?: string[];
+  bodyGaps?: string[];
   status: string;
   assignee: string;
   goal: string;
@@ -199,6 +201,76 @@ describe('ydoc projection + workspace room', () => {
   afterAll(async () => {
     await handle.stop();
     rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('projects titleGaps onto the row, so the board can render the title nudge', async () => {
+    // The list route computes this advisory too, but the BOARD renders from
+    // this map — so a test through the route would pass with the projection
+    // never carrying it, and the badge would be dead. Assert at the layer the
+    // renderer reads.
+    const wsId = await makeWorkspace('title-projection');
+    const observation = await makeTask(wsId, {
+      // States something noticed; names no persona and no action.
+      title: 'A decision-answered event promises a link checklist',
+      assignee: 'Bryan',
+      goal: 'chores',
+    });
+    const standard = await makeTask(wsId, {
+      title: 'Agents can rank a backlog by reading the goal order first',
+      assignee: 'Bryan',
+      goal: 'chores',
+    });
+    const room = handle.rooms.get(workspaceRoomId(wsId));
+    if (!room) throw new Error('ws room was not created');
+    const map = room.ydoc.getMap('tasks');
+
+    const flagged = map.get(observation) as ProjectedTask | undefined;
+    expect(flagged?.titleGaps).toContain('no-persona');
+    expect(flagged?.titleGaps).toContain('no-action');
+    // POSITIVE CONTROL, same map in the same pass: a row that meets the
+    // standard carries NO key, so "absent" is a judgement rather than a
+    // projection that never learned the field.
+    const clean = map.get(standard) as ProjectedTask | undefined;
+    expect(clean?.title).toBe('Agents can rank a backlog by reading the goal order first');
+    expect(clean?.titleGaps).toBeUndefined();
+  });
+
+  it('projects bodyGaps onto the row, so the board can render the description nudge', async () => {
+    // Same argument as the titleGaps case above, and it is not hypothetical:
+    // deleting the projection's bodyGaps line left every route-level test
+    // green, because those read the list route rather than this map. The
+    // board renders from HERE.
+    const wsId = await makeWorkspace('body-projection');
+    const report = await makeTask(wsId, {
+      title: 'Agents can rank a backlog by reading the goal order first',
+      assignee: 'Bryan',
+      goal: 'chores',
+      body: 'Round 5 delivered: 133 candidates ranked and appended to the doc.',
+    });
+    const story = await makeTask(wsId, {
+      title: 'Agents can rank a backlog by reading the goal order first',
+      assignee: 'Bryan',
+      goal: 'chores',
+      body: 'Agents can rank a backlog by reading the goal order so that the top row matters most.',
+    });
+    const decision = await makeTask(wsId, {
+      title: 'Bryan can settle doc ids by choosing opaque or readable ones',
+      assignee: 'Bryan',
+      goal: 'chores',
+      body: '**Should doc ids become opaque identifiers, or stay readable slugs?**',
+      needs: 'decision',
+      options: [{ label: 'Opaque' }, { label: 'Readable slugs' }],
+    });
+    const room = handle.rooms.get(workspaceRoomId(wsId));
+    if (!room) throw new Error('ws room was not created');
+    const map = room.ydoc.getMap('tasks');
+
+    expect((map.get(report) as ProjectedTask | undefined)?.bodyGaps).toContain('no-story');
+    // POSITIVE CONTROLS, same map in the same pass — one for each way a body
+    // can be clean, so "absent" is a judgement rather than a field the
+    // projection never learned.
+    expect((map.get(story) as ProjectedTask | undefined)?.bodyGaps).toBeUndefined();
+    expect((map.get(decision) as ProjectedTask | undefined)?.bodyGaps).toBeUndefined();
   });
 
   it('a REST-created task appears in the ws room tasks map, and a transition updates it', async () => {

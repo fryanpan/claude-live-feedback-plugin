@@ -127,6 +127,74 @@ Technical discoveries that should persist across sessions for this project.
   owner's copy still has the field. Then prove non-vacuity by breaking the
   fix and watching it fail.
 
+## A positive control can silently become a duplicate of the thing it controls
+
+- **Measuring what a server restart costs a doc mid-edit, the first run typed
+  into two docs concurrently and killed the server once — 40 characters into
+  one, 100 into the other, "the same" kill for both. The 40-character doc
+  reported nothing lost, and it was not a result.** Typing 40 characters at
+  80ms finishes 4.8 seconds before typing 100 does, so by the time the kill
+  landed that doc had been idle far longer than the 200ms persistence
+  debounce. It had quietly stopped being a second subject and become a second
+  *control* — and it agreed with the control, which is exactly what made it
+  look like a clean, reassuring row rather than a broken one.
+- **Two subjects in one pass do not share the condition unless the condition
+  is what ENDS the pass.** Here the variable under test was the gap between
+  the last keystroke and the kill; anything that finishes typing early has a
+  different gap, whatever the harness intended. Rule: **one subject per
+  cycle**, with the control alongside it — and if a design needs several
+  subjects in one pass, assert the per-subject condition (each one's own
+  elapsed time at the moment of the kill) rather than assuming a shared event
+  imposes a shared state.
+- **This is the failure this file already records, inverted.** The usual form
+  is a control that cannot see anything, so an absence reads as clean. This
+  one is a control that sees everything and is therefore vacuous in the other
+  direction: it is not that the row could never fail, it is that the row could
+  never have failed *for the reason the experiment was about*. A pass that
+  agrees with the control is the shape to be suspicious of, because it is
+  indistinguishable from a subject that never entered the condition.
+- What caught it was reading the numbers rather than the verdict — 40/40 and
+  0/100 in the same pass, from a harness that claimed to treat both the same
+  way, is a contradiction on its face. Re-run per-subject and the 40-character
+  case loses its characters too.
+
+## A positive control must be a peer in TIME as well as in kind
+
+- **The lead reviewing a board read the workspace to check whether an agent had
+  filed three decision tasks, found them absent, and told the agent in strong
+  terms that its comment claimed a step it had not performed. It had.** The read
+  landed in the window before the creates returned: the agent's rows are stamped
+  18:08:35, and the freshest row the read could see was one of the lead's own at
+  18:05:52 — two minutes forty-three seconds early. Not a cache; a live HTTP
+  call against the running server, so this is real elapsed time between two
+  observers of one store.
+- **There WAS a positive control and it did not help.** Enumerating seven
+  pre-existing `needs: 'decision'` rows proved the probe could see decision rows
+  — the right control in KIND, and exactly what "A negative test needs a
+  positive control or it proves nothing" asks for. It says nothing about whether
+  the view being read included the writes being looked for. "A modal the page
+  AWAITS makes every absence on that page vacuous" is the same gap one layer
+  over: those entries are about a probe's REACH, and neither is about its
+  RECENCY.
+- **The tell was already in the output, for free.** The newest row the probe
+  returned was older than the thing being searched for. That one comparison
+  separates *"it is not there"* from *"I have not caught up"*, and it costs no
+  extra call — the timestamps are already in hand. **Rule: when asserting an
+  absence in a store other writers are actively appending to, compare your
+  view's high-water mark against the time the missing thing would have been
+  written. If the mark predates it, you have measured your own lag rather than
+  an absence.**
+- **A too-early read and a skipped step are indistinguishable from a single
+  observation** — the same family as "A truncated page read is
+  indistinguishable from a page that never rendered": the probe ran, it just
+  measured something other than what it claimed to.
+- **The cost is not only a false accusation.** The instruction that followed was
+  to re-file, and three duplicate decision rows would have landed on a board a
+  human was about to read. The agent stopped, checked, and answered with
+  timestamps instead of complying. **An agent told confidently that its work is
+  missing should verify before re-doing it** — when the operation creates rows,
+  re-doing is not the safe default.
+
 ## Anything in the Yjs doc is readable by every peer, including share visitors
 
 - **Redacting a REST payload closes one door out of two.** `DocMeta`'s
@@ -191,6 +259,64 @@ Technical discoveries that should persist across sessions for this project.
   render via CSS `::before content: attr(...)`. Gutter ORDER follows
   extension order: the old-number gutter must precede `lineNumbers()` in
   the same extension list to render on the left.
+
+## Widening a predicate's DOMAIN is a change to the predicate, and the corpus holds shapes no fixture has
+
+- **`GET /` returned 500 in production twenty minutes after a merge, and not one
+  line of the function that threw had changed.** The new landing page is the
+  first caller to run `awaitingPerson` across EVERY doc on the server rather
+  than across one live workspace's threads. That reached comment rows written
+  months ago, and `classifyActor` (`activity.ts`) did
+  `author.id.startsWith('agent-')` on an author with no `id`:
+  `TypeError: undefined is not an object` — thrown from `unansweredRun`, called
+  from `buildLandingModel`. `awaitingPerson` was correct, well-tested and
+  untouched. **Its domain moved, which is a change to it.**
+- **The type said `User`; the data did not.** Comment authors are persisted in
+  the CRDT by whatever wrote them, across months and several shapes of the
+  field. Measured across the whole corpus afterwards: **26 of 1,825 comments
+  carry an author that is a bare STRING** rather than an object, all of them in
+  one doc family. TypeScript cannot see this — the value was typed at the
+  boundary years of writes ago, and nothing revalidates a CRDT on load.
+- **The evidence was in hand two hours early, and I coded around it.** While
+  measuring the corpus to design the feature, my own probe hit exactly this and
+  I added `if isinstance(a,str)` to the probe so the measurement would finish.
+  The log line said `string authors seen: 1`. I read it as a probe detail rather
+  than as a fact about production data. **A defensive workaround you write in a
+  throwaway probe is a bug report you filed against yourself and then closed.**
+  When a probe needs a guard the production code does not have, that asymmetry
+  IS the finding — stop and check which one is wrong.
+- **Fixtures cannot find this and the corpus can.** Seven mutations, four gates
+  green, 1,525 server tests, an adversarial review pass and a route-level e2e
+  all passed over hand-built authors that were well-formed by construction —
+  because nobody invents the malformed input that breaks their own code. This
+  file already says "Re-measure a widened heuristic against the corpus that
+  justified it"; the same rule applies when the heuristic does not change at all
+  and only its INPUT SET widens.
+- **Fix at the classifier, not the call site.** A landing-only guard leaves every
+  other caller exposed to the same rows. `classifyActor`'s own header already
+  said the field is "hand-populated by outside callers" — the function had
+  anticipated hostile input and defended only against case variation.
+- **A defensive guard must not become a silent behaviour change, so pin the
+  happy path.** The repair reads `id`/`name`/`kind` defensively and a
+  positive-control test asserts all six well-formed classifications resolve
+  exactly as before. Without that, "no longer throws" is satisfied by a function
+  that classifies everything as one thing. An unreadable author declares
+  nothing, which is the same state as `kind == null` — already `agent`, the safe
+  direction, since an agent misfiled as a person launders the audit log and can
+  resurrect a resolved thread while the reverse only over-filters.
+- **Grep every OTHER reader of the field before calling it fixed.** Three more
+  read `author.id`/`author.name` unguarded. Checked rather than assumed: on a
+  string author they are property reads, not method calls, so they do not throw
+   — but `activity-backfill.ts` writes those 26 rows with `actorId`/`actorName`
+  undefined, degrading the weekly-review stream rather than crashing it. A
+  quieter failure in the more important place.
+- **A fixture where two ranking criteria agree cannot tell them apart.** From
+  the same change's mutation round: "group ranking ignores the needs-you count"
+  SURVIVED, because the fixture's busiest group was also its freshest, so a
+  recency-only ranking produced an identical order. It only went red once the
+  fixture was rebuilt to make the criteria disagree — most-waiting group also
+  the oldest. **Any test of a multi-key sort needs a case where the keys
+  conflict**, or it proves only that the first key exists.
 
 ## A unit test can be true and still prove nothing about the caller
 
@@ -628,6 +754,39 @@ Technical discoveries that should persist across sessions for this project.
   once at startup, before the server spawns — restart == deploy. A failed
   build logs loudly and serves the existing dist (stale beats down).
 
+## A restart deploys the deploy SOURCE, and a stale source restarts silently
+
+- **A kickstart run specifically to ship a just-merged client republished the
+  previous one.** Prod came up in five seconds and answered 200; the served
+  release stamped `sourceRef: 1b0af1e8` while `origin/main` was at `1080bf8`,
+  and every feature literal from the merge counted 0 in the served bundle. The
+  primary checkout — which is prod's deploy source, and which prod rebuilds its
+  bundles from at every start — was on `main` and **10 commits behind
+  `origin/main`, with a completely clean tree**. `git pull --ff-only origin
+  main` and a second kickstart fixed it, `sourceRef: 1080bf84`.
+- **Nothing about the bad state looks bad.** The checkout is on the right
+  branch, `git status` is clean, the service is healthy, the port answers, the
+  page loads. A healthy server serving a stale bundle is indistinguishable from
+  a healthy server serving a fresh one — and `-dirty` cannot help, because
+  being behind is not being modified. The deploy source's *freshness* and its
+  *cleanliness* are different facts and only the second one has a marker.
+- **Rule: the deploy is `pull` → `kickstart` → *read `release.json`*, and it is
+  done when `sourceRef` is the commit you meant to ship** — not when the restart
+  returns. The provenance already exists for exactly this reason (the entry
+  about a fallback needing a durable trace records why `sourceRef` is stamped at
+  all); this is the reading it was built for, and skipping it is how the whole
+  mechanism ends up costing a deploy anyway.
+- **The trap is not restarting — it is restarting for some OTHER reason.** Any
+  restart from any cause is the client deploy, so a config-only
+  `scripts/launchd/install.sh` reinstall ships whatever the checkout holds.
+  [tailnet-https.md](tailnet-https.md) already warned about this in its own
+  narrow context; it is general.
+- Same family as "A prod restart reloads server code but NOT the served app
+  bundle", one layer earlier. That entry closed the gap between *server* and
+  *client*. This one is the gap between *the client that got built* and *the
+  code that was merged* — the restart faithfully deployed a source nobody had
+  updated.
+
 ## The restart that delivers the client cannot be the restart you measure
 
 - **A prod restart IS the client deploy here (the entry above), so "open the
@@ -678,6 +837,13 @@ Technical discoveries that should persist across sessions for this project.
 - **Staging data does not migrate.** Tasks and docs created there die with the
   data dir. So the shape is: evaluate on staging pre-merge, then do the real
   work once, after the merge. Don't ask a reviewer to enter real content twice.
+
+## Staging is a port and a data dir — it is not a sandbox for anything naming a target outside the process
+
+- **`createDeployer` hardcodes `spawnGit(opts.repoRoot)` and `launchctlRestart()`, and `launchctlRestart` defaults to the PROD launchd label.** So passing `--deploy` to a `bun run staging` instance does not produce a staging deploy: it pulls a checkout and restarts **prod**, from a process started on port 8788 with a throwaway data dir by someone who believed they were isolated. Caught while designing a probe of the busy-docs gate, before running it — the tempting shape ("staging server, real deployer, real route") is the one that deploys.
+- **The rule the isolation actually gives you is narrower than the word "staging" suggests.** A separate port isolates who can reach you. A separate data dir isolates what you read and write. Neither does anything about a capability that names its target by *label*, *absolute path*, or *hostname* — a launchd job, a checkout, an API endpoint, a plugin cache. Before treating an instance as safe to experiment on, grep the capability for names it resolves independently of the process: `LAUNCHD_LABEL`, `repoRoot`, a hardcoded URL, a well-known path under `$HOME`.
+- **The mitigation already exists in this codebase and is the reason the hazard is only latent: the constructor seam.** `createDeployer` is called in exactly one place (`bin.ts`, behind a flag only `scripts/serve.ts --no-watch` passes), so no test run and no staging server builds one by accident — the same rule the plugin refresher and the summarizer follow. What a probe wants instead is the layer *below* the constructor: build `new Deployer({ run: (req) => runDeploy({ git: fakeGit, restart: fakeRestart, … }, req) })` by hand, which exercises the real route, the real `Rooms` and the real predicate while nothing can reach git or `launchctl`. **A convenience constructor that wires real side effects is the thing to route around, not the thing to call with care.**
+- Same family as "What makes a fleet-wide action safe is that it can't interrupt anybody", inverted: there an operation was already safe and got a mechanism it did not need; here an operation looks contained by its surroundings and is not contained at all. Both answers come from reading what the operation *touches* rather than what it runs next to.
 
 ## A session restart orphans a subagent's worktree, and the shell falls back to the primary checkout without saying so
 
@@ -874,6 +1040,71 @@ Technical discoveries that should persist across sessions for this project.
 - Same discipline as a positive control, one level up: prove your probe can see
   activity before concluding anything from its silence. An empty roster row is
   an absence measured by a cache.
+
+## Restoring a tree in place is indistinguishable from data loss to whoever else is writing in it
+
+- **The entry above is the near-miss; this is the same day's hit.** A second
+  agent was spawned onto task `t-Us2HML0w5cfK` because a roster did not list the
+  one already working it, and it hard-reset the worktree it found
+  (`.claude/worktrees/git-vs-bound`, branch `fix/git-ops-vs-bound-docs`). The
+  reflog recorded `reset: moving to HEAD` and then `reset: moving to
+  origin/main`; an entire uncommitted first pass — a new source file, three
+  edits to `rooms.ts`, two to `learnings.md`, a new test file — was gone.
+  **`git add -A` had run seconds earlier and `git fsck --unreachable` in that
+  worktree found none of the blobs**, so the recovery that usually applies did
+  not. The work survived only because it was reconstructable from conversation.
+- **The general shape is any harness that restores state IN PLACE**, and a
+  mutation test is the common one: write a mutation, run a suite, put the file
+  back with `git checkout -- <file>`. That is correct in a tree the harness
+  owns and a silent revert of somebody else's uncommitted edit in a tree it
+  shares. Same class as the reset above — an operation whose definition of
+  "restore" is "whatever HEAD says", run where HEAD is not the only truth.
+- **Against a bound doc it is worse, and that half is measured** (task
+  `t-3bFI5h-F9qRW`; full detail in "A git operation on a bound file is an editor
+  save, and it goes both ways"). `git checkout -- <file>` inside the 800ms write
+  debounce is reasserted by the live doc about a second later, so git exits 0,
+  `git status` is clean at that instant, and the tree is dirty again immediately
+  after. `git stash` in the same window leaves the content in **neither HEAD nor
+  the stash**, and no git command brings it back.
+- **Two rules, both one-directional.** A harness that needs a clean tree takes a
+  **detached worktree at a sha** (`git worktree add --detach <dir> <sha>`),
+  never a restore-in-place in a checkout somebody else may be writing — its
+  worst failure is a stray directory, which is cheap. And **"this worktree looks
+  abandoned" is not a fact you can read off a roster**: establish liveness from
+  the artifacts (worktree locks, file mtimes, local-vs-remote HEAD) as the entry
+  above says, before the write rather than after.
+- **The layer that protects concurrent writers does not extend to the file.**
+  "Concurrent agent+human edits are CRDT-safe; disk reconcile was not" is about
+  two parties editing the same doc, where Yjs merges them; nothing merges two
+  parties editing the same working tree, and git's restore verbs are written on
+  the assumption that there is only one. That asymmetry is why the expensive
+  window is the one before the first commit — **commit as soon as a coherent
+  chunk exists** rather than letting a whole implementation pass sit in the tree
+  while a long suite runs.
+
+## A report written as turn text is a report nobody receives
+
+- **Two agents on one night wrote complete, correct reports as plain output
+  instead of sending them, and both presented to the lead as idle with no
+  result.** In each case the work was done: the four gates had run, the merge
+  had landed. What did not happen was the send. Nothing errors — the author has
+  written the report and reads its own transcript as evidence it reported, the
+  recipient sees silence, and no tool call failed anywhere.
+- **The cost lands on the reader, who cannot tell a silent agent from a stalled
+  one.** One lead spent a verification pass checking a merge's outcome from the
+  outside on the assumption the work had stalled. That confirmed the file was
+  intact and could say nothing about whether the resolution was sound — the part
+  worth reviewing was a judgment call that existed only in the unsent report.
+- **An idle signal is a measurement of the CHANNEL, not of the work** — the same
+  shape as "An agent roster under-reports live agents, and the branch is the
+  thing that knows", one transport over. There a cache under-reported who was
+  running; here the transport under-reported what was finished. Both are
+  absences measured by something other than the artifacts, so establish state
+  the same way: the branch, the PR, the worktree, the file mtimes.
+- **The reusable half is not "remember to call the tool".** It is that when the
+  deliverable IS a report, finishing the work is not finishing the task, and the
+  send is the only step with no local evidence that it happened. Treat an
+  unacknowledged report as unsent rather than as received.
 
 ## A leak gate that can't see still exits 0 — and reports it as a pass
 
@@ -1120,7 +1351,9 @@ Technical discoveries that should persist across sessions for this project.
   point, not the current tip. The comparand is frozen at the moment the branch
   was cut and stays frozen however many times the job re-runs. Only a rebase, a
   merge of main into the branch, or a branch-protection rule requiring the
-  branch be up to date before merging moves it.
+  branch be up to date before merging moves it. **Superseded by the entry
+  directly below**, which moves the version comparand to the base branch's TIP.
+  The changed-file set still uses the merge base, and must.
 - **Two rules, and both are needed because they cover different actors.** The
   author re-reads the version off `origin/main` immediately before pushing; the
   **merger re-checks it at merge time**. The author cannot cover this alone —
@@ -1134,9 +1367,210 @@ Technical discoveries that should persist across sessions for this project.
   at all and was correct: it touched neither. Bumping on every PR manufactures a
   **total merge order across unrelated branches** — land 0.1.44 and a green PR
   sitting at 0.1.42 can no longer merge without a rebase it never needed.
+- **It recurred the same morning, to four branches on one number, and the
+  count is readable straight out of the object database.** `git log --all
+  --grep='0\.1\.46'` finds four independent claims on 0.1.46: `capture-guard`
+  (`69bf263`), `fix/setdoc-task-body-guard` (`4c0e53d`),
+  `judge/evidence-and-orphan-band` (`10125fb`) and `feat/goal-band-retriage`
+  (`fcf5659`). Exactly one landed — #185, `9ce04dd`. Three of the four subject
+  lines say in so many words that they are *already* re-taking a number lost to
+  #180, so this was the second lap of the same race, not the first.
+- **Read the number off the ref, never off the gate.** `git show
+  origin/main:packages/plugin/.claude-plugin/plugin.json` answers "what is taken
+  now"; `bun run check:plugin-version` answers "was my fork point lower", which
+  is a different question and stays green however long the branch sits. Read all
+  three sites that way, not two — `check-plugin-version.ts` compares only the
+  two manifests, and the third (`PLUGIN_VERSION` in `packages/mcp/src/mcp.ts`)
+  is pinned by `packages/mcp/test/launcher.test.ts` against the BUILT bundle, so
+  it can only go red after a `bun run build:mcp`.
+- **Allocate the number last, and let the sequence skip.**
+  `feat/goal-band-retriage` took 0.1.46 in `fcf5659`, carries 0.1.48 today after
+  merging main, and main has since reached 0.1.51 — three numbers, each correct
+  when written, none of them shipped. Main's own history runs
+  0.1.45 → .46 → .47 → .49 → .51: 0.1.48 and 0.1.50 are simply absent,
+  allocated to branches that hadn't landed when the next one did (`954cb48`,
+  "Take 0.1.50, the number allocated to this branch", is still sitting on
+  `opaque-goal-ids`). Peers compare version strings and nothing requires
+  contiguity, so a gap costs nothing while a pre-allocated number costs a
+  re-bump for every merge that beats you. The order that works is: merge main,
+  run the four gates, hold, take a number, merge immediately.
 - Same family as "Drift you have to go and look for is drift nobody looks for",
   one layer earlier: there a merged release failed to reach the fleet, here two
   releases collide before they get the chance.
+
+## A gate that compares against the merge-base is green precisely when the regression is largest
+
+- **The sequel to the entry above, and it says that entry's fix was the wrong
+  shape.** That one ended on two human habits — the author re-reads the version
+  off `origin/main` before pushing, the merger re-checks it at merge time — plus
+  a person handing out numbers. The gate could have answered the question
+  structurally the whole time; it was asking the wrong ref.
+- **Measured 2026-08-17, and every number reproduced with `git show
+  <ref>:packages/plugin/.claude-plugin/plugin.json` before anything was
+  changed.** PR #187, branch `origin/feat/goal-band-retriage`, carried
+  **0.1.48**. Its merge-base with `main` is `bab50b2`, which held **0.1.47**.
+  `origin/main` was at **0.1.51**. `scripts/check-plugin-version.ts` compared
+  0.1.48 against the *fork point's* 0.1.47, passed, and would have passed
+  however many times CI re-ran — while merging it steps the published version
+  **backwards three releases**, which under `claude plugin update` reaches
+  nobody.
+- **The gate printed its own defect in its success line**, which is the single
+  clearest artifact of the whole thing. On that branch, `--base origin/main`,
+  exit 0: `✓ plugin version gate — 3 file(s) under packages/plugin/, version
+  0.1.47 → 0.1.53`. The 0.1.47 is the frozen fork point being reported as
+  though it were the thing being beaten, with `origin/main` at 0.1.51 the
+  whole time. A success message that names its comparand is worth having;
+  this one named the wrong comparand and nobody read it as strange.
+- **Do not read this as "a branch's number goes stale while it sits" — that is
+  the rare version.** The frequent one is that **every catch-up merge presents
+  the version as a conflict**, and this repo's conventions require merging main
+  before the final push. Both reflexive resolutions produce a number the old
+  gate accepted and the fleet would ignore, and neither requires anyone to be
+  careless:
+  - **Keep ours** — the normal instinct when merging main into a feature
+    branch. Observed in an abandoned merge in a worktree: main @ `f604f8b`
+    (0.1.49) merged into the branch (0.1.48), resolved by keeping 0.1.48 across
+    all three sites. The branch lands *behind* the commit it just merged.
+  - **Take theirs** — the tidy-looking one. PR #187 went `mergeable_state:
+    dirty` with the three version files in the conflict set, 0.1.53 against
+    main's 0.1.51; taking main's side lands the branch at *exactly* main's
+    version, so `claude plugin update` publishes nothing at all.
+  The merge base is structurally incapable of seeing either, because it never
+  moves in response to anything that happens to the branch afterwards. **So the
+  regression is not created once when the branch is cut — it is re-creatable at
+  any point in the branch's life by an ordinary, correct-looking edit.**
+- **Phrase the check as "strictly GREATER than the base", never "different from
+  the base".** Equality is what take-theirs produces, so "must differ" is the
+  natural thing to write if that is the case in front of you — and it waves
+  through keep-ours, which is the one a human actually did. Both are covered
+  here by `compare(current, baseVersion) <= 0`, and relaxing that to `< 0` turns
+  *"fails a version conflict resolved by TAKING THEIRS, landing on the base
+  version"* red.
+- **The comparand is frozen at the fork point while the base moves, so the
+  longer a branch lives the more wrong the number and the more confident the
+  check.** That inversion is the whole entry: the gate's certainty grows with
+  the error it is failing to see. And the counter-intuitive corollary is that
+  **no re-run helps** — people reach for "just re-run CI", and
+  `git merge-base origin/main HEAD` returns the same commit every time. Only a
+  rebase, a merge of the base into the branch, or branch protection's
+  up-to-date requirement moves it.
+- **One variable serving two questions is where this hid.** `mergeBase` fed
+  both `git diff --name-only ${mergeBase}...HEAD` (which files did this branch
+  change) and `git show ${mergeBase}:<manifest>` (what version must I beat).
+  It is *correct* for the first and wrong for the second, and nothing at the
+  call site distinguishes them. **General rule: when a computed value feeds two
+  questions, check that it answers both — the one it answers correctly is
+  exactly what makes the other look reviewed.**
+- **The obvious one-line reading of the fix changes the wrong line, and that is
+  the mistake to expect next.** "Compare against `origin/main`" applied to the
+  *diff* — `base..HEAD` instead of `mergeBase...HEAD` — re-presents everything
+  the base gained since the fork as this branch's additions, which is precisely
+  the defect this repo already fixed in its pre-push scanner ("A merge commit
+  re-presents public content as an addition", above). Only the version
+  comparand moves to the tip. The regression test for that half asserts the two
+  ranges genuinely disagree on the fixture before asserting the behaviour, and
+  making the diff two-dot turns *"exempts a branch touching no plugin files,
+  even when the base moved the plugin forward"* red.
+- **It is a NARROWING, not a closure, and the file's own history says not to
+  overclaim.** CI runs at push time, so the base can still move between the
+  last green run and the merge. What shrank is the exposure — from "the entire
+  life of the branch" to "between the last CI run and the merge". The
+  structural closer is GitHub branch protection's *require branches to be up to
+  date before merging*, which forces a re-run against the new tip; until that
+  is on, the merger's check at merge time is still load-bearing. This is stated
+  in the script's header comment, not only here.
+- **The failure is invisible by construction, which is what ties this to the
+  rest of the file.** Two branches agreeing on a number **merge clean, because
+  a conflict requires disagreement**; CI is **green, because it compared against
+  a frozen fork point**; and `claude plugin update` **reports success while
+  copying nothing**, because the string did not move forward. Every signal a
+  person normally trusts is not merely silent here — it is actively reassuring.
+  There is no marker to resolve, nothing to notice, and no artifact anywhere
+  that looks wrong.
+- **Mutation-verified three ways, each naming a test.** Reverting the comparand
+  to `mergeBase` turns four red, including both conflict-resolution cases and
+  the success line's own comparand; relaxing `<= 0` to `< 0` turns the
+  take-theirs case red; making the changed-file diff two-dot turns the
+  exemption case red. The keep-ours fixture was checked against the OLD
+  comparand rather than assumed — it exits 0 there, which is the measurement
+  that makes it a regression test and not a decoration. Fixtures are real temp
+  git repos — `GIT_*` stripped from the env
+  before `git init` (it re-initializes the repo `GIT_DIR` NAMES, not its cwd),
+  and `-c user.email` / `-c user.name` passed explicitly afterwards, since the
+  strip also removes the committer identity and CI runners have no global one.
+  A pure helper over pre-fetched version strings would have passed against both
+  the broken and the fixed script: the defect is **which git command runs**.
+
+## The merge queue is serialized by a generated artifact, and the version collisions are its symptom
+
+- **Every plugin-touching branch acquires the same four-file conflict the moment
+  another one merges.** Measured 2026-08-17 with `git merge-tree --write-tree
+  origin/main <branch>` against three branches that had nothing to do with each
+  other — `feat/goal-band-retriage` (PR #187), `capture-guard`,
+  `judge/evidence-and-orphan-band` — which returned an identical set:
+  `.claude-plugin/marketplace.json`,
+  `packages/plugin/.claude-plugin/plugin.json`, `packages/mcp/src/mcp.ts` (whose
+  conflicting hunk is the `PLUGIN_VERSION` literal, confirmed in the diff) and
+  `packages/plugin/mcp/index.js`. So **only one plugin-touching PR can be in
+  flight without rework**, however carefully the numbers are handed out. The
+  entry above is what this looks like from the version side; this is the
+  mechanism underneath it.
+- **The fourth file is the one that is not yours to resolve.**
+  `packages/plugin/mcp/index.js` is generated by `bun run build:mcp` and tracked
+  because peers load *it* rather than the source (see "An MCP source fix doesn't
+  reach peers until the tracked bundle is rebuilt"), so every branch touching
+  `packages/mcp/src/**` rewrites all 16,081 lines and 618 KB of it. It is built
+  with `minify: false` (`packages/mcp/scripts/build.ts`) and therefore reads like
+  ordinary code, which is exactly what makes hand-resolving its hunks feel
+  reasonable. A bundle merged hunk by hunk can come out syntactically valid and
+  semantically wrong, and nothing reads it to find out. **Rule: never resolve
+  that file's hunks — take either side wholesale, run `bun run build:mcp`, and
+  commit the result.** CI rebuilds it and fails on any difference
+  (`.github/workflows/ci.yml:42-50`), which is both what makes "take either
+  side" safe and what makes hand-editing pointless.
+- **The refusal is the good outcome, and it is the exact inverse of the failure
+  above.** There the danger is that git *doesn't* refuse — two branches writing
+  the identical version string merge clean, and the collision is silent. Here
+  git refuses on all three version sites, because a central allocator makes the
+  two sides write *different* numbers. That is the trade the allocator actually
+  bought: the queue got slower, and it stopped being able to ship two releases
+  under one version string.
+
+## A supersession pointer makes adjacency load-bearing, and nothing checks it
+
+- **Two independent branches appended an entry at the same point in this file,
+  and the ORDER of the resolution was a correctness property.** Merging `main`
+  into #195 on 2026-08-17, the parent entry ("A version number is only free
+  until somebody else merges") had just gained **"Superseded by the entry
+  directly below"** from #199, and #199's own entry opened "The sequel to the
+  entry above" while naming that parent's content verbatim — *two human habits,
+  plus a person handing out numbers*. Both orders merge clean, all four gates
+  pass, and the file reads fine either way. The wrong one leaves the pointer
+  aimed at an entry that supersedes nothing.
+- **A cross-reference expressed as a POSITION is a link with no target check.**
+  `grep -ni 'superseded by\|the entry above\|entry below' docs/process/learnings.md`
+  found nine of them in the file this entry was added to. The `-i` is
+  load-bearing: without it the pattern silently skips every pointer that starts
+  a sentence, which is the majority of them. Nothing in the four gates reads
+  prose, so each hit is a dangling reference waiting for an insertion. **Prefer
+  naming the heading** — a reader can find it and a grep can verify it
+  survived.
+- **When a conflict hunk appends entries to a file like this, read both
+  BODIES.** Comparing headings is what an ordering decision naturally reaches
+  for, and it is exactly what cannot see a pointer. The tell that decides the
+  order: an entry naming its predecessor's *content* is asserting adjacency,
+  while one saying only "the entry above" is not — so the specific reference
+  stays adjacent and the vague one moves.
+- **Similar-sounding headings written the same night are usually different
+  lessons, not duplicates.** The two entries here were about the version gate's
+  comparand and about the generated bundle in the conflict set. Resolving by
+  heading similarity would have dropped one, and a dropped entry leaves nothing
+  behind to notice — where a kept duplicate is an editing chore.
+- Placement of this entry was itself constrained by the rule: the version chain
+  it sits after is three entries locked in sequence, and "An agent roster
+  under-reports live agents, and the branch is the thing that knows" is locked
+  to the entry opening "The entry above is the near-miss". Check for a pointer
+  before choosing an insertion point, not after.
 
 ## What makes a fleet-wide action safe is that it can't interrupt anybody
 
@@ -1280,6 +1714,84 @@ Technical discoveries that should persist across sessions for this project.
   method, or don't state it.** "I read `create_thread` on 2026-08-17 and it
   looks like X" is honest and useful; "X is the case" is a measurement that was
   never taken.
+
+## After a destructive operation, the missing thing's absence is the PREDICTED consequence — not evidence the warning was wrong
+
+- **`ExitWorktree` renamed this session's transcript onto the parent repo's
+  path and overwrote ~7 weeks of history — silently, with no backup.** That is
+  the operational half, established jointly with the fleet lead after the
+  epistemics below got us to the right question. A session that has entered a
+  worktree writes its transcript under a worktree-encoded project dir
+  (`…-plugin--claude-worktrees-<a>--claude-worktrees-<b>`); leaving moves that
+  file to the parent-repo encoding, where a file of the same session-id name
+  may already exist and be far larger. Measured here: 214,967,259 bytes born
+  Jun 29 replaced by 1,013,315 bytes born Aug 17 12:44:32.
+- **The signature is two directory mtimes in the same second, and anyone can
+  re-derive it.** Both project dirs carry mtime `Aug 17 16:07:55` local; the
+  `ExitWorktree` call is stamped `2026-08-17T23:07:55.039Z` — source dir
+  stamped on entry removal, destination on entry creation, which is
+  `rename(2)`. The surviving file's birthtime is the worktree file's, which an
+  intra-filesystem rename preserves. A second `ExitWorktree` three minutes
+  later left no dir-mtime trace at all, being a no-op after the first had
+  moved the file — so **counting calls does not tell you which one acted.**
+- **Transcripts are an analysis input, not a log**, which is what makes this a
+  soft-delete violation rather than lost scrollback:
+  `.claude/skills/retro/scripts/analyze_transcript.py` reads them directly and
+  the weekly-review pipeline mines them. There are no APFS snapshots and no
+  Time Machine destination on this machine, so nothing outside git has a
+  recovery path. **Before `ExitWorktree` on a long-lived session, check whether
+  a larger same-named transcript already sits at the parent encoding.**
+- **The epistemics, which is the part that generalises.** A peer audited my
+  warning by checking whether the endangered file still existed, found it gone,
+  and concluded the warning had been false. Twelve hours later the measurement
+  was "no such pair exists, nothing over 50MB anywhere" — a correct `find`,
+  correctly read — filed as one of three wrong measurements.
+- **Both hypotheses predict the identical observation, which is what makes this
+  a trap rather than a mistake.** *"The pair never existed"* and *"the pair
+  existed and the rename destroyed it"* are indistinguishable from the
+  post-hoc listing alone. The audit ran **after** the operation it was auditing,
+  so the state it read was the state the warning was about.
+- **What separates them is birth time, and it was free.** At the time of the
+  warning, `stat` reported `size=214967259 birth=Jun 29` at the canonical path
+  and `size=1013315 birth=Aug 17 12:44:32` at the worktree path. Afterwards the
+  canonical path holds a file whose birth is `Aug 17 12:44:32` — the *worktree*
+  file's — whose earliest record is `19:44:32.743Z`, while the worktree file is
+  gone and no file of the original size survives anywhere under `~/.claude`.
+  `mv` within a filesystem is a rename, so it carries birthtime along; that one
+  field is what identifies which file is now standing at the path.
+- **Rule: when the question is whether a destructive operation was justified,
+  the artifact's absence is the weakest possible evidence, because it is what
+  BOTH answers predict. Reach for an identity field that survives the
+  operation** — birthtime, inode, a first-record timestamp, a content hash —
+  and compare it against what the earlier observation recorded. If the earlier
+  observation didn't record one, that is the gap to fix next time, not a reason
+  to trust the later reading.
+- **Same family as "A positive control must be a peer in TIME as well as in
+  kind", with the mechanism inverted.** There, a too-early read made an absence
+  vacuous while other writers were appending. Here the read is too LATE, and
+  the mutation between the two observations was caused by the very action under
+  review — so the audit destroys its own evidence and then cites the result.
+- **The corollary for the writer of the warning: quote the measurement into the
+  warning itself.** The numbers above survived only because they were pasted
+  from `stat` into the message at the time. Had the warning said "this would
+  overwrite a much larger file", it would have been unfalsifiable afterwards
+  and the audit's conclusion would have stood unchallenged.
+- **The residual named in the first draft closed, and that is worth recording
+  as a method note.** That draft said rename fitted every observation but that
+  the old inode had not been captured, so another mechanism could not be
+  excluded. What closed it was not more reasoning — it was a second observer
+  parsing every transcript on the machine for `mv`/`cp`/`rm` against a `.jsonl`
+  in that window (zero hits, so no agent did it) and the dir-mtime pair above.
+  **State the residual; it is the thing someone else can go and close.**
+- Two smaller findings from the same review, both about attributing a claim
+  before grading it. One item on the wrong-measurement list was a correction I
+  had *made* to a peer's relayed advice, which that peer had already
+  acknowledged in writing — the correction got recorded as the error. And a
+  count of tool calls ("two of them") was taken from the shape of a nested path
+  rather than from the calls, which are in the transcript and can be counted.
+  **Before grading a measurement, establish whose it was and what produced
+  it** — a review that mis-attributes is worse than one that is merely wrong,
+  because it teaches the wrong party the wrong lesson.
 
 ## A truncated page read is indistinguishable from a page that never rendered
 
@@ -1764,6 +2276,39 @@ Technical discoveries that should persist across sessions for this project.
   re-verified" as a claim needing its own evidence, because it is the one line
   in a report nobody can check from outside. Same family as "a peer agent's 'it
   worked' means the call didn't error".
+
+## A conflicted PR has ZERO check-runs, which reads exactly like CI not having started yet
+
+- **PR #187 sat at `mergeable: CONFLICTING` / `mergeStateStatus: DIRTY` with no
+  checks at all — not pending, not failed, absent.** Measured 2026-08-17:
+  `gh api repos/<owner>/<repo>/commits/ef2916a7/check-runs --jq .total_count`
+  answers `0`, while
+  `gh api ".../actions/runs?branch=feat/goal-band-retriage"` answers 2 runs,
+  both `pull_request`, both `success` — on `33733b0` and `8ac0f05`, the branch's
+  two EARLIER heads. So the branch shows green history while the head under
+  review has never been built at all. `.github/workflows/ci.yml` runs
+  `on: pull_request`, which needs a merge ref, and there is no merge ref to
+  build for a conflicted PR.
+- **The positive control is a peer PR in the same repo on the same day.** #193's
+  head `c103abf` answers `1` to the identical call — `verify`, `success`.
+  Without that half, `0` is just as consistent with a malformed query as with a
+  real absence. Same discipline as "A negative test needs a positive control or
+  it proves nothing".
+- **`gh pr checks 187` prints `no checks reported on the
+  'feat/goal-band-retriage' branch` and exits 1.** The exit code is honest; the
+  sentence is not. It names an absence, volunteers no cause, and is word for
+  word what a PR opened thirty seconds ago says — so "CI hasn't started" is the
+  natural reading, and it is a wait that never ends.
+- **The probe that separates them is the check-run count against the HEAD SHA,
+  read together with `mergeable` / `mergeStateStatus`** — never the PR page,
+  whose check list is empty in both worlds. `DIRTY` + 0 means merge main or
+  rebase, not wait. `BLOCKED` means branch protection: on this repo that is the
+  one required approving review (`required_status_checks` is null), and a
+  `BLOCKED` PR's head sha still carries its check-run.
+- Same family as "A truncated page read is indistinguishable from a page that
+  never rendered" and "'X is impossible' measured AN absence, not THE absence":
+  the reading is accurate, and the conclusion drawn from it is wrong, because
+  nothing on the surface separates "not there" from "never got made".
 
 ## CI red at "Set up job" is infrastructure, and the status code says whose
 
