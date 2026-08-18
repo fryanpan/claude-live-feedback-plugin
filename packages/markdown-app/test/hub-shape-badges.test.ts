@@ -81,19 +81,13 @@ describe('shape badges on the board', () => {
     // Asserted beside a clean row in the SAME render, so "absent" on the
     // control is a judgement rather than a renderer that draws no badges at
     // all in this harness.
-    const [flagged, clean] = badgeClassesPerRow([
-      task({ bodyGaps: ['no-story'] }),
-      task({}),
-    ]);
+    const [flagged, clean] = badgeClassesPerRow([task({ bodyGaps: ['no-story'] }), task({})]);
     expect(flagged?.some((c) => c.includes('hub-badge-body-gap'))).toBe(true);
     expect(clean?.some((c) => c.includes('hub-badge-body-gap'))).toBe(false);
   });
 
   it('draws the title badge for a row whose title misses the standard', () => {
-    const [flagged, clean] = badgeClassesPerRow([
-      task({ titleGaps: ['no-persona'] }),
-      task({}),
-    ]);
+    const [flagged, clean] = badgeClassesPerRow([task({ titleGaps: ['no-persona'] }), task({})]);
     expect(flagged?.some((c) => c.includes('hub-badge-title-gap'))).toBe(true);
     expect(clean?.some((c) => c.includes('hub-badge-title-gap'))).toBe(false);
   });
@@ -118,7 +112,11 @@ describe('shape badges on the board', () => {
     // the wrong thing is a rewrite, a body that says nothing is a write.
     renderBoard(
       root,
-      boardSections(GOALS, [task({ bodyGaps: ['empty'] }), task({ bodyGaps: ['no-story'] })], filters),
+      boardSections(
+        GOALS,
+        [task({ bodyGaps: ['empty'] }), task({ bodyGaps: ['no-story'] })],
+        filters,
+      ),
       handlers(),
     );
     const labels = Array.from(root.querySelectorAll('.hub-badge-body-gap')).map(

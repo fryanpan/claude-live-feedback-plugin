@@ -33,8 +33,8 @@ const REPORT_BODY = [
 ].join('\n');
 
 /**
- * A decision task. Measured on a real board 2026-08-17: four open rows are
- * shaped exactly like this, and a story-only rule flags every one of them.
+ * A decision task. The row DECLARES `needs: 'decision'`, which is what the
+ * advisory reads — the prose shape is incidental and deliberately so.
  */
 const DECISION_BODY = [
   '**Should the API refuse a task that names no goal, or file it under chores?**',
@@ -124,11 +124,15 @@ describe('task description advisory', () => {
       expect(res.bodyMessage).toBeUndefined();
     });
 
-    it('a decision task that opens with its question is NOT flagged', async () => {
+    it('a row declared as a decision is NOT flagged', async () => {
       // The measured false-positive class, asserted at the route rather than
       // only in the unit test, because the route is what a caller sees.
       const wsId = await seedWorkspace();
-      const res = await createTask(wsId, { body: DECISION_BODY });
+      const res = await createTask(wsId, {
+        body: DECISION_BODY,
+        needs: 'decision',
+        options: [{ label: 'Refuse' }, { label: 'File under chores' }],
+      });
       expect(res.bodyGaps).toBeUndefined();
       // Non-vacuity: this fixture really did reach the store, so the silence
       // above is the genre being recognised rather than the body never
@@ -171,16 +175,29 @@ describe('task description advisory', () => {
           tasks: [
             { title: GOOD_TITLE, assignee: 'Jordan', goal: 'chores', body: STORY_BODY },
             { title: GOOD_TITLE, assignee: 'Jordan', goal: 'chores', body: REPORT_BODY },
+            // A DECLARED decision in the same batch. Without this row the
+            // batch route could drop `needs` entirely and stay green — which
+            // it did, until a mutation said so.
+            {
+              title: 'Bryan can settle the goal rule by choosing refuse or file',
+              assignee: 'Jordan',
+              goal: 'chores',
+              body: DECISION_BODY,
+              needs: 'decision',
+              options: [{ label: 'Refuse' }, { label: 'File under chores' }],
+            },
           ],
         }),
       );
-      expect(res.tasks.length).toBe(2);
+      expect(res.tasks.length).toBe(3);
       const rows = res.bodyGaps ?? [];
       // Exactly the second row — a total would leave the caller diffing to
-      // find which of the batch needs work.
+      // find which of the batch needs work, and the declared decision must
+      // NOT be among them even though its body is not a story.
       expect(rows.length).toBe(1);
       expect(rows[0]?.taskId).toBe(res.tasks[1]?.id);
       expect(rows[0]?.gaps).toContain('no-story');
+      expect(rows.some((r) => r.taskId === res.tasks[2]?.id)).toBe(false);
     });
   });
 });

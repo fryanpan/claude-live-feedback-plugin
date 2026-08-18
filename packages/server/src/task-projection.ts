@@ -445,7 +445,7 @@ export class TaskProjection {
             this.commentCount(t.id),
             ownerKindOf(t),
             this.titleGaps(t),
-            bodyShapeGaps(t.body),
+            bodyShapeGaps(t.body, t.needs),
           ),
         ]),
     );
