@@ -1,0 +1,323 @@
+/**
+ * Watches survive an MCP child respawn — end to end, through the SHIPPED
+ * BUNDLE, against a real server.
+ *
+ * The scenario the task was filed on: a session watches docs, Claude Code
+ * respawns (token switch, /clear, crash), and the new MCP child comes up with
+ * an empty `watchers` map — `list_watched_docs` answers `[]`, indistinguishable
+ * from a session that never subscribed. So this test kills the child and
+ * starts another with the SAME identity, and asserts three things in order:
+ * the set is back, `list_watched_docs` SAYS it came from the server, and an
+ * event on a restored doc actually reaches the new child as a channel message
+ * (a listed watch that delivers nothing is the drift strip's empty-list
+ * failure with extra steps).
+ *
+ * Every absence sits beside its positive control in the same file: a child
+ * with a DIFFERENT identity gets nothing back, and a child with NO identity
+ * is told its watches are session-only rather than silently persisted under
+ * the shared id.
+ *
+ * Fixtures are synthetic. The repo is public.
+ */
+import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
+import { type ChildProcess, spawn } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { type ServerHandle, createServer } from '../src/server.ts';
+
+const BUNDLE = resolve(import.meta.dir, '../../plugin/mcp/index.js');
+
+interface Notification {
+  method: string;
+  params?: { content?: string; meta?: Record<string, unknown> };
+}
+
+/** One MCP child over stdio: JSON-RPC calls plus every notification it sends. */
+class McpChild {
+  private child: ChildProcess;
+  private pending = new Map<number, (msg: Record<string, unknown>) => void>();
+  private nextId = 1;
+  readonly notifications: Notification[] = [];
+  private waiters: Array<() => void> = [];
+
+  constructor(baseUrl: string, env: Record<string, string | undefined>) {
+    const childEnv: Record<string, string> = {};
+    for (const [k, v] of Object.entries(process.env)) {
+      // The parent session may itself carry an agent identity; the child must
+      // get exactly the identity the test names, or the fixture measures the
+      // wrong session.
+      if (k === 'FEEDBACK_AGENT_NAME' || k === 'FEEDBACK_AUTHOR' || k === 'FEEDBACK_BASE_URL') {
+        continue;
+      }
+      if (v !== undefined) childEnv[k] = v;
+    }
+    childEnv.FEEDBACK_BASE_URL = baseUrl;
+    for (const [k, v] of Object.entries(env)) if (v !== undefined) childEnv[k] = v;
+    this.child = spawn('node', [BUNDLE], { env: childEnv, stdio: ['pipe', 'pipe', 'pipe'] });
+    let buf = '';
+    this.child.stdout?.on('data', (d: Buffer) => {
+      buf += d.toString();
+      let nl = buf.indexOf('\n');
+      while (nl !== -1) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (line.startsWith('{')) {
+          const msg = JSON.parse(line) as { id?: number; method?: string };
+          if (typeof msg.id === 'number') this.pending.get(msg.id)?.(msg);
+          else if (typeof msg.method === 'string') {
+            this.notifications.push(msg as Notification);
+            for (const w of this.waiters.splice(0)) w();
+          }
+        }
+        nl = buf.indexOf('\n');
+      }
+    });
+  }
+
+  call(method: string, params: unknown): Promise<Record<string, unknown>> {
+    const id = ++this.nextId;
+    return new Promise((resolvePromise, reject) => {
+      const timer = setTimeout(() => reject(new Error(`${method} timed out`)), 15_000);
+      this.pending.set(id, (msg) => {
+        clearTimeout(timer);
+        resolvePromise(msg);
+      });
+      this.child.stdin?.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
+    });
+  }
+
+  async init(): Promise<void> {
+    await this.call('initialize', {
+      protocolVersion: '2024-11-05',
+      capabilities: {},
+      clientInfo: { name: 'durable-watches-test', version: '0' },
+    });
+    this.child.stdin?.write(
+      `${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`,
+    );
+  }
+
+  async tool(name: string, args: unknown = {}): Promise<Record<string, unknown>> {
+    const reply = (await this.call('tools/call', { name, arguments: args })) as {
+      result?: { content?: Array<{ text?: string }>; isError?: boolean };
+      error?: unknown;
+    };
+    expect(reply.error).toBeUndefined();
+    expect(reply.result?.isError).not.toBe(true);
+    return JSON.parse(reply.result?.content?.[0]?.text ?? '{}');
+  }
+
+  /** Wait until some channel notification satisfies `pred`, or time out. */
+  waitForChannel(pred: (n: Notification) => boolean, timeoutMs = 10_000): Promise<Notification> {
+    return new Promise((resolvePromise, reject) => {
+      const check = () => {
+        const hit = this.notifications.find(
+          (n) => n.method === 'notifications/claude/channel' && pred(n),
+        );
+        if (hit) {
+          clearTimeout(timer);
+          resolvePromise(hit);
+          return true;
+        }
+        return false;
+      };
+      const timer = setTimeout(
+        () =>
+          reject(
+            new Error(
+              `no matching channel notification within ${timeoutMs}ms; saw ${JSON.stringify(
+                this.notifications.map((n) => n.params?.content ?? n.method),
+              )}`,
+            ),
+          ),
+        timeoutMs,
+      );
+      if (check()) return;
+      const w = () => {
+        if (!check()) this.waiters.push(w);
+      };
+      this.waiters.push(w);
+    });
+  }
+
+  kill(): void {
+    this.child.kill();
+  }
+}
+
+describe('watches survive an MCP child respawn (through the real bundle)', () => {
+  let handle: ServerHandle;
+  let dataDir: string;
+  let base: string;
+  const live: McpChild[] = [];
+  const NAME = 'Durable Watch Tester';
+  const AGENT_ID = 'agent-durable-watch-tester';
+
+  const spawnChild = async (env: Record<string, string | undefined>): Promise<McpChild> => {
+    const c = new McpChild(base, env);
+    live.push(c);
+    await c.init();
+    return c;
+  };
+
+  const rest = (path: string, method: string, body?: unknown) =>
+    fetch(`${base}${path}`, {
+      method,
+      headers: {
+        host: `localhost:${handle.port}`,
+        ...(body ? { 'content-type': 'application/json' } : {}),
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+
+  beforeAll(async () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'mcp-durable-watches-'));
+    handle = createServer({ port: 0, dataDir });
+    base = `http://localhost:${handle.port}`;
+    for (const docId of ['dw-one', 'dw-two']) {
+      const path = join(dataDir, `${docId}.md`);
+      writeFileSync(path, `# ${docId}\n\nA paragraph to anchor a thread on.\n`);
+      const res = await rest('/api/docs', 'POST', { docId, sourceUrl: path });
+      expect(res.status).toBe(200);
+    }
+  });
+
+  afterAll(async () => {
+    for (const c of live) c.kill();
+    await handle.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('a fresh identity reads an EMPTY restored set — never-watched, and it says so', async () => {
+    const first = await spawnChild({ FEEDBACK_AGENT_NAME: NAME });
+    const list = (await first.tool('list_watched_docs')) as {
+      watching: string[];
+      persistence: { mode: string; agentId: string };
+      restore: { status: string; from: string; restored: string[] };
+    };
+    expect(list.watching).toEqual([]);
+    expect(list.persistence.mode).toBe('server');
+    expect(list.persistence.agentId).toBe(AGENT_ID);
+    // The distinguishing mark: this `[]` was RESTORED from the server, and
+    // the server had nothing — so it means never-watched, not dropped.
+    expect(list.restore.status).toBe('restored');
+    expect(list.restore.from).toBe('server');
+    expect(list.restore.restored).toEqual([]);
+
+    // Watch one doc explicitly and one workspace via auto-subscribe.
+    const w = (await first.tool('watch_doc', { docId: 'dw-one' })) as {
+      persisted: boolean;
+      persistence: string;
+      watching: string[];
+    };
+    expect(w.persisted).toBe(true);
+    expect(w.persistence).toBe('server');
+    const ws = (await first.tool('create_workspace', { name: 'dw-ws', goal: 'Watch me.' })) as {
+      workspaceId: string;
+    };
+    expect(ws.workspaceId).toBeTruthy();
+    // And a doc touched through an ordinary tool (the auto-watch path).
+    await first.tool('list_threads', { docId: 'dw-two' });
+
+    // Server-side effect, not the tool's own account of itself.
+    const stored = handle.agentWatches.list(AGENT_ID, () => true).watches.map((x) => x.key);
+    expect(stored).toEqual(['dw-one', `ws:${ws.workspaceId}`, 'dw-two']);
+
+    // The respawn: kill the child, start another with the SAME identity.
+    first.kill();
+    const second = await spawnChild({ FEEDBACK_AGENT_NAME: NAME });
+
+    const restored = (await second.tool('list_watched_docs')) as {
+      watching: string[];
+      restore: { status: string; from: string; restored: string[]; pruned: string[]; at?: string };
+    };
+    expect(restored.restore.status).toBe('restored');
+    expect(restored.restore.from).toBe('server');
+    expect(restored.restore.restored.sort()).toEqual(
+      ['dw-one', 'dw-two', `ws:${ws.workspaceId}`].sort(),
+    );
+    expect(restored.restore.pruned).toEqual([]);
+    expect(restored.watching.sort()).toEqual(['dw-one', 'dw-two', `ws:${ws.workspaceId}`].sort());
+
+    // The session was TOLD, not left to ask: one channel line on restore.
+    const notice = await second.waitForChannel((n) =>
+      (n.params?.content ?? '').startsWith('[watches restored]'),
+    );
+    expect(notice.params?.content).toContain('3 watches');
+    expect(notice.params?.content).toContain(NAME);
+
+    // A restored watch that delivers nothing is the empty-list failure with
+    // extra steps — so post a real thread on the restored doc and require it
+    // to arrive in the NEW child as a channel message.
+    const thread = await rest('/api/docs/dw-one/threads/by_find', 'POST', {
+      find: 'paragraph to anchor',
+      text: 'Does the restored watch hear this?',
+      author: { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' },
+    });
+    expect(thread.status).toBe(200);
+    const delivered = await second.waitForChannel(
+      (n) =>
+        n.params?.meta?.doc_id === 'dw-one' &&
+        (n.params?.content ?? '').includes('Does the restored watch hear this?'),
+    );
+    expect(delivered.params?.meta?.event).toBe('thread.created');
+
+    // unwatch forgets it on the server too, so the NEXT respawn does not
+    // resurrect it — and dw-two, untouched, comes back.
+    const un = (await second.tool('unwatch_doc', { docId: 'dw-one' })) as { persisted: boolean };
+    expect(un.persisted).toBe(true);
+    second.kill();
+    const third = await spawnChild({ FEEDBACK_AGENT_NAME: NAME });
+    const after = (await third.tool('list_watched_docs')) as {
+      watching: string[];
+      restore: { restored: string[] };
+    };
+    expect(after.watching).not.toContain('dw-one');
+    expect(after.watching).toContain('dw-two');
+    expect(after.restore.restored).toContain('dw-two');
+    third.kill();
+  }, 30_000);
+
+  it('a DIFFERENT identity on the same server gets nothing back (positive control for the restore above)', async () => {
+    const other = await spawnChild({ FEEDBACK_AGENT_NAME: 'Some Other Peer' });
+    const list = (await other.tool('list_watched_docs')) as {
+      watching: string[];
+      restore: { status: string; restored: string[] };
+    };
+    expect(list.restore.status).toBe('restored');
+    expect(list.watching).toEqual([]);
+    expect(list.restore.restored).toEqual([]);
+    other.kill();
+  }, 30_000);
+
+  it('a session with no FEEDBACK_AGENT_NAME is told its watches are session-only, and nothing lands under the shared id', async () => {
+    // What the plugin's own .mcp.json pins for every peer.
+    const anon = await spawnChild({ FEEDBACK_AGENT_NAME: undefined, FEEDBACK_AUTHOR: 'agent' });
+    const w = (await anon.tool('watch_doc', { docId: 'dw-two' })) as {
+      persisted: boolean;
+      persistence: string;
+      watching: string[];
+    };
+    // Locally wired — events still flow for THIS session…
+    expect(w.watching).toEqual(['dw-two']);
+    // …but the response is honest that a restart drops it.
+    expect(w.persisted).toBe(false);
+    expect(w.persistence).toBe('session-only');
+    const list = (await anon.tool('list_watched_docs')) as {
+      persistence: { mode: string; reason?: string; agentId: string };
+      restore: { status: string; from: string };
+    };
+    expect(list.persistence.mode).toBe('session-only');
+    expect(list.persistence.agentId).toBe('known-agent');
+    expect(list.persistence.reason).toContain('FEEDBACK_AGENT_NAME');
+    expect(list.restore.status).toBe('session-only');
+    expect(list.restore.from).toBe('session');
+    // The server never heard about it under the shared identity — the store
+    // is empty there, and the named identity's set from the test above is
+    // the positive control that the store CAN hold entries.
+    expect(handle.agentWatches.list('known-agent', () => true).watches).toEqual([]);
+    expect(handle.agentWatches.list(AGENT_ID, () => true).watches.length).toBeGreaterThan(0);
+    anon.kill();
+  }, 30_000);
+});

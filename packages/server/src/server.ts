@@ -14,6 +14,14 @@ import {
 import { needsCall } from '@feedback/core/summary-prompt';
 import type { Server as BunServer } from 'bun';
 import { classifyActor } from './activity.ts';
+import {
+  AgentWatches,
+  SHARED_AGENT_IDS,
+  SHARED_IDENTITY_ERROR,
+  SHARED_IDENTITY_MESSAGE,
+  isValidAgentId,
+  isValidWatchKey,
+} from './agent-watches.ts';
 import { clientReleaseStatus } from './client-release.ts';
 import type { Deployer } from './deploy.ts';
 import { showFile } from './git-diff.ts';
@@ -363,6 +371,9 @@ export interface ServerHandle {
   /** The ydoc projection of the task store (ws:<id> board rooms + task
    *  body rooms). Exposed so tests can force a reassert. */
   projection: TaskProjection;
+  /** Per-agent durable watch sets (agent-watches.ts). Exposed so tests can
+   *  read the store the route wrote, not only the route's answer. */
+  agentWatches: AgentWatches;
   shares: Shares | null;
   /** Hang up every websocket and SSE stream whose share is no longer live.
    *  Runs on a 60s interval; exposed so tests exercise the real sweep. */
@@ -588,6 +599,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // The hub task store (plan §3.2/§3.3): server-owned workspaces + tasks,
   // persisted as per-workspace sidecars under <dataDir>/workspaces/.
   const taskStore = new TaskStore({ dataDir });
+  // Which docs each agent identity is watching — the durable memory behind
+  // the MCP child's session-scoped SSE subscriptions, so a respawned session
+  // can re-wire them instead of silently starting from `[]`. See
+  // agent-watches.ts.
+  const agentWatches = new AgentWatches({ dataDir });
+  if (agentWatches.loadError) {
+    console.error(`[agent-watches] ${agentWatches.loadError}`);
+  }
   // Every store event rides the existing SSE pipeline on the workspace
   // channel (`ws~<workspaceId>`, the same channel doc thread events use for
   // legacy grouping workspaces) — no new transport (§3.6). The audit log
@@ -3066,6 +3085,58 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             ...(res.shapeGaps !== undefined ? { shapeGaps: res.shapeGaps } : {}),
           });
         }
+        // --- REST: durable agent watches ---
+        // The MCP child's watch set, remembered here per agent identity so a
+        // respawned child can ask for it back. The server never opens the
+        // streams — it holds the list. GET is the restore path (prunes keys
+        // whose doc is gone and says so); POST unions `add` / deletes
+        // `remove`, never replaces, so two live sessions sharing one name
+        // cannot clobber each other. See agent-watches.ts.
+        const agentWatchesMatch = pathname.match(/^\/api\/agents\/([^/]+)\/watches$/);
+        if (agentWatchesMatch) {
+          // Same defense-in-depth posture as the plugin routes below: a share
+          // host never reaches here today (`shareScopeAllows` is a closed
+          // allowlist), and this keeps a later allowlisting from exposing one
+          // agent's subscription list to an external reviewer.
+          if (visitor) return j(403, { error: 'not available to share visitors' });
+          const agentId = decodeURIComponent(agentWatchesMatch[1] ?? '');
+          if (!isValidAgentId(agentId)) return j(400, { error: 'bad agentId' });
+          if (SHARED_AGENT_IDS.has(agentId)) {
+            return j(400, { error: SHARED_IDENTITY_ERROR, message: SHARED_IDENTITY_MESSAGE });
+          }
+          // A key is live when the thing it names still exists: a doc room, or
+          // for `ws:<id>` a hub workspace / grouping workspace. Anything else
+          // is a subscription the child would open against a 404 forever.
+          const watchKeyExists = (key: string): boolean => {
+            if (rooms.get(key)) return true;
+            if (!key.startsWith('ws:')) return false;
+            const wsId = key.slice('ws:'.length);
+            return (
+              taskStore.getWorkspace(wsId) !== undefined ||
+              rooms.list().some((m) => m.workspaceId === wsId)
+            );
+          };
+          if (req.method === 'GET') {
+            return j(200, agentWatches.list(agentId, watchKeyExists));
+          }
+          if (req.method === 'POST') {
+            const body = await safeJson(req);
+            const rawAdd = Array.isArray(body?.add) ? (body?.add as unknown[]) : [];
+            const rawRemove = Array.isArray(body?.remove) ? (body?.remove as unknown[]) : [];
+            const badKey = [...rawAdd, ...rawRemove].find((k) => !isValidWatchKey(k));
+            if (badKey !== undefined) {
+              return j(400, { error: 'bad watch key', key: String(badKey) });
+            }
+            const name = typeof body?.name === 'string' ? body.name : undefined;
+            const res = agentWatches.update(agentId, {
+              add: rawAdd as string[],
+              remove: rawRemove as string[],
+              ...(name ? { name } : {}),
+            });
+            return j(200, res);
+          }
+          return j(405, { error: 'method not allowed' });
+        }
         // --- REST: plugin refresh ---
         // The other half of the drift signal: any peer that can read who is
         // behind can also ask the machine to fetch the new bundle. Safe to
@@ -4174,6 +4245,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     rooms,
     tasks: taskStore,
     projection: taskProjection,
+    agentWatches,
     shares,
     sweepDeadShares,
     sharingGate,
