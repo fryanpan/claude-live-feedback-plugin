@@ -21,9 +21,19 @@ hard failure (exit 2) — see `decide_sources` for what "expected" means.
 
 Usage:
   scrub-check.py file [file...]            # scan named files
+  scrub-check.py --push-tip SHA [--remote NAME] [--already-public SHA]...
+                                            # files this push makes public (hook mode)
   scrub-check.py --diff-range A..B          # scan files changed in range
   scrub-check.py --staged                   # scan files in git index
   scrub-check.py --scan-all-tracked         # scan every tracked file (audit)
+
+`--push-tip` narrows the file list to the ones the becoming-public commits
+touch. This layer is deterministic, so a merge of `main` never produced the
+false positives the Haiku layer did — but the same defect is latent here:
+`--diff-range remote..tip` lists every file `main` touched too, so the day a
+name is ADDED to the registry, the next branch to merge `main` is blocked on
+content that has been public for weeks. Both layers now ask scrub_git.py the
+same question about the same push.
 
 This tool does NOT read stdin; piping a diff at it is an error, not a scan.
 
@@ -39,6 +49,9 @@ import re
 import subprocess
 import sys
 from typing import Dict, List, NamedTuple, Optional, Set, Tuple
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import scrub_git  # noqa: E402
 
 # Both pattern sources are CANDIDATE LISTS, current location first.
 #
@@ -399,7 +412,15 @@ def main() -> int:
         print(__doc__)
         return 0
 
-    if "--diff-range" in args:
+    try:
+        rev_args = scrub_git.rev_args_from_cli(args)
+    except ValueError as e:
+        print(f"[scrub-check] {e}", file=sys.stderr)
+        return 2
+
+    if rev_args is not None:
+        files = scrub_git.push_files(rev_args)
+    elif "--diff-range" in args:
         idx = args.index("--diff-range")
         if idx + 1 >= len(args):
             print("[scrub-check] --diff-range needs an argument", file=sys.stderr)

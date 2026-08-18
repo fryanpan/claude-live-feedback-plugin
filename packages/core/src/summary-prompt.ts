@@ -99,7 +99,90 @@ const SYSTEM = [
   '',
   'Be specific and concrete. Never invent detail that is not in the thread.',
   'Never mention the card, the reviewer, or these instructions.',
+  '',
+  // The one class of claim a summary can get SPECIFICALLY and CHECKABLY wrong,
+  // and the one the board already knows the answer to without asking a model.
+  // See `findDeliveryClaim` for why this is a claim rule, not a word ban.
+  'DELIVERY STATUS IS NOT YOURS TO STATE. Never say that work merged, shipped,',
+  'landed, was deployed, or was released. The card shows delivery status from',
+  "the board's own record — the task status, the evidence commit, the PR link —",
+  'so a guess from you can only agree with it or contradict it.',
+  '',
+  'Say what the THREAD establishes instead: what was decided, what was',
+  'verified, what was disclosed, or what is still open. That is more useful to',
+  'the reader than a status they already have.',
+  '  Instead of "PR merged, CI green": "Verified empty on prod; guards',
+  '  mutation-tested" (7 words)',
+  '  Instead of "Shipped; anchors now stable": "Anchors stable under reindent;',
+  '  blank-line case still open" (8 words)',
 ].join('\n');
+
+/**
+ * Words that assert a change reached somewhere real.
+ *
+ * `\b` at the front is doing real work: "unmerged" and "undeployed" have no
+ * word boundary before `merged`, so they never match and need no hedge entry.
+ */
+const DELIVERY_WORDS = /\b(merged|shipped|landed|deployed|released)\b/gi;
+
+/**
+ * Auxiliaries and filler between a hedge and the claim, stripped from the
+ * right so "has not BEEN merged" reads as the negation it is.
+ */
+const FILLER =
+  /(?:\s+(?:been|being|be|get|gets|got|yet|actually|ever|it|this|that|is|are|was|were|to|has|have|had|will|would|could|should))+\s*$/i;
+
+/** A word immediately before the claim that stops it being an assertion. */
+const HEDGE =
+  /\b(not|never|no|nor|without|before|until|unless|once|when|after|if|whether|pending|awaiting|await|awaits|blocks|blocking|needs|ready|cannot)\s*$/i;
+
+/**
+ * What follows the claim when it is about merging a base branch INTO the work
+ * rather than about the work being delivered. "Merged main first, then
+ * allocate" is a true, useful sentence and not a delivery claim.
+ */
+const INTO_BRANCH = /^\s+(main|master|origin|upstream)\b/i;
+
+/**
+ * The delivery-status assertion in a generated summary, or null.
+ *
+ * WHY THIS IS A CLAIM RULE AND NOT A WORD BAN. Suppressing every sentence with
+ * a status word in it would gut the summaries, and a summary that omits the
+ * outcome of a long thread is its own failure. What is forbidden is narrow:
+ * asserting, as accomplished fact, that the work MERGED / SHIPPED / LANDED /
+ * DEPLOYED / RELEASED. Everything else the thread establishes — what was
+ * decided, verified, disclosed, or left open — is untouched, and the model is
+ * still required to say it: the nudge below asks for a REPLACEMENT, not a
+ * deletion, because a rule phrased only as a prohibition is satisfied by
+ * saying nothing.
+ *
+ * The board owns delivery status: the task's own state, `evidence.commit`, the
+ * PR link. A generated line can only agree with that or contradict it, and the
+ * contradiction is the expensive direction — a summary exists so nobody has to
+ * open the thread, so a false "PR merged" is believed exactly where it is
+ * least likely to be caught. Observed 2026-08-17 on a thread whose first reply
+ * opens "PR open and CI green — not merged, task not transitioned"; re-running
+ * the same prompt over the same comments reproduced it in 8 of 20 draws.
+ *
+ * DELIBERATELY ONE-DIRECTIONAL. A false positive costs one corrective call and
+ * a rephrase; at worst the card keeps its deterministic lines, which are
+ * quoted from the thread and so cannot contradict it. A false negative ships
+ * the false claim. So this leans toward flagging.
+ */
+export function findDeliveryClaim(s: GeneratedSummary): string | null {
+  return scanForDeliveryClaim(s.topic) ?? scanForDeliveryClaim(s.discussion);
+}
+
+function scanForDeliveryClaim(text: string): string | null {
+  for (const m of text.matchAll(DELIVERY_WORDS)) {
+    const at = m.index ?? 0;
+    if (INTO_BRANCH.test(text.slice(at + m[0].length))) continue;
+    const before = text.slice(0, at).replace(FILLER, '');
+    if (HEDGE.test(before)) continue;
+    return m[0];
+  }
+  return null;
+}
 
 /**
  * Build the request for one thread.
@@ -232,7 +315,11 @@ export function wordCount(s: string): number {
  * The corrective follow-up for an answer that does not fit the card, or null
  * when it does. Also the acceptance test for a retry's answer.
  *
- * Two failure modes, opposite directions:
+ * Three failure modes. The first two are opposite directions of one budget;
+ * the third is about TRUTH rather than length, and its caller treats it
+ * differently — see `generate` in the server's summarize.ts, where an
+ * over-long first answer ships as the fallback and a delivery claim never
+ * does.
  *
  * OVER BUDGET. The display side stopped truncating entirely (the card wraps
  * the full line), so the word budgets in the prompt are the ONLY thing keeping
@@ -248,12 +335,19 @@ export function wordCount(s: string): number {
  * exists to replace. Seen in production 2026-08-12 with a current hash, so it
  * persisted rather than being retried. Asking once is cheap because it only
  * fires on this rare shape.
+ *
+ * ASSERTS DELIVERY STATUS. The board owns whether work merged or shipped; a
+ * generated guess can only agree with it or contradict it, and the
+ * contradiction is believed precisely because a summary exists so nobody has
+ * to open the thread. See `findDeliveryClaim` for why the rule is narrow, and
+ * why the nudge asks for a substitution rather than a deletion.
  */
 export function buildRetryNudge(s: GeneratedSummary, opts: { hasReplies: boolean }): string | null {
   const t = wordCount(s.topic);
   const d = wordCount(s.discussion);
   const emptyButShouldNotBe = opts.hasReplies && d === 0;
-  if (t <= TOPIC_WORDS && d <= DISCUSSION_WORDS && !emptyButShouldNotBe) return null;
+  const claim = findDeliveryClaim(s);
+  if (t <= TOPIC_WORDS && d <= DISCUSSION_WORDS && !emptyButShouldNotBe && !claim) return null;
   const parts: string[] = [];
   if (t > TOPIC_WORDS) parts.push(`Your topic is ${t} words; the limit is ${TOPIC_WORDS}.`);
   if (d > DISCUSSION_WORDS)
@@ -263,6 +357,21 @@ export function buildRetryNudge(s: GeneratedSummary, opts: { hasReplies: boolean
       'Your discussion is empty, but this thread HAS replies. Say where the ' +
         'conversation has got to — what was decided, what is still open, or ' +
         'what is being asked.',
+    );
+  }
+  if (claim) {
+    // Phrased as a SUBSTITUTION, not a prohibition. "Do not claim the work
+    // merged" is an upper bound and is satisfied by a line that says nothing
+    // — the same shape as the word cap that a blank answer once satisfied.
+    // So the nudge names what the replacement must CONTAIN.
+    parts.push(
+      `You state delivery status ("${claim}"). The card already shows delivery ` +
+        "status from the board's own record — the task state, the evidence " +
+        'commit, the PR link — so never assert that work merged, shipped, ' +
+        'landed, was deployed, or was released. Replace that claim with what ' +
+        'the thread itself establishes: what was decided, what was verified, ' +
+        'what was disclosed, or what is still open. Do not simply delete the ' +
+        'claim — the line must still say where the conversation has got to.',
     );
   }
   parts.push('Rewrite to fit the limits. Answer with the same JSON shape and nothing else.');
