@@ -25,6 +25,7 @@
 
 import { summaryHash } from '@feedback/core';
 import {
+  SUMMARY_PROMPT_VERSION,
   type StoredSummary,
   buildRetryNudge,
   buildSummaryPrompt,
@@ -252,6 +253,10 @@ export class ThreadSummarizer {
     // that lands mid-flight invalidates this summary instead of being
     // silently attributed to it.
     const hash = summaryHash(thread);
+    // Stamped alongside the hash: the prompt is the summary's other input,
+    // and `needsCall` uses this to let a backfill reach summaries written
+    // under an older set of instructions.
+    const stamp = { hash, promptVersion: SUMMARY_PROMPT_VERSION };
     const { system, user } = buildSummaryPrompt(thread);
 
     const first = await this.post(system, [{ role: 'user', content: user }]);
@@ -283,7 +288,7 @@ export class ThreadSummarizer {
         // the line.
         const keepsTopic = parsed.topic === '' || reparsed.topic !== '';
         const keepsDiscussion = parsed.discussion === '' || reparsed.discussion !== '';
-        if (keepsTopic && keepsDiscussion) return { ...reparsed, hash };
+        if (keepsTopic && keepsDiscussion) return { ...reparsed, ...stamp };
       }
       // An over-long first answer SHIPS as the fallback below, because a
       // complete 15-word line beats a chopped 12-word one. A first answer that
@@ -298,7 +303,7 @@ export class ThreadSummarizer {
           reparsed &&
           !findDeliveryClaim(reparsed) &&
           (parsed.discussion === '' || reparsed.discussion !== '');
-        if (clean && reparsed) return { ...reparsed, hash };
+        if (clean && reparsed) return { ...reparsed, ...stamp };
         // Both answers asserted delivery status. Store nothing: `threadLines`
         // then keeps the deterministic lines, which are quoted from the thread
         // and therefore cannot contradict it. Worse writing, never a false
@@ -307,7 +312,7 @@ export class ThreadSummarizer {
         return null;
       }
     }
-    return { ...parsed, hash };
+    return { ...parsed, ...stamp };
   }
 
   /**
