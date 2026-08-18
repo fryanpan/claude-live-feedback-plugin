@@ -1,7 +1,7 @@
 # @fryanpan/live-feedback-mcp
 
 Thin MCP stdio server that proxies tool calls to a running
-[live-feedback](https://github.com/fryanpan/claude-live-feedback-plugin)
+[live-feedback](https://github.com/fryanpan/claude-workspaces-plugin)
 HTTP/WS server. Agents launch this binary over stdio; state is
 authoritative in the main server.
 
@@ -57,7 +57,7 @@ The MCP surface is intentionally primitive — agents compose these into whateve
 - `list_watched_docs()`.
 - `observe_url(docId)` — get the SSE URL for non-channel clients.
 
-See [`src/mcp.ts`](https://github.com/fryanpan/claude-live-feedback-plugin/blob/main/packages/mcp/src/mcp.ts) for exact JSON schemas.
+See [`src/mcp.ts`](https://github.com/fryanpan/claude-workspaces-plugin/blob/main/packages/mcp/src/mcp.ts) for exact JSON schemas.
 
 ## Environment
 
@@ -95,4 +95,4 @@ Makes `live-feedback-mcp` resolve on `PATH` so the plugin's `.mcp.json` keeps wo
 
 ## License
 
-[MIT](https://github.com/fryanpan/claude-live-feedback-plugin/blob/main/LICENSE)
+[MIT](https://github.com/fryanpan/claude-workspaces-plugin/blob/main/LICENSE)

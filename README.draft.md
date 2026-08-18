@@ -71,8 +71,8 @@ Yjs is the source of truth at runtime. Disk is authoritative at rest. Comments a
 > _Strawman: when v0.0.1 ships, the bootstrap path becomes `npm install -g @fryanpan/live-feedback-mcp` + `claude plugin install live-feedback@claude-live-feedback`. Until then, the clone-then-bootstrap path below is what works._
 
 ```sh
-git clone https://github.com/fryanpan/claude-live-feedback-plugin.git
-cd claude-live-feedback-plugin
+git clone https://github.com/fryanpan/claude-workspaces-plugin.git
+cd claude-workspaces-plugin
 bun install
 bun run bootstrap
 ```

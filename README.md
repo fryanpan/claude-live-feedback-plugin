@@ -28,8 +28,8 @@ Note that this plugin does **not** work with code yet, but could be extended to 
 The fastest path:
 
 ```sh
-git clone https://github.com/fryanpan/claude-live-feedback-plugin.git
-cd claude-live-feedback-plugin
+git clone https://github.com/fryanpan/claude-workspaces-plugin.git
+cd claude-workspaces-plugin
 claude
 ```
 
