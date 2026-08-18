@@ -14,7 +14,50 @@
  *      what the installed copy reports; `.claude-plugin/marketplace.json` is what
  *      the marketplace advertises. A mismatch means one of them is lying.
  *   2. If this change touches anything under `packages/plugin/`, the version is
- *      strictly greater than the base branch's.
+ *      strictly greater than the one the base branch currently PUBLISHES.
+ *
+ * Two refs, two different questions — do not collapse them back into one.
+ *
+ *   WHICH FILES CHANGED asks about this branch's own work, so it uses the
+ *   three-dot `${mergeBase}...HEAD`. It must NOT become `${base}..HEAD`: a
+ *   two-dot range re-presents everything the base gained since the fork as this
+ *   branch's additions, which is exactly the defect this repo already fixed in
+ *   its pre-push scanner ("A merge commit re-presents public content as an
+ *   addition" in docs/process/learnings.md).
+ *
+ *   WHAT VERSION TO BEAT asks "is this strictly ahead of what is published
+ *   today", so it reads `${base}` — the TIP. It used to read the merge base,
+ *   and that comparand is frozen at the moment the branch was cut while the
+ *   base keeps moving. The gate was therefore green precisely when the
+ *   regression was largest, and it printed its own defect in its success line:
+ *
+ *       ✓ plugin version gate — 3 file(s) under packages/plugin/,
+ *         version 0.1.47 → 0.1.53
+ *
+ *   measured 2026-08-17 on branch feat/goal-band-retriage with `--base
+ *   origin/main`, exit 0. That 0.1.47 is the frozen FORK POINT being reported
+ *   as though it were the thing being beaten; `origin/main` was at 0.1.51.
+ *
+ *   Note the trigger is not only "a number cut early goes stale while the
+ *   branch sits". Every catch-up merge of the base — which this repo's
+ *   conventions require before the final push — presents the three version
+ *   files as a CONFLICT, and both reflexive resolutions produce a number the
+ *   old gate accepted and the fleet would ignore: keep ours (lands behind the
+ *   tip) and take theirs (lands exactly ON it, so nothing is published). The
+ *   fork point cannot notice either, because it never moves. Which is why this
+ *   check must be "strictly GREATER than the base", never "different from the
+ *   base" — the latter is satisfied by a branch that is behind.
+ *
+ *   Re-running CI could not have caught any of it; the comparand does not move
+ *   on a re-run.
+ *
+ * RESIDUAL — this NARROWS the window, it does not close it. CI runs at push
+ * time, so the base can still move between the last green run and the merge.
+ * What shrank is the exposure: from "the entire life of the branch" to "between
+ * the last CI run and the merge". The structural closer is GitHub branch
+ * protection's "require branches to be up to date before merging", which forces
+ * a re-run against the new tip; until that is enabled, the merger re-checking
+ * the number at merge time is still load-bearing.
  *
  * Usage: bun run check:plugin-version [--base <ref>]
  */
@@ -111,6 +154,8 @@ if (!baseExists) {
   process.exit(0);
 }
 
+// Which files this branch changed — its own work only, so three-dot against the
+// fork point. Never `${base}..HEAD`: see the header comment.
 const mergeBase = tryGit('merge-base', base, 'HEAD') ?? base;
 const changed = git('diff', '--name-only', `${mergeBase}...HEAD`).split('\n').filter(Boolean);
 const pluginChanges = changed.filter((f) => f.startsWith(GUARDED_PREFIX));
@@ -120,33 +165,45 @@ if (pluginChanges.length === 0) {
   process.exit(0);
 }
 
-const basePluginJson = tryGit('show', `${mergeBase}:${PLUGIN_MANIFEST}`);
+// What version to beat — what the base branch PUBLISHES right now, so its tip
+// rather than the fork point. See the header comment for why this differs.
+const baseRef = `${base}:${PLUGIN_MANIFEST}`;
+const basePluginJson = tryGit('show', baseRef);
 if (basePluginJson === null) {
   console.log(`✓ plugin version gate — manifest is new on this branch; version ${pluginVersion}.`);
   process.exit(0);
 }
 
-const baseVersion = pluginVersionOf(basePluginJson, `${mergeBase}:${PLUGIN_MANIFEST}`);
+const baseVersion = pluginVersionOf(basePluginJson, baseRef);
 
-if (compare(current, parseSemver(baseVersion, `${mergeBase}:${PLUGIN_MANIFEST}`)) <= 0) {
+if (compare(current, parseSemver(baseVersion, baseRef)) <= 0) {
   const shown = pluginChanges.slice(0, 10);
   fail(
-    `This branch changes ${pluginChanges.length} file(s) under ${GUARDED_PREFIX} but leaves\n` +
-      `the version at ${baseVersion}:\n\n` +
+    `This branch changes ${pluginChanges.length} file(s) under ${GUARDED_PREFIX}, but its\n` +
+      `version ${pluginVersion} is not ahead of the ${baseVersion} that ${base} publishes today:\n\n` +
       shown.map((f) => `    ${f}`).join('\n') +
       (pluginChanges.length > shown.length
         ? `\n    …and ${pluginChanges.length - shown.length} more`
         : '') +
       '\n\n' +
-      `Peers install by version. Unbumped, "claude plugin update" copies nothing\n` +
-      'and still reports success — the change reaches nobody.\n\n' +
-      'Bump the patch version in BOTH manifests:\n' +
+      `Compared against the TIP of ${base}, not this branch's fork point. Your number\n` +
+      'may well have been correct when you cut the branch — the base has moved since,\n' +
+      'and this comparison moves with it. So the instruction is RE-BUMP, not "you\n' +
+      'forgot to bump".\n\n' +
+      `Peers install by version. Merged at ${pluginVersion}, "claude plugin update"\n` +
+      'copies nothing — it only acts when the string moves FORWARD — and still reports\n' +
+      'success, so the change reaches nobody and nothing anywhere goes red.\n\n' +
+      `Re-bump all three sites, to the same value, above ${baseVersion}:\n` +
       `    ${PLUGIN_MANIFEST}\n` +
-      `    ${MARKETPLACE_MANIFEST}`,
+      `    ${MARKETPLACE_MANIFEST}\n` +
+      '    PLUGIN_VERSION in packages/mcp/src/mcp.ts\n\n' +
+      'With several branches in flight, ask whoever owns the merges for your number\n' +
+      `rather than reading the next one off ${base}: two branches that independently\n` +
+      'pick the same number merge clean, because a conflict requires disagreement.',
   );
 }
 
 console.log(
   `✓ plugin version gate — ${pluginChanges.length} file(s) under ${GUARDED_PREFIX}, ` +
-    `version ${baseVersion} → ${pluginVersion}.`,
+    `version ${baseVersion} (${base} tip) → ${pluginVersion}.`,
 );
