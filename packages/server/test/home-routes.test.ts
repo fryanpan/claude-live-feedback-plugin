@@ -85,7 +85,7 @@ describe('home routes — deterministic server (no summarizer)', () => {
     expect(payload.brief.source).toBe('deterministic');
     expect(payload.generating).toBe(false);
     expect(payload.brief.markdown).toContain('queued for your review');
-    expect(payload.instructions).toContain('Under 200 words');
+    expect(payload.instructions).toContain('Under 150 words');
   });
 
   it('board changes since the marker show up in the brief; the queue counts open decisions', async () => {
@@ -230,15 +230,20 @@ describe('home routes — generated brief (stub summarizer)', () => {
     expect(payload.brief.markdown).toBe(REPLY);
     expect(payload.generating).toBe(false);
 
-    // The digest that left the machine named the real task and carried the
+    // The digest that left the machine named the real task AS A DEEP LINK
+    // into this workspace (the route is the layer that supplies the id — a
+    // unit test over the pure half cannot prove it was wired), carried the
     // instructions — and the burst of polls cost ONE call.
     expect(calls.length).toBe(1);
     const sent = JSON.parse(calls[0] ?? '{}') as {
       system: string;
       messages: [{ content: string }];
     };
-    expect(sent.messages[0].content).toContain('Ship the fuzzy matcher');
-    expect(sent.system).toContain('Under 200 words');
+    expect(sent.messages[0].content).toContain(
+      `[Ship the fuzzy matcher](/workspaces/${encodeURIComponent(ws)}?task=`,
+    );
+    expect(sent.system).toContain('Under 150 words');
+    expect(sent.system).toContain('never fabricate a URL');
   });
 
   it('a fresh generated brief is served from the cache without a second call', async () => {

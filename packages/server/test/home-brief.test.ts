@@ -22,6 +22,7 @@ import {
   homeSidecarPath,
   readEventRows,
   readerKey,
+  taskDeepLink,
 } from '../src/home-brief.ts';
 
 const NOW = 1_770_000_000_000;
@@ -32,6 +33,7 @@ const titles = new Map<string, string>([
   ['t-3', 'Draft the launch notes'],
 ]);
 const input = (events: BriefEventRow[], total = 0) => ({
+  workspaceId: 'ws-1',
   events,
   queue: { total },
   titleOf: (id: string) => titles.get(id),
@@ -105,10 +107,18 @@ describe('deterministicBrief', () => {
         2,
       ),
     );
-    expect(md).toContain('**Finished:** Ship the fuzzy matcher (1 task).');
-    expect(md).toContain('**Started:** Rewrite the retry helper.');
-    expect(md).toContain('**Filed:** 1 new task — Draft the launch notes.');
-    expect(md).toContain('**Decided:** 1 decision was answered — Rewrite the retry helper.');
+    // Every title is a deep link to its task — the brief renders as markdown
+    // on the same page the links point at, so the evidence is one tap away.
+    expect(md).toContain(
+      '**Finished:** [Ship the fuzzy matcher](/workspaces/ws-1?task=t-1) (1 task).',
+    );
+    expect(md).toContain('**Started:** [Rewrite the retry helper](/workspaces/ws-1?task=t-2).');
+    expect(md).toContain(
+      '**Filed:** 1 new task — [Draft the launch notes](/workspaces/ws-1?task=t-3).',
+    );
+    expect(md).toContain(
+      '**Decided:** 1 decision was answered — [Rewrite the retry helper](/workspaces/ws-1?task=t-2).',
+    );
     expect(md).toContain('**Goals:** edited once.');
     expect(md).toContain('**2** items are queued for your review below.');
   });
@@ -118,6 +128,7 @@ describe('deterministicBrief', () => {
       ev('task.transitioned', NOW + i, { taskId: `t-x${i}`, to: 'done' }),
     );
     const md = deterministicBrief({
+      workspaceId: 'ws-1',
       events: many,
       queue: { total: 0 },
       titleOf: (id) => `Task ${id}`,
@@ -152,8 +163,54 @@ describe('buildBriefPrompt', () => {
     expect(system).toContain('My standing instructions');
     expect(system).toContain('never invent');
     expect(user).toContain('Covering: since Friday.');
-    expect(user).toContain('task.transitioned todo→done · Ship the fuzzy matcher · by Beacon');
+    expect(user).toContain(
+      'task.transitioned todo→done · [Ship the fuzzy matcher](/workspaces/ws-1?task=t-1) · by Beacon',
+    );
     expect(user).toContain('4 item(s) are queued');
+  });
+
+  it('a task row carries its deep link; a row with no task carries no link at all', () => {
+    // Why: the first brief in the field had no links, and the digest was the
+    // reason — it carried titles only, and the prompt forbade inventing links,
+    // so a compliant model had nothing linkable to work from. The presence
+    // and the absence sit in ONE prompt so the absence is not vacuous.
+    const { user } = buildBriefPrompt(
+      input([
+        ev('task.created', NOW + 1, { taskId: 't-2', actor: 'Beacon' }),
+        ev('workspace.goal_updated', NOW + 2, { actor: 'Beacon' }),
+      ]),
+      'x',
+      'y',
+    );
+    const rows = user.split('\n').filter((l) => l.startsWith('- '));
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toContain('[Rewrite the retry helper](/workspaces/ws-1?task=t-2)');
+    expect(rows[0]).toContain(taskDeepLink('ws-1', 't-2'));
+    expect(rows[1]).toContain('workspace.goal_updated');
+    expect(rows[1]).not.toContain('](');
+  });
+
+  it('the guardrail permits copying digest links and forbids inventing them', () => {
+    const { system } = buildBriefPrompt(input([]), 'x', 'y');
+    expect(system).toContain('copied exactly');
+    expect(system).toContain('never fabricate a URL');
+    // The old flat prohibition — "never invent names, numbers, links" — is
+    // what made links impossible; it must not come back.
+    expect(system).not.toMatch(/never invent[^.]*\blinks\b/);
+    // The word budget belongs to the instructions, so the system prompt must
+    // not carry a competing hard number.
+    expect(system).not.toContain('under 200 words');
+  });
+
+  it('the default instructions ask for evidence links and own the word budget', () => {
+    expect(DEFAULT_INSTRUCTIONS).toContain('Show the evidence');
+    expect(DEFAULT_INSTRUCTIONS).toContain('Under 150 words');
+    expect(DEFAULT_INSTRUCTIONS).toContain('Include inline links');
+  });
+
+  it('taskDeepLink is the same relative shape the board opens on load, ids URL-encoded', () => {
+    expect(taskDeepLink('ws-1', 't-1')).toBe('/workspaces/ws-1?task=t-1');
+    expect(taskDeepLink('ws 1', 't/1&x')).toBe('/workspaces/ws%201?task=t%2F1%26x');
   });
 
   it('bounds the digest to the newest rows and says so', () => {
