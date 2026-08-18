@@ -2470,15 +2470,19 @@ describe('the row badges are capped against the viewport, not against themselves
 /**
  * happy-dom does no layout, so nothing else in this suite can see a fixed
  * launcher painting over a button. What it CAN see is the invariant: the
- * media block that takes the walkthrough full-screen must also reserve
- * bottom clearance in the card, or its last control ("Tell me more" on a
- * decision card) ends up under the bottom-docked mic/pencil launchers. The
- * old form of this test keyed the clearance to a sticky .hub-walk-nav; the
- * ‹ › stepper moved to the panel head (approved design), so the sticky bar
- * is gone and full-screen is now what forces the clearance.
+ * phone media block that restyles the walkthrough must also reserve bottom
+ * clearance in the card, or its last control ("Tell me more" on a decision
+ * card) ends up under the bottom-docked mic/pencil launchers.
+ *
+ * The anchor for "the phone block" has moved twice, each time because the
+ * surface changed shape: first a sticky .hub-walk-nav, then a panel taken to
+ * max-height: 100vh. It is now the stacked reply form, because the
+ * walkthrough is a PAGE in the Home column (approved mockup) and no longer
+ * goes full-screen at all — which is also why this file asserts, below, that
+ * nothing puts it back on `position: fixed`.
  */
-describe('the full-screen walkthrough reserves launcher clearance', () => {
-  it('gives the card bottom clearance wherever the panel goes full-screen', async () => {
+describe('the walkthrough page reserves launcher clearance on a phone', () => {
+  it('gives the card bottom clearance wherever the phone block restyles it', async () => {
     const { readFileSync } = await import('node:fs');
     const { resolve } = await import('node:path');
     const css = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
@@ -2498,17 +2502,19 @@ describe('the full-screen walkthrough reserves launcher clearance', () => {
       }
       blocks.push(css.slice(start, i - 1));
     }
-    const fullScreen = blocks.filter((b) =>
-      /\.hub-walk-panel\s*\{[^}]*max-height:\s*100vh/.test(b),
-    );
+    const phone = blocks.filter((b) => /\.hub-walk-answer[^{]*\{/.test(b));
     // Positive control: the block this asserts about exists and was matched.
-    expect(fullScreen.length).toBeGreaterThan(0);
-    for (const b of fullScreen) {
+    expect(phone.length).toBeGreaterThan(0);
+    for (const b of phone) {
       expect(b).toMatch(/\.hub-walk-card\s*\{[^}]*padding-bottom:\s*calc\([\d.]+px/);
     }
-    // The stepper lives in the panel head now — nothing may make it sticky
-    // again without restoring the reserve that travelled with the old bar.
+    // The stepper lives in the head now — nothing may make it sticky again
+    // without restoring the reserve that travelled with the old bar.
     expect(css).not.toMatch(/\.hub-walk-nav\s*\{[^}]*position:\s*sticky/);
+    // And the page must stay a page: a fixed overlay over the board is the
+    // layout that got rejected, and it takes the Back-to-Home link's meaning
+    // with it.
+    expect(css).not.toMatch(/\.hub-walk(through|-panel)[^{]*\{[^}]*position:\s*fixed/);
   });
 });
 
@@ -2887,11 +2893,19 @@ describe('renderUnplacedStrip', () => {
     // Same reason the coverage line is quieter than the drift alarm: if the
     // standing reading looks like the alarm, people learn to skim the alarm.
     const css = readFileSync(resolve(import.meta.dirname, '../src/styles.css'), 'utf8');
-    const strip = css.slice(css.indexOf('.hub-unplaced {'));
-    const block = strip.slice(0, strip.indexOf('.hub-walkthrough {'));
-    expect(block).toContain('--fg-muted');
-    expect(block).not.toContain('--yellow');
+    // Collect the strip's OWN rules rather than slicing to whatever selector
+    // happens to follow it. The slice form read to `.hub-walkthrough {`, and
+    // when that rule went away (the walkthrough stopped being a fixed overlay)
+    // `indexOf` returned -1 and the "block" became the rest of the file — a
+    // test that then fails on somebody else's colour.
+    const rules = [...css.matchAll(/\.hub-unplaced[\w-]*(?:\.[\w-]+)?\s*\{([^}]*)\}/g)].map(
+      (m) => m[1] ?? '',
+    );
+    // Positive control: the rules this asserts about really were found.
+    expect(rules.length).toBeGreaterThan(1);
+    expect(rules.some((r) => r.includes('--fg-muted'))).toBe(true);
+    for (const r of rules) expect(r).not.toContain('--yellow');
     // The tap target still has to be reachable on a phone.
-    expect(block).toMatch(/min-height:\s*36px/);
+    expect(rules.some((r) => /min-height:\s*36px/.test(r))).toBe(true);
   });
 });
