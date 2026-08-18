@@ -1,3 +1,5 @@
+import type { ReviewPayload } from './review-item.ts';
+
 /** Kinds of surfaces the feedback core can power.
  *  - markdown: WYSIWYG prose editing (Tiptap), bidirectional file sync.
  *  - mockup/dev: HTML / running surfaces reviewed via the injectable widget.
@@ -272,6 +274,18 @@ export interface Comment {
   author: User;
   text: string;
   ts: number;
+  /**
+   * Present when this comment DECLARES that it needs a person — the Review
+   * Item. Absent on an ordinary comment, which is the overwhelming majority
+   * and which no longer enters the review queue at all.
+   *
+   * It rides on the comment rather than in a store of its own because that is
+   * literally what was asked for ("they can be attached as a comment item on a
+   * task or a comment item in a doc"), and because threads already sync,
+   * anchor, resolve, watch and render — a parallel entity would need a second
+   * code path for each. See `review-item.ts`.
+   */
+  review?: ReviewPayload;
 }
 
 export type ThreadStatus = 'open' | 'resolved';
