@@ -23,8 +23,14 @@ short window, while the page still lays out at a true 430×932.
 | Task detail, decision variant | `#/task/unread-marker` | `07-task-decision-desktop.jpg` |
 | Board pane with review removed | `#/board` | `08-board-stub-desktop.jpg` |
 
-Five review items, so the walkthrough is judgeable: two decisions with preset
-options, two open-ended replies, one 15–30 minute read.
+Five review items, so the walkthrough is judgeable: three decisions with preset
+options, one open-ended reply, one 15–30 minute read. It was 2/2/1 until a
+writing pass pointed out that the pane-naming item was a binary choice with both
+arms already costed in its prose — an AskUserQuestion payload typed as an essay,
+and on a phone that makes the cheapest item the most expensive to answer. It is
+options now. The one that stayed open-ended stayed because it genuinely is: 11
+of the 14 replies are uncontroversial and the ask is what to do with the other 3,
+which is not a two-way pick.
 
 ## The choices, and why
 
@@ -33,14 +39,14 @@ prose and a queue, both of which are unreadable at 1280. The board keeps its
 own width.
 
 **The summary clips at half a screen instead of scrolling inside its card.**
-154 words fits desktop whole; at 430×932 it runs 571px against a 410px ceiling,
+147 words fits desktop whole; at 430×932 it runs 536px against a 410px ceiling,
 so on the phone the clip is the normal case rather than the edge case. An inner
 scrollbar hides its own overflow and would let a 400-word summary sit there
 looking like 200. It clips with a fade and a "Read the rest", and the ceiling
 exists so the review queue stays above the fold — the queue is what he came
 for.
 
-**The word count is on the card.** `154 words` next to "Mark read". It is the
+**The word count is on the card.** `147 words` next to "Mark read". It is the
 one number that tells you whether the generator is behaving, and if it is not
 visible nobody will ever notice it drifting to 400.
 
@@ -118,11 +124,13 @@ Chrome, against `http://127.0.0.1:8912`.
 - The open-ended ask **plus its reply box fits one 430×932 screen** with no
   scrolling (`03-walkthrough-reply-430.png`). That is the design's main claim
   and it is the thing worth disputing if the real asks run longer.
-- **Every interactive element is ≥36px tall**, measured by walking
-  `button, select, summary, textarea` and the inline prose links at 430px. The
-  inline links needed `padding: 9px 0` to get there — a bare `#204` in prose is
-  a 39×20 target otherwise, and "brief as possible inline links" is exactly what
-  produces short ones.
+- **Every interactive element is ≥36px tall**, measured by walking every visible
+  `button, select, summary, textarea, a` at 430px and listing anything under 36.
+  The list is empty on Home, in the walkthrough and on a task page. Inline prose
+  links needed vertical padding to get there — a short link in prose is a 39×20
+  target otherwise, and "brief as possible inline links" is exactly what produces
+  short ones. The footer link needed 10px rather than 9 because it sets a smaller
+  font; that came out of re-running the walk, not out of reading the CSS.
 - Flows exercised end to end: mark read → undo; re-sort the queue by longest
   waiting (order changes); walk all five items answering each; "Not now" on the
   read item; end-of-queue copy and the Home count agree (1 left, 1 row).
@@ -130,6 +138,33 @@ Chrome, against `http://127.0.0.1:8912`.
   mid-card because it kept the previous card's scroll position, and it stayed
   on screen over the task page after "Open full task" because it is
   `position: fixed` and nothing closed it on a route change.
+
+## What a second reader found, and what changed
+
+The draft went to a reviewer briefed to read it as you — landing cold, on a
+phone, wanting to answer and leave. Three of its findings were data errors I
+could confirm in the file, and they mattered more than any of the prose:
+
+- The summary said **4 items need you** while the tab badge, the queue header and
+  the board banner all said 5. One scroll apart on a phone.
+- **Every link in the "shipped overnight" paragraph pointed at an unrelated open
+  task**, as did three links inside the asks. A link that lands somewhere other
+  than what it names costs more trust than a missing link. Shipped items are
+  plain text now, and the five remaining links each point at the item they name.
+- **Three surfaces disagreed about what the unread-marker decision blocks** — the
+  summary said the presence strip, the ask said the summary card and review-flow
+  ordering, and the row said "blocks 2". It is the summary card and the presence
+  strip, said the same way in all three places.
+
+On the prose: the read item's ask led with "this one needs a real sitting, not a
+tap" and buried the actual request (answer Atlas's four inline questions) in the
+third bullet — which is what the queue row was quoting, so the highest-value item
+had the least informative row. The flag decision's options were "Ship it" /
+"Flag it", which do not contrast on the axis being chosen: flagging *is*
+shipping, to this board. They are "All boards" / "This board only". Every ask now
+also says what happens if you do nothing, and the two decisions where we have a
+view say so ("we lean per account", "we lean all boards") instead of laying out
+three costed options and going quiet.
 
 ## What I could not verify
 
@@ -177,7 +212,9 @@ the doc" / "Not now" — rather than trying to render 1,900 words in the flow.
 4. **Is "Mark read" per device or per account?** It is item 1 in the mockup
    because I had to pick one to draw and the honest answer is that it is a real
    decision. Reading on the phone and then the desktop is the case that
-   decides it.
+   decides it. The mockup's ask leans per-account, which is also a claim about
+   how these asks should be written — if you would rather they stayed neutral
+   and just laid out the options, say so and I will take the leans out.
 5. **How much of the walkthrough should the "read" item interrupt?** Right now a
    15–30 minute doc sits in the same queue as a 30-second decision, at rank 3.
    It could instead be lifted out into a separate "when you have twenty minutes"

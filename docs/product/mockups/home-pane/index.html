@@ -274,8 +274,11 @@
          matters on a phone. */
       .sum-body a,
       .ask-body a,
-      .cmt-body a {
-        padding: 9px 0;
+      .cmt-body a,
+      .quiet-note a {
+        /* 10px, not 8: the quiet note sets a smaller font, so the same padding
+           lands it at 34.5px. Measured, not assumed. */
+        padding: 10px 0;
       }
       .sum-foot {
         display: flex;
@@ -1138,27 +1141,24 @@
         // a claim about the budget that stops being true the moment anyone edits
         // the summary — and this one was already wrong by 14 words.
         html: `
-<p><strong>Two decisions are holding up the Home pane; everything else is moving.</strong>
-Since Saturday night the board closed 7 tasks, opened 3, and 4 items now need you.</p>
+<p><strong>One decision is blocking the Home pane: where the unread marker lives.</strong>
+Nobody can build the summary card until you pick, and the presence strip is a day late behind it.
+<a href="#/task/unread-marker">The three options are costed here.</a></p>
 
-<p><strong>Decide first.</strong> <a href="#/task/unread-marker">Where the unread marker lives</a>
-blocks two tasks and nobody can build the summary card until you pick.
-<a href="#/task/walkthrough-flag">Ship the walkthrough behind a flag?</a> is a two-minute call.</p>
+<p><strong>Three more, two minutes each at most.</strong> Threading is being dropped and
+<a href="#/task/threading">14 existing replies need somewhere to go</a>.
+<a href="#/task/walkthrough-flag">The walkthrough</a> ships to all three boards or to this one only.
+And <a href="#/task/naming">the pane keeps the name "Home"</a> unless you say otherwise.</p>
 
-<p><strong>Then reply.</strong> <a href="#/task/threading">Dropping threaded comments</a> is agreed,
-but 14 existing replies have nowhere to go and Beacon needs a word from you.</p>
+<p><strong>One longer read, about twenty minutes.</strong> The
+<a href="#/task/rollout-plan">Home pane rollout plan</a> is the last gate before build starts;
+Atlas left four questions inline.</p>
 
-<p><strong>One longer read.</strong> The
-<a href="#/task/rollout-plan">Home pane rollout plan</a> is ready — about 20 minutes,
-and it is the last gate before build starts.</p>
+<p><strong>Shipped overnight, nothing needed.</strong> The comment pill now survives a cancelled
+touch on mobile; task titles were rewritten to say what the task is; the summary word-cap retry
+can no longer blank a line.</p>
 
-<p><strong>Shipped overnight, nothing needed.</strong> The comment pill now survives a
-cancelled touch on mobile (<a href="#/task/threading">#204</a>); task titles were rewritten
-to say what the task is (<a href="#/task/rollout-plan">#201</a>); the summary word-cap retry
-can no longer blank a line (<a href="#/task/threading">#199</a>).</p>
-
-<p><strong>Slipped.</strong> The presence strip is a day late, waiting on the unread-marker
-decision above.</p>`,
+<p><strong>Slipped.</strong> The presence strip, behind the decision above. Nothing else moved.</p>`,
       };
 
       // Each item carries the SAME ask text the walkthrough shows and the detail
@@ -1174,13 +1174,16 @@ decision above.</p>`,
           priority: 'P1 · Home pane',
           effort: '~1 min',
           ask: `
-<p><strong>Pick where "I have read this summary" is stored.</strong> Nothing stores it today,
-so the summary cannot say what changed <em>since last time</em> — it just shows the last 24 hours.</p>
+<p><strong>Pick where "I have read this summary" is stored.</strong> Nothing stores it today, so the
+summary can only cover the last 24 hours instead of what changed since you last looked.</p>
 <ul>
-  <li>You read on the phone and on the desktop, often the same evening. That is the case that decides it.</li>
-  <li>Per-account needs a user record the board does not have yet (<a href="#/task/rollout-plan">schema note</a>).</li>
-  <li>Blocks <a href="#/task/rollout-plan">Home summary card</a> and <a href="#/task/walkthrough-flag">review-flow ordering</a>.</li>
-</ul>`,
+  <li>You read on the phone and on the desktop, often the same evening. Per-device means seeing the
+  same night twice, every time.</li>
+  <li>Blocks the summary card, and the presence strip is a day late behind it.</li>
+</ul>
+<p>We lean <strong>per account</strong>: it is the only one that survives two devices, and a day of
+migration is cheap against getting it wrong permanently. Say <em>per device</em> if the day matters
+more — nothing moves until you answer.</p>`,
           options: [
             {
               title: 'Per device',
@@ -1252,19 +1255,19 @@ settled and waiting.</p>`,
           priority: 'P1 · Home pane',
           effort: '~2 min',
           ask: `
-<p><strong>One word from you: flatten or archive.</strong> Dropping threaded comments is agreed.
-What is not agreed is what happens to the replies that already exist — 14 of them, across 6 threads
-on 4 tasks, the oldest from Aug 11.</p>
+<p><strong>Tell us what to do with 14 replies that lose their parent.</strong> Dropping threaded
+comments is agreed. The replies already in the store are not covered by that — 14 of them, across
+6 threads on 4 tasks, the oldest from Aug 11.</p>
 <ul>
-  <li><strong>Flatten</strong> — every reply becomes a top-level comment in time order, prefixed
-  <em>re: &lt;the comment it answered&gt;</em>. Nothing is lost; the shape is.</li>
-  <li><strong>Archive</strong> — replies move into a collapsed "Earlier discussion" block at the top
-  of each thread. Shape is kept, and it is one more thing to open.</li>
+  <li>11 of the 14 answer the comment directly above them. Flattened into time order they read
+  exactly as they do now, so they are not the hard part.</li>
+  <li>The other 3 answer something further up, and all 3 sit on one task. Flattened they read as
+  non-sequiturs; collapsed into an "Earlier discussion" block they are behind one more tap for
+  everyone, forever.</li>
 </ul>
-<p>We lean <strong>flatten</strong>: 11 of the 14 replies answer the comment directly above them, so
-the prefix is redundant and the loss is small. The three that don't are all on
-<a href="#/task/rollout-plan">the mobile layout task</a>.</p>
-<p>Reply with either word and it lands today. If neither is right, say what you want instead.</p>`,
+<p>We will flatten the 11 either way. The 3 are what we do not want to pick for you — a
+<em>re: &lt;quoted line&gt;</em> prefix, a collapsed block, or dropping them. Reply with what you
+want and it lands today; say nothing and nothing moves.</p>`,
           options: null,
           body: `
 <h2>Bryan can read a task's discussion top to bottom so that no reply is hidden one level down.</h2>
@@ -1305,7 +1308,8 @@ migration is the open part.</p>
               kind: 'agent',
               when: 'Aug 16, 5:02 PM',
               asking: true,
-              html: `<p>Flatten or archive? Either is a day's work; I would rather not pick this one for you.</p>`,
+              html: `<p>The 11 straightforward ones I will flatten either way. It is the 3 on the mobile
+              layout task I would rather not pick for you.</p>`,
             },
           ],
         },
@@ -1319,15 +1323,15 @@ migration is the open part.</p>
           priority: 'P1 · Home pane',
           effort: '15–30 min',
           ask: `
-<p><strong>This one needs a real sitting, not a tap.</strong> The rollout plan is the last gate before
-build starts, and three tasks are waiting behind it.</p>
+<p><strong>Read the rollout plan and answer Atlas's four inline questions.</strong> It is the last
+gate before build starts, with three tasks waiting behind it. Seven sections, about 1,900 words,
+two diagrams — twenty minutes.</p>
 <ul>
-  <li>7 sections, about 1,900 words, two mermaid diagrams.</li>
-  <li>The parts most likely to be wrong: the migration order and who owns the summary prompt.</li>
-  <li>Atlas has left 4 inline questions in the doc, marked with a comment pill.</li>
+  <li>The parts most likely to be wrong: the migration order, and who owns the summary prompt.</li>
+  <li>The four questions are marked with a comment pill. Answering them in the doc <em>is</em> the
+  approval — there is no separate approve step.</li>
 </ul>
-<p>Open it when you have twenty minutes. Skipping it here does not lose it — it stays at the top of
-this queue until it is read.</p>`,
+<p>Skipping it here does not lose it. It stays at the top of this queue until it is read.</p>`,
           doc: true,
           docTitle: 'plans/home-pane-rollout.md',
           options: null,
@@ -1349,29 +1353,31 @@ the comment migration, the mobile pass, and the flag order.</p>`,
         {
           id: 'walkthrough-flag',
           kind: 'decision',
-          title: 'Ship the review walkthrough behind a flag?',
+          title: 'How wide the review walkthrough ships',
           asker: 'Quill',
           waited: 'asked 5h ago',
           blocks: 0,
           priority: 'P2 · Home pane',
           effort: '~1 min',
           ask: `
-<p><strong>Flag it or ship it.</strong> The walkthrough is built and tested at 430px and on desktop.
-The only question is whether it goes out to the other two boards at the same time.</p>
+<p><strong>Does the walkthrough go to the other two boards now, or to this board only?</strong>
+It is built and tested at 430px and on desktop, and nothing is blocked either way.</p>
 <ul>
   <li>The other two boards have 3 and 0 open review items, so neither would see much of it.</li>
-  <li>A flag costs an hour now and a cleanup later.</li>
-</ul>`,
+  <li>A flag is an hour now, plus a cleanup nobody schedules.</li>
+</ul>
+<p>We lean <strong>all boards</strong> — with three items between them the exposure is small, and
+you would hear about it tonight. Say nothing and it waits.</p>`,
           options: [
             {
-              title: 'Ship it',
-              detail: `<p>All three boards get it on the next deploy. If it is wrong you will find out
-              tonight, which is the fastest way to find out.</p>`,
+              title: 'All boards',
+              detail: `<p>Live everywhere on the next deploy. If it is wrong you find out tonight,
+              which is the fastest way to find out.</p>`,
             },
             {
-              title: 'Flag it',
-              detail: `<p>On for this board only, off elsewhere until you say. One hour to build, and a
-              flag nobody removes tends to stay.</p>`,
+              title: 'This board only',
+              detail: `<p>On here, off elsewhere until you say. One hour to build the flag, and a flag
+              nobody removes tends to stay.</p>`,
             },
           ],
           body: `
@@ -1389,7 +1395,7 @@ The only question is whether it goes out to the other two boards at the same tim
         },
         {
           id: 'naming',
-          kind: 'reply',
+          kind: 'decision',
           title: 'Name for the new pane: "Home" or something else',
           asker: 'Quill',
           waited: 'asked 2d ago',
@@ -1397,14 +1403,21 @@ The only question is whether it goes out to the other two boards at the same tim
           priority: 'P3 · Chores',
           effort: '~1 min',
           ask: `
-<p><strong>Confirm the pane is called Home.</strong> It is in the task body as "Home", and it is in
-the nav, the URL and three doc titles now.</p>
-<ul>
-  <li>"Home" is what you wrote, and it is what the tab says today.</li>
-  <li>"Today" reads better for a catch-up surface but is wrong once you open it twice in a day.</li>
-</ul>
-<p>Say "keep Home" and this closes. It is the lowest thing in your queue on purpose.</p>`,
-          options: null,
+<p><strong>Confirm the pane stays called "Home".</strong> It is in the nav, the URL and three doc
+titles now, so renaming stops being free after this week.</p>
+<p>"Today" reads better for a catch-up surface, and it is wrong the second time you open it in a
+day. That is the whole argument. Say nothing and it stays "Home".</p>`,
+          options: [
+            {
+              title: 'Keep Home',
+              detail: `<p>Nothing changes and this closes now.</p>`,
+            },
+            {
+              title: 'Rename to Today',
+              detail: `<p>One redirect, three doc titles and the nav string. Half an hour, and old
+              links keep working.</p>`,
+            },
+          ],
           body: `
 <h2>Bryan can find the catch-up pane by name so that the nav does not need explaining.</h2>
 <p>Cosmetic. Renaming later costs a redirect and three doc titles.</p>`,
