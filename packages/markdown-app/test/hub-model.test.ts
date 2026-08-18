@@ -920,12 +920,7 @@ describe('reviewQueue — human-owned work that agent work is waiting on', () =>
     // h-tunnel, h-key and a-1 all outrank d-1 on the board, so they come
     // first; the decision is last because its ROW is last, not because a
     // decision ranks low.
-    expect(q.items.map((i) => i.kind)).toEqual([
-      'blocker',
-      'blocker',
-      'task-thread',
-      'decision',
-    ]);
+    expect(q.items.map((i) => i.kind)).toEqual(['blocker', 'blocker', 'task-thread', 'decision']);
   });
 
   // Enforced-first / most-blocked-first was the decision band's own primary
@@ -944,10 +939,7 @@ describe('reviewQueue — human-owned work that agent work is waiting on', () =>
     expect(band[0]?.why).toContain('Blocking 2 tasks');
     // `decisionQueue`'s own ordering is untouched — the board's strip still
     // ranks the enforced edge first. Only the review queue re-ranks.
-    expect(humanBlockerRows(boardWithEdges()).map((r) => r.task.id)).toEqual([
-      'h-key',
-      'h-tunnel',
-    ]);
+    expect(humanBlockerRows(boardWithEdges()).map((r) => r.task.id)).toEqual(['h-key', 'h-tunnel']);
   });
 
   // Ownership in this band used to be the literal `human`, which left a task
@@ -1022,12 +1014,6 @@ describe('reviewQueue — task priority is the primary key', () => {
   // half most likely to be changed in one place.
   it('goalRank agrees with the board’s section order, Chores and strays last', () => {
     const rank = goalRank(GOALS);
-    const filters: BoardFilters = {
-      mine: false,
-      me: '',
-      doneWindow: DEFAULT_DONE_WINDOW,
-      now: NOW,
-    };
     const sectionIds = boardSections(GOALS, [], filters).map((s) => s.id);
     expect(sectionIds.map(rank)).toEqual(sectionIds.map((_, i) => i));
     // A goal id no section carries renders under Chores on the board, so it
@@ -1054,10 +1040,7 @@ describe('reviewQueue — task priority is the primary key', () => {
     // no band to rank by and `order` alone decides — and the pair comes back
     // the other way round. That is what makes the assertion above about the
     // GOAL ranking rather than about anything else in the fixture.
-    expect(ids(reviewQueue(board, [], T0, []))).toEqual([
-      'decision:d-late',
-      'blocker:h-early',
-    ]);
+    expect(ids(reviewQueue(board, [], T0, []))).toEqual(['decision:d-late', 'blocker:h-early']);
   });
 
   it('inside one band, the board’s own order decides', () => {
@@ -1169,10 +1152,7 @@ describe('reviewQueue — task priority is the primary key', () => {
       T0,
       GOALS,
     );
-    expect(ids(q)).toEqual([
-      'task-thread:task:k-1:th-known',
-      'task-thread:task:t-gone:th-orphan',
-    ]);
+    expect(ids(q)).toEqual(['task-thread:task:k-1:th-known', 'task-thread:task:t-gone:th-orphan']);
   });
 
   // The goal list is optional so no caller can get a partial order out of
