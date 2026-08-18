@@ -99,7 +99,7 @@ describe('landing + delete_workspace e2e (HTTP)', () => {
     await j(sr);
   });
 
-  it('GET / renders one row per project and NOT its artifacts', async () => {
+  it('GET / renders a project LINK for the review docs and NOT their artifacts', async () => {
     const r = await fetch(`${base}/`);
     expect(r.ok).toBe(true);
     const html = await r.text();
@@ -108,22 +108,19 @@ describe('landing + delete_workspace e2e (HTTP)', () => {
     // MUST ship the responsive viewport meta or it renders at ~980px and
     // scales down to unreadable on a phone.
     expect(html).toContain('name="viewport"');
-    // Project row derives from the owner cwd basename and links to the
-    // project's own page.
+    // The review docs surface as one per-project link behind the fold,
+    // deriving from the owner cwd basename and linking to the project's own
+    // on-demand page.
+    expect(html).toContain('Review docs by project');
     expect(html).toContain('alpha');
     expect(html).toContain(`/projects/${encodeURIComponent('/proj/alpha')}`);
-    // The needs-you band always states its denominator, including at zero —
-    // an empty list with no denominator reads as a clearance.
-    expect(html).toContain('0 of 0');
-    // Two artifacts (the folder counts as ONE + the standalone), one project.
-    expect(html).toContain('2 artifacts');
 
-    // …and NONE of the per-artifact detail. This is the whole point of the
-    // redesign: the member file list and the per-doc review links are what
-    // made this response 910 KB on the live server. The assertions below are
+    // …and NONE of the per-artifact detail. This is the whole point: the
+    // member file list and the per-doc review links are what made this
+    // response 910 KB on the live server, and Bryan's re-scope of `/` is "a
+    // list of active workspaces to open up". The assertions below are
     // absences, so the presences above are their positive control — this
     // response is a rendered page, not an error or an empty body.
-    expect(html).not.toContain('<details');
     expect(html).not.toContain('README.md');
     expect(html).not.toContain('src/index.ts');
     expect(html).not.toContain('review/standalone-doc');
