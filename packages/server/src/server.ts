@@ -861,6 +861,36 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   };
 
   /**
+   * The board a doc's "back" affordance should return to, or null.
+   *
+   * Deliberately NOT `taskStore.workspaceOfDoc`, and the difference is the
+   * whole reason this exists. That resolver answers a SHARE-SCOPE question and
+   * is documented as non-transitive: a diff review / folder browse is filed on
+   * a board as ONE row under its GROUPING id, so every member doc of every
+   * review answers null there. Reusing it would fix back for plain docs and
+   * leave it broken for exactly the surface Bryan reads most.
+   *
+   * Widening `workspaceOfDoc` itself would have widened share scoping with it,
+   * which is a security decision and not this one — so the fallback lives here
+   * and reaches only this field.
+   *
+   * A doc genuinely on two boards has two answers; the first is taken rather
+   * than none, because "back to one of this doc's boards" beats "back to the
+   * index of everything on the machine", which is what the arrow does today.
+   */
+  const backTargetFor = (
+    docId: string,
+    groupingId?: string,
+  ): { id: string; name: string } | null => {
+    const pick = (id: string | undefined): { id: string; name: string } | null => {
+      if (!id) return null;
+      const ws = taskStore.getWorkspace(id);
+      return ws ? { id: ws.id, name: ws.name } : null;
+    };
+    return pick(hubWorkspacesHolding(docId)[0]) ?? pick(hubWorkspacesHolding(groupingId ?? '')[0]);
+  };
+
+  /**
    * Put an attachment — a doc room id OR a grouping id — on a hub workspace and
    * answer which one. Idempotent: something already attached keeps the board it
    * has (moving it is `attach_doc`'s job, not a side effect of re-binding, and
@@ -3302,10 +3332,19 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // OWNER ONLY: a workspace id is an unguessable URL capability, and
             // a doc-scoped visitor must not learn it from a member doc.
             const hubWs = visitor ? null : taskStore.workspaceOfDoc(docId);
+            // Where the review app's `←` should go: the board that links this
+            // doc, rather than the machine-wide landing page. OWNER ONLY for
+            // the same reason `hubWorkspaceId` is — a board id is an
+            // unguessable URL capability, and a share visitor must not learn
+            // one from a member doc. Resolved through the grouping when the
+            // doc is a member of a review, which is where `hubWorkspaceId`
+            // deliberately stops.
+            const backTo = visitor ? null : backTargetFor(docId, room.meta.workspaceId);
             return j(200, {
               meta: metaFor(room.meta),
               ...(taskRefs.length > 0 ? { tasks: taskRefs } : {}),
               ...(hubWs ? { hubWorkspaceId: hubWs } : {}),
+              ...(backTo ? { backTo: { workspaceId: backTo.id, name: backTo.name } } : {}),
             });
           }
           if (rest === '' && req.method === 'DELETE') {
