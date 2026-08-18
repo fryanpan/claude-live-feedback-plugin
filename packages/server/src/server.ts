@@ -30,10 +30,10 @@ import {
   readerKey,
 } from './home-brief.ts';
 import {
-  type LandingGroupRow,
-  type LandingInputDoc,
   type LandingModel,
-  type NeedsYouRow,
+  type LandingProjectLink,
+  type LandingWorkspaceInput,
+  type LandingWorkspaceRow,
   buildLandingModel,
 } from './landing.ts';
 import {
@@ -4110,7 +4110,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
 
         // --- Landing ---
         if (pathname === '/') {
-          const model = buildLandingModel(collectLandingDocs(rooms, taskStore), Date.now());
+          const model = buildLandingModel(
+            collectLandingWorkspaces(rooms, taskStore),
+            collectLandingProjects(rooms),
+            Date.now(),
+          );
           return new Response(renderLanding(model), {
             headers: { 'content-type': 'text/html; charset=utf-8' },
           });
@@ -4467,12 +4471,14 @@ created by an agent calling <code>POST /api/docs</code> with a
 <p><small><a href="/">all docs</a></small></p>`;
 }
 
-// --- Landing page: project → artifacts model ---
+// --- Landing page: active workspaces; per-project artifact pages on demand ---
 //
-// The landing page answers "what does this project have under review, and what
-// needs my attention?". It groups by PROJECT (the creating agent's cwd =
-// doc.owner; 'ungrouped' when absent), and within a project lists ARTIFACTS.
-// An artifact is one of:
+// `/` is a list of active workspaces to open up — see the header of
+// `landing.ts` for what that sentence is quoting and what it deliberately
+// leaves out. The project → artifacts model below serves `/projects/<owner>`,
+// the on-demand index of review docs. It groups by PROJECT (the creating
+// agent's cwd = doc.owner; 'ungrouped' when absent), and within a project
+// lists ARTIFACTS. An artifact is one of:
 //   - a workspace (bound folder/worktree; docs sharing a workspaceId) →
 //     one expandable row with a rolled-up open-count badge and a nested file
 //     list, each file linking to its reviewUrl
@@ -4525,100 +4531,41 @@ function flattenWorkspaceFiles(node: WorkspaceDirNode | WorkspaceFileNode): Land
 }
 
 /**
- * Build the project → artifacts model from the live rooms. Pure data shaping —
- * all HTML lives in `renderLanding`. Exported-shape via the route only.
- */
-/**
- * Is the thing this doc reviews still on disk?
+ * The `/` model's inputs, computed from the live stores.
  *
- * Two shapes, one question. A standalone doc reviews a FILE, so its
- * `sourceUrl` is the thing to look for; a workspace member reviews one file of
- * a bound FOLDER, and the honest per-artifact question there is whether the
- * folder itself survives — a diff review routinely contains members whose
- * files are deleted on purpose, so asking per member would report every normal
- * deletion as an abandoned review.
- *
- * `seen` memoizes within one request. 3,500 docs mostly share a few hundred
- * roots, and this runs on a page that already walks every room.
+ * `lastActivity` is the newest REAL event on the board: a task mutation
+ * (`task.updatedAt` — bumped by every transition, assignment, evidence and
+ * body rewrite), a comment on a task's discussion (`thread.lastActivity` on
+ * the `task:<id>` room), a goal edit, or the board's creation. Deliberately
+ * NOT `meta.lastActivityAt`, which is the `.ydoc` mtime wearing an activity
+ * label — see rule 1 in the header of `landing.ts`.
  */
-function reviewSourceMissing(meta: DocMeta, seen: Map<string, boolean>): boolean {
-  const target = meta.workspaceId ? meta.workspaceRoot : meta.sourceUrl;
-  // A dev-server or mockup doc points at a URL, not a path — nothing on this
-  // machine's filesystem answers for it, so it is never "gone".
-  if (!target || /^https?:\/\//.test(target)) return false;
-  const cached = seen.get(target);
-  if (cached !== undefined) return cached;
-  let missing = false;
-  try {
-    missing = !existsSync(target);
-  } catch {
-    // Unknowable is not missing: an unreadable path would otherwise flag every
-    // artifact under it as abandoned on the strength of a permissions error.
-    missing = false;
-  }
-  seen.set(target, missing);
-  return missing;
+function collectLandingWorkspaces(rooms: Rooms, taskStore: TaskStore): LandingWorkspaceInput[] {
+  return taskStore.listWorkspaces().map((ws) => {
+    let last = Math.max(ws.createdAt, ws.goalUpdatedAt ?? 0);
+    for (const task of taskStore.listTasks(ws.id)) {
+      if (task.updatedAt > last) last = task.updatedAt;
+      for (const thread of rooms.listThreads(`task:${task.id}`)) {
+        if (thread.lastActivity > last) last = thread.lastActivity;
+      }
+    }
+    return { id: ws.id, name: ws.name, lastActivity: last };
+  });
 }
 
-/**
- * Every room the landing page can say something about, as the pure model
- * wants it.
- *
- * Two kinds arrive here and only one of them is an artifact. A review doc is
- * something a person put up for review, and it belongs to a PROJECT (the
- * creating agent's cwd). A `task:<id>` room is a task's discussion on a hub
- * board — not an artifact, so it carries no `artifactId` and inflates nobody's
- * count, but its unanswered questions are exactly the cross-workspace "someone
- * needs you" the page exists to surface, so its threads come along. `ws:<id>`
- * board rooms carry no threads of their own and are skipped outright.
- */
-function collectLandingDocs(rooms: Rooms, taskStore: TaskStore): LandingInputDoc[] {
-  const out: LandingInputDoc[] = [];
-  const seen = new Map<string, boolean>();
+/** Every project owner that has at least one review doc — the links behind
+ *  the review-docs fold. Names only; the artifacts stay on the project page. */
+function collectLandingProjects(rooms: Rooms): Array<{ owner: string; label: string }> {
+  const owners = new Set<string>();
   for (const meta of rooms.list()) {
-    // Infrastructure, not an artifact: the shared hub-feedback doc exists on
-    // every install from startup, and the board rooms are surfaces the server
-    // owns. Same exclusions the previous index made, for the same reasons.
+    // Infrastructure, not review content: the shared hub-feedback doc exists
+    // on every install from startup, and `ws:`/`task:` rooms are surfaces the
+    // server owns for the boards the page already lists.
     if (meta.docId === HUB_FEEDBACK_DOC_ID) continue;
-    if (meta.docId.startsWith('ws:')) continue;
-
-    if (meta.docId.startsWith('task:')) {
-      const taskId = meta.docId.slice('task:'.length);
-      const task = taskStore.getTask(taskId);
-      // A finished task's discussion is not a queue item — answering it
-      // changes nothing, which is the same call `review-queue` makes.
-      if (!task || task.status === 'done') continue;
-      const ws = taskStore.getWorkspace(task.workspaceId);
-      if (!ws) continue;
-      out.push({
-        groupKey: `ws:${ws.id}`,
-        groupLabel: ws.name,
-        groupKind: 'workspace',
-        groupHref: `/workspaces/${encodeURIComponent(ws.id)}`,
-        name: task.title,
-        link: { kind: 'task', workspaceId: ws.id, taskId: task.id },
-        threads: rooms.listThreads(meta.docId),
-      });
-      continue;
-    }
-
-    const owner = meta.owner || 'ungrouped';
-    out.push({
-      groupKey: owner,
-      groupLabel: projectLabel(owner),
-      groupKind: 'project',
-      groupHref: `/projects/${encodeURIComponent(owner)}`,
-      name:
-        meta.relPath ?? (meta.sourceUrl ? basenameOf(meta.sourceUrl) : meta.title || meta.docId),
-      link: { kind: 'doc', docId: meta.docId },
-      threads: rooms.listThreads(meta.docId),
-      // Every member of a bound folder / diff review shares ONE artifact id,
-      // so a 60-file review counts as the single thing somebody put up.
-      artifactId: meta.workspaceId ?? meta.docId,
-      ...(reviewSourceMissing(meta, seen) ? { sourceMissing: true } : {}),
-    });
+    if (meta.docId.startsWith('ws:') || meta.docId.startsWith('task:')) continue;
+    owners.add(meta.owner || 'ungrouped');
   }
-  return out;
+  return Array.from(owners, (owner) => ({ owner, label: projectLabel(owner) }));
 }
 
 /**
@@ -4803,13 +4750,6 @@ h2{font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;
 ul{padding:0;list-style:none;margin:0}
 a{color:#2e7dd7;text-decoration:none}
 a:hover{text-decoration:underline}
-.need{border-left:3px solid #e36f1e;background:#fffaf5;border-radius:0 6px 6px 0;margin-bottom:6px}
-.need a{display:block;padding:9px 12px;color:inherit}
-.need a:hover{text-decoration:none;background:#fff3e8}
-.need-top{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;font-size:12px;color:#8b95a1}
-.need-wait{font-weight:700;color:#bf5b16;flex-shrink:0}
-.need-where{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.need-ask{margin-top:2px;font-size:15px;color:#1b1f23}
 .grp{border-bottom:1px solid #f0f2f4}
 .grp-link{display:block;padding:10px 4px;color:inherit;min-height:44px}
 .grp-link:hover{text-decoration:none;background:#f8f9fb}
@@ -4818,10 +4758,8 @@ a:hover{text-decoration:underline}
 .grp-meta{color:#8b95a1;font-size:12px;margin-top:2px}
 .badge{font-size:10.5px;padding:1.5px 7px;border-radius:99px;background:#f6f8fa;color:#6e7781;font-weight:500;flex-shrink:0}
 .badge-open{background:#fff1e6;color:#bf5b16}
-.badge-need{background:#e36f1e;color:#fff;font-weight:700}
 .badge-resolved{background:#e8f5ed;color:#2da44e}
 .badge-kind{background:#f6f8fa;color:#8b95a1}
-.badge-gone{background:#fdecec;color:#b42318}
 .badges{display:flex;gap:4px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end}
 li.artifact{padding:9px 0;border-bottom:1px solid #f3f4f6}
 li.artifact.has-open{border-left:3px solid #e36f1e;padding-left:10px;margin-left:-13px}
@@ -4838,6 +4776,11 @@ details > summary{display:flex;align-items:baseline;gap:8px;cursor:pointer;list-
 details > summary::-webkit-details-marker{display:none}
 details > summary::before{content:'\\25B8';color:#8b95a1;font-size:11px;flex-shrink:0}
 details[open] > summary::before{content:'\\25BE'}
+/* The landing page's folded sections (inactive workspaces, review docs).
+   Styled like the h2s so a fold reads as a section heading you can open —
+   quiet on purpose: the page is the active list, the folds are the archive. */
+.fold{margin-top:26px}
+.fold > summary{font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#57606a}
 .ws-files{margin:6px 0 0 1.8em;border-left:1px solid #eef0f2;padding-left:10px}
 .ws-file{display:flex;align-items:baseline;gap:8px;padding:3px 0}
 .ws-file-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
@@ -4855,77 +4798,58 @@ ${body}
 <footer>POST /api/docs · /widget.iife.js · /demos/mockup</footer>`;
 }
 
-/** A duration, at the coarsest unit that still says something. Distinct from
- *  `formatRelative`, which takes a timestamp — the band already computed its
- *  own elapsed time against a single `now`, and re-reading the clock per row
- *  would let two rows on one page disagree about what time it is. */
-function formatWait(ms: number): string {
-  if (ms < 60_000) return 'just now';
-  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
-  if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h`;
-  return `${Math.round(ms / 86_400_000)}d`;
-}
-
-function renderNeedsYouRow(r: NeedsYouRow): string {
-  return `<li class="need"><a href="${escape(r.href)}">
-    <div class="need-top"><span class="need-wait">${escape(formatWait(r.waitedMs))}</span><span class="need-where">${escape(r.group)} · ${escape(r.name)}</span></div>
-    <div class="need-ask">${escape(r.ask)}</div>
-    <div class="need-top">${escape(r.askedBy)}</div>
+function renderLandingWorkspaceRow(w: LandingWorkspaceRow): string {
+  // Thread/task activity, never `meta.lastActivityAt` — the collector's
+  // header says why. The whole row is the tap target, not the name inside
+  // it: an inline text link is ~21px tall, under the 36px floor in
+  // docs/product/design-mobile.md, and this is the page Bryan opens on a
+  // phone.
+  const activity =
+    w.lastActivity > 0 ? `active ${formatRelative(w.lastActivity)}` : 'no activity yet';
+  return `<li class="grp"><a class="grp-link" href="${escape(w.href)}">
+    <div class="grp-row"><span class="grp-name">${escape(w.name)}</span></div>
+    <div class="grp-meta">${escape(activity)}</div>
   </a></li>`;
 }
 
-function renderGroupRow(g: LandingGroupRow): string {
-  const needBadge =
-    g.needsYou > 0 ? `<span class="badge badge-need">${g.needsYou} need you</span>` : '';
-  const openBadge =
-    g.openThreads > 0 ? `<span class="badge badge-open">${g.openThreads} open</span>` : '';
-  // What each row COUNTS differs by kind, and saying "0 artifacts" on a board
-  // that has none would read as an empty project rather than a different kind
-  // of thing.
-  const size =
-    g.kind === 'workspace' ? 'board' : `${g.artifacts} artifact${g.artifacts === 1 ? '' : 's'}`;
-  const activity =
-    g.lastActivity > 0 ? `last comment ${formatRelative(g.lastActivity)}` : 'no comments yet';
-  // Forgetting, made visible, and nothing more. No row is hidden, nothing is
-  // acted on, and no cleanup affordance sits next to this badge: archiving is
-  // a separate step that has not been built yet (soft delete is the project
-  // rule), so the honest thing is a fact with no verb attached.
-  const gone =
-    g.missingSources > 0
-      ? `<span class="badge badge-gone">${g.missingSources} source${g.missingSources === 1 ? '' : 's'} gone</span>`
-      : '';
-  // The whole row is the tap target, not the name inside it. An inline text
-  // link is ~21px tall, under the 36px floor in docs/product/design-mobile.md,
-  // and this is the page Bryan opens on a phone.
-  return `<li class="grp"><a class="grp-link" href="${escape(g.href)}">
-    <div class="grp-row"><span class="grp-name">${escape(g.label)}</span><span class="badges">${needBadge}${openBadge}${gone}</span></div>
-    <div class="grp-meta">${escape(size)} · ${escape(activity)}</div>
+function renderLandingProjectLink(p: LandingProjectLink): string {
+  return `<li class="grp"><a class="grp-link" href="${escape(p.href)}">
+    <div class="grp-row"><span class="grp-name">${escape(p.label)}</span></div>
   </a></li>`;
 }
 
 function renderLanding(model: LandingModel): string {
-  // The denominator ships whatever the numerator is — including zero. An
-  // empty list with no denominator reads as a fleet-wide all-clear, which is
-  // the failure written up as "An empty list is a clearance only if you also
-  // render the denominator" in docs/process/learnings.md.
-  const shown = model.needsYou.length;
-  const denom = `${shown} of ${model.needsYouTotal} shown`;
-  const needs =
-    shown === 0
-      ? `<div class="empty">Nothing is waiting on you (0 of ${model.needsYouTotal}).</div>`
-      : `<ul>${model.needsYou.map(renderNeedsYouRow).join('')}</ul>`;
-  const groups =
-    model.groups.length === 0
-      ? '<div class="empty">No workspaces yet — POST /api/docs to create one.</div>'
-      : `<ul>${model.groups.map(renderGroupRow).join('')}</ul>`;
+  const days = Math.round(model.windowMs / 86_400_000);
+  const total = model.active.length + model.inactive.length;
+  // A cut list states what it cut: the empty state names the denominator,
+  // and the inactive fold carries its count — "An empty list is a clearance
+  // only if you also render the denominator" (docs/process/learnings.md).
+  const active =
+    model.active.length === 0
+      ? total === 0
+        ? '<div class="empty">No workspaces yet.</div>'
+        : `<div class="empty">Nothing active in the last ${days} days (${total} inactive below).</div>`
+      : `<ul>${model.active.map(renderLandingWorkspaceRow).join('')}</ul>`;
+  const inactive =
+    model.inactive.length === 0
+      ? ''
+      : `<details class="fold"><summary>Inactive workspaces <span class="count">${model.inactive.length}</span></summary>
+<ul>${model.inactive.map(renderLandingWorkspaceRow).join('')}</ul></details>`;
+  // The review-doc index stays reachable — one fold of per-project links,
+  // not a browser. The "hundreds of bound review items" live behind
+  // /projects/<owner>, fetched only when somebody opens one.
+  const projects =
+    model.projects.length === 0
+      ? ''
+      : `<details class="fold"><summary>Review docs by project <span class="count">${model.projects.length}</span></summary>
+<ul>${model.projects.map(renderLandingProjectLink).join('')}</ul></details>`;
   return landingShell(
     'Workspaces',
     `<h1>Workspaces</h1>
-<div class="summary">${model.totalArtifacts} artifact${model.totalArtifacts === 1 ? '' : 's'} · ${model.totalOpen} open thread${model.totalOpen === 1 ? '' : 's'} · ${model.groups.length} workspace${model.groups.length === 1 ? '' : 's'}</div>
-<h2>Needs you <span class="count">${escape(denom)}</span></h2>
-${needs}
-<h2>All workspaces <span class="count">${model.groups.length}</span></h2>
-${groups}`,
+<div class="summary">Active in the last ${days} days, most recent first</div>
+${active}
+${inactive}
+${projects}`,
   );
 }
 
