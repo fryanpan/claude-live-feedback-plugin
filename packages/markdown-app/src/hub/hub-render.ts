@@ -2679,22 +2679,97 @@ function renderAskPanel(
   return box;
 }
 
+/**
+ * The description's place in the panel, and what it holds before (or without)
+ * the live editor.
+ *
+ * `hub-app.ts` mounts the real Tiptap editor over the task's body room INTO
+ * this element, so what the reader types merges with what an agent writes
+ * through `set_doc_content` / `find_and_replace` on the same room. Until that
+ * mount lands — and if it never does — the slot shows the projection's text,
+ * which is the whole description for anything under the projection cap and an
+ * honest note when it is not.
+ */
+function bodySlot(task: HubTask): HTMLElement {
+  const slot = document.createElement('div');
+  slot.className = 'hub-detail-body-slot';
+  slot.dataset.taskId = task.id;
+  // `renderCommentMarkdown` escapes first and only adds known-safe tags, so a
+  // body written by anyone with write access is inert markup either way.
+  const desc = document.createElement('div');
+  if (task.body?.trim()) {
+    desc.className = 'hub-detail-body';
+    desc.innerHTML = renderCommentMarkdown(task.body);
+  } else {
+    desc.className = 'hub-detail-body-empty';
+    desc.textContent = 'No description yet.';
+  }
+  slot.append(desc);
+  if (task.bodyTruncated) {
+    // Only the pre-mount fallback can be short: the projection caps a body,
+    // the room does not, and the editor reads the room.
+    const more = document.createElement('p');
+    more.className = 'hub-detail-body-more';
+    more.textContent = 'Shortened here — the full description is in the task doc.';
+    slot.append(more);
+  }
+  return slot;
+}
+
+/**
+ * The slot already on screen for THIS task, if the panel is being repainted
+ * rather than opened.
+ *
+ * The board repaints the panel on every ydoc change — a peer's status flip, a
+ * comment landing, and the reader's OWN typing (the body snapshot lands in the
+ * projection ~300ms after a pause). A repaint that rebuilt the description
+ * would tear down the editor under the reader's hands: even moving the node
+ * (`replaceChildren` with the same element) removes it from the document
+ * first, which blurs it and drops the caret. So the slot is the one node the
+ * repaint never touches — everything around it is rebuilt and patched in
+ * place, before and after.
+ *
+ * Only a LIVE slot is kept (`BODY_LIVE_CLASS`, set by the mount). Until the
+ * editor is up the slot holds the projection's text, and that must follow the
+ * projection like everything else in the panel — an un-mounted slot that was
+ * kept would show a description the store no longer has.
+ */
+export const BODY_LIVE_CLASS = 'hub-detail-body-live';
+function keptBodySlot(container: HTMLElement, task: HubTask): HTMLElement | null {
+  const prior = container.querySelector<HTMLElement>('.hub-detail-panel');
+  if (!prior || prior.dataset.taskId !== task.id) return null;
+  const slot = prior.querySelector<HTMLElement>('.hub-detail-body-slot');
+  return slot &&
+    slot.parentElement === prior &&
+    slot.dataset.taskId === task.id &&
+    slot.classList.contains(BODY_LIVE_CLASS)
+    ? slot
+    : null;
+}
+
 export function renderTaskDetail(
   container: HTMLElement,
   task: HubTask | null,
   handlers: DetailHandlers,
   discussion?: TaskDiscussion,
 ): void {
-  container.replaceChildren();
   if (!task) {
+    container.replaceChildren();
     container.classList.add('hidden');
     return;
   }
   container.classList.remove('hidden');
-  const panel = document.createElement('div');
+  const kept = keptBodySlot(container, task);
+  const panel = kept?.parentElement ?? document.createElement('div');
   panel.className = 'hub-detail-panel';
   panel.setAttribute('role', 'dialog');
   panel.setAttribute('aria-modal', 'true');
+  panel.dataset.taskId = task.id;
+  // Everything the panel shows, split around the description: `before` is
+  // patched in above the slot and `after` below it, so the slot itself never
+  // leaves the document (see `keptBodySlot`).
+  const before: Node[] = [];
+  const after: Node[] = [];
 
   const head = document.createElement('div');
   head.className = 'hub-detail-head';
@@ -2713,7 +2788,7 @@ export function renderTaskDetail(
   close.setAttribute('aria-label', 'Close task detail');
   close.addEventListener('click', () => handlers.onClose());
   head.append(title, close);
-  panel.append(head);
+  before.push(head);
 
   // The ask comes FIRST, above everything except the title.
   //
@@ -2724,7 +2799,7 @@ export function renderTaskDetail(
   // identical across every task on the board. None of that is what the reader
   // came to answer.
   const ask = leadAsk(handlers.asks);
-  if (ask) panel.append(renderAskPanel(task, ask, handlers, handlers.now ?? Date.now()));
+  if (ask) before.push(renderAskPanel(task, ask, handlers, handlers.now ?? Date.now()));
 
   const statuses = document.createElement('div');
   statuses.className = 'hub-detail-statuses';
@@ -2737,7 +2812,7 @@ export function renderTaskDetail(
     b.addEventListener('click', () => handlers.onStatusSet(task, s));
     statuses.append(b);
   }
-  panel.append(statuses);
+  before.push(statuses);
 
   const meta = document.createElement('dl');
   meta.className = 'hub-detail-meta';
@@ -2832,7 +2907,7 @@ export function renderTaskDetail(
     const ans = document.createElement('p');
     ans.className = 'hub-detail-answer';
     ans.textContent = `Answered by ${task.answer.by}: “${task.answer.text}”`;
-    panel.append(ans);
+    before.push(ans);
   } else if (task.needs === 'decision') {
     // The walkthrough is not the only way in — a chip or a board row lands
     // here, and options the asker supplied have to be tappable from both.
@@ -2856,7 +2931,7 @@ export function renderTaskDetail(
         b.addEventListener('click', () => handlers.onAnswer(task, o.label, o.id));
         opts.append(b);
       }
-      panel.append(opts);
+      before.push(opts);
     }
     const form = document.createElement('form');
     form.className = 'hub-answer-form';
@@ -2873,45 +2948,30 @@ export function renderTaskDetail(
       const text = ta.value.trim();
       if (text) handlers.onAnswer(task, text);
     });
-    panel.append(form);
+    before.push(form);
   }
 
-  // The description reads HERE. It used to be a link and nothing else, so
-  // "what is this task for" cost a navigation and the board read as a list of
-  // bare titles — the store had the description and no surface showed it.
-  // `renderCommentMarkdown` escapes first and only adds known-safe tags, so a
-  // body written by anyone with write access is inert markup either way.
-  const desc = document.createElement('div');
-  if (task.body?.trim()) {
-    desc.className = 'hub-detail-body';
-    desc.innerHTML = renderCommentMarkdown(task.body);
-  } else {
-    desc.className = 'hub-detail-body-empty';
-    desc.textContent = 'No description yet.';
-  }
-  panel.append(desc);
-
-  if (task.bodyTruncated) {
-    const more = document.createElement('p');
-    more.className = 'hub-detail-body-more';
-    more.textContent = 'Shortened here — the full description is in the task doc.';
-    panel.append(more);
-  }
+  // The description reads — and is written — HERE. It used to be a link and
+  // nothing else, so "what is this task for" cost a navigation and the board
+  // read as a list of bare titles; then it was read-only text plus a link to a
+  // separate doc for editing, which put the description and the place to
+  // change it on two different pages. The slot below is where hub-app.ts
+  // mounts the live editor over the task's body room; see `bodySlot` for what
+  // it holds until then.
+  const slot = kept ?? bodySlot(task);
 
   const body = document.createElement('p');
   body.className = 'hub-detail-body-link';
   const bodyLink = document.createElement('a');
   bodyLink.href = `/review/${encodeURIComponent(task.bodyDocId)}`;
-  // No longer "or comment" — commenting happens right below, and sending
-  // someone elsewhere to do it is what this section replaces.
-  bodyLink.textContent = task.body?.trim()
-    ? 'Edit the task doc'
-    : 'Write the description in the task doc';
+  // A secondary way in, not the way to edit: the same room in the full review
+  // surface, for anchored comments and the wider page.
+  bodyLink.textContent = 'Open in the full editor';
   body.append(bodyLink);
-  panel.append(body);
+  after.push(body);
 
   if (discussion && handlers.onComment) {
-    panel.append(
+    after.push(
       renderDiscussion(
         task,
         discussion,
@@ -2930,27 +2990,35 @@ export function renderTaskDetail(
   // reference material. Somebody who came here to answer a question has
   // already done so by this point in the page.
   const quote = quoteBlock();
-  if (quote) panel.append(quote);
-  panel.append(meta);
-  if (linkChips) panel.append(linkChips);
+  if (quote) after.push(quote);
+  after.push(meta);
+  if (linkChips) after.push(linkChips);
 
   if (task.transitions.length > 0) {
     const h = document.createElement('h3');
     h.className = 'hub-detail-subhead';
     h.textContent = 'History';
-    panel.append(h);
+    after.push(h);
     const list = document.createElement('ul');
     list.className = 'hub-detail-transitions';
     for (const t of [...task.transitions].reverse()) {
       list.append(renderTransitionRow(t));
     }
-    panel.append(list);
+    after.push(list);
   }
 
-  container.addEventListener('click', (ev) => {
-    if (ev.target === container) handlers.onClose();
-  });
-  container.append(panel);
+  if (kept) {
+    // Repaint around the slot, never through it — see `keptBodySlot`.
+    for (const child of [...panel.childNodes]) if (child !== kept) child.remove();
+    for (const n of before) panel.insertBefore(n, kept);
+    panel.append(...after);
+  } else {
+    panel.append(...before, slot, ...after);
+    container.addEventListener('click', (ev) => {
+      if (ev.target === container) handlers.onClose();
+    });
+    container.replaceChildren(panel);
+  }
   // After it is in the document — scrollIntoView on a detached node does
   // nothing, silently. Guarded because happy-dom has no implementation.
   //
