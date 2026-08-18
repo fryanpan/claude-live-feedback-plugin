@@ -21,7 +21,9 @@ import {
   DEFAULT_DONE_WINDOW,
   DONE_WINDOWS,
   type DoneWindow,
+  type HomePayload,
   type HubGoal,
+  type HubPane,
   type HubTask,
   type HubWorkspaceInfo,
   type PendingBucketReviewView,
@@ -39,12 +41,15 @@ import {
   boardSections,
   clientDriftNotice,
   goalLabel,
+  paneFromPath,
+  panePath,
   parseQuickAdd,
   pluginDriftNotice,
   presenceChips,
   refreshReviewItems,
   reviewQueue,
   reviewRow,
+  shouldPollHome,
   unplacedNotice,
   walkPosition,
 } from './hub-model.ts';
@@ -59,10 +64,12 @@ import {
   renderBoard,
   renderDocsSidebar,
   renderGoalStrip,
+  renderHomeBrief,
+  renderHomeReview,
   renderLeadStrip,
   renderPresence,
   renderQuickAdd,
-  renderReviewStrip,
+  renderReviewBanner,
   renderReviewWalkthrough,
   renderTaskDetail,
   renderThreadsSidebar,
@@ -73,6 +80,21 @@ import { sidebarEntriesFor } from './hub-sidebar.ts';
 interface HubState {
   info: HubWorkspaceInfo | null;
   tasks: Map<string, HubTask>;
+  /** Which page of the shell is showing — Home or the board. Follows the URL
+   *  (`/workspaces/<id>/home` vs `/workspaces/<id>`), pushState both ways. */
+  pane: HubPane;
+  /** The Home payload for THIS reader, or null before the first load. */
+  home: HomePayload | null;
+  /** The recipe editor is open. App state, not DOM state, so a repaint
+   *  mid-edit cannot silently close the panel. */
+  homeEditingRecipe: boolean;
+  /** What this sitting has cleared, by key — answered items stay in the Home
+   *  stack marked done instead of vanishing (approved design). Client-side
+   *  and per-sitting on purpose: the server cannot un-answer a decision, so
+   *  "done" here is a display fact about this visit, not a stored one. */
+  homeSettled: Map<string, ReviewItem>;
+  /** When the current generating-poll run started; 0 when not polling. */
+  homePollStarted: number;
   tab: BoardTab;
   doneWindow: DoneWindow;
   view: 'board' | 'activity';
@@ -188,7 +210,19 @@ function buildShell(root: HTMLElement, name: string): void {
     <div id="hub-presence" class="hub-presence hidden"></div>
     <div id="hub-lead" class="hub-lead"></div>
     <div id="hub-goal" class="hub-goal"></div>
-    <div class="hub-main">
+    <div class="hub-main" id="hub-main">
+      <nav id="hub-nav" class="hub-nav" aria-label="Workspace pages">
+        <button type="button" class="hub-nav-item" data-pane="home">
+          <span class="hub-nav-icon" aria-hidden="true">⌂</span><span class="hub-nav-label">Home</span>
+        </button>
+        <button type="button" class="hub-nav-item" data-pane="board">
+          <span class="hub-nav-icon" aria-hidden="true">▦</span><span class="hub-nav-label">Board</span>
+        </button>
+      </nav>
+      <section id="hub-home" class="hub-home hidden">
+        <div id="hub-home-brief"></div>
+        <div id="hub-home-review"></div>
+      </section>
       <aside id="hub-docs" class="hub-side hub-side-docs"></aside>
       <section class="hub-board-col">
         <div class="hub-controls">
@@ -251,6 +285,11 @@ async function main(): Promise<void> {
   const state: HubState = {
     info: null,
     tasks: new Map(),
+    pane: paneFromPath(location.pathname),
+    home: null,
+    homeEditingRecipe: false,
+    homeSettled: new Map(),
+    homePollStarted: 0,
     tab: 'all',
     doneWindow: DEFAULT_DONE_WINDOW,
     view: 'board',
@@ -455,23 +494,126 @@ async function main(): Promise<void> {
         if (task) boardHandlers.onOpenTask(task);
       },
     });
-    renderReviewStrip(el('hub-decisions'), currentQueue(), {
-      onOpen: openReviewItem,
-      onWalkthrough: () => {
-        // A sitting starts empty: the tally counts what THIS pass cleared, so
-        // carrying the last one's over would open on "4 cleared" before the
-        // reader has answered anything.
-        state.walkProgress = { cleared: 0, last: null };
-        state.walkIndex = 0;
-        state.walkKey = currentQueue().items[0]?.key ?? null;
-        renderWalkthrough();
-      },
+    // The board's read of the queue is one line now — the full list lives on
+    // Home. Two surfaces both claiming to be the queue would drift the first
+    // time only one of them learned something.
+    renderReviewBanner(el('hub-decisions'), currentQueue(), {
+      onGoHome: () => setPane('home'),
     });
     renderWalkthrough();
     for (const btn of document.querySelectorAll<HTMLButtonElement>('.hub-tabs .hub-tab')) {
       btn.classList.toggle('hub-tab-active', btn.dataset.tab === state.tab);
       btn.setAttribute('aria-selected', String(btn.dataset.tab === state.tab));
     }
+  }
+
+  // ── The Home pane ───────────────────────────────────────────────────────
+
+  function startWalkthrough(): void {
+    // A sitting starts empty: the tally counts what THIS pass cleared, so
+    // carrying the last one's over would open on "4 cleared" before the
+    // reader has answered anything.
+    state.walkProgress = { cleared: 0, last: null };
+    state.walkIndex = 0;
+    state.walkKey = currentQueue().items[0]?.key ?? null;
+    renderWalkthrough();
+  }
+
+  function renderHomeRegion(): void {
+    // Nav active state, both panes.
+    for (const btn of document.querySelectorAll<HTMLButtonElement>('.hub-nav-item')) {
+      const active = btn.dataset.pane === state.pane;
+      btn.classList.toggle('hub-nav-item-active', active);
+      btn.setAttribute('aria-current', active ? 'page' : 'false');
+    }
+    const main = el('hub-main');
+    main.classList.toggle('hub-main--home', state.pane === 'home');
+    el('hub-home').classList.toggle('hidden', state.pane !== 'home');
+    if (state.pane !== 'home') return;
+    renderHomeBrief(el('hub-home-brief'), state.home, Date.now(), state.homeEditingRecipe, {
+      onMarkCaughtUp: () => void markCaughtUp(),
+      onSaveInstructions: (text) => void saveInstructions(text),
+      onEditRecipe: (open) => {
+        state.homeEditingRecipe = open;
+        renderHomeRegion();
+      },
+    });
+    renderHomeReview(
+      el('hub-home-review'),
+      currentQueue(),
+      { onOpen: openReviewItem, onWalkthrough: startWalkthrough },
+      [...state.homeSettled.values()],
+    );
+  }
+
+  function setPane(pane: HubPane, push = true): void {
+    if (state.pane === pane) {
+      if (pane === 'home') void loadHome();
+      return;
+    }
+    state.pane = pane;
+    if (push) history.pushState(null, '', panePath(workspaceId, pane));
+    renderHomeRegion();
+    if (pane === 'home') void loadHome();
+  }
+
+  let homePollTimer: ReturnType<typeof setTimeout> | null = null;
+  async function loadHome(): Promise<void> {
+    const res = await fetchJson<HomePayload>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/home?user=${encodeURIComponent(user.name)}`,
+    );
+    // A failed fetch keeps the previous payload — same rule as every other
+    // REST-fed region: "the request did not complete" is not "there is
+    // nothing here".
+    if (res) state.home = res;
+    renderHomeRegion();
+    // Poll while the server says a generation is actually queued, so the
+    // generated brief lands without a manual reload. The flag is grounded in
+    // a queued call; the cap stops a wedged payload from polling forever.
+    if (homePollTimer) {
+      clearTimeout(homePollTimer);
+      homePollTimer = null;
+    }
+    if (res?.generating) {
+      if (state.homePollStarted === 0) state.homePollStarted = Date.now();
+      if (shouldPollHome(res, state.homePollStarted, Date.now())) {
+        homePollTimer = setTimeout(() => void loadHome(), 1500);
+      }
+    } else {
+      state.homePollStarted = 0;
+    }
+  }
+
+  async function markCaughtUp(): Promise<void> {
+    const res = await send(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/home/read`,
+      'POST',
+      { author },
+    );
+    if (!res.ok) {
+      showToast('Could not mark caught up — try again.');
+      return;
+    }
+    showToast('Caught up — the brief starts here now.');
+    await loadHome();
+  }
+
+  async function saveInstructions(text: string): Promise<void> {
+    const res = await send(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/home/instructions`,
+      'PUT',
+      { instructions: text, author },
+    );
+    if (!res.ok) {
+      showToast('Could not save the instructions — try again.');
+      return;
+    }
+    state.homeEditingRecipe = false;
+    if (res.data) state.home = res.data as unknown as HomePayload;
+    renderHomeRegion();
+    // The save dropped every cached brief; pick up the regeneration.
+    state.homePollStarted = 0;
+    await loadHome();
   }
 
   function renderActivityRegion(): void {
@@ -708,10 +850,14 @@ async function main(): Promise<void> {
     const ok = await write();
     if (!ok || !item) return ok;
     state.walkProgress = { cleared: state.walkProgress.cleared + 1, last: item };
+    // Answered items stay in the Home stack marked done (approved design)
+    // instead of vanishing — a per-sitting display ledger, not stored state.
+    state.homeSettled.set(item.key, item);
     const queue = currentQueue();
     state.walkIndex = advanceWalk(queue, state.walkIndex, item.key, next?.key ?? null);
     state.walkKey = queue.items[state.walkIndex]?.key ?? null;
     renderWalkthrough();
+    renderHomeRegion();
     return ok;
   }
 
@@ -794,6 +940,7 @@ async function main(): Promise<void> {
     renderPresenceRegion();
     renderDocsSidebar(el('hub-docs'), state.docs);
     renderThreadsSidebar(el('hub-threads'), state.threads);
+    renderHomeRegion();
   }
 
   // ── Mutations (all through the REST gate) ───────────────────────────────
@@ -1005,6 +1152,7 @@ async function main(): Promise<void> {
       ),
     );
     renderBoardRegion();
+    renderHomeRegion();
   }
 
   // ── Sidebars ────────────────────────────────────────────────────────────
@@ -1144,7 +1292,13 @@ async function main(): Promise<void> {
     'workspace.goal_updated',
     'workspace.goals_changed',
   ]) {
-    es.addEventListener(name, () => void loadEvents());
+    es.addEventListener(name, () => {
+      void loadEvents();
+      // The same board changes stale the Home brief. Refreshing only while
+      // Home is showing keeps a background board tab from queueing model
+      // calls nobody is reading.
+      if (state.pane === 'home') void loadHome();
+    });
   }
   // A reply to the question you just asked is the case this whole surface is
   // for, so it lands in the open panel without a reload. These events reach
@@ -1166,6 +1320,13 @@ async function main(): Promise<void> {
   es.addEventListener('task.transitioned', () => void loadReviewItems());
 
   // Controls.
+  // Home / Board nav — pushState both ways, and the back button honours it.
+  for (const btn of document.querySelectorAll<HTMLButtonElement>('.hub-nav-item')) {
+    btn.addEventListener('click', () => setPane((btn.dataset.pane as HubPane) ?? 'board'));
+  }
+  window.addEventListener('popstate', () => {
+    setPane(paneFromPath(location.pathname), false);
+  });
   for (const btn of document.querySelectorAll<HTMLButtonElement>('.hub-tabs .hub-tab')) {
     btn.addEventListener('click', () => {
       state.tab = (btn.dataset.tab as BoardTab) ?? 'all';
@@ -1294,6 +1455,8 @@ async function main(): Promise<void> {
   void loadAgents();
   void loadEvents();
   void loadReviewItems();
+  // A deep link straight to /home needs its payload without a nav tap.
+  if (state.pane === 'home') void loadHome();
 }
 
 void main();
