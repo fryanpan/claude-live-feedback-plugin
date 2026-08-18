@@ -77,7 +77,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.58';
+const PLUGIN_VERSION = '0.1.59';
 
 /**
  * What a good `evidence.commit` looks like, said at the one layer that reaches
@@ -174,6 +174,9 @@ const server = new Server(
       '<channel source="live-feedback" doc_id="..." thread_id="..." event="..." author="..." sent_at="...">body</channel>',
       'messages. Treat each as an explicit ask from the reviewer; read, decide if it',
       "is in your domain, act via an edit tool. unwatch_doc when you're done.",
+      'Watches are remembered on the server under this agent name (FEEDBACK_AGENT_NAME)',
+      'and re-wired when the session respawns; list_watched_docs says whether the',
+      'current set was restored from the server or is session-only.',
       '',
       'CLEANUP: review docs are usually short-lived — bound for a ~30-minute',
       'feedback pass, then obsolete. When you no longer need one, call',
@@ -816,7 +819,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'watch_doc',
       description:
-        "Start pushing live feedback events for this doc into the current Claude Code session as <channel source='live-feedback' …> messages. Every thread.created / thread.replied / thread.resolved / thread.reopened on the doc arrives as a channel event until you call unwatch_doc. NOTE: this is normally redundant — `create_review_doc`, `bind_mock`, and most other docId-bearing tools auto-subscribe the caller on first touch. Use `watch_doc` explicitly when you want to subscribe to a doc you haven't otherwise interacted with (e.g., a peer's doc you only want to observe). Idempotent.",
+        "Start pushing live feedback events for this doc into the current Claude Code session as <channel source='live-feedback' …> messages. Every thread.created / thread.replied / thread.resolved / thread.reopened on the doc arrives as a channel event until you call unwatch_doc. NOTE: this is normally redundant — `create_review_doc`, `bind_mock`, and most other docId-bearing tools auto-subscribe the caller on first touch. Use `watch_doc` explicitly when you want to subscribe to a doc you haven't otherwise interacted with (e.g., a peer's doc you only want to observe). Idempotent. DURABLE: the watch is also recorded on the server under this agent's identity (FEEDBACK_AGENT_NAME), so a session respawn re-wires it without a call from you — the response says `persisted: false` when it could not be (no stable identity, or the server was unreachable), which means a restart WILL drop it.",
       inputSchema: {
         type: 'object',
         properties: { docId: { type: 'string' } },
@@ -825,7 +828,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'unwatch_doc',
-      description: 'Stop pushing channel events for this doc.',
+      description:
+        'Stop pushing channel events for this doc, and forget it on the server so a respawn does not bring it back.',
       inputSchema: {
         type: 'object',
         properties: { docId: { type: 'string' } },
@@ -834,7 +838,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'list_watched_docs',
-      description: 'Return the docIds this session is currently subscribed to for channel events.',
+      description:
+        "Return the docIds this session is currently subscribed to for channel events, WITH PROVENANCE: `restore.status` says whether this session re-wired its set from the server after a respawn ('restored'), never had a server set to restore ('restored' with an empty list), could not reach the server ('failed', with the error — retry by calling again), or has no stable identity so nothing survives a restart ('session-only'). An empty `watching` list therefore no longer means both 'never watched' and 'watched, then respawned' — read `restore` to tell them apart.",
       inputSchema: { type: 'object', properties: {} },
     },
     {
@@ -1643,6 +1648,10 @@ async function maybeAutoWatch(name: string, args: unknown): Promise<void> {
 server.setRequestHandler(CallToolRequestSchema, async (req) => {
   const { name, arguments: a = {} } = req.params;
   try {
+    // Restore before anything else: a respawned child's first tool call is
+    // the moment its watch set has to be back, and if the server was down at
+    // initialize this is the retry. Never throws.
+    await ensureWatchesRestored();
     await maybeAutoWatch(name, a);
     switch (name) {
       case 'list_docs': {
@@ -2125,16 +2134,35 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       }
       case 'watch_doc': {
         const { docId } = a as { docId: string };
-        await watchDoc(docId);
-        return ok({ docId, watching: Array.from(watchers.keys()) });
+        const persisted = await watchDoc(docId);
+        return ok({
+          docId,
+          watching: Array.from(watchers.keys()),
+          persisted,
+          persistence: watchPersistenceMode(),
+        });
       }
       case 'unwatch_doc': {
         const { docId } = a as { docId: string };
-        unwatchDoc(docId);
-        return ok({ docId, watching: Array.from(watchers.keys()) });
+        const persisted = await unwatchDoc(docId);
+        return ok({
+          docId,
+          watching: Array.from(watchers.keys()),
+          persisted,
+          persistence: watchPersistenceMode(),
+        });
       }
       case 'list_watched_docs': {
-        return ok({ watching: Array.from(watchers.keys()) });
+        return ok({
+          watching: Array.from(watchers.keys()),
+          persistence: {
+            mode: watchPersistenceMode(),
+            agentId: AUTHOR.id,
+            ...(IDENTITY_IS_SHARED ? { reason: SHARED_IDENTITY_REASON } : {}),
+          },
+          restore: restoreState,
+          ...(lastPersistError ? { lastPersistError } : {}),
+        });
       }
       case 'share_workspace': {
         const {
@@ -2865,48 +2893,215 @@ interface Watcher {
 }
 const watchers = new Map<string, Watcher>();
 
-async function watchDoc(docId: string): Promise<void> {
-  if (watchers.has(docId)) return;
-  const controller = new AbortController();
-  watchers.set(docId, { controller, docId });
-  void runSseLoop(docId, `/events/${encodeURIComponent(docId)}`, controller.signal).catch((err) => {
-    console.error(`[live-feedback-mcp] watcher ${docId} crashed:`, err);
-    watchers.delete(docId);
+// ---------------------------------------------------------------------------
+// Durable watches. Everything above this line is SESSION-SCOPED: `watchers`
+// is a Map in this process, and this process is the MCP child Claude Code
+// spawns per session — it dies with the session, so a respawn (a token
+// switch, a /clear, a crash) came back with `watchers` empty and
+// `list_watched_docs` answering `[]`, which is exactly what a session that
+// never subscribed answers. Measured 2026-08-18 by two peers: 62 and 6
+// subscriptions, silently gone.
+//
+// The server keeps the SET under this agent's identity (AUTHOR.id — the same
+// id every other call carries; `/api/agents/<id>/watches`). This process
+// mirrors every watch/unwatch there and, once the client has initialized,
+// asks for the set back and re-wires it. Persistence is best-effort and never
+// fails a tool call: the local watch is what delivers events right now, and a
+// persist that could not land is reported (`persisted: false`,
+// `lastPersistError`) rather than thrown. Restore is single-flight, retried on
+// the next tool call if the server was down, and reported in full by
+// `list_watched_docs` so `[]` can no longer mean two things.
+//
+// The shared identity (`FEEDBACK_AGENT_NAME` unset → `known-agent`) is not
+// persisted at all — every anonymous session resolves to it, so a set keyed
+// on it would restore everybody's watches into each of them. The server
+// refuses it too; this check just spares the round trip and says why.
+// ---------------------------------------------------------------------------
+
+const IDENTITY_IS_SHARED = AUTHOR.id === 'known-agent';
+const SHARED_IDENTITY_REASON =
+  'FEEDBACK_AGENT_NAME is not set, so this session has no identity to key its watches on; ' +
+  'they will not survive a restart. Set it in the launch environment and restart the session.';
+
+interface RestoreState {
+  /** `restored` — the server answered and its set is wired (possibly empty:
+   *  never watched anything under this identity). `session-only` — no stable
+   *  identity, nothing to restore from. `pending` — not tried yet. `failed` —
+   *  the server did not answer; retried on the next tool call. */
+  status: 'pending' | 'restored' | 'session-only' | 'failed';
+  from: 'server' | 'session';
+  /** Keys re-wired from the server's set on this process's restore. */
+  restored: string[];
+  /** Keys the server dropped as dead (their doc no longer exists). */
+  pruned: string[];
+  at?: string;
+  error?: string;
+  attempts: number;
+}
+
+let restoreState: RestoreState = IDENTITY_IS_SHARED
+  ? { status: 'session-only', from: 'session', restored: [], pruned: [], attempts: 0 }
+  : { status: 'pending', from: 'session', restored: [], pruned: [], attempts: 0 };
+let restoreInFlight: Promise<void> | null = null;
+/** After a failed restore, don't hammer a down server from every tool call —
+ *  back off (capped at 30s), then try again on the next call after that. */
+let restoreRetryAt = 0;
+let lastPersistError: string | undefined;
+
+function watchPersistenceMode(): 'server' | 'session-only' {
+  return IDENTITY_IS_SHARED ? 'session-only' : 'server';
+}
+
+const watchesPath = () => `/api/agents/${encodeURIComponent(AUTHOR.id)}/watches`;
+
+/** Mirror a local watch/unwatch to the server. Never throws. */
+async function persistWatchChange(change: { add?: string[]; remove?: string[] }): Promise<boolean> {
+  if (IDENTITY_IS_SHARED) return false;
+  try {
+    await http('POST', watchesPath(), { ...change, name: AUTHOR.name });
+    lastPersistError = undefined;
+    return true;
+  } catch (err) {
+    lastPersistError = err instanceof Error ? err.message : String(err);
+    console.error('[live-feedback-mcp] could not persist watch change:', lastPersistError);
+    return false;
+  }
+}
+
+/**
+ * Ask the server what this identity was watching and re-wire it. Single
+ * flight; a failure leaves `restoreState.status = 'failed'` and the next call
+ * tries again. Once `restored`, further calls are no-ops — the server set
+ * only changes through this process's own watch/unwatch from then on (or
+ * through a sibling session with the same name, whose additions reach this
+ * process at ITS next respawn, not live).
+ */
+async function ensureWatchesRestored(): Promise<void> {
+  if (restoreState.status === 'restored' || restoreState.status === 'session-only') return;
+  if (restoreInFlight) return restoreInFlight;
+  if (restoreState.status === 'failed' && Date.now() < restoreRetryAt) return;
+  restoreInFlight = (async () => {
+    const attempts = restoreState.attempts + 1;
+    try {
+      const res = (await http('GET', watchesPath())) as {
+        watches?: Array<{ key: string }>;
+        pruned?: string[];
+      };
+      const keys = (res.watches ?? []).map((w) => w.key);
+      const restored: string[] = [];
+      for (const key of keys) {
+        if (watchers.has(key)) continue;
+        if (key.startsWith('ws:')) await watchWorkspace(key.slice('ws:'.length), false);
+        else await watchDoc(key, false);
+        restored.push(key);
+      }
+      restoreState = {
+        status: 'restored',
+        from: 'server',
+        restored,
+        pruned: res.pruned ?? [],
+        at: new Date().toISOString(),
+        attempts,
+      };
+      if (restored.length > 0 || (res.pruned ?? []).length > 0) {
+        await emitRestoreNotice(restoreState).catch(() => {});
+      }
+    } catch (err) {
+      restoreState = {
+        ...restoreState,
+        status: 'failed',
+        error: err instanceof Error ? err.message : String(err),
+        attempts,
+      };
+      restoreRetryAt = Date.now() + Math.min(30_000, 1_000 * 2 ** attempts);
+    } finally {
+      restoreInFlight = null;
+    }
+  })();
+  return restoreInFlight;
+}
+
+/** One line into the session saying the feedback loop came back intact —
+ *  the thing a respawned peer otherwise has no way to know. */
+async function emitRestoreNotice(state: RestoreState): Promise<void> {
+  const n = state.restored.length;
+  const dropped = state.pruned.length > 0 ? `; ${state.pruned.length} dropped (doc gone)` : '';
+  await server.notification({
+    method: 'notifications/claude/channel',
+    params: {
+      source: 'live-feedback',
+      sent_at: state.at ?? new Date().toISOString(),
+      content: `[watches restored] ${n} watch${n === 1 ? '' : 'es'} re-wired from the server for ${AUTHOR.name} after restart${dropped}: ${state.restored.join(', ')}`,
+      meta: { event: 'watches.restored', restored: state.restored, pruned: state.pruned },
+    },
   });
+}
+
+/** Returns whether the watch was persisted on the server (false when this
+ *  identity is shared, the server refused, or it was unreachable). */
+async function watchDoc(docId: string, persist = true): Promise<boolean> {
+  if (!watchers.has(docId)) {
+    const controller = new AbortController();
+    watchers.set(docId, { controller, docId });
+    await startSseLoop(docId, `/events/${encodeURIComponent(docId)}`, controller);
+  }
+  // Persist even when already locally watched: an earlier persist may have
+  // failed (server down at the time), and the POST is idempotent.
+  return persist ? persistWatchChange({ add: [docId] }) : false;
 }
 
 /** Watch a whole workspace/diff review on ONE stream — every thread event on
  *  any member doc arrives here (server double-broadcasts per workspace). */
-async function watchWorkspace(workspaceId: string): Promise<void> {
+async function watchWorkspace(workspaceId: string, persist = true): Promise<boolean> {
   const key = `ws:${workspaceId}`;
-  if (watchers.has(key)) return;
-  const controller = new AbortController();
-  watchers.set(key, { controller, docId: key });
-  void runSseLoop(
-    key,
-    `/events/workspace/${encodeURIComponent(workspaceId)}`,
-    controller.signal,
-  ).catch((err) => {
-    console.error(`[live-feedback-mcp] workspace watcher ${workspaceId} crashed:`, err);
-    watchers.delete(key);
-  });
+  if (!watchers.has(key)) {
+    const controller = new AbortController();
+    watchers.set(key, { controller, docId: key });
+    await startSseLoop(key, `/events/workspace/${encodeURIComponent(workspaceId)}`, controller);
+  }
+  return persist ? persistWatchChange({ add: [key] }) : false;
 }
 
-function unwatchDoc(docId: string): void {
+async function unwatchDoc(docId: string): Promise<boolean> {
   const w = watchers.get(docId);
-  if (!w) return;
-  w.controller.abort();
-  watchers.delete(docId);
+  if (w) {
+    w.controller.abort();
+    watchers.delete(docId);
+  }
+  // Forget it on the server even if it was not locally wired — a sibling
+  // session may have recorded it, and an explicit unwatch means "stop".
+  return persistWatchChange({ remove: [docId] });
 }
 
-async function runSseLoop(label: string, path: string, signal: AbortSignal): Promise<void> {
+async function runSseLoop(
+  label: string,
+  path: string,
+  signal: AbortSignal,
+  onFirstAttempt?: () => void,
+): Promise<void> {
   // Tight reconnect loop — the server sends keepalive comments every
   // ~15s, so an abrupt close is almost always a transient network blip.
+  //
+  // `onFirstAttempt` fires once, after the first connect attempt has an
+  // outcome — headers back (the stream is live from here) or a throw. It is
+  // what lets `watch_doc` return only once the stream is actually open, so a
+  // reply posted the moment the tool answers is not lost in the gap between
+  // "watcher registered" and "connection established". Not "on first
+  // success": the auto-watch fires BEFORE the tool that creates the doc, so a
+  // 404 on the first attempt is normal there and must not hold the tool call.
+  let first = onFirstAttempt;
+  const settleFirst = () => {
+    if (!first) return;
+    const f = first;
+    first = undefined;
+    f();
+  };
   while (!signal.aborted) {
     try {
       const res = await fetch(`${resolveBaseUrl()}${path}`, {
         signal,
       });
+      settleFirst();
       if (!res.ok || !res.body) throw new Error(`sse ${path} → ${res.status}`);
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -2925,12 +3120,32 @@ async function runSseLoop(label: string, path: string, signal: AbortSignal): Pro
         }
       }
     } catch (err) {
+      settleFirst();
       if (signal.aborted) return;
       console.error(`[live-feedback-mcp] ${label} sse error, retrying:`, err);
     }
     // Backoff before reconnect
     await new Promise((r) => setTimeout(r, 1500));
   }
+  settleFirst();
+}
+
+/** Start an SSE loop and resolve once its first connect attempt has an
+ *  outcome (open or failed) — capped so a wedged connect never stalls a tool
+ *  call. The loop itself keeps running for the life of the watcher. */
+function startSseLoop(label: string, path: string, controller: AbortController): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const cap = setTimeout(resolve, 3_000);
+    void runSseLoop(label, path, controller.signal, () => {
+      clearTimeout(cap);
+      resolve();
+    }).catch((err) => {
+      console.error(`[live-feedback-mcp] watcher ${label} crashed:`, err);
+      watchers.delete(label);
+      clearTimeout(cap);
+      resolve();
+    });
+  });
 }
 
 async function handleFrame(raw: string): Promise<void> {
@@ -3223,6 +3438,14 @@ function err(message: string) {
 }
 
 const transport = new StdioServerTransport();
+// Once the client has finished initializing (not merely connected — the MCP
+// spec has the server hold notifications until then), ask the server for
+// this identity's watch set and re-wire it, so the respawn keeps its feedback
+// loop without waiting for a tool call. A tool call arriving meanwhile awaits
+// the same in-flight restore.
+server.oninitialized = () => {
+  void ensureWatchesRestored();
+};
 await server.connect(transport);
 // Best-effort startup banner. Fall back gracefully if discovery isn't ready
 // at child-start — http() will resolve fresh per request anyway.
