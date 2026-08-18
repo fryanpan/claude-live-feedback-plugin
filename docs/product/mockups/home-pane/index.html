@@ -1,0 +1,2075 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Home pane — mockup</title>
+    <style>
+      /* Tokens lifted verbatim from packages/markdown-app/src/styles.css so this
+         reads as the same product. Do not invent new colours here. */
+      :root {
+        --fg: #1b1f23;
+        --fg-muted: #6e7781;
+        --bg: #ffffff;
+        --bg-panel: #f6f8fa;
+        --bg-hover: #eaeef2;
+        --border: #d1d5da;
+        --border-strong: #afb8c1;
+        --accent: #2e7dd7;
+        --orange: #e36f1e;
+        --red: #d73a49;
+        --green: #2da44e;
+        --yellow: #bf8700;
+        --radius: 6px;
+        --shadow: 0 1px 2px rgba(27, 31, 35, 0.06), 0 0 1px rgba(27, 31, 35, 0.12);
+        --shadow-lg: 0 20px 50px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(27, 31, 35, 0.08);
+        --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        --sans: -apple-system, BlinkMacSystemFont, "Inter", "SF Pro Text", "Segoe UI",
+          system-ui, sans-serif;
+        --serif: Charter, "Iowan Old Style", "Source Serif Pro", Georgia, "Times New Roman",
+          serif;
+        --prose: var(--serif);
+        --safe-bottom: env(safe-area-inset-bottom, 0px);
+        --safe-top: env(safe-area-inset-top, 0px);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        font-family: var(--sans);
+        font-size: 16px;
+        color: var(--fg);
+        background: var(--bg);
+        -webkit-text-size-adjust: 100%;
+      }
+      button,
+      input,
+      textarea,
+      select {
+        font: inherit;
+      }
+      a {
+        color: var(--accent);
+      }
+
+      /* Home is a READING surface, not the board. 720px, not the board's 1280 —
+         a 1280px line of prose is unreadable and the point of this pane is that
+         he can read it. */
+      .wrap {
+        max-width: 720px;
+        margin: 0 auto;
+        padding: 0 14px calc(32px + var(--safe-bottom));
+      }
+
+      /* ================= TOPBAR + PANE TABS ================= */
+      .topbar {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        background: var(--bg);
+        border-bottom: 1px solid var(--border);
+        padding-top: var(--safe-top);
+      }
+      .topbar-inner {
+        max-width: 720px;
+        margin: 0 auto;
+        padding: 0 14px;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 10px;
+        min-height: 48px;
+      }
+      .ws-name {
+        font-weight: 650;
+        font-size: 17px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .ws-sub {
+        font-size: 12px;
+        color: var(--fg-muted);
+      }
+      .panes {
+        display: flex;
+        gap: 4px;
+        max-width: 720px;
+        margin: 0 auto;
+        padding: 0 14px 6px;
+      }
+      .pane-tab {
+        min-height: 36px;
+        padding: 4px 12px;
+        border: 1px solid transparent;
+        border-radius: 999px;
+        background: none;
+        color: var(--fg-muted);
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .pane-tab:hover {
+        background: var(--bg-hover);
+      }
+      .pane-tab[aria-selected="true"] {
+        background: var(--bg-panel);
+        border-color: var(--border);
+        color: var(--fg);
+        font-weight: 600;
+      }
+      .pane-tab .dot {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 20px;
+        height: 20px;
+        padding: 0 6px;
+        border-radius: 999px;
+        background: var(--yellow);
+        color: #fff;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      /* ================= BUTTONS ================= */
+      .btn {
+        min-height: 36px;
+        padding: 6px 12px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--bg-panel);
+        color: var(--fg);
+        cursor: pointer;
+      }
+      .btn:hover {
+        background: var(--bg-hover);
+      }
+      .btn-primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+        font-weight: 600;
+      }
+      .btn-primary:hover {
+        background: #2a6fbe;
+      }
+      .btn-big {
+        width: 100%;
+        min-height: 48px;
+        font-size: 17px;
+      }
+      .btn-link {
+        min-height: 36px;
+        padding: 0;
+        border: 0;
+        background: none;
+        color: var(--accent);
+        cursor: pointer;
+        text-decoration: underline;
+        text-underline-offset: 3px;
+      }
+      .btn-quiet {
+        min-height: 36px;
+        padding: 0;
+        border: 0;
+        background: none;
+        color: var(--fg-muted);
+        cursor: pointer;
+        text-decoration: underline;
+        text-underline-offset: 3px;
+        font-size: 13px;
+      }
+
+      /* ================= SUMMARY CARD ================= */
+      .card {
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--bg);
+        padding: 14px;
+        margin: 12px 0;
+      }
+      .sum-head {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 4px 10px;
+        margin-bottom: 8px;
+      }
+      .sum-title {
+        font-size: 17px;
+        font-weight: 700;
+      }
+      .sum-scope {
+        font-size: 13px;
+        color: var(--fg-muted);
+      }
+      /* The summary is prose. It gets the reading font the editor uses, and a
+         hard ceiling: half a screen. Past that it CLIPS with a fade and an
+         expander rather than scrolling inside the card — an inner scrollbar
+         hides its own overflow, and the ceiling exists so the review queue
+         stays above the fold. On a 430×932 phone 200 words does overflow, so
+         this path is the normal one, not the edge case. */
+      .sum-clip {
+        position: relative;
+      }
+      .sum-body {
+        font-family: var(--prose);
+        font-size: 16px;
+        line-height: 1.55;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+      .sum-clip[data-clipped="true"] .sum-body {
+        max-height: 44vh;
+        overflow: hidden;
+      }
+      .sum-clip[data-clipped="true"]::after {
+        content: "";
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: 56px;
+        pointer-events: none;
+        background: linear-gradient(to bottom, transparent, var(--bg));
+      }
+      .sum-more {
+        display: block;
+        width: 100%;
+        margin-top: 6px;
+        min-height: 36px;
+        border: 0;
+        background: none;
+        color: var(--accent);
+        cursor: pointer;
+        text-align: left;
+        text-decoration: underline;
+        text-underline-offset: 3px;
+      }
+      .sum-more[hidden] {
+        display: none;
+      }
+      .sum-body p {
+        margin: 0 0 10px;
+      }
+      .sum-body p:last-child {
+        margin-bottom: 0;
+      }
+      .sum-body ul {
+        margin: 0 0 10px;
+        padding-left: 20px;
+      }
+      .sum-body li {
+        margin-bottom: 4px;
+      }
+      /* "Brief as possible" inline links means short ones — a bare `#204` is a
+         39x20 target in prose. Vertical padding on an inline element does not
+         move the line box but does grow the hit area, which is the half that
+         matters on a phone. */
+      .sum-body a,
+      .ask-body a,
+      .cmt-body a {
+        padding: 9px 0;
+      }
+      .sum-foot {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px 12px;
+        margin-top: 12px;
+        padding-top: 10px;
+        border-top: 1px solid var(--border);
+      }
+      .sum-words {
+        font-size: 12px;
+        color: var(--fg-muted);
+        margin-left: auto;
+      }
+      .sum-read {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px 12px;
+        color: var(--fg-muted);
+        font-size: 14px;
+      }
+      .sum-read .tick {
+        color: var(--green);
+        font-weight: 700;
+      }
+
+      /* Summary tuning — the "way to test out how to improve this summary
+         process". Collapsed by default; it is a workbench, not a control. */
+      .tune {
+        margin-top: 10px;
+        padding: 10px;
+        border: 1px dashed var(--border-strong);
+        border-radius: var(--radius);
+        background: var(--bg-panel);
+        font-size: 14px;
+      }
+      .tune[hidden] {
+        display: none;
+      }
+      .tune h4 {
+        margin: 0 0 6px;
+        font-size: 14px;
+      }
+      .tune textarea {
+        width: 100%;
+        min-height: 68px;
+        padding: 8px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        resize: vertical;
+      }
+      .tune-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 8px;
+        align-items: center;
+      }
+      .tune-note {
+        margin: 8px 0 0;
+        color: var(--fg-muted);
+        font-size: 13px;
+      }
+
+      /* ================= REVIEW QUEUE ================= */
+      .queue-head {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 4px 10px;
+        margin: 22px 0 8px;
+      }
+      .queue-title {
+        font-size: 17px;
+        font-weight: 700;
+      }
+      .queue-sub {
+        font-size: 13px;
+        color: var(--fg-muted);
+      }
+      .queue-sort {
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 13px;
+        color: var(--fg-muted);
+      }
+      .queue-sort select {
+        min-height: 36px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--bg-panel);
+        padding: 0 6px;
+        max-width: 100%;
+      }
+      .queue-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        overflow: hidden;
+      }
+      .qrow {
+        display: grid;
+        /* minmax(0,1fr) — a long title must shrink, not push the row wider than
+           the phone. See design-mobile.md. */
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        align-items: start;
+        gap: 10px;
+        width: 100%;
+        min-height: 56px;
+        padding: 10px 12px;
+        border: 0;
+        border-top: 1px solid var(--border);
+        background: var(--bg);
+        text-align: left;
+        cursor: pointer;
+      }
+      .queue-list li:first-child .qrow {
+        border-top: 0;
+      }
+      .qrow:hover {
+        background: var(--bg-hover);
+      }
+      .qrow:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: -2px;
+      }
+      .qrank {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 22px;
+        height: 22px;
+        margin-top: 2px;
+        border-radius: 50%;
+        background: var(--bg-panel);
+        border: 1px solid var(--border);
+        font-size: 12px;
+        color: var(--fg-muted);
+        font-variant-numeric: tabular-nums;
+      }
+      .qmain {
+        min-width: 0;
+      }
+      .qkind {
+        display: inline-block;
+        margin-right: 6px;
+        padding: 1px 7px;
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+        vertical-align: 1px;
+      }
+      .qkind-decision {
+        background: color-mix(in srgb, var(--yellow) 16%, var(--bg));
+        color: #7a5600;
+        border: 1px solid var(--yellow);
+      }
+      .qkind-reply {
+        background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+        color: #1a5ea8;
+        border: 1px solid var(--accent);
+      }
+      .qkind-read {
+        background: var(--bg-panel);
+        color: var(--fg-muted);
+        border: 1px solid var(--border);
+      }
+      .qtitle {
+        font-weight: 600;
+        overflow-wrap: anywhere;
+      }
+      /* The ask, not the title. A title is the container; the ask is the
+         question. Two lines max so five rows still fit a phone screen. */
+      .qask {
+        margin-top: 2px;
+        color: var(--fg-muted);
+        font-size: 14px;
+        line-height: 1.4;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        overflow-wrap: anywhere;
+      }
+      .qmeta {
+        margin-top: 4px;
+        font-size: 12px;
+        color: var(--fg-muted);
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 10px;
+      }
+      .qmeta .blocking {
+        color: var(--yellow);
+        font-weight: 600;
+      }
+      .qgo {
+        align-self: center;
+        color: var(--fg-muted);
+        font-size: 18px;
+      }
+
+      .quiet-note {
+        margin: 18px 0 0;
+        color: var(--fg-muted);
+        font-size: 14px;
+      }
+
+      /* ================= WALKTHROUGH ================= */
+      .walk {
+        position: fixed;
+        inset: 0;
+        z-index: 70;
+        background: rgba(0, 0, 0, 0.35);
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
+        padding: 4vh 14px;
+      }
+      .walk[hidden] {
+        display: none;
+      }
+      .walk-panel {
+        display: flex;
+        flex-direction: column;
+        width: min(680px, 100%);
+        max-height: 92vh;
+        overflow: auto;
+        background: var(--bg);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow-lg);
+        padding: 16px;
+      }
+      .walk-head {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 10px;
+      }
+      .walk-pos {
+        font-size: 13px;
+        color: var(--fg-muted);
+        font-variant-numeric: tabular-nums;
+      }
+      .walk-close {
+        min-width: 36px;
+        min-height: 36px;
+        border: 0;
+        background: none;
+        cursor: pointer;
+        font-size: 18px;
+        color: var(--fg-muted);
+      }
+      .walk-progress {
+        height: 4px;
+        border-radius: 2px;
+        background: var(--bg-hover);
+        overflow: hidden;
+        margin-bottom: 12px;
+      }
+      .walk-progress > i {
+        display: block;
+        height: 100%;
+        background: var(--accent);
+        transition: width 0.18s ease;
+      }
+      .walk-title {
+        font-size: 19px;
+        font-weight: 700;
+        margin: 0 0 4px;
+        overflow-wrap: anywhere;
+      }
+      .walk-meta {
+        font-size: 13px;
+        color: var(--fg-muted);
+        margin-bottom: 12px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 10px;
+      }
+      .walk-nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 14px;
+        padding-top: 12px;
+        border-top: 1px solid var(--border);
+        align-items: center;
+      }
+      .walk-nav .grow {
+        flex: 1 1 auto;
+      }
+      .walk-done {
+        text-align: center;
+        padding: 24px 8px;
+      }
+      .walk-done h2 {
+        margin: 0 0 6px;
+        font-size: 20px;
+      }
+      .walk-done p {
+        margin: 0 0 14px;
+        color: var(--fg-muted);
+      }
+
+      /* ================= THE ASK BLOCK =================
+         One component, used in the walkthrough card AND at the bottom of the
+         task detail. Same words in both places on purpose: the walkthrough is
+         not a different question, it is the same question without the scroll. */
+      .ask {
+        border: 1px solid var(--accent);
+        border-left-width: 3px;
+        border-radius: var(--radius);
+        background: color-mix(in srgb, var(--accent) 5%, var(--bg));
+        padding: 12px 14px;
+      }
+      .ask-decision {
+        border-color: var(--yellow);
+        background: color-mix(in srgb, var(--yellow) 8%, var(--bg));
+      }
+      .ask-label {
+        display: block;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--fg-muted);
+        margin-bottom: 6px;
+      }
+      .ask-body {
+        font-family: var(--prose);
+        font-size: 16px;
+        line-height: 1.55;
+        overflow-wrap: anywhere;
+      }
+      .ask-body p {
+        margin: 0 0 10px;
+      }
+      .ask-body p:last-child {
+        margin-bottom: 0;
+      }
+      .ask-body ul {
+        margin: 0 0 10px;
+        padding-left: 20px;
+      }
+      .ask-body li {
+        margin-bottom: 5px;
+      }
+      .ask-words {
+        margin-top: 8px;
+        font-size: 12px;
+        color: var(--fg-muted);
+      }
+
+      /* --- decision options: the AskUserQuestion shape --- */
+      .opts {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin-top: 12px;
+      }
+      .opt {
+        display: block;
+        width: 100%;
+        text-align: left;
+        padding: 10px 12px;
+        border: 1px solid var(--border-strong);
+        border-radius: var(--radius);
+        background: var(--bg);
+        cursor: pointer;
+      }
+      .opt:hover {
+        background: var(--bg-hover);
+      }
+      .opt:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 1px;
+      }
+      .opt[aria-pressed="true"] {
+        border-color: var(--accent);
+        box-shadow: inset 0 0 0 1px var(--accent);
+        background: color-mix(in srgb, var(--accent) 6%, var(--bg));
+      }
+      /* 1–3 words, bold, on its own line. This is the whole point of the
+         AskUserQuestion shape: the title is the thing you choose between, and
+         the markdown under it is what that choice means. */
+      .opt-title {
+        display: block;
+        font-size: 16px;
+        font-weight: 700;
+        margin-bottom: 3px;
+      }
+      .opt-detail {
+        display: block;
+        font-family: var(--prose);
+        font-size: 15px;
+        line-height: 1.5;
+        color: var(--fg);
+      }
+      .opt-detail p {
+        margin: 0 0 6px;
+      }
+      .opt-detail p:last-child {
+        margin-bottom: 0;
+      }
+      .opt-else .opt-title {
+        font-weight: 600;
+        color: var(--fg-muted);
+      }
+
+      .reply {
+        margin-top: 12px;
+      }
+      .reply textarea {
+        width: 100%;
+        min-height: 96px;
+        padding: 10px;
+        border: 1px solid var(--border-strong);
+        border-radius: var(--radius);
+        resize: vertical;
+        font-family: var(--sans);
+      }
+      .reply-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        margin-top: 8px;
+      }
+      .reply-hint {
+        font-size: 12px;
+        color: var(--fg-muted);
+      }
+      .sent {
+        margin-top: 10px;
+        padding: 8px 10px;
+        border: 1px solid var(--green);
+        border-radius: var(--radius);
+        background: color-mix(in srgb, var(--green) 8%, var(--bg));
+        font-size: 14px;
+      }
+      .sent[hidden] {
+        display: none;
+      }
+
+      /* A 15–30 minute read is not a thing to answer in a modal. The card says
+         so and hands over. */
+      .handoff {
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--bg-panel);
+        padding: 12px 14px;
+        margin-top: 12px;
+      }
+      .handoff p {
+        margin: 0 0 10px;
+      }
+
+      /* ================= TASK DETAIL ================= */
+      .detail-head {
+        margin: 14px 0 4px;
+      }
+      .detail-title {
+        font-size: 22px;
+        font-weight: 700;
+        margin: 0 0 6px;
+        overflow-wrap: anywhere;
+      }
+      .detail-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 10px;
+        font-size: 13px;
+        color: var(--fg-muted);
+        margin-bottom: 4px;
+      }
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 2px 9px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: var(--bg-panel);
+        font-size: 12px;
+      }
+      .chip-blocking {
+        border-color: var(--yellow);
+        color: #7a5600;
+        background: color-mix(in srgb, var(--yellow) 12%, var(--bg));
+      }
+      .sec-head {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 6px 10px;
+        margin: 22px 0 8px;
+      }
+      .sec-title {
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--fg-muted);
+      }
+
+      /* The description IS the live doc. Same editor chrome as /review, edited
+         in place, multi-user. No shortening, no separate task doc. */
+      .doc {
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        overflow: hidden;
+      }
+      .doc-bar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px 10px;
+        padding: 6px 10px;
+        border-bottom: 1px solid var(--border);
+        background: var(--bg-panel);
+        font-size: 12px;
+        color: var(--fg-muted);
+      }
+      .doc-bar .who {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .avatar {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        color: #fff;
+        font-size: 10px;
+        font-weight: 700;
+      }
+      .doc-body {
+        font-family: var(--prose);
+        font-size: 16px;
+        line-height: 1.6;
+        padding: 14px;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+        outline: none;
+      }
+      .doc-body:focus {
+        box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent);
+      }
+      .doc-body h2 {
+        font-size: 1.2rem;
+        margin: 18px 0 6px;
+      }
+      .doc-body h3 {
+        font-size: 1.05rem;
+        margin: 14px 0 6px;
+      }
+      .doc-body p {
+        margin: 0 0 10px;
+      }
+      .doc-body ul,
+      .doc-body ol {
+        margin: 0 0 10px;
+        padding-left: 22px;
+      }
+      .doc-body li {
+        margin-bottom: 4px;
+      }
+      .doc-body code {
+        font-family: var(--mono);
+        font-size: 0.9em;
+        background: var(--bg-panel);
+        padding: 1px 4px;
+        border-radius: 4px;
+      }
+
+      /* ================= COMMENTS (Asana-style, single thread) ================= */
+      .comments {
+        display: flex;
+        flex-direction: column;
+        gap: 0;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        overflow: hidden;
+      }
+      .cmt {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 10px;
+        padding: 12px;
+        border-top: 1px solid var(--border);
+        background: var(--bg);
+      }
+      .comments > .cmt:first-child {
+        border-top: 0;
+      }
+      .cmt-avatar {
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        color: #fff;
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .cmt-head {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 4px 8px;
+        margin-bottom: 3px;
+      }
+      .cmt-who {
+        font-weight: 650;
+      }
+      .cmt-kind {
+        font-size: 11px;
+        padding: 0 6px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        color: var(--fg-muted);
+        background: var(--bg-panel);
+      }
+      .cmt-kind-agent {
+        border-color: var(--border);
+      }
+      .cmt-when {
+        font-size: 12px;
+        color: var(--fg-muted);
+        margin-left: auto;
+      }
+      .cmt-body {
+        font-family: var(--prose);
+        font-size: 15px;
+        line-height: 1.55;
+        overflow-wrap: anywhere;
+      }
+      .cmt-body p {
+        margin: 0 0 8px;
+      }
+      .cmt-body p:last-child {
+        margin-bottom: 0;
+      }
+      /* A comment that is the open ask gets a rail, so scrolling up from the
+         reply box you can see where the question was actually made. */
+      .cmt-asking {
+        background: color-mix(in srgb, var(--accent) 4%, var(--bg));
+        box-shadow: inset 3px 0 0 var(--accent);
+      }
+      /* Bryan's preserved words live HERE — a comment, collapsed, not a banner
+         at the top of every task. */
+      .cmt-original summary {
+        cursor: pointer;
+        color: var(--fg-muted);
+        font-size: 13px;
+        min-height: 36px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .cmt-original blockquote {
+        margin: 8px 0 0;
+        padding-left: 10px;
+        border-left: 3px solid var(--border);
+        color: var(--fg-muted);
+        font-family: var(--prose);
+        white-space: pre-wrap;
+      }
+
+      /* The bar you land on. Sticks so the ask and the reply box are never
+         scrolled apart. */
+      .land {
+        margin-top: 22px;
+        scroll-margin-top: 96px;
+      }
+      .land-up {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 4px 6px;
+        margin-bottom: 8px;
+        color: var(--fg-muted);
+        font-size: 13px;
+      }
+      .land-up strong {
+        color: var(--fg);
+      }
+
+      .toast {
+        position: fixed;
+        left: 50%;
+        bottom: calc(18px + var(--safe-bottom));
+        transform: translateX(-50%);
+        z-index: 90;
+        padding: 8px 14px;
+        border-radius: 999px;
+        background: #1b1f23;
+        color: #fff;
+        font-size: 14px;
+        box-shadow: var(--shadow-lg);
+      }
+      .toast[hidden] {
+        display: none;
+      }
+
+      /* Board stub: what the task-list pane looks like once status + decision
+         review MOVE OUT of it. */
+      .board-banner {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 12px;
+        margin: 12px 0;
+        border: 1px solid var(--yellow);
+        border-radius: var(--radius);
+        background: color-mix(in srgb, var(--yellow) 8%, var(--bg));
+      }
+      .board-row {
+        display: grid;
+        grid-template-columns: 18px minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: center;
+        min-height: 40px;
+        padding: 4px 6px;
+        border-top: 1px solid var(--border);
+      }
+      .board-sec {
+        margin: 18px 0 0;
+      }
+      .board-sec h3 {
+        font-size: 14px;
+        margin: 0 0 4px;
+      }
+      .ring {
+        width: 16px;
+        height: 16px;
+        border: 1.5px solid var(--fg-muted);
+        border-radius: 50%;
+      }
+      .ring-doing {
+        border-color: var(--accent);
+        background: color-mix(in srgb, var(--accent) 25%, transparent);
+      }
+
+      .mock-flag {
+        margin: 10px 0 0;
+        padding: 6px 10px;
+        border: 1px dashed var(--border-strong);
+        border-radius: var(--radius);
+        color: var(--fg-muted);
+        font-size: 12px;
+        background: var(--bg-panel);
+      }
+
+      /* ================= PHONE ================= */
+      @media (max-width: 720px) {
+        .wrap {
+          padding: 0 14px calc(32px + var(--safe-bottom));
+        }
+        .topbar-inner,
+        .panes {
+          padding-left: 14px;
+          padding-right: 14px;
+        }
+        .detail-title {
+          font-size: 1.4rem;
+        }
+        .walk {
+          padding: 0;
+        }
+        .walk-panel {
+          width: 100%;
+          max-height: 100dvh;
+          height: 100dvh;
+          border-radius: 0;
+          padding: 14px 14px calc(14px + var(--safe-bottom));
+        }
+        .queue-sort {
+          margin-left: 0;
+          width: 100%;
+        }
+        .sum-words {
+          margin-left: 0;
+        }
+        /* On a phone the walkthrough's two nav buttons are the whole interaction.
+           Full width, thumb-sized, primary action last (nearest the thumb). */
+        .walk-nav .btn {
+          flex: 1 1 140px;
+          min-height: 44px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div>
+          <div class="ws-name">Live Feedback — build board</div>
+          <div class="ws-sub">Sunday 08:12 · 6 agents · you are Bryan</div>
+        </div>
+        <span class="avatar" style="background: #2e7dd7; width: 28px; height: 28px">B</span>
+      </div>
+      <nav class="panes" role="tablist" aria-label="Panes">
+        <button class="pane-tab" role="tab" aria-selected="true" data-pane="home">
+          Home <span class="dot" id="home-count">5</span>
+        </button>
+        <button class="pane-tab" role="tab" aria-selected="false" data-pane="board">
+          Board
+        </button>
+      </nav>
+    </header>
+
+    <main class="wrap" id="app"></main>
+
+    <div class="walk" id="walk" hidden>
+      <div
+        class="walk-panel"
+        id="walk-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Review walkthrough"
+        tabindex="-1"
+      ></div>
+    </div>
+
+    <div class="toast" id="toast" hidden></div>
+
+    <script>
+      // ---------------------------------------------------------------------
+      // MOCKUP DATA. Synthetic. Agent names are made up; the subject matter is
+      // this repo's own public product surface so the copy is judgeable.
+      // ---------------------------------------------------------------------
+
+      const AGENTS = {
+        Bryan: '#2e7dd7',
+        Beacon: '#7d4bd7',
+        Atlas: '#2da44e',
+        Quill: '#e36f1e',
+      };
+
+      const SUMMARY = {
+        since: 'Saturday 21:14',
+        scope: '41 events · 12 tasks · 4 docs',
+        words: 168,
+        html: `
+<p><strong>Two decisions are holding up the Home pane; everything else is moving.</strong>
+Since Saturday night the board closed 7 tasks, opened 3, and 4 items now need you.</p>
+
+<p><strong>Decide first.</strong> <a href="#/task/unread-marker">Where the unread marker lives</a>
+blocks two tasks and nobody can build the summary card until you pick.
+<a href="#/task/walkthrough-flag">Ship the walkthrough behind a flag?</a> is a two-minute call.</p>
+
+<p><strong>Then reply.</strong> <a href="#/task/threading">Dropping threaded comments</a> is agreed,
+but 14 existing replies have nowhere to go and Beacon needs a word from you.</p>
+
+<p><strong>One longer read.</strong> The
+<a href="#/task/rollout-plan">Home pane rollout plan</a> is ready — about 20 minutes,
+and it is the last gate before build starts.</p>
+
+<p><strong>Shipped overnight, nothing needed.</strong> The comment pill now survives a
+cancelled touch on mobile (<a href="#/task/threading">#204</a>); task titles were rewritten
+to say what the task is (<a href="#/task/rollout-plan">#201</a>); the summary word-cap retry
+can no longer blank a line (<a href="#/task/threading">#199</a>).</p>
+
+<p><strong>Slipped.</strong> The presence strip is a day late, waiting on the unread-marker
+decision above.</p>`,
+      };
+
+      // Each item carries the SAME ask text the walkthrough shows and the detail
+      // page shows. One source, two surfaces.
+      const ITEMS = [
+        {
+          id: 'unread-marker',
+          kind: 'decision',
+          title: 'Where the unread marker lives',
+          asker: 'Beacon',
+          waited: 'asked 14h ago',
+          blocks: 2,
+          priority: 'P1 · Home pane',
+          effort: '~1 min',
+          ask: `
+<p><strong>Pick where "I have read this summary" is stored.</strong> Nothing stores it today,
+so the summary cannot say what changed <em>since last time</em> — it just shows the last 24 hours.</p>
+<ul>
+  <li>You read on the phone and on the desktop, often the same evening. That is the case that decides it.</li>
+  <li>Per-account needs a user record the board does not have yet (<a href="#/task/rollout-plan">schema note</a>).</li>
+  <li>Blocks <a href="#/task/rollout-plan">Home summary card</a> and <a href="#/task/walkthrough-flag">review-flow ordering</a>.</li>
+</ul>`,
+          options: [
+            {
+              title: 'Per device',
+              detail: `<p>Each browser remembers its own last-read time. Ships today. Reading on the
+              phone leaves the desktop summary still unread — you would see the same night twice.</p>`,
+            },
+            {
+              title: 'Per account',
+              detail: `<p>One last-read time for you everywhere. Needs a user table (about a day) plus a
+              migration for the three existing boards. Correct, and it delays the Home pane by a day.</p>`,
+            },
+            {
+              title: 'No marker',
+              detail: `<p>The summary always covers the last 24 hours and "Mark read" only collapses the
+              card. Nothing to build, nothing to migrate — and a two-day gap silently loses a day.</p>`,
+            },
+          ],
+          body: `
+<h2>Bryan can mark a summary read so that the next one covers only what he has not seen.</h2>
+<p>The Home summary is defined as <em>what changed since your last review</em>. That sentence needs a
+stored point in time, and there isn't one. Today <code>renderSummary</code> takes
+<code>Date.now() - 24h</code> as its floor, which is right about half the time and wrong the rest.</p>
+<h3>What is already built</h3>
+<ul>
+  <li>The activity feed already carries every task and doc event with a timestamp.</li>
+  <li>The summary generator already accepts a <code>since</code> argument — it is just always handed 24h.</li>
+</ul>
+<h3>What is not decided</h3>
+<p>Where the mark is stored. The three options are on this task. Everything else about the card is
+settled and waiting.</p>`,
+          comments: [
+            {
+              who: 'Bryan',
+              kind: 'person',
+              when: 'Aug 15, 4:02 PM',
+              original: true,
+              text: `need a way to say I read the summary. don't want to see the same 3 lines every time I open my phone`,
+            },
+            {
+              who: 'Beacon',
+              kind: 'agent',
+              when: 'Aug 16, 9:41 AM',
+              html: `<p>Wrote up the three storage options. Per-device is the only one that ships this week;
+              per-account is the only one that is actually right if you review from two places.</p>`,
+            },
+            {
+              who: 'Atlas',
+              kind: 'agent',
+              when: 'Aug 16, 6:20 PM',
+              html: `<p>Confirmed the migration cost for per-account: three boards, 41 tasks, no user rows
+              exist yet. Roughly a day including the backfill.</p>`,
+            },
+            {
+              who: 'Beacon',
+              kind: 'agent',
+              when: 'Aug 17, 6:40 AM',
+              asking: true,
+              html: `<p>This is the last thing blocking the summary card. Which one do you want?</p>`,
+            },
+          ],
+        },
+        {
+          id: 'threading',
+          kind: 'reply',
+          title: '14 replies have nowhere to go when threading is dropped',
+          asker: 'Beacon',
+          waited: 'asked 26h ago',
+          blocks: 1,
+          priority: 'P1 · Home pane',
+          effort: '~2 min',
+          ask: `
+<p><strong>One word from you: flatten or archive.</strong> Dropping threaded comments is agreed.
+What is not agreed is what happens to the replies that already exist — 14 of them, across 6 threads
+on 4 tasks, the oldest from Aug 11.</p>
+<ul>
+  <li><strong>Flatten</strong> — every reply becomes a top-level comment in time order, prefixed
+  <em>re: &lt;the comment it answered&gt;</em>. Nothing is lost; the shape is.</li>
+  <li><strong>Archive</strong> — replies move into a collapsed "Earlier discussion" block at the top
+  of each thread. Shape is kept, and it is one more thing to open.</li>
+</ul>
+<p>We lean <strong>flatten</strong>: 11 of the 14 replies answer the comment directly above them, so
+the prefix is redundant and the loss is small. The three that don't are all on
+<a href="#/task/rollout-plan">the mobile layout task</a>.</p>
+<p>Reply with either word and it lands today. If neither is right, say what you want instead.</p>`,
+          options: null,
+          body: `
+<h2>Bryan can read a task's discussion top to bottom so that no reply is hidden one level down.</h2>
+<p>Threading is being removed — a single comment thread is enough and keeps the UX simple. The
+migration is the open part.</p>
+<h3>Counted 2026-08-16 against the live board</h3>
+<ul>
+  <li>14 replies, 6 threads, 4 tasks. Oldest reply Aug 11.</li>
+  <li>11 of 14 reply to the comment immediately above them.</li>
+  <li>3 reply across a gap; all three are on the mobile layout task.</li>
+</ul>
+<h3>Not in scope</h3>
+<p>Resolve / reopen behaviour does not change. Only the reply nesting goes.</p>`,
+          comments: [
+            {
+              who: 'Bryan',
+              kind: 'person',
+              when: 'Aug 14, 8:55 PM',
+              original: true,
+              text: `drop support for threaded comments -- a single comment thread is enough and keeps UX simple`,
+            },
+            {
+              who: 'Beacon',
+              kind: 'agent',
+              when: 'Aug 15, 11:10 AM',
+              html: `<p>Removal is straightforward. The question is the 14 replies already in the store —
+              they have a parent id and nothing to attach to once nesting is gone.</p>`,
+            },
+            {
+              who: 'Quill',
+              kind: 'agent',
+              when: 'Aug 16, 7:30 AM',
+              html: `<p>Counted them: 11 of 14 answer the comment directly above. Flattening those reads
+              identically to what is on screen now.</p>`,
+            },
+            {
+              who: 'Beacon',
+              kind: 'agent',
+              when: 'Aug 16, 5:02 PM',
+              asking: true,
+              html: `<p>Flatten or archive? Either is a day's work; I would rather not pick this one for you.</p>`,
+            },
+          ],
+        },
+        {
+          id: 'rollout-plan',
+          kind: 'read',
+          title: 'Home pane rollout plan',
+          asker: 'Atlas',
+          waited: 'ready 3h ago',
+          blocks: 3,
+          priority: 'P1 · Home pane',
+          effort: '15–30 min',
+          ask: `
+<p><strong>This one needs a real sitting, not a tap.</strong> The rollout plan is the last gate before
+build starts, and three tasks are waiting behind it.</p>
+<ul>
+  <li>7 sections, about 1,900 words, two mermaid diagrams.</li>
+  <li>The parts most likely to be wrong: the migration order and who owns the summary prompt.</li>
+  <li>Atlas has left 4 inline questions in the doc, marked with a comment pill.</li>
+</ul>
+<p>Open it when you have twenty minutes. Skipping it here does not lose it — it stays at the top of
+this queue until it is read.</p>`,
+          doc: true,
+          docTitle: 'plans/home-pane-rollout.md',
+          options: null,
+          body: `
+<h2>Bryan can approve a rollout order so that build starts against a plan instead of a conversation.</h2>
+<p>Seven sections covering the pane split, the summary generator, the review flow, the detail page,
+the comment migration, the mobile pass, and the flag order.</p>`,
+          comments: [
+            {
+              who: 'Atlas',
+              kind: 'agent',
+              when: 'Aug 17, 5:30 AM',
+              asking: true,
+              html: `<p>Plan is ready for a read. Four inline questions are marked in the doc; the rest is
+              decided unless you say otherwise.</p>`,
+            },
+          ],
+        },
+        {
+          id: 'walkthrough-flag',
+          kind: 'decision',
+          title: 'Ship the review walkthrough behind a flag?',
+          asker: 'Quill',
+          waited: 'asked 5h ago',
+          blocks: 0,
+          priority: 'P2 · Home pane',
+          effort: '~1 min',
+          ask: `
+<p><strong>Flag it or ship it.</strong> The walkthrough is built and tested at 430px and on desktop.
+The only question is whether it goes out to the other two boards at the same time.</p>
+<ul>
+  <li>The other two boards have 3 and 0 open review items, so neither would see much of it.</li>
+  <li>A flag costs an hour now and a cleanup later.</li>
+</ul>`,
+          options: [
+            {
+              title: 'Ship it',
+              detail: `<p>All three boards get it on the next deploy. If it is wrong you will find out
+              tonight, which is the fastest way to find out.</p>`,
+            },
+            {
+              title: 'Flag it',
+              detail: `<p>On for this board only, off elsewhere until you say. One hour to build, and a
+              flag nobody removes tends to stay.</p>`,
+            },
+          ],
+          body: `
+<h2>Bryan can walk the review queue one item at a time so that he never has to choose what to look at next.</h2>
+<p>Built, tested at 430px and 1280px. This task is only about the rollout.</p>`,
+          comments: [
+            {
+              who: 'Quill',
+              kind: 'agent',
+              when: 'Aug 17, 3:10 AM',
+              asking: true,
+              html: `<p>Ready either way. Flag or no flag?</p>`,
+            },
+          ],
+        },
+        {
+          id: 'naming',
+          kind: 'reply',
+          title: 'Name for the new pane: "Home" or something else',
+          asker: 'Quill',
+          waited: 'asked 2d ago',
+          blocks: 0,
+          priority: 'P3 · Chores',
+          effort: '~1 min',
+          ask: `
+<p><strong>Confirm the pane is called Home.</strong> It is in the task body as "Home", and it is in
+the nav, the URL and three doc titles now.</p>
+<ul>
+  <li>"Home" is what you wrote, and it is what the tab says today.</li>
+  <li>"Today" reads better for a catch-up surface but is wrong once you open it twice in a day.</li>
+</ul>
+<p>Say "keep Home" and this closes. It is the lowest thing in your queue on purpose.</p>`,
+          options: null,
+          body: `
+<h2>Bryan can find the catch-up pane by name so that the nav does not need explaining.</h2>
+<p>Cosmetic. Renaming later costs a redirect and three doc titles.</p>`,
+          comments: [
+            {
+              who: 'Quill',
+              kind: 'agent',
+              when: 'Aug 15, 9:00 AM',
+              asking: true,
+              html: `<p>Keeping "Home" unless you say otherwise — flagging it because it is in the URL now.</p>`,
+            },
+          ],
+        },
+      ];
+
+      const KIND_LABEL = { decision: 'Decision', reply: 'Reply', read: 'Read' };
+
+      // ---------------------------------------------------------------------
+      // STATE
+      // ---------------------------------------------------------------------
+      const state = {
+        pane: 'home',
+        summaryRead: false,
+        tuneOpen: false,
+        sort: 'agent',
+        handled: new Set(), // item ids that got an answer this session
+        walkIndex: null,
+      };
+
+      const $ = (sel, root = document) => root.querySelector(sel);
+      const el = (tag, cls, text) => {
+        const n = document.createElement(tag);
+        if (cls) n.className = cls;
+        if (text !== undefined) n.textContent = text;
+        return n;
+      };
+
+      function toast(msg) {
+        const t = $('#toast');
+        t.textContent = msg;
+        t.hidden = false;
+        clearTimeout(toast._t);
+        toast._t = setTimeout(() => {
+          t.hidden = true;
+        }, 2200);
+      }
+
+      function openItems() {
+        const live = ITEMS.filter((i) => !state.handled.has(i.id));
+        const order = {
+          agent: (a, b) => ITEMS.indexOf(a) - ITEMS.indexOf(b),
+          waiting: (a, b) => waitHours(b) - waitHours(a),
+          blocking: (a, b) => b.blocks - a.blocks || ITEMS.indexOf(a) - ITEMS.indexOf(b),
+        };
+        return [...live].sort(order[state.sort]);
+      }
+      function waitHours(i) {
+        const m = /(\d+)\s*(h|d)/.exec(i.waited);
+        if (!m) return 0;
+        return Number(m[1]) * (m[2] === 'd' ? 24 : 1);
+      }
+
+      // ---------------------------------------------------------------------
+      // HOME
+      // ---------------------------------------------------------------------
+      function renderHome(app) {
+        // --- summary card ---
+        const card = el('section', 'card');
+        if (state.summaryRead) {
+          const read = el('div', 'sum-read');
+          const tick = el('span', 'tick', '✓');
+          read.append(
+            tick,
+            el('span', null, `Caught up through ${SUMMARY.since}. Next summary starts here.`),
+          );
+          const undo = el('button', 'btn-quiet', 'Undo');
+          undo.addEventListener('click', () => {
+            state.summaryRead = false;
+            render();
+          });
+          read.append(undo);
+          card.append(read);
+        } else {
+          const head = el('div', 'sum-head');
+          head.append(
+            el('span', 'sum-title', 'Since your last review'),
+            el('span', 'sum-scope', `${SUMMARY.since} · ${SUMMARY.scope}`),
+          );
+          const clip = el('div', 'sum-clip');
+          const body = el('div', 'sum-body');
+          body.innerHTML = SUMMARY.html;
+          clip.append(body);
+          const more = el('button', 'sum-more', 'Read the rest');
+          more.hidden = true;
+          more.addEventListener('click', () => {
+            clip.dataset.clipped = 'false';
+            more.hidden = true;
+          });
+          // Measure after layout: whether 200 words overflows half a screen is a
+          // function of the viewport, so it cannot be decided when the string is
+          // written. Clipped only when it actually is.
+          requestAnimationFrame(() => {
+            clip.dataset.clipped = 'true';
+            requestAnimationFrame(() => {
+              const over = body.scrollHeight > body.clientHeight + 2;
+              clip.dataset.clipped = String(over);
+              more.hidden = !over;
+            });
+          });
+          const foot = el('div', 'sum-foot');
+          const mark = el('button', 'btn btn-primary', 'Mark read');
+          mark.addEventListener('click', () => {
+            state.summaryRead = true;
+            render();
+            toast('Marked read — the next summary starts from now');
+          });
+          const tune = el('button', 'btn-quiet', 'Tune this summary');
+          tune.addEventListener('click', () => {
+            state.tuneOpen = !state.tuneOpen;
+            render();
+          });
+          foot.append(mark, tune, el('span', 'sum-words', `${SUMMARY.words} words`));
+          card.append(head, clip, more, foot);
+
+          const tuner = el('div', 'tune');
+          tuner.hidden = !state.tuneOpen;
+          tuner.innerHTML = `
+            <h4>Standing instructions for the summarizer</h4>
+            <textarea>Lede first. Name what blocks me before what shipped. Never more than 200 words. Link every task you name. Do not describe process.</textarea>
+            <div class="tune-row">
+              <button class="btn btn-primary" type="button">Rewrite this summary</button>
+              <button class="btn" type="button">Compare with last version</button>
+            </div>
+            <p class="tune-note">Applies to every future summary. The last four are kept, so a
+            rewrite can be read side by side with what it replaced.</p>`;
+          tuner
+            .querySelectorAll('button')
+            .forEach((b) =>
+              b.addEventListener('click', () => toast('Mockup — the summarizer is not wired')),
+            );
+          card.append(tuner);
+        }
+        app.append(card);
+
+        // --- review queue ---
+        const items = openItems();
+        const head = el('div', 'queue-head');
+        head.append(
+          el('span', 'queue-title', items.length ? `Needs you (${items.length})` : 'Needs you'),
+          el(
+            'span',
+            'queue-sub',
+            items.length
+              ? `${items.filter((i) => i.kind !== 'read').length} quick · ${
+                  items.filter((i) => i.kind === 'read').length
+                } longer read`
+              : 'Nothing right now',
+          ),
+        );
+        const sortWrap = el('label', 'queue-sort');
+        sortWrap.append(el('span', null, 'Ordered by'));
+        const sel = el('select');
+        [
+          ['agent', "Agent's ranking"],
+          ['waiting', 'Longest waiting'],
+          ['blocking', 'Blocks the most'],
+        ].forEach(([v, t]) => {
+          const o = el('option', null, t);
+          o.value = v;
+          if (state.sort === v) o.selected = true;
+          sel.append(o);
+        });
+        sel.addEventListener('change', () => {
+          state.sort = sel.value;
+          render();
+        });
+        sortWrap.append(sel);
+        head.append(sortWrap);
+        app.append(head);
+
+        if (items.length) {
+          const start = el(
+            'button',
+            'btn btn-primary btn-big',
+            `Start review — ${items.length} item${items.length > 1 ? 's' : ''}`,
+          );
+          start.addEventListener('click', () => openWalk(0));
+          app.append(start);
+
+          const list = el('ul', 'queue-list');
+          items.forEach((it, idx) => {
+            const li = el('li');
+            const row = el('button', 'qrow');
+            row.type = 'button';
+            row.append(el('span', 'qrank', String(idx + 1)));
+            const main = el('div', 'qmain');
+            const title = el('div', 'qtitle');
+            const kind = el('span', `qkind qkind-${it.kind}`, KIND_LABEL[it.kind]);
+            title.append(kind, document.createTextNode(it.title));
+            const ask = el('div', 'qask', firstSentence(it.ask));
+            const meta = el('div', 'qmeta');
+            meta.append(el('span', null, `${it.asker} · ${it.waited}`));
+            meta.append(el('span', null, it.priority));
+            meta.append(el('span', null, it.effort));
+            if (it.blocks > 0)
+              meta.append(el('span', 'blocking', `blocks ${it.blocks} task${it.blocks > 1 ? 's' : ''}`));
+            main.append(title, ask, meta);
+            row.append(main, el('span', 'qgo', '›'));
+            row.addEventListener('click', () => openWalk(idx));
+            li.append(row);
+            list.append(li);
+          });
+          app.append(list);
+        }
+
+        const quiet = el('p', 'quiet-note');
+        quiet.innerHTML = `Nothing else is waiting on you. 14 tasks are in flight and 7 closed since
+        Saturday — <a href="#/board">see the board</a> if you want to look anyway.`;
+        app.append(quiet);
+
+        const flag = el('p', 'mock-flag');
+        flag.textContent =
+          'Mockup — nothing here is wired to the server. Buttons update this page only.';
+        app.append(flag);
+      }
+
+      // Strip tags and take the lede. The ask is written inverted-pyramid, so
+      // the first sentence IS the summary of the summary.
+      function firstSentence(html) {
+        const tmp = el('div');
+        tmp.innerHTML = html;
+        const text = (tmp.textContent || '').replace(/\s+/g, ' ').trim();
+        const cut = text.match(/^.{0,190}?[.?!](\s|$)/);
+        return (cut ? cut[0] : text.slice(0, 190)).trim();
+      }
+
+      // ---------------------------------------------------------------------
+      // WALKTHROUGH
+      // ---------------------------------------------------------------------
+      function openWalk(idx) {
+        state.walkIndex = idx;
+        renderWalk();
+      }
+      function closeWalk() {
+        state.walkIndex = null;
+        $('#walk').hidden = true;
+        render();
+      }
+
+      function renderWalk() {
+        const wrap = $('#walk');
+        const panel = $('#walk-panel');
+        panel.replaceChildren();
+        const items = openItems();
+
+        if (state.walkIndex === null) {
+          wrap.hidden = true;
+          return;
+        }
+        wrap.hidden = false;
+
+        if (state.walkIndex >= items.length || items.length === 0) {
+          const done = el('div', 'walk-done');
+          // "Queue clear" is only true when the queue is EMPTY. Reaching the end
+          // with skipped items left is a different sentence, and saying the
+          // first one there is the kind of cheerful lie that costs trust in the
+          // count on the Home tab.
+          done.append(
+            el('h2', null, items.length === 0 ? 'Queue clear' : 'End of the queue'),
+          );
+          const answered = state.handled.size
+            ? `${state.handled.size} answered.`
+            : 'Nothing answered.';
+          done.append(
+            el(
+              'p',
+              null,
+              items.length === 0
+                ? `${answered} Everything else is with the agents.`
+                : `${answered} ${items.length} skipped — still on Home, still waiting.`,
+            ),
+          );
+          const b = el('button', 'btn btn-primary', 'Back to Home');
+          b.addEventListener('click', closeWalk);
+          done.append(b);
+          panel.append(done);
+          return;
+        }
+
+        const it = items[state.walkIndex];
+        const head = el('div', 'walk-head');
+        head.append(el('span', 'walk-pos', `${state.walkIndex + 1} of ${items.length}`));
+        const close = el('button', 'walk-close', '✕');
+        close.setAttribute('aria-label', 'Close review');
+        close.addEventListener('click', closeWalk);
+        head.append(close);
+        panel.append(head);
+
+        const bar = el('div', 'walk-progress');
+        const fill = el('i');
+        fill.style.width = `${(state.walkIndex / items.length) * 100}%`;
+        bar.append(fill);
+        panel.append(bar);
+
+        panel.append(el('h2', 'walk-title', it.title));
+        const meta = el('div', 'walk-meta');
+        meta.append(el('span', `qkind qkind-${it.kind}`, KIND_LABEL[it.kind]));
+        meta.append(el('span', null, `${it.asker} · ${it.waited}`));
+        meta.append(el('span', null, it.priority));
+        if (it.blocks > 0) meta.append(el('span', null, `blocks ${it.blocks}`));
+        panel.append(meta);
+
+        panel.append(askBlock(it, { inWalk: true }));
+
+        const nav = el('div', 'walk-nav');
+        const open = el('button', 'btn', 'Open full task');
+        open.addEventListener('click', () => {
+          closeWalk();
+          location.hash = `#/task/${it.id}`;
+        });
+        const skip = el('button', 'btn', 'Skip for now');
+        skip.addEventListener('click', () => {
+          state.walkIndex += 1;
+          renderWalk();
+        });
+        nav.append(open, el('span', 'grow'), skip);
+        if (state.walkIndex > 0) {
+          const back = el('button', 'btn', 'Back');
+          back.addEventListener('click', () => {
+            state.walkIndex -= 1;
+            renderWalk();
+          });
+          nav.insertBefore(back, nav.firstChild);
+        }
+        panel.append(nav);
+
+        // Every card starts at its own top. Without this the panel keeps the
+        // previous card's scroll position and the next item opens mid-sentence
+        // — on a phone that reads as a broken page rather than a new question.
+        panel.scrollTop = 0;
+        panel.focus?.();
+      }
+
+      // ---------------------------------------------------------------------
+      // THE ASK BLOCK — shared by the walkthrough and the detail page
+      // ---------------------------------------------------------------------
+      function askBlock(it, { inWalk }) {
+        const box = el('div', `ask${it.kind === 'decision' ? ' ask-decision' : ''}`);
+        box.append(
+          el(
+            'span',
+            'ask-label',
+            it.kind === 'decision'
+              ? 'Decide'
+              : it.kind === 'read'
+                ? 'Read when you have time'
+                : 'What we need from you',
+          ),
+        );
+        const body = el('div', 'ask-body');
+        body.innerHTML = it.ask;
+        box.append(body);
+        box.append(el('div', 'ask-words', `${countWords(it.ask)} words · written by ${it.asker}`));
+
+        if (it.kind === 'read') {
+          const hand = el('div', 'handoff');
+          hand.innerHTML = `<p><strong>${it.docTitle}</strong> — ${it.effort}</p>`;
+          const go = el('button', 'btn btn-primary', 'Open the doc');
+          go.addEventListener('click', () => toast('Mockup — would open the review doc'));
+          const later = el('button', 'btn', 'Not now');
+          later.addEventListener('click', () => {
+            if (inWalk) {
+              state.walkIndex += 1;
+              renderWalk();
+            } else {
+              toast('Stays at the top of your queue');
+            }
+          });
+          const row = el('div', 'reply-row');
+          row.append(go, later);
+          hand.append(row);
+          box.append(hand);
+          return box;
+        }
+
+        if (it.options) {
+          const opts = el('div', 'opts');
+          it.options.forEach((o) => {
+            const b = el('button', 'opt');
+            b.type = 'button';
+            b.setAttribute('aria-pressed', 'false');
+            b.append(el('span', 'opt-title', o.title));
+            const d = el('span', 'opt-detail');
+            d.innerHTML = o.detail;
+            b.append(d);
+            b.addEventListener('click', () => {
+              opts
+                .querySelectorAll('.opt')
+                .forEach((x) => x.setAttribute('aria-pressed', 'false'));
+              b.setAttribute('aria-pressed', 'true');
+              answer(it, `${o.title}`, inWalk);
+            });
+            opts.append(b);
+          });
+          const other = el('button', 'opt opt-else');
+          other.type = 'button';
+          other.append(el('span', 'opt-title', 'Something else'));
+          const od = el('span', 'opt-detail');
+          od.innerHTML = '<p>Write it in your own words instead.</p>';
+          other.append(od);
+          other.addEventListener('click', () => {
+            other.replaceChildren(replyForm(it, inWalk, 'Say what you want instead…'));
+            other.style.cursor = 'default';
+          });
+          opts.append(other);
+          box.append(opts);
+          return box;
+        }
+
+        box.append(replyForm(it, inWalk, 'Reply…'));
+        return box;
+      }
+
+      function replyForm(it, inWalk, placeholder) {
+        const form = el('form', 'reply');
+        const ta = el('textarea');
+        ta.placeholder = placeholder;
+        const row = el('div', 'reply-row');
+        const send = el('button', 'btn btn-primary', 'Send reply');
+        send.type = 'submit';
+        row.append(send, el('span', 'reply-hint', 'Goes on the task as a comment from you.'));
+        form.append(ta, row);
+        form.addEventListener('submit', (ev) => {
+          ev.preventDefault();
+          if (!ta.value.trim()) {
+            ta.focus();
+            return;
+          }
+          answer(it, ta.value.trim(), inWalk);
+        });
+        return form;
+      }
+
+      function answer(it, text, inWalk) {
+        state.handled.add(it.id);
+        toast(`Sent to ${it.asker}: “${text.length > 40 ? text.slice(0, 40) + '…' : text}”`);
+        $('#home-count').textContent = String(openItems().length);
+        if (inWalk) {
+          // Stay at the same index: removing this item slides the next one in.
+          renderWalk();
+        } else {
+          render();
+        }
+      }
+
+      function countWords(html) {
+        const tmp = el('div');
+        tmp.innerHTML = html;
+        return (tmp.textContent || '').trim().split(/\s+/).length;
+      }
+
+      // ---------------------------------------------------------------------
+      // TASK DETAIL
+      // ---------------------------------------------------------------------
+      function renderDetail(app, it) {
+        const back = el('button', 'btn-quiet', '← Home');
+        back.addEventListener('click', () => {
+          location.hash = '#/home';
+        });
+        app.append(back);
+
+        const head = el('div', 'detail-head');
+        head.append(el('h1', 'detail-title', it.title));
+        const meta = el('div', 'detail-meta');
+        meta.append(el('span', 'chip', it.priority));
+        meta.append(el('span', 'chip', `Owner: ${it.asker}`));
+        meta.append(el('span', 'chip', 'In progress'));
+        if (it.blocks > 0)
+          meta.append(el('span', 'chip chip-blocking', `blocks ${it.blocks} task${it.blocks > 1 ? 's' : ''}`));
+        head.append(meta);
+        app.append(head);
+
+        // --- description = the live doc, edited in place ---
+        const sh = el('div', 'sec-head');
+        sh.append(el('span', 'sec-title', 'Description'));
+        sh.append(el('span', 'reply-hint', 'This is the task doc. Edit it here.'));
+        app.append(sh);
+
+        const doc = el('div', 'doc');
+        const bar = el('div', 'doc-bar');
+        const who1 = el('span', 'who');
+        who1.append(avatar('Bryan'), el('span', null, 'You'));
+        const who2 = el('span', 'who');
+        who2.append(avatar(it.asker), el('span', null, `${it.asker} · editing`));
+        bar.append(who1, who2, el('span', null, '· saved 4s ago'));
+        doc.append(bar);
+        const body = el('div', 'doc-body');
+        body.contentEditable = 'true';
+        body.spellcheck = false;
+        body.innerHTML = it.body;
+        doc.append(body);
+        app.append(doc);
+
+        // --- comments ---
+        const ch = el('div', 'sec-head');
+        ch.append(el('span', 'sec-title', `Comments (${it.comments.length})`));
+        ch.append(el('span', 'reply-hint', 'One thread. Newest last.'));
+        app.append(ch);
+
+        const list = el('div', 'comments');
+        it.comments.forEach((c) => list.append(commentRow(c)));
+        app.append(list);
+
+        // --- the ask + the reply, at the bottom, where you land ---
+        const land = el('div', 'land');
+        land.id = 'land';
+        // The page opens HERE, so this line is the only thing naming the task
+        // at the moment of landing — the title is a screen above. It carries the
+        // title as well as the "there is more up there" signal.
+        const up = el('div', 'land-up');
+        up.append(
+          el('span', null, '↑'),
+          el('strong', null, it.title),
+          el(
+            'span',
+            null,
+            `— full description and ${it.comments.length} comment${
+              it.comments.length > 1 ? 's' : ''
+            } above`,
+          ),
+        );
+        land.append(up);
+        land.append(askBlock(it, { inWalk: false }));
+        app.append(land);
+
+        const flag = el('p', 'mock-flag');
+        flag.textContent =
+          'Mockup — the description is editable in the page but nothing is saved. Opens scrolled to the ask.';
+        app.append(flag);
+
+        // Land on the ask. Everything above it is context you scroll UP for.
+        requestAnimationFrame(() => {
+          land.scrollIntoView({ block: 'start' });
+        });
+      }
+
+      function avatar(name) {
+        const a = el('span', 'avatar', name.slice(0, 1));
+        a.style.background = AGENTS[name] || '#6e7781';
+        return a;
+      }
+
+      function commentRow(c) {
+        const row = el('div', `cmt${c.asking ? ' cmt-asking' : ''}${c.original ? ' cmt-original' : ''}`);
+        const av = el('span', 'cmt-avatar', c.who.slice(0, 1));
+        av.style.background = AGENTS[c.who] || '#6e7781';
+        row.append(av);
+        const main = el('div');
+
+        if (c.original) {
+          // Preserved words: a comment, collapsed, secondary. NOT a banner at
+          // the top of the task.
+          const det = el('details');
+          const sum = el('summary');
+          sum.textContent = `Original words — ${c.who}, ${c.when}`;
+          const q = el('blockquote', null, c.text);
+          det.append(sum, q);
+          main.append(det);
+          row.append(main);
+          return row;
+        }
+
+        const h = el('div', 'cmt-head');
+        h.append(el('span', 'cmt-who', c.who));
+        h.append(el('span', `cmt-kind cmt-kind-${c.kind}`, c.kind === 'agent' ? 'agent' : 'you'));
+        if (c.asking) h.append(el('span', 'cmt-kind', 'asked you'));
+        h.append(el('span', 'cmt-when', c.when));
+        const b = el('div', 'cmt-body');
+        b.innerHTML = c.html || `<p>${c.text}</p>`;
+        main.append(h, b);
+        row.append(main);
+        return row;
+      }
+
+      // ---------------------------------------------------------------------
+      // BOARD STUB — what the task list looks like once review moves OUT of it
+      // ---------------------------------------------------------------------
+      function renderBoard(app) {
+        const banner = el('div', 'board-banner');
+        const t = el('div');
+        t.innerHTML = `<strong>5 items need you.</strong> Decisions and the catch-up summary live on Home now.`;
+        const go = el('button', 'btn btn-primary', 'Go to Home');
+        go.addEventListener('click', () => {
+          location.hash = '#/home';
+        });
+        banner.append(t, go);
+        app.append(banner);
+
+        const rows = [
+          ['Summary card reads a stored last-read time', 'Beacon', 'doing'],
+          ['Review flow ordering', 'Atlas', 'doing'],
+          ['Flatten existing replies', 'Beacon', 'todo'],
+          ['Task detail: description is the live doc', 'Quill', 'doing'],
+          ['Mobile pass at 430px', 'Quill', 'todo'],
+          ['Remove decision strip from the board', 'Atlas', 'todo'],
+        ];
+        const sec = el('div', 'board-sec');
+        sec.append(el('h3', null, 'Goal 1 — Home pane'));
+        rows.forEach(([title, owner, status]) => {
+          const r = el('div', 'board-row');
+          r.append(el('span', `ring${status === 'doing' ? ' ring-doing' : ''}`));
+          r.append(el('span', null, title));
+          const a = avatar(owner);
+          r.append(a);
+          sec.append(r);
+        });
+        app.append(sec);
+
+        const flag = el('p', 'mock-flag');
+        flag.textContent =
+          'Mockup — the board pane is a stub here. Its only job is to show that status + decision review are gone from it, leaving one banner.';
+        app.append(flag);
+      }
+
+      // ---------------------------------------------------------------------
+      // ROUTER
+      // ---------------------------------------------------------------------
+      function render() {
+        const app = $('#app');
+        app.replaceChildren();
+        const hash = location.hash || '#/home';
+        const taskMatch = /^#\/task\/(.+)$/.exec(hash);
+
+        document.querySelectorAll('.pane-tab').forEach((b) => {
+          const on =
+            (b.dataset.pane === 'board' && hash.startsWith('#/board')) ||
+            (b.dataset.pane === 'home' && !hash.startsWith('#/board'));
+          b.setAttribute('aria-selected', String(on));
+        });
+        $('#home-count').textContent = String(openItems().length);
+        $('#home-count').style.display = openItems().length ? '' : 'none';
+
+        if (taskMatch) {
+          const it = ITEMS.find((i) => i.id === taskMatch[1]);
+          if (it) return renderDetail(app, it);
+        }
+        if (hash.startsWith('#/board')) return renderBoard(app);
+        return renderHome(app);
+      }
+
+      document.querySelectorAll('.pane-tab').forEach((b) => {
+        b.addEventListener('click', () => {
+          location.hash = b.dataset.pane === 'board' ? '#/board' : '#/home';
+        });
+      });
+      window.addEventListener('hashchange', () => {
+        // A route change always leaves the walkthrough. It is `position: fixed`,
+        // so without this it stays over whatever you navigated to.
+        state.walkIndex = null;
+        $('#walk').hidden = true;
+        window.scrollTo(0, 0);
+        render();
+      });
+      window.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Escape' && state.walkIndex !== null) closeWalk();
+      });
+      render();
+    </script>
+  </body>
+</html>

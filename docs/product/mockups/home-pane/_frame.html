@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>430px harness</title>
+    <style>
+      /* Chrome will not make a window narrower than ~500px, so a phone viewport
+         is only reachable by putting the page inside a same-origin iframe sized
+         to the device. 430×932 = iPhone 16 Pro Max, the width this repo
+         verifies at (docs/product/design-mobile.md). */
+      html,
+      body {
+        margin: 0;
+        background: #444;
+      }
+      #scaler {
+        transform-origin: 0 0;
+        width: 430px;
+        height: 932px;
+      }
+      iframe {
+        display: block;
+        width: 430px;
+        height: 932px;
+        border: 0;
+        background: #fff;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- The iframe always LAYS OUT at 430×932; #scaler only rescales the raster
+         so the whole phone screen fits in a browser window shorter than 932px.
+         Set it from the URL: _frame.html#scale=0.88 -->
+    <div id="scaler"><iframe id="f" src="./index.html"></iframe></div>
+    <script>
+      const m = /scale=([\d.]+)/.exec(location.hash);
+      const s = m ? Number(m[1]) : 1;
+      const sc = document.getElementById('scaler');
+      sc.style.transform = `scale(${s})`;
+      document.body.style.width = `${430 * s}px`;
+      document.body.style.height = `${932 * s}px`;
+      document.body.style.overflow = 'hidden';
+    </script>
+  </body>
+</html>
