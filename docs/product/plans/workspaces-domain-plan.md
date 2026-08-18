@@ -231,14 +231,54 @@ breaks the fetch, the symptom is **silent**: `claude plugin update` reports
 success when it copies nothing, so the fleet simply stops receiving releases
 and no surface says so.
 
-### The install id does not change
+### What the machine actually holds — measured, not inferred
 
-`live-feedback@claude-live-feedback` is `<plugin name>@<marketplace name>`, and
-both come from JSON inside the repo — `.claude-plugin/marketplace.json` declares
-marketplace `claude-live-feedback` containing plugin `live-feedback`. Neither is
-the repo name. **Renaming the repo does not change the install id**, and
-changing the id is a separate, more disruptive decision (every peer would have
-to remove and re-add the marketplace). This PR deliberately leaves the id alone.
+Read off this machine on 2026-08-18, because the whole risk turns on it:
+
+`~/.claude/plugins/known_marketplaces.json`
+
+```json
+"claude-live-feedback": {
+  "source": { "source": "github", "repo": "fryanpan/claude-live-feedback-plugin" },
+  "installLocation": "/Users/bryanchan/.claude/plugins/marketplaces/claude-live-feedback",
+  "lastUpdated": "2026-08-18T18:37:34.869Z"
+}
+```
+
+And that `installLocation` is **a real git clone**:
+
+```
+$ git -C ~/.claude/plugins/marketplaces/claude-live-feedback remote -v
+origin  git@github.com:fryanpan/claude-live-feedback-plugin.git (fetch)
+origin  git@github.com:fryanpan/claude-live-feedback-plugin.git (push)
+$ git -C ~/.claude/plugins/marketplaces/claude-live-feedback log --oneline -1
+57a1ef2 The Home mockup stops throwing away what you typed but have not sent (#219)
+```
+
+Three things follow, and they split the risk cleanly:
+
+1. **The install id survives the rename.** The registration is keyed by
+   `claude-live-feedback` — the `name` field in `.claude-plugin/marketplace.json`
+   — and the install location is named after that key too. The repo name appears
+   only inside `source.repo`. So `live-feedback@claude-live-feedback` stays the
+   correct id, and **this PR deliberately does not change it**. Changing the id
+   is a separate, more disruptive decision: every peer would have to remove and
+   re-add the marketplace.
+2. **`claude plugin update` is a git fetch over SSH against the OLD path.** Not
+   a tarball, not an API call — an ordinary git remote. That is good news,
+   because git operations against a renamed GitHub repo follow a redirect, and
+   it is also exactly why the fix below is a one-line `git remote set-url`
+   rather than anything exotic.
+3. **The refresh is working today.** `lastUpdated` is minutes old and the clone
+   sits at `main`'s tip, which is the before-value that makes "did the rename
+   break delivery" answerable afterwards. Record it again immediately before
+   the rename.
+
+**The exposure, stated plainly:** after the rename, every peer's cache still
+points at `fryanpan/claude-live-feedback-plugin` and keeps working *only for as
+long as GitHub's redirect holds*. That is a dependency on a redirect nobody
+controls, and it ends the moment anyone creates a repo at the old name. It is
+not urgent, and it is not something to leave indefinitely.
 
 ### Checklist
 
@@ -265,9 +305,18 @@ to remove and re-add the marketplace). This PR deliberately leaves the id alone.
 - [ ] **Update every linked worktree's expectation** — they share the primary
       checkout's `.git`, so one `set-url` covers all of them. Verify with
       `git remote -v` from one worktree.
-- [ ] **Re-point the marketplace registration** if `claude plugin marketplace
-      list` still shows the old URL. This is the step most likely to be needed
-      and least likely to be remembered.
+- [ ] **Re-point every peer's marketplace clone.** This is the step most likely
+      to be needed and least likely to be remembered, and it is one line per
+      machine:
+      ```bash
+      git -C ~/.claude/plugins/marketplaces/claude-live-feedback \
+        remote set-url origin git@github.com:fryanpan/claude-workspaces-plugin.git
+      ```
+      `source.repo` in `known_marketplaces.json` still names the old path after
+      this; the alternative that fixes both is
+      `command claude plugin marketplace remove claude-live-feedback` followed by
+      `add fryanpan/claude-workspaces-plugin` — heavier, but it leaves nothing
+      pointing at a redirect. Either way the install id is unchanged.
 - [ ] **Verification, and it must be run by a PEER, not here.** One peer runs
       `command claude plugin update live-feedback@claude-live-feedback` and then
       restarts — in that order, because the cache is version-keyed and
@@ -303,7 +352,7 @@ to remove and re-add the marketplace). This PR deliberately leaves the id alone.
 | risk | how it shows up | mitigation |
 |---|---|---|
 | Marketplace fetch silently stops | peers stay on their current version forever; no error anywhere | the peer verification step above, with the *version the session reports* as the reading — not the updater's own success message |
-| Someone creates `fryanpan/claude-live-feedback-plugin` later | the redirect stops working, and the failure is indistinguishable from a network problem | consider keeping the old name claimed, or move off the redirect immediately by re-pointing every remote and the marketplace registration |
+| Someone creates `fryanpan/claude-live-feedback-plugin` later | the fetch stops resolving, and the failure is indistinguishable from a network problem | move off the redirect rather than relying on it: re-point every peer's marketplace clone (above) and this machine's checkout remote. Keeping the old name claimed is the belt-and-braces option |
 | A peer restarts before updating | drops onto a stale cache — moves *backwards* a version | update, **then** restart; already recorded in learnings.md |
 | The prod refresher's URL goes stale | no release reaches this machine; prod keeps serving whatever it has | check the server log after one refresh tick rather than assuming |
 
