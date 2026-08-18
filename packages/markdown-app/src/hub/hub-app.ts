@@ -76,6 +76,7 @@ import {
   renderUnplacedStrip,
 } from './hub-render.ts';
 import { sidebarEntriesFor } from './hub-sidebar.ts';
+import { createTaskBodyEditorHost } from './task-body-editor.ts';
 
 interface HubState {
   info: HubWorkspaceInfo | null;
@@ -336,6 +337,22 @@ async function main(): Promise<void> {
   buildShell(root, state.info?.name ?? workspaceId);
 
   const el = (id: string) => document.getElementById(id) as HTMLElement;
+
+  // ── The description, edited in place ────────────────────────────────────
+  //
+  // A second room, opened per task rather than per board: the task's body is
+  // `task:<taskId>`, the same room an agent rewrites through `set_doc_content`
+  // and the same one `/review/task:<id>` opens. Mounting the review surface's
+  // editor over it is what makes the reader's typing and an agent's rewrite
+  // merge as CRDT edits instead of one overwriting the other.
+  //
+  // The editor itself is behind a dynamic import so the board's bundle stays a
+  // board — see task-body-editor-chunk.ts.
+  const bodyEditor = createTaskBodyEditorHost({
+    connect: (docId) => connect(wsUrl(docId, 'markdown')),
+    loadEditor: () => import('./task-body-editor-chunk.ts'),
+    user: { name: user.name, color: user.color },
+  });
 
   // ── Realtime: the ws:<id> board room ────────────────────────────────────
   const client = connect(wsUrl(`ws:${workspaceId}`, 'workspace'));
@@ -723,6 +740,15 @@ async function main(): Promise<void> {
         now: Date.now(),
       },
       task ? discussion : undefined,
+    );
+    // After the render, never before: the slot this hands over is the one the
+    // render just decided on — a rebuilt element when the panel was opened or
+    // switched, the SAME element when a repaint kept a live editor in place.
+    // Idempotent for an unchanged pair, so the repaints that arrive while
+    // somebody is typing cost nothing.
+    bodyEditor.sync(
+      task ? { id: task.id, bodyDocId: task.bodyDocId } : null,
+      el('hub-detail').querySelector<HTMLElement>('.hub-detail-body-slot'),
     );
   }
 
