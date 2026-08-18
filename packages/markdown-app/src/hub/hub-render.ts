@@ -18,6 +18,7 @@ import {
   type BoardSection,
   type DecisionRow,
   type DriftNotice,
+  type HomePayload,
   type HubEvidence,
   type HubTask,
   type HubTransition,
@@ -38,10 +39,12 @@ import {
   describeEvent,
   dropIndexFor,
   dropTarget,
+  homeSinceLabel,
   ownerKind,
   quoteAfterCapture,
   quoteAfterEdit,
   quoteForCapture,
+  reviewBannerText,
   reviewRow,
   shortCommit,
   stepTarget,
@@ -1166,18 +1169,54 @@ const REVIEW_KIND_LABEL: Record<ReviewKind, string> = {
  * Urgency is still DERIVED, never declared: "blocking work now" is the same
  * fact as "something depends on it", which `after` / `afterEnforce` already
  * record. There is no urgency field to set and none to keep up to date.
+ *
+ * This now lives on the HOME pane as "For Your Review" (the board keeps only
+ * a one-line banner — `renderReviewBanner`). Same queue, same rows, same
+ * walkthrough entry; what moved is which page carries it.
  */
-export function renderReviewStrip(
+export function renderHomeReview(
   container: HTMLElement,
   queue: ReviewQueue,
   handlers: ReviewStripHandlers,
+  settled: ReviewItem[] = [],
 ): void {
   container.replaceChildren();
+  container.classList.remove('hidden');
+
+  const titleRow = document.createElement('div');
+  titleRow.className = 'hub-home-review-head';
+  const heading = document.createElement('h2');
+  heading.className = 'hub-home-heading';
+  heading.textContent = 'For Your Review';
+  titleRow.append(heading);
+  // The walkthrough entry, right-aligned beside the heading (approved
+  // design). Only offered when there is something to walk through.
+  if (queue.total > 0) {
+    const go = document.createElement('button');
+    go.type = 'button';
+    go.className = 'hub-btn hub-btn-primary hub-review-go';
+    go.textContent = 'Review';
+    go.setAttribute('aria-label', 'Go through these one at a time');
+    go.addEventListener('click', () => handlers.onWalkthrough());
+    titleRow.append(go);
+  }
+  container.append(titleRow);
+
+  // Settled rows stay in the stack marked done (approved design): an answered
+  // item vanishing outright reads as the page losing things. Only rows that
+  // have actually LEFT the queue render here — an item still present (a
+  // replied thread the next refresh hasn't dropped yet) stays a live row.
+  const live = new Set(queue.items.map((i) => i.key));
+  const done = settled.filter((s) => !live.has(s.key));
+
   if (queue.total === 0) {
-    container.classList.add('hidden');
+    const quiet = document.createElement('p');
+    quiet.className = 'hub-home-quiet';
+    quiet.textContent = 'Nothing is waiting for your review right now.';
+    container.append(quiet);
+    appendSettledRows(container, done, handlers);
     return;
   }
-  container.classList.remove('hidden');
 
   /**
    * A thread row that ended with an agent speaking but contains no question.
@@ -1307,6 +1346,175 @@ export function renderReviewStrip(
     det.append(sum, group(updates, 'hub-decision-chips'));
     container.append(det);
   }
+
+  appendSettledRows(container, done, handlers);
+}
+
+/** What this sitting already cleared, kept in the stack and marked done. */
+function appendSettledRows(
+  container: HTMLElement,
+  done: ReviewItem[],
+  handlers: ReviewStripHandlers,
+): void {
+  if (done.length === 0) return;
+  const rows = document.createElement('div');
+  rows.className = 'hub-decision-chips hub-review-settled';
+  for (const item of done) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'hub-decision-chip hub-review-done';
+    const mark = document.createElement('span');
+    mark.className = 'hub-review-mark';
+    mark.textContent = '✓';
+    mark.setAttribute('aria-hidden', 'true');
+    const label = document.createElement('span');
+    label.className = 'hub-decision-chip-title';
+    label.textContent = clip(item.title);
+    chip.append(mark, label);
+    chip.title = `Done this sitting: ${item.title}`;
+    // Still a way back to the thing that was just answered — the row is the
+    // only pointer left once the queue dropped it.
+    chip.addEventListener('click', () => handlers.onOpen(item));
+    rows.append(chip);
+  }
+  container.append(rows);
+}
+
+/**
+ * The board's whole read of the review queue: one line and a way to Home.
+ * The full list lives on the Home pane now — repeating it here would be two
+ * surfaces claiming to be the queue, drifting the first time only one of
+ * them learns something. Renders nothing at all when nothing is waiting
+ * (approved design: the banner exists only while items are open).
+ */
+export interface ReviewBannerHandlers {
+  onGoHome: () => void;
+}
+
+export function renderReviewBanner(
+  container: HTMLElement,
+  queue: ReviewQueue,
+  handlers: ReviewBannerHandlers,
+): void {
+  container.replaceChildren();
+  const text = reviewBannerText(queue);
+  if (!text) {
+    container.classList.add('hidden');
+    return;
+  }
+  container.classList.remove('hidden');
+  const line = document.createElement('span');
+  line.className = 'hub-review-banner-text';
+  line.textContent = text;
+  const go = document.createElement('button');
+  go.type = 'button';
+  go.className = 'hub-btn hub-btn-primary hub-review-banner-go';
+  go.textContent = 'Go to Home';
+  go.addEventListener('click', () => handlers.onGoHome());
+  container.append(line, go);
+}
+
+// ── The Home brief ("What's New?") ─────────────────────────────────────────
+
+export interface HomeBriefHandlers {
+  onMarkCaughtUp: () => void;
+  /** Save & Update Summary — the server drops every cached brief and
+   *  regenerates under the new instructions. */
+  onSaveInstructions: (text: string) => void;
+  /** Open or close the recipe editor. State lives with the app, not the DOM,
+   *  so a repaint mid-edit cannot silently close the panel. */
+  onEditRecipe: (open: boolean) => void;
+}
+
+export function renderHomeBrief(
+  container: HTMLElement,
+  payload: HomePayload | null,
+  now: number,
+  editingRecipe: boolean,
+  handlers: HomeBriefHandlers,
+): void {
+  container.replaceChildren();
+  const card = document.createElement('section');
+  card.className = 'hub-home-brief-card';
+
+  const head = document.createElement('div');
+  head.className = 'hub-home-review-head';
+  const h = document.createElement('h2');
+  h.className = 'hub-home-heading';
+  h.textContent = "What's New?";
+  head.append(h);
+  card.append(head);
+
+  if (!payload) {
+    const quiet = document.createElement('p');
+    quiet.className = 'hub-home-quiet';
+    quiet.textContent = 'Loading…';
+    card.append(quiet);
+    container.append(card);
+    return;
+  }
+
+  const since = document.createElement('p');
+  since.className = 'hub-home-since';
+  // "Updating…" is grounded in the server's own generating flag — the flag is
+  // written at the point the call is queued, never inferred here.
+  since.textContent = homeSinceLabel(payload, now) + (payload.generating ? ' · Updating…' : '');
+  card.append(since);
+
+  const body = document.createElement('div');
+  body.className = 'hub-home-brief-body';
+  // Escape-first markdown subset; anything a writer put in the board is inert
+  // markup by the time it lands here.
+  body.innerHTML = renderCommentMarkdown(payload.brief.markdown);
+  card.append(body);
+
+  const actions = document.createElement('div');
+  actions.className = 'hub-home-brief-actions';
+  const mark = document.createElement('button');
+  mark.type = 'button';
+  mark.className = 'hub-btn hub-btn-primary hub-home-mark-read';
+  mark.textContent = 'Mark caught up';
+  mark.addEventListener('click', () => handlers.onMarkCaughtUp());
+  const edit = document.createElement('button');
+  edit.type = 'button';
+  edit.className = 'hub-linklike hub-home-edit-recipe';
+  edit.textContent = 'Edit how this gets generated';
+  edit.addEventListener('click', () => handlers.onEditRecipe(!editingRecipe));
+  actions.append(mark, edit);
+  card.append(actions);
+
+  if (editingRecipe) {
+    const panel = document.createElement('div');
+    panel.className = 'hub-home-recipe';
+    const hint = document.createElement('p');
+    hint.className = 'hub-home-recipe-hint';
+    hint.textContent =
+      'Edit these instructions and they will be used on this summary and future summaries.';
+    const ta = document.createElement('textarea');
+    ta.className = 'hub-home-recipe-text';
+    ta.value = payload.instructions;
+    ta.rows = 6;
+    const buttons = document.createElement('div');
+    buttons.className = 'hub-home-recipe-buttons';
+    const save = document.createElement('button');
+    save.type = 'button';
+    save.className = 'hub-btn hub-btn-primary hub-home-recipe-save';
+    save.textContent = 'Save & Update Summary';
+    save.addEventListener('click', () => {
+      const text = ta.value.trim();
+      if (text) handlers.onSaveInstructions(text);
+    });
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'hub-btn hub-home-recipe-cancel';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', () => handlers.onEditRecipe(false));
+    buttons.append(save, cancel);
+    panel.append(hint, ta, buttons);
+    card.append(panel);
+  }
+
+  container.append(card);
 }
 
 // ── Decision walkthrough (six answers in one sitting) ──────────────────────
@@ -1413,23 +1621,34 @@ function promptForm(
   return form;
 }
 
-/** Back / skip. Shared by both card kinds, because "go through the list" is
- *  the feature and it must not stop working when the next item is a comment. */
-function walkNav(index: number, total: number, handlers: WalkthroughHandlers): HTMLElement {
-  const nav = document.createElement('div');
+/**
+ * The ‹ › stepper (approved design), shared by both card kinds because "go
+ * through the list" is the feature and it must not stop working when the next
+ * item is a comment. Lives in the panel HEAD around the position readout, so
+ * stepping does not mean scrolling past a long card to find the buttons.
+ */
+function walkStepper(
+  index: number,
+  total: number,
+  pos: HTMLElement,
+  handlers: WalkthroughHandlers,
+): HTMLElement {
+  const nav = document.createElement('span');
   nav.className = 'hub-walk-nav';
   const back = document.createElement('button');
   back.type = 'button';
   back.className = 'hub-btn hub-walk-back';
-  back.textContent = 'Back';
+  back.textContent = '‹';
+  back.setAttribute('aria-label', 'Back');
   back.disabled = index === 0;
   back.addEventListener('click', () => handlers.onStep(index - 1));
   const skip = document.createElement('button');
   skip.type = 'button';
   skip.className = 'hub-btn hub-walk-skip';
-  skip.textContent = index + 1 === total ? 'Skip — finish' : 'Skip for now';
+  skip.textContent = '›';
+  skip.setAttribute('aria-label', index + 1 === total ? 'Skip — finish' : 'Skip for now');
   skip.addEventListener('click', () => handlers.onStep(index + 1));
-  nav.append(back, skip);
+  nav.append(back, pos, skip);
   return nav;
 }
 
@@ -1557,7 +1776,7 @@ export function renderReviewWalkthrough(
   pos.className = 'hub-walk-pos';
   // Two readings, because the queue shrinks as it is worked and neither number
   // alone says you moved: where you are in what REMAINS, and what this sitting
-  // has taken off the list.
+  // has taken off the list. The ‹ › stepper wraps the readout.
   pos.textContent = `${index + 1} of ${queue.items.length}`;
   if (progress.cleared > 0) {
     const cleared = document.createElement('span');
@@ -1571,7 +1790,7 @@ export function renderReviewWalkthrough(
   close.textContent = '✕';
   close.setAttribute('aria-label', 'Close the walkthrough');
   close.addEventListener('click', () => handlers.onClose());
-  head.append(pos, close);
+  head.append(walkStepper(index, queue.items.length, pos, handlers), close);
   panel.append(head);
 
   const card = document.createElement('div');
@@ -1609,7 +1828,6 @@ export function renderReviewWalkthrough(
     open.addEventListener('click', () => handlers.onOpenItem(item));
     card.append(open);
     panel.append(card);
-    panel.append(walkNav(index, queue.items.length, handlers));
     container.append(panel);
     return;
   }
@@ -1637,7 +1855,6 @@ export function renderReviewWalkthrough(
     open.addEventListener('click', () => handlers.onOpenItem(item));
     card.append(open);
     panel.append(card);
-    panel.append(walkNav(index, queue.items.length, handlers));
     container.append(panel);
     return;
   }
@@ -1706,7 +1923,6 @@ export function renderReviewWalkthrough(
   );
 
   panel.append(card);
-  panel.append(walkNav(index, queue.items.length, handlers));
 
   container.append(panel);
 }

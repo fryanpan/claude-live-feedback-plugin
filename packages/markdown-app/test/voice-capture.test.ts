@@ -7,11 +7,12 @@
  * Recognition is injected — happy-dom has no SpeechRecognition — so these
  * tests drive the state machine through the same seams the browser does.
  */
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type OriginFacts,
   type RecognitionLike,
   type RecognitionResultEvent,
+  SPACE_HOLD_ARM_MS,
   type VoiceAck,
   type VoiceContext,
   createVoiceCapture,
@@ -54,6 +55,19 @@ function keyup(target: EventTarget, code = 'Space'): void {
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
+/**
+ * The document-level hotkey is a HOLD, not a tap (t-Mym15-yQ3QxJ): keydown
+ * arms a timer and the recording only starts SPACE_HOLD_ARM_MS later, so a
+ * typed space — which is a quick tap wherever it lands — never records.
+ * These helpers run under fake timers.
+ */
+function holdSpace(target: EventTarget = document.body): void {
+  keydown(target);
+  vi.advanceTimersByTime(SPACE_HOLD_ARM_MS);
+}
+/** `flush` for fake-timer tests: runs due 0ms timers and the microtasks between. */
+const flushTimers = () => vi.advanceTimersByTimeAsync(0);
+
 describe('createVoiceCapture', () => {
   let button: HTMLButtonElement;
   let indicator: HTMLDivElement;
@@ -93,6 +107,7 @@ describe('createVoiceCapture', () => {
     });
 
   beforeEach(() => {
+    vi.useFakeTimers();
     document.body.innerHTML = '';
     button = document.createElement('button');
     indicator = document.createElement('div');
@@ -104,9 +119,13 @@ describe('createVoiceCapture', () => {
     ackToReturn = { route: 'agent', ack: 'Heard: "x". Sent to the workspace agent.' };
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('hold Space starts listening and streams interim text into the indicator', () => {
     const cap = mount();
-    keydown(document.body);
+    holdSpace();
     expect(rec.started).toBe(1);
     expect(indicator.classList.contains('hidden')).toBe(false);
     rec.emit([{ text: 'rework these', final: false }]);
@@ -114,9 +133,75 @@ describe('createVoiceCapture', () => {
     cap.destroy();
   });
 
-  it('a repeated keydown (auto-repeat) does not restart recognition', () => {
+  it('a Space TAP does nothing at all — no recording, no indicator, no eaten keystroke', () => {
+    // The accidental-trigger report (t-Mym15-yQ3QxJ): a typed space is a tap,
+    // and before this a tap RECORDED — plus a 6s "Didn't catch anything."
+    // toast — whenever the guard could not see typing (focus stolen by a
+    // re-render, a focused row, plain body). A tap now never reaches the
+    // engine, and its keydown is not default-prevented, so whatever space
+    // natively does where it landed still happens.
+    const cap = mount();
+    const ev = new KeyboardEvent('keydown', { code: 'Space', bubbles: true, cancelable: true });
+    document.body.dispatchEvent(ev);
+    vi.advanceTimersByTime(SPACE_HOLD_ARM_MS - 100);
+    keyup(document.body);
+    vi.advanceTimersByTime(10_000);
+    expect(ev.defaultPrevented).toBe(false);
+    expect(rec.started).toBe(0);
+    expect(sent).toHaveLength(0);
+    expect(indicator.classList.contains('hidden')).toBe(true);
+    cap.destroy();
+  });
+
+  it('Space over a focused control never arms the mic, however long it is held', () => {
+    // A keydown's target is whatever has focus: a task row (a tabindex div),
+    // a button, a select. Space MEANS something on all of those, and none of
+    // them are "the page". The hotkey only arms when the press lands on the
+    // page itself.
+    const cap = mount();
+    const row = document.createElement('div');
+    row.tabIndex = 0;
+    row.className = 'hub-task-row';
+    const pageButton = document.createElement('button');
+    document.body.append(row, pageButton);
+    for (const el of [row, pageButton]) {
+      keydown(el);
+      vi.advanceTimersByTime(10_000);
+      keyup(el);
+    }
+    expect(rec.started).toBe(0);
+    // Positive control in the same pass: the same hold on the page starts.
+    holdSpace();
+    expect(rec.started).toBe(1);
+    cap.destroy();
+  });
+
+  it('auto-repeats while the hold is live are prevented, so the page does not scroll under a recording', () => {
+    const cap = mount();
+    holdSpace();
+    const repeat = new KeyboardEvent('keydown', {
+      code: 'Space',
+      repeat: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    document.body.dispatchEvent(repeat);
+    expect(repeat.defaultPrevented).toBe(true);
+    cap.destroy();
+  });
+
+  it('a window blur while the hold is still arming cancels it', () => {
     const cap = mount();
     keydown(document.body);
+    window.dispatchEvent(new Event('blur'));
+    vi.advanceTimersByTime(10_000);
+    expect(rec.started).toBe(0);
+    cap.destroy();
+  });
+
+  it('a repeated keydown (auto-repeat) does not restart recognition', () => {
+    const cap = mount();
+    holdSpace();
     keydown(document.body, 'Space', true);
     keydown(document.body, 'Space', true);
     expect(rec.started).toBe(1);
@@ -130,17 +215,23 @@ describe('createVoiceCapture', () => {
     const editable = document.createElement('div');
     editable.setAttribute('contenteditable', 'true');
     document.body.append(input, textarea, editable);
-    for (const el of [input, textarea, editable]) keydown(el);
+    for (const el of [input, textarea, editable]) {
+      keydown(el);
+      vi.advanceTimersByTime(10_000);
+    }
     expect(rec.started).toBe(0);
+    // Non-vacuity: the same held Space on the page does start.
+    holdSpace();
+    expect(rec.started).toBe(1);
     cap.destroy();
   });
 
   it('release sends the full transcript with the surface context and shows the ack', async () => {
     const cap = mount();
-    keydown(document.body);
+    holdSpace();
     rec.emit([{ text: 'rework these into different groupings', final: true }]);
     keyup(document.body);
-    await flush();
+    await flushTimers();
     expect(rec.stopped).toBe(1);
     expect(sent).toHaveLength(1);
     expect(sent[0]?.transcript).toBe('rework these into different groupings');
@@ -156,10 +247,10 @@ describe('createVoiceCapture', () => {
       navigate: '/review/plan',
     };
     const cap = mount();
-    keydown(document.body);
+    holdSpace();
     rec.emit([{ text: 'open the plan', final: true }]);
     keyup(document.body);
-    await flush();
+    await flushTimers();
     expect(navigated).toEqual(['/review/plan']);
     cap.destroy();
   });
@@ -170,7 +261,7 @@ describe('createVoiceCapture', () => {
     expect(rec.started).toBe(1);
     rec.emit([{ text: 'add a task', final: true }]);
     button.dispatchEvent(new Event('pointercancel'));
-    await flush();
+    await flushTimers();
     expect(sent.map((s) => s.transcript)).toEqual(['add a task']);
     // The hold fully settled: a fresh hold starts a fresh recognition.
     button.dispatchEvent(new Event('pointerdown'));
@@ -180,9 +271,9 @@ describe('createVoiceCapture', () => {
 
   it('an empty hold answers locally and never sends', async () => {
     const cap = mount();
-    keydown(document.body);
+    holdSpace();
     keyup(document.body);
-    await flush();
+    await flushTimers();
     expect(sent).toHaveLength(0);
     expect(indicator.textContent?.toLowerCase()).toContain('didn');
     cap.destroy();
@@ -190,7 +281,7 @@ describe('createVoiceCapture', () => {
 
   it('a browser with no speech recognition says so instead of dying silently', () => {
     const cap = mount({ createRecognition: () => null });
-    keydown(document.body);
+    holdSpace();
     expect(indicator.textContent?.toLowerCase()).toContain('not supported');
     keyup(document.body);
     expect(sent).toHaveLength(0);
@@ -200,10 +291,10 @@ describe('createVoiceCapture', () => {
   it('a failed send still answers', async () => {
     ackToReturn = null;
     const cap = mount();
-    keydown(document.body);
+    holdSpace();
     rec.emit([{ text: 'do the thing', final: true }]);
     keyup(document.body);
-    await flush();
+    await flushTimers();
     expect(indicator.textContent?.toLowerCase()).toContain('failed');
     cap.destroy();
   });
@@ -211,7 +302,15 @@ describe('createVoiceCapture', () => {
   it('destroy() detaches every listener', () => {
     const cap = mount();
     cap.destroy();
+    holdSpace();
+    expect(rec.started).toBe(0);
+  });
+
+  it('destroy() cancels a hold that is still arming', () => {
+    const cap = mount();
     keydown(document.body);
+    cap.destroy();
+    vi.advanceTimersByTime(10_000);
     expect(rec.started).toBe(0);
   });
 });
@@ -324,6 +423,7 @@ describe('createVoiceCapture on an insecure origin', () => {
     });
 
   beforeEach(() => {
+    vi.useFakeTimers();
     document.body.innerHTML = '';
     button = document.createElement('button');
     indicator = document.createElement('div');
@@ -332,9 +432,13 @@ describe('createVoiceCapture on an insecure origin', () => {
     created = 0;
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('explains on press instead of showing a dead "Listening…"', () => {
     const cap = mountAt(insecureHostOrigin);
-    keydown(document.body);
+    holdSpace();
     expect(indicator.classList.contains('hidden')).toBe(false);
     expect(indicator.textContent).toContain('http://localhost:8787/workspaces/w-1');
     expect(indicator.textContent).not.toContain('Listening');
@@ -354,7 +458,7 @@ describe('createVoiceCapture on an insecure origin', () => {
 
   it('a blocked press does not wedge the hold flag', () => {
     const cap = mountAt(insecureHostOrigin);
-    keydown(document.body);
+    holdSpace();
     expect(cap.holding()).toBe(false);
     keyup(document.body);
     expect(cap.holding()).toBe(false);
@@ -366,7 +470,7 @@ describe('createVoiceCapture on an insecure origin', () => {
   it('does not fire on a secure origin', () => {
     const cap = mountAt({ ...insecureHostOrigin, isSecureContext: true, protocol: 'https:' });
     expect(button.classList.contains('voice-unavailable')).toBe(false);
-    keydown(document.body);
+    holdSpace();
     expect(created).toBe(1);
     cap.destroy();
   });
@@ -394,11 +498,16 @@ describe('createVoiceCapture without the Space hotkey', () => {
   });
 
   beforeEach(() => {
+    vi.useFakeTimers();
     document.body.innerHTML = '';
     button = document.createElement('button');
     indicator = document.createElement('div');
     document.body.append(button, indicator);
     rec = new FakeRecognition();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   const mount = (spaceHotkey: boolean) =>
@@ -414,7 +523,7 @@ describe('createVoiceCapture without the Space hotkey', () => {
 
   it('ignores Space, and still records from its own button', () => {
     const cap = mount(false);
-    keydown(document.body);
+    holdSpace();
     expect(rec.started).toBe(0);
     expect(cap.holding()).toBe(false);
 
@@ -426,9 +535,9 @@ describe('createVoiceCapture without the Space hotkey', () => {
     cap.destroy();
   });
 
-  it('the default is unchanged — Space still starts the dock', () => {
+  it('the default is unchanged — a held Space still starts the dock', () => {
     const cap = mount(true);
-    keydown(document.body);
+    holdSpace();
     expect(rec.started).toBe(1);
     cap.destroy();
   });
