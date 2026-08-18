@@ -214,9 +214,9 @@ describe('the blocker band — a person’s own task, holding agent work up', ()
     expect((root.querySelector('.hub-walk-title') as HTMLElement).textContent).toBe(
       'Turn on the tunnel',
     );
-    const blocks = root.querySelector('.hub-walk-blocks') as HTMLElement;
-    expect(blocks.textContent).toContain('Blocking 2 tasks');
-    expect(blocks.textContent).toContain('Waiting 1');
+    const ctx = root.querySelector('.hub-walk-ctx') as HTMLElement;
+    expect(ctx.textContent).toContain('blocks');
+    expect(ctx.textContent).toContain('Waiting 1');
     expect(root.querySelector('.hub-walk-answer')).toBeNull();
     expect(root.querySelector('.hub-walk-info')).toBeNull();
     expect(root.querySelector('.hub-walk-options')).toBeNull();
@@ -270,6 +270,81 @@ describe('renderTaskDetail — the same options, from the other entrance', () =>
   });
 });
 
+/**
+ * The approved mockup (home-pane-mockup-v1) is the acceptance bar here, and
+ * the build before this one missed it in the two ways Bryan named: "The
+ * button text doesn't match the last mockup. The layout is weird too."
+ *
+ * So both halves are pinned: the verbatim copy, and the fact that this is a
+ * PAGE inside the Home column rather than a dialog over the board. Paraphrase
+ * is the failure mode — every string below is quoted from the mockup, and a
+ * rewording is a regression even when it reads better.
+ */
+describe('the walkthrough matches the approved mockup', () => {
+  const withBlocker = () => {
+    const d = decision({ title: 'Blue or green?' });
+    return q0([d, task({ after: [d.id], title: 'Build the badge' })]);
+  };
+
+  it('is a page with a way back, not a dialog over the board', () => {
+    const onClose = vi.fn();
+    renderReviewWalkthrough(root, withBlocker(), 0, walk({ onClose }));
+    // A dialog is what got rejected. Nothing here may claim that role, and
+    // the way out is a link rather than a dismiss.
+    expect(root.querySelector('[role="dialog"]')).toBeNull();
+    expect(root.querySelector('[aria-modal]')).toBeNull();
+    const home = root.querySelector('.hub-walk-home') as HTMLElement;
+    expect(home.textContent).toBe('‹ Back to Home');
+    home.click();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    // "Review", with the ‹ N of M › stepper beside it.
+    expect((root.querySelector('.hub-walk-heading') as HTMLElement).textContent).toBe('Review');
+    expect((root.querySelector('.hub-walk-back') as HTMLElement).textContent).toBe('‹');
+    expect((root.querySelector('.hub-walk-pos') as HTMLElement).textContent).toBe('1 of 1');
+    expect((root.querySelector('.hub-walk-skip') as HTMLElement).textContent).toBe('›');
+  });
+
+  it('badges the kind, chips the context, and states the wait as a bare duration', () => {
+    renderReviewWalkthrough(root, withBlocker(), 0, walk({ contextLabel: () => 'Home pane' }));
+    const badge = root.querySelector('.hub-walk-k-decision') as HTMLElement;
+    expect(badge.textContent).toBe('Decision');
+    expect((root.querySelector('.hub-walk-k-count') as HTMLElement).textContent).toBe('Home pane');
+    // "2 days", not "waiting 2 days" — the mockup's wait sits as a bare
+    // duration at the end of the head, where the word would be noise.
+    const wait = root.querySelector('.hub-walk-wait') as HTMLElement;
+    expect(wait.textContent).not.toContain('waiting');
+
+    renderReviewWalkthrough(root, reviewQueue([], [threadItem({ direct: true })], NOW), 0, walk());
+    expect((root.querySelector('.hub-walk-k-reply') as HTMLElement).textContent).toBe(
+      'Needs your reply',
+    );
+    // The chip is left out rather than filled with a placeholder when there
+    // is no body of work to name.
+    expect(root.querySelector('.hub-walk-k-count')).toBeNull();
+  });
+
+  it('says Send and Skip for now, on both card kinds', () => {
+    for (const queue of [withBlocker(), reviewQueue([], [threadItem()], NOW)]) {
+      renderReviewWalkthrough(root, queue, 0, walk());
+      const send = root.querySelector('.hub-walk-answer .hub-btn') as HTMLElement;
+      expect(send.textContent).toBe('Send');
+      // Ink-dark like the mockup's `.btn.primary`, not the accent blue the
+      // rejected build used.
+      expect(send.className).toContain('hub-btn-ink');
+      expect((root.querySelector('.hub-walk-skip-link') as HTMLElement).textContent).toBe(
+        'Skip for now',
+      );
+    }
+  });
+
+  it('Skip for now steps to the next item', () => {
+    const onStep = vi.fn();
+    renderReviewWalkthrough(root, withBlocker(), 0, walk({ onStep }));
+    (root.querySelector('.hub-walk-skip-link') as HTMLElement).click();
+    expect(onStep).toHaveBeenCalledWith(1);
+  });
+});
+
 describe('renderReviewWalkthrough — decisions', () => {
   const OPTIONS = [
     { id: 'o-1', label: 'Ship it blue', detail: 'Matches the rest of the board' },
@@ -295,8 +370,8 @@ describe('renderReviewWalkthrough — decisions', () => {
     const { q } = queueOfThree();
     renderReviewWalkthrough(root, q, 0, walk());
     expect((root.querySelector('.hub-walk-pos') as HTMLElement).textContent).toBe('1 of 3');
-    const blocks = root.querySelector('.hub-walk-blocks') as HTMLElement;
-    expect(blocks.textContent).toContain('Build the badge');
+    const ctx = root.querySelector('.hub-walk-ctx') as HTMLElement;
+    expect(ctx.textContent).toContain('Build the badge');
     expect((root.querySelector('.hub-walk-body') as HTMLElement).innerHTML).toContain(
       '<strong>colour</strong>',
     );
@@ -431,12 +506,17 @@ describe('renderReviewWalkthrough — comments', () => {
     // is what the card claims by saying "asked". The companion below pins the
     // other wording, so the two cannot quietly converge.
     renderReviewWalkthrough(root, queueOf(threadItem({ direct: true })), 0, walk());
+    // The card's heading is the QUESTION (mockup: the card title is the ask);
+    // the thing it was asked ON is the Task link below it.
     expect((root.querySelector('.hub-walk-title') as HTMLElement).textContent).toBe(
+      'Green or blue?',
+    );
+    expect((root.querySelector('.hub-walk-where') as HTMLElement).textContent).toContain(
       'Ship the widget',
     );
     expect((root.querySelector('.hub-walk-ask') as HTMLElement).textContent).toBe('Green or blue?');
-    const why = root.querySelector('.hub-walk-blocks') as HTMLElement;
-    expect(why.textContent).toContain('Helper asked');
+    const why = root.querySelector('.hub-walk-ctx') as HTMLElement;
+    expect(why.textContent).toContain('Asked by Helper');
     // The decision-only furniture is absent: there is no options block and no
     // "not enough to decide" form on a comment.
     expect(root.querySelector('.hub-walk-info')).toBeNull();
@@ -449,9 +529,9 @@ describe('renderReviewWalkthrough — comments', () => {
   // something answerable and delivering something that is not.
   it('does not call a status note a question', () => {
     renderReviewWalkthrough(root, queueOf(threadItem({ ask: 'Merged and deployed.' })), 0, walk());
-    const why = root.querySelector('.hub-walk-blocks') as HTMLElement;
-    expect(why.textContent).toContain('Helper posted');
-    expect(why.textContent).not.toContain('asked');
+    const why = root.querySelector('.hub-walk-ctx') as HTMLElement;
+    expect(why.textContent).toContain('Posted by Helper');
+    expect(why.textContent).not.toMatch(/asked/i);
   });
 
   // Going through the queue must not mean leaving the queue on every item —
@@ -475,8 +555,11 @@ describe('renderReviewWalkthrough — comments', () => {
     const onOpenItem = vi.fn();
     const queue = queueOf(threadItem());
     renderReviewWalkthrough(root, queue, 0, walk({ onOpenItem }));
+    // Mockup: the link is the thing itself — `Task: <title> ↗` — so the
+    // surface is named by the label and the destination by the link.
+    expect((root.querySelector('.hub-walk-where') as HTMLElement).textContent).toContain('Task:');
     const open = root.querySelector('.hub-walk-open') as HTMLElement;
-    expect(open.textContent).toContain('task');
+    expect(open.textContent).toContain('Ship the widget');
     open.click();
     expect(onOpenItem).toHaveBeenCalledWith(queue.items[0]);
 
@@ -486,7 +569,10 @@ describe('renderReviewWalkthrough — comments', () => {
       0,
       walk({ onOpenItem }),
     );
-    expect((root.querySelector('.hub-walk-open') as HTMLElement).textContent).toContain('doc');
+    expect((root.querySelector('.hub-walk-where') as HTMLElement).textContent).toContain('Doc:');
+    expect((root.querySelector('.hub-walk-open') as HTMLElement).textContent).toContain(
+      'Launch plan',
+    );
   });
 
   // The nav is the feature: "there's a way for me to go through that list".

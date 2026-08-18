@@ -1722,8 +1722,17 @@ export function reviewAskedLine(item: ReviewItem, now: number): string {
   // A thread carries its asker; a decision's is whoever first moved the task,
   // which is the only actor a projected task row records.
   const who = thread?.askedBy ?? row?.task.transitions[0]?.by.name;
-  if (who && who.trim() !== '') parts.push(`Asked by ${who}`);
-  parts.push(timeAgo(thread?.askedAt ?? item.since, now));
+  // "Asked by" is a claim that there is a question. A thread reaches this card
+  // whether or not there is one — over-including is the safe direction — so a
+  // status note says "Posted by" instead. Saying "asked" over a deploy note is
+  // the card promising something answerable and delivering something that is
+  // not, and it is how a queue stops being believed.
+  const asked = thread ? thread.direct === true : true;
+  if (who && who.trim() !== '') parts.push(`${asked ? 'Asked' : 'Posted'} by ${who}`);
+  // The clock beside "asked" is the QUESTION's, not the run's: a run can start
+  // days before the ask, and quoting its start tells the reader they have been
+  // sitting on something they were handed minutes ago.
+  parts.push(timeAgo(asked ? (thread?.askedAt ?? item.since) : item.since, now));
   const where = row
     ? blocksPhrase(row)
     : item.kind === 'task-thread'
