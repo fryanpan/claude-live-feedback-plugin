@@ -43,6 +43,37 @@ The feedback widget that ships Linear tickets in `~/dev/health-tool` and `~/dev/
 
 - Lead with goals, not implementation. Top-level docs answer "what becomes possible" before "how it works."
 - Public repo with branch protection on main — all changes via PR.
+- **Never hard delete user content. Soft delete.** (Bryan, 2026-08-17, asked
+  and answered as a project-wide rule: *"Generally don't do hard delete. Use
+  soft delete."*) A removal must be reversible, and the reason is not caution
+  in the abstract — **the `.ydoc` is the durable record, not a cache.**
+  `docs/process/activity-data-completeness.md` states the Weekly Review agent's
+  guarantee as valid *"for every doc whose `.ydoc` still exists (live data dir +
+  archive)"*, and `data/activity.jsonl` is a DERIVED index that
+  `activity-backfill.ts` rebuilds from those ydocs. So a hard delete does not
+  merely remove a document — it silently truncates the historical window an
+  analysis depends on, and no surface anywhere reports that it happened.
+  `reopen` / `read_session` / `doc_open` are live-capture only and are not
+  reconstructable at all, so that log must not be pruned per-doc either.
+  - The mechanism already exists and is half-built: `data/_archive/` works
+    because `hydrateFromDisk` reads only the top level of the data dir (so an
+    archived doc stops loading, and stops costing memory and a poll) while
+    `activity-backfill.ts` explicitly scans `_archive` (so it still feeds
+    analysis). What is missing is a writer — nothing moves anything there.
+    `stagePersisted` / `unstagePersisted` in `rooms.ts` is an existing
+    reversible-rename primitive of the same shape.
+  - `purgePersisted` (`rooms.ts`) is the hard path — `rmSync` on the `.ydoc`
+    plus the private-meta sidecar — and `delete_doc` / `delete_workspace` reach
+    it. Calling it is a decision, never a default.
+  - **The rule is about user content and history, not about transient files.**
+    Pruning old client releases and cleaning up `.tmp`/staging paths are correct
+    as hard deletes. Stated in this direction deliberately: a rule read too
+    broadly leaves litter, while one read too narrowly destroys a record nobody
+    can rebuild.
+  - When you narrow what an existing delete verb does, change its MEANING and
+    keep accepting the old payload. Old plugin bundles keep calling it from
+    sessions that have not restarted — see "Removing an MCP tool cannot break a
+    peer" in [docs/process/learnings.md](docs/process/learnings.md).
 - TypeScript strict mode.
 - Widget bundle size is a hard constraint — measure and report it on every PR that touches widget code.
 - **Don't append new CSS at the end of `packages/markdown-app/src/styles.css`.** It's a single ~2,700-line file organized into `/* ===== SECTION ===== */` banners, and parallel branches that both append at EOF conflict every time. Put rules in the banner section they belong to; a genuinely new feature gets a new banner next to related sections, not at the bottom.
