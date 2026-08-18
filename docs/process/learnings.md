@@ -1120,7 +1120,9 @@ Technical discoveries that should persist across sessions for this project.
   point, not the current tip. The comparand is frozen at the moment the branch
   was cut and stays frozen however many times the job re-runs. Only a rebase, a
   merge of main into the branch, or a branch-protection rule requiring the
-  branch be up to date before merging moves it.
+  branch be up to date before merging moves it. **Superseded by the entry
+  directly below**, which moves the version comparand to the base branch's TIP.
+  The changed-file set still uses the merge base, and must.
 - **Two rules, and both are needed because they cover different actors.** The
   author re-reads the version off `origin/main` immediately before pushing; the
   **merger re-checks it at merge time**. The author cannot cover this alone —
@@ -1137,6 +1139,109 @@ Technical discoveries that should persist across sessions for this project.
 - Same family as "Drift you have to go and look for is drift nobody looks for",
   one layer earlier: there a merged release failed to reach the fleet, here two
   releases collide before they get the chance.
+
+## A gate that compares against the merge-base is green precisely when the regression is largest
+
+- **The sequel to the entry above, and it says that entry's fix was the wrong
+  shape.** That one ended on two human habits — the author re-reads the version
+  off `origin/main` before pushing, the merger re-checks it at merge time — plus
+  a person handing out numbers. The gate could have answered the question
+  structurally the whole time; it was asking the wrong ref.
+- **Measured 2026-08-17, and every number reproduced with `git show
+  <ref>:packages/plugin/.claude-plugin/plugin.json` before anything was
+  changed.** PR #187, branch `origin/feat/goal-band-retriage`, carried
+  **0.1.48**. Its merge-base with `main` is `bab50b2`, which held **0.1.47**.
+  `origin/main` was at **0.1.51**. `scripts/check-plugin-version.ts` compared
+  0.1.48 against the *fork point's* 0.1.47, passed, and would have passed
+  however many times CI re-ran — while merging it steps the published version
+  **backwards three releases**, which under `claude plugin update` reaches
+  nobody.
+- **The gate printed its own defect in its success line**, which is the single
+  clearest artifact of the whole thing. On that branch, `--base origin/main`,
+  exit 0: `✓ plugin version gate — 3 file(s) under packages/plugin/, version
+  0.1.47 → 0.1.53`. The 0.1.47 is the frozen fork point being reported as
+  though it were the thing being beaten, with `origin/main` at 0.1.51 the
+  whole time. A success message that names its comparand is worth having;
+  this one named the wrong comparand and nobody read it as strange.
+- **Do not read this as "a branch's number goes stale while it sits" — that is
+  the rare version.** The frequent one is that **every catch-up merge presents
+  the version as a conflict**, and this repo's conventions require merging main
+  before the final push. Both reflexive resolutions produce a number the old
+  gate accepted and the fleet would ignore, and neither requires anyone to be
+  careless:
+  - **Keep ours** — the normal instinct when merging main into a feature
+    branch. Observed in an abandoned merge in a worktree: main @ `f604f8b`
+    (0.1.49) merged into the branch (0.1.48), resolved by keeping 0.1.48 across
+    all three sites. The branch lands *behind* the commit it just merged.
+  - **Take theirs** — the tidy-looking one. PR #187 went `mergeable_state:
+    dirty` with the three version files in the conflict set, 0.1.53 against
+    main's 0.1.51; taking main's side lands the branch at *exactly* main's
+    version, so `claude plugin update` publishes nothing at all.
+  The merge base is structurally incapable of seeing either, because it never
+  moves in response to anything that happens to the branch afterwards. **So the
+  regression is not created once when the branch is cut — it is re-creatable at
+  any point in the branch's life by an ordinary, correct-looking edit.**
+- **Phrase the check as "strictly GREATER than the base", never "different from
+  the base".** Equality is what take-theirs produces, so "must differ" is the
+  natural thing to write if that is the case in front of you — and it waves
+  through keep-ours, which is the one a human actually did. Both are covered
+  here by `compare(current, baseVersion) <= 0`, and relaxing that to `< 0` turns
+  *"fails a version conflict resolved by TAKING THEIRS, landing on the base
+  version"* red.
+- **The comparand is frozen at the fork point while the base moves, so the
+  longer a branch lives the more wrong the number and the more confident the
+  check.** That inversion is the whole entry: the gate's certainty grows with
+  the error it is failing to see. And the counter-intuitive corollary is that
+  **no re-run helps** — people reach for "just re-run CI", and
+  `git merge-base origin/main HEAD` returns the same commit every time. Only a
+  rebase, a merge of the base into the branch, or branch protection's
+  up-to-date requirement moves it.
+- **One variable serving two questions is where this hid.** `mergeBase` fed
+  both `git diff --name-only ${mergeBase}...HEAD` (which files did this branch
+  change) and `git show ${mergeBase}:<manifest>` (what version must I beat).
+  It is *correct* for the first and wrong for the second, and nothing at the
+  call site distinguishes them. **General rule: when a computed value feeds two
+  questions, check that it answers both — the one it answers correctly is
+  exactly what makes the other look reviewed.**
+- **The obvious one-line reading of the fix changes the wrong line, and that is
+  the mistake to expect next.** "Compare against `origin/main`" applied to the
+  *diff* — `base..HEAD` instead of `mergeBase...HEAD` — re-presents everything
+  the base gained since the fork as this branch's additions, which is precisely
+  the defect this repo already fixed in its pre-push scanner ("A merge commit
+  re-presents public content as an addition", above). Only the version
+  comparand moves to the tip. The regression test for that half asserts the two
+  ranges genuinely disagree on the fixture before asserting the behaviour, and
+  making the diff two-dot turns *"exempts a branch touching no plugin files,
+  even when the base moved the plugin forward"* red.
+- **It is a NARROWING, not a closure, and the file's own history says not to
+  overclaim.** CI runs at push time, so the base can still move between the
+  last green run and the merge. What shrank is the exposure — from "the entire
+  life of the branch" to "between the last CI run and the merge". The
+  structural closer is GitHub branch protection's *require branches to be up to
+  date before merging*, which forces a re-run against the new tip; until that
+  is on, the merger's check at merge time is still load-bearing. This is stated
+  in the script's header comment, not only here.
+- **The failure is invisible by construction, which is what ties this to the
+  rest of the file.** Two branches agreeing on a number **merge clean, because
+  a conflict requires disagreement**; CI is **green, because it compared against
+  a frozen fork point**; and `claude plugin update` **reports success while
+  copying nothing**, because the string did not move forward. Every signal a
+  person normally trusts is not merely silent here — it is actively reassuring.
+  There is no marker to resolve, nothing to notice, and no artifact anywhere
+  that looks wrong.
+- **Mutation-verified three ways, each naming a test.** Reverting the comparand
+  to `mergeBase` turns four red, including both conflict-resolution cases and
+  the success line's own comparand; relaxing `<= 0` to `< 0` turns the
+  take-theirs case red; making the changed-file diff two-dot turns the
+  exemption case red. The keep-ours fixture was checked against the OLD
+  comparand rather than assumed — it exits 0 there, which is the measurement
+  that makes it a regression test and not a decoration. Fixtures are real temp
+  git repos — `GIT_*` stripped from the env
+  before `git init` (it re-initializes the repo `GIT_DIR` NAMES, not its cwd),
+  and `-c user.email` / `-c user.name` passed explicitly afterwards, since the
+  strip also removes the committer identity and CI runners have no global one.
+  A pure helper over pre-fetched version strings would have passed against both
+  the broken and the fixed script: the defect is **which git command runs**.
 
 ## What makes a fleet-wide action safe is that it can't interrupt anybody
 
