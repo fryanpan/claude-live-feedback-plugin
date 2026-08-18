@@ -109,15 +109,20 @@ there. That is how 25 feature commits sat undelivered between 2026-05-09 and
 - **When several branches are in flight, the number is a merge-queue position —
   ask the merger for it, don't read it off main.** Three branches independently
   pushed 0.1.46 on 2026-08-17 with main at 0.1.45, and **nothing went red**:
-  identical strings merge clean because both sides agree, and
-  `check:plugin-version` compares against the *fork point*
-  (`git merge-base origin/main HEAD`), which stays frozen however many times the
-  job re-runs. So re-reading main before you push does not help either — the
-  branch you are about to collide with has not merged, so main cannot tell you
-  about it. Whoever owns the merges hands out numbers and merges in ascending
-  order; **an agent that finds its number taken reports rather than bumps**,
-  because bumping is how it collides with the next one. This matters past
-  tidiness: a merge order that steps the number backwards leaves peers silently
+  identical strings merge clean because both sides agree, and at the time
+  `check:plugin-version` compared against the *fork point*, which stays frozen
+  however many times the job re-runs. **That half is now fixed** — the gate
+  compares against `origin/main`'s TIP, so a stale number goes red instead of
+  green (see "A gate that compares against the merge-base is green precisely
+  when the regression is largest" in learnings.md). It is a narrowing, not a
+  closure: CI runs at push time, so main can still move between your last green
+  run and the merge. And re-reading main before you push still does not help
+  with the other half — the branch you are about to collide with has not merged,
+  so main cannot tell you about it. Whoever owns the merges hands out numbers
+  and merges in ascending order; **an agent that finds its number taken reports
+  rather than bumps**, because bumping is how it collides with the next one.
+  This matters past tidiness: a merge order that steps the number backwards
+  leaves peers silently
   un-updated, since `claude plugin update` copies nothing when the string has not
   moved forward and reports success anyway.
 - **The MCP bundle is checked the same way.** CI rebuilds it and fails if the
