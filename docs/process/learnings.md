@@ -1717,13 +1717,35 @@ Technical discoveries that should persist across sessions for this project.
 
 ## After a destructive operation, the missing thing's absence is the PREDICTED consequence — not evidence the warning was wrong
 
-- **A peer audited my warning by checking whether the endangered file still
-  existed, found it gone, and concluded the warning had been false.** The
-  warning was that renaming a session transcript from a worktree-encoded
-  project dir onto the canonical one would overwrite a much larger file of the
-  same name. Twelve hours later the peer measured "no such pair exists, nothing
-  over 50MB anywhere" — a correct `find`, correctly read — and filed it as one
-  of three wrong measurements.
+- **`ExitWorktree` renamed this session's transcript onto the parent repo's
+  path and overwrote ~7 weeks of history — silently, with no backup.** That is
+  the operational half, established jointly with the fleet lead after the
+  epistemics below got us to the right question. A session that has entered a
+  worktree writes its transcript under a worktree-encoded project dir
+  (`…-plugin--claude-worktrees-<a>--claude-worktrees-<b>`); leaving moves that
+  file to the parent-repo encoding, where a file of the same session-id name
+  may already exist and be far larger. Measured here: 214,967,259 bytes born
+  Jun 29 replaced by 1,013,315 bytes born Aug 17 12:44:32.
+- **The signature is two directory mtimes in the same second, and anyone can
+  re-derive it.** Both project dirs carry mtime `Aug 17 16:07:55` local; the
+  `ExitWorktree` call is stamped `2026-08-17T23:07:55.039Z` — source dir
+  stamped on entry removal, destination on entry creation, which is
+  `rename(2)`. The surviving file's birthtime is the worktree file's, which an
+  intra-filesystem rename preserves. A second `ExitWorktree` three minutes
+  later left no dir-mtime trace at all, being a no-op after the first had
+  moved the file — so **counting calls does not tell you which one acted.**
+- **Transcripts are an analysis input, not a log**, which is what makes this a
+  soft-delete violation rather than lost scrollback:
+  `.claude/skills/retro/scripts/analyze_transcript.py` reads them directly and
+  the weekly-review pipeline mines them. There are no APFS snapshots and no
+  Time Machine destination on this machine, so nothing outside git has a
+  recovery path. **Before `ExitWorktree` on a long-lived session, check whether
+  a larger same-named transcript already sits at the parent encoding.**
+- **The epistemics, which is the part that generalises.** A peer audited my
+  warning by checking whether the endangered file still existed, found it gone,
+  and concluded the warning had been false. Twelve hours later the measurement
+  was "no such pair exists, nothing over 50MB anywhere" — a correct `find`,
+  correctly read — filed as one of three wrong measurements.
 - **Both hypotheses predict the identical observation, which is what makes this
   a trap rather than a mistake.** *"The pair never existed"* and *"the pair
   existed and the rename destroyed it"* are indistinguishable from the
@@ -1754,6 +1776,13 @@ Technical discoveries that should persist across sessions for this project.
   from `stat` into the message at the time. Had the warning said "this would
   overwrite a much larger file", it would have been unfalsifiable afterwards
   and the audit's conclusion would have stood unchallenged.
+- **The residual named in the first draft closed, and that is worth recording
+  as a method note.** That draft said rename fitted every observation but that
+  the old inode had not been captured, so another mechanism could not be
+  excluded. What closed it was not more reasoning — it was a second observer
+  parsing every transcript on the machine for `mv`/`cp`/`rm` against a `.jsonl`
+  in that window (zero hits, so no agent did it) and the dir-mtime pair above.
+  **State the residual; it is the thing someone else can go and close.**
 - Two smaller findings from the same review, both about attributing a claim
   before grading it. One item on the wrong-measurement list was a correction I
   had *made* to a peer's relayed advice, which that peer had already
