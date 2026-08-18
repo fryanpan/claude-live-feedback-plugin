@@ -1,251 +1,111 @@
 /**
- * What the landing page is FOR, and why it is three bounded regions.
+ * What the landing page is FOR: a list of active workspaces to open up.
  *
- * `/` used to be every artifact on the server in one flat list — 322 rows
- * across 20 projects, 910 KB of HTML, rebuilt per request by walking the
- * threads of ~3,500 rooms and the file tree of every workspace. The owner's
- * report was not "this is slow", it was "it is a giant list that is of no
- * use": arriving at it told you a number and left you to find the thing
- * yourself.
+ * That sentence is Bryan's, verbatim (task `t-UZMXu32nt4wN`, 2026-08-18):
+ * "please don't build the overengineered version. Let's just have a simple
+ * workspace list and not overlap with the purpose of each workspace home
+ * page which is also being built." The previous `/` — a cross-workspace
+ * "Needs you" band over every thread on the server plus a grouped index of
+ * every review artifact — was that overlap. Anything about ONE workspace's
+ * state (its queue, its decisions, its catch-up) belongs to the workspace's
+ * own page at `/workspaces/<id>`; `/` only has to get you there.
  *
- * Ordering alone does not fix that, and the measurement is the reason this
- * module caps rather than sorts. Across all 3,500 docs: 436 open threads, and
- * **358 of them — 82% — have an agent as their newest speaker**, which is the
- * predicate for "waiting on a person". A page that ranks 358 items perfectly
- * is still a page you scroll. So the band is CAPPED, and because a capped
- * list that does not say what it is a slice of reads as a clearance (see "An
- * empty list is a clearance only if you also render the denominator" in
- * docs/process/learnings.md), the denominator ships beside it always —
- * including when it is zero.
+ * Two rules survive from the previous model, because they were measured the
+ * hard way (see the git history of this file and docs/process/learnings.md):
  *
- * Three rules this file exists to hold, each of which has been got wrong
- * somewhere in this codebase before:
+ *  1. **Recency is real events, never `meta.lastActivityAt`.** That field is
+ *     derived from the `.ydoc` file's mtime (`rooms.ts` `withActivity`), so a
+ *     server-side snapshot rewrite refreshes it: on the live server all 3,741
+ *     docs reported activity inside 7 days, in identical-millisecond
+ *     clusters. `lastActivity` here is computed by the collector from task
+ *     mutations (`task.updatedAt`), task-thread comments
+ *     (`thread.lastActivity`), goal edits and board creation — timestamps
+ *     that only move when someone does something. This module's input type
+ *     deliberately has no field to put an mtime in.
+ *  2. **A cut list states what it cut.** Inactive workspaces are not hidden —
+ *     they are behind a labelled, counted fold, because a filtered list that
+ *     does not say what it filtered reads as the whole truth ("An empty list
+ *     is a clearance only if you also render the denominator").
  *
- *  1. **One notion of "needs a person."** `awaitingPerson` / `unansweredRun`
- *     in `review-queue.ts` already answer it, per thread, with no workspace
- *     scoping — so they work unchanged on any thread from any doc. A second
- *     notion here would drift from the board's, and the two surfaces would
- *     disagree about the same thread.
- *  2. **The wait is the START of the unanswered run**, never the newest
- *     comment. An agent posting follow-ups on its own thread otherwise resets
- *     its own clock and sinks its own question in a band sorted oldest-first.
- *  3. **Recency is thread activity, never `meta.lastActivityAt`.** That field
- *     is derived from the `.ydoc` file's mtime (`rooms.ts` `withActivity`), so
- *     a server-side snapshot rewrite refreshes it: on the live server all
- *     3,741 docs report activity inside 7 days, in identical-millisecond
- *     clusters. It is a persistence clock wearing an activity label, and
- *     ranking by it is ranking by noise. This module's input type deliberately
- *     has no field to put it in.
+ * The review-doc index (the "hundreds of bound review items" the old page
+ * drowned in) stays reachable through one small fold of per-project links to
+ * `/projects/<owner>` — a link, not a browser.
  */
-import type { Thread } from '@feedback/core';
-import { awaitingPerson, unansweredRun } from './review-queue.ts';
 
-/** How many "needs you" rows the page renders. The rest live behind the
- *  denominator — see the header note on why capping is the point. */
-export const NEEDS_YOU_CAP = 20;
+/** A workspace is ACTIVE when its newest real event is at most this old.
+ *  14 days ≈ "current work": long enough that a board Bryan touched this
+ *  sprint stays on the page, short enough that the graveyard folds away. */
+export const ACTIVE_WINDOW_MS = 14 * 86_400_000;
 
-/** Excerpt budget for the ask. Long enough to recognise which conversation
- *  this is; the thread itself is one tap away. */
-const ASK_MAX = 140;
-
-/** Where a thread opens. A doc thread arrives AT the comment; a task
- *  discussion arrives at its task on the board, which is the container that
- *  holds it. Both shapes are the ones the hub's own review strip already
- *  navigates to — this is not a new URL vocabulary. */
-export type LandingLink =
-  | { kind: 'doc'; docId: string }
-  | { kind: 'task'; workspaceId: string; taskId: string };
-
-/**
- * One room, as the landing model needs to see it.
- *
- * Deliberately narrow. Everything here is either something a person reads or
- * something the ranking uses, and there is no field for the `.ydoc` mtime —
- * see rule 3 in the header.
- */
-export interface LandingInputDoc {
-  /** Stable key of the group this belongs to: a project cwd, or a hub
-   *  workspace id. */
-  groupKey: string;
-  /** What the group is called on the page. */
-  groupLabel: string;
-  groupKind: 'project' | 'workspace';
-  /** Where the group's own page lives — the "artifacts on demand" hop. */
-  groupHref: string;
-  /** What a thread here is ON: a file name, or a task title. */
+/** One hub workspace, as the collector hands it over. */
+export interface LandingWorkspaceInput {
+  id: string;
   name: string;
-  link: LandingLink;
-  threads: Thread[];
   /**
-   * Identity of the ARTIFACT this room belongs to, for counting. Every member
-   * of a bound folder or diff review shares one, so a 60-file review counts as
-   * the single thing a person put up for review. **Absent means this room is
-   * not an artifact at all** — a task body room is a surface the server owns,
-   * and counting it would inflate every board's row with phantom artifacts.
+   * Newest real event anywhere on the board — task mutation, task-thread
+   * comment, goal edit, or the board's creation. Never a `.ydoc` mtime (rule
+   * 1 in the header).
    */
-  artifactId?: string;
-  /**
-   * This doc is bound to a source file that is no longer on disk.
-   *
-   * Surfaced, never acted on. This project's rule is soft delete — archive,
-   * keep the `.ydoc` so the analyses that read it still work — and the archive
-   * step does not exist yet. So this page states the fact and offers no verb:
-   * it does not hide a row, it does not act on one, and it deliberately points
-   * at no cleanup control, because the only verb that exists today is a hard
-   * one and pointing at it is worse than saying nothing.
-   */
-  sourceMissing?: boolean;
-}
-
-/** One row of the "Needs you" band. */
-export interface NeedsYouRow {
-  threadId: string;
-  /** The group's display label — which project or board this is in. */
-  group: string;
-  /** The file or task the conversation is on. */
-  name: string;
-  href: string;
-  /** Start of the unanswered run. See rule 2 in the header. */
-  since: number;
-  /** `now - since`, computed once so the renderer never re-reads the clock. */
-  waitedMs: number;
-  /** The newest thing said, clipped. */
-  ask: string;
-  askedBy: string;
-}
-
-/** One row of the workspaces section: a place to go, not its contents. */
-export interface LandingGroupRow {
-  key: string;
-  label: string;
-  kind: 'project' | 'workspace';
-  href: string;
-  needsYou: number;
-  openThreads: number;
-  /** Distinct artifacts, folder members rolled up. Zero for a hub board. */
-  artifacts: number;
-  /** Newest thread activity anywhere in the group; 0 when nothing has any. */
   lastActivity: number;
-  /** Artifacts bound to a source file that has since been deleted. */
-  missingSources: number;
+}
+
+/** One row of the page: a place to go, not its contents. */
+export interface LandingWorkspaceRow extends LandingWorkspaceInput {
+  href: string;
+}
+
+/** One per-project link in the review-docs fold. */
+export interface LandingProjectLink {
+  owner: string;
+  label: string;
+  href: string;
 }
 
 export interface LandingModel {
-  /** At most `cap` rows, longest wait first. */
-  needsYou: NeedsYouRow[];
-  /** How many there are IN TOTAL — the denominator, always rendered. */
-  needsYouTotal: number;
-  cap: number;
-  groups: LandingGroupRow[];
-  totalArtifacts: number;
-  totalOpen: number;
+  /** Workspaces with an event inside the window, newest first. */
+  active: LandingWorkspaceRow[];
+  /** Everything else, same order — rendered folded, with its count. */
+  inactive: LandingWorkspaceRow[];
+  /** The review-doc index, one link per project owner, label order. */
+  projects: LandingProjectLink[];
+  /** The window the split used, so the renderer states the criterion. */
+  windowMs: number;
 }
 
-/** The URL a thread opens at, for each link shape. */
-export function threadHref(link: LandingLink, threadId: string): string {
-  if (link.kind === 'task') {
-    return `/workspaces/${encodeURIComponent(link.workspaceId)}?task=${encodeURIComponent(link.taskId)}`;
-  }
-  return `/review/${encodeURIComponent(link.docId)}?thread=${encodeURIComponent(threadId)}`;
+function toRow(w: LandingWorkspaceInput): LandingWorkspaceRow {
+  return { ...w, href: `/workspaces/${encodeURIComponent(w.id)}` };
 }
 
-/**
- * Flatten and clip a comment for the band.
- *
- * Local rather than reused from `review-queue.ts`: that module's clipping is
- * tuned to the board strip's two budgets and its direct-ask extraction, which
- * needs a per-workspace roster of who counts as a person. The landing band is
- * cross-workspace and has no roster, so it shows the newest thing said and
- * says so. Presentation, not a second notion of what is waiting.
- */
-function clip(text: string): string {
-  const flat = text.replace(/\s+/g, ' ').replace(/\*\*/g, '').replace(/`/g, '').trim();
-  return flat.length > ASK_MAX ? `${flat.slice(0, ASK_MAX - 1)}…` : flat;
-}
-
-export function buildLandingModel(docs: Iterable<LandingInputDoc>, now: number): LandingModel {
-  const rows: NeedsYouRow[] = [];
-  const groups = new Map<string, LandingGroupRow & { artifactIds: Set<string> }>();
-  /** Artifact ids whose source file is gone, per group — counted by ARTIFACT
-   *  so a 60-file review with a deleted root is one missing thing, not sixty. */
-  const missing = new Map<string, Set<string>>();
-
-  for (const d of docs) {
-    let group = groups.get(d.groupKey);
-    if (!group) {
-      group = {
-        key: d.groupKey,
-        label: d.groupLabel,
-        kind: d.groupKind,
-        href: d.groupHref,
-        needsYou: 0,
-        openThreads: 0,
-        artifacts: 0,
-        lastActivity: 0,
-        missingSources: 0,
-        artifactIds: new Set(),
-      };
-      groups.set(d.groupKey, group);
-      missing.set(d.groupKey, new Set());
-    }
-    if (d.artifactId !== undefined) group.artifactIds.add(d.artifactId);
-    if (d.sourceMissing && d.artifactId !== undefined) {
-      missing.get(d.groupKey)?.add(d.artifactId);
-    }
-
-    for (const thread of d.threads) {
-      if (thread.lastActivity > group.lastActivity) group.lastActivity = thread.lastActivity;
-      if (thread.status !== 'open') continue;
-      group.openThreads += 1;
-      // The one notion of "waiting on a person" — see rule 1 in the header.
-      const newest = awaitingPerson(thread);
-      if (!newest) continue;
-      // …and its run, whose FIRST comment is when the waiting started. Cheap:
-      // `unansweredRun` returns immediately for anything not open, so this
-      // second call only ever walks a thread that already qualified.
-      const run = unansweredRun(thread);
-      const since = run[0]?.ts ?? newest.ts;
-      group.needsYou += 1;
-      rows.push({
-        threadId: thread.id,
-        group: d.groupLabel,
-        name: d.name,
-        href: threadHref(d.link, thread.id),
-        since,
-        waitedMs: Math.max(0, now - since),
-        ask: clip(newest.text),
-        askedBy: newest.author.name,
-      });
-    }
-  }
-
-  // Oldest first: the thing at most risk of never being answered is the thing
-  // the cap must not cut. `threadId` breaks ties so the page is deterministic
-  // across requests rather than reordering under the reader.
-  rows.sort((a, b) => a.since - b.since || a.threadId.localeCompare(b.threadId));
-
-  const groupRows: LandingGroupRow[] = Array.from(groups.values()).map((g) => ({
-    key: g.key,
-    label: g.label,
-    kind: g.kind,
-    href: g.href,
-    needsYou: g.needsYou,
-    openThreads: g.openThreads,
-    artifacts: g.artifactIds.size,
-    lastActivity: g.lastActivity,
-    missingSources: missing.get(g.key)?.size ?? 0,
-  }));
-  groupRows.sort(
-    (a, b) =>
-      b.needsYou - a.needsYou || b.lastActivity - a.lastActivity || a.label.localeCompare(b.label),
+/** Newest first; name then id break ties so the page is deterministic across
+ *  requests rather than reordering under the reader. */
+function byRecency(a: LandingWorkspaceRow, b: LandingWorkspaceRow): number {
+  return (
+    b.lastActivity - a.lastActivity || a.name.localeCompare(b.name) || a.id.localeCompare(b.id)
   );
+}
 
-  return {
-    needsYou: rows.slice(0, NEEDS_YOU_CAP),
-    needsYouTotal: rows.length,
-    cap: NEEDS_YOU_CAP,
-    groups: groupRows,
-    totalArtifacts: groupRows.reduce((sum, g) => sum + g.artifacts, 0),
-    totalOpen: groupRows.reduce((sum, g) => sum + g.openThreads, 0),
-  };
+export function buildLandingModel(
+  workspaces: Iterable<LandingWorkspaceInput>,
+  projects: Iterable<{ owner: string; label: string }>,
+  now: number,
+): LandingModel {
+  const active: LandingWorkspaceRow[] = [];
+  const inactive: LandingWorkspaceRow[] = [];
+  for (const w of workspaces) {
+    // `>=` on the boundary: activity exactly window-old still counts. The
+    // failure mode of counting too much is one extra row; of counting too
+    // little, a board Bryan is working vanishing from the page.
+    (w.lastActivity >= now - ACTIVE_WINDOW_MS ? active : inactive).push(toRow(w));
+  }
+  active.sort(byRecency);
+  inactive.sort(byRecency);
+
+  const projectLinks: LandingProjectLink[] = Array.from(projects, (p) => ({
+    owner: p.owner,
+    label: p.label,
+    href: `/projects/${encodeURIComponent(p.owner)}`,
+  }));
+  projectLinks.sort((a, b) => a.label.localeCompare(b.label) || a.owner.localeCompare(b.owner));
+
+  return { active, inactive, projects: projectLinks, windowMs: ACTIVE_WINDOW_MS };
 }
