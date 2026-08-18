@@ -1205,12 +1205,36 @@ export function renderReviewStrip(
   }
   container.classList.remove('hidden');
 
+  /**
+   * A thread row that ended with an agent speaking but contains no question.
+   *
+   * These are the "shipped it, PR is green" notes agents leave on threads
+   * nobody closed. They qualify for the queue — its rule is that the newest
+   * comment is an agent's — and they are not asks. Measured on the live board
+   * 2026-08-17: 23 items, 0 direct, so ALL of them were rendered as equal
+   * claims on the reader's attention, each one an ellipsis-clipped PR
+   * announcement. That wall is the reported bug.
+   *
+   * Deliberately NOT a filter and NOT a score: nothing leaves the strip, the
+   * rows are grouped and labelled for what they are. The membership rule is
+   * the server's and stays the server's, so this can only change reading
+   * order — it can never make a row disappear.
+   */
+  const isUpdate = (item: ReviewItem): boolean =>
+    item.thread !== undefined && item.thread.direct !== true;
+  const asks = queue.items.filter((i) => !isUpdate(i));
+  const updates = queue.items.filter(isUpdate);
+
   const head = document.createElement('div');
   head.className = 'hub-decisions-head';
 
   const count = document.createElement('button');
   count.type = 'button';
   count.className = 'hub-decisions-count';
+  // Still the whole queue, because this button STARTS THE WALKTHROUGH and the
+  // walkthrough steps through all of it. A headline that counted only the
+  // top group would promise a shorter sitting than the button delivers, which
+  // is a second lie in place of the first.
   count.textContent = queue.total === 1 ? '1 thing needs you' : `${queue.total} things need you`;
   count.setAttribute('aria-label', `${count.textContent} — go through them one at a time`);
   count.addEventListener('click', () => handlers.onWalkthrough());
@@ -1229,9 +1253,17 @@ export function renderReviewStrip(
   head.append(count, urgency);
   container.append(head);
 
-  const chips = document.createElement('div');
-  chips.className = 'hub-decision-chips';
-  for (const item of queue.items) {
+  // The split, stated once, when there is one to state. This is what turns
+  // "23 things need you" from a number the reader distrusts into a number
+  // they can act on: how many of the 23 have their name on them.
+  if (updates.length > 0 && asks.length > 0) {
+    const split = document.createElement('p');
+    split.className = 'hub-decisions-split';
+    split.textContent = `${asks.length} addressed to you · ${updates.length} waiting on a reply`;
+    container.append(split);
+  }
+
+  const chipFor = (item: ReviewItem): HTMLElement => {
     const chip = document.createElement('button');
     chip.type = 'button';
     // Both banded kinds carry a row; read it through the one helper so a new
@@ -1267,9 +1299,40 @@ export function renderReviewStrip(
     }
     chip.title = `${REVIEW_KIND_LABEL[item.kind]}: ${item.title}${item.ask ? ` — ${item.ask}` : ''} · ${item.why}`;
     chip.addEventListener('click', () => handlers.onOpen(item));
-    chips.append(chip);
+    return chip;
+  };
+
+  const group = (items: ReviewItem[], className: string): HTMLElement => {
+    const chips = document.createElement('div');
+    chips.className = className;
+    for (const item of items) chips.append(chipFor(item));
+    return chips;
+  };
+
+  if (asks.length > 0) {
+    container.append(group(asks, 'hub-decision-chips'));
   }
-  container.append(chips);
+
+  if (updates.length > 0) {
+    // Collapsed, because on the board that produced this measurement it is the
+    // whole list. An always-open section of 23 status notes is the wall the
+    // reader is complaining about, whatever heading sits on top of it.
+    const det = document.createElement('details');
+    det.className = 'hub-decision-updates';
+    const sum = document.createElement('summary');
+    sum.className = 'hub-decision-updates-label';
+    // "Not addressed to you by name" and NOT "no question found". `direct` is
+    // exactly the former; treating it as the latter over-claims, and the
+    // over-claim lands on real questions — the flag's recall was measured at
+    // 1 in 3, so a genuine "which repo does this land in?" that names nobody
+    // is `direct: false`. A label may under-promise here; it may not lie.
+    sum.textContent =
+      updates.length === 1
+        ? '1 more waiting on a reply — not addressed to you by name'
+        : `${updates.length} more waiting on a reply — not addressed to you by name`;
+    det.append(sum, group(updates, 'hub-decision-chips'));
+    container.append(det);
+  }
 }
 
 // ── Decision walkthrough (six answers in one sitting) ──────────────────────

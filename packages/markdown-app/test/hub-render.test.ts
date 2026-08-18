@@ -617,6 +617,85 @@ describe('renderReviewStrip', () => {
     renderReviewStrip(root, reviewQueue([], [], NOW), strip);
     expect(root.classList.contains('hidden')).toBe(true);
   });
+
+  const threadItem = (over: Record<string, unknown> = {}) => ({
+    kind: 'task-thread' as const,
+    docId: 'task:t-x',
+    threadId: `th-${Math.random().toString(36).slice(2, 8)}`,
+    taskId: 't-x',
+    title: 'Some task',
+    ask: 'Done in PR #154 — CI green, not merged.',
+    askedBy: 'Live Feedback',
+    since: NOW - 3_600_000,
+    direct: false,
+    ...over,
+  });
+
+  /**
+   * Measured on the live board 2026-08-17: 23 items, 0 direct. Every row was a
+   * status note, every row was styled as an equal claim on the reader, and the
+   * headline said "23 things need you". That headline was true about the
+   * queue's membership rule and false about the reader's evening — and it is
+   * the number they decide from.
+   *
+   * Nothing is filtered: the rows move into a labelled, collapsed group and
+   * are still one tap away. So the failure mode of the grouping is a row that
+   * is harder to reach, never a row that is gone.
+   */
+  it('collapses the rows that are not addressed to the reader, without dropping any', () => {
+    const strip = { onOpen: vi.fn(), onWalkthrough: vi.fn() };
+    const notes = [threadItem(), threadItem(), threadItem()];
+    renderReviewStrip(root, reviewQueue([], notes, NOW), strip);
+    // The headline still counts the WHOLE queue, because tapping it starts a
+    // walkthrough over the whole queue.
+    expect(root.querySelector('.hub-decisions-count')?.textContent).toBe('3 things need you');
+    // Grouped and labelled, not dropped — all three are still reachable.
+    const updates = root.querySelector('.hub-decision-updates') as HTMLDetailsElement;
+    expect(updates).toBeTruthy();
+    expect(updates.hasAttribute('open')).toBe(false);
+    expect(updates.querySelectorAll('.hub-decision-chip')).toHaveLength(3);
+  });
+
+  /**
+   * `direct` is "names a person", which is NARROWER than "contains a
+   * question" — its recall over the real corpus was 1 in 3. So the collapsed
+   * group holds real questions too, and its label must not claim otherwise.
+   * A label that under-promises costs a tap; one that lies costs the answer.
+   */
+  it('never claims the collapsed rows contain no question', () => {
+    const strip = { onOpen: vi.fn(), onWalkthrough: vi.fn() };
+    renderReviewStrip(
+      root,
+      // A genuine question that addresses nobody by name: `direct` is false
+      // and the row is still somebody asking something.
+      reviewQueue([], [threadItem({ ask: 'Which repo does this land in?' })], NOW),
+      strip,
+    );
+    const label = root.querySelector('.hub-decision-updates-label')?.textContent ?? '';
+    expect(label).toContain('not addressed to you by name');
+    expect(label).not.toContain('no question');
+  });
+
+  /** Positive control for the grouping: a row that DOES name the reader stays
+   *  out of the collapsed group, and the split line says how many did. */
+  it('keeps a directly-addressed row on the strip and states the split', () => {
+    const strip = { onOpen: vi.fn(), onWalkthrough: vi.fn() };
+    const items = [
+      threadItem(),
+      threadItem({ direct: true, ask: 'Bryan: drop threading or keep it?', title: 'Threading' }),
+    ];
+    renderReviewStrip(root, reviewQueue([], items, NOW), strip);
+    const updates = root.querySelector('.hub-decision-updates') as HTMLDetailsElement;
+    expect(updates.querySelectorAll('.hub-decision-chip')).toHaveLength(1);
+    // The addressed one is on the strip proper, outside the collapsed group.
+    const top = root.querySelector(':scope > .hub-decision-chips');
+    expect(top?.textContent).toContain('Threading');
+    expect(root.querySelector('.hub-decisions-split')?.textContent).toBe(
+      '1 addressed to you · 1 waiting on a reply',
+    );
+    // Two in, two rendered. The grouping re-reads the list, never shortens it.
+    expect(root.querySelectorAll('.hub-decision-chip')).toHaveLength(2);
+  });
 });
 
 describe('renderGoalStrip', () => {
