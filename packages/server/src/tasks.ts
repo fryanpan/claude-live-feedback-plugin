@@ -720,7 +720,45 @@ export type TriageRequest =
       batchId: string;
       actor: TaskActor;
       ts: number;
+    }
+  | {
+      /**
+       * A band APPEARED in the goal list, so the unknown-goal bucket is worth
+       * re-looking at: some of what nobody could place before may have a home
+       * now. The ask is to LOOK — it never places anything, because
+       * auto-assigning stamps a ranking decision no human made, invisibly.
+       *
+       * Deliberately NOT a `goal-retriage`. That request's `oldGoal`/`newGoal`
+       * are the north-star TEXT, which a goal-list edit does not touch, and
+       * the drain path renders them as "what your placements were last judged
+       * against" — so reusing the slot would make both fields lie. This one
+       * carries its own baseline: the goal LIST before and after.
+       */
+      kind: 'bucket-review';
+      workspaceId: string;
+      /** The bands that appeared in this edit (top-level or subgoal — both
+       *  are placement destinations), in list order. */
+      newBands: GoalBand[];
+      /** The bucket at emission time: open tasks with `unplacedSince` set. */
+      taskIds: string[];
+      /** The baseline this ask is against — the goal LIST, not the goal TEXT. */
+      oldGoals: WorkspaceGoal[];
+      newGoals: WorkspaceGoal[];
+      /** Addressed to the lead, same rule as `goal-retriage`: placing the
+       *  bucket is a board-wide ranking judgment, not first-come work. */
+      leadAgentId?: string;
+      /** The `workspace.goals_changed` batch this ask belongs to, so a
+       *  placement made in answer to it reads as part of that edit. */
+      batchId: string;
+      actor: TaskActor;
+      ts: number;
     };
+
+/** A goal or subgoal named as a place a task could go. */
+export interface GoalBand {
+  id: string;
+  title: string;
+}
 
 /**
  * Bridge to whatever can carry a triage request to a live attached agent —
@@ -870,6 +908,12 @@ export type AttachAgentResult =
        *  drained, so a re-attach never asks for the same walk twice. Only
        *  ever handed to the LEAD; a bystander attaching leaves it waiting. */
       pendingRetriage?: PendingRetriage;
+      /** A band that appeared in the goal list while the lead was away, with
+       *  the bucket it is worth re-looking at. Same delivery contract as
+       *  `pendingRetriage` — lead only, drained here — and deliberately a
+       *  SEPARATE field: the two asks have different baselines and answering
+       *  one is not answering the other. */
+      pendingBucketReview?: PendingBucketReview;
       /** Is THIS attachment the workspace's lead agent — either because it
        *  already held the seat, or because it just claimed an empty one? The
        *  lead is the addressee for goal-edit re-triage, so a fresh context
@@ -1259,6 +1303,44 @@ export function pendingRetriagePath(dataDir: string, workspaceId: string): strin
   return join(dataDir, 'workspaces', `${workspaceId}.retriage.json`);
 }
 
+/**
+ * The "a band appeared, re-look at the bucket" ask waiting for this
+ * workspace's lead, mirrored from its own sidecar.
+ *
+ * At most ONE per workspace, coalescing exactly like `PendingRetriage`:
+ * `oldGoals` and `ts` stay with the FIRST undelivered edit (that is the list
+ * the bucket was last looked at against), `newGoals` and `batchId` take the
+ * newest, `taskIds` and `newBands` union. Two separate asks would walk the
+ * same bucket twice against a list that is already stale.
+ *
+ * Its own record rather than a field on `PendingRetriage`: that one's
+ * baseline is the north-star TEXT and this one's is the goal LIST, and a
+ * lead who answers one has not answered the other.
+ */
+export interface PendingBucketReview {
+  /** The `workspace.goals_changed` batch this stands for — echoed on each
+   *  placement so the moves read as part of that edit. */
+  batchId: string;
+  /** Bands that appeared across the undelivered edits, union. */
+  newBands: GoalBand[];
+  taskIds: string[];
+  /** The goal list before the FIRST undelivered edit. */
+  oldGoals: WorkspaceGoal[];
+  /** The goal list as it stood after the NEWEST one. */
+  newGoals: WorkspaceGoal[];
+  actor: TaskActor;
+  /** When the first undelivered edit in this pending happened. */
+  ts: number;
+}
+
+/** Where a workspace's undelivered bucket re-look waits. Its own sidecar for
+ *  the same reason the re-triage has one — a promise that lives only in
+ *  memory dies with the process — and separate from it because the two asks
+ *  are answered independently. */
+export function pendingBucketReviewPath(dataDir: string, workspaceId: string): string {
+  return join(dataDir, 'workspaces', `${workspaceId}.bucket.json`);
+}
+
 export type SetWorkspaceGoalResult =
   | {
       ok: true;
@@ -1381,6 +1463,20 @@ export type SetGoalListResult =
        *  existed nothing reported them at all. Re-place them with
        *  `set_task_goal` if you want the row gone. */
       strandedDone: string[];
+      /** Whether this edit revealed a new band and therefore asked the lead
+       *  to re-look at the unknown-goal bucket. `taskIds` is that bucket and
+       *  `newBands` what appeared — both empty when nothing was revealed (a
+       *  reorder, a retitle) or the bucket was empty. `requested` = it
+       *  reached the live lead; `queued` = the lead was away and it is
+       *  WAITING for their next attach. Never a placement: the ask is to
+       *  look. */
+      bucketReview: {
+        requested: boolean;
+        queued: boolean;
+        taskIds: string[];
+        newBands: GoalBand[];
+        batchId?: string;
+      };
     }
   | { ok: false; error: 'workspace-not-found' | 'reserved-goal-id' | 'duplicate-goal-id' }
   | {
@@ -1461,6 +1557,9 @@ interface WorkspaceState {
   /** The goal edit waiting for the lead agent, mirrored from its sidecar.
    *  Held in memory because the projection re-reads it on every refresh. */
   pendingRetriage?: PendingRetriage;
+  /** The "a band appeared" bucket re-look waiting for the lead agent,
+   *  mirrored from its own sidecar. */
+  pendingBucketReview?: PendingBucketReview;
 }
 
 /** Where a workspace's sidecar lives. Exported so tests assert the real
@@ -1707,6 +1806,7 @@ export class TaskStore {
       eventsLogPath(this.dataDir, workspaceId),
       voiceQueuePath(this.dataDir, workspaceId),
       pendingRetriagePath(this.dataDir, workspaceId),
+      pendingBucketReviewPath(this.dataDir, workspaceId),
     ]) {
       try {
         rmSync(path, { force: true });
@@ -2035,6 +2135,24 @@ export class TaskStore {
       // Only on success — a request that did not go out must stay queued
       // rather than being dropped by the attempt to deliver it.
       if (delivered) this.clearPendingRetriage(state);
+    }
+    // The bucket re-look is addressed to the same seat, so a handover has to
+    // re-ask the new occupant for it too.
+    const bucket = this.getPendingBucketReview(workspaceId);
+    if (bucket && this.hasLiveLeadAttachment(workspaceId)) {
+      const delivered = this.requestTriage({
+        kind: 'bucket-review',
+        workspaceId,
+        newBands: bucket.newBands,
+        taskIds: bucket.taskIds,
+        oldGoals: bucket.oldGoals,
+        newGoals: bucket.newGoals,
+        leadAgentId: next,
+        batchId: bucket.batchId,
+        actor: bucket.actor,
+        ts: bucket.ts,
+      });
+      if (delivered) this.clearPendingBucketReview(state);
     }
     return { ok: true, workspace, changed: true };
   }
@@ -3081,6 +3199,7 @@ export class TaskStore {
         created: [],
         movedToChores: [],
         strandedDone: [],
+        bucketReview: { requested: false, queued: false, taskIds: [], newBands: [] },
       };
     }
 
@@ -3108,6 +3227,15 @@ export class TaskStore {
       }
     }
     if (stranding.length > 0) return { ok: false, error: 'would-strand-tasks', stranding };
+
+    // Bands that APPEARED — the reason to re-look at the bucket. Computed
+    // from the ID sets at both scopes, not from `kind` below: `kind:'edit'`
+    // also covers a retitle and a dueAt change, neither of which adds a place
+    // a task could go. A band is "apparent" when it becomes a destination.
+    const oldBandIds = new Set(flattenGoals(oldGoals).map((g) => g.id));
+    const newBands: GoalBand[] = flattenGoals(goals)
+      .filter((g) => !oldBandIds.has(g.id))
+      .map((g) => ({ id: g.id, title: g.title }));
 
     // Same members in a different order = the priority gesture; anything
     // else (add / remove / retitle / dueAt) = an edit. Sorting by id makes
@@ -3160,6 +3288,30 @@ export class TaskStore {
     this.scheduleSave(workspaceId);
 
     const batchId = cryptoId('gc');
+    // Ask the lead to re-look at the bucket. Computed HERE — after the sweep
+    // but BEFORE the emits — and both halves are load-bearing.
+    //
+    // After the sweep, because a task THIS edit un-placed (its band was
+    // removed) belongs to the bucket the new band is being offered to;
+    // "replace band A with band B" is where that matters most.
+    //
+    // Before the emits, because `workspace.goals_changed` is what refreshes
+    // the board's projection, and a projection taken before the record exists
+    // does not carry it — with no later event to correct it the chip simply
+    // never appears, and the ask stays invisible until somebody attaches.
+    // This path deliberately emits no store event of its own (a request is a
+    // delivery, not a change, and the audit row for WHAT changed is
+    // `workspace.goals_changed` itself, oldGoals and newGoals and all), so it
+    // rides that one. Safe to depend on: a new band means the list changed,
+    // and a changed list always emits.
+    const bucketReview = this.requestBucketReview(state, {
+      newBands,
+      oldGoals,
+      newGoals: goals,
+      batchId,
+      actor,
+      ts,
+    });
     this.emit({
       type: 'workspace.goals_changed',
       workspaceId,
@@ -3191,7 +3343,228 @@ export class TaskStore {
       created,
       movedToChores: moved.map((m) => m.task.id),
       strandedDone,
+      bucketReview,
     };
+  }
+
+  /**
+   * "A band appeared — re-look at the bucket." Emitted only when the edit
+   * revealed a new destination AND there is something unplaced to offer it
+   * to; a reorder, a retitle, or an empty bucket asks nobody anything.
+   *
+   * Live-or-queue, exactly like the north-star re-triage: delivered if the
+   * lead is here, persisted for their next attach if not. It NEVER places —
+   * an auto-assign would stamp a ranking decision no human made, invisibly,
+   * and the bucket exists precisely because nobody has made that call yet.
+   */
+  private requestBucketReview(
+    state: WorkspaceState,
+    edit: {
+      newBands: GoalBand[];
+      oldGoals: WorkspaceGoal[];
+      newGoals: WorkspaceGoal[];
+      batchId: string;
+      actor: TaskActor;
+      ts: number;
+    },
+  ): {
+    requested: boolean;
+    queued: boolean;
+    taskIds: string[];
+    newBands: GoalBand[];
+    batchId?: string;
+  } {
+    const workspaceId = state.workspace.id;
+    const taskIds = this.listUntriaged(workspaceId).map((t) => t.id);
+    if (edit.newBands.length === 0 || taskIds.length === 0) {
+      return { requested: false, queued: false, taskIds, newBands: [] };
+    }
+    const requested = this.requestTriage({
+      kind: 'bucket-review',
+      workspaceId,
+      newBands: edit.newBands,
+      taskIds,
+      oldGoals: edit.oldGoals,
+      newGoals: edit.newGoals,
+      ...(state.workspace.leadAgentId !== undefined
+        ? { leadAgentId: state.workspace.leadAgentId }
+        : {}),
+      batchId: edit.batchId,
+      actor: edit.actor,
+      ts: edit.ts,
+    });
+    let queued = false;
+    if (requested) {
+      // It went out live, so anything still waiting from an earlier gap is
+      // superseded — the lead is looking at the bucket against the CURRENT
+      // list right now. Same rule the north-star path follows.
+      this.clearPendingBucketReview(state);
+    } else {
+      queued = this.queuePendingBucketReview(state, {
+        batchId: edit.batchId,
+        newBands: edit.newBands,
+        taskIds,
+        oldGoals: edit.oldGoals,
+        newGoals: edit.newGoals,
+        actor: edit.actor,
+        ts: edit.ts,
+      });
+    }
+    // When it QUEUED, report the record that is actually waiting — a second
+    // edit during the same gap merges into the first, so this edit's bands
+    // alone would describe something narrower than what the lead is handed.
+    // `queued: true` and `newBands` have to be about the same object.
+    const waiting = queued ? state.pendingBucketReview : undefined;
+    return {
+      requested,
+      queued,
+      taskIds: waiting?.taskIds ?? taskIds,
+      newBands: waiting?.newBands ?? edit.newBands,
+      batchId: edit.batchId,
+    };
+  }
+
+  /**
+   * The bucket re-look waiting for this workspace's lead, or undefined.
+   *
+   * Read-and-REFRESH, for the same reason `getPendingRetriage` prunes: this
+   * describes the board as it stands NOW, not as it stood when the band
+   * appeared. Two things can go stale, and each retires the ask outright when
+   * it empties:
+   *
+   *  - the BUCKET moves in both directions. A task placed or closed since the
+   *    edit is gone from it, so re-asking about it is asking for work already
+   *    done — and a task FILED since the edit is newly in it, unplaced, with
+   *    the same new band available to it. Intersecting against the stored
+   *    snapshot could only ever shrink, which quietly dropped that second
+   *    task from the one ask it belongs in while the same attach response
+   *    listed it under `untriaged`. So the bucket is re-read live rather
+   *    than filtered; the stored ids are provenance, not the answer;
+   *  - a band that has since been REMOVED is not apparent any more, and a
+   *    request naming a band that no longer exists is the field-that-lies
+   *    failure this record's own slot exists to avoid.
+   *
+   * A surviving band is REBUILT from the live list rather than replayed from
+   * the record, so a rename between the capture and the attach reaches the
+   * lead. Nothing else would deliver it: a retitle deliberately asks for
+   * nothing (it reveals no new destination), which also means it never
+   * refreshes a waiting ask — so the stored title would name a band the board
+   * no longer calls that, in a request whose entire job is to say which band
+   * appeared. The id is what the record is keyed on; the title is display.
+   */
+  getPendingBucketReview(workspaceId: string): PendingBucketReview | undefined {
+    const state = this.workspaces.get(workspaceId);
+    if (!state?.pendingBucketReview) return undefined;
+    const pending = state.pendingBucketReview;
+    const liveTasks = this.listUntriaged(workspaceId).map((t) => t.id);
+    const current = new Map(flattenGoals(state.workspace.goals).map((g) => [g.id, g.title]));
+    const liveBands: GoalBand[] = pending.newBands
+      .filter((b) => current.has(b.id))
+      .map((b) => ({ id: b.id, title: current.get(b.id) as string }));
+    if (liveTasks.length === 0 || liveBands.length === 0) {
+      this.clearPendingBucketReview(state);
+      return undefined;
+    }
+    // Compare BOTH by value, not by length: a rename keeps the band count,
+    // and one task placed while another is filed keeps the task count. A
+    // length compare on either is a guard that passes on the exact edit it
+    // exists to catch.
+    if (
+      JSON.stringify(liveTasks) !== JSON.stringify(pending.taskIds) ||
+      JSON.stringify(liveBands) !== JSON.stringify(pending.newBands)
+    ) {
+      state.pendingBucketReview = { ...pending, taskIds: liveTasks, newBands: liveBands };
+      this.writePendingBucketReview(state);
+    }
+    return state.pendingBucketReview;
+  }
+
+  /** Coalesce with anything already waiting: the FIRST undelivered edit keeps
+   *  the baseline (`oldGoals`) and the provenance (`ts`, `actor`), the newest
+   *  wins on list and batch, and bands and tasks union. Synchronous write,
+   *  like the re-triage queue: the caller is about to be told the ask is
+   *  waiting.
+   *
+   *  `ts` and `actor` move together on purpose. Taking the clock from the
+   *  first edit and the person from the last produces a pair that reads as
+   *  "this person did this then" and is true of nobody — the shape a strip
+   *  renders as `Edited by <name>` beside a relative time. The ask began with
+   *  the first edit, so both come from it. */
+  private queuePendingBucketReview(state: WorkspaceState, next: PendingBucketReview): boolean {
+    const prev = state.pendingBucketReview;
+    if (prev) {
+      const bands = new Map(prev.newBands.map((b) => [b.id, b]));
+      // Newest title wins — a band added and then retitled in the same gap
+      // should be named the way the board names it now.
+      for (const b of next.newBands) bands.set(b.id, b);
+      state.pendingBucketReview = {
+        batchId: next.batchId,
+        newBands: Array.from(bands.values()),
+        taskIds: Array.from(new Set([...prev.taskIds, ...next.taskIds])),
+        oldGoals: prev.oldGoals,
+        newGoals: next.newGoals,
+        actor: prev.actor,
+        ts: prev.ts,
+      };
+    } else {
+      state.pendingBucketReview = next;
+    }
+    return this.writePendingBucketReview(state);
+  }
+
+  /** @returns whether the ask is actually on disk — the caller ACKS with it,
+   *  so a swallowed write must under-promise rather than over-promise. */
+  private writePendingBucketReview(state: WorkspaceState): boolean {
+    const path = pendingBucketReviewPath(this.dataDir, state.workspace.id);
+    try {
+      const dir = join(this.dataDir, 'workspaces');
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      writeFileSync(path, `${JSON.stringify({ pending: state.pendingBucketReview }, null, 2)}\n`);
+      return true;
+    } catch (err) {
+      console.error(`[tasks] failed to queue bucket review for ${state.workspace.id}:`, err);
+      return false;
+    }
+  }
+
+  private clearPendingBucketReview(state: WorkspaceState): void {
+    if (state.pendingBucketReview === undefined) return;
+    state.pendingBucketReview = undefined;
+    try {
+      rmSync(pendingBucketReviewPath(this.dataDir, state.workspace.id), { force: true });
+    } catch {}
+  }
+
+  /** Load a workspace's waiting bucket re-look, if any. A corrupt sidecar
+   *  loses the ask, never the workspace. */
+  private loadPendingBucketReview(workspaceId: string): PendingBucketReview | undefined {
+    const path = pendingBucketReviewPath(this.dataDir, workspaceId);
+    if (!existsSync(path)) return undefined;
+    try {
+      const parsed = JSON.parse(readFileSync(path, 'utf8')) as { pending?: PendingBucketReview };
+      const pending = parsed.pending;
+      // Every field the type declares non-optional, not just the ones a
+      // reader happens to touch today: a truncated sidecar that loads with
+      // `oldGoals` undefined puts that undefined straight back on the wire
+      // inside a `TriageRequest` that declares it `WorkspaceGoal[]`, and the
+      // next reader of that field is the one who finds out.
+      if (
+        !pending ||
+        typeof pending.batchId !== 'string' ||
+        typeof pending.ts !== 'number' ||
+        !Array.isArray(pending.taskIds) ||
+        !Array.isArray(pending.newBands) ||
+        !Array.isArray(pending.oldGoals) ||
+        !Array.isArray(pending.newGoals) ||
+        typeof pending.actor?.id !== 'string'
+      ) {
+        return undefined;
+      }
+      return pending;
+    } catch (err) {
+      console.error(`[tasks] unreadable bucket-review sidecar for ${workspaceId} — skipped:`, err);
+      return undefined;
+    }
   }
 
   /**
@@ -3210,6 +3583,15 @@ export class TaskStore {
    * a caller genuinely saw in the read, and its label is fixed, so "no such
    * goal" would send them hunting for a typo. Same split `reorderGoals`
    * draws for the same reason.
+   *
+   * Deliberately asks for NO bucket re-look, even though a retitle can change
+   * what a band means ("TBD" → "Payments" arguably makes a goal apparent).
+   * The trigger is keyed on a band becoming a DESTINATION, and a rename adds
+   * none: every place a task could go, it could already go. Keying it on
+   * meaning instead would fire on every wording fix, and nothing in the call
+   * distinguishes the two — which is how an ask that matters gets ignored
+   * along with the twenty that did not. If this turns out to be worth having,
+   * it wants an explicit signal from the caller, not a heuristic here.
    *
    * Emits the existing `workspace.goals_changed` with kind 'edit' (a retitle
    * IS an edit under that taxonomy), so nothing downstream needs a new case.
@@ -3685,6 +4067,11 @@ export class TaskStore {
     // showed up first — the failure this whole path exists to end.
     const pendingRetriage = lead ? this.getPendingRetriage(workspaceId) : undefined;
     if (pendingRetriage) this.clearPendingRetriage(state);
+    // Same contract, separate ask: a lead can owe both a re-triage against a
+    // new north star and a re-look at the bucket a new band opened, and
+    // answering one is not answering the other.
+    const pendingBucketReview = lead ? this.getPendingBucketReview(workspaceId) : undefined;
+    if (pendingBucketReview) this.clearPendingBucketReview(state);
     // Emitted LAST, after every state change above: the projection refreshes
     // off this event, so an earlier emit would repaint the board with a
     // pending re-triage this very call just drained.
@@ -3702,6 +4089,7 @@ export class TaskStore {
       untriaged: this.listUntriaged(workspaceId).map((t) => t.id),
       queuedVoice: this.drainVoiceQueue(workspaceId),
       ...(pendingRetriage ? { pendingRetriage } : {}),
+      ...(pendingBucketReview ? { pendingBucketReview } : {}),
       lead,
     };
   }
@@ -4119,6 +4507,7 @@ export class TaskStore {
           this.taskIndex.set(task.id, workspace.id);
         }
         const pendingRetriage = this.loadPendingRetriage(workspace.id);
+        const pendingBucketReview = this.loadPendingBucketReview(workspace.id);
         this.workspaces.set(workspace.id, {
           workspace,
           tasks,
@@ -4127,6 +4516,9 @@ export class TaskStore {
           // the restart: the marker promised in-flight work that the restart
           // killed, this is a request nobody has answered yet.
           ...(pendingRetriage ? { pendingRetriage } : {}),
+          // Same reasoning: a band appeared and nobody has looked at the
+          // bucket yet — a restart does not answer that.
+          ...(pendingBucketReview ? { pendingBucketReview } : {}),
         });
       } catch (err) {
         // A corrupt sidecar loses that one workspace, never the server.

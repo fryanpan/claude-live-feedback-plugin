@@ -145,6 +145,23 @@ export interface PendingRetriageView {
   byName: string;
 }
 
+/** A goal BAND that appeared while the lead was away, and the unplaced tasks
+ *  worth re-looking at against it. Separate from PendingRetriageView because
+ *  the two answer different questions — that one's baseline is the north-star
+ *  TEXT, this one's is the goal LIST — and answering either does not answer
+ *  the other, so a board that renders one and not the other is silent about
+ *  half of what is waiting. */
+export interface PendingBucketReviewView {
+  batchId: string;
+  taskIds: string[];
+  /** Display only; the record is keyed on ids. Rebuilt from the live list on
+   *  every read, so a band renamed since the edit reads the way the board
+   *  names it now. */
+  bandTitles: string[];
+  ts: number;
+  byName: string;
+}
+
 export interface HubWorkspaceInfo {
   id: string;
   name: string;
@@ -161,6 +178,9 @@ export interface HubWorkspaceInfo {
   /** A goal edit the lead agent has not picked up yet. Absent = none
    *  waiting; the board never infers one. */
   pendingRetriage?: PendingRetriageView;
+  /** A goal band the lead agent has not re-looked at the bucket against yet.
+   *  Absent = none waiting. */
+  pendingBucketReview?: PendingBucketReviewView;
   createdAt: number;
 }
 

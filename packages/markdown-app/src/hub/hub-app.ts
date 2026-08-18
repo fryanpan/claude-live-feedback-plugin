@@ -24,6 +24,7 @@ import {
   type HubGoal,
   type HubTask,
   type HubWorkspaceInfo,
+  type PendingBucketReviewView,
   type PendingRetriageView,
   type PluginRelease,
   type PresenceAgent,
@@ -316,6 +317,9 @@ async function main(): Promise<void> {
         ...(wsMap.get('pendingRetriage')
           ? { pendingRetriage: wsMap.get('pendingRetriage') as PendingRetriageView }
           : {}),
+        ...(wsMap.get('pendingBucketReview')
+          ? { pendingBucketReview: wsMap.get('pendingBucketReview') as PendingBucketReviewView }
+          : {}),
         createdAt: Number(wsMap.get('createdAt') ?? 0),
       };
     }
@@ -402,6 +406,7 @@ async function main(): Promise<void> {
       state.agents.map((agent) => agent.agentId),
       { onLeadCommit: (leadAgentId) => void saveLead(leadAgentId) },
       state.info?.pendingRetriage,
+      state.info?.pendingBucketReview,
     );
   }
 
