@@ -13,6 +13,7 @@ import {
   PROMPT_CHARS_MAX,
   buildRetryNudge,
   buildSummaryPrompt,
+  findDeliveryClaim,
   needsCall,
   parseSummaryResponse,
 } from '@feedback/core/summary-prompt';
@@ -207,6 +208,109 @@ describe('buildRetryNudge', () => {
         { hasReplies: false },
       ),
     ).toBeNull();
+  });
+
+  it('asks again when the answer asserts delivery status', () => {
+    // The line observed in production on 2026-08-17, verbatim.
+    const nudge = buildRetryNudge(
+      {
+        topic: 'Removing per-doc sharing; mutation artifact caught by lint',
+        discussion: 'PR merged, CI green; lint caught disabled guard tests missed',
+      },
+      hasReplies,
+    );
+    expect(nudge).not.toBeNull();
+    expect(nudge).toContain('merged');
+  });
+
+  it('asks for a REPLACEMENT, not a deletion', () => {
+    // The learning from the word-cap retry: a rule phrased purely as a
+    // prohibition is satisfied by emptiness. This nudge has to state what the
+    // second answer must still CONTAIN, or the compliant answer is a blank
+    // line — which costs zero words and passes every other check here.
+    const nudge = buildRetryNudge(
+      { topic: 'Per-doc sharing removal', discussion: 'PR merged, CI green' },
+      hasReplies,
+    );
+    expect(nudge).toContain('Replace');
+    expect(nudge).toContain('Do not simply delete');
+    expect(nudge).toContain('still say where the conversation has got to');
+  });
+});
+
+/**
+ * The claim rule.
+ *
+ * Every "this is refused" case below is paired with a "this is allowed" one on
+ * the same word, because a validator that flagged EVERYTHING would pass every
+ * refusal assertion while gutting the summaries — which is the cheap fix the
+ * task explicitly warned against.
+ */
+describe('findDeliveryClaim', () => {
+  const claim = (topic: string, discussion = '') => findDeliveryClaim({ topic, discussion });
+
+  it('flags the line observed in production', () => {
+    expect(
+      claim(
+        'Removing per-doc sharing; mutation artifact caught by lint',
+        'PR merged, CI green; lint caught disabled guard tests missed',
+      ),
+    ).toBe('merged');
+  });
+
+  it('is not fooled by a "not" that belongs to a later clause', () => {
+    // The decisive detail: this line DOES contain the word "not", three words
+    // after the claim, attached to something else entirely. A whole-line
+    // negation check reads it as hedged and lets the false claim through.
+    expect(claim('x', 'PR merged; lint caught the guard, not the tests')).toBe('merged');
+  });
+
+  it.each([
+    ['PR open and CI green — not merged, task not transitioned'],
+    ['Branch has not been merged yet'],
+    ['Never shipped; superseded by the newer approach'],
+    ['Ready to be merged once review lands'],
+    ['Blocked until deployed to staging'],
+    ['Unmerged and awaiting review'],
+  ])('allows the hedged form: %s', (line) => {
+    expect(claim('x', line)).toBeNull();
+  });
+
+  it.each([
+    ['PR merged, CI green', 'merged'],
+    ['Shipped; anchors stable under reindent', 'Shipped'],
+    ['Fix landed in the client bundle', 'landed'],
+    ['Deployed to prod this morning', 'Deployed'],
+    ['Released as 0.1.44', 'Released'],
+  ])('flags the asserted form: %s', (line, word) => {
+    expect(claim('x', line)).toBe(word);
+  });
+
+  it('flags a claim in the topic line too', () => {
+    expect(claim('Per-doc sharing shipped; follow-up open')).toBe('shipped');
+  });
+
+  it('allows merging a base branch INTO the work', () => {
+    // A real board summary: "Merged main first, then allocate". This is not a
+    // delivery claim and suppressing it would lose a genuinely useful line.
+    expect(claim('x', 'Merged main first, then allocate the version')).toBeNull();
+    // Positive control on the same word: without the base-branch object it is
+    // a delivery claim again, so the exemption is narrow rather than a hole.
+    expect(claim('x', 'Merged first, then allocate the version')).toBe('Merged');
+  });
+
+  it('leaves everything a summary is actually for alone', () => {
+    // The point of the rule is to narrow what a summary may CLAIM, not what it
+    // may SAY. None of these lose a word.
+    for (const line of [
+      'Verified empty on prod; guards mutation-tested',
+      'Disclosed false report; lint caught disabled guard',
+      'Still open: does this break element anchors?',
+      'Agreed, real bug, fix not started',
+      'Root cause identified. Goals now opaque and immutable',
+    ]) {
+      expect(claim('x', line)).toBeNull();
+    }
   });
 });
 
