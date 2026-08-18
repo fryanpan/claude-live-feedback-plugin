@@ -263,6 +263,130 @@ describe('ThreadSummarizer.generate — word budget retry', () => {
   });
 });
 
+/*
+ * A summary that CONTRADICTS its thread about shipping state.
+ *
+ * Observed on this repo's own board 2026-08-17: a thread whose first reply
+ * opens "PR open and CI green — not merged, task not transitioned" carried the
+ * stored line "PR merged, CI green; lint caught disabled guard tests missed".
+ * Re-running the same prompt over the same comments reproduced it in 8 of 20
+ * draws, so it is a rate, not a one-off.
+ *
+ * This is the one failure in the family that MANUFACTURES a specific, checkable
+ * falsehood rather than omitting something, and it is the line a person reads
+ * INSTEAD of the thread — so it is believed exactly where it is least likely to
+ * be checked. Which is why the precedence here inverts the word-budget rule
+ * above: an over-long first answer ships as the fallback, a first answer that
+ * asserts delivery status never does.
+ */
+describe('ThreadSummarizer.generate — delivery-status claims', () => {
+  /** A fetch whose Nth call answers with the Nth reply text (last repeats). */
+  function sequencedFetch(replies: string[]) {
+    const calls: string[] = [];
+    const impl = (async (_url: string, init?: RequestInit) => {
+      calls.push(String(init?.body ?? ''));
+      const text = replies[Math.min(calls.length - 1, replies.length - 1)];
+      return new Response(JSON.stringify({ content: [{ text }] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+    return { impl, calls };
+  }
+
+  /** The thread from the board, opening words of each comment verbatim. */
+  function shareThread(): Thread {
+    return {
+      id: 'e7fw6bj76qp7',
+      status: 'open',
+      anchor: { kind: 'subject' },
+      createdBy: alice,
+      commentCount: 2,
+      lastActivity: 2,
+      comments: [
+        {
+          id: 'c1',
+          author: alice,
+          text: 'Live share state, measured — nothing to wind down. Verified before touching any code, with positive controls.',
+          ts: 1,
+        },
+        {
+          id: 'c2',
+          author: alice,
+          text: 'PR open and CI green — not merged, task not transitioned. Four gates on the merged tree; all 12 CI checks pass. A mutation-test artifact survived in server.ts and biome flagged it as a constant condition.',
+          ts: 2,
+        },
+      ],
+    } as Thread;
+  }
+
+  /** The stored line, verbatim. It is 10 words, so no budget rule touches it. */
+  const inverted =
+    '{"topic":"Removing per-doc sharing; mutation artifact caught by lint",' +
+    '"discussion":"PR merged, CI green; lint caught disabled guard tests missed"}';
+  const truthful =
+    '{"topic":"Removing per-doc sharing; mutation artifact caught by lint",' +
+    '"discussion":"Verified empty on prod; lint caught a disabled guard"}';
+
+  it('does not store a summary saying the PR merged when the thread says it did not', async () => {
+    const { impl } = sequencedFetch([inverted, truthful]);
+    const s = new ThreadSummarizer({ apiKey: 'k', fetchImpl: impl });
+    const out = await s.generate(shareThread());
+    expect(out?.discussion).not.toContain('merged');
+    expect(out?.discussion).toBe('Verified empty on prod; lint caught a disabled guard');
+  });
+
+  it('asks again exactly once, carrying the offending answer into the retry', async () => {
+    const { impl, calls } = sequencedFetch([inverted, truthful]);
+    const s = new ThreadSummarizer({ apiKey: 'k', fetchImpl: impl });
+    await s.generate(shareThread());
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toContain('PR merged, CI green');
+    // The nudge must say what the replacement has to CONTAIN. Phrased purely
+    // as a prohibition it is satisfied by a blank line, which is how the word
+    // cap shipped a summary-deleting retry once already.
+    expect(calls[1]).toContain('Do not simply delete');
+  });
+
+  it('stores NOTHING when the retry asserts it too — the card keeps its true lines', async () => {
+    const { impl, calls } = sequencedFetch([inverted, inverted]);
+    const s = new ThreadSummarizer({ apiKey: 'k', fetchImpl: impl });
+    const out = await s.generate(shareThread());
+    expect(calls).toHaveLength(2); // one retry, not a loop
+    expect(out).toBeNull();
+  });
+
+  it('prefers an over-long answer with no claim to a compact one with a claim', async () => {
+    // Length is a display annoyance; a false "PR merged" is a lie on the board.
+    const longClean =
+      '{"topic":"Removing per-doc sharing","discussion":"Verified empty on prod ' +
+      'with positive controls and the guards mutation tested one by one"}';
+    const { impl } = sequencedFetch([inverted, longClean]);
+    const s = new ThreadSummarizer({ apiKey: 'k', fetchImpl: impl });
+    const out = await s.generate(shareThread());
+    expect(out?.discussion).toContain('Verified empty on prod');
+  });
+
+  /*
+   * POSITIVE CONTROL. Every assertion above is an absence — no "merged", or no
+   * summary at all — and an absence proves nothing until the same pipeline is
+   * shown to store something. Same thread, same summarizer, one line changed
+   * in the answer.
+   */
+  it('stores a claim-free answer on the same thread, in ONE call', async () => {
+    const { impl, calls } = sequencedFetch([truthful]);
+    const s = new ThreadSummarizer({ apiKey: 'k', fetchImpl: impl });
+    const t = shareThread();
+    const out = await s.generate(t);
+    expect(calls).toHaveLength(1);
+    expect(out).toEqual({
+      topic: 'Removing per-doc sharing; mutation artifact caught by lint',
+      discussion: 'Verified empty on prod; lint caught a disabled guard',
+      hash: summaryHash(t),
+    });
+  });
+});
+
 describe('ThreadSummarizer.schedule', () => {
   let s: ThreadSummarizer;
   afterEach(() => s?.dispose());

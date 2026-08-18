@@ -13808,7 +13808,7 @@ var AUTHOR = resolveAgentAuthor({
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.51";
+var PLUGIN_VERSION = "0.1.56";
 var COMMIT_EVIDENCE_DESCRIPTION = 'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
 var server = new Server({
   name: "claude-live-feedback",
@@ -13895,8 +13895,7 @@ var server = new Server({
     "promote_to_task add work (omit `goal` and the task lands UNPLACED in",
     "Chores awaiting triage — the create says so and hands you the goal",
     "bands, and placing it with set_task_goal IS the triage:",
-    "pick the goal AND the exact position, and pass riskTier for how dangerous",
-    "the ACTION is, not how important the task is). task_transition is the",
+    "pick the goal AND the exact position). task_transition is the",
     "single gate for status changes — blockers come back in the result, and",
     "attach evidence ({commit} or {threadRef}) or the move is flagged unproven.",
     "attach_agent registers you as the workspace agent (heartbeat every few",
@@ -14630,10 +14629,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             items: {
               type: "object",
               properties: {
-                title: { type: "string" },
+                title: {
+                  type: "string",
+                  description: 'The row\'s one-line name, and the thing a person scanning thirty rows actually reads. Say WHO it is for, WHAT they get, and HOW — `<Person> can <achieve goal X> by <describe action>`, under 70 characters (100 is the hard ceiling). e.g. "Bryan can review across tasks faster with clearer task descriptions and UX", "Agents can revise goal priority with a tool to reorder goals". The failure this exists to stop is a title that states an OBSERVATION — "A decision-answered event promises a link checklist" names something somebody noticed, so ten of them in a column give no sense of the plan and the board cannot be prioritised. Never REFUSED: a rough capture still lands, and the response comes back with `titleGaps` naming what is missing (too long, no persona, no action, clipped mid-thought) so triage can fix it.'
+                },
                 body: {
                   type: "string",
-                  description: "The description. Not schema-required — but WRITE ONE ANYWAY, on every row: a bare title is not pickup-able by an agent that was not in the conversation, and reconstructing intent from a title is how the wrong thing gets built. Shape it as a compact user story — `<persona> can <do x> so that <goal y>`, one persona (Agent / Bryan / Collaborator) — and add falsifiable \"done when\" criteria for anything handed to someone else or parked beyond today. Proportionate: work you will finish within the hour needs the story line and nothing more. Markdown; it renders on the task itself and comes back whole from next_tasks, so do not create a separate doc to hold it.\n\nWhen `needs` is 'decision' this is REQUIRED and has a different shape — the question in one line, what is at stake in two or three, the options with what each one costs, then what is blocked until it is answered. A row with no question in it is REFUSED, because the failure this catches is filing a progress report as a decision: the field is populated, every check passes, and the person asked to decide has nothing to decide from. The other three parts come back as advisory `shapeGaps` on a successful create."
+                  description: "The description. Not schema-required — but WRITE ONE ANYWAY, on every row: a bare title is not pickup-able by an agent that was not in the conversation, and reconstructing intent from a title is how the wrong thing gets built. Shape it as a compact user story — `<persona> can <do x> so that <goal y>`, one persona (Agent / Bryan / Collaborator) — and add falsifiable \"done when\" criteria for anything handed to someone else or parked beyond today. Proportionate: work you will finish within the hour needs the story line and nothing more. Markdown; it renders on the task itself and comes back whole from next_tasks, so do not create a separate doc to hold it.\n\nWhen `needs` is 'decision' this is REQUIRED and has a different shape — the question in one line, what is at stake in two or three, the options with what each one costs, then what is blocked until it is answered. A row with no question in it is REFUSED, because the failure this catches is filing a progress report as a decision: the field is populated, every check passes, and the person asked to decide has nothing to decide from. The other three parts come back as advisory `shapeGaps` on a successful create. Never REFUSED either: the response carries `bodyGaps` when the description does not open with the story (`no-story`) or is missing entirely (`empty`). A row declared `needs` = decision is exempt entirely — it is not a story and should not be, and its own `shapeGaps` already cover it."
                 },
                 key: {
                   type: "string",
@@ -14704,7 +14706,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           docId: { type: "string" },
           threadId: { type: "string" },
           workspaceId: { type: "string", description: "Hub workspace the task lands in." },
-          title: { type: "string", description: "Override the drafted title." },
+          title: {
+            type: "string",
+            description: "Override the drafted title. Worth sending: the drafted one is a clip of somebody’s comment, so it names what was SAID rather than what will be done. The standard is `<Person> can <achieve goal X> by <describe action>`, under 70 characters."
+          },
           body: { type: "string", description: "Override the drafted body." },
           assignee: {
             type: "string",
@@ -14766,7 +14771,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "task_transition",
-      description: "The SINGLE gate for task status changes (todo | in-progress | done) — attributed to this agent, appended to the task's audit trail. Attach `evidence` ({commit} and/or {threadRef}) on forward moves or the move is flagged `unproven` (allowed, shaded on the board) — and read the `commit` field's own description before you fill it, because the obvious value is the wrong one: a branch sha is discarded by the squash-merge, after which the row still reads as proven and points at nothing. If the evidence was missing or WRONG, do not re-send this call — it refuses with `same-status` — use `amend_evidence`, which appends a correction to the move that already happened. Open `after` dependencies come back in `blockers` — an edge marked enforce REFUSES the transition (HTTP 409) until the blocking task closes; read the blocker message, it names what to unblock. The task's riskTier gates forward moves the same way: a RED task refuses outright (a person has to make the move), and a YELLOW one needs `confirmed: true` — which means the human said yes after you showed them the concrete effect, never a flag you set to get past the gate. `usage` ({inputTokens, outputTokens}) reports what the task cost at done. Moving back to todo is never blocked.",
+      description: "The SINGLE gate for task status changes (todo | in-progress | done) — attributed to this agent, appended to the task's audit trail. Attach `evidence` ({commit} and/or {threadRef}) on forward moves or the move is flagged `unproven` (allowed, shaded on the board) — and read the `commit` field's own description before you fill it, because the obvious value is the wrong one: a branch sha is discarded by the squash-merge, after which the row still reads as proven and points at nothing. If the evidence was missing or WRONG, do not re-send this call — it refuses with `same-status` — use `amend_evidence`, which appends a correction to the move that already happened. Open `after` dependencies come back in `blockers` — an edge marked enforce REFUSES the transition (HTTP 409) until the blocking task closes; read the blocker message, it names what to unblock. `usage` ({inputTokens, outputTokens}) reports what the task cost at done. Moving back to todo is never blocked.",
       inputSchema: {
         type: "object",
         properties: {
@@ -14786,10 +14791,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
               inputTokens: { type: "number" },
               outputTokens: { type: "number" }
             }
-          },
-          confirmed: {
-            type: "boolean",
-            description: "The human confirmed THIS move on a yellow-tier task, after being shown what it does. Not a retry flag — if they haven't answered, don't send it."
           }
         },
         required: ["taskId", "to"]
@@ -14844,7 +14845,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "update_task_body",
-      description: "Rewrite a task so it can be picked up — its description, and in the SAME act its title. The fix for a task filed thin, one whose acceptance criteria turned out to be wrong, and the write half of triage's shaping step: a raw capture arrives with a machine-clipped fragment for a title and its whole unedited utterance for a body, and this is what turns both into work. Whole-body replace, so send the full markdown you want the task to have; there is no partial edit. Pass `title` whenever the title no longer names what the task is (omit it to leave the title alone). Written through the task's live body doc as a block-level diff, so comment threads anchored to paragraphs you did not change keep their anchors and anyone reading the task on the board watches it update. Recorded as ONE task.body_edited carrying both titles, attributed to you, and the activity feed renders the rename with the old name — the only name the person who filed it would recognise. The row's ORIGINAL words are preserved to `quote` automatically on the first rewrite, so a rewrite is never the only record of what was said; a quote already there (a dictated transcript) is never overwritten. Keep the shape a task body owes its next reader — a compact user story plus falsifiable done-when criteria — because rewriting is also the moment to add the ones that were missing. Refuses an empty body: blanking a description is not an edit, and if the task should not exist, say so on it instead.",
+      description: "Rewrite a task so it can be picked up — its description, and in the SAME act its title. The fix for a task filed thin, one whose acceptance criteria turned out to be wrong, and the write half of triage's shaping step: a raw capture arrives with a machine-clipped fragment for a title and its whole unedited utterance for a body, and this is what turns both into work. Whole-body replace, so send the full markdown you want the task to have; there is no partial edit. Pass `title` whenever the title no longer names what the task is (omit it to leave the title alone). Written through the task's live body doc as a block-level diff, so comment threads anchored to paragraphs you did not change keep their anchors and anyone reading the task on the board watches it update. Recorded as ONE task.body_edited carrying both titles, attributed to you, and the activity feed renders the rename with the old name — the only name the person who filed it would recognise. The row's ORIGINAL words are preserved to `quote` automatically on the first rewrite, so a rewrite is never the only record of what was said; a quote already there (a dictated transcript) is never overwritten. Keep the shape a task body owes its next reader — a compact user story plus falsifiable done-when criteria — because rewriting is also the moment to add the ones that were missing. Refuses an empty body: blanking a description is not an edit, and if the task should not exist, say so on it instead. The response carries `bodyGaps` when the rewritten description still does not open with the user story, so a rewrite that fixed the criteria but left the opening unshaped says so rather than looking done.",
       inputSchema: {
         type: "object",
         properties: {
@@ -14855,7 +14856,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           title: {
             type: "string",
-            description: "A new title for the row, applied as part of the same act. Omit to keep the current one."
+            description: "A new title for the row, applied as part of the same act. Omit to keep the current one. " + 'The row\'s one-line name, and the thing a person scanning thirty rows actually reads. Say WHO it is for, WHAT they get, and HOW — `<Person> can <achieve goal X> by <describe action>`, under 70 characters (100 is the hard ceiling). e.g. "Bryan can review across tasks faster with clearer task descriptions and UX", "Agents can revise goal priority with a tool to reorder goals". The failure this exists to stop is a title that states an OBSERVATION — "A decision-answered event promises a link checklist" names something somebody noticed, so ten of them in a column give no sense of the plan and the board cannot be prioritised. Never REFUSED: a rough capture still lands, and the response comes back with `titleGaps` naming what is missing (too long, no persona, no action, clipped mid-thought) so triage can fix it.' + " Send one whenever the rewrite changed what this task IS: the response carries `titleGaps`, and a body that has moved substantially since anyone last named the row reports `stale-body` until somebody does."
           }
         },
         required: ["taskId", "markdown"]
@@ -14863,14 +14864,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "set_task_goal",
-      description: "Place a task under a goal (or subgoal) at an exact position — this IS triage's write half: pick the spot, not just the bucket. Stamps triagedAgainst with the goal text judged against and clears the triage-pending marker; every move is recorded and fires task.regrouped, so regroup freely — the safety is the record, not asking first. When a move would cross a human's earlier placement, leave a task comment referencing it. Pass `riskTier` for how dangerous EXECUTING the task is (green: reversible/contained; yellow: outward-facing or hard to reverse; red: irreversible/one-way) — keyed to the action's damage, never its importance. `position` is fractional — there is always room between two tasks; omitted = bottom of the goal.",
+      description: "Place a task under a goal (or subgoal) at an exact position — this IS triage's write half: pick the spot, not just the bucket. Stamps triagedAgainst with the goal text judged against and clears the triage-pending marker; every move is recorded and fires task.regrouped, so regroup freely — the safety is the record, not asking first. When a move would cross a human's earlier placement, leave a task comment referencing it. `position` is fractional — there is always room between two tasks; omitted = bottom of the goal.",
       inputSchema: {
         type: "object",
         properties: {
           taskId: { type: "string" },
           goal: { type: "string", description: 'Goal/subgoal id, or "chores".' },
           position: { type: "number" },
-          riskTier: { type: "string", enum: ["green", "yellow", "red"] },
           batchId: {
             type: "string",
             description: "Echo the batchId from a goal-change re-triage request. It ties this placement to the goal edit that asked for it, so the activity view reads N moves as one edit instead of N unexplained regroupings."
@@ -15566,11 +15566,15 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const { workspaceId, tasks } = a;
         const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/tasks/batch`, { tasks, author: AUTHOR });
         const gapsFor = (taskId) => res.shapeGaps?.find((g) => g.taskId === taskId)?.gaps ?? undefined;
+        const titleGapsFor = (taskId) => res.titleGaps?.find((g) => g.taskId === taskId)?.gaps ?? undefined;
+        const bodyGapsFor = (taskId) => res.bodyGaps?.find((g) => g.taskId === taskId)?.gaps ?? undefined;
         const droppedFor = (taskId) => res.ignoredLinks?.find((l) => l.taskId === taskId)?.ignored ?? undefined;
         const unplaced = new Set(res.placement?.unplaced ?? []);
         return ok({
           created: res.tasks.map((t) => ({
             title: t.title,
+            ...titleGapsFor(t.id) !== undefined ? { titleGaps: titleGapsFor(t.id) } : {},
+            ...bodyGapsFor(t.id) !== undefined ? { bodyGaps: bodyGapsFor(t.id) } : {},
             ...taskCreatedSummary(t, droppedFor(t.id), gapsFor(t.id), !unplaced.has(t.id))
           })),
           failures: res.failures,
@@ -15658,14 +15662,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         });
       }
       case "task_transition": {
-        const { taskId, to, note, evidence, usage, confirmed } = a;
+        const { taskId, to, note, evidence, usage } = a;
         const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/transition`, {
           to,
           author: AUTHOR,
           ...note !== undefined ? { note } : {},
           ...evidence !== undefined ? { evidence } : {},
-          ...usage !== undefined ? { usage } : {},
-          ...confirmed === true ? { confirmed } : {}
+          ...usage !== undefined ? { usage } : {}
         });
         return ok({
           taskId,
@@ -15716,16 +15719,19 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           taskId,
           title: res.task?.title,
           body: res.task?.body,
-          quote: res.task?.quote
+          quote: res.task?.quote,
+          ...res.titleGaps !== undefined ? { titleGaps: res.titleGaps } : {},
+          ...res.titleMessage !== undefined ? { titleMessage: res.titleMessage } : {},
+          ...res.bodyGaps !== undefined ? { bodyGaps: res.bodyGaps } : {},
+          ...res.bodyMessage !== undefined ? { bodyMessage: res.bodyMessage } : {}
         });
       }
       case "set_task_goal": {
-        const { taskId, goal, position, riskTier, batchId } = a;
+        const { taskId, goal, position, batchId } = a;
         const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/goal`, {
           goal,
           author: AUTHOR,
           ...position !== undefined ? { position } : {},
-          ...riskTier !== undefined ? { riskTier } : {},
           ...batchId !== undefined ? { batchId } : {}
         });
         return ok({ taskId, goal: res.task.goal, order: res.task.order, changed: res.changed });

@@ -119,6 +119,49 @@ curl -sS http://localhost:8788/ -o /dev/null -w "%{http_code}\n"
 
 Should print `state = running` and `200`.
 
+### 6b. (Optional) Serve over HTTPS on the tailnet — required for voice
+
+Skip this unless the machine is on a Tailscale tailnet **and** anyone wants the
+board's voice dock or review-doc dictation from a device other than the host.
+
+`http://<tailnet-name>:8787` is **not a secure context**, so Chrome does not
+expose the microphone there at all — `navigator.mediaDevices` is `undefined`.
+The failure is worse than a plain refusal: the `SpeechRecognition` constructor
+still exists, so `start()` answers `not-allowed` with no permission prompt, and
+telling someone to "allow the mic for this site" sends them looking for a
+control the browser never offered. Loopback is exempt (browsers trust it
+whatever the scheme), which is why it works on the host and nowhere else.
+
+Two steps, and **the second is not optional polish** — doing only the first
+looks like success and changes nothing for voice:
+
+```sh
+# 1. Terminate TLS on the tailnet name, proxying to the running server.
+#    Note the flag form: the port must arrive as --https=, because `serve`
+#    reads a bare positional as the target.
+tailscale serve --https=443 --bg http://127.0.0.1:8787
+tailscale serve status        # must say "(tailnet only)"
+
+# 2. Point every link the server emits at that origin, then restart it.
+LF_PUBLIC_BASE_URL=https://<tailnet-name> ./scripts/launchd/install.sh
+```
+
+`publicBaseUrl` is the single source of every `reviewUrl`, `entryUrl` and
+task-import `hubUrl` the server hands a human. Without step 2 those keep
+reading `http://<tailnet-name>:8787`, so every link an agent pastes lands back
+on the insecure origin and voice stays dead for whoever follows it. The value
+is validated at boot — a malformed one is a named startup failure, never a
+silent fallback.
+
+**`serve` is tailnet-only. `tailscale funnel` is the verb that would make this
+public — do not use it.** And `install.sh` regenerates the plist from a
+template on every run, so a hand-edited `LF_PUBLIC_BASE_URL` is silently
+discarded the next time anyone reinstalls; set it through the installer.
+
+Full rationale, the measured before/after table, the non-vacuous verification
+(each check needs its "before" reading or it proves nothing), and rollback:
+[docs/process/tailnet-https.md](../../../docs/process/tailnet-https.md).
+
 ### 7. Confirm done + suggest next step
 
 Recap in one line: "Setup complete. Plugin installed at user scope; server <foreground / launchd-supervised>."

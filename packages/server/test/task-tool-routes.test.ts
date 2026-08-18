@@ -293,7 +293,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
   // ── POST /api/tasks/:id/goal ──────────────────────────────────────────────
 
   describe('POST /api/tasks/:id/goal', () => {
-    it('forwards goal + position + riskTier + author; emits task.regrouped', async () => {
+    it('forwards goal + position + author; emits task.regrouped', async () => {
       const { wsId, G } = await seedWorkspace();
       const task = await seedTask(wsId, G.g1);
       const events: TaskStoreEvent[] = [];
@@ -303,6 +303,8 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
           await post(`/api/tasks/${task.id}/goal`, {
             goal: G.g2,
             position: 1.5,
+            // Still sent, because a peer on an older bundle still sends it.
+            // Ignored by the store since 2026-08-18, never refused.
             riskTier: 'yellow',
             author: AGENT,
           }),
@@ -310,7 +312,6 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
         expect(res.changed).toBe(true);
         expect(res.task.goal).toBe(G.g2);
         expect(res.task.order).toBe(1.5);
-        expect(res.task.riskTier).toBe('yellow');
       } finally {
         off();
       }
@@ -318,7 +319,8 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       const stored = (await getTasks(wsId)).find((t) => t.id === task.id);
       expect(stored?.goal).toBe(G.g2);
       expect(stored?.order).toBe(1.5);
-      expect(stored?.riskTier).toBe('yellow');
+      // And the ignored field left nothing behind on the projection.
+      expect((stored as unknown as { riskTier?: string }).riskTier).toBeUndefined();
 
       const regrouped = events.filter((e) => e.type === 'task.regrouped');
       expect(regrouped.length).toBe(1);
@@ -446,7 +448,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       }
     });
 
-    it('rejects an unknown goal id, an unknown task, a bad riskTier, and missing fields', async () => {
+    it('rejects an unknown goal id, an unknown task, and missing fields', async () => {
       const { wsId, G } = await seedWorkspace();
       const task = await seedTask(wsId, G.g1);
       expect(
@@ -455,17 +457,12 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       expect((await post('/api/tasks/t-missing/goal', { goal: G.g1, author: AGENT })).status).toBe(
         404,
       );
-      expect(
-        (
-          await post(`/api/tasks/${task.id}/goal`, {
-            goal: G.g1,
-            riskTier: 'purple',
-            author: AGENT,
-          })
-        ).status,
-      ).toBe(400);
       expect((await post(`/api/tasks/${task.id}/goal`, { author: AGENT })).status).toBe(400);
       expect((await post(`/api/tasks/${task.id}/goal`, { goal: G.g1 })).status).toBe(400);
+      // NOT in this list any more, and the omission is the point: a bad
+      // `riskTier` used to be a 400 here. The field is ignored now, so
+      // refusing it would break the older peers still sending it — asserted
+      // positively in task-routes.test.ts rather than by its absence here.
     });
   });
 
