@@ -109,9 +109,13 @@ describe('deterministicBrief', () => {
     );
     // Every title is a deep link to its task — the brief renders as markdown
     // on the same page the links point at, so the evidence is one tap away.
-    expect(md).toContain('**Finished:** [Ship the fuzzy matcher](/workspaces/ws-1?task=t-1) (1 task).');
+    expect(md).toContain(
+      '**Finished:** [Ship the fuzzy matcher](/workspaces/ws-1?task=t-1) (1 task).',
+    );
     expect(md).toContain('**Started:** [Rewrite the retry helper](/workspaces/ws-1?task=t-2).');
-    expect(md).toContain('**Filed:** 1 new task — [Draft the launch notes](/workspaces/ws-1?task=t-3).');
+    expect(md).toContain(
+      '**Filed:** 1 new task — [Draft the launch notes](/workspaces/ws-1?task=t-3).',
+    );
     expect(md).toContain(
       '**Decided:** 1 decision was answered — [Rewrite the retry helper](/workspaces/ws-1?task=t-2).',
     );
