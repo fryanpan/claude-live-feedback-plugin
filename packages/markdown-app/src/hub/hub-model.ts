@@ -1676,6 +1676,34 @@ export function reviewRowTitle(item: Pick<ReviewItem, 'title' | 'ask'>): string 
   return item.ask.trim() !== '' ? item.ask : item.title;
 }
 
+/** How long a card heading may run before it stops being a heading. */
+const HEADLINE_MAX = 90;
+
+/**
+ * The heading form of a review item's question.
+ *
+ * The mockup's card carries a SHORT title and, below it, the ask in full. Our
+ * threads have no short title — a thread's question is whatever somebody
+ * typed, which is regularly a paragraph — so the heading is derived: the first
+ * sentence, capped. A decision's title is already short and comes back
+ * unchanged.
+ *
+ * The point is the pair. Print the paragraph as the heading AND again in the
+ * quote below it and the card says everything twice, which is the "layout is
+ * weird" half of what got the last build rejected.
+ */
+export function reviewHeadline(text: string): string {
+  const flat = text.trim().replace(/\s+/g, ' ');
+  // First sentence: a terminator followed by a space or the end. `\S` before
+  // it keeps "e.g. " and a bare "?" from ending a sentence that hasn't begun.
+  const end = flat.match(/\S[.?!](?=\s|$)/);
+  const first = end?.index === undefined ? flat : flat.slice(0, end.index + 2);
+  if (first.length <= HEADLINE_MAX) return first;
+  const cut = first.slice(0, HEADLINE_MAX);
+  const space = cut.lastIndexOf(' ');
+  return `${(space > 40 ? cut.slice(0, space) : cut).trimEnd()}…`;
+}
+
 /**
  * The card's kind badge (mockup: the amber `Decision` and the blue
  * `Needs your reply`).
