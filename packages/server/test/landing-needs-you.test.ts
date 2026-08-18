@@ -195,7 +195,7 @@ describe('a task discussion reaches the band', () => {
   });
 });
 
-describe('un-retired reviews are made visible, never hidden', () => {
+describe('a forgotten review is made visible, never acted on', () => {
   it('badges a project whose bound source file is gone, and not one still on disk', async () => {
     const goneDoc = await makeDoc('/proj/forgotten');
     await makeDoc('/proj/remembered');
@@ -209,7 +209,8 @@ describe('un-retired reviews are made visible, never hidden', () => {
     // is rendered and carries no such badge.
     const remembered = html.slice(html.indexOf('remembered'));
     expect(remembered.slice(0, remembered.indexOf('</li>'))).not.toContain('source gone');
-    // Nothing was deleted or hidden — both projects are still listed.
+    // Nothing was hidden and nothing was acted on — both projects are still
+    // listed. The page states the fact and offers no verb.
     expect(html).toContain('forgotten');
     expect(html).toContain('remembered');
   });

@@ -87,9 +87,12 @@ export interface LandingInputDoc {
   /**
    * This doc is bound to a source file that is no longer on disk.
    *
-   * Surfaced, never acted on. Agents retire their own reviews via
-   * `delete_workspace`; the landing page's job is to make forgetting VISIBLE,
-   * not to auto-hide or auto-delete anything a person might still want.
+   * Surfaced, never acted on. This project's rule is soft delete — archive,
+   * keep the `.ydoc` so the analyses that read it still work — and the archive
+   * step does not exist yet. So this page states the fact and offers no verb:
+   * it does not hide a row, it does not act on one, and it deliberately points
+   * at no cleanup control, because the only verb that exists today is a hard
+   * one and pointing at it is worse than saying nothing.
    */
   sourceMissing?: boolean;
 }

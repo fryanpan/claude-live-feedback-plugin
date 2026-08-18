@@ -4568,8 +4568,10 @@ function renderGroupRow(g: LandingGroupRow): string {
     g.kind === 'workspace' ? 'board' : `${g.artifacts} artifact${g.artifacts === 1 ? '' : 's'}`;
   const activity =
     g.lastActivity > 0 ? `last comment ${formatRelative(g.lastActivity)}` : 'no comments yet';
-  // Forgetting, made visible. Nothing is hidden or deleted on this signal —
-  // agents retire their own reviews; this only makes an un-retired one legible.
+  // Forgetting, made visible, and nothing more. No row is hidden, nothing is
+  // acted on, and no cleanup affordance sits next to this badge: archiving is
+  // a separate step that has not been built yet (soft delete is the project
+  // rule), so the honest thing is a fact with no verb attached.
   const gone =
     g.missingSources > 0
       ? `<span class="badge badge-gone">${g.missingSources} source${g.missingSources === 1 ? '' : 's'} gone</span>`
