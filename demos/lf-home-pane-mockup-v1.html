@@ -420,6 +420,7 @@ let RECIPE = `Write for someone who has been away 2-4 days and reads on a phone.
 - Link only where the link is the next action. At most one link per section.
 - End with what is queued and what is NOT waiting on anyone.
 - Never restate a decision that is already in the queue below — say it is there.`;
+const RECIPE_SEED = RECIPE;
 
 /* --------------------------------------------------------------------------
    THE RUNNING ORDER. The queue and the list are ONE list: the queue steps
@@ -564,6 +565,14 @@ let recipeOpen = false;
 let order = ITEMS.map((i) => i.id);
 const settled = new Map();  // id -> what you answered
 
+/* Every control on this page re-renders the whole pane, so anything the reader
+   has TYPED and not yet sent lives here rather than only in the DOM — otherwise
+   `Mark caught up`, the stepper, Skip or an A/B switch silently discards it.
+   `captureTyped()` runs at the top of every render, so a new control cannot
+   forget to call it. */
+const drafts = new Map();   // item id -> unsent reply text
+let scopeIdx = 0;           // which coverage window the recipe panel has chosen
+
 const byId = (id) => ITEMS.find((i) => i.id === id);
 const live = () => order.filter((id) => !settled.has(id));
 
@@ -605,9 +614,8 @@ function briefCard() {
       <textarea id="rcp" spellcheck="false">${esc(RECIPE)}</textarea>
       <label for="scope">Cover</label>
       <select id="scope">
-        <option>Everything since I last marked caught up (Friday, 6:12 pm)</option>
-        <option>The last 24 hours</option>
-        <option>The last 7 days</option>
+        ${['Everything since I last marked caught up (Friday, 6:12 pm)', 'The last 24 hours', 'The last 7 days']
+          .map((o, i) => `<option ${i === scopeIdx ? 'selected' : ''}>${esc(o)}</option>`).join('')}
       </select>
       <div class="row">
         <button class="btn primary" onclick="rerun()">Save &amp; re-run</button>
@@ -656,7 +664,7 @@ function itemCard(it, rank) {
           </button>`).join('')}
       </div>
       <div class="replybox">
-        <textarea id="free-${it.id}" placeholder="…or answer in your own words — the agent gets your text verbatim"></textarea>
+        <textarea id="free-${it.id}" placeholder="…or answer in your own words — the agent gets your text verbatim">${esc(drafts.get(it.id) || '')}</textarea>
         <button class="btn primary" onclick="answerFree('${it.id}')">Send</button>
       </div>
       <div class="actions"><button class="btn small ghost" onclick="skip('${it.id}')">Skip for now</button>${longBtn}</div>
@@ -671,7 +679,7 @@ function itemCard(it, rank) {
       ${md(asked)}
     </div>
     <div class="replybox">
-      <textarea id="free-${it.id}" placeholder="Reply…"></textarea>
+      <textarea id="free-${it.id}" placeholder="Reply…">${esc(drafts.get(it.id) || '')}</textarea>
       <button class="btn primary" onclick="answerFree('${it.id}')">Send</button>
     </div>
     <div class="actions"><button class="btn small ghost" onclick="skip('${it.id}')">Skip for now</button>${longBtn}</div>`;
@@ -807,7 +815,20 @@ function boardStub() {
   <div class="task"><div class="t-main"><div class="t-title">Prune the device pool</div></div><span class="st todo">todo</span></div>`;
 }
 
+/* Read back everything the reader typed, BEFORE the innerHTML swap throws the
+   nodes away. Called only from render(), which is the only thing that swaps. */
+function captureTyped() {
+  const rcp = document.getElementById('rcp');
+  if (rcp) RECIPE = rcp.value;
+  const scope = document.getElementById('scope');
+  if (scope) scopeIdx = scope.selectedIndex;
+  for (const box of document.querySelectorAll('textarea[id^="free-"]')) {
+    drafts.set(box.id.slice('free-'.length), box.value);
+  }
+}
+
 function render() {
+  captureTyped();
   document.getElementById('panes').innerHTML = paneTabs();
   document.getElementById('app').innerHTML =
     pane === 'home' ? briefCard() + queueSection() + boundSection() : boardStub();
@@ -854,12 +875,16 @@ function markRead() {
 function unread() { briefRead = false; render(); }
 function toggleRecipe() { recipeOpen = !recipeOpen; render(); return false; }
 function rerun() {
-  RECIPE = document.getElementById('rcp').value;
+  // render()'s captureTyped() is what saves the edited instructions — one place
+  // does it, so no control can be the one that forgot.
   toast('Instructions saved, brief re-written. In the product this is a stored recipe with a history — you can see what changed and roll back.');
   render();
 }
 function nudge(line) {
-  RECIPE = `${document.getElementById('rcp').value.trim()}\n- ${line}`;
+  captureTyped();
+  RECIPE = `${RECIPE.trim()}\n- ${line}`;
+  const box = document.getElementById('rcp');
+  if (box) box.value = RECIPE;  // so render()'s capture reads the appended line back
   toast('Appended to the instructions, not to this brief — so the correction holds next week too.');
   render();
 }
@@ -881,6 +906,7 @@ function answerFree(id) {
   settled.set(id, text.length > 46 ? `${text.slice(0, 46)}…` : text);
   toast('Sent verbatim. The thread stays open until whoever asked closes it.');
   cursor = 0; render();
+  drafts.delete(id);  // after render(), whose captureTyped() has already read it
 }
 function undoAnswer(id) { settled.delete(id); render(); }
 function skip(id) {
@@ -903,7 +929,15 @@ function move(id, d) {
   render();
 }
 function resetAll() {
-  settled.clear(); order = ITEMS.map((i) => i.id); cursor = 0; briefRead = false; render();
+  settled.clear(); drafts.clear(); scopeIdx = 0;
+  order = ITEMS.map((i) => i.id); cursor = 0; briefRead = false;
+  // Blank what is on screen too, or render()'s captureTyped() reads it straight
+  // back in — the same ordering trap the drafts map exists to close.
+  const rcp = document.getElementById('rcp');
+  if (rcp) rcp.value = RECIPE_SEED;
+  for (const box of document.querySelectorAll('textarea[id^="free-"]')) box.value = '';
+  RECIPE = RECIPE_SEED;
+  render();
 }
 
 let toastT;
