@@ -127,6 +127,37 @@ Technical discoveries that should persist across sessions for this project.
   owner's copy still has the field. Then prove non-vacuity by breaking the
   fix and watching it fail.
 
+## A positive control can silently become a duplicate of the thing it controls
+
+- **Measuring what a server restart costs a doc mid-edit, the first run typed
+  into two docs concurrently and killed the server once — 40 characters into
+  one, 100 into the other, "the same" kill for both. The 40-character doc
+  reported nothing lost, and it was not a result.** Typing 40 characters at
+  80ms finishes 4.8 seconds before typing 100 does, so by the time the kill
+  landed that doc had been idle far longer than the 200ms persistence
+  debounce. It had quietly stopped being a second subject and become a second
+  *control* — and it agreed with the control, which is exactly what made it
+  look like a clean, reassuring row rather than a broken one.
+- **Two subjects in one pass do not share the condition unless the condition
+  is what ENDS the pass.** Here the variable under test was the gap between
+  the last keystroke and the kill; anything that finishes typing early has a
+  different gap, whatever the harness intended. Rule: **one subject per
+  cycle**, with the control alongside it — and if a design needs several
+  subjects in one pass, assert the per-subject condition (each one's own
+  elapsed time at the moment of the kill) rather than assuming a shared event
+  imposes a shared state.
+- **This is the failure this file already records, inverted.** The usual form
+  is a control that cannot see anything, so an absence reads as clean. This
+  one is a control that sees everything and is therefore vacuous in the other
+  direction: it is not that the row could never fail, it is that the row could
+  never have failed *for the reason the experiment was about*. A pass that
+  agrees with the control is the shape to be suspicious of, because it is
+  indistinguishable from a subject that never entered the condition.
+- What caught it was reading the numbers rather than the verdict — 40/40 and
+  0/100 in the same pass, from a harness that claimed to treat both the same
+  way, is a contradiction on its face. Re-run per-subject and the 40-character
+  case loses its characters too.
+
 ## Anything in the Yjs doc is readable by every peer, including share visitors
 
 - **Redacting a REST payload closes one door out of two.** `DocMeta`'s
