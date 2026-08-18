@@ -275,6 +275,29 @@ describe('describeEvent', () => {
     expect(s).not.toContain('task.body_edited');
   });
 
+  it('names a title-only rename with both names and the reason, not the raw slug', () => {
+    // task.retitled is new (renames used to emit nothing), so without a case
+    // here the feed prints the slug. The OLD name leads: it is the only one
+    // the person who filed the row would recognise.
+    const s = describeEvent(
+      {
+        event: 'task.retitled',
+        ts: NOW,
+        taskId: 't-1',
+        actor: { id: 'agent-x', name: 'Search Revamp', kind: 'agent' },
+        titleFrom: 'fix the thing with the search',
+        titleTo: 'Person can find results by relevance',
+        reason: 'named the outcome instead of the artifact',
+      },
+      titleOf,
+    );
+    expect(s).toContain('Search Revamp');
+    expect(s).toContain('fix the thing with the search');
+    expect(s).toContain('Person can find results by relevance');
+    expect(s).toContain('named the outcome instead of the artifact');
+    expect(s).not.toContain('task.retitled');
+  });
+
   it('says what an evidence amendment corrected, and what it replaced', () => {
     // Same shape as the row above: the fallback would print
     // `task.evidence_amended` and read as a log line in a view built for
