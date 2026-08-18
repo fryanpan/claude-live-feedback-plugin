@@ -186,9 +186,7 @@ describe('/api/agents/:agentId/watches', () => {
       'doc-two',
     ]);
     const removed = await call(base, 'agent-alpha', 'POST', { remove: ['doc-one'] });
-    expect((removed.json.watches as Array<{ key: string }>).map((w) => w.key)).toEqual([
-      'doc-two',
-    ]);
+    expect((removed.json.watches as Array<{ key: string }>).map((w) => w.key)).toEqual(['doc-two']);
   });
 
   it('prunes a watch whose doc is gone on read — and keeps the live one beside it', async () => {
@@ -203,9 +201,9 @@ describe('/api/agents/:agentId/watches', () => {
     // The read is what the store persisted, so it does not come back later.
     const again = await call(base, 'agent-alpha', 'GET');
     expect(again.json.pruned).toEqual([]);
-    expect(handle?.agentWatches.list('agent-alpha', () => true).watches.map((w) => w.key)).toEqual(
-      ['doc-live'],
-    );
+    expect(handle?.agentWatches.list('agent-alpha', () => true).watches.map((w) => w.key)).toEqual([
+      'doc-live',
+    ]);
   });
 
   it('treats `ws:<id>` as live for a hub workspace, and dead for a workspace nobody made', async () => {
