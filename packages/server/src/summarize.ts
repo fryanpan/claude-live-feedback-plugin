@@ -43,9 +43,20 @@ const API_URL = 'https://api.anthropic.com/v1/messages';
 /** Long enough to coalesce a burst of edits, short enough to feel live. */
 export const DEBOUNCE_MS = 3_000;
 const MAX_TOKENS = 200;
-/** A brief is a ~200-word page-top, not a card line — it needs more room
- *  than a thread summary, and its budget is still a hard cap. */
-const BRIEF_MAX_TOKENS = 600;
+/**
+ * A brief is a ~110-word page-top, not a card line — it needs more room than
+ * a thread summary, and its budget is still a hard cap.
+ *
+ * 600 was measured too small on the live board (2026-08-18): the instructions
+ * ask for inline links "as much as possible" and each one carries a ~45-char
+ * URL that costs tokens while costing no words, so an 89-word brief with ten
+ * links reached the ceiling and the API cut it mid-URL. The words are bounded
+ * by the reader's instructions; this is only the ceiling that stops a runaway
+ * reply, so it sits above what a compliant brief can spend rather than at it.
+ * `acceptBrief`'s 4,000-character limit is still the binding bound on what
+ * gets stored.
+ */
+const BRIEF_MAX_TOKENS = 1_200;
 const TIMEOUT_MS = 20_000;
 
 export interface SummarizerOpts {
@@ -340,11 +351,24 @@ export class ThreadSummarizer {
           'are sent to api.anthropic.com. Turn off with LF_SUMMARIES=0.',
       );
     }
-    return await this.post(
+    const reply = await this.postRaw(
       prompt.system,
       [{ role: 'user', content: prompt.user }],
       BRIEF_MAX_TOKENS,
     );
+    if (reply === null) return null;
+    // A reply the API stopped at the token ceiling is a fragment, and the
+    // fragment is what reached the field: a brief cut inside a link URL, which
+    // renders as a visible `](/workspaces/…?task=t-` at the end of the card.
+    // Nothing downstream can tell a cut reply from a short one — it is well
+    // under every length bound `acceptBrief` checks — so the only place that
+    // knows is here, where the API says so. Refusing costs a generated brief
+    // and keeps the deterministic one, which is always whole.
+    if (reply.stopReason === 'max_tokens') {
+      console.error('[summarize] brief hit the token ceiling; keeping the deterministic brief');
+      return null;
+    }
+    return reply.text;
   }
 
   /**
@@ -356,6 +380,24 @@ export class ThreadSummarizer {
     messages: Array<{ role: 'user' | 'assistant'; content: string }>,
     maxTokens: number = MAX_TOKENS,
   ): Promise<string | null> {
+    return (await this.postRaw(system, messages, maxTokens))?.text ?? null;
+  }
+
+  /**
+   * `post`, plus WHY the model stopped.
+   *
+   * Separate from `post` on purpose: thread summaries deliberately ship an
+   * over-long first answer rather than nothing ("a complete 15-word line
+   * beats a chopped 12-word one"), so making every caller refuse a
+   * `max_tokens` stop would change behaviour the summarizer's own tests pin.
+   * Only the brief reads this, because only the brief has a whole
+   * deterministic fallback to fall back TO.
+   */
+  private async postRaw(
+    system: string,
+    messages: Array<{ role: 'user' | 'assistant'; content: string }>,
+    maxTokens: number = MAX_TOKENS,
+  ): Promise<{ text: string; stopReason: string | null } | null> {
     if (!this.key) return null;
     const ctl = new AbortController();
     const timeout = setTimeout(() => ctl.abort(), TIMEOUT_MS);
@@ -375,8 +417,14 @@ export class ThreadSummarizer {
         console.error(`[summarize] HTTP ${res.status}`);
         return null;
       }
-      const body = (await res.json()) as { content?: Array<{ text?: string }> };
-      return body.content?.map((b) => b.text ?? '').join('') ?? '';
+      const body = (await res.json()) as {
+        content?: Array<{ text?: string }>;
+        stop_reason?: string | null;
+      };
+      return {
+        text: body.content?.map((b) => b.text ?? '').join('') ?? '',
+        stopReason: typeof body.stop_reason === 'string' ? body.stop_reason : null,
+      };
     } catch (err) {
       // "Returns null on anything at all going wrong" has to include the
       // things that THROW: an offline machine, the 20s abort above, a 200
