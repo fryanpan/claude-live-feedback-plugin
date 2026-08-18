@@ -1184,36 +1184,42 @@ body.hub-body {
   font-size: 13px;
 }
 
-/* --- review walkthrough: one at a time, in the derived order --- */
-.hub-walkthrough {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.35);
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding: 4vh 14px;
-  z-index: 70;
-}
+/* --- review walkthrough: one at a time, in the derived order ---
+   A PAGE inside the Home pane (approved mockup home-pane-mockup-v1), not an
+   overlay: it takes the Home column, and Home's own content is hidden while
+   it is up. It used to be a fixed dimmed dialog over the board, which is what
+   got the layout rejected — a queue you work for several minutes is somewhere
+   you go, not something that interrupts you. Nothing here may reintroduce
+   `position: fixed`, or the Back-to-Home link stops being the way out. */
 .hub-walkthrough.hidden {
   display: none;
 }
 .hub-walk-panel {
   display: flex;
   flex-direction: column;
-  width: min(680px, 100%);
-  max-height: 92vh;
-  overflow: auto;
-  background: var(--bg);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-lg);
-  padding: 16px;
+  min-width: 0;
+}
+/* The way back out, on its own line above the head. */
+.hub-walk-topline {
+  display: flex;
+  margin-bottom: 4px;
+}
+.hub-walk-home {
+  padding-left: 0;
 }
 .hub-walk-head {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 0 8px;
+}
+/* One heading style across the Home pane's sections (approved design):
+   16px, weight 650, normal case. */
+.hub-walk-heading {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
 }
 .hub-walk-pos {
   font-size: 13px;
@@ -1259,54 +1265,134 @@ body.hub-body {
   min-height: 36px;
   white-space: nowrap;
 }
-.hub-walk-close {
-  min-height: 36px;
-}
+/* The card the whole page is about (mockup `.card`). */
 .hub-walk-card {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  margin: 10px 0 14px;
+  padding: 12px 14px;
+  margin: 0 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
 }
-/* Which of the three this card is. The title says what it is ABOUT — for a
-   comment that is a task or a doc name, which on its own reads like the
-   wrong card. */
-.hub-walk-kind {
-  margin: 0;
-  font-size: 12px;
-  letter-spacing: 0.02em;
-  color: var(--fg-muted);
+/* Badge · question · project chip · wait, on one baseline (mockup
+   `.card-head`). The title takes the slack so the chips keep their words. */
+.hub-walk-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 .hub-walk-title {
   margin: 0;
-  font-size: 19px;
+  font-size: 15px;
+  font-weight: 650;
+  flex: 1;
+  /* A FLOOR, where the mockup has `min-width: 0`. Measured at 430px: with no
+     floor the "Needs your reply" badge takes ~180px of a 402px line and the
+     title shrinks to about 110px, wrapping a one-line question into seven
+     stacked words. With one, the head wraps as it is meant to — badge and
+     title on the first row, chip and wait onto the second. Long unbroken
+     tokens are handled by `overflow-wrap` below, not by the zero. */
+  min-width: 160px;
   overflow-wrap: anywhere;
+}
+/* One pill shape for both the kind badge and the project chip, so a kind
+   added later cannot arrive looking like a different component. */
+.hub-walk-k {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-radius: 4px;
+  padding: 2px 7px;
+  white-space: nowrap;
+  color: var(--fg-muted);
+  background: var(--bg-subtle, var(--bg));
+}
+.hub-walk-k-decision {
+  color: var(--warn-fg, #b25e09);
+  background: var(--warn-wash, #fff4e5);
+}
+.hub-walk-k-reply {
+  color: var(--accent);
+  background: var(--accent-wash, rgba(59, 111, 212, 0.07));
+}
+/* The project chip is an outline, not a fill — it names context rather than
+   classifying the card, and two filled pills side by side read as two
+   competing labels. */
+.hub-walk-k-count {
+  background: transparent;
+  border: 1px solid var(--border);
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 600;
+}
+.hub-walk-wait {
+  font-size: 12px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* Who asked, when, and what is standing behind it (mockup `.ctx`). */
+.hub-walk-ctx {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--fg-muted);
+  border-left: 3px solid var(--border);
+  padding: 2px 0 2px 11px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+/* The one pointer up and out: the task or doc this came from. */
+.hub-walk-where {
+  margin: 0;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+/* The ask, tinted so it is the thing the eye lands on (mockup `.ask`). */
+.hub-walk-askbox {
+  padding: 12px 14px;
+  border: 1px solid var(--accent-line, #cfe2f7);
+  border-radius: var(--radius);
+  background: var(--accent-wash, rgba(59, 111, 212, 0.07));
+}
+.hub-walk-ask-head {
+  margin: 0 0 7px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent);
 }
 /* The question itself, in the asker's words. */
 .hub-walk-ask {
   margin: 0;
-  padding: 8px 12px;
-  border-left: 3px solid var(--border);
-  background: var(--bg-subtle, var(--bg));
+  padding: 0;
+  border: none;
   font-family: var(--prose);
-  line-height: 1.5;
+  line-height: 1.55;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
-/* Answering in place is the default; going to the surface is the escape. */
+/* Answering in place is the default; going to the surface is the escape. On a
+   blocker there is nothing to answer, so this is the card's primary button and
+   keeps the `hub-btn` look it is given. */
 .hub-walk-open {
   align-self: flex-start;
 }
-/* What is waiting on the answer — the reason this one is at the top. */
-.hub-walk-blocks {
-  margin: 0;
-  font-size: 13px;
-  color: var(--fg-muted);
+/* The inline `Task: <title> ↗` link (mockup `.desc a`). A button, because it
+   acts rather than navigates — dressed as the link it reads as. */
+.hub-walk-where-link {
+  font: inherit;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+  text-align: left;
   overflow-wrap: anywhere;
-}
-.hub-walk-blocks.hub-walk-blocking {
-  color: var(--fg);
-  font-weight: 600;
 }
 .hub-walk-body {
   font-family: var(--prose);
@@ -1355,28 +1441,60 @@ body.hub-body {
   font-size: 13px;
   color: var(--fg-muted);
 }
+/* The reply box (mockup `.replybox`): the field and its dark Send side by
+   side, stacking under a thumb — see the ≤900px block. */
+.hub-walk-answer,
+.hub-walk-info {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  margin: 0;
+}
 .hub-walk-answer textarea,
 .hub-walk-info textarea {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   font: inherit;
-  padding: 8px;
+  padding: 9px 11px;
+  min-height: 62px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  margin-bottom: 8px;
+  resize: vertical;
 }
 .hub-walk-info {
   padding-top: 10px;
   border-top: 1px solid var(--border);
 }
-/* The ‹ › stepper wrapping the position readout, in the panel HEAD (approved
-   design) — stepping must not mean scrolling past a long card to find the
-   buttons. Square-ish targets: a glyph button narrower than its height is a
-   miss under a thumb. */
+/* Skip, and the way to say you cannot answer yet (mockup `.actions`). */
+.hub-walk-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 0;
+}
+/* Pushed to the far end: it is the rarer move, and the mockup's actions row
+   reserves that end for the secondary control. */
+.hub-walk-more {
+  margin-left: auto;
+}
+/* The mockup's `.btn.ghost` — no border, no fill, muted. Used by the three
+   controls that are ways OUT of answering rather than answers. */
+.hub-btn-ghost {
+  border-color: transparent;
+  background: none;
+  color: var(--fg-muted);
+}
+/* The `‹ N of M ›` stepper wrapping the position readout, right-aligned in
+   the page head (mockup `.stepper`) — stepping must not mean scrolling past a
+   long card to find the buttons. Square-ish targets: a glyph button narrower
+   than its height is a miss under a thumb. */
 .hub-walk-nav {
   display: inline-flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
+  margin-left: auto;
 }
 .hub-walk-nav .hub-btn {
   min-height: 44px;
@@ -2886,23 +3004,24 @@ a.hub-link-chip:hover {
     border-radius: 0;
   }
   /* The walkthrough is a phone-first surface — six answers in one sitting is
-     a couch gesture, so it takes the whole screen rather than floating in a
-     card with the board showing round the edges. */
-  .hub-walkthrough {
-    padding: 0;
+     a couch gesture. It is a PAGE in the Home column now rather than an
+     overlay, so it already fills the width; what the phone needs is the reply
+     box stacked, since a field and a button side by side at 430px leaves the
+     field too narrow to read what you typed. */
+  .hub-walk-answer,
+  .hub-walk-info {
+    flex-direction: column;
+    align-items: stretch;
   }
-  .hub-walk-panel {
-    max-height: 100vh;
-    height: 100%;
+  .hub-walk-answer .hub-btn,
+  .hub-walk-info .hub-btn {
     width: 100%;
-    border-radius: 0;
   }
-  /* The ‹ › stepper lives in the panel HEAD now, so there is no sticky bottom
-     bar — but the card's tail still ends over two bottom-docked launchers:
-     the hold-to-talk mic bottom-left and the feedback widget's pencil
-     bottom-right, both fixed above this panel by design. Reserve their height
-     so the last control ("Tell me more" on a decision card — exactly the one
-     a stuck reviewer reaches for) can always be scrolled clear of them. */
+  /* The card's tail ends over two bottom-docked launchers: the hold-to-talk
+     mic bottom-left and the feedback widget's pencil bottom-right, both fixed
+     above this page by design. Reserve their height so the last control
+     ("Tell me more" on a decision card — exactly the one a stuck reviewer
+     reaches for) can always be scrolled clear of them. */
   .hub-walk-card {
     padding-bottom: calc(60px + var(--safe-bottom, 0px));
   }

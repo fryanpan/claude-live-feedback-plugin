@@ -16,7 +16,6 @@ import {
   type ActivityEvent,
   type ActivityFilter,
   type BoardSection,
-  type DecisionRow,
   type DriftNotice,
   type HomePayload,
   type HubEvidence,
@@ -44,12 +43,16 @@ import {
   quoteAfterCapture,
   quoteAfterEdit,
   quoteForCapture,
+  reviewAskedLine,
+  reviewBadge,
   reviewBannerText,
+  reviewHeadline,
   reviewRowTitle,
   shortCommit,
   stepTarget,
   timeAgo,
   uptimeSummary,
+  waitShort,
   waitingLabel,
 } from './hub-model.ts';
 
@@ -1142,14 +1145,9 @@ function clip(text: string, max = 60): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
-/** What each kind is, in one glyph. The queue mixes three surfaces and the
- *  reader has to know which one a row will take them to before they tap it. */
-const REVIEW_MARK: Record<ReviewKind, string> = {
-  decision: '◆',
-  blocker: '⛔',
-  'task-thread': '💬',
-  'doc-thread': '📄',
-};
+/** What each kind is, for the row's hover title. The card's own badge comes
+ *  from `reviewBadge`, which is the mockup's two-tone vocabulary; this is the
+ *  longer wording a tooltip can afford. */
 const REVIEW_KIND_LABEL: Record<ReviewKind, string> = {
   decision: 'Decision',
   blocker: 'Your task, blocking',
@@ -1442,6 +1440,10 @@ export interface WalkthroughHandlers {
   /** Move to another position in the queue (skip forward, step back). */
   onStep: (index: number) => void;
   onClose: () => void;
+  /** What body of work this one belongs to — the mockup's project chip. Home
+   *  is per-workspace, so the honest within-workspace answer is the goal;
+   *  null renders no chip rather than a placeholder. */
+  contextLabel?: (item: ReviewItem) => string | null;
 }
 
 /** The task's own description, or an honest line saying there isn't one.
@@ -1460,14 +1462,6 @@ function walkBody(task: HubTask): HTMLElement {
   return body;
 }
 
-function blocksLine(row: DecisionRow): string {
-  if (row.blocks.length === 0) return 'Nothing is waiting on this one.';
-  const titles = row.blocks.map((t) => t.title);
-  const shown = titles.slice(0, 3).join(', ');
-  const rest = titles.length > 3 ? ` and ${titles.length - 3} more` : '';
-  return `${row.hard ? 'Hard-blocking' : 'Blocking'} ${titles.length === 1 ? '1 task' : `${titles.length} tasks`}: ${shown}${rest}`;
-}
-
 /**
  * A textarea + submit pair; the submit is ignored when the field is blank.
  *
@@ -1483,6 +1477,10 @@ function promptForm(
   placeholder: string,
   submitLabel: string,
   onSubmit: (text: string) => Promise<boolean>,
+  // The mockup's Send is `.btn.primary`, which is INK-dark there rather than
+  // accent-blue — the two blue buttons stacked under a decision card are what
+  // got the old layout called weird. Secondary prompts pass a plain button.
+  submitClass = 'hub-btn hub-btn-ink',
 ): HTMLFormElement {
   const form = document.createElement('form');
   form.className = className;
@@ -1491,7 +1489,7 @@ function promptForm(
   ta.rows = 3;
   const submit = document.createElement('button');
   submit.type = 'submit';
-  submit.className = 'hub-btn hub-btn-primary';
+  submit.className = submitClass;
   submit.textContent = submitLabel;
   form.append(ta, submit);
   // A flag, not just the disabled attributes: disabling the CONTROLS stops a
@@ -1523,10 +1521,11 @@ function promptForm(
 }
 
 /**
- * The ‹ › stepper (approved design), shared by both card kinds because "go
- * through the list" is the feature and it must not stop working when the next
- * item is a comment. Lives in the panel HEAD around the position readout, so
- * stepping does not mean scrolling past a long card to find the buttons.
+ * The `‹ N of M ›` stepper (mockup: right-aligned in the "Review" head),
+ * shared by both card kinds because "go through the list" is the feature and
+ * it must not stop working when the next item is a comment. Lives in the page
+ * head around the position readout, so stepping does not mean scrolling past
+ * a long card to find the buttons.
  */
 function walkStepper(
   index: number,
@@ -1551,6 +1550,94 @@ function walkStepper(
   skip.addEventListener('click', () => handlers.onStep(index + 1));
   nav.append(back, pos, skip);
   return nav;
+}
+
+/**
+ * The mockup's card head, in its order: kind badge, the question, the chip
+ * saying which body of work it belongs to, and how long it has waited.
+ *
+ * The badge and the chip carry the same `.k` shape in the mockup and the same
+ * one here, so a new kind cannot arrive looking like a different component.
+ */
+function walkCardHead(item: ReviewItem, handlers: WalkthroughHandlers, now: number): HTMLElement {
+  const head = document.createElement('div');
+  head.className = 'hub-walk-card-head';
+
+  const badge = reviewBadge(item.kind);
+  const kind = document.createElement('span');
+  kind.className = `hub-walk-k hub-walk-k-${badge.tone}`;
+  kind.textContent = badge.label;
+
+  const title = document.createElement('h3');
+  title.className = 'hub-walk-title';
+  // The QUESTION, not the subject — the same title the queue row shows, so
+  // tapping a row and stepping onto it cannot read as two different items.
+  // In its heading form: a typed question is often a paragraph, and the whole
+  // of it is on the card already, in the quote below.
+  title.textContent = reviewHeadline(reviewRowTitle(item));
+  head.append(kind, title);
+
+  const context = handlers.contextLabel?.(item);
+  if (context && context.trim() !== '') {
+    const chip = document.createElement('span');
+    chip.className = 'hub-walk-k hub-walk-k-count';
+    chip.textContent = context;
+    head.append(chip);
+  }
+
+  const wait = document.createElement('span');
+  wait.className = 'hub-walk-wait';
+  wait.textContent = waitShort(item.since, now);
+  head.append(wait);
+  return head;
+}
+
+/** The mockup's left-bordered context block: who asked, when, and what is
+ *  standing behind it. */
+function walkCtx(item: ReviewItem, now: number): HTMLElement {
+  const ctx = document.createElement('div');
+  ctx.className = 'hub-walk-ctx';
+  const line = document.createElement('div');
+  line.className = 'hub-walk-asked-line';
+  line.textContent = reviewAskedLine(item, now);
+  ctx.append(line);
+  return ctx;
+}
+
+/** The one pointer up and out of the card: the task or doc this came from.
+ *  Rendered only when it says something the title does not — an item whose
+ *  question IS its subject would otherwise print the same words twice. */
+function walkWhere(item: ReviewItem, handlers: WalkthroughHandlers): HTMLElement | null {
+  if (item.ask.trim() === '' || item.title.trim() === '') return null;
+  const where = document.createElement('p');
+  where.className = 'hub-walk-where';
+  const label = document.createElement('b');
+  label.textContent = item.kind === 'doc-thread' ? 'Doc:' : 'Task:';
+  const open = document.createElement('button');
+  open.type = 'button';
+  // Its own class, NOT `hub-walk-open`: that one is the blocker card's primary
+  // button, and styling both through one selector turned the button into bare
+  // blue text — measured on staging at 430px.
+  open.className = 'hub-walk-where-link';
+  open.textContent = `${item.title} ↗`;
+  open.addEventListener('click', () => handlers.onOpenItem(item));
+  where.append(label, document.createTextNode(' '), open);
+  return where;
+}
+
+/** The mockup's `Skip for now` row. The `›` stepper does the same move; both
+ *  exist because the stepper is where you look to navigate and this is where
+ *  you look when you have decided not to answer. */
+function walkActions(index: number, handlers: WalkthroughHandlers): HTMLElement {
+  const actions = document.createElement('div');
+  actions.className = 'hub-walk-actions';
+  const skip = document.createElement('button');
+  skip.type = 'button';
+  skip.className = 'hub-btn hub-btn-ghost hub-walk-skip-link';
+  skip.textContent = 'Skip for now';
+  skip.addEventListener('click', () => handlers.onStep(index + 1));
+  actions.append(skip);
+  return actions;
 }
 
 /**
@@ -1608,6 +1695,13 @@ function advancedBanner(progress: WalkProgress, handlers: WalkthroughHandlers): 
  * navigations — so the position and the queue live here rather than in six
  * separate detail-panel visits.
  *
+ * A PAGE, not a modal (approved mockup home-pane-mockup-v1). It replaces the
+ * Home pane's content behind a `‹ Back to Home` link and keeps the workspace
+ * shell — rail, topbar — where it was. The previous cut floated a dialog over
+ * the board with its own dimmed backdrop and a ✕, which is what got the
+ * layout called weird: a queue you work for several minutes is somewhere you
+ * go, not something that interrupts you.
+ *
  * `index` is the position in `queue.items`; past the end (or over an empty
  * queue) is the done state, and a negative index means closed.
  */
@@ -1617,6 +1711,7 @@ export function renderReviewWalkthrough(
   index: number,
   handlers: WalkthroughHandlers,
   progress: WalkProgress = { cleared: 0, last: null },
+  now: number = Date.now(),
 ): void {
   container.replaceChildren();
   if (index < 0) {
@@ -1627,8 +1722,17 @@ export function renderReviewWalkthrough(
 
   const panel = document.createElement('div');
   panel.className = 'hub-walk-panel';
-  panel.setAttribute('role', 'dialog');
-  panel.setAttribute('aria-modal', 'true');
+
+  // The way back out, above everything (mockup: its own row over the head).
+  const topline = document.createElement('div');
+  topline.className = 'hub-walk-topline';
+  const home = document.createElement('button');
+  home.type = 'button';
+  home.className = 'hub-btn hub-btn-ghost hub-walk-home';
+  home.textContent = '‹ Back to Home';
+  home.addEventListener('click', () => handlers.onClose());
+  topline.append(home);
+  panel.append(topline);
 
   const item = queue.items[index];
   // Only a decision gets the answer furniture. A blocker carries the same row
@@ -1663,7 +1767,7 @@ export function renderReviewWalkthrough(
     const close = document.createElement('button');
     close.type = 'button';
     close.className = 'hub-btn hub-btn-primary';
-    close.textContent = 'Back to the board';
+    close.textContent = 'Back to Home';
     close.addEventListener('click', () => handlers.onClose());
     done.append(close);
     panel.append(done);
@@ -1673,6 +1777,9 @@ export function renderReviewWalkthrough(
 
   const head = document.createElement('div');
   head.className = 'hub-walk-head';
+  const heading = document.createElement('h2');
+  heading.className = 'hub-walk-heading';
+  heading.textContent = 'Review';
   const pos = document.createElement('span');
   pos.className = 'hub-walk-pos';
   // Two readings, because the queue shrinks as it is worked and neither number
@@ -1685,13 +1792,7 @@ export function renderReviewWalkthrough(
     cleared.textContent = `${progress.cleared} cleared`;
     pos.append(cleared);
   }
-  const close = document.createElement('button');
-  close.type = 'button';
-  close.className = 'hub-btn hub-walk-close';
-  close.textContent = '✕';
-  close.setAttribute('aria-label', 'Close the walkthrough');
-  close.addEventListener('click', () => handlers.onClose());
-  head.append(walkStepper(index, queue.items.length, pos, handlers), close);
+  head.append(heading, walkStepper(index, queue.items.length, pos, handlers));
   panel.append(head);
 
   const card = document.createElement('div');
@@ -1703,31 +1804,20 @@ export function renderReviewWalkthrough(
   const banner = advancedBanner(progress, handlers);
   if (banner) card.append(banner);
 
-  const kind = document.createElement('p');
-  kind.className = 'hub-walk-kind';
-  kind.textContent = `${REVIEW_MARK[item.kind]} ${REVIEW_KIND_LABEL[item.kind]}`;
-  card.append(kind);
-
-  const title = document.createElement('h2');
-  title.className = 'hub-walk-title';
-  title.textContent = item.title;
-  card.append(title);
+  card.append(walkCardHead(item, handlers, now), walkCtx(item, now));
 
   // ── A blocker: your own task, and the work standing behind it. There is
   // nothing to answer and nothing to reply to — the only move is to go and do
   // it — so the card says what is waiting and hands you the task.
   const blocker = item.blocker;
   if (blocker) {
-    const blocks = document.createElement('p');
-    blocks.className = 'hub-walk-blocks hub-walk-blocking';
-    blocks.textContent = blocksLine(blocker);
-    card.append(blocks, walkBody(blocker.task));
+    card.append(walkBody(blocker.task));
     const open = document.createElement('button');
     open.type = 'button';
     open.className = 'hub-btn hub-btn-primary hub-walk-open';
     open.textContent = 'Open the task';
     open.addEventListener('click', () => handlers.onOpenItem(item));
-    card.append(open);
+    card.append(open, walkActions(index, handlers));
     panel.append(card);
     container.append(panel);
     return;
@@ -1738,34 +1828,33 @@ export function renderReviewWalkthrough(
   // mean leaving the queue on every item — but a comment sometimes only makes
   // sense in place, so "open where this lives" is always offered.
   if (!row) {
-    const ask = document.createElement('blockquote');
-    ask.className = 'hub-walk-ask';
-    ask.textContent = item.ask;
-    const who = document.createElement('p');
-    who.className = 'hub-walk-blocks';
-    who.textContent = item.why;
-    card.append(who, ask);
+    const where = walkWhere(item, handlers);
+    if (where) card.append(where);
+    // The mockup's "What I need from you" block — rendered only when it says
+    // more than the heading already did. A one-line question fits in the
+    // heading, and quoting it again underneath is the card repeating itself.
+    if (reviewHeadline(item.ask) !== item.ask.trim().replace(/\s+/g, ' ')) {
+      const box = document.createElement('div');
+      box.className = 'hub-walk-askbox';
+      const askHead = document.createElement('h4');
+      askHead.className = 'hub-walk-ask-head';
+      askHead.textContent = 'What I need from you';
+      const ask = document.createElement('blockquote');
+      ask.className = 'hub-walk-ask';
+      ask.textContent = item.ask;
+      box.append(askHead, ask);
+      card.append(box);
+    }
     card.append(
-      promptForm('hub-walk-answer', 'Reply…', 'Reply', (text) => handlers.onReply(item, text)),
+      promptForm('hub-walk-answer', 'Reply…', 'Send', (text) => handlers.onReply(item, text)),
     );
-    const open = document.createElement('button');
-    open.type = 'button';
-    open.className = 'hub-btn hub-walk-open';
-    open.textContent =
-      item.kind === 'task-thread' ? 'Open the task discussion' : 'Open the doc at this comment';
-    open.addEventListener('click', () => handlers.onOpenItem(item));
-    card.append(open);
+    card.append(walkActions(index, handlers));
     panel.append(card);
     container.append(panel);
     return;
   }
 
   const task = row.task;
-
-  const blocks = document.createElement('p');
-  blocks.className = `hub-walk-blocks${row.blocks.length > 0 ? ' hub-walk-blocking' : ''}`;
-  blocks.textContent = blocksLine(row);
-  card.append(blocks);
 
   card.append(walkBody(task));
 
@@ -1807,21 +1896,37 @@ export function renderReviewWalkthrough(
   card.append(
     promptForm(
       'hub-walk-answer',
-      task.options && task.options.length > 0
-        ? 'Or answer in your own words…'
-        : 'Record your answer, verbatim…',
-      'Record answer',
+      '…or answer in your own words — the agent gets your text verbatim',
+      'Send',
       (text) => handlers.onAnswer(task, text),
     ),
   );
-  card.append(
-    promptForm(
-      'hub-walk-info',
-      "Not enough to decide? Ask for what's missing…",
-      'Tell me more',
-      (text) => handlers.onMoreInfo(task, text),
-    ),
+
+  // "I can't answer this yet" has no card in the mockup, because the mockup
+  // has no such concept — and this is the only surface that offers it, so
+  // dropping it to match would delete the capability rather than restyle it.
+  // Collapsed behind a ghost control in the actions row: the card reads as
+  // the mockup does until a stuck reviewer goes looking.
+  const actions = walkActions(index, handlers);
+  const info = promptForm(
+    'hub-walk-info hidden',
+    "Not enough to decide? Ask for what's missing…",
+    'Send question',
+    (text) => handlers.onMoreInfo(task, text),
+    'hub-btn',
   );
+  const more = document.createElement('button');
+  more.type = 'button';
+  more.className = 'hub-btn hub-btn-ghost hub-walk-more';
+  more.textContent = 'Tell me more';
+  more.setAttribute('aria-expanded', 'false');
+  more.addEventListener('click', () => {
+    const open = info.classList.toggle('hidden');
+    more.setAttribute('aria-expanded', open ? 'false' : 'true');
+    if (!open) info.querySelector('textarea')?.focus();
+  });
+  actions.append(more);
+  card.append(actions, info);
 
   panel.append(card);
 

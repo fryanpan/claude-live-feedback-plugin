@@ -1800,22 +1800,123 @@ export function homeSinceLabel(payload: Pick<HomePayload, 'since'>, now: number)
   return `From ${sincePointLabel(payload.since, now)} until now`;
 }
 
-/** "waiting 2 days" — the queue row's subline. Same unit boundaries as
- *  timeAgo; under a minute says "moments" rather than a zero. */
-export function waitingLabel(since: number, now: number): string {
+/** "2 days" — how long something has waited, bare. The walkthrough card's
+ *  wait chip (mockup: `2 days` beside the project chip). Same unit boundaries
+ *  as timeAgo; under a minute says "moments" rather than a zero. */
+export function waitShort(since: number, now: number): string {
   const m = Math.round(Math.max(0, now - since) / 60_000);
-  if (m < 1) return 'waiting moments';
-  const unit = (n: number, word: string) => `waiting ${n} ${word}${n === 1 ? '' : 's'}`;
+  if (m < 1) return 'moments';
+  const unit = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
   if (m < 60) return unit(m, 'minute');
   const h = Math.round(m / 60);
   if (h < 24) return unit(h, 'hour');
   return unit(Math.round(h / 24), 'day');
 }
 
+/** "waiting 2 days" — the queue row's subline. One clock with `waitShort`,
+ *  so the row and the card it opens can never disagree about the wait. */
+export function waitingLabel(since: number, now: number): string {
+  return `waiting ${waitShort(since, now)}`;
+}
+
 /** The mockup's row title is the QUESTION itself — the ask when the item
  *  carries one, the subject when the subject IS the question (a decision). */
 export function reviewRowTitle(item: Pick<ReviewItem, 'title' | 'ask'>): string {
   return item.ask.trim() !== '' ? item.ask : item.title;
+}
+
+/** How long a card heading may run before it stops being a heading. */
+const HEADLINE_MAX = 90;
+
+/**
+ * The heading form of a review item's question.
+ *
+ * The mockup's card carries a SHORT title and, below it, the ask in full. Our
+ * threads have no short title — a thread's question is whatever somebody
+ * typed, which is regularly a paragraph — so the heading is derived: the first
+ * sentence, capped. A decision's title is already short and comes back
+ * unchanged.
+ *
+ * The point is the pair. Print the paragraph as the heading AND again in the
+ * quote below it and the card says everything twice, which is the "layout is
+ * weird" half of what got the last build rejected.
+ */
+export function reviewHeadline(text: string): string {
+  const flat = text.trim().replace(/\s+/g, ' ');
+  // First sentence: a terminator followed by a space or the end. `\S` before
+  // it keeps "e.g. " and a bare "?" from ending a sentence that hasn't begun.
+  const end = flat.match(/\S[.?!](?=\s|$)/);
+  const first = end?.index === undefined ? flat : flat.slice(0, end.index + 2);
+  if (first.length <= HEADLINE_MAX) return first;
+  const cut = first.slice(0, HEADLINE_MAX);
+  const space = cut.lastIndexOf(' ');
+  return `${(space > 40 ? cut.slice(0, space) : cut).trimEnd()}…`;
+}
+
+/**
+ * The card's kind badge (mockup: the amber `Decision` and the blue
+ * `Needs your reply`).
+ *
+ * A blocker gets neither, and the third tone is the reason this is a function
+ * rather than a two-entry record: a blocker was never a question, so "needs
+ * your reply" would promise something to answer and there is nothing — the
+ * only move is to go and do the work. The mockup has no such card, so it gets
+ * the mockup's own neutral `.k` styling rather than an invented colour.
+ */
+export function reviewBadge(kind: ReviewKind): { label: string; tone: string } {
+  if (kind === 'decision') return { label: 'Decision', tone: 'decision' };
+  if (kind === 'blocker') return { label: 'Your task, blocking', tone: 'plain' };
+  return { label: 'Needs your reply', tone: 'reply' };
+}
+
+/** "blocks Ship the tunnel" — the tail of the card's provenance line. Lower
+ *  case and mid-sentence, where `blocksLine` is a standalone sentence; empty
+ *  when nothing is waiting, so the line ends after the clock rather than
+ *  asserting an absence. */
+export function blocksPhrase(row: Pick<DecisionRow, 'blocks' | 'hard'>): string {
+  if (row.blocks.length === 0) return '';
+  const titles = row.blocks.map((t) => t.title);
+  const shown = titles.slice(0, 2).join(', ');
+  const rest = titles.length > 2 ? ` and ${titles.length - 2} more` : '';
+  return `${row.hard ? 'hard-blocks' : 'blocks'} ${shown}${rest}`;
+}
+
+/**
+ * "Asked by Harbor agent · 2h ago · blocks Re-run relevance eval" — the
+ * mockup's left-bordered context block, first line.
+ *
+ * Built only out of parts we actually hold, and each one drops out
+ * independently: a decision whose transitions carry no actor says when it was
+ * asked without claiming who asked it, and one nothing is waiting on ends at
+ * the clock. The alternative — a fixed three-part sentence with a placeholder
+ * where a fact is missing — states something nobody measured, which is the
+ * failure this file's `why` lines already had to be walked back from.
+ */
+export function reviewAskedLine(item: ReviewItem, now: number): string {
+  const row = reviewRow(item);
+  const thread = item.thread;
+  const parts: string[] = [];
+  // A thread carries its asker; a decision's is whoever first moved the task,
+  // which is the only actor a projected task row records.
+  const who = thread?.askedBy ?? row?.task.transitions[0]?.by.name;
+  // "Asked by" is a claim that there is a question. A thread reaches this card
+  // whether or not there is one — over-including is the safe direction — so a
+  // status note says "Posted by" instead. Saying "asked" over a deploy note is
+  // the card promising something answerable and delivering something that is
+  // not, and it is how a queue stops being believed.
+  const asked = thread ? thread.direct === true : true;
+  if (who && who.trim() !== '') parts.push(`${asked ? 'Asked' : 'Posted'} by ${who}`);
+  // The clock beside "asked" is the QUESTION's, not the run's: a run can start
+  // days before the ask, and quoting its start tells the reader they have been
+  // sitting on something they were handed minutes ago.
+  parts.push(timeAgo(asked ? (thread?.askedAt ?? item.since) : item.since, now));
+  const where = row
+    ? blocksPhrase(row)
+    : item.kind === 'task-thread'
+      ? 'on this task'
+      : 'on this doc';
+  if (where !== '') parts.push(where);
+  return parts.join(' · ');
 }
 
 /**
