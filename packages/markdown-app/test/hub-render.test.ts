@@ -1321,6 +1321,66 @@ describe('renderTaskDetail — discussion', () => {
    * computed server-side and rendered on the strip the whole time — the panel
    * simply never received it.
    */
+  /**
+   * Found in a real browser at 430px, not in a unit test: opening a review
+   * item left the panel at `scrollTop: 112` with the ask panel's heading cut
+   * off above the fold. The deep link centres the focused thread, and the ask
+   * panel had just hoisted that same thread's question to the top — so the
+   * reader landed mid-page on a second copy of what they came for.
+   *
+   * happy-dom implements no `scrollIntoView`, so the element gets a stub and
+   * the render's own `typeof === 'function'` guard does the rest.
+   */
+  const withScrollSpy = (fn: () => void): string[] => {
+    const scrolled: string[] = [];
+    const proto = (root.ownerDocument.defaultView as unknown as { Element: typeof Element }).Element
+      .prototype as Element & { scrollIntoView?: unknown };
+    const had = 'scrollIntoView' in proto;
+    (proto as { scrollIntoView?: unknown }).scrollIntoView = function scrollIntoView(
+      this: HTMLElement,
+    ) {
+      scrolled.push(this.dataset?.threadId ?? this.className);
+    };
+    try {
+      fn();
+    } finally {
+      if (!had) {
+        (proto as { scrollIntoView?: unknown }).scrollIntoView = undefined;
+      }
+    }
+    return scrolled;
+  };
+
+  it('does not scroll past the ask panel to the thread it already quotes', () => {
+    const scrolled = withScrollSpy(() => {
+      renderTaskDetail(
+        root,
+        task({ id: 't-1' }),
+        detailHandlers({ asks: [askItem({ threadId: 'th-1' })], now: NOW, focusThreadId: 'th-1' }),
+        { loading: false, threads: [thread({ id: 'th-1' }), thread({ id: 'th-2' })] },
+      );
+    });
+    // The panel is still aimed at that thread — this is about where the
+    // viewport lands, not about losing the deep link.
+    expect(root.querySelector('.hub-thread-focus')).toBeTruthy();
+    expect(root.querySelector('.hub-detail-ask')).toBeTruthy();
+    expect(scrolled).toEqual([]);
+  });
+
+  /** Positive control: the spy CAN see a scroll, and centring is still right
+   *  when the focused thread is not the one the ask panel is quoting. */
+  it('still centres a focused thread the ask panel is not about', () => {
+    const scrolled = withScrollSpy(() => {
+      renderTaskDetail(
+        root,
+        task({ id: 't-1' }),
+        detailHandlers({ asks: [askItem({ threadId: 'th-1' })], now: NOW, focusThreadId: 'th-2' }),
+        { loading: false, threads: [thread({ id: 'th-1' }), thread({ id: 'th-2' })] },
+      );
+    });
+    expect(scrolled).toEqual(['th-2']);
+  });
+
   it('states the ask at the top of the panel, above the description', () => {
     const t = task({ id: 't-1', body: 'The description, which is not the ask.' });
     renderTaskDetail(root, t, detailHandlers({ asks: [askItem()], now: NOW }), {
