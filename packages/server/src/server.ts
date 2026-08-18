@@ -57,6 +57,7 @@ import { sanitizeVisitorAuthor } from './share/visitor-identity.ts';
 import { SseHub, openSseStream } from './sse.ts';
 import { KEYCHAIN_SERVICE, ThreadSummarizer } from './summarize.ts';
 import { indexBatchKeys, resolveRowRefs } from './task-batch-refs.ts';
+import { type BodyGap, bodyGapMessage, bodyShapeGaps } from './task-body.ts';
 import {
   BAD_OPTIONS_ERROR,
   BAD_REF_ERROR,
@@ -642,15 +643,42 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * filed before the standard existed: nobody has named it since it was
    * created, which is exactly the state being complained about.
    */
-  const titleAdvisory = (task: Task): { titleGaps?: TitleGap[]; titleMessage?: string } => {
+  /**
+   * The shape advisories a caller gets back on any write that touches a task.
+   *
+   * Both halves are ADVISORY and neither can refuse: the response carries what
+   * is missing, and the write has already landed. Named for the task rather
+   * than the title because it now covers the description too — Bryan expanded
+   * the standard on 2026-08-17, and a helper still called `titleAdvisory`
+   * while returning `bodyGaps` is the kind of drift that makes the next
+   * reader trust the name over the code.
+   */
+  const taskAdvisory = (
+    task: Task,
+  ): {
+    titleGaps?: TitleGap[];
+    titleMessage?: string;
+    bodyGaps?: BodyGap[];
+    bodyMessage?: string;
+  } => {
     const since = task.titleWrittenAt ?? task.createdAt;
     const commentsSinceTitle = taskProjection
       .discussionNotes(task.id)
       .filter((n) => n.ts > since).length;
     const gaps = taskStore.titleGapsOf(task, commentsSinceTitle);
-    if (gaps.length === 0) return {};
+    const bGaps = bodyShapeGaps(task.body, task.needs);
+    const bMessage = bodyGapMessage(bGaps);
+    const bodyPart =
+      bGaps.length === 0
+        ? {}
+        : { bodyGaps: bGaps, ...(bMessage !== undefined ? { bodyMessage: bMessage } : {}) };
+    if (gaps.length === 0) return bodyPart;
     const message = titleGapMessage(gaps);
-    return { titleGaps: gaps, ...(message !== undefined ? { titleMessage: message } : {}) };
+    return {
+      titleGaps: gaps,
+      ...(message !== undefined ? { titleMessage: message } : {}),
+      ...bodyPart,
+    };
   };
 
   const rewriteTaskBody = (
@@ -2070,7 +2098,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // that wrote one. A caller reviewing a board is the reader who
             // most needs to know which rows do not say what they will do, and
             // it cannot get that from a create response it never saw.
-            tasks: tasks.map((t) => ({ ...t, ownerKind: ownerKindOf(t), ...titleAdvisory(t) })),
+            tasks: tasks.map((t) => ({ ...t, ownerKind: ownerKindOf(t), ...taskAdvisory(t) })),
           });
         }
         if (wsTasksMatch && req.method === 'POST') {
@@ -2115,7 +2143,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // caller still learns that its title doesn't say who this is for
             // or what will be built. Advisory on purpose — refusing here
             // would make a rough capture impossible to file at all.
-            ...titleAdvisory(res.task),
+            ...taskAdvisory(res.task),
           });
         }
         /**
@@ -2265,7 +2293,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               const rows = tasks
                 .map((t) => ({ taskId: t.id, gaps: taskStore.titleGapsOf(t) }))
                 .filter((r) => r.gaps.length > 0);
-              return rows.length > 0 ? { titleGaps: rows } : {};
+              const bodyRows = tasks
+                .map((t) => ({ taskId: t.id, gaps: bodyShapeGaps(t.body, t.needs) }))
+                .filter((r) => r.gaps.length > 0);
+              return {
+                ...(rows.length > 0 ? { titleGaps: rows } : {}),
+                ...(bodyRows.length > 0 ? { bodyGaps: bodyRows } : {}),
+              };
             })(),
           });
         }
@@ -2499,7 +2533,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const res = taskStore.renameTask(taskId, title, { actor: author });
           if (!res.ok) return j(404, res);
           taskProjection.ensureWorkspace(res.task.workspaceId);
-          return j(200, { ...res, ...titleAdvisory(res.task) });
+          return j(200, { ...res, ...taskAdvisory(res.task) });
         }
         // update_task_body: replace a task's description after creation.
         // The body is a live `task:<id>` doc room, so this goes THROUGH that
@@ -2541,7 +2575,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // belongs on this response — and when the caller sent no title,
             // this is where a rewrite that moved the body far enough reports
             // that the old name no longer fits.
-            ...(rewritten ? titleAdvisory(rewritten) : {}),
+            ...(rewritten ? taskAdvisory(rewritten) : {}),
           });
         }
         // assign_task (§3.6 task.assigned): hand a task between the human and
@@ -2858,7 +2892,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // Third create path, third report — and the one most likely to
             // need it, since an unnamed promote derives its title from
             // somebody's comment rather than from a decision to name a row.
-            ...titleAdvisory(res.task),
+            ...taskAdvisory(res.task),
           });
         }
         // --- REST: plugin refresh ---

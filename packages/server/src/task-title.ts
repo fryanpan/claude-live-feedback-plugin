@@ -30,6 +30,8 @@
  * here, exactly as it is for the review strip's question detector.
  */
 
+import { firstParagraph } from './task-body.ts';
+
 /** Over this, a title stops being scannable across a board. Bryan's number. */
 export const IDEAL_TITLE_CHARS = 70;
 /** Over this it is not a title at all. Bryan's number. */
@@ -226,12 +228,12 @@ export function clipToWordBoundary(text: string, limit: number): string {
  * Capped, because this is stored per task and a first paragraph can run long.
  */
 export function bodyHead(body: string | undefined): string {
-  const lines = (body ?? '').split('\n').map((l) => l.trim());
-  const start = lines.findIndex((l) => l.length > 0);
-  if (start === -1) return '';
-  const end = lines.findIndex((l, i) => i > start && l.length === 0);
-  const paragraph = lines.slice(start, end === -1 ? lines.length : end).join(' ');
-  return paragraph
+  // Shares `firstParagraph` with `task-body.ts` rather than re-implementing
+  // it. Two hand-written extractors that must agree WILL drift, and the drift
+  // lands in the feature's own subject — this repo has already paid for that
+  // once, with a question-detector and its extractor disagreeing about
+  // newlines and clipping away the question the feature existed to surface.
+  return firstParagraph(body)
     .replace(/^#{1,6}\s*/, '')
     .replace(/[*_`>]/g, '')
     .replace(/\s+/g, ' ')

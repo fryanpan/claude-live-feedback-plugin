@@ -1765,7 +1765,8 @@ body.hub-body {
    day it lands, and a marker styled like the overdue one would train
    everyone to skim past the overdue one. Dotted, muted, no colour of its
    own. */
-.hub-badge-title-gap {
+.hub-badge-title-gap,
+.hub-badge-body-gap {
   border-style: dashed;
   opacity: 0.75;
   cursor: help;
