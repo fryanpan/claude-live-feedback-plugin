@@ -86,6 +86,7 @@ export interface HubTask {
    * presence IS the signal.
    */
   titleGaps?: string[];
+  bodyGaps?: string[];
   goal: string;
   order: number;
   after: string[];

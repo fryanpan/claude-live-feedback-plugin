@@ -1,6 +1,7 @@
 import { listThreads, prose } from '@feedback/core';
 import * as Y from 'yjs';
 import type { Rooms } from './rooms.ts';
+import { bodyShapeGaps } from './task-body.ts';
 import { type OwnerKind, attachedAgentTest, resolveOwnerKind } from './task-owner.ts';
 import type { PremiseNote } from './task-staleness.ts';
 import type { Task, TaskStore, TaskStoreEvent } from './tasks.ts';
@@ -145,6 +146,7 @@ export function projectTask(
    * never saw the response to the call that named any of these rows.
    */
   titleGaps?: readonly string[],
+  bodyGaps?: readonly string[],
 ): Record<string, unknown> {
   return {
     id: task.id,
@@ -152,6 +154,7 @@ export function projectTask(
     workspaceId: task.workspaceId,
     title: task.title,
     ...(titleGaps !== undefined && titleGaps.length > 0 ? { titleGaps: [...titleGaps] } : {}),
+    ...(bodyGaps !== undefined && bodyGaps.length > 0 ? { bodyGaps: [...bodyGaps] } : {}),
     status: task.status,
     assignee: task.assignee,
     ...(ownerKind !== undefined ? { ownerKind } : {}),
@@ -437,7 +440,13 @@ export class TaskProjection {
         .listTasks(workspaceId)
         .map((t) => [
           t.id,
-          projectTask(t, this.commentCount(t.id), ownerKindOf(t), this.titleGaps(t)),
+          projectTask(
+            t,
+            this.commentCount(t.id),
+            ownerKindOf(t),
+            this.titleGaps(t),
+            bodyShapeGaps(t.body, t.needs),
+          ),
         ]),
     );
     const pending = this.tasks.getPendingRetriage(workspaceId);
