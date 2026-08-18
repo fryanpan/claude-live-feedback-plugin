@@ -679,36 +679,67 @@ describe('keyboard reordering', () => {
 });
 
 describe('renderHomeReview', () => {
-  it('shows a chip per open decision and opens it on tap', () => {
-    const onOpen = vi.fn();
+  const strip = () => ({ onOpen: vi.fn(), onWalkthrough: vi.fn() });
+
+  const threadItem = (over: Record<string, unknown> = {}) => ({
+    kind: 'task-thread' as const,
+    docId: 'task:t-x',
+    threadId: `th-${Math.random().toString(36).slice(2, 8)}`,
+    taskId: 't-x',
+    title: 'Some task',
+    ask: 'Which repo does this land in?',
+    askedBy: 'Helper',
+    since: NOW - 2 * 86_400_000,
+    direct: false,
+    ...over,
+  });
+
+  it('heads the section "For Your Review" with the dark Review All button that starts the walkthrough', () => {
+    const h = strip();
+    const d = task({ needs: 'decision', assignee: 'human' });
+    renderHomeReview(root, reviewQueue([d], [], NOW), h);
+    expect(root.querySelector('.hub-home-heading')?.textContent).toBe('For Your Review');
+    const go = root.querySelector('.hub-review-go') as HTMLButtonElement;
+    expect(go.textContent).toBe('Review All');
+    expect(go.className).toContain('hub-btn-ink');
+    go.click();
+    expect(h.onWalkthrough).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders each item as a ranked row: the question as the title, the wait as the subline', () => {
+    const h = strip();
     const d = task({ needs: 'decision', assignee: 'human', title: 'Ship now or wait?' });
-    const strip = { onOpen, onWalkthrough: vi.fn() };
-    renderHomeReview(root, reviewQueue([d], [], NOW), strip);
-    const chip = root.querySelector('.hub-decision-chip') as HTMLElement;
-    expect(chip.textContent).toContain('Ship now or wait?');
-    chip.click();
-    expect(onOpen).toHaveBeenCalledTimes(1);
-    // Empty → the section stays (Home is a page, not a strip) and says so
-    // plainly instead of rendering silence that reads as a broken region.
-    renderHomeReview(root, reviewQueue([], [], NOW), strip);
+    renderHomeReview(root, reviewQueue([d], [threadItem()], NOW), h, [], NOW);
+    const rows = [...root.querySelectorAll('.hub-review-row')];
+    expect(rows).toHaveLength(2);
+    // The decision title IS the question; the thread row shows its ask, not
+    // its task title — the row is the question itself (mockup anatomy).
+    expect(rows[0]?.querySelector('.hub-review-row-title')?.textContent).toBe('Ship now or wait?');
+    expect(rows[1]?.querySelector('.hub-review-row-title')?.textContent).toBe(
+      'Which repo does this land in?',
+    );
+    expect(rows[1]?.querySelector('.hub-review-row-sub')?.textContent).toBe('waiting 2 days');
+    (rows[1] as HTMLElement).click();
+    expect(h.onOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it('highlights the top live row — the one the walkthrough would open on', () => {
+    const d = task({ needs: 'decision', assignee: 'human' });
+    renderHomeReview(root, reviewQueue([d], [threadItem()], NOW), strip());
+    const rows = [...root.querySelectorAll('.hub-review-row')];
+    expect(rows[0]?.className).toContain('hub-review-row-current');
+    expect(rows[1]?.className).not.toContain('hub-review-row-current');
+  });
+
+  it('empty queue says so plainly and offers no Review All', () => {
+    renderHomeReview(root, reviewQueue([], [], NOW), strip());
     expect(root.querySelector('.hub-home-quiet')?.textContent).toContain(
       'Nothing is waiting for your review',
     );
     expect(root.querySelector('.hub-review-go')).toBeNull();
   });
 
-  it('heads the section "For Your Review" with a right-side Review button that starts the walkthrough', () => {
-    const onWalkthrough = vi.fn();
-    const d = task({ needs: 'decision', assignee: 'human' });
-    renderHomeReview(root, reviewQueue([d], [], NOW), { onOpen: vi.fn(), onWalkthrough });
-    expect(root.querySelector('.hub-home-heading')?.textContent).toBe('For Your Review');
-    const go = root.querySelector('.hub-review-go') as HTMLButtonElement;
-    expect(go.textContent).toBe('Review');
-    go.click();
-    expect(onWalkthrough).toHaveBeenCalledTimes(1);
-  });
-
-  it('keeps settled items in the stack marked done, and only ones the queue really dropped', () => {
+  it('keeps settled items in the stack struck through, and only ones the queue really dropped', () => {
     const d = task({ needs: 'decision', assignee: 'human', title: 'Still open?' });
     const queue = reviewQueue([d], [], NOW);
     const stillLive = queue.items[0] as ReviewItem;
@@ -718,97 +749,19 @@ describe('renderHomeReview', () => {
       title: 'Already answered one',
       ask: '',
       why: '',
-      since: NOW,
+      since: NOW - 3_600_000,
     };
-    const onOpen = vi.fn();
-    renderHomeReview(root, queue, { onOpen, onWalkthrough: vi.fn() }, [stillLive, settledGone]);
+    const h = strip();
+    renderHomeReview(root, queue, h, [stillLive, settledGone]);
     // The still-open item renders once, as a live row — not twice.
-    const titles = [...root.querySelectorAll('.hub-decision-chip-title')].map((n) => n.textContent);
+    const titles = [...root.querySelectorAll('.hub-review-row-title')].map((n) => n.textContent);
     expect(titles.filter((t) => t === 'Still open?')).toHaveLength(1);
-    const done = root.querySelector('.hub-review-done') as HTMLElement;
+    const done = root.querySelector('.hub-review-row-done') as HTMLElement;
     expect(done.textContent).toContain('Already answered one');
+    expect(done.querySelector('.hub-review-row-sub')?.textContent).toContain('answered');
     // A done row is still the way back to the thing just answered.
     done.click();
-    expect(onOpen).toHaveBeenCalledWith(settledGone);
-  });
-
-  const threadItem = (over: Record<string, unknown> = {}) => ({
-    kind: 'task-thread' as const,
-    docId: 'task:t-x',
-    threadId: `th-${Math.random().toString(36).slice(2, 8)}`,
-    taskId: 't-x',
-    title: 'Some task',
-    ask: 'Done in PR #154 — CI green, not merged.',
-    askedBy: 'Live Feedback',
-    since: NOW - 3_600_000,
-    direct: false,
-    ...over,
-  });
-
-  /**
-   * Measured on the live board 2026-08-17: 23 items, 0 direct. Every row was a
-   * status note, every row was styled as an equal claim on the reader, and the
-   * headline said "23 things need you". That headline was true about the
-   * queue's membership rule and false about the reader's evening — and it is
-   * the number they decide from.
-   *
-   * Nothing is filtered: the rows move into a labelled, collapsed group and
-   * are still one tap away. So the failure mode of the grouping is a row that
-   * is harder to reach, never a row that is gone.
-   */
-  it('collapses the rows that are not addressed to the reader, without dropping any', () => {
-    const strip = { onOpen: vi.fn(), onWalkthrough: vi.fn() };
-    const notes = [threadItem(), threadItem(), threadItem()];
-    renderHomeReview(root, reviewQueue([], notes, NOW), strip);
-    // The headline still counts the WHOLE queue, because tapping it starts a
-    // walkthrough over the whole queue.
-    expect(root.querySelector('.hub-decisions-count')?.textContent).toBe('3 things need you');
-    // Grouped and labelled, not dropped — all three are still reachable.
-    const updates = root.querySelector('.hub-decision-updates') as HTMLDetailsElement;
-    expect(updates).toBeTruthy();
-    expect(updates.hasAttribute('open')).toBe(false);
-    expect(updates.querySelectorAll('.hub-decision-chip')).toHaveLength(3);
-  });
-
-  /**
-   * `direct` is "names a person", which is NARROWER than "contains a
-   * question" — its recall over the real corpus was 1 in 3. So the collapsed
-   * group holds real questions too, and its label must not claim otherwise.
-   * A label that under-promises costs a tap; one that lies costs the answer.
-   */
-  it('never claims the collapsed rows contain no question', () => {
-    const strip = { onOpen: vi.fn(), onWalkthrough: vi.fn() };
-    renderHomeReview(
-      root,
-      // A genuine question that addresses nobody by name: `direct` is false
-      // and the row is still somebody asking something.
-      reviewQueue([], [threadItem({ ask: 'Which repo does this land in?' })], NOW),
-      strip,
-    );
-    const label = root.querySelector('.hub-decision-updates-label')?.textContent ?? '';
-    expect(label).toContain('not addressed to you by name');
-    expect(label).not.toContain('no question');
-  });
-
-  /** Positive control for the grouping: a row that DOES name the reader stays
-   *  out of the collapsed group, and the split line says how many did. */
-  it('keeps a directly-addressed row on the strip and states the split', () => {
-    const strip = { onOpen: vi.fn(), onWalkthrough: vi.fn() };
-    const items = [
-      threadItem(),
-      threadItem({ direct: true, ask: 'Bryan: drop threading or keep it?', title: 'Threading' }),
-    ];
-    renderHomeReview(root, reviewQueue([], items, NOW), strip);
-    const updates = root.querySelector('.hub-decision-updates') as HTMLDetailsElement;
-    expect(updates.querySelectorAll('.hub-decision-chip')).toHaveLength(1);
-    // The addressed one is on the strip proper, outside the collapsed group.
-    const top = root.querySelector(':scope > .hub-decision-chips');
-    expect(top?.textContent).toContain('Threading');
-    expect(root.querySelector('.hub-decisions-split')?.textContent).toBe(
-      '1 addressed to you · 1 waiting on a reply',
-    );
-    // Two in, two rendered. The grouping re-reads the list, never shortens it.
-    expect(root.querySelectorAll('.hub-decision-chip')).toHaveLength(2);
+    expect(h.onOpen).toHaveBeenCalledWith(settledGone);
   });
 });
 
@@ -818,7 +771,7 @@ describe('renderReviewBanner', () => {
     const d = task({ needs: 'decision', assignee: 'human' });
     renderReviewBanner(root, reviewQueue([d], [], NOW), { onGoHome });
     expect(root.querySelector('.hub-review-banner-text')?.textContent).toBe(
-      '1 item is waiting for your review',
+      'Something is waiting for your review',
     );
     (root.querySelector('.hub-review-banner-go') as HTMLElement).click();
     expect(onGoHome).toHaveBeenCalledTimes(1);
@@ -829,7 +782,7 @@ describe('renderReviewBanner', () => {
     expect(root.children).toHaveLength(0);
   });
 
-  it('counts every kind, plural', () => {
+  it('still renders one countless line when several kinds are waiting', () => {
     const d = task({ needs: 'decision', assignee: 'human' });
     const thread = {
       kind: 'task-thread' as const,
@@ -841,9 +794,9 @@ describe('renderReviewBanner', () => {
       since: NOW - 60_000,
     };
     renderReviewBanner(root, reviewQueue([d], [thread], NOW), { onGoHome: vi.fn() });
-    expect(root.querySelector('.hub-review-banner-text')?.textContent).toBe(
-      '2 items are waiting for your review',
-    );
+    const text = root.querySelector('.hub-review-banner-text')?.textContent;
+    expect(text).toBe('Something is waiting for your review');
+    expect(text).not.toMatch(/\d/);
   });
 });
 
@@ -862,7 +815,7 @@ describe('renderHomeBrief', () => {
     ...over,
   });
 
-  it('renders the brief as markdown under "What\'s New?", with the coverage line', () => {
+  it('renders the brief as markdown under "What\'s New?", with the window in the head row', () => {
     renderHomeBrief(root, payload(), NOW, false, {
       onMarkCaughtUp: vi.fn(),
       onSaveInstructions: vi.fn(),
@@ -870,25 +823,25 @@ describe('renderHomeBrief', () => {
     });
     expect(root.querySelector('.hub-home-heading')?.textContent).toBe("What's New?");
     expect(root.querySelector('.hub-home-brief-body strong')?.textContent).toBe('Finished:');
-    // Never marked read → the bounded window, stated as a bound.
-    expect(root.querySelector('.hub-home-since')?.textContent).toContain(
-      'Covering the last 7 days',
-    );
-    expect(root.querySelector('.hub-home-since')?.textContent).not.toContain('Updating');
+    // The since-line is the window's real start, worded like the mockup —
+    // "From <point> until now" — and it sits in the head row by the heading.
+    const since = root.querySelector('.hub-home-review-head .hub-home-since');
+    expect(since?.textContent).toMatch(/^From .+ until now$/);
+    expect(since?.textContent).not.toContain('Updating');
   });
 
-  it('a marked reader gets the personal phrasing, and generating says Updating…', () => {
-    renderHomeBrief(root, payload({ lastReadAt: NOW - 3_600_000, generating: true }), NOW, false, {
+  it('generating appends Updating… to the window line', () => {
+    renderHomeBrief(root, payload({ generating: true }), NOW, false, {
       onMarkCaughtUp: vi.fn(),
       onSaveInstructions: vi.fn(),
       onEditRecipe: vi.fn(),
     });
     const since = root.querySelector('.hub-home-since')?.textContent ?? '';
-    expect(since).toContain('Since you caught up 1h ago');
+    expect(since).toMatch(/^From .+ until now/);
     expect(since).toContain('Updating…');
   });
 
-  it('Mark caught up fires the handler; the recipe link opens the editor', () => {
+  it('Mark read is the dark button on the right; the edit link sits left and opens the editor', () => {
     const onMarkCaughtUp = vi.fn();
     const onEditRecipe = vi.fn();
     renderHomeBrief(root, payload(), NOW, false, {
@@ -896,8 +849,17 @@ describe('renderHomeBrief', () => {
       onSaveInstructions: vi.fn(),
       onEditRecipe,
     });
-    (root.querySelector('.hub-home-mark-read') as HTMLElement).click();
+    const mark = root.querySelector('.hub-home-mark-read') as HTMLElement;
+    // Verbatim from the mockup: "Mark read", dark, bottom-right. ("Mark
+    // caught up" was a judgment call and was rejected.)
+    expect(mark.textContent).toBe('Mark read');
+    expect(mark.className).toContain('hub-btn-ink');
+    mark.click();
     expect(onMarkCaughtUp).toHaveBeenCalledTimes(1);
+    const actions = root.querySelector('.hub-home-brief-actions') as HTMLElement;
+    // DOM order: link first (left), Mark read last (right).
+    expect(actions.firstElementChild?.classList.contains('hub-home-edit-recipe')).toBe(true);
+    expect(actions.lastElementChild).toBe(mark);
     expect(root.querySelector('.hub-home-edit-recipe')?.textContent).toBe(
       'Edit how this gets generated',
     );
@@ -2207,6 +2169,196 @@ describe('discussionIsBusy', () => {
     const ta = root.querySelector('.hub-discussion textarea') as HTMLTextAreaElement;
     ta.focus();
     expect(discussionIsBusy(root)).toBe(true);
+  });
+});
+
+/**
+ * The half `discussionIsBusy` cannot cover. That guard holds back a discussion
+ * RELOAD while someone is typing, but a task transition arriving over SSE
+ * repaints the whole panel through a different door (the tasks map observer),
+ * and the repaint rebuilds the composer — typed-but-unsent text and focus were
+ * gone and the caret dropped to body. Found while verifying the voice fix in
+ * PR #222: the voice symptom went away, the text loss stayed.
+ *
+ * So the fix is at the choke point every repaint funnels through:
+ * `renderTaskDetail` snapshots what each text control holds the instant
+ * before it throws the old DOM away, and puts it back into the new one —
+ * value, focus, and caret.
+ */
+describe('a repaint of the detail panel keeps what was typed', () => {
+  let root: HTMLElement;
+  beforeEach(() => {
+    root = document.createElement('div');
+    document.body.replaceChildren(root);
+  });
+
+  const handlers = () => ({
+    onClose: vi.fn(),
+    onStatusSet: vi.fn(),
+    onTitleCommit: vi.fn(),
+    onAnswer: vi.fn(),
+    onAssign: vi.fn(),
+    onComment: vi.fn(),
+  });
+
+  const thread = (id: string): TaskThread => ({
+    id,
+    status: 'open',
+    comments: [{ author: 'Jordan', text: `Question in ${id}?`, ts: NOW }],
+  });
+
+  const ask = (taskId: string, threadId: string) => ({
+    kind: 'task-thread' as const,
+    docId: `task:${taskId}`,
+    threadId,
+    taskId,
+    title: 'Some task',
+    ask: 'Bryan: which one?',
+    askedBy: 'Live Feedback',
+    since: NOW - 3_600_000,
+    direct: true,
+  });
+
+  const paint = (t: HubTask, extra: Record<string, unknown> = {}) =>
+    renderTaskDetail(
+      root,
+      t,
+      { ...handlers(), ...extra },
+      { loading: false, threads: [thread('th-1'), thread('th-2')] },
+    );
+
+  const composer = () => root.querySelector('.hub-discussion textarea') as HTMLTextAreaElement;
+
+  /** Type into a control the way a person does: value, focus, caret. */
+  const typeInto = (el: HTMLTextAreaElement | HTMLInputElement, text: string, caret: number) => {
+    el.value = text;
+    el.focus();
+    el.setSelectionRange(caret, caret);
+  };
+
+  it('the discussion composer survives a task transition — text, focus AND caret', () => {
+    const t = task({ status: 'todo' });
+    paint(t);
+    const before = composer();
+    typeInto(before, 'I think this is below the API work because', 12);
+    expect(document.activeElement).toBe(before);
+
+    // The SSE-driven repaint: same task, new status.
+    paint({ ...t, status: 'in-progress' });
+
+    // Positive control, two ways: the panel really was rebuilt (the chip
+    // moved, and the composer is a NEW node), so a pass below is a restore
+    // and not a repaint that never happened.
+    expect(root.querySelector('.hub-chip-current')?.textContent).toBe('In progress');
+    const after = composer();
+    expect(after).not.toBe(before);
+
+    expect(after.value).toBe('I think this is below the API work because');
+    expect(document.activeElement).toBe(after);
+    expect(after.selectionStart).toBe(12);
+    expect(after.selectionEnd).toBe(12);
+  });
+
+  // The caret is restored where it was, not at the end — someone editing the
+  // middle of a sentence keeps their place.
+  it('keeps a mid-text selection, direction included', () => {
+    const t = task();
+    paint(t);
+    const ta = composer();
+    ta.value = 'drop the second half';
+    ta.focus();
+    ta.setSelectionRange(9, 20, 'backward');
+    paint({ ...t, updatedAt: NOW + 1 });
+    const after = composer();
+    expect(after.selectionStart).toBe(9);
+    expect(after.selectionEnd).toBe(20);
+    expect(after.selectionDirection).toBe('backward');
+  });
+
+  // Text without focus is still a draft — the reader tapped away to read a
+  // thread and is coming back to it. Restored, but the caret is left alone:
+  // focusing a field the person left would steal it from wherever they went.
+  it('keeps unfocused draft text without stealing focus', () => {
+    const t = task();
+    paint(t);
+    composer().value = 'half a thought';
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    document.body.focus();
+    paint({ ...t, updatedAt: NOW + 1 });
+    expect(composer().value).toBe('half a thought');
+    expect(document.activeElement).not.toBe(composer());
+  });
+
+  // The other text controls on the panel go through the same repaint and lose
+  // the same way, so they ride the same fix.
+  it('the ask panel reply box survives too', () => {
+    const t = task();
+    paint(t, { asks: [ask(t.id, 'th-1')] });
+    const box = root.querySelector('.hub-detail-ask-form textarea') as HTMLTextAreaElement;
+    expect(box).toBeTruthy();
+    typeInto(box, 'Keep threading.', 4);
+    paint({ ...t, status: 'in-progress' }, { asks: [ask(t.id, 'th-1')] });
+    const after = root.querySelector('.hub-detail-ask-form textarea') as HTMLTextAreaElement;
+    expect(after).not.toBe(box);
+    expect(after.value).toBe('Keep threading.');
+    expect(document.activeElement).toBe(after);
+    expect(after.selectionStart).toBe(4);
+  });
+
+  it('a decision answer being recorded survives too', () => {
+    const t = task({ needs: 'decision' });
+    paint(t);
+    const box = root.querySelector('.hub-answer-form textarea') as HTMLTextAreaElement;
+    expect(box).toBeTruthy();
+    typeInto(box, 'Option B, because', 8);
+    paint({ ...t, updatedAt: NOW + 1 });
+    const after = root.querySelector('.hub-answer-form textarea') as HTMLTextAreaElement;
+    expect(after).not.toBe(box);
+    expect(after.value).toBe('Option B, because');
+    expect(document.activeElement).toBe(after);
+    expect(after.selectionStart).toBe(8);
+  });
+
+  // The title editor is a control that only exists mid-edit, so a repaint
+  // does not merely empty it — it closes it. Reopened with the typed text.
+  it('a title being renamed survives, editor reopened with the typed text', () => {
+    const t = task({ title: 'Old name' });
+    paint(t);
+    (root.querySelector('.hub-detail-title') as HTMLElement).click();
+    const input = root.querySelector('.hub-title-input') as HTMLInputElement;
+    expect(input).toBeTruthy();
+    typeInto(input, 'Old name, sharper', 3);
+    paint({ ...t, updatedAt: NOW + 1 });
+    const after = root.querySelector('.hub-title-input') as HTMLInputElement;
+    expect(after).toBeTruthy();
+    expect(after).not.toBe(input);
+    expect(after.value).toBe('Old name, sharper');
+    expect(document.activeElement).toBe(after);
+    expect(after.selectionStart).toBe(3);
+  });
+
+  // The boundary of the guarantee: a draft belongs to the task it was typed
+  // on. Opening a DIFFERENT task in the same panel starts clean — carrying a
+  // half-typed comment from one task onto another would post it in the wrong
+  // place, which is worse than losing it.
+  it('does not carry a draft from one task onto another', () => {
+    const a = task();
+    const b = task();
+    paint(a);
+    typeInto(composer(), 'about task A', 5);
+    paint(b);
+    expect(composer().value).toBe('');
+    expect(document.activeElement).not.toBe(composer());
+  });
+
+  // A control that starts empty stays empty: the snapshot is not inventing
+  // values, and a repaint of an untouched panel is a no-op for the fields.
+  it('an untouched panel repaints untouched', () => {
+    const t = task();
+    paint(t);
+    paint({ ...t, updatedAt: NOW + 1 });
+    expect(composer().value).toBe('');
+    expect(document.activeElement).not.toBe(composer());
   });
 });
 
