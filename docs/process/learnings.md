@@ -954,6 +954,30 @@ Technical discoveries that should persist across sessions for this project.
   chunk exists** rather than letting a whole implementation pass sit in the tree
   while a long suite runs.
 
+## A report written as turn text is a report nobody receives
+
+- **Two agents on one night wrote complete, correct reports as plain output
+  instead of sending them, and both presented to the lead as idle with no
+  result.** In each case the work was done: the four gates had run, the merge
+  had landed. What did not happen was the send. Nothing errors — the author has
+  written the report and reads its own transcript as evidence it reported, the
+  recipient sees silence, and no tool call failed anywhere.
+- **The cost lands on the reader, who cannot tell a silent agent from a stalled
+  one.** One lead spent a verification pass checking a merge's outcome from the
+  outside on the assumption the work had stalled. That confirmed the file was
+  intact and could say nothing about whether the resolution was sound — the part
+  worth reviewing was a judgment call that existed only in the unsent report.
+- **An idle signal is a measurement of the CHANNEL, not of the work** — the same
+  shape as "An agent roster under-reports live agents, and the branch is the
+  thing that knows", one transport over. There a cache under-reported who was
+  running; here the transport under-reported what was finished. Both are
+  absences measured by something other than the artifacts, so establish state
+  the same way: the branch, the PR, the worktree, the file mtimes.
+- **The reusable half is not "remember to call the tool".** It is that when the
+  deliverable IS a report, finishing the work is not finishing the task, and the
+  send is the only step with no local evidence that it happened. Treat an
+  unacknowledged report as unsent rather than as received.
+
 ## A leak gate that can't see still exits 0 — and reports it as a pass
 
 - **The pre-push scanner's registry half was dead for weeks and nothing said
@@ -1383,6 +1407,42 @@ Technical discoveries that should persist across sessions for this project.
   two sides write *different* numbers. That is the trade the allocator actually
   bought: the queue got slower, and it stopped being able to ship two releases
   under one version string.
+
+## A supersession pointer makes adjacency load-bearing, and nothing checks it
+
+- **Two independent branches appended an entry at the same point in this file,
+  and the ORDER of the resolution was a correctness property.** Merging `main`
+  into #195 on 2026-08-17, the parent entry ("A version number is only free
+  until somebody else merges") had just gained **"Superseded by the entry
+  directly below"** from #199, and #199's own entry opened "The sequel to the
+  entry above" while naming that parent's content verbatim — *two human habits,
+  plus a person handing out numbers*. Both orders merge clean, all four gates
+  pass, and the file reads fine either way. The wrong one leaves the pointer
+  aimed at an entry that supersedes nothing.
+- **A cross-reference expressed as a POSITION is a link with no target check.**
+  `grep -ni 'superseded by\|the entry above\|entry below' docs/process/learnings.md`
+  found nine of them in the file this entry was added to. The `-i` is
+  load-bearing: without it the pattern silently skips every pointer that starts
+  a sentence, which is the majority of them. Nothing in the four gates reads
+  prose, so each hit is a dangling reference waiting for an insertion. **Prefer
+  naming the heading** — a reader can find it and a grep can verify it
+  survived.
+- **When a conflict hunk appends entries to a file like this, read both
+  BODIES.** Comparing headings is what an ordering decision naturally reaches
+  for, and it is exactly what cannot see a pointer. The tell that decides the
+  order: an entry naming its predecessor's *content* is asserting adjacency,
+  while one saying only "the entry above" is not — so the specific reference
+  stays adjacent and the vague one moves.
+- **Similar-sounding headings written the same night are usually different
+  lessons, not duplicates.** The two entries here were about the version gate's
+  comparand and about the generated bundle in the conflict set. Resolving by
+  heading similarity would have dropped one, and a dropped entry leaves nothing
+  behind to notice — where a kept duplicate is an editing chore.
+- Placement of this entry was itself constrained by the rule: the version chain
+  it sits after is three entries locked in sequence, and "An agent roster
+  under-reports live agents, and the branch is the thing that knows" is locked
+  to the entry opening "The entry above is the near-miss". Check for a pointer
+  before choosing an insertion point, not after.
 
 ## What makes a fleet-wide action safe is that it can't interrupt anybody
 
