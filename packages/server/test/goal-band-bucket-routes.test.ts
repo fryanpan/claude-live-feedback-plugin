@@ -62,12 +62,36 @@ describe('a new goal band asks the bucket to be re-looked-at, over HTTP', () => 
     const r = await post(`/api/workspaces/${workspaceId}/tasks`, { author: PERSON, title });
     return ((await r.json()) as { task: { id: string } }).task.id;
   };
+  /**
+   * Submit a goal list over the route now that ids are GENERATED. A key
+   * already in `known` is KEPT by its minted id; a key that is not is NEW and
+   * the server mints one, returned in `created` and merged into `ids` here.
+   * No test names an id — the route refuses one it does not hold.
+   */
   const setGoals = async (
     workspaceId: string,
-    goals: Array<{ id: string; title: string }>,
-  ): Promise<{ bucketReview?: BucketAck }> => {
-    const r = await put(`/api/workspaces/${workspaceId}/goals`, { goals, author: PERSON });
-    return (await r.json()) as { bucketReview?: BucketAck };
+    goals: Array<{ key: string; title: string }>,
+    known: Record<string, string> = {},
+  ): Promise<{ bucketReview?: BucketAck; ids: Record<string, string> }> => {
+    const body = goals.map((g) => ({
+      ...(known[g.key] !== undefined ? { id: known[g.key] } : {}),
+      title: g.title,
+    }));
+    const r = await put(`/api/workspaces/${workspaceId}/goals`, { goals: body, author: PERSON });
+    const parsed = (await r.json()) as {
+      bucketReview?: BucketAck;
+      created?: Array<{ id: string }>;
+    };
+    const ids = { ...known };
+    const fresh = goals.filter((g) => known[g.key] === undefined);
+    const created = parsed.created ?? [];
+    if (fresh.length !== created.length) {
+      throw new Error(`setGoals: ${fresh.length} new keys but ${created.length} created`);
+    }
+    fresh.forEach((g, i) => {
+      ids[g.key] = (created[i] as { id: string }).id;
+    });
+    return { ...parsed, ids };
   };
   const attach = async (workspaceId: string, agentId: string) =>
     (await (
@@ -100,11 +124,13 @@ describe('a new goal band asks the bucket to be re-looked-at, over HTTP', () => 
       agentId: LEAD,
       runtime: 'claude-code-local',
     });
-    const live = await setGoals(wsId, [{ id: 'g1', title: 'Ship the review surface' }]);
+    const live = await setGoals(wsId, [{ key: 'g1', title: 'Ship the review surface' }]);
     expect(live.bucketReview?.requested).toBe(true);
     expect(live.bucketReview?.queued).toBe(false);
     expect(live.bucketReview?.taskIds.slice().sort()).toEqual([first, second].sort());
-    expect(live.bucketReview?.newBands).toEqual([{ id: 'g1', title: 'Ship the review surface' }]);
+    expect(live.bucketReview?.newBands).toEqual([
+      { id: live.ids.g1, title: 'Ship the review surface' },
+    ]);
 
     // Now the lead is gone and only a bystander is connected: a connected
     // agent is not the addressee, so the ask waits.
@@ -113,10 +139,14 @@ describe('a new goal band asks the bucket to be re-looked-at, over HTTP', () => 
       agentId: OTHER,
       runtime: 'claude-code-local',
     });
-    const away = await setGoals(wsId, [
-      { id: 'g1', title: 'Ship the review surface' },
-      { id: 'g2', title: 'Reviewer trust' },
-    ]);
+    const away = await setGoals(
+      wsId,
+      [
+        { key: 'g1', title: 'Ship the review surface' },
+        { key: 'g2', title: 'Reviewer trust' },
+      ],
+      live.ids,
+    );
     expect(away.bucketReview?.requested).toBe(false);
     expect(away.bucketReview?.queued).toBe(true);
 
@@ -124,7 +154,7 @@ describe('a new goal band asks the bucket to be re-looked-at, over HTTP', () => 
     const back = await attach(wsId, LEAD);
     expect(back.pendingBucketReview?.batchId).toBe(away.bucketReview?.batchId ?? '');
     expect(back.pendingBucketReview?.taskIds.slice().sort()).toEqual([first, second].sort());
-    expect(back.pendingBucketReview?.newBands.map((b) => b.id)).toEqual(['g2']);
+    expect(back.pendingBucketReview?.newBands.map((b) => b.id)).toEqual([away.ids.g2]);
   });
 
   // A request that only exists in a sidecar until somebody attaches is the
@@ -136,7 +166,7 @@ describe('a new goal band asks the bucket to be re-looked-at, over HTTP', () => 
     const wsId = await makeHub('visible-board', LEAD);
     const first = await addUnplaced(wsId, 'figure out og-images');
     // The lead never attaches, so the ask can only be waiting.
-    const queued = await setGoals(wsId, [{ id: 'g1', title: 'Reviewer trust' }]);
+    const queued = await setGoals(wsId, [{ key: 'g1', title: 'Reviewer trust' }]);
     expect(queued.bucketReview?.queued).toBe(true);
 
     type BoardRead = {
@@ -147,7 +177,7 @@ describe('a new goal band asks the bucket to be re-looked-at, over HTTP', () => 
 
     const board = await read();
     expect(board.pendingBucketReview?.taskIds).toEqual([first]);
-    expect(board.pendingBucketReview?.newBands.map((b) => b.id)).toEqual(['g1']);
+    expect(board.pendingBucketReview?.newBands.map((b) => b.id)).toEqual([queued.ids.g1]);
     // It is its OWN field: a goal-list edit does not touch the north star, so
     // reporting it under pendingRetriage would make that record's goal text
     // lie about what changed.
@@ -184,19 +214,26 @@ describe('a new goal band asks the bucket to be re-looked-at, over HTTP', () => 
       agentId: LEAD,
       runtime: 'claude-code-local',
     });
-    await setGoals(wsId, [
-      { id: 'g1', title: 'One' },
-      { id: 'g2', title: 'Two' },
+    const seeded = await setGoals(wsId, [
+      { key: 'g1', title: 'One' },
+      { key: 'g2', title: 'Two' },
     ]);
     const reordered = (await (
-      await post(`/api/workspaces/${wsId}/goals/reorder`, { order: ['g2', 'g1'], author: PERSON })
+      await post(`/api/workspaces/${wsId}/goals/reorder`, {
+        order: [seeded.ids.g2, seeded.ids.g1],
+        author: PERSON,
+      })
     ).json()) as { changed: boolean };
     expect(reordered.changed).toBe(true);
     // Same ids, new order — nothing became apparent.
-    const swapped = await setGoals(wsId, [
-      { id: 'g2', title: 'Two' },
-      { id: 'g1', title: 'One' },
-    ]);
+    const swapped = await setGoals(
+      wsId,
+      [
+        { key: 'g2', title: 'Two' },
+        { key: 'g1', title: 'One' },
+      ],
+      seeded.ids,
+    );
     expect(swapped.bucketReview?.requested).toBe(false);
     expect(swapped.bucketReview?.queued).toBe(false);
     expect(swapped.bucketReview?.newBands).toEqual([]);
@@ -245,7 +282,7 @@ describe('a new goal band asks the bucket to be re-looked-at, over HTTP', () => 
     })();
 
     try {
-      const edit = await setGoals(wsId, [{ id: 'g1', title: 'Ship the review surface' }]);
+      const edit = await setGoals(wsId, [{ key: 'g1', title: 'Ship the review surface' }]);
       expect(edit.bucketReview?.requested).toBe(true); // it really went out live
       const deadline = Date.now() + 5000;
       while (Date.now() < deadline && !seen.some((e) => e.event === 'triage.requested')) {
@@ -259,12 +296,12 @@ describe('a new goal band asks the bucket to be re-looked-at, over HTTP', () => 
       const req = seen.find((e) => e.event === 'triage.requested');
       if (!req) throw new Error('the live delivery never reached the channel');
       expect(req.kind).toBe('bucket-review');
-      expect(req.newBands).toEqual([{ id: 'g1', title: 'Ship the review surface' }]);
+      expect(req.newBands).toEqual([{ id: edit.ids.g1, title: 'Ship the review surface' }]);
       expect((req.taskIds as string[]).slice().sort()).toEqual([first, second].sort());
       // The baseline is the goal LIST, and it is on the wire: an empty list
       // before, one band after.
       expect(req.oldGoals).toEqual([]);
-      expect((req.newGoals as Array<{ id: string }>).map((g) => g.id)).toEqual(['g1']);
+      expect((req.newGoals as Array<{ id: string }>).map((g) => g.id)).toEqual([edit.ids.g1]);
       expect(req.batchId).toBe(edit.bucketReview?.batchId);
       expect(req.leadAgentId).toBe(LEAD);
     } finally {
