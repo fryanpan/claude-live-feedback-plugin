@@ -78,7 +78,6 @@ import { sanitizeVisitorAuthor } from './share/visitor-identity.ts';
 import { SseHub, openSseStream } from './sse.ts';
 import { KEYCHAIN_SERVICE, ThreadSummarizer } from './summarize.ts';
 import { indexBatchKeys, resolveRowRefs } from './task-batch-refs.ts';
-import { type BodyGap, bodyGapMessage, bodyShapeGaps } from './task-body.ts';
 import {
   BAD_OPTIONS_ERROR,
   BAD_REF_ERROR,
@@ -99,7 +98,7 @@ import {
 } from './task-owner.ts';
 import { TaskProjection, taskBodyDocId, taskIdOfBodyDoc } from './task-projection.ts';
 import { buildQueue, placeableGoals, summarizeGoals } from './task-queue.ts';
-import { type TitleGap, clipToWordBoundary, titleGapMessage } from './task-title.ts';
+import { clipToWordBoundary } from './task-title.ts';
 import {
   type GoalListEntry,
   type HubWorkspace,
@@ -610,13 +609,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // and "whoever happened to be connected" is how that request reached
   // nobody accountable. A bucket-review is addressed the same way for the
   // same reason — deciding which band a pile of unplaced work belongs under
-  // is a board-wide ranking judgment, not first-come work. A task placement
-  // stays any-live-agent: a new task can be placed by whoever is home.
+  // is a board-wide ranking judgment, not first-come work. A task-review —
+  // "this row's name or story falls short, judge it against the project" —
+  // is lead-addressed for the same reason: the reviewer needs the project
+  // context, and Bryan named the lead (or its subagent) as the reviewer
+  // (task t-hUyldnoHbj_c, 2026-08-17). A task placement stays
+  // any-live-agent: a new task can be placed by whoever is home.
   // Undelivered lead-addressed requests are not lost either way; the store
   // persists each for the lead's next attach.
   taskStore.setTriageDelivery((req) => {
     const live =
-      req.kind === 'goal-retriage' || req.kind === 'bucket-review'
+      req.kind === 'goal-retriage' || req.kind === 'bucket-review' || req.kind === 'task-review'
         ? taskStore.hasLiveLeadAttachment(req.workspaceId)
         : taskStore.hasLiveAttachment(req.workspaceId);
     if (!live) return false;
@@ -807,63 +810,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * function. Putting it here would rebuild the exact gap being closed, one
    * layer up.
    */
-  /**
-   * The title standard, as an advisory a caller actually receives.
-   *
-   * Spread onto every response whose act wrote a title, and onto every row
-   * the list route returns — because a check nothing renders is not a check.
-   * Empty for a title that meets the standard, so a clean row adds no keys and
-   * an agent can treat the presence of `titleGaps` as the whole signal.
-   *
-   * The discussion clause is computed HERE rather than in the store because
-   * the comments live in the task's body room, which the store cannot see —
-   * the same split that makes `projectTask` take `commentCount` as an
-   * argument. `titleWrittenAt ?? createdAt` is the honest fallback for a row
-   * filed before the standard existed: nobody has named it since it was
-   * created, which is exactly the state being complained about.
-   */
-  /**
-   * The shape advisories a caller gets back on any write that touches a task.
-   *
-   * Both halves are ADVISORY and neither can refuse: the response carries what
-   * is missing, and the write has already landed. Named for the task rather
-   * than the title because it now covers the description too — Bryan expanded
-   * the standard on 2026-08-17, and a helper still called `titleAdvisory`
-   * while returning `bodyGaps` is the kind of drift that makes the next
-   * reader trust the name over the code.
-   */
-  const taskAdvisory = (
-    task: Task,
-  ): {
-    titleGaps?: TitleGap[];
-    titleMessage?: string;
-    bodyGaps?: BodyGap[];
-    bodyMessage?: string;
-  } => {
-    const since = task.titleWrittenAt ?? task.createdAt;
-    const commentsSinceTitle = taskProjection
-      .discussionNotes(task.id)
-      .filter((n) => n.ts > since).length;
-    const gaps = taskStore.titleGapsOf(task, commentsSinceTitle);
-    const bGaps = bodyShapeGaps(task.body, task.needs);
-    const bMessage = bodyGapMessage(bGaps);
-    const bodyPart =
-      bGaps.length === 0
-        ? {}
-        : { bodyGaps: bGaps, ...(bMessage !== undefined ? { bodyMessage: bMessage } : {}) };
-    if (gaps.length === 0) return bodyPart;
-    const message = titleGapMessage(gaps);
-    return {
-      titleGaps: gaps,
-      ...(message !== undefined ? { titleMessage: message } : {}),
-      ...bodyPart,
-    };
-  };
-
   const rewriteTaskBody = (
     task: Task,
     markdown: string,
-    opts: { actor?: { id: string; name: string; kind?: string }; title?: string },
+    opts: {
+      actor?: { id: string; name: string; kind?: string };
+      title?: string;
+      reason?: string;
+    },
   ): { ok: true } | { ok: false; error: string } => {
     const docId = taskProjection.ensureBodyRoom(task);
     const res = rooms.setDocContent(docId, markdown);
@@ -877,6 +831,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       taskStore.noteBodyEdited(task.id, {
         actor: opts.actor,
         ...(opts.title ? { title: opts.title } : {}),
+        ...(opts.reason ? { reason: opts.reason } : {}),
       });
     }
     return { ok: true };
@@ -2340,11 +2295,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const ownerKindOf = taskProjection.ownerKindReader(workspaceId);
           return j(200, {
             workspaceId,
-            // `titleGaps` rides every row, not just the response to the act
-            // that wrote one. A caller reviewing a board is the reader who
-            // most needs to know which rows do not say what they will do, and
-            // it cannot get that from a create response it never saw.
-            tasks: tasks.map((t) => ({ ...t, ownerKind: ownerKindOf(t), ...taskAdvisory(t) })),
+            tasks: tasks.map((t) => ({ ...t, ownerKind: ownerKindOf(t) })),
           });
         }
         if (wsTasksMatch && req.method === 'POST') {
@@ -2385,11 +2336,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             },
             ...(parsed.ignoredLinks.length > 0 ? { ignoredLinks: parsed.ignoredLinks } : {}),
             ...(res.shapeGaps !== undefined ? { shapeGaps: res.shapeGaps } : {}),
-            // Same reasoning one field over: the task WAS created, and the
-            // caller still learns that its title doesn't say who this is for
-            // or what will be built. Advisory on purpose — refusing here
-            // would make a rough capture impossible to file at all.
-            ...taskAdvisory(res.task),
           });
         }
         /**
@@ -2531,22 +2477,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               : {}),
             ...(ignoredLinks.length > 0 ? { ignoredLinks } : {}),
             ...(shapeGaps.length > 0 ? { shapeGaps } : {}),
-            // Per row and by id, the same sidecar shape as `shapeGaps` — a
-            // burst capture is exactly where clipped, persona-less titles
-            // arrive, and reporting only a total would leave the caller
-            // diffing to find which of eight rows needs naming.
-            ...(() => {
-              const rows = tasks
-                .map((t) => ({ taskId: t.id, gaps: taskStore.titleGapsOf(t) }))
-                .filter((r) => r.gaps.length > 0);
-              const bodyRows = tasks
-                .map((t) => ({ taskId: t.id, gaps: bodyShapeGaps(t.body, t.needs) }))
-                .filter((r) => r.gaps.length > 0);
-              return {
-                ...(rows.length > 0 ? { titleGaps: rows } : {}),
-                ...(bodyRows.length > 0 ? { bodyGaps: bodyRows } : {}),
-              };
-            })(),
           });
         }
         // The single gate for status changes: attributed, evidence-stamped,
@@ -2760,9 +2690,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           taskProjection.ensureWorkspace(res.task.workspaceId);
           return j(200, res);
         }
-        // In-place task title edit (§3.9: tap the title, Enter commits).
-        // Renames emit no store event (§3.6 has no task.renamed row), so the
-        // projection the board renders from is refreshed by hand.
+        // In-place task title edit (§3.9: tap the title, Enter commits) —
+        // and rewrite_task's title-only path. Emits an attributed
+        // task.retitled when the title actually moves; the hand refresh
+        // below stays because a no-op rename ("changed: false") emits
+        // nothing. `reason` is optional and rides the audit row verbatim.
         const taskTitleMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/title$/);
         if (taskTitleMatch && req.method === 'POST') {
           const taskId = decodeURIComponent(taskTitleMatch[1] ?? '');
@@ -2771,10 +2703,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (title.length === 0) return j(400, { error: 'title required' });
           const author = authorFor(body?.author);
           if (!author) return j(400, { error: 'author required' });
-          const res = taskStore.renameTask(taskId, title, { actor: author });
+          const reason = typeof body?.reason === 'string' ? body.reason.trim() : '';
+          const res = taskStore.renameTask(taskId, title, {
+            actor: author,
+            ...(reason ? { reason } : {}),
+          });
           if (!res.ok) return j(404, res);
           taskProjection.ensureWorkspace(res.task.workspaceId);
-          return j(200, { ...res, ...taskAdvisory(res.task) });
+          return j(200, res);
         }
         // update_task_body: replace a task's description after creation.
         // The body is a live `task:<id>` doc room, so this goes THROUGH that
@@ -2800,9 +2736,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const task = taskStore.getTask(taskId);
           if (!task) return j(404, { ok: false, error: 'not-found' });
           if (!markdown.trim()) return j(400, { ok: false, error: 'empty' });
+          const reason = typeof body?.reason === 'string' ? body.reason.trim() : '';
           const res = rewriteTaskBody(task, markdown, {
             actor: author,
             ...(title ? { title } : {}),
+            ...(reason ? { reason } : {}),
           });
           if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
           // No hand-refresh of the projection: unlike `/title` (which emits
@@ -2812,11 +2750,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           return j(200, {
             ok: true,
             task: rewritten,
-            // Shaping is one act, so the advisory on the title this act set
-            // belongs on this response — and when the caller sent no title,
-            // this is where a rewrite that moved the body far enough reports
-            // that the old name no longer fits.
-            ...(rewritten ? taskAdvisory(rewritten) : {}),
           });
         }
         // assign_task (§3.6 task.assigned): hand a task between the human and
@@ -3130,10 +3063,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             },
             ...(promoteLinks.ignored.length > 0 ? { ignoredLinks: promoteLinks.ignored } : {}),
             ...(res.shapeGaps !== undefined ? { shapeGaps: res.shapeGaps } : {}),
-            // Third create path, third report — and the one most likely to
-            // need it, since an unnamed promote derives its title from
-            // somebody's comment rather than from a decision to name a row.
-            ...taskAdvisory(res.task),
           });
         }
         // --- REST: plugin refresh ---

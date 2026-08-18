@@ -314,7 +314,7 @@ reported success. Placement alone does not make a row pickup-able.
 **Shape first.**
 
 ```
-update_task_body(taskId, markdown: "…", title: "…")
+rewrite_task(taskId, body: "…", title: "…", reason: "…")
 ```
 
 - **Read the row's own words.** `next_tasks` carries the full body; `quote`
