@@ -1134,7 +1134,9 @@
       const SUMMARY = {
         since: 'Saturday 21:14',
         scope: '41 events · 12 tasks · 4 docs',
-        words: 168,
+        // Counted from the text at render, never stored. A hand-written count is
+        // a claim about the budget that stops being true the moment anyone edits
+        // the summary — and this one was already wrong by 14 words.
         html: `
 <p><strong>Two decisions are holding up the Home pane; everything else is moving.</strong>
 Since Saturday night the board closed 7 tasks, opened 3, and 4 items now need you.</p>
@@ -1524,7 +1526,7 @@ the nav, the URL and three doc titles now.</p>
             state.tuneOpen = !state.tuneOpen;
             render();
           });
-          foot.append(mark, tune, el('span', 'sum-words', `${SUMMARY.words} words`));
+          foot.append(mark, tune, el('span', 'sum-words', `${countWords(SUMMARY.html)} words`));
           card.append(head, clip, more, foot);
 
           const tuner = el('div', 'tune');

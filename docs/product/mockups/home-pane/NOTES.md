@@ -4,7 +4,8 @@ Interactive mockup for `t-gHuA16z99o3m` ("Bryan can open a task and see what is
 being asked of him without reconstructing it"). Static HTML, synthetic data,
 nothing wired to the server.
 
-**Open `index.html` in a browser.** It runs from `file://` — no server needed.
+**Open `index.html` in a browser.** One file, no external requests, no build —
+though every check below was run over a local http server, not over `file://`.
 `_frame.html` is the 430px harness (Chrome will not make a window narrower than
 ~500px, so a phone viewport is only reachable inside a same-origin iframe);
 `_frame.html#scale=0.86` shrinks the raster so the whole 932px screen fits in a
@@ -32,14 +33,14 @@ prose and a queue, both of which are unreadable at 1280. The board keeps its
 own width.
 
 **The summary clips at half a screen instead of scrolling inside its card.**
-168 words fits desktop whole; at 430×932 it runs 571px against a 410px ceiling,
+154 words fits desktop whole; at 430×932 it runs 571px against a 410px ceiling,
 so on the phone the clip is the normal case rather than the edge case. An inner
 scrollbar hides its own overflow and would let a 400-word summary sit there
 looking like 200. It clips with a fade and a "Read the rest", and the ceiling
 exists so the review queue stays above the fold — the queue is what he came
 for.
 
-**The word count is on the card.** `168 words` next to "Mark read". It is the
+**The word count is on the card.** `154 words` next to "Mark read". It is the
 one number that tells you whether the generator is behaving, and if it is not
 visible nobody will ever notice it drifting to 400.
 
@@ -117,6 +118,11 @@ Chrome, against `http://127.0.0.1:8912`.
 - The open-ended ask **plus its reply box fits one 430×932 screen** with no
   scrolling (`03-walkthrough-reply-430.png`). That is the design's main claim
   and it is the thing worth disputing if the real asks run longer.
+- **Every interactive element is ≥36px tall**, measured by walking
+  `button, select, summary, textarea` and the inline prose links at 430px. The
+  inline links needed `padding: 9px 0` to get there — a bare `#204` in prose is
+  a 39×20 target otherwise, and "brief as possible inline links" is exactly what
+  produces short ones.
 - Flows exercised end to end: mark read → undo; re-sort the queue by longest
   waiting (order changes); walk all five items answering each; "Not now" on the
   read item; end-of-queue copy and the Home count agree (1 left, 1 row).
