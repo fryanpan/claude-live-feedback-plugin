@@ -301,30 +301,33 @@ describe('plugin version gate', () => {
   // A branch that renames the plugin renames BOTH manifests in the same commit,
   // so the literal matched nothing and the gate failed claiming the marketplace
   // had no such entry — a malformed-file error for a version that was fine.
-  it('resolves the marketplace entry after the plugin is renamed on this branch', () => {
+  function repoRenamingThePluginOnABranch(branchVersion: string): string {
     const root = newRepo();
     setVersion(root, '0.1.60');
-    commit(root, 'base');
-    setVersion(root, '0.1.61', 'renamed-plugin');
-    write(root, 'packages/plugin/skills/x/SKILL.md', 'body\n');
-    commit(root, 'rename + bump');
+    write(root, 'README.md', 'fork point\n');
+    commit(root, 'main publishes 0.1.60 as live-feedback');
+
+    git(root, 'checkout', '-q', '-b', 'feature');
+    setVersion(root, branchVersion, 'renamed-plugin');
+    write(root, 'packages/plugin/skills/demo/SKILL.md', 'branch work\n');
+    commit(root, `rename to renamed-plugin at ${branchVersion}`);
+    return root;
+  }
+
+  it('resolves the marketplace entry after the plugin is renamed on this branch', () => {
+    const root = repoRenamingThePluginOnABranch('0.1.61');
 
     // Non-vacuity: the branch really did change a guarded file, so the gate
-    // reaches the comparison rather than exiting on the no-changes path.
+    // reaches the version comparison rather than exiting on the no-changes path.
     expect(pluginPaths(root, 'main...HEAD').length).toBeGreaterThan(0);
 
     const { code, out } = runGate(root);
     expect(code).toBe(0);
-    expect(out).toContain('0.1.60 → 0.1.61');
+    expect(out).toContain('0.1.60 (main tip) → 0.1.61');
   }, 30_000);
 
   it('still fails a rename that does NOT move the version forward', () => {
-    const root = newRepo();
-    setVersion(root, '0.1.60');
-    commit(root, 'base');
-    setVersion(root, '0.1.60', 'renamed-plugin');
-    write(root, 'packages/plugin/skills/x/SKILL.md', 'body\n');
-    commit(root, 'rename, version untouched');
+    const root = repoRenamingThePluginOnABranch('0.1.60');
 
     const { code, out } = runGate(root);
     expect(code).toBe(1);
