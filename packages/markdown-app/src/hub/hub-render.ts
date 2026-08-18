@@ -479,25 +479,6 @@ function finePointer(): boolean {
   return pointerQuery === null ? true : pointerQuery.matches;
 }
 
-/* Always emits a slot, even with no tier to show. Grid auto-placement fills
-   CONSECUTIVE tracks — it does not leave a hole where a child is missing — so
-   a row that skipped the dot put its title in the dot's track and its badges
-   in the title's. With the title track at `minmax(0, 1fr)` and the dot track
-   collapsed, that rendered every title at zero width. Keeping the child count
-   fixed is also what makes titles line up across rows, which is the whole
-   point of the grid. */
-function riskDot(task: HubTask): HTMLElement {
-  const dot = document.createElement('span');
-  if (!task.riskTier) {
-    dot.className = 'hub-risk-slot';
-    dot.setAttribute('aria-hidden', 'true');
-    return dot;
-  }
-  dot.className = `hub-risk-slot hub-risk hub-risk-${task.riskTier}`;
-  dot.title = `risk: ${task.riskTier}`;
-  return dot;
-}
-
 function taskBadges(task: HubTask): HTMLElement {
   const badges = document.createElement('span');
   badges.className = 'hub-task-badges';
@@ -514,18 +495,22 @@ function taskBadges(task: HubTask): HTMLElement {
   // As a badge it appeared only when it wasn't the default 'agent', so most
   // rows showed no owner at all.
 
-  // The row's only tell that a discussion exists. Without it the comments are
-  // in the store and unreachable from the board — the failure mode this
-  // codebase has already been bitten by with resolved threads. It goes before
-  // the derived badges because the badge strip clips on a narrow row, and the
-  // one badge that means “someone is talking to you” must not be the one lost.
-  if (task.commentCount) {
-    add(
-      'hub-badge-comments',
-      `💬 ${task.commentCount}`,
-      `${task.commentCount} comment${task.commentCount === 1 ? '' : 's'} — open the task to read them`,
-    );
-  }
+  // REMOVED 2026-08-18, at Bryan's explicit request ("comment counts on the
+  // top level task list — taking up space for no reason"). A `💬 N` badge used
+  // to sit here. Recorded rather than deleted silently, because the comment it
+  // replaces argued the badge was load-bearing and it was citing a real
+  // incident: see "The store has it is not the surface can show it" in
+  // docs/process/learnings.md, where a reviewer's reply to a resolved thread
+  // was invisible on the board and got reported as "comments seem to be going
+  // missing".
+  //
+  // So state the cost plainly rather than let it be rediscovered: **the board
+  // no longer signals that a discussion exists on a row.** Finding one means
+  // opening the task, where the detail panel still lists every comment.
+  // Deliberately NOT replaced with a quieter affordance (a dot, a hover, a
+  // smaller glyph) — a substitute is the over-engineering being objected to.
+  // If "comments are going missing" is reported again, this is the trade that
+  // produced it, and a row-level tell is the fix.
   if (task.after.length > 0)
     add('hub-badge-after', `after ${task.after.length}`, `blocked on: ${task.after.join(', ')}`);
   if (task.dueAt !== undefined) {
@@ -709,7 +694,6 @@ export function renderTaskRow(task: HubTask, handlers: BoardHandlers): HTMLEleme
     handlers.onOpenTask(task);
   });
 
-  const dot = riskDot(task);
   const title = document.createElement('span');
   title.className = 'hub-task-title';
   title.textContent = task.title;
@@ -755,7 +739,7 @@ export function renderTaskRow(task: HubTask, handlers: BoardHandlers): HTMLEleme
   avatar.setAttribute('aria-hidden', 'true');
   ownerCtl.append(avatar, assignee);
 
-  row.append(handle, openZone, statusCtl, dot, title, taskBadges(task), ownerCtl);
+  row.append(handle, openZone, statusCtl, title, taskBadges(task), ownerCtl);
   row.addEventListener('click', () => handlers.onOpenTask(task));
   row.addEventListener('keydown', (ev) => {
     if (ev.key === 'Enter' && !(ev.target as HTMLElement).closest('input')) {
@@ -2362,7 +2346,10 @@ export function renderTaskDetail(
     meta.append(dt, dd);
   }
   addMeta('Goal', handlers.goalLabel?.(task.goal) ?? task.goal);
-  if (task.riskTier) addMeta('Risk', task.riskTier);
+  /* `addMeta('Risk', task.riskTier)` was here. It existed to explain the
+     transition gate when it fired; the gate was removed 2026-08-18 and the
+     field with it, so a tier in the panel would describe machinery that no
+     longer exists. */
   if (task.dueAt !== undefined) addMeta('Due', new Date(task.dueAt).toLocaleDateString());
   if (task.after.length > 0) addMeta('After', task.after.join(', '));
   if (task.triagedAgainst) {
