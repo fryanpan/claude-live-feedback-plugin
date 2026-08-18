@@ -160,4 +160,57 @@ describe('router', () => {
     expect(mounted).toEqual(['c']);
     expect(location.pathname).toBe('/review/c');
   });
+
+  /**
+   * The back arrow is SHELL chrome, so it belongs to the router rather than
+   * to any per-doc mount: navigation is in-place and the shell is reused, so
+   * whoever owns the swap has to own the arrow too.
+   */
+  describe('back arrow', () => {
+    const crumb = () =>
+      '<div class="doc-crumb"><a href="/" class="back-link" title="All review docs" aria-label="Back to all review docs">←</a></div>';
+    const backHref = () =>
+      document.querySelector('.doc-crumb .back-link')?.getAttribute('href') ?? null;
+
+    it('points at the board the doc belongs to once its meta arrives', async () => {
+      document.body.innerHTML = `${crumb()}<aside id="set-pane"><ol id="set-pane-list"></ol></aside>`;
+      // Presence of the pre-change state, so "it changed" is a claim about
+      // this navigation rather than about a fixture that was already right.
+      expect(backHref()).toBe('/');
+      stop = startRouter({
+        user: { id: 'u', name: 'U', kind: 'known', color: '#000' },
+        fetchMeta: async () => ({
+          ...meta,
+          backTo: { workspaceId: 'w-abc', name: 'search-revamp' },
+        }),
+        connectFor: () => stubClient(),
+        mountFor: () => {},
+      });
+      await flush();
+      expect(backHref()).toBe('/workspaces/w-abc');
+    });
+
+    it('returns to the index when the next doc has no board', async () => {
+      document.body.innerHTML = `${crumb()}<aside id="set-pane"><ol id="set-pane-list"><li><a href="/review/b">b</a></li></ol></aside>`;
+      let backTo: { workspaceId: string; name: string } | undefined = {
+        workspaceId: 'w-abc',
+        name: 'search-revamp',
+      };
+      stop = startRouter({
+        user: { id: 'u', name: 'U', kind: 'known', color: '#000' },
+        fetchMeta: async () => ({ ...meta, ...(backTo ? { backTo } : {}) }),
+        connectFor: () => stubClient(),
+        mountFor: () => {},
+      });
+      await flush();
+      expect(backHref()).toBe('/workspaces/w-abc'); // presence
+
+      backTo = undefined;
+      document
+        .querySelector('a[href="/review/b"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      await flush();
+      expect(backHref()).toBe('/');
+    });
+  });
 });
