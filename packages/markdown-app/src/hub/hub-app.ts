@@ -1234,6 +1234,10 @@ async function main(): Promise<void> {
   tasksMap.observeDeep(() => {
     readProjection();
     renderBoardRegion();
+    // The Home queue is computed from the same tasks — without this the
+    // first projection lands after Home's first paint and the queue stays
+    // empty while the board banner (painted by renderBoardRegion) counts it.
+    renderHomeRegion();
     renderDetail();
   });
   wsMap.observeDeep(() => {
@@ -1241,6 +1245,7 @@ async function main(): Promise<void> {
     renderGoal();
     renderLead();
     renderBoardRegion();
+    renderHomeRegion();
     void loadSidebars();
   });
 

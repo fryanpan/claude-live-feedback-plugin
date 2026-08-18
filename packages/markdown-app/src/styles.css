@@ -2604,6 +2604,9 @@ a.hub-link-chip:hover {
     position: fixed;
     left: 0;
     right: 0;
+    /* `top: auto` is load-bearing: the desktop rail is sticky with `top: 10px`,
+       and fixed + top + bottom stretches the bar to the full viewport. */
+    top: auto;
     bottom: 0;
     z-index: 60;
     flex-direction: row;
