@@ -56,7 +56,14 @@ interface Harness {
 }
 
 function harness(over: { withPlaceholder?: boolean } = {}) {
-  const h: Harness = { clients: [], destroyed: 0, created: [], land: async () => {}, loads: 0 };
+  const h: Harness = {
+    clients: [],
+    destroyed: 0,
+    created: [],
+    land: async () => {},
+    fail: async () => {},
+    loads: 0,
+  };
   let settle: ((mod: EditorModule) => void) | null = null;
   let reject: ((err: Error) => void) | null = null;
 
