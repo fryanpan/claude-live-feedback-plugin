@@ -12,7 +12,7 @@
 // accident and made the file read as if the vitest run covered it.
 import { afterEach, describe, expect, it } from 'bun:test';
 import { summaryHash } from '@feedback/core';
-import type { StoredSummary } from '@feedback/core/summary-prompt';
+import { SUMMARY_PROMPT_VERSION, type StoredSummary } from '@feedback/core/summary-prompt';
 import type { Thread, User } from '@feedback/core/types';
 import { ThreadSummarizer } from '../src/summarize.ts';
 
@@ -67,10 +67,14 @@ describe('ThreadSummarizer.generate', () => {
     const s = new ThreadSummarizer({ apiKey: 'test-key', fetchImpl: impl });
     const t = thread();
     const out = await s.generate(t);
+    // The stamp is asserted as a VALUE here rather than allowed through by a
+    // loose matcher: it is the other half of what makes a stored summary
+    // re-checkable, and `needsCall` regenerates the whole corpus without it.
     expect(out).toEqual({
       topic: 'Retry loop swallows errors',
       discussion: 'Fix underway',
       hash: summaryHash(t),
+      promptVersion: SUMMARY_PROMPT_VERSION,
     });
   });
 
@@ -194,6 +198,7 @@ describe('ThreadSummarizer.generate — word budget retry', () => {
       topic: 'Retry loop swallows errors',
       discussion: 'Fix underway now',
       hash: summaryHash(t),
+      promptVersion: SUMMARY_PROMPT_VERSION,
     });
   });
 
@@ -383,6 +388,7 @@ describe('ThreadSummarizer.generate — delivery-status claims', () => {
       topic: 'Removing per-doc sharing; mutation artifact caught by lint',
       discussion: 'Verified empty on prod; lint caught a disabled guard',
       hash: summaryHash(t),
+      promptVersion: SUMMARY_PROMPT_VERSION,
     });
   });
 });
@@ -441,7 +447,12 @@ describe('ThreadSummarizer.schedule', () => {
     const t = thread();
     const withSummary = {
       ...t,
-      summary: { topic: 'a', discussion: 'b', hash: summaryHash(t) },
+      summary: {
+        topic: 'a',
+        discussion: 'b',
+        hash: summaryHash(t),
+        promptVersion: SUMMARY_PROMPT_VERSION,
+      },
     } as Thread;
     s.schedule({
       docId: 'd1',
@@ -451,6 +462,35 @@ describe('ThreadSummarizer.schedule', () => {
     });
     await new Promise((r) => setTimeout(r, 40));
     expect(calls).toHaveLength(0);
+  });
+
+  /*
+   * The twin of the case above, and the reason the stamp exists at all: the
+   * thread has NOT moved, so the hash still matches and every pre-version
+   * check said "already summarized". What makes it stale is the instructions
+   * it was written under. Version 1 is the whole pre-stamp corpus, so this
+   * fixture keeps meaning what it says at every future bump.
+   */
+  it('calls again for a current thread whose summary predates this prompt', async () => {
+    const { impl, calls } = fakeFetch();
+    s = new ThreadSummarizer({ apiKey: 'k', fetchImpl: impl, debounceMs: 1 });
+    const t = thread();
+    const oldPrompt = {
+      ...t,
+      summary: { topic: 'a', discussion: 'b', hash: summaryHash(t), promptVersion: 1 },
+    } as Thread;
+    const applied: StoredSummary[] = [];
+    s.schedule({
+      docId: 'd1',
+      threadId: 't1',
+      getThread: () => oldPrompt,
+      apply: (x) => applied.push(x),
+    });
+    await new Promise((r) => setTimeout(r, 40));
+    expect(calls).toHaveLength(1);
+    // And what it writes back carries the CURRENT stamp, so the same thread
+    // does not come round again on the next backfill.
+    expect(applied[0]?.promptVersion).toBe(SUMMARY_PROMPT_VERSION);
   });
 
   it('does nothing, quietly, when generation is switched off', async () => {
@@ -551,7 +591,15 @@ describe('ThreadSummarizer.backfill', () => {
     const { impl, calls } = fakeFetch();
     s = new ThreadSummarizer({ apiKey: 'k', fetchImpl: impl });
     const t = thread();
-    const done = { ...t, summary: { topic: 'a', discussion: 'b', hash: summaryHash(t) } } as Thread;
+    const done = {
+      ...t,
+      summary: {
+        topic: 'a',
+        discussion: 'b',
+        hash: summaryHash(t),
+        promptVersion: SUMMARY_PROMPT_VERSION,
+      },
+    } as Thread;
     // Positive control first: the SAME thread without its summary does cost a
     // call, so the zero below is about the stored summary and nothing else.
     await s.backfill([{ docId: 'd', threadId: 't', getThread: () => t, apply: () => {} }], {
@@ -566,6 +614,30 @@ describe('ThreadSummarizer.backfill', () => {
     );
     expect(calls).toHaveLength(1);
     expect(res).toEqual({ attempted: 1, stored: 0 });
+  });
+
+  /*
+   * This is the operation the prompt version was added FOR: an opt-in backfill
+   * that reaches summaries the hash says are fine. Asserted as `stored: 1` and
+   * not merely as a call, because a summarizer that spends the call and then
+   * declines to write it back would leave the corpus exactly where it was.
+   */
+  it('DOES spend on a current thread whose summary came from an older prompt', async () => {
+    const { impl, calls } = fakeFetch();
+    s = new ThreadSummarizer({ apiKey: 'k', fetchImpl: impl });
+    const t = thread();
+    const oldPrompt = {
+      ...t,
+      summary: { topic: 'a', discussion: 'b', hash: summaryHash(t), promptVersion: 1 },
+    } as Thread;
+    const applied: StoredSummary[] = [];
+    const res = await s.backfill(
+      [{ docId: 'd', threadId: 't', getThread: () => oldPrompt, apply: (x) => applied.push(x) }],
+      { windowMs: 0, minIntervalMs: 0 },
+    );
+    expect(calls).toHaveLength(1);
+    expect(res).toEqual({ attempted: 1, stored: 1 });
+    expect(applied[0]?.promptVersion).toBe(SUMMARY_PROMPT_VERSION);
   });
 
   it('leaves a thread the live path is already generating for to the live path', async () => {

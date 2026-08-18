@@ -146,7 +146,7 @@ const SYSTEM = [
   '  supersedes an earlier one defines the state; do not report the older one.',
   '- Keep polarity exactly: not / un- / never, over / under, before / after,',
   '  pre- / post-, open / closed. A flipped word is the worst error you can',
-  '  make. When unsure, reuse the thread\'s own word.',
+  "  make. When unsure, reuse the thread's own word.",
   '- Keep the actor. An agent recommending is not the human deciding; an ask',
   '  relayed to someone else is not work done here.',
   '',
