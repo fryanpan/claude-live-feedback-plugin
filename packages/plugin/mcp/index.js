@@ -13763,9 +13763,9 @@ function threadCreateRequest(input, author) {
 }
 
 // packages/mcp/src/triage-line.ts
-var RETRIAGE_SKILL = "live-feedback:handling-a-goal-change";
+var RETRIAGE_SKILL = "claude-workspaces:handling-a-goal-change";
 var SHAPE_THEN_PLACE = "read its own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each into a title and a story-shaped body with rewrite_task, then place with set_task_goal";
-var TASK_REVIEW_SKILL = "live-feedback:reviewing-task-shape";
+var TASK_REVIEW_SKILL = "claude-workspaces:reviewing-task-shape";
 function retriageDetail(p) {
   const ids = p.taskIds ?? [];
   const tasks = ids.length > 0 ? `
@@ -13831,7 +13831,7 @@ function resolveBaseUrl() {
         return `http://localhost:${j.port}`;
     } catch {}
   }
-  throw new Error("live-feedback server not found — start it with `bun run dev` (or set FEEDBACK_BASE_URL). " + `Looked for discovery file at ${discovery}.`);
+  throw new Error("claude-workspaces server not found — start it with `bun run dev` (or set FEEDBACK_BASE_URL). " + `Looked for discovery file at ${discovery}.`);
 }
 var AUTHOR = resolveAgentAuthor({
   FEEDBACK_AUTHOR: process.env.FEEDBACK_AUTHOR,
@@ -13843,7 +13843,7 @@ function suggestionAuthor() {
 var PLUGIN_VERSION = "0.1.60";
 var COMMIT_EVIDENCE_DESCRIPTION = 'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
 var server = new Server({
-  name: "claude-live-feedback",
+  name: "claude-workspaces",
   version: PLUGIN_VERSION
 }, {
   capabilities: {
@@ -14666,7 +14666,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
               properties: {
                 title: {
                   type: "string",
-                  description: 'The row\'s one-line name, and the thing a person scanning thirty rows actually reads. Say WHO it is for, WHAT they get, and HOW — `<Person> can <achieve goal X> by <describe action>`, under 70 characters (100 is the hard ceiling). e.g. "Bryan can review across tasks faster with clearer task descriptions and UX", "Agents can revise goal priority with a tool to reorder goals". The failure this exists to stop is a title that states an OBSERVATION — "A decision-answered event promises a link checklist" names something somebody noticed, so ten of them in a column give no sense of the plan and the board cannot be prioritised. Never REFUSED: a rough capture still lands — every placed create is routed to the workspace lead for a shape review (the `live-feedback:reviewing-task-shape` skill), so file what you have.'
+                  description: 'The row\'s one-line name, and the thing a person scanning thirty rows actually reads. Say WHO it is for, WHAT they get, and HOW — `<Person> can <achieve goal X> by <describe action>`, under 70 characters (100 is the hard ceiling). e.g. "Bryan can review across tasks faster with clearer task descriptions and UX", "Agents can revise goal priority with a tool to reorder goals". The failure this exists to stop is a title that states an OBSERVATION — "A decision-answered event promises a link checklist" names something somebody noticed, so ten of them in a column give no sense of the plan and the board cannot be prioritised. Never REFUSED: a rough capture still lands — every placed create is routed to the workspace lead for a shape review (the `claude-workspaces:reviewing-task-shape` skill), so file what you have.'
                 },
                 body: {
                   type: "string",
@@ -14880,14 +14880,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "rewrite_task",
-      description: "Rewrite a task's TITLE, its BODY, or both, in ONE attributed call — the write half of the task-shape review, and the fix for a task filed thin or named by a machine-clipped fragment. Pass whichever halves you are changing and a `reason` saying why; the reason rides the audit row verbatim, so the trail says more than \"rewrote\". Body is a whole-body replace (send the FULL markdown; no partial edit), written through the task's live body doc as a block-level diff so comment threads on untouched paragraphs keep their anchors and the board updates live. A body+title call records ONE task.body_edited carrying both titles; a title-only call records task.retitled with both names — either way the activity feed renders the OLD name, the only one the person who filed the row would recognise. The row's ORIGINAL words are preserved to `quote` automatically on the first body rewrite, so a rewrite is never the only record of what was said; a quote already there (a dictated transcript) is never overwritten. Judgment about WHETHER to rewrite belongs to the `live-feedback:reviewing-task-shape` skill: rewrite when you have the context to do it well, and when the words are a human's deliberate phrasing, ask them on the task instead of silently replacing it. Refuses a call with neither half, and refuses an empty body — blanking a description is not an edit; if the task should not exist, say so on it instead.",
+      description: "Rewrite a task's TITLE, its BODY, or both, in ONE attributed call — the write half of the task-shape review, and the fix for a task filed thin or named by a machine-clipped fragment. Pass whichever halves you are changing and a `reason` saying why; the reason rides the audit row verbatim, so the trail says more than \"rewrote\". Body is a whole-body replace (send the FULL markdown; no partial edit), written through the task's live body doc as a block-level diff so comment threads on untouched paragraphs keep their anchors and the board updates live. A body+title call records ONE task.body_edited carrying both titles; a title-only call records task.retitled with both names — either way the activity feed renders the OLD name, the only one the person who filed the row would recognise. The row's ORIGINAL words are preserved to `quote` automatically on the first body rewrite, so a rewrite is never the only record of what was said; a quote already there (a dictated transcript) is never overwritten. Judgment about WHETHER to rewrite belongs to the `claude-workspaces:reviewing-task-shape` skill: rewrite when you have the context to do it well, and when the words are a human's deliberate phrasing, ask them on the task instead of silently replacing it. Refuses a call with neither half, and refuses an empty body — blanking a description is not an edit; if the task should not exist, say so on it instead.",
       inputSchema: {
         type: "object",
         properties: {
           taskId: { type: "string" },
           title: {
             type: "string",
-            description: "The new one-line name. Omit to keep the current one. Aim for `<Person> can <achieve goal X> by <describe action>` — ideally under 70 characters, 100 max, never clipped mid-word; the full standard is in the `live-feedback:reviewing-task-shape` skill."
+            description: "The new one-line name. Omit to keep the current one. Aim for `<Person> can <achieve goal X> by <describe action>` — ideally under 70 characters, 100 max, never clipped mid-word; the full standard is in the `claude-workspaces:reviewing-task-shape` skill."
           },
           body: {
             type: "string",
@@ -15110,7 +15110,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "attach_agent",
-      description: "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep — and sweeping one means SHAPING it, not only filing it: read the row's own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each with rewrite_task into a title and a story-shaped body, then set_task_goal. A capture arrives with a machine-clipped title and its raw utterance for a body, and this is the only step that turns it into work. Then queuedVoice — voice change-requests that arrived while no agent was live; act on each transcript verbatim — and, if you LEAD this workspace, pendingRetriage: a goal edit made while you were away, whose taskIds you re-place with set_task_goal (echo its batchId on each), plus pendingBucketReview: a goal BAND that appeared while you were away, with the unplaced tasks worth re-looking at against it — place the ones that now have a home, and leave the rest, since nothing has moved them — plus taskReviews: rows created, renamed, or rewritten while no lead was live, each waiting for the shape pass the `live-feedback:reviewing-task-shape` skill describes (judge the title and body; rewrite with rewrite_task or ask the filer on the task). All of these are drained by this call. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments with a fresh heartbeat, and after ~5 minutes of silence the hub shows you as away and requests queue.",
+      description: "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep — and sweeping one means SHAPING it, not only filing it: read the row's own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each with rewrite_task into a title and a story-shaped body, then set_task_goal. A capture arrives with a machine-clipped title and its raw utterance for a body, and this is the only step that turns it into work. Then queuedVoice — voice change-requests that arrived while no agent was live; act on each transcript verbatim — and, if you LEAD this workspace, pendingRetriage: a goal edit made while you were away, whose taskIds you re-place with set_task_goal (echo its batchId on each), plus pendingBucketReview: a goal BAND that appeared while you were away, with the unplaced tasks worth re-looking at against it — place the ones that now have a home, and leave the rest, since nothing has moved them — plus taskReviews: rows created, renamed, or rewritten while no lead was live, each waiting for the shape pass the `claude-workspaces:reviewing-task-shape` skill describes (judge the title and body; rewrite with rewrite_task or ask the filer on the task). All of these are drained by this call. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments with a fresh heartbeat, and after ~5 minutes of silence the hub shows you as away and requests queue.",
       inputSchema: {
         type: "object",
         properties: {
@@ -15149,7 +15149,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "request_plugin_refresh",
-      description: "Ask this machine to fetch the newest live-feedback plugin from the marketplace. Call it when the board's presence strip says agents are running an older bundle than the one released — that notice and this tool are the two halves of the same thing. It REQUESTS rather than forces: the update rewrites a version-keyed cache, so no running session is interrupted and every peer (including you) picks the new version up at its own next restart. Safe to call from any session; concurrent asks collapse into one fetch. The result reports the cache version BEFORE and AFTER, read from disk rather than from the CLI's own success message, because `claude plugin update` reports success when it copies nothing. `changed: false` with matching versions means the cache was already current, which is a real answer and not a failure.",
+      description: "Ask this machine to fetch the newest claude-workspaces plugin from the marketplace. Call it when the board's presence strip says agents are running an older bundle than the one released — that notice and this tool are the two halves of the same thing. It REQUESTS rather than forces: the update rewrites a version-keyed cache, so no running session is interrupted and every peer (including you) picks the new version up at its own next restart. Safe to call from any session; concurrent asks collapse into one fetch. The result reports the cache version BEFORE and AFTER, read from disk rather than from the CLI's own success message, because `claude plugin update` reports success when it copies nothing. `changed: false` with matching versions means the cache was already current, which is a real answer and not a failure.",
       inputSchema: { type: "object", properties: {} }
     },
     {
@@ -15962,7 +15962,7 @@ async function persistWatchChange(change) {
     return true;
   } catch (err) {
     lastPersistError = err instanceof Error ? err.message : String(err);
-    console.error("[live-feedback-mcp] could not persist watch change:", lastPersistError);
+    console.error("[claude-workspaces-mcp] could not persist watch change:", lastPersistError);
     return false;
   }
 }
@@ -16092,7 +16092,7 @@ async function runSseLoop(label, path, signal, onFirstAttempt) {
       settleFirst();
       if (signal.aborted)
         return;
-      console.error(`[live-feedback-mcp] ${label} sse error, retrying:`, err);
+      console.error(`[claude-workspaces-mcp] ${label} sse error, retrying:`, err);
     }
     await new Promise((r) => setTimeout(r, 1500));
   }
@@ -16105,7 +16105,7 @@ function startSseLoop(label, path, controller) {
       clearTimeout(cap);
       resolve();
     }).catch((err) => {
-      console.error(`[live-feedback-mcp] watcher ${label} crashed:`, err);
+      console.error(`[claude-workspaces-mcp] watcher ${label} crashed:`, err);
       watchers.delete(label);
       clearTimeout(cap);
       resolve();
