@@ -77,6 +77,7 @@ import {
 } from './task-owner.ts';
 import { TaskProjection, taskBodyDocId, taskIdOfBodyDoc } from './task-projection.ts';
 import { buildQueue, placeableGoals, summarizeGoals } from './task-queue.ts';
+import { type TitleGap, clipToWordBoundary, titleGapMessage } from './task-title.ts';
 import {
   type GoalListEntry,
   type Ref,
@@ -626,6 +627,32 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * function. Putting it here would rebuild the exact gap being closed, one
    * layer up.
    */
+  /**
+   * The title standard, as an advisory a caller actually receives.
+   *
+   * Spread onto every response whose act wrote a title, and onto every row
+   * the list route returns — because a check nothing renders is not a check.
+   * Empty for a title that meets the standard, so a clean row adds no keys and
+   * an agent can treat the presence of `titleGaps` as the whole signal.
+   *
+   * The discussion clause is computed HERE rather than in the store because
+   * the comments live in the task's body room, which the store cannot see —
+   * the same split that makes `projectTask` take `commentCount` as an
+   * argument. `titleWrittenAt ?? createdAt` is the honest fallback for a row
+   * filed before the standard existed: nobody has named it since it was
+   * created, which is exactly the state being complained about.
+   */
+  const titleAdvisory = (task: Task): { titleGaps?: TitleGap[]; titleMessage?: string } => {
+    const since = task.titleWrittenAt ?? task.createdAt;
+    const commentsSinceTitle = taskProjection
+      .discussionNotes(task.id)
+      .filter((n) => n.ts > since).length;
+    const gaps = taskStore.titleGapsOf(task, commentsSinceTitle);
+    if (gaps.length === 0) return {};
+    const message = titleGapMessage(gaps);
+    return { titleGaps: gaps, ...(message !== undefined ? { titleMessage: message } : {}) };
+  };
+
   const rewriteTaskBody = (
     task: Task,
     markdown: string,
@@ -2039,7 +2066,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const ownerKindOf = taskProjection.ownerKindReader(workspaceId);
           return j(200, {
             workspaceId,
-            tasks: tasks.map((t) => ({ ...t, ownerKind: ownerKindOf(t) })),
+            // `titleGaps` rides every row, not just the response to the act
+            // that wrote one. A caller reviewing a board is the reader who
+            // most needs to know which rows do not say what they will do, and
+            // it cannot get that from a create response it never saw.
+            tasks: tasks.map((t) => ({ ...t, ownerKind: ownerKindOf(t), ...titleAdvisory(t) })),
           });
         }
         if (wsTasksMatch && req.method === 'POST') {
@@ -2080,6 +2111,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             },
             ...(parsed.ignoredLinks.length > 0 ? { ignoredLinks: parsed.ignoredLinks } : {}),
             ...(res.shapeGaps !== undefined ? { shapeGaps: res.shapeGaps } : {}),
+            // Same reasoning one field over: the task WAS created, and the
+            // caller still learns that its title doesn't say who this is for
+            // or what will be built. Advisory on purpose — refusing here
+            // would make a rough capture impossible to file at all.
+            ...titleAdvisory(res.task),
           });
         }
         /**
@@ -2221,6 +2257,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               : {}),
             ...(ignoredLinks.length > 0 ? { ignoredLinks } : {}),
             ...(shapeGaps.length > 0 ? { shapeGaps } : {}),
+            // Per row and by id, the same sidecar shape as `shapeGaps` — a
+            // burst capture is exactly where clipped, persona-less titles
+            // arrive, and reporting only a total would leave the caller
+            // diffing to find which of eight rows needs naming.
+            ...(() => {
+              const rows = tasks
+                .map((t) => ({ taskId: t.id, gaps: taskStore.titleGapsOf(t) }))
+                .filter((r) => r.gaps.length > 0);
+              return rows.length > 0 ? { titleGaps: rows } : {};
+            })(),
           });
         }
         // The single gate for status changes: attributed, evidence-stamped,
@@ -2453,7 +2499,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const res = taskStore.renameTask(taskId, title, { actor: author });
           if (!res.ok) return j(404, res);
           taskProjection.ensureWorkspace(res.task.workspaceId);
-          return j(200, res);
+          return j(200, { ...res, ...titleAdvisory(res.task) });
         }
         // update_task_body: replace a task's description after creation.
         // The body is a live `task:<id>` doc room, so this goes THROUGH that
@@ -2487,7 +2533,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // No hand-refresh of the projection: unlike `/title` (which emits
           // nothing by design), this act DOES emit, and the projection's own
           // subscriber re-runs ensureWorkspace off the event.
-          return j(200, { ok: true, task: taskStore.getTask(taskId) });
+          const rewritten = taskStore.getTask(taskId);
+          return j(200, {
+            ok: true,
+            task: rewritten,
+            // Shaping is one act, so the advisory on the title this act set
+            // belongs on this response — and when the caller sent no title,
+            // this is where a rewrite that moved the body far enough reports
+            // that the old name no longer fits.
+            ...(rewritten ? titleAdvisory(rewritten) : {}),
+          });
         }
         // assign_task (§3.6 task.assigned): hand a task between the human and
         // the agent (or a named identity). Status is untouched — a hand-off
@@ -2732,9 +2787,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const title =
             typeof body?.title === 'string' && body.title.trim().length > 0
               ? body.title.trim()
-              : titleSource.length > 80
-                ? `${titleSource.slice(0, 79)}…`
-                : titleSource;
+              : // A word boundary, not a character count. This clip used to be
+                // `slice(0, 79)`, which is where the board's *"For tasks, I get
+                // dumped o…"* came from — the GENERATOR produced that, not
+                // whoever spoke it. The replacement is a prefix of the same
+                // prefix, so it can only ever read better.
+                clipToWordBoundary(titleSource, 80);
           const draftBody =
             typeof body?.body === 'string'
               ? body.body
@@ -2797,6 +2855,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             },
             ...(promoteLinks.ignored.length > 0 ? { ignoredLinks: promoteLinks.ignored } : {}),
             ...(res.shapeGaps !== undefined ? { shapeGaps: res.shapeGaps } : {}),
+            // Third create path, third report — and the one most likely to
+            // need it, since an unnamed promote derives its title from
+            // somebody's comment rather than from a decision to name a row.
+            ...titleAdvisory(res.task),
           });
         }
         // --- REST: plugin refresh ---
