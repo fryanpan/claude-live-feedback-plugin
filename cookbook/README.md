@@ -1,6 +1,6 @@
 # Cookbook
 
-How to integrate `claude-live-feedback-plugin` into your project.
+How to integrate `claude-workspaces-plugin` into your project.
 
 The plugin ships a generic webhook: when a new comment thread is created,
 replied to, resolved, or reopened, the server POSTs a standard JSON

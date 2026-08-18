@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "claude-live-feedback-plugin",
+      "name": "claude-workspaces-plugin",
       "devDependencies": {
         "@biomejs/biome": "1.9.4",
         "@types/bun": "^1.1.14",

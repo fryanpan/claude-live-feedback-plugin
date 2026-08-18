@@ -19,7 +19,7 @@
 | **2. Comment** | 0:15–0:30 | Highlight a sentence. Comment pill appears. Click it, type a one-line comment, post. | "I point at the line, leave a comment. Same surface I'm reading on." |
 | **3. Channel event** | 0:30–0:45 | Cut to terminal. The `<channel source="live-feedback">` event line is visible. Pause for ~1s so the viewer can read it. | "Claude gets it as a channel event — same way it picks up GitHub mentions or CI failures. No polling, no inbox." |
 | **4. Edit lands** | 0:45–1:15 | Cut back to browser. The agent's edit appears in the doc within a few seconds. Anchor highlight pulses on the changed range. | "And the edit shows up live. Anchors auto-shift, so my comment still points at the right spot. Whole loop is sub-second to a few seconds." _Voice-pass note (delivery time, not script time): "sub-second to a few seconds" reads honest in print but may feel stiff aloud. If it lands flat in the take, two natural alts that keep the honest band: "Whole loop is fast — fraction of a second to a few seconds" or trade precision for cadence: "Whole loop runs in a second or two."_ |
-| **5. Close on the framing** | 1:15–1:30 | Static shot of the editor with the resolved comment + edit visible. | "Three surfaces — markdown, mockups, dev servers — all using this same loop. Repo's at github.com/fryanpan/claude-live-feedback-plugin if you want to try it." |
+| **5. Close on the framing** | 1:15–1:30 | Static shot of the editor with the resolved comment + edit visible. | "Three surfaces — markdown, mockups, dev servers — all using this same loop. Repo's at github.com/fryanpan/claude-workspaces-plugin if you want to try it." |
 
 **Total active ~90s.** Loom usually stretches 10-15% with natural pacing. Aim to land 1:45–2:00.
 

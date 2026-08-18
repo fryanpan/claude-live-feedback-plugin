@@ -1,12 +1,12 @@
 ---
 name: setup
-description: First-time setup for a fresh clone of claude-live-feedback-plugin. Installs JS deps, wires the dev-channels shell alias, registers + installs the plugin user-wide, and optionally installs the macOS launchd supervisor so the server survives reboots. Run this once after cloning the repo, then ask Claude to start using the live-feedback tools.
+description: First-time setup for a fresh clone of claude-workspaces-plugin. Installs JS deps, wires the dev-channels shell alias, registers + installs the plugin user-wide, and optionally installs the macOS launchd supervisor so the server survives reboots. Run this once after cloning the repo, then ask Claude to start using the live-feedback tools.
 user-invocable: true
 ---
 
 # Setup
 
-First-time setup for a fresh clone of `claude-live-feedback-plugin`. Walk the user through the steps in order. Pause for confirmation between sections that touch system state; skip optional sections if they say no.
+First-time setup for a fresh clone of `claude-workspaces-plugin`. Walk the user through the steps in order. Pause for confirmation between sections that touch system state; skip optional sections if they say no.
 
 ## What this skill does
 
