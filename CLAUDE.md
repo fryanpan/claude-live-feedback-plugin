@@ -242,6 +242,28 @@ there. That is how 25 feature commits sat undelivered between 2026-05-09 and
   literal in the served bundle too, old-bundle-first, per "A prod restart
   reloads server code but NOT the served app bundle" in
   [docs/process/learnings.md](docs/process/learnings.md).
+- **`POST /api/deploy` does those three steps as one operation, from the box.**
+  It pulls (`merge --ff-only` only — never a rebase, never a reset), restarts,
+  and writes the outcome to disk, because the restart kills the process that
+  would otherwise have reported on it. `GET /api/deploy` reads that record back
+  and is safe to call any time; reading is not deploying. **There is
+  deliberately no "just restart" verb** — a restart over an unpulled checkout
+  rebuilds the same bundles and prints a successful deploy, which is exactly the
+  failure the bullet above describes, so the route makes it unexpressible.
+  - It answers only to a **loopback peer address**, not to the `Host` header —
+    a LAN and a tailnet client were both measured reaching this server sending
+    `Host: localhost`, so a Host-based gate would be spoofable by the callers
+    it excludes. Run it from the box. Dev and staging answer 501 on purpose.
+  - **A bound document with un-flushed edits refuses the deploy** (`force` to
+    override, and it is a real override — it accepts the loss). Bryan,
+    2026-08-18, asked and answered: *keep refuse by default.* A pull is an
+    editor save as far as a bound doc is concerned, so against un-flushed edits
+    the live doc wins and reasserts ~800ms later — git exits 0, `git status` is
+    clean at that instant, and the tree is dirty again a second afterwards.
+    Refusing names the files; proceeding loses them silently.
+  - The manual three steps above still work and are still the fallback when the
+    server is down — which is the one case the route cannot cover, since it
+    needs the server it is about to restart.
 
 **The whole delivery model is written down once, in
 [docs/process/delivery.md](docs/process/delivery.md)**: how the plugin travels
