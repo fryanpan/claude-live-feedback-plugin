@@ -237,8 +237,11 @@ function buildShell(root: HTMLElement, name: string): void {
         </button>
       </nav>
       <section id="hub-home" class="hub-home hidden">
-        <div id="hub-home-brief"></div>
-        <div id="hub-home-review"></div>
+        <div id="hub-home-page">
+          <div id="hub-home-brief"></div>
+          <div id="hub-home-review"></div>
+        </div>
+        <div id="hub-walkthrough" class="hub-walkthrough hidden"></div>
       </section>
       <aside id="hub-docs" class="hub-side hub-side-docs"></aside>
       <section class="hub-board-col">
@@ -259,7 +262,6 @@ function buildShell(root: HTMLElement, name: string): void {
       <aside id="hub-threads" class="hub-side hub-side-threads"></aside>
     </div>
     <div id="hub-detail" class="hub-detail hidden"></div>
-    <div id="hub-walkthrough" class="hub-walkthrough hidden"></div>
     <div id="hub-help" class="hub-help hidden">
       <div class="hub-help-card">
         <h2>Keyboard shortcuts</h2>
@@ -844,6 +846,11 @@ async function main(): Promise<void> {
     state.walkIndex = index;
     const current = queue.items[index] ?? null;
     const next = queue.items[index + 1] ?? null;
+    // A PAGE inside Home, not an overlay over the board — so the Home content
+    // it replaces has to go away while it is up. One toggle rather than a
+    // class on each region: a region added to Home later is covered by it
+    // without anyone remembering this line exists.
+    el('hub-home-page').classList.toggle('hidden', index >= 0);
     renderReviewWalkthrough(
       el('hub-walkthrough'),
       queue,
@@ -879,9 +886,27 @@ async function main(): Promise<void> {
           state.walkProgress = { cleared: 0, last: null };
           renderWalkthrough();
         },
+        contextLabel: walkContextLabel,
       },
       state.walkProgress,
     );
+  }
+
+  /**
+   * The card's project chip.
+   *
+   * The mockup's Home spans several projects and chips each card with one.
+   * This Home is per-workspace, so the workspace name would be the same word
+   * on every card — the honest within-workspace answer to "which body of work
+   * is this" is the GOAL. Null where there is no task to read one off (a doc
+   * comment), which renders no chip rather than a placeholder.
+   */
+  function walkContextLabel(item: ReviewItem): string | null {
+    const taskId = reviewRow(item)?.task.id ?? item.thread?.taskId;
+    if (!taskId) return null;
+    const task = taskList().find((t) => t.id === taskId);
+    if (!task) return null;
+    return goalLabel(state.info?.goals ?? [], task.goal);
   }
 
   /**
