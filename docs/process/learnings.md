@@ -696,6 +696,39 @@ Technical discoveries that should persist across sessions for this project.
   once at startup, before the server spawns — restart == deploy. A failed
   build logs loudly and serves the existing dist (stale beats down).
 
+## A restart deploys the deploy SOURCE, and a stale source restarts silently
+
+- **A kickstart run specifically to ship a just-merged client republished the
+  previous one.** Prod came up in five seconds and answered 200; the served
+  release stamped `sourceRef: 1b0af1e8` while `origin/main` was at `1080bf8`,
+  and every feature literal from the merge counted 0 in the served bundle. The
+  primary checkout — which is prod's deploy source, and which prod rebuilds its
+  bundles from at every start — was on `main` and **10 commits behind
+  `origin/main`, with a completely clean tree**. `git pull --ff-only origin
+  main` and a second kickstart fixed it, `sourceRef: 1080bf84`.
+- **Nothing about the bad state looks bad.** The checkout is on the right
+  branch, `git status` is clean, the service is healthy, the port answers, the
+  page loads. A healthy server serving a stale bundle is indistinguishable from
+  a healthy server serving a fresh one — and `-dirty` cannot help, because
+  being behind is not being modified. The deploy source's *freshness* and its
+  *cleanliness* are different facts and only the second one has a marker.
+- **Rule: the deploy is `pull` → `kickstart` → *read `release.json`*, and it is
+  done when `sourceRef` is the commit you meant to ship** — not when the restart
+  returns. The provenance already exists for exactly this reason (the entry
+  about a fallback needing a durable trace records why `sourceRef` is stamped at
+  all); this is the reading it was built for, and skipping it is how the whole
+  mechanism ends up costing a deploy anyway.
+- **The trap is not restarting — it is restarting for some OTHER reason.** Any
+  restart from any cause is the client deploy, so a config-only
+  `scripts/launchd/install.sh` reinstall ships whatever the checkout holds.
+  [tailnet-https.md](tailnet-https.md) already warned about this in its own
+  narrow context; it is general.
+- Same family as "A prod restart reloads server code but NOT the served app
+  bundle", one layer earlier. That entry closed the gap between *server* and
+  *client*. This one is the gap between *the client that got built* and *the
+  code that was merged* — the restart faithfully deployed a source nobody had
+  updated.
+
 ## The restart that delivers the client cannot be the restart you measure
 
 - **A prod restart IS the client deploy here (the entry above), so "open the
