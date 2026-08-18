@@ -1137,29 +1137,9 @@
       const SUMMARY = {
         since: 'Saturday 21:14',
         scope: '41 events · 12 tasks · 4 docs',
-        // Counted from the text at render, never stored. A hand-written count is
-        // a claim about the budget that stops being true the moment anyone edits
-        // the summary — and this one was already wrong by 14 words.
-        html: `
-<p><strong>One decision is blocking the Home pane: where the unread marker lives.</strong>
-Nobody can build the summary card until you pick, and the presence strip is a day late behind it.
-<a href="#/task/unread-marker">The three options are costed here.</a></p>
-
-<p><strong>Three more, two minutes each at most.</strong> Threading is being dropped and
-<a href="#/task/threading">14 existing replies need somewhere to go</a>.
-<a href="#/task/walkthrough-flag">The walkthrough</a> ships to all three boards or to this one only.
-And <a href="#/task/naming">the pane keeps the name "Home"</a> unless you say otherwise.</p>
-
-<p><strong>One longer read, about twenty minutes.</strong> The
-<a href="#/task/rollout-plan">Home pane rollout plan</a> is the last gate before build starts;
-Atlas left four questions inline.</p>
-
-<p><strong>Shipped overnight, nothing needed.</strong> The comment pill now survives a cancelled
-touch on mobile; task titles were rewritten to say what the task is; the summary word-cap retry
-can no longer blank a line.</p>
-
-<p><strong>Slipped.</strong> The presence strip, behind the decision above. Nothing else moved.</p>`,
       };
+
+      const ROLLOUT_MINUTES = 20;
 
       // Each item carries the SAME ask text the walkthrough shows and the detail
       // page shows. One source, two surfaces.
@@ -1172,7 +1152,7 @@ can no longer blank a line.</p>
           waited: 'asked 14h ago',
           blocks: 2,
           priority: 'P1 · Home pane',
-          effort: '~1 min',
+          minutes: 1,
           ask: `
 <p><strong>Pick where "I have read this summary" is stored.</strong> Nothing stores it today, so the
 summary can only cover the last 24 hours instead of what changed since you last looked.</p>
@@ -1253,7 +1233,7 @@ settled and waiting.</p>`,
           waited: 'asked 26h ago',
           blocks: 1,
           priority: 'P1 · Home pane',
-          effort: '~2 min',
+          minutes: 2,
           ask: `
 <p><strong>Tell us what to do with 14 replies that lose their parent.</strong> Dropping threaded
 comments is agreed. The replies already in the store are not covered by that — 14 of them, across
@@ -1321,11 +1301,11 @@ migration is the open part.</p>
           waited: 'ready 3h ago',
           blocks: 3,
           priority: 'P1 · Home pane',
-          effort: '15–30 min',
+          minutes: ROLLOUT_MINUTES,
           ask: `
 <p><strong>Read the rollout plan and answer Atlas's four inline questions.</strong> It is the last
 gate before build starts, with three tasks waiting behind it. Seven sections, about 1,900 words,
-two diagrams — twenty minutes.</p>
+two diagrams — ${ROLLOUT_MINUTES} minutes.</p>
 <ul>
   <li>The parts most likely to be wrong: the migration order, and who owns the summary prompt.</li>
   <li>The four questions are marked with a comment pill. Answering them in the doc <em>is</em> the
@@ -1358,7 +1338,7 @@ the comment migration, the mobile pass, and the flag order.</p>`,
           waited: 'asked 5h ago',
           blocks: 0,
           priority: 'P2 · Home pane',
-          effort: '~1 min',
+          minutes: 1,
           ask: `
 <p><strong>Does the walkthrough go to the other two boards now, or to this board only?</strong>
 It is built and tested at 430px and on desktop, and nothing is blocked either way.</p>
@@ -1401,7 +1381,7 @@ you would hear about it tonight. Say nothing and it waits.</p>`,
           waited: 'asked 2d ago',
           blocks: 0,
           priority: 'P3 · Chores',
-          effort: '~1 min',
+          minutes: 1,
           ask: `
 <p><strong>Confirm the pane stays called "Home".</strong> It is in the nav, the URL and three doc
 titles now, so renaming stops being free after this week.</p>
@@ -1432,6 +1412,47 @@ day. That is the whole argument. Say nothing and it stays "Home".</p>`,
           ],
         },
       ];
+
+      // Numbers are computed, sentences are written.
+      //
+      // Every count in this string is read off the same ITEMS array the queue
+      // renders from, so the summary cannot contradict the page underneath it —
+      // which it did, in three separate places, when the counts were typed by
+      // hand ("4 items now need you" over a queue of five). The prose around
+      // them is judgement about what matters this morning and stays written:
+      // derive that too and the summary becomes a template, which is the half
+      // of it worth keeping.
+      function summaryHtml() {
+        const blocking = ITEMS.filter((i) => i.kind === 'decision' && i.blocks > 0);
+        const lead = blocking[0];
+        const reads = ITEMS.filter((i) => i.kind === 'read');
+        const rest = ITEMS.filter((i) => i.kind !== 'read' && i !== lead);
+        const restMax = Math.max(...rest.map((i) => i.minutes));
+        const word = (n) => ['No', 'One', 'Two', 'Three', 'Four', 'Five'][n] ?? String(n);
+        const s = (n) => (n === 1 ? '' : 's');
+        return `
+<p><strong>${word(blocking.length)} decision${s(blocking.length)} ${
+          blocking.length === 1 ? 'is' : 'are'
+        } blocking the Home pane: ${lead.title[0].toLowerCase()}${lead.title.slice(1)}.</strong>
+Nobody can build the summary card until you pick, and the presence strip is a day late behind it.
+<a href="#/task/${lead.id}">The three options are costed here.</a></p>
+
+<p><strong>${word(rest.length)} more, ${word(restMax).toLowerCase()} minute${s(restMax)} each at most.</strong>
+Threading is being dropped and
+<a href="#/task/threading">14 existing replies need somewhere to go</a>.
+<a href="#/task/walkthrough-flag">The walkthrough</a> ships to all three boards or to this one only.
+And <a href="#/task/naming">the pane keeps the name "Home"</a> unless you say otherwise.</p>
+
+<p><strong>${word(reads.length)} longer read, ${reads[0].minutes} minutes.</strong> The
+<a href="#/task/${reads[0].id}">${reads[0].title}</a> is the last gate before build starts;
+Atlas left four questions inline.</p>
+
+<p><strong>Shipped overnight, nothing needed.</strong> The comment pill now survives a cancelled
+touch on mobile; task titles were rewritten to say what the task is; the summary word-cap retry
+can no longer blank a line.</p>
+
+<p><strong>Slipped.</strong> The presence strip, behind the decision above. Nothing else moved.</p>`;
+      }
 
       const KIND_LABEL = { decision: 'Decision', reply: 'Reply', read: 'Read' };
 
@@ -1501,6 +1522,7 @@ day. That is the whole argument. Say nothing and it stays "Home".</p>`,
           read.append(undo);
           card.append(read);
         } else {
+          const summary = summaryHtml();
           const head = el('div', 'sum-head');
           head.append(
             el('span', 'sum-title', 'Since your last review'),
@@ -1508,7 +1530,7 @@ day. That is the whole argument. Say nothing and it stays "Home".</p>`,
           );
           const clip = el('div', 'sum-clip');
           const body = el('div', 'sum-body');
-          body.innerHTML = SUMMARY.html;
+          body.innerHTML = summary;
           clip.append(body);
           const more = el('button', 'sum-more', 'Read the rest');
           more.hidden = true;
@@ -1539,7 +1561,7 @@ day. That is the whole argument. Say nothing and it stays "Home".</p>`,
             state.tuneOpen = !state.tuneOpen;
             render();
           });
-          foot.append(mark, tune, el('span', 'sum-words', `${countWords(SUMMARY.html)} words`));
+          foot.append(mark, tune, el('span', 'sum-words', `${countWords(summary)} words`));
           card.append(head, clip, more, foot);
 
           const tuner = el('div', 'tune');
@@ -1621,7 +1643,7 @@ day. That is the whole argument. Say nothing and it stays "Home".</p>`,
             const meta = el('div', 'qmeta');
             meta.append(el('span', null, `${it.asker} · ${it.waited}`));
             meta.append(el('span', null, it.priority));
-            meta.append(el('span', null, it.effort));
+            meta.append(el('span', null, effortLabel(it.minutes)));
             if (it.blocks > 0)
               meta.append(el('span', 'blocking', `blocks ${it.blocks} task${it.blocks > 1 ? 's' : ''}`));
             main.append(title, ask, meta);
@@ -1784,7 +1806,7 @@ day. That is the whole argument. Say nothing and it stays "Home".</p>`,
 
         if (it.kind === 'read') {
           const hand = el('div', 'handoff');
-          hand.innerHTML = `<p><strong>${it.docTitle}</strong> — ${it.effort}</p>`;
+          hand.innerHTML = `<p><strong>${it.docTitle}</strong> — ${effortLabel(it.minutes)}</p>`;
           const go = el('button', 'btn btn-primary', 'Open the doc');
           go.addEventListener('click', () => toast('Mockup — would open the review doc'));
           const later = el('button', 'btn', 'Not now');
@@ -1871,6 +1893,13 @@ day. That is the whole argument. Say nothing and it stays "Home".</p>`,
         } else {
           render();
         }
+      }
+
+      // One number per item, rendered the same way everywhere it appears. Three
+      // hand-typed spellings of the same duration ("about 20 minutes", "15-30
+      // min", "twenty minutes") were three chances to disagree.
+      function effortLabel(minutes) {
+        return minutes >= 10 ? `${minutes} min` : `~${minutes} min`;
       }
 
       function countWords(html) {

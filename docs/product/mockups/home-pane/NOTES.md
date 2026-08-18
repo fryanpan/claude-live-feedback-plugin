@@ -39,14 +39,33 @@ prose and a queue, both of which are unreadable at 1280. The board keeps its
 own width.
 
 **The summary clips at half a screen instead of scrolling inside its card.**
-147 words fits desktop whole; at 430×932 it runs 536px against a 410px ceiling,
-so on the phone the clip is the normal case rather than the edge case. An inner
-scrollbar hides its own overflow and would let a 400-word summary sit there
-looking like 200. It clips with a fade and a "Read the rest", and the ceiling
-exists so the review queue stays above the fold — the queue is what he came
-for.
+The ceiling is `44vh`, so whether it clips is a fact about the window rather
+than about the text — which is why it can't be settled when the summary is
+written. Measured at 146 words: at 430×932 it runs 536px against a 410px
+ceiling, so on a phone the clip is the normal case rather than the edge case;
+on a 1500×757 desktop window it runs 338px against 333px and clips by a hair,
+and it needs a viewport about 769px tall to fit whole. An inner scrollbar would
+hide its own overflow and let a 400-word summary sit there looking like 200. It
+clips with a fade and a "Read the rest", and the ceiling exists so the review
+queue stays above the fold — the queue is what he came for.
 
-**The word count is on the card.** `147 words` next to "Mark read". It is the
+**Numbers are computed, sentences are written.** Every count in the summary —
+how many decisions are blocking, how many quick items are left, how long the
+read is, the word count — is read off the same `ITEMS` array the queue renders
+from. It did not start that way, and the reason it is worth the code in a
+mockup is that three of the review's five blocking findings were the same bug:
+a number typed into the summary that the page underneath computed differently.
+Deriving them makes the contradiction unrepresentable instead of fixed once.
+The prose around the numbers stays hand-written — derive that too and the
+summary becomes a template, which is the half of it worth keeping.
+
+**One duration per item, rendered the same way everywhere.** `minutes: 20` feeds
+the queue row's chip, the summary's "20 minutes" and the ask's "20 minutes".
+Three hand-typed spellings of one duration ("about 20 minutes", "15–30 min",
+"twenty minutes") were three chances to disagree, and they had already taken
+two of them.
+
+**The word count is on the card.** `146 words` next to "Mark read". It is the
 one number that tells you whether the generator is behaving, and if it is not
 visible nobody will ever notice it drifting to 400.
 
@@ -131,6 +150,16 @@ Chrome, against `http://127.0.0.1:8912`.
   target otherwise, and "brief as possible inline links" is exactly what produces
   short ones. The footer link needed 10px rather than 9 because it sets a smaller
   font; that came out of re-running the walk, not out of reading the CSS.
+- **The derive has a positive control**: splice an item out of `ITEMS`,
+  re-render, and the summary moves from "Three more" to "Two more" while the
+  header moves from "Needs you (5)" to "(4)" in the same pass — then splice it
+  back and both return. Asserting the numbers are currently right would only
+  prove they were typed correctly, which is exactly what was wrong before.
+- The escaped `re: &lt;quoted line&gt;` in the threading ask renders as literal
+  angle brackets, checked in a rendered browser view rather than by grep — an
+  over-eager unescape there would make the browser swallow the phrase as an
+  unknown tag and leave a clean-looking `re: ` with nothing after it. It is
+  visible intact in `03-walkthrough-reply-430.png`.
 - Flows exercised end to end: mark read → undo; re-sort the queue by longest
   waiting (order changes); walk all five items answering each; "Not now" on the
   read item; end-of-queue copy and the Home count agree (1 left, 1 row).
