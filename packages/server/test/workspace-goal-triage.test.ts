@@ -237,7 +237,11 @@ describe('workspace goal + triage hook', () => {
       expect(res.ok).toBe(true);
       if (!res.ok) return;
       expect(res.task.triagePendingTs).toBeUndefined();
-      expect(requests).toHaveLength(0);
+      // No PLACEMENT ask goes out. A `task-review` delivery is expected —
+      // every attributed placed create routes to the lead for a shape pass
+      // (see task-shape-review.test.ts) — so filter by kind rather than
+      // asserting an empty wire.
+      expect(requests.filter((r) => r.kind === 'task')).toHaveLength(0);
     });
 
     it('the marker persists to the sidecar but is cleared on hydrate — a restart kills the emitted request, so the promise must not outlive it', () => {

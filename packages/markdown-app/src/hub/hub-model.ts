@@ -79,14 +79,6 @@ export interface HubTask {
    */
   ownerKind?: HubOwnerKind;
   needs?: 'action' | 'decision';
-  /**
-   * How this row's title falls short of the standard — computed by the
-   * server, because two of the clauses need the body room and the workspace
-   * that the browser does not hold. Absent on a row whose title is fine, so
-   * presence IS the signal.
-   */
-  titleGaps?: string[];
-  bodyGaps?: string[];
   goal: string;
   order: number;
   after: string[];
@@ -1243,8 +1235,19 @@ export function describeEvent(ev: ActivityEvent, titleOf: (taskId: string) => st
       // nowhere else on the board.
       const from = ev.titleFrom as string | undefined;
       const to = ev.titleTo as string | undefined;
-      if (from && to) return `${actorName(ev)} reshaped “${from}” into “${to}”`;
-      return `${actorName(ev)} rewrote the description of ${title()}`;
+      const why = typeof ev.reason === 'string' && ev.reason ? ` — ${ev.reason}` : '';
+      if (from && to) return `${actorName(ev)} reshaped “${from}” into “${to}”${why}`;
+      return `${actorName(ev)} rewrote the description of ${title()}${why}`;
+    }
+    case 'task.retitled': {
+      // A title-only fix. Same rule as the reshape line above: the OLD name
+      // is the only one the person who filed the row would recognise, so it
+      // leads the sentence.
+      const from = ev.titleFrom as string | undefined;
+      const to = ev.titleTo as string | undefined;
+      const why = typeof ev.reason === 'string' && ev.reason ? ` — ${ev.reason}` : '';
+      if (from && to) return `${actorName(ev)} renamed “${from}” to “${to}”${why}`;
+      return `${actorName(ev)} renamed ${title()}${why}`;
     }
     case 'task.evidence_amended': {
       // Two different sentences, because the two cases mean different things

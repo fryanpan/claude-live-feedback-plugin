@@ -75,8 +75,8 @@ describe('triageRequestLine', () => {
     expect(line).toContain('zero / one / several');
     expect(line).toContain('instruction about neighbouring text is zero');
     // Rewrite, then place. Both verbs named, in that order.
-    expect(line.indexOf('update_task_body')).toBeGreaterThan(-1);
-    expect(line.indexOf('set_task_goal')).toBeGreaterThan(line.indexOf('update_task_body'));
+    expect(line.indexOf('rewrite_task')).toBeGreaterThan(-1);
+    expect(line.indexOf('set_task_goal')).toBeGreaterThan(line.indexOf('rewrite_task'));
   });
 
   it('says "?" rather than a wrong count when taskIds is missing', () => {
@@ -281,5 +281,56 @@ describe('RETRIAGE_SKILL', () => {
     const path = join(import.meta.dirname, '..', '..', 'plugin', 'skills', dir, 'SKILL.md');
     expect(existsSync(path)).toBe(true);
     expect(readFileSync(path, 'utf8')).toContain(`name: ${dir}`);
+  });
+});
+
+describe('a task shape review (kind: task-review)', () => {
+  const payload = {
+    kind: 'task-review',
+    taskId: 't-r1',
+    title: 'fix the thing with the search',
+    trigger: 'renamed',
+    leadAgentId: 'agent-lead',
+    actor: { id: 'known-jordan', name: 'Jordan' },
+  };
+
+  it('renders the imperative for the lead, naming the row, the trigger, and the writer', () => {
+    const line = triageRequestLine(payload, 'agent-lead');
+    expect(line).toContain('t-r1');
+    expect(line).toContain('fix the thing with the search');
+    expect(line).toContain('renamed');
+    expect(line).toContain('Jordan');
+    expect(line).not.toContain('FYI');
+  });
+
+  it('names the contract skill and the rewrite verb — the line is the whole briefing', () => {
+    const line = triageRequestLine(payload, 'agent-lead');
+    expect(line).toContain('live-feedback:reviewing-task-shape');
+    expect(line).toContain('rewrite_task');
+    // Judging a row fine must be a stated outcome, or every review "finds"
+    // something — the corrective-retry lesson, one loop earlier.
+    expect(line).toContain('fine as-is');
+    // The other honest outcome: ask the person who filed it, on the task.
+    expect(line).toContain('ask the filer');
+  });
+
+  it('addresses a non-lead as an FYI rather than ordering a second reviewer in', () => {
+    const line = triageRequestLine(payload, 'agent-bystander');
+    expect(line).toContain('FYI');
+    expect(line).toContain('agent-lead');
+    expect(line).toContain('Act only if that is you');
+  });
+
+  it('keeps the imperative when the payload names no lead at all', () => {
+    const { leadAgentId: _lead, ...unaddressed } = payload;
+    const line = triageRequestLine(unaddressed, 'agent-whoever');
+    expect(line).not.toContain('FYI');
+    expect(line).toContain('rewrite_task');
+  });
+
+  it('never renders "undefined" when the payload is thin', () => {
+    const line = triageRequestLine({ kind: 'task-review', taskId: 't-r2' }, 'agent-whoever');
+    expect(line).not.toContain('undefined');
+    expect(line).toContain('t-r2');
   });
 });

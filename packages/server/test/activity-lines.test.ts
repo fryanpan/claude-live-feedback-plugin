@@ -172,6 +172,80 @@ describe('the activity view renders the rows the server really wrote', () => {
     expect(line).toContain('Moving between shelves loses your place');
   });
 
+  it('carries the rewrite REASON through the /body route into the rendered line', async () => {
+    // The route layer hand-copies body fields into the store call, and the
+    // route is the layer nothing type-checks — a dropped `reason` returns
+    // 200 and discards it silently. So: real route, real log, real renderer.
+    const created = await post(`/api/workspaces/${wsId}/tasks`, {
+      title: 'Index the archive',
+      author: AGENT,
+      body: 'thin.',
+    });
+    expect(created.status).toBe(200);
+    const taskId = ((await created.json()) as { task: Task }).task.id;
+
+    const r = await post(`/api/tasks/${taskId}/body`, {
+      markdown: 'Agent can find archived rows so that history stays searchable.',
+      author: AGENT,
+      reason: 'the body did not say when the work is done',
+    });
+    expect(r.status).toBe(200);
+
+    const row = rowsOf('task.body_edited').at(-1);
+    expect(row?.reason).toBe('the body did not say when the work is done');
+    const line = describeEvent(row as ActivityEvent, () => 'Index the archive');
+    expect(line).toContain('the body did not say when the work is done');
+  });
+
+  it('a title-only rename writes an attributed task.retitled row that renders with BOTH names', async () => {
+    // Renames used to emit nothing at all, so this event is new twice over:
+    // the route must emit it and the client must have a case for it —
+    // "a new emitted event reaches the surface as a bare slug" otherwise.
+    const created = await post(`/api/workspaces/${wsId}/tasks`, {
+      title: 'fix the thing with the search',
+      author: PERSON,
+      body: 'Person can find results so that search earns its keep.',
+    });
+    expect(created.status).toBe(200);
+    const taskId = ((await created.json()) as { task: Task }).task.id;
+
+    const r = await post(`/api/tasks/${taskId}/title`, {
+      title: 'Person can find results by relevance so that search earns its keep',
+      author: AGENT,
+      reason: 'named the outcome instead of the artifact',
+    });
+    expect(r.status).toBe(200);
+
+    const row = rowsOf('task.retitled').at(-1);
+    expect(row).toBeDefined();
+    expect((row?.actor as { id?: string } | undefined)?.id).toBe('agent-search-revamp');
+    expect(row?.titleFrom).toBe('fix the thing with the search');
+    expect(row?.titleTo).toBe('Person can find results by relevance so that search earns its keep');
+    const line = describeEvent(row as ActivityEvent, () => 'unused');
+    // The OLD name is the only one the filer would recognise.
+    expect(line).toContain('fix the thing with the search');
+    expect(line).toContain('Person can find results by relevance');
+    expect(line).toContain('named the outcome instead of the artifact');
+    expect(line).not.toContain('task.retitled');
+  });
+
+  it('a no-op rename (same title) emits no task.retitled row', async () => {
+    const created = await post(`/api/workspaces/${wsId}/tasks`, {
+      title: 'Already well named',
+      author: AGENT,
+      body: 'fine.',
+    });
+    expect(created.status).toBe(200);
+    const taskId = ((await created.json()) as { task: Task }).task.id;
+    const before = rowsOf('task.retitled').length;
+    const r = await post(`/api/tasks/${taskId}/title`, {
+      title: 'Already well named',
+      author: AGENT,
+    });
+    expect(r.status).toBe(200);
+    expect(rowsOf('task.retitled').length).toBe(before);
+  });
+
   it('renders an evidence correction from the row the route wrote, naming the sha it replaced', async () => {
     // Same gap as the rewrite row above: a hand-written fixture proves the
     // switch has a case, not that the EMITTED keys are the ones it reads. The
