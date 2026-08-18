@@ -62,6 +62,19 @@ export interface ChromeOpts {
   user: User;
   ydoc: Y.Doc;
   surface: ReviewSurface;
+  /**
+   * Register a callback for "this doc's content has arrived" — pass the
+   * client's `onReady`, which fires immediately when the first sync already
+   * landed. Until it fires, the thread drawer says "Loading comments…"
+   * instead of "No open comments", because the panel is handed `[]` at mount
+   * and the two states are otherwise indistinguishable on screen.
+   *
+   * REQUIRED on purpose, though only one branch of one render reads it:
+   * there are three surfaces mounting this chrome, and an optional field is
+   * how two of them would quietly keep claiming a doc is empty. Making it
+   * required turns "did I wire all three" into a compile error.
+   */
+  whenSynced: (cb: () => void) => void;
   /** Fallback for the topbar label, from the REST meta the router already
    *  fetched. The Yjs meta map no longer carries `sourceUrl` — it named a path
    *  on the host and the CRDT syncs to share visitors — so the label can't come
@@ -514,6 +527,11 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
       }
     },
   });
+
+  // Until the first sync lands the panel is holding `[]` because nothing has
+  // arrived, not because there is nothing. `onReady` fires immediately if the
+  // doc was already hydrated, so a late mount is not left saying "Loading".
+  opts.whenSynced(() => threadsPanel.markSynced());
 
   // --- mobile: inline cards + the over-doc sheet ---------------------------
   // On a phone there is no standalone drawer. Comments render inline under
