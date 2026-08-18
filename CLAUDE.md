@@ -137,8 +137,11 @@ there. That is how 25 feature commits sat undelivered between 2026-05-09 and
   it is safe to expose because the update rewrites a version-keyed cache and
   never touches a running session. Dev and staging deliberately can't do it
   (they're copies of the deploy source); there the route answers 501.
-- **The restart is still the peer's, and the order is still load-bearing:
-  update, THEN restart.** The cache path is version-keyed and a running session
+- **A peer's SESSION restart is still the peer's, and the order is still
+  load-bearing: update, THEN restart.** (This is the one restart an agent cannot
+  run for someone else. Restarting the prod *server* is a different act on a
+  different artifact and it IS yours — see the bullet below.) The cache path is
+  version-keyed and a running session
   resolved it at launch, so restarting first pulls whatever the cache already
   holds — which has demonstrably moved a session *backwards*, from a working-tree
   0.1.15 to a cached 0.1.12, in the same restart that was meant to deliver new
@@ -176,16 +179,44 @@ there. That is how 25 feature commits sat undelivered between 2026-05-09 and
   using --print". That reads exactly like a permission refusal, and it was
   written up in a ticket as one. `command` bypasses functions and aliases, so
   the invocation that works is `command claude plugin update
-  live-feedback@claude-live-feedback`. The restart is still the human step.
+  live-feedback@claude-live-feedback`. The peer's session restart is still the
+  human step; restarting prod is not.
   (The server's own refresh never hits this — it spawns the resolved binary
   path with an argv array and no shell, which is why a fixed argv and no shell
   are load-bearing there rather than stylistic.)
 
+- **Restarting prod is an agent action. Do it; don't ask, and don't route it
+  through Bryan.** (Bryan, 2026-08-17, reversing the older "the production
+  restart is Bryan's call" rule that used to sit in this file and still sat in
+  the diff-review plan.) The command is
+  `launchctl kickstart -k gui/$(id -u)/com.fryanpan.live-feedback`.
+- **The restart deploys whatever the primary checkout is parked on, so pulling
+  comes FIRST.** Prod rebuilds the browser bundles from its deploy source at
+  every start, and that source is the primary checkout — not `origin/main`. On
+  2026-08-17 a kickstart run to deploy a just-merged client came up in five
+  seconds, answered 200, and republished the **previous** client, because the
+  checkout was sitting 10 commits behind `origin/main` with a clean tree.
+  Nothing anywhere said so: a healthy server serving a stale bundle looks
+  exactly like a healthy server serving a fresh one. The deploy is therefore
+  three steps and the last two are not optional —
+
+  ```bash
+  git pull --ff-only origin main      # in the PRIMARY checkout, prod's deploy source
+  launchctl kickstart -k gui/$(id -u)/com.fryanpan.live-feedback
+  cat ~/.local/state/live-feedback/client/current/release.json
+  ```
+
+  — and the deploy is done when that `release.json`'s `sourceRef` matches the
+  commit you meant to ship, not when the restart returns. Verify a feature
+  literal in the served bundle too, old-bundle-first, per "A prod restart
+  reloads server code but NOT the served app bundle" in
+  [docs/process/learnings.md](docs/process/learnings.md).
+
 **The whole delivery model is written down once, in
 [docs/process/delivery.md](docs/process/delivery.md)**: how the plugin travels
 (GitHub marketplace), which artifacts are tracked vs built on the box, why a
-prod restart is the browser deploy, and the one human step left. Read it before
-answering "why doesn't my peer / my browser have this yet".
+prod restart is the browser deploy, and which restart delivers which artifact.
+Read it before answering "why doesn't my peer / my browser have this yet".
 
 ## Reviewing a branch before it merges (`bun run staging`)
 
