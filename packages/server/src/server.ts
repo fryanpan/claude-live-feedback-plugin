@@ -659,7 +659,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const rewriteTaskBody = (
     task: Task,
     markdown: string,
-    opts: { actor?: { id: string; name: string; kind?: string }; title?: string },
+    opts: {
+      actor?: { id: string; name: string; kind?: string };
+      title?: string;
+      reason?: string;
+    },
   ): { ok: true } | { ok: false; error: string } => {
     const docId = taskProjection.ensureBodyRoom(task);
     const res = rooms.setDocContent(docId, markdown);
@@ -673,6 +677,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       taskStore.noteBodyEdited(task.id, {
         actor: opts.actor,
         ...(opts.title ? { title: opts.title } : {}),
+        ...(opts.reason ? { reason: opts.reason } : {}),
       });
     }
     return { ok: true };
@@ -2499,9 +2504,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           taskProjection.ensureWorkspace(res.task.workspaceId);
           return j(200, res);
         }
-        // In-place task title edit (§3.9: tap the title, Enter commits).
-        // Renames emit no store event (§3.6 has no task.renamed row), so the
-        // projection the board renders from is refreshed by hand.
+        // In-place task title edit (§3.9: tap the title, Enter commits) —
+        // and rewrite_task's title-only path. Emits an attributed
+        // task.retitled when the title actually moves; the hand refresh
+        // below stays because a no-op rename ("changed: false") emits
+        // nothing. `reason` is optional and rides the audit row verbatim.
         const taskTitleMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/title$/);
         if (taskTitleMatch && req.method === 'POST') {
           const taskId = decodeURIComponent(taskTitleMatch[1] ?? '');
@@ -2510,7 +2517,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (title.length === 0) return j(400, { error: 'title required' });
           const author = authorFor(body?.author);
           if (!author) return j(400, { error: 'author required' });
-          const res = taskStore.renameTask(taskId, title, { actor: author });
+          const reason = typeof body?.reason === 'string' ? body.reason.trim() : '';
+          const res = taskStore.renameTask(taskId, title, {
+            actor: author,
+            ...(reason ? { reason } : {}),
+          });
           if (!res.ok) return j(404, res);
           taskProjection.ensureWorkspace(res.task.workspaceId);
           return j(200, res);
@@ -2539,9 +2550,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const task = taskStore.getTask(taskId);
           if (!task) return j(404, { ok: false, error: 'not-found' });
           if (!markdown.trim()) return j(400, { ok: false, error: 'empty' });
+          const reason = typeof body?.reason === 'string' ? body.reason.trim() : '';
           const res = rewriteTaskBody(task, markdown, {
             actor: author,
             ...(title ? { title } : {}),
+            ...(reason ? { reason } : {}),
           });
           if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
           // No hand-refresh of the projection: unlike `/title` (which emits

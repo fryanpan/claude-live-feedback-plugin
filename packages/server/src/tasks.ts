@@ -1119,6 +1119,29 @@ export interface TaskBodyEditedEvent {
    *  surface. */
   titleFrom?: string;
   titleTo?: string;
+  /** Why the rewriter changed it, in the rewriter's words — carried when the
+   *  caller gave one, so the trail can say more than “rewrote”. */
+  reason?: string;
+  ts: number;
+}
+
+/**
+ * A title changed on its own — the board's inline edit, or a reviewer fixing
+ * a name whose body was already right. Renames used to emit nothing (§3.6's
+ * table predates a reviewable title standard), which made a title-only fix
+ * the one shaping act with no audit row: the old name — the only name the
+ * filer would recognise — survived nowhere. Both ends always travel, for the
+ * same reason `task.body_edited` carries them when it retitles.
+ */
+export interface TaskRetitledEvent {
+  type: 'task.retitled';
+  workspaceId: string;
+  taskId: string;
+  actor: TaskActor;
+  titleFrom: string;
+  titleTo: string;
+  /** Why, in the renamer's words — when the caller gave one. */
+  reason?: string;
   ts: number;
 }
 
@@ -1297,6 +1320,7 @@ export type TaskStoreEvent =
   | TaskGateRefusedEvent
   | TaskAssignedEvent
   | TaskBodyEditedEvent
+  | TaskRetitledEvent
   | TaskRegroupedEvent
   | DecisionAnsweredEvent
   | DecisionInfoRequestedEvent
@@ -3058,14 +3082,29 @@ export class TaskStore {
   renameTask(
     taskId: string,
     title: string,
-    opts: { actor: { id: string; name: string } },
+    opts: { actor: { id: string; name: string; kind?: string }; reason?: string },
   ): RenameTaskResult {
     const task = this.getTask(taskId);
     if (!task) return { ok: false, error: 'not-found' };
     if (task.title === title) return { ok: true, task, changed: false };
+    const titleFrom = task.title;
     this.applyTitle(task, title);
-    task.updatedAt = Date.now();
+    const ts = Date.now();
+    task.updatedAt = ts;
     this.scheduleSave(task.workspaceId);
+    // Attributed, with both ends: after a rename the old title — the only
+    // name the person who filed the row would recognise — survives nowhere
+    // else on the board. “changed: false” returns above emit nothing.
+    this.emit({
+      type: 'task.retitled',
+      workspaceId: task.workspaceId,
+      taskId: task.id,
+      actor: { id: opts.actor.id, name: opts.actor.name, kind: classifyActor(opts.actor) },
+      titleFrom,
+      titleTo: task.title,
+      ...(opts.reason ? { reason: opts.reason } : {}),
+      ts,
+    });
     this.requestTaskReview(task, 'renamed', opts.actor);
     return { ok: true, task, changed: true };
   }
@@ -3113,6 +3152,8 @@ export class TaskStore {
       actor: { id: string; name: string; kind?: string };
       /** The title this act gives the row. Omit to leave it unchanged. */
       title?: string;
+      /** Why the rewriter changed it — rides the audit row verbatim. */
+      reason?: string;
     },
   ): boolean {
     const task = this.getTask(taskId);
@@ -3133,6 +3174,7 @@ export class TaskStore {
       // needs the old one to recognise the row they filed: "rewrote X" says
       // nothing when X is a title they have never seen.
       ...(task.title !== titleFrom ? { titleFrom, titleTo: task.title } : {}),
+      ...(opts.reason ? { reason: opts.reason } : {}),
       ts,
     });
     this.requestTaskReview(task, 'edited', opts.actor);
