@@ -748,7 +748,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     marker: number,
     input: BriefInput,
   ): void => {
-    const key = `${workspace.id} ${readerKey(person)}`;
+    const key = `${workspace.id}\u0000${readerKey(person)}`;
     if (homeBriefInflight.has(key)) return;
     homeBriefInflight.add(key);
     const sinceLabel =
