@@ -1677,6 +1677,63 @@ export function reviewRowTitle(item: Pick<ReviewItem, 'title' | 'ask'>): string 
 }
 
 /**
+ * The card's kind badge (mockup: the amber `Decision` and the blue
+ * `Needs your reply`).
+ *
+ * A blocker gets neither, and the third tone is the reason this is a function
+ * rather than a two-entry record: a blocker was never a question, so "needs
+ * your reply" would promise something to answer and there is nothing — the
+ * only move is to go and do the work. The mockup has no such card, so it gets
+ * the mockup's own neutral `.k` styling rather than an invented colour.
+ */
+export function reviewBadge(kind: ReviewKind): { label: string; tone: string } {
+  if (kind === 'decision') return { label: 'Decision', tone: 'decision' };
+  if (kind === 'blocker') return { label: 'Your task, blocking', tone: 'plain' };
+  return { label: 'Needs your reply', tone: 'reply' };
+}
+
+/** "blocks Ship the tunnel" — the tail of the card's provenance line. Lower
+ *  case and mid-sentence, where `blocksLine` is a standalone sentence; empty
+ *  when nothing is waiting, so the line ends after the clock rather than
+ *  asserting an absence. */
+export function blocksPhrase(row: Pick<DecisionRow, 'blocks' | 'hard'>): string {
+  if (row.blocks.length === 0) return '';
+  const titles = row.blocks.map((t) => t.title);
+  const shown = titles.slice(0, 2).join(', ');
+  const rest = titles.length > 2 ? ` and ${titles.length - 2} more` : '';
+  return `${row.hard ? 'hard-blocks' : 'blocks'} ${shown}${rest}`;
+}
+
+/**
+ * "Asked by Harbor agent · 2h ago · blocks Re-run relevance eval" — the
+ * mockup's left-bordered context block, first line.
+ *
+ * Built only out of parts we actually hold, and each one drops out
+ * independently: a decision whose transitions carry no actor says when it was
+ * asked without claiming who asked it, and one nothing is waiting on ends at
+ * the clock. The alternative — a fixed three-part sentence with a placeholder
+ * where a fact is missing — states something nobody measured, which is the
+ * failure this file's `why` lines already had to be walked back from.
+ */
+export function reviewAskedLine(item: ReviewItem, now: number): string {
+  const row = reviewRow(item);
+  const thread = item.thread;
+  const parts: string[] = [];
+  // A thread carries its asker; a decision's is whoever first moved the task,
+  // which is the only actor a projected task row records.
+  const who = thread?.askedBy ?? row?.task.transitions[0]?.by.name;
+  if (who && who.trim() !== '') parts.push(`Asked by ${who}`);
+  parts.push(timeAgo(thread?.askedAt ?? item.since, now));
+  const where = row
+    ? blocksPhrase(row)
+    : item.kind === 'task-thread'
+      ? 'on this task'
+      : 'on this doc';
+  if (where !== '') parts.push(where);
+  return parts.join(' · ');
+}
+
+/**
  * The board's one line about the review queue. Null when nothing is waiting —
  * the banner only exists while items are open (approved design), so an empty
  * queue renders nothing rather than an all-clear box.
