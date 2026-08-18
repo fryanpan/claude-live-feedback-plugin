@@ -127,6 +127,37 @@ Technical discoveries that should persist across sessions for this project.
   owner's copy still has the field. Then prove non-vacuity by breaking the
   fix and watching it fail.
 
+## A positive control can silently become a duplicate of the thing it controls
+
+- **Measuring what a server restart costs a doc mid-edit, the first run typed
+  into two docs concurrently and killed the server once — 40 characters into
+  one, 100 into the other, "the same" kill for both. The 40-character doc
+  reported nothing lost, and it was not a result.** Typing 40 characters at
+  80ms finishes 4.8 seconds before typing 100 does, so by the time the kill
+  landed that doc had been idle far longer than the 200ms persistence
+  debounce. It had quietly stopped being a second subject and become a second
+  *control* — and it agreed with the control, which is exactly what made it
+  look like a clean, reassuring row rather than a broken one.
+- **Two subjects in one pass do not share the condition unless the condition
+  is what ENDS the pass.** Here the variable under test was the gap between
+  the last keystroke and the kill; anything that finishes typing early has a
+  different gap, whatever the harness intended. Rule: **one subject per
+  cycle**, with the control alongside it — and if a design needs several
+  subjects in one pass, assert the per-subject condition (each one's own
+  elapsed time at the moment of the kill) rather than assuming a shared event
+  imposes a shared state.
+- **This is the failure this file already records, inverted.** The usual form
+  is a control that cannot see anything, so an absence reads as clean. This
+  one is a control that sees everything and is therefore vacuous in the other
+  direction: it is not that the row could never fail, it is that the row could
+  never have failed *for the reason the experiment was about*. A pass that
+  agrees with the control is the shape to be suspicious of, because it is
+  indistinguishable from a subject that never entered the condition.
+- What caught it was reading the numbers rather than the verdict — 40/40 and
+  0/100 in the same pass, from a harness that claimed to treat both the same
+  way, is a contradiction on its face. Re-run per-subject and the 40-character
+  case loses its characters too.
+
 ## Anything in the Yjs doc is readable by every peer, including share visitors
 
 - **Redacting a REST payload closes one door out of two.** `DocMeta`'s
@@ -678,6 +709,13 @@ Technical discoveries that should persist across sessions for this project.
 - **Staging data does not migrate.** Tasks and docs created there die with the
   data dir. So the shape is: evaluate on staging pre-merge, then do the real
   work once, after the merge. Don't ask a reviewer to enter real content twice.
+
+## Staging is a port and a data dir — it is not a sandbox for anything naming a target outside the process
+
+- **`createDeployer` hardcodes `spawnGit(opts.repoRoot)` and `launchctlRestart()`, and `launchctlRestart` defaults to the PROD launchd label.** So passing `--deploy` to a `bun run staging` instance does not produce a staging deploy: it pulls a checkout and restarts **prod**, from a process started on port 8788 with a throwaway data dir by someone who believed they were isolated. Caught while designing a probe of the busy-docs gate, before running it — the tempting shape ("staging server, real deployer, real route") is the one that deploys.
+- **The rule the isolation actually gives you is narrower than the word "staging" suggests.** A separate port isolates who can reach you. A separate data dir isolates what you read and write. Neither does anything about a capability that names its target by *label*, *absolute path*, or *hostname* — a launchd job, a checkout, an API endpoint, a plugin cache. Before treating an instance as safe to experiment on, grep the capability for names it resolves independently of the process: `LAUNCHD_LABEL`, `repoRoot`, a hardcoded URL, a well-known path under `$HOME`.
+- **The mitigation already exists in this codebase and is the reason the hazard is only latent: the constructor seam.** `createDeployer` is called in exactly one place (`bin.ts`, behind a flag only `scripts/serve.ts --no-watch` passes), so no test run and no staging server builds one by accident — the same rule the plugin refresher and the summarizer follow. What a probe wants instead is the layer *below* the constructor: build `new Deployer({ run: (req) => runDeploy({ git: fakeGit, restart: fakeRestart, … }, req) })` by hand, which exercises the real route, the real `Rooms` and the real predicate while nothing can reach git or `launchctl`. **A convenience constructor that wires real side effects is the thing to route around, not the thing to call with care.**
+- Same family as "What makes a fleet-wide action safe is that it can't interrupt anybody", inverted: there an operation was already safe and got a mechanism it did not need; here an operation looks contained by its surroundings and is not contained at all. Both answers come from reading what the operation *touches* rather than what it runs next to.
 
 ## A session restart orphans a subagent's worktree, and the shell falls back to the primary checkout without saying so
 
