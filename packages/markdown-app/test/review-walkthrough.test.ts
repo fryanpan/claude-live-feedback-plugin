@@ -85,55 +85,39 @@ beforeEach(() => {
   document.body.append(root);
 });
 
-describe('renderHomeReview — the count and the urgency read', () => {
-  it('leads with a number and splits blocking-now from can-wait', () => {
-    const blocking = decision({ title: 'Ship in blue or green?' });
-    const parked = decision({ title: 'Rename the tab?' });
-    renderHomeReview(root, q0([blocking, parked, task({ after: [blocking.id] })]), strip());
-    const count = root.querySelector('.hub-decisions-count') as HTMLElement;
-    expect(count.textContent).toContain('2');
-    const urgency = root.querySelector('.hub-decisions-urgency') as HTMLElement;
-    expect(urgency.textContent).toContain('1 blocking work now');
-    expect(urgency.textContent).toContain('1 can wait');
-  });
-
-  it('says so plainly when nothing is blocked, rather than printing "0 blocking"', () => {
-    renderHomeReview(root, q0([decision(), decision()]), strip());
-    const urgency = root.querySelector('.hub-decisions-urgency') as HTMLElement;
-    expect(urgency.textContent).toContain('Nothing is blocked');
-    expect(urgency.textContent).not.toContain('0 blocking');
-  });
-
-  it('tapping the count starts the walkthrough; a chip still opens one item', () => {
+describe('renderHomeReview — the ranked list (mockup anatomy)', () => {
+  it('Review All starts the walkthrough; a row still opens one item', () => {
     const onWalkthrough = vi.fn();
     const onOpen = vi.fn();
     const d = decision({ title: 'Ship now or wait?' });
     renderHomeReview(root, q0([d, task({ after: [d.id] })]), strip({ onWalkthrough, onOpen }));
-    (root.querySelector('.hub-decisions-count') as HTMLElement).click();
+    (root.querySelector('.hub-review-go') as HTMLElement).click();
     expect(onWalkthrough).toHaveBeenCalledTimes(1);
-    const chip = root.querySelector('.hub-decision-chip') as HTMLElement;
-    expect(chip.textContent).toContain('Ship now or wait?');
-    // Derived urgency reaches the chip too — "blocks 1" is read off the edges.
-    expect(chip.textContent).toContain('blocks 1');
-    chip.click();
+    const row = root.querySelector('.hub-review-row') as HTMLElement;
+    expect(row.textContent).toContain('Ship now or wait?');
+    // Derived urgency still travels with the row — "blocks" reads off the
+    // edges into the hover title, since the mockup row carries no third line.
+    expect(row.title).toContain('Blocking 1 task');
+    row.click();
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
   it('an empty queue renders no rows and says so plainly (Home is a page, not a strip)', () => {
     // Presence first: the section carries rows with one decision.
     renderHomeReview(root, q0([decision()]), strip());
-    expect(root.querySelectorAll('.hub-decision-chip').length).toBeGreaterThan(0);
+    expect(root.querySelectorAll('.hub-review-row').length).toBeGreaterThan(0);
     renderHomeReview(root, q0([task()]), strip());
-    expect(root.querySelectorAll('.hub-decision-chip')).toHaveLength(0);
+    expect(root.querySelectorAll('.hub-review-row')).toHaveLength(0);
     expect(root.querySelector('.hub-home-quiet')?.textContent).toContain(
       'Nothing is waiting for your review',
     );
   });
 
-  // The three kinds are why the strip exists at all: a comment waiting on an
-  // answer was in the store and unreachable from the board. A chip that can't
-  // say which surface it will take you to is a chip nobody taps.
-  it('carries all three kinds, marked, with the ask on the thread chips', () => {
+  // The three kinds are why the queue exists at all: a comment waiting on an
+  // answer was in the store and unreachable from the board. Each row keeps
+  // its kind class, and a thread row's title is its ASK — the question, not
+  // the container (mockup: the row title is the question itself).
+  it('carries all three kinds, marked, with the question as the row title', () => {
     const d = decision({ title: 'Blue or green?' });
     const queue = reviewQueue(
       [d],
@@ -151,15 +135,18 @@ describe('renderHomeReview — the count and the urgency read', () => {
       NOW,
     );
     renderHomeReview(root, queue, strip());
-    const chips = Array.from(root.querySelectorAll<HTMLElement>('.hub-decision-chip'));
-    expect(chips.map((c) => c.className.match(/hub-review-[\w-]+/)?.[0])).toEqual([
-      'hub-review-decision',
-      'hub-review-task-thread',
-      'hub-review-doc-thread',
-    ]);
-    expect(chips[1]?.textContent).toContain('Which repo does this land in?');
-    expect(chips[2]?.textContent).toContain('Is this claim still true?');
-    expect((root.querySelector('.hub-decisions-count') as HTMLElement).textContent).toContain('3');
+    const rows = Array.from(root.querySelectorAll<HTMLElement>('.hub-review-row'));
+    expect(
+      rows.map(
+        (c) => c.className.match(/hub-review-(?:decision|task-thread|doc-thread|blocker)/)?.[0],
+      ),
+    ).toEqual(['hub-review-decision', 'hub-review-task-thread', 'hub-review-doc-thread']);
+    expect(rows[1]?.querySelector('.hub-review-row-title')?.textContent).toBe(
+      'Which repo does this land in?',
+    );
+    expect(rows[2]?.querySelector('.hub-review-row-title')?.textContent).toBe(
+      'Is this claim still true?',
+    );
   });
 
   // A thread blocks nothing structurally; counting it would inflate the one
@@ -170,9 +157,7 @@ describe('renderHomeReview — the count and the urgency read', () => {
     expect(queue.total).toBe(2);
     expect(queue.blocking).toBe(1);
     renderHomeReview(root, queue, strip());
-    const urgency = root.querySelector('.hub-decisions-urgency') as HTMLElement;
-    expect(urgency.textContent).toContain('1 blocking work now');
-    expect(urgency.textContent).toContain('1 can wait');
+    expect(root.querySelectorAll('.hub-review-row')).toHaveLength(2);
   });
 });
 
@@ -186,16 +171,15 @@ describe('the blocker band — a person’s own task, holding agent work up', ()
     return [gate, ...waits];
   }
 
-  it('marks the chip as its own kind and says how much is waiting', () => {
+  it('marks the row as its own kind and says how much is waiting', () => {
     const onOpen = vi.fn();
     renderHomeReview(root, q0(blocked({}, 2)), strip({ onOpen }));
-    const chip = root.querySelector('.hub-decision-chip') as HTMLElement;
-    expect(chip.className).toContain('hub-review-blocker');
-    expect(chip.textContent).toContain('Turn on the tunnel');
-    // The count is read off the edges, the same as a decision chip's.
-    expect(chip.textContent).toContain('blocks 2');
-    expect(chip.title).toContain('Blocking 2 tasks');
-    chip.click();
+    const row = root.querySelector('.hub-review-row') as HTMLElement;
+    expect(row.className).toContain('hub-review-blocker');
+    expect(row.textContent).toContain('Turn on the tunnel');
+    // The count is read off the edges, the same as a decision row's.
+    expect(row.title).toContain('Blocking 2 tasks');
+    row.click();
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
@@ -204,17 +188,17 @@ describe('the blocker band — a person’s own task, holding agent work up', ()
   it('a human task nothing waits on never reaches the queue', () => {
     // Presence first: with an edge, the section carries a row.
     renderHomeReview(root, q0(blocked()), strip());
-    expect(root.querySelectorAll('.hub-decision-chip').length).toBeGreaterThan(0);
+    expect(root.querySelectorAll('.hub-review-row').length).toBeGreaterThan(0);
     renderHomeReview(root, q0([task({ assignee: 'human', title: 'Read the retro' })]), strip());
-    expect(root.querySelectorAll('.hub-decision-chip')).toHaveLength(0);
+    expect(root.querySelectorAll('.hub-review-row')).toHaveLength(0);
     expect(root.textContent).not.toContain('Read the retro');
   });
 
   it('counts as blocking work now, not as something that can wait', () => {
-    renderHomeReview(root, q0(blocked()), strip());
-    const urgency = root.querySelector('.hub-decisions-urgency') as HTMLElement;
-    expect(urgency.textContent).toContain('1 blocking work now');
-    expect(urgency.textContent).not.toContain('can wait');
+    const queue = q0(blocked());
+    expect(queue.blocking).toBe(1);
+    renderHomeReview(root, queue, strip());
+    expect(root.querySelectorAll('.hub-review-row')).toHaveLength(1);
   });
 
   // There is no question on a task, so the decision furniture must not appear:
