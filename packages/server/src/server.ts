@@ -878,7 +878,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * than none, because "back to one of this doc's boards" beats "back to the
    * index of everything on the machine", which is what the arrow does today.
    */
-  const backTargetFor = (docId: string, groupingId?: string): { id: string; name: string } | null => {
+  const backTargetFor = (
+    docId: string,
+    groupingId?: string,
+  ): { id: string; name: string } | null => {
     const pick = (id: string | undefined): { id: string; name: string } | null => {
       if (!id) return null;
       const ws = taskStore.getWorkspace(id);
