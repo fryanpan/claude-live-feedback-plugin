@@ -1,4 +1,4 @@
-# Claude Live Feedback Plugin
+# Claude Workspaces Plugin
 
 A Claude Code plugin that lets people and a Claude Code instance securely co-edit a Markdown document, mockup, or live dev server **on the same surface, in real time** — point at a line, leave a comment, watch the agent's edit land within seconds.
 
@@ -43,9 +43,9 @@ Claude walks through every step — `bun install`, the dev-channels shell alias,
 
 After setup, ask Claude things like:
 
-- "Show me the doc &lt;your doc name&gt; with live feedback"
-- "Show me a mockup with live feedback"
-- "Show me the dev server with live feedback"
+- "Show me the doc &lt;your doc name&gt; with workspaces"
+- "Show me a mockup with workspaces"
+- "Show me the dev server with workspaces"
 
 ### Manual install (if you'd rather do it yourself)
 
