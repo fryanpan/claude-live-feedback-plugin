@@ -73,9 +73,26 @@ export function readerKey(name: string): string {
 
 const HISTORY_CAP = 10;
 
+/**
+ * The default standing instructions, in Bryan's own words.
+ *
+ * The 110 is his (2026-08-18, answering t-vrwyE8YcVD-J: *"cut the default
+ * prompt to 110 words"*), and it is a measurement rather than a round number.
+ * The card is capped at `44vh`; at a true 430x932 viewport that ceiling is
+ * 410px and a 146-word brief in six paragraphs renders 536px, so 410/536 of
+ * 146 is ~112 words — 110 is the budget at which the normal brief stops being
+ * clipped. It overrides the standing lean on that question, which was to keep
+ * the formatting and let the tail clip.
+ *
+ * The budget belongs HERE and nowhere else: `buildBriefPrompt` deliberately
+ * states no competing number, because a second one would contradict a reader
+ * who edits these instructions. A workspace that has saved its own
+ * instructions keeps them — this default only reaches a workspace that has
+ * never edited them.
+ */
 export const DEFAULT_INSTRUCTIONS = `Write for someone who has been away a few days and reads on a phone.
 
-- Under 150 words, as well-formatted markdown.
+- Under 110 words, as well-formatted markdown.
 - Prioritize the most significant changes and keep grouping together changes until you're under word count. And ideally everything important is covered
 - Lead with what changed, what outcomes were delivered.
 - Only state facts that are in the event digest.
