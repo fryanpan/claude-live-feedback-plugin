@@ -158,6 +158,43 @@ Technical discoveries that should persist across sessions for this project.
   way, is a contradiction on its face. Re-run per-subject and the 40-character
   case loses its characters too.
 
+## A positive control must be a peer in TIME as well as in kind
+
+- **The lead reviewing a board read the workspace to check whether an agent had
+  filed three decision tasks, found them absent, and told the agent in strong
+  terms that its comment claimed a step it had not performed. It had.** The read
+  landed in the window before the creates returned: the agent's rows are stamped
+  18:08:35, and the freshest row the read could see was one of the lead's own at
+  18:05:52 — two minutes forty-three seconds early. Not a cache; a live HTTP
+  call against the running server, so this is real elapsed time between two
+  observers of one store.
+- **There WAS a positive control and it did not help.** Enumerating seven
+  pre-existing `needs: 'decision'` rows proved the probe could see decision rows
+  — the right control in KIND, and exactly what "A negative test needs a
+  positive control or it proves nothing" asks for. It says nothing about whether
+  the view being read included the writes being looked for. "A modal the page
+  AWAITS makes every absence on that page vacuous" is the same gap one layer
+  over: those entries are about a probe's REACH, and neither is about its
+  RECENCY.
+- **The tell was already in the output, for free.** The newest row the probe
+  returned was older than the thing being searched for. That one comparison
+  separates *"it is not there"* from *"I have not caught up"*, and it costs no
+  extra call — the timestamps are already in hand. **Rule: when asserting an
+  absence in a store other writers are actively appending to, compare your
+  view's high-water mark against the time the missing thing would have been
+  written. If the mark predates it, you have measured your own lag rather than
+  an absence.**
+- **A too-early read and a skipped step are indistinguishable from a single
+  observation** — the same family as "A truncated page read is
+  indistinguishable from a page that never rendered": the probe ran, it just
+  measured something other than what it claimed to.
+- **The cost is not only a false accusation.** The instruction that followed was
+  to re-file, and three duplicate decision rows would have landed on a board a
+  human was about to read. The agent stopped, checked, and answered with
+  timestamps instead of complying. **An agent told confidently that its work is
+  missing should verify before re-doing it** — when the operation creates rows,
+  re-doing is not the safe default.
+
 ## Anything in the Yjs doc is readable by every peer, including share visitors
 
 - **Redacting a REST payload closes one door out of two.** `DocMeta`'s
