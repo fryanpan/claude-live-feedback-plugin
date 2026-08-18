@@ -27,6 +27,7 @@ import {
   type ReviewItem,
   type ReviewKind,
   type ReviewQueue,
+  type ReviewThreadItem,
   TASK_STATUS_ORDER,
   type TaskStatus,
   type UnplacedNotice,
@@ -2018,6 +2019,20 @@ export interface DetailHandlers {
   replyThreadId?: string | null;
   /** Point the composer somewhere else. `null` means a new thread. */
   onReplyTarget?: (threadId: string | null) => void;
+  /**
+   * This task's rows from the SERVER's review queue
+   * (`GET /api/workspaces/:id/review-items`) — the same computation the strip
+   * reads, handed down rather than re-derived.
+   *
+   * Re-deriving "is this run waiting on a person" in the browser would be a
+   * second copy of a matcher that already exists, and this repo has paid once
+   * for two copies of that one heuristic drifting apart (the extractor lost
+   * the newline branch and clipped away the very question the feature was
+   * built to surface). One source, two readers.
+   */
+  asks?: ReviewThreadItem[];
+  /** Clock for the "asked 3h ago" lines. Injected so a test can pin it. */
+  now?: number;
 }
 
 export interface TaskComment {
@@ -2181,9 +2196,15 @@ function renderDiscussion(
   focusThreadId?: string,
   replyThreadId?: string | null,
   onReplyTarget?: (threadId: string | null) => void,
+  asks?: ReviewThreadItem[],
+  now: number = Date.now(),
 ): HTMLElement {
   const section = document.createElement('section');
   section.className = 'hub-discussion';
+  // Which threads the SERVER says are still waiting on a person. Read, never
+  // re-decided here: "is this comment an agent's" is `classifyActor`'s
+  // judgement and the browser deliberately does not hold a second opinion.
+  const waiting = new Set((asks ?? []).map((a) => a.threadId));
 
   const h = document.createElement('h3');
   h.className = 'hub-detail-subhead';
@@ -2218,6 +2239,17 @@ function renderDiscussion(
       badge.className = 'hub-thread-status';
       badge.textContent = 'Resolved';
       el.append(badge);
+    } else if (waiting.has(t.id)) {
+      // Marked at THREAD grain, which is the grain the server computes and the
+      // only one it publishes — `ReviewThreadItem` names a thread, not a
+      // comment. Inventing a per-comment mark here would mean a second
+      // detector in the browser to decide which comment in the run is the
+      // request, and a browser-side answer that disagreed with the strip's is
+      // worse than a coarser one that cannot.
+      const badge = document.createElement('span');
+      badge.className = 'hub-thread-status hub-thread-needs-you';
+      badge.textContent = 'Needs your reply';
+      el.append(badge);
     }
     // What this conversation is about. Without it two threads on one task are
     // two piles of comments, and picking between them is guesswork.
@@ -2231,16 +2263,26 @@ function renderDiscussion(
     for (const c of t.comments) {
       const row = document.createElement('div');
       row.className = 'hub-comment';
+      // Author AND time, both as text. The time used to live only in a `title`
+      // attribute — which is a hover tooltip, and the reader this surface is
+      // for is on a phone, where nothing hovers. "Who said this and when" was
+      // therefore unanswerable on the device it mattered on.
+      const head = document.createElement('div');
+      head.className = 'hub-comment-head';
       const who = document.createElement('span');
       who.className = 'hub-comment-author';
       who.textContent = c.author;
-      who.title = new Date(c.ts).toLocaleString();
+      const when = document.createElement('span');
+      when.className = 'hub-comment-when';
+      when.textContent = timeAgo(c.ts, now);
+      when.title = new Date(c.ts).toLocaleString();
+      head.append(who, when);
       const body = document.createElement('div');
       body.className = 'hub-comment-body';
       // Same escape-then-allow-known-tags path the description uses, so a
       // comment written by anyone with write access is inert markup.
       body.innerHTML = renderCommentMarkdown(c.text);
-      row.append(who, body);
+      row.append(head, body);
       el.append(row);
     }
     // A button rather than a box. Pointing the one composer at this thread is
@@ -2353,6 +2395,101 @@ function renderTransitionRow(t: HubTransition): HTMLLIElement {
   return li;
 }
 
+/**
+ * The item a reader was sent here to answer: the oldest thing on this task
+ * still waiting on a person.
+ *
+ * Oldest rather than newest, deliberately, and for the same reason the strip's
+ * own band sorts that way — a queue sorted by recency starves its tail, and
+ * the tail is where the thing that has been waiting two days sits.
+ */
+function leadAsk(asks: ReviewThreadItem[] | undefined): ReviewThreadItem | null {
+  if (!asks || asks.length === 0) return null;
+  // `direct` first — a question addressed to a person by name outranks a run
+  // that merely ended with an agent speaking — then oldest within each group.
+  const ranked = [...asks].sort((a, b) => {
+    const d = Number(b.direct ?? false) - Number(a.direct ?? false);
+    return d !== 0 ? d : a.since - b.since;
+  });
+  return ranked[0] ?? null;
+}
+
+/**
+ * "What we need from you", at the top of the panel, with its own reply box.
+ *
+ * This is the half of the review loop that was missing. The ask was already
+ * computed server-side and already rendered on the strip — but opening the row
+ * dropped the reader on a page that showed a task rather than the request, so
+ * the queue could tell them something needed them and then not tell them what.
+ *
+ * Two things are load-bearing about how it reads:
+ *
+ *  - **The reply box lives HERE, not only at the bottom of the discussion.**
+ *    "Answer without leaving the screen you landed on" is the requirement; a
+ *    button that scrolls somewhere else satisfies it only on a desktop, and
+ *    the reader is on a 430px phone.
+ *
+ *  - **A run with no question found is labelled as the update it is.** A
+ *    thread qualifies for the queue when its newest comment is an agent's,
+ *    which is true of every "shipped it, PR is green" note left on a thread
+ *    nobody closed. Measured on the live board 2026-08-17: 23 items, **0** of
+ *    them `direct`, every one of them an ellipsis-clipped PR announcement
+ *    presented as an ask. Giving those the heading of a question is exactly
+ *    the reported defect ("where a comment IS a request for input, the request
+ *    itself is often unclear"), so the heading tells the truth about which of
+ *    the two this is and the reader can skip on sight.
+ */
+function renderAskPanel(
+  task: HubTask,
+  item: ReviewThreadItem,
+  handlers: DetailHandlers,
+  now: number,
+): HTMLElement {
+  const box = document.createElement('section');
+  const direct = item.direct === true;
+  box.className = `hub-detail-ask${direct ? ' hub-detail-ask--direct' : ''}`;
+
+  const kicker = document.createElement('p');
+  kicker.className = 'hub-detail-ask-kicker';
+  // See the strip's summary for why this is not "no question found": `direct`
+  // means "names a person", which is narrower, and the gap between the two is
+  // full of real questions that happen to address nobody.
+  kicker.textContent = direct
+    ? 'What we need from you'
+    : 'Latest reply — not addressed to you by name';
+  box.append(kicker);
+
+  const text = document.createElement('div');
+  text.className = 'hub-detail-ask-text';
+  // Same escape-then-allow-known-tags path the description and the comments
+  // use, so an ask written by anyone with write access is inert markup.
+  text.innerHTML = renderCommentMarkdown(item.ask);
+  box.append(text);
+
+  const meta = document.createElement('p');
+  meta.className = 'hub-detail-ask-meta';
+  // `askedAt` is when the QUESTION was asked; `since` is when the run the
+  // reader has not answered began. An older server sends no `askedAt`, and
+  // falling back to `since` is the pre-existing wording rather than a blank.
+  meta.textContent = `${item.askedBy} · ${timeAgo(item.askedAt ?? item.since, now)}`;
+  box.append(meta);
+
+  if (handlers.onComment) {
+    const form = commentForm(
+      'hub-comment-form hub-detail-ask-form',
+      direct ? 'Answer here…' : 'Reply here…',
+      'Send reply',
+      (t) => handlers.onComment?.(task, t, item.threadId) ?? Promise.resolve(false),
+    );
+    const note = document.createElement('p');
+    note.className = 'hub-detail-ask-note';
+    note.textContent = 'Goes on the task as a comment from you.';
+    form.append(note);
+    box.append(form);
+  }
+  return box;
+}
+
 export function renderTaskDetail(
   container: HTMLElement,
   task: HubTask | null,
@@ -2388,6 +2525,17 @@ export function renderTaskDetail(
   close.addEventListener('click', () => handlers.onClose());
   head.append(title, close);
   panel.append(head);
+
+  // The ask comes FIRST, above everything except the title.
+  //
+  // The requirement is that opening a row from the review queue shows what is
+  // wanted without scrolling on a 430px phone, and the old order — statuses,
+  // then a nine-row metadata list, then the preserved capture, then finally
+  // the description — spent the entire first screen on facts that are
+  // identical across every task on the board. None of that is what the reader
+  // came to answer.
+  const ask = leadAsk(handlers.asks);
+  if (ask) panel.append(renderAskPanel(task, ask, handlers, handlers.now ?? Date.now()));
 
   const statuses = document.createElement('div');
   statuses.className = 'hub-detail-statuses';
@@ -2436,44 +2584,57 @@ export function renderTaskDetail(
     // goal as it stood at triage time, which may no longer be the goal.
     addCollapsibleMeta(meta, 'Triaged against', task.triagedAgainst.goal);
   }
-  panel.append(meta);
 
   const linkChips = renderTaskLinks(task);
-  if (linkChips) panel.append(linkChips);
 
-  if (task.quote) {
-    // An unlabelled blockquote above a rewritten description is silent about
-    // what it is, and the two readings it invites want opposite reactions:
-    // "here is what you said, check I understood it" versus "here is a source
-    // somebody chose to quote". The label settles it.
-    //
-    // ONE label serves every quote, because `quote` has exactly one meaning.
-    // All four writers fill it with the words the task came from, verbatim: a
-    // dictated capture transcript (`quoteForCapture`), the human's words on a
-    // chat-born `create_tasks` row, the latest HUMAN comment on a
-    // `promote_to_task` (agent replies are excluded there by design), and the
-    // row's own pre-rewrite title-and-body preserved by `updateBodySnapshot`.
-    // None of them is an author-chosen quotation, so the field needs no way to
-    // say which kind it is and the label cannot lie on a kind it doesn't cover.
-    //
-    // "Original words" rather than anything that names a person: the preserved
-    // pre-rewrite body of an agent-created row is not something a human said,
-    // so "in their words" / "what Bryan said" would be false on that case — and
-    // a label that lies is worse than no label. `figure` + `figcaption` is the
-    // markup for a quotation with its own attribution, so the caption is read
-    // as belonging to the quote rather than as a heading over the panel.
-    const fig = document.createElement('figure');
-    fig.className = 'hub-detail-quote-block';
-    const cap = document.createElement('figcaption');
-    cap.className = 'hub-detail-quote-label';
-    cap.textContent = 'Original words';
-    cap.title = 'The words this task came from, kept verbatim.';
+  /**
+   * The words the task came from, kept verbatim — moved out of the top of the
+   * panel and collapsed.
+   *
+   * The in-place argument for the LABEL still holds and is kept: an unlabelled
+   * blockquote invites two readings ("here is what you said, check I
+   * understood it" versus "here is a source somebody chose to quote") that
+   * want opposite reactions from the reader, so the caption settles it. That
+   * argument was always about the label, never about the POSITION — and the
+   * position is what was wrong. This block rendered above the description, so
+   * a reader maintaining a task saw their own superseded words before the
+   * content they maintain, every single time.
+   *
+   * `<details>` rather than a comment row: the preservation guarantee lives at
+   * the storage choke point (`updateBodySnapshot`) and turning it into a real
+   * stored comment would mean a write path and a migration for what is a
+   * placement complaint. Reachable, labelled, closed by default — which is
+   * what was asked for. The guarantee itself is untouched; nothing here
+   * decides whether a quote is kept, only where it renders.
+   *
+   * ONE label serves every quote, because `quote` has exactly one meaning.
+   * All four writers fill it with the words the task came from, verbatim: a
+   * dictated capture transcript (`quoteForCapture`), the human's words on a
+   * chat-born `create_tasks` row, the latest HUMAN comment on a
+   * `promote_to_task` (agent replies are excluded there by design), and the
+   * row's own pre-rewrite title-and-body preserved by `updateBodySnapshot`.
+   * None of them is an author-chosen quotation, so the field needs no way to
+   * say which kind it is and the label cannot lie on a kind it doesn't cover.
+   *
+   * "Original words" rather than anything that names a person: the preserved
+   * pre-rewrite body of an agent-created row is not something a human said, so
+   * "in their words" / "what Bryan said" would be false on that case — and a
+   * label that lies is worse than no label.
+   */
+  const quoteBlock = (): HTMLElement | null => {
+    if (!task.quote) return null;
+    const det = document.createElement('details');
+    det.className = 'hub-detail-quote-block';
+    const sum = document.createElement('summary');
+    sum.className = 'hub-detail-quote-label';
+    sum.textContent = 'Original words';
+    sum.title = 'The words this task came from, kept verbatim.';
     const q = document.createElement('blockquote');
     q.className = 'hub-detail-quote';
     q.textContent = task.quote;
-    fig.append(cap, q);
-    panel.append(fig);
-  }
+    det.append(sum, q);
+    return det;
+  };
 
   if (task.answer) {
     const ans = document.createElement('p');
@@ -2566,9 +2727,20 @@ export function renderTaskDetail(
         handlers.focusThreadId,
         handlers.replyThreadId,
         handlers.onReplyTarget,
+        handlers.asks,
+        handlers.now ?? Date.now(),
       ),
     );
   }
+
+  // Below the discussion, and below the description it used to sit above:
+  // the preserved capture, the metadata list and the link chips are all
+  // reference material. Somebody who came here to answer a question has
+  // already done so by this point in the page.
+  const quote = quoteBlock();
+  if (quote) panel.append(quote);
+  panel.append(meta);
+  if (linkChips) panel.append(linkChips);
 
   if (task.transitions.length > 0) {
     const h = document.createElement('h3');
