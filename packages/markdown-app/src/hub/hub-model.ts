@@ -1651,16 +1651,23 @@ export function homeSinceLabel(payload: Pick<HomePayload, 'since'>, now: number)
   return `From ${sincePointLabel(payload.since, now)} until now`;
 }
 
-/** "waiting 2 days" — the queue row's subline. Same unit boundaries as
- *  timeAgo; under a minute says "moments" rather than a zero. */
-export function waitingLabel(since: number, now: number): string {
+/** "2 days" — how long something has waited, bare. The walkthrough card's
+ *  wait chip (mockup: `2 days` beside the project chip). Same unit boundaries
+ *  as timeAgo; under a minute says "moments" rather than a zero. */
+export function waitShort(since: number, now: number): string {
   const m = Math.round(Math.max(0, now - since) / 60_000);
-  if (m < 1) return 'waiting moments';
-  const unit = (n: number, word: string) => `waiting ${n} ${word}${n === 1 ? '' : 's'}`;
+  if (m < 1) return 'moments';
+  const unit = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
   if (m < 60) return unit(m, 'minute');
   const h = Math.round(m / 60);
   if (h < 24) return unit(h, 'hour');
   return unit(Math.round(h / 24), 'day');
+}
+
+/** "waiting 2 days" — the queue row's subline. One clock with `waitShort`,
+ *  so the row and the card it opens can never disagree about the wait. */
+export function waitingLabel(since: number, now: number): string {
+  return `waiting ${waitShort(since, now)}`;
 }
 
 /** The mockup's row title is the QUESTION itself — the ask when the item
