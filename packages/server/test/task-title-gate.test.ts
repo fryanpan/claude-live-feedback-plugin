@@ -283,6 +283,32 @@ describe('task title gate', () => {
       ).toBe(true);
     });
 
+    it('a substantial but unrelated body edit does NOT trip the drift clause', async () => {
+      // The twin of the test above, and the specific misfire worth guarding:
+      // an agent appends a whole implementation note for reasons that have
+      // nothing to do with what the task IS. The title still describes it, so
+      // the badge must stay off. Measured at 0.217 against a 0.3 threshold —
+      // a real edit at ~72% of the budget, not a token one (that case is
+      // covered separately by 'a trivial body edit does NOT trip it').
+      //
+      // Note this asserts about ONE such edit. Repeating it is supposed to
+      // trip eventually — that is the accumulation the next test pins — so
+      // this is a claim about proportion, not a promise of permanent silence.
+      const wsId = await seedWorkspace();
+      const { task } = await createTask(wsId);
+      const withNote = [
+        BODY_A,
+        '',
+        'Note: the ordering already exists in the projection; this is a read path.',
+      ].join('\n');
+      expect((await rewriteViaDocRoute(task.id, withNote)).ok).toBe(true);
+      const after = await readTask(wsId, task.id);
+      expect(after.titleGaps).toBeUndefined();
+      // Non-vacuity: the edit really did land, so the silence above is the
+      // clause declining to fire rather than the rewrite never happening.
+      expect(after.body).toContain('this is a read path');
+    });
+
     it('drift accumulates across several small rewrites, none of which trips alone', async () => {
       // Why the number is accumulated rather than compared against a stored
       // copy of the body: no single one of these edits is significant, and

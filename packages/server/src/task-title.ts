@@ -43,8 +43,24 @@ export const MAX_TITLE_CHARS = 100;
  */
 const PERSONA_WORD_WINDOW = 6;
 
-/** Fraction of a body's words that must have changed since the title was last
- *  authored before the title is presumed to have stopped describing it. */
+/**
+ * Fraction of a body's words that must have changed since the title was last
+ * authored before the title is presumed to have stopped describing it.
+ *
+ * **Which way this is supposed to fail: toward noise.** Tripping when the
+ * title was actually still fine costs a dashed "name?" badge and an entry in
+ * `titleGaps` — nothing is refused, nothing is rewritten, and no capture is
+ * lost. Staying silent when a body has genuinely moved on costs the thing
+ * this whole module exists to prevent: a row whose name describes work
+ * nobody is doing any more, sitting on a board somebody is trying to
+ * prioritise from.
+ *
+ * So when tuning this, err LOW. A number that fires too often is a nuisance
+ * a reader learns to dismiss on a specific row; a number that fires too
+ * rarely is indistinguishable from the feature not being there. The known
+ * misfire is an agent rewriting a body for reasons unrelated to what the
+ * task IS — that is real, and it is the cheap direction.
+ */
 export const STALE_BODY_DRIFT = 0.3;
 
 /**
