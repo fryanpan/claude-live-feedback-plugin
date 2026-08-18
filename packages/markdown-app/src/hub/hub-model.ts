@@ -370,6 +370,31 @@ export function boardSections(goals: HubGoal[], tasks: HubTask[], f: BoardFilter
 }
 
 /**
+ * Where a goal sits in board priority order — the index of its section, with
+ * Chores and any unrecognised goal id last.
+ *
+ * Lives beside `boardSections` and repeats its traversal on purpose: both
+ * answer "which band is this task in", and the Chores fallback has to be the
+ * same answer in both, or the review queue would order asks differently from
+ * the board they are about. A test asserts the two agree, including the
+ * fallback, since nothing else would catch the drift.
+ */
+export function goalRank(goals: HubGoal[]): (goalId: string) => number {
+  const rank = new Map<string, number>();
+  let next = 0;
+  for (const g of goals) {
+    rank.set(g.id, next);
+    next += 1;
+    for (const sg of g.subgoals ?? []) {
+      rank.set(sg.id, next);
+      next += 1;
+    }
+  }
+  const last = next;
+  return (goalId) => rank.get(goalId) ?? last;
+}
+
+/**
  * What the board calls `goalId` — the text on the section header the task's
  * row actually sits under.
  *
@@ -785,7 +810,52 @@ export interface ReviewQueue {
 }
 
 /**
- * Everything waiting on a person, banded and ordered.
+ * Where one ask sits in the queue. Compared field by field, in this order.
+ *
+ * A record rather than a tuple so each key can be named at the point it is
+ * built — a five-element array of numbers is unreadable at the call site and
+ * silently wrong if anyone inserts a key in the middle.
+ */
+interface AskRank {
+  /** 0 = this ask is about a task on the board, so it has a priority to rank
+   *  by. 1 = it does not, and sorts after everything that does. */
+  placed: 0 | 1;
+  /** The task's goal band, then its position inside it — the board's own
+   *  order, so the queue and the board agree about what is important. */
+  goal: number;
+  order: number;
+  createdAt: number;
+  taskId: string;
+  /** Among asks about ONE task (or among the ones with no task at all): the
+   *  decision or blocker row, then that task's discussion, then a doc
+   *  comment. */
+  band: number;
+  /** 0 = a question addressed to a person by name. Only ever a tiebreak. */
+  direct: 0 | 1;
+  since: number;
+  tie: string;
+}
+
+const BAND_TASK_ROW = 0;
+const BAND_TASK_THREAD = 1;
+const BAND_DOC_THREAD = 2;
+
+function compareAsk(a: AskRank, b: AskRank): number {
+  return (
+    a.placed - b.placed ||
+    a.goal - b.goal ||
+    a.order - b.order ||
+    a.createdAt - b.createdAt ||
+    a.taskId.localeCompare(b.taskId) ||
+    a.band - b.band ||
+    a.direct - b.direct ||
+    a.since - b.since ||
+    a.tie.localeCompare(b.tie)
+  );
+}
+
+/**
+ * Everything waiting on a person, in ONE priority order.
  *
  * Bryan's question on coming back to the board is "what do I look at next",
  * and until this existed the board could only answer it for open decisions.
@@ -793,63 +863,133 @@ export interface ReviewQueue {
  * the failure this codebase has been bitten by before, and the one that
  * presents as the worst possible bug because nothing is actually lost.
  *
- * Bands, in the order Bryan named them: decisions, then task discussions,
- * then doc comments. Within the decision band the existing `decisionQueue`
- * ordering is kept wholesale (enforced edges, then how much is waiting, then
- * age) rather than re-derived — it is already tuned and already tested.
- * Within each thread band, the LONGEST WAIT is first: ranking by recency
- * starves the tail, which is exactly what this list exists to prevent.
+ * **Task priority is the primary key** (Bryan, 2026-08-18, answering
+ * t-vrwyE8YcVD-J: *"Always order asks by task priority"*). That question was
+ * filed precisely because two sort keys disagreed with no stated tiebreak —
+ * a P1 asked five hours ago against a P3 that has waited two days — and the
+ * standing lean was the opposite, waiting time first inside a priority band.
+ * His answer settles it the other way, so priority is the band and the wait
+ * is the tiebreak inside it.
+ *
+ * Priority means the BOARD's order and nothing invented here: goal band
+ * first, then the task's own position in it (`goalRank` + `byBoardOrder`).
+ * There is deliberately no priority FIELD to set — the board's order already
+ * is the priority, so a second one would immediately disagree with the list
+ * Bryan drags rows around in.
+ *
+ * Three consequences worth stating, because each replaces a rule this
+ * function used to apply as a primary key:
+ *
+ *  - **Kind is no longer a band.** A decision, a blocker and a comment about
+ *    the same task now sit together, in that order; asks about a
+ *    higher-priority task all come first. Previously every decision on the
+ *    board outranked every comment regardless of what either was about.
+ *  - **Oldest-first survives only as a tiebreak.** It still orders the
+ *    comments on one task, which is where the starvation it protects against
+ *    actually happens (an agent's follow-ups burying its own question — see
+ *    `since` in review-queue.ts). Across tasks it would contradict the
+ *    instruction, so it does not apply there.
+ *  - **`direct` likewise.** A question still outranks a status note, but only
+ *    among asks of equal task priority.
+ *
+ * An ask with no task priority — a doc comment, or a task discussion whose
+ * task is not in `tasks` — sorts after every ask that has one, keeping the
+ * question-first, then oldest-first rule among themselves. That is not a
+ * shelf: a doc read still rides in the one queue and the one walkthrough
+ * (Bryan, same answer: *"it's okay to mix in 15-30 minute doc reads with
+ * quick decisions"*). It is simply the only defined place for an item the
+ * primary key cannot speak about.
+ *
+ * `goals` is optional so a caller that has no goal list still gets a total
+ * order — every task then lands in one band and ranks by board order alone,
+ * which is a degraded ordering rather than a wrong one.
  */
 export function reviewQueue(
   tasks: HubTask[],
   threadItems: ReviewThreadItem[],
   now: number,
+  goals: HubGoal[] = [],
 ): ReviewQueue {
-  const decisions = decisionQueue(tasks);
-  const items: ReviewItem[] = decisions.rows.map((row) => ({
-    key: `decision:${row.task.id}`,
-    kind: 'decision' as const,
-    title: row.task.title,
-    ask: '',
-    why: row.blocks.length === 0 ? 'Nothing is waiting on this yet' : blockingLine(row),
-    since: row.task.createdAt,
-    decision: row,
-  }));
+  const rankGoal = goalRank(goals);
+  const taskById = new Map(tasks.map((t) => [t.id, t]));
+  /** The rank an ask inherits from the task it is about, or the tail. */
+  const rankOf = (
+    task: HubTask | undefined,
+    band: number,
+    direct: boolean,
+    since: number,
+    tie: string,
+  ): AskRank =>
+    task
+      ? {
+          placed: 0,
+          goal: rankGoal(task.goal),
+          order: task.order,
+          createdAt: task.createdAt,
+          taskId: task.id,
+          band,
+          direct: direct ? 0 : 1,
+          since,
+          tie,
+        }
+      : {
+          placed: 1,
+          goal: 0,
+          order: 0,
+          createdAt: 0,
+          taskId: '',
+          band,
+          direct: direct ? 0 : 1,
+          since,
+          tie,
+        };
 
-  // Second band: a person's own open tasks that other work is waiting on. They
-  // sit under decisions and above every comment because, like a decision with
-  // dependents, they are structurally holding work up — and unlike a comment,
-  // nobody else can move them.
-  const blockers = humanBlockerRows(tasks);
-  for (const row of blockers) {
-    items.push({
-      key: `blocker:${row.task.id}`,
-      kind: 'blocker',
-      title: row.task.title,
-      ask: '',
-      why: blockingLine(row),
-      since: row.task.createdAt,
-      blocker: row,
+  const ranked: Array<{ item: ReviewItem; rank: AskRank }> = [];
+
+  // The decision band's own ordering (enforced edges, then how much is
+  // waiting, then age) is no longer the queue's — `decisionQueue` still owns
+  // it for the board's own strip, and this only borrows its ROWS.
+  const decisions = decisionQueue(tasks);
+  for (const row of decisions.rows) {
+    ranked.push({
+      item: {
+        key: `decision:${row.task.id}`,
+        kind: 'decision',
+        title: row.task.title,
+        ask: '',
+        why: row.blocks.length === 0 ? 'Nothing is waiting on this yet' : blockingLine(row),
+        since: row.task.createdAt,
+        decision: row,
+      },
+      rank: rankOf(row.task, BAND_TASK_ROW, false, row.task.createdAt, row.task.id),
     });
   }
 
-  // A question somebody asked you comes before a note somebody left you, and
-  // only then oldest-first. Without the first key the two are interleaved by
-  // age alone, so a status update posted this morning outranks a question that
-  // has been waiting since Tuesday — and the top of the strip, which is the
-  // part that actually gets read, fills with things there is nothing to answer.
-  // This ranks rather than filters: every thread that appears today still
-  // appears, which is what keeps a misjudged `direct` cheap.
-  const byAsk = (a: ReviewThreadItem, b: ReviewThreadItem) =>
-    Number(b.direct ?? false) - Number(a.direct ?? false) ||
-    a.since - b.since ||
-    a.threadId.localeCompare(b.threadId);
-  for (const kind of ['task-thread', 'doc-thread'] as const) {
-    for (const t of threadItems.filter((i) => i.kind === kind).sort(byAsk)) {
-      const where = kind === 'task-thread' ? 'on this task' : 'on this doc';
-      items.push({
+  // A person's own open tasks that other work is waiting on. A task is never
+  // both a decision and a blocker (`humanBlockerRows` excludes decisions), so
+  // sharing a band with them cannot collide.
+  const blockers = humanBlockerRows(tasks);
+  for (const row of blockers) {
+    ranked.push({
+      item: {
+        key: `blocker:${row.task.id}`,
+        kind: 'blocker',
+        title: row.task.title,
+        ask: '',
+        why: blockingLine(row),
+        since: row.task.createdAt,
+        blocker: row,
+      },
+      rank: rankOf(row.task, BAND_TASK_ROW, false, row.task.createdAt, row.task.id),
+    });
+  }
+
+  for (const t of threadItems) {
+    const where = t.kind === 'task-thread' ? 'on this task' : 'on this doc';
+    ranked.push({
+      item: {
         key: `${t.kind}:${t.docId}:${t.threadId}`,
-        kind,
+        kind: t.kind,
         title: t.title,
         ask: t.ask,
         // "asked" is a claim about there being a question. Say it only when
@@ -859,15 +999,24 @@ export function reviewQueue(
         // The run can start days before the ask — status, status, then a
         // question — and quoting the run's start there tells the reader they
         // have been sitting on something they were handed minutes ago.
-        // Ranking still uses `since`; only the sentence changes.
         why: t.direct
           ? `${t.askedBy} asked you ${timeAgo(t.askedAt ?? t.since, now)} · ${where}`
           : `${t.askedBy} posted ${timeAgo(t.since, now)} · ${where}`,
         since: t.since,
         thread: t,
-      });
-    }
+      },
+      rank: rankOf(
+        t.kind === 'task-thread' && t.taskId ? taskById.get(t.taskId) : undefined,
+        t.kind === 'task-thread' ? BAND_TASK_THREAD : BAND_DOC_THREAD,
+        t.direct ?? false,
+        t.since,
+        t.threadId,
+      ),
+    });
   }
+
+  ranked.sort((a, b) => compareAsk(a.rank, b.rank));
+  const items = ranked.map((r) => r.item);
 
   // Every blocker is blocking — that is the condition for being in the band —
   // so it belongs in the number that means "act now". A thread still does not:

@@ -2402,6 +2402,97 @@ a.hub-link-chip:hover {
   margin: 4px 0 0;
   font-size: 13px;
 }
+/* The description's slot — the one node a repaint never rebuilds, because the
+   live editor is mounted into it (see `keptBodySlot` in hub-render.ts). The
+   fallback text and the editor both live here, so the box has to look the
+   same either way: no jump when the editor lands a moment after the panel. */
+.hub-detail-body-slot {
+  margin: 12px 0;
+  /* Reserves the fallback's own first line, so the panel does not reflow when
+     an empty description turns into an editor with a placeholder in it. */
+  min-height: 1.55em;
+}
+.hub-detail-body-slot .hub-detail-body,
+.hub-detail-body-slot .hub-detail-body-empty {
+  margin: 0;
+}
+/* Editable, and it has to SAY so before you tap — a description that reads
+   exactly like static text is a feature nobody finds. A resting outline
+   rather than a full input chrome: this is prose in a reading surface, and
+   the panel already has three real buttons above it. */
+.hub-detail-body-live {
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  margin: 12px -8px;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.hub-detail-body-live:hover {
+  border-color: var(--border);
+}
+.hub-detail-body-live:focus-within {
+  border-color: var(--accent);
+  background: var(--bg-subtle, var(--bg-panel));
+}
+/* None of the `#editor .ProseMirror` rules reach here — that surface is a
+   full page and this is a box inside a panel — so the description's editor
+   states its own type. Prose font at the panel's own size, not the review
+   page's 18px. */
+.hub-detail-body-slot .ProseMirror {
+  outline: none;
+  font-family: var(--prose);
+  font-size: 16px;
+  line-height: 1.55;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+  /* One line minimum, so an empty description is still a tap target rather
+     than a hairline. */
+  min-height: 1.55em;
+}
+.hub-detail-body-slot .ProseMirror > * {
+  margin: 0 0 0.6em;
+}
+.hub-detail-body-slot .ProseMirror > :last-child {
+  margin-bottom: 0;
+}
+.hub-detail-body-slot .ProseMirror h1,
+.hub-detail-body-slot .ProseMirror h2,
+.hub-detail-body-slot .ProseMirror h3 {
+  font-family: var(--sans);
+  font-size: 1.05em;
+  font-weight: 650;
+  line-height: 1.3;
+  margin: 0.9em 0 0.3em;
+}
+.hub-detail-body-slot .ProseMirror ul,
+.hub-detail-body-slot .ProseMirror ol {
+  padding-left: 20px;
+}
+.hub-detail-body-slot .ProseMirror code {
+  font-family: var(--mono);
+  font-size: 0.92em;
+}
+.hub-detail-body-slot .ProseMirror pre {
+  font-family: var(--mono);
+  font-size: 0.92em;
+  overflow-x: auto;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: var(--bg-subtle, var(--bg-panel));
+  border: 1px solid var(--border);
+}
+/* Tiptap's Placeholder marks the empty first block and hands the text over in
+   an attribute; nothing renders it without this rule. `pointer-events: none`
+   so tapping the words puts the caret in the block rather than doing nothing
+   — the empty description is exactly where a first tap lands. */
+.hub-detail-body-slot .ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+  color: var(--fg-muted);
+  font-style: italic;
+}
 .hub-detail-subhead {
   font-size: 13px;
   color: var(--fg-muted);

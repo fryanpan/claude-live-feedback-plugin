@@ -53,12 +53,26 @@ async function emit(buildId: string): Promise<boolean> {
   // The workspace hub is its own entry (served at /app/hub.js by the shell
   // the server renders for /workspaces/:id) — a separate build call because
   // each entry wants a fixed output name.
+  //
+  // Splitting is ON for this entry and this entry only, and it is load-bearing
+  // rather than tidy. Without it Bun inlines a dynamic `import()` into the
+  // entry, so the board's inline task editor — the whole Tiptap/ProseMirror
+  // stack behind one `import()` — lands in the file every workspace page load
+  // fetches: measured 174,462 bytes before, 3,878,670 after, a 22× bundle for
+  // a panel most loads never open. With splitting the editor is its own
+  // chunk, fetched the first time somebody opens a task.
+  //
+  // Chunks ride to production for free: `client-release.ts` copies the dist
+  // directory recursively, and the server serves anything under it at
+  // `/app/*`. The build id still moves when a chunk changes, because the
+  // chunk's name carries a content hash and the entry imports it BY NAME —
+  // so the hashed entry bytes change with it.
   const hubResult = await Bun.build({
     entrypoints: [join(pkgRoot, 'src', 'hub', 'hub-app.ts')],
     outdir: dist,
     target: 'browser',
     format: 'esm',
-    splitting: false,
+    splitting: true,
     sourcemap: 'external',
     define,
     naming: {
