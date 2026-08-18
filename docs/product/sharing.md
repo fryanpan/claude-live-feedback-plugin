@@ -1,6 +1,6 @@
 # Sharing a review surface with an external team
 
-This guide explains how to publish a live-feedback review surface to a
+This guide explains how to publish a Workspaces review surface to a
 public URL gated by Cloudflare Access — so a team you don't share a
 Tailscale network with can review for a bounded window (default 72h) and
 then have their access expire automatically.
@@ -27,7 +27,7 @@ watching, just a different audience.
 flowchart LR
   Reviewer[Reviewer Browser] -->|HTTPS| CF[Cloudflare Edge<br/>Access JWT check]
   CF -->|allow @yourdomain| Tunnel[cloudflared launchd daemon<br/>~/.cloudflared/live-feedback.yml]
-  Tunnel -->|loopback HTTP| LF[live-feedback :8787]
+  Tunnel -->|loopback HTTP| LF[Workspaces :8787]
   LF -->|verify JWT host→aud| OK[Existing handlers + Yjs WS]
 ```
 
@@ -60,7 +60,7 @@ flowchart LR
    ```
 
 6. **Edit `~/.cloudflared/live-feedback.yml`** so the wildcard ingress
-   points at the live-feedback port (default `8787`):
+   points at the Workspaces server port (default `8787`):
    ```yaml
    tunnel: live-feedback
    credentials-file: /Users/bryanchan/.cloudflared/<tunnel-uuid>.json
@@ -77,7 +77,7 @@ flowchart LR
    export CF_ACCOUNT_ID="<your-account-id>"
    export CF_SHARE_BASE_HOSTNAME="tunnel.fryanpan.com"
    ```
-   Then restart the live-feedback server. Look for these lines in startup
+   Then restart the Workspaces server. Look for these lines in startup
    logs to confirm it's wired:
    ```
    [feedback]   cf-access:  team=fryanpan.cloudflareaccess.com aud=auto-from-shares
