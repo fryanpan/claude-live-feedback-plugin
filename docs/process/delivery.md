@@ -12,14 +12,19 @@ while delivering nothing:
   "it's merged" has repeatedly been the wrong answer to "why don't I see it".
 
 What this doc buys you: after a merge you should be able to say, in one line,
-who has your change and who does not — and the single human step that is left.
+who has your change and who does not — and who has to do what about it.
 
-| What | Travels as | Lands when | Human step |
+| What | Travels as | Lands when | Who acts |
 |---|---|---|---|
-| Plugin (commands, skills, hooks, MCP bundle) | Version-keyed copy from the GitHub marketplace | Prod refreshes the cache on its own, ≤30 min after the merge | Peer restarts its session |
+| Plugin (commands, skills, hooks, MCP bundle) | Version-keyed copy from the GitHub marketplace | Prod refreshes the cache on its own, ≤30 min after the merge | **The peer**, by restarting its own session |
 | MCP server code | `packages/plugin/mcp/index.js`, **tracked in git** | Same as the plugin | Same |
-| Browser client (markdown app + widget) | `packages/markdown-app/dist` / `packages/widget/dist`, **untracked**, published at server start | Server restart | None (reload the page) |
-| Server code | The checkout the service runs from | Server restart | None |
+| Browser client (markdown app + widget) | `packages/markdown-app/dist` / `packages/widget/dist`, **untracked**, published at server start | Prod restart | **You** — pull the deploy source, then restart prod; the reader only reloads |
+| Server code | The checkout the service runs from | Prod restart | Same |
+
+Exactly one row needs a person, and it is not the one people assume. **A peer's
+session restart cannot be run for it by anybody else.** Restarting prod can, and
+as of 2026-08-17 it is an agent action — do it rather than asking (Bryan's call,
+reversing an earlier rule that read the other way).
 
 ---
 
@@ -117,6 +122,35 @@ Prod (`scripts/serve.ts --no-watch`, what the launchd service runs) now rebuilds
 both browser bundles at startup, before the server process spawns. **Restarting
 prod is the deploy.** A build that fails logs loudly and leaves the previous
 client serving — stale beats down.
+
+### Running it
+
+```bash
+git pull --ff-only origin main      # in the PRIMARY checkout — prod's deploy source
+launchctl kickstart -k gui/$(id -u)/com.fryanpan.live-feedback
+cat ~/.local/state/live-feedback/client/current/release.json
+```
+
+The pull is first because **the restart deploys whatever the deploy source is
+parked on, not what is on `origin/main`.** Measured 2026-08-17: a kickstart run
+specifically to ship a just-merged client came up in five seconds, answered 200,
+and republished the *previous* client — the checkout was 10 commits behind, with
+a clean tree and nothing wrong with it. A healthy server serving a stale bundle
+is indistinguishable from a healthy server serving a fresh one, which is why the
+third command is part of the procedure rather than a nicety: the deploy is done
+when `release.json`'s `sourceRef` is the commit you meant to ship. `sourceRef`
+is `git describe` on the deploy source at publish time, so it answers exactly
+this question — see [deploy-source.ts](../../packages/server/src/deploy-source.ts)
+for what its `-dirty` suffix does and does not mean.
+
+Then check a feature literal in the served bundle, old bundle first — a literal
+only discriminates if it is absent from the previous release. `releases/` keeps
+the previous one on disk precisely so that half is checkable.
+
+The same ordering applies to any restart from any cause, including a
+`scripts/launchd/install.sh` reinstall done for an unrelated config reason — see
+[tailnet-https.md](tailnet-https.md), where it is the same trap wearing different
+clothes.
 
 What origin that client is *reached on* is a separate question from which
 bundle it is, and it decides whether browser features gated on a secure
@@ -231,10 +265,12 @@ read once from the launch environment.
 So the full path for a plugin change is: merge → bump landed → the cache
 refreshes itself (below) → **peer restarts the session**.
 
-The restart is the human step, and it is the only one. A running session
+That session restart is the human step, and for the plugin it is the only one —
+and unlike the prod restart it genuinely cannot be delegated. A running session
 resolved `CLAUDE_PLUGIN_ROOT` to a version-keyed directory at launch, and an
 MCP reconnect re-execs that same path — it can pick up new tool schemas from
-the bundle it already points at, but it cannot cross a version boundary.
+the bundle it already points at, but it cannot cross a version boundary. Nothing
+another process does to the cache reaches it; only its own relaunch does.
 
 ### Nobody has to remember to run the update
 
