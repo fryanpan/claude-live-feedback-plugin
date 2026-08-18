@@ -1172,9 +1172,39 @@ describe('renderTaskDetail', () => {
     expect(fig?.querySelector('.hub-detail-quote')?.textContent).toContain(
       'without losing the tasks under it',
     );
-    // The caption belongs to the quote, not to the panel: it is inside the
-    // figure, so nothing reads it as a heading over the description below.
-    expect(root.querySelector('.hub-detail-quote-label')?.closest('figure')).toBe(fig);
+    // The label belongs to the quote, not to the panel: it is inside the
+    // block, so nothing reads it as a heading over anything else.
+    expect(root.querySelector('.hub-detail-quote-label')?.closest('.hub-detail-quote-block')).toBe(
+      fig,
+    );
+  });
+
+  // He sees his own superseded words above the description he maintains, every
+  // time he opens the task. The ask was that they be MOVED and HIDDEN, never
+  // dropped — so all three of these assert together, and the last one is what
+  // stops "hidden" from being satisfied by deleting the preservation.
+  it('keeps the preserved capture reachable but below the description, closed by default', () => {
+    renderTaskDetail(
+      root,
+      task({
+        quote: 'the original words, verbatim',
+        body: 'Agent can rename a goal so that filed work survives the rename.',
+      }),
+      detailHandlers(),
+    );
+    const quote = root.querySelector('.hub-detail-quote-block') as HTMLDetailsElement;
+    const desc = root.querySelector('.hub-detail-body');
+    expect(quote).toBeTruthy();
+    expect(desc).toBeTruthy();
+    // Closed: `open` is absent, so the words are one tap away rather than in
+    // the reader's face.
+    expect(quote.hasAttribute('open')).toBe(false);
+    // Below: DOCUMENT_POSITION_FOLLOWING from the description means the quote
+    // comes after it. Asserted as a relationship rather than an index, so
+    // inserting anything else between them cannot silently pass.
+    expect(desc!.compareDocumentPosition(quote) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Not dropped.
+    expect(quote.textContent).toContain('the original words, verbatim');
   });
 
   it('shows no quote block at all on a task that never had one', () => {
@@ -1270,6 +1300,155 @@ describe('renderTaskDetail — discussion', () => {
     status: 'open',
     comments: [{ author: 'Jordan', text: 'Is the index really first?', ts: NOW }],
     ...over,
+  });
+
+  const askItem = (over: Record<string, unknown> = {}) => ({
+    kind: 'task-thread' as const,
+    docId: 'task:t-1',
+    threadId: 'th-1',
+    taskId: 't-1',
+    title: 'Some task',
+    ask: 'Bryan: should we drop threading, or keep it for the 3 orphans?',
+    askedBy: 'Live Feedback',
+    since: NOW - 3_600_000,
+    direct: true,
+    ...over,
+  });
+
+  /**
+   * The measured break in the review loop: the strip said something needed
+   * him, and opening it showed a task rather than the request. The ask was
+   * computed server-side and rendered on the strip the whole time — the panel
+   * simply never received it.
+   */
+  it('states the ask at the top of the panel, above the description', () => {
+    const t = task({ id: 't-1', body: 'The description, which is not the ask.' });
+    renderTaskDetail(root, t, detailHandlers({ asks: [askItem()], now: NOW }), {
+      loading: false,
+      threads: [thread()],
+    });
+    const ask = root.querySelector('.hub-detail-ask');
+    expect(ask).toBeTruthy();
+    expect(ask?.textContent).toContain('should we drop threading');
+    // Above the description — the requirement is "without scrolling on a
+    // 430px phone", and a panel that opens on nine rows of identical metadata
+    // spends the first screen on facts that are the same for every task.
+    const desc = root.querySelector('.hub-detail-body');
+    expect(desc).toBeTruthy();
+    expect(ask!.compareDocumentPosition(desc!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // …and it says who is waiting, and how long they have been.
+    expect(root.querySelector('.hub-detail-ask-meta')?.textContent).toContain('Live Feedback');
+    expect(root.querySelector('.hub-detail-ask-meta')?.textContent).toContain('1h ago');
+  });
+
+  /** "Answer without leaving the screen you landed on." A button that scrolls
+   *  to a composer further down the page satisfies that on a desktop only. */
+  it('replies to the asking thread from the ask panel itself', async () => {
+    const onComment = vi.fn().mockResolvedValue(true);
+    const t = task({ id: 't-1' });
+    renderTaskDetail(
+      root,
+      t,
+      detailHandlers({ asks: [askItem({ threadId: 'th-9' })], now: NOW, onComment }),
+      { loading: false, threads: [thread({ id: 'th-9' })] },
+    );
+    const form = root.querySelector('.hub-detail-ask-form') as HTMLFormElement;
+    expect(form).toBeTruthy();
+    const ta = form.querySelector('textarea') as HTMLTextAreaElement;
+    ta.value = 'Drop it, and prefix the 3 orphans.';
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    // Posts onto the thread that asked, not into a new one — a reply that
+    // opens a fresh thread is how an answer stops being an answer.
+    expect(onComment).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 't-1' }),
+      'Drop it, and prefix the 3 orphans.',
+      'th-9',
+    );
+  });
+
+  /**
+   * Measured on the live board 2026-08-17: 23 review items, **0** of them
+   * `direct` — every one an ellipsis-clipped PR announcement ("Done in PR
+   * #154 — …") presented under a heading that reads as a question. Giving a
+   * status note the words "what we need from you" is the reported defect, so
+   * the heading has to tell the two apart.
+   */
+  it('does not call a status note a question', () => {
+    renderTaskDetail(
+      root,
+      task({ id: 't-1' }),
+      detailHandlers({
+        asks: [askItem({ direct: false, ask: 'Done in PR #154 — CI green, not merged.' })],
+        now: NOW,
+      }),
+      { loading: false, threads: [thread()] },
+    );
+    const kicker = root.querySelector('.hub-detail-ask-kicker')?.textContent ?? '';
+    expect(kicker).not.toContain('need');
+    // Says what is TRUE of the flag — nobody is named — rather than the
+    // stronger claim that no question is present, which `direct` cannot
+    // support at 1-in-3 recall.
+    expect(kicker).toContain('not addressed to you by name');
+    expect(kicker).not.toContain('no question');
+    // The words are still shown — labelled honestly, not withheld.
+    expect(root.querySelector('.hub-detail-ask-text')?.textContent).toContain('PR #154');
+    expect(root.querySelector('.hub-detail-ask--direct')).toBeNull();
+  });
+
+  /** The positive control for the case above: the same renderer DOES give a
+   *  real question the question heading, so the absence just asserted is a
+   *  decision rather than a renderer that can only produce one string. */
+  it('calls a direct question a question', () => {
+    renderTaskDetail(root, task({ id: 't-1' }), detailHandlers({ asks: [askItem()], now: NOW }), {
+      loading: false,
+      threads: [thread()],
+    });
+    expect(root.querySelector('.hub-detail-ask-kicker')?.textContent).toContain(
+      'What we need from you',
+    );
+    expect(root.querySelector('.hub-detail-ask--direct')).toBeTruthy();
+  });
+
+  it('shows no ask panel on a task nothing is waiting on', () => {
+    renderTaskDetail(root, task({ id: 't-1' }), detailHandlers({ asks: [], now: NOW }), {
+      loading: false,
+      threads: [thread()],
+    });
+    expect(root.querySelector('.hub-detail-ask')).toBeNull();
+    // Positive control: the panel rendered at all, so the null above is about
+    // the ask and not about an empty container.
+    expect(root.querySelector('.hub-thread')).toBeTruthy();
+  });
+
+  /** Reported as "comments do not say who they are from, or whether they are a
+   *  request for my input". The author was already there; the TIME was in a
+   *  `title` attribute, which is a hover tooltip on a surface read on a
+   *  phone, and the request marking did not exist at all. */
+  it('shows each comment author and time as text, and marks a thread that is waiting', () => {
+    renderTaskDetail(
+      root,
+      task({ id: 't-1' }),
+      detailHandlers({ asks: [askItem({ threadId: 'th-w' })], now: NOW }),
+      {
+        loading: false,
+        threads: [
+          thread({
+            id: 'th-w',
+            comments: [{ author: 'Live Feedback', text: 'Which way?', ts: NOW - 7_200_000 }],
+          }),
+          thread({ id: 'th-quiet' }),
+        ],
+      },
+    );
+    const waiting = root.querySelector('.hub-thread[data-thread-id="th-w"]');
+    expect(waiting?.querySelector('.hub-comment-author')?.textContent).toBe('Live Feedback');
+    // Text, not a tooltip.
+    expect(waiting?.querySelector('.hub-comment-when')?.textContent).toBe('2h ago');
+    expect(waiting?.querySelector('.hub-thread-needs-you')).toBeTruthy();
+    // Only the thread the server named — a mark on every thread marks nothing.
+    expect(
+      root.querySelector('.hub-thread[data-thread-id="th-quiet"] .hub-thread-needs-you'),
+    ).toBeNull();
   });
 
   /**
