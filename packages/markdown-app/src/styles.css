@@ -843,6 +843,9 @@ body.hub-body {
    unmounting — the board keeps its realtime projection warm underneath. */
 .hub-main--home {
   grid-template-columns: max-content minmax(0, 1fr);
+  /* The rail should reach the foot of the viewport like the mockup's, even
+     when the Home column is short. 64px ≈ the topbar + page padding. */
+  min-height: calc(100vh - 64px);
 }
 .hub-main--home .hub-side,
 .hub-main--home .hub-board-col {
@@ -1527,8 +1530,13 @@ body.hub-body {
   font-size: 12.5px;
   color: var(--fg-muted);
 }
+/* In the brief head the window rides right beside "What's New?" (mockup),
+   so the heading gives up the flex:1 the queue head uses to push its button
+   to the far edge. */
+.hub-home-brief-card .hub-home-heading {
+  flex: 0 0 auto;
+}
 .hub-home-brief-body {
-  font-family: var(--prose);
   font-size: 15px;
   line-height: 1.55;
   overflow-wrap: anywhere;
