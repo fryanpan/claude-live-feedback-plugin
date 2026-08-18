@@ -150,17 +150,32 @@ export function payloadDigest(input: string | undefined | null): string {
  *    agent only over-filters a view.
  */
 export function classifyActor(author: Pick<User, 'id' | 'name'> & { kind?: string }): ActorKind {
+  // The TYPE says this is a User; the DATA does not. Comment authors are
+  // persisted in the CRDT by whatever wrote them, across months and several
+  // shapes of the field, so an old row can carry an author with no `id` — or
+  // an author that is a bare string. Reading `.id.startsWith` off one of those
+  // throws, and it threw in production the first time this ran over every doc
+  // on the server rather than over one live workspace's threads.
+  //
+  // So read the fields defensively and keep every decision below identical for
+  // input that HAS them. An author we cannot read declares nothing, which is
+  // the same state as `kind == null` — and that already falls through to
+  // `agent`, in the safe direction argued for above.
+  const a: { id?: unknown; name?: unknown; kind?: unknown } =
+    author && typeof author === 'object' ? author : {};
+  const id = typeof a.id === 'string' ? a.id : '';
+  const name = typeof a.name === 'string' ? a.name : '';
   // Case-folded because the field is hand-populated by outside callers, and
   // `kind: 'Agent'` matching nothing would fall all the way through to the
   // `person` default — reintroducing the exact misfiling this function was
   // changed to fix, for a caller who did declare itself.
-  const kind = author.kind?.toLowerCase();
+  const kind = typeof a.kind === 'string' ? a.kind.toLowerCase() : undefined;
   if (kind === 'agent') return 'agent';
-  if (author.id === 'known-agent') return 'agent';
-  if (author.id.startsWith('agent-')) return 'agent';
-  if (author.name === 'Agent') return 'agent';
+  if (id === 'known-agent') return 'agent';
+  if (id.startsWith('agent-')) return 'agent';
+  if (name === 'Agent') return 'agent';
   if (kind === 'person') return 'person';
-  if (author.kind == null) return 'agent';
+  if (a.kind == null) return 'agent';
   return 'person';
 }
 
