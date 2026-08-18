@@ -359,7 +359,8 @@ set_task_goal(taskId, goal: "latency", position: 2.5, batchId?)
 
 ```
 attach_agent(workspaceId)
-→ { workspaceId, agentId, gating, lead, untriaged, queuedVoice, pendingRetriage? }
+→ { workspaceId, agentId, gating, lead, untriaged, queuedVoice,
+    pendingRetriage?, pendingBucketReview? }
 ```
 
 Defaults: `agentId` = this agent's MCP identity, `runtime` =
@@ -374,7 +375,12 @@ Defaults: `agentId` = this agent's MCP identity, `runtime` =
 - `lead` — whether you hold the lead seat. An **empty** seat is claimed by the
   first agent to attach; an occupied one is a standing decision and a second
   agent attaching is not a reassignment.
-- `pendingRetriage` — only if you lead. See below.
+- `pendingRetriage` — only if you lead. A **north-star** edit you missed.
+  See below.
+- `pendingBucketReview` — only if you lead. A goal **band** that appeared
+  while you were away, and the unplaced tasks worth re-looking at against
+  it. A different question from the one above, and answering one does not
+  answer the other. See below.
 
 **All of these are drained by this call.** Nothing offers them again.
 
@@ -489,6 +495,40 @@ of N unexplained regroupings.
 
 `get_workspace` also surfaces `pendingRetriage`, but **reading it there does not
 drain it** — only `attach_agent` does.
+
+### A new band asks the bucket to be re-looked-at
+
+Tasks nobody could place sit in the unknown-goal bucket (`untriaged`) at the
+bottom of Chores. That is a fine place for them — until a goal **band** appears
+that one of them might belong to. So ADDING a band to the goal list asks the
+lead to look:
+
+```
+set_goal_list(workspaceId, goals: [...])
+→ { ..., bucketReview: { requested, queued, taskIds, newBands, batchId } }
+```
+
+Same live-or-queue rule as the re-triage: `requested` reached the lead live,
+`queued` is waiting for their next `attach_agent`, where it arrives as
+`pendingBucketReview` (and `get_workspace` shows it without draining it, same
+as above). A **reorder or a rename reveals no new destination and asks
+nothing** — use `reorder_goals` and `rename_goal` for those and no one is
+interrupted.
+
+When you receive one:
+
+```
+for each taskId in pendingBucketReview.taskIds:
+    read the task, and IF one of pendingBucketReview.newBands is its home:
+        set_task_goal(taskId, goal: "<the band>",
+                      batchId: pendingBucketReview.batchId)
+```
+
+**Nothing has been placed for you, and leaving a task unplaced is a real
+answer.** The ask is to LOOK; placing everything because you were asked is how
+the bucket stops meaning anything. It is deliberately not auto-assigned —
+that would stamp a ranking decision no human made, invisibly, and the bucket
+exists precisely because nobody has made that call yet.
 
 The calls above are the write half. What the lead actually owes on a goal
 change — re-reading the goal, sweeping every open task, reordering without
