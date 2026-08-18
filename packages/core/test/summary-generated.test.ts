@@ -11,6 +11,7 @@
 
 import {
   PROMPT_CHARS_MAX,
+  SUMMARY_PROMPT_VERSION,
   buildRetryNudge,
   buildSummaryPrompt,
   findDeliveryClaim,
@@ -315,15 +316,64 @@ describe('findDeliveryClaim', () => {
 });
 
 describe('needsCall', () => {
+  const current = { topic: 'a', discussion: 'b', promptVersion: SUMMARY_PROMPT_VERSION };
+
   it('is true with no stored summary and false once one matches', () => {
     const t = thread();
     expect(needsCall(t, null)).toBe(true);
-    expect(needsCall(t, { topic: 'a', discussion: 'b', hash: summaryHash(t) })).toBe(false);
-    expect(needsCall(t, { topic: 'a', discussion: 'b', hash: 'stale' })).toBe(true);
+    expect(needsCall(t, { ...current, hash: summaryHash(t) })).toBe(false);
+    expect(needsCall(t, { ...current, hash: 'stale' })).toBe(true);
   });
 
   it('is false for a thread with nothing in it', () => {
     expect(needsCall(thread({ comments: [] }), null)).toBe(false);
+  });
+
+  // The hash fingerprints the THREAD; the prompt is the other input a summary
+  // is derived from. A summary written under an older prompt is exactly what
+  // the prompt change exists to redo, so it must read as stale even though the
+  // thread has not moved — and the "current" cases sit beside it so the test
+  // cannot pass against a needsCall that answers true for everything.
+  describe('prompt version', () => {
+    const t = thread();
+    const hash = summaryHash(t);
+
+    it('is stale when written under an OLDER prompt, current at THIS one', () => {
+      expect(needsCall(t, { topic: 'a', discussion: 'b', hash, promptVersion: 1 })).toBe(true);
+      expect(needsCall(t, { ...current, hash })).toBe(false);
+    });
+
+    it('treats a summary with NO version as the oldest prompt — the whole pre-version corpus', () => {
+      expect(needsCall(t, { topic: 'a', discussion: 'b', hash })).toBe(true);
+    });
+
+    it('does NOT re-spend on a summary from a NEWER prompt — a rollback must not regenerate', () => {
+      expect(
+        needsCall(t, {
+          topic: 'a',
+          discussion: 'b',
+          hash,
+          promptVersion: SUMMARY_PROMPT_VERSION + 1,
+        }),
+      ).toBe(false);
+    });
+
+    it('a stale hash still wins whatever the version says', () => {
+      expect(needsCall(t, { ...current, hash: 'stale' })).toBe(true);
+      expect(
+        needsCall(t, {
+          topic: 'a',
+          discussion: 'b',
+          hash: 'stale',
+          promptVersion: SUMMARY_PROMPT_VERSION + 1,
+        }),
+      ).toBe(true);
+    });
+
+    it('is a real number, and the current one is what generate() will stamp', () => {
+      expect(Number.isInteger(SUMMARY_PROMPT_VERSION)).toBe(true);
+      expect(SUMMARY_PROMPT_VERSION).toBeGreaterThan(1);
+    });
   });
 });
 
@@ -461,6 +511,54 @@ describe('readStoredSummary', () => {
 
   it('drops anything else riding on the stored value', () => {
     expect(readStoredSummary({ ...good, extra: 'not part of the contract' })).toEqual(good);
+  });
+
+  it('carries a numeric promptVersion through, and drops a malformed one WITHOUT rejecting the summary', () => {
+    // The stamp only decides whether the next backfill redoes the line; it is
+    // never rendered. So a peer that writes garbage there must not be able to
+    // knock a valid summary off the card — the worst it can do is make the
+    // summary read as pre-version, which is the safe direction (regenerate).
+    expect(readStoredSummary({ ...good, promptVersion: 2 })).toEqual({ ...good, promptVersion: 2 });
+    expect(readStoredSummary({ ...good, promptVersion: '2' })).toEqual(good);
+    expect(readStoredSummary({ ...good, promptVersion: Number.NaN })).toEqual(good);
+    expect(readStoredSummary({ ...good, promptVersion: { v: 2 } })).toEqual(good);
+  });
+});
+
+describe('the system prompt states the mood a thread is in', () => {
+  // These pin the prompt text a corpus review justified (927 stored summaries,
+  // 2026-08-18: 24 of 43 flagged lines were a proposal, plan, request, or
+  // in-flight step reported as done). A prompt is not code, so nothing else
+  // goes red when a rule is dropped in a rewrite; this does.
+  const { system } = buildSummaryPrompt(thread());
+
+  it('tells the model a proposal is not a decision and in-flight is not done', () => {
+    expect(system).toMatch(/proposal, recommendation, or plan is NOT a decision/i);
+    expect(system).toMatch(/in-flight work is NOT done/i);
+  });
+
+  it('tells it the newest comment wins and to keep polarity and actor', () => {
+    expect(system).toMatch(/NEWEST comment wins/);
+    expect(system).toMatch(/Keep polarity exactly/);
+    expect(system).toMatch(/Keep the actor/);
+  });
+
+  it('shows more OPEN example states than completed ones', () => {
+    // The old examples were three completed states and one open question, and
+    // the model wrote "Done" over threads that only proposed. Count the
+    // examples by their listed word count, then the completed-mood openers.
+    const examples = system.match(/^ {2}"[^"]+" \(\d+ words\)$/gm) ?? [];
+    expect(examples.length).toBeGreaterThanOrEqual(4);
+    const completed = examples.filter((e) => /^ {2}"(Fixed|Done|Agreed|Merged|Shipped)/.test(e));
+    expect(completed.length).toBeLessThan(examples.length / 2);
+    // ...and at least one shows an OPEN ask and one a retraction, the two moods
+    // the review found most often collapsed into "done".
+    expect(examples.some((e) => /awaiting|Still open|planned/.test(e))).toBe(true);
+    expect(examples.some((e) => /retracted|Superseded/.test(e))).toBe(true);
+  });
+
+  it('keeps the delivery-status rule from the guard that preceded it', () => {
+    expect(system).toMatch(/DELIVERY STATUS IS NOT YOURS TO STATE/);
   });
 });
 

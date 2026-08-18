@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import { TextRange } from '../src/anchor/index.ts';
-import { createThread, getContent, listThreads, markOrphan, postReply } from '../src/schema.ts';
+import {
+  createThread,
+  getContent,
+  listThreads,
+  markOrphan,
+  postReply,
+  setThreadSummary,
+} from '../src/schema.ts';
+import { SUMMARY_PROMPT_VERSION, needsCall } from '../src/summary-prompt.ts';
 import {
   DISCUSSION_MAX,
   NO_REPLIES_TEXT,
@@ -519,5 +527,73 @@ describe('a malformed anchor', () => {
 
     expect(() => summaryKey(broken)).not.toThrow();
     expect(threadSummary(broken).topic).toBe('The error is swallowed here.');
+  });
+});
+
+/*
+ * The prompt stamp has to survive a round trip through the CRDT, and that is a
+ * different question from whether `needsCall` reads it. `generate` stamps the
+ * summary, `setThreadSummary` writes the object into a Y.Map, and
+ * `readStoredSummary` reads it back on the way out — three layers, each free to
+ * drop an optional field without anything going red. If it is dropped anywhere
+ * along there the summary comes back looking pre-version, so every backfill
+ * regenerates every summary on the server, forever, and the only symptom is the
+ * bill. Written against real writers and readers rather than a hand-built
+ * Thread, because a literal would assert the shape this test exists to check.
+ */
+describe('the prompt stamp survives the ydoc', () => {
+  function docWithThread(): { doc: Y.Doc; read: () => Thread } {
+    const doc = new Y.Doc();
+    const ytext = getContent(doc);
+    ytext.insert(0, DOC);
+    createThread(doc, {
+      threadId: 't1',
+      anchor: TextRange.createFromOffsets(ytext, 0, 20),
+      createdBy: alex,
+      firstComment: { id: 'c0', text: 'We should rethrow on the last attempt.' },
+    });
+    postReply(doc, 't1', { id: 'c1', author: sam, text: 'Agreed — proposing a fix.' });
+    return {
+      doc,
+      read: () => {
+        const t = listThreads(doc)[0];
+        if (!t) throw new Error('fixture thread not readable');
+        return t;
+      },
+    };
+  }
+
+  it('a stored summary read back out of the doc does not ask for another call', () => {
+    const { doc, read } = docWithThread();
+    const before = read();
+    // Positive control: with nothing stored this thread genuinely wants a call,
+    // so the `false` below is about the stamp and not about an inert predicate.
+    expect(needsCall(before, before.summary)).toBe(true);
+
+    setThreadSummary(doc, 't1', {
+      topic: 'Retry loop swallows errors',
+      discussion: 'Proposes rethrowing; awaiting your call',
+      hash: summaryHash(before),
+      promptVersion: SUMMARY_PROMPT_VERSION,
+    });
+
+    const after = read();
+    expect(after.summary?.promptVersion).toBe(SUMMARY_PROMPT_VERSION);
+    expect(needsCall(after, after.summary)).toBe(false);
+  });
+
+  it('the same round trip at an older stamp comes back asking to be redone', () => {
+    const { doc, read } = docWithThread();
+    setThreadSummary(doc, 't1', {
+      topic: 'Retry loop swallows errors',
+      discussion: 'Fixed',
+      hash: summaryHash(read()),
+      promptVersion: 1,
+    });
+    const after = read();
+    // The thread has not moved — the hash still matches — so this `true` can
+    // only come from the version.
+    expect(after.summary?.hash).toBe(summaryHash(after));
+    expect(needsCall(after, after.summary)).toBe(true);
   });
 });
