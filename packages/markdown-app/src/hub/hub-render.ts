@@ -72,6 +72,7 @@ function wireInPlaceTitle(
   el: HTMLElement,
   current: () => string,
   commit: (v: string) => void,
+  keepKey?: string,
 ): void {
   el.addEventListener('keydown', (ev) => {
     if (el.querySelector('input')) return; // the input owns its own keys
@@ -87,6 +88,7 @@ function wireInPlaceTitle(
     const input = document.createElement('input');
     input.type = 'text';
     input.className = 'hub-title-input';
+    if (keepKey) input.dataset.keep = keepKey;
     input.value = original;
     el.replaceChildren(input);
     input.focus();
@@ -2272,17 +2274,83 @@ export interface TaskDiscussion {
  * believes they said it. A handler that never resolves true
  * therefore keeps its text — the safe direction.
  */
+// ── What a repaint owes the person typing ──────────────────────────────────
+
+type TextControl = HTMLTextAreaElement | HTMLInputElement;
+
+/** What one text control held the instant before a repaint threw it away. */
+export interface KeptField {
+  value: string;
+  focused: boolean;
+  selectionStart: number | null;
+  selectionEnd: number | null;
+  selectionDirection: 'forward' | 'backward' | 'none';
+}
+
+/**
+ * Snapshot every text control under `root` that carries a `data-keep` key.
+ *
+ * The detail panel is repainted by `replaceChildren` on every board change —
+ * a task transition arriving over SSE, a reply landing, a picker list moving —
+ * and a repaint rebuilds the composer, so whatever was typed and wherever the
+ * caret was went with the old DOM. `discussionIsBusy` holds back one of those
+ * doors (a discussion reload) and cannot see the others, so the guarantee
+ * belongs here, at the one point every repaint passes through: read the
+ * fields out before the swap, put them back after.
+ *
+ * The key is stamped by whoever builds the control and includes the task id,
+ * so a draft belongs to the task it was typed on — the panel is one shared
+ * container, and a half-typed comment must never follow the reader onto a
+ * different task.
+ */
+export function keepFields(root: ParentNode): Map<string, KeptField> {
+  const kept = new Map<string, KeptField>();
+  for (const el of root.querySelectorAll<TextControl>('textarea[data-keep], input[data-keep]')) {
+    const key = el.dataset.keep;
+    if (!key) continue;
+    kept.set(key, {
+      value: el.value,
+      focused: el === el.ownerDocument.activeElement,
+      selectionStart: el.selectionStart,
+      selectionEnd: el.selectionEnd,
+      selectionDirection: el.selectionDirection ?? 'none',
+    });
+  }
+  return kept;
+}
+
+/**
+ * Put a `keepFields` snapshot back into the freshly built controls under
+ * `root`. Value always; focus and caret only for the field that HAD focus —
+ * a draft the reader tapped away from is restored where it was, without
+ * pulling focus back from wherever they went.
+ */
+export function restoreFields(root: ParentNode, kept: Map<string, KeptField>): void {
+  for (const el of root.querySelectorAll<TextControl>('textarea[data-keep], input[data-keep]')) {
+    const snap = el.dataset.keep ? kept.get(el.dataset.keep) : undefined;
+    if (!snap) continue;
+    el.value = snap.value;
+    if (!snap.focused) continue;
+    el.focus();
+    if (snap.selectionStart !== null && snap.selectionEnd !== null) {
+      el.setSelectionRange(snap.selectionStart, snap.selectionEnd, snap.selectionDirection);
+    }
+  }
+}
+
 function commentForm(
   className: string,
   placeholder: string,
   submitLabel: string,
   onSubmit: (text: string) => Promise<boolean>,
+  keepKey: string,
 ): HTMLFormElement {
   const form = document.createElement('form');
   form.className = className;
   const ta = document.createElement('textarea');
   ta.placeholder = placeholder;
   ta.rows = 2;
+  ta.dataset.keep = keepKey;
   const submit = document.createElement('button');
   submit.type = 'submit';
   submit.className = 'hub-btn';
@@ -2493,6 +2561,10 @@ function renderDiscussion(
     target ? `Reply to ${threadLabel(target)}…` : 'Say something about this task…',
     target ? 'Reply' : 'Comment',
     (text) => onComment(task, text, target?.id),
+    // Keyed by task, not by target: a draft follows a "Reply" / "New thread"
+    // retarget, which is the reader deciding where words they already have
+    // should go. It never follows them onto another task.
+    `discussion:${task.id}`,
   );
   // The target row rides INSIDE the form, above the box, so what the button
   // will do is readable without moving your eyes off it. Omitted when there is
@@ -2669,6 +2741,7 @@ function renderAskPanel(
       direct ? 'Answer here…' : 'Reply here…',
       'Send reply',
       (t) => handlers.onComment?.(task, t, item.threadId) ?? Promise.resolve(false),
+      `ask:${task.id}:${item.threadId}`,
     );
     const note = document.createElement('p');
     note.className = 'hub-detail-ask-note';
@@ -2685,6 +2758,10 @@ export function renderTaskDetail(
   handlers: DetailHandlers,
   discussion?: TaskDiscussion,
 ): void {
+  // Read what the reader has typed BEFORE the swap throws it away — see
+  // `keepFields`. Every repaint of this panel comes through here, which is
+  // what makes this the one place the guarantee can live.
+  const kept = keepFields(container);
   container.replaceChildren();
   if (!task) {
     container.classList.add('hidden');
@@ -2701,10 +2778,12 @@ export function renderTaskDetail(
   const title = document.createElement('h2');
   title.className = 'hub-detail-title';
   title.textContent = task.title;
+  const titleKeepKey = `title:${task.id}`;
   wireInPlaceTitle(
     title,
     () => task.title,
     (v) => handlers.onTitleCommit(task, v),
+    titleKeepKey,
   );
   const close = document.createElement('button');
   close.type = 'button';
@@ -2863,6 +2942,7 @@ export function renderTaskDetail(
     const ta = document.createElement('textarea');
     ta.placeholder = 'Record your answer, verbatim…';
     ta.rows = 3;
+    ta.dataset.keep = `answer:${task.id}`;
     const submit = document.createElement('button');
     submit.type = 'submit';
     submit.className = 'hub-btn hub-btn-primary';
@@ -2972,4 +3052,12 @@ export function renderTaskDetail(
   if (focus && typeof focus.scrollIntoView === 'function') {
     focus.scrollIntoView({ block: 'center' });
   }
+
+  // Last, after the thread-centring above: restoring focus scrolls the field
+  // back into view, so the composer someone is typing in wins over a centred
+  // thread rather than losing to it. The title editor is a control that only
+  // exists mid-edit, so a repaint does not merely empty it — it closes it;
+  // reopen it first so there is a field for the restore to find.
+  if (kept.has(titleKeepKey)) title.click();
+  restoreFields(container, kept);
 }
