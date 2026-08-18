@@ -24,10 +24,10 @@ import {
   renderActivity,
   renderBoard,
   renderGoalStrip,
-  renderLeadStrip,
-  renderPresence,
   renderHomeBrief,
   renderHomeReview,
+  renderLeadStrip,
+  renderPresence,
   renderQuickAdd,
   renderReviewBanner,
   renderTaskDetail,
@@ -723,9 +723,7 @@ describe('renderHomeReview', () => {
     const onOpen = vi.fn();
     renderHomeReview(root, queue, { onOpen, onWalkthrough: vi.fn() }, [stillLive, settledGone]);
     // The still-open item renders once, as a live row — not twice.
-    const titles = [...root.querySelectorAll('.hub-decision-chip-title')].map(
-      (n) => n.textContent,
-    );
+    const titles = [...root.querySelectorAll('.hub-decision-chip-title')].map((n) => n.textContent);
     expect(titles.filter((t) => t === 'Still open?')).toHaveLength(1);
     const done = root.querySelector('.hub-review-done') as HTMLElement;
     expect(done.textContent).toContain('Already answered one');
@@ -873,7 +871,9 @@ describe('renderHomeBrief', () => {
     expect(root.querySelector('.hub-home-heading')?.textContent).toBe("What's New?");
     expect(root.querySelector('.hub-home-brief-body strong')?.textContent).toBe('Finished:');
     // Never marked read → the bounded window, stated as a bound.
-    expect(root.querySelector('.hub-home-since')?.textContent).toContain('Covering the last 7 days');
+    expect(root.querySelector('.hub-home-since')?.textContent).toContain(
+      'Covering the last 7 days',
+    );
     expect(root.querySelector('.hub-home-since')?.textContent).not.toContain('Updating');
   });
 
@@ -2316,13 +2316,17 @@ describe('the row badges are capped against the viewport, not against themselves
 });
 
 /**
- * happy-dom does no layout, so nothing else in this suite can see a sticky
- * bar painting over a button. What it CAN see is the invariant: the media
- * block that makes the nav sticky must also reserve its height in the
- * scroller, or the card's last control ends up under it.
+ * happy-dom does no layout, so nothing else in this suite can see a fixed
+ * launcher painting over a button. What it CAN see is the invariant: the
+ * media block that takes the walkthrough full-screen must also reserve
+ * bottom clearance in the card, or its last control ("Tell me more" on a
+ * decision card) ends up under the bottom-docked mic/pencil launchers. The
+ * old form of this test keyed the clearance to a sticky .hub-walk-nav; the
+ * ‹ › stepper moved to the panel head (approved design), so the sticky bar
+ * is gone and full-screen is now what forces the clearance.
  */
-describe('the sticky walkthrough nav reserves its own height', () => {
-  it('gives the card bottom clearance wherever the nav is sticky', async () => {
+describe('the full-screen walkthrough reserves launcher clearance', () => {
+  it('gives the card bottom clearance wherever the panel goes full-screen', async () => {
     const { readFileSync } = await import('node:fs');
     const { resolve } = await import('node:path');
     const css = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
@@ -2342,12 +2346,17 @@ describe('the sticky walkthrough nav reserves its own height', () => {
       }
       blocks.push(css.slice(start, i - 1));
     }
-    const sticky = blocks.filter((b) => /\.hub-walk-nav\s*\{[^}]*position:\s*sticky/.test(b));
+    const fullScreen = blocks.filter((b) =>
+      /\.hub-walk-panel\s*\{[^}]*max-height:\s*100vh/.test(b),
+    );
     // Positive control: the block this asserts about exists and was matched.
-    expect(sticky.length).toBeGreaterThan(0);
-    for (const b of sticky) {
-      expect(b).toMatch(/\.hub-walk-card\s*\{[^}]*padding-bottom:\s*[\d.]+px/);
+    expect(fullScreen.length).toBeGreaterThan(0);
+    for (const b of fullScreen) {
+      expect(b).toMatch(/\.hub-walk-card\s*\{[^}]*padding-bottom:\s*calc\([\d.]+px/);
     }
+    // The stepper lives in the panel head now — nothing may make it sticky
+    // again without restoring the reserve that travelled with the old bar.
+    expect(css).not.toMatch(/\.hub-walk-nav\s*\{[^}]*position:\s*sticky/);
   });
 });
 

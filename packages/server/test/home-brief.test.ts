@@ -135,7 +135,17 @@ describe('deterministicBrief', () => {
 describe('buildBriefPrompt', () => {
   it('carries the instructions, the since label, the digest, and the queue count', () => {
     const { system, user } = buildBriefPrompt(
-      input([ev('task.transitioned', NOW + 1, { taskId: 't-1', from: 'todo', to: 'done', actor: { name: 'Beacon' } })], 4),
+      input(
+        [
+          ev('task.transitioned', NOW + 1, {
+            taskId: 't-1',
+            from: 'todo',
+            to: 'done',
+            actor: { name: 'Beacon' },
+          }),
+        ],
+        4,
+      ),
       'My standing instructions',
       'since Friday',
     );

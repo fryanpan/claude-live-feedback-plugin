@@ -119,7 +119,11 @@ describe('home routes — deterministic server (no summarizer)', () => {
     expect((await home()).lastReadAt).toBe(0);
 
     const marked = await h.post(`/api/workspaces/${ws}/home/read`, { author: PERSON });
-    const markedBody = (await marked.json()) as { ok: boolean; lastReadAt: number; previous: number };
+    const markedBody = (await marked.json()) as {
+      ok: boolean;
+      lastReadAt: number;
+      previous: number;
+    };
     expect(markedBody.ok).toBe(true);
     expect(markedBody.previous).toBe(0);
     expect(markedBody.lastReadAt).toBeGreaterThan(0);
@@ -229,7 +233,10 @@ describe('home routes — generated brief (stub summarizer)', () => {
     // The digest that left the machine named the real task and carried the
     // instructions — and the burst of polls cost ONE call.
     expect(calls.length).toBe(1);
-    const sent = JSON.parse(calls[0] ?? '{}') as { system: string; messages: [{ content: string }] };
+    const sent = JSON.parse(calls[0] ?? '{}') as {
+      system: string;
+      messages: [{ content: string }];
+    };
     expect(sent.messages[0].content).toContain('Ship the fuzzy matcher');
     expect(sent.system).toContain('Under 200 words');
   });

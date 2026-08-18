@@ -335,7 +335,11 @@ export class ThreadSummarizer {
           'are sent to api.anthropic.com. Turn off with LF_SUMMARIES=0.',
       );
     }
-    return await this.post(prompt.system, [{ role: 'user', content: prompt.user }], BRIEF_MAX_TOKENS);
+    return await this.post(
+      prompt.system,
+      [{ role: 'user', content: prompt.user }],
+      BRIEF_MAX_TOKENS,
+    );
   }
 
   /**

@@ -18,6 +18,18 @@ import { clientReleaseStatus } from './client-release.ts';
 import type { Deployer } from './deploy.ts';
 import { showFile } from './git-diff.ts';
 import {
+  type BriefInput,
+  HomeBriefStore,
+  acceptBrief,
+  briefEvents,
+  briefIsFresh,
+  buildBriefPrompt,
+  deterministicBrief,
+  effectiveSince,
+  readEventRows,
+  readerKey,
+} from './home-brief.ts';
+import {
   type LandingGroupRow,
   type LandingInputDoc,
   type LandingModel,
@@ -40,18 +52,6 @@ import {
 import type { PluginRefresher } from './plugin-refresh.ts';
 import { agentsBehind, checkableAttachments, readReleasedPluginVersion } from './plugin-release.ts';
 import { localHostnames, publicBaseUrl } from './public-host.ts';
-import {
-  type BriefInput,
-  HomeBriefStore,
-  acceptBrief,
-  briefEvents,
-  briefIsFresh,
-  buildBriefPrompt,
-  deterministicBrief,
-  effectiveSince,
-  readEventRows,
-  readerKey,
-} from './home-brief.ts';
 import { type ReviewThreadItem, reviewThreadItems } from './review-queue.ts';
 import { type FeedbackWs, Rooms, type WorkspaceDirNode, type WorkspaceFileNode } from './rooms.ts';
 import { isWithinRoot } from './safe-path.ts';
@@ -2019,7 +2019,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const workspace = taskStore.getWorkspace(workspaceId);
           if (!workspace) return j(404, { error: 'workspace not found' });
           const body = await safeJson(req);
-          const person = String((body?.author as { name?: unknown } | undefined)?.name ?? '').trim();
+          const person = String(
+            (body?.author as { name?: unknown } | undefined)?.name ?? '',
+          ).trim();
           if (person === '') return j(400, { error: 'author.name is required' });
           const at =
             typeof body?.at === 'number' && Number.isFinite(body.at) && body.at >= 0
@@ -2033,15 +2035,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // response is the full home payload so the caller repaints — with
         // `generating` true when a summarizer is wired, because the drop
         // makes every brief stale by construction.
-        const wsHomeInstrMatch = pathname.match(
-          /^\/api\/workspaces\/([^/]+)\/home\/instructions$/,
-        );
+        const wsHomeInstrMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/home\/instructions$/);
         if (wsHomeInstrMatch && req.method === 'PUT') {
           const workspaceId = decodeURIComponent(wsHomeInstrMatch[1] ?? '');
           const workspace = taskStore.getWorkspace(workspaceId);
           if (!workspace) return j(404, { error: 'workspace not found' });
           const body = await safeJson(req);
-          const person = String((body?.author as { name?: unknown } | undefined)?.name ?? '').trim();
+          const person = String(
+            (body?.author as { name?: unknown } | undefined)?.name ?? '',
+          ).trim();
           if (person === '') return j(400, { error: 'author.name is required' });
           const instructions = typeof body?.instructions === 'string' ? body.instructions : '';
           if (instructions.trim() === '') {
