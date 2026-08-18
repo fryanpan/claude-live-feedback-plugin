@@ -2783,6 +2783,21 @@ body.is-reading-width #editor .ProseMirror {
   .doc-label {
     display: none;
   }
+  /* The back arrow is the shell's only navigation affordance on a phone and
+     it measured 26 × 20 CSS px at 440px — a 16px glyph with 2px/6px padding.
+     design-mobile.md asks for ≥36px, which `.hub-topbar .back-link` has had
+     since it was written and this one never did. Scoped to `.doc-crumb`
+     rather than widening the shared `.back-link` base, which the hub arrow
+     also uses with its own sizing; inline-flex + centring because `min-height`
+     does nothing to an inline box and would otherwise leave the glyph pinned
+     to the top of a taller one. */
+  .doc-crumb .back-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 36px;
+    min-height: 36px;
+  }
   .doc-path {
     font-size: 13px;
   }
