@@ -2919,7 +2919,7 @@ export class TaskStore {
    * There were three assignment sites before this: the `createTask` object
    * literal, `renameTask`, and `noteBodyEdited`. Seven doors sit above them
    * (`create_tasks` single and batch, `promote_to_task`,
-   * `import_tasks_markdown`, the board's inline rename, `update_task_body`,
+   * `import_tasks_markdown`, the board's inline rename, `rewrite_task`,
    * and `set_doc_content` on a `task:<id>` room), and no two of them share a
    * reading — `parseTaskCreate` fronts two, promote and import build their
    * own. So a title standard enforced at any one door would be a guarantee
@@ -4069,7 +4069,7 @@ export class TaskStore {
     if (!task) return false;
     if (task.body === body) return true;
     // THE CHOKE POINT for "this row's description was replaced". Every door
-    // into a task body converges here — `update_task_body`, `set_doc_content`
+    // into a task body converges here — `rewrite_task`, `set_doc_content`
     // on the `task:<id>` room, `find_and_replace` and the other prose edit
     // tools aimed at that docId, and a person typing on the board — because
     // they all mutate one Yjs fragment and this is what its observer flushes.
