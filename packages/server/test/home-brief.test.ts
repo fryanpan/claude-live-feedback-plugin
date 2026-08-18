@@ -208,8 +208,20 @@ describe('buildBriefPrompt', () => {
 
   it('the default instructions ask for evidence links and own the word budget', () => {
     expect(DEFAULT_INSTRUCTIONS).toContain('Show the evidence');
-    expect(DEFAULT_INSTRUCTIONS).toContain('Under 150 words');
+    // 110, not 150 (Bryan, 2026-08-18, t-vrwyE8YcVD-J). Asserted as the whole
+    // phrase, and with the superseded number asserted ABSENT beside it, so a
+    // revert cannot pass by leaving both numbers in the text.
+    expect(DEFAULT_INSTRUCTIONS).toContain('Under 110 words');
+    expect(DEFAULT_INSTRUCTIONS).not.toContain('150 words');
     expect(DEFAULT_INSTRUCTIONS).toContain('Include inline links');
+  });
+
+  it('the default instructions are the only place the word budget is stated', () => {
+    // A second number anywhere in the prompt contradicts a reader who edits
+    // these instructions — which is the whole reason the budget lives here.
+    const { system, user } = buildBriefPrompt(input([], 0), DEFAULT_INSTRUCTIONS, 'y');
+    const budgets = `${system}\n${user}`.match(/\b\d+ words\b/g) ?? [];
+    expect(budgets).toEqual(['110 words']);
   });
 
   it('taskDeepLink is the same relative shape the board opens on load, ids URL-encoded', () => {
