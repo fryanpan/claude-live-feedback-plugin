@@ -10,9 +10,11 @@ import {
   panePath,
   reviewBannerText,
   reviewQueue,
+  reviewRowTitle,
   shouldPollHome,
+  waitingLabel,
 } from '../src/hub/hub-model.ts';
-import type { HubTask, ReviewThreadItem } from '../src/hub/hub-model.ts';
+import type { HubTask, ReviewItem, ReviewThreadItem } from '../src/hub/hub-model.ts';
 
 const NOW = 1_700_000_000_000;
 
@@ -40,14 +42,70 @@ describe('paneFromPath / panePath', () => {
 });
 
 describe('homeSinceLabel', () => {
-  it('a never-marked reader gets the bounded window stated as a bound', () => {
-    expect(homeSinceLabel({ lastReadAt: 0 }, NOW)).toBe('Covering the last 7 days');
+  // Local-time fixtures, so the calendar-day comparisons hold in any TZ.
+  const now = new Date(2026, 7, 17, 20, 0).getTime(); // Monday 8:00 pm
+
+  it("reads as the mockup's window: From <point> until now", () => {
+    const friday = new Date(2026, 7, 14, 18, 12).getTime();
+    expect(homeSinceLabel({ since: friday }, now)).toBe('From Friday, 6:12 pm until now');
   });
 
-  it('a marked reader gets their own marker, phrased personally', () => {
-    expect(homeSinceLabel({ lastReadAt: NOW - 2 * 3_600_000 }, NOW)).toBe(
-      'Since you caught up 2h ago',
+  it('a window opening today says today, not a weekday', () => {
+    const morning = new Date(2026, 7, 17, 6, 5).getTime();
+    expect(homeSinceLabel({ since: morning }, now)).toBe('From today, 6:05 am until now');
+  });
+
+  it('yesterday is yesterday — a weekday name a day old is ambiguous next week', () => {
+    const y = new Date(2026, 7, 16, 12, 0).getTime();
+    expect(homeSinceLabel({ since: y }, now)).toBe('From yesterday, 12:00 pm until now');
+  });
+
+  it('older than a week gets the date, because a bare weekday would lie', () => {
+    const old = new Date(2026, 7, 4, 9, 30).getTime();
+    expect(homeSinceLabel({ since: old }, now)).toBe('From Aug 4, 9:30 am until now');
+  });
+
+  it('midnight and noon render as 12, not 0', () => {
+    const midnight = new Date(2026, 7, 17, 0, 15).getTime();
+    expect(homeSinceLabel({ since: midnight }, now)).toBe('From today, 12:15 am until now');
+  });
+});
+
+describe('waitingLabel', () => {
+  it('days, singular and plural', () => {
+    expect(waitingLabel(NOW - 2 * 86_400_000, NOW)).toBe('waiting 2 days');
+    expect(waitingLabel(NOW - 1 * 86_400_000, NOW)).toBe('waiting 1 day');
+  });
+
+  it('hours and minutes below a day', () => {
+    expect(waitingLabel(NOW - 4 * 3_600_000, NOW)).toBe('waiting 4 hours');
+    expect(waitingLabel(NOW - 12 * 60_000, NOW)).toBe('waiting 12 minutes');
+  });
+
+  it('under a minute says moments, not 0 minutes', () => {
+    expect(waitingLabel(NOW - 20_000, NOW)).toBe('waiting moments');
+  });
+});
+
+describe('reviewRowTitle', () => {
+  const item = (over: Partial<ReviewItem>): ReviewItem => ({
+    key: 'k',
+    kind: 'task-thread',
+    title: 'Ship the widget',
+    ask: '',
+    why: 'why',
+    since: NOW,
+    ...over,
+  });
+
+  it('the question itself is the row title when there is one', () => {
+    expect(reviewRowTitle(item({ ask: 'Which repo does this land in?' }))).toBe(
+      'Which repo does this land in?',
     );
+  });
+
+  it('falls back to the subject when the ask is empty (a decision title IS the question)', () => {
+    expect(reviewRowTitle(item({}))).toBe('Ship the widget');
   });
 });
 
