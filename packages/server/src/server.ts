@@ -26,9 +26,11 @@ import { clientReleaseStatus } from './client-release.ts';
 import type { Deployer } from './deploy.ts';
 import { showFile } from './git-diff.ts';
 import {
+  type BriefCoverage,
   type BriefInput,
   HomeBriefStore,
   acceptBrief,
+  briefCoverage,
   briefEvents,
   briefIsFresh,
   buildBriefPrompt,
@@ -747,13 +749,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     person: string,
     marker: number,
     input: BriefInput,
+    coverage: BriefCoverage,
   ): void => {
     const key = `${workspace.id}\u0000${readerKey(person)}`;
     if (homeBriefInflight.has(key)) return;
     homeBriefInflight.add(key);
-    const sinceLabel =
-      marker > 0 ? `everything since ${new Date(marker).toUTCString()}` : 'the last 7 days';
-    const prompt = buildBriefPrompt(input, homeBriefs.instructions(workspace.id), sinceLabel);
+    // The window the model is told about, the window the reader is shown, and
+    // the rows the model is handed all come from ONE coverage value. They used
+    // to be derived separately and disagreed: this said "the last 7 days"
+    // while the digest cap had already cut what the model could see to hours.
+    const prompt = buildBriefPrompt(input, homeBriefs.instructions(workspace.id), coverage);
     void (async () => {
       try {
         const accepted = acceptBrief((await summarizer?.generateHomeBrief(prompt)) ?? null);
@@ -764,6 +769,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           homeBriefs.storeBrief(workspace.id, person, {
             markdown: accepted,
             since: marker,
+            coversFrom: coverage.from,
             eventCount: input.events.length,
             generatedAt: Date.now(),
           });
@@ -787,21 +793,34 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     const since = effectiveSince(marker, now);
     const input = homeBriefInput(workspace, since);
     const stored = homeBriefs.brief(workspace.id, person);
+    const coverage = briefCoverage(input.events, since);
     const fresh = briefIsFresh(stored, marker, input.events.length);
     // `generating` is grounded in work actually queued — it is true exactly
     // when a call is (or is being put) in flight, never inferred.
     let generating = false;
     if (!fresh && summarizer?.enabled) {
       generating = true;
-      generateHomeBriefFor(workspace, person, marker, input);
+      generateHomeBriefFor(workspace, person, marker, input, coverage);
     }
+    // `coversFrom` is per BRIEF, not per payload, because the two briefs
+    // genuinely cover different windows: the deterministic one counts every
+    // event in the window, the generated one only the rows that survived the
+    // digest cap. A stored brief carries the coverage it was written under —
+    // one written before the field existed has no answer, and the window
+    // start is the closest honest thing to say.
     const brief = fresh
       ? {
           markdown: stored.markdown,
           generatedAt: stored.generatedAt,
+          coversFrom: stored.coversFrom ?? since,
           source: 'generated' as const,
         }
-      : { markdown: deterministicBrief(input), generatedAt: now, source: 'deterministic' as const };
+      : {
+          markdown: deterministicBrief(input),
+          generatedAt: now,
+          coversFrom: since,
+          source: 'deterministic' as const,
+        };
     return {
       workspaceId: workspace.id,
       lastReadAt: marker,
