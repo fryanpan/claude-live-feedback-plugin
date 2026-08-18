@@ -17,6 +17,7 @@ import {
   unplacedNotice,
 } from '../src/hub/hub-model.ts';
 import {
+  BODY_LIVE_CLASS,
   type BoardHandlers,
   type QuickAddHandlers,
   type TaskThread,
@@ -2359,6 +2360,164 @@ describe('a repaint of the detail panel keeps what was typed', () => {
     paint({ ...t, updatedAt: NOW + 1 });
     expect(composer().value).toBe('');
     expect(document.activeElement).not.toBe(composer());
+  });
+
+  // The two guarantees in one pass. They are implemented by opposite
+  // mechanisms — a draft is snapshot and restored around the rebuild, the
+  // description slot is the node the rebuild goes AROUND — so a change that
+  // reintroduced a blanket `replaceChildren` would satisfy neither, and one
+  // that stopped rebuilding at all would silently freeze the panel.
+  it('keeps a live description AND a half-typed comment across the same repaint', () => {
+    const t = task({ status: 'todo', body: 'The description as the store has it.' });
+    paint(t);
+    const slot = root.querySelector('.hub-detail-body-slot') as HTMLElement;
+    slot.classList.add(BODY_LIVE_CLASS);
+    slot.replaceChildren(document.createTextNode('what the editor is showing'));
+    typeInto(composer(), 'and a comment mid-sentence', 9);
+
+    paint({ ...t, status: 'in-progress' });
+
+    // Positive control: the panel really was repainted around the slot.
+    expect(root.querySelector('.hub-chip-current')?.textContent).toBe('In progress');
+    expect(root.querySelector('.hub-detail-body-slot')).toBe(slot);
+    expect(slot.textContent).toBe('what the editor is showing');
+    expect(composer().value).toBe('and a comment mid-sentence');
+    expect(document.activeElement).toBe(composer());
+    expect(composer().selectionStart).toBe(9);
+  });
+});
+
+/**
+ * The description is edited where it is read, so the panel's repaint has to
+ * leave one node alone.
+ *
+ * Every ydoc change repaints this panel — a peer's status flip, a comment
+ * landing, and the reader's OWN typing, since the body snapshot lands in the
+ * projection a few hundred ms after a pause. A repaint that rebuilt the
+ * description would tear the editor out from under whoever is typing in it:
+ * even MOVING the node removes it from the document first, which blurs it and
+ * drops the caret. So the slot is kept, and only when it is live.
+ */
+describe('the description slot the editor mounts into', () => {
+  let root: HTMLElement;
+  beforeEach(() => {
+    root = document.createElement('div');
+    document.body.replaceChildren(root);
+  });
+
+  const detailHandlers = () => ({
+    onClose: vi.fn(),
+    onStatusSet: vi.fn(),
+    onTitleCommit: vi.fn(),
+    onAnswer: vi.fn(),
+    onAssign: vi.fn(),
+  });
+
+  const slot = () => root.querySelector('.hub-detail-body-slot') as HTMLElement | null;
+  /** What the mount does to a slot, without dragging Tiptap into a DOM test:
+   *  claim the node, then put something in it that is not the projection. */
+  const goLive = (el: HTMLElement, text = 'the editor’s own content') => {
+    el.classList.add(BODY_LIVE_CLASS);
+    el.replaceChildren(document.createTextNode(text));
+  };
+
+  it('holds the description, and says which task it belongs to', () => {
+    const t = task({ body: 'Agent can **read** it here so that it can start cold.' });
+    renderTaskDetail(root, t, detailHandlers());
+    const s = slot();
+    expect(s?.dataset.taskId).toBe(t.id);
+    // Still rendered markdown, not asterisks — the pre-mount fallback is the
+    // description, not a placeholder for one.
+    expect(s?.querySelector('.hub-detail-body strong')?.textContent).toBe('read');
+  });
+
+  it('keeps the very same node across a repaint once the editor owns it', () => {
+    const t = task({ body: 'First.' });
+    renderTaskDetail(root, t, detailHandlers());
+    const s = slot() as HTMLElement;
+    goLive(s);
+
+    renderTaskDetail(root, { ...t, title: 'Renamed', body: 'Second.' }, detailHandlers());
+
+    expect(slot()).toBe(s);
+    // Untouched by the repaint — including by the newer projection body,
+    // which the editor is ahead of rather than behind.
+    expect(s.textContent).toBe('the editor’s own content');
+    // …while everything around it followed the change.
+    expect(root.querySelector('.hub-detail-title')?.textContent).toBe('Renamed');
+  });
+
+  // The other half, and the reason the class exists at all: before the mount
+  // the slot is showing the PROJECTION, and a projection that stopped
+  // updating would leave a description the store no longer has.
+  it('rebuilds a slot no editor has claimed, so the text follows the store', () => {
+    const t = task({ body: 'First.' });
+    renderTaskDetail(root, t, detailHandlers());
+    const s = slot();
+    renderTaskDetail(root, { ...t, body: 'Second.' }, detailHandlers());
+
+    expect(slot()).not.toBe(s);
+    expect(slot()?.textContent).toContain('Second.');
+  });
+
+  // A live editor is bound to ONE room. Carrying its node onto another task
+  // would show task A's description on task B and write B's typing into A.
+  it('replaces the slot when the panel moves to another task', () => {
+    const a = task({ body: 'A.' });
+    renderTaskDetail(root, a, detailHandlers());
+    const s = slot() as HTMLElement;
+    goLive(s);
+
+    renderTaskDetail(root, task({ body: 'B.' }), detailHandlers());
+
+    expect(slot()).not.toBe(s);
+    expect(slot()?.textContent).toContain('B.');
+    expect(slot()?.classList.contains(BODY_LIVE_CLASS)).toBe(false);
+  });
+
+  it('drops the slot with the panel when the reader closes it', () => {
+    const t = task({ body: 'A.' });
+    renderTaskDetail(root, t, detailHandlers());
+    goLive(slot() as HTMLElement);
+    renderTaskDetail(root, null, detailHandlers());
+
+    expect(slot()).toBeNull();
+    // Reopening the same task builds a fresh one rather than resurrecting a
+    // node whose editor and websocket the host has already torn down.
+    renderTaskDetail(root, t, detailHandlers());
+    expect(slot()?.classList.contains(BODY_LIVE_CLASS)).toBe(false);
+  });
+
+  // The description and the place to change it used to be on two pages. The
+  // link stays, because the full surface has anchored comments and a wider
+  // page — but it is no longer the way to edit, and the copy has to say so.
+  it('the link out is a second way in, not the way to edit', () => {
+    const t = task({ body: 'Something.' });
+    renderTaskDetail(root, t, detailHandlers());
+    const a = root.querySelector('.hub-detail-body-link a') as HTMLAnchorElement;
+    expect(a.getAttribute('href')).toBe(`/review/${encodeURIComponent(t.bodyDocId)}`);
+    expect(a.textContent).toBe('Open in the full editor');
+
+    // Same copy with no description: the old wording branched on the body
+    // ("Write the description in the task doc"), which sent the one reader
+    // most likely to type something to another page to do it.
+    renderTaskDetail(root, task(), detailHandlers());
+    expect(root.querySelector('.hub-detail-body-link a')?.textContent).toBe(
+      'Open in the full editor',
+    );
+  });
+
+  it('the panel still closes on a tap outside it after a repaint that kept the slot', () => {
+    const onClose = vi.fn();
+    const t = task({ body: 'A.' });
+    renderTaskDetail(root, t, { ...detailHandlers(), onClose });
+    goLive(slot() as HTMLElement);
+    renderTaskDetail(root, { ...t, title: 'Renamed' }, { ...detailHandlers(), onClose });
+
+    root.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    // Exactly once: the backdrop handler is wired when the panel is built and
+    // the kept path must not stack a second copy on the same container.
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
 
