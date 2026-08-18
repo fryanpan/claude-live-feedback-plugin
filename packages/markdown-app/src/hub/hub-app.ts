@@ -198,6 +198,19 @@ function showToast(msg: string): void {
   toastTimer = setTimeout(() => el.classList.add('hidden'), 3500);
 }
 
+/** The rail's icons, taken from the approved mockup (home-pane-mockup-v1). */
+const NAV_ICONS = {
+  home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M9.5 21v-6h5v6"/></svg>',
+  board:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M15 4v16"/></svg>',
+  collapse:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="14 6 8 12 14 18"/></svg>',
+  expand:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="10 6 16 12 10 18"/></svg>',
+};
+
+const NAV_COLLAPSED_KEY = 'lf-hub-nav-collapsed';
+
 /** Static shell — built once; regions re-render into their containers. */
 function buildShell(root: HTMLElement, name: string): void {
   root.innerHTML = `
@@ -212,11 +225,14 @@ function buildShell(root: HTMLElement, name: string): void {
     <div id="hub-goal" class="hub-goal"></div>
     <div class="hub-main" id="hub-main">
       <nav id="hub-nav" class="hub-nav" aria-label="Workspace pages">
-        <button type="button" class="hub-nav-item" data-pane="home">
-          <span class="hub-nav-icon" aria-hidden="true">⌂</span><span class="hub-nav-label">Home</span>
+        <button type="button" class="hub-nav-item" data-pane="home" title="Home">
+          <span class="hub-nav-icon" aria-hidden="true">${NAV_ICONS.home}</span><span class="hub-nav-label">Home</span>
         </button>
-        <button type="button" class="hub-nav-item" data-pane="board">
-          <span class="hub-nav-icon" aria-hidden="true">▦</span><span class="hub-nav-label">Board</span>
+        <button type="button" class="hub-nav-item" data-pane="board" title="Board">
+          <span class="hub-nav-icon" aria-hidden="true">${NAV_ICONS.board}</span><span class="hub-nav-label">Board</span>
+        </button>
+        <button type="button" id="hub-nav-collapse" class="hub-nav-item hub-nav-collapse" title="Collapse">
+          <span class="hub-nav-icon" aria-hidden="true">${NAV_ICONS.collapse}</span><span class="hub-nav-label">Collapse</span>
         </button>
       </nav>
       <section id="hub-home" class="hub-home hidden">
@@ -528,6 +544,11 @@ async function main(): Promise<void> {
     }
     const main = el('hub-main');
     main.classList.toggle('hub-main--home', state.pane === 'home');
+    // The mockup's Home is a clean frame: rail + content, none of the board's
+    // chrome (presence strip, lead row, goal banner, plugin-drift strip).
+    // Hidden by a root class rather than per-region, so a region's own
+    // re-render cannot resurrect itself onto the wrong pane.
+    document.getElementById('hub-root')?.classList.toggle('hub-root--home', state.pane === 'home');
     el('hub-home').classList.toggle('hidden', state.pane !== 'home');
     if (state.pane !== 'home') return;
     renderHomeBrief(el('hub-home-brief'), state.home, Date.now(), state.homeEditingRecipe, {
@@ -1324,8 +1345,25 @@ async function main(): Promise<void> {
 
   // Controls.
   // Home / Board nav — pushState both ways, and the back button honours it.
-  for (const btn of document.querySelectorAll<HTMLButtonElement>('.hub-nav-item')) {
+  for (const btn of document.querySelectorAll<HTMLButtonElement>('.hub-nav-item[data-pane]')) {
     btn.addEventListener('click', () => setPane((btn.dataset.pane as HubPane) ?? 'board'));
+  }
+  // The rail collapses to icons (mockup affordance), and the choice sticks.
+  {
+    const nav = el('hub-nav');
+    const collapse = document.getElementById('hub-nav-collapse');
+    const apply = (collapsed: boolean) => {
+      nav.classList.toggle('hub-nav--collapsed', collapsed);
+      const icon = collapse?.querySelector('.hub-nav-icon');
+      if (icon) icon.innerHTML = collapsed ? NAV_ICONS.expand : NAV_ICONS.collapse;
+      collapse?.setAttribute('title', collapsed ? 'Expand' : 'Collapse');
+    };
+    apply(localStorage.getItem(NAV_COLLAPSED_KEY) === '1');
+    collapse?.addEventListener('click', () => {
+      const next = !nav.classList.contains('hub-nav--collapsed');
+      localStorage.setItem(NAV_COLLAPSED_KEY, next ? '1' : '0');
+      apply(next);
+    });
   }
   window.addEventListener('popstate', () => {
     setPane(paneFromPath(location.pathname), false);

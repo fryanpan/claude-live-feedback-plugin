@@ -1611,14 +1611,59 @@ export interface HomePayload {
   generating: boolean;
 }
 
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** "6:12 pm" — hand-rolled so the copy is locale-stable across browsers. */
+function clockLabel(d: Date): string {
+  const h24 = d.getHours();
+  const h = h24 % 12 === 0 ? 12 : h24 % 12;
+  const m = String(d.getMinutes()).padStart(2, '0');
+  return `${h}:${m} ${h24 < 12 ? 'am' : 'pm'}`;
+}
+
+/** "Friday, 6:12 pm" — a point in time the way a person names one. Today and
+ *  yesterday by name; within a week by weekday; beyond that a bare weekday
+ *  would be ambiguous, so the date takes over. */
+export function sincePointLabel(ts: number, now: number): string {
+  const d = new Date(ts);
+  const day = (t: number) => {
+    const x = new Date(t);
+    return `${x.getFullYear()}-${x.getMonth()}-${x.getDate()}`;
+  };
+  const clock = clockLabel(d);
+  if (day(ts) === day(now)) return `today, ${clock}`;
+  if (day(ts) === day(now - 86_400_000)) return `yesterday, ${clock}`;
+  if (now - ts < 7 * 86_400_000) return `${WEEKDAYS[d.getDay()]}, ${clock}`;
+  return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${clock}`;
+}
+
 /**
- * What the brief covers, as a sentence. The marker is the reader's own act,
- * so it gets the personal phrasing; a reader who never marked gets the
- * bounded window stated as a bound, not as a fake marker.
+ * What the brief covers, as the mockup words it: "From Friday, 6:12 pm until
+ * now". `since` is the window's real start — the reader's own marker when
+ * they have one, the server's bound on a first visit — so the sentence is
+ * the actual coverage either way, never a canned "last 7 days".
  */
-export function homeSinceLabel(payload: Pick<HomePayload, 'lastReadAt'>, now: number): string {
-  if (payload.lastReadAt <= 0) return 'Covering the last 7 days';
-  return `Since you caught up ${timeAgo(payload.lastReadAt, now)}`;
+export function homeSinceLabel(payload: Pick<HomePayload, 'since'>, now: number): string {
+  return `From ${sincePointLabel(payload.since, now)} until now`;
+}
+
+/** "waiting 2 days" — the queue row's subline. Same unit boundaries as
+ *  timeAgo; under a minute says "moments" rather than a zero. */
+export function waitingLabel(since: number, now: number): string {
+  const m = Math.round(Math.max(0, now - since) / 60_000);
+  if (m < 1) return 'waiting moments';
+  const unit = (n: number, word: string) => `waiting ${n} ${word}${n === 1 ? '' : 's'}`;
+  if (m < 60) return unit(m, 'minute');
+  const h = Math.round(m / 60);
+  if (h < 24) return unit(h, 'hour');
+  return unit(Math.round(h / 24), 'day');
+}
+
+/** The mockup's row title is the QUESTION itself — the ask when the item
+ *  carries one, the subject when the subject IS the question (a decision). */
+export function reviewRowTitle(item: Pick<ReviewItem, 'title' | 'ask'>): string {
+  return item.ask.trim() !== '' ? item.ask : item.title;
 }
 
 /**
