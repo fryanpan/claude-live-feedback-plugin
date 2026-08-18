@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import type { Task, TaskStoreEvent, TriageRequest } from '../src/tasks.ts';
+import { type GoalIds, seedGoalsOverHttp } from './goal-seed.ts';
 
 const PERSON = { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' };
 const AGENT = { id: 'agent-search-revamp', name: 'Search Revamp', kind: 'known', color: '#888888' };
@@ -570,11 +571,19 @@ describe('hub workspace + task routes', () => {
     });
   });
 
-  // §3.4: risk is a property of the ACTION. Green is free; yellow needs a
-  // human's live confirmation; red the gate refuses outright — for the
-  // LF-MEDIATED mutations that flow through this server. The tier was
-  // stamped, projected and rendered, and no gate path ever read it.
-  describe('riskTier at the transition gate', () => {
+  // The risk gate was REMOVED on 2026-08-18 (Bryan). What replaces its tests
+  // is not "assert nothing happens" — it is the compatibility question, which
+  // is the one that can actually break somebody: peers keep running older
+  // bundles until each restarts, and those bundles send `riskTier` on every
+  // placement and `confirmed` on transitions they believe are gated. The
+  // hazard at a removal is never the deleted verb, it is narrowing what old
+  // callers still send (learnings.md, "Removing an MCP tool cannot break a
+  // peer — the shared server is where a removal bites").
+  //
+  // So these send the OLD payload shape verbatim rather than today's, since a
+  // test written against what the current code emits passes by construction
+  // and detects nothing.
+  describe('the removed risk gate still accepts what older peers send', () => {
     let wsId: string;
 
     beforeAll(async () => {
@@ -586,6 +595,7 @@ describe('hub workspace + task routes', () => {
       const r = await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, title });
       const task = ((await r.json()) as { task: Task }).task;
       if (riskTier) {
+        // The 0.1.54-and-earlier set_task_goal payload, `riskTier` included.
         const g = await post(`/api/tasks/${task.id}/goal`, {
           goal: 'chores',
           author: AGENT,
@@ -596,66 +606,78 @@ describe('hub workspace + task routes', () => {
       return task;
     };
 
-    it('refuses an agent forward move on a red task, allows the person and the undo', async () => {
-      const red = await mkTask('Flip the repo public', 'red');
-      const refused = await post(`/api/tasks/${red.id}/transition`, {
-        to: 'in-progress',
-        author: AGENT,
-      });
-      expect(refused.status).toBe(409);
-      const body = (await refused.json()) as { error: string; riskTier?: string };
-      expect(body.error).toBe('risk-refused');
-      expect(body.riskTier).toBe('red');
-      // It really did not move.
+    it('a placement carrying riskTier still succeeds, and still places the task', async () => {
+      const t = await mkTask('Flip the repo public', 'red');
+      // Not merely a 200: the REST of the payload must still take effect, or
+      // "it accepted the field" would also be true of a route that did nothing.
       const after = (await (await local(`/api/workspaces/${wsId}/tasks`)).json()) as {
         tasks: Task[];
       };
-      expect(after.tasks.find((t) => t.id === red.id)?.status).toBe('todo');
-
-      // POSITIVE CONTROL 1: a person moving the same red task is allowed —
-      // the human override is one tap, the gate binds agents.
-      const byPerson = await post(`/api/tasks/${red.id}/transition`, {
-        to: 'in-progress',
-        author: PERSON,
-      });
-      expect(byPerson.status).toBe(200);
-      // POSITIVE CONTROL 2: undoing is never blocked, whoever asks.
-      const undo = await post(`/api/tasks/${red.id}/transition`, { to: 'todo', author: AGENT });
-      expect(undo.status).toBe(200);
+      const stored = after.tasks.find((x) => x.id === t.id);
+      expect(stored?.goal).toBe('chores');
+      expect(stored?.triagedAgainst).toBeDefined();
     });
 
-    it('a green task is untouched by the gate (positive control)', async () => {
-      const green = await mkTask('Draft the rollout note', 'green');
-      const r = await post(`/api/tasks/${green.id}/transition`, {
+    it('an unrecognised riskTier value is ignored rather than refused', async () => {
+      // This route used to answer 400 here. It must not any more: a value the
+      // server has stopped caring about cannot be a reason to fail a caller.
+      const t = await mkTask('Nonsense tier');
+      const g = await post(`/api/tasks/${t.id}/goal`, {
+        goal: 'chores',
+        author: AGENT,
+        riskTier: 'purple',
+      });
+      expect(g.status).toBe(200);
+    });
+
+    it('an agent forward move on a formerly-red task is no longer refused', async () => {
+      const red = await mkTask('Flip the repo public', 'red');
+      const moved = await post(`/api/tasks/${red.id}/transition`, {
         to: 'in-progress',
         author: AGENT,
       });
-      expect(r.status).toBe(200);
-      const untiered = await mkTask('No tier stamped yet');
-      const r2 = await post(`/api/tasks/${untiered.id}/transition`, {
-        to: 'in-progress',
-        author: AGENT,
-      });
-      expect(r2.status).toBe(200);
+      expect(moved.status).toBe(200);
+      const after = (await (await local(`/api/workspaces/${wsId}/tasks`)).json()) as {
+        tasks: Task[];
+      };
+      expect(after.tasks.find((t) => t.id === red.id)?.status).toBe('in-progress');
     });
 
-    it('a yellow task needs the human confirmation flag, and records it', async () => {
+    it('a transition still carrying confirmed:true succeeds, and records no flag', async () => {
       const yellow = await mkTask('Send the partner update', 'yellow');
-      const refused = await post(`/api/tasks/${yellow.id}/transition`, {
-        to: 'in-progress',
-        author: AGENT,
-      });
-      expect(refused.status).toBe(409);
-      expect(((await refused.json()) as { error: string }).error).toBe('needs-confirmation');
-
-      const confirmed = await post(`/api/tasks/${yellow.id}/transition`, {
+      // Exactly what a 0.1.54 bundle sends after asking its human.
+      const r = await post(`/api/tasks/${yellow.id}/transition`, {
         to: 'in-progress',
         author: AGENT,
         confirmed: true,
       });
-      expect(confirmed.status).toBe(200);
-      const { task } = (await confirmed.json()) as { task: Task };
-      expect(task.transitions.at(-1)?.confirmed).toBe(true);
+      expect(r.status).toBe(200);
+      const { task } = (await r.json()) as { task: Task };
+      // The move landed (control) …
+      expect(task.status).toBe('in-progress');
+      // … and the now-meaningless flag was not written onto the audit row.
+      expect(task.transitions.at(-1)?.confirmed).toBeUndefined();
+    });
+
+    it('an enforce blocker still refuses — the OTHER arm of the gate is untouched', async () => {
+      // Positive control for this whole block. Without it, every "it
+      // succeeded" above is equally consistent with a gate that stopped
+      // working altogether rather than with one arm being removed.
+      const blocker = await mkTask('Unblock me first');
+      const dependent = (await (
+        await post(`/api/workspaces/${wsId}/tasks`, {
+          author: AGENT,
+          title: 'Depends on the above',
+          after: [blocker.id],
+          afterEnforce: [blocker.id],
+        })
+      ).json()) as { task: Task };
+      const refused = await post(`/api/tasks/${dependent.task.id}/transition`, {
+        to: 'done',
+        author: AGENT,
+      });
+      expect(refused.status).toBe(409);
+      expect(((await refused.json()) as { error: string }).error).toBe('blocked');
     });
   });
 
@@ -970,27 +992,24 @@ describe('hub workspace + task routes', () => {
 
   describe('GET /api/workspaces/:id/next (the work queue)', () => {
     /** Goals a, b + a chores task, so priority order is observable. */
-    async function seed(): Promise<{ wsId: string; ids: Record<string, string> }> {
+    async function seed(): Promise<{ wsId: string; ids: Record<string, string>; G: GoalIds }> {
       const r = await post('/api/workspaces', { name: 'queue-ws', goal: 'Ship it.' });
       const wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
-      const g = await local(`/api/workspaces/${wsId}/goals`, {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          goals: [
-            {
-              id: 'g-ship',
-              title: '1. Ship',
-              subgoals: [
-                { id: 'g-blockers', title: '1.1 Blockers' },
-                { id: 'g-loop', title: '1.2 Loop' },
-              ],
-            },
-          ],
-          author: PERSON,
-        }),
-      });
-      expect(g.status).toBe(200);
+      const G = await seedGoalsOverHttp(
+        base,
+        wsId,
+        [
+          {
+            key: 'ship',
+            title: '1. Ship',
+            subgoals: [
+              { key: 'blockers', title: '1.1 Blockers' },
+              { key: 'loop', title: '1.2 Loop' },
+            ],
+          },
+        ],
+        PERSON,
+      );
       const mk = async (opts: Record<string, unknown>): Promise<string> => {
         const res = await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, ...opts });
         expect(res.status).toBe(200);
@@ -998,13 +1017,13 @@ describe('hub workspace + task routes', () => {
       };
       const ids: Record<string, string> = {};
       ids.chore = await mk({ title: 'A chore', goal: 'chores' });
-      ids.loop = await mk({ title: 'Loop work', goal: 'g-loop' });
+      ids.loop = await mk({ title: 'Loop work', goal: G.loop });
       ids.blocker = await mk({
         title: 'Delivery blocker',
-        goal: 'g-blockers',
+        goal: G.blockers,
         body: 'Agent can ship so that peers get the fix.\n\nDone when: merged.',
       });
-      return { wsId, ids };
+      return { wsId, ids, G };
     }
 
     it('answers in priority order, with the goal title and the description line', async () => {
@@ -1062,30 +1081,26 @@ describe('hub workspace + task routes', () => {
 
   describe('GET /api/workspaces/:id (goal summary)', () => {
     it('returns the ordered goals with counts, parent then subgoals, Chores last', async () => {
-      const { wsId } = await (async () => {
+      const { wsId, G } = await (async () => {
         const r = await post('/api/workspaces', { name: 'summary-ws', goal: 'Ship it.' });
         const id = ((await r.json()) as { workspace: { id: string } }).workspace.id;
-        await local(`/api/workspaces/${id}/goals`, {
-          method: 'PUT',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            goals: [
-              { id: 'g-one', title: '1. One', subgoals: [{ id: 'g-one-a', title: '1.1 One A' }] },
-            ],
-            author: PERSON,
-          }),
-        });
+        const goals = await seedGoalsOverHttp(
+          base,
+          id,
+          [{ key: 'one', title: '1. One', subgoals: [{ key: 'oneA', title: '1.1 One A' }] }],
+          PERSON,
+        );
         await post(`/api/workspaces/${id}/tasks`, {
           author: AGENT,
           title: 'in a subgoal',
-          goal: 'g-one-a',
+          goal: goals.oneA,
         });
         await post(`/api/workspaces/${id}/tasks`, {
           author: AGENT,
           title: 'a chore',
           goal: 'chores',
         });
-        return { wsId: id };
+        return { wsId: id, G: goals };
       })();
 
       const res = await local(`/api/workspaces/${wsId}`);
@@ -1093,9 +1108,9 @@ describe('hub workspace + task routes', () => {
       const { goalSummary } = (await res.json()) as {
         goalSummary: Array<{ id: string; title: string; depth: number; todo: number }>;
       };
-      expect(goalSummary.map((g) => g.id)).toEqual(['g-one', 'g-one-a', 'chores']);
+      expect(goalSummary.map((g) => g.id)).toEqual([G.one, G.oneA, 'chores']);
       expect(goalSummary.map((g) => g.depth)).toEqual([0, 1, 0]);
-      expect(goalSummary.find((g) => g.id === 'g-one-a')?.todo).toBe(1);
+      expect(goalSummary.find((g) => g.id === G.oneA)?.todo).toBe(1);
       expect(goalSummary.find((g) => g.id === 'chores')?.todo).toBe(1);
     });
   });

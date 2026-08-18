@@ -1,6 +1,8 @@
 import { listThreads, prose } from '@feedback/core';
 import * as Y from 'yjs';
 import type { Rooms } from './rooms.ts';
+import { bodyShapeGaps } from './task-body.ts';
+import { type OwnerKind, attachedAgentTest, resolveOwnerKind } from './task-owner.ts';
 import type { PremiseNote } from './task-staleness.ts';
 import type { Task, TaskStore, TaskStoreEvent } from './tasks.ts';
 
@@ -55,7 +57,24 @@ export function workspaceRoomId(workspaceId: string): string {
   return `ws:${workspaceId}`;
 }
 
-/** The docId of a task's live body room. */
+/**
+ * The docId of a task's live body room.
+ *
+ * DECIDED, so nobody has to re-derive it: `task:<taskId>` is a RESERVED
+ * PATTERN, not an alias and not a caller-chosen doc id. The `task:` and `ws:`
+ * prefixes belong to the server, and everything after the prefix is an
+ * already-opaque generated id (`t-…`, `w-…`) — so the address inherits its
+ * opacity from the task rather than needing an identity of its own. There is
+ * nothing here for a readable-alias layer to protect: no person bookmarks a
+ * body room, it is derived on demand from a task the reader already has, and
+ * it changes only when the task itself ceases to exist.
+ *
+ * What that settles, deliberately: a body room never gets a second, prettier
+ * name, so the alias layer that generated DOC ids need does not extend here.
+ * `isHubOwnedRoom` (rooms.ts) is already the prefix authority; making the
+ * prefixes unwritable by an outside caller belongs with the doc-id half of
+ * this work, and is noted there rather than claimed here.
+ */
 export function taskBodyDocId(taskId: string): string {
   return `task:${taskId}`;
 }
@@ -105,14 +124,40 @@ export function projectTask(
    * is to open every task.
    */
   commentCount = 0,
+  /**
+   * Person, agent, or nobody-has-said — resolved by the SERVER, because half
+   * the evidence is the workspace's agent roster and that never enters a
+   * ydoc. Deriving it in the browser would give a share visitor a different
+   * answer from the owner's, and the review strip is one shared read of the
+   * workspace: its count has to be the same number for every reader.
+   *
+   * Omitted by the one caller that legitimately cannot know (the SSE event
+   * redactor, which holds a task and no workspace). Every reader treats an
+   * absent value as `unknown`, which is what it is.
+   */
+  ownerKind?: OwnerKind,
+  /**
+   * How this row's title falls short of the standard, derived by the caller
+   * for the same reason `commentCount` is: the discussion clause needs the
+   * body room, which the store cannot see.
+   *
+   * On the projection rather than only on a create response, because the
+   * reader who most needs it is somebody scanning a whole board — and they
+   * never saw the response to the call that named any of these rows.
+   */
+  titleGaps?: readonly string[],
+  bodyGaps?: readonly string[],
 ): Record<string, unknown> {
   return {
     id: task.id,
     ...(commentCount > 0 ? { commentCount } : {}),
     workspaceId: task.workspaceId,
     title: task.title,
+    ...(titleGaps !== undefined && titleGaps.length > 0 ? { titleGaps: [...titleGaps] } : {}),
+    ...(bodyGaps !== undefined && bodyGaps.length > 0 ? { bodyGaps: [...bodyGaps] } : {}),
     status: task.status,
     assignee: task.assignee,
+    ...(ownerKind !== undefined ? { ownerKind } : {}),
     ...(task.needs !== undefined ? { needs: task.needs } : {}),
     // Options and info-requests are workspace CONTENT — the board's decision
     // strip and its batch walkthrough render straight off this projection, so
@@ -135,7 +180,6 @@ export function projectTask(
     // board and the queue can say the sentence out loud without new plumbing
     // — a field only the store can see is the "flag nobody renders" bug.
     ...(task.unplacedSince !== undefined ? { unplacedSince: task.unplacedSince } : {}),
-    ...(task.riskTier !== undefined ? { riskTier: task.riskTier } : {}),
     transitions: task.transitions.map((t) => ({
       ts: t.ts,
       from: t.from,
@@ -240,6 +284,26 @@ export class TaskProjection {
   private onEvent(ev: TaskStoreEvent): void {
     this.ensureWorkspace(ev.workspaceId);
     if (ev.type === 'task.created') this.ensureTaskBody(ev.task);
+  }
+
+  /**
+   * The owner-kind reader the BOARD uses, for a route that wants to answer
+   * the same question over REST.
+   *
+   * Agents cannot read the ydoc projection, so without this the resolved
+   * kind is visible only in a browser — and an agent that declares an owner
+   * has no way to confirm the declaration landed, nor to ask which rows the
+   * board is drawing as "not recorded". A success response means "the call
+   * didn't error"; this is what makes it mean something.
+   *
+   * Returns a closure so the workspace's roster is read ONCE per request
+   * rather than once per row.
+   */
+  ownerKindReader(workspaceId: string): (task: Task) => OwnerKind {
+    const isAttachedAgent = attachedAgentTest(
+      this.tasks.listAttachments(workspaceId).map((a) => a.agentId),
+    );
+    return (task) => resolveOwnerKind(task.assignee, task.assigneeKind, isAttachedAgent);
   }
 
   /**
@@ -364,8 +428,25 @@ export class TaskProjection {
     });
     const tasksMap = room.ydoc.getMap('tasks');
     const wsMap = room.ydoc.getMap('workspace');
+    // The workspace's own agent roster, read once per refresh. `onEvent`
+    // funnels every store event through `ensureWorkspace`, and agent.attached
+    // / agent.detached are store events — so the derived half of an owner's
+    // kind re-projects the moment the roster moves, rather than going stale
+    // until something unrelated touches a task.
+    const ownerKindOf = this.ownerKindReader(workspaceId);
     const want = new Map(
-      this.tasks.listTasks(workspaceId).map((t) => [t.id, projectTask(t, this.commentCount(t.id))]),
+      this.tasks
+        .listTasks(workspaceId)
+        .map((t) => [
+          t.id,
+          projectTask(
+            t,
+            this.commentCount(t.id),
+            ownerKindOf(t),
+            this.titleGaps(t),
+            bodyShapeGaps(t.body, t.needs),
+          ),
+        ]),
     );
     const pending = this.tasks.getPendingRetriage(workspaceId);
     const pendingBucket = this.tasks.getPendingBucketReview(workspaceId);
@@ -492,6 +573,19 @@ export class TaskProjection {
    * common case, since a room is created lazily and an empty one has no
    * threads either way.
    */
+  /**
+   * The title advisory for one row, including the discussion clause — which
+   * needs comment timestamps, and those live here rather than in the store.
+   *
+   * `titleWrittenAt ?? createdAt` is the honest fallback for a row filed
+   * before the standard existed: nobody has named it since it was created.
+   */
+  private titleGaps(task: Task): readonly string[] {
+    const since = task.titleWrittenAt ?? task.createdAt;
+    const commentsSinceTitle = this.discussionNotes(task.id).filter((n) => n.ts > since).length;
+    return this.tasks.titleGapsOf(task, commentsSinceTitle);
+  }
+
   private commentCount(taskId: string): number {
     const room = this.rooms.get(taskBodyDocId(taskId));
     if (!room) return 0;

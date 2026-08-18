@@ -30,6 +30,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CHORES_GOAL_ID, type Task, TaskStore, tasksSidecarPath } from '../src/tasks.ts';
+import { seedGoals } from './goal-seed.ts';
 
 const PERSON = { id: 'known-bryan', name: 'Bryan', kind: 'known' };
 const AGENT = { id: 'agent-search-revamp', name: 'Search Revamp', kind: 'known' };
@@ -72,8 +73,8 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
 
     it('an explicit real band stamps nothing', () => {
       const ws = store.createWorkspace('board', 'Ship the review surface.');
-      store.setGoalList(ws.id, [{ id: 'g-ship', title: 'Ship v1' }], { actor: PERSON });
-      const res = store.createTask(ws.id, { title: 'wire the widget', goal: 'g-ship' });
+      const G = seedGoals(store, ws.id, [{ key: 'ship', title: 'Ship v1' }], PERSON);
+      const res = store.createTask(ws.id, { title: 'wire the widget', goal: G.ship });
       expect(res.ok).toBe(true);
       if (!res.ok) return;
       expect(res.task.unplacedSince).toBeUndefined();
@@ -97,11 +98,11 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
   describe('cleared when somebody actually places it', () => {
     it('set_task_goal clears unplacedSince', () => {
       const ws = store.createWorkspace('board', 'Ship the review surface.');
-      store.setGoalList(ws.id, [{ id: 'g-ship', title: 'Ship v1' }], { actor: PERSON });
+      const G = seedGoals(store, ws.id, [{ key: 'ship', title: 'Ship v1' }], PERSON);
       const res = store.createTask(ws.id, { title: 'place me' });
       if (!res.ok) throw new Error('create failed');
       expect(res.task.unplacedSince).toBeGreaterThan(0); // positive control
-      const placed = store.setTaskGoal(res.task.id, 'g-ship', { actor: AGENT });
+      const placed = store.setTaskGoal(res.task.id, G.ship, { actor: AGENT });
       expect(placed.ok).toBe(true);
       expect(store.getTask(res.task.id)?.unplacedSince).toBeUndefined();
     });
@@ -121,22 +122,23 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
   describe('re-stamped when a band removal un-names a placement somebody DID make', () => {
     it('a task swept to Chores by a goal-list removal gets unplacedSince', () => {
       const ws = store.createWorkspace('board', 'Ship the review surface.');
-      store.setGoalList(
+      const G = seedGoals(
+        store,
         ws.id,
         [
-          { id: 'g-ship', title: 'Ship v1' },
-          { id: 'g-old', title: 'Old bet' },
+          { key: 'ship', title: 'Ship v1' },
+          { key: 'old', title: 'Old bet' },
         ],
-        { actor: PERSON },
+        PERSON,
       );
-      const res = store.createTask(ws.id, { title: 'work under the old bet', goal: 'g-old' });
+      const res = store.createTask(ws.id, { title: 'work under the old bet', goal: G.old });
       if (!res.ok) throw new Error('create failed');
       expect(res.task.unplacedSince).toBeUndefined(); // positive control: placed
-      store.setTaskGoal(res.task.id, 'g-old', { actor: AGENT });
+      store.setTaskGoal(res.task.id, G.old, { actor: AGENT });
 
-      const dropped = store.setGoalList(ws.id, [{ id: 'g-ship', title: 'Ship v1' }], {
+      const dropped = store.setGoalList(ws.id, [{ id: G.ship, title: 'Ship v1' }], {
         actor: PERSON,
-        drop: ['g-old'],
+        drop: [G.old],
       });
       expect(dropped.ok).toBe(true);
       const after = store.getTask(res.task.id);
@@ -146,41 +148,43 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
 
     it('a DONE task swept nowhere is left alone — its placement is history, not a claim', () => {
       const ws = store.createWorkspace('board', 'Ship the review surface.');
-      store.setGoalList(
+      const G = seedGoals(
+        store,
         ws.id,
         [
-          { id: 'g-ship', title: 'Ship v1' },
-          { id: 'g-old', title: 'Old bet' },
+          { key: 'ship', title: 'Ship v1' },
+          { key: 'old', title: 'Old bet' },
         ],
-        { actor: PERSON },
+        PERSON,
       );
-      const res = store.createTask(ws.id, { title: 'finished under the old bet', goal: 'g-old' });
+      const res = store.createTask(ws.id, { title: 'finished under the old bet', goal: G.old });
       if (!res.ok) throw new Error('create failed');
       store.transition(res.task.id, 'done', { actor: AGENT });
-      store.setGoalList(ws.id, [{ id: 'g-ship', title: 'Ship v1' }], {
+      store.setGoalList(ws.id, [{ id: G.ship, title: 'Ship v1' }], {
         actor: PERSON,
-        drop: ['g-old'],
+        drop: [G.old],
       });
       const after = store.getTask(res.task.id);
-      expect(after?.goal).toBe('g-old'); // stays put, per the existing contract
+      expect(after?.goal).toBe(G.old); // stays put, per the existing contract
       expect(after?.unplacedSince).toBeUndefined();
     });
 
     it('a task whose band SURVIVES the edit is untouched', () => {
       const ws = store.createWorkspace('board', 'Ship the review surface.');
-      store.setGoalList(
+      const G = seedGoals(
+        store,
         ws.id,
         [
-          { id: 'g-ship', title: 'Ship v1' },
-          { id: 'g-old', title: 'Old bet' },
+          { key: 'ship', title: 'Ship v1' },
+          { key: 'old', title: 'Old bet' },
         ],
-        { actor: PERSON },
+        PERSON,
       );
-      const res = store.createTask(ws.id, { title: 'safe', goal: 'g-ship' });
+      const res = store.createTask(ws.id, { title: 'safe', goal: G.ship });
       if (!res.ok) throw new Error('create failed');
-      store.setGoalList(ws.id, [{ id: 'g-ship', title: 'Ship v1' }], {
+      store.setGoalList(ws.id, [{ id: G.ship, title: 'Ship v1' }], {
         actor: PERSON,
-        drop: ['g-old'],
+        drop: [G.old],
       });
       expect(store.getTask(res.task.id)?.unplacedSince).toBeUndefined();
     });
@@ -203,33 +207,34 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
 
     it('a placed task drops out of the sweep', () => {
       const ws = store.createWorkspace('board', 'Ship the review surface.');
-      store.setGoalList(ws.id, [{ id: 'g-ship', title: 'Ship v1' }], { actor: PERSON });
+      const G = seedGoals(store, ws.id, [{ key: 'ship', title: 'Ship v1' }], PERSON);
       const res = store.createTask(ws.id, { title: 'place me' });
       if (!res.ok) throw new Error('create failed');
       expect(store.listUntriaged(ws.id).map((t) => t.id)).toContain(res.task.id);
-      store.setTaskGoal(res.task.id, 'g-ship', { actor: AGENT });
+      store.setTaskGoal(res.task.id, G.ship, { actor: AGENT });
       expect(store.listUntriaged(ws.id).map((t) => t.id)).not.toContain(res.task.id);
     });
 
     it('surfaces a task the OLD predicate could not see: swept there by a band removal', () => {
       const ws = store.createWorkspace('board', 'Ship the review surface.');
-      store.setGoalList(
+      const G = seedGoals(
+        store,
         ws.id,
         [
-          { id: 'g-ship', title: 'Ship v1' },
-          { id: 'g-old', title: 'Old bet' },
+          { key: 'ship', title: 'Ship v1' },
+          { key: 'old', title: 'Old bet' },
         ],
-        { actor: PERSON },
+        PERSON,
       );
-      const res = store.createTask(ws.id, { title: 'orphaned by the edit', goal: 'g-old' });
+      const res = store.createTask(ws.id, { title: 'orphaned by the edit', goal: G.old });
       if (!res.ok) throw new Error('create failed');
-      store.setTaskGoal(res.task.id, 'g-old', { actor: AGENT });
+      store.setTaskGoal(res.task.id, G.old, { actor: AGENT });
       // It carries a triagedAgainst from its old placement — which is exactly
       // why the old predicate skipped it.
-      expect(store.getTask(res.task.id)?.triagedAgainst?.goalId).toBe('g-old');
-      store.setGoalList(ws.id, [{ id: 'g-ship', title: 'Ship v1' }], {
+      expect(store.getTask(res.task.id)?.triagedAgainst?.goalId).toBe(G.old);
+      store.setGoalList(ws.id, [{ id: G.ship, title: 'Ship v1' }], {
         actor: PERSON,
-        drop: ['g-old'],
+        drop: [G.old],
       });
       expect(store.listUntriaged(ws.id).map((t) => t.id)).toContain(res.task.id);
     });
@@ -271,20 +276,21 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
       // so the migration refuses it; if hydrate cleared the field, the marker
       // would be gone for good and the task would fall out of the bucket.
       const ws = store.createWorkspace('board', 'Ship the review surface.');
-      store.setGoalList(
+      const G = seedGoals(
+        store,
         ws.id,
         [
-          { id: 'g-ship', title: 'Ship v1' },
-          { id: 'g-old', title: 'Old bet' },
+          { key: 'ship', title: 'Ship v1' },
+          { key: 'old', title: 'Old bet' },
         ],
-        { actor: PERSON },
+        PERSON,
       );
-      const res = store.createTask(ws.id, { title: 'orphaned then restarted', goal: 'g-old' });
+      const res = store.createTask(ws.id, { title: 'orphaned then restarted', goal: G.old });
       if (!res.ok) throw new Error('create failed');
-      store.setTaskGoal(res.task.id, 'g-old', { actor: AGENT });
-      store.setGoalList(ws.id, [{ id: 'g-ship', title: 'Ship v1' }], {
+      store.setTaskGoal(res.task.id, G.old, { actor: AGENT });
+      store.setGoalList(ws.id, [{ id: G.ship, title: 'Ship v1' }], {
         actor: PERSON,
-        drop: ['g-old'],
+        drop: [G.old],
       });
       expect(store.getTask(res.task.id)?.unplacedSince).toBeGreaterThan(0); // positive control
       store.flush();
@@ -294,7 +300,7 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
         const after = reloaded.getTask(res.task.id);
         // The migration cannot have produced this: it skips anything with a
         // triagedAgainst, which this task still carries from its old band.
-        expect(after?.triagedAgainst?.goalId).toBe('g-old');
+        expect(after?.triagedAgainst?.goalId).toBe(G.old);
         expect(after?.unplacedSince).toBeGreaterThan(0);
         expect(reloaded.listUntriaged(ws.id).map((t) => t.id)).toContain(res.task.id);
       } finally {
@@ -304,10 +310,10 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
 
     it('a placed task stays placed across a restart', () => {
       const ws = store.createWorkspace('board', 'Ship the review surface.');
-      store.setGoalList(ws.id, [{ id: 'g-ship', title: 'Ship v1' }], { actor: PERSON });
+      const G = seedGoals(store, ws.id, [{ key: 'ship', title: 'Ship v1' }], PERSON);
       const res = store.createTask(ws.id, { title: 'placed then restarted' });
       if (!res.ok) throw new Error('create failed');
-      store.setTaskGoal(res.task.id, 'g-ship', { actor: AGENT });
+      store.setTaskGoal(res.task.id, G.ship, { actor: AGENT });
       store.flush();
 
       const reloaded = new TaskStore({ dataDir, debounceMs: 5 });
@@ -381,8 +387,8 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
 
     it('hydrate does not stamp a legacy task under a real band', () => {
       const ws = store.createWorkspace('board', 'Ship the review surface.');
-      store.setGoalList(ws.id, [{ id: 'g-ship', title: 'Ship v1' }], { actor: PERSON });
-      const res = store.createTask(ws.id, { title: 'under a band', goal: 'g-ship' });
+      const G = seedGoals(store, ws.id, [{ key: 'ship', title: 'Ship v1' }], PERSON);
+      const res = store.createTask(ws.id, { title: 'under a band', goal: G.ship });
       if (!res.ok) throw new Error('create failed');
       store.flush();
 
