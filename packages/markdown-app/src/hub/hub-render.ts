@@ -2761,11 +2761,22 @@ export function renderTaskDetail(
   container.append(panel);
   // After it is in the document — scrollIntoView on a detached node does
   // nothing, silently. Guarded because happy-dom has no implementation.
-  const focus = handlers.focusThreadId
-    ? panel.querySelector<HTMLElement>(
-        `.hub-thread[data-thread-id="${CSS.escape(handlers.focusThreadId)}"]`,
-      )
-    : null;
+  //
+  // NOT when the ask panel is already showing that same thread's question.
+  // Measured in a real browser at 430px before this guard existed: opening a
+  // review item left the panel at scrollTop 112, with the ask panel's heading
+  // cut off above the fold — the deep-link centred the thread the panel had
+  // just hoisted to the top, so the reader landed mid-page on a second copy of
+  // what they came for. Centring is still right when the focused thread is
+  // NOT the one being asked, which is why this is a condition and not a
+  // deletion.
+  const focusIsLeadAsk = ask !== null && ask.threadId === handlers.focusThreadId;
+  const focus =
+    handlers.focusThreadId && !focusIsLeadAsk
+      ? panel.querySelector<HTMLElement>(
+          `.hub-thread[data-thread-id="${CSS.escape(handlers.focusThreadId)}"]`,
+        )
+      : null;
   if (focus && typeof focus.scrollIntoView === 'function') {
     focus.scrollIntoView({ block: 'center' });
   }
