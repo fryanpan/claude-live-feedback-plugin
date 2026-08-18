@@ -127,9 +127,12 @@ function pluginNameOf(source: string, label: string): string {
  */
 function marketplaceVersionOf(source: string, label: string, pluginName: string): string {
   const plugins: { name?: string; version?: unknown }[] = JSON.parse(source).plugins ?? [];
-  const entry = plugins.find((p) => p.name === pluginName) ?? (plugins.length === 1 ? plugins[0] : undefined);
+  const entry =
+    plugins.find((p) => p.name === pluginName) ?? (plugins.length === 1 ? plugins[0] : undefined);
   if (!entry) {
-    fail(`${label} has no plugins[] entry named "${pluginName}" (and is not a single-plugin file).`);
+    fail(
+      `${label} has no plugins[] entry named "${pluginName}" (and is not a single-plugin file).`,
+    );
   }
   if (typeof entry.version !== 'string') fail(`${label}'s "${entry.name}" entry has no "version".`);
   return entry.version as string;
