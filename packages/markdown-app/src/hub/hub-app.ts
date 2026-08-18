@@ -401,8 +401,14 @@ async function main(): Promise<void> {
 
   /** Re-derived on every render rather than stored: the decision half comes
    *  from the live projection, so an answer anyone posts drops its item out
-   *  without a fetch. */
-  const currentQueue = () => reviewQueue(taskList(), state.reviewItems, Date.now());
+   *  without a fetch.
+   *
+   *  The goal list is what makes the queue's priority order the BOARD's order
+   *  rather than a second one — without it every ask lands in one band and the
+   *  goal ranking silently does nothing. It comes from the same projection, so
+   *  a goal reorder re-ranks the queue on the next render. */
+  const currentQueue = () =>
+    reviewQueue(taskList(), state.reviewItems, Date.now(), state.info?.goals ?? []);
 
   /**
    * "Exactly the place where I need to review and make the choice" — the

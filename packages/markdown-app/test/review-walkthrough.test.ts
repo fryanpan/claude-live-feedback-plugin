@@ -410,16 +410,23 @@ describe('renderReviewWalkthrough — decisions', () => {
     expect(root.children).toHaveLength(0);
   });
 
-  it('the walkthrough queue is the same derived order the strip counts', () => {
-    // Not a tautology: it pins the walkthrough to decisionQueue's ordering, so
-    // "6 things need you" and the 6 cards you get can't drift apart.
+  it('the walkthrough opens on the highest-priority ask, not the most-blocked one', () => {
+    // Bryan, 2026-08-18: "Always order asks by task priority." The fixture
+    // makes the two candidate rules disagree — `c` is the only decision
+    // anything is waiting on, and `a` is the one highest on the board — so
+    // the card that opens says which rule ran. Under the previous rule
+    // (most-blocked first) this card is "Drop the old export?".
     const { a, b, c } = queueOfThree();
     const q = q0([a, b, c, task({ after: [c.id] })]);
     expect(decisionRows([a, b, c]).map((t) => t.id)).toEqual([a.id, b.id, c.id]);
+    expect(a.order).toBeLessThan(c.order);
     renderReviewWalkthrough(root, q, 0, walk());
     expect((root.querySelector('.hub-walk-title') as HTMLElement).textContent).toBe(
-      'Drop the old export?',
+      'Blue or green?',
     );
+    // The whole queue is still the strip's, so the count and the cards cannot
+    // drift apart — that half of the original assertion is unchanged.
+    expect(q.items.map((i) => i.decision?.task.id)).toEqual([a.id, b.id, c.id]);
   });
 });
 

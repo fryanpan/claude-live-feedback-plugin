@@ -21,6 +21,8 @@ import {
   dropIndexFor,
   dropTarget,
   goalLabel,
+  goalRank,
+  humanBlockerRows,
   parseQuickAdd,
   pluginDriftNotice,
   positionBetween,
@@ -888,9 +890,17 @@ describe('reviewQueue — human-owned work that agent work is waiting on', () =>
     expect(q.total).toBe(2);
   });
 
-  it('bands blockers under decisions and above the comment bands', () => {
-    const d = t({ id: 'd-1', assignee: 'human', needs: 'decision' });
-    const tasks = [...boardWithEdges(), d, t({ id: 'a-9', assignee: 'Helper', after: ['d-1'] })];
+  // Kind is no longer a band (Bryan, 2026-08-18: "Always order asks by task
+  // priority"). The fixture is built so the two rules DISAGREE: the decision
+  // sits at the BOTTOM of the board and the blockers above it, so a run that
+  // still bands by kind puts the decision first and this goes red. A fixture
+  // where the board order happened to agree — which is what the previous
+  // version of this test had — cannot tell the two rules apart at all.
+  it('ranks a blocker above a lower-priority decision, kind notwithstanding', () => {
+    const tasks = [...boardWithEdges(), t({ id: 'a-9', assignee: 'Helper', after: ['d-1'] })];
+    // Ordered last on the board, so board order and the old kind-band order
+    // point opposite ways.
+    tasks.push(t({ id: 'd-1', assignee: 'human', needs: 'decision', order: 9_000 }));
     const q = reviewQueue(
       tasks,
       [
@@ -907,18 +917,37 @@ describe('reviewQueue — human-owned work that agent work is waiting on', () =>
       ],
       T0,
     );
-    expect(q.items.map((i) => i.kind)).toEqual(['decision', 'blocker', 'blocker', 'task-thread']);
+    // h-tunnel, h-key and a-1 all outrank d-1 on the board, so they come
+    // first; the decision is last because its ROW is last, not because a
+    // decision ranks low.
+    expect(q.items.map((i) => i.kind)).toEqual([
+      'blocker',
+      'blocker',
+      'task-thread',
+      'decision',
+    ]);
   });
 
-  // Same rule the decision band uses: an enforced edge outranks a bigger soft
-  // one, because that work cannot proceed at all.
-  it('orders by what is enforced first, then by how much is waiting', () => {
+  // Enforced-first / most-blocked-first was the decision band's own primary
+  // key and is no longer the queue's — board order decides, and this fixture
+  // is the case where they disagree (h-key carries the enforced edge and
+  // still sits second because h-tunnel is above it on the board). What the
+  // enforced edge still does is choose the WORDING, so both halves are
+  // asserted here: a change that dropped `hard` would otherwise pass.
+  it('orders blockers by board position, and still says which edge is enforced', () => {
     const q = reviewQueue(boardWithEdges(), [], T0);
     const band = q.items.filter((i) => i.kind === 'blocker');
-    expect(band.map((i) => i.blocker?.task.id)).toEqual(['h-key', 'h-tunnel']);
-    expect(band[0]?.blocker?.hard).toBe(true);
-    expect(band[0]?.why).toContain('Hard-blocking');
-    expect(band[1]?.why).toContain('Blocking 2 tasks');
+    expect(band.map((i) => i.blocker?.task.id)).toEqual(['h-tunnel', 'h-key']);
+    // The enforced one is the second row now, and still knows it is enforced.
+    expect(band[1]?.blocker?.hard).toBe(true);
+    expect(band[1]?.why).toContain('Hard-blocking');
+    expect(band[0]?.why).toContain('Blocking 2 tasks');
+    // `decisionQueue`'s own ordering is untouched — the board's strip still
+    // ranks the enforced edge first. Only the review queue re-ranks.
+    expect(humanBlockerRows(boardWithEdges()).map((r) => r.task.id)).toEqual([
+      'h-key',
+      'h-tunnel',
+    ]);
   });
 
   // Ownership in this band used to be the literal `human`, which left a task
@@ -959,6 +988,205 @@ describe('reviewQueue — human-owned work that agent work is waiting on', () =>
     const keys = q.items.map((i) => i.key);
     expect(new Set(keys).size).toBe(keys.length);
     expect(keys).toContain('blocker:h-tunnel');
+  });
+});
+
+/**
+ * "Always order asks by task priority" (Bryan, 2026-08-18, answering
+ * t-vrwyE8YcVD-J). Priority means the BOARD's order — goal band, then the
+ * task's position in it — so every case below is built so that the new key
+ * and the key it replaced point in OPPOSITE directions. A fixture where they
+ * agree cannot tell them apart, which is how the previous version of the
+ * blocker-ordering test passed against both rules at once.
+ */
+describe('reviewQueue — task priority is the primary key', () => {
+  const T0 = 1_700_000_000_000;
+  const t = (over: Partial<HubTask>): HubTask => task({ createdAt: T0, updatedAt: T0, ...over });
+
+  const thread = (over: Partial<ReviewThreadItem>): ReviewThreadItem => ({
+    kind: 'task-thread',
+    docId: 'task:x',
+    threadId: 'th-x',
+    title: 'A task',
+    ask: 'Which one?',
+    askedBy: 'Helper',
+    since: T0,
+    ...over,
+  });
+
+  const ids = (q: ReturnType<typeof reviewQueue>) => q.items.map((i) => i.key);
+
+  // The rank and the board's own section order have to be one answer. Nothing
+  // in the four gates reads them together, so this is the only thing standing
+  // between them and a silent drift — including the fallback, which is the
+  // half most likely to be changed in one place.
+  it('goalRank agrees with the board’s section order, Chores and strays last', () => {
+    const rank = goalRank(GOALS);
+    const filters: BoardFilters = {
+      mine: false,
+      me: '',
+      doneWindow: DEFAULT_DONE_WINDOW,
+      now: NOW,
+    };
+    const sectionIds = boardSections(GOALS, [], filters).map((s) => s.id);
+    expect(sectionIds.map(rank)).toEqual(sectionIds.map((_, i) => i));
+    // A goal id no section carries renders under Chores on the board, so it
+    // must rank there too rather than at the front.
+    expect(rank('g-deleted')).toBe(rank(CHORES_ID));
+  });
+
+  // The goal band outranks everything inside a band. The fixture inverts every
+  // other signal: the low-priority ask is a decision, is older, and is the one
+  // holding work up.
+  it('a lower goal band loses to a higher one, whatever else is true of it', () => {
+    const late = t({
+      id: 'd-late',
+      goal: 'g-blog',
+      order: 1,
+      createdAt: T0 - HOUR,
+      assignee: 'human',
+      needs: 'decision',
+    });
+    const early = t({ id: 'h-early', goal: 'g-pr', order: 99, assignee: 'human' });
+    const board = [late, early, t({ id: 'a-1', assignee: 'Helper', after: ['d-late', 'h-early'] })];
+    expect(ids(reviewQueue(board, [], T0, GOALS))).toEqual(['blocker:h-early', 'decision:d-late']);
+    // Positive control on the fixture: same inputs, no goal list, so there is
+    // no band to rank by and `order` alone decides — and the pair comes back
+    // the other way round. That is what makes the assertion above about the
+    // GOAL ranking rather than about anything else in the fixture.
+    expect(ids(reviewQueue(board, [], T0, []))).toEqual([
+      'decision:d-late',
+      'blocker:h-early',
+    ]);
+  });
+
+  it('inside one band, the board’s own order decides', () => {
+    const top = t({ id: 'h-top', goal: 'g-pr', order: 1, assignee: 'human' });
+    const mid = t({ id: 'h-mid', goal: 'g-pr', order: 2, assignee: 'human' });
+    const sub = t({ id: 'h-sub', goal: 'g-pr-tickets', order: 1, assignee: 'human' });
+    const waits = [
+      t({ id: 'a-1', assignee: 'Helper', after: ['h-top'] }),
+      t({ id: 'a-2', assignee: 'Helper', after: ['h-mid'] }),
+      t({ id: 'a-3', assignee: 'Helper', after: ['h-sub'] }),
+    ];
+    const q = reviewQueue([mid, sub, top, ...waits], [], T0, GOALS);
+    // A subgoal is its own band, nested directly after its parent — the same
+    // sequence `boardSections` renders.
+    expect(ids(q)).toEqual(['blocker:h-top', 'blocker:h-mid', 'blocker:h-sub']);
+  });
+
+  // Kind stops being a band and becomes a tiebreak inside one task: the row
+  // first, then the discussion on it. Asks about a higher-priority task all
+  // come first, comments included.
+  it('groups every ask about one task together, in board order across tasks', () => {
+    const first = t({ id: 'd-1', goal: 'g-pr', order: 1, assignee: 'human', needs: 'decision' });
+    const second = t({ id: 'k-2', goal: 'g-pr', order: 2 });
+    const q = reviewQueue(
+      [first, second, t({ id: 'a-1', assignee: 'Helper', after: ['d-1'] })],
+      [
+        thread({ threadId: 'th-2', taskId: 'k-2', docId: 'task:k-2' }),
+        thread({ threadId: 'th-1', taskId: 'd-1', docId: 'task:d-1' }),
+      ],
+      T0,
+      GOALS,
+    );
+    expect(ids(q)).toEqual([
+      'decision:d-1',
+      'task-thread:task:d-1:th-1',
+      'task-thread:task:k-2:th-2',
+    ]);
+  });
+
+  // Oldest-first is the rule that stops an agent's own follow-ups burying its
+  // question, and that happens inside one thread stack — which is exactly
+  // where it still applies. Across tasks the instruction overrides it.
+  it('keeps question-first then oldest-first, but only among asks of equal priority', () => {
+    const one = t({ id: 'k-1', goal: 'g-pr', order: 1 });
+    const two = t({ id: 'k-2', goal: 'g-pr', order: 2 });
+    const q = reviewQueue(
+      [one, two],
+      [
+        // On the LOWER-priority task: a real question, and the oldest wait of
+        // the three. Under the previous rule it led the queue.
+        thread({
+          threadId: 'th-old',
+          taskId: 'k-2',
+          docId: 'task:k-2',
+          direct: true,
+          since: T0 - 10 * HOUR,
+        }),
+        thread({ threadId: 'th-new', taskId: 'k-1', docId: 'task:k-1', since: T0 - HOUR }),
+        thread({
+          threadId: 'th-ask',
+          taskId: 'k-1',
+          docId: 'task:k-1',
+          direct: true,
+          since: T0 - 5 * HOUR,
+        }),
+      ],
+      T0,
+      GOALS,
+    );
+    expect(ids(q)).toEqual([
+      // k-1's two, question before note…
+      'task-thread:task:k-1:th-ask',
+      'task-thread:task:k-1:th-new',
+      // …and only then the older, direct ask on the lower-priority task.
+      'task-thread:task:k-2:th-old',
+    ]);
+  });
+
+  // A doc comment has no task priority, so the primary key cannot speak about
+  // it and it sorts after everything the key can rank. That is a position, not
+  // a shelf: it is in the same queue and the same walkthrough, which is what
+  // "it's okay to mix in 15-30 minute doc reads with quick decisions" asks for.
+  it('sorts asks with no task after every ask that has one, and keeps them in the queue', () => {
+    const only = t({ id: 'k-1', goal: 'g-blog', order: 500 });
+    const q = reviewQueue(
+      [only],
+      [
+        thread({ threadId: 'th-doc', kind: 'doc-thread', docId: 'doc-1', since: T0 - 9 * HOUR }),
+        thread({ threadId: 'th-task', taskId: 'k-1', docId: 'task:k-1', since: T0 }),
+      ],
+      T0,
+      GOALS,
+    );
+    expect(ids(q)).toEqual(['task-thread:task:k-1:th-task', 'doc-thread:doc-1:th-doc']);
+    expect(q.total).toBe(2);
+  });
+
+  // The safety property: re-ranking must never make an ask disappear. A
+  // discussion whose task is not in the projection yet has no priority to
+  // rank by, and lands at the tail rather than being dropped — the
+  // store-has-it/surface-cannot-show-it failure this queue exists to fix.
+  it('still shows a discussion whose task is not on the board', () => {
+    const q = reviewQueue(
+      [t({ id: 'k-1', goal: 'g-pr', order: 1 })],
+      [
+        thread({ threadId: 'th-orphan', taskId: 't-gone', docId: 'task:t-gone' }),
+        thread({ threadId: 'th-known', taskId: 'k-1', docId: 'task:k-1' }),
+      ],
+      T0,
+      GOALS,
+    );
+    expect(ids(q)).toEqual([
+      'task-thread:task:k-1:th-known',
+      'task-thread:task:t-gone:th-orphan',
+    ]);
+  });
+
+  // The goal list is optional so no caller can get a partial order out of
+  // this; without one every task is in a single band and board order alone
+  // decides. Degraded, never arbitrary.
+  it('is a total order with no goal list, and never reorders on a repeat call', () => {
+    const tasks = [
+      t({ id: 'h-b', goal: 'g-blog', order: 2, assignee: 'human' }),
+      t({ id: 'h-a', goal: 'g-pr', order: 1, assignee: 'human' }),
+      t({ id: 'a-1', assignee: 'Helper', after: ['h-a', 'h-b'] }),
+    ];
+    const first = ids(reviewQueue(tasks, [], T0));
+    expect(first).toEqual(['blocker:h-a', 'blocker:h-b']);
+    expect(ids(reviewQueue([...tasks].reverse(), [], T0))).toEqual(first);
   });
 });
 
