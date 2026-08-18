@@ -15,11 +15,13 @@
  *    Pinned here because "closed by default" is a property of a file somebody
  *    can edit, and the allowlist has been widened before.
  * 2. `isLoopbackAddress` — the PEER address, not the Host header. Measured
- *    2026-08-17 against a real `Bun.serve`: a LAN client (192.168.x.x) and a
- *    tailnet client (100.x.x.x) both connected while sending
- *    `Host: localhost:1`, and `server.requestIP()` reported their true
- *    addresses. A Host-based loopback check would therefore have been
- *    spoofable by exactly the callers it was meant to exclude.
+ *    2026-08-17 against a real `Bun.serve`: a client on an RFC1918 LAN
+ *    address and one on a CGNAT tailnet address both connected while sending
+ *    `Host: localhost:1`, were classified local by the Host guard, and were
+ *    reported by `server.requestIP()` at their true addresses. A Host-based
+ *    loopback check would therefore have been spoofable by exactly the
+ *    callers it was meant to exclude. (Addresses in the cases below are
+ *    synthetic — this is a public repo and the range is what matters.)
  * 3. The route, end to end, over a real socket from a real address.
  *
  * Every test that asserts a refusal asserts a permission first, on the same
@@ -79,14 +81,16 @@ describe('isLoopbackAddress', () => {
   });
 
   it('refuses LAN, tailnet, public, and unknown peers', () => {
-    // The two middle cases are this machine's real address families, taken
-    // from the measurement in the module header.
-    expect(isLoopbackAddress('::ffff:192.168.50.71')).toBe(false);
-    expect(isLoopbackAddress('::ffff:100.81.139.70')).toBe(false);
-    expect(isLoopbackAddress('192.168.50.71')).toBe(false);
-    expect(isLoopbackAddress('100.81.139.70')).toBe(false);
-    expect(isLoopbackAddress('8.8.8.8')).toBe(false);
-    expect(isLoopbackAddress('::ffff:8.8.8.8')).toBe(false);
+    // Synthetic addresses in the families that matter: RFC1918 for a LAN
+    // client and the CGNAT range tailnets are assigned out of. The point is
+    // the range, never a particular host.
+    expect(isLoopbackAddress('::ffff:192.168.1.42')).toBe(false);
+    expect(isLoopbackAddress('::ffff:100.64.0.1')).toBe(false);
+    expect(isLoopbackAddress('192.168.1.42')).toBe(false);
+    expect(isLoopbackAddress('100.64.0.1')).toBe(false);
+    expect(isLoopbackAddress('10.0.0.1')).toBe(false);
+    expect(isLoopbackAddress('203.0.113.7')).toBe(false); // TEST-NET-3
+    expect(isLoopbackAddress('::ffff:203.0.113.7')).toBe(false);
   });
 
   it('fails closed on an address it cannot read', () => {
