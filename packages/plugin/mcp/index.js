@@ -13764,7 +13764,8 @@ function threadCreateRequest(input, author) {
 
 // packages/mcp/src/triage-line.ts
 var RETRIAGE_SKILL = "live-feedback:handling-a-goal-change";
-var SHAPE_THEN_PLACE = "read its own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each into a title and a story-shaped body with update_task_body, then place with set_task_goal";
+var SHAPE_THEN_PLACE = "read its own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each into a title and a story-shaped body with rewrite_task, then place with set_task_goal";
+var TASK_REVIEW_SKILL = "live-feedback:reviewing-task-shape";
 function retriageDetail(p) {
   const ids = p.taskIds ?? [];
   const tasks = ids.length > 0 ? `
@@ -13793,6 +13794,17 @@ function triageRequestLine(p, selfAgentId) {
       return `[triage.requested] FYI — ${ask} Addressed to lead agent ${lead2}. Act only if that is you.${detail2}`;
     }
     return `[triage.requested] ${ask}${detail2}`;
+  }
+  if (p.kind === "task-review") {
+    const what = p.trigger ?? "written";
+    const named = p.title ? ` ("${p.title}")` : "";
+    const who = p.actor?.name ? ` by ${p.actor.name}` : "";
+    const ask = `task ${p.taskId}${named} was ${what}${who} — review its title and body against the ` + `standard (${TASK_REVIEW_SKILL}): fine as-is is a real answer; otherwise rewrite with ` + "rewrite_task (with a reason), or ask the filer in a comment on the task.";
+    const lead2 = p.leadAgentId;
+    if (lead2 !== undefined && lead2 !== selfAgentId) {
+      return `[triage.requested] FYI — ${ask} Addressed to lead agent ${lead2}. Act only if that is you.`;
+    }
+    return `[triage.requested] ${ask}`;
   }
   if (p.kind !== "goal-retriage") {
     return `[triage.requested] shape and place task ${p.taskId}: ${SHAPE_THEN_PLACE}`;
@@ -14070,7 +14082,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "set_doc_content",
-      description: "Replace the WHOLE document with new markdown — the safe path for a comprehensive rewrite/restructure. Applies as a block-level diff on the live doc: blocks you didn't change keep their identity, so comment threads anchored to them survive, connected editors update live, and the result flushes to the bound .md within ~1s like any other edit. Use this INSTEAD of Write-ing the bound file (then reparse_from_disk) or the delete_doc → Write → create_review_doc dance — both race the write-back and have clobbered files in practice, and the latter orphans every comment thread. On a `task:<taskId>` docId (a task's description) this now does everything `update_task_body` does except retitle — preserves the row's original words into `quote` and records an attributed `task.body_edited` — so it no longer silently erases a capture; prefer `update_task_body` anyway, since it also retitles and hands back the `quote` it preserved. Returns ok:false with error 'unsupported' (code/diff docs are read-only), 'empty' (won't wipe a doc to nothing — use delete_doc if you mean that), 'parse-failed', or 'not-found'.",
+      description: "Replace the WHOLE document with new markdown — the safe path for a comprehensive rewrite/restructure. Applies as a block-level diff on the live doc: blocks you didn't change keep their identity, so comment threads anchored to them survive, connected editors update live, and the result flushes to the bound .md within ~1s like any other edit. Use this INSTEAD of Write-ing the bound file (then reparse_from_disk) or the delete_doc → Write → create_review_doc dance — both race the write-back and have clobbered files in practice, and the latter orphans every comment thread. On a `task:<taskId>` docId (a task's description) this now does everything `rewrite_task` does except retitle — preserves the row's original words into `quote` and records an attributed `task.body_edited` — so it no longer silently erases a capture; prefer `rewrite_task` anyway, since it also retitles, carries a reason, and hands back the `quote` it preserved. Returns ok:false with error 'unsupported' (code/diff docs are read-only), 'empty' (won't wipe a doc to nothing — use delete_doc if you mean that), 'parse-failed', or 'not-found'.",
       inputSchema: {
         type: "object",
         properties: {
@@ -14651,11 +14663,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
               properties: {
                 title: {
                   type: "string",
-                  description: 'The row\'s one-line name, and the thing a person scanning thirty rows actually reads. Say WHO it is for, WHAT they get, and HOW — `<Person> can <achieve goal X> by <describe action>`, under 70 characters (100 is the hard ceiling). e.g. "Bryan can review across tasks faster with clearer task descriptions and UX", "Agents can revise goal priority with a tool to reorder goals". The failure this exists to stop is a title that states an OBSERVATION — "A decision-answered event promises a link checklist" names something somebody noticed, so ten of them in a column give no sense of the plan and the board cannot be prioritised. Never REFUSED: a rough capture still lands, and the response comes back with `titleGaps` naming what is missing (too long, no persona, no action, clipped mid-thought) so triage can fix it.'
+                  description: 'The row\'s one-line name, and the thing a person scanning thirty rows actually reads. Say WHO it is for, WHAT they get, and HOW — `<Person> can <achieve goal X> by <describe action>`, under 70 characters (100 is the hard ceiling). e.g. "Bryan can review across tasks faster with clearer task descriptions and UX", "Agents can revise goal priority with a tool to reorder goals". The failure this exists to stop is a title that states an OBSERVATION — "A decision-answered event promises a link checklist" names something somebody noticed, so ten of them in a column give no sense of the plan and the board cannot be prioritised. Never REFUSED: a rough capture still lands — every placed create is routed to the workspace lead for a shape review (the `live-feedback:reviewing-task-shape` skill), so file what you have.'
                 },
                 body: {
                   type: "string",
-                  description: "The description. Not schema-required — but WRITE ONE ANYWAY, on every row: a bare title is not pickup-able by an agent that was not in the conversation, and reconstructing intent from a title is how the wrong thing gets built. Shape it as a compact user story — `<persona> can <do x> so that <goal y>`, one persona (Agent / Bryan / Collaborator) — and add falsifiable \"done when\" criteria for anything handed to someone else or parked beyond today. Proportionate: work you will finish within the hour needs the story line and nothing more. Markdown; it renders on the task itself and comes back whole from next_tasks, so do not create a separate doc to hold it.\n\nWhen `needs` is 'decision' this is REQUIRED and has a different shape — the question in one line, what is at stake in two or three, the options with what each one costs, then what is blocked until it is answered. A row with no question in it is REFUSED, because the failure this catches is filing a progress report as a decision: the field is populated, every check passes, and the person asked to decide has nothing to decide from. The other three parts come back as advisory `shapeGaps` on a successful create. Never REFUSED either: the response carries `bodyGaps` when the description does not open with the story (`no-story`) or is missing entirely (`empty`). A row declared `needs` = decision is exempt entirely — it is not a story and should not be, and its own `shapeGaps` already cover it."
+                  description: "The description. Not schema-required — but WRITE ONE ANYWAY, on every row: a bare title is not pickup-able by an agent that was not in the conversation, and reconstructing intent from a title is how the wrong thing gets built. Shape it as a compact user story — `<persona> can <do x> so that <goal y>`, one persona (Agent / Bryan / Collaborator) — and add falsifiable \"done when\" criteria for anything handed to someone else or parked beyond today. Proportionate: work you will finish within the hour needs the story line and nothing more. Markdown; it renders on the task itself and comes back whole from next_tasks, so do not create a separate doc to hold it.\n\nWhen `needs` is 'decision' this is REQUIRED and has a different shape — the question in one line, what is at stake in two or three, the options with what each one costs, then what is blocked until it is answered. A row with no question in it is REFUSED, because the failure this catches is filing a progress report as a decision: the field is populated, every check passes, and the person asked to decide has nothing to decide from. The other three parts come back as advisory `shapeGaps` on a successful create. A thin or story-less description is never REFUSED either — the lead's shape review pass is where it gets rewritten or questioned, not the write path."
                 },
                 key: {
                   type: "string",
@@ -14759,7 +14771,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "next_tasks",
-      description: "The work queue: what to pick up next, in priority order (goal band, then task order), already filtered to what you can actually DO. TAKE THE WHOLE READY SET, NOT THE TOP ROW — starting every ready row that does not collide with another is the default, and holding one task while the rest of the queue waits is the slowest way to work a board. Each row carries its FULL description, which is what tells you whether two tasks touch the same code and therefore have to be sequenced; that judgment is made from the text, not from a field. Also on each row: `blockedBy` (open dependencies — only `enforce` ones hold a task back) and `ready`. Hard-blocked rows are omitted unless includeBlocked. Pass assignee to get just your own queue. Make this call at the top of a work session and again whenever a line of work finishes — priorities move while you work.\n\nREAD `bodyWrittenAt` AND `premise` BEFORE YOU TRUST A DESCRIPTION. A body is a measurement taken on the day it was filed and rendered ever after in the present tense, on a codebase that moves several times a day — so `bodyWrittenAt` (on every row) tells you how old the claim is. `premise` appears only when that description has stood still for over a day while somebody kept commenting on the task, and it carries those comments VERBATIM in `notes`. That is where a previous reader wrote down what they found when they reproduced it: five times in one week a task claimed something was missing that had already shipped, twice within hours of the task being filed, and each time the correction existed as a comment nobody on the pickup path could see. Read the notes first — they may already have done the reproducing for you, and they routinely change the SIZE of the work. `premise` says NOTHING about whether the task is done; it never appears on a done task, and most rows carrying it still have real work left. It clears itself when the description is rewritten (update_task_body), which is the right move once you know what is actually true — attribute and date the correction, and keep what the body originally claimed, since the original measurement is evidence about when it was taken rather than a mistake to erase.",
+      description: "The work queue: what to pick up next, in priority order (goal band, then task order), already filtered to what you can actually DO. TAKE THE WHOLE READY SET, NOT THE TOP ROW — starting every ready row that does not collide with another is the default, and holding one task while the rest of the queue waits is the slowest way to work a board. Each row carries its FULL description, which is what tells you whether two tasks touch the same code and therefore have to be sequenced; that judgment is made from the text, not from a field. Also on each row: `blockedBy` (open dependencies — only `enforce` ones hold a task back) and `ready`. Hard-blocked rows are omitted unless includeBlocked. Pass assignee to get just your own queue. Make this call at the top of a work session and again whenever a line of work finishes — priorities move while you work.\n\nREAD `bodyWrittenAt` AND `premise` BEFORE YOU TRUST A DESCRIPTION. A body is a measurement taken on the day it was filed and rendered ever after in the present tense, on a codebase that moves several times a day — so `bodyWrittenAt` (on every row) tells you how old the claim is. `premise` appears only when that description has stood still for over a day while somebody kept commenting on the task, and it carries those comments VERBATIM in `notes`. That is where a previous reader wrote down what they found when they reproduced it: five times in one week a task claimed something was missing that had already shipped, twice within hours of the task being filed, and each time the correction existed as a comment nobody on the pickup path could see. Read the notes first — they may already have done the reproducing for you, and they routinely change the SIZE of the work. `premise` says NOTHING about whether the task is done; it never appears on a done task, and most rows carrying it still have real work left. It clears itself when the description is rewritten (rewrite_task), which is the right move once you know what is actually true — attribute and date the correction, and keep what the body originally claimed, since the original measurement is evidence about when it was taken rather than a mistake to erase.",
       inputSchema: {
         type: "object",
         properties: {
@@ -14864,22 +14876,26 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       }
     },
     {
-      name: "update_task_body",
-      description: "Rewrite a task so it can be picked up — its description, and in the SAME act its title. The fix for a task filed thin, one whose acceptance criteria turned out to be wrong, and the write half of triage's shaping step: a raw capture arrives with a machine-clipped fragment for a title and its whole unedited utterance for a body, and this is what turns both into work. Whole-body replace, so send the full markdown you want the task to have; there is no partial edit. Pass `title` whenever the title no longer names what the task is (omit it to leave the title alone). Written through the task's live body doc as a block-level diff, so comment threads anchored to paragraphs you did not change keep their anchors and anyone reading the task on the board watches it update. Recorded as ONE task.body_edited carrying both titles, attributed to you, and the activity feed renders the rename with the old name — the only name the person who filed it would recognise. The row's ORIGINAL words are preserved to `quote` automatically on the first rewrite, so a rewrite is never the only record of what was said; a quote already there (a dictated transcript) is never overwritten. Keep the shape a task body owes its next reader — a compact user story plus falsifiable done-when criteria — because rewriting is also the moment to add the ones that were missing. Refuses an empty body: blanking a description is not an edit, and if the task should not exist, say so on it instead. The response carries `bodyGaps` when the rewritten description still does not open with the user story, so a rewrite that fixed the criteria but left the opening unshaped says so rather than looking done.",
+      name: "rewrite_task",
+      description: "Rewrite a task's TITLE, its BODY, or both, in ONE attributed call — the write half of the task-shape review, and the fix for a task filed thin or named by a machine-clipped fragment. Pass whichever halves you are changing and a `reason` saying why; the reason rides the audit row verbatim, so the trail says more than \"rewrote\". Body is a whole-body replace (send the FULL markdown; no partial edit), written through the task's live body doc as a block-level diff so comment threads on untouched paragraphs keep their anchors and the board updates live. A body+title call records ONE task.body_edited carrying both titles; a title-only call records task.retitled with both names — either way the activity feed renders the OLD name, the only one the person who filed the row would recognise. The row's ORIGINAL words are preserved to `quote` automatically on the first body rewrite, so a rewrite is never the only record of what was said; a quote already there (a dictated transcript) is never overwritten. Judgment about WHETHER to rewrite belongs to the `live-feedback:reviewing-task-shape` skill: rewrite when you have the context to do it well, and when the words are a human's deliberate phrasing, ask them on the task instead of silently replacing it. Refuses a call with neither half, and refuses an empty body — blanking a description is not an edit; if the task should not exist, say so on it instead.",
       inputSchema: {
         type: "object",
         properties: {
           taskId: { type: "string" },
-          markdown: {
-            type: "string",
-            description: "The FULL new description. Replaces what is there."
-          },
           title: {
             type: "string",
-            description: "A new title for the row, applied as part of the same act. Omit to keep the current one. " + 'The row\'s one-line name, and the thing a person scanning thirty rows actually reads. Say WHO it is for, WHAT they get, and HOW — `<Person> can <achieve goal X> by <describe action>`, under 70 characters (100 is the hard ceiling). e.g. "Bryan can review across tasks faster with clearer task descriptions and UX", "Agents can revise goal priority with a tool to reorder goals". The failure this exists to stop is a title that states an OBSERVATION — "A decision-answered event promises a link checklist" names something somebody noticed, so ten of them in a column give no sense of the plan and the board cannot be prioritised. Never REFUSED: a rough capture still lands, and the response comes back with `titleGaps` naming what is missing (too long, no persona, no action, clipped mid-thought) so triage can fix it.' + " Send one whenever the rewrite changed what this task IS: the response carries `titleGaps`, and a body that has moved substantially since anyone last named the row reports `stale-body` until somebody does."
+            description: "The new one-line name. Omit to keep the current one. Aim for `<Person> can <achieve goal X> by <describe action>` — ideally under 70 characters, 100 max, never clipped mid-word; the full standard is in the `live-feedback:reviewing-task-shape` skill."
+          },
+          body: {
+            type: "string",
+            description: "The FULL new description, replacing what is there. Omit to leave the body alone (a title-only fix). Open with the user story, keep it phone-readable, and state a falsifiable done-when."
+          },
+          reason: {
+            type: "string",
+            description: 'Why you are rewriting, in one line — e.g. "title named the artifact, not the outcome". Recorded on the audit row and rendered in the activity feed, so the filer can see what the rewrite was for.'
           }
         },
-        required: ["taskId", "markdown"]
+        required: ["taskId", "reason"]
       }
     },
     {
@@ -15091,7 +15107,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "attach_agent",
-      description: "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep — and sweeping one means SHAPING it, not only filing it: read the row's own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each with update_task_body into a title and a story-shaped body, then set_task_goal. A capture arrives with a machine-clipped title and its raw utterance for a body, and this is the only step that turns it into work. Then queuedVoice — voice change-requests that arrived while no agent was live; act on each transcript verbatim — and, if you LEAD this workspace, pendingRetriage: a goal edit made while you were away, whose taskIds you re-place with set_task_goal (echo its batchId on each), plus pendingBucketReview: a goal BAND that appeared while you were away, with the unplaced tasks worth re-looking at against it — place the ones that now have a home, and leave the rest, since nothing has moved them. All four are drained by this call. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments with a fresh heartbeat, and after ~5 minutes of silence the hub shows you as away and requests queue.",
+      description: "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep — and sweeping one means SHAPING it, not only filing it: read the row's own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each with rewrite_task into a title and a story-shaped body, then set_task_goal. A capture arrives with a machine-clipped title and its raw utterance for a body, and this is the only step that turns it into work. Then queuedVoice — voice change-requests that arrived while no agent was live; act on each transcript verbatim — and, if you LEAD this workspace, pendingRetriage: a goal edit made while you were away, whose taskIds you re-place with set_task_goal (echo its batchId on each), plus pendingBucketReview: a goal BAND that appeared while you were away, with the unplaced tasks worth re-looking at against it — place the ones that now have a home, and leave the rest, since nothing has moved them — plus taskReviews: rows created, renamed, or rewritten while no lead was live, each waiting for the shape pass the `live-feedback:reviewing-task-shape` skill describes (judge the title and body; rewrite with rewrite_task or ask the filer on the task). All of these are drained by this call. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments with a fresh heartbeat, and after ~5 minutes of silence the hub shows you as away and requests queue.",
       inputSchema: {
         type: "object",
         properties: {
@@ -15586,15 +15602,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const { workspaceId, tasks } = a;
         const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/tasks/batch`, { tasks, author: AUTHOR });
         const gapsFor = (taskId) => res.shapeGaps?.find((g) => g.taskId === taskId)?.gaps ?? undefined;
-        const titleGapsFor = (taskId) => res.titleGaps?.find((g) => g.taskId === taskId)?.gaps ?? undefined;
-        const bodyGapsFor = (taskId) => res.bodyGaps?.find((g) => g.taskId === taskId)?.gaps ?? undefined;
         const droppedFor = (taskId) => res.ignoredLinks?.find((l) => l.taskId === taskId)?.ignored ?? undefined;
         const unplaced = new Set(res.placement?.unplaced ?? []);
         return ok({
           created: res.tasks.map((t) => ({
             title: t.title,
-            ...titleGapsFor(t.id) !== undefined ? { titleGaps: titleGapsFor(t.id) } : {},
-            ...bodyGapsFor(t.id) !== undefined ? { bodyGaps: bodyGapsFor(t.id) } : {},
             ...taskCreatedSummary(t, droppedFor(t.id), gapsFor(t.id), !unplaced.has(t.id))
           })),
           failures: res.failures,
@@ -15729,23 +15741,31 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...res.ownerKind !== undefined ? { ownerKind: res.ownerKind } : {}
         });
       }
-      case "update_task_body": {
-        const { taskId, markdown, title } = a;
-        const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/body`, {
-          markdown,
-          ...title !== undefined ? { title } : {},
+      case "rewrite_task": {
+        const { taskId, title, body, reason } = a;
+        if (body === undefined && title === undefined) {
+          return err("nothing to rewrite — pass title, body, or both");
+        }
+        if (body !== undefined) {
+          const res2 = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/body`, {
+            markdown: body,
+            ...title !== undefined ? { title } : {},
+            ...reason !== undefined ? { reason } : {},
+            author: AUTHOR
+          });
+          return ok({
+            taskId,
+            title: res2.task?.title,
+            body: res2.task?.body,
+            quote: res2.task?.quote
+          });
+        }
+        const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/title`, {
+          title,
+          ...reason !== undefined ? { reason } : {},
           author: AUTHOR
         });
-        return ok({
-          taskId,
-          title: res.task?.title,
-          body: res.task?.body,
-          quote: res.task?.quote,
-          ...res.titleGaps !== undefined ? { titleGaps: res.titleGaps } : {},
-          ...res.titleMessage !== undefined ? { titleMessage: res.titleMessage } : {},
-          ...res.bodyGaps !== undefined ? { bodyGaps: res.bodyGaps } : {},
-          ...res.bodyMessage !== undefined ? { bodyMessage: res.bodyMessage } : {}
-        });
+        return ok({ taskId, title: res.task?.title, changed: res.changed ?? false });
       }
       case "set_task_goal": {
         const { taskId, goal, position, batchId } = a;
@@ -15875,7 +15895,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           untriaged: res.untriaged ?? [],
           queuedVoice: res.queuedVoice ?? [],
           ...res.pendingRetriage ? { pendingRetriage: { ...res.pendingRetriage, contract: RETRIAGE_SKILL } } : {},
-          ...res.pendingBucketReview ? { pendingBucketReview: res.pendingBucketReview } : {}
+          ...res.pendingBucketReview ? { pendingBucketReview: res.pendingBucketReview } : {},
+          ...res.taskReviews !== undefined && res.taskReviews.length > 0 ? { taskReviews: res.taskReviews, taskReviewContract: TASK_REVIEW_SKILL } : {}
         });
       }
       case "heartbeat": {
@@ -16008,6 +16029,12 @@ async function emitHubChannelMessage(event, rawPayload) {
       break;
     case "task.regrouped":
       body = `[task.regrouped] ${p.taskId}: ${p.fromGoal} → ${p.toGoal}${by}`;
+      break;
+    case "task.retitled":
+      body = `[task.retitled] "${truncate(p.titleFrom ?? "", 60)}" → "${truncate(p.titleTo ?? "", 60)}"${by}${p.reason ? ` — ${truncate(p.reason, 80)}` : ""}`;
+      break;
+    case "task.body_edited":
+      body = p.titleFrom && p.titleTo ? `[task.body_edited] reshaped "${truncate(p.titleFrom, 60)}" → "${truncate(p.titleTo, 60)}"${by}${p.reason ? ` — ${truncate(p.reason, 80)}` : ""}` : `[task.body_edited] ${p.taskId}${by}${p.reason ? ` — ${truncate(p.reason, 80)}` : ""}`;
       break;
     case "task.gate_refused":
       body = `[task.gate_refused] ${p.taskId}: ${p.riskTier}-tier ${p.reason}${by} — → ${p.to} did NOT happen`;
