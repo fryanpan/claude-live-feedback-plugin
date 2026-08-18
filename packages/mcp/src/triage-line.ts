@@ -25,6 +25,11 @@ export interface TriageRequestPayload {
   /** `bucket-review` only: the bands that just appeared in the goal list —
    *  the reason the unplaced pile is worth another look. */
   newBands?: Array<{ id?: string; title?: string }>;
+  /** `task-review` only: the name the row has NOW, what just happened to it
+   *  (created / renamed / edited), and who did it. */
+  title?: string;
+  trigger?: string;
+  actor?: { id?: string; name?: string; kind?: string };
 }
 
 /**
@@ -60,13 +65,22 @@ export const RETRIAGE_SKILL = 'live-feedback:handling-a-goal-change';
  *  - REWRITE, then place. A title someone would recognise, a body in the
  *    story shape this board asks for, then `set_task_goal` at a position.
  *
- * `update_task_body` takes the title alongside the markdown so a shaping is
- * one attributed act; the row's original words are preserved to `quote`
+ * `rewrite_task` takes the title alongside the body so a shaping is one
+ * attributed act; the row's original words are preserved to `quote`
  * automatically on that first rewrite, so a rewrite can never be the only
  * record of what was said.
  */
 const SHAPE_THEN_PLACE =
-  'read its own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each into a title and a story-shaped body with update_task_body, then place with set_task_goal';
+  'read its own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each into a title and a story-shaped body with rewrite_task, then place with set_task_goal';
+
+/**
+ * The judgment half of a task-review — what the standard is, when to rewrite
+ * versus ask the filer, and why a human's deliberate words are never silently
+ * replaced. Named in the request the same way RETRIAGE_SKILL is, and exported
+ * for the same reason: the away lead gets the queued rows on `attach_agent`,
+ * and both delivery paths must name the same contract.
+ */
+export const TASK_REVIEW_SKILL = 'live-feedback:reviewing-task-shape';
 
 /**
  * The part of the request that is the WORK — the exact ids to re-place, and
@@ -152,6 +166,22 @@ export function triageRequestLine(p: TriageRequestPayload, selfAgentId: string):
       return `[triage.requested] FYI — ${ask} Addressed to lead agent ${lead}. Act only if that is you.${detail}`;
     }
     return `[triage.requested] ${ask}${detail}`;
+  }
+  if (p.kind === 'task-review') {
+    // Addressed to the lead, like a re-triage: every attached agent hears
+    // the channel, and two agents reviewing one row would rewrite it twice.
+    const what = p.trigger ?? 'written';
+    const named = p.title ? ` ("${p.title}")` : '';
+    const who = p.actor?.name ? ` by ${p.actor.name}` : '';
+    const ask =
+      `task ${p.taskId}${named} was ${what}${who} — review its title and body against the ` +
+      `standard (${TASK_REVIEW_SKILL}): fine as-is is a real answer; otherwise rewrite with ` +
+      'rewrite_task (with a reason), or ask the filer in a comment on the task.';
+    const lead = p.leadAgentId;
+    if (lead !== undefined && lead !== selfAgentId) {
+      return `[triage.requested] FYI — ${ask} Addressed to lead agent ${lead}. Act only if that is you.`;
+    }
+    return `[triage.requested] ${ask}`;
   }
   if (p.kind !== 'goal-retriage') {
     return `[triage.requested] shape and place task ${p.taskId}: ${SHAPE_THEN_PLACE}`;
