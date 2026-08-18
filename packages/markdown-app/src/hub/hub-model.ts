@@ -1570,3 +1570,84 @@ export function presenceChips(
   }
   return chips;
 }
+
+// ── The Home pane (per-workspace) ──────────────────────────────────────────
+
+/** Which page of the workspace shell is showing. Two panes, one shell: the
+ *  shell mounts once and the panes swap, so the board's live projection
+ *  survives a visit to Home. */
+export type HubPane = 'home' | 'board';
+
+/**
+ * `/workspaces/<id>` stays the BOARD — every link already in the field points
+ * there, and a landing page that moved under those links would read as the
+ * board having vanished. Home is the explicit `/home` suffix, deep-linkable.
+ */
+export function paneFromPath(pathname: string): HubPane {
+  return /^\/workspaces\/[^/?#]+\/home\/?$/.test(pathname) ? 'home' : 'board';
+}
+
+export function panePath(workspaceId: string, pane: HubPane): string {
+  const base = `/workspaces/${encodeURIComponent(workspaceId)}`;
+  return pane === 'home' ? `${base}/home` : base;
+}
+
+/** The brief as `GET /api/workspaces/:id/home` ships it. */
+export interface HomeBriefView {
+  markdown: string;
+  generatedAt: number;
+  source: 'generated' | 'deterministic';
+}
+
+export interface HomePayload {
+  workspaceId: string;
+  /** 0 = this person has never marked caught up here. */
+  lastReadAt: number;
+  /** Where the brief's coverage actually starts (bounded on a first visit). */
+  since: number;
+  instructions: string;
+  brief: HomeBriefView;
+  /** True only when the server actually queued a model call for this reader. */
+  generating: boolean;
+}
+
+/**
+ * What the brief covers, as a sentence. The marker is the reader's own act,
+ * so it gets the personal phrasing; a reader who never marked gets the
+ * bounded window stated as a bound, not as a fake marker.
+ */
+export function homeSinceLabel(payload: Pick<HomePayload, 'lastReadAt'>, now: number): string {
+  if (payload.lastReadAt <= 0) return 'Covering the last 7 days';
+  return `Since you caught up ${timeAgo(payload.lastReadAt, now)}`;
+}
+
+/**
+ * The board's one line about the review queue. Null when nothing is waiting —
+ * the banner only exists while items are open (approved design), so an empty
+ * queue renders nothing rather than an all-clear box.
+ */
+export function reviewBannerText(queue: ReviewQueue): string | null {
+  if (queue.total === 0) return null;
+  return queue.total === 1
+    ? '1 item is waiting for your review'
+    : `${queue.total} items are waiting for your review`;
+}
+
+/** How long the Home pane keeps asking after a `generating: true` payload.
+ *  The server's own pending window is the real bound; this cap only stops a
+ *  client from polling a wedged server forever. */
+export const HOME_POLL_CAP_MS = 30_000;
+
+/**
+ * Poll only while the server says a generation is actually queued — the
+ * grounded flag, never an inference — and give up after the cap so a payload
+ * that never settles cannot pin a phone's radio open.
+ */
+export function shouldPollHome(
+  payload: Pick<HomePayload, 'generating'> | null,
+  startedAt: number,
+  now: number,
+): boolean {
+  if (!payload?.generating) return false;
+  return now - startedAt < HOME_POLL_CAP_MS;
+}
