@@ -260,6 +260,64 @@ Technical discoveries that should persist across sessions for this project.
   extension order: the old-number gutter must precede `lineNumbers()` in
   the same extension list to render on the left.
 
+## Widening a predicate's DOMAIN is a change to the predicate, and the corpus holds shapes no fixture has
+
+- **`GET /` returned 500 in production twenty minutes after a merge, and not one
+  line of the function that threw had changed.** The new landing page is the
+  first caller to run `awaitingPerson` across EVERY doc on the server rather
+  than across one live workspace's threads. That reached comment rows written
+  months ago, and `classifyActor` (`activity.ts`) did
+  `author.id.startsWith('agent-')` on an author with no `id`:
+  `TypeError: undefined is not an object` — thrown from `unansweredRun`, called
+  from `buildLandingModel`. `awaitingPerson` was correct, well-tested and
+  untouched. **Its domain moved, which is a change to it.**
+- **The type said `User`; the data did not.** Comment authors are persisted in
+  the CRDT by whatever wrote them, across months and several shapes of the
+  field. Measured across the whole corpus afterwards: **26 of 1,825 comments
+  carry an author that is a bare STRING** rather than an object, all of them in
+  one doc family. TypeScript cannot see this — the value was typed at the
+  boundary years of writes ago, and nothing revalidates a CRDT on load.
+- **The evidence was in hand two hours early, and I coded around it.** While
+  measuring the corpus to design the feature, my own probe hit exactly this and
+  I added `if isinstance(a,str)` to the probe so the measurement would finish.
+  The log line said `string authors seen: 1`. I read it as a probe detail rather
+  than as a fact about production data. **A defensive workaround you write in a
+  throwaway probe is a bug report you filed against yourself and then closed.**
+  When a probe needs a guard the production code does not have, that asymmetry
+  IS the finding — stop and check which one is wrong.
+- **Fixtures cannot find this and the corpus can.** Seven mutations, four gates
+  green, 1,525 server tests, an adversarial review pass and a route-level e2e
+  all passed over hand-built authors that were well-formed by construction —
+  because nobody invents the malformed input that breaks their own code. This
+  file already says "Re-measure a widened heuristic against the corpus that
+  justified it"; the same rule applies when the heuristic does not change at all
+  and only its INPUT SET widens.
+- **Fix at the classifier, not the call site.** A landing-only guard leaves every
+  other caller exposed to the same rows. `classifyActor`'s own header already
+  said the field is "hand-populated by outside callers" — the function had
+  anticipated hostile input and defended only against case variation.
+- **A defensive guard must not become a silent behaviour change, so pin the
+  happy path.** The repair reads `id`/`name`/`kind` defensively and a
+  positive-control test asserts all six well-formed classifications resolve
+  exactly as before. Without that, "no longer throws" is satisfied by a function
+  that classifies everything as one thing. An unreadable author declares
+  nothing, which is the same state as `kind == null` — already `agent`, the safe
+  direction, since an agent misfiled as a person launders the audit log and can
+  resurrect a resolved thread while the reverse only over-filters.
+- **Grep every OTHER reader of the field before calling it fixed.** Three more
+  read `author.id`/`author.name` unguarded. Checked rather than assumed: on a
+  string author they are property reads, not method calls, so they do not throw
+   — but `activity-backfill.ts` writes those 26 rows with `actorId`/`actorName`
+  undefined, degrading the weekly-review stream rather than crashing it. A
+  quieter failure in the more important place.
+- **A fixture where two ranking criteria agree cannot tell them apart.** From
+  the same change's mutation round: "group ranking ignores the needs-you count"
+  SURVIVED, because the fixture's busiest group was also its freshest, so a
+  recency-only ranking produced an identical order. It only went red once the
+  fixture was rebuilt to make the criteria disagree — most-waiting group also
+  the oldest. **Any test of a multi-key sort needs a case where the keys
+  conflict**, or it proves only that the first key exists.
+
 ## A unit test can be true and still prove nothing about the caller
 
 - **`isWhitespaceOnlyChange('a b', 'ab') === false` passed from the first
