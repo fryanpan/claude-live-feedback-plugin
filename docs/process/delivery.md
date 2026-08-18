@@ -18,7 +18,7 @@ who has your change and who does not — and who has to do what about it.
 |---|---|---|---|
 | Plugin (commands, skills, hooks, MCP bundle) | Version-keyed copy from the GitHub marketplace | Prod refreshes the cache on its own, ≤30 min after the merge | **The peer**, by restarting its own session |
 | MCP server code | `packages/plugin/mcp/index.js`, **tracked in git** | Same as the plugin | Same |
-| Browser client (markdown app + widget) | `packages/markdown-app/dist` / `packages/widget/dist`, **untracked**, published at server start | Prod restart | **You** — pull the deploy source, then restart prod; the reader only reloads |
+| Browser client (markdown app + widget) | `packages/markdown-app/dist` / `packages/widget/dist`, **untracked**, published at server start | Prod restart | **You** — pull the deploy source, then restart prod (or `POST /api/deploy`, which is those two steps as one); the reader only reloads |
 | Server code | The checkout the service runs from | Prod restart | Same |
 
 Exactly one row needs a person, and it is not the one people assume. **A peer's
@@ -142,6 +142,30 @@ when `release.json`'s `sourceRef` is the commit you meant to ship. `sourceRef`
 is `git describe` on the deploy source at publish time, so it answers exactly
 this question — see [deploy-source.ts](../../packages/server/src/deploy-source.ts)
 for what its `-dirty` suffix does and does not mean.
+
+### Or ask the server to do it
+
+`POST /api/deploy` runs exactly those three steps as one operation — pull
+(`merge --ff-only`, never a rebase or a reset), restart, and record the outcome
+to disk, since the restart ends the process that would otherwise report on it.
+`GET /api/deploy` reads that record back and is safe at any time; reading is not
+deploying.
+
+**There is no "just restart" verb, here or anywhere else, and that is the
+design.** A restart over an unpulled checkout rebuilds the same bundles and
+publishes the same client while printing a successful deploy — the failure the
+section above is about. Binding the pull and the restart into one operation
+makes that state unexpressible rather than merely discouraged.
+
+Two limits worth knowing. The route answers only to a **loopback peer address**
+(not the `Host` header, which is client-controlled — a LAN and a tailnet client
+were both measured reaching this server sending `Host: localhost`), so it runs
+from the box; dev and staging answer 501 by construction. And a bound document
+with un-flushed edits **refuses** the deploy, with `force` to accept the loss —
+see [learnings.md](learnings.md), "A git operation on a bound file is an editor
+save", for why a pull over a live doc is undone about a second after git reports
+success. The manual three steps remain the fallback for the one case the route
+cannot serve: a server that is already down.
 
 Then check a feature literal in the served bundle, old bundle first — a literal
 only discriminates if it is absent from the previous release. `releases/` keeps
