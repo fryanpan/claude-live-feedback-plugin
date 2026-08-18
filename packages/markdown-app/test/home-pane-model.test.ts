@@ -44,30 +44,52 @@ describe('paneFromPath / panePath', () => {
 describe('homeSinceLabel', () => {
   // Local-time fixtures, so the calendar-day comparisons hold in any TZ.
   const now = new Date(2026, 7, 17, 20, 0).getTime(); // Monday 8:00 pm
+  // A payload whose brief states no coverage of its own — the pre-field
+  // shape, and the shape the deterministic brief has when coverage equals
+  // the window. Every case below fixes the window and varies nothing else.
+  const at = (since: number, coversFrom?: number) => ({
+    since,
+    brief: {
+      markdown: 'x',
+      generatedAt: since,
+      source: 'deterministic' as const,
+      ...(coversFrom === undefined ? {} : { coversFrom }),
+    },
+  });
 
   it("reads as the mockup's window: From <point> until now", () => {
     const friday = new Date(2026, 7, 14, 18, 12).getTime();
-    expect(homeSinceLabel({ since: friday }, now)).toBe('From Friday, 6:12 pm until now');
+    expect(homeSinceLabel(at(friday), now)).toBe('From Friday, 6:12 pm until now');
   });
 
   it('a window opening today says today, not a weekday', () => {
     const morning = new Date(2026, 7, 17, 6, 5).getTime();
-    expect(homeSinceLabel({ since: morning }, now)).toBe('From today, 6:05 am until now');
+    expect(homeSinceLabel(at(morning), now)).toBe('From today, 6:05 am until now');
   });
 
   it('yesterday is yesterday — a weekday name a day old is ambiguous next week', () => {
     const y = new Date(2026, 7, 16, 12, 0).getTime();
-    expect(homeSinceLabel({ since: y }, now)).toBe('From yesterday, 12:00 pm until now');
+    expect(homeSinceLabel(at(y), now)).toBe('From yesterday, 12:00 pm until now');
   });
 
   it('older than a week gets the date, because a bare weekday would lie', () => {
     const old = new Date(2026, 7, 4, 9, 30).getTime();
-    expect(homeSinceLabel({ since: old }, now)).toBe('From Aug 4, 9:30 am until now');
+    expect(homeSinceLabel(at(old), now)).toBe('From Aug 4, 9:30 am until now');
   });
 
   it('midnight and noon render as 12, not 0', () => {
     const midnight = new Date(2026, 7, 17, 0, 15).getTime();
-    expect(homeSinceLabel({ since: midnight }, now)).toBe('From today, 12:15 am until now');
+    expect(homeSinceLabel(at(midnight), now)).toBe('From today, 12:15 am until now');
+  });
+
+  it("names the BRIEF's coverage start, not the window's, when the two differ", () => {
+    // The reported defect: a 7-day window, a brief written from the newest
+    // slice of it, and a card claiming the week. Both are asserted over the
+    // same window so the difference can only come from `coversFrom`.
+    const weekAgo = new Date(2026, 7, 10, 9, 0).getTime();
+    const thisMorning = new Date(2026, 7, 17, 8, 50).getTime();
+    expect(homeSinceLabel(at(weekAgo), now)).toBe('From Aug 10, 9:00 am until now');
+    expect(homeSinceLabel(at(weekAgo, thisMorning), now)).toBe('From today, 8:50 am until now');
   });
 });
 
