@@ -136,6 +136,7 @@ function auditLines(dataDir: string, workspaceId: string): number {
 type ProjectedTask = {
   id: string;
   title: string;
+  titleGaps?: string[];
   status: string;
   assignee: string;
   goal: string;
@@ -199,6 +200,38 @@ describe('ydoc projection + workspace room', () => {
   afterAll(async () => {
     await handle.stop();
     rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('projects titleGaps onto the row, so the board can render the title nudge', async () => {
+    // The list route computes this advisory too, but the BOARD renders from
+    // this map — so a test through the route would pass with the projection
+    // never carrying it, and the badge would be dead. Assert at the layer the
+    // renderer reads.
+    const wsId = await makeWorkspace('title-projection');
+    const observation = await makeTask(wsId, {
+      // States something noticed; names no persona and no action.
+      title: 'A decision-answered event promises a link checklist',
+      assignee: 'Bryan',
+      goal: 'chores',
+    });
+    const standard = await makeTask(wsId, {
+      title: 'Agents can rank a backlog by reading the goal order first',
+      assignee: 'Bryan',
+      goal: 'chores',
+    });
+    const room = handle.rooms.get(workspaceRoomId(wsId));
+    if (!room) throw new Error('ws room was not created');
+    const map = room.ydoc.getMap('tasks');
+
+    const flagged = map.get(observation) as ProjectedTask | undefined;
+    expect(flagged?.titleGaps).toContain('no-persona');
+    expect(flagged?.titleGaps).toContain('no-action');
+    // POSITIVE CONTROL, same map in the same pass: a row that meets the
+    // standard carries NO key, so "absent" is a judgement rather than a
+    // projection that never learned the field.
+    const clean = map.get(standard) as ProjectedTask | undefined;
+    expect(clean?.title).toBe('Agents can rank a backlog by reading the goal order first');
+    expect(clean?.titleGaps).toBeUndefined();
   });
 
   it('a REST-created task appears in the ws room tasks map, and a transition updates it', async () => {
