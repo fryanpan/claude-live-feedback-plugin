@@ -108,10 +108,11 @@ sequences:
   colliding merge landed is not evidence your number is still ahead.
 - **Merges.** They land one at a time, in an order somebody chooses, each
   branch taking a fresh `main` merge before its final commit.
-- **A `yellow` or `red` risk tier, or an open decision.** These gate the
-  **forward transition** — the moment the work becomes real. They do not gate
-  reading the code, reproducing the problem, writing the branch, or opening
-  the PR.
+- **An open decision.** It gates the **forward transition** — the moment the
+  work becomes real. It does not gate reading the code, reproducing the
+  problem, writing the branch, or opening the PR. (A `yellow` or `red` risk
+  tier belonged in this line until 2026-08-18; that gate is gone, and judging
+  when a move needs a person is your own call again.)
 
 Only the first is a reason to serialise the **work**. The next two sequence
 the **merge**, and sequencing merges is entirely compatible with every branch
