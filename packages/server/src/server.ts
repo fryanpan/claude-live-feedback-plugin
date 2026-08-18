@@ -2317,17 +2317,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             note: body?.note as string | undefined,
             evidence: body?.evidence as { commit?: string; threadRef?: Ref } | undefined,
             usage: body?.usage as { inputTokens: number; outputTokens: number } | undefined,
-            // The human's live confirmation for a yellow-tier move (§3.4).
-            confirmed: body?.confirmed === true,
           });
+          // `body.confirmed` is read by nothing now (the risk gate was removed
+          // 2026-08-18) and is deliberately NOT validated: peers on older
+          // bundles keep sending it until they restart, and a request that
+          // starts failing over a field the server no longer cares about is
+          // exactly how a removal breaks a caller it never meant to touch.
           if (!res.ok) {
             // A gate refusal is a refusal, not a malformed request: same 409
             // an enforce-marked blocker returns, so callers have one shape
             // for "the gate said no".
-            const refused =
-              res.error === 'blocked' ||
-              res.error === 'risk-refused' ||
-              res.error === 'needs-confirmation';
+            const refused = res.error === 'blocked';
             const status = res.error === 'not-found' ? 404 : refused ? 409 : 400;
             return j(status, res);
           }
@@ -2404,10 +2404,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           taskProjection.ensureWorkspace(res.task.workspaceId);
           return j(200, { ok: true, changed: res.changed, task: res.task });
         }
-        // set_task_goal (§3.10): goal/subgoal + exact position + riskTier —
-        // the write half of triage and the board's regroup gesture. Every
-        // field here is hand-copied; each has an HTTP-level test in
-        // task-tool-routes.test.ts.
+        // set_task_goal (§3.10): goal/subgoal + exact position — the write
+        // half of triage and the board's regroup gesture. Every field here is
+        // hand-copied; each has an HTTP-level test in task-tool-routes.test.ts.
+        //
+        // `riskTier` used to be validated here and forwarded to the store. It
+        // is now IGNORED, not refused: an older peer sends it on every
+        // placement until it restarts, and the 400 this route used to be able
+        // to return would now fire on a field that means nothing. Accept the
+        // old payload shape; there is an HTTP-level test that sends it.
         const taskGoalMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/goal$/);
         if (taskGoalMatch && req.method === 'POST') {
           const taskId = decodeURIComponent(taskGoalMatch[1] ?? '');
@@ -2418,15 +2423,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           const author = authorFor(body?.author);
           if (!author) return j(400, { error: 'author required' });
-          const riskTier = body?.riskTier;
-          if (
-            riskTier !== undefined &&
-            riskTier !== 'green' &&
-            riskTier !== 'yellow' &&
-            riskTier !== 'red'
-          ) {
-            return j(400, { error: 'riskTier must be green | yellow | red' });
-          }
           const batchId = body?.batchId;
           if (batchId !== undefined && typeof batchId !== 'string') {
             return j(400, { error: 'batchId must be a string' });
@@ -2434,13 +2430,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const res = taskStore.setTaskGoal(taskId, goal, {
             actor: author,
             position: typeof body?.position === 'number' ? Number(body.position) : undefined,
-            riskTier,
             batchId,
           });
           if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
           // A confirm-in-place (changed:false) mutates gated fields
-          // (triagedAgainst, triagePendingTs, riskTier) without emitting an
-          // event — refresh the projection by hand, same as attachDoc.
+          // (triagedAgainst, triagePendingTs) without emitting an event —
+          // refresh the projection by hand, same as attachDoc.
           if (!res.changed) taskProjection.ensureWorkspace(res.task.workspaceId);
           return j(200, res);
         }
