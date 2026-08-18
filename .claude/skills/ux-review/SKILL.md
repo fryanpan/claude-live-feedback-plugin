@@ -69,6 +69,45 @@ DOM regions that were merely past the cut. See "A truncated page read is
 indistinguishable from a page that never rendered" in
 `docs/process/learnings.md`.
 
+### Before concluding a behaviour did not happen, prove the page could have done it
+
+A probe that reports "the feature did not fire" is an absence, and an absence
+is only worth reporting once you have shown the page was in a state where the
+feature *could* have fired.
+
+- **A backgrounded Chrome window never fires `requestAnimationFrame`.** When
+  `document.visibilityState === 'hidden'`, rAF callbacks are not throttled —
+  they are not called at all, indefinitely. Anything scheduled through one has
+  simply not run: a measure-then-clamp that sets a max-height, a
+  scroll-into-view on mount, a layout decision deferred one frame to let fonts
+  settle. The DOM you read back is the pre-decision DOM, and it reads exactly
+  like a broken feature.
+- Measured here on two features in one pass — a summary that clamps itself to
+  `44vh` reported its ceiling equal to its natural height (i.e. "clipping never
+  engages"), and a page that scrolls to its ask on mount reported `scrollY: 0`.
+  Both were working. The window was behind the terminal.
+- **Check it directly rather than assuming the window is in front**, since a
+  screenshot, a click, or a `navigate` will foreground it and change the answer
+  under you:
+
+  ```js
+  document.visibilityState                       // 'hidden' invalidates any rAF-dependent reading
+  await new Promise((res) => {                   // the positive control: does a frame arrive at all?
+    requestAnimationFrame(() => res(true));
+    setTimeout(() => res(false), 800);
+  });
+  ```
+
+  If that promise resolves `false`, no frame arrived — take a screenshot
+  first (that foregrounds the window), then re-measure. Do not report the
+  first reading.
+- The general form, and it outlives rAF: **satisfy every precondition the
+  behaviour has before measuring its absence** — a frame for rAF work, a
+  dismissed modal for anything the page awaits, a scrolled viewport for
+  virtualized DOM, a completed handshake for a socket. Same family as "a
+  negative test needs a positive control": the probe ran, it just measured a
+  page that never got to the point of deciding.
+
 ### Timing the page: a backgrounded tab's clock is not yours
 
 - **Chrome clamps timers in a tab that isn't in front** — measured here at 3
