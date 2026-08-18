@@ -51,10 +51,31 @@ export interface GeneratedSummary {
  * A generated summary as STORED, with the fingerprint of the thread it came
  * from. The hash is what makes regeneration idempotent and what stops a stale
  * summary from outliving its input.
+ *
+ * `promptVersion` is the OTHER input a summary is derived from. The hash
+ * covers the thread; nothing covered the instructions, so a summary written
+ * under a prompt that has since been corrected stayed current forever — the
+ * 2026-08-17 delivery-claim rule reached zero of the ~900 summaries already
+ * on disk, because every one of them still matched its thread. Absent means
+ * "before this field existed" (version 1). See `needsCall`.
  */
 export interface StoredSummary extends GeneratedSummary {
   hash: string;
+  promptVersion?: number;
 }
+
+/**
+ * Bump when a change to SYSTEM (or to how the answer is read) is meant to
+ * reach summaries that already exist. `needsCall` treats a stored summary
+ * from an older version as needing a call, so the next backfill rewrites it;
+ * the client keeps showing the old line until the new one lands. Nothing
+ * fires on its own — the backfill is still opt-in per start (`bin.ts`).
+ *
+ *   1  everything before the field existed
+ *   2  2026-08-18: mood rules (proposal ≠ decision, in-flight ≠ done,
+ *      newest comment wins, polarity, actor) after a 927-summary review
+ */
+export const SUMMARY_PROMPT_VERSION = 2;
 
 export interface SummaryPrompt {
   system: string;
@@ -91,14 +112,43 @@ const SYSTEM = [
   `Aim for 8 words. Never exceed ${DISCUSSION_WORDS}. If your draft is longer,`,
   'rewrite it shorter before you answer — do not answer with the long version.',
   '',
+  // The examples used to be three completed states and one open question, and
+  // the model learnt the lesson: it wrote "Done" / "Agreed" / "Fixed" over
+  // threads that only proposed, asked, or planned. Measured over 927 stored
+  // summaries (2026-08-18): the largest error class by far was a proposal,
+  // plan, request, or in-flight step reported as done or agreed — 24 of the
+  // 43 lines a reviewer flagged. Inversions were 5, stale state 5. So the
+  // examples now show the moods the thread actually comes in.
   'Good discussion lines, and their length:',
   '  "Fixed; caret top-right, Resolve on its own row" (8 words)',
-  '  "Agreed, real bug, fix not started" (6 words)',
+  '  "Proposes separate writing type; awaiting your call" (7 words)',
   '  "Still open: does this break element anchors?" (7 words)',
-  '  "Rewrote section; device telemetry now matches" (6 words)',
+  '  "Retitle planned, not applied yet; PR still open" (8 words)',
+  '  "Earlier fix retracted; doc numbers stand" (6 words)',
   '',
   'Be specific and concrete. Never invent detail that is not in the thread.',
   'Never mention the card, the reviewer, or these instructions.',
+  '',
+  // The rules below each name a measured error class from the same review.
+  // They are stated as substitutions ("say X instead"), not prohibitions,
+  // because a rule phrased only as "never say Y" is satisfied by a blank line.
+  'STATE THE MOOD THE THREAD IS IN. Only what the thread ESTABLISHES, in the',
+  'mood it establishes it:',
+  '- A proposal, recommendation, or plan is NOT a decision or a done deed.',
+  '  "I\'d add X — want me to?" is "Proposes adding X; awaiting go-ahead", never',
+  '  "Agreed to add X" or "Added X".',
+  '- Future or in-flight work is NOT done. "I\'ll retitle §2", "running now",',
+  '  "PR is up" are "Retitle planned", "Verification run in flight", "PR open',
+  '  for review" — never "Fixed", "Verified", "Done".',
+  '- An unanswered question IS the state. If the newest comment asks someone',
+  '  something or offers to do something, name that open ask.',
+  '- The NEWEST comment wins. A later comment that corrects, retracts, or',
+  '  supersedes an earlier one defines the state; do not report the older one.',
+  '- Keep polarity exactly: not / un- / never, over / under, before / after,',
+  '  pre- / post-, open / closed. A flipped word is the worst error you can',
+  '  make. When unsure, reuse the thread\'s own word.',
+  '- Keep the actor. An agent recommending is not the human deciding; an ask',
+  '  relayed to someone else is not work done here.',
   '',
   // The one class of claim a summary can get SPECIFICALLY and CHECKABLY wrong,
   // and the one the board already knows the answer to without asking a model.
@@ -383,9 +433,16 @@ export function buildRetryNudge(s: GeneratedSummary, opts: { hasReplies: boolean
  *
  * The single place that decides, so the server never grows its own copy of the
  * judgement. A thread with no comments has nothing to summarize; a thread whose
- * stored hash still matches has already been summarized as it stands.
+ * stored hash still matches has already been summarized as it stands — unless
+ * it was summarized under an OLDER prompt than this build carries, in which
+ * case the next backfill should redo it (see `SUMMARY_PROMPT_VERSION`).
+ *
+ * "Older", not "different": a summary written by a newer build than this one
+ * is not stale, and a rollback must not spend a call putting the old prompt's
+ * answer back.
  */
 export function needsCall(t: Thread, stored: StoredSummary | null | undefined): boolean {
   if (t.comments.length === 0) return false;
-  return !stored || stored.hash !== summaryHash(t);
+  if (!stored || stored.hash !== summaryHash(t)) return true;
+  return (stored.promptVersion ?? 1) < SUMMARY_PROMPT_VERSION;
 }

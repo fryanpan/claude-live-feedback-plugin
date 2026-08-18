@@ -174,8 +174,10 @@ export function summaryPending(t: Thread, opts: { now: number }): boolean {
  * choice in `threadLines`, and reaches a card row declared `string` — which
  * renders as `[object Object]`.
  *
- * Returns a fresh, three-field object so nothing else riding on the stored
- * value travels with it.
+ * Returns a fresh object so nothing else riding on the stored value travels
+ * with it. `promptVersion` is optional and advisory (it only decides whether
+ * a backfill re-spends a call), so a malformed one is dropped rather than
+ * rejecting the whole summary.
  */
 export function readStoredSummary(value: unknown): StoredSummary | undefined {
   if (!value || typeof value !== 'object') return undefined;
@@ -183,7 +185,11 @@ export function readStoredSummary(value: unknown): StoredSummary | undefined {
   if (typeof s.topic !== 'string') return undefined;
   if (typeof s.discussion !== 'string') return undefined;
   if (typeof s.hash !== 'string') return undefined;
-  return { topic: s.topic, discussion: s.discussion, hash: s.hash };
+  const out: StoredSummary = { topic: s.topic, discussion: s.discussion, hash: s.hash };
+  if (typeof s.promptVersion === 'number' && Number.isFinite(s.promptVersion)) {
+    out.promptVersion = s.promptVersion;
+  }
+  return out;
 }
 
 /**
