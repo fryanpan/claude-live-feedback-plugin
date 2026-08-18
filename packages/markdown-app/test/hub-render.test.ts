@@ -771,7 +771,7 @@ describe('renderReviewBanner', () => {
     const d = task({ needs: 'decision', assignee: 'human' });
     renderReviewBanner(root, reviewQueue([d], [], NOW), { onGoHome });
     expect(root.querySelector('.hub-review-banner-text')?.textContent).toBe(
-      '1 item is waiting for your review',
+      'Something is waiting for your review',
     );
     (root.querySelector('.hub-review-banner-go') as HTMLElement).click();
     expect(onGoHome).toHaveBeenCalledTimes(1);
@@ -782,7 +782,7 @@ describe('renderReviewBanner', () => {
     expect(root.children).toHaveLength(0);
   });
 
-  it('counts every kind, plural', () => {
+  it('still renders one countless line when several kinds are waiting', () => {
     const d = task({ needs: 'decision', assignee: 'human' });
     const thread = {
       kind: 'task-thread' as const,
@@ -794,9 +794,9 @@ describe('renderReviewBanner', () => {
       since: NOW - 60_000,
     };
     renderReviewBanner(root, reviewQueue([d], [thread], NOW), { onGoHome: vi.fn() });
-    expect(root.querySelector('.hub-review-banner-text')?.textContent).toBe(
-      '2 items are waiting for your review',
-    );
+    const text = root.querySelector('.hub-review-banner-text')?.textContent;
+    expect(text).toBe('Something is waiting for your review');
+    expect(text).not.toMatch(/\d/);
   });
 });
 

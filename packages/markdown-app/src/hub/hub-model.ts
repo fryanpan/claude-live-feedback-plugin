@@ -1673,12 +1673,16 @@ export function reviewRowTitle(item: Pick<ReviewItem, 'title' | 'ask'>): string 
  * The board's one line about the review queue. Null when nothing is waiting —
  * the banner only exists while items are open (approved design), so an empty
  * queue renders nothing rather than an all-clear box.
+ *
+ * No count, deliberately (Bryan, 2026-08-18, answering t-0iestDQdJTOZ:
+ * "Remove the count. Don't think I need it."). The decision that number was
+ * built to make honest — which rows a needs-you COUNT may admit — dissolved
+ * with the number itself: the banner says the queue is non-empty, and the
+ * Home list is the queue.
  */
 export function reviewBannerText(queue: ReviewQueue): string | null {
   if (queue.total === 0) return null;
-  return queue.total === 1
-    ? '1 item is waiting for your review'
-    : `${queue.total} items are waiting for your review`;
+  return 'Something is waiting for your review';
 }
 
 /** How long the Home pane keeps asking after a `generating: true` payload.
