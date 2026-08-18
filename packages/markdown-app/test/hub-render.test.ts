@@ -2718,7 +2718,7 @@ describe('renderPresence — plugin drift', () => {
     expect(note?.textContent).toContain('older plugin than 0.1.26');
     expect(note?.textContent).toContain('agent-quill 0.1.12');
     expect(note?.textContent).toContain(
-      'command claude plugin update live-feedback@claude-live-feedback',
+      'command claude plugin update claude-workspaces@claude-workspaces',
     );
   });
 

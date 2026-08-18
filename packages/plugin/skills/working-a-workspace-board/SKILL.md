@@ -13,7 +13,7 @@ the contract.
 
 This is the discipline. For the **tool shapes** — creating a workspace,
 ordering goals, filing a task, triaging, transitions, decisions, the
-lead-agent seat — read `live-feedback:running-a-workspace-hub`. Don't
+lead-agent seat — read `claude-workspaces:running-a-workspace-hub`. Don't
 reconstruct the API from the server source.
 
 ## Always work in priority order

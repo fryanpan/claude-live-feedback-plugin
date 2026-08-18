@@ -58,7 +58,7 @@ After setup, ask Claude things like:
 2. Enable channel events for live-feedback. Add this one-line alias to your shell init file (e.g., `~/.zshrc`):
 
    ```sh
-   claude() { /path/to/claude --dangerously-load-development-channels plugin:live-feedback@claude-live-feedback "$@"; }
+   claude() { /path/to/claude --dangerously-load-development-channels plugin:claude-workspaces@claude-workspaces "$@"; }
    ```
 
    Reload your shell (`source ~/.zshrc`) and relaunch Claude Code.
@@ -67,7 +67,7 @@ After setup, ask Claude things like:
 
    ```sh
    claude plugin marketplace add .
-   claude plugin install live-feedback@claude-live-feedback --scope user
+   claude plugin install claude-workspaces@claude-workspaces --scope user
    ```
 
    The MCP server is bundled inside the plugin tree at `packages/plugin/mcp/index.js` and invoked via Claude Code's `${CLAUDE_PLUGIN_ROOT}` substitution, so no `npm link` step or PATH setup is needed — the plugin install is the complete install.

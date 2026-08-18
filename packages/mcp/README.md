@@ -70,8 +70,8 @@ See [`src/mcp.ts`](https://github.com/fryanpan/claude-workspaces-plugin/blob/mai
 The server advertises `experimental: { 'claude/channel': {} }` and pushes thread events as `notifications/claude/channel`. Claude Code requires per-session opt-in:
 
 ```sh
-claude --channels plugin:live-feedback@claude-live-feedback   # production
-claude --dangerously-load-development-channels plugin:live-feedback@claude-live-feedback   # local-dev
+claude --channels plugin:claude-workspaces@claude-workspaces   # production
+claude --dangerously-load-development-channels plugin:claude-workspaces@claude-workspaces   # local-dev
 ```
 
 ## Releasing this package

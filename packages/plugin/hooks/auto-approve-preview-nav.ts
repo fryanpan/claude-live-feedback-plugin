@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Shipped as part of the live-feedback plugin. Mirrors the repo's own
+ * Shipped as part of the claude-workspaces plugin. Mirrors the repo's own
  * hook at .claude/hooks/auto-approve-preview-nav.ts so users who install
  * the plugin get the same behavior without copying files.
  *
