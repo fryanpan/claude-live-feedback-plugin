@@ -2179,6 +2179,37 @@ export class Rooms {
   }
 
   /**
+   * Bound documents whose write-back flush has been scheduled and has not
+   * fired yet — i.e. the live doc holds edits that disk does not.
+   *
+   * This is the window in which an external write to the same file LOSES:
+   * the poll classifies it as a conflict, the live doc wins, and the file is
+   * reasserted ~800ms later. A `git pull` is such a write, so a deploy asks
+   * this before it fast-forwards anything.
+   *
+   * `root` limits the answer to files under one directory, because the
+   * question is only ever about the tree that is about to be rewritten — a
+   * document bound from some other repo has no bearing on it. Containment
+   * goes through `isWithinRoot`, which realpaths both sides: this machine
+   * reaches the same home directory through two paths, and a lexical prefix
+   * test answers no for half of them.
+   *
+   * One consequence of `isWithinRoot` answering closed: a binding whose file
+   * has been deleted is not reported. That is the right way round — the
+   * caller uses this to decide whether to refuse, and a missing file is not
+   * a reason to block a deploy.
+   */
+  pendingFileWrites(root?: string): { docId: string; path: string }[] {
+    const out: { docId: string; path: string }[] = [];
+    for (const [docId, binding] of this.fileBindings) {
+      if (!binding.writeTimer) continue;
+      if (root !== undefined && !isWithinRoot(root, binding.path)) continue;
+      out.push({ docId, path: binding.path });
+    }
+    return out;
+  }
+
+  /**
    * Replace the WHOLE document from a markdown payload — the legitimate
    * "comprehensive rewrite" path. Applies as a block-level diff on the live
    * doc (anchors on untouched blocks keep resolving, connected editors

@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveClientDists } from './client-release.ts';
+import { createDeployer } from './deploy.ts';
 import { createPluginRefresher } from './plugin-refresh.ts';
 import { lanHostnames, normalizePublicBaseUrl, tailscaleHost } from './public-host.ts';
 import { createServer } from './server.ts';
@@ -167,11 +168,40 @@ const pluginRefresher =
     ? createPluginRefresher()
     : null;
 
+// Declared before the deployer because the deployer needs to ask this
+// server's Rooms which bound documents are mid-edit, and the server is
+// constructed below.
+let handle: ReturnType<typeof createServer> | null = null;
+
+// The ONLY place a real deployer is constructed — same seam rule as the
+// plugin refresher above, and it matters more here: this one runs `git merge
+// --ff-only` in the deploy source and then restarts the launchd service. No
+// test run, no embedded server and no `bun run staging` may do either.
+//
+// PROD passes --deploy (see scripts/serve.ts). Absent, no deployer exists and
+// /api/deploy answers 501 — which is what dev and staging want, because they
+// are copies of the deploy source rather than the machine everyone reads.
+//
+// There is deliberately no "--restart" companion. A restart re-runs
+// scripts/serve.ts out of the deploy source's WorkingDirectory, so over an
+// unpulled checkout it rebuilds the same bundles and republishes the same
+// client while printing a successful deploy line. Pull and restart are one
+// verb in deploy.ts precisely so that cannot be expressed here.
+const deployer = args.includes('--deploy')
+  ? createDeployer({
+      repoRoot,
+      dataDir: dataDir ?? join(repoRoot, 'data'),
+      // Only documents bound INSIDE the deploy source can be clobbered by
+      // its pull; one bound from another checkout is not this deploy's
+      // business.
+      busyDocs: () => handle?.rooms.pendingFileWrites(repoRoot) ?? [],
+    })
+  : null;
+
 // Try the requested port first; if it's taken (e.g. another agent owns it),
 // walk up to the next 20 ports. This keeps `bun run dev` working without
 // conflicts when multiple agents are on the same machine.
 let port = requestedPort;
-let handle: ReturnType<typeof createServer> | null = null;
 let lastErr: unknown = null;
 for (let i = 0; i < 20 && !handle; i++) {
   try {
@@ -191,6 +221,7 @@ for (let i = 0; i < 20 && !handle; i++) {
       summarizer,
       ...(voiceComplete ? { voiceComplete } : {}),
       ...(pluginRefresher ? { pluginRefresher } : {}),
+      ...(deployer ? { deployer } : {}),
     });
   } catch (err) {
     lastErr = err;

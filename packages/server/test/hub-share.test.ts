@@ -590,6 +590,15 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
         // refresh'. This row is the end-to-end confirmation that the gate is
         // actually wired in front of it.
         ['/api/plugin/refresh', { method: 'POST' }],
+        // Same shape, one step worse in consequence: a deploy restarts this
+        // process and drops every live editor socket, so a share visitor
+        // reaching it would be able to interrupt everyone else's review.
+        // Also refused by `shareScopeAllows` before any route runs; the
+        // layer-level assertion lives in deploy-reachability.test.ts, 'a
+        // share visitor cannot reach the deploy route'. This row confirms
+        // the gate is wired in front of it.
+        ['/api/deploy', { method: 'POST' }],
+        ['/api/deploy', { method: 'GET' }],
       ];
       for (const [path, init] of cases) {
         const r = await pub(path, hubCookie, {
