@@ -1,0 +1,131 @@
+/**
+ * The task description, edited in place.
+ *
+ * A task's body is not a field on the row — it is a live Yjs room
+ * (`task:<taskId>`), the same one an agent rewrites through
+ * `set_doc_content` / `find_and_replace` and the same one the full review
+ * surface opens. This mounts the review surface's own editor over that room
+ * inside the detail panel, so a person's typing and an agent's rewrite merge
+ * as CRDT edits rather than one overwriting the other, and the description
+ * is edited where it is read instead of on a second page.
+ *
+ * The editor is loaded lazily: the hub bundle is a board, and the whole
+ * Tiptap/ProseMirror stack would triple it for a panel most page loads never
+ * open. `loadEditor` is a dynamic import at the call site, so it becomes its
+ * own chunk.
+ *
+ * Lifecycle is keyed on (task, slot). The panel repaints on every ydoc change
+ * and keeps the slot element in place for a live description (see
+ * `keptBodySlot` in hub-render.ts) — so a repaint with the same task and the
+ * same slot is a no-op here, and only a different task, a rebuilt slot, or a
+ * closed panel tears the editor down. That is what lets a reader keep typing
+ * through their own snapshot landing in the projection.
+ */
+import type { FeedbackClient } from '@feedback/core';
+import type { AnyExtension } from '@tiptap/core';
+import type { CreateEditorOpts, EditorHandle } from '../editor.ts';
+import { BODY_LIVE_CLASS } from './hub-render.ts';
+
+export interface TaskBodyTarget {
+  id: string;
+  bodyDocId: string;
+}
+
+/** What the lazily-loaded chunk hands back. Types only — the real module is
+ *  `../editor.ts` plus Tiptap's Placeholder, and none of it is imported here
+ *  so that none of it lands in the hub bundle. */
+export interface EditorModule {
+  createEditor: (opts: CreateEditorOpts) => EditorHandle;
+  /** The empty description says what to write rather than showing a blank
+   *  box. Optional so a test double need not carry Tiptap. */
+  placeholder?: (text: string) => AnyExtension;
+}
+
+export interface TaskBodyEditorDeps {
+  connect: (docId: string) => FeedbackClient;
+  loadEditor: () => Promise<EditorModule>;
+  user: { name: string; color: string };
+  /** Reached the room, mounted the editor. Test seam; the app has no use for it. */
+  onMounted?: (taskId: string) => void;
+}
+
+export interface TaskBodyEditorHost {
+  /** Called after every panel repaint with the task on screen (or null) and
+   *  the slot the panel is showing for it. Idempotent for the same pair. */
+  sync(task: TaskBodyTarget | null, slot: HTMLElement | null): void;
+  /** Whether an editor is currently mounted for this task. */
+  isLive(taskId: string): boolean;
+  destroy(): void;
+}
+
+interface Mount {
+  taskId: string;
+  slot: HTMLElement;
+  client: FeedbackClient;
+  handle: EditorHandle | null;
+}
+
+export const PLACEHOLDER_TEXT = 'Describe the task — what someone can do once it is done, and why.';
+
+export function createTaskBodyEditorHost(deps: TaskBodyEditorDeps): TaskBodyEditorHost {
+  let mount: Mount | null = null;
+
+  const teardown = () => {
+    if (!mount) return;
+    const m = mount;
+    mount = null;
+    m.handle?.destroy();
+    m.client.close();
+    m.slot.classList.remove(BODY_LIVE_CLASS);
+  };
+
+  const sync = (task: TaskBodyTarget | null, slot: HTMLElement | null) => {
+    if (mount && (!task || !slot || mount.taskId !== task.id || mount.slot !== slot)) teardown();
+    if (!task || !slot || mount) return;
+
+    const client = deps.connect(task.bodyDocId);
+    const m: Mount = { taskId: task.id, slot, client, handle: null };
+    mount = m;
+    void deps
+      .loadEditor()
+      .then((mod) => {
+        // The reader may have closed the panel or moved to another task while
+        // the chunk was in flight; a late mount would put an editor for the
+        // wrong task into a slot that no longer shows it.
+        if (mount !== m) return;
+        // Marked live BEFORE the editor is created, and before the projection
+        // fallback is cleared: from here on the panel's repaint keeps this
+        // node rather than rebuilding it, which is the property the editor
+        // needs from its parent.
+        slot.classList.add(BODY_LIVE_CLASS);
+        slot.replaceChildren();
+        const extra = mod.placeholder ? [mod.placeholder(PLACEHOLDER_TEXT)] : [];
+        m.handle = mod.createEditor({
+          parent: slot,
+          ydoc: client.ydoc,
+          awareness: client.awareness,
+          user: deps.user,
+          extraExtensions: extra,
+        });
+        deps.onMounted?.(task.id);
+      })
+      .catch(() => {
+        if (mount !== m) return;
+        // The fallback text is still in the slot; say why it is not editable
+        // rather than leaving a static description that looks like a broken
+        // editor. The link out below the slot still reaches the room.
+        const note = document.createElement('p');
+        note.className = 'hub-detail-body-more';
+        note.textContent = 'The editor could not load here — open the full editor to change this.';
+        slot.append(note);
+        mount = null;
+        client.close();
+      });
+  };
+
+  return {
+    sync,
+    isLive: (taskId) => mount?.taskId === taskId && mount.handle !== null,
+    destroy: teardown,
+  };
+}

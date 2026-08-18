@@ -76,6 +76,7 @@ import {
   renderUnplacedStrip,
 } from './hub-render.ts';
 import { sidebarEntriesFor } from './hub-sidebar.ts';
+import { createTaskBodyEditorHost } from './task-body-editor.ts';
 
 interface HubState {
   info: HubWorkspaceInfo | null;
