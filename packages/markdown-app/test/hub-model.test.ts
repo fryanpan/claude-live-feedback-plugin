@@ -25,7 +25,6 @@ import {
   humanBlockerRows,
   parseQuickAdd,
   pluginDriftNotice,
-  positionBetween,
   presenceChips,
   quoteAfterCapture,
   quoteAfterEdit,
@@ -480,31 +479,18 @@ describe('presenceChips', () => {
 
 // ── Reordering (drag handle + keyboard) ────────────────────────────────────
 //
-// `task.order` is fractional and `set_task_goal` already takes a fractional
-// `position`, so dropping between two rows is arithmetic, not a new API. The
-// DOM-facing half (which row is under the pointer) is browser-only; these are
-// the pure halves it feeds.
-
-describe('positionBetween', () => {
-  it('lands a row exactly between its two new neighbours', () => {
-    expect(positionBetween(task({ order: 1 }), task({ order: 2 }))).toBe(1.5);
-    expect(positionBetween(task({ order: 1.5 }), task({ order: 2 }))).toBe(1.75);
-  });
-
-  it('appends past the last row and prepends before the first', () => {
-    expect(positionBetween(task({ order: 7 }), undefined)).toBe(8);
-    expect(positionBetween(undefined, task({ order: 7 }))).toBe(6);
-    // An empty section has no neighbours at all.
-    expect(positionBetween(undefined, undefined)).toBe(0);
-  });
-
-  // Two rows can carry the same order across a goal boundary (orders are only
-  // dense within a goal). A plain midpoint would equal both, the server would
-  // report changed:false, and the drop would silently do nothing.
-  it('still produces a value greater than `before` when the neighbours tie', () => {
-    expect(positionBetween(task({ order: 3 }), task({ order: 3 }))).toBeGreaterThan(3);
-  });
-});
+// A drop names the ROW it lands behind, not a number. These cases used to
+// assert the fractional `position` the drop computed — 2.5 between orders 2
+// and 3 — and every one of them passed while the feature was broken, because
+// nothing here ever built the input that breaks it: two rows sharing an
+// `order`. Fixtures were written 1, 2, 3, so the arithmetic always had room.
+// The tie is the ordinary state of a real board (`set_task_goal` stores
+// whatever number a caller sends), and between two tied rows no number can
+// express "between them" at all. So the assertions below are about which row
+// is named, and the fixture ties on purpose.
+//
+// The DOM-facing half (which row is under the pointer) is browser-only; these
+// are the pure halves it feeds.
 
 describe('dropIndexFor', () => {
   const rects = [
@@ -526,28 +512,40 @@ describe('dropIndexFor', () => {
 });
 
 describe('dropTarget', () => {
+  // b and c TIE on order — the shape that broke the arithmetic, and the shape
+  // a board reaches on its own. createdAt is spaced so the board's tiebreak
+  // puts them in a known sequence rather than comparing two ids.
   const dropSections = () =>
     boardSections(
       GOALS,
       [
-        task({ id: 'a', goal: 'g-pr', order: 1 }),
-        task({ id: 'b', goal: 'g-pr', order: 2 }),
-        task({ id: 'c', goal: 'g-pr', order: 3 }),
-        task({ id: 'z', goal: 'g-blog', order: 1 }),
+        task({ id: 'a', goal: 'g-pr', order: 1, createdAt: 100 }),
+        task({ id: 'b', goal: 'g-pr', order: 2, createdAt: 200 }),
+        task({ id: 'c', goal: 'g-pr', order: 2, createdAt: 300 }),
+        task({ id: 'z', goal: 'g-blog', order: 1, createdAt: 400 }),
       ],
       filters,
     );
 
-  it('reorders inside a goal at the midpoint of the rows it lands between', () => {
-    // 'a' dropped at index 1 of the remaining [b, c] → between b and c.
-    expect(dropTarget(dropSections(), 'a', 'g-pr', 1)).toEqual({ goal: 'g-pr', position: 2.5 });
-    // …and one further down is past c, i.e. appended.
-    expect(dropTarget(dropSections(), 'a', 'g-pr', 2)).toEqual({ goal: 'g-pr', position: 4 });
+  it('names the row it lands behind, so tied neighbours are still distinguishable', () => {
+    // The fixture is what makes this case worth having: b and c share an
+    // order, so "between b and c" has no numeric answer — and these two drops
+    // used to produce values that both sorted after c, i.e. one outcome for
+    // two different destinations.
+    expect(dropSections()[0]?.tasks.map((t) => t.id)).toEqual(['a', 'b', 'c']);
+    // 'a' dropped at index 1 of the remaining [b, c] → directly behind b.
+    expect(dropTarget(dropSections(), 'a', 'g-pr', 1)).toEqual({ goal: 'g-pr', after: 'b' });
+    // …and one further down is behind c.
+    expect(dropTarget(dropSections(), 'a', 'g-pr', 2)).toEqual({ goal: 'g-pr', after: 'c' });
+  });
+
+  it('the top of a section is `after: null` rather than a row', () => {
+    expect(dropTarget(dropSections(), 'c', 'g-pr', 0)).toEqual({ goal: 'g-pr', after: null });
   });
 
   it('moving to another goal is the same call with a different goal', () => {
-    expect(dropTarget(dropSections(), 'a', 'g-blog', 0)).toEqual({ goal: 'g-blog', position: 0 });
-    expect(dropTarget(dropSections(), 'a', 'g-blog', 1)).toEqual({ goal: 'g-blog', position: 2 });
+    expect(dropTarget(dropSections(), 'a', 'g-blog', 0)).toEqual({ goal: 'g-blog', after: null });
+    expect(dropTarget(dropSections(), 'a', 'g-blog', 1)).toEqual({ goal: 'g-blog', after: 'z' });
   });
 
   it('a drop that changes nothing is not a write', () => {
@@ -577,8 +575,8 @@ describe('stepTarget (the keyboard half of reordering)', () => {
     );
 
   it('moves a row one slot down and one slot up inside its goal', () => {
-    expect(stepTarget(stepSections(), 'a', 1)).toEqual({ goal: 'g-pr', position: 3 });
-    expect(stepTarget(stepSections(), 'b', -1)).toEqual({ goal: 'g-pr', position: 0 });
+    expect(stepTarget(stepSections(), 'a', 1)).toEqual({ goal: 'g-pr', after: 'b' });
+    expect(stepTarget(stepSections(), 'b', -1)).toEqual({ goal: 'g-pr', after: null });
   });
 
   // The keyboard has to reach every drop a pointer can, including the one
