@@ -342,7 +342,7 @@ update_task_body(taskId, markdown: "…", title: "…")
 **Then place.**
 
 ```
-set_task_goal(taskId, goal: "latency", position: 2.5, riskTier: "yellow", batchId?)
+set_task_goal(taskId, goal: "latency", position: 2.5, batchId?)
 ```
 
 - **Pick the spot, not just the bucket.** `position` is fractional — there is
@@ -352,9 +352,6 @@ set_task_goal(taskId, goal: "latency", position: 2.5, riskTier: "yellow", batchI
   so regroup freely — the safety is the record, not asking first. When a move
   would cross a human's earlier placement, leave a comment on the task doc
   referencing it.
-- **`riskTier` is how dangerous EXECUTING the task is, never how important it
-  is.** `green` reversible/contained · `yellow` outward-facing or hard to
-  reverse · `red` irreversible/one-way. It is keyed to the action's damage.
 
 ## The work loop
 
@@ -445,14 +442,15 @@ task_transition(taskId, to: "done", note: "merged in #142",
 - Open `after` dependencies come back in `blockers`; an edge marked **enforce
   refuses the transition (409)** until the blocking task closes. Read the
   message, it names what to unblock.
-- **Risk tier gates the actor, not the task.** An *agent* moving a `red` task
-  forward is refused outright — a person has to make the move. A `yellow` one
-  needs `confirmed: true`, which means the human said yes after you showed them
-  the concrete effect. It is not a retry flag; if they haven't answered, don't
-  send it. A person is never gated, and **moving back to `todo` is never
-  blocked**.
-- The tier binds live-feedback-mediated moves only. Actions your own runtime
-  performs never touch this server.
+- **Moving back to `todo` is never blocked** — undoing work must not be
+  gateable.
+- There is no risk gate here any more. A `riskTier` on the task used to refuse
+  an agent's forward move on `red` and require `confirmed: true` on `yellow`;
+  that was removed on 2026-08-18 because when to stop and ask a person is
+  already your fleet's own judgement, and a second copy of it on this server
+  was one mechanism too many. **Deciding when a move needs a human is still
+  yours to make** — the server simply no longer makes it for you. Old bundles
+  may still send `riskTier` and `confirmed`; both are accepted and ignored.
 
 **Hand off what isn't yours** with `assign_task(taskId, assignee)` —
 `'human'`, `'agent'`, or a named identity — the moment you discover it, rather

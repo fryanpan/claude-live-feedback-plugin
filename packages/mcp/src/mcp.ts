@@ -77,7 +77,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.54';
+const PLUGIN_VERSION = '0.1.56';
 
 /**
  * What a good `evidence.commit` looks like, said at the one layer that reaches
@@ -191,8 +191,7 @@ const server = new Server(
       'promote_to_task add work (omit `goal` and the task lands UNPLACED in',
       'Chores awaiting triage — the create says so and hands you the goal',
       'bands, and placing it with set_task_goal IS the triage:',
-      'pick the goal AND the exact position, and pass riskTier for how dangerous',
-      'the ACTION is, not how important the task is). task_transition is the',
+      'pick the goal AND the exact position). task_transition is the',
       'single gate for status changes — blockers come back in the result, and',
       'attach evidence ({commit} or {threadRef}) or the move is flagged unproven.',
       'attach_agent registers you as the workspace agent (heartbeat every few',
@@ -1157,7 +1156,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'task_transition',
       description:
-        "The SINGLE gate for task status changes (todo | in-progress | done) — attributed to this agent, appended to the task's audit trail. Attach `evidence` ({commit} and/or {threadRef}) on forward moves or the move is flagged `unproven` (allowed, shaded on the board) — and read the `commit` field's own description before you fill it, because the obvious value is the wrong one: a branch sha is discarded by the squash-merge, after which the row still reads as proven and points at nothing. If the evidence was missing or WRONG, do not re-send this call — it refuses with `same-status` — use `amend_evidence`, which appends a correction to the move that already happened. Open `after` dependencies come back in `blockers` — an edge marked enforce REFUSES the transition (HTTP 409) until the blocking task closes; read the blocker message, it names what to unblock. The task's riskTier gates forward moves the same way: a RED task refuses outright (a person has to make the move), and a YELLOW one needs `confirmed: true` — which means the human said yes after you showed them the concrete effect, never a flag you set to get past the gate. `usage` ({inputTokens, outputTokens}) reports what the task cost at done. Moving back to todo is never blocked.",
+        "The SINGLE gate for task status changes (todo | in-progress | done) — attributed to this agent, appended to the task's audit trail. Attach `evidence` ({commit} and/or {threadRef}) on forward moves or the move is flagged `unproven` (allowed, shaded on the board) — and read the `commit` field's own description before you fill it, because the obvious value is the wrong one: a branch sha is discarded by the squash-merge, after which the row still reads as proven and points at nothing. If the evidence was missing or WRONG, do not re-send this call — it refuses with `same-status` — use `amend_evidence`, which appends a correction to the move that already happened. Open `after` dependencies come back in `blockers` — an edge marked enforce REFUSES the transition (HTTP 409) until the blocking task closes; read the blocker message, it names what to unblock. `usage` ({inputTokens, outputTokens}) reports what the task cost at done. Moving back to todo is never blocked.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1177,11 +1176,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
               inputTokens: { type: 'number' },
               outputTokens: { type: 'number' },
             },
-          },
-          confirmed: {
-            type: 'boolean',
-            description:
-              "The human confirmed THIS move on a yellow-tier task, after being shown what it does. Not a retry flag — if they haven't answered, don't send it.",
           },
         },
         required: ['taskId', 'to'],
@@ -1265,14 +1259,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'set_task_goal',
       description:
-        "Place a task under a goal (or subgoal) at an exact position — this IS triage's write half: pick the spot, not just the bucket. Stamps triagedAgainst with the goal text judged against and clears the triage-pending marker; every move is recorded and fires task.regrouped, so regroup freely — the safety is the record, not asking first. When a move would cross a human's earlier placement, leave a task comment referencing it. Pass `riskTier` for how dangerous EXECUTING the task is (green: reversible/contained; yellow: outward-facing or hard to reverse; red: irreversible/one-way) — keyed to the action's damage, never its importance. `position` is fractional — there is always room between two tasks; omitted = bottom of the goal.",
+        "Place a task under a goal (or subgoal) at an exact position — this IS triage's write half: pick the spot, not just the bucket. Stamps triagedAgainst with the goal text judged against and clears the triage-pending marker; every move is recorded and fires task.regrouped, so regroup freely — the safety is the record, not asking first. When a move would cross a human's earlier placement, leave a task comment referencing it. `position` is fractional — there is always room between two tasks; omitted = bottom of the goal.",
       inputSchema: {
         type: 'object',
         properties: {
           taskId: { type: 'string' },
           goal: { type: 'string', description: 'Goal/subgoal id, or "chores".' },
           position: { type: 'number' },
-          riskTier: { type: 'string', enum: ['green', 'yellow', 'red'] },
           batchId: {
             type: 'string',
             description:
@@ -2432,13 +2425,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         });
       }
       case 'task_transition': {
-        const { taskId, to, note, evidence, usage, confirmed } = a as {
+        const { taskId, to, note, evidence, usage } = a as {
           taskId: string;
           to: string;
           note?: string;
           evidence?: { commit?: string; threadRef?: unknown };
           usage?: { inputTokens: number; outputTokens: number };
-          confirmed?: boolean;
         };
         const res = (await http('POST', `/api/tasks/${encodeURIComponent(taskId)}/transition`, {
           to,
@@ -2446,7 +2438,6 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...(note !== undefined ? { note } : {}),
           ...(evidence !== undefined ? { evidence } : {}),
           ...(usage !== undefined ? { usage } : {}),
-          ...(confirmed === true ? { confirmed } : {}),
         })) as { task: TaskPayload; blockers: unknown[]; unproven: boolean };
         return ok({
           taskId,
@@ -2542,18 +2533,16 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         });
       }
       case 'set_task_goal': {
-        const { taskId, goal, position, riskTier, batchId } = a as {
+        const { taskId, goal, position, batchId } = a as {
           taskId: string;
           goal: string;
           position?: number;
-          riskTier?: 'green' | 'yellow' | 'red';
           batchId?: string;
         };
         const res = (await http('POST', `/api/tasks/${encodeURIComponent(taskId)}/goal`, {
           goal,
           author: AUTHOR,
           ...(position !== undefined ? { position } : {}),
-          ...(riskTier !== undefined ? { riskTier } : {}),
           ...(batchId !== undefined ? { batchId } : {}),
         })) as { task: TaskPayload; changed: boolean };
         return ok({ taskId, goal: res.task.goal, order: res.task.order, changed: res.changed });
@@ -2995,6 +2984,9 @@ async function emitHubChannelMessage(event: string, rawPayload: unknown): Promis
     case 'task.regrouped':
       body = `[task.regrouped] ${p.taskId}: ${p.fromGoal} → ${p.toGoal}${by}`;
       break;
+    // Nothing emits this since the risk gate was removed (2026-08-18). Kept
+    // so a replayed or historical row still relays as a sentence rather than
+    // falling through to the bare-slug default.
     case 'task.gate_refused':
       body = `[task.gate_refused] ${p.taskId}: ${p.riskTier}-tier ${p.reason}${by} — → ${p.to} did NOT happen`;
       break;
