@@ -39,9 +39,11 @@ const DEPLOYED: DeployResult = {
   changed: true,
   before: 'aaaaaaa',
   after: 'bbbbbbb',
+  behind: 1,
+  ahead: 0,
   message: 'fixture deploy',
   ranAt: 1,
-  restartScheduled: true,
+  restartRequested: true,
 };
 
 describe('a share visitor cannot reach the deploy route', () => {
