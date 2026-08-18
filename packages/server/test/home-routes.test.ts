@@ -106,8 +106,8 @@ describe('home routes — deterministic server (no summarizer)', () => {
     const payload = await home();
     expect(payload.brief.markdown).toContain('**Filed:** 2 new tasks');
     expect(payload.brief.markdown).toContain('Rewrite the retry helper');
-    // The denominator counts the open decision.
-    expect(payload.brief.markdown).toContain('**1** item is queued for your review below.');
+    // The closing line states presence, never a number (t-0iestDQdJTOZ).
+    expect(payload.brief.markdown).toContain('What needs your review is queued below.');
   });
 
   it('mark caught up moves the marker per PERSON, the brief covers from it, and undo restores', async () => {
@@ -134,9 +134,9 @@ describe('home routes — deterministic server (no summarizer)', () => {
     expect(after.since).toBe(markedBody.lastReadAt);
     // Everything before the marker is read: the brief goes quiet.
     expect(after.brief.markdown).toContain('Quiet since you last caught up');
-    // …but the denominator still renders — an empty brief with no
-    // denominator would read as an all-clear over a queue with an open item.
-    expect(after.brief.markdown).toContain('**1** item is queued for your review below.');
+    // …but the presence line still renders — a quiet brief with no line
+    // would read as an all-clear over a queue with an open item.
+    expect(after.brief.markdown).toContain('What needs your review is queued below.');
 
     // Undo: post the previous value back.
     const undone = await h.post(`/api/workspaces/${ws}/home/read`, {
