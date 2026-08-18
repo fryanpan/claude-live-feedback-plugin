@@ -1,6 +1,7 @@
 /**
  * Hold-to-talk voice capture (§2.4 / §3.8), shared by the hub, the doc
- * surface, and the task detail. Hold Space anywhere (never while typing), hold
+ * surface, and the task detail. Hold Space over the page itself (a real hold,
+ * never a tap, never while typing or while any control has focus), hold
  * the mic button, or hold Space/Enter while the mic button has focus — the
  * last being the only route for someone who never uses a pointer, since a
  * mount that opts out of the document hotkey would otherwise have no keyboard
@@ -124,6 +125,15 @@ export interface VoiceCapture {
 
 /** How long a terminal indicator message stays up. */
 const INDICATOR_LINGER_MS = 6_000;
+/**
+ * How long Space must be HELD before the document-level hotkey starts
+ * recording. Push-to-talk is a hold; a typed space is a tap (keydown→keyup in
+ * well under 150ms), and before this threshold existed a tap RECORDED — every
+ * space that landed outside a text field started the engine and left a 6s
+ * "Didn't catch anything." toast (t-Mym15-yQ3QxJ). The mic button keeps
+ * starting instantly: pressing a mic is already unambiguous.
+ */
+export const SPACE_HOLD_ARM_MS = 250;
 /** If the recognition's `onend` never arrives after stop(), finalize anyway —
  *  a dead engine must not eat the utterance. */
 const FINALIZE_WATCHDOG_MS = 1_500;
@@ -231,6 +241,29 @@ export function recognitionErrorMessage(code: string): string {
  *  shadow boundary too — otherwise a space typed into the feedback widget's
  *  comment box starts recording instead of typing a space. Same retargeting
  *  bug as the board's hotkeys; same shared guard. */
+
+/**
+ * Where a document-level Space hold may begin: on the page itself, and
+ * nowhere else. A keydown's target is whatever has focus, and Space MEANS
+ * something on almost any focused element — it activates a button, toggles a
+ * checkbox, opens a select, "selects" a task row. `typingInPath` only knows
+ * about text entry, so every one of those cases used to start a recording
+ * (t-Mym15-yQ3QxJ). The honest positive predicate is narrow: the press is the
+ * page's own only when it lands on body / the root / the document — which is
+ * exactly the state of a reader who is not interacting with anything.
+ *
+ * Deliberately one-directional: everything this suppresses still has the mic
+ * button, so a false "not the page" costs a click; the old false "not typing"
+ * cost a corrupted sentence and a surprise recording.
+ */
+export function spaceHoldTargetsPage(path: readonly (EventTarget | undefined)[]): boolean {
+  const inner = path[0];
+  if (!inner) return false;
+  if (inner instanceof Document) return true;
+  if (!(inner instanceof Element)) return false;
+  const doc = inner.ownerDocument;
+  return inner === doc.body || inner === doc.documentElement;
+}
 
 export function createVoiceCapture(opts: VoiceCaptureOpts): VoiceCapture {
   const { button, indicator } = opts;
@@ -363,18 +396,61 @@ export function createVoiceCapture(opts: VoiceCaptureOpts): VoiceCapture {
     });
   };
 
+  /**
+   * The document-level hotkey. Two rules beyond the typing guard, both from
+   * the accidental-trigger report (t-Mym15-yQ3QxJ — "voice triggers while I'm
+   * typing, basically everywhere"):
+   *
+   * 1. The press must land on the PAGE (`spaceHoldTargetsPage`), not on some
+   *    focused control. This is what catches the report's worst case: a board
+   *    re-render that rebuilds the DOM under someone's hands drops focus to
+   *    <body>, and their next typed space arrived here looking exactly like a
+   *    deliberate hotkey.
+   * 2. The press must be a HOLD. keydown only ARMS a timer; the engine starts
+   *    SPACE_HOLD_ARM_MS later, and a keyup before that disarms — so a tap
+   *    does nothing at all. No preventDefault until the hold is real, so a
+   *    tap also keeps its native behaviour (scrolling, mostly) instead of
+   *    being eaten by a feature it never asked for.
+   */
+  let armTimer: ReturnType<typeof setTimeout> | null = null;
+  const disarm = (): void => {
+    if (armTimer) {
+      clearTimeout(armTimer);
+      armTimer = null;
+    }
+  };
+
   const onKeyDown = (ev: KeyboardEvent): void => {
-    if (ev.code !== 'Space' || ev.repeat) return;
+    if (ev.code !== 'Space') return;
+    if (ev.repeat) {
+      // Once the hold is arming or live, its auto-repeats are the hold's —
+      // keep them from scrolling the page under a recording.
+      if (holding || armTimer) ev.preventDefault();
+      return;
+    }
     if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
-    if (typingInPath(eventPath(ev))) return;
-    ev.preventDefault();
-    beginHold();
+    const path = eventPath(ev);
+    if (typingInPath(path)) return;
+    if (!spaceHoldTargetsPage(path)) return;
+    if (armTimer || holding) return;
+    armTimer = setTimeout(() => {
+      armTimer = null;
+      beginHold();
+    }, SPACE_HOLD_ARM_MS);
   };
   const onKeyUp = (ev: KeyboardEvent): void => {
     if (ev.code !== 'Space') return;
+    if (armTimer) {
+      // A tap: nothing started, so there is nothing to settle or report.
+      disarm();
+      return;
+    }
     endHold();
   };
-  const onBlur = (): void => endHold();
+  const onBlur = (): void => {
+    disarm();
+    endHold();
+  };
   const onPointerDown = (ev: Event): void => {
     ev.preventDefault();
     beginHold();
@@ -458,6 +534,7 @@ export function createVoiceCapture(opts: VoiceCaptureOpts): VoiceCapture {
       button.removeEventListener('keydown', onButtonKeyDown);
       button.removeEventListener('keyup', onButtonKeyUp);
       button.removeEventListener('blur', onButtonBlur);
+      disarm();
       if (clearTimer) clearTimeout(clearTimer);
       if (watchdog) clearTimeout(watchdog);
       try {
