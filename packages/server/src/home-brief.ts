@@ -73,12 +73,13 @@ export function readerKey(name: string): string {
 
 const HISTORY_CAP = 10;
 
-export const DEFAULT_INSTRUCTIONS = `Write for someone who has been away a day or two and reads on a phone.
+export const DEFAULT_INSTRUCTIONS = `Write for someone who has been away a few days and reads on a phone.
 
-- Under 200 words, as well-formatted markdown. Lead with what changed, not the process.
-- One short section per goal that moved; name what did not move in one line, so silence is never ambiguous.
-- End with how many items are queued for review below — never restate a decision that is already in the queue, say it is there.
-- Only state facts that are in the digest. Never invent names, numbers, or outcomes.`;
+- Under 150 words, as well-formatted markdown.
+- Prioritize the most significant changes and keep grouping together changes until you're under word count. And ideally everything important is covered
+- Lead with what changed, what outcomes were delivered.
+- Only state facts that are in the event digest.
+- Include inline links (not counted against word count) as much as possible to tie to source tasks, docs, mockups. Show the evidence.`;
 
 // ── What counts as news ────────────────────────────────────────────────────
 
@@ -170,6 +171,9 @@ export interface BriefQueueSummary {
 }
 
 export interface BriefInput {
+  /** The workspace the events belong to — every task mention in the brief
+   *  deep-links back into it, so a brief cannot be built without one. */
+  workspaceId: string;
   events: BriefEventRow[];
   queue: BriefQueueSummary;
   /** taskId → current title, for events that carry only an id. */
@@ -185,9 +189,35 @@ function actorName(actor: unknown): string | undefined {
   return undefined;
 }
 
+/**
+ * The relative URL that opens a task's detail on the board — the same shape
+ * the voice route navigates to and `hub-app.ts` reads off `?task=` on load.
+ * Relative on purpose: the brief renders on the page it points at, and the
+ * client resolves it against its own origin, so it is right on the tailnet
+ * hostname, on localhost, and behind a share host alike.
+ */
+export function taskDeepLink(workspaceId: string, taskId: string): string {
+  return `/workspaces/${encodeURIComponent(workspaceId)}?task=${encodeURIComponent(taskId)}`;
+}
+
 function titled(input: BriefInput, row: BriefEventRow): string {
   const id = typeof row.taskId === 'string' ? row.taskId : '';
   return (id && input.titleOf(id)) || id || 'a task';
+}
+
+/**
+ * The task as a markdown link — `[title](deep link)` — or the bare title
+ * when the row carries no task id (a goal edit, a lead change). This is what
+ * makes links POSSIBLE in the generated brief: the model may only reuse
+ * links present in the digest, so the digest has to carry them. Square
+ * brackets are dropped from the label because they would break the link
+ * syntax on the way back out; the visible title loses only the brackets.
+ */
+function linked(input: BriefInput, row: BriefEventRow): string {
+  const title = titled(input, row);
+  if (typeof row.taskId !== 'string' || row.taskId === '') return title;
+  const label = title.replace(/[[\]]/g, '');
+  return `[${label}](${taskDeepLink(input.workspaceId, row.taskId)})`;
 }
 
 function listOf(titles: string[], cap = 5): string {
@@ -217,14 +247,14 @@ export function deterministicBrief(input: BriefInput): string {
   for (const row of input.events) {
     switch (row.event) {
       case 'task.created':
-        created.push(titled(input, row));
+        created.push(linked(input, row));
         break;
       case 'task.transitioned':
-        if (row.to === 'done') done.push(titled(input, row));
-        else if (row.to === 'in-progress') started.push(titled(input, row));
+        if (row.to === 'done') done.push(linked(input, row));
+        else if (row.to === 'in-progress') started.push(linked(input, row));
         break;
       case 'decision.answered':
-        answered.push(titled(input, row));
+        answered.push(linked(input, row));
         break;
       case 'workspace.goal_updated':
       case 'workspace.goals_changed':
@@ -286,7 +316,7 @@ export function buildBriefPrompt(
       const when = typeof row.ts === 'number' ? new Date(row.ts).toISOString() : '';
       const who = actorName(row.actor);
       const what = String(row.event);
-      const task = typeof row.taskId === 'string' ? titled(input, row) : '';
+      const task = typeof row.taskId === 'string' ? linked(input, row) : '';
       const extra =
         row.event === 'task.transitioned'
           ? ` ${String(row.from ?? '')}→${String(row.to ?? '')}`
@@ -296,12 +326,19 @@ export function buildBriefPrompt(
       return `- ${when} ${what}${extra}${task ? ` · ${task}` : ''}${who ? ` · by ${who}` : ''}`;
     })
     .join('\n');
+  // The guardrail is deliberately two-sided. "Never invent links" alone made
+  // links impossible — nothing linkable was in the digest, and a compliant
+  // model produced none. Now the digest carries each task as a markdown link,
+  // and the model is told to reuse those and only those. The word budget is
+  // the instructions' to set, so no competing number lives here.
   const system = [
     'You write the "What\'s New?" catch-up brief at the top of a project workspace\'s Home page.',
     'The reader has been away and reads on a phone. Write well-formatted markdown, inverted-pyramid,',
-    'under 200 words. Use only facts present in the digest below — never invent names, numbers,',
-    'links, or outcomes, and never claim something shipped unless a digest line says it finished.',
-    'Do not address the reader with a preamble; start with the content. Output ONLY the brief markdown.',
+    "and respect the word limit in the reader's instructions. Use only facts present in the digest",
+    'below — never invent names, numbers, or outcomes, and never claim something shipped unless a',
+    'digest line says it finished. Link to tasks using ONLY the markdown links present in the digest,',
+    'each URL copied exactly; never fabricate a URL. Do not address the reader with a preamble;',
+    'start with the content. Output ONLY the brief markdown.',
     '',
     "The reader's standing instructions for this brief:",
     instructions,
