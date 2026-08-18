@@ -982,10 +982,38 @@ body.hub-body {
   font-size: 13px;
   color: var(--fg-muted);
 }
+/* How the headline count splits. Rendered only when BOTH groups exist, so it
+   never restates a number the reader can already see. */
+.hub-decisions-split {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--fg-muted);
+}
 .hub-decision-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+/* Threads that qualified for the queue without containing a question — the
+   "shipped it, PR is green" notes agents leave on threads nobody closed.
+   Collapsed, because on the board that produced this measurement they were
+   the ENTIRE list (23 of 23), and an open section of 23 status notes is the
+   wall the reader is complaining about whatever heading sits on top of it.
+   Nothing is filtered out; a row moved here is still one tap away. */
+.hub-decision-updates {
+  margin-top: 8px;
+}
+.hub-decision-updates-label {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+.hub-decision-updates .hub-decision-chips {
+  margin-top: 6px;
 }
 .hub-decision-chip {
   display: inline-flex;
@@ -1933,11 +1961,14 @@ a.hub-link-chip:hover {
 .hub-link-internal {
   color: var(--fg-muted);
 }
-/* A preserved capture, labelled. The caption is what separates "here is what
-   you said" from "here is a source" — see the comment at its call site. It
-   sits INSIDE the figure's left rule so the label and the words it names read
-   as one block; at 430px the caption wraps to its own line before the quote
-   does, which is why the rule is on the figure and not on the blockquote. */
+/* A preserved capture, labelled and COLLAPSED, below the description rather
+   than above it. The label is what separates "here is what you said" from
+   "here is a source" — see the comment at its call site — and it survives the
+   move onto the <summary>. What changed is the position and the default state:
+   these are superseded words, and rendering them open above the description
+   showed a reader their own old text before the text they maintain.
+   The rule sits on the <details> so the label and the words it names read as
+   one block; at 430px the label wraps to its own line before the quote does. */
 .hub-detail-quote-block {
   margin: 0 0 12px;
   padding: 6px 12px;
@@ -1950,6 +1981,13 @@ a.hub-link-chip:hover {
   text-transform: uppercase;
   color: var(--fg-muted);
   margin-bottom: 4px;
+  cursor: pointer;
+  /* A summary is a tap target on a phone; the default marker box is smaller
+     than a finger, so the row itself carries the height. */
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 .hub-detail-quote {
   margin: 0;
@@ -1957,6 +1995,57 @@ a.hub-link-chip:hover {
   color: var(--fg-muted);
   font-family: var(--prose);
   overflow-wrap: anywhere;
+}
+/* "What we need from you" — the first thing under the title, with its own
+   reply box, so answering costs no scroll on a 430px phone. The box is what
+   makes it a loop rather than a signpost: a button that scrolls to a composer
+   further down satisfies "answer without leaving the screen" on a desktop
+   only. */
+.hub-detail-ask {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-subtle, transparent);
+}
+/* A run that contains a real question addressed to a person gets the accent;
+   one that does not is deliberately quiet, because it is a status note and
+   the reader is meant to be able to skip it on sight. */
+.hub-detail-ask--direct {
+  border-color: var(--accent, #2e7dd7);
+  border-left-width: 3px;
+}
+.hub-detail-ask-kicker {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.hub-detail-ask-text {
+  font-family: var(--prose);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.hub-detail-ask-text > :first-child {
+  margin-top: 0;
+}
+.hub-detail-ask-text > :last-child {
+  margin-bottom: 0;
+}
+.hub-detail-ask-meta {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.hub-detail-ask-form {
+  margin-top: 10px;
+}
+.hub-detail-ask-note {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--fg-muted);
 }
 .hub-detail-answer {
   font-weight: 600;
@@ -2103,11 +2192,30 @@ a.hub-link-chip:hover {
      panel — the detail sits in a 430px column on a phone. */
   overflow-wrap: anywhere;
 }
+/* Who said it and when, on one line, both as TEXT. The time used to live only
+   in a title attribute — a hover tooltip, on a surface whose whole point is
+   that it is read on a phone, where nothing hovers. */
+.hub-comment-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 .hub-comment-author {
-  display: block;
   font-size: 12px;
   font-weight: 600;
   color: var(--fg-muted);
+}
+.hub-comment-when {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+/* A thread the SERVER's review queue still lists as waiting on a person.
+   Louder than the Resolved badge it shares a class with, because this one is
+   a claim on the reader rather than a fact about the past. */
+.hub-thread-needs-you {
+  color: var(--accent, #2e7dd7);
+  font-weight: 700;
 }
 .hub-comment-body {
   font-family: var(--prose);
