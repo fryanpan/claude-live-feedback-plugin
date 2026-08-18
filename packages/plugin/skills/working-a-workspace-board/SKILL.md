@@ -151,7 +151,7 @@ already worked.
 
 `premise` is not a status and never appears on a done task — most rows
 carrying it still have real work left. When you have established what is
-actually true, **rewrite the description** with `update_task_body`, which
+actually true, **rewrite the description** with `rewrite_task`, which
 clears the notice. Keep what the body originally claimed and add the
 correction with your name and the date: the original measurement is evidence
 about when it was taken, not a mistake to erase.

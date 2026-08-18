@@ -1,120 +1,13 @@
 import { describe, expect, test } from 'bun:test';
-import {
-  IDEAL_TITLE_CHARS,
-  MAX_TITLE_CHARS,
-  bodyDrift,
-  bodyHead,
-  clipToWordBoundary,
-  titleGapMessage,
-  titleShapeGaps,
-} from '../src/task-title';
+import { bodyHead, clipToWordBoundary } from '../src/task-title';
 
-describe('titleShapeGaps — length', () => {
-  test("Bryan's own examples of a good title carry no SHAPE gap", () => {
-    // Note the first one is 74 characters — his stated ideal is 70, so his
-    // own example trips `over-ideal`. That is a real disagreement between the
-    // two halves of the brief and not a bug here: the length rule is his
-    // number, and it is reported as the mildest gap rather than as a defect.
-    // What matters is that neither example lacks a persona, an action, or a
-    // finished last word.
-    const one = titleShapeGaps(
-      'Bryan can review across tasks faster with clearer task descriptions and UX',
-    );
-    expect(one).toEqual(['over-ideal']);
-    expect(titleShapeGaps('Agents can revise goal priority with a tool to reorder goals')).toEqual(
-      [],
-    );
-  });
-
-  test('over the ideal but under the max reports over-ideal alone', () => {
-    // 71..100 chars, well-formed otherwise.
-    const title = 'Reviewers can spot a stale task by a marker the board renders on every row now';
-    expect(title.length).toBeGreaterThan(IDEAL_TITLE_CHARS);
-    expect(title.length).toBeLessThanOrEqual(MAX_TITLE_CHARS);
-    expect(titleShapeGaps(title)).toEqual(['over-ideal']);
-  });
-
-  test('over the max reports BOTH too-long and over-ideal', () => {
-    const title = `Agents can ${'x'.repeat(120)} with a tool`;
-    expect(title.length).toBeGreaterThan(MAX_TITLE_CHARS);
-    const gaps = titleShapeGaps(title);
-    expect(gaps).toContain('too-long');
-    expect(gaps).toContain('over-ideal');
-  });
-
-  test('a title exactly at each boundary is NOT flagged — the limits are inclusive', () => {
-    // Positive control for the two length gaps: the same builder one char
-    // longer must flag, or "no gap" here proves nothing.
-    const atIdeal = `Agents can ${'a'.repeat(IDEAL_TITLE_CHARS - 23)} with a tool`;
-    expect(atIdeal.length).toBe(IDEAL_TITLE_CHARS);
-    expect(titleShapeGaps(atIdeal)).toEqual([]);
-    expect(titleShapeGaps(`${atIdeal}a`)).toEqual(['over-ideal']);
-  });
-});
-
-describe('titleShapeGaps — persona and action', () => {
-  test('an observation with no persona reports no-persona', () => {
-    // Verbatim from the board, quoted in the task that asked for this.
-    const gaps = titleShapeGaps('A decision-answered event promises a link checklist');
-    expect(gaps).toContain('no-persona');
-  });
-
-  test('a persona with no means-clause reports no-action', () => {
-    expect(titleShapeGaps('Bryan can review across tasks faster')).toEqual(['no-action']);
-  });
-
-  test('the means-clause must follow the persona clause, not merely appear', () => {
-    // "with" sits BEFORE the `can`, so it is not the action this title
-    // promises. A whole-string `includes` would wrongly pass this.
-    const gaps = titleShapeGaps('With no warning a reviewer can lose the thread');
-    expect(gaps).toContain('no-action');
-  });
-
-  test('each means marker is accepted after the persona clause', () => {
-    for (const marker of ['by', 'with', 'via', 'using', 'so']) {
-      expect(titleShapeGaps(`Agents can rank a backlog ${marker} reading the goal order`)).toEqual(
-        [],
-      );
-    }
-  });
-
-  test('a persona clause too deep into the title does not count', () => {
-    // `can` at word 12 is a coincidence of prose, not the standard's grammar.
-    const gaps = titleShapeGaps(
-      'A commit that is not a sha should not read as proof so nobody can trust it',
-    );
-    expect(gaps).toContain('no-persona');
-  });
-});
-
-describe('titleShapeGaps — clipped', () => {
-  test('a machine-clipped fragment ending in an ellipsis is reported', () => {
-    // The exact failure mode quoted on the board.
-    expect(titleShapeGaps('For tasks, I get dumped o…')).toContain('clipped');
-    expect(titleShapeGaps('For tasks, I get dumped o...')).toContain('clipped');
-  });
-
-  test('a title ending in a function word reads as truncated', () => {
-    expect(titleShapeGaps('Bryan can review a task by opening the')).toContain('clipped');
-    expect(titleShapeGaps('Bryan can review a task with')).toContain('clipped');
-  });
-
-  test('a title ending in a trailing comma reads as truncated', () => {
-    expect(titleShapeGaps('Bryan can review a task by opening it,')).toContain('clipped');
-  });
-
-  test('an ordinary well-formed ending is NOT clipped', () => {
-    // Positive control for the absence above: same shape, complete last word.
-    expect(titleShapeGaps('Bryan can review a task by opening the board')).not.toContain('clipped');
-  });
-});
-
-describe('titleShapeGaps — empty', () => {
-  test('a blank title is reported as empty and nothing else is asserted about it', () => {
-    expect(titleShapeGaps('   ')).toEqual(['empty']);
-    expect(titleShapeGaps('')).toEqual(['empty']);
-  });
-});
+/**
+ * The two helpers that survived the format-check removal (the gap
+ * derivations moved into the reviewing skill's LLM prompt, 2026-08-18):
+ * the word-boundary clip `promote_to_task` uses to generate a title, and
+ * the normalized body-head `applyTitle` stamps as part of the capture
+ * record.
+ */
 
 describe('clipToWordBoundary', () => {
   test('a string under the limit is returned untouched', () => {
@@ -178,55 +71,5 @@ describe('bodyHead — the story line a title compresses', () => {
   test('an empty body has an empty head', () => {
     expect(bodyHead('   \n\n ')).toBe('');
     expect(bodyHead(undefined)).toBe('');
-  });
-});
-
-describe('bodyDrift — how much of the body changed', () => {
-  test('an identical body has zero drift', () => {
-    const b = 'Agents can rank a backlog by reading the goal order first.';
-    expect(bodyDrift(b, b)).toBe(0);
-  });
-
-  test('a complete rewrite has full drift', () => {
-    expect(bodyDrift('alpha beta gamma delta', 'whisky xray yankee zulu')).toBe(1);
-  });
-
-  test('a same-length paraphrase of the middle still registers drift', () => {
-    // The case a first-line-only trigger would miss entirely, and the reason
-    // drift is measured over words rather than over length.
-    const prev = 'The reviewer opens the board and reads every row in order of goal.';
-    const next = 'The reviewer opens the board and skips every row without a marker.';
-    expect(bodyDrift(prev, next)).toBeGreaterThan(0.1);
-  });
-
-  test('drift is symmetric and bounded to 0..1', () => {
-    const a = 'one two three four five six';
-    const b = 'one two three';
-    expect(bodyDrift(a, b)).toBe(bodyDrift(b, a));
-    expect(bodyDrift(a, b)).toBeGreaterThan(0);
-    expect(bodyDrift(a, b)).toBeLessThanOrEqual(1);
-  });
-
-  test('growing a body counts the added words as drift', () => {
-    const prev = 'one two three four';
-    const next = 'one two three four five six seven eight';
-    expect(bodyDrift(prev, next)).toBeCloseTo(0.5, 5);
-  });
-
-  test('an undefined side is treated as an empty body, not as no change', () => {
-    expect(bodyDrift(undefined, 'one two three')).toBe(1);
-    expect(bodyDrift(undefined, undefined)).toBe(0);
-  });
-});
-
-describe('titleGapMessage', () => {
-  test('names every gap it was given', () => {
-    const msg = titleGapMessage(['over-ideal', 'no-persona']) ?? '';
-    expect(msg).toContain('70');
-    expect(msg.toLowerCase()).toContain('who');
-  });
-
-  test('no gaps produces no message', () => {
-    expect(titleGapMessage([])).toBeUndefined();
   });
 });
