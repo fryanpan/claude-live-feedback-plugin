@@ -1547,6 +1547,21 @@ body.hub-body {
 .hub-home-brief-body > :last-child {
   margin-bottom: 0;
 }
+/* Links in the brief are COLOUR ONLY — no underline (Bryan, 2026-08-18:
+   "link styling with underlines breaks readability in the what's new summary
+   -- use only more subtle text color changes"). The brief is a dense run of
+   linked task titles, so the browser's default underline draws a near-solid
+   rule through every paragraph; on a phone that is the whole card. `--accent`
+   is this stylesheet's standard link colour (the editor's prose links and the
+   comment bodies both use it), so the affordance stays the familiar blue.
+   Hover deepens the colour rather than adding the underline back. */
+.hub-home-brief-body a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.hub-home-brief-body a:hover {
+  color: color-mix(in srgb, var(--accent) 70%, var(--fg));
+}
 .hub-home-brief-actions {
   display: flex;
   align-items: center;
