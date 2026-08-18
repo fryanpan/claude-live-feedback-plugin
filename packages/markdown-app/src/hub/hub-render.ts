@@ -1615,7 +1615,10 @@ function walkWhere(item: ReviewItem, handlers: WalkthroughHandlers): HTMLElement
   label.textContent = item.kind === 'doc-thread' ? 'Doc:' : 'Task:';
   const open = document.createElement('button');
   open.type = 'button';
-  open.className = 'hub-walk-open';
+  // Its own class, NOT `hub-walk-open`: that one is the blocker card's primary
+  // button, and styling both through one selector turned the button into bare
+  // blue text — measured on staging at 430px.
+  open.className = 'hub-walk-where-link';
   open.textContent = `${item.title} ↗`;
   open.addEventListener('click', () => handlers.onOpenItem(item));
   where.append(label, document.createTextNode(' '), open);

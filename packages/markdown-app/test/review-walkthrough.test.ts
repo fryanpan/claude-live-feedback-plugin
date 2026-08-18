@@ -577,7 +577,7 @@ describe('renderReviewWalkthrough — comments', () => {
     // Mockup: the link is the thing itself — `Task: <title> ↗` — so the
     // surface is named by the label and the destination by the link.
     expect((root.querySelector('.hub-walk-where') as HTMLElement).textContent).toContain('Task:');
-    const open = root.querySelector('.hub-walk-open') as HTMLElement;
+    const open = root.querySelector('.hub-walk-where-link') as HTMLElement;
     expect(open.textContent).toContain('Ship the widget');
     open.click();
     expect(onOpenItem).toHaveBeenCalledWith(queue.items[0]);
@@ -589,9 +589,12 @@ describe('renderReviewWalkthrough — comments', () => {
       walk({ onOpenItem }),
     );
     expect((root.querySelector('.hub-walk-where') as HTMLElement).textContent).toContain('Doc:');
-    expect((root.querySelector('.hub-walk-open') as HTMLElement).textContent).toContain(
+    expect((root.querySelector('.hub-walk-where-link') as HTMLElement).textContent).toContain(
       'Launch plan',
     );
+    // Not the blocker card's primary button — one class for both turned that
+    // button into bare text on staging.
+    expect(root.querySelector('.hub-walk-open')).toBeNull();
   });
 
   // The nav is the feature: "there's a way for me to go through that list".

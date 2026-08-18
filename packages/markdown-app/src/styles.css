@@ -1289,7 +1289,13 @@ body.hub-body {
   font-size: 15px;
   font-weight: 650;
   flex: 1;
-  min-width: 0;
+  /* A FLOOR, where the mockup has `min-width: 0`. Measured at 430px: with no
+     floor the "Needs your reply" badge takes ~180px of a 402px line and the
+     title shrinks to about 110px, wrapping a one-line question into seven
+     stacked words. With one, the head wraps as it is meant to — badge and
+     title on the first row, chip and wait onto the second. Long unbroken
+     tokens are handled by `overflow-wrap` below, not by the zero. */
+  min-width: 160px;
   overflow-wrap: anywhere;
 }
 /* One pill shape for both the kind badge and the project chip, so a kind
@@ -1370,9 +1376,15 @@ body.hub-body {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
-/* Answering in place is the default; going to the surface is the escape. */
+/* Answering in place is the default; going to the surface is the escape. On a
+   blocker there is nothing to answer, so this is the card's primary button and
+   keeps the `hub-btn` look it is given. */
 .hub-walk-open {
   align-self: flex-start;
+}
+/* The inline `Task: <title> ↗` link (mockup `.desc a`). A button, because it
+   acts rather than navigates — dressed as the link it reads as. */
+.hub-walk-where-link {
   font: inherit;
   padding: 0;
   border: none;
@@ -1380,6 +1392,7 @@ body.hub-body {
   color: var(--accent);
   cursor: pointer;
   text-align: left;
+  overflow-wrap: anywhere;
 }
 .hub-walk-body {
   font-family: var(--prose);
