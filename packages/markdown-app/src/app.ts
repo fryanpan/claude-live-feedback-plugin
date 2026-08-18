@@ -2,10 +2,11 @@ import { type User, connect, escapeHtml, readDocMeta, suggestOps } from '@feedba
 import { mountCode } from './code/code-app.ts';
 import { saveStateView, settlePending, watchConnection } from './connection-state.ts';
 import { renderDiffNav, setActiveFile } from './diff-nav.ts';
+import { fetchDocMeta } from './doc-meta.ts';
 import { type EditorHandle, createEditor } from './editor.ts';
 import { trackGesture } from './gesture.ts';
 import { ensureUserIdentity } from './identity-prompt.ts';
-import type { DocMeta, MountContext } from './mount-context.ts';
+import type { MountContext } from './mount-context.ts';
 import type { MountScope } from './mount-scope.ts';
 import { startReadingTracker } from './reading-tracker.ts';
 import { mountMarkupMargin } from './redline/markup-margin.ts';
@@ -35,48 +36,6 @@ import { renderWorkspaceTree } from './workspace-tree.ts';
 
 const DEFAULT_WS_PATH = (docId: string, type: string) =>
   `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/y/${encodeURIComponent(docId)}?type=${encodeURIComponent(type)}`;
-
-/** Fetch a doc's persisted type + paths before mounting a surface. Defaults to
- *  'markdown' if the meta can't be read (the markdown path is the safe
- *  fallback — it never assumes code). */
-async function fetchDocMeta(docId: string): Promise<DocMeta> {
-  const fallback: DocMeta = {
-    docType: 'markdown',
-    sourceUrl: '',
-    workspaceId: '',
-    relPath: '',
-    diffTarget: '',
-  };
-  try {
-    const res = await fetch(`/api/docs/${encodeURIComponent(docId)}`);
-    if (!res.ok) return fallback;
-    const data = (await res.json()) as {
-      meta?: {
-        type?: string;
-        sourceUrl?: string;
-        workspaceId?: string;
-        relPath?: string;
-        diffTarget?: string;
-      };
-      // Top-level, NOT under `meta`: `meta.workspaceId` is the GROUPING id of
-      // a diff review / folder browse, which is a different thing from the
-      // board that holds it. The server resolves one from the other.
-      backTo?: { workspaceId?: string; name?: string };
-    };
-    const t = data.meta?.type;
-    const backId = data.backTo?.workspaceId;
-    return {
-      docType: t === 'code' || t === 'diff' ? t : 'markdown',
-      sourceUrl: data.meta?.sourceUrl ?? '',
-      workspaceId: data.meta?.workspaceId ?? '',
-      relPath: data.meta?.relPath ?? '',
-      diffTarget: data.meta?.diffTarget ?? '',
-      ...(backId ? { backTo: { workspaceId: backId, name: data.backTo?.name ?? '' } } : {}),
-    };
-  } catch {
-    return fallback;
-  }
-}
 
 interface Selection {
   start: Uint8Array;
