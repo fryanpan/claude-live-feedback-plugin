@@ -12,7 +12,7 @@ import {
 import {
   type ReviewStripHandlers,
   type WalkthroughHandlers,
-  renderReviewStrip,
+  renderHomeReview,
   renderReviewWalkthrough,
   renderTaskDetail,
 } from '../src/hub/hub-render.ts';
@@ -85,11 +85,11 @@ beforeEach(() => {
   document.body.append(root);
 });
 
-describe('renderReviewStrip — the count and the urgency read', () => {
+describe('renderHomeReview — the count and the urgency read', () => {
   it('leads with a number and splits blocking-now from can-wait', () => {
     const blocking = decision({ title: 'Ship in blue or green?' });
     const parked = decision({ title: 'Rename the tab?' });
-    renderReviewStrip(root, q0([blocking, parked, task({ after: [blocking.id] })]), strip());
+    renderHomeReview(root, q0([blocking, parked, task({ after: [blocking.id] })]), strip());
     const count = root.querySelector('.hub-decisions-count') as HTMLElement;
     expect(count.textContent).toContain('2');
     const urgency = root.querySelector('.hub-decisions-urgency') as HTMLElement;
@@ -98,7 +98,7 @@ describe('renderReviewStrip — the count and the urgency read', () => {
   });
 
   it('says so plainly when nothing is blocked, rather than printing "0 blocking"', () => {
-    renderReviewStrip(root, q0([decision(), decision()]), strip());
+    renderHomeReview(root, q0([decision(), decision()]), strip());
     const urgency = root.querySelector('.hub-decisions-urgency') as HTMLElement;
     expect(urgency.textContent).toContain('Nothing is blocked');
     expect(urgency.textContent).not.toContain('0 blocking');
@@ -108,7 +108,7 @@ describe('renderReviewStrip — the count and the urgency read', () => {
     const onWalkthrough = vi.fn();
     const onOpen = vi.fn();
     const d = decision({ title: 'Ship now or wait?' });
-    renderReviewStrip(root, q0([d, task({ after: [d.id] })]), strip({ onWalkthrough, onOpen }));
+    renderHomeReview(root, q0([d, task({ after: [d.id] })]), strip({ onWalkthrough, onOpen }));
     (root.querySelector('.hub-decisions-count') as HTMLElement).click();
     expect(onWalkthrough).toHaveBeenCalledTimes(1);
     const chip = root.querySelector('.hub-decision-chip') as HTMLElement;
@@ -119,12 +119,15 @@ describe('renderReviewStrip — the count and the urgency read', () => {
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
-  it('hides the whole strip when there is nothing waiting', () => {
-    // Presence first: the strip is visible with one decision.
-    renderReviewStrip(root, q0([decision()]), strip());
-    expect(root.classList.contains('hidden')).toBe(false);
-    renderReviewStrip(root, q0([task()]), strip());
-    expect(root.classList.contains('hidden')).toBe(true);
+  it('an empty queue renders no rows and says so plainly (Home is a page, not a strip)', () => {
+    // Presence first: the section carries rows with one decision.
+    renderHomeReview(root, q0([decision()]), strip());
+    expect(root.querySelectorAll('.hub-decision-chip').length).toBeGreaterThan(0);
+    renderHomeReview(root, q0([task()]), strip());
+    expect(root.querySelectorAll('.hub-decision-chip')).toHaveLength(0);
+    expect(root.querySelector('.hub-home-quiet')?.textContent).toContain(
+      'Nothing is waiting for your review',
+    );
   });
 
   // The three kinds are why the strip exists at all: a comment waiting on an
@@ -147,7 +150,7 @@ describe('renderReviewStrip — the count and the urgency read', () => {
       ],
       NOW,
     );
-    renderReviewStrip(root, queue, strip());
+    renderHomeReview(root, queue, strip());
     const chips = Array.from(root.querySelectorAll<HTMLElement>('.hub-decision-chip'));
     expect(chips.map((c) => c.className.match(/hub-review-[\w-]+/)?.[0])).toEqual([
       'hub-review-decision',
@@ -166,7 +169,7 @@ describe('renderReviewStrip — the count and the urgency read', () => {
     const queue = reviewQueue([d, task({ after: [d.id] })], [threadItem()], NOW);
     expect(queue.total).toBe(2);
     expect(queue.blocking).toBe(1);
-    renderReviewStrip(root, queue, strip());
+    renderHomeReview(root, queue, strip());
     const urgency = root.querySelector('.hub-decisions-urgency') as HTMLElement;
     expect(urgency.textContent).toContain('1 blocking work now');
     expect(urgency.textContent).toContain('1 can wait');
@@ -185,7 +188,7 @@ describe('the blocker band — a person’s own task, holding agent work up', ()
 
   it('marks the chip as its own kind and says how much is waiting', () => {
     const onOpen = vi.fn();
-    renderReviewStrip(root, q0(blocked({}, 2)), strip({ onOpen }));
+    renderHomeReview(root, q0(blocked({}, 2)), strip({ onOpen }));
     const chip = root.querySelector('.hub-decision-chip') as HTMLElement;
     expect(chip.className).toContain('hub-review-blocker');
     expect(chip.textContent).toContain('Turn on the tunnel');
@@ -198,16 +201,17 @@ describe('the blocker band — a person’s own task, holding agent work up', ()
 
   // Criterion 3 at the surface: widening the band to every human task is the
   // easy wrong fix, and it shows up here as a strip full of personal backlog.
-  it('a human task nothing waits on never reaches the strip', () => {
-    // Presence first: with an edge, the strip is up.
-    renderReviewStrip(root, q0(blocked()), strip());
-    expect(root.classList.contains('hidden')).toBe(false);
-    renderReviewStrip(root, q0([task({ assignee: 'human', title: 'Read the retro' })]), strip());
-    expect(root.classList.contains('hidden')).toBe(true);
+  it('a human task nothing waits on never reaches the queue', () => {
+    // Presence first: with an edge, the section carries a row.
+    renderHomeReview(root, q0(blocked()), strip());
+    expect(root.querySelectorAll('.hub-decision-chip').length).toBeGreaterThan(0);
+    renderHomeReview(root, q0([task({ assignee: 'human', title: 'Read the retro' })]), strip());
+    expect(root.querySelectorAll('.hub-decision-chip')).toHaveLength(0);
+    expect(root.textContent).not.toContain('Read the retro');
   });
 
   it('counts as blocking work now, not as something that can wait', () => {
-    renderReviewStrip(root, q0(blocked()), strip());
+    renderHomeReview(root, q0(blocked()), strip());
     const urgency = root.querySelector('.hub-decisions-urgency') as HTMLElement;
     expect(urgency.textContent).toContain('1 blocking work now');
     expect(urgency.textContent).not.toContain('can wait');

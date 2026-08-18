@@ -7,6 +7,7 @@ import {
   DEFAULT_DONE_WINDOW,
   type HubGoal,
   type HubTask,
+  type ReviewItem,
   type UptimeReport,
   boardSections,
   clientDriftNotice,
@@ -23,10 +24,12 @@ import {
   renderActivity,
   renderBoard,
   renderGoalStrip,
+  renderHomeBrief,
+  renderHomeReview,
   renderLeadStrip,
   renderPresence,
   renderQuickAdd,
-  renderReviewStrip,
+  renderReviewBanner,
   renderTaskDetail,
   renderUnplacedStrip,
 } from '../src/hub/hub-render.ts';
@@ -675,19 +678,58 @@ describe('keyboard reordering', () => {
   });
 });
 
-describe('renderReviewStrip', () => {
+describe('renderHomeReview', () => {
   it('shows a chip per open decision and opens it on tap', () => {
     const onOpen = vi.fn();
     const d = task({ needs: 'decision', assignee: 'human', title: 'Ship now or wait?' });
     const strip = { onOpen, onWalkthrough: vi.fn() };
-    renderReviewStrip(root, reviewQueue([d], [], NOW), strip);
+    renderHomeReview(root, reviewQueue([d], [], NOW), strip);
     const chip = root.querySelector('.hub-decision-chip') as HTMLElement;
     expect(chip.textContent).toContain('Ship now or wait?');
     chip.click();
     expect(onOpen).toHaveBeenCalledTimes(1);
-    // Empty → the strip hides instead of rendering an empty shell.
-    renderReviewStrip(root, reviewQueue([], [], NOW), strip);
-    expect(root.classList.contains('hidden')).toBe(true);
+    // Empty → the section stays (Home is a page, not a strip) and says so
+    // plainly instead of rendering silence that reads as a broken region.
+    renderHomeReview(root, reviewQueue([], [], NOW), strip);
+    expect(root.querySelector('.hub-home-quiet')?.textContent).toContain(
+      'Nothing is waiting for your review',
+    );
+    expect(root.querySelector('.hub-review-go')).toBeNull();
+  });
+
+  it('heads the section "For Your Review" with a right-side Review button that starts the walkthrough', () => {
+    const onWalkthrough = vi.fn();
+    const d = task({ needs: 'decision', assignee: 'human' });
+    renderHomeReview(root, reviewQueue([d], [], NOW), { onOpen: vi.fn(), onWalkthrough });
+    expect(root.querySelector('.hub-home-heading')?.textContent).toBe('For Your Review');
+    const go = root.querySelector('.hub-review-go') as HTMLButtonElement;
+    expect(go.textContent).toBe('Review');
+    go.click();
+    expect(onWalkthrough).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps settled items in the stack marked done, and only ones the queue really dropped', () => {
+    const d = task({ needs: 'decision', assignee: 'human', title: 'Still open?' });
+    const queue = reviewQueue([d], [], NOW);
+    const stillLive = queue.items[0] as ReviewItem;
+    const settledGone: ReviewItem = {
+      key: 'decision:t-gone',
+      kind: 'decision',
+      title: 'Already answered one',
+      ask: '',
+      why: '',
+      since: NOW,
+    };
+    const onOpen = vi.fn();
+    renderHomeReview(root, queue, { onOpen, onWalkthrough: vi.fn() }, [stillLive, settledGone]);
+    // The still-open item renders once, as a live row — not twice.
+    const titles = [...root.querySelectorAll('.hub-decision-chip-title')].map((n) => n.textContent);
+    expect(titles.filter((t) => t === 'Still open?')).toHaveLength(1);
+    const done = root.querySelector('.hub-review-done') as HTMLElement;
+    expect(done.textContent).toContain('Already answered one');
+    // A done row is still the way back to the thing just answered.
+    done.click();
+    expect(onOpen).toHaveBeenCalledWith(settledGone);
   });
 
   const threadItem = (over: Record<string, unknown> = {}) => ({
@@ -717,7 +759,7 @@ describe('renderReviewStrip', () => {
   it('collapses the rows that are not addressed to the reader, without dropping any', () => {
     const strip = { onOpen: vi.fn(), onWalkthrough: vi.fn() };
     const notes = [threadItem(), threadItem(), threadItem()];
-    renderReviewStrip(root, reviewQueue([], notes, NOW), strip);
+    renderHomeReview(root, reviewQueue([], notes, NOW), strip);
     // The headline still counts the WHOLE queue, because tapping it starts a
     // walkthrough over the whole queue.
     expect(root.querySelector('.hub-decisions-count')?.textContent).toBe('3 things need you');
@@ -736,7 +778,7 @@ describe('renderReviewStrip', () => {
    */
   it('never claims the collapsed rows contain no question', () => {
     const strip = { onOpen: vi.fn(), onWalkthrough: vi.fn() };
-    renderReviewStrip(
+    renderHomeReview(
       root,
       // A genuine question that addresses nobody by name: `direct` is false
       // and the row is still somebody asking something.
@@ -756,7 +798,7 @@ describe('renderReviewStrip', () => {
       threadItem(),
       threadItem({ direct: true, ask: 'Bryan: drop threading or keep it?', title: 'Threading' }),
     ];
-    renderReviewStrip(root, reviewQueue([], items, NOW), strip);
+    renderHomeReview(root, reviewQueue([], items, NOW), strip);
     const updates = root.querySelector('.hub-decision-updates') as HTMLDetailsElement;
     expect(updates.querySelectorAll('.hub-decision-chip')).toHaveLength(1);
     // The addressed one is on the strip proper, outside the collapsed group.
@@ -767,6 +809,145 @@ describe('renderReviewStrip', () => {
     );
     // Two in, two rendered. The grouping re-reads the list, never shortens it.
     expect(root.querySelectorAll('.hub-decision-chip')).toHaveLength(2);
+  });
+});
+
+describe('renderReviewBanner', () => {
+  it('renders one line and a way to Home while items are open, nothing at all when none are', () => {
+    const onGoHome = vi.fn();
+    const d = task({ needs: 'decision', assignee: 'human' });
+    renderReviewBanner(root, reviewQueue([d], [], NOW), { onGoHome });
+    expect(root.querySelector('.hub-review-banner-text')?.textContent).toBe(
+      '1 item is waiting for your review',
+    );
+    (root.querySelector('.hub-review-banner-go') as HTMLElement).click();
+    expect(onGoHome).toHaveBeenCalledTimes(1);
+    // The banner exists only while items are open (approved design) — an
+    // empty queue hides it entirely rather than announcing an all-clear.
+    renderReviewBanner(root, reviewQueue([], [], NOW), { onGoHome });
+    expect(root.classList.contains('hidden')).toBe(true);
+    expect(root.children).toHaveLength(0);
+  });
+
+  it('counts every kind, plural', () => {
+    const d = task({ needs: 'decision', assignee: 'human' });
+    const thread = {
+      kind: 'task-thread' as const,
+      docId: 'task:t-b',
+      threadId: 'th-b',
+      title: 'Some task',
+      ask: 'Green or blue?',
+      askedBy: 'Helper',
+      since: NOW - 60_000,
+    };
+    renderReviewBanner(root, reviewQueue([d], [thread], NOW), { onGoHome: vi.fn() });
+    expect(root.querySelector('.hub-review-banner-text')?.textContent).toBe(
+      '2 items are waiting for your review',
+    );
+  });
+});
+
+describe('renderHomeBrief', () => {
+  const payload = (over: Record<string, unknown> = {}) => ({
+    workspaceId: 'w-1',
+    lastReadAt: 0,
+    since: NOW - 1000,
+    instructions: 'Under 200 words.',
+    brief: {
+      markdown: '**Finished:** the retry rewrite landed.',
+      generatedAt: NOW,
+      source: 'deterministic' as const,
+    },
+    generating: false,
+    ...over,
+  });
+
+  it('renders the brief as markdown under "What\'s New?", with the coverage line', () => {
+    renderHomeBrief(root, payload(), NOW, false, {
+      onMarkCaughtUp: vi.fn(),
+      onSaveInstructions: vi.fn(),
+      onEditRecipe: vi.fn(),
+    });
+    expect(root.querySelector('.hub-home-heading')?.textContent).toBe("What's New?");
+    expect(root.querySelector('.hub-home-brief-body strong')?.textContent).toBe('Finished:');
+    // Never marked read → the bounded window, stated as a bound.
+    expect(root.querySelector('.hub-home-since')?.textContent).toContain(
+      'Covering the last 7 days',
+    );
+    expect(root.querySelector('.hub-home-since')?.textContent).not.toContain('Updating');
+  });
+
+  it('a marked reader gets the personal phrasing, and generating says Updating…', () => {
+    renderHomeBrief(root, payload({ lastReadAt: NOW - 3_600_000, generating: true }), NOW, false, {
+      onMarkCaughtUp: vi.fn(),
+      onSaveInstructions: vi.fn(),
+      onEditRecipe: vi.fn(),
+    });
+    const since = root.querySelector('.hub-home-since')?.textContent ?? '';
+    expect(since).toContain('Since you caught up 1h ago');
+    expect(since).toContain('Updating…');
+  });
+
+  it('Mark caught up fires the handler; the recipe link opens the editor', () => {
+    const onMarkCaughtUp = vi.fn();
+    const onEditRecipe = vi.fn();
+    renderHomeBrief(root, payload(), NOW, false, {
+      onMarkCaughtUp,
+      onSaveInstructions: vi.fn(),
+      onEditRecipe,
+    });
+    (root.querySelector('.hub-home-mark-read') as HTMLElement).click();
+    expect(onMarkCaughtUp).toHaveBeenCalledTimes(1);
+    expect(root.querySelector('.hub-home-edit-recipe')?.textContent).toBe(
+      'Edit how this gets generated',
+    );
+    (root.querySelector('.hub-home-edit-recipe') as HTMLElement).click();
+    expect(onEditRecipe).toHaveBeenCalledWith(true);
+    // Closed by default: the panel only exists when the app says it is open.
+    expect(root.querySelector('.hub-home-recipe')).toBeNull();
+  });
+
+  it('the open recipe editor carries the exact approved copy and exactly two buttons', () => {
+    const onSaveInstructions = vi.fn();
+    const onEditRecipe = vi.fn();
+    renderHomeBrief(root, payload(), NOW, true, {
+      onMarkCaughtUp: vi.fn(),
+      onSaveInstructions,
+      onEditRecipe,
+    });
+    expect(root.querySelector('.hub-home-recipe-hint')?.textContent).toBe(
+      'Edit these instructions and they will be used on this summary and future summaries.',
+    );
+    const ta = root.querySelector('.hub-home-recipe-text') as HTMLTextAreaElement;
+    expect(ta.value).toBe('Under 200 words.');
+    const buttons = root.querySelectorAll('.hub-home-recipe button');
+    expect([...buttons].map((b) => b.textContent)).toEqual(['Save & Update Summary', 'Cancel']);
+    ta.value = 'Be terse.';
+    (root.querySelector('.hub-home-recipe-save') as HTMLElement).click();
+    expect(onSaveInstructions).toHaveBeenCalledWith('Be terse.');
+    (root.querySelector('.hub-home-recipe-cancel') as HTMLElement).click();
+    expect(onEditRecipe).toHaveBeenCalledWith(false);
+  });
+
+  it('a blank instructions box saves nothing — blanking the recipe is not expressible', () => {
+    const onSaveInstructions = vi.fn();
+    renderHomeBrief(root, payload(), NOW, true, {
+      onMarkCaughtUp: vi.fn(),
+      onSaveInstructions,
+      onEditRecipe: vi.fn(),
+    });
+    (root.querySelector('.hub-home-recipe-text') as HTMLTextAreaElement).value = '   ';
+    (root.querySelector('.hub-home-recipe-save') as HTMLElement).click();
+    expect(onSaveInstructions).not.toHaveBeenCalled();
+  });
+
+  it('no payload yet renders a loading line, not an empty card', () => {
+    renderHomeBrief(root, null, NOW, false, {
+      onMarkCaughtUp: vi.fn(),
+      onSaveInstructions: vi.fn(),
+      onEditRecipe: vi.fn(),
+    });
+    expect(root.querySelector('.hub-home-quiet')?.textContent).toBe('Loading…');
   });
 });
 
@@ -2135,13 +2316,17 @@ describe('the row badges are capped against the viewport, not against themselves
 });
 
 /**
- * happy-dom does no layout, so nothing else in this suite can see a sticky
- * bar painting over a button. What it CAN see is the invariant: the media
- * block that makes the nav sticky must also reserve its height in the
- * scroller, or the card's last control ends up under it.
+ * happy-dom does no layout, so nothing else in this suite can see a fixed
+ * launcher painting over a button. What it CAN see is the invariant: the
+ * media block that takes the walkthrough full-screen must also reserve
+ * bottom clearance in the card, or its last control ("Tell me more" on a
+ * decision card) ends up under the bottom-docked mic/pencil launchers. The
+ * old form of this test keyed the clearance to a sticky .hub-walk-nav; the
+ * ‹ › stepper moved to the panel head (approved design), so the sticky bar
+ * is gone and full-screen is now what forces the clearance.
  */
-describe('the sticky walkthrough nav reserves its own height', () => {
-  it('gives the card bottom clearance wherever the nav is sticky', async () => {
+describe('the full-screen walkthrough reserves launcher clearance', () => {
+  it('gives the card bottom clearance wherever the panel goes full-screen', async () => {
     const { readFileSync } = await import('node:fs');
     const { resolve } = await import('node:path');
     const css = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
@@ -2161,12 +2346,17 @@ describe('the sticky walkthrough nav reserves its own height', () => {
       }
       blocks.push(css.slice(start, i - 1));
     }
-    const sticky = blocks.filter((b) => /\.hub-walk-nav\s*\{[^}]*position:\s*sticky/.test(b));
+    const fullScreen = blocks.filter((b) =>
+      /\.hub-walk-panel\s*\{[^}]*max-height:\s*100vh/.test(b),
+    );
     // Positive control: the block this asserts about exists and was matched.
-    expect(sticky.length).toBeGreaterThan(0);
-    for (const b of sticky) {
-      expect(b).toMatch(/\.hub-walk-card\s*\{[^}]*padding-bottom:\s*[\d.]+px/);
+    expect(fullScreen.length).toBeGreaterThan(0);
+    for (const b of fullScreen) {
+      expect(b).toMatch(/\.hub-walk-card\s*\{[^}]*padding-bottom:\s*calc\([\d.]+px/);
     }
+    // The stepper lives in the panel head now — nothing may make it sticky
+    // again without restoring the reserve that travelled with the old bar.
+    expect(css).not.toMatch(/\.hub-walk-nav\s*\{[^}]*position:\s*sticky/);
   });
 });
 
