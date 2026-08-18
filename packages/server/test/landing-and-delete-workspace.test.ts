@@ -5,9 +5,12 @@ import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 
 /**
- * HTTP e2e for the Milestone-2 landing redesign + workspace deletion:
- *   - GET / renders the project → artifacts page (grouped, with the folder
- *     artifact expandable and a per-artifact open badge)
+ * HTTP e2e for the landing page + workspace deletion:
+ *   - GET / renders ONE row per project and no per-artifact detail — the
+ *     artifacts moved to /projects/<owner>, which is what keeps the landing
+ *     response small
+ *   - GET /projects/<owner> renders that project's artifacts, folder members
+ *     nested under one expandable row
  *   - GET /api/workspaces lists the rolled-up summary
  *   - DELETE /api/workspaces/:id enforces the all-or-nothing open-thread
  *     guardrail and force-deletes the whole folder as a unit
@@ -96,7 +99,7 @@ describe('landing + delete_workspace e2e (HTTP)', () => {
     await j(sr);
   });
 
-  it('GET / renders the grouped project → artifacts HTML', async () => {
+  it('GET / renders one row per project and NOT its artifacts', async () => {
     const r = await fetch(`${base}/`);
     expect(r.ok).toBe(true);
     const html = await r.text();
@@ -105,10 +108,35 @@ describe('landing + delete_workspace e2e (HTTP)', () => {
     // MUST ship the responsive viewport meta or it renders at ~980px and
     // scales down to unreadable on a phone.
     expect(html).toContain('name="viewport"');
-    // Project header derives from the owner cwd basename.
+    // Project row derives from the owner cwd basename and links to the
+    // project's own page.
     expect(html).toContain('alpha');
-    // The folder artifact appears as an expandable <details> with a folder glyph,
-    // labeled by its workspaceId, and nests its member files (README.md, index.ts).
+    expect(html).toContain(`/projects/${encodeURIComponent('/proj/alpha')}`);
+    // The needs-you band always states its denominator, including at zero —
+    // an empty list with no denominator reads as a clearance.
+    expect(html).toContain('0 of 0');
+    // Two artifacts (the folder counts as ONE + the standalone), one project.
+    expect(html).toContain('2 artifacts');
+
+    // …and NONE of the per-artifact detail. This is the whole point of the
+    // redesign: the member file list and the per-doc review links are what
+    // made this response 910 KB on the live server. The assertions below are
+    // absences, so the presences above are their positive control — this
+    // response is a rendered page, not an error or an empty body.
+    expect(html).not.toContain('<details');
+    expect(html).not.toContain('README.md');
+    expect(html).not.toContain('src/index.ts');
+    expect(html).not.toContain('review/standalone-doc');
+    // A landing response measured in kilobytes, not hundreds of them.
+    expect(html.length).toBeLessThan(20_000);
+  });
+
+  it('GET /projects/<owner> renders that project artifacts on demand', async () => {
+    const r = await fetch(`${base}/projects/${encodeURIComponent('/proj/alpha')}`);
+    expect(r.ok).toBe(true);
+    const html = await r.text();
+    // The folder artifact is one expandable <details> labeled by its
+    // workspaceId, nesting its member files.
     expect(html).toContain('<details');
     expect(html).toContain(workspaceId);
     expect(html).toContain('README.md');
@@ -118,9 +146,13 @@ describe('landing + delete_workspace e2e (HTTP)', () => {
     expect(html).toContain('STANDALONE.md');
     expect(html).toContain('review/standalone-doc');
     expect(html).toContain('markdown');
-    // Summary line counts artifacts (the folder counts as ONE artifact + the
-    // standalone = 2), not member files.
-    expect(html).toContain('2 artifacts');
+    // Back to the index.
+    expect(html).toContain('href="/"');
+  });
+
+  it('GET /projects/<unknown> is a 404, not an empty-looking success', async () => {
+    const r = await fetch(`${base}/projects/${encodeURIComponent('/proj/nope')}`);
+    expect(r.status).toBe(404);
   });
 
   it('GET /api/workspaces lists the rolled-up summary', async () => {
