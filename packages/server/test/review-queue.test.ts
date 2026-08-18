@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import type { Comment, Thread } from '@feedback/core';
+import type { Comment, ReviewPayload, Thread } from '@feedback/core';
 import {
   asksPerson,
   awaitingPerson,
@@ -540,5 +540,155 @@ describe('reviewThreadItems — who counts as a person', () => {
       source: { threadsOf: (docId: string) => (docId === 'task:tk-1' ? [opened] : []) },
     });
     expect(item.direct).toBe(true);
+  });
+});
+
+describe('reviewThreadItems — declared review items vs the inferred band', () => {
+  const source = (map: Record<string, Thread[]>) => ({
+    threadsOf: (docId: string) => map[docId] ?? [],
+  });
+
+  /** A well-formed declaration. Synthetic copy throughout. */
+  const declaration = (over: Partial<ReviewPayload> = {}): ReviewPayload => ({
+    shape: 'decision',
+    headline: 'Should a resolved thread stay visible inline?',
+    why: 'Blocks the inline-comments branch.',
+    options: [
+      { id: 'hide', label: 'Hide them' },
+      { id: 'dim', label: 'Keep dimmed' },
+    ],
+    ...over,
+  });
+
+  const run = (threads: Thread[]) =>
+    reviewThreadItems({
+      tasks: [{ id: 'tk-1', title: 'Ship the inline comments', bodyDocId: 'task:tk-1' }],
+      docs: [],
+      source: source({ 'task:tk-1': threads }),
+    });
+
+  it('bands a declared item as declared and titles the row with the headline', () => {
+    const t = thread({
+      id: 'th-d',
+      comments: [comment({ text: 'see the card', review: declaration(), ts: T0 + 10 })],
+    });
+    const [item] = run([t]);
+    expect(item.band).toBe('declared');
+    expect(item.ask).toBe(declaration().headline);
+    expect(item.review?.options).toHaveLength(2);
+    expect(item.commentId).toBe(t.comments[0].id);
+  });
+
+  // The positive control for every assertion above: an ordinary agent status
+  // note must still produce a row, in the OTHER band. Without this, a
+  // collector that dropped undeclared threads entirely would satisfy the
+  // declared-band tests and silently delete the thing the migration exists to
+  // account for.
+  it('still emits an ordinary agent status note, in the unreplied band', () => {
+    const [item] = run([
+      thread({ id: 'th-s', comments: [comment({ text: 'Done — merged in a1b2c3d.', ts: T0 })] }),
+    ]);
+    expect(item.band).toBe('unreplied');
+    expect(item.review).toBeUndefined();
+    expect(item.ask).toContain('Done');
+  });
+
+  /**
+   * The safety property of the whole change, asserted as a relationship rather
+   * than as values: banding may re-sort and re-label rows, it may not change
+   * WHICH threads appear. A queue that quietly dropped rows would look like a
+   * fixed queue and be a queue that lost questions.
+   */
+  it('emits exactly the same set of threads whether or not they declare', () => {
+    const bare = [
+      thread({ id: 'a', comments: [comment({ text: 'Done.', ts: T0 })] }),
+      thread({ id: 'b', comments: [comment({ text: 'Fixed it.', ts: T0 + 1 })] }),
+      thread({ id: 'c', comments: [comment({ text: 'Merged.', ts: T0 + 2 })] }),
+    ];
+    const declared = bare.map((t, i) =>
+      i === 1
+        ? thread({
+            id: t.id,
+            comments: [comment({ text: t.comments[0].text, review: declaration(), ts: T0 + 1 })],
+          })
+        : t,
+    );
+    const ids = (ts: Thread[]) =>
+      run(ts)
+        .map((i) => i.threadId)
+        .sort();
+    expect(ids(declared)).toEqual(ids(bare));
+    // …and non-vacuously: the banding really did change between the two runs.
+    expect(run(bare).every((i) => i.band === 'unreplied')).toBe(true);
+    expect(run(declared).filter((i) => i.band === 'declared')).toHaveLength(1);
+  });
+
+  it('takes the newest declaration when an agent declared twice', () => {
+    const [item] = run([
+      thread({
+        id: 'th-two',
+        comments: [
+          comment({ text: 'first', review: declaration({ headline: 'Older ask' }), ts: T0 }),
+          comment({ text: 'second', review: declaration({ headline: 'Newer ask' }), ts: T0 + 50 }),
+        ],
+      }),
+    ]);
+    expect(item.ask).toBe('Newer ask');
+  });
+
+  /**
+   * `since` ranks the band oldest-first so nothing starves, and for an
+   * INFERRED row it has to be the run's start or an agent's follow-ups reset
+   * its own clock. A declaration is immune to that by construction — a later
+   * comment does not become the declaration — so its own timestamp is both
+   * safe and more truthful. An agent that posted status for three days and
+   * only then declared has been waiting minutes, not days.
+   */
+  it('dates a declared row from the declaration, not from the run start', () => {
+    const t = thread({
+      id: 'th-late',
+      comments: [
+        comment({ text: 'working on it', ts: T0 }),
+        comment({ text: 'still working', ts: T0 + 1_000 }),
+        comment({ text: 'now I need you', review: declaration(), ts: T0 + 9_000 }),
+      ],
+    });
+    expect(run([t])[0].since).toBe(T0 + 9_000);
+    // The control: strip the declaration and the same thread dates from T0.
+    const bare = thread({
+      id: t.id,
+      comments: t.comments.map((c) => ({ ...c, review: undefined })),
+    });
+    expect(run([bare])[0].since).toBe(T0);
+  });
+
+  // A person's reply ends the unanswered run, and a declaration inside a run
+  // that has ended is answered. This is the ONLY clearing mechanism, and it is
+  // the one that already existed — a second "handled" flag would immediately
+  // disagree with the first.
+  it('drops a declared item once a person has replied under it', () => {
+    expect(
+      run([
+        thread({
+          id: 'th-ans',
+          comments: [
+            comment({ text: 'need you', review: declaration(), ts: T0 }),
+            comment({ kind: 'person', text: 'Keep them dimmed.', ts: T0 + 10 }),
+          ],
+        }),
+      ]),
+    ).toEqual([]);
+  });
+
+  it('drops a declared item once the thread is resolved', () => {
+    expect(
+      run([
+        thread({
+          id: 'th-res',
+          status: 'resolved',
+          comments: [comment({ text: 'need you', review: declaration(), ts: T0 })],
+        }),
+      ]),
+    ).toEqual([]);
   });
 });
