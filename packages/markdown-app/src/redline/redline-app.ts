@@ -236,6 +236,10 @@ export async function mountRedline(ctx: MountContext): Promise<void> {
     user,
     ydoc: chromeYdoc,
     surface,
+    // Must be the client whose ydoc the chrome is reading — the companion's
+    // when there is one, or the drawer would go on saying "Loading" against a
+    // doc that has already arrived (and vice versa).
+    whenSynced: (cb) => (companion ? companion.client : client).onReady(cb),
     scope,
     labelHint: ctx.sourceUrl || ctx.relPath || undefined,
     selectHint: 'Select some text first to leave a comment.',

@@ -246,6 +246,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     user,
     ydoc,
     surface: editor,
+    whenSynced: (cb) => client.onReady(cb),
     scope,
     labelHint: ctx.sourceUrl || ctx.relPath || undefined,
     selectHint: 'Select some text first to leave a comment.',
