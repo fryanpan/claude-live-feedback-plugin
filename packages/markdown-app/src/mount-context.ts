@@ -1,4 +1,5 @@
 import type { FeedbackClient, User } from '@feedback/core';
+import type { BackTarget } from './back-link.ts';
 import type { MountScope } from './mount-scope.ts';
 
 /**
@@ -15,6 +16,11 @@ export interface DocMeta {
    *  working-tree mode, where the File view is an editor (the server binds
    *  those members with write-back); pinned content is immutable. */
   diffTarget: string;
+  /** The workspace board this doc was reached from, when the server can name
+   *  one — where the shell's back arrow should return to instead of the
+   *  machine-wide index. Absent for a doc on no board, and for a share
+   *  visitor (a board id is an unguessable URL capability). */
+  backTo?: BackTarget;
 }
 
 /**

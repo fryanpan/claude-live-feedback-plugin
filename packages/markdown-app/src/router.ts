@@ -1,4 +1,5 @@
 import type { FeedbackClient, User } from '@feedback/core';
+import { applyBackLink } from './back-link.ts';
 import { setActiveFile } from './diff-nav.ts';
 import type { DocMeta, MountContext, MountFn } from './mount-context.ts';
 import { MountScope } from './mount-scope.ts';
@@ -108,6 +109,13 @@ async function swap(docId: string): Promise<void> {
 
   const meta = await o.fetchMeta(docId);
   if (currentScope !== scope) return; // superseded during fetch
+
+  // The back arrow is shell chrome that outlives each per-doc mount, so the
+  // router owns it: retarget it here, on BOTH branches, or a doc with no board
+  // would inherit the previous doc's board and the arrow would be a live wrong
+  // link. After the token re-check, so a superseded navigation cannot repoint
+  // the arrow at the doc that lost.
+  applyBackLink(document, meta.backTo);
 
   const client = o.connectFor(docId, meta.docType);
   // Registered FIRST → runs LAST on dispose, after the surface's teardown.

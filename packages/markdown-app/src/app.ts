@@ -58,14 +58,20 @@ async function fetchDocMeta(docId: string): Promise<DocMeta> {
         relPath?: string;
         diffTarget?: string;
       };
+      // Top-level, NOT under `meta`: `meta.workspaceId` is the GROUPING id of
+      // a diff review / folder browse, which is a different thing from the
+      // board that holds it. The server resolves one from the other.
+      backTo?: { workspaceId?: string; name?: string };
     };
     const t = data.meta?.type;
+    const backId = data.backTo?.workspaceId;
     return {
       docType: t === 'code' || t === 'diff' ? t : 'markdown',
       sourceUrl: data.meta?.sourceUrl ?? '',
       workspaceId: data.meta?.workspaceId ?? '',
       relPath: data.meta?.relPath ?? '',
       diffTarget: data.meta?.diffTarget ?? '',
+      ...(backId ? { backTo: { workspaceId: backId, name: data.backTo?.name ?? '' } } : {}),
     };
   } catch {
     return fallback;
