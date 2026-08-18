@@ -287,15 +287,16 @@ describe('ADVERSARIAL: landing project->artifacts + delete_workspace guardrail',
     }
 
     const html = await (await fetch(`${base}/`)).text();
-    // One row for the project, by owner basename, and the folder counts as a
-    // SINGLE artifact there.
+    // One LINK for the project behind the review-docs fold, by owner
+    // basename. `/` itself is a list of active workspaces (Bryan's re-scope,
+    // task t-UZMXu32nt4wN), so the project carries no artifact counts here.
     expect(html).toContain('adv');
-    expect(html).toContain('1 artifact');
+    expect(html).toContain(`/projects/${encodeURIComponent('/proj/adv')}`);
     // …and none of its contents: the per-artifact detail is what moved off the
     // landing response. The presences above are this absence's positive
     // control — a real page rendered, it just does not carry the file list.
-    expect(html).not.toContain('<details');
     expect(html).not.toContain('src/index.ts');
+    expect(html).not.toContain('README.md');
 
     // The detail lives one hop away, and it is still ONE expandable folder
     // artifact nesting its members.
