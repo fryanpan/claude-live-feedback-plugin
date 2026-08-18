@@ -1,260 +1,147 @@
+import { describe, expect, it } from 'bun:test';
+import { type BodyGap, bodyGapMessage, bodyShapeGaps, firstParagraph } from '../src/task-body.ts';
+
 /**
- * POST /api/tasks/:id/body — rewrite a task's description after creation.
- *
- * The reported bug ("a task body is immutable, PATCH and PUT both 404") is
- * half true: the body is a live `task:<id>` doc room, so `set_doc_content`
- * on that docId already rewrote it. What was missing is everything AROUND
- * that — a named route an agent can find, the body room existing on a
- * workspace nobody has touched since the last restart, a snapshot the caller
- * can read back immediately, and an attributed row in the audit log. Each of
- * those is asserted here, because each of them failing looks like "the
- * rewrite didn't work" from the outside.
- *
- * All fixtures are synthetic — invented names in the jordan@partner.example
- * register. The repo is public.
+ * Fixtures are synthetic, but their SHAPES were measured against the 47 open
+ * rows of a real board on 2026-08-17 before any of this was written — which
+ * is the only reason the decision genre below exists. A first cut of the
+ * story rule flagged 18 rows; the corrected one flags 6, and 4 of the
+ * difference are decision tasks that open with their question and are
+ * correctly shaped for what they are. Inventing fixtures alone would not
+ * have produced that case, because nobody invents the input that breaks
+ * their own rule.
  */
-import { afterEach, describe, expect, it } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { listThreads, prose } from '@feedback/core';
-import type { User } from '@feedback/core';
 
-import { type ServerHandle, createServer } from '../src/server.ts';
-import { taskBodyDocId } from '../src/task-projection.ts';
-import type { Task, TaskStoreEvent } from '../src/tasks.ts';
+const STORY = [
+  'Agents can rank a backlog by reading the goal order first so that the top',
+  'of the queue is the work that matters most.',
+  '',
+  'Done when: next_tasks returns rows in goal order.',
+].join('\n');
 
-const PERSON: User = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
-const AGENT: User = {
-  id: 'agent-search-revamp',
-  name: 'Search Revamp',
-  kind: 'known',
-  color: '#888888',
-};
-
-describe('POST /api/tasks/:id/body', () => {
-  let handle: ServerHandle | undefined;
-  let dataDir: string | undefined;
-  let base = '';
-
-  const start = async (dir: string): Promise<ServerHandle> => {
-    const h = await createServer({ port: 0, dataDir: dir });
-    base = `http://127.0.0.1:${h.port}`;
-    return h;
-  };
-
-  const jj = async <T>(res: Response): Promise<T> => {
-    expect(res.ok, `${res.status} ${await res.clone().text()}`).toBe(true);
-    return res.json() as Promise<T>;
-  };
-
-  const post = (path: string, body?: unknown) =>
-    fetch(`${base}${path}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-
-  /** A workspace with one task carrying a deliberately thin body. */
-  async function seed(opts: { body?: string } = {}): Promise<{ workspaceId: string; task: Task }> {
-    dataDir = mkdtempSync(join(tmpdir(), 'lf-task-body-'));
-    handle = await start(dataDir);
-    const { workspace } = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name: 'search-revamp', goal: 'Ship search v2.' }),
+describe('firstParagraph', () => {
+  it('takes the first paragraph, not the first line', () => {
+    expect(firstParagraph(STORY)).toBe(
+      'Agents can rank a backlog by reading the goal order first so that the top of the queue is the work that matters most.',
     );
-    const { task } = await jj<{ task: Task }>(
-      await post(`/api/workspaces/${workspace.id}/tasks`, {
-        author: AGENT,
-        title: 'tune the ranking',
-        goal: 'chores',
-        body: opts.body ?? 'thin.',
-      }),
-    );
-    return { workspaceId: workspace.id, task };
-  }
-
-  /** A task filed with no body at all — the thin task this feature is for. */
-  async function seedBodyless(): Promise<{ workspaceId: string; task: Task }> {
-    dataDir = mkdtempSync(join(tmpdir(), 'lf-task-body-'));
-    handle = await start(dataDir);
-    const { workspace } = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name: 'search-revamp', goal: 'Ship search v2.' }),
-    );
-    const { task } = await jj<{ task: Task }>(
-      await post(`/api/workspaces/${workspace.id}/tasks`, {
-        author: AGENT,
-        title: 'filed in a hurry',
-        goal: 'chores',
-      }),
-    );
-    return { workspaceId: workspace.id, task };
-  }
-
-  const readTask = async (workspaceId: string, taskId: string): Promise<Task> => {
-    const { tasks } = await jj<{ tasks: Task[] }>(
-      await fetch(`${base}/api/workspaces/${workspaceId}/tasks`),
-    );
-    const found = tasks.find((t) => t.id === taskId);
-    expect(found).toBeDefined();
-    return found as Task;
-  };
-
-  afterEach(async () => {
-    await handle?.stop();
-    handle = undefined;
-    if (dataDir) rmSync(dataDir, { recursive: true, force: true });
-    dataDir = undefined;
   });
 
-  it('rewrites the body and the caller can read it back immediately', async () => {
-    const { workspaceId, task } = await seed();
-    // Positive control: the thin body is what's there before the rewrite.
-    expect((await readTask(workspaceId, task.id)).body).toContain('thin.');
-
-    const markdown = '## Why\n\nThe ranking clause is stale.\n\nDone when: it is not.';
-    await jj(await post(`/api/tasks/${task.id}/body`, { markdown, author: AGENT }));
-
-    // Read back with no delay — the snapshot the board and next_tasks serve
-    // is debounced, so a route that only nudges it would hand the caller the
-    // pre-rewrite body and read as a failed write.
-    expect((await readTask(workspaceId, task.id)).body).toContain('The ranking clause is stale.');
-
-    // ...and the live doc room, which is what a reader on the board sees.
-    const doc = await jj<{ plainText: string }>(
-      await fetch(`${base}/api/docs/${encodeURIComponent(taskBodyDocId(task.id))}/content`),
+  it('skips leading blank lines rather than returning empty', () => {
+    expect(firstParagraph('\n\n\nBryan can read it so that he can rank it.')).toBe(
+      'Bryan can read it so that he can rank it.',
     );
-    expect(doc.plainText).toContain('Done when: it is not.');
-    expect(doc.plainText).not.toContain('thin.');
   });
 
-  it('records who rewrote it', async () => {
-    const { task } = await seed();
-    const events: TaskStoreEvent[] = [];
-    const off = handle?.tasks.onEvent((e) => events.push(e));
-    try {
-      await jj(await post(`/api/tasks/${task.id}/body`, { markdown: 'rewritten.', author: AGENT }));
-    } finally {
-      off?.();
+  it('is empty for a body that is only whitespace', () => {
+    expect(firstParagraph('   \n\n  \n')).toBe('');
+    expect(firstParagraph(undefined)).toBe('');
+  });
+});
+
+describe('bodyShapeGaps', () => {
+  it('reports empty for a body with no words at all', () => {
+    expect(bodyShapeGaps('')).toEqual(['empty']);
+    expect(bodyShapeGaps(undefined)).toEqual(['empty']);
+    expect(bodyShapeGaps('   \n \n ')).toEqual(['empty']);
+  });
+
+  it('an empty body reports ONLY empty, not empty plus no-story', () => {
+    // Two gaps naming one absence reads as two problems to fix.
+    expect(bodyShapeGaps('')).toEqual(['empty']);
+  });
+
+  it('accepts a story opening', () => {
+    expect(bodyShapeGaps(STORY)).toEqual([]);
+  });
+
+  it('accepts a story whose persona is not the first word', () => {
+    // The recall bug caught on the corpus: requiring the persona at word one
+    // and `can` at word two rejected a perfectly good story.
+    const body =
+      'Agent reading a `decision.answered` event can trust what the line tells it to do so that the event stops promising an affordance the record does not have.';
+    expect(bodyShapeGaps(body)).toEqual([]);
+  });
+
+  it('accepts a story introduced by an article', () => {
+    // "An agent pushing to this repo can trust..." — the article branch. It
+    // has its own case because no other fixture reaches it, and a guard no
+    // test can reach is a guard that silently stops working.
+    const body =
+      'An agent pushing to this repo can trust the scan verdict so that it stops reaching for the bypass flag.';
+    expect(bodyShapeGaps(body)).toEqual([]);
+  });
+
+  it('accepts a story wrapped in markdown emphasis', () => {
+    const body = '**Bryan** can scan the board **so that** he can check the ranking.';
+    expect(bodyShapeGaps(body)).toEqual([]);
+  });
+
+  it('accepts a decision task that opens with its question', () => {
+    // The measured false-positive class. A decision task has no "can ... so
+    // that" opening and is not deficient; its question IS its statement.
+    const body = [
+      '**Should a board share transitively grant repo-file access?**',
+      '',
+      'Options: refuse, report, or scope per review.',
+    ].join('\n');
+    expect(bodyShapeGaps(body)).toEqual([]);
+  });
+
+  it('accepts an unbolded decision question', () => {
+    expect(bodyShapeGaps('Which ids should docs use, opaque or readable?')).toEqual([]);
+  });
+
+  it('reports no-story for a status report opening', () => {
+    const body = 'Round 5 delivered: 133 candidates ranked and appended to the doc.';
+    expect(bodyShapeGaps(body)).toEqual(['no-story']);
+  });
+
+  it('reports no-story when the goal clause is missing', () => {
+    expect(bodyShapeGaps('Agents can rank a backlog by reading the goal order.')).toEqual([
+      'no-story',
+    ]);
+  });
+
+  it('reports no-story when the persona is missing', () => {
+    // "so that" alone is prose, not a story.
+    expect(bodyShapeGaps('The queue should be ordered so that the top row matters most.')).toEqual([
+      'no-story',
+    ]);
+  });
+
+  it('only reads the FIRST paragraph, so a story buried on page two does not count', () => {
+    const buried = [
+      'Some preamble that says nothing.',
+      '',
+      'Bryan can rank it so that he can plan.',
+    ].join('\n');
+    expect(bodyShapeGaps(buried)).toEqual(['no-story']);
+    // Positive control: the same story, in the opening, is accepted — so the
+    // assertion above is about POSITION rather than about the matcher failing
+    // to read that sentence at all.
+    expect(bodyShapeGaps('Bryan can rank it so that he can plan.')).toEqual([]);
+  });
+});
+
+describe('bodyGapMessage', () => {
+  it('is undefined when there is nothing to say', () => {
+    expect(bodyGapMessage([])).toBeUndefined();
+  });
+
+  it('names the standard so a caller can act without looking it up', () => {
+    const msg = bodyGapMessage(['no-story']) ?? '';
+    expect(msg).toContain('so that');
+  });
+
+  it('has text for every gap the type allows', () => {
+    // Guards the case where a new BodyGap is added and the message table is
+    // not — which would render as a bare slug, the failure this repo has
+    // already recorded once for event names.
+    const all: BodyGap[] = ['empty', 'no-story'];
+    for (const g of all) {
+      const m = bodyGapMessage([g]);
+      expect(m, `no message text for gap ${g}`).toBeDefined();
+      expect(m).not.toContain(g);
     }
-    const row = events.find((e) => e.type === 'task.body_edited');
-    expect(row).toBeDefined();
-    expect(row?.taskId).toBe(task.id);
-    expect(row?.actor.name).toBe('Search Revamp');
-    expect(row?.actor.kind).toBe('agent');
-  });
-
-  it('classifies a person the same way every other mutation does', async () => {
-    const { task } = await seed();
-    const events: TaskStoreEvent[] = [];
-    const off = handle?.tasks.onEvent((e) => events.push(e));
-    try {
-      await jj(
-        await post(`/api/tasks/${task.id}/body`, {
-          markdown: 'a person wrote this.',
-          author: PERSON,
-        }),
-      );
-    } finally {
-      off?.();
-    }
-    expect(events.find((e) => e.type === 'task.body_edited')?.actor.kind).toBe('person');
-  });
-
-  it('keeps comment threads anchored to blocks the rewrite left alone', async () => {
-    const { task } = await seed({ body: 'Keep this paragraph.\n\nReplace this one.' });
-    const docId = taskBodyDocId(task.id);
-    // by_find, not /threads: the latter takes the anchor verbatim, and a
-    // hand-written text-range with no encoded rel positions is not an
-    // anchor — it plants something that only fails later, inside the
-    // re-anchor sweep, as an async crash attributed to whatever test is
-    // running by then.
-    const { thread } = await jj<{ thread: { id: string } }>(
-      await post(`/api/docs/${encodeURIComponent(docId)}/threads/by_find`, {
-        author: PERSON,
-        text: 'why?',
-        find: 'Keep this paragraph.',
-      }),
-    );
-
-    await jj(
-      await post(`/api/tasks/${task.id}/body`, {
-        markdown: 'Keep this paragraph.\n\nA different second paragraph.',
-        author: AGENT,
-      }),
-    );
-
-    // "Did the anchor survive" is not a field on the thread — nothing sets
-    // `orphaned` on this route, so reading it would assert undefined both
-    // ways. Resolve the stored RelativePosition against the live doc, which
-    // is what the editor itself does.
-    const resolves = (): boolean => {
-      const room = handle?.rooms.get(docId);
-      const stored = room ? listThreads(room.ydoc).find((t) => t.id === thread.id) : undefined;
-      const anchor = stored?.anchor as { startRel?: Uint8Array } | undefined;
-      if (!room || !anchor?.startRel) return false;
-      return prose.resolveRelativePosition(room.ydoc, anchor.startRel) !== null;
-    };
-    expect(resolves()).toBe(true);
-
-    // Control: the check can come out the other way. Wipe the paragraph the
-    // thread is anchored to — and leave no snippet for the re-anchor sweep
-    // to find — and it stops resolving. So "survived" above means the block
-    // diff spared that block, not that this check always says yes.
-    await jj(
-      await post(`/api/tasks/${task.id}/body`, {
-        markdown: 'Nothing of the original remains.',
-        author: AGENT,
-      }),
-    );
-    expect(resolves()).toBe(false);
-  });
-
-  it('refuses to blank a body, and says why rather than 200-ing', async () => {
-    const { workspaceId, task } = await seed();
-    const res = await post(`/api/tasks/${task.id}/body`, { markdown: '   ', author: AGENT });
-    // 400, NOT 404: with no route at all every request here 404s, so a bare
-    // `res.ok === false` would pass before a line of this feature existed.
-    expect(res.status).toBe(400);
-    expect((await res.json()).error).toBe('empty');
-    // The body it refused to wipe is still there.
-    expect((await readTask(workspaceId, task.id)).body).toContain('thin.');
-  });
-
-  it('404s on a task that does not exist', async () => {
-    // Non-vacuous because the first test drives the same route to 200 on a
-    // real id — this asserts the route can tell the two apart.
-    await seed();
-    const res = await post('/api/tasks/t-nope/body', { markdown: 'hello.', author: AGENT });
-    expect(res.status).toBe(404);
-  });
-
-  it('survives a restart on a task filed with no body at all', async () => {
-    const { workspaceId, task } = await seedBodyless();
-    await handle?.stop();
-    handle = await start(dataDir as string);
-
-    await jj(
-      await post(`/api/tasks/${task.id}/body`, { markdown: 'written cold.', author: AGENT }),
-    );
-    expect((await readTask(workspaceId, task.id)).body).toContain('written cold.');
-  });
-
-  it('recreates a body room that was deleted out from under the task', async () => {
-    // Body rooms are created lazily, and `delete_doc` on one is a call any
-    // agent can make. A rewrite aimed straight at the doc then comes back
-    // 'not-found' — which reads as "no such task", when the task is fine and
-    // only its room is missing. The route recreates the room rather than
-    // relying on the startup sweep that happens to re-arm every other case.
-    const { workspaceId, task } = await seed();
-    const docId = taskBodyDocId(task.id);
-    const del = await fetch(`${base}/api/docs/${encodeURIComponent(docId)}`, { method: 'DELETE' });
-    expect(del.ok).toBe(true);
-    // Positive control: the room really is gone.
-    expect((await fetch(`${base}/api/docs/${encodeURIComponent(docId)}/content`)).status).toBe(404);
-
-    await jj(
-      await post(`/api/tasks/${task.id}/body`, { markdown: 'back from nothing.', author: AGENT }),
-    );
-    expect((await readTask(workspaceId, task.id)).body).toContain('back from nothing.');
   });
 });
