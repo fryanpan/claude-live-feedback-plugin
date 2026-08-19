@@ -2991,6 +2991,43 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           return j(200, res);
         }
+        // add_goal: append ONE band. Separate from the PUT above for the same
+        // reason rename is — that one replaces the list, so a board adding a
+        // band through it submits the list it last read and removes anything
+        // another writer added in between.
+        const wsAddGoalMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/goals\/add$/);
+        if (wsAddGoalMatch && req.method === 'POST') {
+          const workspaceId = decodeURIComponent(wsAddGoalMatch[1] ?? '');
+          const body = await safeJson(req);
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const title = body?.title;
+          if (typeof title !== 'string' || title.trim().length === 0) {
+            return j(400, { error: 'title must be a non-empty string' });
+          }
+          const dueAt = body?.dueAt;
+          if (dueAt !== undefined && typeof dueAt !== 'number') {
+            return j(400, { error: 'dueAt must be a number' });
+          }
+          const after = body?.after;
+          if (after !== undefined && (typeof after !== 'string' || after.length === 0)) {
+            return j(400, { error: 'after must be a goal id' });
+          }
+          const res = taskStore.addGoal(
+            workspaceId,
+            {
+              title: title.trim(),
+              ...(dueAt !== undefined ? { dueAt: dueAt as number } : {}),
+              ...(after !== undefined ? { after: after as string } : {}),
+            },
+            { actor: author },
+          );
+          if (!res.ok) {
+            const status = res.error === 'rejected' ? 400 : 404;
+            return j(status, res);
+          }
+          return j(200, res);
+        }
         // reorder_goals (§3.2): the priority gesture, permutation-only. A
         // separate route from the PUT above because that one REPLACES the
         // list — the two params here (`order`, `parent`) are the whole

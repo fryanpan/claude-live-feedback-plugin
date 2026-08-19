@@ -76,6 +76,7 @@ function handlers(over: Partial<BoardHandlers> = {}): BoardHandlers {
   return {
     onStatusSet: vi.fn(),
     onGoalTitleCommit: vi.fn(),
+    onGoalAdd: vi.fn(),
     onOpenTask: vi.fn(),
     onReorder: vi.fn(),
     onTitleCommit: vi.fn(),
@@ -140,16 +141,108 @@ describe('renderBoard', () => {
   // detail panel's discussion section.
   it('puts no discussion badge on a row, while other row badges still render', () => {
     const h = handlers();
-    const discussed = task({ goal: 'g-pr', commentCount: 3, needs: 'decision' });
+    const discussed = task({ goal: 'g-pr', commentCount: 3, after: ['t-a', 't-b'] });
     renderBoard(root, boardSections(GOALS, [discussed], filters), h);
     const row = root.querySelector(`.hub-task-row[data-task-id="${discussed.id}"]`);
     expect(row).not.toBeNull();
-    // Control: the strip is alive and this row's other badge is in it.
-    expect(row?.querySelector('.hub-badge-decision')).not.toBeNull();
+    // Control: the strip is alive and this row's other badge is in it. (It
+    // used to be the `decision` badge; that one is gone too — see below.)
+    expect(row?.querySelector('.hub-badge-after')).not.toBeNull();
     expect(row?.querySelector('.hub-badge-comments')).toBeNull();
     // …and no badge anywhere on the row spells the count either, which is what
     // a differently-classed replacement glyph would do.
     expect(row?.querySelector('.hub-task-badges')?.textContent ?? '').not.toContain('3');
+  });
+
+  // Same request, same day, same reasoning ("not useful and a waste of
+  // space"): `needs` labels the board's shape rather than the row, so on a
+  // triaged board every row carried one. Pinned as an absence with a positive
+  // control beside it — a row that WOULD have carried the badge still renders
+  // its other badges, so this is not "the strip stopped rendering".
+  it('puts no decision/action identifier on a row', () => {
+    const h = handlers();
+    const decide = task({ goal: 'g-pr', needs: 'decision', after: ['t-a'] });
+    const act = task({ goal: 'g-pr', needs: 'action' });
+    renderBoard(root, boardSections(GOALS, [decide, act], filters), h);
+    const row = root.querySelector(`.hub-task-row[data-task-id="${decide.id}"]`);
+    expect(row?.querySelector('.hub-badge-after')).not.toBeNull();
+    expect(root.querySelector('.hub-badge-decision')).toBeNull();
+    expect(root.querySelector('.hub-badge-action')).toBeNull();
+    // And no differently-classed replacement spells the words either.
+    const badgeText = [...root.querySelectorAll('.hub-task-badges')]
+      .map((b) => b.textContent ?? '')
+      .join(' ');
+    expect(badgeText).not.toContain('decision');
+    expect(badgeText).not.toContain('action');
+  });
+
+  // Display-only flattening. The goal LIST still nests — `boardSections`
+  // reports the subgoal at depth 1 and this test asserts that first, so a
+  // change that flattened the DATA would fail here rather than pass quietly.
+  // What stops is the indent: a subgoal is work with the same claim on the
+  // day as anything else on the list.
+  it('renders a subgoal as a plain section, with the nesting still in the model', () => {
+    const h = handlers();
+    const sections = boardSections(GOALS, [task({ goal: 'g-sub' })], filters);
+    // The premise, asserted rather than assumed: this fixture HAS a subgoal.
+    expect(sections.map((s) => s.depth)).toContain(1);
+    renderBoard(root, sections, h);
+    expect(root.querySelector('.hub-subgoal')).toBeNull();
+    // Positive control: the section it would have been on is really there,
+    // in board order, with its task in it.
+    const rendered = [...root.querySelectorAll('.hub-section')].map(
+      (s) => (s as HTMLElement).dataset.goalId,
+    );
+    expect(rendered).toEqual(sections.map((s) => s.id));
+    expect(root.querySelector('.hub-section[data-goal-id="g-sub"] .hub-task-row')).not.toBeNull();
+  });
+
+  it('offers a goal-add row that reports the title and the band to follow', () => {
+    const h = handlers();
+    const sections = boardSections(GOALS, [], filters);
+    renderBoard(root, sections, h);
+    const btn = root.querySelector('.hub-goal-add-btn') as HTMLButtonElement;
+    expect(btn).not.toBeNull();
+    btn.click();
+    const input = root.querySelector('.hub-goal-add-input') as HTMLInputElement;
+    input.value = '  3. Cut support load  ';
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    // Trimmed, and placed after the last REAL band — never after Chores,
+    // which always renders last and is not a band anyone files against.
+    const lastReal = [...sections].reverse().find((s) => !s.isChores);
+    expect(lastReal?.isChores).toBe(false);
+    expect(h.onGoalAdd).toHaveBeenCalledWith('3. Cut support load', lastReal?.id);
+    // The box closes and empties, so the next open does not offer the last
+    // title back as though it were already typed.
+    expect(input.value).toBe('');
+    expect(input.classList.contains('hidden')).toBe(true);
+  });
+
+  it('files nothing for an empty goal title, or for Escape over a typed one', () => {
+    const h = handlers();
+    renderBoard(root, boardSections(GOALS, [], filters), h);
+    (root.querySelector('.hub-goal-add-btn') as HTMLButtonElement).click();
+    const input = root.querySelector('.hub-goal-add-input') as HTMLInputElement;
+    input.value = '   ';
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    input.value = 'a real title';
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(h.onGoalAdd).not.toHaveBeenCalled();
+    // Positive control in the same pass: the same box CAN file, so the two
+    // absences above are refusals rather than a dead affordance.
+    (root.querySelector('.hub-goal-add-btn') as HTMLButtonElement).click();
+    input.value = 'a real title';
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(h.onGoalAdd).toHaveBeenCalledWith('a real title', expect.any(String));
+  });
+
+  it('omits the goal-add row entirely when no handler is given', () => {
+    const h = handlers();
+    const { onGoalAdd: _drop, ...noAdd } = h;
+    renderBoard(root, boardSections(GOALS, [], filters), noAdd as BoardHandlers);
+    expect(root.querySelector('.hub-goal-add')).toBeNull();
+    // Control: the board rendered.
+    expect(root.querySelector('.hub-section')).not.toBeNull();
   });
 
   it('a change event that re-picks the current status writes nothing', () => {
