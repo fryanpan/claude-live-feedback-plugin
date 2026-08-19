@@ -180,15 +180,29 @@ export function attachedAgentTest(agentIds: Iterable<string>): (name: string) =>
  * what to expose. It returns the record as-is: redaction of host-machine
  * fields belongs to whoever serves it, not to the matcher.
  *
- * The RESERVED owners never resolve, whatever the roster holds. `agent` is
- * the value every session with no configured name collapses into and `human`
- * means "a person, unnamed" — both are shared or anonymous by construction,
- * so a match on them names an arbitrary session rather than the one that did
- * the work. `resolveOwnerKind` already returns before its roster check for
- * exactly these two, so this adds no new behaviour there; it puts the rule in
- * the one place every future caller inherits it, rather than trusting each to
- * re-derive it. Guessing wrong here is worse than saying nothing: an owner
- * with no answer reads as unknown, an owner with the wrong one reads as fact.
+ * The RESERVED owners never resolve, whatever the roster holds, and this is
+ * a DECISION rather than a gap — read the next paragraph before "fixing" it.
+ *
+ * `agent` is the value every session with no configured name collapses into,
+ * and `human` means "a person, unnamed". Both are shared or anonymous by
+ * construction, so a match on them names an arbitrary session rather than the
+ * one that did the work. Measured on the live board 2026-08-19: the generic
+ * identity carried **858 of 7,727 activity events**, produced by multiple
+ * distinct sessions that are no longer distinguishable — the information that
+ * would separate them was never captured, so no join can recover it.
+ *
+ * Returning nothing there is therefore the correct answer and not a missing
+ * feature. **A wrong attribution is worse than an absent one, because nothing
+ * downstream can tell that it is wrong**: an owner with no session reads as
+ * unknown and invites a look, while an owner with the wrong session reads as
+ * fact and ends the question. The tempting change — treat the null as a gap
+ * and match the roster anyway — silently converts every one of those rows
+ * into a confident lie.
+ *
+ * `resolveOwnerKind` already returns before its roster check for exactly
+ * these two, so this adds no new behaviour there; it puts the rule in the one
+ * place every future caller inherits it, rather than trusting each to
+ * re-derive it.
  */
 export function attachedAgentResolver<T extends { agentId: string }>(
   attachments: Iterable<T>,
