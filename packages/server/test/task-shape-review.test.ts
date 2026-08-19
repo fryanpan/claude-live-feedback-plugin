@@ -4,7 +4,7 @@
  * shape review. The server does not judge the title or the body any more
  * (Bryan, 2026-08-18: "Remove the format check that's all written in code.
  * Instead, I want that to be in an LLM prompt going forward"); it only
- * ROUTES, and the lead's prompt (the `live-feedback:reviewing-task-shape`
+ * ROUTES, and the lead's prompt (the `claude-workspaces:reviewing-task-shape`
  * skill) decides fine-as-is / rewrite / ask the filer. Capture always wins —
  * nothing here can refuse or delay a write.
  *

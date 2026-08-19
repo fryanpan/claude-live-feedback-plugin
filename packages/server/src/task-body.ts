@@ -3,7 +3,7 @@
  *
  * This module used to derive "body gaps" — a code-written check that a
  * description opens with the user story. Bryan moved that judgment into an
- * LLM prompt on 2026-08-18 (the `live-feedback:reviewing-task-shape`
+ * LLM prompt on 2026-08-18 (the `claude-workspaces:reviewing-task-shape`
  * skill), for the reason this file's own header recorded from the start:
  * the server *"can detect that the ticket titles are not good, but can't
  * necessarily fix them. And should not gate the capture of information."*

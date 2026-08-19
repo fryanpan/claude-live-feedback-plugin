@@ -31,10 +31,11 @@ import { execFile } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { readRenamedEnv } from '@feedback/core/env-names';
 import { compareSemver } from './plugin-release.ts';
 
 /** The one plugin this server knows the released version of. */
-export const PLUGIN_REF = 'live-feedback@claude-live-feedback';
+export const PLUGIN_REF = 'claude-workspaces@claude-workspaces';
 
 /** How long a spawned update gets before it is killed. A hung fetch must not
  *  hold the single-flight slot open forever. */
@@ -116,7 +117,7 @@ export const CLAUDE_BIN_CANDIDATES: readonly string[] = [
 /**
  * The `claude` binary to spawn, or null if we cannot find one.
  *
- * `override` (LF_CLAUDE_BIN) is **authoritative**: if it is set and does not
+ * `override` (CW_CLAUDE_BIN) is **authoritative**: if it is set and does not
  * exist, the answer is null rather than "something else that happens to be
  * on this box". An override at the head of a fallback chain lets an operator
  * believe they pointed this somewhere they didn't — the same failure that
@@ -154,7 +155,7 @@ export async function runPluginRefresh(deps: RefreshDeps): Promise<RefreshResult
       after: before,
       changed: false,
       message:
-        'no claude binary found — set LF_CLAUDE_BIN to its path, or install the CLI on this machine',
+        'no claude binary found — set CW_CLAUDE_BIN to its path, or install the CLI on this machine',
       ranAt,
     };
   }
@@ -271,7 +272,7 @@ export function createPluginRefresher(opts: { minIntervalMs?: number } = {}): Pl
   return new PluginRefresher({
     run: () =>
       runPluginRefresh({
-        bin: resolveClaudeBin({ override: process.env.LF_CLAUDE_BIN }),
+        bin: resolveClaudeBin({ override: readRenamedEnv(process.env, 'CW_CLAUDE_BIN') }),
         run: execRun,
         installedVersion: () => readInstalledPluginVersion(),
         now: Date.now,

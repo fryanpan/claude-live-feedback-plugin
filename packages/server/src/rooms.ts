@@ -1648,7 +1648,7 @@ export class Rooms {
    * text is seeded into the flat `content` Y.Text (no markdown parse), the
    * mtime poll is armed for disk→doc refresh, and — crucially — there is NO
    * doc→disk write-back: the browser never edits a code file (it only
-   * comments), so the file is never rewritten by live-feedback. The agent
+   * comments), so the file is never rewritten by claude-workspaces. The agent
    * edits the source via its normal tools; the poll re-renders the view.
    */
   attachReadonlyFile(

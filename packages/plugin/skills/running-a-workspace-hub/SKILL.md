@@ -1,9 +1,9 @@
 ---
 name: running-a-workspace-hub
-description: Use when you need to stand up or drive a live-feedback workspace hub with the MCP tools — create_workspace, set_goal_list, create_tasks, set_task_goal, attach_agent, task_transition, answer_decision, link_refs. Covers the north-star goal, the ordered goal list, story-shaped task bodies, triage, the work loop, decisions, and the lead-agent seat.
+description: Use when you need to stand up or drive a claude-workspaces workspace hub with the MCP tools — create_workspace, set_goal_list, create_tasks, set_task_goal, attach_agent, task_transition, answer_decision, link_refs. Covers the north-star goal, the ordered goal list, story-shaped task bodies, triage, the work loop, decisions, and the lead-agent seat.
 ---
 
-# Running a live-feedback workspace hub
+# Running a claude-workspaces workspace hub
 
 A hub workspace is a **north-star goal + an ordered task board + linked docs**,
 rendered at `/workspaces/<workspaceId>`. Everything on it is reachable from
@@ -19,7 +19,7 @@ file.
 
 This skill is the tool contract. The **discipline** of working an existing
 board — priority order, fanning out, when to stop — lives in
-`live-feedback:working-a-workspace-board`. Read both.
+`claude-workspaces:working-a-workspace-board`. Read both.
 
 ## First: two different things are called "workspace"
 
@@ -408,7 +408,7 @@ identically; what this seat adds is deciding how many lines run at once and in
 what order their merges land. The default is every ready row that doesn't
 collide, and the criteria — what counts as a collision, and what forces a
 sequence of the merge rather than of the work — are in
-`live-feedback:working-a-workspace-board`. Don't re-derive them here. Two
+`claude-workspaces:working-a-workspace-board`. Don't re-derive them here. Two
 things only the lead can do about it:
 
 - **Make the board judgeable.** A batch is planned by reading descriptions
@@ -533,7 +533,7 @@ exists precisely because nobody has made that call yet.
 The calls above are the write half. What the lead actually owes on a goal
 change — re-reading the goal, sweeping every open task, reordering without
 losing a band, and flagging what the edit made obsolete *without* closing
-somebody's work — is `live-feedback:handling-a-goal-change`.
+somebody's work — is `claude-workspaces:handling-a-goal-change`.
 
 ## Adopting an existing tracker
 

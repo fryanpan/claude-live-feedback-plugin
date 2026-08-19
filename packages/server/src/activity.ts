@@ -131,7 +131,7 @@ export function payloadDigest(input: string | undefined | null): string {
 /**
  * Classify a comment author as `person` or `agent`. Agent identities are the
  * generic "known-agent" one, per-agent MCP identities (`agent-<slug>` ids
- * from FEEDBACK_AGENT_NAME), a literal "Agent" name, an author that declares
+ * from CW_AGENT_NAME), a literal "Agent" name, an author that declares
  * `kind: 'agent'`, or an author whose `kind` is missing entirely. Everyone
  * else is a person. Agent events are still recorded (so WR can filter them)
  * but person events are the ones that must never be dropped.

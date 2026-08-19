@@ -2,6 +2,7 @@
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readRenamedEnv } from '@feedback/core/env-names';
 import { resolveClientDists } from './client-release.ts';
 import { createDeployer } from './deploy.ts';
 import { createPluginRefresher } from './plugin-refresh.ts';
@@ -32,8 +33,8 @@ const dataDir = arg('data-dir', join(repoRoot, 'data'));
 // run dev`, `bun run staging`, a bare bin.ts — falls back to this checkout's
 // own dist, which is what those want.
 const { widget: widgetDist, markdownApp: markdownAppDist } = resolveClientDists({
-  widgetDist: arg('widget-dist') ?? process.env.LF_WIDGET_DIST,
-  markdownAppDist: arg('markdown-app-dist') ?? process.env.LF_MARKDOWN_APP_DIST,
+  widgetDist: arg('widget-dist') ?? readRenamedEnv(process.env, 'CW_WIDGET_DIST'),
+  markdownAppDist: arg('markdown-app-dist') ?? readRenamedEnv(process.env, 'CW_MARKDOWN_APP_DIST'),
   repoRoot,
 });
 const demosDir = pathOrNull(join(repoRoot, 'demos'));
@@ -44,7 +45,9 @@ const demosDir = pathOrNull(join(repoRoot, 'demos'));
 // links to an origin nobody meant to publish. Unset is the normal case and
 // falls back to `http://<discovered host>:<port>`.
 const publicBaseUrlOverride =
-  normalizePublicBaseUrl(arg('public-base-url') ?? process.env.LF_PUBLIC_BASE_URL) ?? undefined;
+  normalizePublicBaseUrl(
+    arg('public-base-url') ?? readRenamedEnv(process.env, 'CW_PUBLIC_BASE_URL'),
+  ) ?? undefined;
 
 // The release root this deployment PUBLISHES into, which is what lets the
 // board say "your browser is running a client from three days ago because the
@@ -80,7 +83,7 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? '')
   .filter(Boolean);
 
 /**
- * LF_SHARING_DISABLED=1 — external sharing starts OFF and the runtime toggle
+ * CW_SHARING_DISABLED=1 — external sharing starts OFF and the runtime toggle
  * (`POST /api/share/enabled`, the `set_sharing_enabled` MCP tool) refuses to
  * reopen it. Use this while a security review is in flight: it is the one
  * setting nothing the server exposes can undo, so a compromised or
@@ -90,7 +93,7 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? '')
  * state persists in <dataDir>/sharing.json across restarts.
  */
 const sharingEnvLocked = ['1', 'true', 'yes'].includes(
-  (process.env.LF_SHARING_DISABLED ?? '').trim().toLowerCase(),
+  (readRenamedEnv(process.env, 'CW_SHARING_DISABLED') ?? '').trim().toLowerCase(),
 );
 
 const trustedHosts = (process.env.TRUSTED_HOSTS ?? '')
@@ -146,7 +149,7 @@ const share = shareConfig
 // The ONLY place a real summarizer is constructed. `createServer` has no
 // default, so nothing that merely spins a server up — every test in
 // packages/server/test, every embedded use — can reach the network or the
-// key. An absent key or LF_SUMMARIES=0 makes every call on it a no-op.
+// key. An absent key or CW_SUMMARIES=0 makes every call on it a no-op.
 const summarizer = new ThreadSummarizer();
 
 // The ONLY place the real voice fast-path completer is constructed — the
@@ -258,7 +261,7 @@ if (share) {
   const st = handle.sharingGate.status();
   console.log(
     `[feedback]   sharing:    ${st.enabled ? 'ON — external share hosts are served' : 'OFF — every external host gets 403'}` +
-      `${st.locked ? ' (LOCKED by LF_SHARING_DISABLED)' : ''}` +
+      `${st.locked ? ' (LOCKED by CW_SHARING_DISABLED)' : ''}` +
       `${st.loadError ? ` (failed closed: ${st.loadError})` : ''}`,
   );
 }
@@ -284,12 +287,16 @@ if (!markdownAppDist)
 // respawn, a `bun run dev` while iterating) must never spend it by accident.
 // Run it once, on purpose:
 //
-//   LF_SUMMARY_BACKFILL=1 bun run dev
+//   CW_SUMMARY_BACKFILL=1 bun run dev
 //
-// Set the window in minutes with LF_SUMMARY_BACKFILL_MINUTES (default 15).
+// Set the window in minutes with CW_SUMMARY_BACKFILL_MINUTES (default 15).
 // It is paced, skips anything already summarized, and stops on shutdown.
-if (['1', 'true', 'yes'].includes((process.env.LF_SUMMARY_BACKFILL ?? '').trim().toLowerCase())) {
-  const minutes = Number(process.env.LF_SUMMARY_BACKFILL_MINUTES ?? '15');
+if (
+  ['1', 'true', 'yes'].includes(
+    (readRenamedEnv(process.env, 'CW_SUMMARY_BACKFILL') ?? '').trim().toLowerCase(),
+  )
+) {
+  const minutes = Number(readRenamedEnv(process.env, 'CW_SUMMARY_BACKFILL_MINUTES') ?? '15');
   const windowMs = (Number.isFinite(minutes) && minutes > 0 ? minutes : 15) * 60_000;
   const { queued, open, resolved } = handle.rooms.backfillSummaries({ windowMs });
   console.log(

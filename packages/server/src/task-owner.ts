@@ -31,7 +31,7 @@ export const ASSIGNEE_REQUIRED_ERROR = 'assignee-required';
 /** Says how to satisfy the refusal — a gate that only blocks is a dead end. */
 export const ASSIGNEE_REQUIRED_MESSAGE =
   "Name who owns this task: pass `assignee` (a person, an agent's name, or 'human'), " +
-  'or identify yourself with `author`. An agent gets its name from FEEDBACK_AGENT_NAME ' +
+  'or identify yourself with `author`. An agent gets its name from CW_AGENT_NAME ' +
   `in its launch environment — "${GENERIC_ASSIGNEE}" on its own is not an owner.`;
 
 /**
@@ -42,7 +42,7 @@ export const ASSIGNEE_REQUIRED_MESSAGE =
  */
 export const ASSIGNEE_REQUIRED_HANDOVER_MESSAGE =
   "Name who takes this task: pass `assignee` (a person, an agent's name, or 'human'). " +
-  'An agent gets its name from FEEDBACK_AGENT_NAME in its launch environment — ' +
+  'An agent gets its name from CW_AGENT_NAME in its launch environment — ' +
   `"${GENERIC_ASSIGNEE}" on its own is not an owner.`;
 
 /** The value a caller supplied, or nothing when it names nobody. */
