@@ -142,7 +142,7 @@ describe('POST /api/workspaces/<id>/tasks/batch', () => {
     expect(res.failures.map((f) => f.index)).toEqual([0, 2]);
     expect(res.failures[0]?.error).toBe('assignee-required');
     // The refusal has to say how to satisfy it, per row.
-    expect(res.failures[0]?.message).toContain('FEEDBACK_AGENT_NAME');
+    expect(res.failures[0]?.message).toContain('CW_AGENT_NAME');
     // Positive control: the owned row landed anyway — one bad row does not
     // reject the batch.
     const titles = (await listTasks(wsId)).map((t) => t.title);
