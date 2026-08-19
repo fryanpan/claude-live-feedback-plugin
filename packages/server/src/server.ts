@@ -2746,9 +2746,23 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // read, and the two answers differ exactly where it matters (an
           // undeclared row whose owner is an attached agent reads `agent`).
           const ownerKindOf = taskProjection.ownerKindReader(workspaceId);
+          // And WHICH session that owner is, when one can be named. The kind
+          // above says a row belongs to an agent; this says whether that
+          // agent is still there, which is the difference between "somebody
+          // owns this" and "somebody is on this". Absent when no attachment
+          // vouches for the owner — a person, or an owner too generic to
+          // resolve to one session.
+          const ownerSessionOf = taskProjection.ownerSessionReader(workspaceId);
           return j(200, {
             workspaceId,
-            tasks: tasks.map((t) => ({ ...t, ownerKind: ownerKindOf(t) })),
+            tasks: tasks.map((t) => {
+              const session = ownerSessionOf(t);
+              return {
+                ...t,
+                ownerKind: ownerKindOf(t),
+                ...(session !== undefined ? { ownerSession: session } : {}),
+              };
+            }),
           });
         }
         if (wsTasksMatch && req.method === 'POST') {
