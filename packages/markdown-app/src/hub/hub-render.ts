@@ -2907,6 +2907,15 @@ function leadAsk(asks: ReviewThreadItem[] | undefined): ReviewThreadItem | null 
  *    the reported defect ("where a comment IS a request for input, the request
  *    itself is often unclear"), so the heading tells the truth about which of
  *    the two this is and the reader can skip on sight.
+ *
+ *  - **A DECLARED item shows everything its author declared.** The panel used
+ *    to render `item.ask` alone — which for a declared item is the one-line
+ *    headline — so the why, the look-for, the detail carrying the links to the
+ *    thing under review, and the options were all reachable only by scrolling
+ *    to the comment at the bottom (reported with a screenshot 2026-08-19).
+ *    The blocks come from `walkReviewBlocks` and the options from the same
+ *    markup as the Home card on purpose: two surfaces rendering one
+ *    declaration from two sets of rules is how they drift apart.
  */
 function renderAskPanel(
   task: HubTask,
@@ -2935,6 +2944,17 @@ function renderAskPanel(
   text.innerHTML = renderCommentMarkdown(item.ask);
   box.append(text);
 
+  const review = item.review;
+  if (review) {
+    // The second half of the enforced two-line header. Same pair as the Home
+    // card, unclamped here because this IS the opened card — the panel is
+    // where the reader came to read it, not a row they are scanning past.
+    const why = document.createElement('p');
+    why.className = 'hub-detail-ask-why';
+    why.textContent = review.why;
+    box.append(why);
+  }
+
   const meta = document.createElement('p');
   meta.className = 'hub-detail-ask-meta';
   // `askedAt` is when the QUESTION was asked; `since` is when the run the
@@ -2943,10 +2963,54 @@ function renderAskPanel(
   meta.textContent = `${item.askedBy} · ${timeAgo(item.askedAt ?? item.since, now)}`;
   box.append(meta);
 
+  if (review) {
+    // Reported 2026-08-19 with a screenshot: the panel showed the headline and
+    // nothing else, so the why / look-for / detail the agent WROTE for this
+    // card were reachable only by scrolling to the comment at the bottom —
+    // which is where the links to the thing under review live. The same
+    // helper the Home walkthrough uses renders them, so the two surfaces
+    // cannot drift into showing a declaration differently.
+    box.append(...walkReviewBlocks(review));
+    // Gated on the reply handler for the same reason the form below is: an
+    // option is a one-tap ANSWER, and one that cannot post is a dead button.
+    if (handlers.onComment && review.options && review.options.length > 0) {
+      const opts = document.createElement('div');
+      opts.className = 'hub-walk-options';
+      for (const o of review.options) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'hub-walk-option';
+        const label = document.createElement('span');
+        label.className = 'hub-walk-option-label';
+        label.textContent = o.label;
+        b.append(label);
+        if (o.detail) {
+          const detail = document.createElement('span');
+          detail.className = 'hub-walk-option-detail';
+          detail.textContent = o.detail;
+          b.append(detail);
+        }
+        // The Home card's contract, unchanged: the LABEL is the verbatim
+        // reply, so a tap and a typed answer land in the thread identically.
+        b.addEventListener('click', () => {
+          void handlers.onComment?.(task, o.label, item.threadId);
+        });
+        opts.append(b);
+      }
+      box.append(opts);
+    }
+  }
+
   if (handlers.onComment) {
     const form = commentForm(
       'hub-comment-form hub-detail-ask-form',
-      direct ? 'Answer here…' : 'Reply here…',
+      // Options are a shortcut, never a closed set — the box below them is how
+      // an answer that is not one of the candidates still gets said.
+      review?.options?.length
+        ? '…or answer in your own words'
+        : direct
+          ? 'Answer here…'
+          : 'Reply here…',
       'Send reply',
       (t) => handlers.onComment?.(task, t, item.threadId) ?? Promise.resolve(false),
       `ask:${task.id}:${item.threadId}`,

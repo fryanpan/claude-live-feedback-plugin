@@ -2694,6 +2694,16 @@ a.hub-link-chip:hover {
 .hub-detail-ask-text > :last-child {
   margin-bottom: 0;
 }
+/* Line 2 of a declared item's header: why it matters. The Home row clamps its
+   twin to two lines because the reader is scanning past it; here they have
+   opened the thing, so it runs to its full (gate-capped) length. */
+.hub-detail-ask-why {
+  margin: 6px 0 0;
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
 .hub-detail-ask-meta {
   margin: 6px 0 0;
   font-size: 12px;
