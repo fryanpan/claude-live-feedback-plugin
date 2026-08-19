@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { readRenamedEnv } from '../../core/src/env-names.ts';
+import { discoveryCandidates, resolveDiscoveryFile } from '../../core/src/machine-paths.ts';
 import { resolveAgentAuthor } from './author.ts';
 import { type ThreadCreateInput, threadCreateRequest } from './thread-create.ts';
 import { RETRIAGE_SKILL, TASK_REVIEW_SKILL, triageRequestLine } from './triage-line.ts';
@@ -15,8 +17,8 @@ import { RETRIAGE_SKILL, TASK_REVIEW_SKILL, triageRequestLine } from './triage-l
  * server's REST API so state is authoritative there.
  *
  * Base URL resolution (first hit wins):
- *   1. $FEEDBACK_BASE_URL — explicit override
- *   2. ~/.claude/live-feedback/server.json — written by scripts/serve.ts
+ *   1. $CW_BASE_URL — explicit override
+ *   2. ~/.claude/claude-workspaces/server.json — written by scripts/serve.ts
  *      on startup so the MCP auto-finds whichever port the server landed on.
  *      Deliberately NOT renamed with the plugin: the writer and this reader
  *      ship in different artifacts and restart independently, so moving it
@@ -24,11 +26,11 @@ import { RETRIAGE_SKILL, TASK_REVIEW_SKILL, triageRequestLine } from './triage-l
  *   3. http://localhost:8787 — last-resort default
  *
  * env:
- *   FEEDBACK_BASE_URL    — optional override; usually discovery handles it
- *   FEEDBACK_AGENT_NAME  — this agent's display name (e.g. "Quick Build");
- *                          wins over FEEDBACK_AUTHOR, which the plugin's
+ *   CW_BASE_URL    — optional override; usually discovery handles it
+ *   CW_AGENT_NAME  — this agent's display name (e.g. "Quick Build");
+ *                          wins over CW_AUTHOR, which the plugin's
  *                          .mcp.json pins to `agent` for every peer
- *   FEEDBACK_AUTHOR      — fallback author key/name (default: agent)
+ *   CW_AUTHOR      — fallback author key/name (default: agent)
  */
 
 // Resolved per-request, not frozen at module load. The MCP stdio child runs
@@ -42,9 +44,10 @@ import { RETRIAGE_SKILL, TASK_REVIEW_SKILL, triageRequestLine } from './triage-l
 // notion-channel-mcp on developer machines and silently routed every call to
 // the wrong server. If discovery is unavailable, fail loudly with a hint.
 function resolveBaseUrl(): string {
-  if (process.env.FEEDBACK_BASE_URL) return process.env.FEEDBACK_BASE_URL;
-  const discovery = join(homedir(), '.claude', 'live-feedback', 'server.json');
-  if (existsSync(discovery)) {
+  const override = readRenamedEnv(process.env, 'CW_BASE_URL');
+  if (override) return override;
+  const discovery = resolveDiscoveryFile(homedir(), existsSync);
+  if (discovery) {
     try {
       const j = JSON.parse(readFileSync(discovery, 'utf8')) as { port?: number };
       if (j.port) return `http://localhost:${j.port}`;
@@ -53,14 +56,11 @@ function resolveBaseUrl(): string {
     }
   }
   throw new Error(
-    'claude-workspaces server not found — start it with `bun run dev` (or set FEEDBACK_BASE_URL). ' +
-      `Looked for discovery file at ${discovery}.`,
+    'claude-workspaces server not found — start it with `bun run dev` (or set CW_BASE_URL). ' +
+      `Looked for a discovery file at ${discoveryCandidates(homedir()).join(' and ')}.`,
   );
 }
-const AUTHOR = resolveAgentAuthor({
-  FEEDBACK_AUTHOR: process.env.FEEDBACK_AUTHOR,
-  FEEDBACK_AGENT_NAME: process.env.FEEDBACK_AGENT_NAME,
-});
+const AUTHOR = resolveAgentAuthor(process.env);
 
 /** The {id,name,color} subset of AUTHOR a `suggest: true` route call needs —
  *  suggestions are attributed per-agent from the same identity every other
@@ -113,7 +113,7 @@ const server = new Server(
     capabilities: {
       tools: {},
       // Declares this server as a Claude Code channel — incoming feedback
-      // events get pushed to the session as <channel source="live-feedback" …>
+      // events get pushed to the session as <channel source="claude-workspaces" …>
       // via `notifications/claude/channel`.
       experimental: { 'claude/channel': {} },
     },
@@ -174,10 +174,10 @@ const server = new Server(
       'arrive on the same watch_doc channel as thread events.',
       '',
       'OBSERVE: call watch_doc(docId) once per doc to receive thread events as',
-      '<channel source="live-feedback" doc_id="..." thread_id="..." event="..." author="..." sent_at="...">body</channel>',
+      '<channel source="claude-workspaces" doc_id="..." thread_id="..." event="..." author="..." sent_at="...">body</channel>',
       'messages. Treat each as an explicit ask from the reviewer; read, decide if it',
       "is in your domain, act via an edit tool. unwatch_doc when you're done.",
-      'Watches are remembered on the server under this agent name (FEEDBACK_AGENT_NAME)',
+      'Watches are remembered on the server under this agent name (CW_AGENT_NAME)',
       'and re-wired when the session respawns; list_watched_docs says whether the',
       'current set was restored from the server or is session-only.',
       '',
@@ -293,7 +293,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'summarize_thread',
       description:
-        "Generate the two summary lines (topic + discussion) shown on a thread's collapsed card, and store them on the thread so every open browser picks them up immediately. Normally you do NOT need this: the server generates a summary automatically ~3s after any thread change. Reach for it when you want a summary right now — e.g. you just posted a long reply and want the card to read correctly before you hand the review URL to someone. A thread whose stored summary already matches its current state is returned as-is with cached:true and costs nothing; pass force:true to regenerate anyway. Two expected failures come back as tool ERRORS, not as a result field — the error text carries the HTTP status. A 503 (summaries disabled) means no API key is configured or LF_SUMMARIES=0; the card keeps its deterministic lines, nothing is broken, and retrying will not help. A 409 (thread changed during generation) means a reply landed mid-call and the summary would have described the older thread — just call it again.",
+        "Generate the two summary lines (topic + discussion) shown on a thread's collapsed card, and store them on the thread so every open browser picks them up immediately. Normally you do NOT need this: the server generates a summary automatically ~3s after any thread change. Reach for it when you want a summary right now — e.g. you just posted a long reply and want the card to read correctly before you hand the review URL to someone. A thread whose stored summary already matches its current state is returned as-is with cached:true and costs nothing; pass force:true to regenerate anyway. Two expected failures come back as tool ERRORS, not as a result field — the error text carries the HTTP status. A 503 (summaries disabled) means no API key is configured or CW_SUMMARIES=0; the card keeps its deterministic lines, nothing is broken, and retrying will not help. A 409 (thread changed during generation) means a reply landed mid-call and the summary would have described the older thread — just call it again.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -822,7 +822,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'watch_doc',
       description:
-        "Start pushing live feedback events for this doc into the current Claude Code session as <channel source='live-feedback' …> messages. Every thread.created / thread.replied / thread.resolved / thread.reopened on the doc arrives as a channel event until you call unwatch_doc. NOTE: this is normally redundant — `create_review_doc`, `bind_mock`, and most other docId-bearing tools auto-subscribe the caller on first touch. Use `watch_doc` explicitly when you want to subscribe to a doc you haven't otherwise interacted with (e.g., a peer's doc you only want to observe). Idempotent. DURABLE: the watch is also recorded on the server under this agent's identity (FEEDBACK_AGENT_NAME), so a session respawn re-wires it without a call from you — the response says `persisted: false` when it could not be (no stable identity, or the server was unreachable), which means a restart WILL drop it.",
+        "Start pushing live feedback events for this doc into the current Claude Code session as <channel source='claude-workspaces' …> messages. Every thread.created / thread.replied / thread.resolved / thread.reopened on the doc arrives as a channel event until you call unwatch_doc. NOTE: this is normally redundant — `create_review_doc`, `bind_mock`, and most other docId-bearing tools auto-subscribe the caller on first touch. Use `watch_doc` explicitly when you want to subscribe to a doc you haven't otherwise interacted with (e.g., a peer's doc you only want to observe). Idempotent. DURABLE: the watch is also recorded on the server under this agent's identity (CW_AGENT_NAME), so a session respawn re-wires it without a call from you — the response says `persisted: false` when it could not be (no stable identity, or the server was unreachable), which means a restart WILL drop it.",
       inputSchema: {
         type: 'object',
         properties: { docId: { type: 'string' } },
@@ -848,7 +848,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'share_workspace',
       description:
-        "Publish a WHOLE workspace behind a Cloudflare Access gate, so external reviewers can browse the set — file tree, every member doc, cross-doc links, and per-file comment threads. A WORKSPACE IS THE UNIT OF SHARING: there is no per-doc share, so to share one document, file it on a workspace (attach_doc, or bind_folder / create_diff_review) and share that. Everything in the workspace is then available to everyone in it. Returns { share: {...}, memberCount }. Read .claude/live-feedback.json's `share.defaultAllowDomains` first; if a repo has no config, ASK THE USER which domain(s) to allow before calling — never default to 'anyone'. Default ttlSeconds is 72h. Visitors can read, comment on, and co-edit members through the live editor — but cannot delete docs, replace a doc wholesale, reparse from disk, list other workspaces or docs, open files outside the workspace root, or manage shares.",
+        "Publish a WHOLE workspace behind a Cloudflare Access gate, so external reviewers can browse the set — file tree, every member doc, cross-doc links, and per-file comment threads. A WORKSPACE IS THE UNIT OF SHARING: there is no per-doc share, so to share one document, file it on a workspace (attach_doc, or bind_folder / create_diff_review) and share that. Everything in the workspace is then available to everyone in it. Returns { share: {...}, memberCount }. Read .claude/claude-workspaces.json's `share.defaultAllowDomains` first; if a repo has no config, ASK THE USER which domain(s) to allow before calling — never default to 'anyone'. Default ttlSeconds is 72h. Visitors can read, comment on, and co-edit members through the live editor — but cannot delete docs, replace a doc wholesale, reparse from disk, list other workspaces or docs, open files outside the workspace root, or manage shares.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -922,7 +922,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'set_sharing_enabled',
       description:
-        'Master switch for ALL external access. Turning it off makes every share host and link host answer 403 before authentication, and hangs up websockets and SSE streams that are already open — one call, rather than revoking shares individually. Existing shares are preserved and resume when it is turned back on. The local/tailnet surface is unaffected. Call with no argument to just read the current state. Refuses with env_locked when LF_SHARING_DISABLED is set in the service environment.',
+        'Master switch for ALL external access. Turning it off makes every share host and link host answer 403 before authentication, and hangs up websockets and SSE streams that are already open — one call, rather than revoking shares individually. Existing shares are preserved and resume when it is turned back on. The local/tailnet surface is unaffected. Call with no argument to just read the current state. Refuses with env_locked when CW_SHARING_DISABLED is set in the service environment.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1020,7 +1020,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                 assignee: {
                   type: 'string',
                   description:
-                    "Who owns this row: 'human' for work only a person can do, or a named identity (another agent, a person). Omit it and YOU own it — the API records your own name. It REFUSES a row whose owner comes out as the bare word 'agent', because that names a category rather than somebody, and a board of tasks owned by \"agent\" cannot answer who is doing what. If you get that refusal, your session was launched without FEEDBACK_AGENT_NAME.",
+                    "Who owns this row: 'human' for work only a person can do, or a named identity (another agent, a person). Omit it and YOU own it — the API records your own name. It REFUSES a row whose owner comes out as the bare word 'agent', because that names a category rather than somebody, and a board of tasks owned by \"agent\" cannot answer who is doing what. If you get that refusal, your session was launched without CW_AGENT_NAME.",
                 },
                 assigneeKind: {
                   type: 'string',
@@ -1229,7 +1229,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           assignee: {
             type: 'string',
             description:
-              "'human', a person's name, or an agent's name (yours comes from FEEDBACK_AGENT_NAME). The bare word 'agent' is refused.",
+              "'human', a person's name, or an agent's name (yours comes from CW_AGENT_NAME). The bare word 'agent' is refused.",
           },
           assigneeKind: {
             type: 'string',
@@ -2915,7 +2915,7 @@ const watchers = new Map<string, Watcher>();
 // the next tool call if the server was down, and reported in full by
 // `list_watched_docs` so `[]` can no longer mean two things.
 //
-// The shared identity (`FEEDBACK_AGENT_NAME` unset → `known-agent`) is not
+// The shared identity (`CW_AGENT_NAME` unset → `known-agent`) is not
 // persisted at all — every anonymous session resolves to it, so a set keyed
 // on it would restore everybody's watches into each of them. The server
 // refuses it too; this check just spares the round trip and says why.
@@ -2923,7 +2923,7 @@ const watchers = new Map<string, Watcher>();
 
 const IDENTITY_IS_SHARED = AUTHOR.id === 'known-agent';
 const SHARED_IDENTITY_REASON =
-  'FEEDBACK_AGENT_NAME is not set, so this session has no identity to key its watches on; ' +
+  'CW_AGENT_NAME is not set, so this session has no identity to key its watches on; ' +
   'they will not survive a restart. Set it in the launch environment and restart the session.';
 
 interface RestoreState {
@@ -3032,7 +3032,7 @@ async function emitRestoreNotice(state: RestoreState): Promise<void> {
   await server.notification({
     method: 'notifications/claude/channel',
     params: {
-      source: 'live-feedback',
+      source: 'claude-workspaces',
       sent_at: state.at ?? new Date().toISOString(),
       content: `[watches restored] ${n} watch${n === 1 ? '' : 'es'} re-wired from the server for ${AUTHOR.name} after restart${dropped}: ${state.restored.join(', ')}`,
       meta: { event: 'watches.restored', restored: state.restored, pruned: state.pruned },
@@ -3330,7 +3330,7 @@ async function emitHubChannelMessage(event: string, rawPayload: unknown): Promis
   await server.notification({
     method: 'notifications/claude/channel',
     params: {
-      source: 'live-feedback',
+      source: 'claude-workspaces',
       sent_at: new Date().toISOString(),
       content: body,
       meta: {
@@ -3362,7 +3362,7 @@ async function emitChannelMessage(event: string, rawPayload: unknown): Promise<v
     await server.notification({
       method: 'notifications/claude/channel',
       params: {
-        source: 'live-feedback',
+        source: 'claude-workspaces',
         sent_at: new Date().toISOString(),
         content: body,
         meta: {
@@ -3394,7 +3394,7 @@ async function emitChannelMessage(event: string, rawPayload: unknown): Promise<v
   await server.notification({
     method: 'notifications/claude/channel',
     params: {
-      source: 'live-feedback',
+      source: 'claude-workspaces',
       sent_at: sentAt,
       content: body,
       meta: {

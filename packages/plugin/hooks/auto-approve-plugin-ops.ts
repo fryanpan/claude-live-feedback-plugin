@@ -24,7 +24,7 @@
  *      `/setup` and the README:
  *        - `./scripts/launchd/install.sh` / `uninstall.sh`
  *        - `launchctl {bootstrap,bootout,kickstart,print}` against the
- *          plugin's service label `com.fryanpan.live-feedback`
+ *          plugin's service label `com.fryanpan.claude-workspaces`
  *        - `bun run scripts/serve.ts` and `bun run dev` (foreground server)
  *        - `kill` against PIDs holding the plugin's port (8787 / 8788)
  *      Anything else falls through to Claude Code's normal prompt.
@@ -54,7 +54,7 @@ type HookDecision = {
 };
 
 const MCP_PREFIX = 'mcp__plugin_claude-workspaces_claude-workspaces__';
-const SERVICE_LABEL = 'com.fryanpan.live-feedback';
+const SERVICE_LABEL = 'com.fryanpan.claude-workspaces';
 
 /**
  * Anchored, simple-glob matchers for Bash commands the plugin owns.
@@ -94,7 +94,7 @@ function approveBash(command: string): { approve: true; reason: string } | null 
       return { approve: true, reason: `plugin service mgmt: ${needle}` };
     }
   }
-  // `launchctl print gui/<uid>/com.fryanpan.live-feedback` — the service
+  // `launchctl print gui/<uid>/com.fryanpan.claude-workspaces` — the service
   // label appears later in the path, so the substring match above already
   // catches it. Same for kickstart / bootout. The `SERVICE_LABEL`
   // co-occurrence requirement is the guardrail: no broad `launchctl`

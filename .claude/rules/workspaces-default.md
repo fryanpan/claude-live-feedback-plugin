@@ -39,4 +39,4 @@ If that returns nothing, THEN the plugin isn't enabled for your session — but 
 
 **Apply Bryan's comments via the claude-workspaces edit tools** — once a doc is bound, NEVER edit the .md file directly with Write/Edit. Use `find_and_replace`, `rewrite_thread_region`, `insert_blocks_after_thread`, etc. The plugin serializes the live doc back to disk ~1s after every change; direct filesystem edits get silently clobbered by the next flush. See the `claude-workspaces:editing-review-docs` skill for the full pattern.
 
-**Watch for comments** via `watch_doc(docId)` — comment events arrive as `<channel source="live-feedback" doc_id="..." thread_id="..." event="...">` blocks. Resolve threads when you've addressed the feedback (`resolve_thread`).
+**Watch for comments** via `watch_doc(docId)` — comment events arrive as `<channel source="claude-workspaces" doc_id="..." thread_id="..." event="...">` blocks. (Sessions still running a pre-rename bundle emit `source="live-feedback"`; the attribute changes when that session restarts, not when this rule does.) Resolve threads when you've addressed the feedback (`resolve_thread`).
