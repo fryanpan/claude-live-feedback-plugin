@@ -337,18 +337,13 @@ body.has-set #main {
     display: block;
   }
 }
-.set-pane-header {
-  padding: 14px 16px 8px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--fg-muted);
-}
 #set-pane-list {
   list-style: none;
   margin: 0;
-  padding: 0 8px 16px;
+  /* Top gap is the list's own: the "In this review" header used to supply it
+     and was dropped 2026-08-19 for costing ~36px of vertical space on an iPad
+     to say what the pane's contents already say. */
+  padding: 10px 8px 16px;
 }
 #set-pane-list li {
   margin: 2px 0;
