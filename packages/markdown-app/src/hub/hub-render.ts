@@ -592,8 +592,24 @@ function taskBadges(task: HubTask): HTMLElement {
   // smaller glyph) — a substitute is the over-engineering being objected to.
   // If "comments are going missing" is reported again, this is the trade that
   // produced it, and a row-level tell is the fix.
-  if (task.after.length > 0)
-    add('hub-badge-after', `after ${task.after.length}`, `blocked on: ${task.after.join(', ')}`);
+  // REMOVED 2026-08-19, at Bryan's request on seeing it: *"That's not helpful.
+  // Just don't show it any more. We can figure out how or if this data is
+  // useful or not as we go along."* An `after N` badge sat here, counting the
+  // task's dependencies.
+  //
+  // Recorded rather than deleted silently, and the specific reason it was not
+  // helpful is worth keeping: the number counted ALL of `after`, while only
+  // the `afterEnforce` subset actually hard-blocks a transition. So `after 2`
+  // could mean two hard blocks, two soft ones, or a mix, and the row could not
+  // say which — it read as "blocked" on rows that were not. What it was
+  // blocked ON lived only in the hover title, which a touch screen cannot
+  // reach at all.
+  //
+  // The dependencies themselves are untouched: `after` / `afterEnforce` still
+  // gate transitions, still drive the blocker rows on Home, and still show in
+  // the detail panel. This removes a row-level TELL, not a feature. If the
+  // board needs one again, it should distinguish enforced from soft and name
+  // what is blocking without a hover.
   if (task.dueAt !== undefined) {
     const due = new Date(task.dueAt);
     const overdue = task.dueAt < Date.now() && task.status !== 'done';
