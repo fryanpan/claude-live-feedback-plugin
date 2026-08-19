@@ -13,6 +13,7 @@ import { declareWorkspaceLead } from './declare-lead.ts';
 import { createFrameDedup } from './frame-dedup.ts';
 import { type ThreadCreateInput, threadCreateRequest } from './thread-create.ts';
 import { RETRIAGE_SKILL, TASK_REVIEW_SKILL, triageRequestLine } from './triage-line.ts';
+import { voiceRequestLine } from './voice-line.ts';
 import {
   type WatchCoverage,
   boardsToReattach,
@@ -89,7 +90,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.65';
+const PLUGIN_VERSION = '0.1.66';
 
 /**
  * What a good `evidence.commit` looks like, said at the one layer that reaches
@@ -1663,7 +1664,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'attach_agent',
       description:
-        "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep — and sweeping one means SHAPING it, not only filing it: read the row's own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each with rewrite_task into a title and a story-shaped body, then set_task_goal. A capture arrives with a machine-clipped title and its raw utterance for a body, and this is the only step that turns it into work. Then queuedVoice — voice change-requests that arrived while no agent was live; act on each transcript verbatim — and, if you LEAD this workspace, pendingRetriage: a goal edit made while you were away, whose taskIds you re-place with set_task_goal (echo its batchId on each), plus pendingBucketReview: a goal BAND that appeared while you were away, with the unplaced tasks worth re-looking at against it — place the ones that now have a home, and leave the rest, since nothing has moved them — plus taskReviews: rows created, renamed, or rewritten while no lead was live, each waiting for the shape pass the `claude-workspaces:reviewing-task-shape` skill describes (judge the title and body; rewrite with rewrite_task or ask the filer on the task). All of these are drained by this call. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments the server has observed recently (a heartbeat or a tool call, whichever is later), and after ~5 minutes of silence the hub shows you as away.",
+        "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep — and sweeping one means SHAPING it, not only filing it: read the row's own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each with rewrite_task into a title and a story-shaped body, then set_task_goal. A capture arrives with a machine-clipped title and its raw utterance for a body, and this is the only step that turns it into work. Then queuedVoice — voice change-requests that arrived while no agent was live; act on each transcript verbatim, EXCEPT where the row carries `applied`: that names what the voice fast path already did to the board on the speaker's behalf, so pick up only whatever the utterance asked for beyond it rather than redoing it — and, if you LEAD this workspace, pendingRetriage: a goal edit made while you were away, whose taskIds you re-place with set_task_goal (echo its batchId on each), plus pendingBucketReview: a goal BAND that appeared while you were away, with the unplaced tasks worth re-looking at against it — place the ones that now have a home, and leave the rest, since nothing has moved them — plus taskReviews: rows created, renamed, or rewritten while no lead was live, each waiting for the shape pass the `claude-workspaces:reviewing-task-shape` skill describes (judge the title and body; rewrite with rewrite_task or ask the filer on the task). All of these are drained by this call. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments the server has observed recently (a heartbeat or a tool call, whichever is later), and after ~5 minutes of silence the hub shows you as away.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -3096,7 +3097,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           attachment?: { agentId?: string };
           gating?: unknown;
           untriaged?: string[];
-          queuedVoice?: Array<{ transcript: string; ts: number }>;
+          queuedVoice?: Array<{ transcript: string; ts: number; applied?: string }>;
           lead?: boolean;
           pendingRetriage?: {
             batchId: string;
@@ -3132,7 +3133,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           untriaged: res.untriaged ?? [],
           // Voice change-requests that arrived while no agent was live
           // ("agent away — queued"): this attach is their delivery. Act on
-          // each transcript, verbatim.
+          // each transcript, verbatim — EXCEPT for the part named by
+          // `applied`, which the voice fast path already did to the board on
+          // the speaker's behalf. Pick up only what the utterance asked for
+          // beyond it; redoing it posts the same words twice.
           queuedVoice: res.queuedVoice ?? [],
           // A goal edit made while you were away, waiting for you because
           // you lead this board. Walk its taskIds with set_task_goal against
@@ -3826,16 +3830,13 @@ async function emitHubChannelMessage(event: string, rawPayload: unknown): Promis
     case 'agent.detached':
       body = `[${event}] ${p.agentId ?? '?'}`;
       break;
+    // Three routes, three different things to say — and one of them is "say
+    // nothing". An action the fast path already applied must NOT read as work
+    // to do; see voice-line.ts.
     case 'voice.request': {
-      // The speaker's words arrive VERBATIM (§3.8: changes carry the
-      // transcript verbatim); the context object says where they were.
-      if (p.route === 'fast-path') return; // a lookup the server already answered
-      const ctx = p.context
-        ? ` (at ${p.context.surface ?? '?'}${p.context.docId ? ` ${p.context.docId}` : ''}${
-            p.context.taskId ? ` ${p.context.taskId}` : ''
-          }${p.context.visibleHeading ? `, near "${p.context.visibleHeading}"` : ''})`
-        : '';
-      body = `[voice.request]${by}${ctx}: "${p.transcript ?? ''}" — act on it through the task/edit tools; the speaker was told: "${truncate(p.ack ?? '', 120)}"`;
+      const line = voiceRequestLine(p);
+      if (line === null) return;
+      body = line;
       break;
     }
     default:
