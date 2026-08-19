@@ -18,7 +18,7 @@
  * notion of who counts as an agent is exactly the drift this codebase has
  * already been bitten by.
  */
-import type { Comment, Thread } from '@feedback/core';
+import type { Comment, ReviewPayload, Thread } from '@feedback/core';
 import { classifyActor } from './activity.ts';
 
 /** How much of the question rides along to the strip. Enough to recognise the
@@ -35,10 +35,36 @@ const ASK_MAX = 200;
  */
 const DIRECT_ASK_MAX = 420;
 
+/**
+ * Which of the two lists this row belongs to, and it is the whole point of
+ * the change.
+ *
+ * - `declared` — an agent attached a Review Item and said "this needs you".
+ *   This is the queue. Everything on it is something only a person can answer,
+ *   because somebody had to write a headline to put it here.
+ * - `unreplied` — the OLD membership rule, unchanged: an open thread whose
+ *   newest comment is an agent's. That is what a finished exchange looks like,
+ *   which is why it stopped being the queue.
+ *
+ * `unreplied` is kept, and kept visible, on purpose. A declared queue is only
+ * as good as the agents filling it, and if they stop filing, an inferred queue
+ * that had silently been deleted would leave questions sitting unasked behind
+ * a surface that looks healthy. So nothing that surfaces today stops
+ * surfacing — the set of threads is identical, the rows only sort into two
+ * lists — and the reader can see whether the new path is being used at all.
+ */
+export type ReviewBand = 'declared' | 'unreplied';
+
 export interface ReviewThreadItem {
   kind: 'task-thread' | 'doc-thread';
+  band: ReviewBand;
   docId: string;
   threadId: string;
+  /** The comment this row is about: the declaration if there is one, else the
+   *  comment being quoted. Needed to stamp an answer back onto the item. */
+  commentId: string;
+  /** The declaration itself, present exactly when `band === 'declared'`. */
+  review?: ReviewPayload;
   /** Present on a task discussion — the board opens the task, not the doc. */
   taskId?: string;
   /** What the reader is being asked ABOUT: the task title, or the doc's label. */
@@ -386,6 +412,41 @@ export function reviewThreadItems(args: {
     for (const thread of args.source.threadsOf(docId)) {
       const run = unansweredRun(thread);
       if (run.length === 0) continue;
+
+      // A DECLARATION beats every heuristic below it, and the newest one wins
+      // for the same reason the newest ask does: it is the one still standing.
+      const declaring = [...run].reverse().find((c) => c.review !== undefined);
+      if (declaring?.review) {
+        items.push({
+          kind,
+          band: 'declared',
+          docId,
+          threadId: thread.id,
+          commentId: declaring.id,
+          review: declaring.review,
+          ...(taskId ? { taskId } : {}),
+          title,
+          // The headline IS the row title — an authored line rather than a
+          // clip of prose, which is the entire fix for "titles are random
+          // detailed text". No `clip` call: the length was enforced at the
+          // door, so anything arriving over it is legacy and should be seen
+          // rather than silently cut.
+          ask: declaring.review.headline,
+          askedBy: declaring.author.name,
+          // The DECLARATION's timestamp, not the run's start. For an inferred
+          // row `since` has to be the run's start or an agent's follow-ups
+          // reset its own clock; a declaration cannot be reset that way,
+          // because a later comment does not become the declaration. So this
+          // is both starvation-safe and more truthful — an agent that posted
+          // status for three days and only then declared has been waiting on
+          // an answer for minutes, not days.
+          since: declaring.ts,
+          direct: true,
+          askedAt: declaring.ts,
+        });
+        continue;
+      }
+
       // Newest ask wins when an agent asked twice — the later one is the one
       // still standing. Falling back to the run's newest comment keeps the
       // pre-existing behaviour for every thread that asks nothing.
@@ -393,8 +454,10 @@ export function reviewThreadItems(args: {
       const shown = asked ?? run[run.length - 1];
       items.push({
         kind,
+        band: 'unreplied',
         docId,
         threadId: thread.id,
+        commentId: shown.id,
         ...(taskId ? { taskId } : {}),
         title,
         ask: asked ? extractAsk(asked.text, people) : clip(shown.text),
@@ -427,7 +490,7 @@ export function reviewThreadItems(args: {
  * agent addressing nobody. `classifyActor` draws the line, so this cannot
  * disagree with the reply-reopen rule about who is a person.
  */
-function knownPeople(docIds: Iterable<string>, source: ThreadSource): Set<string> {
+export function knownPeople(docIds: Iterable<string>, source: ThreadSource): Set<string> {
   const people = new Set<string>();
   const add = (u: { name?: string } | undefined) => {
     if (u && classifyActor(u as Parameters<typeof classifyActor>[0]) === 'person' && u.name)
