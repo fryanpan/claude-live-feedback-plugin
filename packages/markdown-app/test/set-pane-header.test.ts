@@ -47,3 +47,47 @@ describe('review-set sidebar', () => {
     expect(padding).not.toMatch(/^0[\s;]/);
   });
 });
+
+/**
+ * The sidebar is hidden on an iPad in landscape, and the three rules that
+ * decide that agree on where the line is.
+ *
+ * Bryan, 2026-08-19: *"The 'in this review' is no longer useful for any screen
+ * resolution for an individual doc. It's only useful for diff reviews. And for
+ * those, at iPad resolution, please also hide it and keep it in the dropdown
+ * like for mobile."*
+ *
+ * A media query cannot read a custom property, so the breakpoint is written
+ * out three times and nothing in CSS makes them agree. Changing one is a
+ * silent half-fix: raise only the show gate and the grid still reserves a
+ * 320px column with nothing in it; raise only the grid and the sidebar
+ * renders into a track that no longer exists.
+ */
+describe('review-set sidebar breakpoint', () => {
+  const SHOW_GATE = /@media\s*\(min-width:\s*(\d+)px\)\s*\{\s*body\.has-set\s+#set-pane/;
+
+  it('shows the sidebar only above every iPad landscape width', () => {
+    const gate = CSS.match(SHOW_GATE);
+    expect(gate, 'the #set-pane show gate went missing').not.toBeNull();
+    const min = Number(gate?.[1]);
+    // iPad Pro 12.9" landscape is 1366 CSS px — the widest iPad there is. The
+    // gate must not admit it, so it starts at 1367 or higher.
+    expect(min).toBeGreaterThan(1366);
+  });
+
+  it('collapses the grid at exactly the width the sidebar stops showing', () => {
+    const min = Number(CSS.match(SHOW_GATE)?.[1]);
+    const grid = CSS.match(/@media\s*\(max-width:\s*(\d+)px\)\s*\{\s*body\.has-set\s+#main/);
+    expect(grid, 'the has-set #main collapse rule went missing').not.toBeNull();
+    // Off by one from the gate, and off by one in the right direction: the two
+    // must tile the whole range with no width belonging to both or neither.
+    expect(Number(grid?.[1])).toBe(min - 1);
+  });
+
+  it('hides the resize handle wherever the sidebar is hidden', () => {
+    const min = Number(CSS.match(SHOW_GATE)?.[1]);
+    const resize = CSS.match(/@media\s*\(max-width:\s*(\d+)px\)\s*\{\s*\.set-resize/);
+    expect(resize, 'the .set-resize hide rule went missing').not.toBeNull();
+    expect(Number(resize?.[1])).toBe(min - 1);
+  });
+});
