@@ -296,6 +296,49 @@ Concretely:
 - URL formatting still applies: bare URL on its own line, no markdown
   wrapping.
 
+## A report to a peer goes on the task too — the message is a link
+
+The two rules above are about the owner, and that is exactly how the largest
+source of noise slipped past them. Over one 38-hour window, **52,340 words —
+40% of every word in the owner's chat window — were agent-to-agent reports.**
+Ninety-nine of them. The two longest ran 3,079 and 4,392 words. **None was
+addressed to him.**
+
+Every one of those agents was following the rules as written and still did
+this, because a report to a peer doesn't look like either case above. You
+aren't asking the owner for feedback, and you aren't handing him a
+deliverable — you are answering a coworker who asked you a direct question.
+So the whole category reads as out of scope, and goes to chat by default.
+
+It isn't out of scope, for a mechanical reason: **agent-to-agent messages
+transit the person's window.** A message you address to a peer is a message
+the owner scrolls past. He is paying the full cost of your report and is not
+its reader.
+
+So the same rule covers it. **Post the report on the task; send the peer the
+link.**
+
+- Post it where the work is: `post_reply` on the thread that asked you, or
+  `create_thread(docId="task:<taskId>", …)` when the ask arrived some other
+  way.
+- **The response hands you the link back** — `url` on the `create_thread` /
+  `post_reply` result, absolute and ready to paste. You do not have to
+  assemble it, and you do not need to know the server's base URL. That field
+  exists so the honest path is the cheap one.
+- Then your message to the peer is one or two sentences and that link. The
+  findings, the evidence, the gate output, the file list, the reasoning — all
+  of it is already on the task, where the next agent to touch that task will
+  find it. A report pasted into chat is read once and is gone.
+
+Two things are genuinely messages rather than reports, and both are short by
+nature: **a decision the peer must make before either of you can move**, and
+**a blocker you need them to clear**. Neither needs 3,000 words. Everything
+else — status, results, what you found, what you shipped, what took two
+attempts — is a task comment with a link to it.
+
+The test, when you are unsure: if what you are about to send another agent
+runs longer than a short paragraph, it is a report. Post it, send the link.
+
 ## Finishing a task is not a reason to stop
 
 When a line of work closes, **refill it**: re-run `next_tasks` and start
