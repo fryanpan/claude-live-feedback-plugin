@@ -225,7 +225,7 @@ describe('POST /api/docs/:docId/threads/:threadId/summary', () => {
     expect(body.error).toBe('summaries disabled');
     // "Helpful" means it names the switch AND how to add a key — a bare
     // "disabled" leaves the operator with nowhere to go.
-    expect(body.detail).toContain('LF_SUMMARIES=1');
+    expect(body.detail).toContain('CW_SUMMARIES=1');
     expect(body.detail).toContain('live-feedback-summary-api-key');
     // The disabled path must short-circuit BEFORE the call, not after it.
     expect(calls.length).toBe(0);

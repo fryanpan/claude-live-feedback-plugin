@@ -104,7 +104,7 @@ export function normalizePublicBaseUrl(raw: string | null | undefined): string |
   const s = (raw ?? '').trim();
   if (s === '') return null;
   const bad = (why: string): never => {
-    throw new Error(`LF_PUBLIC_BASE_URL is invalid (${why}): ${JSON.stringify(s)}`);
+    throw new Error(`CW_PUBLIC_BASE_URL is invalid (${why}): ${JSON.stringify(s)}`);
   };
   let u: URL;
   try {
