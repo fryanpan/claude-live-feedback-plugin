@@ -150,6 +150,59 @@ export function initialDrawerOpen(opts: {
 
 const DRAWER_PREF_KEY = 'lf:drawer';
 
+/** Above this, a 320px doc list costs the prose nothing — Bryan's 4K monitor.
+ *  Every phone, tablet and laptop is one tier below it and shares one answer.
+ *  Deliberately NOT an attempt to identify a device: pinch-zoom scales the
+ *  layout viewport (a 1366px iPad at 85% reports 1607px), so width cannot say
+ *  what hardware this is. It can still say how much room there is. */
+export const WIDE_SCREEN_QUERY = '(min-width: 1921px)';
+
+const SET_PANE_PREF_KEY = 'lf:set-pane';
+
+/** Whether the review-set sidebar starts open. A stored choice wins in both
+ *  directions; with nothing stored, only a 4K-class screen opens it. */
+export function initialSetPaneOpen(stored: string | null, isWide: boolean): boolean {
+  if (stored === 'open') return true;
+  if (stored === 'closed') return false;
+  return isWide;
+}
+
+/** Wire the topbar's doc-list toggle. Shell-level and doc-independent, so it
+ *  runs once per page rather than per navigation — `mountReviewChrome` runs on
+ *  every doc change, and a second listener here would flip the pane twice per
+ *  click. The button's own visibility is CSS (`body.has-set` + the 1101px
+ *  floor); this only owns the open/closed state. */
+export function wireSetPaneToggle(): void {
+  const btn = document.getElementById('toggle-set-pane');
+  if (!btn || btn.dataset.wired === '1') return;
+  btn.dataset.wired = '1';
+  const apply = (open: boolean) => {
+    document.body.classList.toggle('set-pane-open', open);
+    btn.setAttribute('aria-pressed', String(open));
+    btn.title = open ? 'Hide doc list' : 'Show doc list';
+    btn.setAttribute(
+      'aria-label',
+      open ? 'Hide the list of docs in this review' : 'Show the list of docs in this review',
+    );
+  };
+  let stored: string | null = null;
+  try {
+    stored = localStorage.getItem(SET_PANE_PREF_KEY);
+  } catch {
+    // storage unavailable — the tier default still applies.
+  }
+  apply(initialSetPaneOpen(stored, window.matchMedia(WIDE_SCREEN_QUERY).matches));
+  btn.addEventListener('click', () => {
+    const next = !document.body.classList.contains('set-pane-open');
+    apply(next);
+    try {
+      localStorage.setItem(SET_PANE_PREF_KEY, next ? 'open' : 'closed');
+    } catch {
+      // storage unavailable — the choice holds for this page only.
+    }
+  });
+}
+
 export interface ReviewChrome {
   threadsPanel: ThreadPanel;
   openDrawer: () => void;
@@ -263,6 +316,7 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     handleClass: 'threads-resize',
     label: 'Resize comments panel',
   });
+  wireSetPaneToggle();
   wireResizeHandle({
     pane: document.getElementById('set-pane'),
     cssVar: '--set-w',
