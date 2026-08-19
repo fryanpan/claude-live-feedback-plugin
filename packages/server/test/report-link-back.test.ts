@@ -1,30 +1,29 @@
 /**
- * Posting a report on a task hands back the link to it.
+ * Posting a report hands back the link to where it landed.
  *
- * The measured problem this serves: over 38 hours, 52,340 words — 40% of
- * every word in the user's chat window — were agent-to-agent reports relayed
- * through his terminal. Ninety-nine of them, two single messages at 3,079 and
- * 4,392 words, none addressed to him. Each had an obvious correct home: the
- * task the work belonged to.
+ * The measured problem this serves, from one 38-hour window on this
+ * project's own board: 52,340 words — 40% of every word in the owner's chat
+ * window — were agent-to-agent reports relayed through his terminal. Ninety-
+ * nine of them, two single messages at 3,079 and 4,392 words, none addressed
+ * to him. Each had an obvious correct home: the thread that asked.
  *
  * The rule telling agents to post there already ships, and did not prevent
  * it. Part of the reason is friction on the honest path: an agent that DOES
- * post its report on the task then has to hand its peer a pointer, and the
- * response it just got back contains no link. It has to assemble
- * `/workspaces/<wsId>?task=<taskId>` from parts, against a base URL it may
- * not know — while replying in chat costs nothing. So the cheap path is the
- * wrong one.
+ * post its report then has to hand its peer a pointer, and the response it
+ * just got back contained no link. It had to assemble the URL from parts
+ * against a base it may not know — while replying in chat cost nothing. So
+ * the cheap path was the wrong one.
  *
  * This closes that gap the way `reviewGapAdvice` closes its own: the thing
- * the author needs travels back on the success response. No new endpoint, no
- * second URL contract — `externalBaseUrl()` already exists precisely so an
- * operator override cannot reach some links and miss others, and
- * `taskDeepLink()` already owns this path's shape.
+ * the author needs travels back on the success response. No new endpoint and
+ * no second URL contract — `externalBaseUrl()` already exists precisely so an
+ * operator override cannot reach some links and miss others, `taskDeepLink()`
+ * owns the task path's shape, and `withReviewUrl` owns the doc path's.
  *
- * The share-visitor case is a genuine constraint, not caution: a workspace id
- * is an unguessable URL capability, and a doc-scoped visitor must not learn
- * one from a member doc (the same rule that gates `hubWorkspaceId` and
- * `backTo` on the doc route).
+ * BOTH surfaces are covered on purpose. The thread that asked you for
+ * something is very often a comment on a markdown review doc rather than a
+ * task, so a version answering only for `task:` docs would hand back nothing
+ * on the commonest reply path.
  *
  * All fixtures are synthetic. The repo is public.
  */
@@ -42,11 +41,11 @@ const AGENT = { id: 'agent-search-revamp', name: 'Search Revamp', kind: 'known',
 
 interface ThreadResponse {
   thread?: { id: string };
-  url?: string;
+  threadUrl?: string;
   error?: string;
 }
 
-describe('a report posted on a task comes back with the link to hand over', () => {
+describe('a report comes back with the link to hand over', () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
@@ -79,6 +78,9 @@ describe('a report posted on a task comes back with the link to hand over', () =
     return (await r.json()) as ThreadResponse;
   };
 
+  const taskLink = (t: string) =>
+    `${PUBLIC_BASE}/workspaces/${encodeURIComponent(wsId)}?task=${encodeURIComponent(t)}`;
+
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'report-link-'));
     handle = createServer({ port: 0, dataDir, publicBaseUrl: PUBLIC_BASE });
@@ -105,16 +107,11 @@ describe('a report posted on a task comes back with the link to hand over', () =
   });
 
   it('opening the thread returns a URL that opens the task on the board', async () => {
-    const body = await postSubjectThread(
-      `task:${taskId}`,
-      'Deploy done: gates green, prod on abc.',
-    );
+    const body = await postSubjectThread(`task:${taskId}`, 'Deploy done: gates green.');
     // Absolute, and on the operator's public base — the whole point is that
     // it can be pasted somewhere else and still resolve. A relative path
     // would be useless to the peer it is being handed to.
-    expect(body.url).toBe(
-      `${PUBLIC_BASE}/workspaces/${encodeURIComponent(wsId)}?task=${encodeURIComponent(taskId)}`,
-    );
+    expect(body.threadUrl).toBe(taskLink(taskId));
   });
 
   it('a reply returns it too — the second report is where the long ones actually land', async () => {
@@ -128,30 +125,52 @@ describe('a report posted on a task comes back with the link to hand over', () =
     );
     expect(r.status).toBe(200);
     const body = (await r.json()) as ThreadResponse;
-    expect(body.url).toBe(
-      `${PUBLIC_BASE}/workspaces/${encodeURIComponent(wsId)}?task=${encodeURIComponent(taskId)}`,
-    );
+    expect(body.threadUrl).toBe(taskLink(taskId));
+  });
+
+  it('by_find returns it as well — the third write site, and the odd one out', async () => {
+    // This route builds its response from a differently-named local than the
+    // other two, which makes it the site most likely to be miswired. It also
+    // had no coverage at all until this case existed.
+    // This route anchors to text, so the task body needs some first.
+    const docId = `task:${taskId}`;
+    const seeded = await post(`/api/docs/${encodeURIComponent(docId)}/content`, {
+      markdown: '# Results page\n\nAnchor me here.\n',
+    });
+    expect(seeded.status).toBe(200);
+
+    const r = await post(`/api/docs/${encodeURIComponent(docId)}/threads/by_find`, {
+      author: AGENT,
+      text: 'Filed from the by_find route.',
+      find: 'Anchor me here.',
+    });
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as ThreadResponse;
+    expect(body.thread?.id).toBeDefined();
+    expect(body.threadUrl).toBe(taskLink(taskId));
   });
 
   it('POSITIVE CONTROL: the id in the link is THIS task, not any task', async () => {
-    // Without this, a hardcoded or first-task link passes both assertions
+    // Without this, a hardcoded or first-task link passes every assertion
     // above and sends every reader to the same wrong row.
     const second = await post(`/api/workspaces/${wsId}/tasks`, {
       title: 'A different piece of work',
       author: AGENT,
     });
+    expect(second.status).toBe(200);
     const otherId = ((await second.json()) as { task: { id: string } }).task.id;
     expect(otherId).not.toBe(taskId);
 
     const body = await postSubjectThread(`task:${otherId}`, 'Report on the other one.');
-    expect(body.url).toContain(encodeURIComponent(otherId));
-    expect(body.url).not.toContain(encodeURIComponent(taskId));
+    expect(body.threadUrl).toContain(encodeURIComponent(otherId));
+    expect(body.threadUrl).not.toContain(encodeURIComponent(taskId));
   });
 
-  it('an ordinary doc comment carries no such field', async () => {
-    // The link answers "where did my report go" for a TASK. A markdown doc
-    // already has `reviewUrl` on its own metadata, and inventing a second
-    // URL contract here is exactly what `externalBaseUrl` exists to prevent.
+  it('a comment on a markdown doc gets the review URL — the commonest reply path', async () => {
+    // The thread that asked you for something is usually a doc comment, not
+    // a task. Answering only for `task:` docs would leave the most-travelled
+    // path with no link and no fallback, which is the exact friction this
+    // change exists to remove.
     const docId = 'plain-notes';
     const p = join(dataDir, `${docId}.md`);
     writeFileSync(p, '# Notes\n\nSome body text to anchor to.\n');
@@ -164,12 +183,23 @@ describe('a report posted on a task comes back with the link to hand over', () =
     });
     expect(r.status).toBe(200);
     const body = (await r.json()) as ThreadResponse;
-    expect(body.thread?.id).toBeDefined(); // the post really happened
-    expect(body.url).toBeUndefined();
+    expect(body.threadUrl).toBe(`${PUBLIC_BASE}/review/${encodeURIComponent(docId)}`);
+  });
+
+  it('a doc nobody has heard of gets no link rather than a broken one', async () => {
+    // The spread is conditional so an unresolvable doc simply omits the
+    // field. A link built anyway would point at a 404 and read as authoritative.
+    const r = await post(`/api/docs/${encodeURIComponent('task:t-does-not-exist')}/threads`, {
+      author: AGENT,
+      text: 'Into the void.',
+      anchor: { kind: 'subject' },
+    });
+    const body = (await r.json()) as ThreadResponse;
+    expect(body.threadUrl).toBeUndefined();
   });
 });
 
-describe('the handoff link is owner-only — a workspace id is a capability', () => {
+describe('the handoff link is owner-only', () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
@@ -240,7 +270,14 @@ describe('the handoff link is owner-only — a workspace id is a capability', ()
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  it('the owner gets the link and the visitor gets none of it', async () => {
+  it('the owner gets the link and the visitor does not', async () => {
+    // What this pins is narrower than it looks, and worth stating exactly.
+    // Per-doc shares were removed — `POST /api/share/link` answers 410
+    // `per_doc_sharing_removed` for any body naming a docId — so every
+    // visitor that can reach this route is workspace-scoped and ALREADY
+    // holds the board id. This is not a closed leak; it is the guard holding
+    // for a visitor who happens to have the id anyway, so that the default
+    // is already right on the day doc-scoped visitors come back.
     const docId = `task:${taskId}`;
     // PRESENCE FIRST, on the same doc in the same pass: without it the
     // `undefined` below is equally consistent with a resolver that never
@@ -253,7 +290,7 @@ describe('the handoff link is owner-only — a workspace id is a capability', ()
     });
     expect(ownerRes.status).toBe(200);
     const owner = (await ownerRes.json()) as ThreadResponse;
-    expect(owner.url).toContain(encodeURIComponent(boardId));
+    expect(owner.threadUrl).toContain(encodeURIComponent(boardId));
 
     const seen = await pubPost(`/api/docs/${encodeURIComponent(docId)}/threads`, {
       author: { id: 'visitor-1', name: 'Visitor', kind: 'anon', color: '#999999' },
@@ -264,7 +301,7 @@ describe('the handoff link is owner-only — a workspace id is a capability', ()
     const raw = await seen.text();
     const visitor = JSON.parse(raw) as ThreadResponse;
     expect(visitor.thread?.id).toBeDefined(); // …and really got a thread back
-    expect(visitor.url).toBeUndefined();
+    expect(visitor.threadUrl).toBeUndefined();
     // Belt and braces: the board id must not appear ANYWHERE in what they
     // got, not merely be absent from the field we remembered to strip.
     expect(raw).not.toContain(boardId);

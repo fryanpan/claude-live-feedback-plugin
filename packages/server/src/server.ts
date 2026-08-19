@@ -3869,12 +3869,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                 generate: !visitor,
                 ...(declared.review ? { review: declared.review } : {}),
               });
-              const handoff = taskHandoffUrl(docId, Boolean(visitor));
+              const handoff = threadUrl(docId, Boolean(visitor));
               return t
                 ? j(200, {
                     thread: t,
                     ...(declared.advice ? { reviewAdvice: declared.advice } : {}),
-                    ...(handoff ? { url: handoff } : {}),
+                    ...(handoff ? { threadUrl: handoff } : {}),
                   })
                 : j(404, { error: 'thread not found' });
             }
@@ -4026,12 +4026,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               generate: !visitor,
               ...(declared.review ? { review: declared.review } : {}),
             });
-            const handoff = taskHandoffUrl(docId, Boolean(visitor));
+            const handoff = threadUrl(docId, Boolean(visitor));
             return t
               ? j(200, {
                   thread: t,
                   ...(declared.advice ? { reviewAdvice: declared.advice } : {}),
-                  ...(handoff ? { url: handoff } : {}),
+                  ...(handoff ? { threadUrl: handoff } : {}),
                 })
               : j(500, { error: 'could not create thread' });
           }
@@ -4059,12 +4059,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               // Visitor-authored text becomes the entire prompt on this route.
               { generate: !visitor, ...(declared.review ? { review: declared.review } : {}) },
             );
-            const findHandoff = taskHandoffUrl(docId, Boolean(visitor));
+            const findHandoff = threadUrl(docId, Boolean(visitor));
             return res.ok
               ? j(200, {
                   thread: res.thread,
                   ...(declared.advice ? { reviewAdvice: declared.advice } : {}),
-                  ...(findHandoff ? { url: findHandoff } : {}),
+                  ...(findHandoff ? { threadUrl: findHandoff } : {}),
                 })
               : j(409, res);
           }
@@ -4547,7 +4547,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   }
 
   /**
-   * The link an agent hands over after posting a report on a task.
+   * The link an agent hands over after posting a report — the URL that opens
+   * where the thread now lives.
    *
    * Measured cost of not having it: 52,340 words — 40% of every word in the
    * user's chat window over 38 hours — were agent-to-agent reports relayed
@@ -4566,20 +4567,35 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * `externalBaseUrl()` for the reason that function exists — one base, so
    * an operator override cannot reach some links and miss others.
    *
-   * OWNER ONLY. A workspace id is an unguessable URL capability, so a
-   * doc-scoped share visitor must not learn one by commenting on a member
-   * doc — the same rule that already gates `hubWorkspaceId` and `backTo` on
-   * the doc route. Returns undefined for anything that is not a task's own
-   * body room, so callers can spread it and an ordinary doc comment carries
-   * no extra field.
+   * Covers BOTH surfaces a thread can live on, and the second one is not a
+   * nicety: the thread that asked you for something is very often a comment
+   * on a markdown review doc, not a task. A version of this that answered
+   * only for `task:` docs would hand back nothing on the commonest reply
+   * path — reintroducing, one surface over, exactly the friction the whole
+   * change exists to remove.
+   *
+   * OWNER ONLY, and deliberately more conservative than today's sharing
+   * needs. Per-doc shares were removed (`POST /api/share/link` answers 410
+   * `per_doc_sharing_removed`), so every visitor that can reach this code is
+   * workspace-scoped and already holds the id this would tell them — the
+   * guard closes no leak that is currently open. It stays because the value
+   * is a URL capability and the cost of keeping it owner-only is nil, so the
+   * default should already be right on the day doc-scoped visitors come
+   * back. Returns undefined for an unknown doc, so callers can spread it.
    */
-  function taskHandoffUrl(docId: string, isVisitor: boolean): string | undefined {
+  function threadUrl(docId: string, isVisitor: boolean): string | undefined {
     if (isVisitor) return undefined;
-    if (!docId.startsWith('task:')) return undefined;
-    const workspaceId = taskStore.workspaceOfDoc(docId);
-    if (!workspaceId) return undefined;
-    const taskId = docId.slice('task:'.length);
-    return `${externalBaseUrl()}${taskDeepLink(workspaceId, taskId)}`;
+    if (docId.startsWith('task:')) {
+      const workspaceId = taskStore.workspaceOfDoc(docId);
+      if (!workspaceId) return undefined;
+      const taskId = docId.slice('task:'.length);
+      return `${externalBaseUrl()}${taskDeepLink(workspaceId, taskId)}`;
+    }
+    // Reuse `withReviewUrl` rather than rebuild the /review/ path here: it
+    // already branches on doc type (a mockup is not served from /review/),
+    // and one builder is the same reason `externalBaseUrl` is one function.
+    const meta = rooms.get(docId)?.meta;
+    return meta ? withReviewUrl(meta).reviewUrl : undefined;
   }
 
   // Decorate doc metadata with a `reviewUrl` that's actually reachable from
