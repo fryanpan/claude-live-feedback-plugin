@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Daily live-feedback doc-triage run. Invoked by the
+# Daily claude-workspaces doc-triage run. Invoked by the
 # com.fryanpan.doc-triage launchd job (see scripts/launchd/). Spawns a
 # headless Claude run that reads the open review docs and pings each owning
 # agent (via claude-hive) about the ones idle >24h. It only ASKS — it never

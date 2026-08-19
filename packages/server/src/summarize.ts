@@ -24,6 +24,7 @@
  */
 
 import { summaryHash } from '@feedback/core';
+import { readRenamedEnv } from '@feedback/core/env-names';
 import {
   SUMMARY_PROMPT_VERSION,
   type StoredSummary,
@@ -36,8 +37,21 @@ import {
 import type { Thread } from '@feedback/core/types';
 import { readKeychainPassword } from './share/keychain.ts';
 
-/** Keychain service holding the key. Env override: LIVE_FEEDBACK_SUMMARY_API_KEY. */
-export const KEYCHAIN_SERVICE = 'live-feedback-summary-api-key';
+/** Keychain service holding the key. Env override: CW_SUMMARY_API_KEY. */
+export const KEYCHAIN_SERVICE = 'claude-workspaces-summary-api-key';
+
+/**
+ * The pre-rename service name, still read if the current one holds nothing.
+ *
+ * Deliberately NOT migrated by `scripts/migrate-rename.ts`. Copying a
+ * keychain item means reading the secret out and writing it back, which puts
+ * the key in a process's memory and its argv for the benefit of saving one
+ * manual command — and the operator re-keying by hand is both cheap and the
+ * act of consent this feature is gated on. Reading the old name costs one
+ * failed lookup at construction and keeps summaries alive across the flag day
+ * with nobody touching the keychain at all.
+ */
+export const KEYCHAIN_SERVICE_LEGACY = 'live-feedback-summary-api-key';
 const MODEL = 'claude-haiku-4-5-20251001';
 const API_URL = 'https://api.anthropic.com/v1/messages';
 /** Long enough to coalesce a burst of edits, short enough to feel live. */
@@ -88,8 +102,8 @@ export interface ScheduleArgs {
  * Resolve the API key once. Returns null when there is none, which is the
  * documented "feature off" state rather than an error.
  *
- * ONLY the dedicated entry counts — the Keychain service above, or its
- * `LIVE_FEEDBACK_SUMMARY_API_KEY` env override. It used to fall back to
+ * ONLY the dedicated entry counts — either Keychain service above, or the
+ * `CW_SUMMARY_API_KEY` env override. It used to fall back to
  * `ANTHROPIC_API_KEY`, which is set in most Claude Code launch environments:
  * that turned an opt-in feature into one that switched itself on for every
  * peer who installed the plugin, shipping their review comments and anchored
@@ -97,13 +111,30 @@ export interface ScheduleArgs {
  * entry is the act of consent; a key that happens to be in the environment
  * for other reasons is not.
  */
-function resolveKey(explicit?: string | null): string | null {
+export function resolveKeyFrom(
+  explicit: string | null | undefined,
+  read: (service: string) => string | null,
+): string | null {
   if (explicit !== undefined) return explicit || null;
-  try {
-    return readKeychainPassword(KEYCHAIN_SERVICE);
-  } catch {
-    return null;
+  for (const service of [KEYCHAIN_SERVICE, KEYCHAIN_SERVICE_LEGACY]) {
+    try {
+      const key = read(service);
+      if (key) return key;
+    } catch {
+      // A missing entry throws; try the next name before giving up.
+    }
   }
+  return null;
+}
+
+/**
+ * The reader is a parameter above so the ORDER can be tested without a
+ * keychain: `readKeychainPassword` shells out to `security`, so a test of the
+ * real function would either touch this machine's keychain or measure
+ * nothing.
+ */
+function resolveKey(explicit?: string | null): string | null {
+  return resolveKeyFrom(explicit, readKeychainPassword);
 }
 
 /** Process-wide so the key hint / on notice appear once, not once per server. */
@@ -154,9 +185,9 @@ export class ThreadSummarizer {
     this.debounceMs = opts.debounceMs ?? DEBOUNCE_MS;
   }
 
-  /** Is generation switched on at all? `LF_SUMMARIES=0` is the kill switch. */
+  /** Is generation switched on at all? `CW_SUMMARIES=0` is the kill switch. */
   get enabled(): boolean {
-    return process.env.LF_SUMMARIES !== '0' && this.key !== null;
+    return readRenamedEnv(process.env, 'CW_SUMMARIES') !== '0' && this.key !== null;
   }
 
   /**
@@ -165,7 +196,7 @@ export class ThreadSummarizer {
    */
   schedule(args: ScheduleArgs): void {
     if (!this.enabled) {
-      if (!warnedNoKey && process.env.LF_SUMMARIES !== '0') {
+      if (!warnedNoKey && readRenamedEnv(process.env, 'CW_SUMMARIES') !== '0') {
         warnedNoKey = true;
         console.log(
           '[summarize] no API key; thread summaries stay deterministic. ' +
@@ -257,7 +288,7 @@ export class ThreadSummarizer {
       announcedOn = true;
       console.log(
         '[summarize] thread summaries ON: comment text and the anchored line ' +
-          'are sent to api.anthropic.com. Turn off with LF_SUMMARIES=0.',
+          'are sent to api.anthropic.com. Turn off with CW_SUMMARIES=0.',
       );
     }
     // Hash the state we are about to describe, BEFORE the call, so a reply
@@ -348,7 +379,7 @@ export class ThreadSummarizer {
       announcedOn = true;
       console.log(
         '[summarize] thread summaries ON: comment text and the anchored line ' +
-          'are sent to api.anthropic.com. Turn off with LF_SUMMARIES=0.',
+          'are sent to api.anthropic.com. Turn off with CW_SUMMARIES=0.',
       );
     }
     const reply = await this.postRaw(

@@ -3,7 +3,8 @@
  * PreToolUse hook for mcp__claude-in-chrome__navigate.
  *
  * Auto-approves navigates to hostnames declared as trusted in
- * .claude/live-feedback.json or ~/.claude/live-feedback.json:
+ * .claude/claude-workspaces.json or ~/.claude/claude-workspaces.json
+ * (both falling back to the pre-rename live-feedback.json):
  *
  *   {
  *     "trustedPreviewDomains": ["tunnel.fryanpan.com"]
@@ -33,6 +34,16 @@ type HookDecision = {
   reason?: string;
 };
 
+/**
+ * Config filenames, current first.
+ *
+ * The old name is a permanent fallback, not a transition step: this file lives
+ * in whoever's checkout the hook runs against, and nothing in this repo can
+ * rename a config in somebody else's repo. Root precedence stays OUTERMOST —
+ * a project's own config beats the home one whichever filename it uses.
+ */
+const CONFIG_NAMES = ['claude-workspaces.json', 'live-feedback.json'];
+
 function readConfig(): string[] {
   const roots = [
     process.env.CLAUDE_PROJECT_DIR,
@@ -40,15 +51,17 @@ function readConfig(): string[] {
     homedir(),
   ].filter(Boolean) as string[];
   for (const root of roots) {
-    const p = join(root, '.claude', 'live-feedback.json');
-    if (!existsSync(p)) continue;
-    try {
-      const j = JSON.parse(readFileSync(p, 'utf8')) as {
-        trustedPreviewDomains?: string[];
-      };
-      if (Array.isArray(j.trustedPreviewDomains)) return j.trustedPreviewDomains;
-    } catch {
-      // ignore malformed config; fall through to defaults (empty)
+    for (const name of CONFIG_NAMES) {
+      const p = join(root, '.claude', name);
+      if (!existsSync(p)) continue;
+      try {
+        const j = JSON.parse(readFileSync(p, 'utf8')) as {
+          trustedPreviewDomains?: string[];
+        };
+        if (Array.isArray(j.trustedPreviewDomains)) return j.trustedPreviewDomains;
+      } catch {
+        // ignore malformed config; fall through to defaults (empty)
+      }
     }
   }
   return [];
@@ -100,7 +113,7 @@ async function main(): Promise<void> {
 
   const out: HookDecision = {
     decision: 'approve',
-    reason: `host "${host}" matches trusted preview domain "${matched}" from .claude/live-feedback.json`,
+    reason: `host "${host}" matches trusted preview domain "${matched}" from .claude/claude-workspaces.json`,
   };
   process.stdout.write(JSON.stringify(out));
   process.exit(0);

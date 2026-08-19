@@ -1,9 +1,9 @@
 ---
 name: diff-review
-description: Use when the reviewer asks to "review a diff", review a branch or PR-style change, or compare two commits of a local repo through live-feedback. Covers creating the diff review, sharing the URL, watching line comments, and cleaning up.
+description: Use when the reviewer asks to "review a diff", review a branch or PR-style change, or compare two commits of a local repo through claude-workspaces. Covers creating the diff review, sharing the URL, watching line comments, and cleaning up.
 ---
 
-# Reviewing a git diff through live-feedback
+# Reviewing a git diff through claude-workspaces
 
 When the human wants to review a code change — "review this diff", "let me
 review the branch", a PR-style pass over `base..target` — use
@@ -92,7 +92,7 @@ other changed file.
   itself shows up in the reviewer's diff as soon as you save, so resolve with
   a short "done, see line N" reply.
 - The diff surface is **read-only** — you change code with your normal tools
-  in the repo, not through live-feedback edit tools (those are for markdown
+  in the repo, not through claude-workspaces edit tools (those are for markdown
   docs).
 - If the reviewer wants to comment on a **deleted** line: not supported yet —
   ask them to comment on an adjacent kept line instead.

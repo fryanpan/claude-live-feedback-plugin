@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Thin share CLI. Calls into the live-feedback server's /api/share REST
+ * Thin share CLI. Calls into the claude-workspaces server's /api/share REST
  * routes — same path the MCP tools take. The server (started by
  * scripts/serve.ts) owns the actual share state.
  *
@@ -14,17 +14,20 @@
  *   bun share revoke <shareId>
  *
  * Resolution of the server URL matches packages/mcp/src/mcp.ts:
- *   FEEDBACK_BASE_URL → ~/.claude/live-feedback/server.json → fail.
+ *   CW_BASE_URL → ~/.claude/claude-workspaces/server.json → fail.
+ *   (Both fall back to the pre-rename spellings; see machine-paths.ts.)
  */
 
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { readRenamedEnv } from '../packages/core/src/env-names.ts';
+import { resolveDiscoveryFile } from '../packages/core/src/machine-paths.ts';
 
 function resolveBaseUrl(): string {
-  if (process.env.FEEDBACK_BASE_URL) return process.env.FEEDBACK_BASE_URL;
-  const discovery = join(homedir(), '.claude', 'live-feedback', 'server.json');
-  if (existsSync(discovery)) {
+  const override = readRenamedEnv(process.env, 'CW_BASE_URL');
+  if (override) return override;
+  const discovery = resolveDiscoveryFile(homedir(), existsSync);
+  if (discovery) {
     try {
       const j = JSON.parse(readFileSync(discovery, 'utf8')) as { port?: number };
       if (j.port) return `http://localhost:${j.port}`;
@@ -33,7 +36,7 @@ function resolveBaseUrl(): string {
     }
   }
   throw new Error(
-    'live-feedback server not running — start it with `bun run dev` (or set FEEDBACK_BASE_URL).',
+    'claude-workspaces server not running — start it with `bun run dev` (or set CW_BASE_URL).',
   );
 }
 

@@ -9,6 +9,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./anchor": "./src/anchor/index.ts",
+    "./env-names": "./src/env-names.ts",
+    "./machine-paths": "./src/machine-paths.ts",
     "./types": "./src/types.ts",
     "./summary-prompt": "./src/summary-prompt.ts",
     "./goal-summary": "./src/goal-summary.ts"

@@ -1,10 +1,10 @@
 {
-  "name": "@fryanpan/live-feedback-mcp",
+  "name": "@fryanpan/claude-workspaces-mcp",
   "version": "0.0.2",
   "description": "MCP stdio server for claude-workspaces-plugin. Lets Claude Code agents observe and reply to review comments.",
   "type": "module",
   "bin": {
-    "live-feedback-mcp": "./dist/mcp.js"
+    "claude-workspaces-mcp": "./dist/mcp.js"
   },
   "main": "./dist/mcp.js",
   "files": ["dist", "README.md"],

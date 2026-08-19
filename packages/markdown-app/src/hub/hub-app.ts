@@ -58,15 +58,12 @@ import {
   walkPosition,
 } from './hub-model.ts';
 import {
-  type SidebarDoc,
-  type SidebarThread,
   type TaskDiscussion,
   type TaskThread,
   type WalkProgress,
   discussionIsBusy,
   renderActivity,
   renderBoard,
-  renderDocsSidebar,
   renderGoalStrip,
   renderHomeBrief,
   renderHomeReview,
@@ -76,10 +73,8 @@ import {
   renderReviewBanner,
   renderReviewWalkthrough,
   renderTaskDetail,
-  renderThreadsSidebar,
   renderUnplacedStrip,
 } from './hub-render.ts';
-import { sidebarEntriesFor } from './hub-sidebar.ts';
 import { createTaskBodyEditorHost } from './task-body-editor.ts';
 
 interface HubState {
@@ -122,8 +117,6 @@ interface HubState {
    *  not replace it. Null on any server that publishes no client release
    *  (dev, staging) — those must not report the prod machine's deploy. */
   clientRelease: ClientRelease | null;
-  docs: SidebarDoc[];
-  threads: SidebarThread[];
   detailTaskId: string | null;
   /** The thread the review queue aimed at, when the panel was opened from it.
    *  Null every other way in. */
@@ -273,7 +266,6 @@ function buildShell(root: HTMLElement, name: string): void {
         </div>
         <div id="hub-walkthrough" class="hub-walkthrough hidden"></div>
       </section>
-      <aside id="hub-docs" class="hub-side hub-side-docs"></aside>
       <section class="hub-board-col">
         <div id="hub-decisions" class="hub-decisions hidden"></div>
         <div id="hub-quick" class="hub-quick"></div>
@@ -281,7 +273,6 @@ function buildShell(root: HTMLElement, name: string): void {
         <div id="hub-board" class="hub-board"></div>
         <div id="hub-activity" class="hub-activity hidden"></div>
       </section>
-      <aside id="hub-threads" class="hub-side hub-side-threads"></aside>
     </div>
     <div id="hub-detail" class="hub-detail hidden"></div>
     <div id="hub-help" class="hub-help hidden">
@@ -343,8 +334,6 @@ async function main(): Promise<void> {
     agents: [],
     pluginRelease: null,
     clientRelease: null,
-    docs: [],
-    threads: [],
     detailTaskId: null,
     detailThreadId: null,
     discussion: { loading: false, threads: [] },
@@ -411,7 +400,6 @@ async function main(): Promise<void> {
           ? { goalSummary: wsMap.get('goalSummary') as StoredGoalSummary }
           : {}),
         goals: (wsMap.get('goals') as HubGoal[] | undefined) ?? [],
-        docIds: (wsMap.get('docIds') as string[] | undefined) ?? [],
         ...(wsMap.get('leadAgentId') ? { leadAgentId: String(wsMap.get('leadAgentId')) } : {}),
         ...(wsMap.get('pendingRetriage')
           ? { pendingRetriage: wsMap.get('pendingRetriage') as PendingRetriageView }
@@ -1120,8 +1108,6 @@ async function main(): Promise<void> {
     renderActivityRegion();
     renderDetail();
     renderPresenceRegion();
-    renderDocsSidebar(el('hub-docs'), state.docs);
-    renderThreadsSidebar(el('hub-threads'), state.threads);
     renderHomeRegion();
   }
 
@@ -1369,25 +1355,6 @@ async function main(): Promise<void> {
     renderHomeRegion();
   }
 
-  // ── Sidebars ────────────────────────────────────────────────────────────
-  async function loadSidebars(): Promise<void> {
-    const docIds = state.info?.docIds ?? [];
-    const docs: SidebarDoc[] = [];
-    const threads: SidebarThread[] = [];
-    const entries = await Promise.all(
-      docIds.map((docId) => sidebarEntriesFor(docId, (url) => fetchJson(url))),
-    );
-    for (const entry of entries) {
-      docs.push(...entry.docs);
-      threads.push(...entry.threads);
-    }
-    docs.sort((a, b) => a.label.localeCompare(b.label));
-    state.docs = docs;
-    state.threads = threads;
-    renderDocsSidebar(el('hub-docs'), state.docs);
-    renderThreadsSidebar(el('hub-threads'), state.threads);
-  }
-
   async function loadAgents(): Promise<void> {
     const res = await fetchJson<{
       attachments: Array<{
@@ -1462,7 +1429,6 @@ async function main(): Promise<void> {
     renderLead();
     renderBoardRegion();
     renderHomeRegion();
-    void loadSidebars();
   });
 
   client.awareness.setLocalState({
@@ -1674,7 +1640,6 @@ async function main(): Promise<void> {
   // REST-backed regions.
   readProjection();
   renderAll();
-  void loadSidebars();
   void loadAgents();
   void loadEvents();
   void loadReviewItems();

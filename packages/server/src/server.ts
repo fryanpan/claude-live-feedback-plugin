@@ -247,7 +247,7 @@ const ANONYMOUS_ACTOR: User = {
 
 export interface ServerOptions {
   /**
-   * LF_SHARING_DISABLED was set: external sharing starts OFF and the runtime
+   * CW_SHARING_DISABLED was set: external sharing starts OFF and the runtime
    * toggle refuses to reopen it. The switch to reach for while a security
    * review is in flight — nothing this process exposes can undo it.
    */
@@ -1006,10 +1006,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    *   they mean this one; a bare `workspaceId` in this file means a grouping.
    *
    * An ATTACHMENT is either a doc room id or a grouping id — `POST
-   * /api/workspaces/:id/docs` has accepted both since it was written, and the
-   * hub sidebar resolves a grouping through the workspace endpoints
-   * (`hub-sidebar.ts`). So a review goes on a board as ONE row; its members
-   * stay off, because a hundred-file review is one unit of work, not a hundred.
+   * /api/workspaces/:id/docs` has accepted both since it was written. So a
+   * review goes on a board as ONE row; its members stay off, because a
+   * hundred-file review is one unit of work, not a hundred. Note the board
+   * page itself no longer LISTS attachments: the Docs and Open-threads rails
+   * came out (Bryan, 2026-08-18, "remove docs and live threads from the task
+   * list"), so `docIds` now feeds the review queue and voice lookup rather
+   * than a sidebar.
    *
    * Every doc and every group bind belongs to a hub workspace (Bryan,
    * 2026-08-13) — and requiring one must not add a step. "Bind it, send Bryan
@@ -1432,7 +1435,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!res.ok) {
             return j(409, {
               error: res.error,
-              hint: 'LF_SHARING_DISABLED is set in the environment. Remove it from the service definition and restart to allow runtime control.',
+              hint: 'CW_SHARING_DISABLED is set in the environment. Remove it from the service definition and restart to allow runtime control.',
             });
           }
           let closedSockets = 0;
@@ -3724,7 +3727,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               if (!summarizer?.enabled) {
                 return j(503, {
                   error: 'summaries disabled',
-                  detail: `set LF_SUMMARIES=1 and add a key: security add-generic-password -a "$USER" -s ${KEYCHAIN_SERVICE} -w`,
+                  detail: `set CW_SUMMARIES=1 and add a key: security add-generic-password -a "$USER" -s ${KEYCHAIN_SERVICE} -w`,
                 });
               }
               // Already summarized as it stands: answer with what is stored
@@ -4162,11 +4165,22 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // The shell is server-rendered (like the landing page) so the route
         // works — and 404s crisply — whether or not the app bundle has been
         // built; the page's behavior all lives in /app/hub.js.
-        // `/home` serves the same shell: which pane renders is the client's
-        // routing (`paneFromPath` in hub-model), so Home is deep-linkable —
-        // the board banner's "Go to Home" and a phone bookmark both land on
-        // the pane, not on the board with a hint.
-        const hubPageMatch = pathname.match(/^\/workspaces\/([^/]+?)(?:\/home)?$/);
+        // Every nav suffix serves the same shell: which destination renders is
+        // the client's routing (`navFromPath` in hub-model), so all four are
+        // deep-linkable — the board banner's "Go to Home", a phone bookmark
+        // and a pasted link all land on the destination, not on the board with
+        // a hint.
+        //
+        // The list must stay in step with `HubNav`, and the cost of it not
+        // being is invisible from the client: `setNav` pushes these paths into
+        // history, so a suffix missing here costs nothing until somebody
+        // RELOADS or shares the URL, at which point they get a 404 on a link
+        // the product handed them. That is exactly what `/tasks`, `/mine` and
+        // `/activity` did between the nav landing and this line — measured on
+        // a staging build, 404 on all three while `/home` answered 200.
+        const hubPageMatch = pathname.match(
+          /^\/workspaces\/([^/]+?)(?:\/(?:home|tasks|mine|activity))?$/,
+        );
         if (hubPageMatch && req.method === 'GET') {
           const workspaceId = decodeURIComponent(hubPageMatch[1] ?? '');
           const workspace = taskStore.getWorkspace(workspaceId);

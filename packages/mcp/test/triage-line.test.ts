@@ -91,7 +91,7 @@ describe('triageRequestLine', () => {
   it('names the contract skill in the imperative', () => {
     const line = triageRequestLine({ ...RETRIAGE, leadAgentId: 'agent-lead' }, 'agent-lead');
     expect(line).toContain(RETRIAGE_SKILL);
-    expect(RETRIAGE_SKILL).toBe('live-feedback:handling-a-goal-change');
+    expect(RETRIAGE_SKILL).toBe('claude-workspaces:handling-a-goal-change');
   });
 
   // Same reason the batchId rides along: a lead whose id moved reads the FYI,
@@ -305,7 +305,7 @@ describe('a task shape review (kind: task-review)', () => {
 
   it('names the contract skill and the rewrite verb — the line is the whole briefing', () => {
     const line = triageRequestLine(payload, 'agent-lead');
-    expect(line).toContain('live-feedback:reviewing-task-shape');
+    expect(line).toContain('claude-workspaces:reviewing-task-shape');
     expect(line).toContain('rewrite_task');
     // Judging a row fine must be a stated outcome, or every review "finds"
     // something — the corrective-retry lesson, one loop earlier.

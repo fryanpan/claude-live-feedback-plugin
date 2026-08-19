@@ -6519,7 +6519,6 @@ var require_dist = __commonJS((exports, module) => {
 // packages/mcp/src/mcp.ts
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
 
 // node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/core.js
 var NEVER = Object.freeze({
@@ -13669,6 +13668,55 @@ class StdioServerTransport {
   }
 }
 
+// packages/core/src/env-names.ts
+var ENV_RENAMES = [
+  ["FEEDBACK_BASE_URL", "CW_BASE_URL"],
+  ["FEEDBACK_AGENT_NAME", "CW_AGENT_NAME"],
+  ["FEEDBACK_AUTHOR", "CW_AUTHOR"],
+  ["LF_CLIENT_ROOT", "CW_CLIENT_ROOT"],
+  ["LF_PUBLIC_BASE_URL", "CW_PUBLIC_BASE_URL"],
+  ["LF_WIDGET_DIST", "CW_WIDGET_DIST"],
+  ["LF_MARKDOWN_APP_DIST", "CW_MARKDOWN_APP_DIST"],
+  ["LF_SHARING_DISABLED", "CW_SHARING_DISABLED"],
+  ["LF_SUMMARIES", "CW_SUMMARIES"],
+  ["LF_SUMMARY_BACKFILL", "CW_SUMMARY_BACKFILL"],
+  ["LF_SUMMARY_BACKFILL_MINUTES", "CW_SUMMARY_BACKFILL_MINUTES"],
+  ["LF_PLUGIN_REFRESH_MINUTES", "CW_PLUGIN_REFRESH_MINUTES"],
+  ["LF_CLAUDE_BIN", "CW_CLAUDE_BIN"],
+  ["LF_MCP_PRINT_NODE", "CW_MCP_PRINT_NODE"],
+  ["LIVE_FEEDBACK_SUMMARY_API_KEY", "CW_SUMMARY_API_KEY"]
+];
+var LEGACY_OF = new Map(ENV_RENAMES.map(([legacy, current]) => [current, legacy]));
+function present(v) {
+  return v !== undefined && v.trim() !== "";
+}
+function readRenamedEnv(env, current) {
+  const direct = env[current];
+  if (present(direct))
+    return direct;
+  const legacy = LEGACY_OF.get(current);
+  if (legacy !== undefined) {
+    const old = env[legacy];
+    if (present(old))
+      return old;
+  }
+  return direct;
+}
+
+// packages/core/src/machine-paths.ts
+import { join } from "node:path";
+var PRODUCT_SLUG = "claude-workspaces";
+var PRODUCT_SLUG_LEGACY = "live-feedback";
+var DISCOVERY_DIR_CURRENT = PRODUCT_SLUG;
+var DISCOVERY_DIR_LEGACY = PRODUCT_SLUG_LEGACY;
+var DISCOVERY_FILE = "server.json";
+function discoveryCandidates(home) {
+  return [DISCOVERY_DIR_CURRENT, DISCOVERY_DIR_LEGACY].map((dir) => join(home, ".claude", dir, DISCOVERY_FILE));
+}
+function resolveDiscoveryFile(home, exists) {
+  return discoveryCandidates(home).find(exists);
+}
+
 // packages/core/src/identity.ts
 var KNOWN_USERS = {
   bryan: { name: "Bryan", color: "#2e7dd7" },
@@ -13733,7 +13781,7 @@ function agentIdForName(name) {
 
 // packages/mcp/src/author.ts
 function resolveAgentAuthor(env) {
-  const name = env.FEEDBACK_AGENT_NAME?.trim() || env.FEEDBACK_AUTHOR?.trim() || "agent";
+  const name = readRenamedEnv(env, "CW_AGENT_NAME")?.trim() || readRenamedEnv(env, "CW_AUTHOR")?.trim() || "agent";
   const known = knownUserForName(name);
   if (known)
     return known;
@@ -13769,9 +13817,9 @@ function threadCreateRequest(input, author) {
 }
 
 // packages/mcp/src/triage-line.ts
-var RETRIAGE_SKILL = "live-feedback:handling-a-goal-change";
+var RETRIAGE_SKILL = "claude-workspaces:handling-a-goal-change";
 var SHAPE_THEN_PLACE = "read its own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each into a title and a story-shaped body with rewrite_task, then place with set_task_goal";
-var TASK_REVIEW_SKILL = "live-feedback:reviewing-task-shape";
+var TASK_REVIEW_SKILL = "claude-workspaces:reviewing-task-shape";
 function retriageDetail(p) {
   const ids = p.taskIds ?? [];
   const tasks = ids.length > 0 ? `
@@ -13827,29 +13875,27 @@ function triageRequestLine(p, selfAgentId) {
 
 // packages/mcp/src/mcp.ts
 function resolveBaseUrl() {
-  if (process.env.FEEDBACK_BASE_URL)
-    return process.env.FEEDBACK_BASE_URL;
-  const discovery = join(homedir(), ".claude", "live-feedback", "server.json");
-  if (existsSync(discovery)) {
+  const override = readRenamedEnv(process.env, "CW_BASE_URL");
+  if (override)
+    return override;
+  const discovery = resolveDiscoveryFile(homedir(), existsSync);
+  if (discovery) {
     try {
       const j = JSON.parse(readFileSync(discovery, "utf8"));
       if (j.port)
         return `http://localhost:${j.port}`;
     } catch {}
   }
-  throw new Error("live-feedback server not found — start it with `bun run dev` (or set FEEDBACK_BASE_URL). " + `Looked for discovery file at ${discovery}.`);
+  throw new Error("claude-workspaces server not found — start it with `bun run dev` (or set CW_BASE_URL). " + `Looked for a discovery file at ${discoveryCandidates(homedir()).join(" and ")}.`);
 }
-var AUTHOR = resolveAgentAuthor({
-  FEEDBACK_AUTHOR: process.env.FEEDBACK_AUTHOR,
-  FEEDBACK_AGENT_NAME: process.env.FEEDBACK_AGENT_NAME
-});
+var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.60";
+var PLUGIN_VERSION = "0.1.61";
 var COMMIT_EVIDENCE_DESCRIPTION = 'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
 var server = new Server({
-  name: "claude-live-feedback",
+  name: "claude-workspaces",
   version: PLUGIN_VERSION
 }, {
   capabilities: {
@@ -13913,10 +13959,10 @@ var server = new Server({
     "arrive on the same watch_doc channel as thread events.",
     "",
     "OBSERVE: call watch_doc(docId) once per doc to receive thread events as",
-    '<channel source="live-feedback" doc_id="..." thread_id="..." event="..." author="..." sent_at="...">body</channel>',
+    '<channel source="claude-workspaces" doc_id="..." thread_id="..." event="..." author="..." sent_at="...">body</channel>',
     "messages. Treat each as an explicit ask from the reviewer; read, decide if it",
     "is in your domain, act via an edit tool. unwatch_doc when you're done.",
-    "Watches are remembered on the server under this agent name (FEEDBACK_AGENT_NAME)",
+    "Watches are remembered on the server under this agent name (CW_AGENT_NAME)",
     "and re-wired when the session respawns; list_watched_docs says whether the",
     "current set was restored from the server or is session-only.",
     "",
@@ -14073,7 +14119,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "summarize_thread",
-      description: "Generate the two summary lines (topic + discussion) shown on a thread's collapsed card, and store them on the thread so every open browser picks them up immediately. Normally you do NOT need this: the server generates a summary automatically ~3s after any thread change. Reach for it when you want a summary right now — e.g. you just posted a long reply and want the card to read correctly before you hand the review URL to someone. A thread whose stored summary already matches its current state is returned as-is with cached:true and costs nothing; pass force:true to regenerate anyway. Two expected failures come back as tool ERRORS, not as a result field — the error text carries the HTTP status. A 503 (summaries disabled) means no API key is configured or LF_SUMMARIES=0; the card keeps its deterministic lines, nothing is broken, and retrying will not help. A 409 (thread changed during generation) means a reply landed mid-call and the summary would have described the older thread — just call it again.",
+      description: "Generate the two summary lines (topic + discussion) shown on a thread's collapsed card, and store them on the thread so every open browser picks them up immediately. Normally you do NOT need this: the server generates a summary automatically ~3s after any thread change. Reach for it when you want a summary right now — e.g. you just posted a long reply and want the card to read correctly before you hand the review URL to someone. A thread whose stored summary already matches its current state is returned as-is with cached:true and costs nothing; pass force:true to regenerate anyway. Two expected failures come back as tool ERRORS, not as a result field — the error text carries the HTTP status. A 503 (summaries disabled) means no API key is configured or CW_SUMMARIES=0; the card keeps its deterministic lines, nothing is broken, and retrying will not help. A 409 (thread changed during generation) means a reply landed mid-call and the summary would have described the older thread — just call it again.",
       inputSchema: {
         type: "object",
         properties: {
@@ -14560,7 +14606,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "watch_doc",
-      description: "Start pushing live feedback events for this doc into the current Claude Code session as <channel source='live-feedback' …> messages. Every thread.created / thread.replied / thread.resolved / thread.reopened on the doc arrives as a channel event until you call unwatch_doc. NOTE: this is normally redundant — `create_review_doc`, `bind_mock`, and most other docId-bearing tools auto-subscribe the caller on first touch. Use `watch_doc` explicitly when you want to subscribe to a doc you haven't otherwise interacted with (e.g., a peer's doc you only want to observe). Idempotent. DURABLE: the watch is also recorded on the server under this agent's identity (FEEDBACK_AGENT_NAME), so a session respawn re-wires it without a call from you — the response says `persisted: false` when it could not be (no stable identity, or the server was unreachable), which means a restart WILL drop it.",
+      description: "Start pushing live feedback events for this doc into the current Claude Code session as <channel source='claude-workspaces' …> messages. Every thread.created / thread.replied / thread.resolved / thread.reopened on the doc arrives as a channel event until you call unwatch_doc. NOTE: this is normally redundant — `create_review_doc`, `bind_mock`, and most other docId-bearing tools auto-subscribe the caller on first touch. Use `watch_doc` explicitly when you want to subscribe to a doc you haven't otherwise interacted with (e.g., a peer's doc you only want to observe). Idempotent. DURABLE: the watch is also recorded on the server under this agent's identity (CW_AGENT_NAME), so a session respawn re-wires it without a call from you — the response says `persisted: false` when it could not be (no stable identity, or the server was unreachable), which means a restart WILL drop it.",
       inputSchema: {
         type: "object",
         properties: { docId: { type: "string" } },
@@ -14583,7 +14629,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "share_workspace",
-      description: "Publish a WHOLE workspace behind a Cloudflare Access gate, so external reviewers can browse the set — file tree, every member doc, cross-doc links, and per-file comment threads. A WORKSPACE IS THE UNIT OF SHARING: there is no per-doc share, so to share one document, file it on a workspace (attach_doc, or bind_folder / create_diff_review) and share that. Everything in the workspace is then available to everyone in it. Returns { share: {...}, memberCount }. Read .claude/live-feedback.json's `share.defaultAllowDomains` first; if a repo has no config, ASK THE USER which domain(s) to allow before calling — never default to 'anyone'. Default ttlSeconds is 72h. Visitors can read, comment on, and co-edit members through the live editor — but cannot delete docs, replace a doc wholesale, reparse from disk, list other workspaces or docs, open files outside the workspace root, or manage shares.",
+      description: "Publish a WHOLE workspace behind a Cloudflare Access gate, so external reviewers can browse the set — file tree, every member doc, cross-doc links, and per-file comment threads. A WORKSPACE IS THE UNIT OF SHARING: there is no per-doc share, so to share one document, file it on a workspace (attach_doc, or bind_folder / create_diff_review) and share that. Everything in the workspace is then available to everyone in it. Returns { share: {...}, memberCount }. Read .claude/claude-workspaces.json's `share.defaultAllowDomains` first; if a repo has no config, ASK THE USER which domain(s) to allow before calling — never default to 'anyone'. Default ttlSeconds is 72h. Visitors can read, comment on, and co-edit members through the live editor — but cannot delete docs, replace a doc wholesale, reparse from disk, list other workspaces or docs, open files outside the workspace root, or manage shares.",
       inputSchema: {
         type: "object",
         properties: {
@@ -14651,7 +14697,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "set_sharing_enabled",
-      description: "Master switch for ALL external access. Turning it off makes every share host and link host answer 403 before authentication, and hangs up websockets and SSE streams that are already open — one call, rather than revoking shares individually. Existing shares are preserved and resume when it is turned back on. The local/tailnet surface is unaffected. Call with no argument to just read the current state. Refuses with env_locked when LF_SHARING_DISABLED is set in the service environment.",
+      description: "Master switch for ALL external access. Turning it off makes every share host and link host answer 403 before authentication, and hangs up websockets and SSE streams that are already open — one call, rather than revoking shares individually. Existing shares are preserved and resume when it is turned back on. The local/tailnet surface is unaffected. Call with no argument to just read the current state. Refuses with env_locked when CW_SHARING_DISABLED is set in the service environment.",
       inputSchema: {
         type: "object",
         properties: {
@@ -14718,7 +14764,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
               properties: {
                 title: {
                   type: "string",
-                  description: 'The row\'s one-line name, and the thing a person scanning thirty rows actually reads. Say WHO it is for, WHAT they get, and HOW — `<Person> can <achieve goal X> by <describe action>`, under 70 characters (100 is the hard ceiling). e.g. "Bryan can review across tasks faster with clearer task descriptions and UX", "Agents can revise goal priority with a tool to reorder goals". The failure this exists to stop is a title that states an OBSERVATION — "A decision-answered event promises a link checklist" names something somebody noticed, so ten of them in a column give no sense of the plan and the board cannot be prioritised. Never REFUSED: a rough capture still lands — every placed create is routed to the workspace lead for a shape review (the `live-feedback:reviewing-task-shape` skill), so file what you have.'
+                  description: 'The row\'s one-line name, and the thing a person scanning thirty rows actually reads. Say WHO it is for, WHAT they get, and HOW — `<Person> can <achieve goal X> by <describe action>`, under 70 characters (100 is the hard ceiling). e.g. "Bryan can review across tasks faster with clearer task descriptions and UX", "Agents can revise goal priority with a tool to reorder goals". The failure this exists to stop is a title that states an OBSERVATION — "A decision-answered event promises a link checklist" names something somebody noticed, so ten of them in a column give no sense of the plan and the board cannot be prioritised. Never REFUSED: a rough capture still lands — every placed create is routed to the workspace lead for a shape review (the `claude-workspaces:reviewing-task-shape` skill), so file what you have.'
                 },
                 body: {
                   type: "string",
@@ -14730,7 +14776,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                 },
                 assignee: {
                   type: "string",
-                  description: `Who owns this row: 'human' for work only a person can do, or a named identity (another agent, a person). Omit it and YOU own it — the API records your own name. It REFUSES a row whose owner comes out as the bare word 'agent', because that names a category rather than somebody, and a board of tasks owned by "agent" cannot answer who is doing what. If you get that refusal, your session was launched without FEEDBACK_AGENT_NAME.`
+                  description: `Who owns this row: 'human' for work only a person can do, or a named identity (another agent, a person). Omit it and YOU own it — the API records your own name. It REFUSES a row whose owner comes out as the bare word 'agent', because that names a category rather than somebody, and a board of tasks owned by "agent" cannot answer who is doing what. If you get that refusal, your session was launched without CW_AGENT_NAME.`
                 },
                 assigneeKind: {
                   type: "string",
@@ -14919,7 +14965,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           taskId: { type: "string" },
           assignee: {
             type: "string",
-            description: "'human', a person's name, or an agent's name (yours comes from FEEDBACK_AGENT_NAME). The bare word 'agent' is refused."
+            description: "'human', a person's name, or an agent's name (yours comes from CW_AGENT_NAME). The bare word 'agent' is refused."
           },
           assigneeKind: {
             type: "string",
@@ -14932,14 +14978,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "rewrite_task",
-      description: "Rewrite a task's TITLE, its BODY, or both, in ONE attributed call — the write half of the task-shape review, and the fix for a task filed thin or named by a machine-clipped fragment. Pass whichever halves you are changing and a `reason` saying why; the reason rides the audit row verbatim, so the trail says more than \"rewrote\". Body is a whole-body replace (send the FULL markdown; no partial edit), written through the task's live body doc as a block-level diff so comment threads on untouched paragraphs keep their anchors and the board updates live. A body+title call records ONE task.body_edited carrying both titles; a title-only call records task.retitled with both names — either way the activity feed renders the OLD name, the only one the person who filed the row would recognise. The row's ORIGINAL words are preserved to `quote` automatically on the first body rewrite, so a rewrite is never the only record of what was said; a quote already there (a dictated transcript) is never overwritten. Judgment about WHETHER to rewrite belongs to the `live-feedback:reviewing-task-shape` skill: rewrite when you have the context to do it well, and when the words are a human's deliberate phrasing, ask them on the task instead of silently replacing it. Refuses a call with neither half, and refuses an empty body — blanking a description is not an edit; if the task should not exist, say so on it instead.",
+      description: "Rewrite a task's TITLE, its BODY, or both, in ONE attributed call — the write half of the task-shape review, and the fix for a task filed thin or named by a machine-clipped fragment. Pass whichever halves you are changing and a `reason` saying why; the reason rides the audit row verbatim, so the trail says more than \"rewrote\". Body is a whole-body replace (send the FULL markdown; no partial edit), written through the task's live body doc as a block-level diff so comment threads on untouched paragraphs keep their anchors and the board updates live. A body+title call records ONE task.body_edited carrying both titles; a title-only call records task.retitled with both names — either way the activity feed renders the OLD name, the only one the person who filed the row would recognise. The row's ORIGINAL words are preserved to `quote` automatically on the first body rewrite, so a rewrite is never the only record of what was said; a quote already there (a dictated transcript) is never overwritten. Judgment about WHETHER to rewrite belongs to the `claude-workspaces:reviewing-task-shape` skill: rewrite when you have the context to do it well, and when the words are a human's deliberate phrasing, ask them on the task instead of silently replacing it. Refuses a call with neither half, and refuses an empty body — blanking a description is not an edit; if the task should not exist, say so on it instead.",
       inputSchema: {
         type: "object",
         properties: {
           taskId: { type: "string" },
           title: {
             type: "string",
-            description: "The new one-line name. Omit to keep the current one. Aim for `<Person> can <achieve goal X> by <describe action>` — ideally under 70 characters, 100 max, never clipped mid-word; the full standard is in the `live-feedback:reviewing-task-shape` skill."
+            description: "The new one-line name. Omit to keep the current one. Aim for `<Person> can <achieve goal X> by <describe action>` — ideally under 70 characters, 100 max, never clipped mid-word; the full standard is in the `claude-workspaces:reviewing-task-shape` skill."
           },
           body: {
             type: "string",
@@ -15162,7 +15208,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "attach_agent",
-      description: "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep — and sweeping one means SHAPING it, not only filing it: read the row's own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each with rewrite_task into a title and a story-shaped body, then set_task_goal. A capture arrives with a machine-clipped title and its raw utterance for a body, and this is the only step that turns it into work. Then queuedVoice — voice change-requests that arrived while no agent was live; act on each transcript verbatim — and, if you LEAD this workspace, pendingRetriage: a goal edit made while you were away, whose taskIds you re-place with set_task_goal (echo its batchId on each), plus pendingBucketReview: a goal BAND that appeared while you were away, with the unplaced tasks worth re-looking at against it — place the ones that now have a home, and leave the rest, since nothing has moved them — plus taskReviews: rows created, renamed, or rewritten while no lead was live, each waiting for the shape pass the `live-feedback:reviewing-task-shape` skill describes (judge the title and body; rewrite with rewrite_task or ask the filer on the task). All of these are drained by this call. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments with a fresh heartbeat, and after ~5 minutes of silence the hub shows you as away and requests queue.",
+      description: "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep — and sweeping one means SHAPING it, not only filing it: read the row's own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each with rewrite_task into a title and a story-shaped body, then set_task_goal. A capture arrives with a machine-clipped title and its raw utterance for a body, and this is the only step that turns it into work. Then queuedVoice — voice change-requests that arrived while no agent was live; act on each transcript verbatim — and, if you LEAD this workspace, pendingRetriage: a goal edit made while you were away, whose taskIds you re-place with set_task_goal (echo its batchId on each), plus pendingBucketReview: a goal BAND that appeared while you were away, with the unplaced tasks worth re-looking at against it — place the ones that now have a home, and leave the rest, since nothing has moved them — plus taskReviews: rows created, renamed, or rewritten while no lead was live, each waiting for the shape pass the `claude-workspaces:reviewing-task-shape` skill describes (judge the title and body; rewrite with rewrite_task or ask the filer on the task). All of these are drained by this call. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments with a fresh heartbeat, and after ~5 minutes of silence the hub shows you as away and requests queue.",
       inputSchema: {
         type: "object",
         properties: {
@@ -15201,7 +15247,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "request_plugin_refresh",
-      description: "Ask this machine to fetch the newest live-feedback plugin from the marketplace. Call it when the board's presence strip says agents are running an older bundle than the one released — that notice and this tool are the two halves of the same thing. It REQUESTS rather than forces: the update rewrites a version-keyed cache, so no running session is interrupted and every peer (including you) picks the new version up at its own next restart. Safe to call from any session; concurrent asks collapse into one fetch. The result reports the cache version BEFORE and AFTER, read from disk rather than from the CLI's own success message, because `claude plugin update` reports success when it copies nothing. `changed: false` with matching versions means the cache was already current, which is a real answer and not a failure.",
+      description: "Ask this machine to fetch the newest claude-workspaces plugin from the marketplace. Call it when the board's presence strip says agents are running an older bundle than the one released — that notice and this tool are the two halves of the same thing. It REQUESTS rather than forces: the update rewrites a version-keyed cache, so no running session is interrupted and every peer (including you) picks the new version up at its own next restart. Safe to call from any session; concurrent asks collapse into one fetch. The result reports the cache version BEFORE and AFTER, read from disk rather than from the CLI's own success message, because `claude plugin update` reports success when it copies nothing. `changed: false` with matching versions means the cache was already current, which is a real answer and not a failure.",
       inputSchema: { type: "object", properties: {} }
     },
     {
@@ -15996,7 +16042,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 });
 var watchers = new Map;
 var IDENTITY_IS_SHARED = AUTHOR.id === "known-agent";
-var SHARED_IDENTITY_REASON = "FEEDBACK_AGENT_NAME is not set, so this session has no identity to key its watches on; " + "they will not survive a restart. Set it in the launch environment and restart the session.";
+var SHARED_IDENTITY_REASON = "CW_AGENT_NAME is not set, so this session has no identity to key its watches on; " + "they will not survive a restart. Set it in the launch environment and restart the session.";
 var restoreState = IDENTITY_IS_SHARED ? { status: "session-only", from: "session", restored: [], pruned: [], attempts: 0 } : { status: "pending", from: "session", restored: [], pruned: [], attempts: 0 };
 var restoreInFlight = null;
 var restoreRetryAt = 0;
@@ -16014,7 +16060,7 @@ async function persistWatchChange(change) {
     return true;
   } catch (err) {
     lastPersistError = err instanceof Error ? err.message : String(err);
-    console.error("[live-feedback-mcp] could not persist watch change:", lastPersistError);
+    console.error("[claude-workspaces-mcp] could not persist watch change:", lastPersistError);
     return false;
   }
 }
@@ -16071,7 +16117,7 @@ async function emitRestoreNotice(state) {
   await server.notification({
     method: "notifications/claude/channel",
     params: {
-      source: "live-feedback",
+      source: "claude-workspaces",
       sent_at: state.at ?? new Date().toISOString(),
       content: `[watches restored] ${n} watch${n === 1 ? "" : "es"} re-wired from the server for ${AUTHOR.name} after restart${dropped}: ${state.restored.join(", ")}`,
       meta: { event: "watches.restored", restored: state.restored, pruned: state.pruned }
@@ -16144,7 +16190,7 @@ async function runSseLoop(label, path, signal, onFirstAttempt) {
       settleFirst();
       if (signal.aborted)
         return;
-      console.error(`[live-feedback-mcp] ${label} sse error, retrying:`, err);
+      console.error(`[claude-workspaces-mcp] ${label} sse error, retrying:`, err);
     }
     await new Promise((r) => setTimeout(r, 1500));
   }
@@ -16157,7 +16203,7 @@ function startSseLoop(label, path, controller) {
       clearTimeout(cap);
       resolve();
     }).catch((err) => {
-      console.error(`[live-feedback-mcp] watcher ${label} crashed:`, err);
+      console.error(`[claude-workspaces-mcp] watcher ${label} crashed:`, err);
       watchers.delete(label);
       clearTimeout(cap);
       resolve();
@@ -16255,7 +16301,7 @@ async function emitHubChannelMessage(event, rawPayload) {
   await server.notification({
     method: "notifications/claude/channel",
     params: {
-      source: "live-feedback",
+      source: "claude-workspaces",
       sent_at: new Date().toISOString(),
       content: body,
       meta: {
@@ -16285,7 +16331,7 @@ async function emitChannelMessage(event, rawPayload) {
     await server.notification({
       method: "notifications/claude/channel",
       params: {
-        source: "live-feedback",
+        source: "claude-workspaces",
         sent_at: new Date().toISOString(),
         content: body2,
         meta: {
@@ -16310,7 +16356,7 @@ async function emitChannelMessage(event, rawPayload) {
   await server.notification({
     method: "notifications/claude/channel",
     params: {
-      source: "live-feedback",
+      source: "claude-workspaces",
       sent_at: sentAt,
       content: body,
       meta: {
