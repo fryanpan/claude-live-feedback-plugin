@@ -199,7 +199,7 @@ Technical discoveries that should persist across sessions for this project.
 
 **Every failure in these entries had a check that ran, printed something, and
 meant nothing — and in each case the thing that would have caught it was one
-deliberate attempt to make the check fail.** Five distinct instances measured
+deliberate attempt to make the check fail.** Seven distinct instances measured
 on 2026-08-19, different tools, one shape:
 
 1. a probe that always passed — an empty grep pattern (this entry);
@@ -210,7 +210,18 @@ on 2026-08-19, different tools, one shape:
    enumerate its own run set";
 5. a grep for a string at a column the command never puts it in —
    "`git merge-tree`'s three-arg form hides conflict markers behind a diff
-   prefix".
+   prefix";
+6. a probe answering a question it cannot carry, in a repo whose merges
+   discard the commits it looks for — "An empty result and a silent command
+   are the same bytes";
+7. a *remedy* published without the control that had just falsified the thing
+   it replaced — "A remedy is a claim like any other".
+
+**The operational form is short enough to keep: when a probe returns nothing,
+the first question is whether it CAN return something.** Item 7 is the one that
+escapes this, and it is why the thesis needs stating rather than assuming — a
+remedy is not a probe, so nobody thinks to control it, and it inherits the
+credibility of the diagnosis it shipped with.
 
 **The sharper form of "a negative probe needs a positive control": agreement is
 not independence.** Three agents re-running the same runner is one derivation
@@ -2762,8 +2773,14 @@ Every count that went wrong had one.
 - **The general form: a tool's human-readable output is not an inventory of
   what it did. It reports what it found worth saying.** A sibling agent hit the
   same shape in a different tool — a served-bundle freshness check that passed
-  because someone else's build happened to land inside the window, where the
-  artifact's own `dist/` mtime was the thing that actually answered it.
+  because someone else's build happened to land inside the window.
+- **Correction, 2026-08-19: this bullet used to close by prescribing the
+  artifact's own `dist/` mtime as the thing that should have answered it. That
+  remedy is wrong** — `dist/` is a mixed directory whose mtimes mean different
+  things per file, measured under "A remedy is a claim like any other" below.
+  Recorded rather than quietly deleted, because a wrong fix riding along with a
+  right diagnosis is the failure that entry is about, and this sentence is an
+  instance of it.
 
 ## `git merge-tree`'s three-arg form hides conflict markers behind a diff prefix, so an anchored grep never matches
 
@@ -2789,6 +2806,108 @@ Every count that went wrong had one.
   returns 0 on a clean pair *and* on a conflicting pair, which is what makes
   the reading indistinguishable from a real all-clear. See "The thesis, stated
   once for the whole family" under "A probe that always answers 'yes'…".
+
+## An empty result and a silent command are the same bytes, so never chain an irreversible action to one
+
+- **`git branch -r --contains <sha>` prints nothing and exits 0 when the commit
+  is unreferenced — and prints branches and exits 0 when it is.** Measured
+  2026-08-19, git 2.54: a dangling commit built with `commit-tree` → empty
+  output, **exit 0**; `926969e`, which is on main → five refs, **exit 0**. The
+  exit code is not the answer. The entire answer is whether stdout was empty,
+  and *empty* is also what the command prints when it could not see.
+- **So `… --contains $SHA | grep -q . || git worktree remove …` fires the
+  delete on silence.** Every way of being quiet — an unset or misspelled sha
+  variable, remotes never fetched, a remote not named `origin`, `-r` when the
+  branch only exists locally — is byte-identical to "this work is nowhere".
+  Only a *nonexistent* sha behaves differently (`error: no such commit`, exit
+  **129**), so the one case that does announce itself is the one you were not
+  worried about.
+- **The deeper error is that ancestry was the wrong derivation in the first
+  place. This repo squash-merges.** A squash discards the branch's commits, so
+  nothing on main descends from them and `--contains` correctly answers "no"
+  about work that merged perfectly. Measured against three merged PRs, asking
+  "are you on `origin/main`?" of each PR's branch-head sha:
+
+  ```
+  PR #257 head b343693 -> []          PR #257 squash 63388fb -> [origin/main]
+  PR #262 head 1880184 -> []          PR #262 squash 926969e -> [origin/main]
+  PR #263 head 46d642c -> []          PR #263 squash 201792c -> [origin/main]
+  ```
+
+  All three are MERGED. The left column is a clean, confident, correct "not on
+  main" about three PRs that are on main. The right column is the positive
+  control and it is the whole point: **the probe works perfectly and is being
+  asked a question whose answer it cannot carry.** Not a mistimed check — the
+  wrong question.
+- **"Did this land" is a question about content, not ancestry.** Ask GitHub
+  (`gh pr view <n> --json state,mergeCommit`), or match the change itself —
+  `git log --oneline --grep`, or diff the tree. Reach for `--contains` only in
+  a repo that preserves commits through a merge, which this one does not.
+- **Rule, and it is the cheap half: before trusting a zero, ask whether the
+  probe CAN speak — run it against something you know it should find.** Then
+  print its output and decide, rather than shell-chaining the decision. A
+  destructive action wired to `||` has delegated its safety to a command that
+  cannot distinguish "no" from "I said nothing".
+- Same family as "An agent roster under-reports live agents, and the branch is
+  the thing that knows" (an absence measured by a cache) and "A session restart
+  orphans a subagent's worktree" (what a wrongly-removed worktree costs). The
+  general statement is under "The thesis, stated once for the whole family" in
+  "A probe that always answers 'yes'…".
+
+## A remedy is a claim like any other, and it travels further than the bug because it arrives as a correction
+
+- **Having correctly diagnosed a served-bundle freshness check as vacuous, I
+  prescribed the replacement in the same breath — compare `dist/` mtimes
+  against `src/` — and never ran it. It is wrong.** It reached two other agents
+  and an open PR, and was written into this archive, before another agent
+  tested it. The diagnosis was sound, which is exactly why nobody re-derived
+  the fix attached to it.
+- **`dist/` is a MIXED directory, so an mtime comparison fails in both
+  directions.** Measured 2026-08-19 in a fresh worktree, bun 1.3.10, after
+  backdating `src/styles.css` and running `bun scripts/build.ts`:
+
+  ```
+  src/styles.css    2026-01-01 12:00:00
+  dist/styles.css   2026-01-01 12:00:00   <- inherits the SOURCE mtime
+  dist/app.js       2026-08-19 07:46:47   <- build time
+  dist/index.html   2026-08-19 07:46:47   <- build time
+  ```
+
+  A `dist` newer than `src` proves nothing, because `app.js` always is. A
+  `dist` file older than the build is not stale, because `styles.css` is
+  copied rather than generated. Stale-looking when fresh, fresh-looking when
+  stale.
+- **The mechanism is a SIZE threshold, and that is what makes it worse than a
+  quirk.** `build.ts:92-93` copies `index.html` and `styles.css` with the same
+  `cpSync` call shape and they come out with different mtime semantics: bun's
+  `cpSync` takes a clone path above **128 KiB** that carries the source's
+  mtime, and byte-copies below it, stamping now. Measured boundary on that
+  run: **131072 bytes → not preserved, 131073 → preserved**. `src/styles.css`
+  is 178,144 bytes; `index.html` is 12,719.
+- **So the signal flips silently as a file crosses 128 KiB.** A check built on
+  it today starts reporting the opposite the day someone deletes 50KB of CSS,
+  and nothing about the check changes. Note also that `cpSync` documents
+  `preserveTimestamps: false` as its default — reading the docs predicts the
+  wrong answer for the large file, so the mechanism survives a plausible
+  desk-check.
+- **My own first probe of this was also wrong, in the direction that would have
+  buried it.** An isolated script reported "mtime not preserved" and appeared
+  to refute the whole finding — because the script hardcoded a 7-byte source
+  and ignored the large file passed to it. It sat below the threshold, so it
+  measured the other branch of the very behaviour in question and read as a
+  clean refutation.
+- **Use a content hash of the served bytes against `dist/`**, or the signals
+  the archive already had and this remedy talked past: `dist/BUILD_INFO.txt`
+  (written by `writeFileSync`, so always build time) and old-bundle-first
+  literal counts — both under "A prod restart reloads server code but NOT the
+  served app bundle". No timestamp is involved in either.
+- **The general form: the fix you propose for a bad check is itself an untested
+  claim, and it propagates faster and further than the bug did, because it
+  arrives with the authority of a correction.** Nobody re-derives a remedy that
+  comes attached to a correct diagnosis — the diagnosis vouches for it. Whatever
+  control you just used to falsify the broken check, run it against the
+  replacement before you publish it. See "The thesis, stated once for the whole
+  family" under "A probe that always answers 'yes'…".
 
 ## An assertion whose alternation can match either way pins nothing, and reads as coverage of exactly the thing it does not check
 
