@@ -227,6 +227,32 @@ describe('liveness for delivery is observed, not self-reported', () => {
     expect(att?.lastToolCallAt).toBe(att?.lastHeartbeat);
   });
 
+  it('WIRING: attaching reads the clock ONCE — a tick mid-attach cannot split the two', () => {
+    // The test above SAMPLES that contract; this one asserts it. Passing the
+    // event's `ts` into the observer fixed only half of the flake, because
+    // `assignLead` still took a `Date.now()` of its OWN for the
+    // `workspace.lead_changed` it stamps — so the attach was still two clock
+    // reads, and still went red whenever the millisecond happened to tick
+    // between them. Measured at 8 failures in 300 runs on 676f53b, which is
+    // exactly the kind of rate that reddens somebody else's branch.
+    //
+    // Ticking the clock on EVERY read makes that tick certain rather than
+    // lucky: under this stub the old code fails every single run, so the red
+    // is a statement about the code and not about the machine's timing.
+    const store = tightStore(10_000);
+    const ws = store.createWorkspace('one-read-hub', 'Ship it.');
+    const realNow = Date.now;
+    let ticks = realNow.call(Date);
+    Date.now = () => ++ticks;
+    try {
+      store.attachAgent(ws.id, { agentId: 'lead', runtime: 'claude-code-local' });
+    } finally {
+      Date.now = realNow;
+    }
+    const att = store.listAttachments(ws.id)[0];
+    expect(att?.lastToolCallAt).toBe(att?.lastHeartbeat);
+  });
+
   it('WIRING: observing OLDER work than we already knew is not news', () => {
     // The clock only moves forward, the same guard `heartbeat` applies to a
     // claimed toolCallAt — otherwise a replayed or out-of-order event could
