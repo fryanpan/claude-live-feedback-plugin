@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
-  applyMigration,
   type MigrationIo,
   type MigrationProbe,
-  planMigration,
   type Step,
+  applyMigration,
+  planMigration,
 } from './migrate-rename.ts';
 
 /**
@@ -244,7 +244,10 @@ describe('applyMigration', () => {
   });
 
   it('reports a conflict as unfinished so the exit code can say so', () => {
-    const clean = applyMigration(planMigration({ home: HOME }, unmigrated().probe), unmigrated().io);
+    const clean = applyMigration(
+      planMigration({ home: HOME }, unmigrated().probe),
+      unmigrated().io,
+    );
     expect(clean.conflicts).toEqual([]);
 
     const m = fakeMachine([OLD_DISCOVERY, NEW_DISCOVERY]);
