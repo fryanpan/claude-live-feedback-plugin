@@ -7,6 +7,7 @@ import {
   DEFAULT_DONE_WINDOW,
   type HubGoal,
   type HubTask,
+  type PresenceChip,
   type ReviewItem,
   type UptimeReport,
   boardSections,
@@ -2977,6 +2978,119 @@ describe('renderPresence — plugin drift', () => {
     expect(host.querySelector('.hub-drift')?.textContent).toContain(
       'no session has attached to this board',
     );
+  });
+});
+
+describe('renderPresence — compact circle mode (the top-right cluster)', () => {
+  const person = (name: string, key = `p-${name}`): PresenceChip => ({
+    key,
+    label: name,
+    kind: 'person',
+    where: 'hub',
+    title: `${name} · in hub · just now`,
+    docId: 'doc-1',
+  });
+  const agent = (id: string): PresenceChip => ({
+    key: `a-${id}`,
+    label: id,
+    kind: 'agent',
+    where: 'active',
+    title: `${id} · active · last tool call just now`,
+    state: 'active',
+  });
+  const noop = { onTap: () => {}, onLongPress: () => {} };
+
+  it('renders circles with initials, keeping the full detail in title and aria-label', () => {
+    const host = document.createElement('div');
+    renderPresence(host, [person('Ana Reyes'), agent('task-list-ux')], null, noop, [], true);
+    const circles = host.querySelectorAll('.hub-presence-circle');
+    expect(circles.length).toBe(2);
+    // No long-form chip anywhere in compact mode…
+    expect(host.querySelector('.hub-presence-chip')).toBeNull();
+    const [p, a] = [...circles];
+    expect(p?.querySelector('.hub-presence-initials')?.textContent).toBe('AR');
+    expect(p?.getAttribute('title')).toBe('Ana Reyes · in hub · just now');
+    expect(p?.getAttribute('aria-label')).toBe('Ana Reyes · in hub · just now');
+    // …and the agent circle keeps the kind class the styling keys off.
+    expect(a?.classList.contains('hub-presence-agent')).toBe(true);
+    expect(a?.querySelector('.hub-presence-initials')?.textContent).toBe('TL');
+    // Positive control: the same chips long-form still render as chips.
+    renderPresence(host, [person('Ana Reyes')], null, noop, []);
+    expect(host.querySelector('.hub-presence-chip')?.textContent).toContain('Ana Reyes');
+  });
+
+  it('keeps tap, liveness state, and following on a circle', () => {
+    const host = document.createElement('div');
+    const tapped: PresenceChip[] = [];
+    const chip: PresenceChip = { ...agent('quill'), state: 'unresponsive' };
+    renderPresence(
+      host,
+      [chip],
+      chip.key,
+      { ...noop, onTap: (c) => tapped.push(c) },
+      [],
+      true,
+    );
+    const el = host.querySelector<HTMLButtonElement>('.hub-presence-circle');
+    expect(el?.classList.contains('hub-presence-unresponsive')).toBe(true);
+    expect(el?.classList.contains('hub-following')).toBe(true);
+    el?.click();
+    expect(tapped.map((c) => c.key)).toEqual([chip.key]);
+  });
+
+  it('clamps at four: five people render as three circles plus a "+2" that names the rest', () => {
+    const host = document.createElement('div');
+    const chips = ['Ana', 'Ben', 'Cam', 'Dee', 'Eli'].map((n) => person(n));
+    const overflowed: PresenceChip[][] = [];
+    renderPresence(
+      host,
+      chips,
+      null,
+      { ...noop, onOverflow: (h) => overflowed.push(h) },
+      [],
+      true,
+    );
+    const circles = host.querySelectorAll('.hub-presence-circle');
+    expect(circles.length).toBe(4); // 3 people + the overflow slot
+    const more = host.querySelector<HTMLButtonElement>('.hub-presence-more');
+    expect(more?.textContent).toBe('+2');
+    expect(more?.getAttribute('title')).toBe('Dee, Eli');
+    more?.click();
+    expect(overflowed).toEqual([[chips[3], chips[4]]]);
+    // Positive control for the boundary: exactly four renders four circles
+    // and NO overflow slot — the cap is a footprint, not a count.
+    renderPresence(host, chips.slice(0, 4), null, noop, [], true);
+    expect(host.querySelectorAll('.hub-presence-circle').length).toBe(4);
+    expect(host.querySelector('.hub-presence-more')).toBeNull();
+  });
+});
+
+/**
+ * happy-dom does no layout, so the popover and the 430px fit are pinned at
+ * the rule level, the same way the walkthrough title floor is above: assert
+ * the declarations that make the behaviour, with a presence check first so
+ * a renamed selector fails loudly rather than passing vacuously.
+ */
+describe('settings popover + presence visibility (CSS contract)', () => {
+  const css = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
+
+  it('the settings panel floats instead of shifting the page', () => {
+    const rule = css.match(/\.hub-settings-panel\s*\{([^}]*)\}/)?.[1] ?? '';
+    expect(rule).toContain('background'); // positive control: found the rule
+    expect(rule).toMatch(/position:\s*absolute/);
+    // Anchored to the header, which must therefore be a positioned ancestor.
+    const topbar = css.match(/\.hub-topbar\s*\{([^}]*)\}/)?.[1] ?? '';
+    expect(topbar).toMatch(/position:\s*relative/);
+  });
+
+  it('no width band hides the circle presence strip any more', () => {
+    // The old ≤560px rule was `.hub-presence.hub-people { display: none }`.
+    // The circles fit, so nothing may hide the strip at any width.
+    const peopleRules = [...css.matchAll(/\.hub-presence\.hub-people\s*\{([^}]*)\}/g)];
+    expect(peopleRules.length).toBeGreaterThan(0); // positive control
+    for (const [, body] of peopleRules) {
+      expect(body).not.toMatch(/display:\s*none/);
+    }
   });
 });
 
