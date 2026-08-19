@@ -1,6 +1,6 @@
 ---
 name: working-a-workspace-board
-description: Use when this session is working from a claude-workspaces workspace — you have a workspaceId, you are calling next_tasks / task_transition, or someone told you "the board is your task list". Covers priority order, taking a whole batch in parallel by default, what actually forces a sequence, what a description owes the next agent, keeping the board current, and why finishing a task is not a reason to stop.
+description: Use when this session is working from a claude-workspaces workspace — you have a workspaceId, you are calling next_tasks / task_transition, or someone told you "the board is your task list". Covers declaring yourself lead once so every surface reaches you, priority order, taking a whole batch in parallel by default, what actually forces a sequence, what a description owes the next agent, keeping the board current, checking your coverage when it feels quiet, and why finishing a task is not a reason to stop.
 ---
 
 # Working a claude-workspaces workspace board
@@ -15,6 +15,45 @@ This is the discipline. For the **tool shapes** — creating a workspace,
 ordering goals, filing a task, triaging, transitions, decisions, the
 lead-agent seat — read `claude-workspaces:running-a-workspace-hub`. Don't
 reconstruct the API from the server source.
+
+## Declare yourself once at session start
+
+If you are the agent responsible for this board, your entire setup is one call:
+
+```
+set_workspace_lead(workspaceId)          // no second argument
+```
+
+From then on **everything on the board reaches you** — task and decision
+events, thread events on every doc filed here, voice notes, re-triage asks —
+including surfaces **created later**, because coverage is resolved when the
+event fires rather than when you subscribed. It also **survives a respawn**:
+the subscription is persisted against your agent identity and re-wired when
+your session comes back, so a fresh context does not spend its opening turns
+rebuilding a watch list. And because it attaches you, the response hands back
+whatever queued while the seat was empty (`queuedVoice`, `pendingRetriage`,
+`pendingBucketReview`, `taskReviews`) — read it there, nothing offers it again.
+
+Two things follow, and they are the ones agents get wrong:
+
+- **`watch_doc` is now for docs OUTSIDE your board** — a peer's review you only
+  want to observe. It is not how you cover your own board, and it never was a
+  substitute for declaring: every delivery gate asks whether the lead is
+  **attached**, and a doc watch is not an attachment. An agent can hold six doc
+  watches, believe it is listening, and miss every voice note — with no error
+  and no warning, because a queue nobody is draining looks exactly like a queue
+  nobody filled.
+- **When the board feels quiet, check rather than assume.** `list_watched_docs`
+  answers "what am I MISSING", not just what am I watching. Read
+  `coverage.unattachedBoards`: every row is a board holding docs you watch
+  where you have no attachment, listing what is queued for its lead.
+  `set_workspace_lead(workspaceId)` on that id clears it in one call. If
+  `coverage` is **absent**, the server did not answer — that is unknown, not
+  all-clear.
+
+Not the lead? A peer picking up one task or a subagent handed a workspaceId
+uses `attach_agent(workspaceId)` instead — it subscribes and briefs you without
+taking the seat.
 
 ## Always work in priority order
 
