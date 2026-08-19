@@ -755,6 +755,9 @@ async function main(): Promise<void> {
   /** Which task the panel is CURRENTLY showing, so open and close are
    *  distinguishable from a repaint. */
   let renderedDetailId: string | null = null;
+  /** Which task the panel has already fetched audit rows for — one fetch per
+   *  open, and the guard that keeps the fetch's own re-render from looping. */
+  let detailEventsFor: string | null = null;
 
   function renderDetail(): void {
     const task = state.detailTaskId ? (state.tasks.get(state.detailTaskId) ?? null) : null;
@@ -770,6 +773,16 @@ async function main(): Promise<void> {
       void loadDiscussion(task);
     }
     if (!task) state.discussionTaskId = null;
+    // The audit rows the Activity tab renders. Fetched on open rather than at
+    // boot: a reader who never opens a ticket never needs them, and the
+    // workspace Activity VIEW has always fetched them the same lazy way.
+    // Guarded by task id, which is also what stops `loadEvents`'s own
+    // re-render from coming back round here.
+    if (task && detailEventsFor !== task.id) {
+      detailEventsFor = task.id;
+      void loadEvents();
+    }
+    if (!task) detailEventsFor = null;
     // Only pass a discussion that belongs to the task on screen. An in-flight
     // load for a task the reader has left must not paint under this one.
     const discussion =
@@ -804,6 +817,9 @@ async function main(): Promise<void> {
         // filter is by taskId: a doc-thread item has none and never matches,
         // which is correct — it belongs to a doc, not to this panel.
         asks: task ? state.reviewItems.filter((i) => i.taskId === task.id) : [],
+        // The workspace's audit rows; the panel takes this task's out of them.
+        // The same list the Activity view reads — one log, two surfaces.
+        activity: state.events,
         now: Date.now(),
       },
       task ? discussion : undefined,
@@ -1571,6 +1587,10 @@ async function main(): Promise<void> {
     state.events = applyRefresh(state.events, res, (r) => r.events ?? []);
     state.uptime = applyRefresh(state.uptime, res, (r) => r.uptime ?? null);
     if (state.view === 'activity') renderActivityRegion();
+    // The ticket's own Activity tab reads the same rows, so a refresh that
+    // repainted only the workspace view left an open panel showing the
+    // history as it stood when it opened.
+    if (state.detailTaskId) renderDetail();
   }
 
   // ── Wiring ──────────────────────────────────────────────────────────────

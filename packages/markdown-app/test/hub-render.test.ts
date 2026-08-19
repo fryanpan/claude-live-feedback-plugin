@@ -325,18 +325,43 @@ describe('renderBoard', () => {
   // unreadable row for one unanswerable one.
   it('shows the owner as initials, keeping the full name reachable', () => {
     const h = handlers();
-    const rows: [string, string][] = [
-      ['team-lead-fleet', 'TL'],
-      ['human', 'H'],
-      ['agent-live-feedback', 'LF'],
+    // Third column: what the accessible name says. An agent's id IS its name
+    // and reads fine; `human` is a reserved id meaning "a person,
+    // unspecified", and saying the id out loud put an implementation detail in
+    // the reader's ear and in the dropdown.
+    const rows: [string, string, string][] = [
+      ['team-lead-fleet', 'TL', 'team-lead-fleet'],
+      ['human', 'H', 'A person'],
+      ['agent-live-feedback', 'LF', 'agent-live-feedback'],
     ];
-    for (const [assignee, expected] of rows) {
+    for (const [assignee, expected, reads] of rows) {
       root.replaceChildren();
       renderBoard(root, boardSections(GOALS, [task({ goal: 'g-pr', assignee })], filters), h);
       const avatar = root.querySelector('.hub-owner-avatar') as HTMLElement;
       expect(avatar.textContent).toBe(expected);
-      expect((root.querySelector('.hub-row-assignee') as HTMLElement).title).toContain(assignee);
+      const picker = root.querySelector('.hub-row-assignee') as HTMLSelectElement;
+      expect(picker.title).toContain(reads);
+      // The VALUE is untouched: what gets posted is still the id.
+      expect(picker.value).toBe(assignee);
     }
+  });
+
+  it('offers the reserved person id under a name a reader can read', () => {
+    // `human` is not a person's name and not an agent's — it is the id for
+    // "somebody, unspecified", and it was rendered raw as an option label.
+    renderBoard(
+      root,
+      boardSections(GOALS, [task({ goal: 'g-pr', assignee: 'team-lead-fleet' })], filters),
+      handlers({ knownAgentIds: ['team-lead-fleet'] }),
+    );
+    const picker = root.querySelector('.hub-row-assignee') as HTMLSelectElement;
+    const labels = [...picker.options].map((o) => o.textContent);
+    expect(labels).toContain('A person');
+    expect(labels).not.toContain('human');
+    // Positive control: an agent's own name is NOT relabelled.
+    expect(labels).toContain('team-lead-fleet');
+    // …and the option still carries the id, so the write is unchanged.
+    expect([...picker.options].map((o) => o.value)).toContain('human');
   });
 
   // Unowned is a hole in the board, and it has to look like one rather than
@@ -520,6 +545,30 @@ describe('inline title editing', () => {
       expect.objectContaining({ id: t.id }),
       'New title',
     );
+  });
+
+  it('Enter LEAVES edit mode, not just commits', () => {
+    // *"title should save and switch back to not editable state"*. It
+    // committed and left the input in place, relying on the caller's
+    // re-render — and in the detail panel that re-render REOPENS the editor
+    // for any title draft it finds, so Enter saved and put the reader
+    // straight back into editing, every time.
+    const h = handlers();
+    renderBoard(
+      root,
+      boardSections(GOALS, [task({ goal: 'g-pr', title: 'Old title' })], filters),
+      h,
+    );
+    const title = root.querySelector('.hub-task-title') as HTMLElement;
+    title.click();
+    const input = title.querySelector('input') as HTMLInputElement;
+    input.value = 'New title';
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(h.onTitleCommit).toHaveBeenCalled();
+    expect(title.querySelector('input')).toBeNull();
+    // Showing the committed words, not the old ones — the caller re-renders,
+    // but the element must not flash the pre-edit title in between.
+    expect(title.textContent).toBe('New title');
   });
 
   it('Escape cancels without writing', () => {
@@ -3285,6 +3334,74 @@ describe('the panel’s review queue', () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(ta.value).toBe('Rebuild it nightly.');
+  });
+
+  it('makes the panel title reachable from the keyboard, like the board row', () => {
+    // The board's title carries `tabIndex 0` + a tooltip; the panel's carried
+    // neither, so renaming there was pointer-only and nothing said the title
+    // was editable at all.
+    renderTaskDetail(root, task({ id: 't-1', title: 'Old title' }), handlers(), {
+      loading: false,
+      threads: [],
+    });
+    const title = root.querySelector('.hub-detail-title') as HTMLElement;
+    expect(title.tabIndex).toBe(0);
+    expect(title.title).toMatch(/rename/i);
+    title.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(title.querySelector('input')).not.toBeNull();
+  });
+
+  it('shows a rename, a rewrite and a reassignment in the ticket’s own history', () => {
+    // Measured 2026-08-18: the Activity tab rendered `task.transitions` and
+    // nothing else, so every one of these was in the workspace log and on no
+    // surface of the ticket it changed.
+    const t = task({ id: 't-1', title: 'Ship the index' });
+    renderTaskDetail(
+      root,
+      t,
+      handlers({
+        activity: [
+          {
+            event: 'task.retitled',
+            ts: NOW - 3000,
+            taskId: 't-1',
+            actor: { name: 'Jordan' },
+            titleFrom: 'Index',
+            titleTo: 'Ship the index',
+          },
+          {
+            event: 'task.assigned',
+            ts: NOW - 2000,
+            taskId: 't-1',
+            actor: { name: 'Jordan' },
+            from: 'human',
+            to: 'agent-index',
+          },
+          { event: 'task.body_edited', ts: NOW - 1000, taskId: 't-1', actor: { name: 'Jordan' } },
+          // Another task's row, in the same feed the panel is handed.
+          {
+            event: 'task.retitled',
+            ts: NOW,
+            taskId: 't-2',
+            actor: { name: 'Jordan' },
+            titleFrom: 'A',
+            titleTo: 'B',
+          },
+        ],
+      }),
+      { loading: false, threads: [] },
+    );
+    const rows = [...root.querySelectorAll('.hub-detail-transitions li')].map(
+      (li) => li.textContent ?? '',
+    );
+    expect(rows.some((r) => r.includes('renamed'))).toBe(true);
+    expect(rows.some((r) => r.includes('assigned'))).toBe(true);
+    expect(rows.some((r) => r.includes('rewrote the description'))).toBe(true);
+    // Only this ticket's rows: the feed is the whole workspace's.
+    expect(rows.some((r) => r.includes('“B”'))).toBe(false);
+    // Newest first, and the stored transitions are still in the same list.
+    expect(rows[0]).toContain('rewrote the description');
+    expect(rows.some((r) => r.includes('→'))).toBe(true);
   });
 
   it('names the description, and separates it from the fields and the queue', () => {

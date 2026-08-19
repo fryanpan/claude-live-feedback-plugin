@@ -62,6 +62,7 @@ import {
   reviewRowTitle,
   shortCommit,
   stepTarget,
+  taskActivity,
   timeAgo,
   uptimeSummary,
   waitShort,
@@ -91,6 +92,10 @@ function wireInPlaceTitle(
   keepKey?: string,
 ): void {
   el.addEventListener('keydown', (ev) => {
+    // Only a key pressed on the element ITSELF starts an edit. "Is there an
+    // input here" was the whole guard, and it is a fact that can change
+    // between the key being handled and this handler seeing it bubble.
+    if (ev.target !== el) return;
     if (el.querySelector('input')) return; // the input owns its own keys
     if (ev.key !== 'Enter' && ev.key !== 'F2') return;
     ev.preventDefault();
@@ -113,11 +118,28 @@ function wireInPlaceTitle(
       el.replaceChildren(document.createTextNode(original));
     };
     input.addEventListener('keydown', (ke) => {
+      if (ke.key === 'Enter' || ke.key === 'Escape') {
+        // The editor consumed this key, so nothing above it should also act on
+        // it. Load-bearing now that Enter REMOVES the input: the guard on the
+        // element's own handler is "is there an input here", and by the time
+        // the bubble reaches it the answer has become no — so the key that
+        // ended the edit would immediately start a new one.
+        ke.stopPropagation();
+      }
       if (ke.key === 'Enter') {
         ke.preventDefault();
         const v = input.value.trim();
-        if (v && v !== original) commit(v);
-        else restore();
+        if (v && v !== original) {
+          // Leave edit mode HERE, before the commit, rather than waiting for
+          // the caller's re-render to do it. Two reasons, and the second is
+          // the bug: the panel's repaint reopens the editor for any title
+          // draft `keepFields` found, so an input still holding the committed
+          // text put the reader straight back into edit mode — Enter saved and
+          // never exited, every time. Removing the input also settles its own
+          // blur handler, which is guarded on `el.contains(input)`.
+          el.replaceChildren(document.createTextNode(v));
+          commit(v);
+        } else restore();
       } else if (ke.key === 'Escape') {
         restore();
       }
@@ -366,6 +388,22 @@ export interface BoardHandlers {
 const GENERIC_ASSIGNEE = 'agent';
 
 /**
+ * How an assignee id reads to a person.
+ *
+ * `human` is a reserved id meaning "a person, unspecified" — every other value
+ * is an agent's own name and reads fine as it is. Rendering the reserved word
+ * raw put the literal `human` in the dropdown and in its accessible name,
+ * which is an implementation detail presented as user-facing copy.
+ *
+ * "A person" rather than "Me" or a name: the id says a person owns this and
+ * says nothing about WHICH, and inventing the reader is how a shared board
+ * starts telling two people different things about the same row.
+ */
+export function assigneeLabel(id: string): string {
+  return id === 'human' ? 'A person' : id;
+}
+
+/**
  * Who has this task, as a picker over everyone it could go to.
  *
  * This was a two-word toggle: one tap flipped the owner between 'human' and
@@ -406,13 +444,13 @@ function assigneePicker(
   for (const id of ['human', ...agents]) {
     const opt = document.createElement('option');
     opt.value = id;
-    opt.textContent = id;
+    opt.textContent = assigneeLabel(id);
     sel.append(opt);
   }
   // After the options are in the tree — a detached option's selected flag
   // does not survive being appended.
   sel.value = owner;
-  const reads = owner === '' ? 'nobody' : `${owner}${ownerKindSuffix(kind)}`;
+  const reads = owner === '' ? 'nobody' : `${assigneeLabel(owner)}${ownerKindSuffix(kind)}`;
   sel.title = `Assignee: ${reads} — pick who takes this`;
   sel.setAttribute('aria-label', `Assignee: ${reads} — pick who takes this`);
   sel.addEventListener('click', (ev) => ev.stopPropagation());
@@ -2438,6 +2476,16 @@ export interface DetailHandlers {
   onCopyLink?: (task: HubTask) => void;
   /** Clock for the "asked 3h ago" lines. Injected so a test can pin it. */
   now?: number;
+  /**
+   * The workspace's audit rows, unfiltered — the panel takes this task's out
+   * of them (`taskActivity`) and renders them in the Activity tab beside the
+   * stored transitions.
+   *
+   * Handed down rather than fetched per task: they are the same rows the
+   * workspace Activity view reads, and a per-task endpoint would be a second
+   * projection of one log.
+   */
+  activity?: ActivityEvent[];
 }
 
 export interface TaskComment {
@@ -2883,6 +2931,18 @@ function evidenceLabel(evidence: HubEvidence | undefined): string {
  *  - proof attached after the fact → the mark clears (there IS proof now),
  *    and the row keeps the narrower fact that it arrived late.
  */
+/** One audit row in a ticket's history, in the same sentence the workspace
+ *  Activity view would read it in — one `describeEvent`, two surfaces. */
+function activityRow(ev: ActivityEvent, title: string): HTMLLIElement {
+  const li = document.createElement('li');
+  li.className = 'hub-detail-activity-row';
+  li.title = new Date(ev.ts).toLocaleString();
+  const what = document.createElement('span');
+  what.textContent = describeEvent(ev, () => title);
+  li.append(what);
+  return li;
+}
+
 function renderTransitionRow(t: HubTransition): HTMLLIElement {
   const li = document.createElement('li');
   li.title = new Date(t.ts).toLocaleString();
@@ -3739,6 +3799,15 @@ export function renderTaskDetail(
   const title = document.createElement('h2');
   title.className = 'hub-detail-title';
   title.textContent = task.title;
+  // The same affordance the board row's title carries, for the same reason:
+  // renaming here was pointer-only, so on a keyboard the panel's title could
+  // not be reached at all — and with no tooltip nothing said it was editable
+  // to anyone. `wireInPlaceTitle` already answers Enter and F2; what was
+  // missing was a way to put the focus on it. Deliberately unconditional,
+  // where the board makes it depend on a fine pointer: the panel's title is a
+  // full-width target with no competing tap gesture over it.
+  title.tabIndex = 0;
+  title.title = 'Click or press Enter to rename';
   const titleKeepKey = `title:${task.id}`;
   wireInPlaceTitle(
     title,
@@ -3952,16 +4021,27 @@ export function renderTaskDetail(
   const activity = document.createElement('div');
   activity.className = 'hub-detail-tabpanel hub-detail-tabpanel-activity';
   activity.setAttribute('role', 'tabpanel');
-  if (task.transitions.length > 0) {
+  // ONE history, newest first: the stored transitions (which carry evidence
+  // and the unproven mark) merged with the task's own rows from the workspace
+  // audit log. The tab used to render transitions and nothing else, so a
+  // rename, a description rewrite, a reassignment and a due-date change all
+  // left no trace on the ticket they changed — every one of them was in the
+  // log the whole time, on a surface nobody opens a ticket to read.
+  const history: Array<{ ts: number; node: HTMLLIElement }> = [
+    ...task.transitions.map((t) => ({ ts: t.ts, node: renderTransitionRow(t) })),
+    ...taskActivity(handlers.activity, task.id).map((e) => ({
+      ts: e.ts,
+      node: activityRow(e, task.title),
+    })),
+  ].sort((a, b) => b.ts - a.ts);
+  if (history.length > 0) {
     const h = document.createElement('h3');
     h.className = 'hub-detail-subhead';
     h.textContent = 'History';
     activity.append(h);
     const list = document.createElement('ul');
     list.className = 'hub-detail-transitions';
-    for (const t of [...task.transitions].reverse()) {
-      list.append(renderTransitionRow(t));
-    }
+    for (const row of history) list.append(row.node);
     activity.append(list);
   }
   const quote = quoteBlock();

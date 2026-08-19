@@ -1353,6 +1353,30 @@ export function activityRows(events: ActivityEvent[], filter: ActivityFilter): A
   return kept.sort((a, b) => b.ts - a.ts);
 }
 
+/**
+ * One task's audit rows, newest first — what the panel's Activity tab shows
+ * beside the stored transition list.
+ *
+ * `task.transitioned` is dropped because the panel renders those from
+ * `task.transitions`, which carries the evidence and the unproven mark that
+ * the log row does not. Everything else a task can have done TO it —
+ * renamed, rewritten, reassigned, re-dated, answered, taken back — reached
+ * the workspace feed and no surface on the ticket. Measured 2026-08-18: the
+ * tab logged status changes and nothing else, so a rename left no trace on
+ * the ticket it renamed.
+ */
+export function taskActivity(events: ActivityEvent[] | undefined, taskId: string): ActivityEvent[] {
+  return (events ?? [])
+    .filter(
+      (e) =>
+        e.taskId === taskId &&
+        e.event !== 'task.transitioned' &&
+        e.event !== 'agent.heartbeat' &&
+        e.event !== 'server.tick',
+    )
+    .sort((a, b) => b.ts - a.ts);
+}
+
 // ── Uptime (deploy readiness — §3.12 commit 11) ────────────────────────────
 
 /** Mirror of the server's UptimeReport (packages/server/src/uptime.ts) —
