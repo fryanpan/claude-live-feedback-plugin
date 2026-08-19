@@ -946,8 +946,27 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         ...(title ? { title } : {}),
         reviewItems: reviewItemsFor(workspace)
           .filter((item) => item.docId === docId)
-          .map((item) => ({ threadId: item.threadId, ask: item.ask, askedBy: item.askedBy })),
+          .map((item) => ({
+            threadId: item.threadId,
+            commentId: item.commentId,
+            ask: item.ask,
+            askedBy: item.askedBy,
+          })),
       };
+    },
+    // The room store itself, for the two text verbs. Voice calls
+    // `postComment` — the one choke point every reply path in this server
+    // already funnels through — and `answerReviewItem` exactly as it stands,
+    // so a spoken comment and a typed one are the same write, fire the same
+    // events, and reach a watching agent identically.
+    rooms,
+    // A task's discussion room, CREATED if this process has not served it
+    // yet. Body rooms are lazy, so on a freshly restarted server the room for
+    // a task nobody has opened does not exist and a comment aimed straight at
+    // `task:<id>` is dropped with a `null` the caller reads as "no such doc".
+    taskCommentDoc: (taskId) => {
+      const task = taskStore.getTask(taskId);
+      return task ? taskProjection.ensureBodyRoom(task) : undefined;
     },
   });
 
