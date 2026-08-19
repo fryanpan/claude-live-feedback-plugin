@@ -163,7 +163,6 @@ export interface HubWorkspaceInfo {
    *  the deterministic clip; the board never waits for one to arrive. */
   goalSummary?: StoredGoalSummary;
   goals: HubGoal[];
-  docIds: string[];
   /** The agent responsible for this board. Absent = the seat is empty, and
    *  the strip says so rather than showing a stale or guessed name. */
   leadAgentId?: string;

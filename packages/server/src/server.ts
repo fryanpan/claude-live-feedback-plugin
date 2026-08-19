@@ -971,10 +971,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    *   they mean this one; a bare `workspaceId` in this file means a grouping.
    *
    * An ATTACHMENT is either a doc room id or a grouping id — `POST
-   * /api/workspaces/:id/docs` has accepted both since it was written, and the
-   * hub sidebar resolves a grouping through the workspace endpoints
-   * (`hub-sidebar.ts`). So a review goes on a board as ONE row; its members
-   * stay off, because a hundred-file review is one unit of work, not a hundred.
+   * /api/workspaces/:id/docs` has accepted both since it was written. So a
+   * review goes on a board as ONE row; its members stay off, because a
+   * hundred-file review is one unit of work, not a hundred. Note the board
+   * page itself no longer LISTS attachments: the Docs and Open-threads rails
+   * came out (Bryan, 2026-08-18, "remove docs and live threads from the task
+   * list"), so `docIds` now feeds the review queue and voice lookup rather
+   * than a sidebar.
    *
    * Every doc and every group bind belongs to a hub workspace (Bryan,
    * 2026-08-13) — and requiring one must not add a step. "Bind it, send Bryan
