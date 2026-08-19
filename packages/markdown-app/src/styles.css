@@ -32,6 +32,30 @@
      content it was supposed to clear. Asked for by number (2026-08-18):
      *"default 1100px, at least 900px when space allows"*. */
   --hub-detail-w: min(1100px, max(900px, 62vw));
+
+  /* What the task LIST needs to still be a list once the panel has taken its
+     share. The split pane reserves the panel's width out of the board's
+     column, so this is the other half of that arithmetic — and the number the
+     split's breakpoint is derived from (see the ≥1660px block).
+
+     Measured, not chosen: at a 1600px window the board column came out at
+     274px, where a user-story title clips after about twenty characters and
+     the quick-capture input renders as "Ca"; at 1191px the same column
+     computed to zero and the rows had no width at all. 420px is where a row
+     shows enough of a story title to be scanned rather than guessed at. */
+  --hub-board-min: 420px;
+  /* What the board's side of a split costs in total: its own floor plus the
+     334px measured between and around the two columns — the nav rail and its
+     gap (190), the page gutters (28), the panel's 16px offset, the scrollbar.
+     Measured at a 1600px window, where a 992px panel left a 274px column:
+     1600 − 992 − 274 = 334. */
+  --hub-board-keep: calc(var(--hub-board-min) + 334px);
+  /* The panel's width IN THE SPLIT, where it is capped by what the board must
+     keep — one expression, because the panel's width and the room the board
+     reserves for it have to be the same number or the panel's edge lands over
+     the content it was supposed to clear. Below the split's breakpoint the
+     modal uses `--hub-detail-w` directly and this is unused. */
+  --hub-detail-pane-w: min(var(--hub-detail-w), calc(100vw - var(--hub-board-keep)));
 }
 
 * {
@@ -3604,7 +3628,7 @@ a.hub-link-chip:hover {
   display: none;
 }
 
-/* --- ≥1024px: the task detail is a right-hand split pane, not a modal ---
+/* --- ≥1660px: the task detail is a right-hand split pane, not a modal ---
 
    Bryan's report: "the current modal is cramped on bigger screens" — a centred
    860px card on a 1600px display leaves the board unreadable behind a dimmed
@@ -3617,11 +3641,27 @@ a.hub-link-chip:hover {
    CONTAINER because `replaceChildren` repaints the panel constantly and would
    drop a class held on the panel itself.
 
-   Deliberately keyed off 1024px rather than the file's usual 900/1100: this is
-   about there being room for two columns, which is a different question from
-   "is this a phone" (900) or "does the nav rail still fit" (1100). Below it the
-   modal, and below 900 the full-screen sheet, are both unchanged. */
-@media (min-width: 1024px) {
+   THE BREAKPOINT IS ARITHMETIC, not a device class, and it is the fix for a
+   split that was tried where it does not fit. This block used to start at
+   1024px, on the reasoning that 1024 is "room for two columns" — but the panel
+   below is floored at 900px and the board's column is what pays for it, so
+   from 1024 up to about 1650 the reflow squeezed the list into a sliver rather
+   than splitting anything. Measured at a 1191px viewport: task rows 0px wide,
+   the capture input 42px, "Capture a task" rendering as "Ca". At 1600px the
+   column was 274px and every user-story title clipped after ~20 characters.
+   A layout that reports itself as a split while showing a column nobody can
+   read is worse than the modal it replaced, because the modal at least says
+   what it is doing.
+
+   So the split starts where BOTH columns fit and nowhere lower:
+   900px panel floor + 420px board floor (`--hub-board-min`) + 334px of
+   measured chrome between and around them — the nav rail and its gap (190),
+   the page's own gutters (28), the panel's 16px offset and the scrollbar —
+   which is 1654, taken up to 1660. Below it the reader gets the modal, at the
+   same 900–1100px width, over a scrim that is honest about the board being
+   out of play; below 900 the full-screen sheet is unchanged. Two things
+   readable at a time, or one thing at a time — never two slivers. */
+@media (min-width: 1660px) {
   .hub-detail {
     align-items: stretch;
     justify-content: flex-end;
@@ -3634,8 +3674,12 @@ a.hub-link-chip:hover {
     /* 1100 by default, never under 900 while the viewport can pay for it —
        *"taking more than half the horizontal width on laptop/tablet is fine"*.
        The 52vw this replaced gave a 1512px laptop a 760px pane, which is the
-       "cramped on bigger screens" report unfixed. */
-    width: min(var(--hub-detail-w), 100vw);
+       "cramped on bigger screens" report unfixed.
+       Capped by what the board must keep, so the panel yields the last pixels
+       rather than the list: at the breakpoint that resolves to 906px of panel
+       beside 420px of board, and the panel then grows to 1100 while the board
+       takes everything past it. */
+    width: var(--hub-detail-pane-w);
     max-height: none;
     height: 100%;
     border-radius: 0;
@@ -3653,7 +3697,7 @@ a.hub-link-chip:hover {
      thing a test can assert, and so the two subtrees (board and panel) do not
      have to be siblings. */
   body.hub-detail-open .hub-main {
-    padding-right: calc(min(var(--hub-detail-w), 100vw) + 16px);
+    padding-right: calc(var(--hub-detail-pane-w) + 16px);
   }
   /* At full screen the panel covers the board completely, so reserving room
      for it would squeeze the board to nothing and reflow it twice on the way

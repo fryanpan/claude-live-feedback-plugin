@@ -21,6 +21,11 @@ import { describe, expect, it } from 'vitest';
  */
 const CSS = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
 
+/** The query the split-pane block is keyed off. Named once: several tests
+ *  scope themselves to that block, and a stale copy of the number would
+ *  silently search nothing and pass. */
+const SPLIT = '(min-width: 1660px)';
+
 function declarationsOnly(css: string): string {
   return css.replace(/\/\*[\s\S]*?\*\//g, '');
 }
@@ -72,11 +77,14 @@ describe('the task panel is as wide as it was asked to be', () => {
 
   it('uses that width in the modal AND in the split pane', () => {
     expect(rule('.hub-detail-panel')).toMatch(/width:\s*min\(var\(--hub-detail-w\)/);
-    const split = media('(min-width: 1024px)');
+    const split = media(SPLIT);
     expect(split, 'the split-pane block is missing').not.toBe('');
-    // The 52vw this replaced gave a 1512px laptop a 760px pane, which is the
-    // "cramped on bigger screens" report unfixed.
-    expect(rule('.hub-detail-panel', split)).toMatch(/width:\s*min\(var\(--hub-detail-w\)/);
+    // The split resolves it through `--hub-detail-pane-w`, which is the same
+    // expression capped by what the board keeps. The 52vw this replaced gave a
+    // 1512px laptop a 760px pane — the "cramped on bigger screens" report
+    // unfixed.
+    expect(rule(':root')).toMatch(/--hub-detail-pane-w:\s*min\(var\(--hub-detail-w\)/);
+    expect(rule('.hub-detail-panel', split)).toMatch(/width:\s*var\(--hub-detail-pane-w\)/);
     expect(rule('.hub-detail-panel', split)).not.toMatch(/52vw/);
   });
 
@@ -84,14 +92,66 @@ describe('the task panel is as wide as it was asked to be', () => {
     // The review banner and the quick-capture row ran under the panel's edge
     // and were clipped by it. Reserving the panel's own width is the fix, and
     // it must reserve THE SAME width — hence the shared token.
-    const split = media('(min-width: 1024px)');
+    const split = media(SPLIT);
     expect(rule('body.hub-detail-open .hub-main', split)).toMatch(
-      /padding-right:\s*calc\(min\(var\(--hub-detail-w\)/,
+      /padding-right:\s*calc\(var\(--hub-detail-pane-w\)/,
     );
     // ...and give it back at full screen, where the panel covers the board.
     expect(rule('body.hub-detail-open.hub-detail-full .hub-main', split)).toMatch(
       /padding-right:\s*0/,
     );
+  });
+});
+
+/**
+ * The split's breakpoint is arithmetic, and this is the arithmetic.
+ *
+ * It started at 1024px on the reasoning that 1024 is "room for two columns".
+ * It is not: the panel is floored at 900 and the board's column is what pays
+ * for it, so every width from 1024 up to about 1650 reflowed the list into a
+ * sliver and called it a split. Measured at 1191px — task rows 0px wide, the
+ * capture input 42px, "Capture a task" rendering as "Ca"; at 1600px the column
+ * was 274px and every user-story title clipped after ~20 characters.
+ *
+ * Asserted as a RELATIONSHIP between the numbers rather than as the numbers,
+ * so moving any one of them on purpose stays possible and moving one by
+ * accident goes red.
+ */
+describe('the split pane starts where both columns fit', () => {
+  const px = (s: string | undefined) => Number(/(\d+)px/.exec(s ?? '')?.[1]);
+  const root = rule(':root');
+  const boardMin = px(/--hub-board-min:\s*([^;]+);/.exec(root)?.[1]);
+  const panelMin = px(/--hub-detail-w:\s*min\([^,]+,\s*max\(([^,]+),/.exec(root)?.[1]);
+  /** The chrome between and around the two columns, from `--hub-board-keep`. */
+  const chrome = px(/--hub-board-keep:[^;]*\+\s*([0-9]+px)/.exec(root)?.[1]);
+  const breakpoint = px(SPLIT);
+
+  it('reads all four numbers, so the comparison below is not vacuous', () => {
+    for (const [name, n] of [
+      ['--hub-board-min', boardMin],
+      ['the panel floor inside --hub-detail-w', panelMin],
+      ['the chrome term of --hub-board-keep', chrome],
+      ['the split breakpoint', breakpoint],
+    ] as const) {
+      expect(Number.isFinite(n), `${name} did not parse`).toBe(true);
+    }
+  });
+
+  it('opens no lower than panel floor + board floor + chrome', () => {
+    expect(breakpoint).toBeGreaterThanOrEqual(panelMin + boardMin + chrome);
+  });
+
+  it('caps the pane so the board keeps its floor at every width above it', () => {
+    // Without the cap the panel takes 62vw and the board takes the remainder,
+    // which at the breakpoint is 297px — under its floor, i.e. the sliver
+    // again, one breakpoint higher.
+    expect(rule(':root')).toMatch(
+      /--hub-detail-pane-w:\s*min\(var\(--hub-detail-w\),\s*calc\(100vw\s*-\s*var\(--hub-board-keep\)\)\)/,
+    );
+    // And the cap still leaves the panel its own floor at the breakpoint —
+    // the two floors are simultaneously satisfiable exactly there, which is
+    // what makes this the lowest honest breakpoint rather than a guess.
+    expect(breakpoint - boardMin - chrome).toBeGreaterThanOrEqual(panelMin);
   });
 });
 
