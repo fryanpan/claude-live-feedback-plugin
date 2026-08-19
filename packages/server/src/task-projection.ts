@@ -2,9 +2,34 @@ import { listThreads, prose, readTaskReviewItem } from '@feedback/core';
 import type { TaskReviewItem } from '@feedback/core';
 import * as Y from 'yjs';
 import type { Rooms } from './rooms.ts';
-import { type OwnerKind, attachedAgentTest, resolveOwnerKind } from './task-owner.ts';
+import {
+  type OwnerKind,
+  attachedAgentResolver,
+  attachedAgentTest,
+  resolveOwnerKind,
+} from './task-owner.ts';
 import type { PremiseNote } from './task-staleness.ts';
-import type { Task, TaskStore, TaskStoreEvent } from './tasks.ts';
+import type { AttachmentState, Task, TaskStore, TaskStoreEvent } from './tasks.ts';
+
+/**
+ * The session behind a task's owner: which one, when it was last heard from,
+ * when it was last seen working, and what bundle it runs.
+ *
+ * Deliberately NOT the whole attachment. `endpoint` is host-machine data that
+ * never leaves REST unredacted, and the rest is noise for the question this
+ * answers — so the shape is the answer rather than the record.
+ */
+export interface OwnerSession {
+  agentId: string;
+  /** Last time the session SAID it was alive. */
+  lastHeartbeat: number;
+  /** Last time the server SAW it do something. The pair disagreeing is the
+   *  usage-limit outage signature — one field cannot show it. */
+  lastToolCallAt: number;
+  state: AttachmentState;
+  stateLabel: string;
+  pluginVersion?: string;
+}
 
 /**
  * Ydoc projection of the hub task store (plan §3.3).
@@ -315,6 +340,41 @@ export class TaskProjection {
       this.tasks.listAttachments(workspaceId).map((a) => a.agentId),
     );
     return (task) => resolveOwnerKind(task.assignee, task.assigneeKind, isAttachedAgent);
+  }
+
+  /**
+   * WHICH session holds this task, and what is known about it right now.
+   *
+   * The sibling of `ownerKindReader` and built the same way — one roster read
+   * per request, closed over. That one answers what an owner IS; this one
+   * answers who they ARE, which is the question a "last seen" line needs and
+   * the one the board could not previously reach: the owner is a display name
+   * and the attachment is an identity id, so the two never met.
+   *
+   * Fields are named one at a time rather than spread from the attachment.
+   * `endpoint` is a host-machine fact with its own redaction rule
+   * (`publicAttachment`), and a spread would carry it into every board read
+   * the moment somebody adds a field — the private-meta lesson. An explicit
+   * allow-list cannot leak a field that did not exist when it was written.
+   *
+   * Returns undefined for an owner no attachment vouches for, which includes
+   * every person and every reserved owner. Absent means "no session to
+   * name" — never "away", and never a guess.
+   */
+  ownerSessionReader(workspaceId: string): (task: Task) => OwnerSession | undefined {
+    const resolve = attachedAgentResolver(this.tasks.listAttachments(workspaceId));
+    return (task) => {
+      const att = resolve(task.assignee);
+      if (!att) return undefined;
+      return {
+        agentId: att.agentId,
+        lastHeartbeat: att.lastHeartbeat,
+        lastToolCallAt: att.lastToolCallAt,
+        state: att.state,
+        stateLabel: att.stateLabel,
+        ...(att.pluginVersion !== undefined ? { pluginVersion: att.pluginVersion } : {}),
+      };
+    };
   }
 
   /**
