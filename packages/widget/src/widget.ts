@@ -78,7 +78,7 @@ export interface WidgetOpts {
 const TAG = 'claude-feedback-widget';
 const IGNORE_ATTR = 'data-feedback-widget';
 
-// The host page and the live-feedback server normally live on different ports
+// The host page and the claude-workspaces server normally live on different ports
 // (e.g. Astro dev :4321 vs LF :8788). The widget bundle is served by the LF
 // server, so its script origin is the right default for the WS server URL.
 // Captured at top-level evaluation time, when document.currentScript still

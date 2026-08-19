@@ -44,6 +44,8 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { readRenamedEnv } from '@feedback/core/env-names';
+import { STATE_ROOT_DIR } from '@feedback/core/machine-paths';
 
 /** Built bundle directories, as they come out of the package build scripts. */
 export interface ClientSources {
@@ -79,10 +81,10 @@ export function clientReleaseRoot(
   env: Record<string, string | undefined> = process.env,
   home: string = homedir(),
 ): string {
-  const explicit = env.LF_CLIENT_ROOT?.trim();
+  const explicit = readRenamedEnv(env, 'CW_CLIENT_ROOT')?.trim();
   if (explicit) return explicit;
   const state = env.XDG_STATE_HOME?.trim() || join(home, '.local', 'state');
-  return join(state, 'live-feedback', 'client');
+  return join(state, STATE_ROOT_DIR, 'client');
 }
 
 /**

@@ -1438,7 +1438,7 @@ describe('pluginDriftNotice', () => {
     // that does not work is worse than printing none. Harmless everywhere
     // that has no such wrapper.
     expect(n.fix).toBe(
-      'Run: command claude plugin update live-feedback@claude-live-feedback — then restart that session.',
+      'Run: command claude plugin update claude-workspaces@claude-workspaces — then restart that session.',
     );
   });
 

@@ -1,9 +1,9 @@
 ---
 name: embedding-feedback-widget
-description: Use when generating HTML mockups, sample pages, or live dev-server pages that should accept live-feedback comments — covers the standard <script> tags, multi-page docId choice, and setContext calls for dynamic UI state (modals, tabs, SPA routes).
+description: Use when generating HTML mockups, sample pages, or live dev-server pages that should accept claude-workspaces comments — covers the standard <script> tags, multi-page docId choice, and setContext calls for dynamic UI state (modals, tabs, SPA routes).
 ---
 
-# Embedding the live-feedback widget
+# Embedding the claude-workspaces widget
 
 When you create any HTML surface the user might review — a mockup, a sample
 page, a dev-server demo — drop in the feedback widget so they can

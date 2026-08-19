@@ -53,7 +53,7 @@ export interface DocMeta {
   setId?: string;
   createdAt: number;
   /**
-   * Identifier of the agent that created the doc — the live-feedback MCP
+   * Identifier of the agent that created the doc — the claude-workspaces MCP
    * child's cwd, which is the agent's project directory and matches how
    * claude-hive keys peers (`from_cwd`). Lets a cleanup job route a "still
    * needed?" prompt to the owning agent. Persisted; absent on legacy docs.

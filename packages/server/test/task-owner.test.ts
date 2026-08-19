@@ -116,7 +116,7 @@ describe('task creation records a real owner', () => {
       const body = (await r.json()) as { error: string; message?: string };
       expect(body.error).toBe('assignee-required');
       // The refusal has to say how to satisfy it, or it just blocks the caller.
-      expect(body.message).toContain('FEEDBACK_AGENT_NAME');
+      expect(body.message).toContain('CW_AGENT_NAME');
       // …and nothing was created.
       expect((await getTasks(wsId)).some((t) => t.title === 'Nobody owns me')).toBe(false);
     });
@@ -162,7 +162,7 @@ describe('task creation records a real owner', () => {
       const body = (await r.json()) as { error: string; message?: string };
       expect(body.error).toBe('assignee-required');
       // Same rule as the create routes, so the same remediation.
-      expect(body.message).toContain('FEEDBACK_AGENT_NAME');
+      expect(body.message).toContain('CW_AGENT_NAME');
       // The refusal is a no-op, not a clear: the previous owner still has it.
       expect((await getTasks(wsId)).find((t) => t.id === task.id)?.assignee).toBe('Search Revamp');
     });

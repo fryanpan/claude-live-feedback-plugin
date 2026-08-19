@@ -51,7 +51,7 @@ Take screenshots at the key states — initial load, mid-flow, completion, error
 a page that never rendered look identical.
 
 - **Pass an explicit high `max_chars`** (or a `ref_id` scoped to the region you
-  care about) when reading a long surface. The live-feedback workspace board is
+  care about) when reading a long surface. The claude-workspaces workspace board is
   one: its accessibility tree already runs ~24k characters and grows with every
   task added, so the default is a ceiling you will hit without noticing.
 - **Treat the truncation footer as load-bearing, not boilerplate.** It is the

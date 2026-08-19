@@ -91,7 +91,7 @@ function issueBody(payload: WebhookPayload): string {
   const comments = thread.comments
     .map((c: Comment) => `> **${c.author.name}** (${new Date(c.ts).toISOString()})\n> ${c.text}`)
     .join('\n\n');
-  return `From Live Feedback on **${doc.type}** doc \`${doc.docId}\`\n\nAnchor: _${anchor}_\n\n${comments}`;
+  return `From Claude Workspaces on **${doc.type}** doc \`${doc.docId}\`\n\nAnchor: _${anchor}_\n\n${comments}`;
 }
 
 async function createIssue(payload: WebhookPayload): Promise<string> {

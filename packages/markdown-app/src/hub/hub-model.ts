@@ -164,7 +164,6 @@ export interface HubWorkspaceInfo {
    *  the deterministic clip; the board never waits for one to arrive. */
   goalSummary?: StoredGoalSummary;
   goals: HubGoal[];
-  docIds: string[];
   /** The agent responsible for this board. Absent = the seat is empty, and
    *  the strip says so rather than showing a stale or guessed name. */
   leadAgentId?: string;
@@ -1614,7 +1613,7 @@ const PLUGIN_DOMAIN =
  * session BACKWARDS a version in exactly this situation.
  */
 const PLUGIN_FIX =
-  'Run: command claude plugin update live-feedback@claude-live-feedback — then restart that session.';
+  'Run: command claude plugin update claude-workspaces@claude-workspaces — then restart that session.';
 
 /** `(2 checked)`, or nothing at all when the server did not send a count. */
 function checkedClause(checked: number | undefined): string {
