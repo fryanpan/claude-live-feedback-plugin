@@ -72,14 +72,32 @@ describe('the skills teach one declaration per session', () => {
 describe('the skills teach what declaring does NOT do', () => {
   for (const [name, text] of both) {
     describe(name, () => {
-      it('says a declaration does not keep you live — the heartbeat window still gates delivery', () => {
+      it('says a declaration does not keep you live, and names OBSERVED WORK as the gate', () => {
         // The gap this branch created: one call now covers every surface, so
-        // "I declared" reads as "I am covered" — while an attachment expires
-        // ~5 minutes after its last heartbeat and every lead-addressed
-        // delivery asks for a fresh one. A skill that teaches the one call
-        // without this teaches a session to go silently away.
+        // "I declared" reads as "I am covered" — while an attachment lapses
+        // unless the server keeps seeing the session. A skill that teaches
+        // the one call without this teaches a session to go silently away.
+        //
+        // WHAT THIS ASSERTION IS FOR, since the previous one taught the wrong
+        // rule while looking like it guarded this exact sentence. It was
+        // `/5[- ]minute|five minutes|goes quiet|stay live/` — an alternation
+        // broad enough to pass on the WRONG text, on the corrected text, and
+        // again if anyone reinstated the error. It pinned nothing and read as
+        // coverage, which is why the mistake survived four green CI runs.
+        //
+        // The rule it should have encoded: HEARTBEAT_FRESH_MS (~5 min) feeds
+        // the DISPLAYED away label; delivery rides the observed clock,
+        // `max(lastHeartbeat, lastToolCallAt)`. So a ~5-minute claim about
+        // display is fine and a heartbeat-window claim about DELIVERY is not,
+        // and only the second is asserted here.
         expect(text).toMatch(/heartbeat\(workspaceId\)/);
-        expect(text.toLowerCase()).toMatch(/5[- ]minute|five minutes|goes quiet|stay live/);
+        // Positive: the delivery gate is named as BOTH signals, not one.
+        expect(text.toLowerCase()).toMatch(/a heartbeat or a tool call/);
+        // Negative: and the old claim cannot come back unnoticed. Reverting
+        // either skill to "Delivery is gated on a heartbeat inside the
+        // ~5-minute window" fails on both halves at once.
+        expect(text.toLowerCase()).not.toMatch(/gated on a heartbeat/);
+        expect(text.toLowerCase()).not.toMatch(/away and triage requests queue/);
       });
 
       it('names the THREE different remedies, not one blanket fix', () => {

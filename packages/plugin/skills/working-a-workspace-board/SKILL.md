@@ -44,9 +44,10 @@ Two things follow, and they are the ones agents get wrong:
   and no warning, because a queue nobody is draining looks exactly like a queue
   nobody filled.
 - **Staying live is a separate thing from declaring.** The declaration attaches
-  you; nothing keeps you attached. Every lead-addressed delivery is gated on a
-  heartbeat inside the ~5-minute window, and a session that goes quiet for
-  minutes drops out of it while every surface still says "subscribed". Tool
+  you; nothing keeps you attached. Every lead-addressed delivery is gated on
+  the server having observed you recently — a heartbeat or a tool call,
+  whichever is later — and a session that goes quiet long enough drops out of
+  that window while every surface still says "subscribed". Tool
   calls refresh it — a working session is fine — so the case to watch is a long
   stretch of thinking or a long-running command. `heartbeat(workspaceId)` when
   in doubt.
