@@ -257,6 +257,49 @@ describe('decision routes', () => {
       expect(stored?.answer?.text).toBe('neither — split it in two');
       expect(stored?.answer?.optionId).toBeUndefined();
     });
+
+    it('keeps a standing answer’s words when a second answer lands over it', async () => {
+      // The race this reproduces: two browsers both show the unanswered card,
+      // Bryan answers, and a collaborator whose panel has not repainted yet
+      // answers two seconds later. The second write must not hard-delete the
+      // first answer — soft delete is the project-wide rule for user content,
+      // and `answerHistory` exists precisely so overwritten words survive.
+      const wsId = await seedWorkspace();
+      const task = await seedDecision(wsId, { options: [{ label: 'Ship now' }] });
+      const picked = task.options?.[0];
+      await jj(
+        await post(`/api/tasks/${task.id}/answer`, {
+          text: 'Ship now',
+          optionId: picked?.id,
+          author: PERSON,
+        }),
+      );
+      await jj(
+        await post(`/api/tasks/${task.id}/answer`, {
+          text: 'Wait for the rebuild',
+          author: { id: 'known-sam', name: 'Sam', kind: 'known', color: '#888888' },
+        }),
+      );
+      const stored = (await getTasks(wsId)).find((t) => t.id === task.id);
+      // Last write stands…
+      expect(stored?.answer?.text).toBe('Wait for the rebuild');
+      expect(stored?.answer?.by).toBe('Sam');
+      // …and the displaced words survive with their full provenance: whose
+      // they were, which option carried them, and who displaced them.
+      expect(stored?.answerHistory?.map((a) => a.text)).toEqual(['Ship now']);
+      expect(stored?.answerHistory?.[0]?.by).toBe('Jordan');
+      expect(stored?.answerHistory?.[0]?.optionId).toBe(picked?.id);
+      expect(stored?.answerHistory?.[0]?.withdrawnBy).toBe('Sam');
+      expect(stored?.answerHistory?.[0]?.withdrawnAt).toBeGreaterThan(0);
+      // Undo after the race recovers round by round: first the second answer…
+      await jj(await post(`/api/tasks/${task.id}/answer/undo`, { author: PERSON }));
+      const undone = (await getTasks(wsId)).find((t) => t.id === task.id);
+      expect(undone?.answer).toBeUndefined();
+      expect(undone?.answerHistory?.map((a) => a.text)).toEqual([
+        'Ship now',
+        'Wait for the rebuild',
+      ]);
+    });
   });
 
   // ── POST /api/tasks/:id/answer/undo ─────────────────────────────────────

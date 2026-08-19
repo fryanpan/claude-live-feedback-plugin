@@ -2916,6 +2916,20 @@ export class TaskStore {
       name: opts.actor.name,
       kind: classifyActor(opts.actor),
     };
+    // A second answer landing over a standing one is a race, not a rewrite
+    // request — two browsers both showing the unanswered card, the slower tap
+    // arriving after the faster one recorded. Last write stands (the panel's
+    // busy-disable is DOM-local, so the server is the only place this can be
+    // handled), but the displaced words move to `answerHistory` exactly as an
+    // undo would move them: overwriting IS a withdrawal, performed by the
+    // overwriting actor, and a hard delete here is the loss that field was
+    // added to prevent.
+    if (task.answer) {
+      task.answerHistory = [
+        ...(task.answerHistory ?? []),
+        { ...task.answer, withdrawnAt: ts, withdrawnBy: actor.name },
+      ];
+    }
     // `by` is the display name — the projection ships display names, not ids
     // (§3.3 visitor contract), and the event carries the full actor anyway.
     // `text` stays the answer whether it was typed or tapped: an option is a
