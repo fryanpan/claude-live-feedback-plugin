@@ -30,7 +30,7 @@ reversing an earlier rule that read the other way).
 
 ## The plugin ships through a GitHub marketplace
 
-The marketplace `claude-live-feedback` resolves to the GitHub repo
+The marketplace `claude-workspaces` resolves to the GitHub repo
 `fryanpan/claude-workspaces-plugin` (since 2026-08-13; it used to point at a
 local directory). Installing or updating fetches the repo, reads
 `.claude-plugin/marketplace.json`, and copies the plugin into a
@@ -41,26 +41,26 @@ A peer installs, once:
 
 ```bash
 claude plugin marketplace add fryanpan/claude-workspaces-plugin
-claude plugin install live-feedback@claude-live-feedback --scope user
+claude plugin install claude-workspaces@claude-workspaces --scope user
 ```
 
 and afterwards updates with:
 
 ```bash
-claude plugin update live-feedback@claude-live-feedback
+claude plugin update claude-workspaces@claude-workspaces
 ```
 
 **Sharp edge — `claude plugin marketplace remove <name>` also uninstalls the
 plugin.** Swapping the source (local directory → GitHub, or a rename) is
 therefore remove-then-add-then-*reinstall*, and between the remove and the
 install there is a window with no plugin at all — sessions started in that
-window come up with no live-feedback tools. Do the three commands back to
+window come up with no claude-workspaces tools. Do the three commands back to
 back:
 
 ```bash
-claude plugin marketplace remove claude-live-feedback
+claude plugin marketplace remove claude-workspaces
 claude plugin marketplace add fryanpan/claude-workspaces-plugin
-claude plugin install live-feedback@claude-live-feedback --scope user
+claude plugin install claude-workspaces@claude-workspaces --scope user
 ```
 
 ## Three version sites, one value
@@ -300,7 +300,7 @@ another process does to the cache reaches it; only its own relaunch does.
 
 Prod polls it. `scripts/serve.ts --no-watch` passes
 `--plugin-refresh-interval-ms`, and the server then runs
-`claude plugin update live-feedback@claude-live-feedback` at boot and every 30
+`claude plugin update claude-workspaces@claude-workspaces` at boot and every 30
 minutes (`LF_PLUGIN_REFRESH_MINUTES`; `0` turns it off). A merge therefore
 reaches this machine's cache on its own, within the window.
 
@@ -330,7 +330,7 @@ resolves to a wrapper that injects flags ahead of the subcommand, so
 `claude plugin update …` is parsed as a prompt and dies with *"Input must be
 provided either through stdin or as a prompt argument when using --print"*,
 which reads like a permission refusal and was once written up as one. Use
-`command claude plugin update live-feedback@claude-live-feedback` — `command`
+`command claude plugin update claude-workspaces@claude-workspaces` — `command`
 bypasses functions and aliases. (The server never hits this: it spawns the
 resolved binary path with an argv array and no shell.)
 
@@ -455,7 +455,7 @@ bun run staging      # builds this worktree's bundles, serves :8788, throwaway d
 Prod keeps serving 8787 with its own data throughout. The script refuses to run
 from the primary checkout (that is prod's deploy source), and starts the server
 via `packages/server/src/bin.ts` rather than `scripts/serve.ts` — because
-`serve.ts` publishes the live port that the live-feedback MCP discovers, and
+`serve.ts` publishes the live port that the claude-workspaces MCP discovers, and
 running it would silently repoint every agent on the machine at the staging
 build.
 

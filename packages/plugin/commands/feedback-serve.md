@@ -1,6 +1,6 @@
 ---
 allowed-tools: Bash(bun run *), Bash(pgrep *), Bash(lsof *)
-description: Start the live-feedback server; prints localhost / tailscale / LAN URLs
+description: Start the claude-workspaces server; prints localhost / tailscale / LAN URLs
 ---
 
 ## Context

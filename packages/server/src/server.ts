@@ -212,7 +212,7 @@ const ANONYMOUS_ACTOR: User = {
 
 export interface ServerOptions {
   /**
-   * LF_SHARING_DISABLED was set: external sharing starts OFF and the runtime
+   * CW_SHARING_DISABLED was set: external sharing starts OFF and the runtime
    * toggle refuses to reopen it. The switch to reach for while a security
    * review is in flight — nothing this process exposes can undo it.
    */
@@ -1400,7 +1400,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!res.ok) {
             return j(409, {
               error: res.error,
-              hint: 'LF_SHARING_DISABLED is set in the environment. Remove it from the service definition and restart to allow runtime control.',
+              hint: 'CW_SHARING_DISABLED is set in the environment. Remove it from the service definition and restart to allow runtime control.',
             });
           }
           let closedSockets = 0;
@@ -3657,7 +3657,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               if (!summarizer?.enabled) {
                 return j(503, {
                   error: 'summaries disabled',
-                  detail: `set LF_SUMMARIES=1 and add a key: security add-generic-password -a "$USER" -s ${KEYCHAIN_SERVICE} -w`,
+                  detail: `set CW_SUMMARIES=1 and add a key: security add-generic-password -a "$USER" -s ${KEYCHAIN_SERVICE} -w`,
                 });
               }
               // Already summarized as it stands: answer with what is stored

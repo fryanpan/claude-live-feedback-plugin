@@ -190,7 +190,7 @@ there. That is how 25 feature commits sat undelivered between 2026-05-09 and
   `packages/mcp/src/**` must run `bun run build:mcp` and commit the result.
   This is why CI pins its Bun version — bundler output moves between releases.
 - **The update no longer waits for anyone to remember it.** Prod runs
-  `claude plugin update live-feedback@claude-live-feedback` at boot and every 30
+  `claude plugin update claude-workspaces@claude-workspaces` at boot and every 30
   minutes (`LF_PLUGIN_REFRESH_MINUTES`), so a merge reaches this machine's cache
   on its own. Any peer can also ask for it now with `request_plugin_refresh` —
   it is safe to expose because the update rewrites a version-keyed cache and
@@ -238,7 +238,7 @@ there. That is how 25 feature commits sat undelivered between 2026-05-09 and
   using --print". That reads exactly like a permission refusal, and it was
   written up in a ticket as one. `command` bypasses functions and aliases, so
   the invocation that works is `command claude plugin update
-  live-feedback@claude-live-feedback`. The peer's session restart is still the
+  claude-workspaces@claude-workspaces`. The peer's session restart is still the
   human step; restarting prod is not.
   (The server's own refresh never hits this — it spawns the resolved binary
   path with an argv array and no shell, which is why a fixed argv and no shell
@@ -307,7 +307,7 @@ Peers and people can review an unmerged build without merging it. From a **linke
 bun run staging            # builds this worktree's bundles, serves :8788 with a throwaway data dir
 ```
 
-Prod stays on 8787 with its own data throughout. The script refuses to run from the primary checkout, because that checkout is prod's deploy source: every prod start rebuilds the bundles there and publishes them as the client release the whole fleet loads, so a "test build" there ships at the next restart. It also starts the server via `bin.ts` rather than `scripts/serve.ts`, because `serve.ts` publishes the live port that the live-feedback MCP discovers, which would silently repoint every agent in the fleet at the staging build.
+Prod stays on 8787 with its own data throughout. The script refuses to run from the primary checkout, because that checkout is prod's deploy source: every prod start rebuilds the bundles there and publishes them as the client release the whole fleet loads, so a "test build" there ships at the next restart. It also starts the server via `bin.ts` rather than `scripts/serve.ts`, because `serve.ts` publishes the live port that the claude-workspaces MCP discovers, which would silently repoint every agent in the fleet at the staging build.
 
 To put an *agent* on staging: `FEEDBACK_BASE_URL=http://<host>:8788` in its launch env (read once at session start, so it needs a restart). Staging data never migrates to prod — evaluate pre-merge, do the real work once, after.
 

@@ -167,7 +167,10 @@ export class Shares {
 
     if (!this.cfApi) throw new Error('Cloudflare API not configured — use a link share instead');
     const app = await this.cfApi.createApp({
-      name: `live-feedback-share-${slug}`,
+      // Only NEW applications get the new name. Teardown does not match on it
+      // — `deleteShare` calls `deleteApp(share.appId)` with the id stored at
+      // creation — so existing shares are unaffected by the rename.
+      name: `claude-workspaces-share-${slug}`,
       domain: hostname,
       sessionDuration: `${Math.ceil(ttl / 3600)}h`,
     });

@@ -11,7 +11,7 @@
         ]
       },
       {
-        "matcher": "mcp__plugin_live-feedback_live-feedback__.*",
+        "matcher": "mcp__plugin_claude-workspaces_claude-workspaces__.*",
         "hooks": [
           {
             "type": "command",
