@@ -72,13 +72,16 @@ describe('the board no longer carries the docs and open-threads rails', () => {
   });
 
   it('gives the board a min-0 track, so a long title cannot widen the page', () => {
-    // The single remaining column must stay `minmax(0, 1fr)`. Bare `1fr` is
+    // The CONTENT column must stay `minmax(0, 1fr)`. Bare `1fr` is
     // `minmax(auto, 1fr)`, whose content-driven minimum is what let one long
     // unbreakable task title push the whole page wider than the viewport —
-    // the bug the three-column layout was already guarding against, which a
-    // simplification down to one column is exactly how you reintroduce.
+    // the bug the three-column layout was already guarding against. The nav
+    // rail's `max-content` track may sit in front of it; what may never come
+    // back is a bare `1fr` anywhere in the template.
     const main = css.slice(css.indexOf('.hub-main {'));
     const block = main.slice(0, main.indexOf('}'));
-    expect(block).toContain('grid-template-columns: minmax(0, 1fr)');
+    const template = /grid-template-columns:([^;]*);/.exec(block)?.[1] ?? '';
+    expect(template).toContain('minmax(0, 1fr)');
+    expect(template.replace(/minmax\(0, 1fr\)/g, '')).not.toContain('1fr');
   });
 });
