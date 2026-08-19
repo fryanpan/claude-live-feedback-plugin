@@ -3007,6 +3007,35 @@ describe('renderTaskDetail — the reorganised panel', () => {
     expect(activity().classList.contains('hidden')).toBe(true);
   });
 
+  /**
+   * Switching a tab has to LAND somewhere the reader can see it happened.
+   *
+   * Reported as a dead control that had in fact worked: hiding the taller
+   * panel shortens the content under the scroll position, the browser clamps
+   * it to 0, and the reader is returned to the top of the ticket with the tab
+   * row a screenful below and the panel they chose off the bottom of the
+   * screen. Nothing on screen changes, so the click reads as nothing.
+   *
+   * happy-dom resolves no layout and has no `scrollIntoView`, so what is
+   * assertable here is that the switch asks for the tab row to be put at the
+   * top; the offset that keeps it clear of the sticky head is CSS, and is
+   * asserted in hub-detail-css.test.ts.
+   */
+  it('parks the tab row at the top when a tab is switched', () => {
+    renderTaskDetail(root, task(), handlers(), { loading: false, threads: [] });
+    const tabs = root.querySelector('.hub-detail-tabs') as HTMLElement;
+    const calls: unknown[] = [];
+    (tabs as unknown as { scrollIntoView: unknown }).scrollIntoView = (arg: unknown) =>
+      calls.push(arg);
+    (root.querySelector('.hub-detail-tab-activity') as HTMLElement).click();
+    expect(calls).toEqual([{ block: 'start' }]);
+    // Control: the switch itself still happened, so the assertion above is
+    // about where the reader lands rather than about the click working.
+    expect(root.querySelector('.hub-detail-tab-activity')?.getAttribute('aria-selected')).toBe(
+      'true',
+    );
+  });
+
   it('offers a share link only when the board wired one up', () => {
     renderTaskDetail(root, task(), handlers());
     expect(root.querySelector('.hub-detail-share')).toBeNull();

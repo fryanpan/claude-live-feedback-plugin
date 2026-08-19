@@ -3719,6 +3719,14 @@ function requireText(field: HTMLTextAreaElement, near: HTMLElement, message: str
   field.addEventListener('input', () => note.remove(), { once: true });
 }
 
+/**
+ * The head-height observer for each open panel, so a repaint can retire the
+ * previous one. A WeakMap rather than a field on the element: the entry goes
+ * with the panel when the panel goes, and nothing has to remember to clean up
+ * after a close.
+ */
+const headObservers = new WeakMap<HTMLElement, ResizeObserver>();
+
 /** The two tabs at the bottom of the panel, and which one is showing. */
 type DetailTab = 'comments' | 'activity';
 const DETAIL_TABS: { id: DetailTab; label: string }[] = [
@@ -4074,13 +4082,36 @@ export function renderTaskDetail(
       buttons[t.id]?.setAttribute('aria-selected', t.id === want ? 'true' : 'false');
     }
   };
+  /**
+   * Where the reader lands after switching, and it is not "wherever the
+   * scrollbar ends up".
+   *
+   * Hiding the taller panel shortens the content under the scroll position, so
+   * the browser clamps it — measured going straight to 0 on a switch to
+   * Activity. That drops the reader at the top of the ticket with the tab row
+   * a screenful below and the panel they just chose off the bottom of the
+   * screen: the click reads as having done nothing at all, which is exactly
+   * how it was reported. Parking the tab row under the sticky head instead
+   * puts the switch where it happened — the row that changed stays put, and
+   * the new panel starts immediately under it.
+   *
+   * `scroll-margin-top` on the row (styles.css) is what keeps it clear of the
+   * head; without it `block: 'start'` aligns to the scrollport's own top,
+   * which is the position the head is painted over.
+   */
+  const land = (): void => {
+    if (typeof tabs.scrollIntoView === 'function') tabs.scrollIntoView({ block: 'start' });
+  };
   for (const t of DETAIL_TABS) {
     const b = document.createElement('button');
     b.type = 'button';
     b.className = `hub-detail-tab hub-detail-tab-${t.id}`;
     b.textContent = t.label;
     b.setAttribute('role', 'tab');
-    b.addEventListener('click', () => show(t.id));
+    b.addEventListener('click', () => {
+      show(t.id);
+      land();
+    });
     buttons[t.id] = b;
     tabs.append(b);
   }
@@ -4101,6 +4132,32 @@ export function renderTaskDetail(
     });
     container.replaceChildren(panel);
   }
+  // How tall the sticky head actually is, published to the stylesheet.
+  //
+  // The tab row docks under the head rather than sliding beneath it, and the
+  // head's height is not a constant a stylesheet can know: it grows by a line
+  // whenever the title wraps, which depends on the title and on the panel's
+  // width. A hard-coded offset is therefore wrong on exactly the tickets with
+  // the longest names. The CSS carries a fallback for the first paint and for
+  // environments with no layout at all (happy-dom measures everything as 0,
+  // which is why a zero is discarded rather than published).
+  const syncHeadHeight = (): void => {
+    const h = head.getBoundingClientRect?.().height ?? 0;
+    if (h > 0) panel.style.setProperty('--hub-detail-head-h', `${Math.round(h)}px`);
+  };
+  syncHeadHeight();
+  // A window resize re-wraps the title without repainting the panel, so a
+  // measurement taken only at render goes stale in the one case that moves it.
+  // Keyed by panel and disconnected first: this function runs on every repaint
+  // and each one builds a new head, so an observer per render would accumulate
+  // one live observer per board event for as long as the ticket is open.
+  headObservers.get(panel)?.disconnect();
+  if (typeof ResizeObserver === 'function') {
+    const ro = new ResizeObserver(syncHeadHeight);
+    ro.observe(head);
+    headObservers.set(panel, ro);
+  }
+
   // After it is in the document — scrollIntoView on a detached node does
   // nothing, silently. Guarded because happy-dom has no implementation.
   //

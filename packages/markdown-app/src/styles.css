@@ -3405,11 +3405,34 @@ a.hub-link-chip:hover {
    The record (history, original words, the leftover fields, the link chips)
    used to sit inline under the discussion, so reaching the bottom of a
    conversation meant scrolling past a transition list first. */
+/* The tab row DOCKS under the sticky head instead of sliding beneath it.
+
+   Reported as dead controls, and they were, at the place a reader actually
+   reaches them: the head is 90px tall, opaque and painted at z-index 1, and
+   the tab row scrolls to y 68–108 on the way down — so both tab CENTRES sat
+   under the head while an 18px sliver of each stayed visible. Clicking the
+   label you can see hit the head, and `aria-selected` never moved. Only
+   scrolling back UP brought the row out again, which is the opposite of the
+   direction anyone is going when they are looking for it.
+
+   `--hub-detail-head-h` is measured and published by `renderTaskDetail` —
+   the head grows by a line when a long title wraps, so this offset cannot be
+   a constant. The literal here is the first-paint fallback.
+
+   The background is load-bearing rather than decorative: a transparent sticky
+   row lets the comments scroll through the labels. And `scroll-margin-top` is
+   what `land()` aligns against after a switch, so "put the tab row at the top"
+   means under the head rather than beneath it. */
 .hub-detail-tabs {
+  position: sticky;
+  top: var(--hub-detail-head-h, 96px);
+  z-index: 1;
   display: flex;
   gap: 4px;
   margin: 24px 0 0;
+  background: var(--bg);
   border-bottom: 1px solid var(--border);
+  scroll-margin-top: var(--hub-detail-head-h, 96px);
 }
 .hub-detail-tab {
   min-height: 40px;

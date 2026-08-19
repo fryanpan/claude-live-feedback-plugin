@@ -155,6 +155,41 @@ describe('the split pane starts where both columns fit', () => {
   });
 });
 
+/**
+ * The tabs were visible and dead at the place a reader reaches them: the head
+ * is sticky, opaque and 90px tall, and the tab row scrolled to y 68–108, so
+ * both tab centres sat underneath it while an 18px sliver stayed visible.
+ * Clicking the label you could see hit the head and `aria-selected` never
+ * moved.
+ */
+describe('the tab row is reachable where it appears', () => {
+  const tabs = rule('.hub-detail-tabs');
+
+  it('docks under the sticky head rather than sliding beneath it', () => {
+    expect(tabs).toMatch(/position:\s*sticky/);
+    // Offset by the head's MEASURED height, published by renderTaskDetail: the
+    // head grows a line when a long title wraps, so a constant would be wrong
+    // on exactly the tickets with the longest names. The fallback is for the
+    // first paint and for environments that resolve no layout.
+    expect(tabs).toMatch(/top:\s*var\(--hub-detail-head-h,\s*\d+px\)/);
+    // Opaque, or the comments scroll through the labels.
+    expect(tabs).toMatch(/background:\s*var\(--bg\)/);
+    // Over the content it is docked above, not under it.
+    expect(tabs).toMatch(/z-index:\s*1/);
+  });
+
+  it('lands a switch under the head, not under the scrollport’s own top', () => {
+    // `land()` calls scrollIntoView({block:'start'}), which aligns to the
+    // scrollport top — the exact strip the head is painted over. The margin is
+    // what makes "the top" mean "below the head", and it must be the SAME
+    // offset the row sticks at or the two disagree by a tab's height.
+    const margin = /scroll-margin-top:\s*([^;]+);/.exec(tabs)?.[1]?.trim();
+    const top = /top:\s*([^;]+);/.exec(tabs)?.[1]?.trim();
+    expect(margin, 'the tab row has no scroll margin').toBeDefined();
+    expect(margin).toBe(top);
+  });
+});
+
 describe('the panel’s fields and headings', () => {
   it('gives the goal its own line, because a goal title is free text', () => {
     // *"Goal field: own line — the goal title can be longer than the column
