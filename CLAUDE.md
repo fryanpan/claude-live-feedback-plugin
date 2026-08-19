@@ -248,7 +248,13 @@ there. That is how 25 feature commits sat undelivered between 2026-05-09 and
   through Bryan.** (Bryan, 2026-08-17, reversing the older "the production
   restart is Bryan's call" rule that used to sit in this file and still sat in
   the diff-review plan.) The command is
-  `launchctl kickstart -k gui/$(id -u)/com.fryanpan.live-feedback`.
+  `launchctl kickstart -k gui/$(id -u)/com.fryanpan.claude-workspaces`.
+  **The label is `com.fryanpan.claude-workspaces`, not the old
+  `com.fryanpan.live-feedback`** — the launchd job followed the repo rename
+  and this file did not. The stale name fails with `Could not find service`,
+  which reads like a permissions problem rather than a typo, so an agent that
+  hits it goes looking in the wrong place. `launchctl list | grep fryanpan`
+  settles it in one command.
 - **The restart deploys whatever the primary checkout is parked on, so pulling
   comes FIRST.** Prod rebuilds the browser bundles from its deploy source at
   every start, and that source is the primary checkout — not `origin/main`. On
@@ -261,8 +267,8 @@ there. That is how 25 feature commits sat undelivered between 2026-05-09 and
 
   ```bash
   git pull --ff-only origin main      # in the PRIMARY checkout, prod's deploy source
-  launchctl kickstart -k gui/$(id -u)/com.fryanpan.live-feedback
-  cat ~/.local/state/live-feedback/client/current/release.json
+  launchctl kickstart -k gui/$(id -u)/com.fryanpan.claude-workspaces
+  cat ~/.local/state/claude-workspaces/client/current/release.json
   ```
 
   — and the deploy is done when that `release.json`'s `sourceRef` matches the

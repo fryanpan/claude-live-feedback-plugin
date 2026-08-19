@@ -121,7 +121,7 @@ Reinstall the launchd agent with the origin in its environment:
 LF_PUBLIC_BASE_URL=https://<tailnet-name> scripts/launchd/install.sh
 ```
 
-This rewrites `~/Library/LaunchAgents/com.fryanpan.live-feedback.plist` with
+This rewrites `~/Library/LaunchAgents/com.fryanpan.claude-workspaces.plist` with
 `LF_PUBLIC_BASE_URL` set and restarts the service. The value is validated at
 boot: a malformed one is a startup failure with a named error, not a silent
 fallback.
