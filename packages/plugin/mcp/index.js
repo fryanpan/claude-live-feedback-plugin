@@ -13717,6 +13717,31 @@ function resolveDiscoveryFile(home, exists) {
   return discoveryCandidates(home).find(exists);
 }
 
+// packages/mcp/src/attachment-keepalive.ts
+var DEFAULT_INTERVAL_MS = 120000;
+function createAttachmentKeepalive(opts) {
+  const intervalMs = opts?.intervalMs ?? DEFAULT_INTERVAL_MS;
+  const now = opts?.now ?? Date.now;
+  const lastSent = new Map;
+  return {
+    mark(workspaceId) {
+      lastSent.set(workspaceId, now());
+    },
+    due() {
+      const t = now();
+      const out = [];
+      for (const [workspaceId, at] of lastSent) {
+        if (t - at < intervalMs)
+          continue;
+        lastSent.set(workspaceId, t);
+        out.push(workspaceId);
+      }
+      return out;
+    },
+    boards: () => [...lastSent.keys()]
+  };
+}
+
 // packages/core/src/identity.ts
 var KNOWN_USERS = {
   bryan: { name: "Bryan", color: "#2e7dd7" },
@@ -13853,30 +13878,47 @@ async function declareWorkspaceLead(args, deps) {
   const leadAgentId = declaring ? deps.self.id : named;
   const path = `/api/workspaces/${encodeURIComponent(workspaceId)}`;
   let attached;
+  let subscription = { open: false, persisted: false };
   if (declaring) {
     attached = await deps.http("POST", `${path}/attachments`, {
       agentId: deps.self.id,
       runtime: deps.runtime,
       pluginVersion: deps.pluginVersion
     });
-    await deps.watchWorkspace(workspaceId);
+    subscription = await deps.watchWorkspace(workspaceId);
   }
   const res = await deps.http("PUT", `${path}/lead`, {
     leadAgentId,
-    author: deps.self
+    author: deps.self,
+    ...args.takeover === true ? { takeover: true } : {}
   });
+  const settledLead = res.workspace?.leadAgentId ?? leadAgentId;
   const seat = {
     workspaceId,
     changed: res.changed,
-    leadAgentId: res.workspace?.leadAgentId ?? leadAgentId
+    leadAgentId: settledLead,
+    ...res.previousLeadAgentId !== undefined ? { previousLeadAgentId: res.previousLeadAgentId } : {},
+    ...res.declined !== undefined ? { declined: res.declined } : {}
   };
   if (!declaring)
     return seat;
   const a = attached ?? {};
+  const warnings = [];
+  if (!subscription.open) {
+    warnings.push("the event stream did not confirm it was open before the seat changed, so anything the " + "server delivered in that window may not have arrived — call list_watched_docs to check " + "coverage, and re-run this if it still looks wrong");
+  }
+  if (!subscription.persisted) {
+    warnings.push("this subscription was NOT persisted against an agent identity, so it will not come back " + "after a respawn — set CW_AGENT_NAME in the launch environment");
+  }
   return {
     ...seat,
-    subscribed: true,
-    lead: a.lead ?? false,
+    subscribed: subscription.open,
+    subscriptionPersisted: subscription.persisted,
+    ...warnings.length > 0 ? { subscriptionWarning: warnings.join("; ") } : {},
+    lead: settledLead === deps.self.id,
+    ...res.declined === "lead-held" ? {
+      note: `${settledLead} already leads this board and is live, so the seat was left alone — ` + "you are attached and subscribed, and everything on the board still reaches you. " + "Coordinate with them; pass takeover: true only if you mean to take the seat."
+    } : {},
     gating: a.gating,
     untriaged: a.untriaged ?? [],
     queuedVoice: a.queuedVoice ?? [],
@@ -13888,28 +13930,38 @@ async function declareWorkspaceLead(args, deps) {
 
 // packages/mcp/src/frame-dedup.ts
 var DEFAULT_LIMIT = 512;
-function createFrameDedup(limit = DEFAULT_LIMIT) {
-  const seen = new Set;
-  return function shouldForward(event, payload) {
+var DEFAULT_TTL_MS = 30000;
+function createFrameDedup(opts) {
+  const limit = opts?.limit ?? DEFAULT_LIMIT;
+  const ttlMs = opts?.ttlMs ?? DEFAULT_TTL_MS;
+  const now = opts?.now ?? Date.now;
+  const seen = new Map;
+  function shouldForward(event, payload) {
     const key = frameKey(event, payload);
     if (key === undefined)
       return true;
-    if (seen.has(key))
+    const t = now();
+    const at = seen.get(key);
+    if (at !== undefined && t - at < ttlMs)
       return false;
-    seen.add(key);
+    seen.delete(key);
+    seen.set(key, t);
     while (seen.size > limit) {
-      const oldest = seen.values().next();
+      const oldest = seen.keys().next();
       if (oldest.done)
         break;
       seen.delete(oldest.value);
     }
     return true;
-  };
+  }
+  return { shouldForward, reset: () => seen.clear() };
 }
 function frameKey(event, payload) {
   if (typeof payload !== "object" || payload === null)
     return;
   const p = payload;
+  if (typeof p.eid === "string" && p.eid !== "")
+    return `eid#${p.eid}`;
   if (typeof p.seq !== "number" || !Number.isFinite(p.seq))
     return;
   if (typeof p.docId !== "string" || p.docId === "")
@@ -13979,20 +14031,39 @@ function describeQueue(q) {
     parts.push(plural(q.taskReviews, "task review"));
   return parts.join(", ");
 }
+function remedyFor(b, agentId) {
+  if (b.leadLive && b.leadAgentId !== undefined && b.leadAgentId !== agentId) {
+    return `${b.leadAgentId} holds the lead seat and is live, so the queue is addressed to them — ` + `ask them rather than taking it. attach_agent(workspaceId: "${b.workspaceId}") makes you ` + "addressable and subscribed without moving the seat.";
+  }
+  if (b.attached && !b.heartbeatFresh) {
+    return "your attachment is stale — no heartbeat inside the freshness window, which is exactly " + "what every delivery gate tests, so the board reads you as away. heartbeat(workspaceId: " + `"${b.workspaceId}") now, and every few minutes while you work it.`;
+  }
+  return `set_workspace_lead(workspaceId: "${b.workspaceId}") attaches, subscribes and hands the ` + "backlog over in one call.";
+}
 function coverageAlertLine(coverage) {
   const waiting = boardsWaitingOnYou(coverage);
   if (waiting.length === 0)
     return null;
-  const described = waiting.map((b) => `"${b.name}" (${b.workspaceId}) — ${plural(b.watchedDocs.length, "doc")} watched, ` + `${b.queuedTotal} waiting (${describeQueue(b.queued)})`).join("; ");
-  const first = waiting[0];
-  return `[not attached] you watch docs on ${plural(waiting.length, "board")} where you have no ` + `attachment, and ${waiting.length === 1 ? "it has" : "they have"} work queued for a lead: ` + `${described}. Watching a doc is not attaching — every delivery gate asks whether the ` + "lead is ATTACHED, so none of that reaches you until you are. " + `set_workspace_lead(workspaceId: "${first.workspaceId}") attaches, subscribes and hands ` + "the backlog over in one call.";
+  const agentId = coverage?.agentId ?? "";
+  const described = waiting.map((b) => {
+    const via = b.watchedDocs.length > 0 ? `${plural(b.watchedDocs.length, "doc")} watched` : "this board watched directly";
+    return `"${b.name}" (${b.workspaceId}) — ${via}, ${b.queuedTotal} waiting ` + `(${describeQueue(b.queued)}); ${remedyFor(b, agentId)}`;
+  }).join(" ");
+  return `[not covered] ${plural(waiting.length, "board")} you follow ` + `${waiting.length === 1 ? "has" : "have"} work queued for a lead, and you are not live on ` + `${waiting.length === 1 ? "it" : "them"}. Watching is not attaching, and an attachment with ` + "a stale heartbeat is not attached either — every delivery gate asks for a heartbeat inside " + `the window. ${described}`;
+}
+function boardsToReattach(coverage) {
+  return (coverage?.workspaces ?? []).filter((w) => w.kind === "board" && (w.lead === true || w.attached === true)).filter((w) => w.heartbeatFresh !== true).map((w) => w.workspaceId);
 }
 function restoreNoticeContent(opts) {
   const lines = [];
   const n = opts.restored.length;
+  const reattached = opts.reattached ?? [];
   if (n > 0 || opts.pruned.length > 0) {
     const dropped = opts.pruned.length > 0 ? `; ${opts.pruned.length} dropped (doc gone)` : "";
     lines.push(`[watches restored] ${plural(n, "watch", "watches")} re-wired from the server for ` + `${opts.agentName} after restart${dropped}: ${opts.restored.join(", ")}`);
+  }
+  if (reattached.length > 0) {
+    lines.push(`[attachments restored] re-attached to ${plural(reattached.length, "board")} whose ` + "attachment came back stale, so lead-addressed work reaches this session again: " + `${reattached.join(", ")}`);
   }
   const alert = coverageAlertLine(opts.coverage);
   if (alert)
@@ -14752,7 +14823,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "list_watched_docs",
-      description: "Return the docIds this session is currently subscribed to for channel events, WITH PROVENANCE: `restore.status` says whether this session re-wired its set from the server after a respawn ('restored'), never had a server set to restore ('restored' with an empty list), could not reach the server ('failed', with the error — retry by calling again), or has no stable identity so nothing survives a restart ('session-only'). An empty `watching` list therefore no longer means both 'never watched' and 'watched, then respawned' — read `restore` to tell them apart. Also answers the question that actually goes wrong — not 'what am I watching' but 'what am I MISSING'. `coverage.workspaces` resolves each `ws:<id>` key you hold (hub BOARD or review GROUPING; for a board, whether you are attached, whether your heartbeat is fresh, and whether you hold the lead seat), and `coverage.unattachedBoards` names boards that hold docs you watch but where you have NO attachment, each with what is queued for that board's lead (queuedVoice / pendingRetriage / pendingBucketReview / taskReviews). Watching a doc is not attaching: every delivery gate asks whether the lead is ATTACHED, so a row there means real work is queuing that will never reach you — `set_workspace_lead(workspaceId)` attaches, subscribes and drains it in one call. `coverage` is ABSENT rather than empty when the server did not answer (older server, no stable identity, unreachable); absent means unknown, never all-clear.",
+      description: "Return the docIds this session is currently subscribed to for channel events, WITH PROVENANCE: `restore.status` says whether this session re-wired its set from the server after a respawn ('restored'), never had a server set to restore ('restored' with an empty list), could not reach the server ('failed', with the error — retry by calling again), or has no stable identity so nothing survives a restart ('session-only'). An empty `watching` list therefore no longer means both 'never watched' and 'watched, then respawned' — read `restore` to tell them apart. Also answers the question that actually goes wrong — not 'what am I watching' but 'what am I MISSING'. `coverage.workspaces` resolves each `ws:<id>` key you hold (hub BOARD or review GROUPING; for a board, whether you are attached, whether your heartbeat is fresh, and whether you hold the lead seat), and `coverage.unattachedBoards` names boards you follow — through a watched doc OR through the board's own `ws:` key — where you have no LIVE attachment, each with what is queued for that board's lead (queuedVoice / pendingRetriage / pendingBucketReview / taskReviews) plus who holds the seat (`leadAgentId`, `leadLive`) and whether your own record is merely stale (`attached: true, heartbeatFresh: false`). Watching a doc is not attaching, and an attachment whose heartbeat aged out is not attached either — every delivery gate asks for a heartbeat inside the ~5-minute window, so a row there means real work is queuing that will never reach you. The remedy depends on who is there: `set_workspace_lead(workspaceId)` when the seat is empty or its holder is gone, `heartbeat(workspaceId)` when the seat is already yours and only the heartbeat lapsed, and `attach_agent(workspaceId)` when a live peer leads it — taking that seat would evict them. `coverage` is ABSENT rather than empty when the server did not answer (older server, no stable identity, unreachable); absent means unknown, never all-clear.",
       inputSchema: { type: "object", properties: {} }
     },
     {
@@ -14855,7 +14926,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "set_workspace_lead",
-      description: "DECLARE YOURSELF LEAD of a workspace — one call, and from then on you receive everything on this board: task and decision events, thread events on every doc filed here INCLUDING docs created later, voice notes, and re-triage asks. Call it with just `workspaceId` at session start and you are done; there is no per-surface subscribe to remember and nothing to redo after a respawn (the subscription is persisted against your agent identity and re-wired when you come back). It replaces a pile of watch_doc calls, and it is what closes the gap those calls leave: a doc watch is not an attachment, so an agent watching six docs still misses every voice note and every goal-edit re-triage, silently — a queue nobody is draining looks exactly like a queue nobody filled. Because it attaches you, it also DRAINS whatever was waiting for the seat and hands it back on this same response, in attach_agent's own field names: `queuedVoice` (act on each transcript verbatim), `pendingRetriage`, `pendingBucketReview`, `taskReviews`, plus `gating` and `untriaged`. `subscribed: true` on the response is the answer to \"am I actually listening?\" — the question an agent otherwise cannot answer from the inside. The lead is a STANDING assignment, not a session fact, so a goal change waits for you even while you are away rather than going to whoever happens to be connected. Pass `leadAgentId` ONLY to hand the board to somebody else: that is a pure handover — it moves the seat and nothing more, because attaching or subscribing on an absent agent's behalf would make the board report a live lead that is not there.",
+      description: "DECLARE YOURSELF LEAD of a workspace — one call, and from then on you receive everything on this board: task and decision events, thread events on every doc filed here INCLUDING docs created later, voice notes, and re-triage asks. Call it with just `workspaceId` at session start; there is no per-surface subscribe to remember, and a respawn re-wires the subscription AND re-attaches you (both are persisted against your agent identity). STAYING LIVE IS NOT AUTOMATIC ON A QUIET SESSION: an attachment expires ~5 minutes after its last heartbeat, and every lead-addressed delivery — voice notes, goal re-triage, bucket and task reviews — is gated on a fresh one. Tool calls refresh it for you, so a working session stays live; a session that goes quiet for minutes should call heartbeat(workspaceId), and `list_watched_docs` → `coverage` is where you check rather than assume. It replaces a pile of watch_doc calls, and it is what closes the gap those calls leave: a doc watch is not an attachment, so an agent watching six docs still misses every voice note and every goal-edit re-triage, silently — a queue nobody is draining looks exactly like a queue nobody filled. Because it attaches you, it also DRAINS whatever was waiting for the seat and hands it back on this same response, in attach_agent's own field names: `queuedVoice` (act on each transcript verbatim), `pendingRetriage`, `pendingBucketReview`, `taskReviews`, plus `gating` and `untriaged`. `subscribed` on the response is the answer to \"am I actually listening?\" — the question an agent otherwise cannot answer from the inside — and it is MEASURED, not asserted: it reports whether the event stream really opened, so `subscribed: false` with a `subscriptionWarning` is a real outcome to retry rather than a field you can skim past. `subscriptionPersisted: false` is the separate failure — the watch will not survive a respawn, usually because this session has no stable agent name. The lead is a STANDING assignment, not a session fact, so a goal change waits for you even while you are away rather than going to whoever happens to be connected. Pass `leadAgentId` ONLY to hand the board to somebody else: that is a pure handover — it moves the seat and nothing more, because attaching or subscribing on an absent agent's behalf would make the board report a live lead that is not there.",
       inputSchema: {
         type: "object",
         properties: {
@@ -14863,6 +14934,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           leadAgentId: {
             type: "string",
             description: "The agent id taking responsibility. OMIT IT to declare yourself — that is the common case, and the only form that also attaches and subscribes you. Naming another agent hands the seat over and does nothing else; naming your own id is the same as omitting it, so callers built against the older required-field form keep their exact meaning."
+          },
+          takeover: {
+            type: "boolean",
+            description: 'Take the seat even though a DIFFERENT agent holds it and is live. Default false, and the default is the point: declaring yourself on a board a working peer leads would evict them silently, and every lead-addressed delivery would start routing to you while they keep working. Without this you get `declined: "lead-held"` and `previousLeadAgentId` naming the incumbent — you are still attached and subscribed, so nothing on the board is hidden from you; only the seat stays put. Coordinate with them first, and pass this when you mean it.'
           }
         },
         required: ["workspaceId"]
@@ -15427,6 +15502,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   const { name, arguments: a = {} } = req.params;
   try {
     await ensureWatchesRestored();
+    sendDueHeartbeats();
     await maybeAutoWatch(name, a);
     switch (name) {
       case "list_docs": {
@@ -15834,8 +15910,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         });
       }
       case "set_workspace_lead": {
-        const { workspaceId, leadAgentId } = a;
-        return ok(await declareWorkspaceLead({ workspaceId, ...leadAgentId !== undefined ? { leadAgentId } : {} }, {
+        const { workspaceId, leadAgentId, takeover } = a;
+        return ok(await declareWorkspaceLead({
+          workspaceId,
+          ...leadAgentId !== undefined ? { leadAgentId } : {},
+          ...takeover === true ? { takeover: true } : {}
+        }, {
           http,
           watchWorkspace,
           self: AUTHOR,
@@ -16137,6 +16217,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...capabilities !== undefined ? { capabilities } : {},
           pluginVersion: PLUGIN_VERSION
         });
+        if (agentId === undefined || agentId === AUTHOR.id)
+          markAttached(workspaceId);
         if (subscribe !== false)
           await watchWorkspace(workspaceId);
         return ok({
@@ -16154,6 +16236,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       case "heartbeat": {
         const { workspaceId, agentId, toolCallAt } = a;
         const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments/${encodeURIComponent(agentId ?? AUTHOR.id)}/heartbeat`, { toolCallAt: toolCallAt ?? Date.now() });
+        if (agentId === undefined || agentId === AUTHOR.id)
+          markAttached(workspaceId);
         return ok({ workspaceId, agentId: agentId ?? AUTHOR.id, state: res.attachment?.state });
       }
       case "request_plugin_refresh": {
@@ -16178,6 +16262,17 @@ var restoreState = IDENTITY_IS_SHARED ? { status: "session-only", from: "session
 var restoreInFlight = null;
 var restoreRetryAt = 0;
 var lastPersistError;
+var keepalive = createAttachmentKeepalive();
+function markAttached(workspaceId) {
+  keepalive.mark(workspaceId);
+}
+async function sendDueHeartbeats() {
+  for (const workspaceId of keepalive.due()) {
+    try {
+      await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments/${encodeURIComponent(AUTHOR.id)}/heartbeat`, { toolCallAt: Date.now() });
+    } catch {}
+  }
+}
 var lastCoverage;
 async function refreshCoverage() {
   if (IDENTITY_IS_SHARED)
@@ -16227,10 +16322,25 @@ async function ensureWatchesRestored() {
           await watchDoc(key, false);
         restored.push(key);
       }
+      const reattached = [];
+      for (const workspaceId of boardsToReattach(lastCoverage)) {
+        try {
+          await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`, {
+            agentId: AUTHOR.id,
+            runtime: "claude-code-local",
+            pluginVersion: PLUGIN_VERSION
+          });
+          markAttached(workspaceId);
+          reattached.push(workspaceId);
+        } catch {}
+      }
+      if (reattached.length > 0)
+        await refreshCoverage();
       restoreState = {
         status: "restored",
         from: "server",
         restored,
+        reattached,
         pruned: res.pruned ?? [],
         at: new Date().toISOString(),
         attempts
@@ -16253,6 +16363,7 @@ async function ensureWatchesRestored() {
 async function emitRestoreNotice(state) {
   const content = restoreNoticeContent({
     restored: state.restored,
+    reattached: state.reattached ?? [],
     pruned: state.pruned,
     agentName: AUTHOR.name,
     coverage: lastCoverage
@@ -16277,19 +16388,21 @@ async function emitRestoreNotice(state) {
 async function watchDoc(docId, persist = true) {
   if (!watchers.has(docId)) {
     const controller = new AbortController;
-    watchers.set(docId, { controller, docId });
+    watchers.set(docId, { controller, docId, open: false });
     await startSseLoop(docId, `/events/${encodeURIComponent(docId)}`, controller);
   }
   return persist ? persistWatchChange({ add: [docId] }) : false;
 }
 async function watchWorkspace(workspaceId, persist = true) {
   const key = `ws:${workspaceId}`;
+  let open = watchers.get(key)?.open === true;
   if (!watchers.has(key)) {
     const controller = new AbortController;
-    watchers.set(key, { controller, docId: key });
-    await startSseLoop(key, `/events/workspace/${encodeURIComponent(workspaceId)}`, controller);
+    watchers.set(key, { controller, docId: key, open: false });
+    open = await startSseLoop(key, `/events/workspace/${encodeURIComponent(workspaceId)}`, controller);
   }
-  return persist ? persistWatchChange({ add: [key] }) : false;
+  const persisted = persist ? await persistWatchChange({ add: [key] }) : false;
+  return { open, persisted };
 }
 async function unwatchDoc(docId) {
   const w = watchers.get(docId);
@@ -16301,19 +16414,26 @@ async function unwatchDoc(docId) {
 }
 async function runSseLoop(label, path, signal, onFirstAttempt) {
   let first = onFirstAttempt;
-  const settleFirst = () => {
+  const settleFirst = (open) => {
     if (!first)
       return;
     const f = first;
     first = undefined;
-    f();
+    f(open);
+  };
+  const setOpen = (open) => {
+    const w = watchers.get(label);
+    if (w)
+      w.open = open;
   };
   while (!signal.aborted) {
     try {
       const res = await fetch(`${resolveBaseUrl()}${path}`, {
         signal
       });
-      settleFirst();
+      const live = res.ok && res.body !== null;
+      setOpen(live);
+      settleFirst(live);
       if (!res.ok || !res.body)
         throw new Error(`sse ${path} → ${res.status}`);
       const reader = res.body.getReader();
@@ -16337,26 +16457,30 @@ async function runSseLoop(label, path, signal, onFirstAttempt) {
         }
       }
     } catch (err) {
-      settleFirst();
+      setOpen(false);
+      settleFirst(false);
       if (signal.aborted)
         return;
       console.error(`[claude-workspaces-mcp] ${label} sse error, retrying:`, err);
     }
+    setOpen(false);
     await new Promise((r) => setTimeout(r, 1500));
+    shouldForwardFrame.reset();
   }
-  settleFirst();
+  setOpen(false);
+  settleFirst(false);
 }
 function startSseLoop(label, path, controller) {
   return new Promise((resolve) => {
-    const cap = setTimeout(resolve, 3000);
-    runSseLoop(label, path, controller.signal, () => {
+    const cap = setTimeout(() => resolve(false), 3000);
+    runSseLoop(label, path, controller.signal, (open) => {
       clearTimeout(cap);
-      resolve();
+      resolve(open);
     }).catch((err) => {
       console.error(`[claude-workspaces-mcp] watcher ${label} crashed:`, err);
       watchers.delete(label);
       clearTimeout(cap);
-      resolve();
+      resolve(false);
     });
   });
 }
@@ -16383,7 +16507,7 @@ async function handleFrame(raw) {
   } catch {
     return;
   }
-  if (!shouldForwardFrame(ev, payload))
+  if (!shouldForwardFrame.shouldForward(ev, payload))
     return;
   await emitChannelMessage(ev, payload);
 }

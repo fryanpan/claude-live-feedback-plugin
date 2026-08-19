@@ -255,6 +255,14 @@ export interface ServerOptions {
   port?: number;
   dataDir?: string;
   /**
+   * How long an attachment stays `live` without a heartbeat (default five
+   * minutes, `HEARTBEAT_FRESH_MS`). A test seam: the whole away-lead half of
+   * this server is unreachable otherwise, since a test cannot sleep five
+   * minutes and asserting on `attachmentState` in isolation does not exercise
+   * the routes that read it.
+   */
+  heartbeatFreshMs?: number;
+  /**
    * Runs `claude plugin update` on this machine when a peer asks. Absent by
    * default and constructed in ONE place (bin.ts), so nothing that merely
    * spins a server up — every test, every embedded use — can mutate this
@@ -439,15 +447,37 @@ export interface CoverageWorkspaceRow {
   queuedTotal?: number;
 }
 
-/** A board holding docs this agent watches, where it has NO attachment —
- *  the incident, rendered as a row. */
+/**
+ * A board this agent covers on paper but not in fact — the incident,
+ * rendered as a row.
+ *
+ * "Not in fact" is deliberately wider than "has no attachment record". Every
+ * delivery gate asks `hasLiveAttachment` / `hasLiveLeadAttachment`, i.e. is
+ * there a heartbeat inside the freshness window — so an hour-old attachment
+ * satisfies "attached" while the board's whole queue routes to nobody. The
+ * first version of this readout tested for the record and was therefore
+ * confidently wrong in the one state that matters: a declared lead whose
+ * session went quiet, with work visibly piling up.
+ */
 export interface CoverageUnattachedBoard {
   workspaceId: string;
   name: string;
-  /** The watched docs that put this board on the list. */
+  /** The watched docs that put this board on the list. Empty when the agent
+   *  reached it by holding the board's own `ws:<id>` key — which is what a
+   *  declared lead holds, and holds instead of any doc key. */
   watchedDocs: string[];
   queued: CoverageQueue;
   queuedTotal: number;
+  /** An attachment RECORD exists for this agent. Not the same as covered. */
+  attached: boolean;
+  /** …and its heartbeat is inside the window. This is the one the gates ask. */
+  heartbeatFresh: boolean;
+  /** Who holds the lead seat, when anyone does. */
+  leadAgentId?: string;
+  /** Whether THAT agent has a live attachment. False means the queue has no
+   *  live addressee; true means somebody else is already draining it and
+   *  taking the seat would evict a working peer. */
+  leadLive: boolean;
 }
 
 export interface WatchCoverage {
@@ -691,7 +721,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   });
   // The hub task store (plan §3.2/§3.3): server-owned workspaces + tasks,
   // persisted as per-workspace sidecars under <dataDir>/workspaces/.
-  const taskStore = new TaskStore({ dataDir });
+  const taskStore = new TaskStore({
+    dataDir,
+    ...(opts.heartbeatFreshMs !== undefined ? { heartbeatFreshMs: opts.heartbeatFreshMs } : {}),
+  });
   // Which docs each agent identity is watching — the durable memory behind
   // the MCP child's session-scoped SSE subscriptions, so a respawned session
   // can re-wire them instead of silently starting from `[]`. See
@@ -1125,19 +1158,45 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    *    name a hub BOARD or a review GROUPING, and today nothing tells the
    *    agent which — so nothing tells it that a board key without an
    *    attachment hears the events but is invisible to every delivery gate.
-   *  - `unattachedBoards` is the measured incident: boards holding docs this
-   *    agent watches where it has no attachment at all, each with the count
-   *    of items queued for that board's lead. Six docs watched, zero
-   *    attachments, four items waiting.
+   *  - `unattachedBoards` is the measured incident: boards this agent covers
+   *    on paper but not in fact, each with the count of items queued for that
+   *    board's lead. Six docs watched, zero attachments, four items waiting.
    *
-   * Deliberately built from DOC keys only. A `ws:<grouping>` key resolves to
-   * the board the review sits on, but the agent asked about the review, not
-   * about somebody else's seat — a row there would be an alarm about a board
-   * it never claimed to cover, and an alarm that fires on the innocent case
-   * is how a real one stops being read.
+   * TWO THINGS PUT A BOARD ON THAT LIST, and the second was missing while
+   * this feature's whole point was to create agents of exactly that shape:
+   *
+   *  - a DOC key the agent holds that resolves to the board, and
+   *  - the board's OWN `ws:<id>` key — which is all a declared lead holds. It
+   *    holds no doc keys at all, so building the list from doc keys alone
+   *    made the one agent this branch teaches the fleet to be the one agent
+   *    the probe could not see.
+   *
+   * A `ws:<grouping>` key still raises nothing. It resolves to the board the
+   * review sits on, but the agent asked about the review, not about somebody
+   * else's seat — and an alarm that fires on the innocent case is how a real
+   * one stops being read.
+   *
+   * "Not in fact" means no LIVE attachment: no record, or a record whose
+   * heartbeat has aged out. The gates ask the second question, so this must
+   * too, or it reports covered about a board whose every gate answers away.
    */
   const watchCoverageFor = (agentId: string, keys: string[]): WatchCoverage => {
+    /** Attachment facts for one agent on one board, read the way the delivery
+     *  gates read them. */
+    const liveness = (workspaceId: string, who: string) => {
+      const att = taskStore.listAttachments(workspaceId).find((a) => a.agentId === who);
+      return {
+        attached: att !== undefined,
+        // `away` is precisely "no heartbeat inside the freshness window",
+        // which is the condition every delivery gate actually tests.
+        heartbeatFresh: att !== undefined && att.state !== 'away',
+      };
+    };
+
     const workspaces: CoverageWorkspaceRow[] = [];
+    /** boardId → the watched doc keys that put it there (empty for a board
+     *  reached through its own `ws:` key). */
+    const boardsInScope = new Map<string, string[]>();
     for (const key of keys) {
       if (!key.startsWith('ws:')) continue;
       const workspaceId = key.slice('ws:'.length);
@@ -1148,42 +1207,53 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         workspaces.push({ key, workspaceId, kind: 'grouping' });
         continue;
       }
-      const attachment = taskStore.listAttachments(workspaceId).find((a) => a.agentId === agentId);
+      const { attached, heartbeatFresh } = liveness(workspaceId, agentId);
       const queued = queuedForLead(workspaceId);
       workspaces.push({
         key,
         workspaceId,
         kind: 'board',
         name: board.name,
-        attached: attachment !== undefined,
-        // `away` is precisely "no heartbeat inside the freshness window",
-        // which is the condition every delivery gate actually tests.
-        heartbeatFresh: attachment !== undefined && attachment.state !== 'away',
+        attached,
+        heartbeatFresh,
         lead: board.leadAgentId === agentId,
         queued,
         queuedTotal: queueTotal(queued),
       });
+      if (!boardsInScope.has(workspaceId)) boardsInScope.set(workspaceId, []);
     }
 
-    const docsByBoard = new Map<string, string[]>();
     for (const key of keys) {
       if (key.startsWith('ws:')) continue;
       for (const boardId of hubBoardsForDoc(key)) {
-        docsByBoard.set(boardId, [...(docsByBoard.get(boardId) ?? []), key]);
+        boardsInScope.set(boardId, [...(boardsInScope.get(boardId) ?? []), key]);
       }
     }
     const unattachedBoards: CoverageUnattachedBoard[] = [];
-    for (const [workspaceId, watchedDocs] of docsByBoard) {
+    for (const [workspaceId, watchedDocs] of boardsInScope) {
       const board = taskStore.getWorkspace(workspaceId);
       if (!board) continue;
-      if (taskStore.listAttachments(workspaceId).some((a) => a.agentId === agentId)) continue;
+      const mine = liveness(workspaceId, agentId);
+      // A LIVE attachment is coverage; a record alone is not.
+      if (mine.heartbeatFresh) continue;
       const queued = queuedForLead(workspaceId);
+      const lead = board.leadAgentId;
       unattachedBoards.push({
         workspaceId,
         name: board.name,
         watchedDocs: [...watchedDocs].sort(),
         queued,
         queuedTotal: queueTotal(queued),
+        attached: mine.attached,
+        heartbeatFresh: mine.heartbeatFresh,
+        ...(lead !== undefined ? { leadAgentId: lead } : {}),
+        // Naming the incumbent is what stops the remedy being "take the
+        // seat" on a board somebody else is actively working. `setLeadAgent`
+        // has no liveness check of its own, so a reader that followed a
+        // blanket takeover recommendation would evict a live peer and
+        // neither of them would be told.
+        leadLive:
+          lead !== undefined && lead !== agentId && liveness(workspaceId, lead).heartbeatFresh,
       });
     }
     // Loudest first: a board with items actually waiting is the one a reader
@@ -2418,7 +2488,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           const author = authorFor(body?.author);
           if (!author) return j(400, { error: 'author required' });
-          const res = taskStore.setLeadAgent(workspaceId, leadAgentId, { actor: author });
+          // `takeover` is how a caller says it MEANS to displace a live lead.
+          // Absent it, claiming a seat a live agent already holds is refused
+          // (`declined: 'lead-held'`) rather than silently granted — an
+          // eviction nobody was told about routes every lead-addressed
+          // delivery to a session that has stopped expecting it. Old bundles
+          // never send the field, and they get the refusal, which is the safe
+          // side of the change.
+          const takeover = body?.takeover === true;
+          const res = taskStore.setLeadAgent(workspaceId, leadAgentId, {
+            actor: author,
+            ...(takeover ? { takeover: true } : {}),
+          });
           if (!res.ok) return j(404, res);
           return j(200, res);
         }

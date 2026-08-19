@@ -43,17 +43,29 @@ Two things follow, and they are the ones agents get wrong:
   watches, believe it is listening, and miss every voice note — with no error
   and no warning, because a queue nobody is draining looks exactly like a queue
   nobody filled.
+- **Staying live is a separate thing from declaring.** The declaration attaches
+  you; nothing keeps you attached. Every lead-addressed delivery is gated on a
+  heartbeat inside the ~5-minute window, and a session that goes quiet for
+  minutes drops out of it while every surface still says "subscribed". Tool
+  calls refresh it — a working session is fine — so the case to watch is a long
+  stretch of thinking or a long-running command. `heartbeat(workspaceId)` when
+  in doubt.
 - **When the board feels quiet, check rather than assume.** `list_watched_docs`
   answers "what am I MISSING", not just what am I watching. Read
-  `coverage.unattachedBoards`: every row is a board holding docs you watch
-  where you have no attachment, listing what is queued for its lead.
-  `set_workspace_lead(workspaceId)` on that id clears it in one call. If
+  `coverage.unattachedBoards`: every row is a board you follow where you are
+  not **live**, listing what is queued for its lead. Each row carries its own
+  remedy, because there are three different problems here —
+  `set_workspace_lead(workspaceId)` when the seat is empty or abandoned,
+  `heartbeat(workspaceId)` when the seat is already yours and only the window
+  lapsed, and `attach_agent(workspaceId)` when a live peer leads it. If
   `coverage` is **absent**, the server did not answer — that is unknown, not
   all-clear.
 
 Not the lead? A peer picking up one task or a subagent handed a workspaceId
 uses `attach_agent(workspaceId)` instead — it subscribes and briefs you without
-taking the seat.
+taking the seat. And declaring on a board a **live** peer already leads does
+not take it from them: you get `declined: "lead-held"`, you are attached and
+subscribed anyway, and `takeover: true` is there for when you mean it.
 
 ## Always work in priority order
 

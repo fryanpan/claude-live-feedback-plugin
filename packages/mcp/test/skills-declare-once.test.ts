@@ -69,6 +69,36 @@ describe('the skills teach one declaration per session', () => {
   }
 });
 
+describe('the skills teach what declaring does NOT do', () => {
+  for (const [name, text] of both) {
+    describe(name, () => {
+      it('says a declaration does not keep you live — the heartbeat window still gates delivery', () => {
+        // The gap this branch created: one call now covers every surface, so
+        // "I declared" reads as "I am covered" — while an attachment expires
+        // ~5 minutes after its last heartbeat and every lead-addressed
+        // delivery asks for a fresh one. A skill that teaches the one call
+        // without this teaches a session to go silently away.
+        expect(text).toMatch(/heartbeat\(workspaceId\)/);
+        expect(text.toLowerCase()).toMatch(/5[- ]minute|five minutes|goes quiet|stay live/);
+      });
+
+      it('names the THREE different remedies, not one blanket fix', () => {
+        // A single "declare yourself" recommendation is wrong in two
+        // directions: it evicts a live peer, and it does not fix a lapsed
+        // heartbeat on a seat you already hold.
+        expect(text).toMatch(/attach_agent\(workspaceId\)/);
+        expect(text).toMatch(/set_workspace_lead\(workspaceId\)/);
+        expect(text).toMatch(/heartbeat\(workspaceId\)/);
+      });
+
+      it('says declaring will not displace a live lead, and names the override', () => {
+        expect(text).toMatch(/lead-held/);
+        expect(text).toMatch(/takeover/);
+      });
+    });
+  }
+});
+
 describe('positive controls — guidance that must survive the edit', () => {
   it('the hub skill still requires a heartbeat while attached', () => {
     // Declaring once does NOT retire the heartbeat: delivery still asks
