@@ -23,7 +23,7 @@
  * counts as consent for LF→Anthropic traffic.
  */
 import { readKeychainPassword } from './share/keychain.ts';
-import { KEYCHAIN_SERVICE } from './summarize.ts';
+import { resolveKeyFrom } from './summarize.ts';
 import type { TaskStore } from './tasks.ts';
 
 export type VoiceSurface = 'hub' | 'doc' | 'task';
@@ -309,17 +309,12 @@ export class VoiceRouter {
 export function haikuVoiceComplete(opts?: {
   apiKey?: string | null;
   fetchImpl?: typeof fetch;
+  readKey?: (service: string) => string | null;
 }): VoiceComplete | null {
-  let key: string | null;
-  if (opts?.apiKey !== undefined) {
-    key = opts.apiKey || null;
-  } else {
-    try {
-      key = readKeychainPassword(KEYCHAIN_SERVICE);
-    } catch {
-      key = null;
-    }
-  }
+  // Same two-name resolution as the summarizer: a machine set up before the
+  // rename holds only the legacy entry, and reading just the new name left
+  // the fast path silently off while summaries kept working.
+  const key = resolveKeyFrom(opts?.apiKey, opts?.readKey ?? readKeychainPassword);
   if (!key) return null;
   const fetchImpl = opts?.fetchImpl ?? globalThis.fetch;
   const resolvedKey = key;
