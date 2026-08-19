@@ -3984,14 +3984,10 @@ a.hub-link-chip:hover {
     gap: 6px;
     padding: 2px 2px;
   }
-  /* `action` is the default and `after N` is rare enough to read in the
-     detail panel; on a phone they cost title width on every row without
-     distinguishing any row from its neighbours. `decision`, overdue and
-     triage stay — those are the ones that mean "look at me". */
-  .hub-badge-action,
-  .hub-badge-after {
-    display: none;
-  }
+  /* The phone-only hide for `.hub-badge-action` / `.hub-badge-after` is gone
+     with the badges themselves (2026-08-18 and 2026-08-19) — nothing emits
+     either class now, so the rule hid nothing at any width. Overdue and
+     triage stay at every size: those are the ones that mean "look at me". */
   /* Hard ceiling so badges can never win the row against the title.
      `minmax(0, 1fr)` handles the title side; this handles the other.
 
