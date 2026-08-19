@@ -490,7 +490,7 @@ export function reviewThreadItems(args: {
  * agent addressing nobody. `classifyActor` draws the line, so this cannot
  * disagree with the reply-reopen rule about who is a person.
  */
-function knownPeople(docIds: Iterable<string>, source: ThreadSource): Set<string> {
+export function knownPeople(docIds: Iterable<string>, source: ThreadSource): Set<string> {
   const people = new Set<string>();
   const add = (u: { name?: string } | undefined) => {
     if (u && classifyActor(u as Parameters<typeof classifyActor>[0]) === 'person' && u.name)
