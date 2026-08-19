@@ -430,20 +430,17 @@ describe('watches survive an MCP child respawn (through the real bundle)', () =>
 
   it('POSITIVE CONTROL: a session that IS attached to the board hears the restore line and no alarm', async () => {
     const NAME3 = 'Seated Watch Tester';
-    const AGENT3 = 'agent-seated-watch-tester';
     const { workspaceId } = await boardWithBacklog('seated-board', 'seated-doc');
-    // The one difference from the case above.
-    expect(
-      (
-        await rest(`/api/workspaces/${workspaceId}/attachments`, 'POST', {
-          agentId: AGENT3,
-          runtime: 'claude-code-local',
-        })
-      ).status,
-    ).toBe(200);
 
     const first = await spawnChild({ CW_AGENT_NAME: NAME3 });
     await first.tool('watch_doc', { docId: 'seated-doc' });
+    // The one difference from the case above — and it goes through the TOOL
+    // rather than a REST POST on purpose. Being seated is two things: a
+    // record, and a channel open to receive what the record makes you the
+    // addressee for. `attach_agent` does both; posting the record from
+    // outside describes a session that registered and never connected, which
+    // is precisely the state the alarm exists to report.
+    expect(await first.tool('attach_agent', { workspaceId })).toBeDefined();
     const live = (await first.tool('list_watched_docs')) as {
       coverage?: { unattachedBoards: Array<{ workspaceId: string }> };
     };

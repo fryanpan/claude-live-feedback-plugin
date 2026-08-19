@@ -5266,6 +5266,27 @@ export class TaskStore {
     return this.isDeliverable(workspaceId, att);
   }
 
+  /**
+   * Is THIS named agent live on this board — the per-agent form of
+   * `hasLiveAttachment`.
+   *
+   * Exists because the coverage read ("which boards am I missing work on?")
+   * asks about one specific agent, and answering it from `attachmentState`
+   * measures the wrong thing. That state is heartbeat-only and feeds the
+   * displayed active/away label; delivery rides the observed clock. Between
+   * the two windows sits a real gap where an agent is shown `away` and is
+   * nonetheless handed every request — so a coverage row built on the label
+   * reports a problem the agent does not have, and prescribes a remedy
+   * (claiming a seat) whose whole hazard is that it can evict a working peer.
+   */
+  hasLiveAttachmentFor(workspaceId: string, agentId: string): boolean {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return false;
+    const att = state.attachments.get(agentId);
+    if (!att) return false;
+    return this.isDeliverable(workspaceId, att);
+  }
+
   /** Open decision tasks that gate open tasks via `after` edges, rolled into
    *  the §3.3 one-liner: "2 open decisions gating 3 tasks". */
   private gatingSummary(workspaceId: string): GatingSummary {

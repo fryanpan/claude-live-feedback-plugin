@@ -37,7 +37,11 @@ export interface CoverageWorkspaceRow {
   kind: 'board' | 'grouping';
   name?: string;
   attached?: boolean;
+  /** The displayed active/away label. NOT the delivery gate — see `live`. */
   heartbeatFresh?: boolean;
+  /** Whether work actually reaches this session here. This is the covered
+   *  one; absent on servers older than the release that split the two. */
+  live?: boolean;
   lead?: boolean;
   queued?: CoverageQueue;
   queuedTotal?: number;
@@ -50,6 +54,13 @@ export interface CoverageWorkspaceRow {
  * delivery gate asks `hasLiveAttachment`, so an hour-old record satisfies
  * "attached" while the whole queue routes to nobody. A declared lead that
  * went quiet is exactly that state, and it is the state this feature creates.
+ *
+ * "Live" here means what the gates mean: the server has OBSERVED this agent
+ * recently — a heartbeat or a tool call, whichever is later — and a channel
+ * is open to carry the delivery. Deliberately not the displayed active/away
+ * label, whose window is far shorter: selecting rows on the label reported
+ * boards that were being served perfectly, and sent the reader off to claim
+ * a seat it did not need.
  */
 export interface CoverageUnattachedBoard {
   workspaceId: string;
@@ -61,11 +72,14 @@ export interface CoverageUnattachedBoard {
   queuedTotal: number;
   /** A record exists for this session. Not the same as covered. */
   attached: boolean;
-  /** …and its heartbeat is inside the window. This is what the gates ask. */
+  /** …and its heartbeat is inside the heartbeat window. Names which clock
+   *  lapsed; it is not what admitted this row, since rows are selected on the
+   *  delivery gate. */
   heartbeatFresh: boolean;
   /** Who holds the seat, when anyone does. */
   leadAgentId?: string;
-  /** Whether that agent (someone OTHER than this session) is live on it. */
+  /** Whether that agent (someone OTHER than this session) is live on it, by
+   *  the same predicate that decides whether claiming the seat is refused. */
   leadLive: boolean;
 }
 
@@ -121,11 +135,12 @@ function describeQueue(q: CoverageQueue): string {
  * The remedy for ONE board, which depends on who is sitting in its seat.
  *
  * A single blanket sentence was wrong in two directions. On a board a live
- * peer leads, "declare yourself lead" is advice to evict them — `setLeadAgent`
- * has no liveness check, the incumbent gets no event it is told to act on,
- * and the declaring agent cannot tell a takeover from claiming an empty seat.
- * On a board this session already leads with a dead heartbeat, "you have no
- * attachment" is simply false, and the fix it names is not the fix.
+ * peer leads, "declare yourself lead" is advice to evict them — the incumbent
+ * gets no event it is told to act on, and the declaring agent cannot tell a
+ * takeover from claiming an empty seat. (`setLeadAgent` now refuses that case
+ * outright, so the advice would not merely be rude, it would not work.) On a
+ * board this session already leads and has simply gone quiet, "you have no
+ * attachment" is false, and the fix it names is not the fix.
  */
 function remedyFor(b: CoverageUnattachedBoard, agentId: string): string {
   if (b.leadLive && b.leadAgentId !== undefined && b.leadAgentId !== agentId) {
@@ -137,9 +152,9 @@ function remedyFor(b: CoverageUnattachedBoard, agentId: string): string {
   }
   if (b.attached && !b.heartbeatFresh) {
     return (
-      'your attachment is stale — no heartbeat inside the freshness window, which is exactly ' +
-      'what every delivery gate tests, so the board reads you as away. heartbeat(workspaceId: ' +
-      `"${b.workspaceId}") now, and every few minutes while you work it.`
+      'your attachment is stale — the server has not seen a heartbeat OR a tool call from you ' +
+      'on this board inside the observed-work window, so deliveries for it are parking. ' +
+      `heartbeat(workspaceId: "${b.workspaceId}") now, and every few minutes while you work it.`
     );
   }
   return (
@@ -175,9 +190,9 @@ export function coverageAlertLine(coverage: WatchCoverage | undefined): string |
   return (
     `[not covered] ${plural(waiting.length, 'board')} you follow ` +
     `${waiting.length === 1 ? 'has' : 'have'} work queued for a lead, and you are not live on ` +
-    `${waiting.length === 1 ? 'it' : 'them'}. Watching is not attaching, and an attachment with ` +
-    'a stale heartbeat is not attached either — every delivery gate asks for a heartbeat inside ' +
-    `the window. ${described}`
+    `${waiting.length === 1 ? 'it' : 'them'}. Watching is not attaching, and an attachment the ` +
+    'server has stopped observing is not attached either — every delivery gate asks for recent ' +
+    `observed work, a heartbeat or a tool call, plus an open channel. ${described}`
   );
 }
 
