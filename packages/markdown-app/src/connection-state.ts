@@ -72,6 +72,110 @@ export function watchConnection(opts: ConnectionWatchOptions): void {
   });
 }
 
+/** Two triggers this close together are one event to a reader. */
+export const LIVE_RESYNC_MIN_MS = 2_000;
+
+export interface LiveSyncOptions {
+  /** The event stream's transitions: 'open' when it (re)opens, 'closed' when
+   *  it drops. Unlike ws-client's subscribe this need NOT fire on subscribe. */
+  onStatus: (cb: (s: 'open' | 'closed') => void) => void;
+  /** "The reader is looking at this page again" — a tab foregrounded, a phone
+   *  woken. */
+  onVisible: (cb: () => void) => void;
+  /** Refetch whatever the stream would otherwise have delivered. */
+  resync: () => void;
+  minIntervalMs?: number;
+  now?: () => number;
+}
+
+/**
+ * Refetch after any window in which the live stream could not deliver.
+ *
+ * The reported break: a new Home queue item did not appear until the page was
+ * reloaded. The live path itself is fine — measured on a staging build, an
+ * item posted with the stream healthy paints in about a second. What had no
+ * recovery path at all was the window where the stream was DOWN.
+ *
+ * Two facts make that window unrecoverable without this, and both were
+ * measured rather than assumed:
+ *
+ *  1. **The server replays nothing.** There is no `Last-Event-ID` handling
+ *     anywhere in the repo, so an event fired while a client is disconnected
+ *     is gone permanently rather than redelivered on reconnect.
+ *  2. **The client only ever refetched from the stream.** Every call to the
+ *     queue's loader after boot hung off an SSE listener — no error handler,
+ *     no reopen handler, no visibility handler, no poll.
+ *
+ * `EventSource` reconnects on its own, which is exactly what makes this so
+ * quiet: the page comes back looking perfectly healthy while silently missing
+ * everything created during the gap. A server restart is that gap on every
+ * deploy, and so is a slept laptop or a backgrounded phone.
+ *
+ * The first `open` deliberately does not refetch — the page has just loaded
+ * the same data — so this costs one extra round of REST calls per genuine
+ * outage and none per page view.
+ */
+export function watchLiveSync(o: LiveSyncOptions): void {
+  const minIntervalMs = o.minIntervalMs ?? LIVE_RESYNC_MIN_MS;
+  const now = o.now ?? (() => Date.now());
+
+  // Whether the stream has EVER been up. The first open is a boot, not a
+  // recovery; every later one means time passed with nobody listening.
+  let everOpen = false;
+  let droppedSinceOpen = false;
+  let lastResync = Number.NEGATIVE_INFINITY;
+
+  const fire = () => {
+    const t = now();
+    // A restart trips "visible" and "stream reopened" within a few hundred ms
+    // of each other; the reader gets one refresh, not two of the same three
+    // endpoints. Keyed on the last ACTUAL resync, so it suppresses a burst
+    // without ever latching the next real one off.
+    if (t - lastResync < minIntervalMs) return;
+    lastResync = t;
+    o.resync();
+  };
+
+  o.onStatus((s) => {
+    if (s === 'closed') {
+      droppedSinceOpen = true;
+      return;
+    }
+    if (!everOpen) {
+      everOpen = true;
+      return;
+    }
+    // A repeated 'open' with no drop in between is not a recovery. Guarded
+    // because an adapter that re-emits the current state on subscribe would
+    // otherwise refetch on every page load.
+    if (!droppedSinceOpen) return;
+    droppedSinceOpen = false;
+    fire();
+  });
+
+  o.onVisible(() => fire());
+}
+
+/**
+ * The board's "this list may be out of date" line.
+ *
+ * Deliberately NOT the same words as the reconnect banner above it. That one
+ * is about the editing socket and says "keep this tab open"; this one is
+ * about the queue being a stale read, which is the thing a reader would
+ * otherwise act on without knowing. A confidently stale queue is the bug
+ * underneath the reported bug — silence that looks like calm.
+ */
+export function renderLiveStaleNotice(el: HTMLElement | null, view: ConnectionView): void {
+  if (!el) return;
+  if (view === 'reconnecting') {
+    el.textContent = 'Live updates are paused — this list may be out of date.';
+    el.classList.remove('hidden');
+    return;
+  }
+  el.textContent = '';
+  el.classList.add('hidden');
+}
+
 /**
  * The grace window governs what is SHOWN. It must never govern what is TRUE.
  *

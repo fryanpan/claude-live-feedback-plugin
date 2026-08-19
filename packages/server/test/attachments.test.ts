@@ -321,15 +321,27 @@ describe('TaskStore attachment registry', () => {
     expect(events.filter((e) => e.type === 'agent.detached')).toHaveLength(1);
   });
 
-  it('hasLiveAttachment is heartbeat-freshness, not mere existence', async () => {
-    const tight = new TaskStore({ dataDir, debounceMs: 5, heartbeatFreshMs: 30 });
+  it('hasLiveAttachment is OBSERVED freshness, not mere existence', async () => {
+    // The window this reads used to be `heartbeatFreshMs` — i.e. how recently
+    // the agent SAID it was alive. It is now how recently the server OBSERVED
+    // it, by heartbeat or by write, so both knobs are set here: leaving
+    // `observedWorkFreshMs` at its 15-minute default would keep the fresh
+    // attach inside the window and this test would never see it go stale.
+    // See OBSERVED_LIVE_MS and voice-gate-liveness.test.ts for why it changed.
+    const tight = new TaskStore({
+      dataDir,
+      debounceMs: 5,
+      heartbeatFreshMs: 30,
+      observedWorkFreshMs: 30,
+    });
     const ws = tight.createWorkspace('live-hub', 'Ship it.');
     expect(tight.hasLiveAttachment(ws.id)).toBe(false);
     tight.attachAgent(ws.id, { agentId: 'lead', runtime: 'claude-code-local' });
     // Positive control: fresh → live.
     expect(tight.hasLiveAttachment(ws.id)).toBe(true);
     await new Promise((r) => setTimeout(r, 60));
-    // The record still exists, but a stale heartbeat is not "live".
+    // The record still exists, but nothing has been observed since. Existence
+    // was never the question.
     expect(tight.listAttachments(ws.id)).toHaveLength(1);
     expect(tight.hasLiveAttachment(ws.id)).toBe(false);
     tight.stop();

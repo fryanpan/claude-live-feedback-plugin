@@ -17,6 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { workspaceRoomId } from '../src/task-projection.ts';
+import { openWorkspaceStream } from './agent-stream.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'person' };
 const LEAD = 'agent-lead';
@@ -120,10 +121,13 @@ describe('a new goal band asks the bucket to be re-looked-at, over HTTP', () => 
     const second = await addUnplaced(wsId, 'audit the empty states');
 
     // POSITIVE CONTROL: with the lead live the ask is delivered, not queued.
+    // Live is attached AND reachable — the ask is a broadcast on the
+    // workspace channel, which the MCP joins right after it attaches.
     await post(`/api/workspaces/${wsId}/attachments`, {
       agentId: LEAD,
       runtime: 'claude-code-local',
     });
+    const stream = await openWorkspaceStream(baseUrl, wsId);
     const live = await setGoals(wsId, [{ key: 'g1', title: 'Ship the review surface' }]);
     expect(live.bucketReview?.requested).toBe(true);
     expect(live.bucketReview?.queued).toBe(false);
@@ -133,7 +137,9 @@ describe('a new goal band asks the bucket to be re-looked-at, over HTTP', () => 
     ]);
 
     // Now the lead is gone and only a bystander is connected: a connected
-    // agent is not the addressee, so the ask waits.
+    // agent is not the addressee, so the ask waits. The stream deliberately
+    // stays open — reachability is a property of the CHANNEL, and the point
+    // here is that an open channel with the wrong agent on it still waits.
     await local(`/api/workspaces/${wsId}/attachments/${LEAD}`, { method: 'DELETE' });
     await post(`/api/workspaces/${wsId}/attachments`, {
       agentId: OTHER,
@@ -155,6 +161,7 @@ describe('a new goal band asks the bucket to be re-looked-at, over HTTP', () => 
     expect(back.pendingBucketReview?.batchId).toBe(away.bucketReview?.batchId ?? '');
     expect(back.pendingBucketReview?.taskIds.slice().sort()).toEqual([first, second].sort());
     expect(back.pendingBucketReview?.newBands.map((b) => b.id)).toEqual([away.ids.g2]);
+    await stream.close();
   });
 
   // A request that only exists in a sidecar until somebody attaches is the

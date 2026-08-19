@@ -4,9 +4,11 @@ import {
   type ConnectionView,
   RECONNECT_GRACE_MS,
   renderConnectionBanner,
+  renderLiveStaleNotice,
   saveStateView,
   settlePending,
   watchConnection,
+  watchLiveSync,
 } from '../src/connection-state.ts';
 
 /** Drives the status callback exactly the way ws-client does. */
@@ -222,5 +224,183 @@ describe('saveStateView', () => {
     // fall through to "All changes saved".
     const pending = settlePending(1, /* wsOnline */ false);
     expect(saveStateView({ reconnecting: false, pendingEdits: pending })).not.toBe('saved');
+  });
+});
+
+/**
+ * The Home queue went stale and stayed stale until a manual reload. Reported
+ * 2026-08-19: *"Why didn't the home queue item appear immediately? I had to
+ * refresh the page."*
+ *
+ * Measured, not guessed. Against a staging build: posting a declared review
+ * item with the page open and the stream healthy DID paint it within ~2.5s
+ * (the positive control — the live path works). What has no recovery path at
+ * all is the window where the stream is DOWN: the server's SSE has no
+ * `Last-Event-ID` replay anywhere in the repo, so an event fired during a
+ * disconnect is gone for good, and the board's only calls to `loadReviewItems`
+ * after boot are the SSE listeners themselves. `EventSource` reconnects
+ * silently, so the page comes back looking perfectly healthy and is missing
+ * every item created while it was away — which is a server restart (every
+ * deploy), a slept laptop, or a backgrounded phone.
+ */
+describe('watchLiveSync', () => {
+  const fakeStream = () => {
+    const cbs: ((s: 'open' | 'closed') => void)[] = [];
+    return {
+      onStatus: (cb: (s: 'open' | 'closed') => void) => cbs.push(cb),
+      set: (s: 'open' | 'closed') => {
+        for (const cb of cbs) cb(s);
+      },
+    };
+  };
+  const fakeVisible = () => {
+    const cbs: (() => void)[] = [];
+    return {
+      onVisible: (cb: () => void) => cbs.push(cb),
+      show: () => {
+        for (const cb of cbs) cb();
+      },
+    };
+  };
+  /** A clock the dedupe window can be driven against without real waiting. */
+  const clock = (start = 0) => {
+    let t = start;
+    return { now: () => t, advance: (ms: number) => (t += ms) };
+  };
+
+  it('does not refetch on the first open — boot already loaded the queue', () => {
+    const stream = fakeStream();
+    const vis = fakeVisible();
+    const resync = vi.fn();
+    watchLiveSync({
+      onStatus: stream.onStatus,
+      onVisible: vis.onVisible,
+      resync,
+      now: clock().now,
+    });
+
+    stream.set('open');
+
+    // A resync here would double every page load's REST traffic for nothing.
+    expect(resync).not.toHaveBeenCalled();
+  });
+
+  it('refetches when the stream comes BACK — the missed-events window', () => {
+    // The regression itself. Events that fired while the stream was down are
+    // unrecoverable (no replay), so reopening the stream is the only moment
+    // the client can learn it missed anything.
+    const stream = fakeStream();
+    const vis = fakeVisible();
+    const resync = vi.fn();
+    const c = clock();
+    watchLiveSync({ onStatus: stream.onStatus, onVisible: vis.onVisible, resync, now: c.now });
+
+    stream.set('open');
+    stream.set('closed');
+    c.advance(30_000);
+    stream.set('open');
+
+    expect(resync).toHaveBeenCalledTimes(1);
+  });
+
+  it('refetches when the reader comes back to the tab', () => {
+    // Bryan's actual usage: a phone returning from sleep. The stream may have
+    // been torn down and rebuilt without the page ever noticing.
+    const stream = fakeStream();
+    const vis = fakeVisible();
+    const resync = vi.fn();
+    const c = clock();
+    watchLiveSync({ onStatus: stream.onStatus, onVisible: vis.onVisible, resync, now: c.now });
+
+    stream.set('open');
+    c.advance(30_000);
+    vis.show();
+
+    expect(resync).toHaveBeenCalledTimes(1);
+  });
+
+  it('collapses a burst of triggers into one refetch', () => {
+    // A restart fires "visible" and "stream reopened" within a few hundred ms
+    // of each other. Two refetches of the same three endpoints is waste, and
+    // on a phone it is waste at the worst moment.
+    const stream = fakeStream();
+    const vis = fakeVisible();
+    const resync = vi.fn();
+    const c = clock();
+    watchLiveSync({ onStatus: stream.onStatus, onVisible: vis.onVisible, resync, now: c.now });
+
+    stream.set('open');
+    stream.set('closed');
+    c.advance(30_000);
+    stream.set('open');
+    c.advance(100);
+    vis.show();
+
+    expect(resync).toHaveBeenCalledTimes(1);
+  });
+
+  it('refetches again once the window has passed — dedupe is not a latch', () => {
+    // POSITIVE CONTROL for the test above: proves the dedupe suppresses a
+    // burst rather than permanently disabling the second trigger, which is
+    // how this fix would silently become the bug it replaces.
+    const stream = fakeStream();
+    const vis = fakeVisible();
+    const resync = vi.fn();
+    const c = clock();
+    watchLiveSync({
+      onStatus: stream.onStatus,
+      onVisible: vis.onVisible,
+      resync,
+      now: c.now,
+      minIntervalMs: 2_000,
+    });
+
+    stream.set('open');
+    stream.set('closed');
+    c.advance(30_000);
+    stream.set('open');
+    c.advance(5_000);
+    vis.show();
+
+    expect(resync).toHaveBeenCalledTimes(2);
+  });
+
+  it('ignores a repeated open with no drop in between', () => {
+    const stream = fakeStream();
+    const vis = fakeVisible();
+    const resync = vi.fn();
+    const c = clock();
+    watchLiveSync({ onStatus: stream.onStatus, onVisible: vis.onVisible, resync, now: c.now });
+
+    stream.set('open');
+    c.advance(30_000);
+    stream.set('open');
+
+    expect(resync).not.toHaveBeenCalled();
+  });
+});
+
+describe('renderLiveStaleNotice', () => {
+  it('says the queue may be out of date while live updates are down', () => {
+    const el = document.createElement('div');
+    el.className = 'hidden';
+    renderLiveStaleNotice(el, 'reconnecting');
+    expect(el.classList.contains('hidden')).toBe(false);
+    // Names what is unreliable — the list — rather than a transport the
+    // reader has no model of. "Silence that looks like calm" is the bug
+    // underneath the bug.
+    expect(el.textContent).toMatch(/out of date|not updating|paused/i);
+  });
+
+  it('clears itself when live updates resume', () => {
+    const el = document.createElement('div');
+    renderLiveStaleNotice(el, 'reconnecting');
+    renderLiveStaleNotice(el, 'online');
+    expect(el.classList.contains('hidden')).toBe(true);
+    expect(el.textContent).toBe('');
+  });
+
+  it('tolerates a missing element', () => {
+    expect(() => renderLiveStaleNotice(null, 'reconnecting')).not.toThrow();
   });
 });
