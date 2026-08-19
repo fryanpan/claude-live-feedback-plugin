@@ -10,6 +10,7 @@ import { discoveryCandidates, resolveDiscoveryFile } from '../../core/src/machin
 import { resolveAgentAuthor } from './author.ts';
 import { type ThreadCreateInput, threadCreateRequest } from './thread-create.ts';
 import { RETRIAGE_SKILL, TASK_REVIEW_SKILL, triageRequestLine } from './triage-line.ts';
+import { voiceRequestLine } from './voice-line.ts';
 
 /**
  * Thin MCP server that proxies tool calls to a running feedback server
@@ -80,7 +81,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.63';
+const PLUGIN_VERSION = '0.1.66';
 
 /**
  * What a good `evidence.commit` looks like, said at the one layer that reaches
@@ -3384,16 +3385,13 @@ async function emitHubChannelMessage(event: string, rawPayload: unknown): Promis
     case 'agent.detached':
       body = `[${event}] ${p.agentId ?? '?'}`;
       break;
+    // Three routes, three different things to say — and one of them is "say
+    // nothing". An action the fast path already applied must NOT read as work
+    // to do; see voice-line.ts.
     case 'voice.request': {
-      // The speaker's words arrive VERBATIM (§3.8: changes carry the
-      // transcript verbatim); the context object says where they were.
-      if (p.route === 'fast-path') return; // a lookup the server already answered
-      const ctx = p.context
-        ? ` (at ${p.context.surface ?? '?'}${p.context.docId ? ` ${p.context.docId}` : ''}${
-            p.context.taskId ? ` ${p.context.taskId}` : ''
-          }${p.context.visibleHeading ? `, near "${p.context.visibleHeading}"` : ''})`
-        : '';
-      body = `[voice.request]${by}${ctx}: "${p.transcript ?? ''}" — act on it through the task/edit tools; the speaker was told: "${truncate(p.ack ?? '', 120)}"`;
+      const line = voiceRequestLine(p);
+      if (line === null) return;
+      body = line;
       break;
     }
     default:
