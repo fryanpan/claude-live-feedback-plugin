@@ -2586,6 +2586,33 @@ Technical discoveries that should persist across sessions for this project.
   what you use to *read* the hit once you have it, not to find it. Two people
   sweeping the same tree came out at seven sites and six for exactly this
   reason — not better judgement, a shorter needle.
+- **The mirror image: an assertion on wall-clock time measures the machine,
+  and reports on the box rather than the code.** Met during this same PR's
+  gates. `summarize.test.ts`, "paces itself across the window it was given",
+  drains 4 tasks over a 200ms pacing window and asserts `elapsed < 200` to
+  prove there is no trailing gap after the last call. It came in at **213ms**
+  while other suites were saturating the machine, and passes 3/3 in isolation
+  — on a docs-only diff that cannot reach the scheduler.
+  - The two bounds in that test are not equally sound, and the difference is
+    the rule. The lower bound (`elapsed >= 120`) says *the delay exists*; load
+    can only push elapsed UP, so noise never makes it pass wrongly. The upper
+    bound says *no trailing gap*, and load pushes elapsed up too — so the same
+    noise fails it. **A lower bound on elapsed time is robust and an upper
+    bound is not**, and it fails hardest exactly when the box is busiest, which
+    is when CI runs it. Assert the ceiling against a fake clock, or not at all.
+  - It belongs in this entry because it is the same defect seen from the other
+    side. The alternation reported success without looking at the thing it
+    named; this reports failure about something it never measured. In both, the
+    assertion's subject and what it actually tests have come apart — the
+    failure "the probe ran, it just measured something other than what it
+    claimed to" already recorded for the mobile-viewport verification.
+  - It also costs more than a re-run, because **the shape is
+    indistinguishable from a real regression until you look**, and the
+    cheapest-looking reading is "flake, re-run it". That reflex is right here
+    and catastrophic when it is not — which is why the neighbouring rule
+    stands: measure the baseline on unmodified HEAD before concluding either
+    way. Filed as its own ticket rather than fixed here; a learnings PR that
+    starts fixing tests stops being reviewable as docs.
 - Same family as "A negative probe needs a positive control", pointed at
   assertions rather than searches: a check that reports success without having
   looked at the thing it names.
