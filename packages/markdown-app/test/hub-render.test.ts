@@ -3023,14 +3023,7 @@ describe('renderPresence — compact circle mode (the top-right cluster)', () =>
     const host = document.createElement('div');
     const tapped: PresenceChip[] = [];
     const chip: PresenceChip = { ...agent('quill'), state: 'unresponsive' };
-    renderPresence(
-      host,
-      [chip],
-      chip.key,
-      { ...noop, onTap: (c) => tapped.push(c) },
-      [],
-      true,
-    );
+    renderPresence(host, [chip], chip.key, { ...noop, onTap: (c) => tapped.push(c) }, [], true);
     const el = host.querySelector<HTMLButtonElement>('.hub-presence-circle');
     expect(el?.classList.contains('hub-presence-unresponsive')).toBe(true);
     expect(el?.classList.contains('hub-following')).toBe(true);
@@ -3042,14 +3035,7 @@ describe('renderPresence — compact circle mode (the top-right cluster)', () =>
     const host = document.createElement('div');
     const chips = ['Ana', 'Ben', 'Cam', 'Dee', 'Eli'].map((n) => person(n));
     const overflowed: PresenceChip[][] = [];
-    renderPresence(
-      host,
-      chips,
-      null,
-      { ...noop, onOverflow: (h) => overflowed.push(h) },
-      [],
-      true,
-    );
+    renderPresence(host, chips, null, { ...noop, onOverflow: (h) => overflowed.push(h) }, [], true);
     const circles = host.querySelectorAll('.hub-presence-circle');
     expect(circles.length).toBe(4); // 3 people + the overflow slot
     const more = host.querySelector<HTMLButtonElement>('.hub-presence-more');
