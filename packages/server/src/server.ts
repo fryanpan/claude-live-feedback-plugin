@@ -9,6 +9,7 @@ import {
   type WebhookPayload,
   anchors,
   checkReviewPayload,
+  reviewGapAdvice,
   contentKind,
   reviewPayloadMessage,
   suggestOps,
@@ -219,14 +220,21 @@ function anchorSnippetText(anchor: Anchor): string | undefined {
  *
  * Returns `undefined` for an absent declaration — an ordinary comment is
  * still an ordinary comment, and the overwhelming majority are.
+ *
+ * `advice` is the non-refusing half: a payload that filed successfully but
+ * left the card thin. It rides back on the 200 rather than being dropped
+ * here, because an author who is never told writes the same thin item again.
  */
 function reviewFromBody(
   raw: unknown,
-): { ok: true; review?: ReviewPayload } | { ok: false; error: string } {
+):
+  | { ok: true; review?: ReviewPayload; advice?: string }
+  | { ok: false; error: string } {
   if (raw === undefined || raw === null) return { ok: true };
   const check = checkReviewPayload(raw);
   if (!check.ok) return { ok: false, error: reviewPayloadMessage(check) };
-  return { ok: true, review: raw as ReviewPayload };
+  const advice = reviewGapAdvice(check.gaps);
+  return { ok: true, review: raw as ReviewPayload, ...(advice ? { advice } : {}) };
 }
 
 /** Attribution for a write that arrived with no author at all. Deliberately
@@ -3674,7 +3682,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                 generate: !visitor,
                 ...(declared.review ? { review: declared.review } : {}),
               });
-              return t ? j(200, { thread: t }) : j(404, { error: 'thread not found' });
+              return t
+                ? j(200, { thread: t, ...(declared.advice ? { reviewAdvice: declared.advice } : {}) })
+                : j(404, { error: 'thread not found' });
             }
             // Answering a Review Item. Deliberately a thin wrapper over the
             // reply above rather than a second write path: `text` is always
@@ -3824,7 +3834,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               generate: !visitor,
               ...(declared.review ? { review: declared.review } : {}),
             });
-            return t ? j(200, { thread: t }) : j(500, { error: 'could not create thread' });
+            return t
+              ? j(200, { thread: t, ...(declared.advice ? { reviewAdvice: declared.advice } : {}) })
+              : j(500, { error: 'could not create thread' });
           }
           if (rest === 'threads/by_find' && req.method === 'POST') {
             const body = await safeJson(req);
@@ -3850,7 +3862,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               // Visitor-authored text becomes the entire prompt on this route.
               { generate: !visitor, ...(declared.review ? { review: declared.review } : {}) },
             );
-            return res.ok ? j(200, { thread: res.thread }) : j(409, res);
+            return res.ok
+              ? j(200, {
+                  thread: res.thread,
+                  ...(declared.advice ? { reviewAdvice: declared.advice } : {}),
+                })
+              : j(409, res);
           }
           if (rest === 'content' && req.method === 'GET') {
             const doc = rooms.getDoc(docId);

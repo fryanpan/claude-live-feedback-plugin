@@ -293,6 +293,36 @@ export function reviewPayloadMessage(check: ReviewCheck): string {
 }
 
 /**
+ * The advice half of the check, for a payload that WAS filed.
+ *
+ * `gaps` are computed on every successful write and were, in the first cut of
+ * this feature, read by nobody — the call returned 200, the card came out
+ * thinner than the author meant, and nothing connected the two. That is the
+ * same shape as the refusal this module argues against: a defect the author
+ * cannot see is a defect the author repeats. So the advice travels back on the
+ * success response, phrased like the refusals are — what to write, not what
+ * was wrong.
+ *
+ * Returns undefined when there is nothing to say, so a caller can spread it
+ * and an ordinary well-formed item carries no extra field.
+ */
+export function reviewGapAdvice(gaps: ReviewGap[]): string | undefined {
+  if (gaps.length === 0) return undefined;
+  const parts: string[] = [];
+  if (gaps.includes('lookFor')) {
+    parts.push(
+      "review.lookFor is missing — one line saying what to look at, so the card says what a useful answer would be about. Without it the reader gets the question and no idea what you're unsure of.",
+    );
+  }
+  if (gaps.includes('detail')) {
+    parts.push(
+      'review.detail is missing — the markdown body under the header. Without it the card is a headline and two options with nothing behind them.',
+    );
+  }
+  return ['Filed. It will be thinner than it needs to be:', ...parts].join(' ');
+}
+
+/**
  * A payload read back out of the CRDT, or undefined.
  *
  * Defensive for the reason `readStoredSummary` is: this value is synced to

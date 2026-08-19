@@ -4,6 +4,7 @@ import {
   type ReviewPayload,
   checkReviewPayload,
   readReviewPayload,
+  reviewGapAdvice,
   reviewPayloadMessage,
 } from './review-item.ts';
 
@@ -176,6 +177,47 @@ describe('reviewPayloadMessage', () => {
     const msg = reviewPayloadMessage(c);
     for (const e of c.errors) expect(msg).toContain(e);
     expect(c.errors.length).toBeGreaterThan(1);
+  });
+});
+
+describe('reviewGapAdvice — the advice half, which nothing used to read', () => {
+  it('says nothing at all about a complete payload', () => {
+    // The positive control for every assertion below: the same helper DOES
+    // speak when there is something to say, so an empty answer here is a
+    // judgement about this payload rather than a helper that never fires.
+    expect(reviewGapAdvice(checkReviewPayload(decision()).gaps)).toBeUndefined();
+    expect(reviewGapAdvice(['detail'])).toBeDefined();
+  });
+
+  // Both directions, because either alone passes against a helper that names
+  // one field unconditionally — mutation-tested: making the lookFor branch
+  // unconditional survives the first of these and is killed by the second.
+  it('names the missing field, and only the missing one', () => {
+    const advice = reviewGapAdvice(checkReviewPayload(decision({ lookFor: undefined })).gaps);
+    expect(advice).toContain('review.lookFor');
+    expect(advice).not.toContain('review.detail');
+  });
+
+  it('names only detail when only detail is missing', () => {
+    const advice = reviewGapAdvice(checkReviewPayload(review({ detail: undefined })).gaps);
+    expect(advice).toContain('review.detail');
+    expect(advice).not.toContain('review.lookFor');
+  });
+
+  it('names both when both are absent', () => {
+    const gaps = checkReviewPayload(decision({ lookFor: undefined, detail: undefined })).gaps;
+    const advice = reviewGapAdvice(gaps) ?? '';
+    expect(advice).toContain('review.lookFor');
+    expect(advice).toContain('review.detail');
+  });
+
+  it('reads as filed-but-thin, never as a refusal', () => {
+    // The distinction the whole two-tier design rests on. If this text reads
+    // like reviewPayloadMessage, an author retries a write that already
+    // succeeded and files the item twice.
+    const advice = reviewGapAdvice(['detail']) ?? '';
+    expect(advice).toContain('Filed.');
+    expect(advice).not.toContain('cannot be filed');
   });
 });
 
