@@ -10,7 +10,17 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
-import { transitionUnproven } from '@feedback/core';
+import {
+  type ReviewPayload,
+  type TaskReviewItem,
+  checkReviewPayload,
+  readReviewPayload,
+  readTaskReviewItem,
+  reviewFromDecisionTask,
+  reviewGapAdvice,
+  reviewPayloadMessage,
+  transitionUnproven,
+} from '@feedback/core';
 import { type StoredGoalSummary, goalTextHash } from '@feedback/core/goal-summary';
 import { classifyActor } from './activity.ts';
 import {
@@ -386,6 +396,25 @@ export interface Task {
   /** "Tell me more" — questions asked back at the decision, in order. These
    *  deliberately do NOT answer it: the task stays open and stays counted. */
   infoRequests?: InfoRequest[];
+  /**
+   * The review items hanging on this ticket — 0..n, several possibly open at
+   * once. THE cardinality change (Bryan, 2026-08-18: *"a decision is a part of
+   * a ticket… at any point in time there might be multiple open decisions for
+   * a ticket"*): the three fields directly above spell ONE decision that the
+   * ticket IS, so its title had to double as the question and a second open
+   * question had nowhere to go.
+   *
+   * Those three fields are NOT replaced and NOT migrated. They keep being read
+   * and written exactly as before, and `listReviewItems` DERIVES a row from
+   * them at read time when this array is empty — read-side only, idempotent by
+   * construction, nothing rewritten on disk. Soft by default: a legacy
+   * decision cannot be damaged by a migration that ran twice or half-way,
+   * because no migration runs at all.
+   *
+   * Persisted with the rest of the task — the sidecar serializes the whole
+   * row, so this needs no writer of its own.
+   */
+  reviews?: TaskReviewItem[];
   /** Goal or subgoal id; `chores` is the catch-all. */
   goal: string;
   /** Fractional sort key — always room to insert between two tasks. */
@@ -1170,6 +1199,16 @@ export interface DecisionAnsweredEvent {
   /** Which candidate the words came from, when one was tapped. Absent for
    *  free text — the answer is the text either way. */
   optionId?: string;
+  /**
+   * WHICH review item on the task was answered, when the answer came in
+   * through `answerTaskReview` on a real row.
+   *
+   * Absent for the legacy path, and that absence is load-bearing rather than
+   * incidental: `answerDecision` is untouched, so every existing listener sees
+   * byte-identical events, and a listener that wants the row can read this
+   * without having to guess when a ticket holds several.
+   */
+  reviewItemId?: string;
   actor: TaskActor;
   /** The decision task's links — a ready-made propagation checklist. */
   links: Ref[];
@@ -1192,6 +1231,10 @@ export interface DecisionInfoRequestedEvent {
   taskId: string;
   /** The VERBATIM question. */
   question: string;
+  /** WHICH review item was asked about, when it came in through
+   *  `requestMoreInfoOnReview` on a real row. Absent on the legacy path, for
+   *  the same reason as on `decision.answered`. */
+  reviewItemId?: string;
   actor: TaskActor;
   links: Ref[];
   ts: number;
@@ -1450,6 +1493,34 @@ export type AnswerDecisionResult =
 export type RequestMoreInfoResult =
   | { ok: true; task: Task }
   | { ok: false; error: 'not-found' | 'not-a-decision' };
+
+export type AddReviewItemResult =
+  | {
+      ok: true;
+      task: Task;
+      item: TaskReviewItem;
+      /** The shared checker's GAPS, phrased as what to write. Advice on a
+       *  successful create, never a refusal — see `reviewGapAdvice`. */
+      advice?: string;
+    }
+  | {
+      ok: false;
+      error: 'not-found' | 'bad-review';
+      /** The gate's verbatim refusal, written to land in a retrying model's
+       *  context. Present exactly when `error` is 'bad-review'. */
+      message?: string;
+    };
+
+export type AnswerTaskReviewResult =
+  | { ok: true; task: Task; item: TaskReviewItem }
+  | {
+      ok: false;
+      error: 'not-found' | 'unknown-review-item' | 'unknown-option' | 'not-a-decision';
+    };
+
+export type RequestInfoOnReviewResult =
+  | { ok: true; task: Task; item: TaskReviewItem }
+  | { ok: false; error: 'not-found' | 'unknown-review-item' | 'not-a-decision' };
 
 export type SetDependenciesResult =
   | {
@@ -1713,6 +1784,19 @@ function cryptoId(prefix: string): string {
   // char is legal in a docId (the future `task:<id>` body rooms need that).
   return `${prefix}-${randomBytes(9).toString('base64url')}`;
 }
+
+/**
+ * The id of the review item DERIVED from a task's legacy decision fields.
+ *
+ * Fixed rather than minted, and that is what makes the derivation safe to run
+ * on every read: the same task always derives the same id, so an answer
+ * addressed at it lands on the same row no matter how many times anything
+ * re-derived it. A minted id would make a read a write.
+ *
+ * It cannot collide with a real one: `cryptoId('r')` emits `r-` plus twelve
+ * base64url characters, and this is six.
+ */
+export const LEGACY_REVIEW_ITEM_ID = 'r-legacy';
 
 /**
  * The id of a NEWLY CREATED goal. Opaque and server-generated, exactly like a
@@ -2911,6 +2995,271 @@ export class TaskStore {
       ts,
     });
     return { ok: true, task };
+  }
+
+  // ── Review items: 0..n per ticket ─────────────────────────────────────────
+
+  /**
+   * Attach a review item to a ticket.
+   *
+   * `review` arrives as `unknown` because every door into this is a route
+   * carrying parsed JSON, and it is gated by `checkReviewPayload` — THE
+   * checker, the same one comment-borne declarations pass through. Writing a
+   * second gate here is precisely the "two spellings of one concept" this
+   * whole change deletes: a second copy of a limit is how a card ends up
+   * rendering something the API swore it had refused.
+   *
+   * The stored payload is the one `readReviewPayload` normalizes out of the
+   * input, so caller-supplied junk keys never reach the sidecar. Option ids
+   * are the CALLER'S — `checkReviewPayload` already demands they exist and be
+   * unique within the item, and re-minting them would break an `answeredWith`
+   * a client had already put on screen. Only the item id is minted here,
+   * `r-<crypto>`, the way options mint `o-<crypto>`.
+   *
+   * `gaps` come back as `advice` on SUCCESS. They were computed and read by
+   * nobody in the first cut of this feature: the call returned 200, the card
+   * came out thinner than the author meant, and nothing connected the two.
+   */
+  addReviewItem(
+    taskId: string,
+    review: unknown,
+    opts: { actor: { id: string; name: string; kind?: string } },
+  ): AddReviewItemResult {
+    const task = this.getTask(taskId);
+    if (!task) return { ok: false, error: 'not-found' };
+
+    const check = checkReviewPayload(review);
+    if (!check.ok) {
+      return { ok: false, error: 'bad-review', message: reviewPayloadMessage(check) };
+    }
+    const payload = readReviewPayload(review);
+    // Unreachable for anything the gate passed — kept because "the checker said
+    // yes and the reader said no" must not become an undefined write.
+    if (!payload) {
+      return { ok: false, error: 'bad-review', message: reviewPayloadMessage(check) };
+    }
+
+    const ts = Date.now();
+    const actor: TaskActor = {
+      id: opts.actor.id,
+      name: opts.actor.name,
+      kind: classifyActor(opts.actor),
+    };
+    const item: TaskReviewItem = {
+      id: cryptoId('r'),
+      review: payload,
+      createdAt: ts,
+      // Display name, like every other projected `by` (§3.3 visitor contract).
+      createdBy: actor.name,
+    };
+    task.reviews = [...(task.reviews ?? []), item];
+    task.updatedAt = ts;
+    this.scheduleSave(task.workspaceId);
+
+    const advice = reviewGapAdvice(check.gaps);
+    return { ok: true, task, item, ...(advice !== undefined ? { advice } : {}) };
+  }
+
+  /**
+   * Every review item on a ticket, in order.
+   *
+   * When the ticket holds no real rows and IS a legacy decision, one derived
+   * row is appended with the fixed id `r-legacy`. The derivation happens at
+   * READ time and writes nothing: it is idempotent by construction and cannot
+   * double-apply across a restart, which is strictly safer than the lazy
+   * back-fill `hydrateFromDisk` does for `unplacedSince`. Nothing is purged
+   * either — `needs`, `options`, `answer` and `infoRequests` keep being read
+   * and written exactly as before.
+   *
+   * Real rows SUPPRESS the derived one. Once somebody has written the ticket's
+   * questions as rows, showing the ticket title back as a question again would
+   * be a duplicate of work already done. The legacy decision is not lost by
+   * that — it is still on the task, still answerable through `answerDecision`,
+   * and still rendered by the surfaces that read those fields today.
+   *
+   * Rows are read through `readTaskReviewItem`, so a row corrupted on disk
+   * drops out of the list instead of throwing inside a renderer that never
+   * touched this ticket.
+   */
+  listReviewItems(taskId: string): TaskReviewItem[] {
+    const task = this.getTask(taskId);
+    if (!task) return [];
+    const stored = task.reviews ?? [];
+    if (stored.length > 0) {
+      const out: TaskReviewItem[] = [];
+      for (const raw of stored) {
+        const item = readTaskReviewItem(raw);
+        if (item) out.push(item);
+      }
+      return out;
+    }
+    const legacy = this.legacyReviewItem(task);
+    return legacy ? [legacy] : [];
+  }
+
+  /**
+   * The one legacy decision as a review item, or undefined when there is none.
+   *
+   * ONE rule, in ONE place, because three callers ask it — the reader above
+   * and both answer paths. If the answer paths resolved `r-legacy` under a
+   * different condition than the reader lists it under, a row nothing shows
+   * would still accept answers.
+   *
+   * The payload mapping is `reviewFromDecisionTask` in core (pure, mints
+   * nothing). What is added here is the ROW around it: the task's own clock,
+   * and — the part that matters — the legacy `answer` carried across, because
+   * an answered decision read as open is a queue that never empties.
+   *
+   * `createdBy` is deliberately empty. No legacy decision recorded who RAISED
+   * it; `assignee` is who has to answer it, which is a different person, and
+   * writing it here would attribute the question to the wrong one.
+   */
+  private legacyReviewItem(task: Task): TaskReviewItem | undefined {
+    if ((task.reviews?.length ?? 0) > 0) return undefined;
+    if (task.needs !== 'decision') return undefined;
+    const review: ReviewPayload = reviewFromDecisionTask(task);
+    const item: TaskReviewItem = {
+      id: LEGACY_REVIEW_ITEM_ID,
+      review,
+      createdAt: task.createdAt,
+      createdBy: '',
+    };
+    if (task.answer) {
+      item.answer = {
+        text: task.answer.text,
+        by: task.answer.by,
+        ts: task.answer.ts,
+        ...(task.answer.optionId !== undefined ? { answeredWith: task.answer.optionId } : {}),
+      };
+    }
+    if (task.infoRequests && task.infoRequests.length > 0) {
+      item.infoRequests = task.infoRequests.map((r) => ({ text: r.text, by: r.by, ts: r.ts }));
+    }
+    return item;
+  }
+
+  /**
+   * Answer ONE review item on a ticket, leaving its siblings open.
+   *
+   * `r-legacy` DELEGATES to `answerDecision`, untouched. That is the whole
+   * back-compat story in one line: `task.answer`, the `optionId` validation
+   * and the `decision.answered` payload stay byte-identical for every caller
+   * that never heard of review items, and there is no second implementation of
+   * "record a decision's answer" free to drift from the first.
+   */
+  answerTaskReview(
+    taskId: string,
+    reviewItemId: string,
+    text: string,
+    opts: { actor: { id: string; name: string; kind?: string }; answeredWith?: string },
+  ): AnswerTaskReviewResult {
+    const task = this.getTask(taskId);
+    if (!task) return { ok: false, error: 'not-found' };
+
+    if (reviewItemId === LEGACY_REVIEW_ITEM_ID && this.legacyReviewItem(task)) {
+      const res = this.answerDecision(taskId, text, {
+        actor: opts.actor,
+        ...(opts.answeredWith !== undefined ? { optionId: opts.answeredWith } : {}),
+      });
+      if (!res.ok) return res;
+      const item = this.legacyReviewItem(res.task);
+      // The row exists — it resolved a line above — so this only guards the
+      // type. An answer recorded is never reported as a failure.
+      if (!item) return { ok: false, error: 'unknown-review-item' };
+      return { ok: true, task: res.task, item };
+    }
+
+    const item = task.reviews?.find((r) => r.id === reviewItemId);
+    if (!item) return { ok: false, error: 'unknown-review-item' };
+    // An `answeredWith` that resolves to no option ON THIS ROW would record an
+    // answer whose provenance is a lie — and with several rows on one ticket,
+    // a neighbour's option id is the easy way to write that lie by accident.
+    if (
+      opts.answeredWith !== undefined &&
+      !item.review.options?.some((o) => o.id === opts.answeredWith)
+    ) {
+      return { ok: false, error: 'unknown-option' };
+    }
+
+    const ts = Date.now();
+    const actor: TaskActor = {
+      id: opts.actor.id,
+      name: opts.actor.name,
+      kind: classifyActor(opts.actor),
+    };
+    item.answer = {
+      text,
+      by: actor.name,
+      ts,
+      ...(opts.answeredWith !== undefined ? { answeredWith: opts.answeredWith } : {}),
+    };
+    task.updatedAt = ts;
+    this.scheduleSave(task.workspaceId);
+    this.emit({
+      type: 'decision.answered',
+      workspaceId: task.workspaceId,
+      taskId: task.id,
+      answer: text,
+      ...(opts.answeredWith !== undefined ? { optionId: opts.answeredWith } : {}),
+      reviewItemId,
+      actor,
+      links: task.links,
+      ts,
+    });
+    return { ok: true, task, item };
+  }
+
+  /**
+   * Ask ONE review item for more context instead of answering it.
+   *
+   * Carried over deliberately. "Tell me more" is a shipped first-class
+   * response with no counterpart in `ReviewPayload`, so unifying the two
+   * spellings without it would have quietly deleted a capability people use.
+   * The item stays open and stays counted — that is the point of it being its
+   * own thing rather than an answer carrying a flag.
+   *
+   * `r-legacy` delegates to the untouched `requestMoreInfo`, same as above.
+   */
+  requestMoreInfoOnReview(
+    taskId: string,
+    reviewItemId: string,
+    question: string,
+    opts: { actor: { id: string; name: string; kind?: string } },
+  ): RequestInfoOnReviewResult {
+    const task = this.getTask(taskId);
+    if (!task) return { ok: false, error: 'not-found' };
+
+    if (reviewItemId === LEGACY_REVIEW_ITEM_ID && this.legacyReviewItem(task)) {
+      const res = this.requestMoreInfo(taskId, question, { actor: opts.actor });
+      if (!res.ok) return res;
+      const item = this.legacyReviewItem(res.task);
+      if (!item) return { ok: false, error: 'unknown-review-item' };
+      return { ok: true, task: res.task, item };
+    }
+
+    const item = task.reviews?.find((r) => r.id === reviewItemId);
+    if (!item) return { ok: false, error: 'unknown-review-item' };
+
+    const ts = Date.now();
+    const actor: TaskActor = {
+      id: opts.actor.id,
+      name: opts.actor.name,
+      kind: classifyActor(opts.actor),
+    };
+    item.infoRequests = [...(item.infoRequests ?? []), { text: question, by: actor.name, ts }];
+    task.updatedAt = ts;
+    this.scheduleSave(task.workspaceId);
+    this.emit({
+      type: 'decision.info_requested',
+      workspaceId: task.workspaceId,
+      taskId: task.id,
+      question,
+      reviewItemId,
+      actor,
+      links: task.links,
+      ts,
+    });
+    return { ok: true, task, item };
   }
 
   /**
