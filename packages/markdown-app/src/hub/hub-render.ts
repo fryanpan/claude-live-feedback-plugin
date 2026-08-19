@@ -1313,7 +1313,6 @@ export function renderHomeReview(
     quiet.textContent = 'Nothing is waiting for your review right now.';
     container.append(quiet);
     appendSettledRows(container, done, handlers, now);
-    appendUnrepliedRows(container, queue.unreplied, handlers, now);
     return;
   }
 
@@ -1354,57 +1353,6 @@ export function renderHomeReview(
   });
 
   appendSettledRows(container, done, handlers, now);
-  appendUnrepliedRows(container, queue.unreplied, handlers, now);
-}
-
-/**
- * Threads where an agent spoke last and nobody declared anything.
- *
- * Until this change these WERE the queue — membership was inferred from "an
- * agent commented and no person answered", which is true of every status note
- * an agent has ever posted. They are demoted rather than dropped: 105 rows
- * were sitting in that inferred set the day this landed, and a row that stops
- * rendering is indistinguishable from data loss to whoever wrote it. So the
- * section states its own count and says why it is down here.
- *
- * Deliberately below the settled rows and outside `queue.total`: the walkthrough,
- * the count and the banner are the DECLARED queue, and letting these back into
- * any of those is how the queue becomes unreadable again.
- */
-function appendUnrepliedRows(
-  container: HTMLElement,
-  unreplied: ReviewItem[],
-  handlers: ReviewStripHandlers,
-  now: number,
-): void {
-  if (unreplied.length === 0) return;
-  const head = document.createElement('div');
-  head.className = 'hub-review-unreplied-head';
-  const label = document.createElement('h3');
-  label.className = 'hub-review-unreplied-title';
-  label.textContent =
-    unreplied.length === 1 ? '1 unanswered comment' : `${unreplied.length} unanswered comments`;
-  const note = document.createElement('p');
-  note.className = 'hub-review-unreplied-note';
-  note.textContent = 'Nobody asked you for anything here — open one if you want to.';
-  head.append(label, note);
-  container.append(head);
-
-  for (const item of unreplied) {
-    const row = document.createElement('button');
-    row.type = 'button';
-    row.className = `hub-review-row hub-review-row-unreplied hub-review-${item.kind}`;
-    const title = document.createElement('span');
-    title.className = 'hub-review-row-title';
-    title.textContent = reviewRowTitle(item);
-    const sub = document.createElement('span');
-    sub.className = 'hub-review-row-sub';
-    sub.textContent = waitingLabel(item.since, now);
-    row.append(title, sub);
-    row.title = `${REVIEW_KIND_LABEL[item.kind]}: ${item.title} · ${item.why}`;
-    row.addEventListener('click', () => handlers.onOpen(item));
-    container.append(row);
-  }
 }
 
 /** What this sitting already cleared: kept in the stack as struck-through
