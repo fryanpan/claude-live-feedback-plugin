@@ -58,24 +58,17 @@
      234 is container-relative and therefore true at every width; it
      reproduces the same 274px at 1600, and 359 / 166 / 166 at the 1661 / 1920
      / 2400 a reviewer measured off rendered pixels. */
-  --hub-board-chrome: 234px;
-  /* `100vw` counts the classic scrollbar; every box it is spent in does not.
-     Measured after the 234px correction: at a 1661px window the reservation
-     was right and the row still came out 405px, fifteen short of its floor,
-     because `100vw` read 1661 while the layout had 1646 to give. Reserved at
-     the WIDEST of the values rather than the measured one, because the width
-     is the platform's and not ours — 0 with macOS overlay scrollbars, 15 in
-     this Chrome, 17 on Windows. This is a floor, so the two errors are not
-     symmetric: over-reserving costs the panel pixels it has spare, while
-     under-reserving misses the one guarantee the token makes. Nothing in CSS
-     reports the number, which is why it is an allowance and not a
-     calculation. */
-  --hub-scrollbar-allowance: 17px;
-  --hub-board-keep: calc(
-    var(--hub-board-min) +
-    var(--hub-board-chrome) +
-    var(--hub-scrollbar-allowance)
-  );
+  /* Inside `.hub-main`'s grid, everything to the left of the board: the nav
+     rail's `max-content` track (170px measured — the one number here with no
+     literal to read, and the one a longer nav label would move) and the
+     grid's own 20px gap. Named because the floor's clamp needs this distance
+     in `.hub-main`'s own coordinates, where the page gutters are already
+     out. */
+  --hub-board-inset: 190px;
+  /* The same distance in `#hub-root`'s coordinates — the page gutters either
+     side, the inset above, and the panel's offset. 234px. */
+  --hub-board-chrome: calc(28px + var(--hub-board-inset) + var(--hub-detail-gap));
+  --hub-board-keep: calc(var(--hub-board-min) + var(--hub-board-chrome));
   /* The panel's width IN THE SPLIT, where it is capped by what the board must
      keep — one expression, because the panel's width and the room the board
      reserves for it have to be the same number or the panel's edge lands over
@@ -3743,6 +3736,19 @@ a.hub-link-chip:hover {
        beside 420px of board, and the panel then grows to 1100 while the board
        takes everything past it. */
     width: var(--hub-detail-pane-w);
+    /* The floor, enforced rather than predicted. `--hub-detail-pane-w` is
+       derived from `100vw`, which counts the classic scrollbar; nothing it is
+       spent in does. That gap is not knowable in CSS — measured 0 with macOS
+       overlay scrollbars, 15 and then 19 in two runs of this same Chrome — so
+       a reserved allowance is a guess, and the two guesses this file tried
+       were both wrong by the time they were measured.
+       A percentage is not a guess. The panel is `position: fixed`, so its
+       containing block is the initial containing block: `100%` here IS the
+       layout width, scrollbar already subtracted, whatever it happens to be.
+       Paired with the clamp on `.hub-main`'s reservation below, which uses
+       `100%` against ITS own box — the two boxes differ, which is exactly why
+       one `100vw` could never serve both. */
+    max-width: calc(100% - var(--hub-board-keep));
     max-height: none;
     height: 100%;
     border-radius: 0;
@@ -3760,7 +3766,18 @@ a.hub-link-chip:hover {
      thing a test can assert, and so the two subtrees (board and panel) do not
      have to be siblings. */
   body.hub-detail-open .hub-main {
-    padding-right: calc(var(--hub-detail-pane-w) + var(--hub-detail-gap));
+    /* The reservation, floored. `100%` on a padding resolves against this
+       element's own containing block — `#hub-root`'s content box — so
+       `100% - inset - board-min` is exactly the widest reservation that still
+       leaves the board its floor, in the units the board is actually measured
+       in. The two clamps meet at the same pair of numbers, so the board's
+       right edge lands at `gutter + inset + board-min` and the panel's left
+       edge no closer than `board-keep` from the right: a 30px gap at the
+       breakpoint, and it cannot close, whatever the scrollbar is. */
+    padding-right: min(
+      calc(var(--hub-detail-pane-w) + var(--hub-detail-gap)),
+      calc(100% - var(--hub-board-inset) - var(--hub-board-min))
+    );
   }
   /* The page grows by exactly what the panel took.
      Without this the reservation above is viewport-sized and the box it comes
