@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the daily live-feedback doc-triage job as a launchd LaunchAgent.
+# Install the daily claude-workspaces doc-triage job as a launchd LaunchAgent.
 #
 # Fires once a day (09:00 local by default — edit the plist template's
 # StartCalendarInterval and re-run) and spawns a headless Claude run that pings

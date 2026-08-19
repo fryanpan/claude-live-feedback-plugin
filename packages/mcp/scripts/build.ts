@@ -8,7 +8,7 @@
  *
  *   packages/mcp/dist/mcp.js           — canonical build artifact, the
  *                                        `bin` target of the published
- *                                        npm package (`live-feedback-mcp`).
+ *                                        npm package (`claude-workspaces-mcp`).
  *
  *   packages/plugin/mcp/index.js       — vendored copy bundled INTO the
  *                                        plugin tree so `.mcp.json` can

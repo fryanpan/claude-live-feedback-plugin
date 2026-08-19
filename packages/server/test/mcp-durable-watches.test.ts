@@ -47,7 +47,18 @@ class McpChild {
       // The parent session may itself carry an agent identity; the child must
       // get exactly the identity the test names, or the fixture measures the
       // wrong session.
-      if (k === 'FEEDBACK_AGENT_NAME' || k === 'FEEDBACK_AUTHOR' || k === 'FEEDBACK_BASE_URL') {
+      // Both spellings: the rename gave each of these a `CW_` name and kept
+      // the old one working, so stripping only one half lets the parent's
+      // identity through under the other and the fixture silently measures
+      // the wrong session.
+      if (
+        k === 'FEEDBACK_AGENT_NAME' ||
+        k === 'FEEDBACK_AUTHOR' ||
+        k === 'FEEDBACK_BASE_URL' ||
+        k === 'CW_AGENT_NAME' ||
+        k === 'CW_AUTHOR' ||
+        k === 'CW_BASE_URL'
+      ) {
         continue;
       }
       if (v !== undefined) childEnv[k] = v;
@@ -291,9 +302,11 @@ describe('watches survive an MCP child respawn (through the real bundle)', () =>
     other.kill();
   }, 30_000);
 
-  it('a session with no FEEDBACK_AGENT_NAME is told its watches are session-only, and nothing lands under the shared id', async () => {
-    // What the plugin's own .mcp.json pins for every peer.
-    const anon = await spawnChild({ FEEDBACK_AGENT_NAME: undefined, FEEDBACK_AUTHOR: 'agent' });
+  it('a session with no agent name is told its watches are session-only, and nothing lands under the shared id', async () => {
+    // What the plugin's own .mcp.json pins for every peer. Deliberately the
+    // CURRENT spelling: the cases above pass the legacy names and pass, which
+    // is what makes them the regression test for the rename's fallback.
+    const anon = await spawnChild({ CW_AGENT_NAME: undefined, CW_AUTHOR: 'agent' });
     const w = (await anon.tool('watch_doc', { docId: 'dw-two' })) as {
       persisted: boolean;
       persistence: string;
@@ -310,7 +323,7 @@ describe('watches survive an MCP child respawn (through the real bundle)', () =>
     };
     expect(list.persistence.mode).toBe('session-only');
     expect(list.persistence.agentId).toBe('known-agent');
-    expect(list.persistence.reason).toContain('FEEDBACK_AGENT_NAME');
+    expect(list.persistence.reason).toContain('CW_AGENT_NAME');
     expect(list.restore.status).toBe('session-only');
     expect(list.restore.from).toBe('session');
     // The server never heard about it under the shared identity — the store

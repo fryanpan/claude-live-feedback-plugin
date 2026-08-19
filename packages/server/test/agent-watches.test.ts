@@ -229,7 +229,7 @@ describe('/api/agents/:agentId/watches', () => {
       const res = await call(base, shared, 'POST', { add: ['doc-one'] });
       expect(res.status).toBe(400);
       expect(res.json.error).toBe(SHARED_IDENTITY_ERROR);
-      expect(String(res.json.message)).toContain('FEEDBACK_AGENT_NAME');
+      expect(String(res.json.message)).toContain('CW_AGENT_NAME');
       const read = await call(base, shared, 'GET');
       expect(read.status).toBe(400);
     }

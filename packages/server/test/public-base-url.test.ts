@@ -75,7 +75,7 @@ describe('normalizePublicBaseUrl', () => {
     ];
     for (const [why, value] of bad) {
       it(`rejects ${why}`, () => {
-        expect(() => normalizePublicBaseUrl(value)).toThrow(/LF_PUBLIC_BASE_URL is invalid/);
+        expect(() => normalizePublicBaseUrl(value)).toThrow(/CW_PUBLIC_BASE_URL is invalid/);
       });
     }
   });

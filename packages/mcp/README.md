@@ -1,22 +1,22 @@
-# @fryanpan/live-feedback-mcp
+# @fryanpan/claude-workspaces-mcp
 
 Thin MCP stdio server that proxies tool calls to a running
-[live-feedback](https://github.com/fryanpan/claude-workspaces-plugin)
+[claude-workspaces](https://github.com/fryanpan/claude-workspaces-plugin)
 HTTP/WS server. Agents launch this binary over stdio; state is
 authoritative in the main server.
 
 ## Installation
 
-You don't install this directly — it's invoked by the `live-feedback`
+You don't install this directly — it's invoked by the `claude-workspaces`
 Claude Code plugin. The plugin's `.mcp.json` resolves this binary via
 the npm registry:
 
 ```json
 {
   "mcpServers": {
-    "live-feedback": {
+    "claude-workspaces": {
       "command": "npx",
-      "args": ["-y", "@fryanpan/live-feedback-mcp@latest"]
+      "args": ["-y", "@fryanpan/claude-workspaces-mcp@latest"]
     }
   }
 }
@@ -70,8 +70,8 @@ See [`src/mcp.ts`](https://github.com/fryanpan/claude-workspaces-plugin/blob/mai
 The server advertises `experimental: { 'claude/channel': {} }` and pushes thread events as `notifications/claude/channel`. Claude Code requires per-session opt-in:
 
 ```sh
-claude --channels plugin:live-feedback@claude-live-feedback   # production
-claude --dangerously-load-development-channels plugin:live-feedback@claude-live-feedback   # local-dev
+claude --channels plugin:claude-workspaces@claude-workspaces   # production
+claude --dangerously-load-development-channels plugin:claude-workspaces@claude-workspaces   # local-dev
 ```
 
 ## Releasing this package
@@ -91,7 +91,7 @@ cd packages/mcp
 npm link
 ```
 
-Makes `live-feedback-mcp` resolve on `PATH` so the plugin's `.mcp.json` keeps working while you iterate on the tool surface. Note: the `.mcp.json` shipped in the plugin uses the published-on-npm path; if you want it to use your local link instead, replace `npx -y @fryanpan/live-feedback-mcp@latest` with `live-feedback-mcp` (no args).
+Makes `claude-workspaces-mcp` resolve on `PATH` so the plugin's `.mcp.json` keeps working while you iterate on the tool surface. Note: the `.mcp.json` shipped in the plugin uses the published-on-npm path; if you want it to use your local link instead, replace `npx -y @fryanpan/claude-workspaces-mcp@latest` with `claude-workspaces-mcp` (no args).
 
 ## License
 
