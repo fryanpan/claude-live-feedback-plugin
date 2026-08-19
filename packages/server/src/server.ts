@@ -9,8 +9,8 @@ import {
   type WebhookPayload,
   anchors,
   checkReviewPayload,
-  reviewGapAdvice,
   contentKind,
+  reviewGapAdvice,
   reviewPayloadMessage,
   suggestOps,
   summaryHash,
@@ -227,9 +227,7 @@ function anchorSnippetText(anchor: Anchor): string | undefined {
  */
 function reviewFromBody(
   raw: unknown,
-):
-  | { ok: true; review?: ReviewPayload; advice?: string }
-  | { ok: false; error: string } {
+): { ok: true; review?: ReviewPayload; advice?: string } | { ok: false; error: string } {
   if (raw === undefined || raw === null) return { ok: true };
   const check = checkReviewPayload(raw);
   if (!check.ok) return { ok: false, error: reviewPayloadMessage(check) };
@@ -3683,7 +3681,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                 ...(declared.review ? { review: declared.review } : {}),
               });
               return t
-                ? j(200, { thread: t, ...(declared.advice ? { reviewAdvice: declared.advice } : {}) })
+                ? j(200, {
+                    thread: t,
+                    ...(declared.advice ? { reviewAdvice: declared.advice } : {}),
+                  })
                 : j(404, { error: 'thread not found' });
             }
             // Answering a Review Item. Deliberately a thin wrapper over the
