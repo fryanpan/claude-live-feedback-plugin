@@ -1333,7 +1333,19 @@ export function renderHomeReview(
     const sub = document.createElement('span');
     sub.className = 'hub-review-row-sub';
     sub.textContent = waitingLabel(item.since, now);
-    row.append(title, sub);
+    row.append(title);
+    // The declaration's second line, on the row rather than only on the card
+    // it opens. A header whose "why it matters" half is one tap away is not a
+    // header — the queue is the surface being SCANNED, and deciding what to
+    // open next is exactly the judgement that line exists to serve. This is
+    // the whole reason the API refuses a `why` longer than one line.
+    if (item.review) {
+      const why = document.createElement('span');
+      why.className = 'hub-review-row-why';
+      why.textContent = item.review.why;
+      row.append(why);
+    }
+    row.append(sub);
     row.title = `${REVIEW_KIND_LABEL[item.kind]}: ${item.title}${item.ask ? ` — ${item.ask}` : ''} · ${item.why}`;
     row.addEventListener('click', () => handlers.onOpen(item));
     container.append(row);

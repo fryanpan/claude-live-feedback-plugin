@@ -1921,6 +1921,20 @@ body.hub-body {
   color: var(--fg);
   overflow-wrap: anywhere;
 }
+/* The second half of a declared item's header. The API refuses a `why` over
+   one line precisely so this can sit on the scanning surface without pushing
+   the next row off the screen — clamped anyway, because the refusal counts
+   characters and a narrow phone counts pixels. */
+.hub-review-row-why {
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--fg-soft, var(--fg-muted));
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 .hub-review-row-sub {
   font-size: 12.5px;
   line-height: 1.4;

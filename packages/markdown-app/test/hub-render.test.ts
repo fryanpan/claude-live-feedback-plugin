@@ -917,6 +917,23 @@ describe('renderHomeReview', () => {
     // above is not a page that rendered nothing.
     expect(root.querySelectorAll('.hub-review-row')).toHaveLength(1);
   });
+
+  // The header is two lines and both of them belong on the surface being
+  // SCANNED. A "why it matters" that is one tap away is not a header — the
+  // queue row is where the reader decides what to open, which is the exact
+  // judgement that line exists to serve.
+  it('puts the declared why on the queue row, not only on the card it opens', () => {
+    renderHomeReview(root, reviewQueue([], [threadItem(), note()], NOW), strip(), [], NOW);
+    const rows = [...root.querySelectorAll('.hub-review-row')];
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.querySelector('.hub-review-row-why')?.textContent).toBe(
+      threadItem().review?.why,
+    );
+    // An undeclared row has no second line to show, and inventing one would
+    // put a derived sentence exactly where an authored one is promised.
+    expect(rows[1]?.className).toContain('hub-review-row-unreplied');
+    expect(rows[1]?.querySelector('.hub-review-row-why')).toBeNull();
+  });
 });
 
 describe('renderReviewBanner', () => {
