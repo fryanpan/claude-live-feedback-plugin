@@ -88,9 +88,9 @@ describe('threadCreateRequest — the review declaration', () => {
   // acquire the key at all, since the server reads its presence as the
   // declaration itself.
   it('omits the key entirely when nothing is declared', () => {
-    expect('review' in threadCreateRequest({ docId: 'd-1', find: 'x', text: 't' }, AUTHOR).body).toBe(
-      false,
-    );
+    expect(
+      'review' in threadCreateRequest({ docId: 'd-1', find: 'x', text: 't' }, AUTHOR).body,
+    ).toBe(false);
     expect('review' in threadCreateRequest({ docId: 'd-1', text: 't' }, AUTHOR).body).toBe(false);
   });
 });

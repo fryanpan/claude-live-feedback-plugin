@@ -226,7 +226,7 @@ const server = new Server(
 const REVIEW_ITEM_SCHEMA = {
   type: 'object',
   description:
-    'Declares this comment as a Review Item, putting it on the reviewer\'s Home queue. Omit for ordinary comments — status notes and closing remarks must NOT declare. Refused (400, naming the field) if headline/why are missing, multi-line, or over budget: write them like a ticket title, because they are the two lines a phone shows.',
+    "Declares this comment as a Review Item, putting it on the reviewer's Home queue. Omit for ordinary comments — status notes and closing remarks must NOT declare. Refused (400, naming the field) if headline/why are missing, multi-line, or over budget: write them like a ticket title, because they are the two lines a phone shows.",
   properties: {
     shape: {
       type: 'string',
@@ -258,7 +258,10 @@ const REVIEW_ITEM_SCHEMA = {
       items: {
         type: 'object',
         properties: {
-          id: { type: 'string', description: 'Stable id; the answer records which one was picked.' },
+          id: {
+            type: 'string',
+            description: 'Stable id; the answer records which one was picked.',
+          },
           label: { type: 'string', description: '1-3 words, ≤28 chars. This is the button.' },
           detail: { type: 'string', description: 'What choosing it costs or buys. ≤50 words.' },
         },
