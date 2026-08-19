@@ -60,3 +60,37 @@ describe('threadCreateRequest', () => {
     );
   });
 });
+
+describe('threadCreateRequest — the review declaration', () => {
+  const REVIEW = {
+    shape: 'decision',
+    headline: 'Where should the trial banner live?',
+    why: 'Blocks the onboarding rework.',
+    options: [
+      { id: 'above', label: 'Keep above' },
+      { id: 'below', label: 'Move below' },
+    ],
+  };
+
+  // Both endpoints, because a subject thread is the one a task discussion
+  // uses and it is a different branch of this function.
+  it('carries it on the by_find branch', () => {
+    const r = threadCreateRequest({ docId: 'd-1', find: 'x', text: 't', review: REVIEW }, AUTHOR);
+    expect(r.body.review).toEqual(REVIEW);
+  });
+
+  it('carries it on the subject branch', () => {
+    const r = threadCreateRequest({ docId: 'task:t-9', text: 't', review: REVIEW }, AUTHOR);
+    expect(r.body.review).toEqual(REVIEW);
+  });
+
+  // The positive control for the two above: an ordinary create must not
+  // acquire the key at all, since the server reads its presence as the
+  // declaration itself.
+  it('omits the key entirely when nothing is declared', () => {
+    expect(
+      'review' in threadCreateRequest({ docId: 'd-1', find: 'x', text: 't' }, AUTHOR).body,
+    ).toBe(false);
+    expect('review' in threadCreateRequest({ docId: 'd-1', text: 't' }, AUTHOR).body).toBe(false);
+  });
+});

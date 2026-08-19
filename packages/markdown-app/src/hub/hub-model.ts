@@ -4,6 +4,7 @@
  * no fetch — so the board's grouping/filter/ordering rules are unit-testable
  * without a browser.
  */
+import type { ReviewPayload } from '@feedback/core';
 import type { StoredGoalSummary } from '@feedback/core/goal-summary';
 
 export type TaskStatus = 'todo' | 'in-progress' | 'done';
@@ -724,6 +725,26 @@ export function humanBlockerRows(tasks: HubTask[]): BlockerRow[] {
  */
 export interface ReviewThreadItem {
   kind: 'task-thread' | 'doc-thread';
+  /**
+   * Which half of the queue this came from.
+   *
+   * `declared` — an agent said in so many words that it is asking for
+   * something, by putting a `review` payload on its comment. `unreplied` —
+   * the older INFERRED rule: an agent comment nobody has replied to. The
+   * second one fires on exactly what a finished exchange looks like, so it
+   * accumulated one permanent row per thing the agents got right, which is
+   * what this feature exists to stop.
+   *
+   * Absent on a payload from a server older than the field, which reads as
+   * `unreplied` — every pre-existing row keeps its pre-existing meaning
+   * rather than being promoted into a queue it never declared for.
+   */
+  band?: 'declared' | 'unreplied';
+  /** The declaration itself, on a `declared` item. */
+  review?: ReviewPayload;
+  /** Which comment carries the declaration — the answer is written against
+   *  it, so a thread with several declarations answers the right one. */
+  commentId?: string;
   docId: string;
   threadId: string;
   taskId?: string;
@@ -794,6 +815,18 @@ export interface ReviewItem {
   blocker?: BlockerRow;
   /** Set on either thread kind — where the reply gets written. */
   thread?: ReviewThreadItem;
+  /** Set when an agent DECLARED this as a review item. Its presence is what
+   *  separates the queue proper from the inferred `unreplied` list below, so
+   *  every reader can ask one question rather than re-deriving the rule. */
+  review?: ReviewPayload;
+}
+
+/** A declared item's headline is authored to fit and validated at the API, so
+ *  it is shown as written. Everything else is somebody's paragraph and gets
+ *  the derived heading — which CLIPS, and clipping an authored headline is
+ *  exactly the unreadable row this feature removes. */
+export function reviewCardHeadline(item: ReviewItem): string {
+  return item.review ? item.review.headline : reviewHeadline(reviewRowTitle(item));
 }
 
 /** The task-and-dependents row an item carries, for the two bands that have
@@ -805,6 +838,18 @@ export function reviewRow(item: ReviewItem): DecisionRow | undefined {
 
 export interface ReviewQueue {
   items: ReviewItem[];
+  /**
+   * Agent comments nobody has replied to that declared NOTHING.
+   *
+   * They are deliberately not `items`: this is the inferred rule the declared
+   * queue replaces, and it fires on exactly what a finished exchange looks
+   * like. But they are not dropped either — 105 of them existed the day this
+   * shipped, a handful holding real questions, and a row that silently stops
+   * being rendered is indistinguishable from data loss to whoever wrote it.
+   * So they render under their own heading, out of the count and out of the
+   * walkthrough, where nobody has to work them and anybody can look.
+   */
+  unreplied: ReviewItem[];
   total: number;
   /** How many are holding other work up right now: decisions with dependents,
    *  plus every human-owned blocker (which has dependents by definition). Not
@@ -988,14 +1033,22 @@ export function reviewQueue(
     });
   }
 
+  // Ranked exactly like the declared ones — same comparator, same keys — and
+  // then split at the end. Ranking them apart would make the two lists
+  // disagree about what "important" means the first time one of them learned
+  // something the other did not.
+  const inferred: Array<{ item: ReviewItem; rank: AskRank }> = [];
+
   for (const t of threadItems) {
     const where = t.kind === 'task-thread' ? 'on this task' : 'on this doc';
-    ranked.push({
+    const declared = t.band === 'declared' && t.review !== undefined;
+    const entry = {
       item: {
         key: `${t.kind}:${t.docId}:${t.threadId}`,
         kind: t.kind,
         title: t.title,
         ask: t.ask,
+        ...(declared ? { review: t.review } : {}),
         // "asked" is a claim about there being a question. Say it only when
         // there is one; otherwise the row promises an answerable thing and
         // delivers a status note, which is how a strip stops being believed.
@@ -1003,9 +1056,15 @@ export function reviewQueue(
         // The run can start days before the ask — status, status, then a
         // question — and quoting the run's start there tells the reader they
         // have been sitting on something they were handed minutes ago.
-        why: t.direct
-          ? `${t.askedBy} asked you ${timeAgo(t.askedAt ?? t.since, now)} · ${where}`
-          : `${t.askedBy} posted ${timeAgo(t.since, now)} · ${where}`,
+        // A declared item's second line is the one its author WROTE — why it
+        // matters, in their words. The derived line ("Name posted 3d ago")
+        // describes the comment rather than the ask, which is all there is to
+        // say when nobody declared anything.
+        why: declared
+          ? (t.review?.why ?? '')
+          : t.direct
+            ? `${t.askedBy} asked you ${timeAgo(t.askedAt ?? t.since, now)} · ${where}`
+            : `${t.askedBy} posted ${timeAgo(t.since, now)} · ${where}`,
         since: t.since,
         thread: t,
       },
@@ -1016,17 +1075,24 @@ export function reviewQueue(
         t.since,
         t.threadId,
       ),
-    });
+    };
+    (declared ? ranked : inferred).push(entry);
   }
 
   ranked.sort((a, b) => compareAsk(a.rank, b.rank));
+  inferred.sort((a, b) => compareAsk(a.rank, b.rank));
   const items = ranked.map((r) => r.item);
 
   // Every blocker is blocking — that is the condition for being in the band —
   // so it belongs in the number that means "act now". A thread still does not:
   // it blocks nothing structurally, and counting it would inflate the one
   // number that is supposed to mean act now.
-  return { items, total: items.length, blocking: decisions.blocking + blockers.length };
+  return {
+    items,
+    unreplied: inferred.map((r) => r.item),
+    total: items.length,
+    blocking: decisions.blocking + blockers.length,
+  };
 }
 
 /** "Blocking 2 tasks" / "Hard-blocking 1 task". One phrasing, both bands. */
@@ -1926,6 +1992,21 @@ export function reviewBadge(kind: ReviewKind): { label: string; tone: string } {
   if (kind === 'decision') return { label: 'Decision', tone: 'decision' };
   if (kind === 'blocker') return { label: 'Your task, blocking', tone: 'plain' };
   return { label: 'Needs your reply', tone: 'reply' };
+}
+
+/**
+ * The badge for a queue item, declaration included.
+ *
+ * A declared decision reads as one whether it arrived as a task row or as a
+ * comment — which is the point of declaring — so it borrows the task
+ * decision's own tone rather than inventing a third amber. A declared
+ * `review` gets its own label because "needs your reply" understates a
+ * fifteen-minute doc read.
+ */
+export function reviewItemBadge(item: ReviewItem): { label: string; tone: string } {
+  if (item.review?.shape === 'decision') return { label: 'Decision', tone: 'decision' };
+  if (item.review?.shape === 'review') return { label: 'Review', tone: 'review' };
+  return reviewBadge(item.kind);
 }
 
 /** "blocks Ship the tunnel" — the tail of the card's provenance line. Lower

@@ -14,6 +14,7 @@ import {
   type Anchor,
   type DocMeta,
   type DocType,
+  type ReviewPayload,
   type Thread,
   type User,
   type WebhookPayload,
@@ -26,6 +27,7 @@ import {
   postReply as schemaPostReply,
   replaceAnchor as schemaReplaceAnchor,
   setStatus as schemaSetStatus,
+  setCommentReview,
   setThreadSummary,
   suggestOps,
 } from '@feedback/core';
@@ -587,7 +589,23 @@ export class Rooms {
      * summary is not worth granting an outsider an outbound call. Defaults to
      * true so local editors and agents keep working unchanged.
      */
-    opts?: { generate?: boolean },
+    opts?: {
+      generate?: boolean;
+      /**
+       * The Review Item this comment DECLARES, if it declares one.
+       *
+       * Rides on the ordinary comment path rather than a store of its own,
+       * which is what makes every existing mechanism apply to it for free:
+       * threads already sync, anchor, resolve, watch and emit the events
+       * agents listen to, and a person's reply already ends the unanswered
+       * run — which is exactly how a review item leaves the queue.
+       *
+       * `postComment` is the one choke point all three reply paths funnel
+       * through (browser REST, MCP `post_reply`, widget), so this is the
+       * layer where the payload has to be accepted, not the routes above it.
+       */
+      review?: ReviewPayload;
+    },
   ): Promise<Thread | null> {
     const room = this.rooms.get(docId);
     if (!room) return null;
@@ -598,7 +616,7 @@ export class Rooms {
         threadId: id,
         anchor,
         createdBy: author,
-        firstComment: { id: randomId(), text },
+        firstComment: { id: randomId(), text, ...(opts?.review ? { review: opts.review } : {}) },
       });
       this.fireEvent(room, 'thread.created', t, undefined, opts);
       // Hash the activity event with the comment's PERSISTED ts (not a fresh
@@ -615,6 +633,7 @@ export class Rooms {
       id: randomId(),
       author,
       text,
+      ...(opts?.review ? { review: opts.review } : {}),
     });
     if (!comment) return null;
     // A PERSON replying to a resolved thread is continuing the conversation,
@@ -644,6 +663,55 @@ export class Rooms {
   }
 
   /**
+   * Answer a Review Item: post the person's words as a reply, and record
+   * which option they came from.
+   *
+   * **The answer IS the reply.** There is deliberately no second answer store
+   * and no answered flag, because a review item leaves the queue exactly when
+   * a person speaks — which `unansweredRun` already decides, which
+   * `postComment` already triggers, and which already reopens a resolved
+   * thread and already emits the events watching agents receive. Building a
+   * parallel path would give "this is handled" two spellings that could
+   * immediately disagree.
+   *
+   * `optionId` is provenance only, mirroring `answer_decision`'s split: `text`
+   * is always the verbatim answer, and the id merely records which candidate
+   * the words came from. A typed answer carries no id and is not a lesser
+   * answer.
+   *
+   * Refuses an unknown option rather than recording a dangling id — the card
+   * renders the label by looking the id up, so a stale one would render as a
+   * blank choice on a decision that reads as answered.
+   */
+  async answerReviewItem(
+    docId: string,
+    threadId: string,
+    commentId: string,
+    author: User,
+    text: string,
+    optionId?: string,
+    opts?: { generate?: boolean },
+  ): Promise<{ ok: true; thread: Thread } | { ok: false; error: string }> {
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'no-doc' };
+    const thread = this.getThread(docId, threadId);
+    const target = thread?.comments.find((c) => c.id === commentId);
+    if (!target?.review) return { ok: false, error: 'not-a-review-item' };
+    if (optionId !== undefined && !target.review.options?.some((o) => o.id === optionId)) {
+      return { ok: false, error: `unknown option '${optionId}'` };
+    }
+    // Stamped BEFORE the reply so the payload is already current when
+    // `thread.replied` reaches a watching agent — otherwise the event that
+    // says "answered" carries a card that still says "unanswered".
+    setCommentReview(room.ydoc, threadId, commentId, {
+      ...target.review,
+      ...(optionId !== undefined ? { answeredWith: optionId } : {}),
+    });
+    const replied = await this.postComment(docId, threadId, author, text, undefined, opts);
+    return replied ? { ok: true, thread: replied } : { ok: false, error: 'reply-failed' };
+  }
+
+  /**
    * Agent-side thread creation. Mirrors the user-side editor flow
    * (editor → POST /api/docs/<id>/threads with a pre-built Anchor) but
    * accepts `find`+context the same way `find_and_replace` does — the
@@ -669,7 +737,7 @@ export class Rooms {
      * — the worst of the gate's holes, because it needs no pre-existing
      * thread. Defaults to generating, like every other local caller.
      */
-    writeOpts?: { generate?: boolean },
+    writeOpts?: { generate?: boolean; review?: ReviewPayload },
   ): Promise<
     | { ok: true; thread: Thread }
     | {

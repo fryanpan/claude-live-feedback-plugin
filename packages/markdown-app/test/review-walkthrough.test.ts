@@ -45,8 +45,17 @@ function decision(overrides: Partial<HubTask> = {}): HubTask {
   return task({ assignee: 'human', needs: 'decision', ...overrides });
 }
 
+/**
+ * A thread an agent DECLARED as a review item.
+ *
+ * Declaring is what puts a thread in the queue now, so this is the shape the
+ * walkthrough sees; `note()` below is the undeclared twin, which lands in the
+ * demoted band and never reaches a card. The headline repeats the `ask`
+ * because `ask` IS the headline for a declared item — the queue reads the
+ * author's words rather than deriving a title from the comment.
+ */
 function threadItem(over: Partial<ReviewThreadItem> = {}): ReviewThreadItem {
-  return {
+  const base: ReviewThreadItem = {
     kind: 'task-thread',
     docId: 'task:t-1',
     threadId: 'th-1',
@@ -55,8 +64,28 @@ function threadItem(over: Partial<ReviewThreadItem> = {}): ReviewThreadItem {
     ask: 'Green or blue?',
     askedBy: 'Helper',
     since: NOW - 60_000,
+    band: 'declared',
+    commentId: 'c-1',
+    review: {
+      shape: 'review',
+      headline: 'Green or blue?',
+      why: 'The mockup shows one and the build ships the other.',
+    },
     ...over,
   };
+  // Keep the declaration and the derived title in step when a case overrides
+  // the ask, so no fixture can quietly test a card whose head disagrees with
+  // its own row.
+  if (over.ask !== undefined && over.review === undefined && base.review) {
+    base.review = { ...base.review, headline: over.ask };
+  }
+  return base;
+}
+
+/** An ordinary agent comment nobody declared anything on. */
+function note(over: Partial<ReviewThreadItem> = {}): ReviewThreadItem {
+  const { band, commentId, review, ...rest } = threadItem(over);
+  return rest;
 }
 
 /** The queue with no threads in it — most cases here are about decisions. */
@@ -315,9 +344,9 @@ describe('the walkthrough matches the approved mockup', () => {
     expect(wait.textContent).not.toContain('waiting');
 
     renderReviewWalkthrough(root, reviewQueue([], [threadItem({ direct: true })], NOW), 0, walk());
-    expect((root.querySelector('.hub-walk-k-reply') as HTMLElement).textContent).toBe(
-      'Needs your reply',
-    );
+    // A declared item reads as what it declared, not as the surface it arrived
+    // on — the same words a declared decision on a task would carry.
+    expect((root.querySelector('.hub-walk-k-review') as HTMLElement).textContent).toBe('Review');
     // The chip is left out rather than filled with a placeholder when there
     // is no body of work to name.
     expect(root.querySelector('.hub-walk-k-count')).toBeNull();
@@ -535,11 +564,19 @@ describe('renderReviewWalkthrough — comments', () => {
   // A typed question is regularly a paragraph. The mockup's card is a SHORT
   // title plus the ask in full, and we have no short title to read — so the
   // heading is derived and the quote carries the words.
+  // The FALLBACK path: a card built from a thread that declared nothing. The
+  // banding keeps those out of `queue.items`, so this drives the renderer
+  // directly rather than through `reviewQueue` — the branch is what stops an
+  // undeclared item, if one ever reaches a card, from showing a clipped
+  // heading with the comment itself nowhere on the page.
   it('headlines a long question and keeps the whole of it in the quote', () => {
     const ask =
       'The card head puts the wait at the end of the line, which wraps onto its own row at 430px. ' +
       'Do you want it kept there, or moved under the title where it has the width?';
-    renderReviewWalkthrough(root, queueOf(threadItem({ ask, direct: true })), 0, walk());
+    const undeclared = reviewQueue([], [note({ ask, direct: true })], NOW);
+    expect(undeclared.items).toHaveLength(0);
+    const forced = { ...undeclared, items: undeclared.unreplied, total: 1 };
+    renderReviewWalkthrough(root, forced, 0, walk());
     const title = (root.querySelector('.hub-walk-title') as HTMLElement).textContent ?? '';
     expect(title.length).toBeLessThan(ask.length);
     expect(title.startsWith('The card head puts the wait')).toBe(true);
@@ -866,5 +903,129 @@ describe('advanceWalk — landing on the NEXT request, not the one after it', ()
     const { queue, keyAt } = three();
     const after = reviewQueue([queue.items[2]?.decision?.task as HubTask], [], NOW);
     expect(advanceWalk(after, 0, keyAt(0), keyAt(1))).toBe(0);
+  });
+});
+
+describe('renderReviewWalkthrough — a declared review item', () => {
+  const queueOf = (...items: ReviewThreadItem[]) => reviewQueue([], items, NOW);
+
+  /** The full shape: both header lines, both optional blocks, two options. */
+  const declared = (over: Partial<ReviewThreadItem> = {}) =>
+    threadItem({
+      ask: 'Where should the trial banner live?',
+      review: {
+        shape: 'decision',
+        headline: 'Where should the trial banner live?',
+        why: 'Blocks the onboarding rework; both screens are built either way.',
+        lookFor: 'Whether moving it below the fold hides the price.',
+        detail: 'Above the fold it competes with the **sign-up** button.',
+        options: [
+          { id: 'above', label: 'Keep above', detail: 'Seen by everyone.' },
+          { id: 'below', label: 'Move below', detail: 'Cleaner header.' },
+        ],
+      },
+      ...over,
+    });
+
+  // The enforced two-line header is the whole reason a declaration is refused
+  // when either half is missing: a queue of rows whose titles were clipped out
+  // of comment prose is what this replaced.
+  it('leads with the author’s headline and why, in that order', () => {
+    renderReviewWalkthrough(root, queueOf(declared()), 0, walk());
+    expect((root.querySelector('.hub-walk-title') as HTMLElement).textContent).toBe(
+      'Where should the trial banner live?',
+    );
+    expect((root.querySelector('.hub-walk-why') as HTMLElement).textContent).toBe(
+      'Blocks the onboarding rework; both screens are built either way.',
+    );
+    // The why sits with the head rather than in the body, so the pair is one
+    // block on a phone.
+    const card = root.querySelector('.hub-walk-card') as HTMLElement;
+    const kids = [...card.children].map((c) => c.className.split(' ')[0]);
+    expect(kids.indexOf('hub-walk-why')).toBe(kids.indexOf('hub-walk-card-head') + 1);
+  });
+
+  it('shows what to review for and the detail, as markdown', () => {
+    renderReviewWalkthrough(root, queueOf(declared()), 0, walk());
+    const look = root.querySelector('.hub-walk-lookfor') as HTMLElement;
+    expect(look.querySelector('.hub-walk-ask-head')?.textContent).toBe('What to review for');
+    expect(look.querySelector('.hub-walk-lookfor-text')?.textContent).toBe(
+      'Whether moving it below the fold hides the price.',
+    );
+    const detail = root.querySelector('.hub-walk-review-detail') as HTMLElement;
+    expect(detail.querySelector('strong')?.textContent).toBe('sign-up');
+  });
+
+  // Both blocks are optional and neither gets a placeholder: an absent
+  // `lookFor` means the author had nothing to add, and "no guidance given"
+  // would be the card inventing a gap.
+  it('renders no block for what the author left out', () => {
+    const bare = threadItem({
+      review: { shape: 'review', headline: 'Read the copy', why: 'It ships Tuesday.' },
+    });
+    renderReviewWalkthrough(root, queueOf(bare), 0, walk());
+    expect(root.querySelector('.hub-walk-lookfor')).toBeNull();
+    expect(root.querySelector('.hub-walk-review-detail')).toBeNull();
+    // Positive control: the required half rendered, so the two absences above
+    // are not a card that rendered nothing.
+    expect((root.querySelector('.hub-walk-why') as HTMLElement).textContent).toBe(
+      'It ships Tuesday.',
+    );
+  });
+
+  // One reply path. A tap and typed words must reach the thread the same way,
+  // or the two drift and only one of them records the choice.
+  it('sends an option tap and typed words through the same handler', () => {
+    const onReply = vi.fn();
+    const queue = queueOf(declared());
+    renderReviewWalkthrough(root, queue, 0, walk({ onReply }));
+    const opts = [...root.querySelectorAll<HTMLElement>('.hub-walk-option')];
+    expect(opts.map((o) => o.querySelector('.hub-walk-option-label')?.textContent)).toEqual([
+      'Keep above',
+      'Move below',
+    ]);
+    opts[1]?.click();
+    // The LABEL is the verbatim reply; the id says which candidate it was.
+    expect(onReply).toHaveBeenCalledWith(queue.items[0], 'Move below', 'below');
+
+    const form = root.querySelector('.hub-walk-answer') as HTMLFormElement;
+    const ta = form.querySelector('textarea') as HTMLTextAreaElement;
+    ta.value = 'Neither — put it in the sign-up flow.';
+    form.dispatchEvent(new Event('submit', { cancelable: true }));
+    // Two arguments, not three-with-undefined: typed words came from no
+    // candidate, and saying `optionId: undefined` at the route would be the
+    // client asserting a choice it does not have.
+    expect(onReply).toHaveBeenLastCalledWith(
+      queue.items[0],
+      'Neither — put it in the sign-up flow.',
+    );
+  });
+
+  // The candidates are a shortcut, never a closed set — so an item with none
+  // is not a lesser card, it is the same card with one way to answer.
+  it('keeps the free-text answer when the author offered no options', () => {
+    const onReply = vi.fn();
+    const queue = queueOf(
+      threadItem({ review: { shape: 'review', headline: 'Read the copy', why: 'Ships Tuesday.' } }),
+    );
+    renderReviewWalkthrough(root, queue, 0, walk({ onReply }));
+    expect(root.querySelectorAll('.hub-walk-option')).toHaveLength(0);
+    const form = root.querySelector('.hub-walk-answer') as HTMLFormElement;
+    (form.querySelector('textarea') as HTMLTextAreaElement).value = 'Reads fine.';
+    form.dispatchEvent(new Event('submit', { cancelable: true }));
+    expect(onReply).toHaveBeenCalledWith(queue.items[0], 'Reads fine.');
+  });
+
+  // A declared headline is authored, so it goes through untouched. The derived
+  // path clips at the first sentence terminator, which would throw the
+  // question away here.
+  it('does not clip an authored headline at its first full stop', () => {
+    const item = threadItem({
+      review: { shape: 'decision', headline: 'Ship v2 now. Or wait for the rebuild?', why: 'w' },
+    });
+    renderReviewWalkthrough(root, queueOf(item), 0, walk());
+    expect((root.querySelector('.hub-walk-title') as HTMLElement).textContent).toBe(
+      'Ship v2 now. Or wait for the rebuild?',
+    );
   });
 });

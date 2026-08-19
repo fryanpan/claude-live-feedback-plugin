@@ -29,6 +29,8 @@ import {
   quoteAfterCapture,
   quoteAfterEdit,
   quoteForCapture,
+  reviewCardHeadline,
+  reviewItemBadge,
   reviewQueue,
   reviewRow,
   stepTarget,
@@ -618,8 +620,22 @@ describe('reviewQueue', () => {
       ...over,
     }) as HubTask;
 
+  /** A DECLARED item — an agent said it is asking for something — which is
+   *  what puts a thread in the queue proper. The ranking cases below are all
+   *  about that queue, so this is their default. */
   const threadItem = (over: Partial<ReviewThreadItem> = {}): ReviewThreadItem => ({
     kind: 'task-thread',
+    band: 'declared',
+    review: {
+      shape: 'decision',
+      headline: 'Green or blue?',
+      why: 'Blocks the widget.',
+      options: [
+        { id: 'g', label: 'Green' },
+        { id: 'b', label: 'Blue' },
+      ],
+    },
+    commentId: 'c-1',
     docId: 'task:tk-1',
     threadId: 'th-1',
     taskId: 'tk-1',
@@ -629,6 +645,16 @@ describe('reviewQueue', () => {
     since: T0,
     ...over,
   });
+
+  /** An agent comment nobody replied to that declared nothing — the inferred
+   *  band. Its second line is DERIVED, which is what the lines below test. */
+  const note = (over: Partial<ReviewThreadItem> = {}): ReviewThreadItem => {
+    const { band, review, commentId, ...rest } = threadItem(over);
+    void band;
+    void review;
+    void commentId;
+    return rest;
+  };
 
   // The ordering Bryan asked for, and the reason the queue exists: the thing
   // holding work up is first, and a doc comment is not allowed to outrank a
@@ -690,17 +716,16 @@ describe('reviewQueue', () => {
   // "asked you" is a claim that there is a question. A row that makes it over
   // a status note is the strip promising something it cannot deliver.
   it('says asked you only for a question, and posted otherwise', () => {
+    // The derived second line belongs to the INFERRED band now: a declared
+    // item's second line is the one its author wrote.
     const q = reviewQueue(
       [],
-      [
-        threadItem({ threadId: 'a', direct: true }),
-        threadItem({ threadId: 'b', kind: 'doc-thread' }),
-      ],
+      [note({ threadId: 'a', direct: true }), note({ threadId: 'b', kind: 'doc-thread' })],
       T0,
     );
-    expect(q.items[0].why).toContain('asked you');
-    expect(q.items[1].why).toContain('posted');
-    expect(q.items[1].why).not.toContain('asked');
+    expect(q.unreplied[0].why).toContain('asked you');
+    expect(q.unreplied[1].why).toContain('posted');
+    expect(q.unreplied[1].why).not.toContain('asked');
   });
 
   // The clock beside "asked" is the QUESTION's, not the run's. An agent that
@@ -710,22 +735,18 @@ describe('reviewQueue', () => {
   it('dates asked you from the question, not from the start of the wait', () => {
     const q = reviewQueue(
       [],
-      [threadItem({ threadId: 'a', direct: true, since: T0 - 86_400_000, askedAt: T0 - 60_000 })],
+      [note({ threadId: 'a', direct: true, since: T0 - 86_400_000, askedAt: T0 - 60_000 })],
       T0,
     );
-    expect(q.items[0].why).toContain('asked you 1m ago');
-    expect(q.items[0].why).not.toContain('1d ago');
+    expect(q.unreplied[0].why).toContain('asked you 1m ago');
+    expect(q.unreplied[0].why).not.toContain('1d ago');
     // The wait itself is unchanged — this is a wording fix, not a re-rank.
-    expect(q.items[0].since).toBe(T0 - 86_400_000);
+    expect(q.unreplied[0].since).toBe(T0 - 86_400_000);
   });
 
   it('falls back to the wait when an older server sends no askedAt', () => {
-    const q = reviewQueue(
-      [],
-      [threadItem({ threadId: 'a', direct: true, since: T0 - 60_000 })],
-      T0,
-    );
-    expect(q.items[0].why).toContain('asked you 1m ago');
+    const q = reviewQueue([], [note({ threadId: 'a', direct: true, since: T0 - 60_000 })], T0);
+    expect(q.unreplied[0].why).toContain('asked you 1m ago');
   });
 
   // A payload from a server that predates the field must order exactly as it
@@ -904,6 +925,9 @@ describe('reviewQueue — human-owned work that agent work is waiting on', () =>
       [
         {
           kind: 'task-thread',
+          band: 'declared',
+          review: { shape: 'decision', headline: 'Which repo?', why: 'Blocks the ship.' },
+          commentId: 'c-1',
           docId: 'task:a-1',
           threadId: 'th-1',
           taskId: 'a-1',
@@ -993,8 +1017,13 @@ describe('reviewQueue — task priority is the primary key', () => {
   const T0 = 1_700_000_000_000;
   const t = (over: Partial<HubTask>): HubTask => task({ createdAt: T0, updatedAt: T0, ...over });
 
+  // Declared, because these cases rank asks in the queue proper against each
+  // other and against task rows.
   const thread = (over: Partial<ReviewThreadItem>): ReviewThreadItem => ({
     kind: 'task-thread',
+    band: 'declared',
+    review: { shape: 'review', headline: 'Which one?', why: 'Waiting on you.' },
+    commentId: 'c-x',
     docId: 'task:x',
     threadId: 'th-x',
     title: 'A task',
@@ -1168,6 +1197,152 @@ describe('reviewQueue — task priority is the primary key', () => {
   });
 });
 
+describe('reviewQueue — declared review items vs the inferred band', () => {
+  const T0 = 1_700_000_000_000;
+  const base = (over: Partial<ReviewThreadItem> = {}): ReviewThreadItem => ({
+    kind: 'doc-thread',
+    docId: 'doc-1',
+    threadId: 'th-1',
+    title: 'Onboarding copy',
+    ask: 'Read the new onboarding copy',
+    askedBy: 'Onboarding Rework',
+    since: T0 - 60_000,
+    ...over,
+  });
+  const declared = (over: Partial<ReviewThreadItem> = {}): ReviewThreadItem =>
+    base({
+      band: 'declared',
+      commentId: 'c-1',
+      review: {
+        shape: 'review',
+        headline: 'Read the new onboarding copy',
+        why: 'Ships with the next release; nobody outside the team has read it.',
+      },
+      ...over,
+    });
+
+  // The whole point of the change: only what an agent DECLARED is work.
+  it('puts a declared item in the queue and an undeclared one in unreplied', () => {
+    const q = reviewQueue([], [declared({ threadId: 'a' }), base({ threadId: 'b' })], T0);
+    expect(q.items.map((i) => i.thread?.threadId)).toEqual(['a']);
+    expect(q.unreplied.map((i) => i.thread?.threadId)).toEqual(['b']);
+    // The count and the walkthrough are the queue proper, so a status note
+    // no longer inflates either.
+    expect(q.total).toBe(1);
+  });
+
+  // Nothing vanishes. 105 inferred rows existed the day this shipped, and a
+  // row that stops rendering is indistinguishable from data loss to whoever
+  // wrote it — so the two lists together must still hold every thread.
+  it('accounts for every thread across the two lists, whatever their bands', () => {
+    const items = [
+      declared({ threadId: 'a' }),
+      base({ threadId: 'b' }),
+      declared({ threadId: 'c', kind: 'task-thread', taskId: 'tk-1', docId: 'task:tk-1' }),
+      base({ threadId: 'd', kind: 'task-thread', taskId: 'tk-1', docId: 'task:tk-1' }),
+    ];
+    const q = reviewQueue([], items, T0);
+    const seen = [...q.items, ...q.unreplied].map((i) => i.thread?.threadId).sort();
+    expect(seen).toEqual(['a', 'b', 'c', 'd']);
+    // ...and the split really did split, so the assertion above is not
+    // satisfied by everything landing in one list.
+    expect(q.items).toHaveLength(2);
+    expect(q.unreplied).toHaveLength(2);
+  });
+
+  // The two lists are sorted by ONE comparator. Ranking them apart is how
+  // they would come to disagree about what important means.
+  it('ranks the inferred list by the same rule as the queue', () => {
+    const q = reviewQueue(
+      [],
+      [
+        base({ threadId: 'newer', since: T0 - 1_000 }),
+        base({ threadId: 'older', since: T0 - 90_000 }),
+        declared({ threadId: 'd-newer', since: T0 - 1_000 }),
+        declared({ threadId: 'd-older', since: T0 - 90_000 }),
+      ],
+      T0,
+    );
+    expect(q.items.map((i) => i.thread?.threadId)).toEqual(['d-older', 'd-newer']);
+    expect(q.unreplied.map((i) => i.thread?.threadId)).toEqual(['older', 'newer']);
+  });
+
+  // A payload from a server older than the field carries no band at all. It
+  // must keep its pre-existing meaning rather than be promoted into a queue
+  // it never declared for.
+  it('treats a missing band as unreplied', () => {
+    const q = reviewQueue([], [base({ band: undefined })], T0);
+    expect(q.items).toHaveLength(0);
+    expect(q.unreplied).toHaveLength(1);
+  });
+
+  // A band claiming declared with no payload is a half-written row. The
+  // renderers all read `item.review`, so admitting it would put a card with
+  // no headline at the top of somebody's queue.
+  it('does not admit a declared band with no payload', () => {
+    const q = reviewQueue([], [base({ band: 'declared' })], T0);
+    expect(q.items).toHaveLength(0);
+    expect(q.unreplied).toHaveLength(1);
+  });
+
+  it("takes a declared item's second line from its author, not from the clock", () => {
+    const q = reviewQueue([], [declared()], T0);
+    expect(q.items[0].why).toBe(
+      'Ships with the next release; nobody outside the team has read it.',
+    );
+    expect(q.items[0].why).not.toContain('ago');
+    // Positive control: the derived line is still what an undeclared row gets.
+    expect(reviewQueue([], [base()], T0).unreplied[0].why).toContain('ago');
+  });
+});
+
+describe('reviewCardHeadline — an authored headline is never clipped', () => {
+  const item = (over: Partial<ReviewItem> = {}): ReviewItem => ({
+    key: 'k',
+    kind: 'doc-thread',
+    title: 'Onboarding copy',
+    ask: 'Ship v2 now. Or wait for the rebuild?',
+    why: 'w',
+    since: 0,
+    ...over,
+  });
+
+  // The derived heading stops at the first sentence, which on this string
+  // throws the question away — exactly the unreadable row the declaration
+  // exists to replace.
+  it('shows a declared headline as written where the derived one would clip', () => {
+    expect(reviewCardHeadline(item())).toBe('Ship v2 now.');
+    expect(
+      reviewCardHeadline(
+        item({ review: { shape: 'decision', headline: 'Ship v2 now. Or wait?', why: 'w' } }),
+      ),
+    ).toBe('Ship v2 now. Or wait?');
+  });
+});
+
+describe('reviewItemBadge', () => {
+  const item = (review?: ReviewItem['review']): ReviewItem => ({
+    key: 'k',
+    kind: 'doc-thread',
+    title: 't',
+    ask: 'a',
+    why: 'w',
+    since: 0,
+    ...(review ? { review } : {}),
+  });
+
+  it('reads a declared decision as a Decision wherever it arrived from', () => {
+    expect(reviewItemBadge(item({ shape: 'decision', headline: 'h', why: 'w' })).label).toBe(
+      'Decision',
+    );
+    expect(reviewItemBadge(item({ shape: 'review', headline: 'h', why: 'w' })).label).toBe(
+      'Review',
+    );
+    // Positive control: an undeclared thread keeps the pre-existing badge.
+    expect(reviewItemBadge(item()).label).toBe('Needs your reply');
+  });
+});
+
 describe('reviewRow — the row an item carries, whichever band it came from', () => {
   it('answers for a decision and a blocker, and not for a comment', () => {
     const T0 = 1_700_000_000_000;
@@ -1178,6 +1353,9 @@ describe('reviewRow — the row an item carries, whichever band it came from', (
       [
         {
           kind: 'doc-thread',
+          band: 'declared',
+          review: { shape: 'review', headline: 'Still true?', why: 'Ships Friday.' },
+          commentId: 'c-1',
           docId: 'doc-1',
           threadId: 'th-1',
           title: 'Launch plan',

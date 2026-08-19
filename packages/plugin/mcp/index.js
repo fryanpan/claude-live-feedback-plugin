@@ -13794,7 +13794,12 @@ function threadCreateRequest(input, author) {
   if (input.find === undefined) {
     return {
       path: `/api/docs/${doc2}/threads`,
-      body: { author, text: input.text, anchor: { kind: "subject" } }
+      body: {
+        author,
+        text: input.text,
+        anchor: { kind: "subject" },
+        ...input.review !== undefined ? { review: input.review } : {}
+      }
     };
   }
   return {
@@ -13805,7 +13810,8 @@ function threadCreateRequest(input, author) {
       find: input.find,
       ...input.contextBefore !== undefined ? { contextBefore: input.contextBefore } : {},
       ...input.contextAfter !== undefined ? { contextAfter: input.contextAfter } : {},
-      ...input.occurrence !== undefined ? { occurrence: input.occurrence } : {}
+      ...input.occurrence !== undefined ? { occurrence: input.occurrence } : {},
+      ...input.review !== undefined ? { review: input.review } : {}
     }
   };
 }
@@ -13886,7 +13892,7 @@ var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.61";
+var PLUGIN_VERSION = "0.1.62";
 var COMMIT_EVIDENCE_DESCRIPTION = 'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
 var server = new Server({
   name: "claude-workspaces",
@@ -13987,6 +13993,50 @@ var server = new Server({
     "onto the board (dry-run first — review the mapping before apply:true)."
   ].join(" ")
 });
+var REVIEW_ITEM_SCHEMA = {
+  type: "object",
+  description: "Declares this comment as a Review Item, putting it on the reviewer's Home queue. Omit for ordinary comments — status notes and closing remarks must NOT declare. Refused (400, naming the field) if headline/why are missing, multi-line, or over budget: write them like a ticket title, because they are the two lines a phone shows.",
+  properties: {
+    shape: {
+      type: "string",
+      enum: ["decision", "review"],
+      description: "'decision' offers named options to pick between (2-6 required). 'review' asks someone to read or look at something and answer in their own words — use it for a short doc, a mockup, or a set of links, all of which are the same ask."
+    },
+    headline: {
+      type: "string",
+      description: "Line 1: WHAT needs review, as a ticket title. One line, ≤70 chars."
+    },
+    why: {
+      type: "string",
+      description: "Line 2: why it matters / what is blocked on it. One line, ≤90 chars."
+    },
+    lookFor: {
+      type: "string",
+      description: "What to look for — shown on the opened card, not on the row. ≤90 chars. Omitting it is accepted but reported back as a gap."
+    },
+    detail: {
+      type: "string",
+      description: "The body, markdown, inline links welcome. ≤50 words for a decision, ≤150 for a review."
+    },
+    options: {
+      type: "array",
+      description: "For 'decision' only: 2-6 options. Refused on a 'review'.",
+      items: {
+        type: "object",
+        properties: {
+          id: {
+            type: "string",
+            description: "Stable id; the answer records which one was picked."
+          },
+          label: { type: "string", description: "1-3 words, ≤28 chars. This is the button." },
+          detail: { type: "string", description: "What choosing it costs or buys. ≤50 words." }
+        },
+        required: ["id", "label"]
+      }
+    }
+  },
+  required: ["shape", "headline", "why"]
+};
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
@@ -14020,20 +14070,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "post_reply",
-      description: "Post a reply to an existing thread (as the configured author).",
+      description: "Post a reply to an existing thread (as the configured author). Pass `review` when this reply is asking a person to decide or look at something — that is what puts it on their Home queue as a Review Item. Without it the reply is an ordinary comment and does NOT enter the queue, which is correct for status notes and closing remarks.",
       inputSchema: {
         type: "object",
         properties: {
           docId: { type: "string" },
           threadId: { type: "string" },
-          text: { type: "string" }
+          text: { type: "string" },
+          review: REVIEW_ITEM_SCHEMA
         },
         required: ["docId", "threadId", "text"]
       }
     },
     {
       name: "create_thread",
-      description: 'Open a new comment thread on a doc, seeded with an initial comment from the configured author. Use when the agent has editorial notes / suggestions that should land as durable threads (instead of one-shot chat messages) — e.g. running `/edit` on a blog draft and leaving anchored feedback at six different places. Pass `find` to anchor the thread to that text; disambiguation works the same as `find_and_replace` (`contextBefore`/`contextAfter` or `occurrence` if the text appears more than once). OMIT `find` to open a thread about the doc AS A WHOLE — this is how you discuss a hub task, whose body doc is `task:<taskId>` and is often still empty: `create_thread(docId="task:t-abc", text="...")`. A subject thread never orphans. Returns `{ thread }` with `thread.id` for follow-up `post_reply` calls, and fires the same `thread.created` event the editor uses, so watchers see it immediately.',
+      description: 'Open a new comment thread on a doc, seeded with an initial comment from the configured author. Use when the agent has editorial notes / suggestions that should land as durable threads (instead of one-shot chat messages) — e.g. running `/edit` on a blog draft and leaving anchored feedback at six different places. Pass `find` to anchor the thread to that text; disambiguation works the same as `find_and_replace` (`contextBefore`/`contextAfter` or `occurrence` if the text appears more than once). OMIT `find` to open a thread about the doc AS A WHOLE — this is how you discuss a hub task, whose body doc is `task:<taskId>` and is often still empty: `create_thread(docId="task:t-abc", text="...")`. A subject thread never orphans. Pass `review` when you are asking a person to decide or look at something — that is what puts the thread on their Home queue as a Review Item; leave it off for notes you are recording rather than asking about. Returns `{ thread }` with `thread.id` for follow-up `post_reply` calls, and fires the same `thread.created` event the editor uses, so watchers see it immediately.',
       inputSchema: {
         type: "object",
         properties: {
@@ -14048,7 +14099,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           contextBefore: { type: "string" },
           contextAfter: { type: "string" },
           occurrence: { type: "number" },
-          text: { type: "string" }
+          text: { type: "string" },
+          review: REVIEW_ITEM_SCHEMA
         },
         required: ["docId", "text"]
       }
@@ -15262,8 +15314,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok(res);
       }
       case "post_reply": {
-        const { docId, threadId, text } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/comments`, { author: AUTHOR, text });
+        const { docId, threadId, text, review } = a;
+        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/comments`, { author: AUTHOR, text, ...review !== undefined ? { review } : {} });
         return ok(res);
       }
       case "create_thread": {
