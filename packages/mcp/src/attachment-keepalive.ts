@@ -1,16 +1,24 @@
 /**
  * Keep this session's attachments live while it is working.
  *
- * WHY THIS EXISTS. Attaching is not a state, it is a claim with a five-minute
- * expiry: `hasLiveAttachment` / `hasLiveLeadAttachment` are
- * `Date.now() - lastHeartbeat < HEARTBEAT_FRESH_MS`, and every lead-addressed
- * delivery is gated on them. The only thing that refreshed it was an agent
- * remembering to call the `heartbeat` tool, and nothing in this process ever
- * did it automatically. So the documented happy path — "declare yourself lead
- * at session start and you are done" — put an agent six minutes of quiet
- * implementation away from being `away`, at which point Bryan's next goal
- * edit queues with no channel emit and the session hears exactly the silence
- * this ticket is about.
+ * WHY THIS EXISTS. Attaching is not a state, it is a claim that lapses unless
+ * the server keeps SEEING this session: `hasLiveAttachment` /
+ * `hasLiveLeadAttachment` ask whether observed work — `max(lastHeartbeat,
+ * lastToolCallAt)` — is inside the observed window AND a channel is open, and
+ * every lead-addressed delivery is gated on them. The server only observes
+ * what reaches IT, so an agent editing files, thinking, or working a
+ * different board is invisible here however busy it is. The one thing that
+ * refreshed the claim was an agent remembering to call the `heartbeat` tool,
+ * and nothing in this process ever did it automatically. So the documented
+ * happy path — "declare yourself lead at session start and you are done" —
+ * let a working agent lapse on every board it was not actively touching, at
+ * which point Bryan's next goal edit queues with no channel emit and the
+ * session hears exactly the silence this ticket is about.
+ *
+ * It also keeps the DISPLAYED state honest, which is a separate and shorter
+ * clock: the active/away label a person reads on the board is heartbeat-only,
+ * so without this a plainly working agent renders as away long before any
+ * delivery is actually at risk.
  *
  * WHY PIGGYBACK ON TOOL CALLS rather than a timer. The heartbeat means "this
  * agent is alive AND working" — the route stamps `lastToolCallAt` from it,
@@ -24,8 +32,11 @@
  * tested against a clock. The sending lives in mcp.ts.
  */
 
-/** Well inside the server's five-minute window, so two consecutive misses
- *  still leave the attachment live. */
+/** Well inside the SHORTER of the server's two windows — the heartbeat one
+ *  behind the displayed active/away label — so two consecutive misses still
+ *  leave the attachment both live and shown as active. Sizing against the
+ *  longer delivery window instead would keep deliveries working while the
+ *  board quietly rendered a working agent as away. */
 const DEFAULT_INTERVAL_MS = 120_000;
 
 export interface AttachmentKeepalive {

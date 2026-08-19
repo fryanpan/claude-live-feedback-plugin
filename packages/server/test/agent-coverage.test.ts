@@ -30,6 +30,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { type AgentStream, openWorkspaceStream } from './agent-stream.ts';
 
 const PERSON = { id: 'known-reviewer', name: 'Reviewer', kind: 'known', color: '#2e7dd7' };
 const AGENT = 'agent-coverage';
@@ -47,6 +48,7 @@ interface CoverageWorkspaceRow {
   name?: string;
   attached?: boolean;
   heartbeatFresh?: boolean;
+  live?: boolean;
   lead?: boolean;
   queued?: CoverageQueue;
   queuedTotal?: number;
@@ -87,6 +89,9 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
   const put = (path: string, body: unknown) =>
     local(path, { method: 'PUT', body: JSON.stringify(body) });
 
+  /** Event streams opened by `attach`, hung up after each test. */
+  const streams: AgentStream[] = [];
+
   beforeEach(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'agent-coverage-'));
     srcDir = mkdtempSync(join(tmpdir(), 'agent-coverage-src-'));
@@ -95,6 +100,7 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
   });
 
   afterEach(async () => {
+    for (const s of streams.splice(0)) await s.close();
     await handle.stop();
     rmSync(dataDir, { recursive: true, force: true });
     rmSync(srcDir, { recursive: true, force: true });
@@ -138,11 +144,23 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
     expect(res.status).toBe(200);
   };
 
-  const attach = (workspaceId: string, agentId = AGENT) =>
-    post(`/api/workspaces/${workspaceId}/attachments`, {
+  /**
+   * Attach the way the MCP does: POST the attachment, then hold the board's
+   * event stream.
+   *
+   * Both halves are load-bearing here. Coverage answers "will work reach me",
+   * and a delivery is a broadcast — so an agent that registered and never
+   * connected is genuinely uncovered, and this probe now says so. Attaching
+   * alone would describe that half-agent and assert it was fine.
+   */
+  const attach = async (workspaceId: string, agentId = AGENT) => {
+    const res = await post(`/api/workspaces/${workspaceId}/attachments`, {
       agentId,
       runtime: 'claude-code-local',
     });
+    streams.push(await openWorkspaceStream(base, workspaceId));
+    return res;
+  };
 
   /**
    * Three of the four things that queue for a board's lead, produced the way
@@ -322,8 +340,11 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
    * visibly queued, `unattachedBoards: []`, and a restore notice that says
    * nothing.
    *
-   * These use a tight `heartbeatFreshMs` because the real window is five
-   * minutes and a test must not sleep through it.
+   * These tighten BOTH windows, because there are two and only the longer
+   * one selects these rows. `heartbeatFreshMs` drives the displayed
+   * active/away label; `observedWorkFreshMs` is the delivery gate coverage
+   * actually reads. Shrinking only the first leaves the agent deliverable for
+   * the full fifteen minutes and the "not covered" state never arrives.
    */
   describe('a declared lead whose heartbeat went stale', () => {
     let tight: ServerHandle;
@@ -354,15 +375,29 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
 
     beforeEach(() => {
       tightDir = mkdtempSync(join(tmpdir(), 'agent-coverage-tight-'));
-      // 40ms of freshness: an attachment made at the top of a test is `away`
-      // by the time the same test reads coverage.
-      tight = createServer({ port: 0, dataDir: tightDir, heartbeatFreshMs: 40 });
+      // 40ms of freshness on both clocks: an attachment made at the top of a
+      // test is both `away` and past the delivery window by the time the same
+      // test reads coverage.
+      tight = createServer({
+        port: 0,
+        dataDir: tightDir,
+        heartbeatFreshMs: 40,
+        observedWorkFreshMs: 40,
+      });
       tightBase = `http://localhost:${tight.port}`;
     });
     afterEach(async () => {
+      for (const s of tightStreams.splice(0)) await s.close();
       await tight.stop();
       rmSync(tightDir, { recursive: true, force: true });
     });
+
+    /** Streams held by agents these tests want to be REACHABLE. Deliberately
+     *  not opened for the stale cases — those want the opposite. */
+    const tightStreams: AgentStream[] = [];
+    const holdStream = async (workspaceId: string) => {
+      tightStreams.push(await openWorkspaceStream(tightBase, workspaceId));
+    };
 
     const seedBoard = async (name: string): Promise<string> => {
       const r = await tpost('/api/workspaces', { name, goal: 'Ship the index.' });
@@ -430,6 +465,7 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
         agentId: AGENT,
         runtime: 'claude-code-local',
       });
+      await holdStream(boardId);
       await tpost(`/api/agents/${AGENT}/watches`, { add: [`ws:${boardId}`], name: AGENT });
 
       const coverage = await tcoverage();
@@ -442,6 +478,77 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
     });
 
     /**
+     * THE GAP BETWEEN THE TWO CLOCKS, which is the whole reason coverage may
+     * not read the displayed label.
+     *
+     * Liveness stopped being a self-reported heartbeat and became observed
+     * work, but this probe kept selecting rows on `attachmentState`, whose
+     * window is a fraction of the delivery one. So an agent that simply had
+     * not called `heartbeat` recently — while every request was reaching it —
+     * was told real work was queuing that would never arrive, and handed a
+     * remedy whose hazard is evicting a working peer.
+     *
+     * Built with the windows deliberately SPLIT so the gap is reachable: the
+     * label expires in 40ms, the delivery gate holds for 30s. The agent then
+     * does observable work, which is what a busy session does constantly.
+     */
+    it('an agent past the heartbeat label but inside the delivery window is NOT reported uncovered', async () => {
+      const splitDir = mkdtempSync(join(tmpdir(), 'agent-coverage-split-'));
+      const split = createServer({
+        port: 0,
+        dataDir: splitDir,
+        heartbeatFreshMs: 40,
+        observedWorkFreshMs: 30_000,
+      });
+      const sbase = `http://localhost:${split.port}`;
+      const shost = { host: `localhost:${split.port}`, 'content-type': 'application/json' };
+      try {
+        const r = await fetch(`${sbase}/api/workspaces`, {
+          method: 'POST',
+          headers: shost,
+          body: JSON.stringify({ name: 'busy-but-quiet', goal: 'Ship it.' }),
+        });
+        const boardId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
+        await fetch(`${sbase}/api/workspaces/${boardId}/attachments`, {
+          method: 'POST',
+          headers: shost,
+          body: JSON.stringify({ agentId: AGENT, runtime: 'claude-code-local' }),
+        });
+        await fetch(`${sbase}/api/agents/${AGENT}/watches`, {
+          method: 'POST',
+          headers: shost,
+          body: JSON.stringify({ add: [`ws:${boardId}`], name: AGENT }),
+        });
+        // Reachable, like a real declared lead — the gap under test is about
+        // the two CLOCKS, so the channel must not be the thing that fails.
+        const held = await openWorkspaceStream(sbase, boardId);
+
+        // Past the label's window, nowhere near the delivery one.
+        await new Promise((res) => setTimeout(res, 60));
+
+        const read = async () => {
+          const res = await fetch(`${sbase}/api/agents/${AGENT}/watches`, { headers: shost });
+          const json = (await res.json()) as { coverage?: Coverage };
+          if (!json.coverage) throw new Error('no coverage block');
+          return json.coverage;
+        };
+        const coverage = await read();
+        const row = coverage.workspaces[0] as CoverageWorkspaceRow & { live?: boolean };
+
+        // Positive control on the premise: the label really did lapse. Without
+        // this the assertion below could pass because nothing ever expired.
+        expect(row.heartbeatFresh).toBe(false);
+        // The fix: still deliverable, so still covered, and no alarm.
+        expect(row.live).toBe(true);
+        expect(coverage.unattachedBoards).toEqual([]);
+        await held.close();
+      } finally {
+        await split.stop();
+        rmSync(splitDir, { recursive: true, force: true });
+      }
+    });
+
+    /**
      * The takeover hazard: the alert used to end "set_workspace_lead(...)
      * hands the backlog over in one call" with no idea who was sitting there.
      * A board whose lead is somebody else and LIVE must say so, or following
@@ -449,11 +556,14 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
      */
     it('names the incumbent lead and whether it is live', async () => {
       const boardId = await seedBoard('board-with-a-live-lead');
-      // The incumbent attaches (claiming the empty seat) and stays fresh.
+      // The incumbent attaches (claiming the empty seat), holds its stream,
+      // and stays fresh — all three, or it is not the live lead this test is
+      // about and `leadLive` would be false for an uninteresting reason.
       await tpost(`/api/workspaces/${boardId}/attachments`, {
         agentId: 'agent-incumbent',
         runtime: 'claude-code-local',
       });
+      await holdStream(boardId);
       // A second agent watches a doc on the board, never attaches.
       const path = join(srcDir, 'doc-shared.md');
       writeFileSync(path, '# doc-shared\n\nBody.\n');

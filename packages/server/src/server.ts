@@ -263,6 +263,15 @@ export interface ServerOptions {
    */
   heartbeatFreshMs?: number;
   /**
+   * How recently the server must have OBSERVED an agent for a delivery to
+   * count as reaching it (default `OBSERVED_LIVE_MS`, fifteen minutes). The
+   * separate seam matters: this is the window the coverage read and every
+   * delivery gate actually test, and it is three times the heartbeat one, so
+   * a test that shrinks only `heartbeatFreshMs` never leaves the live window
+   * at all.
+   */
+  observedWorkFreshMs?: number;
+  /**
    * Runs `claude plugin update` on this machine when a peer asks. Absent by
    * default and constructed in ONE place (bin.ts), so nothing that merely
    * spins a server up — every test, every embedded use — can mutate this
@@ -441,7 +450,13 @@ export interface CoverageWorkspaceRow {
    *  `attached: false` for a grouping would read as a gap that cannot exist. */
   name?: string;
   attached?: boolean;
+  /** The displayed active/away label: a heartbeat inside the heartbeat
+   *  window. NOT the delivery gate — see `live`. */
   heartbeatFresh?: boolean;
+  /** Whether work actually reaches this agent here: recent observed work
+   *  (heartbeat or tool call, whichever is later) plus an open channel. This
+   *  is the one that answers "am I covered". */
+  live?: boolean;
   lead?: boolean;
   queued?: CoverageQueue;
   queuedTotal?: number;
@@ -470,13 +485,18 @@ export interface CoverageUnattachedBoard {
   queuedTotal: number;
   /** An attachment RECORD exists for this agent. Not the same as covered. */
   attached: boolean;
-  /** …and its heartbeat is inside the window. This is the one the gates ask. */
+  /** …and its heartbeat is inside the heartbeat window, i.e. the board does
+   *  not show it as away. Reported because it names which of the two things
+   *  lapsed; it is NOT what admitted this row — rows are selected on the
+   *  delivery gate, so `attached: true, heartbeatFresh: false` here means
+   *  BOTH clocks ran out, not merely the heartbeat one. */
   heartbeatFresh: boolean;
   /** Who holds the lead seat, when anyone does. */
   leadAgentId?: string;
-  /** Whether THAT agent has a live attachment. False means the queue has no
-   *  live addressee; true means somebody else is already draining it and
-   *  taking the seat would evict a working peer. */
+  /** Whether THAT agent is live by the same predicate `setLeadAgent`'s guard
+   *  uses. False means the queue has no live addressee; true means somebody
+   *  else is already draining it and taking the seat would evict a working
+   *  peer — and would be refused. */
   leadLive: boolean;
 }
 
@@ -724,6 +744,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const taskStore = new TaskStore({
     dataDir,
     ...(opts.heartbeatFreshMs !== undefined ? { heartbeatFreshMs: opts.heartbeatFreshMs } : {}),
+    ...(opts.observedWorkFreshMs !== undefined
+      ? { observedWorkFreshMs: opts.observedWorkFreshMs }
+      : {}),
   });
   // Which docs each agent identity is watching — the durable memory behind
   // the MCP child's session-scoped SSE subscriptions, so a respawned session
@@ -1222,15 +1245,27 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * too, or it reports covered about a board whose every gate answers away.
    */
   const watchCoverageFor = (agentId: string, keys: string[]): WatchCoverage => {
-    /** Attachment facts for one agent on one board, read the way the delivery
-     *  gates read them. */
+    /**
+     * Attachment facts for one agent on one board.
+     *
+     * Two DIFFERENT questions, deliberately kept apart. `heartbeatFresh` is
+     * the displayed active/away label: did this agent SAY it was alive inside
+     * the heartbeat window. `live` is the delivery gate: has the server SEEN
+     * it recently — heartbeat or tool call, whichever is later — and is the
+     * channel open to carry anything.
+     *
+     * They were one field, and it read the label. The label's window is a
+     * third of the delivery one, so an agent that had simply not called
+     * `heartbeat` for a few minutes was reported as uncovered while every
+     * request was reaching it perfectly — and the remedy it was then handed
+     * is seat-claiming, whose entire hazard is evicting a working peer.
+     */
     const liveness = (workspaceId: string, who: string) => {
       const att = taskStore.listAttachments(workspaceId).find((a) => a.agentId === who);
       return {
         attached: att !== undefined,
-        // `away` is precisely "no heartbeat inside the freshness window",
-        // which is the condition every delivery gate actually tests.
         heartbeatFresh: att !== undefined && att.state !== 'away',
+        live: taskStore.hasLiveAttachmentFor(workspaceId, who),
       };
     };
 
@@ -1248,7 +1283,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         workspaces.push({ key, workspaceId, kind: 'grouping' });
         continue;
       }
-      const { attached, heartbeatFresh } = liveness(workspaceId, agentId);
+      const { attached, heartbeatFresh, live } = liveness(workspaceId, agentId);
       const queued = queuedForLead(workspaceId);
       workspaces.push({
         key,
@@ -1257,6 +1292,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         name: board.name,
         attached,
         heartbeatFresh,
+        live,
         lead: board.leadAgentId === agentId,
         queued,
         queuedTotal: queueTotal(queued),
@@ -1275,8 +1311,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       const board = taskStore.getWorkspace(workspaceId);
       if (!board) continue;
       const mine = liveness(workspaceId, agentId);
-      // A LIVE attachment is coverage; a record alone is not.
-      if (mine.heartbeatFresh) continue;
+      // A LIVE attachment is coverage; a record alone is not. Read the
+      // DELIVERY predicate, not the displayed label — this row's whole claim
+      // is "work is queuing that will not reach you", and an agent inside the
+      // observed window is being reached.
+      if (mine.live) continue;
       const queued = queuedForLead(workspaceId);
       const lead = board.leadAgentId;
       unattachedBoards.push({
@@ -1289,12 +1328,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         heartbeatFresh: mine.heartbeatFresh,
         ...(lead !== undefined ? { leadAgentId: lead } : {}),
         // Naming the incumbent is what stops the remedy being "take the
-        // seat" on a board somebody else is actively working. `setLeadAgent`
-        // has no liveness check of its own, so a reader that followed a
-        // blanket takeover recommendation would evict a live peer and
-        // neither of them would be told.
+        // seat" on a board somebody else is actively working. This asks the
+        // same predicate `setLeadAgent`'s own lead-held guard asks, which is
+        // the point: read the heartbeat LABEL here and a working lead reports
+        // as gone, so the advice says "take the seat" while the server's
+        // guard refuses it — the reader is told to do a thing that then
+        // silently does not happen.
         leadLive:
-          lead !== undefined && lead !== agentId && liveness(workspaceId, lead).heartbeatFresh,
+          lead !== undefined && lead !== agentId && taskStore.hasLiveLeadAttachment(workspaceId),
       });
     }
     // Loudest first: a board with items actually waiting is the one a reader
