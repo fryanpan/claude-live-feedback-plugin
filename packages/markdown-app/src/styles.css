@@ -2398,30 +2398,9 @@ body.hub-body {
   color: inherit;
   cursor: pointer;
 }
-.hub-status-chip {
-  flex: 0 0 auto;
-  min-width: 88px;
-  min-height: 30px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  border: 1px solid transparent;
-  background-color: transparent;
-  font-size: 12px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-/* The affordance the border used to carry, moved onto the pointer and the
-   keyboard so it costs nothing while reading. focus-visible (not focus) keeps
-   the ring off a mouse click but guarantees it for tab navigation — removing
-   a border must not remove the only thing a keyboard user can see. */
-.hub-status-chip:hover {
-  background-color: var(--bg-hover);
-  border-color: var(--border);
-}
-.hub-status-chip:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
+/* (`.hub-status-chip` and `.hub-chip-current` are gone with the chip row the
+   panel no longer renders — only the `.hub-chip-<status>` color classes below
+   survive, because the status <select> still wears them.) */
 .hub-chip-todo {
   color: var(--fg-muted);
 }
@@ -2432,9 +2411,6 @@ body.hub-body {
 .hub-chip-done {
   color: var(--green);
   border-color: var(--green);
-}
-.hub-chip-current {
-  font-weight: 700;
 }
 .hub-task-badges {
   display: inline-flex;
@@ -3509,6 +3485,50 @@ a.hub-link-chip:hover {
   display: none;
 }
 
+/* --- ≤1023px: the mic-clearance pair, everywhere the panel is not a split
+   pane ---
+
+   Two fixed launchers own the bottom corners on every page: the hold-to-talk
+   mic bottom-left (z-index 70, above this panel's 60) and the feedback pencil
+   bottom-right. Reported as CRITICAL at 430px — the mic sat squarely on
+   "Record answer", which is the one control the review queue exists to
+   deliver. Two mitigations, and they cover every width where the panel's left
+   edge reaches the mic's column — which is every width BELOW the split pane,
+   not only the ≤900px sheet: between 901 and 1023 the centred modal still
+   puts the panel's left edge at 14px, so a landscape phone (932×430, coarse
+   pointer, mic active) had a left-aligned submit under the mic with only 24px
+   of tail and no scroll position that cleared it.
+
+   1. The tail reservation guarantees every control can be SCROLLED clear of
+      the launchers; moving the mic instead would only trade which surface it
+      covers. `--hub-bottom-bar` is in the sum because the mic is LIFTED by
+      the phone nav on exactly this page: measured at 430px without it, the
+      composer's Comment button (812–848) sat under the mic (814–858). Above
+      900px the bar does not exist and the variable reads its 0 fallback, so
+      one calc serves the whole range. 60px is the mic's own 16+44; 24px is
+      the clearance.
+
+   2. …and the reservation is only half the answer, because the mic is FIXED
+      and the panel SCROLLS under it — it guarantees a resting position with
+      nothing beneath the mic, and says nothing about the positions a control
+      passes through on the way there. Measured at 430px 2026-08-18, with the
+      reservation already in place: `#hub-mic` intersected "Record answer"
+      over scrollTop 195–255 (20% covered at the worst point) and "Comment"
+      over 1545–1605 (45%), and `elementFromPoint` at the intersection centre
+      returned the mic. The mic occupies one COLUMN, x 16–60; a submit aligned
+      to the panel's right edge cannot intersect it at ANY scroll position.
+      Right-aligned submits are also what every other composer on a phone
+      does, so this is not a concession. */
+@media (max-width: 1023px) {
+  .hub-detail-panel {
+    padding-bottom: calc(24px + 60px + var(--hub-bottom-bar, 0px) + var(--safe-bottom, 0px));
+  }
+  body.hub-body .hub-decide-form button[type="submit"],
+  body.hub-body .hub-comment-form button[type="submit"] {
+    align-self: flex-end;
+  }
+}
+
 /* --- ≥1024px: the task detail is a right-hand split pane, not a modal ---
 
    Bryan's report: "the current modal is cramped on bigger screens" — a centred
@@ -3569,6 +3589,20 @@ a.hub-link-chip:hover {
   .hub-detail--full .hub-detail-panel {
     width: 100%;
     max-width: none;
+    /* Full screen un-does the geometry that made the split pane safe from the
+       fixed mic: the panel spans the viewport again, so its left column is
+       the mic's column again — and full screen is the escape hatch FOR long
+       discussions, i.e. for being scrolled to the composer at the bottom. So
+       it takes the same tail reservation the ≤1023px widths have, minus the
+       --hub-bottom-bar term (the phone nav does not exist at this width). */
+    padding-bottom: calc(24px + 60px + var(--safe-bottom, 0px));
+  }
+  /* …and the same right-aligned submits, for the same reason: the reservation
+     covers the resting position, the alignment covers every position the
+     composer scrolls through on the way there. */
+  body.hub-detail-full .hub-decide-form button[type="submit"],
+  body.hub-detail-full .hub-comment-form button[type="submit"] {
+    align-self: flex-end;
   }
   .hub-detail-expand {
     display: inline-flex;
@@ -3710,38 +3744,11 @@ a.hub-link-chip:hover {
     height: 100%;
     width: 100%;
     border-radius: 0;
-    /* The same reservation `.hub-walk-card` makes, for the same two fixed
-       launchers: the hold-to-talk mic bottom-left (z-index 70, above this
-       panel's 60) and the feedback pencil bottom-right. Reported as CRITICAL
-       at 430px — the mic sat squarely on "Record answer", which is the one
-       control the review queue exists to deliver. Reserving the tail is what
-       guarantees every control can be SCROLLED clear of them; moving the mic
-       instead would only trade which surface it covers.
-       `--hub-bottom-bar` is in the sum because the mic is LIFTED by the phone
-       nav on exactly this page: measured at 430px without it, the composer's
-       Comment button (812–848) sat under the mic (814–858). 60px is the mic's
-       own 16+44; 24px is the clearance. */
-    padding-bottom: calc(24px + 60px + var(--hub-bottom-bar, 0px) + var(--safe-bottom, 0px));
   }
-  /* …and the tail reservation is only half the answer, because the mic is
-     FIXED and the panel SCROLLS under it. The reservation guarantees a
-     resting position with nothing beneath the mic; it says nothing about the
-     positions a control passes through on the way there. Measured at 430px
-     2026-08-18, with the reservation already in place: `#hub-mic` intersected
-     "Record answer" over scrollTop 195–255 (20% of the button covered at the
-     worst point) and "Comment" over scrollTop 1545–1605 (45%), and
-     `elementFromPoint` at the intersection centre returned the mic — so the
-     tap went to the microphone rather than to the button under it.
-
-     The mic occupies one COLUMN, x 16–60. A submit aligned to the right edge
-     of a 430px panel starts around x 300, so it cannot intersect the mic at
-     ANY scroll position — the guarantee stops depending on where the reader
-     happens to have stopped. Right-aligned submits are also what every other
-     composer on a phone does, so this is not a concession. */
-  body.hub-body .hub-decide-form button[type="submit"],
-  body.hub-body .hub-comment-form button[type="submit"] {
-    align-self: flex-end;
-  }
+  /* (The mic-clearance pair — the panel's tail reservation and the
+     right-aligned submits — lives in the ≤1023px block below the toast
+     rules, because the hazard it answers covers every width the split pane
+     does not, not only the phone sheet.) */
   /* The walkthrough is a phone-first surface — six answers in one sitting is
      a couch gesture. It is a PAGE in the Home column now rather than an
      overlay, so it already fills the width; what the phone needs is the reply

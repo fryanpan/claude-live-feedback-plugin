@@ -185,13 +185,17 @@ describe('the panel’s fields and headings', () => {
 });
 
 describe('nothing fixed to the viewport can sit on the last control', () => {
-  it('reserves the launchers’ height at the foot of the phone panel', () => {
+  it('reserves the launchers’ height at the foot of every non-split-pane panel', () => {
     // Reported CRITICAL at 430px: the hold-to-talk mic (fixed bottom-left,
     // z-index above the panel) sat squarely on "Record answer". Reserving the
     // tail is what guarantees every control can be SCROLLED clear of it —
     // the same reservation `.hub-walk-card` already makes for the same two
-    // launchers.
-    const phone = media('(max-width: 900px)');
+    // launchers. The reservation covers everything UP TO the split pane
+    // (≤1023px), not only the phone sheet: between 901 and 1023 the centred
+    // modal still has its left edge at 14px, its submits in the mic's column,
+    // and no split-pane geometry to save it — a 932×430 landscape phone lands
+    // exactly in that band.
+    const phone = media('(max-width: 1023px)');
     const tail = rule('.hub-detail-panel', phone);
     expect(tail).toMatch(/padding-bottom:\s*calc\(24px \+ 60px/);
     // The mic is LIFTED by the phone's bottom nav on this very page, so the
@@ -201,8 +205,11 @@ describe('nothing fixed to the viewport can sit on the last control', () => {
     expect(tail).toMatch(/var\(--hub-bottom-bar/);
     expect(rule('.voice-mic')).toMatch(/var\(--hub-bottom-bar/);
     // One declaration of the height, so the lift and the reservation cannot
-    // drift; and it is scoped to hub pages, since no other surface has the bar.
-    expect(rule('body.hub-body', phone)).toMatch(/--hub-bottom-bar:\s*58px/);
+    // drift; and it is scoped to hub pages, since no other surface has the
+    // bar. The bar itself stays a PHONE fact (≤900px) — above that width the
+    // nav is not fixed, so between 901 and 1023 the same calc reads the
+    // variable's 0 fallback and reserves the mic's own height alone.
+    expect(rule('body.hub-body', media('(max-width: 900px)'))).toMatch(/--hub-bottom-bar:\s*58px/);
     // …and only there: above the breakpoint the bar is not fixed, so the
     // fallback 0 has to be what applies. The base `body.hub-body` rule exists
     // and styles other things — the assertion is that it does not set this.
@@ -236,7 +243,10 @@ describe('the mic cannot cover a submit button at any scroll position', () => {
 
     // Both submits are pushed to the opposite edge, so no scroll position can
     // put them under it. One grouped rule, so this reads the block whole.
-    const phone = media('(max-width: 900px)');
+    // Scoped to everything BELOW the split pane (≤1023px), not to the phone
+    // sheet alone: the 901–1023 modal keeps the panel's left edge at 14px, so
+    // a left-aligned submit sits in the mic's column there too.
+    const phone = media('(max-width: 1023px)');
     // Either quote style: biome normalises the attribute selector to double
     // quotes on format, so a pattern that insisted on one would go red the
     // first time someone ran the formatter.
@@ -246,6 +256,31 @@ describe('the mic cannot cover a submit button at any scroll position', () => {
     ).exec(phone);
     expect(grouped, 'no phone rule targets the submit buttons at all').not.toBeNull();
     const [, selectors = '', body = ''] = grouped ?? [];
+    expect(selectors).toContain('.hub-decide-form');
+    expect(selectors).toContain('.hub-comment-form');
+    expect(body).toMatch(/align-self:\s*flex-end/);
+  });
+
+  it('keeps the mitigations in full screen at desktop, where the panel reaches the mic again', () => {
+    // ≥1024px normally puts the panel on the RIGHT, out of the mic's column —
+    // that is why the split pane needs neither mitigation. `.hub-detail--full`
+    // un-does exactly that geometry: the panel spans the whole viewport, its
+    // submits return to the mic's column, and full screen is the mode chosen
+    // FOR long discussions, i.e. for being scrolled to the composer at the
+    // bottom. So full screen re-applies both mitigations the narrow widths
+    // have: the tail reservation (no --hub-bottom-bar term — the phone nav
+    // does not exist at this width) and the right-aligned submits.
+    const split = media('(min-width: 1024px)');
+    expect(rule('.hub-detail--full .hub-detail-panel', split)).toMatch(
+      /padding-bottom:\s*calc\(24px \+ 60px/,
+    );
+    const submit = String.raw`button\[type=['"]submit['"]\]`;
+    const grouped = new RegExp(
+      `((?:[^{}]*${submit}[^{}]*,\\s*)*[^{}]*${submit}\\s*)\\{([^}]*)\\}`,
+    ).exec(split);
+    expect(grouped, 'no full-screen rule targets the submit buttons at all').not.toBeNull();
+    const [, selectors = '', body = ''] = grouped ?? [];
+    expect(selectors).toContain('body.hub-detail-full');
     expect(selectors).toContain('.hub-decide-form');
     expect(selectors).toContain('.hub-comment-form');
     expect(body).toMatch(/align-self:\s*flex-end/);
@@ -293,6 +328,15 @@ describe('the threading UI left no rules behind', () => {
       '.hub-detail-ask',
       '.hub-detail-ask-kicker',
       '.hub-detail-ask-form',
+      // The status chip ROW went with the redesign too (replaced by the
+      // status <select>), and it left these four rules behind: the chip base,
+      // its two interaction states, and the -current variant only a row of
+      // chips could mark. `.hub-chip-todo/-in-progress/-done` are NOT here —
+      // the select still wears those for its color.
+      '.hub-status-chip',
+      '.hub-status-chip:hover',
+      '.hub-status-chip:focus-visible',
+      '.hub-chip-current',
     ]) {
       expect(rule(sel), `${sel} still has a rule`).toBe('');
     }
@@ -301,5 +345,8 @@ describe('the threading UI left no rules behind', () => {
     // nothing would not read as a clean sweep.
     expect(rule('.hub-comment')).not.toBe('');
     expect(rule('.hub-comment-focus::before')).not.toBe('');
+    // …and the surviving status colors really survive: the <select> at
+    // hub-render's status control still emits `hub-chip-<status>`.
+    expect(rule('.hub-chip-done')).not.toBe('');
   });
 });
