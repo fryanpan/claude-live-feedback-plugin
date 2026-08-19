@@ -166,7 +166,12 @@ After the walkthrough, evaluate against these. For each, mark Pass / Issue / Cri
 - Can the user accomplish the goal without leaving the page to read docs?
 
 **Motor / Fitts's Law**
-- Are click targets ≥44×44px on mobile, ≥24×24px on desktop?
+- Are click targets at least the floor **this project** sets? Read the number out of
+  `docs/product/design-mobile.md` rather than from memory — it is **36×36px** there today,
+  and a generic 44×44px heuristic that used to sit on this line filed a false merge blocker
+  against a shipped PR, because every reviewer loads this checklist and none of them opened
+  the doc. Anything between the project floor and some remembered larger number is **not a
+  finding**. Below the floor is. (Desktop: ≥24×24px.)
 - Is the most-used target closest to where the user's hand/cursor naturally rests?
 - Are destructive actions far from frequent ones?
 
