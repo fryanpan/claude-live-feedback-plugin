@@ -36,9 +36,14 @@ import { existsSync, renameSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { PRODUCT_SLUG, PRODUCT_SLUG_LEGACY } from '../packages/core/src/machine-paths.ts';
 
-export const OLD_SLUG = 'live-feedback';
-export const NEW_SLUG = 'claude-workspaces';
+// Imported rather than spelled again: the discovery dir, the state root and
+// the cloudflared config are all built from this one slug, and a script that
+// moves them while holding its own copy of the name is how a later rename
+// half-lands.
+export const OLD_SLUG = PRODUCT_SLUG_LEGACY;
+export const NEW_SLUG = PRODUCT_SLUG;
 export const OLD_LAUNCHD_LABEL = 'com.fryanpan.live-feedback';
 export const NEW_LAUNCHD_LABEL = 'com.fryanpan.claude-workspaces';
 
@@ -134,7 +139,7 @@ function moveStep(
       action: 'conflict',
       note:
         `both ${from} and ${to} exist — refusing to move, since either ` +
-        `outcome shadows or destroys one of them. Merge or move one aside by hand.`,
+        'outcome shadows or destroys one of them. Merge or move one aside by hand.',
     };
   }
   if (hasOld) return { kind: 'move', id, what, from, to, action: 'move' };
