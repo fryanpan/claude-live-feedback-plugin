@@ -29,9 +29,19 @@ ToolSearch → select:mcp__plugin_claude-workspaces_claude-workspaces__create_re
 
 If that returns nothing, THEN the plugin isn't enabled for your session — but check the doubled-prefix name first. "The tools aren't in my list" is expected for deferred tools, not a broken MCP.
 
+## Present the work in the workspace, not in chat
+
+The workspace is the **primary work surface** (Bryan, 2026-08-18: *"Chat is so weird and out of context — I'd like you to start showing me review items tied to tasks or doc comments or wherever they are in context, instead of making me figure it out from a funny chat screen."*). When the thing you built answers a task or a comment, the URL goes there:
+
+- Reply on the thread that asked for it (`post_reply`), or open a subject thread on the task (`create_thread(docId="task:<taskId>", …)`) when nothing asked yet.
+- Pass the `review` payload on `create_thread` / `post_reply` when you're asking Bryan to look or decide — that's what makes it a Review Item on his Home queue rather than a comment he has to notice.
+- Chat gets at most a one-line pointer. Bare URLs on their own line, never markdown-wrapped.
+
+The full rule ships fleet-wide in the `claude-workspaces:working-a-workspace-board` skill ("Present the work itself in context").
+
 ## How
 
-**Markdown docs** — bind via `mcp__plugin_claude-workspaces_claude-workspaces__create_review_doc(docId, path, title?)`. Share the review URL (`http://mac-mini.tailb53801.ts.net:8787/review/<docId>`) in your message to Bryan.
+**Markdown docs** — bind via `mcp__plugin_claude-workspaces_claude-workspaces__create_review_doc(docId, path, title?)`. Post the review URL (`http://mac-mini.tailb53801.ts.net:8787/review/<docId>`) on the task or thread the doc belongs to (see above); a chat message carries at most a pointer.
 
 **Dev servers / HTML mockups** — use the `claude-workspaces:embedding-widget` skill (it covers the `<script>` tags + `setContext` calls).
 
