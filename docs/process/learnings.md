@@ -2521,3 +2521,54 @@ Technical discoveries that should persist across sessions for this project.
 - Related: "Four gates, and each one is the only thing that catches its class".
   A gate that cannot load its subject has not run, whatever its exit code
   suggests.
+
+## An assertion whose alternation can match either way pins nothing, and reads as coverage of exactly the thing it does not check
+
+- **The assertion, `packages/mcp/test/skills-declare-once.test.ts:75-83`:**
+  ```js
+  expect(text.toLowerCase()).toMatch(/5[- ]minute|five minutes|goes quiet|stay live/);
+  ```
+  Its test name is *"says a declaration does not keep you live — the heartbeat
+  window still gates delivery"*, and its comment restates the claim it appears
+  to guard, verbatim. But `goes quiet` and `stay live` are generic enough to
+  match the WRONG text, the CORRECTED text, and a later reinstatement of the
+  wrong text. It passes in all three worlds. **An alternation is only as
+  strong as its weakest branch** — if any branch would match text that
+  violates the property, the assertion tests nothing about that property.
+- **The check is one question: what text would make this fail?** If you cannot
+  name a concrete string that turns it red, it is not an assertion, whatever
+  its name says. Worse than absent coverage, because it occupies the slot a
+  real test would take and tells the next reader the claim is pinned.
+- **Measured cost.** A shipped, fleet-wide MCP tool description stated the
+  wrong delivery rule — *"every delivery gate asks for a heartbeat inside the
+  ~5-minute window"* — and survived **four green CI runs and three independent
+  reviewers**. Post-#253 that is wrong twice over: `isDeliverable`
+  (`tasks.ts:5217`) reads `observedWorkFreshMs ?? OBSERVED_LIVE_MS`, which is
+  **15** minutes, off `max(lastHeartbeat, lastToolCallAt)` plus a wire probe.
+  The 5-minute figure is `HEARTBEAT_FRESH_MS`, which feeds the DISPLAYED state
+  and not delivery — a split `OBSERVED_LIVE_MS`'s own comment spells out.
+- **The other half of why it survived, and it is separately worth knowing: the
+  passage was internally HALF-RIGHT.** Every one of the sites also said "Tool
+  calls refresh it, so a working session is fine" — which is correct, and
+  post-#253 aware. So the text read as informed by someone who knew the
+  mechanism, and a careful reader had no snag to catch on. **A confidently
+  written passage that is 90% right is harder to catch than one that is wrong
+  throughout**, because the wrong 10% inherits the credibility of the rest.
+- **Scope, once anybody looked: SEVEN prose sites, not one** — four `mcp.ts`
+  tool descriptions (`watch_coverage`, `set_workspace_lead`, `attach_agent`,
+  `heartbeat`) and three skill passages. **Three of the seven were verified
+  present on `origin/main`**, so the claim had already been shipping; the
+  branch that got blocked for it merely added four more. It was found by
+  grepping the whole tree for one phrase AFTER a single instance surfaced —
+  not by reading the diff. The diff-scoped read is exactly what missed it
+  three times, because a wrong sentence that main already carries is not in
+  the diff to be reviewed.
+- **A sweep needs its own positive control, and this one nearly under-reported
+  by one.** A fixed-string `grep -F` for `gated on a heartbeat inside the
+  ~5-minute window` returned 0 against a file that says exactly that — the
+  phrase is **line-wrapped** in the markdown, so no single line contains it.
+  Re-running through `tr '\n' ' ' | tr -s ' '` found it. Prose wraps; a
+  literal multi-word probe against a wrapped file reports a clean absence.
+- Same family as "A negative probe needs a positive control", pointed at
+  assertions rather than searches: a check that reports success without having
+  looked at the thing it names.
