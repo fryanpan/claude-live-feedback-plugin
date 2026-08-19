@@ -284,17 +284,18 @@ body.view-mode #toggle-format {
   grid-template-columns: minmax(0, 1fr) var(--threads-w, 360px);
   overflow: hidden;
 }
-/* Review-set sidebar adds a left column on desktop when the doc is
-   tagged with a setId. At or below 1366px — every iPad in landscape — the
-   sidebar collapses (dropdown in the topbar takes over); below 900px,
-   threads also drawer-ify. Keep this number in step with the `#set-pane`
-   show gate and `.set-resize`. */
-body.has-set #main {
-  grid-template-columns: var(--set-w, 320px) minmax(0, 1fr) var(--threads-w, 360px);
-}
-@media (max-width: 1366px) {
-  body.has-set #main {
-    grid-template-columns: minmax(0, 1fr) 360px;
+/* Review-set sidebar adds a left column — but only once the reviewer opens
+   it. Closed is the default and needs no rule of its own: the grid falls
+   through to #main's own two-column definition above, which IS the closed
+   layout. That fall-through also fixes something the width-gated rule this
+   replaces got wrong — it hard-coded `360px` for the comments column, so a
+   collapsed comments drawer silently stopped collapsing on a narrow desktop.
+   Below 1101px the pane cannot show at all, so the column is never reserved
+   there; see the `#set-pane` show gate for why width no longer decides
+   visibility itself. */
+@media (min-width: 1101px) {
+  body.has-set.set-pane-open #main {
+    grid-template-columns: var(--set-w, 320px) minmax(0, 1fr) var(--threads-w, 360px);
   }
 }
 @media (max-width: 900px) {
@@ -329,28 +330,43 @@ body.has-set #main {
   overflow-y: auto;
   font-size: 13px;
 }
-/* Sidebar is desktop-only, and "desktop" means WIDER THAN AN iPAD.
-   At or below 1366px the dropdown in the topbar is the only nav for the
-   review set — don't burn vertical space on a stacked list above the editor.
-   Gated on min-width (rather than the prior unconditional show + max-width
-   hide) so source order can't re-introduce the mobile sidebar bug.
+/* Whether the sidebar shows is a REVIEWER'S CHOICE, not a measurement.
+   Default closed (no `.set-pane-open` on <body> until the toggle or the
+   stored preference adds it), so every screen starts with the width the
+   prose gets.
 
-   1366, not 1100: Bryan reviews on an iPad in landscape with a keyboard
-   (2026-08-19), and *"at iPad resolution, please also hide it and keep it in
-   the dropdown like for mobile"*. Every iPad in landscape is covered —
-   Air 11" is 1180, Pro 11" is 1194, Pro 12.9" is 1366 — and the tradeoff is
-   deliberate: a 1366-wide laptop now gets the dropdown too. That is the
-   nav this breakpoint already gave every narrower screen, not a loss of
-   function.
+   Width used to decide this and cannot. Page zoom scales the layout
+   viewport: a 1366px iPad at 85% zoom reports 1607px, so any gate set high
+   enough to exclude that iPad also excludes a 1512px MacBook. The previous
+   fix picked 1367px and Bryan defeated it by pinching — *"I actually zoom out
+   a bit and the panel is back on my iPad"* — and then settled it outright:
+   *"On desktop, even at the resolutions I'd zoomed out above, would prefer to
+   have more horizontal space and collapse the left bar."*
 
-   THREE RULES SHARE THIS NUMBER and must move together, or the layout keeps
-   a 320px column with nothing in it: this gate, `body.has-set #main`'s
-   grid-template-columns, and `.set-resize`'s hide. `set-pane-header.test.ts`
-   asserts they agree, because a media query cannot read a custom property
-   and there is no other way to name the value once. */
-@media (min-width: 1367px) {
-  body.has-set #set-pane {
+   What is left of width here is narrow and honest: below 1101px there is no
+   room for a 320px column beside the prose, so the toggle is not offered and
+   the topbar dropdown remains the whole nav. TWO rules carry that number —
+   this one and `body.has-set.set-pane-open #main`'s columns — plus the
+   toggle's own show rule below. `set-pane.test.ts` asserts all three agree,
+   because a media query cannot read a custom property and there is no other
+   way to name the value once. (`.set-resize` used to be a fourth copy; it is
+   a child of #set-pane, so `display: none` here already takes it along.) */
+@media (min-width: 1101px) {
+  body.has-set.set-pane-open #set-pane {
     display: block;
+  }
+}
+/* The toggle that opens it. Lives in the crumb rather than the toolbar
+   because it acts on the left edge of the page and that is where a reader
+   looks for it. Hidden entirely when there is no set to list, and below the
+   width where the pane could open — a control that flips a class no
+   stylesheet acts on is a dead control. */
+#toggle-set-pane {
+  display: none;
+}
+@media (min-width: 1101px) {
+  body.has-set #toggle-set-pane {
+    display: inline-flex;
   }
 }
 #set-pane-list {
@@ -6290,13 +6306,9 @@ body.code-mode .cm-editor .cm-deletedChunk .cm-deletedText {
 .set-resize.dragging {
   background: var(--accent-subtle, rgba(46, 125, 215, 0.25));
 }
-/* Nothing to resize once the sidebar is gone. Same number as the
-   `#set-pane` show gate — see the note there. */
-@media (max-width: 1366px) {
-  .set-resize {
-    display: none;
-  }
-}
+/* No width gate of its own: the handle is appended INTO #set-pane by
+   wireResizeHandle, so hiding the pane hides the handle. This was a third
+   hand-maintained copy of the sidebar breakpoint until 2026-08-19. */
 
 /* Line-number chip on comments (code/diff surfaces): "L293" / "L293-301". */
 .thread-line {
