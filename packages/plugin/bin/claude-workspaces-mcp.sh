@@ -89,7 +89,7 @@ node_bin=$(find_node) || {
 }
 
 # A seam for the test: prove resolution works without starting a stdio server.
-if [ "${LF_MCP_PRINT_NODE:-}" = "1" ]; then
+if [ "${CW_MCP_PRINT_NODE:-${LF_MCP_PRINT_NODE:-}}" = "1" ]; then
   echo "$node_bin"
   exit 0
 fi
