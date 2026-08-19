@@ -223,8 +223,9 @@ describe('/api/agents/:agentId/watches', () => {
     expect(res.json.pruned).toEqual(['ws:no-such-workspace']);
   });
 
-  it('refuses the shared identity with a message that says how to fix it', async () => {
+  it('refuses the shared identity with a message that says how to fix it — and reports no coverage for it', async () => {
     const base = start();
+    await createDoc(base, 'doc-one');
     for (const shared of ['known-agent', 'agent']) {
       const res = await call(base, shared, 'POST', { add: ['doc-one'] });
       expect(res.status).toBe(400);
@@ -232,10 +233,21 @@ describe('/api/agents/:agentId/watches', () => {
       expect(String(res.json.message)).toContain('CW_AGENT_NAME');
       const read = await call(base, shared, 'GET');
       expect(read.status).toBe(400);
+      // ABSENT, not fabricated. A shared identity is the union of every
+      // anonymous session, so any coverage answer here would describe
+      // somebody — just nobody in particular. An empty coverage block would
+      // read as "you are fully covered", which is the exact reassuring lie
+      // this whole readout exists to stop telling.
+      expect(read.json.coverage).toBeUndefined();
     }
-    // Positive control: a named identity on the same server is served.
+    // Positive control: a named identity on the same server is served, and
+    // DOES get a coverage block — so the absence above is about the identity
+    // rather than about the route having quietly stopped building one.
     const ok = await call(base, 'agent-alpha', 'POST', { add: ['doc-one'] });
     expect(ok.status).toBe(200);
+    const named = await call(base, 'agent-alpha', 'GET');
+    expect(named.status).toBe(200);
+    expect((named.json.coverage as { agentId: string }).agentId).toBe('agent-alpha');
   });
 
   it('refuses a malformed key rather than storing it', async () => {
