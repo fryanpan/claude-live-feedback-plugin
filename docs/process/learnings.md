@@ -2491,3 +2491,33 @@ Technical discoveries that should persist across sessions for this project.
   is 0 or `grep -a` agrees.
 - Same family as "A negative probe needs a positive control", with the sting
   that here the control is inside the blind spot with the probe.
+
+## Red gates on a diff that touches no code: count failed FILES against failed TESTS
+
+- **A docs-only branch — one `.md` file, +61 lines — took `bunx vitest run` and
+  `bun test packages/server/test` both to exit 1.** Measured 2026-08-19 in a
+  worktree created minutes earlier with `git worktree add … origin/main`. That
+  is the shape that gets waved through as flake, or read as "main is broken",
+  and it was neither.
+- **The tell is in the two counters, and they disagree.** vitest reported
+  `Test Files 56 failed | 50 passed (106)` next to `Tests 755 passed (755)` —
+  fifty-six files failed while **zero tests** did. A file that fails to LOAD
+  fails before any test in it runs, so it contributes no failing test; an
+  assertion failure contributes exactly the opposite. Fifty-six files down and
+  nothing red inside them cannot be a code regression, and a one-file docs diff
+  cannot break a file it does not appear in.
+- **The cause was the environment, and the error said so plainly:** `Failed to
+  resolve import "@feedback/core"` from vitest, `Cannot find module
+  '@feedback/core'` from the server suite. `git worktree add` creates the tree
+  but no `node_modules`, and this monorepo's workspace packages resolve through
+  it. `bun install` — 948 packages, 731ms — then all four gates exit 0, with
+  1702 and 1813 tests respectively. Nothing about the diff changed.
+- **So the first question on a red gate is not "which test broke" but "did the
+  test files load".** Read the failed-files and failed-tests counters together
+  before touching anything. They separate a missing install, a bad import path
+  and a genuine regression in one glance, and re-running the suite — the
+  reflex a red gate invites — tells you nothing, because it fails identically
+  every time.
+- Related: "Four gates, and each one is the only thing that catches its class".
+  A gate that cannot load its subject has not run, whatever its exit code
+  suggests.
