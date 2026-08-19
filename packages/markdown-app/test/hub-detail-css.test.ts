@@ -119,6 +119,24 @@ describe('the panel’s fields and headings', () => {
     expect(Number(floor) * 4 + 16 * 3).toBeLessThanOrEqual(874);
   });
 
+  it('holds the description to a readable measure when the panel goes wide', () => {
+    // Measured in a browser in full screen at a 1512px window: the description
+    // ran 1449px, about 177 characters a line, where the readable range tops
+    // out near 75. The panel is width-flexible and prose is not.
+    const slot = rule('.hub-detail-body-slot');
+    const measure = /max-width:\s*(\d+)ch/.exec(slot);
+    expect(measure, 'the description has no measure').not.toBeNull();
+    expect(Number(measure?.[1])).toBeLessThanOrEqual(80);
+    // A `ch` cap binds only where the panel is WIDER than it, so the phone is
+    // untouched — that is the property worth pinning, since a px cap set from
+    // the same measurement would also clamp the 383px phone column. Asserting
+    // the unit is asserting that.
+    expect(slot).not.toMatch(/max-width:\s*\d+px/);
+    // And it stays in the panel's left column: centring one section breaks the
+    // edge the fields and the queue above it are read down.
+    expect(slot).not.toMatch(/margin(-inline)?:\s*[^;]*auto/);
+  });
+
   it('draws all four values as one kind of control at one height', () => {
     const ctl = rule('.hub-detail-select,\n.hub-detail-input');
     expect(ctl, 'the shared control rule is missing').not.toBe('');

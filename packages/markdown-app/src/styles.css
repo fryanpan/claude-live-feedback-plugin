@@ -2987,6 +2987,14 @@ a.hub-link-chip:hover {
    this is the sentence that says what is being decided, and it is allowed to
    wrap: *"the blurb may run a few lines — design for that"*. Nothing here
    clips, truncates or sets a line count. */
+/* The card's two prose lines get the same measure the description does, for
+   the same reason — in full screen the question ran 1415px, right beside a
+   description capped at 708, which reads as two unrelated layouts stacked.
+   Deliberately NOT scoped to the detail panel: these classes are meant to be
+   adopted by the Home queue's copy of this card (see the last case in
+   `hub-decide-css.test.ts`), and a `ch` cap is inert anywhere the card is
+   already narrower, which is everywhere it renders today. The OPTIONS keep the
+   full width on purpose — they are tap targets, not text. */
 .hub-decide-headline {
   margin: 0 0 8px;
   font-family: var(--prose);
@@ -2994,6 +3002,7 @@ a.hub-link-chip:hover {
   font-weight: 650;
   line-height: 1.4;
   overflow-wrap: anywhere;
+  max-width: 72ch;
 }
 .hub-decide-why {
   margin: 0 0 12px;
@@ -3002,6 +3011,7 @@ a.hub-link-chip:hover {
   line-height: 1.5;
   color: var(--fg-muted);
   overflow-wrap: anywhere;
+  max-width: 72ch;
 }
 .hub-decide-lookfor {
   margin: 0 0 12px;
@@ -3120,6 +3130,18 @@ a.hub-link-chip:hover {
   /* Reserves the fallback's own first line, so the panel does not reflow when
      an empty description turns into an editor with a placeholder in it. */
   min-height: 1.55em;
+  /* A measure, because the panel is width-flexible and prose is not. Measured
+     in full screen at a 1512px window: 1449px of running text, about 177
+     characters a line, where the readable range tops out near 75 — the eye
+     loses the line it was on when it returns to the left edge.
+
+     `ch` rather than px so it tracks the font: 72ch is the measure, and it
+     binds only where the panel is wider than that, so the phone (383px at
+     430) and the split pane are untouched. Left-aligned rather than centred:
+     the description shares a left edge with the fields and the queue above
+     it, and centring one section of a panel breaks the column everything
+     else is read down. */
+  max-width: 72ch;
 }
 .hub-detail-body-slot .hub-detail-body,
 .hub-detail-body-slot .hub-detail-body-empty {
