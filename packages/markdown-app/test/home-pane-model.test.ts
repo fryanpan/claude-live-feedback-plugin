@@ -6,15 +6,19 @@ import { describe, expect, it } from 'vitest';
 import {
   HOME_POLL_CAP_MS,
   homeSinceLabel,
+  navFromPath,
+  navPath,
+  paneForNav,
   paneFromPath,
   panePath,
   reviewBannerText,
   reviewQueue,
   reviewRowTitle,
   shouldPollHome,
+  tabForNav,
   waitingLabel,
 } from '../src/hub/hub-model.ts';
-import type { HubTask, ReviewItem, ReviewThreadItem } from '../src/hub/hub-model.ts';
+import type { HubNav, HubTask, ReviewItem, ReviewThreadItem } from '../src/hub/hub-model.ts';
 
 const NOW = 1_700_000_000_000;
 
@@ -38,6 +42,54 @@ describe('paneFromPath / panePath', () => {
     expect(paneFromPath(panePath('w-abc', 'home'))).toBe('home');
     expect(paneFromPath(panePath('w-abc', 'board'))).toBe('board');
     expect(panePath('w a', 'home')).toBe('/workspaces/w%20a/home');
+  });
+});
+
+describe('navFromPath / navPath', () => {
+  it('the bare workspace path is Tasks, for the reason the board always was', () => {
+    expect(navFromPath('/workspaces/w-abc')).toBe('tasks');
+    expect(navFromPath('/workspaces/w-abc/')).toBe('tasks');
+  });
+
+  it('every destination has a URL, which is the point of promoting them', () => {
+    expect(navFromPath('/workspaces/w-abc/home')).toBe('home');
+    expect(navFromPath('/workspaces/w-abc/mine')).toBe('mine');
+    expect(navFromPath('/workspaces/w-abc/activity')).toBe('activity');
+    expect(navFromPath('/workspaces/w-abc/mine/')).toBe('mine');
+  });
+
+  it('an unknown suffix is Tasks, not a crash', () => {
+    expect(navFromPath('/workspaces/w-abc/minecraft')).toBe('tasks');
+    expect(navFromPath('/review/doc-1')).toBe('tasks');
+  });
+
+  it('navPath round-trips all four, id encoded', () => {
+    for (const nav of ['home', 'tasks', 'mine', 'activity'] as const) {
+      expect(navFromPath(navPath('w-abc', nav))).toBe(nav);
+    }
+    expect(navPath('w a', 'mine')).toBe('/workspaces/w%20a/mine');
+    expect(navPath('w-abc', 'tasks')).toBe('/workspaces/w-abc');
+  });
+
+  it('pane and tab derive from nav, and neither Home nor Activity resets the filter', () => {
+    expect(paneForNav('home')).toBe('home');
+    expect(['tasks', 'mine', 'activity'].map((n) => paneForNav(n as HubNav))).toEqual([
+      'board',
+      'board',
+      'board',
+    ]);
+    expect(tabForNav('tasks')).toBe('all');
+    expect(tabForNav('mine')).toBe('mine');
+    // Undefined means "leave the reader's filter alone" — neither of these
+    // renders task rows, so answering 'all' would silently undo their choice
+    // on the way back.
+    expect(tabForNav('home')).toBeUndefined();
+    expect(tabForNav('activity')).toBeUndefined();
+  });
+
+  it('the old pane paths still resolve, so links already in the field survive', () => {
+    expect(paneForNav(navFromPath(panePath('w-abc', 'home')))).toBe('home');
+    expect(paneForNav(navFromPath(panePath('w-abc', 'board')))).toBe('board');
   });
 });
 
