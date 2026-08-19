@@ -28,7 +28,7 @@ Ask once:
 
 Wait for their answer. If they say "just do it," proceed; if they want to skip parts (e.g. the launchd supervisor), honor that.
 
-If `node_modules/` already exists, `~/Library/LaunchAgents/com.fryanpan.live-feedback.plist` is present, and the alias is already in their shell init — recap "Already set up — here's what I'd suggest next" and exit. Don't redo steps unnecessarily.
+If `node_modules/` already exists, `~/Library/LaunchAgents/com.fryanpan.claude-workspaces.plist` is present, and the alias is already in their shell init — recap "Already set up — here's what I'd suggest next" and exit. Don't redo steps unnecessarily.
 
 ### 2. Install JS dependencies
 
@@ -113,7 +113,7 @@ If `pwd -P` shows a `/Users/...` path directly (standard macOS install), the FDA
 Verify after:
 
 ```sh
-launchctl print "gui/$(id -u)/com.fryanpan.live-feedback" | grep "state ="
+launchctl print "gui/$(id -u)/com.fryanpan.claude-workspaces" | grep "state ="
 curl -sS http://localhost:8788/ -o /dev/null -w "%{http_code}\n"
 ```
 

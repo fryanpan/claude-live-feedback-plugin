@@ -24,6 +24,7 @@ import type { ElementAnchor, Thread, User } from '@feedback/core';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { workspaceRoomId } from '../src/task-projection.ts';
 import type { Task, TaskStoreEvent } from '../src/tasks.ts';
+import { openWorkspaceStream } from './agent-stream.ts';
 import { type GoalIds, seedGoalsOverHttp } from './goal-seed.ts';
 
 const PERSON: User = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
@@ -403,12 +404,16 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       const { wsId, G } = await seedWorkspace();
       // A live attachment makes the triage request deliverable, which is the
       // only path that stamps triagePendingTs (grounded-pending rule).
+      // Deliverable means REACHABLE, not merely registered: the request is a
+      // broadcast on the workspace channel, so the agent has to be holding
+      // it — which is what the MCP does right after attaching.
       await jj(
         await post(`/api/workspaces/${wsId}/attachments`, {
           agentId: 'agent-search-revamp',
           runtime: 'claude-code-local',
         }),
       );
+      const stream = await openWorkspaceStream(base, wsId);
       const { task } = await jj<{ task: Task }>(
         await post(`/api/workspaces/${wsId}/tasks`, {
           assignee: 'human',
@@ -425,6 +430,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       expect(res.task.triagePendingTs).toBeUndefined();
       expect(res.task.triagedAgainst).toMatchObject({ goalId: G.g1, goal: 'Ship search v2.' });
       expect(res.task.triagedAgainst?.ts).toBeGreaterThan(0);
+      await stream.close();
     });
 
     it('same goal + same position → changed:false and NO task.regrouped, but the triage stamp still lands', async () => {
@@ -715,6 +721,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
           runtime: 'claude-code-local',
         }),
       );
+      const stream = await openWorkspaceStream(base, wsId);
       const a = await seedThread();
       const untriaged = await jj<{ task: Task }>(
         await post(`/api/docs/${a.docId}/threads/${a.threadId}/promote`, {
@@ -734,6 +741,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
         }),
       );
       expect(placed.task.triagePendingTs).toBeUndefined();
+      await stream.close();
     });
 
     it('404s an unknown thread, doc, or workspace; 400s a missing workspaceId', async () => {

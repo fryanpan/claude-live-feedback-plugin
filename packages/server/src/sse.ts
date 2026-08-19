@@ -5,6 +5,34 @@
  */
 type SsePayload = { event: string };
 
+/**
+ * The keepalive period and the socket idle timeout are ONE decision, so they
+ * live next to each other. `SSE_KEEPALIVE_MS` must stay comfortably under
+ * `HTTP_IDLE_TIMEOUT_SEC * 1000`, and `sse-keepalive.test.ts` asserts exactly
+ * that — separating them is what broke this.
+ *
+ * Measured 2026-08-19 on Bun 1.3.10: `curl -N` on `/events/workspace/<id>`
+ * ended after 9.7s having received the 5-byte `:ok` preamble and nothing else,
+ * when asked to hold for 40. The keepalive comment was already here, on a
+ * 20_000ms period; `Bun.serve` carried no `idleTimeout` at all and Bun's
+ * default is 10 seconds. **The guard's period was longer than the timeout it
+ * was guarding**, so the connection idled out before the keepalive could ever
+ * write, on every stream, forever.
+ *
+ * The damage was not the reconnect. `EventSource` reconnects by itself, so
+ * every open tab looked healthy while reopening its stream six times a minute
+ * — and with no `Last-Event-ID` replay on this server, everything broadcast
+ * inside those gaps was lost permanently.
+ *
+ * Both numbers are deliberately defensive rather than minimal. 15s of
+ * keepalive also sits under the 30-60s idle timeouts common in proxies, so a
+ * tunnel in front of this server cannot reintroduce the same failure; and
+ * 120s of idle timeout means a missed keepalive costs nothing. Bun caps
+ * `idleTimeout` at 255 and throws above it, which the test also pins.
+ */
+export const SSE_KEEPALIVE_MS = 15_000;
+export const HTTP_IDLE_TIMEOUT_SEC = 120;
+
 type Sink = {
   write: (event: string, data: unknown) => void;
   close: () => void;
@@ -131,7 +159,7 @@ export function openSseStream(
         } catch {
           clearInterval(keepalive);
         }
-      }, 20000);
+      }, SSE_KEEPALIVE_MS);
       // attach cleanup on cancel
       (c as unknown as { _keepalive?: ReturnType<typeof setInterval> })._keepalive = keepalive;
     },

@@ -29,6 +29,7 @@ import {
   parseVoiceReply,
   resolveVoiceAction,
 } from '../src/voice.ts';
+import { type AgentStream, openWorkspaceStream } from './agent-stream.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
 const AGENT = { id: 'agent-search-revamp', name: 'Search Agent', kind: 'agent', color: '#7d2ed7' };
@@ -281,12 +282,23 @@ describe('voice routing (§3.8)', () => {
       expect(readFileSync(qPath, 'utf8')).toContain('rework these into different groupings');
     });
 
+    /** The agent's event stream, opened at attach the way the MCP opens it. */
+    let agentStream: AgentStream | null = null;
+    afterAll(async () => {
+      await agentStream?.close();
+    });
+
     it('attaching an agent DRAINS the queue into the attach result', async () => {
       const r = await post(`/api/workspaces/${hubId}/attachments`, {
         agentId: 'agent-search-revamp',
         runtime: 'claude-code-local',
       });
       expect(r.status).toBe(200);
+      // Attaching is half of arriving; the MCP opens the workspace stream
+      // straight after (`subscribe !== false`). Delivery is a broadcast on
+      // that channel, so an agent that never opens it is unreachable however
+      // recently it attached.
+      agentStream = await openWorkspaceStream(base, hubId);
       const body = (await r.json()) as {
         queuedVoice?: Array<{ transcript: string }>;
       };
@@ -345,6 +357,28 @@ describe('voice routing (§3.8)', () => {
       expect(r.status).toBe(200);
       const body = (await r.json()) as { route: string };
       expect(body.route).toBe('agent');
+    });
+
+    it('an attachment nobody is listening on queues rather than broadcasting into the void', async () => {
+      // Why the gate is an AND rather than a wider clock. A session that dies
+      // between two writes stays inside every freshness window while being
+      // gone, and the `agent` route DELIVERS by broadcasting — so routing to
+      // it there loses the utterance outright. Queued is late; broadcast to
+      // nobody is not recoverable.
+      completeImpl = () => Promise.resolve(JSON.stringify({ kind: 'change' }));
+      await agentStream?.close();
+      agentStream = null;
+
+      const gone = await voice({ transcript: 'rename the crawler task', author: PERSON });
+      expect(((await gone.json()) as { route: string }).route).toBe('agent-queued');
+
+      // POSITIVE CONTROL: the attachment never changed, and the clock never
+      // moved. Re-open the stream and the same utterance routes to the agent
+      // — so the assertion above is about reachability and not about the
+      // attachment having expired mid-test.
+      agentStream = await openWorkspaceStream(base, hubId);
+      const back = await voice({ transcript: 'rename the crawler task', author: PERSON });
+      expect(((await back.json()) as { route: string }).route).toBe('agent');
     });
   });
 
