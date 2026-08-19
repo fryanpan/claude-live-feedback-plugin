@@ -135,13 +135,12 @@ describe('the decision card has the spacing it was reported for missing', () => 
   it('is written to be reusable by the Home card, not scoped to the panel', () => {
     // The Home queue's copy of this card is a separate ticket, on hold. These
     // names are the point: it should adopt them rather than grow a second
-    // layout that drifts. So no LAYOUT selector here may be scoped to the
-    // detail panel, or adopting it elsewhere would silently style nothing.
-    // `body.hub-detail-full …` is exempt by the lookbehind: that is a
-    // viewport-state override (the full-screen mic mitigation right-aligns
-    // the submits), not a home for the card's layout — a card adopted
-    // elsewhere still styles completely without it.
-    const scoped = /(?<!body)\.hub-detail[a-z-]*\s+\.hub-decide/.exec(declarationsOnly(CSS));
+    // layout that drifts. So no selector here may be scoped to the detail
+    // panel, or adopting it elsewhere would silently style nothing. The
+    // `body.hub-detail-full` exemption this pattern used to carry is gone with
+    // the rule it existed for — the full-screen mic mitigation, which the
+    // docked mic made unnecessary.
+    const scoped = /\.hub-detail[a-z-]*\s+\.hub-decide/.exec(declarationsOnly(CSS));
     expect(scoped).toBeNull();
   });
 });

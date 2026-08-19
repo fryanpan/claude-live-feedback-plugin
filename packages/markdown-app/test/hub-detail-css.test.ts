@@ -7,11 +7,13 @@ import { describe, expect, it } from 'vitest';
  * can see, because happy-dom resolves no layout and every one of these is a
  * property of the stylesheet rather than of the tree.
  *
- * Four of Bryan's eight anchored comments on the 2026-08-18 staging build are
- * pure CSS: the panel's width, the goal field's own line, the Description
- * heading's separation, and the mic clearance at 430px. Each is asserted here
- * by the number he gave, so a later edit that quietly halves one goes red
- * rather than merely looking different.
+ * Three of Bryan's eight anchored comments on the 2026-08-18 staging build are
+ * pure CSS: the panel's width, the goal field's own line, and the Description
+ * heading's separation. Each is asserted here by the number he gave, so a
+ * later edit that quietly halves one goes red rather than merely looking
+ * different. (A fourth was the mic clearance at 430px; it moved out of this
+ * file when the mic stopped floating over the panel — see
+ * `hub-mic-dock-css.test.ts`.)
  *
  * The rendered result is checked in a real browser at desktop and at 430px;
  * that is what closes the criterion. What this file prevents is a rule being
@@ -184,108 +186,14 @@ describe('the panel’s fields and headings', () => {
   });
 });
 
-describe('nothing fixed to the viewport can sit on the last control', () => {
-  it('reserves the launchers’ height at the foot of every non-split-pane panel', () => {
-    // Reported CRITICAL at 430px: the hold-to-talk mic (fixed bottom-left,
-    // z-index above the panel) sat squarely on "Record answer". Reserving the
-    // tail is what guarantees every control can be SCROLLED clear of it —
-    // the same reservation `.hub-walk-card` already makes for the same two
-    // launchers. The reservation covers everything UP TO the split pane
-    // (≤1023px), not only the phone sheet: between 901 and 1023 the centred
-    // modal still has its left edge at 14px, its submits in the mic's column,
-    // and no split-pane geometry to save it — a 932×430 landscape phone lands
-    // exactly in that band.
-    const phone = media('(max-width: 1023px)');
-    const tail = rule('.hub-detail-panel', phone);
-    expect(tail).toMatch(/padding-bottom:\s*calc\(24px \+ 60px/);
-    // The mic is LIFTED by the phone's bottom nav on this very page, so the
-    // reservation has to include the bar or it clears where the mic isn't.
-    // Measured at 430px before this term existed: mic 814–858, the composer's
-    // Comment button 812–848 — underneath it.
-    expect(tail).toMatch(/var\(--hub-bottom-bar/);
-    expect(rule('.voice-mic')).toMatch(/var\(--hub-bottom-bar/);
-    // One declaration of the height, so the lift and the reservation cannot
-    // drift; and it is scoped to hub pages, since no other surface has the
-    // bar. The bar itself stays a PHONE fact (≤900px) — above that width the
-    // nav is not fixed, so between 901 and 1023 the same calc reads the
-    // variable's 0 fallback and reserves the mic's own height alone.
-    expect(rule('body.hub-body', media('(max-width: 900px)'))).toMatch(/--hub-bottom-bar:\s*58px/);
-    // …and only there: above the breakpoint the bar is not fixed, so the
-    // fallback 0 has to be what applies. The base `body.hub-body` rule exists
-    // and styles other things — the assertion is that it does not set this.
-    expect(rule('body.hub-body'), 'the base body rule vanished').not.toBe('');
-    expect(rule('body.hub-body')).not.toMatch(/--hub-bottom-bar/);
-    // Positive control: the mic really is fixed and really is above the panel,
-    // so the reservation is answering a real overlap rather than decorating.
-    expect(rule('.voice-mic')).toMatch(/position:\s*fixed/);
-    expect(Number(/z-index:\s*(\d+)/.exec(rule('.voice-mic'))?.[1])).toBeGreaterThan(
-      Number(/z-index:\s*(\d+)/.exec(rule('.hub-detail'))?.[1]),
-    );
-  });
-});
-
-describe('the mic cannot cover a submit button at any scroll position', () => {
-  it('takes the phone submits out of the mic’s column, not just off its resting spot', () => {
-    // The tail reservation (asserted above) answers where the panel COMES TO
-    // REST. It says nothing about the positions a control passes through on
-    // the way there: measured at 430px with the reservation already in place,
-    // `#hub-mic` intersected "Record answer" over scrollTop 195–255 and
-    // "Comment" over 1545–1605, and `elementFromPoint` at the intersection
-    // centre returned the mic.
-    const mic = rule('.voice-mic');
-    // The premise, asserted rather than assumed: the mic is fixed, and it is
-    // in the LEFT column. A mic that had moved would leave the rest of this
-    // test describing a layout that no longer exists.
-    expect(mic).toMatch(/position:\s*fixed/);
-    const left = Number(/left:\s*(\d+)px/.exec(mic)?.[1]);
-    const width = Number(/width:\s*(\d+)px/.exec(mic)?.[1]);
-    expect(left + width).toBeLessThan(430 / 2);
-
-    // Both submits are pushed to the opposite edge, so no scroll position can
-    // put them under it. One grouped rule, so this reads the block whole.
-    // Scoped to everything BELOW the split pane (≤1023px), not to the phone
-    // sheet alone: the 901–1023 modal keeps the panel's left edge at 14px, so
-    // a left-aligned submit sits in the mic's column there too.
-    const phone = media('(max-width: 1023px)');
-    // Either quote style: biome normalises the attribute selector to double
-    // quotes on format, so a pattern that insisted on one would go red the
-    // first time someone ran the formatter.
-    const submit = String.raw`button\[type=['"]submit['"]\]`;
-    const grouped = new RegExp(
-      `((?:[^{}]*${submit}[^{}]*,\\s*)*[^{}]*${submit}\\s*)\\{([^}]*)\\}`,
-    ).exec(phone);
-    expect(grouped, 'no phone rule targets the submit buttons at all').not.toBeNull();
-    const [, selectors = '', body = ''] = grouped ?? [];
-    expect(selectors).toContain('.hub-decide-form');
-    expect(selectors).toContain('.hub-comment-form');
-    expect(body).toMatch(/align-self:\s*flex-end/);
-  });
-
-  it('keeps the mitigations in full screen at desktop, where the panel reaches the mic again', () => {
-    // ≥1024px normally puts the panel on the RIGHT, out of the mic's column —
-    // that is why the split pane needs neither mitigation. `.hub-detail--full`
-    // un-does exactly that geometry: the panel spans the whole viewport, its
-    // submits return to the mic's column, and full screen is the mode chosen
-    // FOR long discussions, i.e. for being scrolled to the composer at the
-    // bottom. So full screen re-applies both mitigations the narrow widths
-    // have: the tail reservation (no --hub-bottom-bar term — the phone nav
-    // does not exist at this width) and the right-aligned submits.
-    const split = media('(min-width: 1024px)');
-    expect(rule('.hub-detail--full .hub-detail-panel', split)).toMatch(
-      /padding-bottom:\s*calc\(24px \+ 60px/,
-    );
-    const submit = String.raw`button\[type=['"]submit['"]\]`;
-    const grouped = new RegExp(
-      `((?:[^{}]*${submit}[^{}]*,\\s*)*[^{}]*${submit}\\s*)\\{([^}]*)\\}`,
-    ).exec(split);
-    expect(grouped, 'no full-screen rule targets the submit buttons at all').not.toBeNull();
-    const [, selectors = '', body = ''] = grouped ?? [];
-    expect(selectors).toContain('body.hub-detail-full');
-    expect(selectors).toContain('.hub-decide-form');
-    expect(selectors).toContain('.hub-comment-form');
-    expect(body).toMatch(/align-self:\s*flex-end/);
-  });
-
+/**
+ * (The mic-clearance pair that used to be asserted here — the panel's tail
+ * reservation and the right-aligned submits — is gone with the floating mic
+ * that forced it. The mic is docked in the nav now and is over no page
+ * content at any width; `hub-mic-dock-css.test.ts` holds that guarantee, and
+ * asserts these rules stayed deleted.)
+ */
+describe('every control in the queue clears the touch-target floor', () => {
   it('keeps every control in the queue at the 36px floor', () => {
     // design-mobile.md: "Minimum 36×36px for any interactive element." The
     // queue's two chevrons were 32.

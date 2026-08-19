@@ -295,6 +295,10 @@ function buildShell(root: HTMLElement, name: string): void {
         <button type="button" id="hub-nav-collapse" class="hub-nav-item hub-nav-collapse" title="Collapse">
           <span class="hub-nav-icon" aria-hidden="true">${NAV_ICONS.collapse}</span><span class="hub-nav-label">Collapse</span>
         </button>
+        <div class="hub-nav-dock" role="group" aria-label="Voice">
+          <button type="button" id="hub-mic" class="voice-mic" title="Hold to talk (or hold Space)" aria-label="Hold to talk">🎙</button>
+          <div id="hub-voice" class="voice-indicator hidden" aria-live="polite"></div>
+        </div>
       </nav>
       <section id="hub-home" class="hub-home hidden">
         <div id="hub-home-page">
@@ -327,9 +331,7 @@ function buildShell(root: HTMLElement, name: string): void {
         </dl>
       </div>
     </div>
-    <div id="hub-toast" class="hub-toast hidden"></div>
-    <button type="button" id="hub-mic" class="voice-mic" title="Hold to talk (or hold Space)" aria-label="Hold to talk">🎙</button>
-    <div id="hub-voice" class="voice-indicator hidden" aria-live="polite"></div>`;
+    <div id="hub-toast" class="hub-toast hidden"></div>`;
   const doneSelect = document.getElementById('hub-done-filter') as HTMLSelectElement;
   for (const w of DONE_WINDOWS) {
     const opt = document.createElement('option');

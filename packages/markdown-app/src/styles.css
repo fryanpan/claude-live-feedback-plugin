@@ -1014,13 +1014,19 @@ body.hub-body {
   grid-template-columns: max-content minmax(0, 1fr);
   gap: 20px;
   align-items: start;
+  /* The rail stretches to this row, so this is what guarantees the rail — and
+     the mic docked at its foot — reaches the fold on a board with three rows
+     in it. Was on `.hub-main--home` alone, where it read as a Home-page
+     concern; "the mic is at the bottom left of the nav" is only a location a
+     reader can rely on if the nav has a bottom to speak of. 64px is the
+     topbar plus the page's own tail. */
+  min-height: calc(100vh - 64px);
 }
 /* Home showing: the board column leaves the grid and the Home section takes
    the one content track. Hiding rather than unmounting — the board keeps its
-   realtime projection warm underneath. */
-.hub-main--home {
-  min-height: calc(100vh - 64px);
-}
+   realtime projection warm underneath. (The `min-height` this pair used to
+   carry moved onto `.hub-main` — every view needs the rail to reach the fold,
+   not only Home.) */
 .hub-main--home .hub-board-col {
   display: none;
 }
@@ -1710,7 +1716,15 @@ body.hub-body {
    reversing the brief topbar-tabs detour), collapsible to icons via the
    button at its foot, with the choice persisted in localStorage. At ≤1100px
    it becomes a horizontal strip above the content, and on a phone the fixed
-   bottom bar — those bands live in their media blocks below. */
+   bottom bar — those bands live in their media blocks below.
+
+   The rail deliberately carries NO `overflow`. It used to clip its own x-axis
+   while the width animated, which cost more than it bought: an `overflow-x`
+   makes the element a scroll container on BOTH axes, which would clip the
+   voice readout that hangs off the dock at its foot and would silently strand
+   that dock's `position: sticky` against the rail's own (never-scrolling)
+   box. The labels are `display: none` when collapsed rather than clipped, so
+   there is nothing left to overflow. */
 .hub-nav {
   display: flex;
   flex-direction: column;
@@ -1721,14 +1735,14 @@ body.hub-body {
   background: var(--bg-panel);
   border-right: 1px solid var(--border);
   transition: width 150ms ease;
-  overflow-x: hidden;
-  scrollbar-width: none;
 }
-.hub-nav::-webkit-scrollbar {
-  display: none;
-}
+/* 6px of side padding rather than the rail's 8: the collapsed rail still has
+   to hold a whole 44px mic at its foot, and the width is border-box —
+   58 − 1px border − 12px padding = 45. */
 .hub-nav--collapsed {
   width: 58px;
+  padding-left: 6px;
+  padding-right: 6px;
 }
 .hub-nav--collapsed .hub-nav-label {
   display: none;
@@ -1773,6 +1787,74 @@ body.hub-body {
   display: block;
   width: 100%;
   height: 100%;
+}
+
+/* --- the hold-to-talk mic, docked at the rail's foot ---
+
+   Bryan, 2026-08-19: *"can we make a more durable fix for the mic? Place it in
+   a fixed location instead of floating. Put it in bottom left of left navbar
+   in desktop views. And in the bottom tab on mobile, and give it a distinct
+   look and keep it slightly separate from the navbar so it's clear it's not a
+   navbar item"*.
+
+   The mic used to be a `position: fixed` launcher in the viewport's bottom-left
+   corner, painted above everything — so it landed on whatever each page put in
+   that corner, and every surface that reached the corner had to reserve a
+   column for it. A reservation is a promise nothing will ever be positioned
+   under one particular column, renewed at every width where it could be
+   broken. Docking retires the promise: the mic sits in the nav's own column,
+   which no page content ever occupies.
+
+   `sticky`, not plain flow, because the rail is as tall as the page and
+   scrolls with it — a mic at the literal foot of a 4000px rail is not a fixed
+   location. Stuck to the bottom of the scrollport it stays where the reader
+   last saw it, still inside the rail, still over nothing. Being positioned
+   also makes it the containing block the readout hangs off. */
+.hub-nav-dock {
+  position: sticky;
+  bottom: 8px;
+  display: flex;
+  align-items: center;
+  /* *"slightly separate … so it's clear it's not a navbar item"* — a divider
+     AND a gap. The divider alone reads as a list separator between two items,
+     which is the opposite of what it is for. */
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.hub-nav-dock .voice-mic {
+  /* Out of the fixed layer entirely. The offsets and the z-index it needed as
+     a FAB mean nothing in flow, and leaving them set is how the next reader
+     concludes it is still floating. */
+  position: static;
+  left: auto;
+  bottom: auto;
+  z-index: auto;
+  flex: none;
+  /* A docked control casts no shadow — the shadow is what read as hovering
+     above the page. */
+  box-shadow: none;
+}
+/* Distinct from a nav item: those are borderless text rows in the rail's own
+   panel colour; this is a filled round button that contrasts with it.
+   `:not(.voice-active)` so the recording red — the state that matters most —
+   still wins from its own one-class rule. */
+.hub-nav-dock .voice-mic:not(.voice-active) {
+  background: var(--bg);
+}
+.hub-nav-dock .voice-mic:not(.voice-active):hover {
+  background: var(--bg-hover);
+}
+/* The dictation/ack readout rides above the mic wherever the mic is. Absolute
+   against the dock rather than fixed to the viewport corner: on a centred
+   1500px hub the rail's foot is nowhere near that corner, and a readout
+   pointing at the page gutter is worse than no readout. It is wider than the
+   rail on purpose and overflows it — see the `overflow` note above. */
+.hub-nav-dock .voice-indicator {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  z-index: auto;
 }
 /* A reading column, not the full stage — the brief is prose and a full-width
    line is unreadable. The phone already has this width and needs no case. */
@@ -3506,50 +3588,6 @@ a.hub-link-chip:hover {
   display: none;
 }
 
-/* --- ≤1023px: the mic-clearance pair, everywhere the panel is not a split
-   pane ---
-
-   Two fixed launchers own the bottom corners on every page: the hold-to-talk
-   mic bottom-left (z-index 70, above this panel's 60) and the feedback pencil
-   bottom-right. Reported as CRITICAL at 430px — the mic sat squarely on
-   "Record answer", which is the one control the review queue exists to
-   deliver. Two mitigations, and they cover every width where the panel's left
-   edge reaches the mic's column — which is every width BELOW the split pane,
-   not only the ≤900px sheet: between 901 and 1023 the centred modal still
-   puts the panel's left edge at 14px, so a landscape phone (932×430, coarse
-   pointer, mic active) had a left-aligned submit under the mic with only 24px
-   of tail and no scroll position that cleared it.
-
-   1. The tail reservation guarantees every control can be SCROLLED clear of
-      the launchers; moving the mic instead would only trade which surface it
-      covers. `--hub-bottom-bar` is in the sum because the mic is LIFTED by
-      the phone nav on exactly this page: measured at 430px without it, the
-      composer's Comment button (812–848) sat under the mic (814–858). Above
-      900px the bar does not exist and the variable reads its 0 fallback, so
-      one calc serves the whole range. 60px is the mic's own 16+44; 24px is
-      the clearance.
-
-   2. …and the reservation is only half the answer, because the mic is FIXED
-      and the panel SCROLLS under it — it guarantees a resting position with
-      nothing beneath the mic, and says nothing about the positions a control
-      passes through on the way there. Measured at 430px 2026-08-18, with the
-      reservation already in place: `#hub-mic` intersected "Record answer"
-      over scrollTop 195–255 (20% covered at the worst point) and "Comment"
-      over 1545–1605 (45%), and `elementFromPoint` at the intersection centre
-      returned the mic. The mic occupies one COLUMN, x 16–60; a submit aligned
-      to the panel's right edge cannot intersect it at ANY scroll position.
-      Right-aligned submits are also what every other composer on a phone
-      does, so this is not a concession. */
-@media (max-width: 1023px) {
-  .hub-detail-panel {
-    padding-bottom: calc(24px + 60px + var(--hub-bottom-bar, 0px) + var(--safe-bottom, 0px));
-  }
-  body.hub-body .hub-decide-form button[type="submit"],
-  body.hub-body .hub-comment-form button[type="submit"] {
-    align-self: flex-end;
-  }
-}
-
 /* --- ≥1024px: the task detail is a right-hand split pane, not a modal ---
 
    Bryan's report: "the current modal is cramped on bigger screens" — a centred
@@ -3610,20 +3648,6 @@ a.hub-link-chip:hover {
   .hub-detail--full .hub-detail-panel {
     width: 100%;
     max-width: none;
-    /* Full screen un-does the geometry that made the split pane safe from the
-       fixed mic: the panel spans the viewport again, so its left column is
-       the mic's column again — and full screen is the escape hatch FOR long
-       discussions, i.e. for being scrolled to the composer at the bottom. So
-       it takes the same tail reservation the ≤1023px widths have, minus the
-       --hub-bottom-bar term (the phone nav does not exist at this width). */
-    padding-bottom: calc(24px + 60px + var(--safe-bottom, 0px));
-  }
-  /* …and the same right-aligned submits, for the same reason: the reservation
-     covers the resting position, the alignment covers every position the
-     composer scrolls through on the way there. */
-  body.hub-detail-full .hub-decide-form button[type="submit"],
-  body.hub-detail-full .hub-comment-form button[type="submit"] {
-    align-self: flex-end;
   }
   .hub-detail-expand {
     display: inline-flex;
@@ -3656,10 +3680,29 @@ a.hub-link-chip:hover {
     border-right: none;
     border-bottom: 1px solid var(--border);
     transition: none;
-    overflow-x: auto;
   }
   .hub-nav-collapse {
     display: none;
+  }
+  /* The mic dock turns with the bar: the rail's top divider becomes a side
+     one, and `order` puts it at the head of a left-to-right strip without
+     moving it in the DOM, where it belongs AFTER the pages it is not one of.
+     Still positioned (relative, not static) — the readout is absolute against
+     it, and a static dock would silently re-anchor that to the viewport. */
+  .hub-nav-dock {
+    order: -1;
+    position: relative;
+    align-self: stretch;
+    margin: 0;
+    padding: 0 10px 0 0;
+    border-top: none;
+    border-right: 1px solid var(--border);
+  }
+  .hub-nav-dock .voice-indicator {
+    /* The strip sits at the TOP of the content in this band, so the readout
+       hangs below it rather than over the header. */
+    top: calc(100% + 8px);
+    bottom: auto;
   }
   .hub-home {
     padding-top: 4px;
@@ -3680,7 +3723,6 @@ a.hub-link-chip:hover {
     bottom: 0;
     z-index: 60;
     gap: 0;
-    overflow-x: visible;
     background: var(--bg-panel);
     border-top: 1px solid var(--border);
     border-bottom: none;
@@ -3700,18 +3742,22 @@ a.hub-link-chip:hover {
     width: 18px;
     height: 18px;
   }
-  /* Everything bottom-docked has to clear the 54px bar: the page's own tail,
-     and the hold-to-talk mic + its indicator, which are fixed bottom-left at
-     the same corner the bar now owns.
-
-     The height is a VARIABLE rather than three copies of `58px`, because a
-     fourth reader appeared and read the wrong number. The detail panel
-     reserves the mic's height at its foot so the last control can be scrolled
-     clear — and it reserved it against a mic sitting at `bottom: 16px`, which
-     is where the mic is on every page EXCEPT the one the panel opens over.
-     Measured at 430px on 2026-08-18: the mic lands at 814–858 and the
-     composer's Comment button at 812–848, i.e. directly underneath it. One
-     declaration, inherited, so the lift and every reservation move together. */
+  /* The mic is in the bar here, per *"in the bottom tab on mobile"* — same
+     dock, inset from the screen edge, and NOT `flex: 1` like the tabs beside
+     it: a 44px control that grows to a quarter of the bar would read as a
+     fourth page. The bar is at the bottom again, so the readout goes back
+     above it. */
+  .hub-nav-dock {
+    padding: 0 10px;
+  }
+  .hub-nav-dock .voice-indicator {
+    top: auto;
+    bottom: calc(100% + 8px);
+  }
+  /* The page's own tail has to clear the 54px bar. The height is a VARIABLE
+     rather than copies of `58px` because more than one reader needs it and one
+     of them read the wrong number; it is scoped to hub pages because no other
+     surface has the bar. */
   body.hub-body {
     --hub-bottom-bar: 58px;
   }
@@ -3766,10 +3812,6 @@ a.hub-link-chip:hover {
     width: 100%;
     border-radius: 0;
   }
-  /* (The mic-clearance pair — the panel's tail reservation and the
-     right-aligned submits — lives in the ≤1023px block below the toast
-     rules, because the hazard it answers covers every width the split pane
-     does not, not only the phone sheet.) */
   /* The walkthrough is a phone-first surface — six answers in one sitting is
      a couch gesture. It is a PAGE in the Home column now rather than an
      overlay, so it already fills the width; what the phone needs is the reply
@@ -3784,11 +3826,11 @@ a.hub-link-chip:hover {
   .hub-walk-info .hub-btn {
     width: 100%;
   }
-  /* The card's tail ends over two bottom-docked launchers: the hold-to-talk
-     mic bottom-left and the feedback widget's pencil bottom-right, both fixed
-     above this page by design. Reserve their height so the last control
-     ("Tell me more" on a decision card — exactly the one a stuck reviewer
-     reaches for) can always be scrolled clear of them. */
+  /* The card's tail still ends under one viewport-fixed launcher — the
+     feedback widget's pencil, bottom-right. (The mic used to be the other
+     one; it is docked in the nav now and covers nothing.) Reserve the
+     pencil's height so the last control ("Tell me more" on a decision card —
+     exactly the one a stuck reviewer reaches for) can be scrolled clear. */
   .hub-walk-card {
     padding-bottom: calc(60px + var(--safe-bottom, 0px));
   }
@@ -3909,18 +3951,21 @@ a.hub-link-chip:hover {
 }
 
 /* ================= VOICE (hold-to-talk, §2.4/§3.8) =================
-   The mic button + streaming-dictation/ack indicator, shared by the hub,
-   the doc surface, and the task detail. Bottom-LEFT, out of the deep-work
-   path (the composer and comment pill live bottom-right/center). Rises with
-   the keyboard via --kb-bottom like every bottom-docked element. */
+   The mic button + streaming-dictation/ack indicator, shared by the hub and
+   the /review/<docId> doc surface.
+
+   These base rules are the FLOATING form, and the doc surface is the only
+   thing still wearing it: `mountDocVoice` appends the mic to <body> on a page
+   with no nav to dock into, so a bottom-left launcher is what it has. The hub
+   docks the same element in its nav rail / bottom tab bar instead — see
+   `.hub-nav-dock` in the workspace-hub section, which un-fixes it. Bottom-LEFT
+   here, out of the deep-work path (the composer and comment pill live
+   bottom-right/center), rising with the keyboard via --kb-bottom like every
+   bottom-docked element on that surface. */
 
 .voice-mic {
   position: fixed;
-  /* `--hub-bottom-bar` is 0 everywhere except a hub page at phone width, where
-     a fixed nav owns this corner — so this one declaration is the mic's
-     position on every surface, and the panel's tail reservation reads the same
-     variable rather than a copy of the number. */
-  bottom: calc(16px + var(--hub-bottom-bar, 0px) + var(--kb-bottom, 0px) + var(--safe-bottom, 0px));
+  bottom: calc(16px + var(--kb-bottom, 0px) + var(--safe-bottom, 0px));
   left: 16px;
   z-index: 70;
   width: 44px;
@@ -3960,8 +4005,8 @@ a.hub-link-chip:hover {
 }
 .voice-indicator {
   position: fixed;
-  /* Rides directly above the mic, so it reads the same bar height. */
-  bottom: calc(68px + var(--hub-bottom-bar, 0px) + var(--kb-bottom, 0px) + var(--safe-bottom, 0px));
+  /* Rides directly above the floating mic — 68px is its 16 + 44 + 8. */
+  bottom: calc(68px + var(--kb-bottom, 0px) + var(--safe-bottom, 0px));
   left: 16px;
   z-index: 70;
   max-width: min(80vw, 420px);
