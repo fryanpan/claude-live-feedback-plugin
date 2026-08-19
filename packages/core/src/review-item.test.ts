@@ -389,6 +389,32 @@ describe('TaskReviewItem — a ticket HAS review items, 0..n, rather than IS one
     expect(readTaskReviewItem(item({ answer: { by: 'Reviewer' } }))?.answer).toBeUndefined();
   });
 
+  /**
+   * Answering twice is legal — a person changes their mind, or a retry lands —
+   * but the words already recorded are USER CONTENT, and this project does not
+   * hard-delete user content. So a superseded answer moves to `priorAnswers`
+   * rather than being overwritten out of existence, oldest first.
+   */
+  it('reads superseded answers back, oldest first, and drops only the wordless ones', () => {
+    const read = readTaskReviewItem(
+      item({
+        answer: { text: 'Keep memory', by: 'Reviewer', ts: 30 },
+        priorAnswers: [
+          { text: 'Keep disk', by: 'Reviewer', ts: 10, answeredWith: 'dim' },
+          { by: 'Reviewer', ts: 20 },
+          'not an object',
+        ],
+      }),
+    );
+    expect(read?.priorAnswers).toEqual([
+      { text: 'Keep disk', by: 'Reviewer', ts: 10, answeredWith: 'dim' },
+    ]);
+    // Absent rather than empty while there are none — the same rule the rest
+    // of this row follows, so a reader can ask one question.
+    expect(readTaskReviewItem(item())?.priorAnswers).toBeUndefined();
+    expect(readTaskReviewItem(item({ priorAnswers: ['junk'] }))?.priorAnswers).toBeUndefined();
+  });
+
   it('keeps readable info requests and drops only the malformed ones', () => {
     const read = readTaskReviewItem(
       item({

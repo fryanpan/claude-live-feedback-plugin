@@ -116,6 +116,23 @@ export interface ReviewInfoRequest {
  * purpose: two spellings of one concept is what this replaces, and a second
  * copy of the limits is how a card renders something the API swore it refused.
  */
+/**
+ * The VERBATIM words of an answer, plus which option they came from.
+ *
+ * Named rather than inlined because a superseded answer is the SAME thing as
+ * the current one — it stopped being current, it did not stop being an answer
+ * somebody wrote — and two shapes for that would be free to disagree.
+ */
+export interface ReviewItemAnswer {
+  text: string;
+  /** Display name. No actor ids in projected state. */
+  by: string;
+  ts: number;
+  /** WHICH option the words came from, when one was tapped. Provenance, never
+   *  the answer itself, which is why a typed answer carries none. */
+  answeredWith?: string;
+}
+
 export interface TaskReviewItem {
   /** Stable within the thing it hangs on. Minted by the writer. */
   id: string;
@@ -131,7 +148,18 @@ export interface TaskReviewItem {
    *
    * Its presence is what closes the item; see `isReviewItemOpen`.
    */
-  answer?: { text: string; by: string; ts: number; answeredWith?: string };
+  answer?: ReviewItemAnswer;
+  /**
+   * Answers this one SUPERSEDED, oldest first.
+   *
+   * Answering twice is legal — a person changes their mind, a retry lands, two
+   * people reach for the same row — but the words already recorded are user
+   * content, and this project does not hard-delete user content. Overwriting
+   * `answer` in place is a destructive edit nothing anywhere reports; moving
+   * the old one here makes the same act reversible. Absent while there are
+   * none, like every other optional field on this row.
+   */
+  priorAnswers?: ReviewItemAnswer[];
   /** "Tell me more", in order. Absent rather than empty while there are none. */
   infoRequests?: ReviewInfoRequest[];
 }
@@ -448,6 +476,16 @@ function str(v: unknown, fallback: string): string {
  * authoritative, and a malformed object reaching a renderer is a crash on a
  * page that never touched the doc.
  */
+/** One answer record, read loosely. Shared by `answer` and `priorAnswers` so
+ *  a superseded answer can never read differently from a current one. */
+function readAnswer(value: unknown): ReviewItemAnswer | undefined {
+  if (!isPlainObject(value)) return undefined;
+  if (typeof value.text !== 'string' || value.text.trim() === '') return undefined;
+  const out: ReviewItemAnswer = { text: value.text, by: str(value.by, ''), ts: num(value.ts, 0) };
+  if (typeof value.answeredWith === 'string') out.answeredWith = value.answeredWith;
+  return out;
+}
+
 export function readTaskReviewItem(value: unknown): TaskReviewItem | undefined {
   if (!isPlainObject(value)) return undefined;
   const id = value.id;
@@ -462,13 +500,19 @@ export function readTaskReviewItem(value: unknown): TaskReviewItem | undefined {
     createdBy: str(value.createdBy, ''),
   };
 
-  const a = value.answer;
   // The words ARE the answer, so a record without them is not one — dropping
   // it leaves the item open, which is the safe direction: an item wrongly read
   // as answered disappears from the queue and nobody is told.
-  if (isPlainObject(a) && typeof a.text === 'string' && a.text.trim() !== '') {
-    out.answer = { text: a.text, by: str(a.by, ''), ts: num(a.ts, 0) };
-    if (typeof a.answeredWith === 'string') out.answer.answeredWith = a.answeredWith;
+  const answer = readAnswer(value.answer);
+  if (answer) out.answer = answer;
+
+  if (Array.isArray(value.priorAnswers)) {
+    const prior: ReviewItemAnswer[] = [];
+    for (const raw of value.priorAnswers) {
+      const read = readAnswer(raw);
+      if (read) prior.push(read);
+    }
+    if (prior.length > 0) out.priorAnswers = prior;
   }
 
   if (Array.isArray(value.infoRequests)) {

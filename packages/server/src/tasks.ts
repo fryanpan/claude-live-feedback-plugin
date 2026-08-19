@@ -3063,38 +3063,42 @@ export class TaskStore {
   /**
    * Every review item on a ticket, in order.
    *
-   * When the ticket holds no real rows and IS a legacy decision, one derived
-   * row is appended with the fixed id `r-legacy`. The derivation happens at
-   * READ time and writes nothing: it is idempotent by construction and cannot
-   * double-apply across a restart, which is strictly safer than the lazy
-   * back-fill `hydrateFromDisk` does for `unplacedSince`. Nothing is purged
-   * either — `needs`, `options`, `answer` and `infoRequests` keep being read
-   * and written exactly as before.
+   * When the ticket IS a legacy decision, one derived row leads the list with
+   * the fixed id `r-legacy`. The derivation happens at READ time and writes
+   * nothing: it is idempotent by construction and cannot double-apply across a
+   * restart, which is strictly safer than the lazy back-fill `hydrateFromDisk`
+   * does for `unplacedSince`. Nothing is purged either — `needs`, `options`,
+   * `answer` and `infoRequests` keep being read and written exactly as before.
    *
-   * Real rows SUPPRESS the derived one. Once somebody has written the ticket's
-   * questions as rows, showing the ticket title back as a question again would
-   * be a duplicate of work already done. The legacy decision is not lost by
-   * that — it is still on the task, still answerable through `answerDecision`,
-   * and still rendered by the surfaces that read those fields today.
+   * Real rows do NOT suppress the derived one, and that is a correction rather
+   * than a preference. Suppressing on "a stored row exists" keys the decision
+   * on the wrong fact: the legacy decision is a SEPARATE open question from
+   * whatever somebody filed later, so the moment a ticket gained its second
+   * question the first one silently left this list — and with it `GET
+   * /review-items`, which is the one route that answers "what is waiting on
+   * me". The derived row leaves for exactly one reason now: the decision was
+   * answered, at which point it is still LISTED and merely closed.
+   *
+   * It leads rather than trails because it is the oldest question on the
+   * ticket (`createdAt` is the task's own), and this queue is oldest-first.
    *
    * Rows are read through `readTaskReviewItem`, so a row corrupted on disk
    * drops out of the list instead of throwing inside a renderer that never
-   * touched this ticket.
+   * touched this ticket — and because the derived row no longer depends on how
+   * many raw rows there are, an unreadable one can no longer take the legacy
+   * decision down with it.
    */
   listReviewItems(taskId: string): TaskReviewItem[] {
     const task = this.getTask(taskId);
     if (!task) return [];
-    const stored = task.reviews ?? [];
-    if (stored.length > 0) {
-      const out: TaskReviewItem[] = [];
-      for (const raw of stored) {
-        const item = readTaskReviewItem(raw);
-        if (item) out.push(item);
-      }
-      return out;
-    }
+    const out: TaskReviewItem[] = [];
     const legacy = this.legacyReviewItem(task);
-    return legacy ? [legacy] : [];
+    if (legacy) out.push(legacy);
+    for (const raw of task.reviews ?? []) {
+      const item = readTaskReviewItem(raw);
+      if (item) out.push(item);
+    }
+    return out;
   }
 
   /**
@@ -3115,7 +3119,10 @@ export class TaskStore {
    * writing it here would attribute the question to the wrong one.
    */
   private legacyReviewItem(task: Task): TaskReviewItem | undefined {
-    if ((task.reviews?.length ?? 0) > 0) return undefined;
+    // `needs === 'decision'` is the WHOLE condition. It used to also require
+    // that no stored row existed, which made an unanswered decision disappear
+    // from every reader as soon as somebody filed a second question on the
+    // same ticket — see `listReviewItems` for why that is the wrong key.
     if (task.needs !== 'decision') return undefined;
     const review: ReviewPayload = reviewFromDecisionTask(task);
     const item: TaskReviewItem = {
@@ -3187,6 +3194,12 @@ export class TaskStore {
       name: opts.actor.name,
       kind: classifyActor(opts.actor),
     };
+    // Answering twice is legal — somebody changes their mind, a retry lands,
+    // two people reach for the same row — but the words already recorded are
+    // USER CONTENT and this project does not hard-delete user content. The
+    // superseded answer moves aside instead of being written over; nothing
+    // else anywhere would have reported that it was gone.
+    if (item.answer) item.priorAnswers = [...(item.priorAnswers ?? []), item.answer];
     item.answer = {
       text,
       by: actor.name,

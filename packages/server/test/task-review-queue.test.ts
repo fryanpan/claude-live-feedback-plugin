@@ -244,11 +244,19 @@ describe('the Home queue count', () => {
   });
 
   /**
-   * …and the count really did move. A ticket that is NOT a decision, holding
-   * two open review items, contributed ZERO to the old expression — so the
-   * deterministic brief said the queue was empty while two questions sat on it.
+   * The count is a promise about the LIST rendered under it, and the list is
+   * the browser's `reviewQueue` — which deliberately does not place a
+   * ticket-borne row yet (the detail panel owns that half, and it is not in
+   * this change). So a ticket-borne row is shipped by the route, where agents
+   * and the MCP verbs read it, and is NOT counted by the brief, where counting
+   * it would print "something is waiting" above a list showing nothing and
+   * offering no control to answer it.
+   *
+   * This asymmetry is temporary and it is the deferred rendering half that
+   * removes it: when Home places a `task-review` row, the `kind` filter below
+   * goes with it and this test inverts.
    */
-  it('says the queue is non-empty for a non-decision ticket holding review items', async () => {
+  it('ships a non-decision ticket’s review items without counting them into the brief', async () => {
     const ws = await seedWorkspace();
     const task = await seedAction(ws);
     expect(await briefLine(ws)).toContain('Nothing is queued for your review right now.');
@@ -257,7 +265,58 @@ describe('the Home queue count', () => {
         handle.tasks.addReviewItem(task.id, { ...REVIEW, headline }, { actor: AGENT }).ok,
       ).toBe(true);
     }
+    // The route ships both — that is the entity reaching the API.
+    expect((await queueRows(ws)).filter((r) => r.kind === 'task-review')).toHaveLength(2);
+    // …and the brief still describes only what Home draws.
+    expect(await briefLine(ws)).toContain('Nothing is queued for your review right now.');
+  });
+
+  /**
+   * The regression this pins: an open legacy decision must keep being counted
+   * however many other questions land on the same ticket.
+   *
+   * It briefly was not. The derived `r-legacy` row was suppressed as soon as a
+   * stored row existed, and the count had dropped its own
+   * `needs === 'decision' && !answer` term on the premise that the derived row
+   * would always be there — so answering the NEW question emptied the brief
+   * while the decision itself sat unanswered and still rendered on the board.
+   */
+  it('keeps counting an open decision after a second question is filed and answered', async () => {
+    const ws = await seedWorkspace();
+    const decision = await seedDecision(ws);
     expect(await briefLine(ws)).toContain('What needs your review is queued below.');
+
+    const added = handle.tasks.addReviewItem(decision.id, REVIEW, { actor: AGENT });
+    expect(added.ok, JSON.stringify(added)).toBe(true);
+    if (!added.ok) return;
+    expect(
+      handle.tasks.answerTaskReview(decision.id, added.item.id, 'Keep disk', { actor: PERSON }).ok,
+    ).toBe(true);
+
+    // The legacy row is still listed and still OPEN…
+    const rows = await queueRows(ws);
+    expect(rows.map((r) => r.reviewItemId)).toEqual(['r-legacy']);
+    // …and the brief still says so.
+    expect(await briefLine(ws)).toContain('What needs your review is queued below.');
+  });
+
+  /**
+   * POSITIVE CONTROL for the two tests above: the closing line is only ever
+   * observable as empty / non-empty, so a term that had silently become
+   * unconditionally true would satisfy both of them. This is the case that
+   * must still read EMPTY — a decision, answered, and nothing else on the
+   * board. It also pins that the row goes on being LISTED while closed:
+   * nothing is purged when a decision is answered.
+   */
+  it('goes back to empty once the only decision is answered', async () => {
+    const ws = await seedWorkspace();
+    const decision = await seedDecision(ws);
+    expect(await briefLine(ws)).toContain('What needs your review is queued below.');
+    await jj(
+      await post(`/api/tasks/${decision.id}/answer`, { text: 'Keep disk.', author: PERSON }),
+    );
+    expect(await briefLine(ws)).toContain('Nothing is queued for your review right now.');
+    expect(handle.tasks.listReviewItems(decision.id).map((i) => i.id)).toEqual(['r-legacy']);
   });
 });
 
@@ -294,5 +353,69 @@ describe('the board projection', () => {
     const reviews = projectedAction.reviews as Array<{ id: string; review: ReviewPayload }>;
     expect(reviews).toHaveLength(1);
     expect(reviews[0].review.headline).toBe(REVIEW.headline);
+  });
+
+  /**
+   * A review item filed WITH the ticket has to be in the projection when the
+   * create returns — with NO refresh of our own after it.
+   *
+   * Both create doors attach the row after `createTask` has already emitted
+   * `task.created`, which is what refreshes the projection; `addReviewItem`
+   * emits nothing. So the board room showed the new ticket without its
+   * `reviews` until some unrelated store event happened to touch the
+   * workspace, which on a quiet board is never. Deliberately no
+   * `handle.projection.refresh(...)` here — calling it is what hid this.
+   */
+  it('projects a review item filed on the SINGLE create door, with no extra refresh', async () => {
+    const ws = await seedWorkspace();
+    const { task } = await jj<{ task: Task }>(
+      await post(`/api/workspaces/${ws}/tasks`, {
+        title: 'sweep the cache dir',
+        assignee: 'Scheduler Agent',
+        body: 'Agent can sweep the cache dir so that the disk stops filling up.',
+        review: REVIEW,
+        author: AGENT,
+      }),
+    );
+    const map = handle.rooms.get(`ws:${ws}`)?.ydoc.getMap('tasks');
+    const projected = map?.get(task.id) as Record<string, unknown> | undefined;
+    const reviews = projected?.reviews as Array<{ review: ReviewPayload }> | undefined;
+    expect(reviews).toHaveLength(1);
+    expect(reviews?.[0]?.review.headline).toBe(REVIEW.headline);
+  });
+
+  /**
+   * The same for the BATCH door — and specifically for its LAST row, which is
+   * the one nothing else refreshes behind. Earlier rows were picked up
+   * incidentally by the next row's `task.created`, so a one-row batch and the
+   * tail of an n-row batch were the only cases that showed the defect.
+   */
+  it('projects a review item on the LAST row of a batch create', async () => {
+    const ws = await seedWorkspace();
+    const { tasks } = await jj<{ tasks: Task[] }>(
+      await post(`/api/workspaces/${ws}/tasks/batch`, {
+        author: AGENT,
+        tasks: [
+          {
+            title: 'sweep the cache dir',
+            assignee: 'Scheduler Agent',
+            body: 'Agent can sweep the cache dir so that the disk stops filling up.',
+          },
+          {
+            title: 'rebuild the index',
+            assignee: 'Scheduler Agent',
+            body: 'Agent can rebuild the index so that lookups stop missing rows.',
+            review: REVIEW,
+          },
+        ],
+      }),
+    );
+    const last = tasks.find((t) => t.title === 'rebuild the index');
+    expect(last, JSON.stringify(tasks.map((t) => t.title))).toBeDefined();
+    const map = handle.rooms.get(`ws:${ws}`)?.ydoc.getMap('tasks');
+    const projected = map?.get(last?.id ?? '') as Record<string, unknown> | undefined;
+    const reviews = projected?.reviews as Array<{ review: ReviewPayload }> | undefined;
+    expect(reviews).toHaveLength(1);
+    expect(reviews?.[0]?.review.headline).toBe(REVIEW.headline);
   });
 });
