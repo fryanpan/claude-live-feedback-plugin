@@ -190,8 +190,8 @@ describe('renderBoard', () => {
     expect(root.querySelector('.hub-subgoal')).toBeNull();
     // Positive control: the section it would have been on is really there,
     // in board order, with its task in it.
-    const rendered = [...root.querySelectorAll('.hub-section')].map((s) =>
-      (s as HTMLElement).dataset.goalId,
+    const rendered = [...root.querySelectorAll('.hub-section')].map(
+      (s) => (s as HTMLElement).dataset.goalId,
     );
     expect(rendered).toEqual(sections.map((s) => s.id));
     expect(root.querySelector('.hub-section[data-goal-id="g-sub"] .hub-task-row')).not.toBeNull();

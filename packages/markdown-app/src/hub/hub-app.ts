@@ -590,11 +590,11 @@ async function main(): Promise<void> {
       btn.setAttribute('aria-current', active ? 'page' : 'false');
     }
     const main = el('hub-main');
-    main.classList.toggle('hub-main--home', state.pane === 'home');
     // Home is a clean frame: content only, none of the board's side columns.
-    // A root class rather than per-region, so a region's own re-render cannot
-    // resurrect itself onto the wrong pane.
-    document.getElementById('hub-root')?.classList.toggle('hub-root--home', state.pane === 'home');
+    // The pane-scoped `hub-root--home` class went with the board chrome it
+    // used to suppress — presence, lead and the goal banner live in the
+    // settings panel now, which is not a pane's to hide.
+    main.classList.toggle('hub-main--home', state.pane === 'home');
     el('hub-home').classList.toggle('hidden', state.pane !== 'home');
     if (state.pane !== 'home') return;
     renderHomeBrief(el('hub-home-brief'), state.home, Date.now(), state.homeEditingRecipe, {
