@@ -2501,7 +2501,28 @@ body.hub-body {
   word-break: break-word;
 }
 
-/* --- task detail (opens instantly — §3.9) --- */
+/* --- task detail (opens instantly — §3.9) ---
+
+   TWO RULES HOLD THIS WHOLE SURFACE TOGETHER, and both were reported missing
+   ("laid out by a monkey… random elements not aligned and inconsistent spacing
+   and flow", 2026-08-18):
+
+   1. ONE SPACING SCALE — 4 / 8 / 12 / 16 / 24. Nothing in the panel uses a
+      value off it. Gaps inside a component are 8 or 12; the gap BETWEEN two
+      sections is 16 or 24. If a new rule wants 10px or 14px, the component
+      wants regrouping, not a new number.
+   2. ONE LEFT EDGE. The panel's content box is the grid line, and the title,
+      the field labels and their values, the decision card, the description,
+      the tabs, the comment text and the composer all begin on it. A control
+      aligns its BOX there (a pill centres its own text, so pulling it left by
+      its padding aligns nothing and leaves it hanging into the gutter —
+      measured both ways); text and prose align their glyphs, which is why the
+      live description editor carries a negative inline margin equal to the
+      padding its hover box needs.
+
+   The corollary rule: a mark on one row must not move that row. The comment
+   stream's focus and target bars are absolutely positioned in the panel's
+   gutter for exactly this reason. */
 .hub-detail {
   position: fixed;
   inset: 0;
@@ -2524,8 +2545,8 @@ body.hub-body {
   box-shadow: var(--shadow-lg);
   /* No top padding: the head is sticky, and a padded top leaves a transparent
      band above it that scrolling content shows through. The head carries that
-     16px itself instead. */
-  padding: 0 16px 16px;
+     inset itself instead. */
+  padding: 0 16px 24px;
 }
 /* The head is sticky because the panel is now a tall split pane on a desktop
    and a full-height sheet on a phone: close, share and the title are the three
@@ -2536,17 +2557,16 @@ body.hub-body {
   z-index: 1;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: start;
-  padding: 16px 0 10px;
-  margin-bottom: 4px;
+  gap: 12px;
+  align-items: center;
+  padding: 16px 0 12px;
   background: var(--bg);
   border-bottom: 1px solid var(--border);
 }
 .hub-detail-title {
   margin: 0;
   font-size: 22px;
-  line-height: 1.25;
+  line-height: 1.3;
   font-weight: 650;
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -2558,6 +2578,19 @@ body.hub-body {
   align-items: center;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+/* Every control in the head is the same height and the same shape, including
+   the close glyph — a 36px row with one square button in it reads as a
+   mistake, and the ✕ was the odd one because its content is one character. */
+.hub-detail-head-actions .hub-btn {
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.hub-detail-close {
+  min-width: 32px;
+  padding: 0;
 }
 /* Only meaningful where the panel is not already the whole viewport — a phone
    sheet is full screen by definition, so the toggle would promise a change it
@@ -2571,11 +2604,24 @@ body.hub-body {
   /* Wraps to one field per line on a phone and sits in a row from about a
      tablet up; `auto-fit` rather than a media query because what decides it is
      the PANEL's width, which the split pane and full screen both change. */
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 12px 18px;
-  margin: 12px 0 16px;
-  padding-bottom: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 16px;
+  margin: 16px 0 0;
+  padding-bottom: 16px;
   border-bottom: 1px solid var(--border);
+}
+/* One grid item per FIELD. A bare `dt` + `dd` are two items, so the label
+   lands in one column and its value in the next — see the note on `cell()`. */
+.hub-detail-field {
+  min-width: 0;
+}
+/* Status is three chips side by side, so it takes the whole line and the three
+   text fields share the one below. `1 / -1` rather than `span 2` deliberately:
+   `auto-fit` drops to a single column on a narrow phone, where `span 2` would
+   create an implicit second column and overflow the panel, while `1 / -1` just
+   means "full width" at every count. */
+.hub-detail-field:first-child {
+  grid-column: 1 / -1;
 }
 .hub-detail-field-k {
   margin: 0 0 4px;
@@ -2586,13 +2632,32 @@ body.hub-body {
 }
 .hub-detail-field-v {
   margin: 0;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
   font-size: 14px;
   overflow-wrap: anywhere;
 }
+/* Rule 2, for the two field values that are CONTROLS. Their boxes sit on the
+   panel's left edge with their labels — the box, not the glyph, because a pill
+   centres its text inside a 88px minimum, so pulling it left by its padding
+   aligned nothing and left it hanging into the gutter instead. Measured both
+   ways in a browser at 1512px. */
 .hub-detail-statuses {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
+}
+.hub-detail-field-v .hub-assignee-btn {
+  min-height: 32px;
+}
+/* The status a task is IN is not a button — it is the fact the other two act
+   on. Given the same box as its neighbours so the row is three aligned pills
+   rather than a bare word beside two controls. */
+.hub-detail-statuses .hub-status-chip:disabled {
+  border-color: currentcolor;
+  cursor: default;
+  opacity: 1;
 }
 .hub-detail-meta {
   display: grid;
@@ -2777,8 +2842,8 @@ a.hub-link-chip:hover {
    Everything here is spacing and alignment — no colours the surrounding card
    does not already own — so it can be dropped into another container. */
 .hub-decide {
-  margin: 0 0 16px;
-  padding: 14px;
+  margin: 24px 0 0;
+  padding: 16px;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
   background: var(--bg-panel, var(--bg-subtle, #fafafa));
@@ -2796,7 +2861,7 @@ a.hub-link-chip:hover {
 .hub-decide-options {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 .hub-decide-option {
   display: flex;
@@ -2805,7 +2870,7 @@ a.hub-link-chip:hover {
   gap: 4px;
   width: 100%;
   min-height: 44px;
-  padding: 12px 14px;
+  padding: 12px;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
   background: var(--bg);
@@ -2890,7 +2955,9 @@ a.hub-link-chip:hover {
    fallback text and the editor both live here, so the box has to look the
    same either way: no jump when the editor lands a moment after the panel. */
 .hub-detail-body-slot {
-  margin: 12px 0;
+  /* 24px, the between-SECTIONS step: the description is its own section, and
+     at 12px it hugged whatever sat above it (the decision card, usually). */
+  margin: 24px 0 0;
   /* Reserves the fallback's own first line, so the panel does not reflow when
      an empty description turns into an editor with a placeholder in it. */
   min-height: 1.55em;
@@ -2906,8 +2973,11 @@ a.hub-link-chip:hover {
 .hub-detail-body-live {
   border: 1px solid transparent;
   border-radius: var(--radius);
-  padding: 6px 8px;
-  margin: 12px -8px;
+  /* The negative inline margin is what keeps rule 2 true while the editor has
+     a hover/focus box: the padding pushes the prose in, the margin pulls the
+     box back out, so the text still starts on the panel's left edge. */
+  padding: 8px;
+  margin: 0 -8px;
   transition: border-color 0.12s ease, background 0.12s ease;
 }
 .hub-detail-body-live:hover {
@@ -3023,12 +3093,12 @@ a.hub-link-chip:hover {
 .hub-detail-tabs {
   display: flex;
   gap: 4px;
-  margin: 18px 0 0;
+  margin: 24px 0 0;
   border-bottom: 1px solid var(--border);
 }
 .hub-detail-tab {
   min-height: 40px;
-  padding: 0 14px;
+  padding: 0 12px;
   border: none;
   border-bottom: 2px solid transparent;
   border-radius: 0;
@@ -3038,6 +3108,12 @@ a.hub-link-chip:hover {
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
+}
+/* Rule 2 again: the first tab's LABEL starts on the panel's left edge. Done by
+   dropping this one tab's left padding rather than by shifting the strip, so
+   the underline the strip carries still spans the panel exactly. */
+.hub-detail-tab:first-child {
+  padding-left: 0;
 }
 .hub-detail-tab:hover {
   color: var(--fg);
@@ -3073,7 +3149,8 @@ a.hub-link-chip:hover {
   padding: 0;
 }
 .hub-comment {
-  padding: 14px 0;
+  position: relative;
+  padding: 16px 0;
   border-top: 1px solid var(--border);
   /* Long agent output and pasted paths must wrap rather than widen the
      panel — the detail sits in a 430px column on a phone. */
@@ -3081,7 +3158,22 @@ a.hub-link-chip:hover {
 }
 .hub-comment:first-child {
   border-top: none;
-  padding-top: 6px;
+  padding-top: 8px;
+}
+/* A row's MARK must not move the row. The bar is absolutely positioned in the
+   panel's own left padding, so a marked comment sits on the same left edge as
+   an unmarked one — a border-left plus a compensating padding zig-zagged the
+   stream, which is the alignment complaint reproduced one surface over. */
+.hub-comment-focus::before,
+.hub-comment-target::before {
+  content: "";
+  position: absolute;
+  left: -12px;
+  top: 12px;
+  bottom: 12px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--fg-muted);
 }
 /* A comment in a resolved conversation. Quieter, never hidden: a resolved
    thread is still part of the argument, and hiding one here would repeat the
@@ -3092,18 +3184,13 @@ a.hub-link-chip:hover {
 /* The conversation the review queue sent you here to answer. Marking it is not
    optional on a stream of near-identical status notes — you have to be able to
    tell WHICH rows they are when you look up from the scroll. */
-.hub-comment-focus {
-  border-left: 3px solid var(--accent, #3b6fd4);
-  padding-left: 10px;
-  background: var(--accent-wash, rgba(59, 111, 212, 0.07));
+.hub-comment-focus::before {
+  background: var(--accent, #3b6fd4);
 }
-/* The conversation the one composer is pointed at. Paired with the target row
-   inside the composer itself: two signals for one fact, because the composer
-   can be a scroll away from the comment it will post under. */
-.hub-comment-target {
-  border-left: 3px solid var(--fg-muted);
-  padding-left: 10px;
-}
+/* The conversation the one composer is pointed at gets the quieter bar. Paired
+   with the target row inside the composer itself: two signals for one fact,
+   because the composer can be a scroll away from the comment it will post
+   under. */
 .hub-comment-status {
   font-size: 11px;
   text-transform: uppercase;

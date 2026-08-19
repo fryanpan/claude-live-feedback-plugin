@@ -2889,6 +2889,34 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const ownerKind = taskProjection.ownerKindReader(res.task.workspaceId)(res.task);
           return j(200, { ...res, ownerKind });
         }
+        // Set / move / clear a due date (§3.6 task.due_set). `dueAt` was
+        // writable only at creation, so the detail panel rendered a date
+        // nobody could correct. Bryan, 2026-08-18: "All fields must be human
+        // editable."
+        const taskDueMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/due$/);
+        if (taskDueMatch && req.method === 'POST') {
+          const taskId = decodeURIComponent(taskDueMatch[1] ?? '');
+          const body = await safeJson(req);
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          // `null` clears and a number sets. Anything else is REFUSED rather
+          // than coerced: an unparseable date silently read as "clear" would
+          // answer 200 while deleting the fact the caller meant to change.
+          const raw = body?.dueAt;
+          const dueAt =
+            raw === null || raw === undefined
+              ? null
+              : typeof raw === 'number' && Number.isFinite(raw)
+                ? raw
+                : undefined;
+          if (dueAt === undefined) {
+            return j(400, { error: 'dueAt must be an epoch-ms number, or null to clear' });
+          }
+          const res = taskStore.setDueAt(taskId, dueAt, { actor: author });
+          if (!res.ok) return j(404, res);
+          if (!res.changed) taskProjection.ensureWorkspace(res.task.workspaceId);
+          return j(200, res);
+        }
         // set_goal_list (§3.2 edit contract): replace the ordered board
         // sections. Structural validation happens HERE because the store
         // trusts its callers with shapes — a junk entry that reached the

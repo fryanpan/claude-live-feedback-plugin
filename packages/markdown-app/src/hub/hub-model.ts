@@ -1441,6 +1441,17 @@ export function describeEvent(ev: ActivityEvent, titleOf: (taskId: string) => st
       return `${actorName(ev)} assigned ${title()}: ${String(ev.from)} → ${String(ev.to)}`;
     case 'task.regrouped':
       return `${actorName(ev)} regrouped ${title()}: ${String(ev.fromGoal)} → ${String(ev.toGoal)}`;
+    case 'task.due_set': {
+      // Three sentences, because clearing a date and setting one read
+      // differently to whoever is scanning the trail for what slipped.
+      const when = (v: unknown): string =>
+        typeof v === 'number' ? new Date(v).toLocaleDateString() : '';
+      const to = when(ev.to);
+      const from = when(ev.from);
+      if (!to) return `${actorName(ev)} cleared the due date on ${title()}`;
+      if (from) return `${actorName(ev)} moved ${title()} from ${from} to ${to}`;
+      return `${actorName(ev)} set ${title()} due ${to}`;
+    }
     case 'task.body_edited': {
       // Typing in a task body is deliberately NOT activity (the snapshot
       // fires no event at all). This row is the other thing: a wholesale

@@ -1145,6 +1145,26 @@ export interface TaskRetitledEvent {
   ts: number;
 }
 
+/**
+ * A due date set, moved, or cleared after creation.
+ *
+ * `dueAt` was accepted at CREATE and by nothing afterwards, so the detail
+ * panel rendered a fact with no way to correct it. Both ends ride the row
+ * because "moved to Friday" and "set to Friday" are different things to
+ * whoever is reading the trail, and `to: null` is a clear rather than an
+ * omission — a missing key would be indistinguishable from a row written by
+ * an older writer.
+ */
+export interface TaskDueSetEvent {
+  type: 'task.due_set';
+  workspaceId: string;
+  taskId: string;
+  from: number | null;
+  to: number | null;
+  actor: TaskActor;
+  ts: number;
+}
+
 export interface TaskRegroupedEvent {
   type: 'task.regrouped';
   workspaceId: string;
@@ -1321,6 +1341,7 @@ export type TaskStoreEvent =
   | TaskAssignedEvent
   | TaskBodyEditedEvent
   | TaskRetitledEvent
+  | TaskDueSetEvent
   | TaskRegroupedEvent
   | DecisionAnsweredEvent
   | DecisionInfoRequestedEvent
@@ -3284,6 +3305,45 @@ export class TaskStore {
       taskId: task.id,
       from,
       to: assignee,
+      actor: { id: opts.actor.id, name: opts.actor.name, kind: classifyActor(opts.actor) },
+      ts,
+    });
+    return { ok: true, task, changed: true };
+  }
+
+  /**
+   * Set, move, or clear a task's due date.
+   *
+   * Bryan, 2026-08-18: *"All fields must be human editable. But I expect
+   * they'll be mostly set by agents going forward. Trust but verify… sometimes
+   * having me edit a thing is the fastest way to fix."* `dueAt` was writable
+   * only at creation, so the detail panel rendered a field nobody could
+   * correct — the same gap `setAssignee` closed for the owner.
+   *
+   * `null` clears. An unchanged value returns `changed: false` and emits
+   * nothing: a repaint that re-sends the date already on the row is not an
+   * edit, and an audit row saying so is noise in every feed.
+   */
+  setDueAt(
+    taskId: string,
+    dueAt: number | null,
+    opts: { actor: { id: string; name: string; kind?: string } },
+  ): SetAssigneeResult {
+    const task = this.getTask(taskId);
+    if (!task) return { ok: false, error: 'not-found' };
+    const from = task.dueAt ?? null;
+    if (from === dueAt) return { ok: true, task, changed: false };
+    const ts = Date.now();
+    if (dueAt === null) task.dueAt = undefined;
+    else task.dueAt = dueAt;
+    task.updatedAt = ts;
+    this.scheduleSave(task.workspaceId);
+    this.emit({
+      type: 'task.due_set',
+      workspaceId: task.workspaceId,
+      taskId: task.id,
+      from,
+      to: dueAt,
       actor: { id: opts.actor.id, name: opts.actor.name, kind: classifyActor(opts.actor) },
       ts,
     });
