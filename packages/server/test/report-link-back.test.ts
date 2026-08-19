@@ -105,7 +105,10 @@ describe('a report posted on a task comes back with the link to hand over', () =
   });
 
   it('opening the thread returns a URL that opens the task on the board', async () => {
-    const body = await postSubjectThread(`task:${taskId}`, 'Deploy done: gates green, prod on abc.');
+    const body = await postSubjectThread(
+      `task:${taskId}`,
+      'Deploy done: gates green, prod on abc.',
+    );
     // Absolute, and on the operator's public base — the whole point is that
     // it can be pasted somewhere else and still resolve. A relative path
     // would be useless to the peer it is being handed to.
@@ -267,4 +270,3 @@ describe('the handoff link is owner-only — a workspace id is a capability', ()
     expect(raw).not.toContain(boardId);
   });
 });
-
