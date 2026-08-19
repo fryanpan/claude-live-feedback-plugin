@@ -199,11 +199,21 @@ describe('the owning session over the real routes', () => {
     expect(byId.get(person.task.id)?.ownerSession).toBeUndefined();
     expect(byId.get(stranger.task.id)?.ownerSession).toBeUndefined();
 
-    // The host-machine endpoint never rides along, on any row. Asserted on
-    // the raw body rather than the parsed object so a nested copy anywhere
-    // in the payload still trips it.
+    // The host-machine endpoint never rides along, on any row.
+    //
+    // Structural check FIRST, because it is the assertion actually being
+    // made and it cannot be spoofed by a coincidence.
+    expect('endpoint' in session).toBe(false);
+    // Then the whole-payload sweep, which catches a nested copy the
+    // structural check would miss. Matched on the ENTIRE endpoint and never
+    // on its port: this payload carries two `Date.now()` millisecond stamps,
+    // so a four-digit needle like the port number has ~20 uncontrolled digit
+    // positions to hit. That is not hypothetical — the sibling assertion in
+    // `attachments.test.ts` took CI red on `lastHeartbeat: 1786980999099`,
+    // where the endpoint was correctly absent and the CLOCK spelled the
+    // needle. This test shipped with that same port match until the same
+    // scar, one file over, pointed it out.
     expect(raw).toContain('agent-cartographer');
-    expect(raw).not.toContain('9099');
-    expect(raw).not.toContain('hooks/agent-relay');
+    expect(raw).not.toContain(ENDPOINT);
   });
 });
