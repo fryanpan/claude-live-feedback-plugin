@@ -19,7 +19,15 @@ import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { KEYCHAIN_SERVICE, KEYCHAIN_SERVICE_LEGACY } from '../src/summarize.ts';
 import { TaskStore, type TaskStoreEvent, voiceQueuePath } from '../src/tasks.ts';
-import { RESOURCE_MAX, VoiceRouter, haikuVoiceComplete, parseVoiceReply } from '../src/voice.ts';
+import {
+  RESOURCE_MAX,
+  type VoiceContext,
+  type VoiceResource,
+  VoiceRouter,
+  haikuVoiceComplete,
+  parseVoiceReply,
+  resolveVoiceAction,
+} from '../src/voice.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
 const AGENT = { id: 'agent-search-revamp', name: 'Search Agent', kind: 'agent', color: '#7d2ed7' };
@@ -63,6 +71,7 @@ describe('voice routing (§3.8)', () => {
   const lastPrompt: { value: { system: string; user: string } | null } = { value: null };
   /** Fresh read — sidesteps TS narrowing `.value` to null after a reset. */
   const promptUser = (): string => lastPrompt.value?.user ?? '';
+  const promptSystem = (): string => lastPrompt.value?.system ?? '';
 
   const local = (path: string, init: RequestInit = {}) =>
     fetch(`${base}${path}`, {
@@ -463,6 +472,213 @@ describe('voice routing (§3.8)', () => {
       expect(block).toContain('truncated');
       // The budget is the point: the block cannot grow with the content.
       expect(new TextEncoder().encode(block).length).toBeLessThanOrEqual(RESOURCE_MAX + 200);
+    });
+  });
+
+  // A third classification. The guardrails ship BEFORE the writers do, so the
+  // rule that decides whether a spoken action may touch anything is reviewable
+  // on its own — and provably fails closed. Nothing here writes: an action
+  // still takes the agent route until the executors land.
+  describe('resolveVoiceAction — a target only ever comes from the validated context', () => {
+    const PERSON_ACTOR = { id: 'known-jordan', name: 'Jordan', kind: 'known' };
+    const TASK_CONTEXT: VoiceContext = { surface: 'task', taskId: 't-fixture' };
+    const taskResource = (over: Partial<Extract<VoiceResource, { kind: 'task' }>> = {}) =>
+      ({
+        kind: 'task',
+        id: 't-fixture',
+        title: 'Wire the results page',
+        status: 'todo',
+        assignee: '',
+        links: [],
+        ...over,
+      }) satisfies VoiceResource;
+
+    const resolve = (
+      raw: string,
+      over: {
+        actor?: { id: string; name: string; kind?: string };
+        context?: VoiceContext;
+        resource?: VoiceResource;
+        transcript?: string;
+      } = {},
+    ) =>
+      resolveVoiceAction({
+        classification: parseVoiceReply(raw),
+        actor: over.actor ?? PERSON_ACTOR,
+        transcript: over.transcript ?? 'mark this done',
+        ...(over.context !== undefined ? { context: over.context } : { context: TASK_CONTEXT }),
+        ...(over.resource !== undefined
+          ? { resource: over.resource }
+          : { resource: taskResource() }),
+      });
+
+    const MARK_DONE = '{"kind":"action","action":"set-status","status":"done"}';
+
+    it('POSITIVE CONTROL: a well-formed action over a validated task resolves', () => {
+      expect(resolve(MARK_DONE)).toEqual({
+        action: 'set-status',
+        taskId: 't-fixture',
+        status: 'done',
+        actor: PERSON_ACTOR,
+      });
+    });
+
+    it('an action verb outside the scoped set never parses, so it never resolves', () => {
+      expect(parseVoiceReply('{"kind":"action","action":"delete-the-workspace"}')).toBeNull();
+      expect(resolve('{"kind":"action","action":"delete-the-workspace"}')).toBeNull();
+      // A status the store has no word for is the same failure.
+      expect(resolve('{"kind":"action","action":"set-status","status":"shipped"}')).toBeNull();
+      // And a classification that is not an action at all.
+      expect(resolve('{"kind":"change"}')).toBeNull();
+      expect(resolve('{"kind":"lookup","target":"task","id":"t-fixture"}')).toBeNull();
+    });
+
+    it('the deictic "mark this done" from the hub — no id in context — resolves to nothing', () => {
+      const noResource = { surface: 'hub' as const };
+      expect(
+        resolveVoiceAction({
+          classification: parseVoiceReply(MARK_DONE),
+          actor: PERSON_ACTOR,
+          transcript: 'mark this done',
+          context: noResource,
+        }),
+      ).toBeNull();
+      // A resource without the matching context id is the same hole from the
+      // other side: the resource must be the thing the context named.
+      expect(resolve(MARK_DONE, { context: { surface: 'task' } })).toBeNull();
+      expect(resolve(MARK_DONE, { context: { surface: 'task', taskId: 't-other' } })).toBeNull();
+    });
+
+    it('a model-named id that disagrees with the context is refused', () => {
+      expect(
+        resolve('{"kind":"action","action":"set-status","status":"done","id":"t-someone-elses"}'),
+      ).toBeNull();
+      // Naming the id it was told not to name is fine when it is the SAME id —
+      // the rule is about acting on a target the speaker never had in view.
+      expect(
+        resolve('{"kind":"action","action":"set-status","status":"done","id":"t-fixture"}'),
+      ).not.toBeNull();
+    });
+
+    it('an actor with no declared kind is refused (classifyActor would file it as an agent)', () => {
+      expect(resolve(MARK_DONE, { actor: { id: 'known-jordan', name: 'Jordan' } })).toBeNull();
+      expect(
+        resolve(MARK_DONE, { actor: { id: 'known-jordan', name: 'Jordan', kind: '' } }),
+      ).toBeNull();
+    });
+
+    it('set-assignee needs a name, and "me" is the speaker', () => {
+      expect(resolve('{"kind":"action","action":"set-assignee","assignee":"me"}')).toEqual({
+        action: 'set-assignee',
+        taskId: 't-fixture',
+        assignee: 'Jordan',
+        actor: PERSON_ACTOR,
+      });
+      expect(resolve('{"kind":"action","action":"set-assignee"}')).toBeNull();
+    });
+
+    it('a comment carries the transcript verbatim, on the task or the doc in view', () => {
+      expect(
+        resolve('{"kind":"action","action":"comment"}', { transcript: 'this needs a benchmark' }),
+      ).toEqual({
+        action: 'comment',
+        target: { kind: 'task', taskId: 't-fixture' },
+        text: 'this needs a benchmark',
+        actor: PERSON_ACTOR,
+      });
+    });
+
+    it('answer-review resolves the thread from the doc, and refuses when it is ambiguous', () => {
+      const docContext: VoiceContext = { surface: 'doc', docId: 'expansion-plan' };
+      const withItems = (n: number): VoiceResource => ({
+        kind: 'doc',
+        id: 'expansion-plan',
+        reviewItems: Array.from({ length: n }, (_, i) => ({
+          threadId: `th-${i}`,
+          ask: 'Should the rollout wait?',
+          askedBy: 'Search Agent',
+        })),
+      });
+      expect(
+        resolve('{"kind":"action","action":"answer-review"}', {
+          context: docContext,
+          resource: withItems(1),
+          transcript: 'yes, wait for it',
+        }),
+      ).toEqual({
+        action: 'answer-review',
+        docId: 'expansion-plan',
+        threadId: 'th-0',
+        text: 'yes, wait for it',
+        actor: PERSON_ACTOR,
+      });
+      // Nothing open, or more than one open: which one "that comment" means is
+      // not knowable from the context, so it is the agent's call.
+      for (const n of [0, 2]) {
+        expect(
+          resolve('{"kind":"action","action":"answer-review"}', {
+            context: docContext,
+            resource: withItems(n),
+          }),
+        ).toBeNull();
+      }
+    });
+
+    it('open-link resolves the sole ref, and refuses to guess between several', () => {
+      const one = taskResource({ links: [{ kind: 'doc', docId: 'expansion-plan' }] });
+      expect(resolve('{"kind":"action","action":"open-link"}', { resource: one })).toEqual({
+        action: 'open-link',
+        taskId: 't-fixture',
+        ref: { kind: 'doc', docId: 'expansion-plan' },
+      });
+      const two = taskResource({
+        links: [
+          { kind: 'doc', docId: 'expansion-plan' },
+          { kind: 'url', url: 'https://example.invalid/mockup' },
+        ],
+      });
+      expect(resolve('{"kind":"action","action":"open-link"}', { resource: two })).toBeNull();
+      expect(resolve('{"kind":"action","action":"open-link"}')).toBeNull();
+    });
+
+    it('the enumerated action shapes reach the model', async () => {
+      completeImpl = () => Promise.resolve(JSON.stringify({ kind: 'change' }));
+      lastPrompt.value = null;
+      await voice({ transcript: 'mark this done', context: { surface: 'hub' }, author: PERSON });
+      const system = promptSystem();
+      expect(system).toContain('"kind":"action"');
+      expect(system).toContain('set-status');
+      expect(system).toContain('answer-review');
+      // The standing rules survive the addition.
+      expect(system).toContain('{"kind":"change"}');
+      expect(system.toLowerCase()).toContain('never name an id');
+    });
+
+    it('an action classification still takes the agent route, and writes nothing', async () => {
+      completeImpl = () =>
+        Promise.resolve(JSON.stringify({ kind: 'action', action: 'set-status', status: 'done' }));
+      const before = await local(`/api/workspaces/${hubId}/tasks`);
+      const beforeTask = (
+        (await before.json()) as { tasks: Array<{ id: string; status: string }> }
+      ).tasks.find((t) => t.id === taskId);
+      expect(beforeTask?.status).toBe('todo');
+
+      const r = await voice({
+        transcript: 'mark this done',
+        context: { surface: 'task', taskId },
+        author: PERSON,
+      });
+      expect(r.status).toBe(200);
+      const body = (await r.json()) as { route: string; ack: string; navigate?: string };
+      expect(['agent', 'agent-queued']).toContain(body.route);
+      expect(body.ack).toContain('mark this done');
+      expect(body.navigate).toBeUndefined();
+
+      const after = await local(`/api/workspaces/${hubId}/tasks`);
+      const afterTask = (
+        (await after.json()) as { tasks: Array<{ id: string; status: string }> }
+      ).tasks.find((t) => t.id === taskId);
+      expect(afterTask?.status).toBe('todo');
     });
   });
 

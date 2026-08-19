@@ -24,9 +24,17 @@
  */
 import { readKeychainPassword } from './share/keychain.ts';
 import { resolveKeyFrom } from './summarize.ts';
-import type { Ref, Task, TaskStore } from './tasks.ts';
+import type { Ref, Task, TaskStatus, TaskStore } from './tasks.ts';
 
 export type VoiceSurface = 'hub' | 'doc' | 'task';
+
+/** Who is speaking. `kind` is optional on the wire and load-bearing here —
+ *  see `resolveVoiceAction`, which refuses to act without it. */
+export interface VoiceActor {
+  id: string;
+  name: string;
+  kind?: string;
+}
 
 /** The per-utterance anchor (§3.8): wherever the speaker is NOW. */
 export interface VoiceContext {
@@ -158,9 +166,37 @@ export function renderResourceBlock(resource: VoiceResource): string {
  *  tests; the real one is `haikuVoiceComplete` below. */
 export type VoiceComplete = (args: { system: string; user: string }) => Promise<string>;
 
+/**
+ * The scoped verb set. Deliberately closed: everything NOT on this list is a
+ * `change` and belongs to the agent, so widening what voice may do by itself
+ * is an edit to this union rather than a prompt the model reinterprets.
+ */
+export const VOICE_ACTIONS = [
+  'set-status',
+  'set-assignee',
+  'comment',
+  'answer-review',
+  'open-link',
+] as const;
+export type VoiceAction = (typeof VOICE_ACTIONS)[number];
+
 export type VoiceClassification =
   | { kind: 'change' }
-  | { kind: 'lookup'; target?: 'task' | 'doc'; id?: string };
+  | { kind: 'lookup'; target?: 'task' | 'doc'; id?: string }
+  | {
+      kind: 'action';
+      action: VoiceAction;
+      status?: TaskStatus;
+      assignee?: string;
+      /**
+       * An id the model named even though the prompt forbids it. Captured
+       * rather than dropped ON PURPOSE: `resolveVoiceAction` can only refuse a
+       * target the speaker never had in view if it can SEE the model reaching
+       * for one. Silently ignoring this field would turn a hallucinated target
+       * into a write against the resource that happened to be in view.
+       */
+      id?: string;
+    };
 
 export interface VoiceResult {
   route: 'fast-path' | 'agent' | 'agent-queued';
@@ -176,7 +212,14 @@ export type VoiceHandleResult =
 
 const MODEL = 'claude-haiku-4-5-20251001';
 const API_URL = 'https://api.anthropic.com/v1/messages';
-const MAX_TOKENS = 120;
+/**
+ * 120 was sized for a 30-byte classification, and an action reply is longer.
+ * Raised deliberately rather than left to fit "most" of them: a truncated
+ * reply parses to null, which is SAFE — it takes the agent route — but it is
+ * safe in the way a permanently disabled feature is safe, and nothing would
+ * have reported it. Still far under a runaway.
+ */
+const MAX_TOKENS = 200;
 const TIMEOUT_MS = 10_000;
 /** Keep acks readable when a hold rambles. */
 const ACK_TRANSCRIPT_MAX = 90;
@@ -221,11 +264,21 @@ export function buildVoicePrompt(
     'You route voice requests for a task workspace. Decide: does the utterance',
     'CHANGE something (create/edit/regroup/reprioritize/assign/answer), or is it',
     'a LOOKUP (navigate to / open / find an existing task or doc)?',
+    'A change that is one of the ACTIONS below, applied to the resource in',
+    'view, is an ACTION; every other change is {"kind":"change"}.',
     'Reply with ONE JSON object and nothing else:',
     '  {"kind":"change"}',
     '  {"kind":"lookup","target":"task","id":"<task id from the index>"}',
     '  {"kind":"lookup","target":"doc","id":"<doc id from the index>"}',
     '  {"kind":"lookup"}   (a lookup, but nothing in the index matches)',
+    '  {"kind":"action","action":"set-status","status":"todo|in-progress|done"}',
+    '  {"kind":"action","action":"set-assignee","assignee":"<name, or \'me\' for the speaker>"}',
+    '  {"kind":"action","action":"comment"}        (say this on the resource in view)',
+    '  {"kind":"action","action":"answer-review"}  (answer its open review item)',
+    '  {"kind":"action","action":"open-link"}      (open the resource\'s linked doc/mockup)',
+    'An ACTION applies to the resource in view and to nothing else.',
+    'NEVER name an id in an action — the target is the resource in view, and',
+    'an action over anything else is {"kind":"change"}.',
     'Only use ids that appear in the index. When unsure, answer {"kind":"change"}.',
   ].join('\n');
   const lines: string[] = [];
@@ -258,6 +311,22 @@ export function buildVoicePrompt(
   return { system, user: lines.join('\n') };
 }
 
+/** Longest assignee name the fast path will carry. */
+const ASSIGNEE_MAX = 100;
+
+/** The three words the store knows, and nothing else. Spoken status names
+ *  arrive spelled however the model felt like spelling them, so "In Progress"
+ *  and "in_progress" normalize — but an invented status is undefined, and an
+ *  undefined status is what makes `set-status` fail to resolve. */
+function parseTaskStatus(raw: unknown): TaskStatus | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const v = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, '-');
+  return v === 'todo' || v === 'in-progress' || v === 'done' ? v : undefined;
+}
+
 /** Tolerant reply parser: the model may fence or preface the JSON. Anything
  *  that doesn't contain a well-shaped object is null (= fast-path failure). */
 export function parseVoiceReply(raw: string): VoiceClassification | null {
@@ -273,6 +342,26 @@ export function parseVoiceReply(raw: string): VoiceClassification | null {
   if (typeof parsed !== 'object' || parsed === null) return null;
   const p = parsed as Record<string, unknown>;
   if (p.kind === 'change') return { kind: 'change' };
+  if (p.kind === 'action') {
+    const action = VOICE_ACTIONS.find((a) => a === p.action);
+    // A verb outside the scoped set is not a narrower action — it is an
+    // utterance this classifier has no answer for, which is the same state as
+    // unparseable, and takes the agent route.
+    if (!action) return null;
+    const status = parseTaskStatus(p.status);
+    const assignee =
+      typeof p.assignee === 'string' && p.assignee.trim().length > 0
+        ? p.assignee.trim().slice(0, ASSIGNEE_MAX)
+        : undefined;
+    const id = typeof p.id === 'string' && p.id.length > 0 ? p.id : undefined;
+    return {
+      kind: 'action',
+      action,
+      ...(status !== undefined ? { status } : {}),
+      ...(assignee !== undefined ? { assignee } : {}),
+      ...(id !== undefined ? { id } : {}),
+    };
+  }
   if (p.kind === 'lookup') {
     const target = p.target === 'task' || p.target === 'doc' ? p.target : undefined;
     const id = typeof p.id === 'string' && p.id.length > 0 ? p.id : undefined;
@@ -283,6 +372,126 @@ export function parseVoiceReply(raw: string): VoiceClassification | null {
     };
   }
   return null;
+}
+
+/**
+ * A spoken action, resolved down to exactly which record it touches. Built
+ * only by `resolveVoiceAction`; nothing else may construct one, because the
+ * whole safety argument is that a plan cannot name a target the speaker did
+ * not have in view.
+ */
+export type VoiceActionPlan =
+  | { action: 'set-status'; taskId: string; status: TaskStatus; actor: VoiceActor }
+  | { action: 'set-assignee'; taskId: string; assignee: string; actor: VoiceActor }
+  | {
+      action: 'comment';
+      target: { kind: 'task'; taskId: string } | { kind: 'doc'; docId: string };
+      text: string;
+      actor: VoiceActor;
+    }
+  | { action: 'answer-review'; docId: string; threadId: string; text: string; actor: VoiceActor }
+  | { action: 'open-link'; taskId: string; ref: Ref };
+
+/** "assign this to me" — the speaker, not a person literally named "me". */
+const SELF_WORDS = new Set(['me', 'myself', 'i', 'mine']);
+
+/**
+ * Turn a classification into a plan, or into NOTHING.
+ *
+ * This is the whole guardrail, and it ships before any writer does so it can
+ * be read on its own. Four conditions, all required:
+ *
+ *  1. the reply parses as a well-formed action (`parseVoiceReply` above);
+ *  2. the id the action needs is present in the VALIDATED context — the
+ *     `resource` is the thing that context named, and both must agree, so a
+ *     deictic "mark this done" spoken from the hub with no detail panel open
+ *     resolves to nothing rather than to whatever was nearby;
+ *  3. the model named NO id, or named one identical to the context's. The
+ *     prompt forbids naming ids; this is the half that does not depend on the
+ *     model having obeyed;
+ *  4. `actor.kind` is present. `classifyActor` (activity.ts) maps a kind-less
+ *     author to `agent` — so without this, Bryan's own board move is attributed
+ *     to an agent, and his reply cannot reopen a resolved thread. A missing
+ *     `kind` is not a cosmetic gap; it silently rewrites who did it.
+ *
+ * All four are checked for EVERY verb, including the read-only `open-link`.
+ * Gating a navigation on `actor.kind` is stricter than that one verb needs;
+ * the uniformity is the point, because the alternative is a per-verb table of
+ * which guards apply, and the verb that gets added without its row is the one
+ * that writes.
+ *
+ * Any failure returns null and the utterance takes the agent route exactly as
+ * it does today. Deliberately NOT wired into `handle()` yet — the executors
+ * land next, and separating them keeps the rule reviewable without a writer
+ * behind it.
+ */
+export function resolveVoiceAction(args: {
+  classification: VoiceClassification | null;
+  actor: VoiceActor;
+  transcript: string;
+  context?: VoiceContext;
+  resource?: VoiceResource;
+}): VoiceActionPlan | null {
+  const { classification: c, actor, transcript, context, resource } = args;
+  // (1) a well-formed action, and nothing else.
+  if (!c || c.kind !== 'action') return null;
+  // (4) an actor who says what they are.
+  if (typeof actor.kind !== 'string' || actor.kind.trim().length === 0) return null;
+  // (2) the resource must be the one the validated context named. Checking
+  // both sides rather than trusting the caller to have paired them: the
+  // resource is a projection, and a projection with no context behind it is
+  // exactly the "acted on something nobody was looking at" failure.
+  if (!resource || !context) return null;
+  const contextId = resource.kind === 'task' ? context.taskId : context.docId;
+  if (contextId === undefined || contextId !== resource.id) return null;
+  // (3) the model may not reach past what is in view.
+  if (c.id !== undefined && c.id !== resource.id) return null;
+
+  switch (c.action) {
+    case 'set-status':
+      if (resource.kind !== 'task' || c.status === undefined) return null;
+      return { action: 'set-status', taskId: resource.id, status: c.status, actor };
+    case 'set-assignee': {
+      if (resource.kind !== 'task' || c.assignee === undefined) return null;
+      const assignee = SELF_WORDS.has(c.assignee.toLowerCase()) ? actor.name : c.assignee;
+      if (assignee.trim().length === 0) return null;
+      return { action: 'set-assignee', taskId: resource.id, assignee, actor };
+    }
+    case 'comment':
+      return {
+        action: 'comment',
+        target:
+          resource.kind === 'task'
+            ? { kind: 'task', taskId: resource.id }
+            : { kind: 'doc', docId: resource.id },
+        text: transcript,
+        actor,
+      };
+    case 'answer-review': {
+      if (resource.kind !== 'doc') return null;
+      // Which item "that comment" means is only knowable when there is one.
+      // With none open there is nothing to answer; with several, picking would
+      // mean the model naming a thread id — the thing condition (3) forbids.
+      // Both cases are the agent's call, which is a narrowing a later commit
+      // can widen by putting the choice in the speaker's hands, never the
+      // model's.
+      const [only, ...rest] = resource.reviewItems;
+      if (!only || rest.length > 0) return null;
+      return {
+        action: 'answer-review',
+        docId: resource.id,
+        threadId: only.threadId,
+        text: transcript,
+        actor,
+      };
+    }
+    case 'open-link': {
+      if (resource.kind !== 'task') return null;
+      const [only, ...rest] = resource.links;
+      if (!only || rest.length > 0) return null;
+      return { action: 'open-link', taskId: resource.id, ref: only };
+    }
+  }
 }
 
 export class VoiceRouter {
@@ -393,7 +602,7 @@ export class VoiceRouter {
     req: {
       transcript: string;
       context?: VoiceContext;
-      actor: { id: string; name: string; kind?: string };
+      actor: VoiceActor;
     },
   ): Promise<VoiceHandleResult> {
     const workspace = this.tasks.getWorkspace(workspaceId);
@@ -437,7 +646,10 @@ export class VoiceRouter {
       result = this.lookupResult(workspaceId, transcript, classification);
     } else {
       // A change — or an unclassifiable utterance, which only the agent's
-      // judgment can handle. Both take the agent route.
+      // judgment can handle. Both take the agent route, and so does an
+      // ACTION for now: `resolveVoiceAction` exists and is tested, but the
+      // executors behind it land in the next commits, so classifying an
+      // utterance as an action changes nothing a speaker can observe yet.
       const note = fastPathDown ? ' (Fast path unavailable.)' : '';
       if (this.tasks.hasLiveAttachment(workspaceId)) {
         result = {
