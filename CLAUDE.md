@@ -335,4 +335,49 @@ Bypass: `SCRUB_SKIP=1 git push ...` (both layers), `SCRUB_SKIP_HAIKU=1 git push 
 - Team: Bryan Chan (BRY)
 - Team ID: 01328a7f-d761-4176-8bbf-004a397dc6f7
 
-@docs/process/learnings.md
+## Learnings archive — grep it, don't load it
+
+`docs/process/learnings.md` is the incident archive. It is deliberately NOT
+`@`-inlined here (the include cost ~41k tokens on every turn of every
+session; Bryan dropped it 2026-08-19). Grep it before acting on any of these
+triggers:
+
+- something looks broken or impossible (a tool "missing", a 404, a
+  permission refusal) — the archive usually has the measured explanation
+- a check or probe reports clean and you are about to trust it
+- a plugin update or deploy seems not to have landed
+- you are about to delete, overwrite, restore, or force anything
+- CI is red on something your diff never touched
+
+```bash
+grep -n -A12 -i '<topic>' docs/process/learnings.md
+```
+
+**Promotion rule:** anything in the archive that must fire *without* being
+looked up doesn't belong in an archive — promote it into this file or a
+`.claude/rules/` file, and keep the promoted set under ~1k tokens total.
+
+Promoted killer items (the archive has the full stories):
+
+- **Never hand-resolve `packages/plugin/mcp/index.js` merge conflicts.** It
+  is a generated bundle every plugin-touching branch rewrites wholesale:
+  take either side, run `bun run build:mcp`, commit the result. CI rebuilds
+  and diffs it, so a hand-merged bundle goes red — or worse, ships wrong.
+- **Bound docs make git operations lossy while live.** A git command that
+  rewrites a bound file is an editor save; against un-flushed live edits the
+  doc wins and reasserts ~800ms later — git exits 0, the tree re-dirties a
+  second afterwards (`git stash` can strand content in neither HEAD nor the
+  stash). Let bound docs go idle ~1s before git ops; if a tree re-dirties
+  after one, read the doc's `syncError`. Never Write/Edit a bound `.md` —
+  MCP edit tools only.
+- **A conflicted PR has ZERO check-runs**, which reads exactly like "CI
+  hasn't started". `mergeStateStatus: DIRTY` + 0 checks on the head sha
+  means merge main into the branch — waiting is a wait that never ends.
+- **Check which tree you are in before writing.** After a shell restart or
+  any unexplained error, `git rev-parse --show-toplevel` — a shell whose
+  worktree was deleted silently resolves to the primary checkout, which is
+  prod's deploy source.
+- **A negative probe needs a positive control.** "The secret / element /
+  event isn't there" proves nothing until the same probe has seen something
+  real. And reproduce a reported impossibility before building the fix —
+  several confident task premises have been false or already-fixed.
