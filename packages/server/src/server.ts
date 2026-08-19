@@ -42,6 +42,7 @@ import {
   effectiveSince,
   readEventRows,
   readerKey,
+  taskDeepLink,
 } from './home-brief.ts';
 import {
   type LandingModel,
@@ -3708,10 +3709,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                 generate: !visitor,
                 ...(declared.review ? { review: declared.review } : {}),
               });
+              const handoff = taskHandoffUrl(docId, Boolean(visitor));
               return t
                 ? j(200, {
                     thread: t,
                     ...(declared.advice ? { reviewAdvice: declared.advice } : {}),
+                    ...(handoff ? { url: handoff } : {}),
                   })
                 : j(404, { error: 'thread not found' });
             }
@@ -3863,8 +3866,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               generate: !visitor,
               ...(declared.review ? { review: declared.review } : {}),
             });
+            const handoff = taskHandoffUrl(docId, Boolean(visitor));
             return t
-              ? j(200, { thread: t, ...(declared.advice ? { reviewAdvice: declared.advice } : {}) })
+              ? j(200, {
+                  thread: t,
+                  ...(declared.advice ? { reviewAdvice: declared.advice } : {}),
+                  ...(handoff ? { url: handoff } : {}),
+                })
               : j(500, { error: 'could not create thread' });
           }
           if (rest === 'threads/by_find' && req.method === 'POST') {
@@ -3891,10 +3899,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               // Visitor-authored text becomes the entire prompt on this route.
               { generate: !visitor, ...(declared.review ? { review: declared.review } : {}) },
             );
+            const findHandoff = taskHandoffUrl(docId, Boolean(visitor));
             return res.ok
               ? j(200, {
                   thread: res.thread,
                   ...(declared.advice ? { reviewAdvice: declared.advice } : {}),
+                  ...(findHandoff ? { url: findHandoff } : {}),
                 })
               : j(409, res);
           }
@@ -4374,6 +4384,42 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    */
   function externalBaseUrl(): string {
     return opts.publicBaseUrl ?? publicBaseUrl(server.port ?? port);
+  }
+
+  /**
+   * The link an agent hands over after posting a report on a task.
+   *
+   * Measured cost of not having it: 52,340 words — 40% of every word in the
+   * user's chat window over 38 hours — were agent-to-agent reports relayed
+   * through his terminal rather than posted on the task they belonged to.
+   * The rule to post on the task already ships. What did not exist was a
+   * cheap way to then TELL a peer where it went: the write succeeded and
+   * returned no link, so handing over a pointer meant assembling one from
+   * parts against a base URL the agent may not know — while answering in
+   * chat cost nothing. This is the same fix `reviewGapAdvice` makes for a
+   * thin review item: what the author needs next travels back on the success
+   * response, rather than being something they are expected to know.
+   *
+   * Absolute, unlike `taskDeepLink`'s own relative output, and that
+   * difference is the point: the brief renders on the page it points at, but
+   * this URL is being pasted somewhere else entirely. It goes through
+   * `externalBaseUrl()` for the reason that function exists — one base, so
+   * an operator override cannot reach some links and miss others.
+   *
+   * OWNER ONLY. A workspace id is an unguessable URL capability, so a
+   * doc-scoped share visitor must not learn one by commenting on a member
+   * doc — the same rule that already gates `hubWorkspaceId` and `backTo` on
+   * the doc route. Returns undefined for anything that is not a task's own
+   * body room, so callers can spread it and an ordinary doc comment carries
+   * no extra field.
+   */
+  function taskHandoffUrl(docId: string, isVisitor: boolean): string | undefined {
+    if (isVisitor) return undefined;
+    if (!docId.startsWith('task:')) return undefined;
+    const workspaceId = taskStore.workspaceOfDoc(docId);
+    if (!workspaceId) return undefined;
+    const taskId = docId.slice('task:'.length);
+    return `${externalBaseUrl()}${taskDeepLink(workspaceId, taskId)}`;
   }
 
   // Decorate doc metadata with a `reviewUrl` that's actually reachable from
