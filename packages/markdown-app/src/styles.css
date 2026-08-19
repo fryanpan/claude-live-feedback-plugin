@@ -3464,7 +3464,19 @@ a.hub-link-chip:hover {
   scroll-margin-top: var(--hub-detail-head-h, 96px);
 }
 .hub-detail-tab {
-  min-height: 40px;
+  /* 44, not the 36 `design-mobile.md` sets as the project floor, and the
+     difference is deliberate rather than an oversight in one direction or the
+     other. 40 cleared the documented floor — measured 85×40 and 75×40 at
+     430×932, so this was never a compliance failure — but this control is NEW
+     in this PR, and a control being introduced can start at the stricter
+     target (Apple HIG and WCAG 2.5.5 AAA both say 44) at no cost to anything
+     already shipped. Raising the project floor for the ~20 existing controls
+     at 36 is a separate decision and not this rule's to make.
+     Recorded because the number arrived here attributed to `design-mobile.md`
+     and that attribution was wrong: the doc says 36×36, and the 44 traces to a
+     recommendation in `docs/process/ux-review-2026-04-18-v2.md` that was never
+     adopted. Kept on its merits, not on the citation. */
+  min-height: 44px;
   padding: 0 12px;
   border: none;
   border-bottom: 2px solid transparent;
