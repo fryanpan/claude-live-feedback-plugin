@@ -122,15 +122,20 @@ describe('the split pane starts where both columns fit', () => {
   const root = rule(':root');
   const boardMin = px(/--hub-board-min:\s*([^;]+);/.exec(root)?.[1]);
   const panelMin = px(/--hub-detail-w:\s*min\([^,]+,\s*max\(([^,]+),/.exec(root)?.[1]);
-  /** The chrome between and around the two columns, from `--hub-board-keep`. */
-  const chrome = px(/--hub-board-keep:[^;]*\+\s*([0-9]+px)/.exec(root)?.[1]);
+  /** Everything `--hub-board-keep` adds on top of the board's own floor: the
+   *  chrome between and around the two columns, plus the scrollbar `100vw`
+   *  counts and the layout does not. */
+  const boardChrome = px(/--hub-board-chrome:\s*([^;]+);/.exec(root)?.[1]);
+  const scrollbar = px(/--hub-scrollbar-allowance:\s*([^;]+);/.exec(root)?.[1]);
+  const chrome = boardChrome + scrollbar;
   const breakpoint = px(SPLIT);
 
   it('reads all four numbers, so the comparison below is not vacuous', () => {
     for (const [name, n] of [
       ['--hub-board-min', boardMin],
       ['the panel floor inside --hub-detail-w', panelMin],
-      ['the chrome term of --hub-board-keep', chrome],
+      ['--hub-board-chrome', boardChrome],
+      ['--hub-scrollbar-allowance', scrollbar],
       ['the split breakpoint', breakpoint],
     ] as const) {
       expect(Number.isFinite(n), `${name} did not parse`).toBe(true);
@@ -145,13 +150,185 @@ describe('the split pane starts where both columns fit', () => {
     // Without the cap the panel takes 62vw and the board takes the remainder,
     // which at the breakpoint is 297px — under its floor, i.e. the sliver
     // again, one breakpoint higher.
-    expect(rule(':root')).toMatch(
-      /--hub-detail-pane-w:\s*min\(var\(--hub-detail-w\),\s*calc\(100vw\s*-\s*var\(--hub-board-keep\)\)\)/,
+    expect(rule(':root').replace(/\s+/g, ' ')).toMatch(
+      /--hub-detail-pane-w: min\(var\(--hub-detail-w\), calc\(100vw - var\(--hub-board-keep\)\)\)/,
     );
     // And the cap still leaves the panel its own floor at the breakpoint —
     // the two floors are simultaneously satisfiable exactly there, which is
     // what makes this the lowest honest breakpoint rather than a guess.
     expect(breakpoint - boardMin - chrome).toBeGreaterThanOrEqual(panelMin);
+  });
+});
+
+/**
+ * The board's floor, in RENDERED pixels, at the widths people actually use.
+ *
+ * The block above asserts a relationship between four tokens and passed while
+ * the board rendered 166px at 1920 — because the reservation is derived from
+ * `100vw` and then spent inside a container the page caps. Every number the
+ * panel reserves is viewport-sized; every number the board has left is
+ * container-sized; nothing compared the two.
+ *
+ * So this models what the browser does — cap, reservation, chrome — and the
+ * first test below CALIBRATES that model against four independently measured
+ * pixel counts before any of the others are allowed to mean anything.
+ *
+ * The inversion is the tell. 1661 → 1920 is +259px of screen and −193px of
+ * board, and 1920 is the width of the display this is read on.
+ *
+ * One input here is measured rather than parsed: the nav rail's track is
+ * `max-content`, so no stylesheet literal states its width. It reaches this
+ * file only as the chrome term of `--hub-board-keep`, which is why that
+ * constant being viewport-relative rather than container-relative was able to
+ * be wrong for so long without anything noticing.
+ */
+describe('the board keeps its floor in rendered pixels, not just in tokens', () => {
+  const px = (s: string | undefined) => Number(/(-?\d+)px/.exec(s ?? '')?.[1]);
+  const root = rule(':root');
+  const boardMin = px(/--hub-board-min:\s*([^;]+);/.exec(root)?.[1]);
+  /** Everything physically between the CONTAINER's edge and the board except
+   *  the pane: page gutters, the nav rail and its gap, the panel's offset.
+   *  This is a real distance in the layout. */
+  const chrome = px(/--hub-board-chrome:\s*([^;]+);/.exec(root)?.[1]);
+  /** What the RESERVATION adds for a scrollbar that is inside `100vw` and
+   *  outside every layout box. This is a policy, not a distance — the two are
+   *  separate constants here for the same reason they are separate tokens. */
+  const allowance = px(/--hub-scrollbar-allowance:\s*([^;]+);/.exec(root)?.[1]);
+  const pageW = px(/--hub-page-w:\s*([^;]+);/.exec(root)?.[1]);
+  const gap = px(/--hub-detail-gap:\s*([^;]+);/.exec(root)?.[1]);
+  const detailMax = px(/--hub-detail-w:\s*min\(([^,]+),/.exec(root)?.[1]);
+  const detailMin = px(/--hub-detail-w:\s*min\([^,]+,\s*max\(([^,]+),/.exec(root)?.[1]);
+  const detailVw = Number(/--hub-detail-w:[^;]*?(\d+)vw/.exec(root)?.[1]);
+
+  /** `--hub-detail-pane-w`, evaluated. Fed the viewport `100vw` reads, which
+   *  on a classic-scrollbar platform is wider than anything it is spent in. */
+  const paneAt = (vw: number) =>
+    Math.min(
+      Math.min(detailMax, Math.max(detailMin, (detailVw / 100) * vw)),
+      vw - boardMin - chrome - allowance,
+    );
+
+  /**
+   * What `#hub-root` is capped at while the panel is open, READ FROM THE CSS
+   * rather than assumed — with no open-state override the cap is the page's
+   * own, which is the state that rendered 166px and the state this test has
+   * to be able to describe. Only the `+ pane + gap` shape is recognised,
+   * because that is the only one that makes the reservation and the container
+   * agree; anything else falls back and the floor assertion fails, which is
+   * the correct outcome for a cap that does not grow with the panel.
+   */
+  const openRule = rule('body.hub-detail-open #hub-root', media(SPLIT));
+  const capGrowsWithPane =
+    /max-width:\s*calc\(\s*var\(--hub-page-w\)\s*\+\s*var\(--hub-detail-pane-w\)\s*\+\s*var\(--hub-detail-gap\)\s*\)/.test(
+      openRule,
+    );
+  const openCapAt = (vw: number) => (capGrowsWithPane ? pageW + paneAt(vw) + gap : pageW);
+
+  /**
+   * The board's rendered width: the container — capped, and never wider than
+   * the layout viewport, which is `vw` MINUS the scrollbar — less what the
+   * panel reserved out of it and the chrome between them. Both halves of the
+   * original defect are visible in this one line: `openCapAt` is what made
+   * the reservation and the container disagree, and `vw - sb` is what made
+   * the reservation and the layout disagree.
+   *
+   * `sb` is a parameter rather than a constant because it is the platform's
+   * to choose — the floor has to hold across the range, not at one value.
+   */
+  const boardAt = (vw: number, sb = 0) => Math.min(openCapAt(vw), vw - sb) - paneAt(vw) - chrome;
+  /** Every scrollbar width worth caring about: macOS overlay, this Chrome,
+   *  Windows, and one wider than the allowance to prove the term is doing the
+   *  work rather than the slack in `--hub-detail-w` happening to cover it. */
+  const scrollbars = [0, 15, 16, 17];
+  const openCap = () => openCapAt(1920);
+
+  /**
+   * The model, fed the tokens as they stood when a reviewer measured the
+   * rendered pixels, must return the pixels they measured. Without this the
+   * assertions below are a model checking itself.
+   *
+   * Two constants are spelled out because they are the ones that MOVED: the
+   * pane cap's chrome term was 334 (a viewport-relative number that folded in
+   * the 100px the 1500px cap threw away at the 1600px window it was taken
+   * from), while the chrome physically between the container's edge and the
+   * list was 234 the whole time. One quantity, two values, and the gap
+   * between them is the defect.
+   */
+  it('reproduces five measured pixel counts before asserting anything', () => {
+    const paneThen = (vw: number, keepChrome: number) =>
+      Math.min(Math.min(1100, Math.max(900, 0.62 * vw)), vw - 420 - keepChrome);
+    const boardThen = (vw: number, pane: number, sb = 0) => Math.min(1500, vw - sb) - pane - 234;
+
+    // The three the UX pass measured on the shipped branch, cap chrome 334.
+    expect(boardThen(1661, paneThen(1661, 334))).toBe(359);
+    expect(boardThen(1920, paneThen(1920, 334))).toBe(166);
+    expect(boardThen(2400, paneThen(2400, 334))).toBe(166);
+    // And the one recorded in `--hub-board-min`'s own comment, from before a
+    // pane cap existed at all: a 992px panel at 1600px left a 274px column.
+    expect(boardThen(1600, 992)).toBe(274);
+
+    // The fifth is the one that put the scrollbar term here. Measured in
+    // Chrome at a 1661px frame with the container cap already fixed and the
+    // keep at 420 + 234: `.hub-task-row` came out 405px, not the 420 the
+    // model without `sb` predicted, and the 15px gap was the scrollbar. This
+    // is the only case in the list where the page cap does NOT bind, which is
+    // exactly why the other four could never have surfaced it.
+    const capFixed = (vw: number, sb: number) =>
+      Math.min(1500 + paneThen(vw, 234) + 16, vw - sb) - paneThen(vw, 234) - 234;
+    expect(capFixed(1661, 15)).toBe(405);
+  });
+
+  it('reads every number, so the comparisons below are not vacuous', () => {
+    for (const [name, n] of [
+      ['--hub-board-min', boardMin],
+      ['the chrome term of --hub-board-keep', chrome],
+      ['--hub-page-w', pageW],
+      ['--hub-detail-gap', gap],
+      ['the 1100 ceiling of --hub-detail-w', detailMax],
+      ['the 900 floor of --hub-detail-w', detailMin],
+      ['the vw term of --hub-detail-w', detailVw],
+      ['the open-state cap', openCap()],
+    ] as const) {
+      expect(Number.isFinite(n), `${name} did not parse`).toBe(true);
+    }
+  });
+
+  // 420px is where a row shows enough of a user story to be scanned rather
+  // than guessed at — the number the whole breakpoint was derived from, and
+  // the one that was never once reached.
+  it('honours --hub-board-min at 1661, 1920 and 2400', () => {
+    for (const vw of [1661, 1920, 2400]) {
+      for (const sb of scrollbars) {
+        const w = boardAt(vw, sb);
+        expect(w, `board is ${w}px at ${vw}px with a ${sb}px scrollbar`).toBeGreaterThanOrEqual(
+          boardMin,
+        );
+      }
+    }
+  });
+
+  // The failure was not merely "too small" — it was BACKWARDS. A wider screen
+  // gave a narrower list, so the machine this is read on was the worst case.
+  it('never gives a wider screen a narrower board', () => {
+    const widths = [1661, 1720, 1920, 2200, 2400, 2800];
+    for (const sb of scrollbars) {
+      for (let i = 1; i < widths.length; i += 1) {
+        const prev = boardAt(widths[i - 1], sb);
+        const here = boardAt(widths[i], sb);
+        expect(
+          here,
+          `${widths[i - 1]}px gave ${prev}px, ${widths[i]}px gave ${here}px (${sb}px scrollbar)`,
+        ).toBeGreaterThanOrEqual(prev);
+      }
+    }
+  });
+
+  // And the reader never gets a row WIDER than the page cap was willing to
+  // give them with no panel open — the cap's own comment is about how much of
+  // a sentence a row should show, and opening a panel must not overrun it.
+  it('never lets the board exceed what the closed page would have given it', () => {
+    const closedBoard = pageW - chrome + gap;
+    expect(boardAt(4000)).toBeLessThanOrEqual(closedBoard);
   });
 });
 

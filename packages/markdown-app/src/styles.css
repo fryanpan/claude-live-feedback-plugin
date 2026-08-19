@@ -45,17 +45,53 @@
      shows enough of a story title to be scanned rather than guessed at. */
   --hub-board-min: 420px;
   /* What the board's side of a split costs in total: its own floor plus the
-     334px measured between and around the two columns — the nav rail and its
-     gap (190), the page gutters (28), the panel's 16px offset, the scrollbar.
-     Measured at a 1600px window, where a 992px panel left a 274px column:
-     1600 − 992 − 274 = 334. */
-  --hub-board-keep: calc(var(--hub-board-min) + 334px);
+     234px that sits between the CONTAINER's edge and the list — the nav rail
+     and its gap (190), the page gutters (28), the panel's offset (16).
+
+     It read 334 until 2026-08-19, from `1600 − 992 − 274 = 334` measured at a
+     1600px window. That subtraction starts from the VIEWPORT and the board
+     lives inside `#hub-root`, which is capped at `--hub-page-w` — so the
+     missing 100px was not a scrollbar, as the old comment guessed. It was
+     1600 − 1500, the width the cap threw away, and it is only 100px at
+     exactly 1600px. Folding a cap overflow into a constant is what made every
+     number here viewport-sized while the box they were spent in was not.
+     234 is container-relative and therefore true at every width; it
+     reproduces the same 274px at 1600, and 359 / 166 / 166 at the 1661 / 1920
+     / 2400 a reviewer measured off rendered pixels. */
+  --hub-board-chrome: 234px;
+  /* `100vw` counts the classic scrollbar; every box it is spent in does not.
+     Measured after the 234px correction: at a 1661px window the reservation
+     was right and the row still came out 405px, fifteen short of its floor,
+     because `100vw` read 1661 while the layout had 1646 to give. Reserved at
+     the WIDEST of the values rather than the measured one, because the width
+     is the platform's and not ours — 0 with macOS overlay scrollbars, 15 in
+     this Chrome, 17 on Windows. This is a floor, so the two errors are not
+     symmetric: over-reserving costs the panel pixels it has spare, while
+     under-reserving misses the one guarantee the token makes. Nothing in CSS
+     reports the number, which is why it is an allowance and not a
+     calculation. */
+  --hub-scrollbar-allowance: 17px;
+  --hub-board-keep: calc(
+    var(--hub-board-min) +
+    var(--hub-board-chrome) +
+    var(--hub-scrollbar-allowance)
+  );
   /* The panel's width IN THE SPLIT, where it is capped by what the board must
      keep — one expression, because the panel's width and the room the board
      reserves for it have to be the same number or the panel's edge lands over
      the content it was supposed to clear. Below the split's breakpoint the
      modal uses `--hub-detail-w` directly and this is unused. */
   --hub-detail-pane-w: min(var(--hub-detail-w), calc(100vw - var(--hub-board-keep)));
+  /* How far the panel's edge sits inside the board's reservation. A token
+     because THREE rules now need the same number — the reservation, the
+     container's open-state cap, and the panel's own offset — and the file's
+     own warning about two hand-kept copies of a width applies harder to
+     three. */
+  --hub-detail-gap: 16px;
+  /* How wide the page gets. The cap's reasoning is at `#hub-root`; it is a
+     token because the split's container cap has to be derived from it rather
+     than repeat it. */
+  --hub-page-w: 1500px;
 }
 
 * {
@@ -597,7 +633,7 @@ body.hub-body {
    left to give, its fixed chrome being 134px of handle, open zone, status,
    owner, gaps and padding. */
 #hub-root {
-  max-width: 1500px;
+  max-width: var(--hub-page-w);
   margin: 0 auto;
   padding: 0 14px calc(24px + var(--safe-bottom));
 }
@@ -3677,10 +3713,14 @@ a.hub-link-chip:hover {
    what it is doing.
 
    So the split starts where BOTH columns fit and nowhere lower:
-   900px panel floor + 420px board floor (`--hub-board-min`) + 334px of
-   measured chrome between and around them — the nav rail and its gap (190),
-   the page's own gutters (28), the panel's 16px offset and the scrollbar —
-   which is 1654, taken up to 1660. Below it the reader gets the modal, at the
+   900px panel floor + 420px board floor (`--hub-board-min`) + the 251px
+   `--hub-board-keep` adds to it — 234 of measured chrome (the nav rail and
+   its gap at 190, the page's own gutters at 28, the panel's 16px offset)
+   plus the 17px scrollbar allowance — which is 1571. 1660 is where it
+   actually starts, and the ~90px of slack is deliberate: at 1571 the panel
+   sits exactly on its 900px floor with nothing spare, so the first width
+   that qualifies is also the worst one.
+   Below it the reader gets the modal, at the
    same 900–1100px width, over a scrim that is honest about the board being
    out of play; below 900 the full-screen sheet is unchanged. Two things
    readable at a time, or one thing at a time — never two slivers. */
@@ -3720,7 +3760,23 @@ a.hub-link-chip:hover {
      thing a test can assert, and so the two subtrees (board and panel) do not
      have to be siblings. */
   body.hub-detail-open .hub-main {
-    padding-right: calc(var(--hub-detail-pane-w) + 16px);
+    padding-right: calc(var(--hub-detail-pane-w) + var(--hub-detail-gap));
+  }
+  /* The page grows by exactly what the panel took.
+     Without this the reservation above is viewport-sized and the box it comes
+     out of is not: `#hub-root` stops at `--hub-page-w`, so at 1920 a 1100px
+     panel was subtracted from a 1472px content box and left the board 166px —
+     a narrower list than the same layout gave at 1661px. More screen, less
+     board, at the width this is read on.
+     Growing the cap rather than shrinking the panel is what the page's own
+     reasoning asks for: the cap is there so a ROW shows enough of a sentence
+     (see `#hub-root`), and `calc(page + pane + gap)` keeps the board at
+     exactly the width that cap always gave it while the panel takes the
+     space beyond it. Above ~2616px the cap binds again and the board stops
+     growing, so a row never overruns what the closed page would have shown —
+     the cap's intent survives being exceeded. */
+  body.hub-detail-open #hub-root {
+    max-width: calc(var(--hub-page-w) + var(--hub-detail-pane-w) + var(--hub-detail-gap));
   }
   /* At full screen the panel covers the board completely, so reserving room
      for it would squeeze the board to nothing and reflow it twice on the way
