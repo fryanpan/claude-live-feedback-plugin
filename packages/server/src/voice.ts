@@ -1197,7 +1197,7 @@ export class VoiceRouter {
     ack: string,
     write: () => Promise<boolean>,
   ): Promise<ActionOutcome> {
-    const full = `${workspaceId} ${key}`;
+    const full = `${workspaceId}\0${key}`;
     const now = Date.now();
     for (const [k, at] of this.recentWrites)
       if (now - at > RETRY_WINDOW_MS) this.recentWrites.delete(k);
