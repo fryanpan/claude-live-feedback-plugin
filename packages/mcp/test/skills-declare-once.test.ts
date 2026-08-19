@@ -26,13 +26,41 @@ const SKILLS = join(HERE, '../../plugin/skills');
 const HUB = readFileSync(join(SKILLS, 'running-a-workspace-hub/SKILL.md'), 'utf8');
 const BOARD = readFileSync(join(SKILLS, 'working-a-workspace-board/SKILL.md'), 'utf8');
 
-const both: Array<[string, string]> = [
-  ['running-a-workspace-hub', HUB],
-  ['working-a-workspace-board', BOARD],
+/**
+ * One line, lower-cased. Every assertion below that searches for a PHRASE runs
+ * against this rather than the raw file.
+ *
+ * These SKILL.md files are hard-wrapped at ~76 columns, so a multi-word search
+ * only matches when the wrap happens not to have landed inside it — and where
+ * the wrap lands is decided by an unrelated edit three sentences earlier. That
+ * is survivable for a positive assertion, which goes loudly red. It is not
+ * survivable for a `not.toMatch`, which goes quietly GREEN: it reports the
+ * banned sentence as absent from the file that contains it.
+ *
+ * This is not hypothetical. At ecaf378, the last commit before the delivery
+ * claim was corrected, both skills carried "Delivery is gated on a heartbeat
+ * inside the ~5-minute window" and `not.toMatch(/gated on a heartbeat/)` fired
+ * on exactly one of them:
+ *
+ *   running-a-workspace-hub   "gated on a heartbeat inside the"   -> caught
+ *   working-a-workspace-board "...is gated on a" / "heartbeat..." -> MISSED
+ *
+ * Same assertion, same loop, same wrong sentence; the only difference is that
+ * one file's line break fell between `a` and `heartbeat`. Collapsing the
+ * whitespace removes the coin flip.
+ *
+ * Structural assertions (`/^## …$/m`, frontmatter) keep using the raw text —
+ * they are ABOUT line boundaries, and flattening would destroy what they check.
+ */
+const flatten = (s: string): string => s.replace(/\s+/g, ' ').toLowerCase();
+
+const both: Array<[string, string, string]> = [
+  ['running-a-workspace-hub', HUB, flatten(HUB)],
+  ['working-a-workspace-board', BOARD, flatten(BOARD)],
 ];
 
 describe('the skills teach one declaration per session', () => {
-  for (const [name, text] of both) {
+  for (const [name, text, flat] of both) {
     describe(name, () => {
       it('names the bare one-argument declaration', () => {
         // `set_workspace_lead(workspaceId)` with nothing else — the form that
@@ -42,16 +70,16 @@ describe('the skills teach one declaration per session', () => {
       });
 
       it('says the declaration covers surfaces created later', () => {
-        expect(text.toLowerCase()).toMatch(/created later/);
+        expect(flat).toMatch(/created later/);
       });
 
       it('says it survives a respawn without being redone', () => {
-        expect(text.toLowerCase()).toMatch(/respawn|restart/);
-        expect(text.toLowerCase()).toMatch(/re-?wire|restore|persist/);
+        expect(flat).toMatch(/respawn|restart/);
+        expect(flat).toMatch(/re-?wire|restore|persist/);
       });
 
       it('demotes watch_doc to docs OUTSIDE your board', () => {
-        expect(text.toLowerCase()).toMatch(/outside/);
+        expect(flat).toMatch(/outside/);
         expect(text).toMatch(/watch_doc/);
       });
 
@@ -63,14 +91,14 @@ describe('the skills teach one declaration per session', () => {
         // The exact reading the incident needed and nobody had: a peer that
         // believed it was listening had no way to ask.
         expect(text).toMatch(/unattachedBoards/);
-        expect(text.toLowerCase()).toMatch(/quiet/);
+        expect(flat).toMatch(/quiet/);
       });
     });
   }
 });
 
 describe('the skills teach what declaring does NOT do', () => {
-  for (const [name, text] of both) {
+  for (const [name, text, flat] of both) {
     describe(name, () => {
       it('says a declaration does not keep you live, and names OBSERVED WORK as the gate', () => {
         // The gap this branch created: one call now covers every surface, so
@@ -90,14 +118,30 @@ describe('the skills teach what declaring does NOT do', () => {
         // `max(lastHeartbeat, lastToolCallAt)`. So a ~5-minute claim about
         // display is fine and a heartbeat-window claim about DELIVERY is not,
         // and only the second is asserted here.
+        //
+        // All three phrase searches below run on `flat`, not on `text`. See
+        // the note on `flatten` for the measurement: on the raw file this
+        // first negative caught the hub and MISSED the board, at a commit
+        // where both files carried the sentence word for word.
         expect(text).toMatch(/heartbeat\(workspaceId\)/);
         // Positive: the delivery gate is named as BOTH signals, not one.
-        expect(text.toLowerCase()).toMatch(/a heartbeat or a tool call/);
+        expect(flat).toMatch(/a heartbeat or a tool call/);
         // Negative: and the old claim cannot come back unnoticed. Reverting
         // either skill to "Delivery is gated on a heartbeat inside the
         // ~5-minute window" fails on both halves at once.
-        expect(text.toLowerCase()).not.toMatch(/gated on a heartbeat/);
-        expect(text.toLowerCase()).not.toMatch(/away and triage requests queue/);
+        expect(flat).not.toMatch(/gated on a heartbeat/);
+        // The second negative bans the hub's old display-vs-delivery fusion,
+        // "the hub shows you as **away and triage requests queue**". Two
+        // things about it are worth knowing rather than rediscovering. It is
+        // a revert guard, not a live check: the sentence was deleted in
+        // 278de00 and the phrase is now absent from both files. And it has
+        // only ever been able to fire on the hub: sweeping every reachable
+        // revision of the two files finds the phrase in 37 of the hub's 39
+        // and in 0 of the board's 50. Its silence on the board is absence of
+        // the subject, not evidence of coverage. Flattening still matters —
+        // it is what stops the guard from depending on where the wrap lands
+        // if anyone reinstates the wording.
+        expect(flat).not.toMatch(/away and triage requests queue/);
       });
 
       it('names the THREE different remedies, not one blanket fix', () => {
@@ -136,7 +180,7 @@ describe('positive controls — guidance that must survive the edit', () => {
     // that deleted the heartbeat instruction along with the wrong sentence
     // about it would be exactly that.
     expect(HUB).toMatch(/heartbeat\(workspaceId\)/);
-    expect(HUB.toLowerCase()).toMatch(/stay live/);
+    expect(flatten(HUB)).toMatch(/stay live/);
   });
 
   it('the hub skill still documents attach_agent for agents that do not lead', () => {
