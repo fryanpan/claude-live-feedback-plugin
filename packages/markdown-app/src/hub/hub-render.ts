@@ -10,6 +10,7 @@ import {
   evidenceSuperseded,
   transitionUnproven,
 } from '@feedback/core';
+import type { ReviewShape } from '@feedback/core';
 import {
   GOAL_SUMMARY_MAX_WORDS,
   type StoredGoalSummary,
@@ -17,7 +18,6 @@ import {
   goalDisplay,
 } from '@feedback/core/goal-summary';
 import { renderCommentMarkdown } from '../comment-markdown.ts';
-import type { ReviewShape } from '@feedback/core';
 import { SPACE_HOLD_PAGE_ATTR } from '../voice-capture.ts';
 import {
   type ActivityEvent,
@@ -2693,9 +2693,10 @@ export function composerTarget(threads: TaskThread[], focusThreadId?: string): T
  * `create_thread` writes them (34 of 37 on the live board carry a text anchor
  * into the description) and `resolve_thread` still means "this point is
  * handled". Flattening the render is reversible; flattening the store would
- * destroy the anchors and redefine an MCP verb that has callers. The one place
- * a thread still shows through is the quoted passage on the row that opens
- * one, which is context about the description rather than a control.
+ * destroy the anchors and redefine an MCP verb that has callers. Nothing in
+ * this render reads a thread's identity except `data-thread-id`, which is data
+ * rather than presentation — it is how a reply reaches the agent watching that
+ * conversation.
  */
 function renderDiscussion(
   task: HubTask,
@@ -3018,7 +3019,14 @@ function detailFields(task: HubTask, handlers: DetailHandlers): HTMLElement {
   mark.className = `hub-status-mark hub-status-mark-${task.status}`;
   mark.setAttribute('aria-hidden', 'true');
   const status = document.createElement('select');
-  status.className = `hub-detail-select hub-status-select hub-chip-${task.status}`;
+  // Deliberately NOT `hub-status-select` / `hub-chip-<status>`. Those two are
+  // the BOARD row's vocabulary — the first strips the native caret because the
+  // select there is a transparent hit area over the mark, the second tints the
+  // text and the border. Here the mark next door already carries the colour,
+  // and the panel's four fields are meant to look like four ordinary controls,
+  // so borrowing them would fight `.hub-detail-select` for every property and
+  // leave a dropdown with no caret.
+  status.className = 'hub-detail-select hub-detail-status';
   for (const s of TASK_STATUS_ORDER) {
     const opt = document.createElement('option');
     opt.value = s;
@@ -3338,8 +3346,18 @@ function reviewQueueRegion(
     region.dataset.reviewIndex = String(at);
     cards.forEach((c, ci) => c.classList.toggle('hidden', ci !== at));
     const item = queue[at];
+    // Three headings, and the third one is the honest half. Measured on the
+    // live board 2026-08-17: 23 review items, ZERO of them `direct` — every one
+    // an ellipsis-clipped status note ("Done in PR #154 — …") presented under a
+    // heading that read as a question. `direct` runs at about 1-in-3 recall, so
+    // this says what is TRUE of the flag (nobody is named) rather than the
+    // stronger claim that no question is present.
     kicker.textContent =
-      item?.shape === 'decision' ? 'Waiting on your decision' : 'Waiting on your review';
+      item?.shape === 'decision'
+        ? 'Waiting on your decision'
+        : item?.direct === false
+          ? 'Flagged for you — not addressed to you by name'
+          : 'Waiting on your review';
     count.textContent = `${at + 1} of ${queue.length}`;
     prev.disabled = at === 0;
     next.disabled = at === queue.length - 1;
@@ -3496,10 +3514,18 @@ export function renderTaskDetail(
   if (!task) {
     container.replaceChildren();
     container.classList.add('hidden');
+    // The board gets its width back. Marked on `<body>` rather than inferred
+    // with `:has()` because the board and the panel are siblings under
+    // different subtrees, and a class is the thing a test can assert on.
+    document.body.classList.remove('hub-detail-open');
     return;
   }
   const freshOpen = priorTaskId !== task.id;
   container.classList.remove('hidden');
+  // Wide screens reflow the BOARD out from under the panel instead of letting
+  // it run beneath the panel's edge — the review banner and the quick-capture
+  // row were both being clipped by it.
+  document.body.classList.add('hub-detail-open');
   const keptSlot = keptBodySlot(container, task);
   const panel = keptSlot?.parentElement ?? document.createElement('div');
   panel.className = 'hub-detail-panel';
@@ -3566,6 +3592,10 @@ export function renderTaskDetail(
   const isFull = container.classList.contains('hub-detail--full');
   full.className = 'hub-btn hub-icon-btn hub-detail-expand';
   const fullState = (on: boolean): void => {
+    // At full screen the panel covers the board, so the board must stop
+    // reserving room for it — otherwise it is squeezed to nothing behind a
+    // panel that is already hiding it, and comes back reflowing.
+    document.body.classList.toggle('hub-detail-full', on);
     full.textContent = on ? '⤡' : '⤢';
     const label = on ? 'Exit full screen' : 'Full screen';
     full.title = label;

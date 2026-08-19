@@ -23,6 +23,15 @@
   /* iOS safe-area inset (nothing by default on desktop) */
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-top: env(safe-area-inset-top, 0px);
+
+  /* How wide the task detail panel is: 1100 where there is room, never under
+     900 while the viewport can pay for it, always bounded by the viewport at
+     the use site. A token rather than a literal because the BOARD has to
+     reserve exactly this much room beside the split pane — two hand-kept
+     copies of a width is how a panel edge ends up a few pixels over the
+     content it was supposed to clear. Asked for by number (2026-08-18):
+     *"default 1100px, at least 900px when space allows"*. */
+  --hub-detail-w: min(1100px, max(900px, 62vw));
 }
 
 * {
@@ -2537,7 +2546,13 @@ body.hub-body {
   display: none;
 }
 .hub-detail-panel {
-  width: min(860px, 100%);
+  /* Asked for by number: *"default 1100px, at least 900px when space allows"*,
+     and *"taking more than half the horizontal width on laptop/tablet is
+     fine"*. The single expression lives in `--hub-detail-w` because the split
+     pane below has to reserve exactly this much room on the board's side —
+     two hand-kept copies of a width is how a panel edge ends up a few pixels
+     over the content it was supposed to clear. */
+  width: min(var(--hub-detail-w), 100%);
   max-height: 92vh;
   overflow: auto;
   background: var(--bg);
@@ -2579,18 +2594,25 @@ body.hub-body {
   flex-wrap: wrap;
   justify-content: flex-end;
 }
-/* Every control in the head is the same height and the same shape, including
-   the close glyph — a 36px row with one square button in it reads as a
-   mistake, and the ✕ was the odd one because its content is one character. */
+/* Every control in the head is the same SQUARE, because they are all icons
+   now: *"Copy link / Full screen: icons instead of text buttons, Asana-style"*
+   (2026-08-18). That inverts the note this rule used to carry — the ✕ was the
+   odd one out among two text buttons, and the answer turned out to be that the
+   other two should look like the ✕. 36px is design-mobile.md's floor for a
+   thumb; the glyph is centred, so all three read as one row of controls.
+   Each one still carries a `title` AND an `aria-label`, which is what keeps an
+   icon-only control nameable to a screen reader and hoverable on a desktop. */
+.hub-icon-btn,
 .hub-detail-head-actions .hub-btn {
-  min-height: 32px;
-  padding: 0 12px;
-  font-size: 13px;
-  white-space: nowrap;
-}
-.hub-detail-close {
-  min-width: 32px;
+  min-height: 36px;
+  min-width: 36px;
   padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  line-height: 1;
+  white-space: nowrap;
 }
 /* Only meaningful where the panel is not already the whole viewport — a phone
    sheet is full screen by definition, so the toggle would promise a change it
@@ -2615,13 +2637,66 @@ body.hub-body {
 .hub-detail-field {
   min-width: 0;
 }
-/* Status is three chips side by side, so it takes the whole line and the three
-   text fields share the one below. `1 / -1` rather than `span 2` deliberately:
-   `auto-fit` drops to a single column on a narrow phone, where `span 2` would
-   create an implicit second column and overflow the panel, while `1 / -1` just
-   means "full width" at every count. */
-.hub-detail-field:first-child {
+/* GOAL takes the whole line. Reported 2026-08-18: *"the goal title can be
+   longer than the column has room for"* — and it is the one field whose value
+   is free text somebody wrote, where the other three are a fixed vocabulary, a
+   name, or a date. `1 / -1` rather than `span 2` deliberately: `auto-fit`
+   drops to a single column on a narrow phone, where `span 2` would create an
+   implicit second column and overflow the panel, while `1 / -1` just means
+   "full width" at every count.
+   Status is NO LONGER the full-width one — it stopped being three chips and
+   became a single value with a dropdown, which fits a column. */
+.hub-detail-field:last-child {
   grid-column: 1 / -1;
+}
+/* All four values are controls, so they get one box shape and one height and
+   the row scans as a row. 36px is the thumb floor; `max-width: 100%` and
+   `min-width: 0` are what stop a long goal title or an agent id from setting
+   the select's intrinsic width and pushing the panel past a 430px viewport. */
+.hub-detail-select,
+.hub-detail-input {
+  /* Full-cell, so the four boxes share a left edge AND a right edge instead of
+     each ending wherever its longest option happens to. */
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-subtle, #fafafa);
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+.hub-detail-select:hover,
+.hub-detail-input:hover {
+  border-color: var(--border-strong);
+}
+/* A date is typed as well as picked, so it gets a text cursor and the browser's
+   own spin/calendar affordances room to sit. */
+.hub-detail-input {
+  cursor: text;
+}
+/* The board's round status mark, then the dropdown that changes it — one line,
+   the mark first, exactly as the summary row reads. Asked for by name:
+   *"show ONLY the current status, with the status icon used in the summary
+   view, and a dropdown to change it"*. `min-width: 0` on the wrapper so the
+   select inside it can shrink rather than widen the column. */
+.hub-detail-statusctl {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+}
+.hub-detail-statusctl .hub-status-mark {
+  flex: none;
+}
+.hub-detail-statusctl .hub-detail-status {
+  min-width: 0;
+  flex: 1 1 auto;
 }
 .hub-detail-field-k {
   margin: 0 0 4px;
@@ -2632,32 +2707,24 @@ body.hub-body {
 }
 .hub-detail-field-v {
   margin: 0;
-  min-height: 32px;
+  /* 36, the control height, so a value's box and the row it sits in are the
+     same thing rather than a box floating inside a slightly shorter row. */
+  min-height: 36px;
   display: flex;
   align-items: center;
   font-size: 14px;
   overflow-wrap: anywhere;
 }
-/* Rule 2, for the two field values that are CONTROLS. Their boxes sit on the
-   panel's left edge with their labels — the box, not the glyph, because a pill
-   centres its text inside a 88px minimum, so pulling it left by its padding
-   aligned nothing and left it hanging into the gutter instead. Measured both
-   ways in a browser at 1512px. */
-.hub-detail-statuses {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
+/* The assignee picker is shared with the board, where it is a 44px row on its
+   own. In the field grid it is one of FOUR controls, and four boxes of two
+   heights is the "inconsistent spacing" complaint in miniature — so it takes
+   the row's height here. Higher specificity than `.hub-assignee-btn`, which is
+   what makes this win wherever the two rules meet.
+   (`.hub-detail-statuses` and its disabled-chip rule are gone with the chip
+   row itself — status is a single value with a dropdown now.) */
 .hub-detail-field-v .hub-assignee-btn {
-  min-height: 32px;
-}
-/* The status a task is IN is not a button — it is the fact the other two act
-   on. Given the same box as its neighbours so the row is three aligned pills
-   rather than a bare word beside two controls. */
-.hub-detail-statuses .hub-status-chip:disabled {
-  border-color: currentcolor;
-  cursor: default;
-  opacity: 1;
+  min-height: 36px;
+  width: 100%;
 }
 .hub-detail-meta {
   display: grid;
@@ -2772,57 +2839,10 @@ a.hub-link-chip:hover {
   font-family: var(--prose);
   overflow-wrap: anywhere;
 }
-/* "What we need from you" — the first thing under the title, with its own
-   reply box, so answering costs no scroll on a 430px phone. The box is what
-   makes it a loop rather than a signpost: a button that scrolls to a composer
-   further down satisfies "answer without leaving the screen" on a desktop
-   only. */
-.hub-detail-ask {
-  margin: 0 0 14px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg-subtle, transparent);
-}
-/* A run that contains a real question addressed to a person gets the accent;
-   one that does not is deliberately quiet, because it is a status note and
-   the reader is meant to be able to skip it on sight. */
-.hub-detail-ask--direct {
-  border-color: var(--accent, #2e7dd7);
-  border-left-width: 3px;
-}
-.hub-detail-ask-kicker {
-  margin: 0 0 6px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--fg-muted);
-}
-.hub-detail-ask-text {
-  font-family: var(--prose);
-  line-height: 1.55;
-  overflow-wrap: anywhere;
-}
-.hub-detail-ask-text > :first-child {
-  margin-top: 0;
-}
-.hub-detail-ask-text > :last-child {
-  margin-bottom: 0;
-}
-.hub-detail-ask-meta {
-  margin: 6px 0 0;
-  font-size: 12px;
-  color: var(--fg-muted);
-}
-.hub-detail-ask-form {
-  margin-top: 10px;
-}
-.hub-detail-ask-note {
-  margin: 4px 0 0;
-  font-size: 11px;
-  color: var(--fg-muted);
-}
+/* (`.hub-detail-ask*` is gone. The panel used to render TWO regions here — a
+   decision card and a separate "ask" panel — each showing one item and each
+   blind to the other, so a task with both showed two competing headers. They
+   are one `hub-decide` queue now.) */
 .hub-detail-answer {
   font-weight: 600;
   margin: 0 0 16px;
@@ -2848,12 +2868,89 @@ a.hub-link-chip:hover {
   border-radius: var(--radius);
   background: var(--bg-panel, var(--bg-subtle, #fafafa));
 }
-.hub-decide-kicker {
+/* The queue's own header: what kind of thing is waiting, and — only when there
+   is more than one — where you are in them. `justify-content: space-between`
+   with the walk absent leaves the kicker exactly where a single-item card used
+   to put it, which is the requirement: *"with exactly one open item it should
+   look like today's single card"*. */
+.hub-decide-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   margin: 0 0 12px;
+}
+.hub-decide-kicker {
+  margin: 0;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+  color: var(--fg-muted);
+}
+/* ‹ 2 of 3 › — the same walkthrough shape Home uses, inside the ticket. */
+.hub-decide-walk {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.hub-decide-count {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.hub-decide-step {
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  line-height: 1;
+}
+.hub-decide-step:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+/* One item. No border and no background of its own: it is the ONLY thing in
+   the card at any moment, so a box inside a box would just be a second edge
+   8px in from the first. */
+.hub-decide-card.hidden {
+  display: none;
+}
+/* The blurb, above the options. *"The ticket title is not the decision"* —
+   this is the sentence that says what is being decided, and it is allowed to
+   wrap: *"the blurb may run a few lines — design for that"*. Nothing here
+   clips, truncates or sets a line count. */
+.hub-decide-headline {
+  margin: 0 0 8px;
+  font-family: var(--prose);
+  font-size: 16px;
+  font-weight: 650;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.hub-decide-why {
+  margin: 0 0 12px;
+  font-family: var(--prose);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
+.hub-decide-lookfor {
+  margin: 0 0 12px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
+.hub-decide-meta {
+  margin: 0 0 12px;
+  font-size: 12px;
   color: var(--fg-muted);
 }
 /* One answer per row, with real air between them: on a phone this is the
@@ -2977,7 +3074,10 @@ a.hub-link-chip:hover {
      a hover/focus box: the padding pushes the prose in, the margin pulls the
      box back out, so the text still starts on the panel's left edge. */
   padding: 8px;
-  margin: 0 -8px;
+  /* -9, not -8: the box has a 1px border, and the prose starts one pixel
+     inside it. Measured at 1512px — the body paragraphs sat at x=777 against
+     a 776 spine everything else in the panel shares. */
+  margin: 0 -9px;
   transition: border-color 0.12s ease, background 0.12s ease;
 }
 .hub-detail-body-live:hover {
@@ -3051,7 +3151,19 @@ a.hub-link-chip:hover {
   color: var(--fg-muted);
   text-transform: uppercase;
   letter-spacing: 0.03em;
-  margin: 14px 0 4px;
+  /* 16/4, on the scale. 14 was the one stray value in the panel. */
+  margin: 16px 0 4px;
+}
+/* "Description", asked for by name: *"add a Description heading with proper
+   spacing separating it from the fields/decision area above"*. It carries the
+   24px between-SECTIONS step, and the slot below it drops to 4 — the heading
+   and the prose it names are ONE block, so the air belongs above the pair
+   rather than between them. */
+.hub-detail-body-head {
+  margin: 24px 0 4px;
+}
+.hub-detail-body-head + .hub-detail-body-slot {
+  margin-top: 0;
 }
 .hub-detail-transitions {
   margin: 0;
@@ -3160,12 +3272,15 @@ a.hub-link-chip:hover {
   border-top: none;
   padding-top: 8px;
 }
-/* A row's MARK must not move the row. The bar is absolutely positioned in the
-   panel's own left padding, so a marked comment sits on the same left edge as
-   an unmarked one — a border-left plus a compensating padding zig-zagged the
-   stream, which is the alignment complaint reproduced one surface over. */
-.hub-comment-focus::before,
-.hub-comment-target::before {
+/* The one comment the review queue sent you here to answer. A row's MARK must
+   not move the row, so the bar is absolutely positioned in the panel's own
+   left padding — a border-left plus a compensating padding zig-zagged the
+   stream, which is the alignment complaint reproduced one surface over.
+   (`hub-comment-target`, `-resolved`, `-status`, `-anchor` and `-reply` are
+   gone with the threading UI: *"stop supporting threaded comments and clean up
+   all code related to this — clean up the UX too"*. Only the storage keeps
+   threads; nothing in this stream renders one.) */
+.hub-comment-focus::before {
   content: "";
   position: absolute;
   left: -12px;
@@ -3173,50 +3288,7 @@ a.hub-link-chip:hover {
   bottom: 12px;
   width: 3px;
   border-radius: 2px;
-  background: var(--fg-muted);
-}
-/* A comment in a resolved conversation. Quieter, never hidden: a resolved
-   thread is still part of the argument, and hiding one here would repeat the
-   drawer bug where a reply existed in the store with no surface to reach it. */
-.hub-comment-resolved {
-  opacity: 0.72;
-}
-/* The conversation the review queue sent you here to answer. Marking it is not
-   optional on a stream of near-identical status notes — you have to be able to
-   tell WHICH rows they are when you look up from the scroll. */
-.hub-comment-focus::before {
   background: var(--accent, #3b6fd4);
-}
-/* The conversation the one composer is pointed at gets the quieter bar. Paired
-   with the target row inside the composer itself: two signals for one fact,
-   because the composer can be a scroll away from the comment it will post
-   under. */
-.hub-comment-status {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--fg-muted);
-}
-/* What this conversation is ABOUT — the passage of the description an agent
-   anchored it to, on the row that opens the thread. Without it a task's
-   comments are one undifferentiated pile, which is the state the boxes were
-   drawn to avoid and which has to survive losing them. */
-.hub-comment-anchor {
-  margin: 0 0 8px;
-  padding: 4px 0 4px 8px;
-  border-left: 2px solid var(--border);
-  color: var(--fg-muted);
-  font-family: var(--prose);
-  font-size: 13px;
-  font-style: italic;
-  line-height: 1.45;
-  overflow-wrap: anywhere;
-}
-/* Points the composer at this conversation. A button, not a second box — see
-   the composer comment in hub-render's renderDiscussion. */
-.hub-comment-reply {
-  min-height: 36px;
-  margin-top: 8px;
 }
 /* Who said it and when, on one line, both as TEXT. The time used to live only
    in a title attribute — a hover tooltip, on a surface whose whole point is
@@ -3235,13 +3307,6 @@ a.hub-link-chip:hover {
 .hub-comment-when {
   font-size: 11px;
   color: var(--fg-muted);
-}
-/* A thread the SERVER's review queue still lists as waiting on a person.
-   Louder than the Resolved badge it shares a class with, because this one is
-   a claim on the reader rather than a fact about the past. */
-.hub-comment-needs-you {
-  color: var(--accent, #2e7dd7);
-  font-weight: 700;
 }
 /* A comment that DECLARED a Review Item. Set apart because the thread that is
    the queue row otherwise reads exactly like the status notes above it — one
@@ -3283,34 +3348,22 @@ a.hub-link-chip:hover {
 .hub-comment-body > :last-child {
   margin-bottom: 0;
 }
+/* The composer sits at the END of the sequence, after the newest comment —
+   Asana-style, reversed from the original ask on 2026-08-18. So it needs the
+   between-sections step above it rather than the 6px it had when it lived
+   inside a thread box. */
 .hub-comment-form {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 6px;
-  margin: 6px 0 0;
-}
-/* Says where the box will post, immediately above the box, so what the button
-   will do is readable without moving your eyes off it. This is the whole of
-   what the second composer used to communicate by existing. */
-.hub-composer-target {
-  display: grid;
-  /* minmax(0, …): a quoted anchor is prose and must wrap, not widen the panel
-     past a 430px viewport. */
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
   gap: 8px;
-  width: 100%;
-  font-size: 13px;
-  color: var(--fg-muted);
+  margin: 24px 0 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
 }
-.hub-composer-target-label {
-  overflow-wrap: anywhere;
-}
-.hub-composer-switch {
-  min-height: 36px;
-  white-space: nowrap;
-}
+/* (`.hub-composer-target` and its switch are gone. The bar existed to say
+   WHICH thread the one box would post to, and with threading out of the UI
+   there is only one place a comment can go: the end of the sequence.) */
 .hub-comment-form textarea {
   width: 100%;
   /* The panel is a grid/flex child; without this a long unbroken paste sets
@@ -3322,9 +3375,6 @@ a.hub-link-chip:hover {
   padding: 8px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-}
-.hub-comment-form {
-  margin-top: 10px;
 }
 
 /* --- help + toast --- */
@@ -3402,7 +3452,11 @@ a.hub-link-chip:hover {
     background: rgba(0, 0, 0, 0.18);
   }
   .hub-detail-panel {
-    width: min(760px, 52vw);
+    /* 1100 by default, never under 900 while the viewport can pay for it —
+       *"taking more than half the horizontal width on laptop/tablet is fine"*.
+       The 52vw this replaced gave a 1512px laptop a 760px pane, which is the
+       "cramped on bigger screens" report unfixed. */
+    width: min(var(--hub-detail-w), 100vw);
     max-height: none;
     height: 100%;
     border-radius: 0;
@@ -3411,6 +3465,22 @@ a.hub-link-chip:hover {
   }
   .hub-detail-head {
     padding-top: 20px;
+  }
+  /* The BOARD gets out of the way rather than running underneath the panel.
+     Without this the review banner and the quick-capture row extend under the
+     panel's left edge and are clipped by it — a split pane that only splits
+     what you can see is a modal with a lighter scrim.
+     Keyed off a class on `<body>` rather than `:has()` so the state is one
+     thing a test can assert, and so the two subtrees (board and panel) do not
+     have to be siblings. */
+  body.hub-detail-open .hub-main {
+    padding-right: calc(min(var(--hub-detail-w), 100vw) + 16px);
+  }
+  /* At full screen the panel covers the board completely, so reserving room
+     for it would squeeze the board to nothing and reflow it twice on the way
+     back out. */
+  body.hub-detail-open.hub-detail-full .hub-main {
+    padding-right: 0;
   }
   .hub-detail--full .hub-detail-panel {
     width: 100%;
@@ -3550,6 +3620,14 @@ a.hub-link-chip:hover {
     height: 100%;
     width: 100%;
     border-radius: 0;
+    /* The same reservation `.hub-walk-card` makes, for the same two fixed
+       launchers: the hold-to-talk mic bottom-left (z-index 70, above this
+       panel's 60) and the feedback pencil bottom-right. Reported as CRITICAL
+       at 430px — the mic sat squarely on "Record answer", which is the one
+       control the review queue exists to deliver. Reserving the tail is what
+       guarantees every control can be SCROLLED clear of them; moving the mic
+       instead would only trade which surface it covers. */
+    padding-bottom: calc(24px + 60px + var(--safe-bottom, 0px));
   }
   /* The walkthrough is a phone-first surface — six answers in one sitting is
      a couch gesture. It is a PAGE in the Home column now rather than an

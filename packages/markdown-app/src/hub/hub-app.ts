@@ -1209,7 +1209,8 @@ async function main(): Promise<void> {
       dueAt,
       author,
     });
-    if (!res.ok) showToast(dueAt === null ? 'Clearing the due date failed' : 'Setting the due date failed');
+    if (!res.ok)
+      showToast(dueAt === null ? 'Clearing the due date failed' : 'Setting the due date failed');
   }
 
   /**
