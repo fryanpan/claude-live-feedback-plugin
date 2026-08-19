@@ -1960,33 +1960,6 @@ body.hub-body {
   text-decoration-color: color-mix(in srgb, var(--fg-muted) 55%, transparent);
   color: var(--fg-muted);
 }
-/* Threads nobody declared anything on. Quiet by construction: this band is
-   permanently non-empty on any busy workspace, so styling it like the queue
-   would train the eye to skip the queue. */
-.hub-review-unreplied-head {
-  margin-top: 14px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-}
-.hub-review-unreplied-title {
-  margin: 0;
-  font-size: 12px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--fg-muted);
-}
-.hub-review-unreplied-note {
-  margin: 3px 0 0;
-  font-size: 12.5px;
-  line-height: 1.4;
-  color: var(--fg-muted);
-}
-.hub-review-row-unreplied .hub-review-row-title {
-  font-weight: 500;
-  color: var(--fg-muted);
-}
-
 /* --- board sections (goals ARE the sections) --- */
 .hub-section {
   margin-bottom: 18px;

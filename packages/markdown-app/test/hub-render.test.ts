@@ -874,44 +874,35 @@ describe('renderHomeReview', () => {
     expect(h.onOpen).toHaveBeenCalledWith(settledGone);
   });
 
-  // The band that used to BE the queue. It is demoted, not deleted — 105 rows
-  // were in the inferred set the day this shipped, and a row that stops
-  // rendering is indistinguishable from data loss to whoever wrote it.
-  it('renders undeclared comments in their own labelled band, below the queue', () => {
+  // The band that used to render here ("N unanswered comments") is gone
+  // outright — Bryan, 2026-08-18: "Remove the unanswered comments from home.
+  // I don't need to know." The model still buckets undeclared threads into
+  // `queue.unreplied` so they stay OUT of the declared queue; the page just
+  // no longer shows them.
+  it('does not render undeclared comments at all', () => {
     const h = strip();
     const d = task({ needs: 'decision', assignee: 'human', title: 'Ship now or wait?' });
     renderHomeReview(root, reviewQueue([d], [threadItem(), note()], NOW), h, [], NOW);
-    expect(root.querySelector('.hub-review-unreplied-title')?.textContent).toBe(
-      '1 unanswered comment',
-    );
+    expect(root.querySelector('.hub-review-unreplied-head')).toBeNull();
+    expect(root.querySelector('.hub-review-unreplied-title')).toBeNull();
     const rows = [...root.querySelectorAll('.hub-review-row')];
-    // Order is what makes this a demotion: queue rows first, then the band.
-    expect(rows.map((r) => r.className.includes('hub-review-row-unreplied'))).toEqual([
-      false,
-      false,
-      true,
-    ]);
-    // Still reachable — the whole point of keeping it on the page.
-    (rows[2] as HTMLElement).click();
-    expect(h.onOpen).toHaveBeenCalledTimes(1);
+    // Positive control: both DECLARED items rendered, so the absences above
+    // are not a page that rendered nothing.
+    expect(rows).toHaveLength(2);
+    expect(rows.some((r) => r.className.includes('hub-review-row-unreplied'))).toBe(false);
   });
 
-  it('renders the band even when the queue proper is empty', () => {
+  it('shows only the quiet line when the queue is empty, however many comments sit unreplied', () => {
     renderHomeReview(root, reviewQueue([], [note(), note()], NOW), strip(), [], NOW);
-    // Both sentences are true at once and both belong: nothing is asking for
-    // a decision, and two comments are still sitting there.
     expect(root.querySelector('.hub-home-quiet')?.textContent).toContain(
       'Nothing is waiting for your review',
     );
-    expect(root.querySelector('.hub-review-unreplied-title')?.textContent).toBe(
-      '2 unanswered comments',
-    );
-    // A band is not a queue: no Review All, because there is nothing declared
-    // to walk through.
+    expect(root.querySelector('.hub-review-unreplied-head')).toBeNull();
+    expect(root.querySelectorAll('.hub-review-row')).toHaveLength(0);
     expect(root.querySelector('.hub-review-go')).toBeNull();
   });
 
-  it('renders no band at all when every thread was declared', () => {
+  it('renders no band when every thread was declared', () => {
     renderHomeReview(root, reviewQueue([], [threadItem()], NOW), strip(), [], NOW);
     expect(root.querySelector('.hub-review-unreplied-head')).toBeNull();
     // Positive control: the declared one really did render, so the absence
@@ -926,14 +917,11 @@ describe('renderHomeReview', () => {
   it('puts the declared why on the queue row, not only on the card it opens', () => {
     renderHomeReview(root, reviewQueue([], [threadItem(), note()], NOW), strip(), [], NOW);
     const rows = [...root.querySelectorAll('.hub-review-row')];
-    expect(rows).toHaveLength(2);
+    // The undeclared note no longer renders a row, so only the declared one is here.
+    expect(rows).toHaveLength(1);
     expect(rows[0]?.querySelector('.hub-review-row-why')?.textContent).toBe(
       threadItem().review?.why,
     );
-    // An undeclared row has no second line to show, and inventing one would
-    // put a derived sentence exactly where an authored one is promised.
-    expect(rows[1]?.className).toContain('hub-review-row-unreplied');
-    expect(rows[1]?.querySelector('.hub-review-row-why')).toBeNull();
   });
 });
 
