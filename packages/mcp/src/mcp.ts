@@ -3286,6 +3286,15 @@ async function runSseLoop(
     }
     // Backoff before reconnect
     await new Promise((r) => setTimeout(r, 1500));
+    // A reconnect is what a server restart looks like from in here, and a
+    // restart rebuilt every room with `seq` back at 0 — so every key the
+    // dedup is holding can now collide with a genuinely NEW event and
+    // silently swallow it. Drop the window: the cost is at most a duplicate
+    // of something in flight, and the cost of keeping it is a comment nobody
+    // ever hears about. (A current server also stamps a unique `eid`, which
+    // makes this belt-and-braces; the fallback key is what an un-restarted
+    // box still sends.)
+    shouldForwardFrame.reset();
   }
   settleFirst();
 }
@@ -3311,8 +3320,9 @@ function startSseLoop(label: string, path: string, controller: AbortController):
 /** Shared across every SSE loop in this process — the whole point is to catch
  *  a frame arriving on the board stream that the grouping stream already
  *  delivered, so a per-loop instance would see nothing. See frame-dedup.ts
- *  for why the key is `${event}#${docId}#${seq}` and why anything it cannot
- *  identify is forwarded rather than dropped. */
+ *  for what identifies an event (the server's `eid` first, `event#docId#seq`
+ *  for an older one), why the fallback needs a window, and why anything it
+ *  cannot identify is forwarded rather than dropped. */
 const shouldForwardFrame = createFrameDedup();
 
 async function handleFrame(raw: string): Promise<void> {
@@ -3332,7 +3342,7 @@ async function handleFrame(raw: string): Promise<void> {
   } catch {
     return;
   }
-  if (!shouldForwardFrame(ev, payload)) return;
+  if (!shouldForwardFrame.shouldForward(ev, payload)) return;
   await emitChannelMessage(ev, payload);
 }
 

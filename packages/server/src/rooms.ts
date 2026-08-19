@@ -62,6 +62,7 @@ import {
   refreshWorkspace as refreshWorkspaceImpl,
   setWorkspaceGroups as setWorkspaceGroupsImpl,
 } from './binds.ts';
+import { newEventId } from './event-id.ts';
 import { scanFolderPaths } from './fs-scan.ts';
 import { showFile } from './git-diff.ts';
 import { gitConflictHint } from './git-provenance.ts';
@@ -2940,6 +2941,13 @@ export class Rooms {
   /** Shared SSE + workspace + webhook fan-out behind fireEvent /
    *  fireSuggestionEvent. Caller stamps `event`/`seq`/`doc` into payload. */
   private broadcastToRoom(room: DocRoom, payload: WebhookPayload): void {
+    // ONE id per broadcast, stamped before the fan-out so every channel below
+    // carries the same string. That is what lets a subscriber holding two of
+    // these channels collapse the copies without having to guess from `seq`,
+    // which is per-room AND per-server-epoch and therefore repeats after any
+    // restart — a guess whose wrong answer is a comment silently swallowed.
+    // See event-id.ts.
+    payload.eid = newEventId();
     this.cfg.sse.broadcast(room.docId, payload);
     // Double-broadcast on the GROUPING's channel — `meta.workspaceId` is the
     // tag a diff review or folder bind sets — so an agent can watch ONE
