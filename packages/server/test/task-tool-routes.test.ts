@@ -553,6 +553,118 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
     });
   });
 
+  // ── POST /api/tasks/:id/due ───────────────────────────────────────────────
+  //
+  // Same gap as the assignee route, one field over: `dueAt` was writable only
+  // at creation, so the detail panel rendered a date nobody could correct.
+  // Bryan, 2026-08-18: *"All fields must be human editable. But I expect
+  // they'll be mostly set by agents going forward."*
+
+  describe('POST /api/tasks/:id/due', () => {
+    const DUE = Date.UTC(2026, 8, 2, 19, 0, 0);
+
+    it('sets, moves and clears the date, emits task.due_set, and the board follows', async () => {
+      const { wsId, G } = await seedWorkspace();
+      const task = await seedTask(wsId, G.g1);
+      expect(task.dueAt).toBeUndefined(); // control: nothing is due yet
+      const events: TaskStoreEvent[] = [];
+      const off = handle.tasks.onEvent((e) => events.push(e));
+      try {
+        const set = await jj<{ task: Task; changed: boolean }>(
+          await post(`/api/tasks/${task.id}/due`, { dueAt: DUE, author: PERSON }),
+        );
+        expect(set.changed).toBe(true);
+        expect(set.task.dueAt).toBe(DUE);
+        // The STORED effect, read back over HTTP — the route hand-copies body
+        // fields and nothing type-checks that it forwarded this one.
+        expect((await getTasks(wsId)).find((t) => t.id === task.id)?.dueAt).toBe(DUE);
+
+        // The board room is what every browser reads; a store-only change
+        // would be invisible there.
+        const board = handle.rooms.get(workspaceRoomId(wsId));
+        expect(board).toBeDefined(); // control: the room exists at all
+        const projected = board?.ydoc.getMap('tasks').get(task.id) as
+          | { dueAt?: number; title?: string }
+          | undefined;
+        expect(projected?.title).toBe(task.title); // control
+        expect(projected?.dueAt).toBe(DUE);
+
+        const moved = await jj<{ task: Task }>(
+          await post(`/api/tasks/${task.id}/due`, { dueAt: DUE + 86_400_000, author: PERSON }),
+        );
+        expect(moved.task.dueAt).toBe(DUE + 86_400_000);
+
+        // `null` CLEARS. Asserted as an absence on the stored row, because a
+        // response body echoing `undefined` would read the same either way.
+        const cleared = await jj<{ changed: boolean }>(
+          await post(`/api/tasks/${task.id}/due`, { dueAt: null, author: PERSON }),
+        );
+        expect(cleared.changed).toBe(true);
+        expect((await getTasks(wsId)).find((t) => t.id === task.id)?.dueAt).toBeUndefined();
+
+        const due = events.filter((e) => e.type === 'task.due_set');
+        expect(due.length).toBe(3);
+        const first = due[0] as Extract<TaskStoreEvent, { type: 'task.due_set' }>;
+        expect(first).toMatchObject({ taskId: task.id, from: null, to: DUE });
+        expect(first.actor).toEqual({ id: PERSON.id, name: PERSON.name, kind: 'person' });
+        const last = due[2] as Extract<TaskStoreEvent, { type: 'task.due_set' }>;
+        expect(last).toMatchObject({ from: DUE + 86_400_000, to: null });
+      } finally {
+        off();
+      }
+    });
+
+    it('re-sending the date already on the row changes nothing and emits nothing', async () => {
+      const { wsId, G } = await seedWorkspace();
+      const task = await seedTask(wsId, G.g1, { dueAt: DUE });
+      const events: TaskStoreEvent[] = [];
+      const off = handle.tasks.onEvent((e) => events.push(e));
+      try {
+        // Control: a real move DOES emit…
+        const moved = await jj<{ changed: boolean }>(
+          await post(`/api/tasks/${task.id}/due`, { dueAt: DUE + 3_600_000, author: PERSON }),
+        );
+        expect(moved.changed).toBe(true);
+        expect(events.filter((e) => e.type === 'task.due_set').length).toBe(1);
+        // …and the repaint that re-sends the same date does not. An audit row
+        // per repaint is noise in every feed that reads this log.
+        const same = await jj<{ changed: boolean }>(
+          await post(`/api/tasks/${task.id}/due`, { dueAt: DUE + 3_600_000, author: PERSON }),
+        );
+        expect(same.changed).toBe(false);
+        expect(events.filter((e) => e.type === 'task.due_set').length).toBe(1);
+        // Clearing a date that was never set is the same no-op.
+        const fresh = await seedTask(wsId, G.g1);
+        const noop = await jj<{ changed: boolean }>(
+          await post(`/api/tasks/${fresh.id}/due`, { dueAt: null, author: PERSON }),
+        );
+        expect(noop.changed).toBe(false);
+      } finally {
+        off();
+      }
+    });
+
+    it('refuses an unparseable date rather than reading it as "clear"', async () => {
+      const { wsId, G } = await seedWorkspace();
+      const task = await seedTask(wsId, G.g1, { dueAt: DUE });
+      // `NaN` is deliberately not in this list: `JSON.stringify` writes it as
+      // `null`, so a client cannot send it and a fixture that "sends" it is
+      // actually testing the clear path — which answers 200 and would have
+      // wiped the date this case then asserts is untouched.
+      for (const bad of ['2026-09-02', {}, true, []]) {
+        const r = await post(`/api/tasks/${task.id}/due`, { dueAt: bad, author: PERSON });
+        expect(r.status, `dueAt: ${JSON.stringify(bad)}`).toBe(400);
+      }
+      // The date it already had is untouched — a 400 that had already written
+      // would be worse than the coercion it refuses.
+      expect((await getTasks(wsId)).find((t) => t.id === task.id)?.dueAt).toBe(DUE);
+      expect((await post(`/api/tasks/${task.id}/due`, { dueAt: DUE })).status).toBe(400);
+      expect((await post('/api/tasks/t-missing/due', { dueAt: DUE, author: PERSON })).status).toBe(
+        404,
+      );
+    });
+  });
+
   // ── POST /api/tasks/:id/answer ────────────────────────────────────────────
 
   describe('POST /api/tasks/:id/answer', () => {

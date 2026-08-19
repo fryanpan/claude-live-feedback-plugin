@@ -143,6 +143,45 @@ describe('the activity view renders the rows the server really wrote', () => {
     expect(line).not.toContain('task.body_edited');
   });
 
+  it('renders a due date from the row the /due route wrote, and names the day', async () => {
+    // `task.due_set` is emitted by a route that did not exist until this
+    // change, and the client case reads `from` / `to` by name. The unit test
+    // proves the case exists; only this proves the emitted row carries the
+    // keys it reads — and that the ROUTE forwarded the date at all, which is
+    // the layer nothing type-checks.
+    const created = await post(`/api/workspaces/${wsId}/tasks`, {
+      title: 'Cut the release note',
+      author: AGENT,
+    });
+    expect(created.status).toBe(200);
+    const taskId = ((await created.json()) as { task: Task }).task.id;
+    // Local noon, so the rendered day is the same in every timezone.
+    const due = new Date(2026, 8, 2, 12).getTime();
+
+    expect((await post(`/api/tasks/${taskId}/due`, { dueAt: due, author: PERSON })).status).toBe(
+      200,
+    );
+    const set = rowsOf('task.due_set').at(-1);
+    expect(set).toBeDefined();
+    const line = describeEvent(set as ActivityEvent, () => 'Cut the release note');
+    expect(line).toContain('Jordan');
+    expect(line).toContain('Cut the release note');
+    expect(line).toContain(new Date(due).toLocaleDateString());
+    expect(line).not.toContain('task.due_set');
+
+    // And the clear, which is a different sentence — a row that read "set due"
+    // with no date would be worse than the slug.
+    expect((await post(`/api/tasks/${taskId}/due`, { dueAt: null, author: PERSON })).status).toBe(
+      200,
+    );
+    const cleared = describeEvent(
+      rowsOf('task.due_set').at(-1) as ActivityEvent,
+      () => 'Cut the release note',
+    );
+    expect(cleared).toContain('cleared');
+    expect(cleared).not.toContain(new Date(due).toLocaleDateString());
+  });
+
   it('renders a SHAPING with both titles, from the row the route wrote', async () => {
     // Two keys are new on this event (`titleFrom` / `titleTo`) and the client
     // case reads them by name. describeEvent's own suite hands it a

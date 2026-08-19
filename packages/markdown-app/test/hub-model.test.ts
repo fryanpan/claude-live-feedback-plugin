@@ -257,6 +257,44 @@ describe('describeEvent', () => {
     expect(s).not.toContain('task.body_edited');
   });
 
+  it('reads a due date three ways — set, moved and cleared', () => {
+    // `task.due_set` is new, so without a case here the feed prints the slug
+    // with no actor and no title, the way `task.body_edited` did. Three
+    // sentences because they read differently to whoever is scanning the trail
+    // for what slipped: a date arriving, a date moving, a date going away.
+    const due = (over: Record<string, unknown>) =>
+      describeEvent(
+        {
+          event: 'task.due_set',
+          ts: NOW,
+          taskId: 't-1',
+          actor: { id: 'known-jordan', name: 'Jordan', kind: 'person' },
+          ...over,
+        },
+        titleOf,
+      );
+    // Local noon, so the rendered day is the same one in every timezone.
+    const day = (y: number, m: number, d: number) => new Date(y, m - 1, d, 12).getTime();
+    const shown = (t: number) => new Date(t).toLocaleDateString();
+
+    const set = due({ from: null, to: day(2026, 9, 2) });
+    expect(set).toContain('Jordan');
+    expect(set).toContain('Fix ranking');
+    expect(set).toContain(shown(day(2026, 9, 2)));
+    expect(set).not.toContain('task.due_set');
+
+    const moved = due({ from: day(2026, 9, 2), to: day(2026, 9, 9) });
+    expect(moved).toContain(shown(day(2026, 9, 2)));
+    expect(moved).toContain(shown(day(2026, 9, 9)));
+
+    const cleared = due({ from: day(2026, 9, 9), to: null });
+    expect(cleared).toContain('cleared');
+    expect(cleared).toContain('Fix ranking');
+    // A cleared date must not print the one it used to have as though it were
+    // still set — "cleared … 9/9/2026" reads as a date somebody just chose.
+    expect(cleared).not.toContain(shown(day(2026, 9, 9)));
+  });
+
   it('names BOTH titles when a rewrite reshaped the row', () => {
     // Triage shaping a raw capture replaces the clipped fragment the person
     // filed. "rewrote the description of <new title>" is useless to them —
