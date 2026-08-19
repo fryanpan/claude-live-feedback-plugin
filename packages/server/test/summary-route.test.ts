@@ -226,7 +226,10 @@ describe('POST /api/docs/:docId/threads/:threadId/summary', () => {
     // "Helpful" means it names the switch AND how to add a key — a bare
     // "disabled" leaves the operator with nowhere to go.
     expect(body.detail).toContain('CW_SUMMARIES=1');
-    expect(body.detail).toContain('live-feedback-summary-api-key');
+    // The CURRENT service name: `resolveKey` still reads the pre-rename entry
+    // second, but an operator being told how to ADD a key should be told to
+    // add it where the next reader looks first.
+    expect(body.detail).toContain('claude-workspaces-summary-api-key');
     // The disabled path must short-circuit BEFORE the call, not after it.
     expect(calls.length).toBe(0);
   });
