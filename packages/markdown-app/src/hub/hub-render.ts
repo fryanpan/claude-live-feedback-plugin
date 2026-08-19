@@ -44,7 +44,9 @@ import {
   dropIndexFor,
   dropTarget,
   homeSinceLabel,
+  initialsOf,
   ownerKind,
+  presenceHue,
   quoteAfterCapture,
   quoteAfterEdit,
   quoteForCapture,
@@ -2188,9 +2190,18 @@ export interface PresenceHandlers {
   onTap: (chip: PresenceChip) => void;
   /** Long-press to follow — your view navigates when theirs does. */
   onLongPress: (chip: PresenceChip) => void;
+  /** Tap the "+N" overflow circle — hand back the people it stands for, so
+   *  the caller can name them (a title attribute alone is unreachable from a
+   *  touch screen). */
+  onOverflow?: (hidden: PresenceChip[]) => void;
 }
 
 const LONG_PRESS_MS = 550;
+
+/** Compact mode caps the strip at this many circles; past it the last slot
+ *  becomes a "+N" that names the rest. Chosen so the cluster's worst case
+ *  (4 × 28px + gaps ≈ 124px) still leaves the workspace name room at 430px. */
+const MAX_CIRCLES = 4;
 
 export function renderPresence(
   container: HTMLElement,
@@ -2201,6 +2212,12 @@ export function renderPresence(
   // agents' plugin bundles and the browser's own client. They fail separately
   // and are fixed separately, so neither may hide the other.
   drift?: ReadonlyArray<DriftNotice | null | undefined> | null,
+  // Compact: small circular profile buttons (initials, full name in the
+  // title) instead of the long-form chips — the top-right cluster's fit
+  // (Bryan, 2026-08-18: "show smaller circle profile buttons for each active
+  // user instead of the long form"). Tap and long-press behave exactly as the
+  // chips did; only the rendering changes.
+  compact = false,
 ): void {
   container.replaceChildren();
   const notices = (drift ?? []).filter((d): d is DriftNotice => Boolean(d));
@@ -2209,6 +2226,14 @@ export function renderPresence(
     return;
   }
   container.classList.remove('hidden');
+  // Clamp BEFORE the loop, so the overflow circle replaces the fourth chip
+  // rather than following it — the cap is a footprint, not a count.
+  let visible = chips;
+  let hidden: PresenceChip[] = [];
+  if (compact && chips.length > MAX_CIRCLES) {
+    visible = chips.slice(0, MAX_CIRCLES - 1);
+    hidden = chips.slice(MAX_CIRCLES - 1);
+  }
   for (const notice of notices) {
     // Beside the agents, because that is what it is about — and BEFORE the
     // early return that a chipless strip used to take: an away session draws
@@ -2221,13 +2246,22 @@ export function renderPresence(
     note.innerHTML = `<span class="hub-drift-head">${escapeHtml(notice.headline)}</span><span class="hub-drift-who">${escapeHtml(notice.detail)}</span><span class="hub-drift-fix">${escapeHtml(notice.fix)}</span>`;
     container.append(note);
   }
-  for (const chip of chips) {
+  for (const chip of visible) {
     const el = document.createElement('button');
     el.type = 'button';
-    el.className = `hub-presence-chip hub-presence-${chip.kind}${chip.state ? ` hub-presence-${chip.state}` : ''}${followedKey === chip.key ? ' hub-following' : ''}`;
+    const base = compact ? 'hub-presence-circle' : 'hub-presence-chip';
+    el.className = `${base} hub-presence-${chip.kind}${chip.state ? ` hub-presence-${chip.state}` : ''}${followedKey === chip.key ? ' hub-following' : ''}`;
     el.title =
       followedKey === chip.key ? `${chip.title} · following — long-press to stop` : chip.title;
-    el.innerHTML = `<span class="hub-presence-name">${escapeHtml(chip.label)}</span><span class="hub-presence-where">${escapeHtml(chip.where)}</span>`;
+    if (compact) {
+      el.innerHTML = `<span class="hub-presence-initials">${escapeHtml(initialsOf(chip.label))}</span>`;
+      el.style.background = `hsl(${presenceHue(chip.label)}, 45%, 45%)`;
+      // The circle drops the visible name, so it must be announced — the
+      // title alone is read weakly or not at all depending on the reader.
+      el.setAttribute('aria-label', chip.title);
+    } else {
+      el.innerHTML = `<span class="hub-presence-name">${escapeHtml(chip.label)}</span><span class="hub-presence-where">${escapeHtml(chip.where)}</span>`;
+    }
     // A long-press follows; a tap jumps. The press has TWO endings —
     // pointercancel is the common one on mobile — and both must disarm the
     // timer or one scroll wedges the strip.
@@ -2252,6 +2286,17 @@ export function renderPresence(
       if (!longFired) handlers.onTap(chip);
     });
     container.append(el);
+  }
+  if (hidden.length > 0) {
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'hub-presence-circle hub-presence-more';
+    more.textContent = `+${hidden.length}`;
+    const names = hidden.map((c) => c.label).join(', ');
+    more.title = names;
+    more.setAttribute('aria-label', `${hidden.length} more: ${names}`);
+    more.addEventListener('click', () => handlers.onOverflow?.(hidden));
+    container.append(more);
   }
 }
 
