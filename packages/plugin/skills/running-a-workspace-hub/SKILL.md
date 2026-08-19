@@ -364,7 +364,8 @@ set_task_goal(taskId, goal: "latency", position: 2.5, batchId?)
 
 ```
 set_workspace_lead(workspaceId)          // no second argument
-→ { workspaceId, changed, leadAgentId, subscribed: true,
+→ { workspaceId, changed, leadAgentId, previousLeadAgentId?, declined?,
+    subscribed, subscriptionPersisted, subscriptionWarning?,
     lead, gating, untriaged, queuedVoice,
     pendingRetriage?, pendingBucketReview?, taskReviews? }
 ```
@@ -378,14 +379,31 @@ There is no per-surface subscribe to remember and nothing to redo.
 
 **It survives a respawn.** The subscription is persisted against your agent
 identity (`CW_AGENT_NAME`) and re-wired when your session comes back, so the
-next context does not spend its opening turns rebuilding a watch list. Check
-with `list_watched_docs`, whose `restore.status` says whether the re-wire
+next context does not spend its opening turns rebuilding a watch list. The
+restore now **re-attaches** you too, on boards you already led or were attached
+to whose heartbeat came back stale — re-wiring the key puts events back on the
+wire, and only the attachment makes you *addressable*, so the two repairs
+failing separately is how a respawned lead came back subscribed and invisible.
+Check with `list_watched_docs`, whose `restore.status` says whether the re-wire
 happened, failed, or was never possible (no stable identity).
 
 Because it also attaches you, the same response carries the **backlog** the
 seat accumulated — same fields, same meaning as `attach_agent` below, and
 **drained by this call**, so read them here or lose them.
 
+- **Read `subscribed`, don't assume it.** It reports whether the event stream
+  actually opened, so `false` is a real outcome: something reached the server
+  but the listening half did not come up, and a `subscriptionWarning` says
+  which. Call again. `subscriptionPersisted: false` is the *other* failure —
+  today works, the next respawn does not, usually because this session has no
+  `CW_AGENT_NAME`. They fail independently, which is why they are two fields.
+- **Declaring does not evict a live peer.** If a different agent already leads
+  the board and is live, the seat stays with them and you get
+  `declined: "lead-held"` plus `previousLeadAgentId`. You are still attached
+  and subscribed — nothing on the board is hidden from you, only the seat did
+  not move. Coordinate with them; pass `takeover: true` when you genuinely
+  mean to take it. (A seat whose holder has gone quiet is *not* protected —
+  recovering an abandoned board is exactly what declaring is for.)
 - **Use the bare one-argument form to declare yourself.** Passing
   `leadAgentId` is a *handover* to somebody else: it moves the seat and does
   nothing else, because attaching on an absent agent's behalf would make the
@@ -396,11 +414,26 @@ seat accumulated — same fields, same meaning as `attach_agent` below, and
   every delivery gate asks whether the lead is **attached**, and a doc watch is
   not an attachment. That gap is silent by construction — a queue nobody is
   draining looks exactly like a queue nobody filled.
+- **Declaring once is not staying live.** The declaration attaches you; it
+  cannot keep you attached. Delivery is gated on a heartbeat inside the
+  ~5-minute window, so a session that goes quiet for minutes stops receiving
+  lead-addressed work while every surface still says it is subscribed. Tool
+  calls refresh it, so a working session is fine; a thinking one is not. See
+  "Stay live" below.
 - **When the board feels quiet, don't assume it is.** Call
   `list_watched_docs` and read `coverage.unattachedBoards`: each row is a board
-  holding docs you watch where you have **no attachment**, with what is queued
-  for its lead. A row there means real work is waiting that will never reach
-  you, and `set_workspace_lead(workspaceId)` on that id fixes it in one call.
+  you follow — through a watched doc **or through the board's own `ws:` key** —
+  where you are not **live**, with what is queued for its lead. "Not live"
+  covers two different states and the row says which: no attachment at all, or
+  `attached: true, heartbeatFresh: false` (a record exists, the window lapsed,
+  and every gate reads the window). The remedy differs, and each row carries
+  the right one:
+  - seat empty or its holder gone → `set_workspace_lead(workspaceId)`
+  - the seat is already yours, only the heartbeat lapsed → `heartbeat(workspaceId)`
+  - a **live peer** leads it (`leadLive: true`) → `attach_agent(workspaceId)`,
+    which makes you addressable without evicting them. The queue there is
+    addressed to *them*; ask rather than take.
+
   An **absent** `coverage` means the server did not answer — unknown, never
   all-clear.
 

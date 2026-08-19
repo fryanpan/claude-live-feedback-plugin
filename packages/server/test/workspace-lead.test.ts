@@ -145,6 +145,134 @@ describe('TaskStore lead agent', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Declaring yourself lead must not silently evict a working peer.
+//
+// `attachAgent` claims an EMPTY seat only — that guard is deliberate, and
+// `setLeadAgent` used to have no equivalent. So the one-call declaration this
+// branch adds could take a board out from under a live lead, and NEITHER side
+// was told: the evicted agent gets no event it is required to act on, and the
+// declaring agent could not tell a takeover from claiming a vacancy. Every
+// lead-addressed delivery then routes to a session that has stopped expecting
+// it, which is this ticket's own failure mode pointed at a bystander.
+//
+// The guard is deliberately narrow — it only fires when an agent claims the
+// seat FOR ITSELF while a DIFFERENT lead is live. A person reassigning, a
+// handover to a third party, and a stale incumbent are all unaffected, and
+// each has a test below so the narrowness is pinned rather than assumed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('setLeadAgent does not displace a LIVE lead without takeover', () => {
+  let dataDir: string;
+  let store: TaskStore;
+  let events: TaskStoreEvent[];
+
+  const RELAY = { id: 'agent-relay', name: 'Relay', kind: 'agent' };
+  const HELPER = { id: 'agent-helper', name: 'Helper', kind: 'agent' };
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'ws-lead-held-'));
+    // A 150ms freshness window makes "the incumbent went quiet" reachable in
+    // a test without faking the clock the production path reads.
+    store = new TaskStore({ dataDir, debounceMs: 5, heartbeatFreshMs: 150 });
+    events = [];
+    store.onEvent((e) => events.push(e));
+  });
+
+  afterEach(() => {
+    store.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  /** A board whose seat `agent-relay` holds, attached and freshly beating. */
+  const boardWithLiveLead = () => {
+    const ws = store.createWorkspace('held-hub', 'Ship it.');
+    const attach = store.attachAgent(ws.id, {
+      agentId: RELAY.id,
+      runtime: 'claude-code-local',
+    });
+    if (!attach.ok) throw new Error('fixture');
+    // Positive control: the incumbent really did claim the seat, so a later
+    // "the seat did not move" assertion is about the guard and not about a
+    // fixture that never seated anyone.
+    if (attach.lead !== true) throw new Error('fixture: incumbent did not take the seat');
+    return ws;
+  };
+
+  it('refuses the claim, keeps the seat, and NAMES the incumbent', () => {
+    const ws = boardWithLiveLead();
+    events.length = 0;
+
+    const res = store.setLeadAgent(ws.id, HELPER.id, { actor: HELPER });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.changed).toBe(false);
+    expect(res.declined).toBe('lead-held');
+    // Naming who holds it is the difference between a refusal a caller can
+    // act on and one it can only be confused by.
+    expect(res.previousLeadAgentId).toBe(RELAY.id);
+    expect(store.getWorkspace(ws.id)?.leadAgentId).toBe(RELAY.id);
+    expect(events.filter((e) => e.type === 'workspace.lead_changed')).toHaveLength(0);
+  });
+
+  it('takeover: true really does move it — and reports who was displaced', () => {
+    const ws = boardWithLiveLead();
+    events.length = 0;
+
+    const res = store.setLeadAgent(ws.id, HELPER.id, { actor: HELPER, takeover: true });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.changed).toBe(true);
+    expect(res.declined).toBeUndefined();
+    expect(res.previousLeadAgentId).toBe(RELAY.id);
+    expect(store.getWorkspace(ws.id)?.leadAgentId).toBe(HELPER.id);
+    expect(events.filter((e) => e.type === 'workspace.lead_changed')).toHaveLength(1);
+  });
+
+  it('a lead whose heartbeat aged out is NOT protected — that is the case this feature exists for', async () => {
+    const ws = boardWithLiveLead();
+    await new Promise((r) => setTimeout(r, 200)); // past the 150ms window
+    const res = store.setLeadAgent(ws.id, HELPER.id, { actor: HELPER });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.changed).toBe(true);
+    expect(res.declined).toBeUndefined();
+    expect(store.getWorkspace(ws.id)?.leadAgentId).toBe(HELPER.id);
+  });
+
+  it('a PERSON reassigning is never refused — the guard is about agents claiming for themselves', () => {
+    const ws = boardWithLiveLead();
+    const res = store.setLeadAgent(ws.id, HELPER.id, { actor: PERSON });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.changed).toBe(true);
+    expect(res.declined).toBeUndefined();
+    expect(store.getWorkspace(ws.id)?.leadAgentId).toBe(HELPER.id);
+  });
+
+  it('an agent HANDING the seat to a third party is not refused either', () => {
+    const ws = boardWithLiveLead();
+    // The incumbent itself, or any agent, naming somebody else is a handover
+    // rather than a grab: nobody is claiming the seat for the caller.
+    const res = store.setLeadAgent(ws.id, 'agent-scribe', { actor: HELPER });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.changed).toBe(true);
+    expect(res.declined).toBeUndefined();
+    expect(store.getWorkspace(ws.id)?.leadAgentId).toBe('agent-scribe');
+  });
+
+  it('the incumbent re-declaring its OWN seat is the ordinary no-op, not a refusal', () => {
+    const ws = boardWithLiveLead();
+    const res = store.setLeadAgent(ws.id, RELAY.id, { actor: RELAY });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.changed).toBe(false);
+    expect(res.declined).toBeUndefined();
+    expect(store.getWorkspace(ws.id)?.leadAgentId).toBe(RELAY.id);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Routes + the ydoc projection
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -243,6 +371,39 @@ describe('lead agent routes + projection', () => {
     expect(attach.status).toBe(200);
     expect(((await attach.json()) as { lead: boolean }).lead).toBe(true);
     expect((await workspaceOf(wsId)).leadAgentId).toBe('agent-relay');
+  });
+
+  it('the route forwards takeover — without it a live lead is held, with it the seat moves', async () => {
+    const r = await post('/api/workspaces', { name: 'takeover-route', goal: 'Ship it.' });
+    const wsId = ((await r.json()) as { workspace: HubWorkspace }).workspace.id;
+    const attach = await post(`/api/workspaces/${wsId}/attachments`, {
+      agentId: 'agent-relay',
+      runtime: 'claude-code-local',
+    });
+    expect(((await attach.json()) as { lead: boolean }).lead).toBe(true); // positive control
+
+    const helper = { id: 'agent-helper', name: 'Helper', kind: 'agent' };
+    const held = await put(`/api/workspaces/${wsId}/lead`, {
+      leadAgentId: helper.id,
+      author: helper,
+    });
+    expect(held.status).toBe(200);
+    const heldBody = (await held.json()) as { changed: boolean; declined?: string };
+    expect(heldBody.changed).toBe(false);
+    expect(heldBody.declined).toBe('lead-held');
+    // Read the seat back over HTTP rather than trusting the response.
+    expect((await workspaceOf(wsId)).leadAgentId).toBe('agent-relay');
+
+    const took = await put(`/api/workspaces/${wsId}/lead`, {
+      leadAgentId: helper.id,
+      author: helper,
+      takeover: true,
+    });
+    expect(took.status).toBe(200);
+    const tookBody = (await took.json()) as { changed: boolean; previousLeadAgentId?: string };
+    expect(tookBody.changed).toBe(true);
+    expect(tookBody.previousLeadAgentId).toBe('agent-relay');
+    expect((await workspaceOf(wsId)).leadAgentId).toBe(helper.id);
   });
 
   it('the board room projects the lead — and drops the key when the seat is empty', async () => {

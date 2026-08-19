@@ -57,6 +57,10 @@ interface UnattachedBoard {
   watchedDocs: string[];
   queued: CoverageQueue;
   queuedTotal: number;
+  attached: boolean;
+  heartbeatFresh: boolean;
+  leadAgentId?: string;
+  leadLive: boolean;
 }
 interface Coverage {
   agentId: string;
@@ -302,5 +306,178 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
     const widened = await coverageOf();
     expect(widened.unattachedBoards.map((b) => b.workspaceId)).toEqual([boardId]);
     expect(widened.unattachedBoards[0]?.queuedTotal).toBe(3);
+  });
+
+  /**
+   * THE STATE THIS READOUT WAS BLIND TO — and it is the state the whole
+   * feature creates.
+   *
+   * An agent that adopts `set_workspace_lead(workspaceId)` holds exactly ONE
+   * key: `ws:<board>`. It holds no doc keys at all. `unattachedBoards` was
+   * built only from non-`ws:` keys, so that agent could never appear on it;
+   * and the attachment test was "a record exists", which an hour-old
+   * heartbeat satisfies while every delivery gate answers `away`. So the one
+   * agent this branch teaches the fleet to be was the one agent the probe
+   * could not see, in the one state that matters: heartbeat dead, work
+   * visibly queued, `unattachedBoards: []`, and a restore notice that says
+   * nothing.
+   *
+   * These use a tight `heartbeatFreshMs` because the real window is five
+   * minutes and a test must not sleep through it.
+   */
+  describe('a declared lead whose heartbeat went stale', () => {
+    let tight: ServerHandle;
+    let tightDir: string;
+    let tightBase: string;
+
+    const tpost = (path: string, body: unknown) =>
+      fetch(`${tightBase}${path}`, {
+        method: 'POST',
+        headers: { host: `localhost:${tight.port}`, 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    const tput = (path: string, body: unknown) =>
+      fetch(`${tightBase}${path}`, {
+        method: 'PUT',
+        headers: { host: `localhost:${tight.port}`, 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    const tcoverage = async (agentId = AGENT): Promise<Coverage> => {
+      const res = await fetch(`${tightBase}/api/agents/${encodeURIComponent(agentId)}/watches`, {
+        headers: { host: `localhost:${tight.port}` },
+      });
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as { coverage?: Coverage };
+      if (!json.coverage) throw new Error('no coverage block');
+      return json.coverage;
+    };
+
+    beforeEach(() => {
+      tightDir = mkdtempSync(join(tmpdir(), 'agent-coverage-tight-'));
+      // 40ms of freshness: an attachment made at the top of a test is `away`
+      // by the time the same test reads coverage.
+      tight = createServer({ port: 0, dataDir: tightDir, heartbeatFreshMs: 40 });
+      tightBase = `http://localhost:${tight.port}`;
+    });
+    afterEach(async () => {
+      await tight.stop();
+      rmSync(tightDir, { recursive: true, force: true });
+    });
+
+    const seedBoard = async (name: string): Promise<string> => {
+      const r = await tpost('/api/workspaces', { name, goal: 'Ship the index.' });
+      return ((await r.json()) as { workspace: { id: string } }).workspace.id;
+    };
+
+    /** The queue, produced the way it actually happens. Deliberately called
+     *  AFTER the attachment has aged out — an attach drains what is waiting,
+     *  so queueing first and attaching second would leave nothing to find and
+     *  the assertion would pass for the wrong reason. */
+    const queueThree = async (boardId: string): Promise<void> => {
+      await tpost(`/api/workspaces/${boardId}/tasks`, {
+        author: PERSON,
+        title: 'An open row',
+        goal: 'chores',
+      });
+      const voice = await tpost(`/api/workspaces/${boardId}/voice`, {
+        transcript: 'make cutting token usage the top goal',
+        author: PERSON,
+      });
+      // The incident's own signature: routed to a queue, not to an agent.
+      expect(((await voice.json()) as { route: string }).route).toBe('agent-queued');
+      const goal = await tput(`/api/workspaces/${boardId}/goal`, {
+        goal: 'Cut token usage per session in half.',
+        author: PERSON,
+      });
+      expect(((await goal.json()) as { retriage: { queued: boolean } }).retriage.queued).toBe(true);
+    };
+
+    it('reports a stale-heartbeat lead holding only a ws: key, with what is queued', async () => {
+      const boardId = await seedBoard('lead-gone-quiet');
+      await tpost(`/api/workspaces/${boardId}/attachments`, {
+        agentId: AGENT,
+        runtime: 'claude-code-local',
+      });
+      await tpost(`/api/agents/${AGENT}/watches`, { add: [`ws:${boardId}`], name: AGENT });
+      await new Promise((r) => setTimeout(r, 60)); // heartbeat ages out
+      await queueThree(boardId);
+
+      const coverage = await tcoverage();
+      const row = coverage.workspaces[0] as CoverageWorkspaceRow;
+      expect(row.kind).toBe('board');
+      expect(row.attached).toBe(true);
+      expect(row.heartbeatFresh).toBe(false);
+      expect(row.lead).toBe(true);
+      expect((row.queuedTotal ?? 0) > 0).toBe(true);
+      // The alarm the agent actually reads. An attachment RECORD is not
+      // coverage — every delivery gate asks whether the heartbeat is fresh.
+      expect(coverage.unattachedBoards.map((b) => b.workspaceId)).toEqual([boardId]);
+      const alarm = coverage.unattachedBoards[0] as UnattachedBoard;
+      expect(alarm.attached).toBe(true);
+      expect(alarm.heartbeatFresh).toBe(false);
+      expect(alarm.leadAgentId).toBe(AGENT);
+      // Nobody else is live on it either, so nothing is draining that queue.
+      expect(alarm.leadLive).toBe(false);
+      expect(alarm.watchedDocs).toEqual([]);
+    });
+
+    // POSITIVE CONTROL 4 — the same board, the same single `ws:` key, with a
+    // FRESH heartbeat raises no alarm. Without this the row above would prove
+    // only that the builder lists every board it can reach.
+    it('POSITIVE CONTROL: a live attachment on the same key raises no alarm', async () => {
+      const boardId = await seedBoard('lead-still-here');
+      await tpost(`/api/workspaces/${boardId}/attachments`, {
+        agentId: AGENT,
+        runtime: 'claude-code-local',
+      });
+      await tpost(`/api/agents/${AGENT}/watches`, { add: [`ws:${boardId}`], name: AGENT });
+
+      const coverage = await tcoverage();
+      expect((coverage.workspaces[0] as CoverageWorkspaceRow).heartbeatFresh).toBe(true);
+      expect(coverage.unattachedBoards).toEqual([]);
+      // …and it goes back to being an alarm once the heartbeat ages out, in
+      // the same test, so "no alarm" is a state and not a permanent silence.
+      await new Promise((r) => setTimeout(r, 60));
+      expect((await tcoverage()).unattachedBoards.map((b) => b.workspaceId)).toEqual([boardId]);
+    });
+
+    /**
+     * The takeover hazard: the alert used to end "set_workspace_lead(...)
+     * hands the backlog over in one call" with no idea who was sitting there.
+     * A board whose lead is somebody else and LIVE must say so, or following
+     * the advice evicts a working peer.
+     */
+    it('names the incumbent lead and whether it is live', async () => {
+      const boardId = await seedBoard('board-with-a-live-lead');
+      // The incumbent attaches (claiming the empty seat) and stays fresh.
+      await tpost(`/api/workspaces/${boardId}/attachments`, {
+        agentId: 'agent-incumbent',
+        runtime: 'claude-code-local',
+      });
+      // A second agent watches a doc on the board, never attaches.
+      const path = join(srcDir, 'doc-shared.md');
+      writeFileSync(path, '# doc-shared\n\nBody.\n');
+      await tpost('/api/docs', {
+        docId: 'doc-shared',
+        sourceUrl: path,
+        title: 'doc-shared',
+        hubWorkspaceId: boardId,
+      });
+      await tpost(`/api/agents/${AGENT}/watches`, { add: ['doc-shared'], name: AGENT });
+
+      const alarm = (await tcoverage()).unattachedBoards[0] as UnattachedBoard;
+      expect(alarm.workspaceId).toBe(boardId);
+      expect(alarm.leadAgentId).toBe('agent-incumbent');
+      expect(alarm.leadLive).toBe(true);
+      expect(alarm.attached).toBe(false);
+
+      // POSITIVE CONTROL 5 — once the incumbent's heartbeat ages out the same
+      // row reports `leadLive: false`, so the field tracks the incumbent
+      // rather than being a constant.
+      await new Promise((r) => setTimeout(r, 60));
+      const later = (await tcoverage()).unattachedBoards[0] as UnattachedBoard;
+      expect(later.leadAgentId).toBe('agent-incumbent');
+      expect(later.leadLive).toBe(false);
+    });
   });
 });

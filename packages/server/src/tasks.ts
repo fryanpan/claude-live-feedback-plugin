@@ -1438,8 +1438,18 @@ export type SetLeadAgentResult =
   | {
       ok: true;
       workspace: HubWorkspace;
-      /** False when the named agent already held the seat. */
+      /** False when the named agent already held the seat, and false when the
+       *  seat was left alone because a live agent is in it (`declined`). */
       changed: boolean;
+      /** Who was in the seat before this call moved it. Absent when nothing
+       *  moved or the seat was empty. Reported so a takeover is something the
+       *  caller can SEE — `changed: true` alone is the identical answer for
+       *  claiming an empty seat and for displacing somebody. */
+      previousLeadAgentId?: string;
+      /** `lead-held` — a DIFFERENT agent holds the seat and its heartbeat is
+       *  fresh, and the caller was claiming the seat for itself without
+       *  `takeover`. The request succeeded; the seat did not move. */
+      declined?: 'lead-held';
     }
   | { ok: false; error: 'workspace-not-found' };
 
@@ -2235,13 +2245,42 @@ export class TaskStore {
   setLeadAgent(
     workspaceId: string,
     leadAgentId: string,
-    opts: { actor: { id: string; name: string; kind?: string } },
+    opts: { actor: { id: string; name: string; kind?: string }; takeover?: boolean },
   ): SetLeadAgentResult {
     const state = this.workspaces.get(workspaceId);
     if (!state) return { ok: false, error: 'workspace-not-found' };
     const workspace = state.workspace;
     const next = leadAgentId.trim();
     if (next === workspace.leadAgentId) return { ok: true, workspace, changed: false };
+    const previousLeadAgentId = workspace.leadAgentId;
+    /**
+     * DO NOT let an agent quietly take a seat somebody LIVE is sitting in.
+     *
+     * `attachAgent` refuses this on purpose — "an occupied seat is a standing
+     * decision and a second agent attaching is not a reassignment" — and
+     * `set_workspace_lead` had no such guard, which was survivable while it
+     * meant "hand the board to a named peer" and became a hazard the moment
+     * the skills started telling every session to declare itself at startup.
+     * The displaced lead keeps its watch and its attachment, is told nothing
+     * it acts on, and simply never receives the re-triage it was waiting for;
+     * the declaring agent cannot tell a takeover from an empty seat, because
+     * `changed: true` is the same answer for both.
+     *
+     * Narrow on purpose. It fires only when an agent is claiming the seat FOR
+     * ITSELF (a declaration) — naming a third party is a deliberate handover
+     * and keeps its old meaning exactly. And only against a LIVE incumbent: a
+     * dead session's seat is exactly what a new lead should be able to
+     * recover, which is most of why declaring works at all.
+     */
+    if (
+      previousLeadAgentId !== undefined &&
+      previousLeadAgentId !== next &&
+      next === opts.actor.id &&
+      opts.takeover !== true &&
+      this.hasLiveLeadAttachment(workspaceId)
+    ) {
+      return { ok: true, workspace, changed: false, previousLeadAgentId, declined: 'lead-held' };
+    }
     const actor: TaskActor = {
       id: opts.actor.id,
       name: opts.actor.name,
@@ -2313,7 +2352,12 @@ export class TaskStore {
         this.writePendingTaskReviews(state);
       }
     }
-    return { ok: true, workspace, changed: true };
+    return {
+      ok: true,
+      workspace,
+      changed: true,
+      ...(previousLeadAgentId !== undefined ? { previousLeadAgentId } : {}),
+    };
   }
 
   /** The seat change itself, shared by `setLeadAgent` and the attach-time

@@ -44,9 +44,9 @@ function harness(responses: { attach?: unknown; lead?: unknown } = {}) {
       }
       throw new Error(`unexpected path ${path}`);
     },
-    watchWorkspace: async (workspaceId: string): Promise<boolean> => {
+    watchWorkspace: async (workspaceId: string): Promise<{ open: boolean; persisted: boolean }> => {
       calls.push({ kind: 'watch', path: workspaceId });
-      return true;
+      return { open: true, persisted: true };
     },
     self: SELF,
     runtime: 'claude-code-local',
@@ -136,6 +136,106 @@ describe('declareWorkspaceLead — declaring yourself', () => {
     const { deps } = harness();
     const res = await declareWorkspaceLead({ workspaceId: WS }, deps);
     expect(res.subscribed).toBe(true);
+    expect(res.subscriptionPersisted).toBe(true);
+    expect(res.subscriptionWarning).toBeUndefined();
+  });
+
+  /**
+   * `subscribed: true` used to be a LITERAL — `watchWorkspace`'s return value
+   * was discarded. So a session with no stable identity (CW_AGENT_NAME unset,
+   * every watch session-only) and a session whose watches POST 500'd both got
+   * a durable-subscription receipt for something that vanishes at the next
+   * respawn, under a tool description promising "nothing to redo after a
+   * respawn". A receipt for work that did not happen is the same lie this
+   * whole readout exists to stop telling.
+   */
+  it('reports a session-only subscription as exactly that', async () => {
+    const { deps } = harness();
+    deps.watchWorkspace = async () => ({ open: true, persisted: false });
+    const res = await declareWorkspaceLead({ workspaceId: WS }, deps);
+    // The stream IS open, so events reach this session right now…
+    expect(res.subscribed).toBe(true);
+    // …and it will NOT come back on its own after a respawn.
+    expect(res.subscriptionPersisted).toBe(false);
+    expect(String(res.subscriptionWarning)).toContain('respawn');
+  });
+
+  /**
+   * `startSseLoop` resolves on the first attempt's OUTCOME — a throw or a
+   * non-200 counts — and on a 3s cap. So `watchWorkspace` can return with the
+   * loop still in backoff and nothing subscribed on `ws~<id>`, after which
+   * the seat change makes the server consider a queued re-triage delivered
+   * and clear it forever. The ordering cannot prevent that on its own; what
+   * it can do is stop claiming otherwise.
+   */
+  it('does not claim to be subscribed when the stream never opened', async () => {
+    const { deps } = harness();
+    deps.watchWorkspace = async () => ({ open: false, persisted: true });
+    const res = await declareWorkspaceLead({ workspaceId: WS }, deps);
+    expect(res.subscribed).toBe(false);
+    expect(String(res.subscriptionWarning)).toContain('stream');
+  });
+
+  /**
+   * `lead` was read off the ATTACH response, which is computed before the
+   * seat moves — and `attachAgent` claims an EMPTY seat only. So taking the
+   * seat from a departed agent answered `leadAgentId: <me>` and `lead: false`
+   * in the same payload, and `lead` is the field the skills teach an agent to
+   * branch on for "is goal-edit re-triage addressed to me".
+   */
+  it('reads `lead` from the seat as the server settled it, not from the attach', async () => {
+    const { deps } = harness({
+      // The seat was held by someone else, so the attach could not claim it…
+      attach: { attachment: { agentId: SELF.id }, lead: false },
+      // …and the PUT then moved it here.
+      lead: {
+        changed: true,
+        workspace: { leadAgentId: SELF.id },
+        previousLeadAgentId: 'agent-departed',
+      },
+    });
+    const res = await declareWorkspaceLead({ workspaceId: WS }, deps);
+    expect(res.leadAgentId).toBe(SELF.id);
+    expect(res.lead).toBe(true);
+    // And it says whose seat it was, so a takeover is reportable rather than
+    // silent.
+    expect(res.previousLeadAgentId).toBe('agent-departed');
+  });
+
+  // POSITIVE CONTROL — `lead` still answers false when the seat genuinely
+  // ends up elsewhere, so the fix above is "read the seat" and not "always
+  // say true".
+  it('POSITIVE CONTROL: lead is false when the seat did not come to this session', async () => {
+    const { deps } = harness({
+      attach: { attachment: { agentId: SELF.id }, lead: false },
+      lead: {
+        changed: false,
+        declined: 'lead-held',
+        workspace: { leadAgentId: 'agent-incumbent' },
+      },
+    });
+    const res = await declareWorkspaceLead({ workspaceId: WS }, deps);
+    expect(res.lead).toBe(false);
+    expect(res.leadAgentId).toBe('agent-incumbent');
+    // Refused rather than failed: this session is attached and subscribed and
+    // is told why it is not the lead, instead of quietly evicting a peer.
+    expect(res.declined).toBe('lead-held');
+    expect(res.subscribed).toBe(true);
+    expect(String(res.note)).toContain('agent-incumbent');
+  });
+
+  it('passes takeover through when the caller means it', async () => {
+    const { calls, deps } = harness();
+    await declareWorkspaceLead({ workspaceId: WS, takeover: true }, deps);
+    const lead = calls.find((c) => c.path?.endsWith('/lead'));
+    expect(lead?.body).toMatchObject({ takeover: true });
+    // POSITIVE CONTROL: absent by default, so a plain declaration cannot
+    // evict anyone by accident.
+    const plain = harness();
+    await declareWorkspaceLead({ workspaceId: WS }, plain.deps);
+    expect(plain.calls.find((c) => c.path?.endsWith('/lead'))?.body).not.toMatchObject({
+      takeover: true,
+    });
   });
 
   it('reports the seat as the server settled it', async () => {
@@ -184,15 +284,18 @@ describe('POSITIVE CONTROL — the legacy payload keeps its meaning', () => {
   });
 });
 
+/** mcp.ts ends in a top-level `await server.connect(transport)` and exports
+ *  nothing, so its wiring can only be checked by reading it. */
+async function mcpSource(): Promise<string> {
+  const { readFileSync } = await import('node:fs');
+  const { dirname, join } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  return readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../src/mcp.ts'), 'utf8');
+}
+
 describe('the tool schema widened rather than narrowed', () => {
   it('set_workspace_lead no longer requires leadAgentId', async () => {
-    const { readFileSync } = await import('node:fs');
-    const { dirname, join } = await import('node:path');
-    const { fileURLToPath } = await import('node:url');
-    const src = readFileSync(
-      join(dirname(fileURLToPath(import.meta.url)), '../src/mcp.ts'),
-      'utf8',
-    );
+    const src = await mcpSource();
     const decl = src.slice(src.indexOf("name: 'set_workspace_lead'"));
     const schema = decl.slice(0, decl.indexOf('\n    },'));
     // Old bundles keep sending leadAgentId; the field stays, it just stops
@@ -201,5 +304,32 @@ describe('the tool schema widened rather than narrowed', () => {
     expect(schema).toContain('leadAgentId');
     expect(schema).toContain("required: ['workspaceId']");
     expect(schema).not.toContain("required: ['workspaceId', 'leadAgentId']");
+  });
+
+  it('exposes takeover as an OPTIONAL escape hatch, and the handler forwards it', async () => {
+    const src = await mcpSource();
+    const decl = src.slice(src.indexOf("name: 'set_workspace_lead'"));
+    const schema = decl.slice(0, decl.indexOf('\n    },'));
+    // Refusing to displace a live lead is only safe if there IS a way to say
+    // you mean it — otherwise the guard becomes a wall and callers route
+    // around it by writing the seat some other way.
+    expect(schema).toContain('takeover');
+    expect(schema).toContain("required: ['workspaceId']");
+
+    // The schema advertising a field the dispatcher drops is worse than no
+    // field: the caller reads a documented override and gets a refusal it
+    // cannot explain.
+    const handler = src.slice(src.indexOf("case 'set_workspace_lead'"));
+    const body = handler.slice(0, handler.indexOf("case 'attach_doc'"));
+    expect(body).toContain('takeover');
+    expect(body).toContain('takeover: true');
+  });
+
+  it('mcp.ts hands watchWorkspace back as { open, persisted } — the two failures stay apart', async () => {
+    const src = await mcpSource();
+    // A single boolean here is how `subscribed: true` got asserted over a
+    // stream that never opened. Pinning the SIGNATURE is what keeps the
+    // module contract this file tests wired to the real caller.
+    expect(src).toContain('Promise<{ open: boolean; persisted: boolean }>');
   });
 });

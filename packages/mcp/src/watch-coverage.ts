@@ -43,13 +43,30 @@ export interface CoverageWorkspaceRow {
   queuedTotal?: number;
 }
 
-/** A board holding docs this session watches, where it has NO attachment. */
+/**
+ * A board this session covers on paper but not in fact.
+ *
+ * Wider than "no attachment record", and the width is the fix: every
+ * delivery gate asks `hasLiveAttachment`, so an hour-old record satisfies
+ * "attached" while the whole queue routes to nobody. A declared lead that
+ * went quiet is exactly that state, and it is the state this feature creates.
+ */
 export interface CoverageUnattachedBoard {
   workspaceId: string;
   name: string;
+  /** Empty when the board is in scope through its OWN `ws:` key — which is
+   *  all a declared lead holds. */
   watchedDocs: string[];
   queued: CoverageQueue;
   queuedTotal: number;
+  /** A record exists for this session. Not the same as covered. */
+  attached: boolean;
+  /** …and its heartbeat is inside the window. This is what the gates ask. */
+  heartbeatFresh: boolean;
+  /** Who holds the seat, when anyone does. */
+  leadAgentId?: string;
+  /** Whether that agent (someone OTHER than this session) is live on it. */
+  leadLive: boolean;
 }
 
 export interface WatchCoverage {
@@ -81,10 +98,10 @@ export function parseCoverage(res: unknown): WatchCoverage | undefined {
   };
 }
 
-/** The boards this session watches docs on, is not attached to, and that have
- *  something actually waiting. Unattached-with-nothing-queued is the ordinary
- *  case (every doc bound without a board lands on a default holding pen) and
- *  is deliberately not an alarm. */
+/** The boards this session follows, is not LIVE on, and that have something
+ *  actually waiting. Uncovered-with-nothing-queued is the ordinary case
+ *  (every doc bound without a board lands on a default holding pen) and is
+ *  deliberately not an alarm. */
 export function boardsWaitingOnYou(coverage: WatchCoverage | undefined): CoverageUnattachedBoard[] {
   return (coverage?.unattachedBoards ?? []).filter((b) => b.queuedTotal > 0);
 }
@@ -101,6 +118,37 @@ function describeQueue(q: CoverageQueue): string {
 }
 
 /**
+ * The remedy for ONE board, which depends on who is sitting in its seat.
+ *
+ * A single blanket sentence was wrong in two directions. On a board a live
+ * peer leads, "declare yourself lead" is advice to evict them — `setLeadAgent`
+ * has no liveness check, the incumbent gets no event it is told to act on,
+ * and the declaring agent cannot tell a takeover from claiming an empty seat.
+ * On a board this session already leads with a dead heartbeat, "you have no
+ * attachment" is simply false, and the fix it names is not the fix.
+ */
+function remedyFor(b: CoverageUnattachedBoard, agentId: string): string {
+  if (b.leadLive && b.leadAgentId !== undefined && b.leadAgentId !== agentId) {
+    return (
+      `${b.leadAgentId} holds the lead seat and is live, so the queue is addressed to them — ` +
+      `ask them rather than taking it. attach_agent(workspaceId: "${b.workspaceId}") makes you ` +
+      'addressable and subscribed without moving the seat.'
+    );
+  }
+  if (b.attached && !b.heartbeatFresh) {
+    return (
+      'your attachment is stale — no heartbeat inside the freshness window, which is exactly ' +
+      'what every delivery gate tests, so the board reads you as away. heartbeat(workspaceId: ' +
+      `"${b.workspaceId}") now, and every few minutes while you work it.`
+    );
+  }
+  return (
+    `set_workspace_lead(workspaceId: "${b.workspaceId}") attaches, subscribes and hands the ` +
+    'backlog over in one call.'
+  );
+}
+
+/**
  * One line naming every board that is waiting on this session — or `null`.
  *
  * `null` when the server said nothing (unknown, and a guess would be worse
@@ -111,22 +159,47 @@ function describeQueue(q: CoverageQueue): string {
 export function coverageAlertLine(coverage: WatchCoverage | undefined): string | null {
   const waiting = boardsWaitingOnYou(coverage);
   if (waiting.length === 0) return null;
+  const agentId = coverage?.agentId ?? '';
   const described = waiting
-    .map(
-      (b) =>
-        `"${b.name}" (${b.workspaceId}) — ${plural(b.watchedDocs.length, 'doc')} watched, ` +
-        `${b.queuedTotal} waiting (${describeQueue(b.queued)})`,
-    )
-    .join('; ');
-  const first = waiting[0] as CoverageUnattachedBoard;
+    .map((b) => {
+      const via =
+        b.watchedDocs.length > 0
+          ? `${plural(b.watchedDocs.length, 'doc')} watched`
+          : 'this board watched directly';
+      return (
+        `"${b.name}" (${b.workspaceId}) — ${via}, ${b.queuedTotal} waiting ` +
+        `(${describeQueue(b.queued)}); ${remedyFor(b, agentId)}`
+      );
+    })
+    .join(' ');
   return (
-    `[not attached] you watch docs on ${plural(waiting.length, 'board')} where you have no ` +
-    `attachment, and ${waiting.length === 1 ? 'it has' : 'they have'} work queued for a lead: ` +
-    `${described}. Watching a doc is not attaching — every delivery gate asks whether the ` +
-    'lead is ATTACHED, so none of that reaches you until you are. ' +
-    `set_workspace_lead(workspaceId: "${first.workspaceId}") attaches, subscribes and hands ` +
-    'the backlog over in one call.'
+    `[not covered] ${plural(waiting.length, 'board')} you follow ` +
+    `${waiting.length === 1 ? 'has' : 'have'} work queued for a lead, and you are not live on ` +
+    `${waiting.length === 1 ? 'it' : 'them'}. Watching is not attaching, and an attachment with ` +
+    'a stale heartbeat is not attached either — every delivery gate asks for a heartbeat inside ' +
+    `the window. ${described}`
   );
+}
+
+/**
+ * The boards a respawned session must RE-ATTACH to, not merely re-subscribe.
+ *
+ * `ensureWatchesRestored` re-wires watch KEYS. Nothing re-issues the
+ * attachment, and the attachment sidecar hydrates with the heartbeat from
+ * before the restart — so a lead came back subscribed and `away`, and every
+ * lead-addressed delivery kept queuing silently. That is the incident again,
+ * on the far side of its own fix.
+ *
+ * Only boards this session already leads or was already attached to. Not
+ * every board it can reach: `attachAgent` CLAIMS an empty seat, so attaching
+ * on restore to whatever board a watched doc happens to sit on would have a
+ * respawn quietly taking seats nobody gave it.
+ */
+export function boardsToReattach(coverage: WatchCoverage | undefined): string[] {
+  return (coverage?.workspaces ?? [])
+    .filter((w) => w.kind === 'board' && (w.lead === true || w.attached === true))
+    .filter((w) => w.heartbeatFresh !== true)
+    .map((w) => w.workspaceId);
 }
 
 /**
@@ -141,15 +214,28 @@ export function restoreNoticeContent(opts: {
   restored: string[];
   pruned: string[];
   agentName: string;
+  /** Boards the restore re-ATTACHED to. A re-wired key puts events back on
+   *  the wire; it does nothing about the attachment the delivery gates test,
+   *  and the two repairs failing separately is what let a respawned lead read
+   *  "watches restored" and still be invisible. */
+  reattached?: string[];
   coverage?: WatchCoverage | undefined;
 }): string | null {
   const lines: string[] = [];
   const n = opts.restored.length;
+  const reattached = opts.reattached ?? [];
   if (n > 0 || opts.pruned.length > 0) {
     const dropped = opts.pruned.length > 0 ? `; ${opts.pruned.length} dropped (doc gone)` : '';
     lines.push(
       `[watches restored] ${plural(n, 'watch', 'watches')} re-wired from the server for ` +
         `${opts.agentName} after restart${dropped}: ${opts.restored.join(', ')}`,
+    );
+  }
+  if (reattached.length > 0) {
+    lines.push(
+      `[attachments restored] re-attached to ${plural(reattached.length, 'board')} whose ` +
+        'attachment came back stale, so lead-addressed work reaches this session again: ' +
+        `${reattached.join(', ')}`,
     );
   }
   const alert = coverageAlertLine(opts.coverage);
