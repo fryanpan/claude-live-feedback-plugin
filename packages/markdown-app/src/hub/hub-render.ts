@@ -44,9 +44,10 @@ import {
   quoteAfterEdit,
   quoteForCapture,
   reviewAskedLine,
-  reviewBadge,
   reviewBannerText,
+  reviewCardHeadline,
   reviewHeadline,
+  reviewItemBadge,
   reviewRowTitle,
   shortCommit,
   stepTarget,
@@ -1218,6 +1219,7 @@ export function renderHomeReview(
     quiet.textContent = 'Nothing is waiting for your review right now.';
     container.append(quiet);
     appendSettledRows(container, done, handlers, now);
+    appendUnrepliedRows(container, queue.unreplied, handlers, now);
     return;
   }
 
@@ -1246,6 +1248,57 @@ export function renderHomeReview(
   });
 
   appendSettledRows(container, done, handlers, now);
+  appendUnrepliedRows(container, queue.unreplied, handlers, now);
+}
+
+/**
+ * Threads where an agent spoke last and nobody declared anything.
+ *
+ * Until this change these WERE the queue — membership was inferred from "an
+ * agent commented and no person answered", which is true of every status note
+ * an agent has ever posted. They are demoted rather than dropped: 105 rows
+ * were sitting in that inferred set the day this landed, and a row that stops
+ * rendering is indistinguishable from data loss to whoever wrote it. So the
+ * section states its own count and says why it is down here.
+ *
+ * Deliberately below the settled rows and outside `queue.total`: the walkthrough,
+ * the count and the banner are the DECLARED queue, and letting these back into
+ * any of those is how the queue becomes unreadable again.
+ */
+function appendUnrepliedRows(
+  container: HTMLElement,
+  unreplied: ReviewItem[],
+  handlers: ReviewStripHandlers,
+  now: number,
+): void {
+  if (unreplied.length === 0) return;
+  const head = document.createElement('div');
+  head.className = 'hub-review-unreplied-head';
+  const label = document.createElement('h3');
+  label.className = 'hub-review-unreplied-title';
+  label.textContent =
+    unreplied.length === 1 ? '1 unanswered comment' : `${unreplied.length} unanswered comments`;
+  const note = document.createElement('p');
+  note.className = 'hub-review-unreplied-note';
+  note.textContent = 'Nobody asked you for anything here — open one if you want to.';
+  head.append(label, note);
+  container.append(head);
+
+  for (const item of unreplied) {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = `hub-review-row hub-review-row-unreplied hub-review-${item.kind}`;
+    const title = document.createElement('span');
+    title.className = 'hub-review-row-title';
+    title.textContent = reviewRowTitle(item);
+    const sub = document.createElement('span');
+    sub.className = 'hub-review-row-sub';
+    sub.textContent = waitingLabel(item.since, now);
+    row.append(title, sub);
+    row.title = `${REVIEW_KIND_LABEL[item.kind]}: ${item.title} · ${item.why}`;
+    row.addEventListener('click', () => handlers.onOpen(item));
+    container.append(row);
+  }
 }
 
 /** What this sitting already cleared: kept in the stack as struck-through
@@ -1432,8 +1485,11 @@ export interface WalkthroughHandlers {
    *  still the one that needs you. */
   onMoreInfo: (task: HubTask, question: string) => Promise<boolean>;
   /** Answer a thread without leaving the queue. Posts a reply on the thread the
-   *  item came from, wherever that thread lives. */
-  onReply: (item: ReviewItem, text: string) => Promise<boolean>;
+   *  item came from, wherever that thread lives. `optionId` rides along when
+   *  the reply came from tapping one of a declared item's candidates — the same
+   *  shape `onAnswer` uses, because a tap and typed words must reach the thread
+   *  by one path or the two will drift. */
+  onReply: (item: ReviewItem, text: string, optionId?: string) => Promise<boolean>;
   /** Go to the exact place instead of answering here — the task's discussion at
    *  that thread, the doc anchored on that comment. */
   onOpenItem: (item: ReviewItem) => void;
@@ -1563,7 +1619,7 @@ function walkCardHead(item: ReviewItem, handlers: WalkthroughHandlers, now: numb
   const head = document.createElement('div');
   head.className = 'hub-walk-card-head';
 
-  const badge = reviewBadge(item.kind);
+  const badge = reviewItemBadge(item);
   const kind = document.createElement('span');
   kind.className = `hub-walk-k hub-walk-k-${badge.tone}`;
   kind.textContent = badge.label;
@@ -1573,8 +1629,10 @@ function walkCardHead(item: ReviewItem, handlers: WalkthroughHandlers, now: numb
   // The QUESTION, not the subject — the same title the queue row shows, so
   // tapping a row and stepping onto it cannot read as two different items.
   // In its heading form: a typed question is often a paragraph, and the whole
-  // of it is on the card already, in the quote below.
-  title.textContent = reviewHeadline(reviewRowTitle(item));
+  // of it is on the card already, in the quote below. A DECLARED headline is
+  // already a heading and goes through untouched — clipping it at the first
+  // sentence terminator is what "Ship v2 now. Or wait?" cannot survive.
+  title.textContent = reviewCardHeadline(item);
   head.append(kind, title);
 
   const context = handlers.contextLabel?.(item);
@@ -1590,6 +1648,42 @@ function walkCardHead(item: ReviewItem, handlers: WalkthroughHandlers, now: numb
   wait.textContent = waitShort(item.since, now);
   head.append(wait);
   return head;
+}
+
+/**
+ * The authored middle of a declared review item's card: what to review for,
+ * then the detail.
+ *
+ * Both are optional in the schema and neither gets a placeholder — an absent
+ * `lookFor` means the author had nothing to add past the two-line header, and
+ * printing "no guidance given" would be the card inventing a gap. The header
+ * itself (headline + why) is not here: it is required, so it renders against
+ * the card head rather than in a block that can be empty.
+ */
+function walkReviewBlocks(review: NonNullable<ReviewItem['review']>): HTMLElement[] {
+  const out: HTMLElement[] = [];
+  if (review.lookFor?.trim()) {
+    const box = document.createElement('div');
+    box.className = 'hub-walk-askbox hub-walk-lookfor';
+    const head = document.createElement('h4');
+    head.className = 'hub-walk-ask-head';
+    head.textContent = 'What to review for';
+    const body = document.createElement('p');
+    body.className = 'hub-walk-lookfor-text';
+    body.textContent = review.lookFor;
+    box.append(head, body);
+    out.push(box);
+  }
+  if (review.detail?.trim()) {
+    const detail = document.createElement('div');
+    detail.className = 'hub-walk-body hub-walk-review-detail';
+    // Markdown, because the schema says markdown — links to the thing under
+    // review are the whole point of the links shape. `renderCommentMarkdown`
+    // escapes first and only re-adds known-safe tags.
+    detail.innerHTML = renderCommentMarkdown(review.detail);
+    out.push(detail);
+  }
+  return out;
 }
 
 /** The mockup's left-bordered context block: who asked, when, and what is
@@ -1804,7 +1898,19 @@ export function renderReviewWalkthrough(
   const banner = advancedBanner(progress, handlers);
   if (banner) card.append(banner);
 
-  card.append(walkCardHead(item, handlers, now), walkCtx(item, now));
+  card.append(walkCardHead(item, handlers, now));
+  // The second half of the enforced two-line header: what needs review, then
+  // why it matters. It sits against the head rather than in the body because
+  // the pair is what has to be readable in two lines on a phone before any
+  // scrolling — the reason a declaration is refused when either half is
+  // missing or over budget.
+  if (item.review) {
+    const why = document.createElement('p');
+    why.className = 'hub-walk-why';
+    why.textContent = item.review.why;
+    card.append(why);
+  }
+  card.append(walkCtx(item, now));
 
   // ── A blocker: your own task, and the work standing behind it. There is
   // nothing to answer and nothing to reply to — the only move is to go and do
@@ -1830,10 +1936,41 @@ export function renderReviewWalkthrough(
   if (!row) {
     const where = walkWhere(item, handlers);
     if (where) card.append(where);
-    // The mockup's "What I need from you" block — rendered only when it says
-    // more than the heading already did. A one-line question fits in the
-    // heading, and quoting it again underneath is the card repeating itself.
-    if (reviewHeadline(item.ask) !== item.ask.trim().replace(/\s+/g, ' ')) {
+    const review = item.review;
+    if (review) {
+      // A DECLARED review item. Everything below was written by the agent for
+      // this card, so none of it is derived, clipped or guessed at — which is
+      // the whole reason declaring exists.
+      card.append(...walkReviewBlocks(review));
+      if (review.options && review.options.length > 0) {
+        const opts = document.createElement('div');
+        opts.className = 'hub-walk-options';
+        for (const o of review.options) {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.className = 'hub-walk-option';
+          const label = document.createElement('span');
+          label.className = 'hub-walk-option-label';
+          label.textContent = o.label;
+          b.append(label);
+          if (o.detail) {
+            const detail = document.createElement('span');
+            detail.className = 'hub-walk-option-detail';
+            detail.textContent = o.detail;
+            b.append(detail);
+          }
+          // The same contract a decision task's options have: the LABEL is the
+          // verbatim reply, the id says which candidate it was. One reply path,
+          // so a tap and a typed answer land in the thread identically.
+          b.addEventListener('click', () => handlers.onReply(item, o.label, o.id));
+          opts.append(b);
+        }
+        card.append(opts);
+      }
+    } else if (reviewHeadline(item.ask) !== item.ask.trim().replace(/\s+/g, ' ')) {
+      // The mockup's "What I need from you" block — rendered only when it says
+      // more than the heading already did. A one-line question fits in the
+      // heading, and quoting it again underneath is the card repeating itself.
       const box = document.createElement('div');
       box.className = 'hub-walk-askbox';
       const askHead = document.createElement('h4');
@@ -1845,8 +1982,15 @@ export function renderReviewWalkthrough(
       box.append(askHead, ask);
       card.append(box);
     }
+    // Always present, options or not — the candidates are a shortcut, never a
+    // closed set, and a review item with no options only has this.
     card.append(
-      promptForm('hub-walk-answer', 'Reply…', 'Send', (text) => handlers.onReply(item, text)),
+      promptForm(
+        'hub-walk-answer',
+        review?.options?.length ? '…or answer in your own words' : 'Reply…',
+        'Send',
+        (text) => handlers.onReply(item, text),
+      ),
     );
     card.append(walkActions(index, handlers));
     panel.append(card);

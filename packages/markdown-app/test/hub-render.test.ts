@@ -682,6 +682,8 @@ describe('keyboard reordering', () => {
 describe('renderHomeReview', () => {
   const strip = () => ({ onOpen: vi.fn(), onWalkthrough: vi.fn() });
 
+  /** A thread an agent DECLARED as a review item — which is what puts a thread
+   *  in the queue at all now. `note()` below is the undeclared twin. */
   const threadItem = (over: Record<string, unknown> = {}) => ({
     kind: 'task-thread' as const,
     docId: 'task:t-x',
@@ -692,8 +694,21 @@ describe('renderHomeReview', () => {
     askedBy: 'Helper',
     since: NOW - 2 * 86_400_000,
     direct: false,
+    band: 'declared' as const,
+    commentId: 'c-1',
+    review: {
+      shape: 'review' as const,
+      headline: 'Which repo does this land in?',
+      why: 'The next commit goes to one of them and both are open.',
+    },
     ...over,
   });
+
+  /** An ordinary agent comment nobody declared anything on. */
+  const note = (over: Record<string, unknown> = {}) => {
+    const { band, commentId, review, ...rest } = threadItem(over);
+    return rest;
+  };
 
   it('heads the section "For Your Review" with the dark Review All button that starts the walkthrough', () => {
     const h = strip();
@@ -763,6 +778,51 @@ describe('renderHomeReview', () => {
     // A done row is still the way back to the thing just answered.
     done.click();
     expect(h.onOpen).toHaveBeenCalledWith(settledGone);
+  });
+
+  // The band that used to BE the queue. It is demoted, not deleted — 105 rows
+  // were in the inferred set the day this shipped, and a row that stops
+  // rendering is indistinguishable from data loss to whoever wrote it.
+  it('renders undeclared comments in their own labelled band, below the queue', () => {
+    const h = strip();
+    const d = task({ needs: 'decision', assignee: 'human', title: 'Ship now or wait?' });
+    renderHomeReview(root, reviewQueue([d], [threadItem(), note()], NOW), h, [], NOW);
+    expect(root.querySelector('.hub-review-unreplied-title')?.textContent).toBe(
+      '1 unanswered comment',
+    );
+    const rows = [...root.querySelectorAll('.hub-review-row')];
+    // Order is what makes this a demotion: queue rows first, then the band.
+    expect(rows.map((r) => r.className.includes('hub-review-row-unreplied'))).toEqual([
+      false,
+      false,
+      true,
+    ]);
+    // Still reachable — the whole point of keeping it on the page.
+    (rows[2] as HTMLElement).click();
+    expect(h.onOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders the band even when the queue proper is empty', () => {
+    renderHomeReview(root, reviewQueue([], [note(), note()], NOW), strip(), [], NOW);
+    // Both sentences are true at once and both belong: nothing is asking for
+    // a decision, and two comments are still sitting there.
+    expect(root.querySelector('.hub-home-quiet')?.textContent).toContain(
+      'Nothing is waiting for your review',
+    );
+    expect(root.querySelector('.hub-review-unreplied-title')?.textContent).toBe(
+      '2 unanswered comments',
+    );
+    // A band is not a queue: no Review All, because there is nothing declared
+    // to walk through.
+    expect(root.querySelector('.hub-review-go')).toBeNull();
+  });
+
+  it('renders no band at all when every thread was declared', () => {
+    renderHomeReview(root, reviewQueue([], [threadItem()], NOW), strip(), [], NOW);
+    expect(root.querySelector('.hub-review-unreplied-head')).toBeNull();
+    // Positive control: the declared one really did render, so the absence
+    // above is not a page that rendered nothing.
+    expect(root.querySelectorAll('.hub-review-row')).toHaveLength(1);
   });
 });
 
