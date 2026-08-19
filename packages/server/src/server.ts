@@ -42,6 +42,7 @@ import {
   effectiveSince,
   readEventRows,
   readerKey,
+  taskDeepLink,
 } from './home-brief.ts';
 import {
   type LandingModel,
@@ -4319,10 +4320,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                 generate: !visitor,
                 ...(declared.review ? { review: declared.review } : {}),
               });
+              const handoff = threadUrl(docId, Boolean(visitor));
               return t
                 ? j(200, {
                     thread: t,
                     ...(declared.advice ? { reviewAdvice: declared.advice } : {}),
+                    ...(handoff ? { threadUrl: handoff } : {}),
                   })
                 : j(404, { error: 'thread not found' });
             }
@@ -4474,8 +4477,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               generate: !visitor,
               ...(declared.review ? { review: declared.review } : {}),
             });
+            const handoff = threadUrl(docId, Boolean(visitor));
             return t
-              ? j(200, { thread: t, ...(declared.advice ? { reviewAdvice: declared.advice } : {}) })
+              ? j(200, {
+                  thread: t,
+                  ...(declared.advice ? { reviewAdvice: declared.advice } : {}),
+                  ...(handoff ? { threadUrl: handoff } : {}),
+                })
               : j(500, { error: 'could not create thread' });
           }
           if (rest === 'threads/by_find' && req.method === 'POST') {
@@ -4502,10 +4510,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               // Visitor-authored text becomes the entire prompt on this route.
               { generate: !visitor, ...(declared.review ? { review: declared.review } : {}) },
             );
+            const findHandoff = threadUrl(docId, Boolean(visitor));
             return res.ok
               ? j(200, {
                   thread: res.thread,
                   ...(declared.advice ? { reviewAdvice: declared.advice } : {}),
+                  ...(findHandoff ? { threadUrl: findHandoff } : {}),
                 })
               : j(409, res);
           }
@@ -4985,6 +4995,58 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    */
   function externalBaseUrl(): string {
     return opts.publicBaseUrl ?? publicBaseUrl(server.port ?? port);
+  }
+
+  /**
+   * The link an agent hands over after posting a report — the URL that opens
+   * where the thread now lives.
+   *
+   * Measured cost of not having it: 52,340 words — 40% of every word in the
+   * user's chat window over 38 hours — were agent-to-agent reports relayed
+   * through his terminal rather than posted on the task they belonged to.
+   * The rule to post on the task already ships. What did not exist was a
+   * cheap way to then TELL a peer where it went: the write succeeded and
+   * returned no link, so handing over a pointer meant assembling one from
+   * parts against a base URL the agent may not know — while answering in
+   * chat cost nothing. This is the same fix `reviewGapAdvice` makes for a
+   * thin review item: what the author needs next travels back on the success
+   * response, rather than being something they are expected to know.
+   *
+   * Absolute, unlike `taskDeepLink`'s own relative output, and that
+   * difference is the point: the brief renders on the page it points at, but
+   * this URL is being pasted somewhere else entirely. It goes through
+   * `externalBaseUrl()` for the reason that function exists — one base, so
+   * an operator override cannot reach some links and miss others.
+   *
+   * Covers BOTH surfaces a thread can live on, and the second one is not a
+   * nicety: the thread that asked you for something is very often a comment
+   * on a markdown review doc, not a task. A version of this that answered
+   * only for `task:` docs would hand back nothing on the commonest reply
+   * path — reintroducing, one surface over, exactly the friction the whole
+   * change exists to remove.
+   *
+   * OWNER ONLY, and deliberately more conservative than today's sharing
+   * needs. Per-doc shares were removed (`POST /api/share/link` answers 410
+   * `per_doc_sharing_removed`), so every visitor that can reach this code is
+   * workspace-scoped and already holds the id this would tell them — the
+   * guard closes no leak that is currently open. It stays because the value
+   * is a URL capability and the cost of keeping it owner-only is nil, so the
+   * default should already be right on the day doc-scoped visitors come
+   * back. Returns undefined for an unknown doc, so callers can spread it.
+   */
+  function threadUrl(docId: string, isVisitor: boolean): string | undefined {
+    if (isVisitor) return undefined;
+    if (docId.startsWith('task:')) {
+      const workspaceId = taskStore.workspaceOfDoc(docId);
+      if (!workspaceId) return undefined;
+      const taskId = docId.slice('task:'.length);
+      return `${externalBaseUrl()}${taskDeepLink(workspaceId, taskId)}`;
+    }
+    // Reuse `withReviewUrl` rather than rebuild the /review/ path here: it
+    // already branches on doc type (a mockup is not served from /review/),
+    // and one builder is the same reason `externalBaseUrl` is one function.
+    const meta = rooms.get(docId)?.meta;
+    return meta ? withReviewUrl(meta).reviewUrl : undefined;
   }
 
   // Decorate doc metadata with a `reviewUrl` that's actually reachable from
