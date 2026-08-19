@@ -7,6 +7,7 @@ import {
   isReviewItemOpen,
   readReviewPayload,
   readTaskReviewItem,
+  reviewAnswered,
   reviewFromDecisionTask,
   reviewGapAdvice,
   reviewPayloadMessage,
@@ -259,6 +260,41 @@ describe('readReviewPayload — loose on the way out, so nothing already stored 
 
   it('carries answeredWith through', () => {
     expect(readReviewPayload(decision({ answeredWith: 'dim' }))?.answeredWith).toBe('dim');
+  });
+
+  it('carries answeredAt through, and refuses a stamp that is not a number', () => {
+    expect(readReviewPayload(decision({ answeredAt: 1_700_000_000_000 }))?.answeredAt).toBe(
+      1_700_000_000_000,
+    );
+    // A peer can sync anything into this map. A stamp that arrived as a string
+    // or as NaN must not read as an answer — that would silently retire a
+    // question — so it is dropped and the item stays on the queue.
+    for (const junk of ['1700000000000', Number.NaN, null, {}]) {
+      expect(
+        readReviewPayload(decision({ answeredAt: junk as never }))?.answeredAt,
+      ).toBeUndefined();
+    }
+  });
+});
+
+/**
+ * One predicate for "has a person answered this", because the queue and the
+ * card must not each decide it — and because two stamps mean the same thing:
+ * `answeredAt` on every answer since it existed, `answeredWith` alone on an
+ * option tapped before it did.
+ */
+describe('reviewAnswered', () => {
+  const payload = (over: Partial<ReviewPayload> = {}): ReviewPayload =>
+    readReviewPayload(decision(over)) as ReviewPayload;
+
+  it('is true for a typed answer, an option tap, and a legacy option tap', () => {
+    expect(reviewAnswered(payload({ answeredAt: 1 }))).toBe(true);
+    expect(reviewAnswered(payload({ answeredAt: 1, answeredWith: 'dim' }))).toBe(true);
+    expect(reviewAnswered(payload({ answeredWith: 'dim' }))).toBe(true);
+  });
+
+  it('is false for an item nobody has answered', () => {
+    expect(reviewAnswered(payload())).toBe(false);
   });
 });
 

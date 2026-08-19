@@ -287,7 +287,7 @@ describe('renderTaskDetail — the same options, from the other entrance', () =>
     renderTaskDetail(root, d, handlers);
     // Presence first: the free-text form is there either way.
     expect(root.querySelector('.hub-answer-form')).not.toBeNull();
-    const opt = root.querySelector('.hub-detail-option') as HTMLElement;
+    const opt = root.querySelector('.hub-decide-option') as HTMLElement;
     expect(opt.textContent).toContain('Ship it blue');
     opt.click();
     expect(onAnswer).toHaveBeenCalledWith(d, 'Ship it blue', 'o-1');
@@ -295,7 +295,7 @@ describe('renderTaskDetail — the same options, from the other entrance', () =>
     // A decision with no options renders none — the block is conditional, not
     // an empty shell.
     renderTaskDetail(root, decision({ title: 'Rename the tab?' }), handlers);
-    expect(root.querySelector('.hub-detail-option')).toBeNull();
+    expect(root.querySelector('.hub-decide-option')).toBeNull();
   });
 });
 

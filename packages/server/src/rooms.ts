@@ -667,13 +667,19 @@ export class Rooms {
    * Answer a Review Item: post the person's words as a reply, and record
    * which option they came from.
    *
-   * **The answer IS the reply.** There is deliberately no second answer store
-   * and no answered flag, because a review item leaves the queue exactly when
-   * a person speaks — which `unansweredRun` already decides, which
-   * `postComment` already triggers, and which already reopens a resolved
-   * thread and already emits the events watching agents receive. Building a
-   * parallel path would give "this is handled" two spellings that could
-   * immediately disagree.
+   * **The answer IS the reply** — the words a person answered with are a
+   * comment, there is no second answer store, and this still reopens a
+   * resolved thread and still emits the events watching agents receive.
+   *
+   * What this no longer leans on is "a person spoke" as the RECORD that it
+   * happened. That reading held only while every person's comment in the
+   * thread was an answer, and the task panel's single composer made that
+   * false: it aims an ordinary remark at the newest comment's thread, so a
+   * line of small talk retired an unanswered decision and took its card with
+   * it. So the answer is stamped onto the declaration (`answeredAt`, plus
+   * `answeredWith` when the words came from an option) and the queue reads
+   * that. One field, written in one place, so the two spellings this comment
+   * used to warn about still cannot disagree.
    *
    * `optionId` is provenance only, mirroring `answer_decision`'s split: `text`
    * is always the verbatim answer, and the id merely records which candidate
@@ -706,6 +712,10 @@ export class Rooms {
     // says "answered" carries a card that still says "unanswered".
     setCommentReview(room.ydoc, threadId, commentId, {
       ...target.review,
+      // Every answer, tapped or typed. `answeredWith` cannot carry this on its
+      // own — it is absent on a typed answer — and an item with no stamp at
+      // all is one the queue would go on offering after it was answered.
+      answeredAt: Date.now(),
       ...(optionId !== undefined ? { answeredWith: optionId } : {}),
     });
     const replied = await this.postComment(docId, threadId, author, text, undefined, opts);
