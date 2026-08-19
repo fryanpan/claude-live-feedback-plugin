@@ -213,6 +213,8 @@ const NAV_ICONS = {
   tasks: `<svg ${SVG} ${SVG_ENDS}><path d="M9 6h11M9 12h11M9 18h11"/><path d="M4 6h.01M4 12h.01M4 18h.01"/></svg>`,
   mine: `<svg ${SVG} ${SVG_ENDS}><circle cx="12" cy="8" r="3.4"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></svg>`,
   activity: `<svg ${SVG} ${SVG_ENDS}><path d="M3 12h4l3-7 4 14 3-7h4"/></svg>`,
+  collapse: `<svg ${SVG} ${SVG_ENDS}><polyline points="14 6 8 12 14 18"/></svg>`,
+  expand: `<svg ${SVG} ${SVG_ENDS}><polyline points="10 6 16 12 10 18"/></svg>`,
   share: `<svg ${SVG} ${SVG_ENDS}><circle cx="18" cy="5" r="2.6"/><circle cx="6" cy="12" r="2.6"/><circle cx="18" cy="19" r="2.6"/><path d="m8.3 10.8 7.4-4.3M8.3 13.2l7.4 4.3"/></svg>`,
   settings: `<svg ${SVG} ${SVG_ENDS}><circle cx="12" cy="12" r="3"/><path d="M12 2.5v2.4M12 19.1v2.4M21.5 12h-2.4M4.9 12H2.5M18.7 5.3l-1.7 1.7M7 17l-1.7 1.7M18.7 18.7 17 17M7 7 5.3 5.3"/></svg>`,
 };
@@ -234,15 +236,6 @@ function buildShell(root: HTMLElement, name: string): void {
     <header class="hub-topbar">
       <a href="/" class="back-link" title="All workspaces" aria-label="Back">←</a>
       <span class="hub-ws-name">${escapeHtml(name)}</span>
-      <nav id="hub-nav" class="hub-nav" aria-label="Workspace pages">
-        ${NAV_ITEMS.map(
-          (
-            n,
-          ) => `<button type="button" class="hub-nav-item" data-nav="${n.nav}" title="${escapeHtml(n.label)}">
-          <span class="hub-nav-icon" aria-hidden="true">${n.icon}</span><span class="hub-nav-label">${escapeHtml(n.label)}</span>
-        </button>`,
-        ).join('')}
-      </nav>
       <div class="hub-cluster">
         <div id="hub-people" class="hub-presence hub-people hidden"></div>
         <button type="button" id="hub-share" class="hub-icon-btn" title="Share workspace" aria-label="Share workspace">${NAV_ICONS.share}</button>
@@ -260,6 +253,18 @@ function buildShell(root: HTMLElement, name: string): void {
     </header>
     <div id="hub-connection" class="conn-banner hidden" role="status" aria-live="polite"></div>
     <div class="hub-main" id="hub-main">
+      <nav id="hub-nav" class="hub-nav" aria-label="Workspace pages">
+        ${NAV_ITEMS.map(
+          (
+            n,
+          ) => `<button type="button" class="hub-nav-item" data-nav="${n.nav}" title="${escapeHtml(n.label)}">
+          <span class="hub-nav-icon" aria-hidden="true">${n.icon}</span><span class="hub-nav-label">${escapeHtml(n.label)}</span>
+        </button>`,
+        ).join('')}
+        <button type="button" id="hub-nav-collapse" class="hub-nav-item hub-nav-collapse" title="Collapse">
+          <span class="hub-nav-icon" aria-hidden="true">${NAV_ICONS.collapse}</span><span class="hub-nav-label">Collapse</span>
+        </button>
+      </nav>
       <section id="hub-home" class="hub-home hidden">
         <div id="hub-home-page">
           <div id="hub-home-brief"></div>
@@ -1507,6 +1512,29 @@ async function main(): Promise<void> {
   // button honours all four.
   for (const btn of document.querySelectorAll<HTMLButtonElement>('.hub-nav-item[data-nav]')) {
     btn.addEventListener('click', () => setNav((btn.dataset.nav as HubNav) ?? 'tasks'));
+  }
+  // Rail collapse — persisted so the choice survives reloads. The button only
+  // renders on wide screens (CSS hides it in the strip/bottom-bar bands).
+  {
+    const NAV_COLLAPSED_KEY = 'lf-hub-nav-collapsed';
+    const nav = document.getElementById('hub-nav');
+    const collapseBtn = document.getElementById('hub-nav-collapse');
+    const apply = (collapsed: boolean) => {
+      nav?.classList.toggle('hub-nav--collapsed', collapsed);
+      if (collapseBtn) {
+        const icon = collapseBtn.querySelector('.hub-nav-icon');
+        if (icon) icon.innerHTML = collapsed ? NAV_ICONS.expand : NAV_ICONS.collapse;
+        const label = collapseBtn.querySelector('.hub-nav-label');
+        if (label) label.textContent = collapsed ? 'Expand' : 'Collapse';
+        collapseBtn.title = collapsed ? 'Expand' : 'Collapse';
+      }
+    };
+    apply(localStorage.getItem(NAV_COLLAPSED_KEY) === '1');
+    collapseBtn?.addEventListener('click', () => {
+      const next = !nav?.classList.contains('hub-nav--collapsed');
+      localStorage.setItem(NAV_COLLAPSED_KEY, next ? '1' : '0');
+      apply(next);
+    });
   }
   window.addEventListener('popstate', () => {
     setNav(navFromPath(location.pathname), false);
