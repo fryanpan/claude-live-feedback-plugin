@@ -56,6 +56,7 @@ import {
   shouldPollHome,
   tabForNav,
   unplacedNotice,
+  voiceHubContext,
   walkPosition,
 } from './hub-model.ts';
 import {
@@ -1582,8 +1583,13 @@ async function main(): Promise<void> {
   createVoiceCapture({
     button: el('hub-mic'),
     indicator: el('hub-voice'),
+    // The open detail panel OR the highlighted row — see `voiceHubContext`.
+    // Both are "this ticket" to the person holding the mic.
     getContext: () =>
-      state.detailTaskId ? { surface: 'task', taskId: state.detailTaskId } : { surface: 'hub' },
+      voiceHubContext(
+        state.detailTaskId,
+        document.activeElement?.closest<HTMLElement>('.hub-task-row')?.dataset.taskId,
+      ),
     send: async (transcript, context) => {
       const res = await send(`/api/workspaces/${encodeURIComponent(workspaceId)}/voice`, 'POST', {
         transcript,

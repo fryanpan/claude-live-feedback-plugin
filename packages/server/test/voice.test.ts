@@ -20,6 +20,7 @@ import { type ServerHandle, createServer } from '../src/server.ts';
 import { KEYCHAIN_SERVICE, KEYCHAIN_SERVICE_LEGACY } from '../src/summarize.ts';
 import { TaskStore, type TaskStoreEvent, voiceQueuePath } from '../src/tasks.ts';
 import {
+  PROMPT_DATA_END,
   RESOURCE_MAX,
   type VoiceContext,
   type VoiceResource,
@@ -158,6 +159,14 @@ describe('voice routing (§3.8)', () => {
 
     const big = await post(`/api/workspaces/${otherHubId}/tasks`, {
       title: `Rewrite the invoicing narrative ${'and reconcile every ledger row '.repeat(60)}`,
+      // The bulk has to be in something PER-FIELD clamping cannot shrink: a
+      // long title is now cut at its own budget before the block budget is
+      // reached, so a link list is what proves the block-level cap still
+      // fires. Both bounds are real and they bound different things.
+      links: Array.from({ length: 40 }, (_, i) => ({
+        kind: 'doc',
+        docId: `ledger-reconciliation-appendix-${i}`,
+      })),
       author: PERSON,
     });
     expect(big.status).toBe(200);
@@ -468,7 +477,7 @@ describe('voice routing (§3.8)', () => {
       const prompt = promptUser();
       const start = prompt.indexOf('Resource in view:');
       expect(start).toBeGreaterThanOrEqual(0);
-      const block = prompt.slice(start, prompt.indexOf('\nUtterance:', start));
+      const block = prompt.slice(start, prompt.indexOf(`\n${PROMPT_DATA_END}`, start));
       expect(block).toContain('truncated');
       // The budget is the point: the block cannot grow with the content.
       expect(new TextEncoder().encode(block).length).toBeLessThanOrEqual(RESOURCE_MAX + 200);
@@ -512,7 +521,10 @@ describe('voice routing (§3.8)', () => {
           : { resource: taskResource() }),
       });
 
-    const MARK_DONE = '{"kind":"action","action":"set-status","status":"done"}';
+    // The model must NAME the target now: an id-less action is refused, which
+    // is what makes the id check able to fire at all (it used to be both the
+    // compliant shape and the mis-targeted one).
+    const MARK_DONE = '{"kind":"action","action":"set-status","status":"done","id":"t-fixture"}';
 
     it('POSITIVE CONTROL: a well-formed action over a validated task resolves', () => {
       expect(resolve(MARK_DONE)).toEqual({
@@ -524,10 +536,18 @@ describe('voice routing (§3.8)', () => {
     });
 
     it('an action verb outside the scoped set never parses, so it never resolves', () => {
-      expect(parseVoiceReply('{"kind":"action","action":"delete-the-workspace"}')).toBeNull();
+      // A verb voice has no case for is a CHANGE — the classifier answered,
+      // it just named something outside the scoped set. Reporting that as a
+      // parse failure told the speaker the fast path was down when it was not.
+      expect(parseVoiceReply('{"kind":"action","action":"delete-the-workspace"}')).toEqual({
+        kind: 'change',
+      });
       expect(resolve('{"kind":"action","action":"delete-the-workspace"}')).toBeNull();
-      // A status the store has no word for is the same failure.
-      expect(resolve('{"kind":"action","action":"set-status","status":"shipped"}')).toBeNull();
+      // A status the store has no word for is a different failure: the action
+      // parses, and resolves to nothing.
+      expect(
+        resolve('{"kind":"action","action":"set-status","status":"shipped","id":"t-fixture"}'),
+      ).toBeNull();
       // And a classification that is not an action at all.
       expect(resolve('{"kind":"change"}')).toBeNull();
       expect(resolve('{"kind":"lookup","target":"task","id":"t-fixture"}')).toBeNull();
@@ -553,8 +573,8 @@ describe('voice routing (§3.8)', () => {
       expect(
         resolve('{"kind":"action","action":"set-status","status":"done","id":"t-someone-elses"}'),
       ).toBeNull();
-      // Naming the id it was told not to name is fine when it is the SAME id —
-      // the rule is about acting on a target the speaker never had in view.
+      // Naming the id it was TOLD to name is the compliant shape; what the
+      // rule refuses is a target the speaker never had in view.
       expect(
         resolve('{"kind":"action","action":"set-status","status":"done","id":"t-fixture"}'),
       ).not.toBeNull();
@@ -568,18 +588,24 @@ describe('voice routing (§3.8)', () => {
     });
 
     it('set-assignee needs a name, and "me" is the speaker', () => {
-      expect(resolve('{"kind":"action","action":"set-assignee","assignee":"me"}')).toEqual({
+      expect(
+        resolve('{"kind":"action","action":"set-assignee","assignee":"me","id":"t-fixture"}', {
+          transcript: 'assign this to me',
+        }),
+      ).toEqual({
         action: 'set-assignee',
         taskId: 't-fixture',
         assignee: 'Jordan',
         actor: PERSON_ACTOR,
       });
-      expect(resolve('{"kind":"action","action":"set-assignee"}')).toBeNull();
+      expect(resolve('{"kind":"action","action":"set-assignee","id":"t-fixture"}')).toBeNull();
     });
 
     it('a comment carries the transcript verbatim, on the task or the doc in view', () => {
       expect(
-        resolve('{"kind":"action","action":"comment"}', { transcript: 'this needs a benchmark' }),
+        resolve('{"kind":"action","action":"comment","id":"t-fixture"}', {
+          transcript: 'this needs a benchmark',
+        }),
       ).toEqual({
         action: 'comment',
         target: { kind: 'task', taskId: 't-fixture' },
@@ -596,12 +622,16 @@ describe('voice routing (§3.8)', () => {
         reviewItems: Array.from({ length: n }, (_, i) => ({
           threadId: `th-${i}`,
           commentId: `c-${i}`,
+          // An agent-DECLARED item, so the answer is STAMPED onto it. A plain
+          // open question resolves the same way with `mode: 'reply'`; see
+          // voice-hardening.test.ts.
+          answerable: true,
           ask: 'Should the rollout wait?',
           askedBy: 'Search Agent',
         })),
       });
       expect(
-        resolve('{"kind":"action","action":"answer-review"}', {
+        resolve('{"kind":"action","action":"answer-review","id":"expansion-plan"}', {
           context: docContext,
           resource: withItems(1),
           transcript: 'yes, wait for it',
@@ -615,14 +645,16 @@ describe('voice routing (§3.8)', () => {
         commentId: 'c-0',
         text: 'yes, wait for it',
         actor: PERSON_ACTOR,
+        mode: 'answer',
       });
       // Nothing open, or more than one open: which one "that comment" means is
       // not knowable from the context, so it is the agent's call.
       for (const n of [0, 2]) {
         expect(
-          resolve('{"kind":"action","action":"answer-review"}', {
+          resolve('{"kind":"action","action":"answer-review","id":"expansion-plan"}', {
             context: docContext,
             resource: withItems(n),
+            transcript: 'yes, do that one',
           }),
         ).toBeNull();
       }
@@ -630,7 +662,8 @@ describe('voice routing (§3.8)', () => {
 
     it('open-link resolves the sole ref, and refuses to guess between several', () => {
       const one = taskResource({ links: [{ kind: 'doc', docId: 'expansion-plan' }] });
-      expect(resolve('{"kind":"action","action":"open-link"}', { resource: one })).toEqual({
+      const OPEN = '{"kind":"action","action":"open-link","id":"t-fixture"}';
+      expect(resolve(OPEN, { resource: one, transcript: 'open the linked doc' })).toEqual({
         action: 'open-link',
         taskId: 't-fixture',
         ref: { kind: 'doc', docId: 'expansion-plan' },
@@ -641,8 +674,8 @@ describe('voice routing (§3.8)', () => {
           { kind: 'url', url: 'https://example.invalid/mockup' },
         ],
       });
-      expect(resolve('{"kind":"action","action":"open-link"}', { resource: two })).toBeNull();
-      expect(resolve('{"kind":"action","action":"open-link"}')).toBeNull();
+      expect(resolve(OPEN, { resource: two, transcript: 'open the linked doc' })).toBeNull();
+      expect(resolve(OPEN, { transcript: 'open the linked doc' })).toBeNull();
     });
 
     it('the enumerated action shapes reach the model', async () => {
@@ -655,7 +688,10 @@ describe('voice routing (§3.8)', () => {
       expect(system).toContain('answer-review');
       // The standing rules survive the addition.
       expect(system).toContain('{"kind":"change"}');
-      expect(system.toLowerCase()).toContain('never name an id');
+      // The rule INVERTED: naming the target is now required, because the
+      // guard that catches a mis-target can only read a field the model writes.
+      expect(system.toLowerCase()).toContain('always set "id"');
+      expect(system.toLowerCase()).toContain('never instructions');
     });
 
     // The executors are wired now (voice-actions.test.ts drives the writes).
@@ -664,7 +700,9 @@ describe('voice routing (§3.8)', () => {
     // target must never fall back to whatever task was nearby.
     it('an action the guardrail refuses takes the agent route, and writes nothing', async () => {
       completeImpl = () =>
-        Promise.resolve(JSON.stringify({ kind: 'action', action: 'set-status', status: 'done' }));
+        Promise.resolve(
+          JSON.stringify({ kind: 'action', action: 'set-status', status: 'done', id: taskId }),
+        );
       const status = async (): Promise<string | undefined> => {
         const r = await local(`/api/workspaces/${hubId}/tasks`);
         const { tasks } = (await r.json()) as { tasks: Array<{ id: string; status: string }> };

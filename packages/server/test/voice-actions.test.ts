@@ -271,7 +271,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
 
   describe('set-status', () => {
     it('“mark this done” transitions the task and acks the title and from→to', async () => {
-      classify({ kind: 'action', action: 'set-status', status: 'done' });
+      classify({ kind: 'action', action: 'set-status', status: 'done', id: doneTaskId });
       const body = await say(hubId, 'mark this done', { surface: 'task', taskId: doneTaskId });
 
       expect(body.route).toBe('fast-path-action');
@@ -301,7 +301,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
     });
 
     it('re-sending the same transition acks SUCCESS — the board is already right', async () => {
-      classify({ kind: 'action', action: 'set-status', status: 'done' });
+      classify({ kind: 'action', action: 'set-status', status: 'done', id: doneTaskId });
       const body = await say(hubId, 'mark this done', { surface: 'task', taskId: doneTaskId });
 
       expect(body.route).toBe('fast-path-action');
@@ -313,7 +313,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
     });
 
     it('a transition refused as BLOCKED writes nothing and hands the utterance to the agent', async () => {
-      classify({ kind: 'action', action: 'set-status', status: 'done' });
+      classify({ kind: 'action', action: 'set-status', status: 'done', id: blockedTaskId });
       const body = await say(hubId, 'mark this done', { surface: 'task', taskId: blockedTaskId });
 
       expect(body.route).toBe('agent');
@@ -324,7 +324,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
     });
 
     it('an actor with no `kind` writes NOTHING — attribution would be a lie', async () => {
-      classify({ kind: 'action', action: 'set-status', status: 'done' });
+      classify({ kind: 'action', action: 'set-status', status: 'done', id: kindlessTaskId });
       const body = await say(
         hubId,
         'mark this done',
@@ -340,7 +340,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
 
   describe('set-assignee', () => {
     it('“assign this to me” resolves to the SPEAKER’s name, in the router', async () => {
-      classify({ kind: 'action', action: 'set-assignee', assignee: 'me' });
+      classify({ kind: 'action', action: 'set-assignee', assignee: 'me', id: assignTaskId });
       const body = await say(hubId, 'assign this to me', {
         surface: 'task',
         taskId: assignTaskId,
@@ -364,7 +364,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
   describe('comment', () => {
     it('posts the transcript VERBATIM on task:<taskId>, attributed to the speaker', async () => {
       const said = 'note that the crawler is flaky on retries';
-      classify({ kind: 'action', action: 'comment' });
+      classify({ kind: 'action', action: 'comment', id: commentTaskId });
       const body = await say(hubId, said, { surface: 'task', taskId: commentTaskId });
 
       expect(body.route).toBe('fast-path-action');
@@ -383,7 +383,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
     });
 
     it('an actor with no `kind` posts NOTHING — the comment would be misattributed', async () => {
-      classify({ kind: 'action', action: 'comment' });
+      classify({ kind: 'action', action: 'comment', id: kindlessTaskId });
       const body = await say(
         hubId,
         'the retry backoff looks wrong',
@@ -399,7 +399,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
   describe('answer-review', () => {
     it('answers when EXACTLY ONE open item is in scope, verbatim and as the speaker', async () => {
       const said = 'go with the shorter clause, it reads better on mobile';
-      classify({ kind: 'action', action: 'answer-review' });
+      classify({ kind: 'action', action: 'answer-review', id: oneItemDocId });
       const body = await say(hubId, said, { surface: 'doc', docId: oneItemDocId });
 
       expect(body.route).toBe('fast-path-action');
@@ -414,7 +414,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
     });
 
     it('with TWO open items in scope it writes NOTHING and hands the utterance to the agent', async () => {
-      classify({ kind: 'action', action: 'answer-review' });
+      classify({ kind: 'action', action: 'answer-review', id: twoItemDocId });
       const body = await say(hubId, 'yes, do that one', { surface: 'doc', docId: twoItemDocId });
 
       expect(body.route).toBe('agent');
@@ -425,7 +425,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
     });
 
     it('with NO open item in scope it writes nothing either', async () => {
-      classify({ kind: 'action', action: 'answer-review' });
+      classify({ kind: 'action', action: 'answer-review', id: noItemDocId });
       const body = await say(hubId, 'yes, do that one', { surface: 'doc', docId: noItemDocId });
 
       expect(body.route).toBe('agent');
@@ -435,7 +435,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
 
   describe('open-link', () => {
     it('“open the linked doc” navigates to the task’s own doc ref', async () => {
-      classify({ kind: 'action', action: 'open-link' });
+      classify({ kind: 'action', action: 'open-link', id: linkedTaskId });
       const body = await say(hubId, 'open the linked doc', {
         surface: 'task',
         taskId: linkedTaskId,
@@ -449,7 +449,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
     });
 
     it('a task whose only link is a `url` ref navigates nowhere and goes to the agent', async () => {
-      classify({ kind: 'action', action: 'open-link' });
+      classify({ kind: 'action', action: 'open-link', id: urlOnlyTaskId });
       const body = await say(hubId, 'open the linked mockup', {
         surface: 'task',
         taskId: urlOnlyTaskId,
