@@ -111,17 +111,30 @@ export interface ScheduleArgs {
  * entry is the act of consent; a key that happens to be in the environment
  * for other reasons is not.
  */
-function resolveKey(explicit?: string | null): string | null {
+export function resolveKeyFrom(
+  explicit: string | null | undefined,
+  read: (service: string) => string | null,
+): string | null {
   if (explicit !== undefined) return explicit || null;
   for (const service of [KEYCHAIN_SERVICE, KEYCHAIN_SERVICE_LEGACY]) {
     try {
-      const key = readKeychainPassword(service);
+      const key = read(service);
       if (key) return key;
     } catch {
       // A missing entry throws; try the next name before giving up.
     }
   }
   return null;
+}
+
+/**
+ * The reader is a parameter above so the ORDER can be tested without a
+ * keychain: `readKeychainPassword` shells out to `security`, so a test of the
+ * real function would either touch this machine's keychain or measure
+ * nothing.
+ */
+function resolveKey(explicit?: string | null): string | null {
+  return resolveKeyFrom(explicit, readKeychainPassword);
 }
 
 /** Process-wide so the key hint / on notice appear once, not once per server. */
