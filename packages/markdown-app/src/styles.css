@@ -1813,6 +1813,22 @@ body.hub-body {
 .hub-nav-dock {
   position: sticky;
   bottom: 8px;
+  /* Above the task detail's scrim (60), and the DOCK only — the nav itself
+     keeps no layer, so the pages stay under an overlay that is meant to cover
+     them. Docking put the mic inside the one element `.hub-detail` (fixed,
+     `inset: 0`, later in the shell than `.hub-main`) paints over at every
+     width, and hold-to-talk from inside an open task is a shipped capability:
+     the voice context sends `surface: 'task'`, and its keyboard half wants a
+     Space key. Under the scrim the mic is not merely dimmed — the click lands
+     on the scrim, whose handler CLOSES the task. Nothing is behind the rail's
+     column, so a mic painted over that scrim still covers no page content,
+     which is the promise docking was for.
+
+     This reaches only the widths where the nav is static (the rail and the
+     ≤1100px strip). A `position: fixed` bar is a stacking context whatever its
+     z-index, so at ≤900px no number here can escape it; there the overlay is
+     kept off the bar's row instead — see `.hub-detail` in the ≤900px block. */
+  z-index: 70;
   display: flex;
   align-items: center;
   /* *"slightly separate … so it's clear it's not a navbar item"* — a divider
@@ -3692,6 +3708,12 @@ a.hub-link-chip:hover {
   .hub-nav-dock {
     order: -1;
     position: relative;
+    /* The rail's sticky offset, undone. `bottom: 8px` says "park 8px off the
+       scrollport's foot" while the dock is sticky; read by a RELATIVE box it
+       means "paint 8px above your flow position", which lifts the stretched
+       dock — divider and all — out of line with the tabs beside it and over
+       the bar's top border. */
+    bottom: auto;
     align-self: stretch;
     margin: 0;
     padding: 0 10px 0 0;
@@ -3803,11 +3825,25 @@ a.hub-link-chip:hover {
   .hub-owner-ctl .hub-row-assignee {
     inset: -6px;
   }
+  /* The full-screen panel stops where the bottom bar starts, because the mic
+     is IN that bar now. A fixed bar is a stacking context whatever its
+     z-index, so the dock's own layer cannot climb out of it here — and the
+     panel is a later sibling at the same 60, so it wins on tree order and
+     takes the mic with the tabs. Ending the overlay above the bar is the
+     geometric answer: nothing is over the mic, rather than the mic being over
+     nothing. It costs the panel one bar of height and keeps hold-to-talk
+     reachable from an open task on the one device with no Space key.
+
+     This is not the float era's tail reservation coming back. That was a
+     promise about a COLUMN a scrolling control could pass through at some
+     scroll positions and not others; this is a row the panel's box simply
+     ends above, the same way `#hub-root` already ends above it. */
   .hub-detail {
     padding: 0;
+    bottom: calc(var(--hub-bottom-bar, 0px) + var(--safe-bottom, 0px));
   }
   .hub-detail-panel {
-    max-height: 100vh;
+    max-height: 100%;
     height: 100%;
     width: 100%;
     border-radius: 0;

@@ -215,18 +215,74 @@ describe('the phone gets the mic in the bottom tab bar', () => {
     expect(rule('.hub-nav-dock', phone)).not.toMatch(/flex:\s*1/);
   });
 
-  it('leaves the bar no higher than the full-screen overlays, mic included', () => {
-    // The whole point of docking: the mic is part of the bar now, so an
-    // overlay that covers the bar covers the mic. It can no longer punch
-    // through a panel from a higher layer — which is the defect the deleted
-    // mitigations were compensating for. Equal z-index is enough, because the
-    // detail overlay comes later in the shell markup.
+  it('undoes the rail’s sticky offset when the dock joins a horizontal bar', () => {
+    // `bottom: 8px` is the STICKY rail's offset — how far off the scrollport's
+    // foot the mic parks. `position: relative` keeps reading the same
+    // declaration, and a relatively positioned box with a `bottom` is PAINTED
+    // that far ABOVE its flow position: the dock's stretched box, divider and
+    // all, would ride 8px out of line with the tabs beside it and poke over
+    // the bar's top border. A media query adds no specificity, so the reset
+    // has to be written — the rule the rail block states in its own comment.
+    // Positive control: the offset really is inherited from the rail rule.
+    expect(rule('.hub-nav-dock')).toMatch(/bottom:\s*8px/);
+    expect(rule('.hub-nav-dock', media('(max-width: 1100px)'))).toMatch(/bottom:\s*auto/);
+  });
+
+  it('leaves the bar no higher than the full-screen overlays', () => {
+    // The bar itself stays under the detail overlay: an overlay that covers
+    // the board covers the pages you could navigate to instead of it. Equal
+    // z-index is enough, because the detail overlay comes later in the shell
+    // markup. (What must NOT be covered is the mic — see the describe below,
+    // where the overlay is kept off the bar's row entirely.)
     const z = (decl: string) => Number(/z-index:\s*(\d+)/.exec(decl)?.[1]);
     const bar = z(rule('.hub-nav', media('(max-width: 900px)')));
     expect(bar, 'the bar lost its layer').not.toBeNaN();
     expect(bar).toBeLessThanOrEqual(z(rule('.hub-detail')));
-    // And the docked mic no longer carries a layer of its own at all.
+    // And the docked mic carries no layer of its own — it rides the dock's.
     expect(rule('.hub-nav-dock .voice-mic')).toMatch(/z-index:\s*auto/);
+  });
+});
+
+describe('the task detail never lands on top of the docked mic', () => {
+  const z = (decl: string) => Number(/z-index:\s*(\d+)/.exec(decl)?.[1]);
+
+  /**
+   * Docking traded one overlap for another. `.hub-detail` is `position: fixed;
+   * inset: 0` and comes after `.hub-main` in the shell, so the panel and its
+   * scrim cover the nav — and the mic went into the nav. That is not cosmetic:
+   * hold-to-talk from inside an open task is a shipped capability (the voice
+   * context sends `surface: 'task'`), and the keyboard half of it needs a
+   * Space key a phone does not have. The mic has to stay reachable while a
+   * task is open, at every width.
+   */
+  it('lifts the dock — and only the dock — over the panel’s scrim', () => {
+    // Where the nav is a static rail or strip (≥901px) it opens no stacking
+    // context, so the dock alone can sit above the overlay. The rail's column
+    // holds no page content, so a mic painted over that scrim covers nothing —
+    // while a scrim painted over the mic hands the click to the scrim's own
+    // close-on-outside handler and dismisses the task instead.
+    const dock = rule('.hub-nav-dock');
+    expect(z(dock), 'the dock has no layer of its own').not.toBeNaN();
+    expect(z(dock)).toBeGreaterThan(z(rule('.hub-detail')));
+    // Only the dock: the pages stay under the overlay, so this lifts the mic
+    // rather than restoring a nav you can click through a modal.
+    expect(rule('.hub-nav')).not.toMatch(/z-index/);
+  });
+
+  it('stops the phone’s full-screen panel above the bar the mic is in', () => {
+    // A fixed bar IS a stacking context whatever its z-index, so at ≤900px no
+    // z-index on the dock can escape it. The answer is geometric instead: the
+    // overlay ends where the bar begins, so the mic is not merely on top of
+    // nothing — nothing is over it.
+    const phone = media('(max-width: 900px)');
+    const overlay = rule('.hub-detail', phone);
+    expect(overlay, 'the phone no longer restyles the overlay').not.toBe('');
+    expect(overlay).toMatch(/bottom:\s*calc\([^)]*--hub-bottom-bar/);
+    // …and it clears the home-indicator inset the bar itself pads for.
+    expect(overlay).toMatch(/--safe-bottom/);
+    // Positive control: the bar's height really is published at this width, so
+    // the offset resolves to the bar rather than to the 0 fallback.
+    expect(rule('body.hub-body', phone)).toMatch(/--hub-bottom-bar:\s*58px/);
   });
 });
 
