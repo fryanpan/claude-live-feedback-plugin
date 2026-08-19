@@ -13788,6 +13788,104 @@ function resolveAgentAuthor(env) {
   return { name, color: hashToColor(name), id: agentIdForName(name), kind: "known" };
 }
 
+// packages/mcp/src/triage-line.ts
+var RETRIAGE_SKILL = "claude-workspaces:handling-a-goal-change";
+var SHAPE_THEN_PLACE = "read its own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each into a title and a story-shaped body with rewrite_task, then place with set_task_goal";
+var TASK_REVIEW_SKILL = "claude-workspaces:reviewing-task-shape";
+function retriageDetail(p) {
+  const ids = p.taskIds ?? [];
+  const tasks = ids.length > 0 ? `
+tasks: ${ids.join(", ")}` : "";
+  const baseline = p.oldGoal ? `
+previous goal (what those placements were judged against): ${p.oldGoal}` : "";
+  return `${tasks}${baseline}`;
+}
+function bucketReviewDetail(p) {
+  const bands = (p.newBands ?? []).map((b) => b.title && b.id ? `"${b.title}" (${b.id})` : b.title ?? b.id).filter((s) => typeof s === "string" && s.length > 0);
+  const banded = bands.length > 0 ? `
+new band(s): ${bands.join(", ")}` : "";
+  const ids = p.taskIds ?? [];
+  const tasks = ids.length > 0 ? `
+unplaced tasks: ${ids.join(", ")}` : "";
+  return `${banded}${tasks}`;
+}
+function triageRequestLine(p, selfAgentId) {
+  if (p.kind === "bucket-review") {
+    const count2 = p.taskIds?.length ?? "?";
+    const batch2 = p.batchId ? `, passing batchId "${p.batchId}" on each` : "";
+    const detail2 = bucketReviewDetail(p);
+    const ask = `re-look at ${count2} unplaced task(s) — a new goal band appeared, so some of them may ` + `have a home now. Place the ones that do with set_task_goal${batch2}; leaving the rest ` + "unplaced is fine, that is what the bucket is for.";
+    const lead2 = p.leadAgentId;
+    if (lead2 !== undefined && lead2 !== selfAgentId) {
+      return `[triage.requested] FYI — ${ask} Addressed to lead agent ${lead2}. Act only if that is you.${detail2}`;
+    }
+    return `[triage.requested] ${ask}${detail2}`;
+  }
+  if (p.kind === "task-review") {
+    const what = p.trigger ?? "written";
+    const named = p.title ? ` ("${p.title}")` : "";
+    const who = p.actor?.name ? ` by ${p.actor.name}` : "";
+    const ask = `task ${p.taskId}${named} was ${what}${who} — review its title and body against the ` + `standard (${TASK_REVIEW_SKILL}): fine as-is is a real answer; otherwise rewrite with ` + "rewrite_task (with a reason), or ask the filer in a comment on the task.";
+    const lead2 = p.leadAgentId;
+    if (lead2 !== undefined && lead2 !== selfAgentId) {
+      return `[triage.requested] FYI — ${ask} Addressed to lead agent ${lead2}. Act only if that is you.`;
+    }
+    return `[triage.requested] ${ask}`;
+  }
+  if (p.kind !== "goal-retriage") {
+    return `[triage.requested] shape and place task ${p.taskId}: ${SHAPE_THEN_PLACE}`;
+  }
+  const count = p.taskIds?.length ?? "?";
+  const batch = p.batchId ? `, passing batchId "${p.batchId}" on each` : "";
+  const detail = retriageDetail(p);
+  const lead = p.leadAgentId;
+  if (lead !== undefined && lead !== selfAgentId) {
+    return `[triage.requested] FYI — goal changed; re-triaging ${count} open task(s) is addressed to lead agent ${lead}${batch}. Act only if that is you (${RETRIAGE_SKILL}).${detail}`;
+  }
+  return `[triage.requested] goal changed — re-triage ${count} open task(s) with set_task_goal${batch}. What you owe on a goal change: ${RETRIAGE_SKILL}${detail}`;
+}
+
+// packages/mcp/src/declare-lead.ts
+async function declareWorkspaceLead(args, deps) {
+  const { workspaceId } = args;
+  const named = typeof args.leadAgentId === "string" ? args.leadAgentId.trim() : "";
+  const declaring = named.length === 0 || named === deps.self.id;
+  const leadAgentId = declaring ? deps.self.id : named;
+  const path = `/api/workspaces/${encodeURIComponent(workspaceId)}`;
+  let attached;
+  if (declaring) {
+    attached = await deps.http("POST", `${path}/attachments`, {
+      agentId: deps.self.id,
+      runtime: deps.runtime,
+      pluginVersion: deps.pluginVersion
+    });
+    await deps.watchWorkspace(workspaceId);
+  }
+  const res = await deps.http("PUT", `${path}/lead`, {
+    leadAgentId,
+    author: deps.self
+  });
+  const seat = {
+    workspaceId,
+    changed: res.changed,
+    leadAgentId: res.workspace?.leadAgentId ?? leadAgentId
+  };
+  if (!declaring)
+    return seat;
+  const a = attached ?? {};
+  return {
+    ...seat,
+    subscribed: true,
+    lead: a.lead ?? false,
+    gating: a.gating,
+    untriaged: a.untriaged ?? [],
+    queuedVoice: a.queuedVoice ?? [],
+    ...a.pendingRetriage ? { pendingRetriage: { ...a.pendingRetriage, contract: RETRIAGE_SKILL } } : {},
+    ...a.pendingBucketReview ? { pendingBucketReview: a.pendingBucketReview } : {},
+    ...a.taskReviews !== undefined && a.taskReviews.length > 0 ? { taskReviews: a.taskReviews, taskReviewContract: TASK_REVIEW_SKILL } : {}
+  };
+}
+
 // packages/mcp/src/frame-dedup.ts
 var DEFAULT_LIMIT = 512;
 function createFrameDedup(limit = DEFAULT_LIMIT) {
@@ -13845,63 +13943,6 @@ function threadCreateRequest(input, author) {
       ...input.review !== undefined ? { review: input.review } : {}
     }
   };
-}
-
-// packages/mcp/src/triage-line.ts
-var RETRIAGE_SKILL = "claude-workspaces:handling-a-goal-change";
-var SHAPE_THEN_PLACE = "read its own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each into a title and a story-shaped body with rewrite_task, then place with set_task_goal";
-var TASK_REVIEW_SKILL = "claude-workspaces:reviewing-task-shape";
-function retriageDetail(p) {
-  const ids = p.taskIds ?? [];
-  const tasks = ids.length > 0 ? `
-tasks: ${ids.join(", ")}` : "";
-  const baseline = p.oldGoal ? `
-previous goal (what those placements were judged against): ${p.oldGoal}` : "";
-  return `${tasks}${baseline}`;
-}
-function bucketReviewDetail(p) {
-  const bands = (p.newBands ?? []).map((b) => b.title && b.id ? `"${b.title}" (${b.id})` : b.title ?? b.id).filter((s) => typeof s === "string" && s.length > 0);
-  const banded = bands.length > 0 ? `
-new band(s): ${bands.join(", ")}` : "";
-  const ids = p.taskIds ?? [];
-  const tasks = ids.length > 0 ? `
-unplaced tasks: ${ids.join(", ")}` : "";
-  return `${banded}${tasks}`;
-}
-function triageRequestLine(p, selfAgentId) {
-  if (p.kind === "bucket-review") {
-    const count2 = p.taskIds?.length ?? "?";
-    const batch2 = p.batchId ? `, passing batchId "${p.batchId}" on each` : "";
-    const detail2 = bucketReviewDetail(p);
-    const ask = `re-look at ${count2} unplaced task(s) — a new goal band appeared, so some of them may ` + `have a home now. Place the ones that do with set_task_goal${batch2}; leaving the rest ` + "unplaced is fine, that is what the bucket is for.";
-    const lead2 = p.leadAgentId;
-    if (lead2 !== undefined && lead2 !== selfAgentId) {
-      return `[triage.requested] FYI — ${ask} Addressed to lead agent ${lead2}. Act only if that is you.${detail2}`;
-    }
-    return `[triage.requested] ${ask}${detail2}`;
-  }
-  if (p.kind === "task-review") {
-    const what = p.trigger ?? "written";
-    const named = p.title ? ` ("${p.title}")` : "";
-    const who = p.actor?.name ? ` by ${p.actor.name}` : "";
-    const ask = `task ${p.taskId}${named} was ${what}${who} — review its title and body against the ` + `standard (${TASK_REVIEW_SKILL}): fine as-is is a real answer; otherwise rewrite with ` + "rewrite_task (with a reason), or ask the filer in a comment on the task.";
-    const lead2 = p.leadAgentId;
-    if (lead2 !== undefined && lead2 !== selfAgentId) {
-      return `[triage.requested] FYI — ${ask} Addressed to lead agent ${lead2}. Act only if that is you.`;
-    }
-    return `[triage.requested] ${ask}`;
-  }
-  if (p.kind !== "goal-retriage") {
-    return `[triage.requested] shape and place task ${p.taskId}: ${SHAPE_THEN_PLACE}`;
-  }
-  const count = p.taskIds?.length ?? "?";
-  const batch = p.batchId ? `, passing batchId "${p.batchId}" on each` : "";
-  const detail = retriageDetail(p);
-  const lead = p.leadAgentId;
-  if (lead !== undefined && lead !== selfAgentId) {
-    return `[triage.requested] FYI — goal changed; re-triaging ${count} open task(s) is addressed to lead agent ${lead}${batch}. Act only if that is you (${RETRIAGE_SKILL}).${detail}`;
-  }
-  return `[triage.requested] goal changed — re-triage ${count} open task(s) with set_task_goal${batch}. What you owe on a goal change: ${RETRIAGE_SKILL}${detail}`;
 }
 
 // packages/mcp/src/mcp.ts
@@ -14758,14 +14799,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "set_workspace_lead",
-      description: "Hand the workspace's LEAD AGENT seat to another agent. The lead is who a goal edit's re-triage is addressed to — it is a standing assignment, not a session fact, so a goal change waits for the lead even while they are away rather than going to whoever happens to be connected. Use it when you are handing a board off, or to fill the seat on a board a person created.",
+      description: "DECLARE YOURSELF LEAD of a workspace — one call, and from then on you receive everything on this board: task and decision events, thread events on every doc filed here INCLUDING docs created later, voice notes, and re-triage asks. Call it with just `workspaceId` at session start and you are done; there is no per-surface subscribe to remember and nothing to redo after a respawn (the subscription is persisted against your agent identity and re-wired when you come back). It replaces a pile of watch_doc calls, and it is what closes the gap those calls leave: a doc watch is not an attachment, so an agent watching six docs still misses every voice note and every goal-edit re-triage, silently — a queue nobody is draining looks exactly like a queue nobody filled. Because it attaches you, it also DRAINS whatever was waiting for the seat and hands it back on this same response, in attach_agent's own field names: `queuedVoice` (act on each transcript verbatim), `pendingRetriage`, `pendingBucketReview`, `taskReviews`, plus `gating` and `untriaged`. `subscribed: true` on the response is the answer to \"am I actually listening?\" — the question an agent otherwise cannot answer from the inside. The lead is a STANDING assignment, not a session fact, so a goal change waits for you even while you are away rather than going to whoever happens to be connected. Pass `leadAgentId` ONLY to hand the board to somebody else: that is a pure handover — it moves the seat and nothing more, because attaching or subscribing on an absent agent's behalf would make the board report a live lead that is not there.",
       inputSchema: {
         type: "object",
         properties: {
           workspaceId: { type: "string", description: "Hub workspace id from create_workspace." },
-          leadAgentId: { type: "string", description: "The agent id taking responsibility." }
+          leadAgentId: {
+            type: "string",
+            description: "The agent id taking responsibility. OMIT IT to declare yourself — that is the common case, and the only form that also attaches and subscribes you. Naming another agent hands the seat over and does nothing else; naming your own id is the same as omitting it, so callers built against the older required-field form keep their exact meaning."
+          }
         },
-        required: ["workspaceId", "leadAgentId"]
+        required: ["workspaceId"]
       }
     },
     {
@@ -15733,15 +15777,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       }
       case "set_workspace_lead": {
         const { workspaceId, leadAgentId } = a;
-        const res = await http("PUT", `/api/workspaces/${encodeURIComponent(workspaceId)}/lead`, {
-          leadAgentId,
-          author: AUTHOR
-        });
-        return ok({
-          workspaceId,
-          changed: res.changed,
-          leadAgentId: res.workspace?.leadAgentId ?? leadAgentId
-        });
+        return ok(await declareWorkspaceLead({ workspaceId, ...leadAgentId !== undefined ? { leadAgentId } : {} }, {
+          http,
+          watchWorkspace,
+          self: AUTHOR,
+          runtime: "claude-code-local",
+          pluginVersion: PLUGIN_VERSION
+        }));
       }
       case "attach_doc": {
         const { workspaceId, docId } = a;
