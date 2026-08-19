@@ -15,6 +15,12 @@
  * say, which is a different question with different error shapes (a 400 the
  * caller can act on, per field).
  */
+import {
+  type ReviewPayload,
+  checkReviewPayload,
+  reviewGapAdvice,
+  reviewPayloadMessage,
+} from '@feedback/core';
 import { BATCH_REF_SIGIL } from './task-batch-refs.ts';
 import {
   ASSIGNEE_REQUIRED_ERROR,
@@ -30,6 +36,10 @@ export const BAD_TITLE_ERROR = 'title required';
 export const BATCH_REF_OUTSIDE_BATCH_ERROR = 'batch-ref-outside-batch';
 export const BAD_NEEDS_ERROR = "needs must be 'action' | 'decision'";
 export const BAD_OPTIONS_ERROR = 'options must be [{label, detail?}] with a non-empty label';
+
+/** Same spelling the dedicated review-item route answers with, so a caller
+ *  that learns the error on one door recognises it on the other. */
+export const BAD_REVIEW_ERROR = 'bad-review';
 
 /** The 400 body for a ref a route refuses. Naming the accepted kinds turns a
  *  source dive into a re-send — the first outside caller of these routes had
@@ -81,6 +91,41 @@ export function parseOptions(
     });
   }
   return { ok: true, options };
+}
+
+/**
+ * `review` for the task-create routes — ONE review item filed with the ticket
+ * that raises it.
+ *
+ * The whole point of the entity is that a ticket HAS review items rather than
+ * IS one: the title is not the question, the question has its own blurb, and a
+ * ticket can carry several at once. Without this field an agent files the
+ * ticket, reads back its id, and posts the item in a second call — two round
+ * trips to say one thing, and a window in which the ticket exists with the
+ * question missing.
+ *
+ * Refused rather than partially accepted, for exactly the reason `parseOptions`
+ * is: the options inside are controls a person will TAP, and a silently dropped
+ * one is a choice they were never offered. Beyond that, a review item accepted
+ * and discarded is a question nobody is ever asked — the ticket lands, the 200
+ * says it worked, and the queue stays empty.
+ *
+ * Gated by `checkReviewPayload` — THE checker, the same one comment-borne
+ * declarations and `addReviewItem` run. A second copy of a limit here is how a
+ * card ends up rendering something the API swore it had refused.
+ *
+ * `advice` is the non-refusing half and rides back on the 200; see
+ * `reviewGapAdvice`. An author who is never told writes the same thin item
+ * again.
+ */
+export function parseReview(
+  raw: unknown,
+): { ok: true; review?: ReviewPayload; advice?: string } | { ok: false; message: string } {
+  if (raw === undefined || raw === null) return { ok: true };
+  const check = checkReviewPayload(raw);
+  if (!check.ok) return { ok: false, message: reviewPayloadMessage(check) };
+  const advice = reviewGapAdvice(check.gaps);
+  return { ok: true, review: raw as ReviewPayload, ...(advice !== undefined ? { advice } : {}) };
 }
 
 /**
@@ -159,7 +204,23 @@ function batchRefIn(raw: unknown): string | undefined {
 }
 
 export type TaskCreateParse =
-  | { ok: true; opts: CreateTaskOpts; ignoredLinks: unknown[] }
+  | {
+      ok: true;
+      opts: CreateTaskOpts;
+      ignoredLinks: unknown[];
+      /**
+       * Beside `opts`, not inside it. `CreateTaskOpts` is what a task may BE;
+       * a review item is a ROW that hangs on the task, written by
+       * `addReviewItem` once the task has an id. Folding it into the create
+       * options would give "attach a review item" a second implementation,
+       * free to disagree with the first about ids, gaps and limits — which is
+       * the two-spellings problem this whole entity removes.
+       */
+      review?: ReviewPayload;
+      /** The gaps of that review, phrased as what to write. Advice on a
+       *  successful create, never a refusal. */
+      reviewAdvice?: string;
+    }
   | { ok: false; error: string; message?: string };
 
 /**
@@ -189,6 +250,8 @@ export function parseTaskCreate(
   }
   const options = parseOptions(body.options);
   if (!options.ok) return { ok: false, error: BAD_OPTIONS_ERROR };
+  const review = parseReview(body.review);
+  if (!review.ok) return { ok: false, error: BAD_REVIEW_ERROR, message: review.message };
   const links = parseLinks(body.links);
   if (!links.ok) return { ok: false, error: BAD_REF_ERROR };
   const origin = parseOrigin(body.origin);
@@ -211,6 +274,8 @@ export function parseTaskCreate(
   return {
     ok: true,
     ignoredLinks: links.ignored,
+    ...(review.review !== undefined ? { review: review.review } : {}),
+    ...(review.advice !== undefined ? { reviewAdvice: review.advice } : {}),
     opts: {
       title: title.trim(),
       body: body.body as string | undefined,
