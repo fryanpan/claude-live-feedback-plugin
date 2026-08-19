@@ -444,7 +444,11 @@ export class ThreadPanel {
     // only emits a fixed safe tag set, so innerHTML is safe here.
     msg.innerHTML = renderCommentMarkdown(t.comments[0]?.text ?? '');
 
-    return slot('slot-a', [topicEl], [msg]);
+    // A thread whose OPENING comment declared reads as a request from the
+    // collapsed card, without opening it — which is the state this pane is in
+    // most of the time.
+    const header = reviewHeader(t.comments[0]?.review);
+    return slot('slot-a', [topicEl], header ? [header, msg] : [msg]);
   }
 
   /** Slot B: who spoke + where it got to becomes the replies + the reply box. */
@@ -574,9 +578,30 @@ function participantsRow(p: Participants): HTMLElement {
   return row;
 }
 
+/**
+ * The two-line header a declared Review Item carries, or null.
+ *
+ * Plain text on both lines: they are agent-supplied, and unlike the comment
+ * BODY they are not markdown — the API takes them as single-line strings and
+ * refuses anything else, so rendering them as markup would interpret
+ * characters the author was told would be literal.
+ */
+function reviewHeader(review: Comment['review']): HTMLElement | null {
+  if (!review) return null;
+  const box = div('comment-review');
+  const kind = span('comment-review-k');
+  kind.textContent = review.shape === 'decision' ? 'Decision' : 'Review';
+  const headline = div('comment-review-headline');
+  headline.textContent = review.headline;
+  const why = div('comment-review-why');
+  why.textContent = review.why;
+  box.append(kind, headline, why);
+  return box;
+}
+
 /** One reply, in slot B's detail face. The opening message is slot A's. */
 function commentRow(c: Comment): HTMLElement {
-  const row = div('comment');
+  const row = div(c.review ? 'comment comment-declared' : 'comment');
   const authorRow = div('author');
   const swatch = span('swatch');
   swatch.style.background = c.author.color;
@@ -592,7 +617,10 @@ function commentRow(c: Comment): HTMLElement {
   // only emits a fixed safe tag set, so innerHTML is safe here.
   body.innerHTML = renderCommentMarkdown(c.text);
 
-  row.append(authorRow, body);
+  const header = reviewHeader(c.review);
+  // Above the words, not instead of them: the text is what the agent said,
+  // the declaration is what it is asking for.
+  row.append(authorRow, ...(header ? [header] : []), body);
   return row;
 }
 

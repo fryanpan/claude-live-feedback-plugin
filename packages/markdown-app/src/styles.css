@@ -2809,6 +2809,35 @@ a.hub-link-chip:hover {
   color: var(--accent, #2e7dd7);
   font-weight: 700;
 }
+/* A comment that DECLARED a Review Item. Set apart because the thread that is
+   the queue row otherwise reads exactly like the status notes above it — one
+   accent rule, no box, so a long discussion does not become a stack of
+   competing cards. */
+.hub-comment-review {
+  padding-left: 10px;
+  border-left: 3px solid var(--accent, #2e7dd7);
+}
+.hub-comment-review-k {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent, #2e7dd7);
+}
+.hub-comment-review-headline {
+  margin: 2px 0 0;
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.hub-comment-review-why {
+  margin: 1px 0 4px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
 .hub-comment-body {
   font-family: var(--prose);
   line-height: 1.5;
@@ -4147,6 +4176,34 @@ body.threads-resizing {
 .thread .comment {
   font-size: 14.5px;
   line-height: 1.55;
+}
+/* The declared header, in the threads pane. Same vocabulary as the hub's
+   version — one accent rule and an uppercase kind — so a review item does not
+   look like two different components depending on which surface found it. */
+.comment-review {
+  margin-bottom: 4px;
+  padding-left: 9px;
+  border-left: 3px solid var(--accent, #2e7dd7);
+  font-family: var(--sans);
+}
+.comment-review-k {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent, #2e7dd7);
+}
+.comment-review-headline {
+  font-size: 13.5px;
+  font-weight: 650;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.comment-review-why {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
 }
 /* Author/time chrome stays sans for clear metadata-vs-content contrast. */
 .thread .comment .author {

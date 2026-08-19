@@ -4,7 +4,12 @@
  * so the interaction contracts (the status dropdown, in-place title edits,
  * the two-filter activity view) are testable under happy-dom.
  */
-import { escapeHtml, evidenceSuperseded, transitionUnproven } from '@feedback/core';
+import {
+  type ReviewPayload,
+  escapeHtml,
+  evidenceSuperseded,
+  transitionUnproven,
+} from '@feedback/core';
 import {
   GOAL_SUMMARY_MAX_WORDS,
   type StoredGoalSummary,
@@ -2378,6 +2383,16 @@ export interface TaskComment {
   author: string;
   text: string;
   ts: number;
+  /**
+   * The Review Item this comment declared, when it declared one.
+   *
+   * Carried at COMMENT grain because that is where it is written — a thread
+   * that starts as a status note becomes a review item at the comment that
+   * declares, and the `Needs your reply` badge above is at thread grain
+   * precisely because the server publishes nothing finer for the inferred
+   * band. This one is finer because it is authored, not inferred.
+   */
+  review?: ReviewPayload;
 }
 
 export interface TaskThread {
@@ -2667,7 +2682,10 @@ function renderDiscussion(
     }
     for (const c of t.comments) {
       const row = document.createElement('div');
-      row.className = 'hub-comment';
+      // A declared comment is visibly a request rather than one more message
+      // in the pile. Without this the thread that IS the queue row reads
+      // exactly like the fourteen status notes above it.
+      row.className = c.review ? 'hub-comment hub-comment-review' : 'hub-comment';
       // Author AND time, both as text. The time used to live only in a `title`
       // attribute — which is a hover tooltip, and the reader this surface is
       // for is on a phone, where nothing hovers. "Who said this and when" was
@@ -2682,12 +2700,32 @@ function renderDiscussion(
       when.textContent = timeAgo(c.ts, now);
       when.title = new Date(c.ts).toLocaleString();
       head.append(who, when);
+      if (c.review) {
+        const badge = document.createElement('span');
+        badge.className = 'hub-comment-review-k';
+        badge.textContent = c.review.shape === 'decision' ? 'Decision' : 'Review';
+        head.append(badge);
+      }
       const body = document.createElement('div');
       body.className = 'hub-comment-body';
       // Same escape-then-allow-known-tags path the description uses, so a
       // comment written by anyone with write access is inert markup.
       body.innerHTML = renderCommentMarkdown(c.text);
-      row.append(head, body);
+      row.append(head);
+      if (c.review) {
+        // The declared header, in the author's words and in the order the API
+        // enforces. It goes ABOVE the comment text rather than replacing it:
+        // the text is what the agent said, the declaration is what it is
+        // asking for, and the two are not the same sentence.
+        const headline = document.createElement('p');
+        headline.className = 'hub-comment-review-headline';
+        headline.textContent = c.review.headline;
+        const why = document.createElement('p');
+        why.className = 'hub-comment-review-why';
+        why.textContent = c.review.why;
+        row.append(headline, why);
+      }
+      row.append(body);
       el.append(row);
     }
     // A button rather than a box. Pointing the one composer at this thread is

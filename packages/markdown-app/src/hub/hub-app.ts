@@ -6,7 +6,7 @@
  * mutation goes through the REST gate — never by writing into the maps,
  * which the server would revert.
  */
-import { type User, connect, escapeHtml } from '@feedback/core';
+import { type ReviewPayload, type User, connect, escapeHtml } from '@feedback/core';
 import type { StoredGoalSummary } from '@feedback/core/goal-summary';
 import { renderConnectionBanner, watchConnection } from '../connection-state.ts';
 import { ensureUserIdentity } from '../identity-prompt.ts';
@@ -774,7 +774,12 @@ async function main(): Promise<void> {
         id: string;
         status?: string;
         anchor?: { kind?: string; snippet?: { text?: string } };
-        comments?: Array<{ author?: { name?: string }; text?: string; ts?: number }>;
+        comments?: Array<{
+          author?: { name?: string };
+          text?: string;
+          ts?: number;
+          review?: ReviewPayload;
+        }>;
       }>;
     }>(`/api/docs/${encodeURIComponent(task.bodyDocId)}/threads`);
     // The reader may have moved on while this was in flight.
@@ -792,6 +797,10 @@ async function main(): Promise<void> {
         author: c.author?.name ?? 'Someone',
         text: c.text ?? '',
         ts: c.ts ?? Date.now(),
+        // Forwarded, not re-validated: the server refuses a malformed
+        // declaration at the write, and re-deciding here would be a second
+        // copy of one rule free to drift from the first.
+        ...(c.review ? { review: c.review } : {}),
       })),
     }));
     state.discussion = { loading: false, threads };
