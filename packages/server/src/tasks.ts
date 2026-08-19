@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import {
   type ReviewPayload,
   type TaskReviewItem,
+  agentIdCandidates,
   checkReviewPayload,
   readReviewPayload,
   readTaskReviewItem,
@@ -871,12 +872,58 @@ export const HEARTBEAT_FRESH_MS = 5 * 60_000;
 /** §4: "no lastToolCallAt movement in 30+ minutes" is the outage signature. */
 export const TOOL_CALL_STALE_MS = 30 * 60_000;
 
+/**
+ * How recently the server must have OBSERVED an agent for a delivery to count
+ * as reaching it.
+ *
+ * Separate from `HEARTBEAT_FRESH_MS` because it answers a different question.
+ * That one asks "how recently did this agent SAY it was alive" and feeds the
+ * displayed state; this one asks "how recently did we SEE it do something",
+ * and it decides whether a request is handed over or parked.
+ *
+ * The distinction is the whole bug. `lastHeartbeat` moves only when a session
+ * calls the `heartbeat` tool, and nothing makes that happen — no timer, no
+ * hook, one line of prose in one skill. Measured on the live board
+ * 2026-08-19: 13 liveness events in 5.43 days against 215 task transitions,
+ * so the old gate could read live for **0.77%** of the time an agent was
+ * attached and plainly working. Voice paid for it directly — 6 of 10 recorded
+ * utterances routed to `agent-queued`, one of them "voice is not working".
+ *
+ * 15 minutes is measured rather than picked. On the same board the median gap
+ * between consecutive observable agent writes is 0.3 min and p90 is 11.2 min:
+ * a window at the old 5-minute figure would still read away across ~18% of
+ * ordinary working gaps, where 15 minutes sits just above p90. It is
+ * deliberately not hours — a false "live" is broadcast to nobody and lost,
+ * where a false "away" is merely deferred to the next attach.
+ */
+export const OBSERVED_LIVE_MS = 15 * 60_000;
+
 export type AttachmentState = 'active' | 'unresponsive' | 'away';
 
 export interface AttachmentThresholds {
   heartbeatFreshMs?: number;
   toolCallStaleMs?: number;
+  observedWorkFreshMs?: number;
 }
+
+/**
+ * Is anyone actually subscribed to the channel a request is about to ride?
+ *
+ * The half a time window cannot cover: a session that died since its last
+ * write is still inside the window and still gone. Wired to the SSE hub in
+ * `server.ts`; unwired it answers yes, so a store with no transport behaves
+ * exactly as it did before.
+ *
+ * It takes a workspaceId and not an agentId on purpose, and that is its
+ * honest limit: the channel is per-BOARD, so this can answer "is anyone
+ * there" and never "is THAT agent there". Which agent is live stays a
+ * question for the observed clock, and the gate is the AND of the two. So a
+ * browser tab open on a board makes the probe true while contributing no
+ * liveness of its own — which is why the probe may only ever narrow the
+ * answer, never widen it. Reading it as sufficient would let an open tab
+ * impersonate a working agent and lose the request it was handed.
+ */
+export type DeliveryProbe = (workspaceId: string) => boolean;
 
 /**
  * Derive the hub's attachment state (§4). "Active 2m ago" is shown because a
@@ -1827,6 +1874,7 @@ export class TaskStore {
   private debounceMs: number;
   private attachmentThresholds: AttachmentThresholds;
   private triageDelivery: TriageDelivery | undefined;
+  private deliveryProbe: DeliveryProbe | undefined;
   private eventListeners = new Set<(event: TaskStoreEvent) => void>();
 
   constructor(opts: {
@@ -1836,12 +1884,16 @@ export class TaskStore {
      *  minutes (§6: delivery timings configurable). */
     heartbeatFreshMs?: number;
     toolCallStaleMs?: number;
+    observedWorkFreshMs?: number;
   }) {
     this.dataDir = opts.dataDir;
     this.debounceMs = opts.debounceMs ?? 200;
     this.attachmentThresholds = {
       ...(opts.heartbeatFreshMs !== undefined ? { heartbeatFreshMs: opts.heartbeatFreshMs } : {}),
       ...(opts.toolCallStaleMs !== undefined ? { toolCallStaleMs: opts.toolCallStaleMs } : {}),
+      ...(opts.observedWorkFreshMs !== undefined
+        ? { observedWorkFreshMs: opts.observedWorkFreshMs }
+        : {}),
     };
     this.hydrateFromDisk();
   }
@@ -1855,10 +1907,66 @@ export class TaskStore {
     return () => this.eventListeners.delete(listener);
   }
 
+  /**
+   * Wire (or clear) the check for "is anyone on the channel". `server.ts`
+   * installs the SSE-hub-backed one; left unwired the store answers yes and
+   * behaves exactly as it did before, which is what keeps every store-only
+   * test honest without teaching it about a transport.
+   */
+  setDeliveryProbe(probe: DeliveryProbe | undefined): void {
+    this.deliveryProbe = probe;
+  }
+
   /** Wire (or clear) the bridge that carries triage requests to a live
    *  attached agent. The attachment registry commit installs the real one. */
   setTriageDelivery(delivery: TriageDelivery | undefined): void {
     this.triageDelivery = delivery;
+  }
+
+  /**
+   * Every emitted board change is also EVIDENCE that its author was alive at
+   * that moment, so the work clock moves here rather than at ~20 call sites.
+   *
+   * The call-site version of this is what failed: `noteAgentToolCall` shipped
+   * with no caller at all and sat unused, because "remember to also record
+   * liveness" is exactly the kind of step that gets forgotten. At the choke
+   * point it cannot be — a new route that emits is observed for free.
+   *
+   * Two things it deliberately does NOT do:
+   *  - `agent.*` events never count. A heartbeat asserting work is what
+   *    collapsed the two clocks into one and made `unresponsive` unreachable;
+   *    `attachAgent` sets both clocks itself and needs no help here.
+   *  - A person's edit never moves an agent's clock. The actor is resolved
+   *    against the attachment roster, and a name that matches nothing is a
+   *    no-op.
+   */
+  private noteObservedWork(event: TaskStoreEvent): void {
+    if (event.type.startsWith('agent.')) return;
+    const { workspaceId } = event;
+    const attachments = this.workspaces.get(workspaceId)?.attachments;
+    if (!attachments || attachments.size === 0) return;
+    const actor = (event as { actor?: { id?: unknown; name?: unknown } }).actor;
+    if (!actor) return;
+    // Match on every spelling a roster could hold. The event's actor id and
+    // the attachment key demonstrably disagree in the field — `live-feedback`
+    // against `agent-live-feedback` on the same session — so matching one
+    // spelling matches roughly none of the fleet.
+    const candidates = new Set<string>();
+    for (const raw of [actor.id, actor.name]) {
+      if (typeof raw !== 'string') continue;
+      candidates.add(raw.trim().toLowerCase());
+      for (const c of agentIdCandidates(raw)) candidates.add(c);
+    }
+    if (candidates.size === 0) return;
+    for (const agentId of attachments.keys()) {
+      if (!candidates.has(agentId.trim().toLowerCase())) continue;
+      // Through the public method rather than touching the field, so there
+      // is exactly one definition of "the agent was observed working" — and
+      // so that method finally has the production caller whose absence is
+      // the whole reason the clock never moved.
+      this.noteAgentToolCall(workspaceId, agentId, event.ts);
+      return;
+    }
   }
 
   private emit(event: TaskStoreEvent): void {
@@ -1866,6 +1974,7 @@ export class TaskStore {
     // audit log has it" are the same fact by construction (§3.6), so the log
     // can never disagree with what subscribers saw.
     this.appendAudit(event);
+    this.noteObservedWork(event);
     for (const listener of this.eventListeners) {
       try {
         listener(event);
@@ -4982,12 +5091,27 @@ export class TaskStore {
     return { ok: true, attachment };
   }
 
-  /** Bump lastToolCallAt to now. No event — tool calls are not a §3.6 row;
-   *  the next heartbeat event carries the moved clock. */
-  noteAgentToolCall(workspaceId: string, agentId: string): boolean {
+  /**
+   * Bump lastToolCallAt. No event — tool calls are not a §3.6 row; the next
+   * heartbeat event carries the moved clock.
+   *
+   * `at` is when the work was observed, defaulting to now. Callers that are
+   * recording a specific event should pass that event's `ts` rather than
+   * re-reading the clock: attaching emits `workspace.lead_changed` when it
+   * claims an empty seat, and a fresh `Date.now()` there lands a millisecond
+   * past the attach's own timestamp, breaking the "a new attachment's two
+   * clocks are equal" contract about 1 run in 3.
+   *
+   * Clamped to now and monotonic, the same guards `heartbeat` applies to a
+   * claimed `toolCallAt`: a clock may not run ahead of the server's, and
+   * observing older work than we already knew about is not news.
+   */
+  noteAgentToolCall(workspaceId: string, agentId: string, at?: number): boolean {
     const attachment = this.workspaces.get(workspaceId)?.attachments.get(agentId);
     if (!attachment) return false;
-    attachment.lastToolCallAt = Date.now();
+    const observed = Math.min(at ?? Date.now(), Date.now());
+    if (observed <= attachment.lastToolCallAt) return true;
+    attachment.lastToolCallAt = observed;
     this.scheduleAttachmentsSave(workspaceId);
     return true;
   }
@@ -5036,19 +5160,43 @@ export class TaskStore {
   }
 
   /**
-   * Is any attachment's heartbeat fresh? This is what grounds the triage
-   * pending marker (§3.4): "emitted to a live attachment" means someone with
-   * a live process is subscribed to act — existence alone proves nothing
-   * (a record whose runtime died an hour ago is `away`, and promising it
-   * work would be the summaries-incident lie again).
+   * The newest moment the server OBSERVED this agent: a heartbeat it sent, or
+   * a write it made. Whichever is later — the two are independent evidence and
+   * taking the max means adding the observed clock never makes an agent look
+   * *less* alive than it did before.
+   */
+  private lastObserved(att: Pick<AgentAttachment, 'lastHeartbeat' | 'lastToolCallAt'>): number {
+    return Math.max(att.lastHeartbeat, att.lastToolCallAt);
+  }
+
+  /** Recent enough to hand work to, AND with the channel open to carry it. */
+  private isDeliverable(
+    workspaceId: string,
+    att: Pick<AgentAttachment, 'lastHeartbeat' | 'lastToolCallAt'>,
+  ): boolean {
+    const freshMs = this.attachmentThresholds.observedWorkFreshMs ?? OBSERVED_LIVE_MS;
+    if (Date.now() - this.lastObserved(att) >= freshMs) return false;
+    // Asked last and separately: the clock says the agent was here recently,
+    // this says somebody is on the wire to receive what we are about to send.
+    return this.deliveryProbe?.(workspaceId) ?? true;
+  }
+
+  /**
+   * Is any attached agent live enough to hand a request to? This is what
+   * grounds the triage pending marker (§3.4): "emitted to a live attachment"
+   * means someone is there to act — existence alone proves nothing, and
+   * promising work to a runtime that died an hour ago would be the
+   * summaries-incident lie again.
+   *
+   * Liveness is OBSERVED, never self-reported. It used to read `lastHeartbeat`
+   * alone, which measured whether a model remembered to announce itself — see
+   * `OBSERVED_LIVE_MS` for the measurement and what it cost.
    */
   hasLiveAttachment(workspaceId: string): boolean {
     const state = this.workspaces.get(workspaceId);
     if (!state) return false;
-    const now = Date.now();
-    const freshMs = this.attachmentThresholds.heartbeatFreshMs ?? HEARTBEAT_FRESH_MS;
     for (const att of state.attachments.values()) {
-      if (now - att.lastHeartbeat < freshMs) return true;
+      if (this.isDeliverable(workspaceId, att)) return true;
     }
     return false;
   }
@@ -5069,8 +5217,9 @@ export class TaskStore {
     if (!state || leadAgentId === undefined) return false;
     const att = state.attachments.get(leadAgentId);
     if (!att) return false;
-    const freshMs = this.attachmentThresholds.heartbeatFreshMs ?? HEARTBEAT_FRESH_MS;
-    return Date.now() - att.lastHeartbeat < freshMs;
+    // Same observed clock as `hasLiveAttachment` — fixing one and not the
+    // other would leave board-wide requests queueing while ordinary ones flow.
+    return this.isDeliverable(workspaceId, att);
   }
 
   /** Open decision tasks that gate open tasks via `after` edges, rolled into
