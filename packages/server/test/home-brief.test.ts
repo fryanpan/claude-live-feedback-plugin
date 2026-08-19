@@ -199,6 +199,75 @@ describe('buildBriefPrompt', () => {
     expect(rows[1]).not.toContain('](');
   });
 
+  it('a decision.answered row carries the recorded answer text — a refusal must be readable as one', () => {
+    // Why: the brief told a reader he had approved a force-push he had
+    // refused. The task title stated the affirmative outcome ("X approves the
+    // rollout"), the digest line said only `decision.answered · by <reader>`,
+    // and the model composed the two into consent. The answer text is the
+    // ONLY carrier of polarity — title and status cannot say which way a
+    // decision went — so the digest line must quote it.
+    const refusal = ev('decision.answered', NOW + 1, {
+      taskId: 't-9',
+      actor: { name: 'Riley' },
+      answer: 'No, do not roll it out. Review the acceptance criteria first.',
+    });
+    const approval = ev('decision.answered', NOW + 2, {
+      taskId: 't-9',
+      actor: { name: 'Riley' },
+      answer: 'Yes, ship it.',
+    });
+    const { user } = buildBriefPrompt(
+      {
+        workspaceId: 'ws-1',
+        events: [refusal, approval],
+        queue: { total: 0 },
+        titleOf: () => 'Riley approves the rollout',
+      },
+      'x',
+      uncapped(NOW),
+    );
+    const rows = user.split('\n').filter((l) => l.startsWith('- '));
+    expect(rows).toHaveLength(2);
+    // The refusal and the approval are distinguishable from the digest alone.
+    expect(rows[0]).toContain(
+      'answer: "No, do not roll it out. Review the acceptance criteria first."',
+    );
+    expect(rows[1]).toContain('answer: "Yes, ship it."');
+  });
+
+  it('answer snippets are bounded and flattened; absent or non-string answers add nothing', () => {
+    const long = `First line says no.\n\nThen ${'a very long justification '.repeat(20)}`;
+    const { user } = buildBriefPrompt(
+      input([
+        ev('decision.answered', NOW + 1, { taskId: 't-2', answer: long }),
+        ev('decision.answered', NOW + 2, { taskId: 't-2' }), // legacy row, no answer
+        ev('decision.answered', NOW + 3, { taskId: 't-2', answer: 42 }), // hostile shape
+      ]),
+      'x',
+      uncapped(NOW),
+    );
+    const rows = user.split('\n').filter((l) => l.startsWith('- '));
+    expect(rows).toHaveLength(3); // a multi-line answer must not split its row
+    expect(rows[0]).toContain('answer: "First line says no. Then a very long justification');
+    expect(rows[0]).toContain('…"');
+    const quoted = rows[0]?.match(/answer: "([^"]*)"/)?.[1] ?? '';
+    expect(quoted.length).toBeLessThanOrEqual(140);
+    // The positive control above proves the matcher sees answers; these two
+    // absences are therefore non-vacuous.
+    expect(rows[1]).not.toContain('answer:');
+    expect(rows[2]).not.toContain('answer:');
+  });
+
+  it('the guardrail says polarity lives in the answer text, not in titles or status', () => {
+    // "decision.answered + task done" is a legitimate pattern on a healthy
+    // board (a refusal resolves the request), so the prompt must forbid the
+    // exact composition that produced the false approval.
+    const { system } = buildBriefPrompt(input([]), 'x', uncapped(NOW));
+    expect(system).toContain('states a goal, not an outcome');
+    expect(system).toContain('only the quoted answer text says which way it went');
+    expect(system).toContain('may be a refusal');
+  });
+
   it('the guardrail permits copying digest links and forbids inventing them', () => {
     const { system } = buildBriefPrompt(input([]), 'x', uncapped(NOW));
     expect(system).toContain('copied exactly');

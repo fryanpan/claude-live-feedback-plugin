@@ -380,6 +380,22 @@ export function briefCoverage(events: BriefEventRow[], since: number): BriefCove
   };
 }
 
+/** A digest line must stay one line, and a whole essay of an answer is not
+ *  what the model needs — the polarity lives in the first sentence or two. */
+const ANSWER_SNIPPET_MAX = 140;
+
+/** The recorded answer, flattened and bounded, as a digest-line fragment.
+ *  Empty for rows written before answers were captured, and for any
+ *  non-string shape — an unreadable answer must degrade to the pre-fix line,
+ *  never crash the prompt. */
+function answerFragment(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const flat = value.replace(/\s+/g, ' ').trim();
+  if (flat === '') return '';
+  const cut = flat.length > ANSWER_SNIPPET_MAX ? `${flat.slice(0, ANSWER_SNIPPET_MAX - 1)}…` : flat;
+  return ` · answer: "${cut}"`;
+}
+
 export function buildBriefPrompt(
   input: BriefInput,
   instructions: string,
@@ -398,7 +414,12 @@ export function buildBriefPrompt(
           : row.event === 'task.assigned'
             ? ` →${String(row.assignee ?? '')}`
             : '';
-      return `- ${when} ${what}${extra}${task ? ` · ${task}` : ''}${who ? ` · by ${who}` : ''}`;
+      // Without the answer text, `decision.answered · by <reader>` under a
+      // title like "X approves the rollout" reads as consent — the brief told
+      // a reader he had approved a force-push he had refused. Only the answer
+      // carries which way the decision went.
+      const answer = row.event === 'decision.answered' ? answerFragment(row.answer) : '';
+      return `- ${when} ${what}${extra}${task ? ` · ${task}` : ''}${who ? ` · by ${who}` : ''}${answer}`;
     })
     .join('\n');
   // The guardrail is deliberately two-sided. "Never invent links" alone made
@@ -414,6 +435,11 @@ export function buildBriefPrompt(
     'digest line says it finished. Link to tasks using ONLY the markdown links present in the digest,',
     'each URL copied exactly; never fabricate a URL. Do not address the reader with a preamble;',
     'start with the content. Output ONLY the brief markdown.',
+    '',
+    'A task title states a goal, not an outcome. A decision.answered event means only that an answer',
+    'was recorded — only the quoted answer text says which way it went, and it may be a refusal that',
+    'resolves the request. Never present a decision as approved, agreed, or locked unless the answer',
+    'text itself approves; a done transition on the task does not.',
     '',
     "The reader's standing instructions for this brief:",
     instructions,
