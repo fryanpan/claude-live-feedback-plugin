@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.fryanpan.live-feedback</string>
+    <string>com.fryanpan.claude-workspaces</string>
 
     <key>WorkingDirectory</key>
     <string>{{REPO_DIR}}</string>
@@ -31,7 +31,7 @@
              `http://<discovered host>:<port>`, which is what it is directly
              reachable on and the correct answer with nothing in front.
              See docs/process/tailnet-https.md. -->
-        <key>LF_PUBLIC_BASE_URL</key>
+        <key>CW_PUBLIC_BASE_URL</key>
         <string>{{PUBLIC_BASE_URL}}</string>
     </dict>
 
@@ -50,8 +50,8 @@
     <integer>10</integer>
 
     <key>StandardOutPath</key>
-    <string>{{LOG_DIR}}/com.fryanpan.live-feedback.out.log</string>
+    <string>{{LOG_DIR}}/com.fryanpan.claude-workspaces.out.log</string>
     <key>StandardErrorPath</key>
-    <string>{{LOG_DIR}}/com.fryanpan.live-feedback.err.log</string>
+    <string>{{LOG_DIR}}/com.fryanpan.claude-workspaces.err.log</string>
 </dict>
 </plist>
