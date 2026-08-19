@@ -615,13 +615,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // Late-bound because Rooms is constructed before the task store and the
   // projection it needs. Nothing can fire through it until a room exists,
   // which is after both.
-  let onTaskBodyEvent: ((docId: string, payload: WebhookPayload) => void) | null = null;
+  let onDocRoomEvent: ((docId: string, payload: WebhookPayload) => void) | null = null;
   const rooms = new Rooms({
     dataDir,
     sse,
     webhooks,
     decorateDocMeta: withReviewUrl,
-    onRoomEvent: (docId, payload) => onTaskBodyEvent?.(docId, payload),
+    onRoomEvent: (docId, payload) => onDocRoomEvent?.(docId, payload),
     ...(summarizer ? { summarizer } : {}),
   });
   // Materialize the shared hub-feedback doc at startup rather than letting
@@ -698,13 +698,45 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // only fans out on the doc's own stream reaches nobody who is working. The
   // same event also moves the row's comment count, which nothing else would
   // refresh (the store never changes, so no task.* event fires).
-  onTaskBodyEvent = (docId, payload) => {
+  //
+  // EVERY other doc room needs the same bridge, for the same reason and with
+  // one extra hop. `rooms.broadcastToRoom` fans out on `ws~<meta.workspaceId>`
+  // — the GROUPING tag a diff review or folder bind sets — and a board link is
+  // not that tag, so a plain review doc filed on a board reached that board's
+  // agent never. Measured: a session with six docs under `watch_doc` and a
+  // seat on the board heard nothing from any of them on the board channel, and
+  // silence from a subscription you never made is indistinguishable from
+  // nobody having commented.
+  //
+  // Resolution happens HERE, at BROADCAST time, against `workspace.docIds` —
+  // nothing is registered when a doc is created. That is what makes "and
+  // anything created later" true with no new call, no new field and no
+  // migration: `fileUnderHubWorkspace` already files every doc onto some
+  // board, defaulting to Unfiled, so a doc that exists is a doc some board
+  // holds.
+  onDocRoomEvent = (docId, payload) => {
     const taskId = taskIdOfBodyDoc(docId);
-    if (!taskId) return;
-    const workspaceId = taskStore.getTask(taskId)?.workspaceId;
-    if (!workspaceId) return;
-    sse.broadcast(`ws~${workspaceId}`, payload);
-    taskProjection.refresh(workspaceId);
+    if (taskId) {
+      const workspaceId = taskStore.getTask(taskId)?.workspaceId;
+      if (!workspaceId) return;
+      sse.broadcast(`ws~${workspaceId}`, payload);
+      // Task path only: a plain doc thread moves no row, so refreshing the
+      // projection for it would be a board-wide rewrite that changes nothing.
+      taskProjection.refresh(workspaceId);
+      return;
+    }
+    // Exactly one hop from grouping to board — the same non-transitive rule
+    // `shareWorkspacesOf` spells out, so what an agent HEARS about a review
+    // and what a share visitor may OPEN in it cannot drift apart.
+    const grouping = rooms.get(docId)?.meta.workspaceId;
+    const boards = new Set(hubWorkspacesHolding(docId));
+    if (grouping) for (const board of hubWorkspacesHolding(grouping)) boards.add(board);
+    for (const board of boards) {
+      // rooms.ts already broadcast on the grouping's own channel; a second
+      // send here would deliver the same comment twice to one listener.
+      if (board === grouping) continue;
+      sse.broadcast(`ws~${board}`, payload);
+    }
   };
 
   // ── Home pane: per-person read markers + the "What's New?" brief ─────────
