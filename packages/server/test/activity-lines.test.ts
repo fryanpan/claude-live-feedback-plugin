@@ -102,6 +102,30 @@ describe('the activity view renders the rows the server really wrote', () => {
     expect(line).toContain('Ship Friday, not Thursday.');
   });
 
+  it('says an answer was taken back, in the words that were taken back', async () => {
+    // Runs after the test above, which answered this decision — the undo has
+    // to have something to undo.
+    const r = await post(`/api/tasks/${decisionId}/answer/undo`, { author: PERSON });
+    expect(r.status).toBe(200);
+
+    const row = rowsOf('decision.answer_withdrawn').at(-1);
+    // A row that never reached the log renders nothing, which would make the
+    // assertions below vacuous.
+    expect(row).toBeDefined();
+    const line = describeEvent(row as ActivityEvent, () => 'Ship Thursday or Friday?');
+    expect(line).toContain('Jordan');
+    expect(line).toContain('Ship Thursday or Friday?');
+    expect(line).toContain('Ship Friday, not Thursday.');
+    // Not the bare slug a missing switch case falls through to.
+    expect(line).not.toContain('decision.answer_withdrawn');
+
+    // Re-answer, so the tests after this one see the state they expect.
+    await post(`/api/tasks/${decisionId}/answer`, {
+      text: 'Ship Friday, not Thursday.',
+      author: PERSON,
+    });
+  });
+
   it('attributes task.created, so an author can be told from a stranger', async () => {
     const r = await post(`/api/workspaces/${wsId}/tasks`, {
       title: 'Wire the index',

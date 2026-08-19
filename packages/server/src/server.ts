@@ -2727,6 +2727,22 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
           return j(200, res);
         }
+        // Undo. Answering is a single click with no confirmation, so there has
+        // to be a way back — and the way back is a SOFT delete: the store moves
+        // the answer to `answerHistory` rather than dropping it, and the
+        // decision goes back to open. Matched BEFORE `/answer` would be a
+        // mistake either way (that pattern is anchored), but it is written
+        // first so the pair reads together.
+        const taskAnswerUndoMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/answer\/undo$/);
+        if (taskAnswerUndoMatch && req.method === 'POST') {
+          const taskId = decodeURIComponent(taskAnswerUndoMatch[1] ?? '');
+          const body = await safeJson(req);
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const res = taskStore.withdrawAnswer(taskId, { actor: author });
+          if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
+          return j(200, res);
+        }
         // "Tell me more" — a question asked back at a decision INSTEAD of
         // answering it. Keeps the options from being a closed set: the row
         // stays open, stays counted, and the attached agent owes context.

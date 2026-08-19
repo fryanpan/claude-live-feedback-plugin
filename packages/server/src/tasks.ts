@@ -440,6 +440,25 @@ export interface Task {
   /** Decisions keep the verbatim answer. `optionId` records WHICH candidate
    *  the words came from when one was tapped — the text stays the answer. */
   answer?: { text: string; by: string; ts: number; optionId?: string };
+  /**
+   * Answers that were WITHDRAWN, oldest first — the soft-delete half of
+   * `answer`.
+   *
+   * Answering a decision is a single click, and a stray one used to be
+   * unrecoverable: the words were overwritten by the next answer or, with no
+   * undo at all, simply stood. The project rule is that a removal must be
+   * reversible, so undo moves the answer HERE rather than dropping it. Nothing
+   * reads this to decide anything — `answer` alone still says whether the
+   * decision is answered — which is what keeps the record cheap to keep.
+   */
+  answerHistory?: Array<{
+    text: string;
+    by: string;
+    ts: number;
+    optionId?: string;
+    withdrawnAt: number;
+    withdrawnBy: string;
+  }>;
   /** Which goal (id + its text at the time) produced this placement. */
   triagedAgainst?: { goalId: string; goal: string; ts: number };
   /**
@@ -1197,6 +1216,28 @@ export interface DecisionAnsweredEvent {
 }
 
 /**
+ * An answer taken back.
+ *
+ * Its own event rather than a second `decision.answered` carrying a flag: an
+ * agent watching the feed has to be able to tell "the decision moved" from
+ * "the decision is open again, and what I propagated was withdrawn". The
+ * withdrawn words ride the event because the agent that acted on them may
+ * need to say which answer it had already acted on.
+ */
+export interface DecisionAnswerWithdrawnEvent {
+  type: 'decision.answer_withdrawn';
+  workspaceId: string;
+  taskId: string;
+  /** The answer that was taken back, verbatim. */
+  answer: string;
+  /** Who had answered — not necessarily who withdrew it. */
+  answeredBy: string;
+  actor: TaskActor;
+  links: Ref[];
+  ts: number;
+}
+
+/**
  * "Tell me more" — the third first-class response to a decision, next to
  * picking an option and writing your own answer.
  *
@@ -1344,6 +1385,7 @@ export type TaskStoreEvent =
   | TaskDueSetEvent
   | TaskRegroupedEvent
   | DecisionAnsweredEvent
+  | DecisionAnswerWithdrawnEvent
   | DecisionInfoRequestedEvent
   | WorkspaceGoalUpdatedEvent
   | WorkspaceRetriagedEvent
@@ -1467,6 +1509,10 @@ export type SetLeadAgentResult =
 export type AnswerDecisionResult =
   | { ok: true; task: Task }
   | { ok: false; error: 'not-found' | 'not-a-decision' | 'unknown-option' };
+
+export type WithdrawAnswerResult =
+  | { ok: true; task: Task }
+  | { ok: false; error: 'not-found' | 'not-a-decision' | 'no-answer' };
 
 export type RequestMoreInfoResult =
   | { ok: true; task: Task }
@@ -2888,6 +2934,55 @@ export class TaskStore {
       taskId: task.id,
       answer: text,
       ...(opts.optionId !== undefined ? { optionId: opts.optionId } : {}),
+      actor,
+      links: task.links,
+      ts,
+    });
+    return { ok: true, task };
+  }
+
+  /**
+   * Take an answer back.
+   *
+   * Answering is one click with no confirmation step, and a stray one on a
+   * phone used to be permanent — the surface offered no way back, and the
+   * words were gone the moment a second answer overwrote them. This is the
+   * way back, and it is a SOFT delete: the answer moves to `answerHistory`
+   * with who withdrew it and when, so the record of what was decided (and
+   * un-decided) survives, which is the project-wide rule for user content.
+   *
+   * Refuses when there is nothing to withdraw rather than succeeding
+   * vacuously: two readers racing the same undo must not both be told they
+   * took something back.
+   */
+  withdrawAnswer(
+    taskId: string,
+    opts: { actor: { id: string; name: string; kind?: string } },
+  ): WithdrawAnswerResult {
+    const task = this.getTask(taskId);
+    if (!task) return { ok: false, error: 'not-found' };
+    if (task.needs !== 'decision') return { ok: false, error: 'not-a-decision' };
+    const answer = task.answer;
+    if (!answer) return { ok: false, error: 'no-answer' };
+    const ts = Date.now();
+    const actor: TaskActor = {
+      id: opts.actor.id,
+      name: opts.actor.name,
+      kind: classifyActor(opts.actor),
+    };
+    task.answerHistory = [
+      ...(task.answerHistory ?? []),
+      { ...answer, withdrawnAt: ts, withdrawnBy: actor.name },
+    ];
+    task.answer = undefined;
+    task.updatedAt = ts;
+    this.scheduleSave(task.workspaceId);
+    this.emit({
+      type: 'decision.answer_withdrawn',
+      workspaceId: task.workspaceId,
+      taskId: task.id,
+      answer: answer.text,
+      answeredBy: answer.by,
       actor,
       links: task.links,
       ts,

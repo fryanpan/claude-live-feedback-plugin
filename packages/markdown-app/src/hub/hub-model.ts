@@ -1512,6 +1512,13 @@ export function describeEvent(ev: ActivityEvent, titleOf: (taskId: string) => st
           : (ev.answer as { text?: string } | undefined)?.text;
       return `${actorName(ev)} answered ${title()}${answer ? `: “${answer}”` : ''}`;
     }
+    case 'decision.answer_withdrawn': {
+      // The withdrawn words are IN the line, not implied by it. Whoever reads
+      // this trail is usually reading it because an agent acted on an answer
+      // that has since been taken back, and "which answer" is the question.
+      const answer = typeof ev.answer === 'string' ? ev.answer : '';
+      return `${actorName(ev)} took back the answer on ${title()}${answer ? `: “${answer}”` : ''} — it is open again`;
+    }
     case 'workspace.retriaged': {
       const n = (ev.taskIds as string[] | undefined)?.length ?? 0;
       return `${actorName(ev)} changed the goal — re-triaging ${n} open task${n === 1 ? '' : 's'}`;
