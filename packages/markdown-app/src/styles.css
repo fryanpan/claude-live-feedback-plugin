@@ -1351,6 +1351,33 @@ body.hub-body {
   font-size: 14px;
   overflow-wrap: anywhere;
 }
+/* The second line of a declared item's two-line header: why it matters, in
+   the author's words. Capped at two lines here as well as at the API, because
+   the API's budget is characters and a narrow phone turns 90 of them into
+   three lines — the clamp is what makes the promise true at 430px rather than
+   on average. */
+.hub-walk-why {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* "What to review for" reuses the ask box; the detail below it is prose and
+   reuses the body. Both are the authored middle of a declared card. */
+.hub-walk-lookfor-text {
+  margin: 0;
+  font-family: var(--prose);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.hub-walk-review-detail {
+  margin: 0;
+}
 /* The ask, tinted so it is the thing the eye lands on (mockup `.ask`). */
 .hub-walk-askbox {
   padding: 12px 14px;
@@ -1802,6 +1829,32 @@ body.hub-body {
 .hub-review-row-done .hub-review-row-title {
   text-decoration: line-through;
   text-decoration-color: color-mix(in srgb, var(--fg-muted) 55%, transparent);
+  color: var(--fg-muted);
+}
+/* Threads nobody declared anything on. Quiet by construction: this band is
+   permanently non-empty on any busy workspace, so styling it like the queue
+   would train the eye to skip the queue. */
+.hub-review-unreplied-head {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.hub-review-unreplied-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+}
+.hub-review-unreplied-note {
+  margin: 3px 0 0;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--fg-muted);
+}
+.hub-review-row-unreplied .hub-review-row-title {
+  font-weight: 500;
   color: var(--fg-muted);
 }
 
