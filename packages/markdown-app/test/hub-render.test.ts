@@ -1914,6 +1914,125 @@ describe('renderTaskDetail — discussion', () => {
     expect(root.querySelector('.hub-detail-ask--direct')).toBeTruthy();
   });
 
+  /**
+   * Reported with a screenshot 2026-08-19: *"the review request up top is
+   * missing all of the necessary details -- please fix. I see they're in the
+   * review request at the bottom."*
+   *
+   * A declared item arrives with a `review` payload the agent WROTE for this
+   * card — why it matters, what to review for, and the detail that carries the
+   * links to the thing under review. The panel rendered `ask` alone, so the
+   * reader got the headline at the top and had to scroll to the comment at the
+   * bottom for everything that made the headline actionable.
+   */
+  const declared = (over: Record<string, unknown> = {}) => ({
+    shape: 'review' as const,
+    headline: 'The rollup query is ready to look at',
+    why: 'It blocks the nightly job, which is paused until someone signs off.',
+    lookFor: 'Whether the join drops rows when a session has no events.',
+    detail: 'The change is in [the rollup PR](https://example.test/pr/12) — two files.',
+    ...over,
+  });
+
+  it('renders the declared review payload in the ask panel, links and all', () => {
+    renderTaskDetail(
+      root,
+      task({ id: 't-1' }),
+      detailHandlers({
+        asks: [askItem({ band: 'declared', review: declared(), ask: declared().headline })],
+        now: NOW,
+      }),
+      { loading: false, threads: [thread()] },
+    );
+    const ask = root.querySelector('.hub-detail-ask');
+    expect(ask).toBeTruthy();
+    // Why it matters — the second half of the two-line header, which the panel
+    // dropped entirely.
+    expect(ask?.querySelector('.hub-detail-ask-why')?.textContent).toContain(
+      'blocks the nightly job',
+    );
+    // What to review for, through the same block the Home card uses.
+    expect(ask?.querySelector('.hub-walk-lookfor-text')?.textContent).toContain(
+      'drops rows when a session has no events',
+    );
+    // The detail is markdown, so the link to the thing under review is a real
+    // link rather than bracket soup — the reason the detail exists at all.
+    const link = ask?.querySelector('.hub-walk-review-detail a') as HTMLAnchorElement | null;
+    expect(link).toBeTruthy();
+    expect(link?.getAttribute('href')).toBe('https://example.test/pr/12');
+    expect(link?.textContent).toBe('the rollup PR');
+  });
+
+  it('offers a declared decision’s options as one-tap replies', async () => {
+    const onComment = vi.fn().mockResolvedValue(true);
+    const t = task({ id: 't-1' });
+    renderTaskDetail(
+      root,
+      t,
+      detailHandlers({
+        asks: [
+          askItem({
+            threadId: 'th-9',
+            band: 'declared',
+            review: declared({
+              shape: 'decision',
+              lookFor: undefined,
+              options: [
+                { id: 'keep', label: 'Keep threading', detail: 'Costs a migration.' },
+                { id: 'drop', label: 'Drop threading' },
+              ],
+            }),
+          }),
+        ],
+        now: NOW,
+        onComment,
+      }),
+      { loading: false, threads: [thread({ id: 'th-9' })] },
+    );
+    const opts = root.querySelectorAll('.hub-detail-ask .hub-walk-option');
+    expect(opts).toHaveLength(2);
+    expect(opts[0]?.querySelector('.hub-walk-option-label')?.textContent).toBe('Keep threading');
+    expect(opts[0]?.querySelector('.hub-walk-option-detail')?.textContent).toBe(
+      'Costs a migration.',
+    );
+    // The second has no detail, so no detail element — not an empty one.
+    expect(opts[1]?.querySelector('.hub-walk-option-detail')).toBeNull();
+    // Same contract as the Home card: the LABEL is the verbatim reply, and it
+    // lands on the thread that asked.
+    (opts[1] as HTMLButtonElement).click();
+    expect(onComment).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 't-1' }),
+      'Drop threading',
+      'th-9',
+    );
+    // Tapping is a shortcut, never a closed set — the free-text box stays.
+    const form = root.querySelector('.hub-detail-ask-form') as HTMLFormElement;
+    expect(form).toBeTruthy();
+    expect((form.querySelector('textarea') as HTMLTextAreaElement).placeholder).toContain(
+      'your own words',
+    );
+  });
+
+  /** Positive control: the change is ADDITIVE. An item with no declaration is
+   *  the pre-existing panel — headline and a reply box, nothing invented. */
+  it('leaves an undeclared ask exactly as it was', () => {
+    renderTaskDetail(root, task({ id: 't-1' }), detailHandlers({ asks: [askItem()], now: NOW }), {
+      loading: false,
+      threads: [thread()],
+    });
+    const ask = root.querySelector('.hub-detail-ask');
+    expect(ask?.querySelector('.hub-detail-ask-text')?.textContent).toContain(
+      'should we drop threading',
+    );
+    expect(ask?.querySelector('.hub-detail-ask-why')).toBeNull();
+    expect(ask?.querySelector('.hub-walk-lookfor-text')).toBeNull();
+    expect(ask?.querySelectorAll('.hub-walk-option')).toHaveLength(0);
+    const form = root.querySelector('.hub-detail-ask-form') as HTMLFormElement;
+    expect((form.querySelector('textarea') as HTMLTextAreaElement).placeholder).toBe(
+      'Answer here…',
+    );
+  });
+
   it('shows no ask panel on a task nothing is waiting on', () => {
     renderTaskDetail(root, task({ id: 't-1' }), detailHandlers({ asks: [], now: NOW }), {
       loading: false,
