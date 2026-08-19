@@ -13873,6 +13873,28 @@ function triageRequestLine(p, selfAgentId) {
   return `[triage.requested] goal changed — re-triage ${count} open task(s) with set_task_goal${batch}. What you owe on a goal change: ${RETRIAGE_SKILL}${detail}`;
 }
 
+// packages/mcp/src/voice-line.ts
+function truncate(s, n) {
+  return s.length > n ? `${s.slice(0, n - 1)}…` : s;
+}
+function where(p) {
+  const c = p.context;
+  if (!c)
+    return "";
+  return ` (at ${c.surface ?? "?"}${c.docId ? ` ${c.docId}` : ""}${c.taskId ? ` ${c.taskId}` : ""}${c.visibleHeading ? `, near "${c.visibleHeading}"` : ""})`;
+}
+function voiceRequestLine(p) {
+  if (p.route === "fast-path")
+    return null;
+  const by = p.actor?.name ? ` by ${p.actor.name}` : "";
+  const said = `[voice.request]${by}${where(p)}: "${p.transcript ?? ""}"`;
+  const told = truncate(p.ack ?? "", 120);
+  if (p.route === "fast-path-action") {
+    return `${said} — the fast path ALREADY applied this to the board on the speaker's behalf; ` + `they were told: "${told}". Do NOT redo it — reconcile your own picture of the board ` + "with what changed, and pick up only whatever the utterance asked for beyond it.";
+  }
+  return `${said} — act on it through the task/edit tools; the speaker was told: "${told}"`;
+}
+
 // packages/mcp/src/mcp.ts
 function resolveBaseUrl() {
   const override = readRenamedEnv(process.env, "CW_BASE_URL");
@@ -13892,7 +13914,7 @@ var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.63";
+var PLUGIN_VERSION = "0.1.66";
 var COMMIT_EVIDENCE_DESCRIPTION = 'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
 var server = new Server({
   name: "claude-workspaces",
@@ -16245,10 +16267,10 @@ async function emitHubChannelMessage(event, rawPayload) {
   let body;
   switch (event) {
     case "task.created":
-      body = `[task.created] "${truncate(p.task?.title ?? p.taskId ?? "", 60)}" → ${p.goal ?? "?"}${p.assignee ? ` (assignee ${p.assignee})` : ""}`;
+      body = `[task.created] "${truncate2(p.task?.title ?? p.taskId ?? "", 60)}" → ${p.goal ?? "?"}${p.assignee ? ` (assignee ${p.assignee})` : ""}`;
       break;
     case "task.transitioned":
-      body = `[task.transitioned] ${p.taskId}: ${p.from} → ${p.to}${by}${p.note ? ` — ${truncate(p.note, 80)}` : ""}`;
+      body = `[task.transitioned] ${p.taskId}: ${p.from} → ${p.to}${by}${p.note ? ` — ${truncate2(p.note, 80)}` : ""}`;
       break;
     case "task.assigned":
       body = `[task.assigned] ${p.taskId}: ${p.from} → ${p.to}${by}`;
@@ -16257,19 +16279,19 @@ async function emitHubChannelMessage(event, rawPayload) {
       body = `[task.regrouped] ${p.taskId}: ${p.fromGoal} → ${p.toGoal}${by}`;
       break;
     case "task.retitled":
-      body = `[task.retitled] "${truncate(p.titleFrom ?? "", 60)}" → "${truncate(p.titleTo ?? "", 60)}"${by}${p.reason ? ` — ${truncate(p.reason, 80)}` : ""}`;
+      body = `[task.retitled] "${truncate2(p.titleFrom ?? "", 60)}" → "${truncate2(p.titleTo ?? "", 60)}"${by}${p.reason ? ` — ${truncate2(p.reason, 80)}` : ""}`;
       break;
     case "task.body_edited":
-      body = p.titleFrom && p.titleTo ? `[task.body_edited] reshaped "${truncate(p.titleFrom, 60)}" → "${truncate(p.titleTo, 60)}"${by}${p.reason ? ` — ${truncate(p.reason, 80)}` : ""}` : `[task.body_edited] ${p.taskId}${by}${p.reason ? ` — ${truncate(p.reason, 80)}` : ""}`;
+      body = p.titleFrom && p.titleTo ? `[task.body_edited] reshaped "${truncate2(p.titleFrom, 60)}" → "${truncate2(p.titleTo, 60)}"${by}${p.reason ? ` — ${truncate2(p.reason, 80)}` : ""}` : `[task.body_edited] ${p.taskId}${by}${p.reason ? ` — ${truncate2(p.reason, 80)}` : ""}`;
       break;
     case "task.gate_refused":
       body = `[task.gate_refused] ${p.taskId}: ${p.riskTier}-tier ${p.reason}${by} — → ${p.to} did NOT happen`;
       break;
     case "decision.answered":
-      body = `[decision.answered] ${p.taskId}${by}: "${truncate(p.answer ?? "", 120)}" — walk its links as the propagation checklist`;
+      body = `[decision.answered] ${p.taskId}${by}: "${truncate2(p.answer ?? "", 120)}" — walk its links as the propagation checklist`;
       break;
     case "workspace.goal_updated":
-      body = `[workspace.goal_updated]${by}: "${truncate(p.newGoal ?? "", 120)}"`;
+      body = `[workspace.goal_updated]${by}: "${truncate2(p.newGoal ?? "", 120)}"`;
       break;
     case "workspace.lead_changed":
       body = p.leadAgentId === AUTHOR.id ? `[workspace.lead_changed]${by}: you are now the lead agent — goal-edit re-triage is addressed to you` : `[workspace.lead_changed]${by}: lead agent is now ${p.leadAgentId ?? "?"}`;
@@ -16289,10 +16311,10 @@ async function emitHubChannelMessage(event, rawPayload) {
       body = `[${event}] ${p.agentId ?? "?"}`;
       break;
     case "voice.request": {
-      if (p.route === "fast-path")
+      const line = voiceRequestLine(p);
+      if (line === null)
         return;
-      const ctx = p.context ? ` (at ${p.context.surface ?? "?"}${p.context.docId ? ` ${p.context.docId}` : ""}${p.context.taskId ? ` ${p.context.taskId}` : ""}${p.context.visibleHeading ? `, near "${p.context.visibleHeading}"` : ""})` : "";
-      body = `[voice.request]${by}${ctx}: "${p.transcript ?? ""}" — act on it through the task/edit tools; the speaker was told: "${truncate(p.ack ?? "", 120)}"`;
+      body = line;
       break;
     }
     default:
@@ -16326,7 +16348,7 @@ async function emitChannelMessage(event, rawPayload) {
     const author2 = p.suggestion?.author?.name ?? "";
     const snippet2 = p.suggestion?.snippet ?? "";
     const kind = p.suggestion?.kind ?? "";
-    const header2 = snippet2 ? `"${truncate(snippet2, 60)}"` : sid;
+    const header2 = snippet2 ? `"${truncate2(snippet2, 60)}"` : sid;
     const body2 = `[suggestion ${action2}] ${author2 ? `${author2}: ` : ""}${kind} ${header2}`.trim();
     await server.notification({
       method: "notifications/claude/channel",
@@ -16351,7 +16373,7 @@ async function emitChannelMessage(event, rawPayload) {
   const text = p.comment?.text ?? p.thread?.comments?.at(-1)?.text ?? "";
   const sentAt = new Date(p.comment?.ts ?? Date.now()).toISOString();
   const action = event.startsWith("thread.") ? event.slice("thread.".length) : event;
-  const header = snippet ? `on "${truncate(snippet, 60)}"` : "";
+  const header = snippet ? `on "${truncate2(snippet, 60)}"` : "";
   const body = text ? `[${action}] ${author ? `${author}: ` : ""}${text}` : `[${action}] thread ${threadId} ${header}`.trim();
   await server.notification({
     method: "notifications/claude/channel",
@@ -16369,7 +16391,7 @@ async function emitChannelMessage(event, rawPayload) {
     }
   });
 }
-function truncate(s, n) {
+function truncate2(s, n) {
   return s.length > n ? `${s.slice(0, n - 1)}…` : s;
 }
 async function http(method, path, body) {
