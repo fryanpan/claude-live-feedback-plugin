@@ -257,6 +257,132 @@ describe('decision routes', () => {
       expect(stored?.answer?.text).toBe('neither — split it in two');
       expect(stored?.answer?.optionId).toBeUndefined();
     });
+
+    it('keeps a standing answer’s words when a second answer lands over it', async () => {
+      // The race this reproduces: two browsers both show the unanswered card,
+      // Bryan answers, and a collaborator whose panel has not repainted yet
+      // answers two seconds later. The second write must not hard-delete the
+      // first answer — soft delete is the project-wide rule for user content,
+      // and `answerHistory` exists precisely so overwritten words survive.
+      const wsId = await seedWorkspace();
+      const task = await seedDecision(wsId, { options: [{ label: 'Ship now' }] });
+      const picked = task.options?.[0];
+      await jj(
+        await post(`/api/tasks/${task.id}/answer`, {
+          text: 'Ship now',
+          optionId: picked?.id,
+          author: PERSON,
+        }),
+      );
+      await jj(
+        await post(`/api/tasks/${task.id}/answer`, {
+          text: 'Wait for the rebuild',
+          author: { id: 'known-sam', name: 'Sam', kind: 'known', color: '#888888' },
+        }),
+      );
+      const stored = (await getTasks(wsId)).find((t) => t.id === task.id);
+      // Last write stands…
+      expect(stored?.answer?.text).toBe('Wait for the rebuild');
+      expect(stored?.answer?.by).toBe('Sam');
+      // …and the displaced words survive with their full provenance: whose
+      // they were, which option carried them, and who displaced them.
+      expect(stored?.answerHistory?.map((a) => a.text)).toEqual(['Ship now']);
+      expect(stored?.answerHistory?.[0]?.by).toBe('Jordan');
+      expect(stored?.answerHistory?.[0]?.optionId).toBe(picked?.id);
+      expect(stored?.answerHistory?.[0]?.withdrawnBy).toBe('Sam');
+      expect(stored?.answerHistory?.[0]?.withdrawnAt).toBeGreaterThan(0);
+      // Undo after the race recovers round by round: first the second answer…
+      await jj(await post(`/api/tasks/${task.id}/answer/undo`, { author: PERSON }));
+      const undone = (await getTasks(wsId)).find((t) => t.id === task.id);
+      expect(undone?.answer).toBeUndefined();
+      expect(undone?.answerHistory?.map((a) => a.text)).toEqual([
+        'Ship now',
+        'Wait for the rebuild',
+      ]);
+    });
+  });
+
+  // ── POST /api/tasks/:id/answer/undo ─────────────────────────────────────
+
+  describe('POST /api/tasks/:id/answer/undo', () => {
+    it('reopens the decision and KEEPS the withdrawn words', async () => {
+      const wsId = await seedWorkspace();
+      const task = await seedDecision(wsId, { options: [{ label: 'Ship now' }] });
+      const picked = task.options?.[0];
+      expect(picked).toBeDefined();
+      if (!picked) return;
+      await jj(
+        await post(`/api/tasks/${task.id}/answer`, {
+          text: picked.label,
+          optionId: picked.id,
+          author: PERSON,
+        }),
+      );
+      // Positive control: it really was answered before the undo, so the
+      // absence asserted below is the undo's doing and not a failed answer.
+      expect((await getTasks(wsId)).find((t) => t.id === task.id)?.answer?.text).toBe('Ship now');
+
+      const events: TaskStoreEvent[] = [];
+      const off = handle.tasks.onEvent((e) => events.push(e));
+      try {
+        await jj(await post(`/api/tasks/${task.id}/answer/undo`, { author: PERSON }));
+      } finally {
+        off();
+      }
+      const stored = (await getTasks(wsId)).find((t) => t.id === task.id);
+      expect(stored?.answer).toBeUndefined();
+      // The soft-delete half: the words, who said them, which option, and who
+      // took it back. A hard delete would pass the line above and lose all of
+      // it.
+      expect(stored?.answerHistory?.length).toBe(1);
+      expect(stored?.answerHistory?.[0]?.text).toBe('Ship now');
+      expect(stored?.answerHistory?.[0]?.by).toBe('Jordan');
+      expect(stored?.answerHistory?.[0]?.optionId).toBe(picked.id);
+      expect(stored?.answerHistory?.[0]?.withdrawnBy).toBe('Jordan');
+      expect(stored?.answerHistory?.[0]?.withdrawnAt).toBeGreaterThan(0);
+
+      const withdrawn = events.find((e) => e.type === 'decision.answer_withdrawn');
+      expect(withdrawn).toBeDefined();
+      if (withdrawn?.type === 'decision.answer_withdrawn') {
+        expect(withdrawn.answer).toBe('Ship now');
+        expect(withdrawn.answeredBy).toBe('Jordan');
+      }
+    });
+
+    it('lets the decision be answered again, and keeps both rounds', async () => {
+      const wsId = await seedWorkspace();
+      const task = await seedDecision(wsId);
+      await jj(await post(`/api/tasks/${task.id}/answer`, { text: 'wait', author: PERSON }));
+      await jj(await post(`/api/tasks/${task.id}/answer/undo`, { author: PERSON }));
+      await jj(await post(`/api/tasks/${task.id}/answer`, { text: 'ship', author: PERSON }));
+      await jj(await post(`/api/tasks/${task.id}/answer/undo`, { author: PERSON }));
+      const stored = (await getTasks(wsId)).find((t) => t.id === task.id);
+      expect(stored?.answerHistory?.map((a) => a.text)).toEqual(['wait', 'ship']);
+    });
+
+    it('404s an unknown task, 400s a missing author, an unanswered decision, or a plain task', async () => {
+      const wsId = await seedWorkspace();
+      const task = await seedDecision(wsId);
+      const { task: plain } = await jj<{ task: Task }>(
+        await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, title: 'plain' }),
+      );
+      expect((await post('/api/tasks/t-missing/answer/undo', { author: PERSON })).status).toBe(404);
+      expect((await post(`/api/tasks/${task.id}/answer/undo`, {})).status).toBe(400);
+      // Nothing to withdraw is a refusal, not a vacuous success — two readers
+      // racing the same undo must not both be told they took something back.
+      const none = await post(`/api/tasks/${task.id}/answer/undo`, { author: PERSON });
+      expect(none.status).toBe(400);
+      expect(((await none.json()) as { error: string }).error).toBe('no-answer');
+      expect((await post(`/api/tasks/${plain.id}/answer/undo`, { author: PERSON })).status).toBe(
+        400,
+      );
+      // Positive control: the same route on the same task DOES work once
+      // there is an answer to take back.
+      await jj(await post(`/api/tasks/${task.id}/answer`, { text: 'ship', author: PERSON }));
+      expect((await post(`/api/tasks/${task.id}/answer/undo`, { author: PERSON })).status).toBe(
+        200,
+      );
+    });
   });
 
   // ── POST /api/tasks/:id/more-info ───────────────────────────────────────

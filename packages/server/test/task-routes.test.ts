@@ -1165,6 +1165,81 @@ describe('hub workspace + task routes', () => {
     });
 
     /**
+     * A DECLARED item is not cleared that way, and this is the route-level
+     * proof of it.
+     *
+     * Reproduced in the browser before it was fixed: on a task with a pending
+     * ask, one line typed into "Add a comment…" made the whole card —
+     * question, why and every option button — disappear, and it stayed gone
+     * across a reload with the decision never answered. The composer has no
+     * target picker (by design), it derives one as the newest comment's
+     * thread, and that is the ask's own thread on exactly the tasks where an
+     * agent has just asked something.
+     *
+     * Driven over HTTP rather than through `reviewThreadItems` because the
+     * mechanism spans two routes the unit test cannot see: the comment lands
+     * through `/comments`, the answer through `/answer`, and it is the second
+     * one that has to leave a record the first one does not.
+     */
+    it('keeps a declared review item through an ordinary comment, and drops it on an answer', async () => {
+      const r = await post('/api/workspaces', { name: 'declared-ws', goal: 'Answer things.' });
+      const wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
+      const t = await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, title: 'Ship it' });
+      const taskId = ((await t.json()) as { task: { id: string } }).task.id;
+      const bodyDoc = encodeURIComponent(`task:${taskId}`);
+
+      const made = await post(`/api/docs/${bodyDoc}/threads`, {
+        author: AGENT,
+        text: 'Two ways to go, both fine.',
+        anchor: { kind: 'subject' },
+        review: {
+          shape: 'decision',
+          headline: 'Dim resolved threads or hide them?',
+          why: 'Blocks the inline-comments branch.',
+          detail: 'Hiding is tidier; dimming keeps the history one tap away.',
+          options: [
+            { id: 'hide', label: 'Hide them' },
+            { id: 'dim', label: 'Keep dimmed' },
+          ],
+        },
+      });
+      expect(made.status, await made.clone().text()).toBe(200);
+      const thread = ((await made.json()) as { thread: { id: string; comments: { id: string }[] } })
+        .thread;
+      const threadId = encodeURIComponent(thread.id);
+      const commentId = thread.comments[0]?.id;
+
+      // The reader says something that is not an answer — the exact act that
+      // used to delete the card.
+      const chat = await post(`/api/docs/${bodyDoc}/threads/${threadId}/comments`, {
+        author: PERSON,
+        text: 'Reading this now, one sec.',
+      });
+      expect(chat.status).toBe(200);
+
+      const still = (await (await local(`/api/workspaces/${wsId}/review-items`)).json()) as {
+        items: Array<{ band: string; review?: { options?: unknown[] } }>;
+      };
+      expect(still.items).toHaveLength(1);
+      expect(still.items[0]?.band).toBe('declared');
+      // The options are what vanished on the screen, so they are what is
+      // asserted: a row with no payload would not re-render the card.
+      expect(still.items[0]?.review?.options).toHaveLength(2);
+
+      // Answering does clear it — the positive control, without which a route
+      // that had simply stopped dropping anything would pass the assertion
+      // above.
+      const answered = await post(`/api/docs/${bodyDoc}/threads/${threadId}/answer`, {
+        author: PERSON,
+        text: 'Neither — dim them on mobile only.',
+        commentId,
+      });
+      expect(answered.status, await answered.clone().text()).toBe(200);
+      const gone = await local(`/api/workspaces/${wsId}/review-items`);
+      expect(((await gone.json()) as { items: unknown[] }).items).toEqual([]);
+    });
+
+    /**
      * `direct` and the roster it depends on, end-to-end.
      *
      * The unit tests hand `reviewThreadItems` a source they build themselves,

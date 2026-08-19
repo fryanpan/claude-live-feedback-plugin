@@ -23,6 +23,68 @@
   /* iOS safe-area inset (nothing by default on desktop) */
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-top: env(safe-area-inset-top, 0px);
+
+  /* How wide the task detail panel is: 1100 where there is room, never under
+     900 while the viewport can pay for it, always bounded by the viewport at
+     the use site. A token rather than a literal because the BOARD has to
+     reserve exactly this much room beside the split pane — two hand-kept
+     copies of a width is how a panel edge ends up a few pixels over the
+     content it was supposed to clear. Asked for by number (2026-08-18):
+     *"default 1100px, at least 900px when space allows"*. */
+  --hub-detail-w: min(1100px, max(900px, 62vw));
+
+  /* What the task LIST needs to still be a list once the panel has taken its
+     share. The split pane reserves the panel's width out of the board's
+     column, so this is the other half of that arithmetic — and the number the
+     split's breakpoint is derived from (see the ≥1660px block).
+
+     Measured, not chosen: at a 1600px window the board column came out at
+     274px, where a user-story title clips after about twenty characters and
+     the quick-capture input renders as "Ca"; at 1191px the same column
+     computed to zero and the rows had no width at all. 420px is where a row
+     shows enough of a story title to be scanned rather than guessed at. */
+  --hub-board-min: 420px;
+  /* What the board's side of a split costs in total: its own floor plus the
+     234px that sits between the CONTAINER's edge and the list — the nav rail
+     and its gap (190), the page gutters (28), the panel's offset (16).
+
+     It read 334 until 2026-08-19, from `1600 − 992 − 274 = 334` measured at a
+     1600px window. That subtraction starts from the VIEWPORT and the board
+     lives inside `#hub-root`, which is capped at `--hub-page-w` — so the
+     missing 100px was not a scrollbar, as the old comment guessed. It was
+     1600 − 1500, the width the cap threw away, and it is only 100px at
+     exactly 1600px. Folding a cap overflow into a constant is what made every
+     number here viewport-sized while the box they were spent in was not.
+     234 is container-relative and therefore true at every width; it
+     reproduces the same 274px at 1600, and 359 / 166 / 166 at the 1661 / 1920
+     / 2400 a reviewer measured off rendered pixels. */
+  /* Inside `.hub-main`'s grid, everything to the left of the board: the nav
+     rail's `max-content` track (170px measured — the one number here with no
+     literal to read, and the one a longer nav label would move) and the
+     grid's own 20px gap. Named because the floor's clamp needs this distance
+     in `.hub-main`'s own coordinates, where the page gutters are already
+     out. */
+  --hub-board-inset: 190px;
+  /* The same distance in `#hub-root`'s coordinates — the page gutters either
+     side, the inset above, and the panel's offset. 234px. */
+  --hub-board-chrome: calc(28px + var(--hub-board-inset) + var(--hub-detail-gap));
+  --hub-board-keep: calc(var(--hub-board-min) + var(--hub-board-chrome));
+  /* The panel's width IN THE SPLIT, where it is capped by what the board must
+     keep — one expression, because the panel's width and the room the board
+     reserves for it have to be the same number or the panel's edge lands over
+     the content it was supposed to clear. Below the split's breakpoint the
+     modal uses `--hub-detail-w` directly and this is unused. */
+  --hub-detail-pane-w: min(var(--hub-detail-w), calc(100vw - var(--hub-board-keep)));
+  /* How far the panel's edge sits inside the board's reservation. A token
+     because THREE rules now need the same number — the reservation, the
+     container's open-state cap, and the panel's own offset — and the file's
+     own warning about two hand-kept copies of a width applies harder to
+     three. */
+  --hub-detail-gap: 16px;
+  /* How wide the page gets. The cap's reasoning is at `#hub-root`; it is a
+     token because the split's container cap has to be derived from it rather
+     than repeat it. */
+  --hub-page-w: 1500px;
 }
 
 * {
@@ -564,7 +626,7 @@ body.hub-body {
    left to give, its fixed chrome being 134px of handle, open zone, status,
    owner, gaps and padding. */
 #hub-root {
-  max-width: 1500px;
+  max-width: var(--hub-page-w);
   margin: 0 auto;
   padding: 0 14px calc(24px + var(--safe-bottom));
 }
@@ -1005,13 +1067,19 @@ body.hub-body {
   grid-template-columns: max-content minmax(0, 1fr);
   gap: 20px;
   align-items: start;
+  /* The rail stretches to this row, so this is what guarantees the rail — and
+     the mic docked at its foot — reaches the fold on a board with three rows
+     in it. Was on `.hub-main--home` alone, where it read as a Home-page
+     concern; "the mic is at the bottom left of the nav" is only a location a
+     reader can rely on if the nav has a bottom to speak of. 64px is the
+     topbar plus the page's own tail. */
+  min-height: calc(100vh - 64px);
 }
 /* Home showing: the board column leaves the grid and the Home section takes
    the one content track. Hiding rather than unmounting — the board keeps its
-   realtime projection warm underneath. */
-.hub-main--home {
-  min-height: calc(100vh - 64px);
-}
+   realtime projection warm underneath. (The `min-height` this pair used to
+   carry moved onto `.hub-main` — every view needs the rail to reach the fold,
+   not only Home.) */
 .hub-main--home .hub-board-col {
   display: none;
 }
@@ -1701,7 +1769,15 @@ body.hub-body {
    reversing the brief topbar-tabs detour), collapsible to icons via the
    button at its foot, with the choice persisted in localStorage. At ≤1100px
    it becomes a horizontal strip above the content, and on a phone the fixed
-   bottom bar — those bands live in their media blocks below. */
+   bottom bar — those bands live in their media blocks below.
+
+   The rail deliberately carries NO `overflow`. It used to clip its own x-axis
+   while the width animated, which cost more than it bought: an `overflow-x`
+   makes the element a scroll container on BOTH axes, which would clip the
+   voice readout that hangs off the dock at its foot and would silently strand
+   that dock's `position: sticky` against the rail's own (never-scrolling)
+   box. The labels are `display: none` when collapsed rather than clipped, so
+   there is nothing left to overflow. */
 .hub-nav {
   display: flex;
   flex-direction: column;
@@ -1712,14 +1788,14 @@ body.hub-body {
   background: var(--bg-panel);
   border-right: 1px solid var(--border);
   transition: width 150ms ease;
-  overflow-x: hidden;
-  scrollbar-width: none;
 }
-.hub-nav::-webkit-scrollbar {
-  display: none;
-}
+/* 6px of side padding rather than the rail's 8: the collapsed rail still has
+   to hold a whole 44px mic at its foot, and the width is border-box —
+   58 − 1px border − 12px padding = 45. */
 .hub-nav--collapsed {
   width: 58px;
+  padding-left: 6px;
+  padding-right: 6px;
 }
 .hub-nav--collapsed .hub-nav-label {
   display: none;
@@ -1764,6 +1840,101 @@ body.hub-body {
   display: block;
   width: 100%;
   height: 100%;
+}
+
+/* --- the hold-to-talk mic, docked at the rail's foot ---
+
+   Bryan, 2026-08-19: *"can we make a more durable fix for the mic? Place it in
+   a fixed location instead of floating. Put it in bottom left of left navbar
+   in desktop views. And in the bottom tab on mobile, and give it a distinct
+   look and keep it slightly separate from the navbar so it's clear it's not a
+   navbar item"*.
+
+   The mic used to be a `position: fixed` launcher in the viewport's bottom-left
+   corner, painted above everything — so it landed on whatever each page put in
+   that corner, and every surface that reached the corner had to reserve a
+   column for it. A reservation is a promise nothing will ever be positioned
+   under one particular column, renewed at every width where it could be
+   broken. Docking retires the promise: the mic sits in the nav's own column,
+   which no page content ever occupies.
+
+   `sticky`, not plain flow, because the rail is as tall as the page and
+   scrolls with it — a mic at the literal foot of a 4000px rail is not a fixed
+   location. Stuck to the bottom of the scrollport it stays where the reader
+   last saw it, still inside the rail, still over nothing. Being positioned
+   also makes it the containing block the readout hangs off. */
+.hub-nav-dock {
+  position: sticky;
+  bottom: 8px;
+  /* Above the task detail's scrim (60), and the DOCK only — the nav itself
+     keeps no layer, so the pages stay under an overlay that is meant to cover
+     them. Docking put the mic inside the one element `.hub-detail` (fixed,
+     `inset: 0`, later in the shell than `.hub-main`) paints over at every
+     width, and hold-to-talk from inside an open task is a shipped capability:
+     the voice context sends `surface: 'task'`, and its keyboard half wants a
+     Space key. Under the scrim the mic is not merely dimmed — the click lands
+     on the scrim, whose handler CLOSES the task. Nothing is behind the rail's
+     column, so a mic painted over that scrim still covers no page content,
+     which is the promise docking was for.
+
+     This reaches only the RAIL. Measured 2026-08-19: in the ≤1100px band the
+     nav is a static top strip and the centred panel runs under it, so the same
+     z-index put the mic on top of the open task — at 905px it covered the
+     panel whole, clipped the title's first characters, and hit-testing over
+     the intersection resolved to the mic, so it took the click too. That is
+     the float era exactly, which is why the escape is dropped there rather
+     than narrowed: see `.hub-nav-dock` in the ≤1100px block.
+
+     Read the premise above literally — it is the whole justification. The
+     escape is earned only where nothing of the page is behind the dock's own
+     column, and only the rail is such a column.
+
+     A `position: fixed` bar is a stacking context whatever its z-index, so at
+     ≤900px no number here can escape it either; there the overlay is kept off
+     the bar's row instead — see `.hub-detail` in the ≤900px block. */
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  /* *"slightly separate … so it's clear it's not a navbar item"* — a divider
+     AND a gap. The divider alone reads as a list separator between two items,
+     which is the opposite of what it is for. */
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.hub-nav-dock .voice-mic {
+  /* Out of the fixed layer entirely. The offsets and the z-index it needed as
+     a FAB mean nothing in flow, and leaving them set is how the next reader
+     concludes it is still floating. */
+  position: static;
+  left: auto;
+  bottom: auto;
+  z-index: auto;
+  flex: none;
+  /* A docked control casts no shadow — the shadow is what read as hovering
+     above the page. */
+  box-shadow: none;
+}
+/* Distinct from a nav item: those are borderless text rows in the rail's own
+   panel colour; this is a filled round button that contrasts with it.
+   `:not(.voice-active)` so the recording red — the state that matters most —
+   still wins from its own one-class rule. */
+.hub-nav-dock .voice-mic:not(.voice-active) {
+  background: var(--bg);
+}
+.hub-nav-dock .voice-mic:not(.voice-active):hover {
+  background: var(--bg-hover);
+}
+/* The dictation/ack readout rides above the mic wherever the mic is. Absolute
+   against the dock rather than fixed to the viewport corner: on a centred
+   1500px hub the rail's foot is nowhere near that corner, and a readout
+   pointing at the page gutter is worse than no readout. It is wider than the
+   rail on purpose and overflows it — see the `overflow` note above. */
+.hub-nav-dock .voice-indicator {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  z-index: auto;
 }
 /* A reading column, not the full stage — the brief is prose and a full-width
    line is unreadable. The phone already has this width and needs no case. */
@@ -2389,30 +2560,9 @@ body.hub-body {
   color: inherit;
   cursor: pointer;
 }
-.hub-status-chip {
-  flex: 0 0 auto;
-  min-width: 88px;
-  min-height: 30px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  border: 1px solid transparent;
-  background-color: transparent;
-  font-size: 12px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-/* The affordance the border used to carry, moved onto the pointer and the
-   keyboard so it costs nothing while reading. focus-visible (not focus) keeps
-   the ring off a mouse click but guarantees it for tab navigation — removing
-   a border must not remove the only thing a keyboard user can see. */
-.hub-status-chip:hover {
-  background-color: var(--bg-hover);
-  border-color: var(--border);
-}
-.hub-status-chip:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
+/* (`.hub-status-chip` and `.hub-chip-current` are gone with the chip row the
+   panel no longer renders — only the `.hub-chip-<status>` color classes below
+   survive, because the status <select> still wears them.) */
 .hub-chip-todo {
   color: var(--fg-muted);
 }
@@ -2423,9 +2573,6 @@ body.hub-body {
 .hub-chip-done {
   color: var(--green);
   border-color: var(--green);
-}
-.hub-chip-current {
-  font-weight: 700;
 }
 .hub-task-badges {
   display: inline-flex;
@@ -2501,7 +2648,28 @@ body.hub-body {
   word-break: break-word;
 }
 
-/* --- task detail (opens instantly — §3.9) --- */
+/* --- task detail (opens instantly — §3.9) ---
+
+   TWO RULES HOLD THIS WHOLE SURFACE TOGETHER, and both were reported missing
+   ("laid out by a monkey… random elements not aligned and inconsistent spacing
+   and flow", 2026-08-18):
+
+   1. ONE SPACING SCALE — 4 / 8 / 12 / 16 / 24. Nothing in the panel uses a
+      value off it. Gaps inside a component are 8 or 12; the gap BETWEEN two
+      sections is 16 or 24. If a new rule wants 10px or 14px, the component
+      wants regrouping, not a new number.
+   2. ONE LEFT EDGE. The panel's content box is the grid line, and the title,
+      the field labels and their values, the decision card, the description,
+      the tabs, the comment text and the composer all begin on it. A control
+      aligns its BOX there (a pill centres its own text, so pulling it left by
+      its padding aligns nothing and leaves it hanging into the gutter —
+      measured both ways); text and prose align their glyphs, which is why the
+      live description editor carries a negative inline margin equal to the
+      padding its hover box needs.
+
+   The corollary rule: a mark on one row must not move that row. The comment
+   stream's focus and target bars are absolutely positioned in the panel's
+   gutter for exactly this reason. */
 .hub-detail {
   position: fixed;
   inset: 0;
@@ -2516,31 +2684,197 @@ body.hub-body {
   display: none;
 }
 .hub-detail-panel {
-  width: min(860px, 100%);
+  /* Asked for by number: *"default 1100px, at least 900px when space allows"*,
+     and *"taking more than half the horizontal width on laptop/tablet is
+     fine"*. The single expression lives in `--hub-detail-w` because the split
+     pane below has to reserve exactly this much room on the board's side —
+     two hand-kept copies of a width is how a panel edge ends up a few pixels
+     over the content it was supposed to clear. */
+  width: min(var(--hub-detail-w), 100%);
   max-height: 92vh;
   overflow: auto;
   background: var(--bg);
   border-radius: var(--radius);
   box-shadow: var(--shadow-lg);
-  padding: 16px;
+  /* No top padding: the head is sticky, and a padded top leaves a transparent
+     band above it that scrolling content shows through. The head carries that
+     inset itself instead. */
+  padding: 0 16px 24px;
 }
+/* The head is sticky because the panel is now a tall split pane on a desktop
+   and a full-height sheet on a phone: close, share and the title are the three
+   things that must not require scrolling back up. */
 .hub-detail-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: start;
+  gap: 12px;
+  align-items: center;
+  padding: 16px 0 12px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
 }
 .hub-detail-title {
   margin: 0;
-  font-size: 19px;
+  font-size: 22px;
+  line-height: 1.3;
+  font-weight: 650;
   overflow-wrap: anywhere;
   word-break: break-word;
   cursor: text;
 }
-.hub-detail-statuses {
+.hub-detail-head-actions {
   display: flex;
-  gap: 6px;
-  margin: 12px 0;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+/* Every control in the head is the same SQUARE, because they are all icons
+   now: *"Copy link / Full screen: icons instead of text buttons, Asana-style"*
+   (2026-08-18). That inverts the note this rule used to carry — the ✕ was the
+   odd one out among two text buttons, and the answer turned out to be that the
+   other two should look like the ✕. 36px is design-mobile.md's floor for a
+   thumb; the glyph is centred, so all three read as one row of controls.
+   Each one still carries a `title` AND an `aria-label`, which is what keeps an
+   icon-only control nameable to a screen reader and hoverable on a desktop. */
+.hub-icon-btn,
+.hub-detail-head-actions .hub-btn {
+  min-height: 36px;
+  min-width: 36px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  line-height: 1;
+  white-space: nowrap;
+}
+/* Only meaningful where the panel is not already the whole viewport — a phone
+   sheet is full screen by definition, so the toggle would promise a change it
+   cannot make. Unhidden by the ≥1024px block below. */
+.hub-detail-expand {
+  display: none;
+}
+/* --- key fields: status, who, when, what for — one row under the title --- */
+.hub-detail-fields {
+  display: grid;
+  /* Wraps to one field per line on a phone and sits in a row from about a
+     tablet up; `auto-fit` rather than a media query because what decides it is
+     the PANEL's width, which the split pane and full screen both change.
+     The 200px floor is not cosmetic and was measured in the browser at 430px:
+     a 170px floor buys TWO columns on a phone, and because GOAL below takes
+     the whole line, that leaves DUE alone in a half-width cell with an empty
+     cell beside it — the "elements not aligned" complaint in miniature. At
+     200px a 430px phone gets one column and all four fields share a left and a
+     right edge, while the 874px split pane still fits four across. */
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin: 16px 0 0;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+/* One grid item per FIELD. A bare `dt` + `dd` are two items, so the label
+   lands in one column and its value in the next — see the note on `cell()`. */
+.hub-detail-field {
+  min-width: 0;
+}
+/* GOAL takes the whole line. Reported 2026-08-18: *"the goal title can be
+   longer than the column has room for"* — and it is the one field whose value
+   is free text somebody wrote, where the other three are a fixed vocabulary, a
+   name, or a date. `1 / -1` rather than `span 2` deliberately: `auto-fit`
+   drops to a single column on a narrow phone, where `span 2` would create an
+   implicit second column and overflow the panel, while `1 / -1` just means
+   "full width" at every count.
+   Status is NO LONGER the full-width one — it stopped being three chips and
+   became a single value with a dropdown, which fits a column. */
+.hub-detail-field:last-child {
+  grid-column: 1 / -1;
+}
+/* All four values are controls, so they get one box shape and one height and
+   the row scans as a row. 36px is the thumb floor; `max-width: 100%` and
+   `min-width: 0` are what stop a long goal title or an agent id from setting
+   the select's intrinsic width and pushing the panel past a 430px viewport. */
+.hub-detail-select,
+.hub-detail-input {
+  /* Full-cell, so the four boxes share a left edge AND a right edge instead of
+     each ending wherever its longest option happens to. */
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-subtle, #fafafa);
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+.hub-detail-select:hover,
+.hub-detail-input:hover {
+  border-color: var(--border-strong);
+}
+/* A date is typed as well as picked, so it gets a text cursor and the browser's
+   own spin/calendar affordances room to sit. */
+.hub-detail-input {
+  cursor: text;
+}
+/* The board's round status mark, then the dropdown that changes it — one line,
+   the mark first, exactly as the summary row reads. Asked for by name:
+   *"show ONLY the current status, with the status icon used in the summary
+   view, and a dropdown to change it"*. `min-width: 0` on the wrapper so the
+   select inside it can shrink rather than widen the column. */
+.hub-detail-statusctl {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  /* Fills its cell. `.hub-detail-field-v` is itself a flex container, so
+     without this the mark-plus-dropdown shrink-wraps to its content — measured
+     at 137px in a 383px cell — and STATUS is the one field of four whose box
+     stops short of the shared right edge. That ragged edge is exactly the
+     "inconsistent" reading; the select below takes whatever the mark leaves. */
+  flex: 1 1 auto;
+}
+.hub-detail-statusctl .hub-status-mark {
+  flex: none;
+}
+.hub-detail-statusctl .hub-detail-status {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.hub-detail-field-k {
+  margin: 0 0 4px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.hub-detail-field-v {
+  margin: 0;
+  /* 36, the control height, so a value's box and the row it sits in are the
+     same thing rather than a box floating inside a slightly shorter row. */
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+/* The assignee picker is shared with the board, where it is a 44px row on its
+   own. In the field grid it is one of FOUR controls, and four boxes of two
+   heights is the "inconsistent spacing" complaint in miniature — so it takes
+   the row's height here. Higher specificity than `.hub-assignee-btn`, which is
+   what makes this win wherever the two rules meet.
+   (`.hub-detail-statuses` and its disabled-chip rule are gone with the chip
+   row itself — status is a single value with a dropdown now.) */
+.hub-detail-field-v .hub-assignee-btn {
+  min-height: 36px;
+  width: 100%;
 }
 .hub-detail-meta {
   display: grid;
@@ -2579,7 +2913,6 @@ body.hub-body {
 .hub-assignee-btn {
   max-width: 100%;
   min-height: 44px;
-  margin: -10px 0;
   padding: 0 8px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -2645,9 +2978,15 @@ a.hub-link-chip:hover {
   /* A summary is a tap target on a phone; the default marker box is smaller
      than a finger, so the row itself carries the height. */
   min-height: 36px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  /* NOT `flex`. Chrome's disclosure triangle is drawn by the summary's
+     `::marker`, and a `display` other than `list-item` removes it — measured
+     2026-08-18: the row read as a heading with no sign it opened anything.
+     `list-item` keeps the marker AND lets the row carry its own height; the
+     alignment `flex` was here for is bought with `::marker` + padding, which
+     costs nothing a reader can see. */
+  display: list-item;
+  list-style-position: inside;
+  padding-block: 8px;
 }
 .hub-detail-quote {
   margin: 0;
@@ -2656,69 +2995,252 @@ a.hub-link-chip:hover {
   font-family: var(--prose);
   overflow-wrap: anywhere;
 }
-/* "What we need from you" — the first thing under the title, with its own
-   reply box, so answering costs no scroll on a 430px phone. The box is what
-   makes it a loop rather than a signpost: a button that scrolls to a composer
-   further down satisfies "answer without leaving the screen" on a desktop
-   only. */
-.hub-detail-ask {
-  margin: 0 0 14px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg-subtle, transparent);
+/* (`.hub-detail-ask*` is gone. The panel used to render TWO regions here — a
+   decision card and a separate "ask" panel — each showing one item and each
+   blind to the other, so a task with both showed two competing headers. They
+   are one `hub-decide` queue now. The declared payload the ask panel learned
+   to render — the why, the look-for, the markdown detail — is rendered by
+   `.hub-decide-why` / `.hub-decide-lookfor` / `.hub-decide-detail` below; the
+   why is unclamped there for the same reason it was unclamped here.) */
+/* What was decided, and the way back out of it. The pair sits at the TOP of
+   the queue region rather than replacing it: answering the task's own decision
+   used to retire every thread item with it, open or not. */
+.hub-detail-answered {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 0 0 16px;
 }
-/* A run that contains a real question addressed to a person gets the accent;
-   one that does not is deliberately quiet, because it is a status note and
-   the reader is meant to be able to skip it on sight. */
-.hub-detail-ask--direct {
-  border-color: var(--accent, #2e7dd7);
-  border-left-width: 3px;
-}
-.hub-detail-ask-kicker {
-  margin: 0 0 6px;
-  font-size: 11px;
+.hub-detail-answer {
   font-weight: 600;
-  letter-spacing: 0.04em;
+  margin: 0;
+  flex: 1 1 240px;
+  overflow-wrap: anywhere;
+}
+/* Quiet, and never smaller than a finger. Undo is the recovery path for a
+   single unconfirmed click, so it has to be reachable without being the thing
+   the eye lands on. */
+.hub-detail-undo-answer {
+  flex: none;
+  min-height: 44px;
+  padding-inline: 14px;
+}
+/* The queue region carrying nothing but the answer — no head, no cards, so the
+   16px gap under the answer would be trailing space. */
+.hub-decide--answered .hub-detail-answered {
+  margin-bottom: 0;
+}
+/* A refusal said next to the control that refused. `role="alert"`, so it is
+   announced rather than only drawn. */
+.hub-form-error {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--red);
+}
+/* A write is in flight. The controls are disabled in JS; this is the part the
+   reader can see, and it is what the card was missing when an answer took two
+   seconds and repainted nothing. */
+.hub-decide-card.is-busy {
+  opacity: 0.6;
+  cursor: progress;
+}
+/* --- the decision card: a question, the ways to answer it, and a box ---
+
+   Reported 2026-08-18: "options crammed against their details, no spacing
+   between the answer buttons, no spacing between buttons and comment text,
+   nothing aligned." The task-detail copy of this card emitted classes that had
+   NO rules at all, so the browser's defaults stacked the options edge to edge
+   and jammed the answer box against them.
+
+   `hub-decide-*` is deliberately not panel-specific: it is ONE layout for
+   "here is a question and here are the ways to answer it", and the Home /
+   walkthrough card is meant to adopt these class names when that ticket comes
+   off hold, rather than growing a second layout that drifts from this one.
+   Everything here is spacing and alignment — no colours the surrounding card
+   does not already own — so it can be dropped into another container. */
+.hub-decide {
+  margin: 24px 0 0;
+  padding: 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-panel, var(--bg-subtle, #fafafa));
+}
+/* The queue's own header: what kind of thing is waiting, and — only when there
+   is more than one — where you are in them. `justify-content: space-between`
+   with the walk absent leaves the kicker exactly where a single-item card used
+   to put it, which is the requirement: *"with exactly one open item it should
+   look like today's single card"*. */
+.hub-decide-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 12px;
+}
+.hub-decide-kicker {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--fg-muted);
 }
-.hub-detail-ask-text {
-  font-family: var(--prose);
-  line-height: 1.55;
-  overflow-wrap: anywhere;
+/* ‹ 2 of 3 › — the same walkthrough shape Home uses, inside the ticket. */
+.hub-decide-walk {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
 }
-.hub-detail-ask-text > :first-child {
+.hub-decide-count {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+/* 36, not 32: design-mobile.md sets 36×36 as the floor for anything
+   interactive, and these two are the control that walks a phone reader
+   through the queue. Measured at 430px on the staging build — they were the
+   only controls in the panel under the floor. */
+.hub-decide-step {
+  min-width: 36px;
+  min-height: 36px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  line-height: 1;
+}
+.hub-decide-step:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+/* One item. No border and no background of its own: it is the ONLY thing in
+   the card at any moment, so a box inside a box would just be a second edge
+   8px in from the first. */
+.hub-decide-card.hidden {
+  display: none;
+}
+/* The blurb, above the options. *"The ticket title is not the decision"* —
+   this is the sentence that says what is being decided, and it is allowed to
+   wrap: *"the blurb may run a few lines — design for that"*. Nothing here
+   clips, truncates or sets a line count. */
+/* The card's two prose lines get the same measure the description does, for
+   the same reason — in full screen the question ran 1415px, right beside a
+   description capped at 708, which reads as two unrelated layouts stacked.
+   Deliberately NOT scoped to the detail panel: these classes are meant to be
+   adopted by the Home queue's copy of this card (see the last case in
+   `hub-decide-css.test.ts`), and a `ch` cap is inert anywhere the card is
+   already narrower, which is everywhere it renders today. The OPTIONS keep the
+   full width on purpose — they are tap targets, not text. */
+.hub-decide-headline {
+  margin: 0 0 8px;
+  font-family: var(--prose);
+  font-size: 16px;
+  font-weight: 650;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  max-width: 72ch;
+}
+.hub-decide-why {
+  margin: 0 0 12px;
+  font-family: var(--prose);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+  max-width: 72ch;
+}
+/* The declaration's detail, rendered as the markdown it is declared to be —
+   this is where the links to the thing under review live, so it reads as prose
+   with real links rather than as a trailing clause on the why. Unclamped for
+   the same reason the headline and the why are. */
+.hub-decide-detail {
+  margin: 0 0 12px;
+  font-family: var(--prose);
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  max-width: 72ch;
+}
+.hub-decide-detail > :first-child {
   margin-top: 0;
 }
-.hub-detail-ask-text > :last-child {
+.hub-decide-detail > :last-child {
   margin-bottom: 0;
 }
-/* Line 2 of a declared item's header: why it matters. The Home row clamps its
-   twin to two lines because the reader is scanning past it; here they have
-   opened the thing, so it runs to its full (gate-capped) length. */
-.hub-detail-ask-why {
-  margin: 6px 0 0;
-  font-size: 13.5px;
+.hub-decide-lookfor {
+  margin: 0 0 12px;
+  font-size: 13px;
   line-height: 1.45;
   color: var(--fg-muted);
   overflow-wrap: anywhere;
 }
-.hub-detail-ask-meta {
-  margin: 6px 0 0;
+.hub-decide-meta {
+  margin: 0 0 12px;
   font-size: 12px;
   color: var(--fg-muted);
 }
-.hub-detail-ask-form {
-  margin-top: 10px;
+/* One answer per row, with real air between them: on a phone this is the
+   primary gesture, and a row of pills would put two answers under one thumb. */
+.hub-decide-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
-.hub-detail-ask-note {
-  margin: 4px 0 0;
-  font-size: 11px;
+.hub-decide-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: 100%;
+  min-height: 44px;
+  padding: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.hub-decide-option:hover {
+  border-color: var(--accent, #2e7dd7);
+}
+.hub-decide-option-label {
+  font-weight: 600;
+  line-height: 1.3;
+}
+/* The half that read as "crammed": the detail is a second line under its
+   label, not a continuation of it. */
+.hub-decide-option-detail {
+  font-size: 13px;
+  line-height: 1.4;
   color: var(--fg-muted);
 }
-.hub-detail-answer {
-  font-weight: 600;
+/* Separated from the options by a rule as well as by space, because it is an
+   ALTERNATIVE to them and not the next step after them. */
+.hub-decide-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+}
+.hub-decide-options + .hub-decide-form {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.hub-decide-form-hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+.hub-decide-form button {
+  align-self: flex-start;
 }
 .hub-answer-form textarea {
   width: 100%;
@@ -2726,7 +3248,6 @@ a.hub-link-chip:hover {
   padding: 8px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  margin-bottom: 8px;
 }
 /* The description, read in place. Prose measure and font, because this is
    the one part of the panel that is writing rather than metadata. */
@@ -2762,10 +3283,24 @@ a.hub-link-chip:hover {
    fallback text and the editor both live here, so the box has to look the
    same either way: no jump when the editor lands a moment after the panel. */
 .hub-detail-body-slot {
-  margin: 12px 0;
+  /* 24px, the between-SECTIONS step: the description is its own section, and
+     at 12px it hugged whatever sat above it (the decision card, usually). */
+  margin: 24px 0 0;
   /* Reserves the fallback's own first line, so the panel does not reflow when
      an empty description turns into an editor with a placeholder in it. */
   min-height: 1.55em;
+  /* A measure, because the panel is width-flexible and prose is not. Measured
+     in full screen at a 1512px window: 1449px of running text, about 177
+     characters a line, where the readable range tops out near 75 — the eye
+     loses the line it was on when it returns to the left edge.
+
+     `ch` rather than px so it tracks the font: 72ch is the measure, and it
+     binds only where the panel is wider than that, so the phone (383px at
+     430) and the split pane are untouched. Left-aligned rather than centred:
+     the description shares a left edge with the fields and the queue above
+     it, and centring one section of a panel breaks the column everything
+     else is read down. */
+  max-width: 72ch;
 }
 .hub-detail-body-slot .hub-detail-body,
 .hub-detail-body-slot .hub-detail-body-empty {
@@ -2778,8 +3313,14 @@ a.hub-link-chip:hover {
 .hub-detail-body-live {
   border: 1px solid transparent;
   border-radius: var(--radius);
-  padding: 6px 8px;
-  margin: 12px -8px;
+  /* The negative inline margin is what keeps rule 2 true while the editor has
+     a hover/focus box: the padding pushes the prose in, the margin pulls the
+     box back out, so the text still starts on the panel's left edge. */
+  padding: 8px;
+  /* -9, not -8: the box has a 1px border, and the prose starts one pixel
+     inside it. Measured at 1512px — the body paragraphs sat at x=777 against
+     a 776 spine everything else in the panel shares. */
+  margin: 0 -9px;
   transition: border-color 0.12s ease, background 0.12s ease;
 }
 .hub-detail-body-live:hover {
@@ -2853,7 +3394,19 @@ a.hub-link-chip:hover {
   color: var(--fg-muted);
   text-transform: uppercase;
   letter-spacing: 0.03em;
-  margin: 14px 0 4px;
+  /* 16/4, on the scale. 14 was the one stray value in the panel. */
+  margin: 16px 0 4px;
+}
+/* "Description", asked for by name: *"add a Description heading with proper
+   spacing separating it from the fields/decision area above"*. It carries the
+   24px between-SECTIONS step, and the slot below it drops to 4 — the heading
+   and the prose it names are ONE block, so the air belongs above the pair
+   rather than between them. */
+.hub-detail-body-head {
+  margin: 24px 0 4px;
+}
+.hub-detail-body-head + .hub-detail-body-slot {
+  margin-top: 0;
 }
 .hub-detail-transitions {
   margin: 0;
@@ -2888,6 +3441,72 @@ a.hub-link-chip:hover {
   opacity: 0.9;
 }
 
+/* --- Comments | Activity: the two tabs below the description ---
+   The record (history, original words, the leftover fields, the link chips)
+   used to sit inline under the discussion, so reaching the bottom of a
+   conversation meant scrolling past a transition list first. */
+/* The tab row DOCKS under the sticky head instead of sliding beneath it.
+
+   Reported as dead controls, and they were, at the place a reader actually
+   reaches them: the head is 90px tall, opaque and painted at z-index 1, and
+   the tab row scrolls to y 68–108 on the way down — so both tab CENTRES sat
+   under the head while an 18px sliver of each stayed visible. Clicking the
+   label you can see hit the head, and `aria-selected` never moved. Only
+   scrolling back UP brought the row out again, which is the opposite of the
+   direction anyone is going when they are looking for it.
+
+   `--hub-detail-head-h` is measured and published by `renderTaskDetail` —
+   the head grows by a line when a long title wraps, so this offset cannot be
+   a constant. The literal here is the first-paint fallback.
+
+   The background is load-bearing rather than decorative: a transparent sticky
+   row lets the comments scroll through the labels. And `scroll-margin-top` is
+   what `land()` aligns against after a switch, so "put the tab row at the top"
+   means under the head rather than beneath it. */
+.hub-detail-tabs {
+  position: sticky;
+  top: var(--hub-detail-head-h, 96px);
+  z-index: 1;
+  display: flex;
+  gap: 4px;
+  margin: 24px 0 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  scroll-margin-top: var(--hub-detail-head-h, 96px);
+}
+.hub-detail-tab {
+  min-height: 40px;
+  padding: 0 12px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: none;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+/* Rule 2 again: the first tab's LABEL starts on the panel's left edge. Done by
+   dropping this one tab's left padding rather than by shifting the strip, so
+   the underline the strip carries still spans the panel exactly. */
+.hub-detail-tab:first-child {
+  padding-left: 0;
+}
+.hub-detail-tab:hover {
+  color: var(--fg);
+}
+.hub-detail-tab[aria-selected="true"] {
+  color: var(--fg);
+  border-bottom-color: var(--accent, #2e7dd7);
+}
+.hub-detail-tabpanel {
+  padding-top: 12px;
+}
+.hub-detail-tabpanel.hidden {
+  display: none;
+}
+
 /* --- task discussion (comments on the task itself) --- */
 .hub-discussion-loading,
 .hub-discussion-empty {
@@ -2896,62 +3515,46 @@ a.hub-link-chip:hover {
   font-size: 13px;
   font-style: italic;
 }
-.hub-thread {
-  border-left: 2px solid var(--border);
-  padding: 2px 0 2px 10px;
-  margin: 0 0 12px;
-}
-.hub-thread.resolved {
-  opacity: 0.72;
-}
-/* The one the review queue sent you here to answer. Scrolling to it is not
-   enough on a panel of six near-identical threads — you have to be able to
-   tell WHICH one when you look up from the scroll. */
-.hub-thread-focus {
-  border-left-color: var(--accent, #3b6fd4);
-  background: var(--accent-wash, rgba(59, 111, 212, 0.07));
-  border-radius: 0 6px 6px 0;
-}
-/* The conversation the one composer is pointed at. Paired with the target row
-   inside the composer itself: two signals for one fact, because the composer
-   can be a scroll away from the thread it will post into. */
-.hub-thread-target {
-  border-left-color: var(--fg-muted);
-}
-.hub-thread-status {
-  display: inline-block;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--fg-muted);
-  margin-bottom: 4px;
-}
-/* What this thread is ABOUT — the passage of the description an agent anchored
-   it to. Without it two threads on one task are two piles of comments and
-   choosing between them is guesswork, which is how a task ended up needing a
-   reply box per thread just to be routable. */
-.hub-thread-anchor {
-  margin: 0 0 8px;
-  padding: 4px 0 4px 8px;
-  border-left: 2px solid var(--border);
-  color: var(--fg-muted);
-  font-family: var(--prose);
-  font-size: 13px;
-  font-style: italic;
-  line-height: 1.45;
-  overflow-wrap: anywhere;
-}
-/* Points the composer here. A button, not a second box — see the composer
-   comment in hub-render's renderDiscussion. */
-.hub-thread-reply {
-  min-height: 36px;
-  margin-top: 4px;
+/* ONE sequence of comments, oldest first — no thread boxes. Bryan, 2026-08-18:
+   "multi-threaded comments are too complicated — just a single sequence of
+   comments with clearer separation, authorship and timing." So the separation
+   that used to come from a bordered box per thread now comes from a hairline
+   between consecutive comments and real vertical rhythm; the thread each one
+   belongs to is still on the row (`data-thread-id`) and still routable. */
+.hub-comment-stream {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
 }
 .hub-comment {
-  margin: 0 0 8px;
+  position: relative;
+  padding: 16px 0;
+  border-top: 1px solid var(--border);
   /* Long agent output and pasted paths must wrap rather than widen the
      panel — the detail sits in a 430px column on a phone. */
   overflow-wrap: anywhere;
+}
+.hub-comment:first-child {
+  border-top: none;
+  padding-top: 8px;
+}
+/* The one comment the review queue sent you here to answer. A row's MARK must
+   not move the row, so the bar is absolutely positioned in the panel's own
+   left padding — a border-left plus a compensating padding zig-zagged the
+   stream, which is the alignment complaint reproduced one surface over.
+   (`hub-comment-target`, `-resolved`, `-status`, `-anchor` and `-reply` are
+   gone with the threading UI: *"stop supporting threaded comments and clean up
+   all code related to this — clean up the UX too"*. Only the storage keeps
+   threads; nothing in this stream renders one.) */
+.hub-comment-focus::before {
+  content: "";
+  position: absolute;
+  left: -12px;
+  top: 12px;
+  bottom: 12px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent, #3b6fd4);
 }
 /* Who said it and when, on one line, both as TEXT. The time used to live only
    in a title attribute — a hover tooltip, on a surface whose whole point is
@@ -2970,13 +3573,6 @@ a.hub-link-chip:hover {
 .hub-comment-when {
   font-size: 11px;
   color: var(--fg-muted);
-}
-/* A thread the SERVER's review queue still lists as waiting on a person.
-   Louder than the Resolved badge it shares a class with, because this one is
-   a claim on the reader rather than a fact about the past. */
-.hub-thread-needs-you {
-  color: var(--accent, #2e7dd7);
-  font-weight: 700;
 }
 /* A comment that DECLARED a Review Item. Set apart because the thread that is
    the queue row otherwise reads exactly like the status notes above it — one
@@ -3018,34 +3614,22 @@ a.hub-link-chip:hover {
 .hub-comment-body > :last-child {
   margin-bottom: 0;
 }
+/* The composer sits at the END of the sequence, after the newest comment —
+   Asana-style, reversed from the original ask on 2026-08-18. So it needs the
+   between-sections step above it rather than the 6px it had when it lived
+   inside a thread box. */
 .hub-comment-form {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 6px;
-  margin: 6px 0 0;
-}
-/* Says where the box will post, immediately above the box, so what the button
-   will do is readable without moving your eyes off it. This is the whole of
-   what the second composer used to communicate by existing. */
-.hub-composer-target {
-  display: grid;
-  /* minmax(0, …): a quoted anchor is prose and must wrap, not widen the panel
-     past a 430px viewport. */
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
   gap: 8px;
-  width: 100%;
-  font-size: 13px;
-  color: var(--fg-muted);
+  margin: 24px 0 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
 }
-.hub-composer-target-label {
-  overflow-wrap: anywhere;
-}
-.hub-composer-switch {
-  min-height: 36px;
-  white-space: nowrap;
-}
+/* (`.hub-composer-target` and its switch are gone. The bar existed to say
+   WHICH thread the one box would post to, and with threading out of the UI
+   there is only one place a comment can go: the end of the sequence.) */
 .hub-comment-form textarea {
   width: 100%;
   /* The panel is a grid/flex child; without this a long unbroken paste sets
@@ -3057,9 +3641,6 @@ a.hub-link-chip:hover {
   padding: 8px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-}
-.hub-comment-form {
-  margin-top: 10px;
 }
 
 /* --- help + toast --- */
@@ -3110,6 +3691,136 @@ a.hub-link-chip:hover {
   display: none;
 }
 
+/* --- ≥1660px: the task detail is a right-hand split pane, not a modal ---
+
+   Bryan's report: "the current modal is cramped on bigger screens" — a centred
+   860px card on a 1600px display leaves the board unreadable behind a dimmed
+   backdrop and still gives the description a narrow column. The detail becomes
+   a full-height sheet on the right half instead, so the board stays legible on
+   the left and the reader keeps their place in it.
+
+   `.hub-detail--full` is the escape hatch for a long description or a long
+   discussion: the same sheet widened to the whole viewport. It lives on the
+   CONTAINER because `replaceChildren` repaints the panel constantly and would
+   drop a class held on the panel itself.
+
+   THE BREAKPOINT IS ARITHMETIC, not a device class, and it is the fix for a
+   split that was tried where it does not fit. This block used to start at
+   1024px, on the reasoning that 1024 is "room for two columns" — but the panel
+   below is floored at 900px and the board's column is what pays for it, so
+   from 1024 up to about 1650 the reflow squeezed the list into a sliver rather
+   than splitting anything. Measured at a 1191px viewport: task rows 0px wide,
+   the capture input 42px, "Capture a task" rendering as "Ca". At 1600px the
+   column was 274px and every user-story title clipped after ~20 characters.
+   A layout that reports itself as a split while showing a column nobody can
+   read is worse than the modal it replaced, because the modal at least says
+   what it is doing.
+
+   So the split starts where BOTH columns fit and nowhere lower:
+   900px panel floor + 420px board floor (`--hub-board-min`) + the 251px
+   `--hub-board-keep` adds to it — 234 of measured chrome (the nav rail and
+   its gap at 190, the page's own gutters at 28, the panel's 16px offset)
+   plus the 17px scrollbar allowance — which is 1571. 1660 is where it
+   actually starts, and the ~90px of slack is deliberate: at 1571 the panel
+   sits exactly on its 900px floor with nothing spare, so the first width
+   that qualifies is also the worst one.
+   Below it the reader gets the modal, at the
+   same 900–1100px width, over a scrim that is honest about the board being
+   out of play; below 900 the full-screen sheet is unchanged. Two things
+   readable at a time, or one thing at a time — never two slivers. */
+@media (min-width: 1660px) {
+  .hub-detail {
+    align-items: stretch;
+    justify-content: flex-end;
+    padding: 0;
+    /* Lighter than the modal scrim — the board behind it is meant to stay
+       readable here, which is the point of the split. */
+    background: rgba(0, 0, 0, 0.18);
+  }
+  .hub-detail-panel {
+    /* 1100 by default, never under 900 while the viewport can pay for it —
+       *"taking more than half the horizontal width on laptop/tablet is fine"*.
+       The 52vw this replaced gave a 1512px laptop a 760px pane, which is the
+       "cramped on bigger screens" report unfixed.
+       Capped by what the board must keep, so the panel yields the last pixels
+       rather than the list: at the breakpoint that resolves to 906px of panel
+       beside 420px of board, and the panel then grows to 1100 while the board
+       takes everything past it. */
+    width: var(--hub-detail-pane-w);
+    /* The floor, enforced rather than predicted. `--hub-detail-pane-w` is
+       derived from `100vw`, which counts the classic scrollbar; nothing it is
+       spent in does. That gap is not knowable in CSS — measured 0 with macOS
+       overlay scrollbars, 15 and then 19 in two runs of this same Chrome — so
+       a reserved allowance is a guess, and the two guesses this file tried
+       were both wrong by the time they were measured.
+       A percentage is not a guess. The panel is `position: fixed`, so its
+       containing block is the initial containing block: `100%` here IS the
+       layout width, scrollbar already subtracted, whatever it happens to be.
+       Paired with the clamp on `.hub-main`'s reservation below, which uses
+       `100%` against ITS own box — the two boxes differ, which is exactly why
+       one `100vw` could never serve both. */
+    max-width: calc(100% - var(--hub-board-keep));
+    max-height: none;
+    height: 100%;
+    border-radius: 0;
+    padding: 0 24px 28px;
+    box-shadow: -10px 0 30px rgba(0, 0, 0, 0.18);
+  }
+  .hub-detail-head {
+    padding-top: 20px;
+  }
+  /* The BOARD gets out of the way rather than running underneath the panel.
+     Without this the review banner and the quick-capture row extend under the
+     panel's left edge and are clipped by it — a split pane that only splits
+     what you can see is a modal with a lighter scrim.
+     Keyed off a class on `<body>` rather than `:has()` so the state is one
+     thing a test can assert, and so the two subtrees (board and panel) do not
+     have to be siblings. */
+  body.hub-detail-open .hub-main {
+    /* The reservation, floored. `100%` on a padding resolves against this
+       element's own containing block — `#hub-root`'s content box — so
+       `100% - inset - board-min` is exactly the widest reservation that still
+       leaves the board its floor, in the units the board is actually measured
+       in. The two clamps meet at the same pair of numbers, so the board's
+       right edge lands at `gutter + inset + board-min` and the panel's left
+       edge no closer than `board-keep` from the right: a 30px gap at the
+       breakpoint, and it cannot close, whatever the scrollbar is. */
+    padding-right: min(
+      calc(var(--hub-detail-pane-w) + var(--hub-detail-gap)),
+      calc(100% - var(--hub-board-inset) - var(--hub-board-min))
+    );
+  }
+  /* The page grows by exactly what the panel took.
+     Without this the reservation above is viewport-sized and the box it comes
+     out of is not: `#hub-root` stops at `--hub-page-w`, so at 1920 a 1100px
+     panel was subtracted from a 1472px content box and left the board 166px —
+     a narrower list than the same layout gave at 1661px. More screen, less
+     board, at the width this is read on.
+     Growing the cap rather than shrinking the panel is what the page's own
+     reasoning asks for: the cap is there so a ROW shows enough of a sentence
+     (see `#hub-root`), and `calc(page + pane + gap)` keeps the board at
+     exactly the width that cap always gave it while the panel takes the
+     space beyond it. Above ~2616px the cap binds again and the board stops
+     growing, so a row never overruns what the closed page would have shown —
+     the cap's intent survives being exceeded. */
+  body.hub-detail-open #hub-root {
+    max-width: calc(var(--hub-page-w) + var(--hub-detail-pane-w) + var(--hub-detail-gap));
+  }
+  /* At full screen the panel covers the board completely, so reserving room
+     for it would squeeze the board to nothing and reflow it twice on the way
+     back out. */
+  body.hub-detail-open.hub-detail-full .hub-main {
+    padding-right: 0;
+  }
+  .hub-detail--full .hub-detail-panel {
+    width: 100%;
+    max-width: none;
+  }
+  .hub-detail-expand {
+    display: inline-flex;
+  }
+}
+
 /* --- ≤1100px: the nav rail becomes a horizontal strip above the content ---
 
    A 170px rail plus its gap costs too much of the board's width at laptop-
@@ -3136,10 +3847,46 @@ a.hub-link-chip:hover {
     border-right: none;
     border-bottom: 1px solid var(--border);
     transition: none;
-    overflow-x: auto;
   }
   .hub-nav-collapse {
     display: none;
+  }
+  /* The mic dock turns with the bar: the rail's top divider becomes a side
+     one, and `order` puts it at the head of a left-to-right strip without
+     moving it in the DOM, where it belongs AFTER the pages it is not one of.
+     Still positioned (relative, not static) — the readout is absolute against
+     it, and a static dock would silently re-anchor that to the viewport. */
+  .hub-nav-dock {
+    order: -1;
+    position: relative;
+    /* The rail's sticky offset, undone. `bottom: 8px` says "park 8px off the
+       scrollport's foot" while the dock is sticky; read by a RELATIVE box it
+       means "paint 8px above your flow position", which lifts the stretched
+       dock — divider and all — out of line with the tabs beside it and over
+       the bar's top border. */
+    bottom: auto;
+    /* The rail's layer, undone — and this is the load-bearing line. The strip
+       is IN FLOW here, so it scrolls, and a z-index that lifts it over the
+       task overlay promises a column the panel can pass under at some scroll
+       positions and not others. That promise is the one docking was built to
+       retire. Under the scrim the mic is unreachable while a task is open in
+       this band; that is a real loss and it is the smaller one, because the
+       alternative measured as a control that paints over the task's title and
+       swallows clicks meant for it. The ≤900px band keeps the capability by
+       geometry instead — a FIXED bar the panel's box ends above — which is
+       available there and is not available to a strip that scrolls. */
+    z-index: auto;
+    align-self: stretch;
+    margin: 0;
+    padding: 0 10px 0 0;
+    border-top: none;
+    border-right: 1px solid var(--border);
+  }
+  .hub-nav-dock .voice-indicator {
+    /* The strip sits at the TOP of the content in this band, so the readout
+       hangs below it rather than over the header. */
+    top: calc(100% + 8px);
+    bottom: auto;
   }
   .hub-home {
     padding-top: 4px;
@@ -3160,7 +3907,6 @@ a.hub-link-chip:hover {
     bottom: 0;
     z-index: 60;
     gap: 0;
-    overflow-x: visible;
     background: var(--bg-panel);
     border-top: 1px solid var(--border);
     border-bottom: none;
@@ -3180,17 +3926,27 @@ a.hub-link-chip:hover {
     width: 18px;
     height: 18px;
   }
-  /* Everything bottom-docked has to clear the 54px bar: the page's own tail,
-     and the hold-to-talk mic + its indicator, which are fixed bottom-left at
-     the same corner the bar now owns. */
+  /* The mic is in the bar here, per *"in the bottom tab on mobile"* — same
+     dock, inset from the screen edge, and NOT `flex: 1` like the tabs beside
+     it: a 44px control that grows to a quarter of the bar would read as a
+     fourth page. The bar is at the bottom again, so the readout goes back
+     above it. */
+  .hub-nav-dock {
+    padding: 0 10px;
+  }
+  .hub-nav-dock .voice-indicator {
+    top: auto;
+    bottom: calc(100% + 8px);
+  }
+  /* The page's own tail has to clear the 54px bar. The height is a VARIABLE
+     rather than copies of `58px` because more than one reader needs it and one
+     of them read the wrong number; it is scoped to hub pages because no other
+     surface has the bar. */
+  body.hub-body {
+    --hub-bottom-bar: 58px;
+  }
   #hub-root {
-    padding-bottom: calc(24px + 58px + var(--safe-bottom));
-  }
-  body.hub-body .voice-mic {
-    bottom: calc(16px + 58px + var(--kb-bottom, 0px) + var(--safe-bottom, 0px));
-  }
-  body.hub-body .voice-indicator {
-    bottom: calc(68px + 58px + var(--kb-bottom, 0px) + var(--safe-bottom, 0px));
+    padding-bottom: calc(24px + var(--hub-bottom-bar, 0px) + var(--safe-bottom));
   }
   /* Deliberately NOT re-wrapping. The row stays a single grid line at every
      width: wrapping is what put the status marks at four x-positions and
@@ -3231,11 +3987,25 @@ a.hub-link-chip:hover {
   .hub-owner-ctl .hub-row-assignee {
     inset: -6px;
   }
+  /* The full-screen panel stops where the bottom bar starts, because the mic
+     is IN that bar now. A fixed bar is a stacking context whatever its
+     z-index, so the dock's own layer cannot climb out of it here — and the
+     panel is a later sibling at the same 60, so it wins on tree order and
+     takes the mic with the tabs. Ending the overlay above the bar is the
+     geometric answer: nothing is over the mic, rather than the mic being over
+     nothing. It costs the panel one bar of height and keeps hold-to-talk
+     reachable from an open task on the one device with no Space key.
+
+     This is not the float era's tail reservation coming back. That was a
+     promise about a COLUMN a scrolling control could pass through at some
+     scroll positions and not others; this is a row the panel's box simply
+     ends above, the same way `#hub-root` already ends above it. */
   .hub-detail {
     padding: 0;
+    bottom: calc(var(--hub-bottom-bar, 0px) + var(--safe-bottom, 0px));
   }
   .hub-detail-panel {
-    max-height: 100vh;
+    max-height: 100%;
     height: 100%;
     width: 100%;
     border-radius: 0;
@@ -3254,11 +4024,11 @@ a.hub-link-chip:hover {
   .hub-walk-info .hub-btn {
     width: 100%;
   }
-  /* The card's tail ends over two bottom-docked launchers: the hold-to-talk
-     mic bottom-left and the feedback widget's pencil bottom-right, both fixed
-     above this page by design. Reserve their height so the last control
-     ("Tell me more" on a decision card — exactly the one a stuck reviewer
-     reaches for) can always be scrolled clear of them. */
+  /* The card's tail still ends under one viewport-fixed launcher — the
+     feedback widget's pencil, bottom-right. (The mic used to be the other
+     one; it is docked in the nav now and covers nothing.) Reserve the
+     pencil's height so the last control ("Tell me more" on a decision card —
+     exactly the one a stuck reviewer reaches for) can be scrolled clear. */
   .hub-walk-card {
     padding-bottom: calc(60px + var(--safe-bottom, 0px));
   }
@@ -3379,10 +4149,17 @@ a.hub-link-chip:hover {
 }
 
 /* ================= VOICE (hold-to-talk, §2.4/§3.8) =================
-   The mic button + streaming-dictation/ack indicator, shared by the hub,
-   the doc surface, and the task detail. Bottom-LEFT, out of the deep-work
-   path (the composer and comment pill live bottom-right/center). Rises with
-   the keyboard via --kb-bottom like every bottom-docked element. */
+   The mic button + streaming-dictation/ack indicator, shared by the hub and
+   the /review/<docId> doc surface.
+
+   These base rules are the FLOATING form, and the doc surface is the only
+   thing still wearing it: `mountDocVoice` appends the mic to <body> on a page
+   with no nav to dock into, so a bottom-left launcher is what it has. The hub
+   docks the same element in its nav rail / bottom tab bar instead — see
+   `.hub-nav-dock` in the workspace-hub section, which un-fixes it. Bottom-LEFT
+   here, out of the deep-work path (the composer and comment pill live
+   bottom-right/center), rising with the keyboard via --kb-bottom like every
+   bottom-docked element on that surface. */
 
 .voice-mic {
   position: fixed;
@@ -3426,6 +4203,7 @@ a.hub-link-chip:hover {
 }
 .voice-indicator {
   position: fixed;
+  /* Rides directly above the floating mic — 68px is its 16 + 44 + 8. */
   bottom: calc(68px + var(--kb-bottom, 0px) + var(--safe-bottom, 0px));
   left: 16px;
   z-index: 70;
@@ -3439,6 +4217,37 @@ a.hub-link-chip:hover {
   line-height: 1.4;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
   word-break: break-word;
+}
+/* The in-flight state. The wait between releasing the key and the server's
+   ack had nothing moving in it, so a slow round trip and a dead mic looked
+   identical — on the one surface that promises every utterance an answer. */
+.voice-indicator--busy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.voice-spinner {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent, #2e7dd7);
+  border-radius: 50%;
+  animation: voice-spin 0.8s linear infinite;
+}
+@keyframes voice-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* Someone who has asked for less motion still needs to know it is working —
+   so the mark stays and only the rotation goes. */
+@media (prefers-reduced-motion: reduce) {
+  .voice-spinner {
+    animation: none;
+    border-top-color: var(--accent, #2e7dd7);
+    opacity: 0.8;
+  }
 }
 
 /* ================= FORMAT BAR ================= */

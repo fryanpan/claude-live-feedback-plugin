@@ -2433,8 +2433,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           });
         }
         // The human's queue, to the board's agent-side `next` below: every
-        // open thread across this workspace's tasks and docs whose newest
-        // comment is an agent's. Decisions are NOT here — the board already
+        // open thread across this workspace's tasks and docs that is waiting
+        // on a person — its newest comment is an agent's, OR it carries a
+        // declared item nobody has answered, which stays whatever else is
+        // said in the thread. Decisions are NOT here — the board already
         // holds every task, so shipping them again would put the priority
         // rule in two places; the client merges the two halves and orders
         // them (see `reviewQueue` in hub-model).
@@ -3220,6 +3222,22 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
           return j(200, res);
         }
+        // Undo. Answering is a single click with no confirmation, so there has
+        // to be a way back — and the way back is a SOFT delete: the store moves
+        // the answer to `answerHistory` rather than dropping it, and the
+        // decision goes back to open. Matched BEFORE `/answer` would be a
+        // mistake either way (that pattern is anchored), but it is written
+        // first so the pair reads together.
+        const taskAnswerUndoMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/answer\/undo$/);
+        if (taskAnswerUndoMatch && req.method === 'POST') {
+          const taskId = decodeURIComponent(taskAnswerUndoMatch[1] ?? '');
+          const body = await safeJson(req);
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const res = taskStore.withdrawAnswer(taskId, { actor: author });
+          if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
+          return j(200, res);
+        }
         // "Tell me more" — a question asked back at a decision INSTEAD of
         // answering it. Keeps the options from being a closed set: the row
         // stays open, stays counted, and the attached agent owes context.
@@ -3468,6 +3486,34 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // declaration that silently failed to land also reports.
           const ownerKind = taskProjection.ownerKindReader(res.task.workspaceId)(res.task);
           return j(200, { ...res, ownerKind });
+        }
+        // Set / move / clear a due date (§3.6 task.due_set). `dueAt` was
+        // writable only at creation, so the detail panel rendered a date
+        // nobody could correct. Bryan, 2026-08-18: "All fields must be human
+        // editable."
+        const taskDueMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/due$/);
+        if (taskDueMatch && req.method === 'POST') {
+          const taskId = decodeURIComponent(taskDueMatch[1] ?? '');
+          const body = await safeJson(req);
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          // `null` clears and a number sets. Anything else is REFUSED rather
+          // than coerced: an unparseable date silently read as "clear" would
+          // answer 200 while deleting the fact the caller meant to change.
+          const raw = body?.dueAt;
+          const dueAt =
+            raw === null || raw === undefined
+              ? null
+              : typeof raw === 'number' && Number.isFinite(raw)
+                ? raw
+                : undefined;
+          if (dueAt === undefined) {
+            return j(400, { error: 'dueAt must be an epoch-ms number, or null to clear' });
+          }
+          const res = taskStore.setDueAt(taskId, dueAt, { actor: author });
+          if (!res.ok) return j(404, res);
+          if (!res.changed) taskProjection.ensureWorkspace(res.task.workspaceId);
+          return j(200, res);
         }
         // set_goal_list (§3.2 edit contract): replace the ordered board
         // sections. Structural validation happens HERE because the store
