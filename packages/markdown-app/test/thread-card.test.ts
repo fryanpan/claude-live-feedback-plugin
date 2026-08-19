@@ -482,3 +482,63 @@ describe('thread card — repaint', () => {
     expect(text(cardFor(edited).querySelector('.thread-topic'))).toBe('after');
   });
 });
+
+describe('thread card — a declared Review Item', () => {
+  const declared = (over: Partial<Comment['review']> = {}): Comment['review'] => ({
+    shape: 'review',
+    headline: 'Read the new onboarding copy',
+    why: 'Ships Tuesday and nobody outside the team has read it.',
+    ...over,
+  });
+
+  // The pane is collapsed most of the time, so the opening comment's
+  // declaration has to be legible from the card face rather than only after
+  // someone expands it.
+  it('shows the opening comment’s header on the collapsed card', () => {
+    const opening = { ...comment(alice, 'Draft is up.'), review: declared() };
+    const t = makeThread({ comments: [opening] });
+    const { panel, cardFor } = mountPanel();
+    panel.setThreads([t]);
+    const slotA = cardFor(t).querySelector('.thread-slot.slot-a') as HTMLElement;
+    const header = slotA.querySelector('.comment-review') as HTMLElement;
+    expect(text(header.querySelector('.comment-review-k'))).toBe('Review');
+    expect(text(header.querySelector('.comment-review-headline'))).toBe(
+      'Read the new onboarding copy',
+    );
+    expect(text(header.querySelector('.comment-review-why'))).toBe(
+      'Ships Tuesday and nobody outside the team has read it.',
+    );
+    // Above the words, not instead of them.
+    expect(text(slotA.querySelector('.face-detail .thread-message'))).toBe('Draft is up.');
+  });
+
+  it('marks a declared REPLY and leaves the ordinary ones alone', () => {
+    const t = makeThread({
+      // The opening comment is slot A's; `.comments` holds the REPLIES, so
+      // this needs three to have an ordinary reply to contrast against.
+      comments: [
+        comment(alice, 'Started on this.'),
+        comment(bob, 'Picked it up.'),
+        { ...comment(bob, 'Both screens exist now.'), review: declared({ shape: 'decision' }) },
+      ],
+    });
+    const { panel, cardFor } = mountPanel();
+    panel.setThreads([t]);
+    const rows = [...cardFor(t).querySelectorAll('.face-detail .comments .comment')];
+    // A thread can start as a status note and become a review item later, so
+    // the mark is per comment.
+    expect(rows.map((r) => r.className.includes('comment-declared'))).toEqual([false, true]);
+    expect(text(rows[1]?.querySelector('.comment-review-k') ?? null)).toBe('Decision');
+  });
+
+  it('renders no header at all on a thread nobody declared anything on', () => {
+    const t = makeThread({ comments: [comment(alice, 'Just a note.'), comment(bob, 'Ack.')] });
+    const { panel, cardFor } = mountPanel();
+    panel.setThreads([t]);
+    const card = cardFor(t);
+    expect(card.querySelector('.comment-review')).toBeNull();
+    // Positive control: the card really rendered, so the absence above is not
+    // an empty page.
+    expect(text(card.querySelector('.face-detail .thread-message'))).toBe('Just a note.');
+  });
+});

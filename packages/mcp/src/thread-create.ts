@@ -16,6 +16,10 @@ export interface ThreadCreateInput {
   contextAfter?: string;
   occurrence?: number;
   text: string;
+  /** An optional Review Item declaration. Passed through untouched — the
+   *  server validates it and refuses a malformed one, so a shape check here
+   *  would be a second copy of one rule, free to drift from the first. */
+  review?: unknown;
 }
 
 export interface ThreadCreateRequest {
@@ -35,7 +39,12 @@ export function threadCreateRequest(
   if (input.find === undefined) {
     return {
       path: `/api/docs/${doc}/threads`,
-      body: { author, text: input.text, anchor: { kind: 'subject' } },
+      body: {
+        author,
+        text: input.text,
+        anchor: { kind: 'subject' },
+        ...(input.review !== undefined ? { review: input.review } : {}),
+      },
     };
   }
   return {
@@ -47,6 +56,7 @@ export function threadCreateRequest(
       ...(input.contextBefore !== undefined ? { contextBefore: input.contextBefore } : {}),
       ...(input.contextAfter !== undefined ? { contextAfter: input.contextAfter } : {}),
       ...(input.occurrence !== undefined ? { occurrence: input.occurrence } : {}),
+      ...(input.review !== undefined ? { review: input.review } : {}),
     },
   };
 }

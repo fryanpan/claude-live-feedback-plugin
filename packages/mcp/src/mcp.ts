@@ -80,7 +80,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.61';
+const PLUGIN_VERSION = '0.1.62';
 
 /**
  * What a good `evidence.commit` looks like, said at the one layer that reaches
@@ -210,6 +210,71 @@ const server = new Server(
   },
 );
 
+/**
+ * A Review Item: the declaration that turns a comment into a row on a
+ * person's Home queue.
+ *
+ * Declaring is the whole point. Before this existed the queue INFERRED its
+ * membership — any agent comment nobody had replied to — which meant a
+ * finished exchange left a permanent row behind, and the queue grew by one
+ * for every thing the agents got right. Nothing here is derived: if you did
+ * not ask for something, do not pass `review`, and your comment stays out of
+ * the queue.
+ *
+ * `headline` and `why` are the two lines of the row, and the server REFUSES
+ * an over-long or multi-line one rather than clipping it — a clipped headline
+ * is exactly the unreadable row this replaces. Write them like a ticket
+ * title, not like the first sentence of the explanation.
+ */
+const REVIEW_ITEM_SCHEMA = {
+  type: 'object',
+  description:
+    "Declares this comment as a Review Item, putting it on the reviewer's Home queue. Omit for ordinary comments — status notes and closing remarks must NOT declare. Refused (400, naming the field) if headline/why are missing, multi-line, or over budget: write them like a ticket title, because they are the two lines a phone shows.",
+  properties: {
+    shape: {
+      type: 'string',
+      enum: ['decision', 'review'],
+      description:
+        "'decision' offers named options to pick between (2-6 required). 'review' asks someone to read or look at something and answer in their own words — use it for a short doc, a mockup, or a set of links, all of which are the same ask.",
+    },
+    headline: {
+      type: 'string',
+      description: 'Line 1: WHAT needs review, as a ticket title. One line, ≤70 chars.',
+    },
+    why: {
+      type: 'string',
+      description: 'Line 2: why it matters / what is blocked on it. One line, ≤90 chars.',
+    },
+    lookFor: {
+      type: 'string',
+      description:
+        'What to look for — shown on the opened card, not on the row. ≤90 chars. Omitting it is accepted but reported back as a gap.',
+    },
+    detail: {
+      type: 'string',
+      description:
+        'The body, markdown, inline links welcome. ≤50 words for a decision, ≤150 for a review.',
+    },
+    options: {
+      type: 'array',
+      description: "For 'decision' only: 2-6 options. Refused on a 'review'.",
+      items: {
+        type: 'object',
+        properties: {
+          id: {
+            type: 'string',
+            description: 'Stable id; the answer records which one was picked.',
+          },
+          label: { type: 'string', description: '1-3 words, ≤28 chars. This is the button.' },
+          detail: { type: 'string', description: 'What choosing it costs or buys. ≤50 words.' },
+        },
+        required: ['id', 'label'],
+      },
+    },
+  },
+  required: ['shape', 'headline', 'why'],
+} as const;
+
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
@@ -243,13 +308,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'post_reply',
-      description: 'Post a reply to an existing thread (as the configured author).',
+      description:
+        'Post a reply to an existing thread (as the configured author). Pass `review` when this reply is asking a person to decide or look at something — that is what puts it on their Home queue as a Review Item. Without it the reply is an ordinary comment and does NOT enter the queue, which is correct for status notes and closing remarks.',
       inputSchema: {
         type: 'object',
         properties: {
           docId: { type: 'string' },
           threadId: { type: 'string' },
           text: { type: 'string' },
+          review: REVIEW_ITEM_SCHEMA,
         },
         required: ['docId', 'threadId', 'text'],
       },
@@ -257,7 +324,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'create_thread',
       description:
-        'Open a new comment thread on a doc, seeded with an initial comment from the configured author. Use when the agent has editorial notes / suggestions that should land as durable threads (instead of one-shot chat messages) — e.g. running `/edit` on a blog draft and leaving anchored feedback at six different places. Pass `find` to anchor the thread to that text; disambiguation works the same as `find_and_replace` (`contextBefore`/`contextAfter` or `occurrence` if the text appears more than once). OMIT `find` to open a thread about the doc AS A WHOLE — this is how you discuss a hub task, whose body doc is `task:<taskId>` and is often still empty: `create_thread(docId="task:t-abc", text="...")`. A subject thread never orphans. Returns `{ thread }` with `thread.id` for follow-up `post_reply` calls, and fires the same `thread.created` event the editor uses, so watchers see it immediately.',
+        'Open a new comment thread on a doc, seeded with an initial comment from the configured author. Use when the agent has editorial notes / suggestions that should land as durable threads (instead of one-shot chat messages) — e.g. running `/edit` on a blog draft and leaving anchored feedback at six different places. Pass `find` to anchor the thread to that text; disambiguation works the same as `find_and_replace` (`contextBefore`/`contextAfter` or `occurrence` if the text appears more than once). OMIT `find` to open a thread about the doc AS A WHOLE — this is how you discuss a hub task, whose body doc is `task:<taskId>` and is often still empty: `create_thread(docId="task:t-abc", text="...")`. A subject thread never orphans. Pass `review` when you are asking a person to decide or look at something — that is what puts the thread on their Home queue as a Review Item; leave it off for notes you are recording rather than asking about. Returns `{ thread }` with `thread.id` for follow-up `post_reply` calls, and fires the same `thread.created` event the editor uses, so watchers see it immediately.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -274,6 +341,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           contextAfter: { type: 'string' },
           occurrence: { type: 'number' },
           text: { type: 'string' },
+          review: REVIEW_ITEM_SCHEMA,
         },
         required: ['docId', 'text'],
       },
@@ -1676,11 +1744,16 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok(res);
       }
       case 'post_reply': {
-        const { docId, threadId, text } = a as { docId: string; threadId: string; text: string };
+        const { docId, threadId, text, review } = a as {
+          docId: string;
+          threadId: string;
+          text: string;
+          review?: unknown;
+        };
         const res = await http(
           'POST',
           `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/comments`,
-          { author: AUTHOR, text },
+          { author: AUTHOR, text, ...(review !== undefined ? { review } : {}) },
         );
         return ok(res);
       }

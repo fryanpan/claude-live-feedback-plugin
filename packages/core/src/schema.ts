@@ -1,4 +1,5 @@
 import * as Y from 'yjs';
+import { type ReviewPayload, readReviewPayload } from './review-item.ts';
 import { readStoredSummary } from './thread-summary.ts';
 import type {
   Anchor,
@@ -142,7 +143,12 @@ export function readThread(threadMap: Y.Map<unknown>, threadId: string): Thread 
       const text = c.get('text') as string | undefined;
       const ts = c.get('ts') as number | undefined;
       if (id && author && text !== undefined && ts !== undefined) {
-        comments.push({ id, author, text, ts });
+        // Read defensively, exactly as `summary` is: this map is written by
+        // whatever peer posted the comment and no peer's write is
+        // authoritative, so a malformed payload must degrade to "an ordinary
+        // comment" rather than reach a renderer.
+        const review = readReviewPayload(c.get('review'));
+        comments.push({ id, author, text, ts, ...(review ? { review } : {}) });
       }
     }
   }
@@ -180,7 +186,7 @@ export interface CreateThreadArgs {
   threadId: string;
   anchor: Anchor;
   createdBy: User;
-  firstComment: { id: string; text: string };
+  firstComment: { id: string; text: string; review?: ReviewPayload };
 }
 
 export function createThread(doc: Y.Doc, args: CreateThreadArgs): Thread {
@@ -195,6 +201,7 @@ export function createThread(doc: Y.Doc, args: CreateThreadArgs): Thread {
     firstCommentMap.set('author', args.createdBy);
     firstCommentMap.set('text', args.firstComment.text);
     firstCommentMap.set('ts', now);
+    if (args.firstComment.review) firstCommentMap.set('review', args.firstComment.review);
     comments.push([firstCommentMap]);
 
     threadMap.set('anchor', args.anchor);
@@ -214,7 +221,7 @@ export function createThread(doc: Y.Doc, args: CreateThreadArgs): Thread {
 export function postReply(
   doc: Y.Doc,
   threadId: string,
-  reply: { id: string; author: User; text: string },
+  reply: { id: string; author: User; text: string; review?: ReviewPayload },
 ): Comment | null {
   const threads = getThreads(doc);
   const threadMap = threads.get(threadId);
@@ -228,9 +235,44 @@ export function postReply(
     cm.set('author', reply.author);
     cm.set('text', reply.text);
     cm.set('ts', now);
+    if (reply.review) cm.set('review', reply.review);
     comments.push([cm]);
   });
-  return { id: reply.id, author: reply.author, text: reply.text, ts: now };
+  return {
+    id: reply.id,
+    author: reply.author,
+    text: reply.text,
+    ts: now,
+    ...(reply.review ? { review: reply.review } : {}),
+  };
+}
+
+/**
+ * Replace the review payload on an existing comment.
+ *
+ * The one mutation a review item takes after it is written: stamping
+ * `answeredWith` when a person answers by tapping an option. Written as a
+ * whole-value `set` on the same ydoc the browsers hold, so the card the
+ * person just tapped updates from the sync rather than from a refetch.
+ *
+ * Returns false when the comment has gone, which is a normal race rather
+ * than an error.
+ */
+export function setCommentReview(
+  doc: Y.Doc,
+  threadId: string,
+  commentId: string,
+  review: ReviewPayload,
+): boolean {
+  const threadMap = getThreads(doc).get(threadId);
+  const comments = threadMap?.get('comments') as Y.Array<Y.Map<unknown>> | undefined;
+  if (!comments) return false;
+  for (const c of comments) {
+    if (c.get('id') !== commentId) continue;
+    doc.transact(() => c.set('review', review));
+    return true;
+  }
+  return false;
 }
 
 /**
