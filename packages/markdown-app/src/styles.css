@@ -942,33 +942,26 @@ body.hub-body {
   margin-top: 8px;
 }
 
-/* --- main 3-column layout ---
-   The side columns pay 50px into the board (220→200 and 280→260), which is
-   the half of the widening that helps a 1280px or 1440px window too — those
-   never reach `#hub-root`'s max-width, so raising it alone does nothing for
-   them. Both sidebars hold links that already wrap (`.hub-side-list a` sets
-   `overflow-wrap: anywhere`), so what they spend is height, on a column that
-   is nowhere near the height of the board beside it. The centre track stays
-   `minmax(0, 1fr)`: `1fr` is `minmax(auto, 1fr)`, and its content-driven
-   minimum is what lets one long unbreakable title push the whole page wider
-   than the viewport. */
+/* --- main single-column layout ---
+   Once the Docs and Open-threads rails came out (Bryan: "remove docs and live
+   threads from the task list"), the board is the only content track at every
+   width. `minmax(0, 1fr)` rather than `1fr`: `1fr` is `minmax(auto, 1fr)`, and
+   its content-driven minimum is what lets one long unbreakable title push the
+   whole page wider than the viewport. That is why this is still a grid and not
+   a bare block — the min-0 track is load-bearing, and dropping it reintroduces
+   the horizontal-overflow bug the 3-column layout was already guarding. */
 .hub-main {
   display: grid;
-  /* Three content tracks. The nav used to hold a fourth `max-content` rail
-     track here; it is a row of tabs in the topbar now, so the board starts at
-     the left edge of the page again. */
-  grid-template-columns: 200px minmax(0, 1fr) 260px;
+  grid-template-columns: minmax(0, 1fr);
   gap: 20px;
   align-items: start;
 }
-/* Home showing: the board's three content columns leave the grid entirely and
-   the Home section takes the one remaining content track. Hiding rather than
-   unmounting — the board keeps its realtime projection warm underneath. */
+/* Home showing: the board column leaves the grid and the Home section takes
+   the one content track. Hiding rather than unmounting — the board keeps its
+   realtime projection warm underneath. */
 .hub-main--home {
-  grid-template-columns: minmax(0, 1fr);
   min-height: calc(100vh - 64px);
 }
-.hub-main--home .hub-side,
 .hub-main--home .hub-board-col {
   display: none;
 }
@@ -979,37 +972,6 @@ body.hub-body {
    view it was never meant to render in. */
 .hub-hidden-by-view {
   display: none !important;
-}
-.hub-side {
-  min-width: 0;
-}
-.hub-side-title {
-  font-size: 14px;
-  margin: 8px 0 6px;
-  color: var(--fg-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
-.hub-side-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.hub-side-list li {
-  margin: 0;
-}
-.hub-side-list a {
-  display: block;
-  padding: 8px 6px;
-  min-height: 36px;
-  border-radius: var(--radius);
-  color: var(--fg);
-  text-decoration: none;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-.hub-side-list a:hover {
-  background: var(--bg-hover);
 }
 
 /* --- board controls (inside the board column — §3.9) ---
@@ -1723,7 +1685,7 @@ body.hub-body {
   gap: 16px;
 }
 /* One heading style across both sections (approved): 16px, 650, normal case,
-   ink — NOT the muted uppercase `.hub-side-title` treatment. */
+   ink. */
 .hub-home-heading {
   margin: 0;
   font-size: 16px;
@@ -3003,30 +2965,20 @@ a.hub-link-chip:hover {
   display: none;
 }
 
-/* --- single-column stack: board first, sidebars after — a sidebar above the
-       board would push the morning's 90-second read below the fold. ---
+/* --- ≤1100px: the topbar breaks to two rows ---
 
-   ≤1100px, not ≤900px, and the extra 200px is the band this was moved for.
-   The two side columns and their gaps cost a flat 500px whatever the window
-   is, so the three-column layout gets steadily worse as the window narrows
-   and falls off a cliff at the bottom of its own range: measured at a 901px
-   viewport the board column came out 373px and a row's TITLE 239px — about
-   32 characters, worse than the same board on a 430px phone, on a layout
-   whose whole justification is having room to spare. One pixel narrower it
-   stacks and the title gets 938px. Moving the stack up to 1100 puts the
-   narrowest three-column row at 439px of title (60 characters), which is the
-   floor `task-title-lines-css.test.ts` pins.
+   This band used to also stack the three-column layout, because the two side
+   rails and their gaps cost a flat 500px whatever the window was and starved
+   the board at the bottom of its own range (measured at a 901px viewport: a
+   373px board column, a 239px row title — worse than the same board on a
+   430px phone). Removing the rails removed that arithmetic entirely: the
+   board is one full-width track at every size now, so only the topbar rule
+   survives here.
 
-   Only the STACK moved. Everything else in this file that keys off 900px —
-   the full-screen detail panel, the full-screen walkthrough, the badge drops,
-   the row padding — is about a phone-shaped screen rather than about column
-   arithmetic, and stays where it was. 901–1100 dropping its sidebars matches
-   what `design-mobile.md` already documents for the doc surface in exactly
-   that band. */
+   Everything else in this file keys off 900px — the full-screen detail panel,
+   the full-screen walkthrough, the badge drops, the row padding — because
+   those are about a phone-shaped screen rather than about column arithmetic. */
 @media (max-width: 1100px) {
-  .hub-main {
-    grid-template-columns: minmax(0, 1fr);
-  }
   /* The tabs drop to their own row under the name, so the workspace name and
      the cluster stop competing with four labels for one 48px line. Only the
      areas template changes — every child keeps the `grid-area` it was placed
@@ -3040,15 +2992,6 @@ a.hub-link-chip:hover {
   }
   .hub-home {
     padding-top: 4px;
-  }
-  .hub-board-col {
-    order: 0;
-  }
-  .hub-side-docs {
-    order: 1;
-  }
-  .hub-side-threads {
-    order: 2;
   }
 }
 
