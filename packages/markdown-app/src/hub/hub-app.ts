@@ -43,6 +43,7 @@ import {
   boardSections,
   clientDriftNotice,
   goalLabel,
+  initialsOf,
   navFromPath,
   navPath,
   paneForNav,
@@ -248,15 +249,15 @@ function buildShell(root: HTMLElement, name: string): void {
         <button type="button" id="hub-settings" class="hub-icon-btn" title="Workspace settings" aria-label="Workspace settings" aria-expanded="false">${NAV_ICONS.settings}<span id="hub-settings-alarm" class="hub-alarm-dot hidden" aria-hidden="true"></span></button>
         <span id="hub-me" class="hub-me" title="Signed in"></span>
       </div>
+      <div id="hub-settings-panel" class="hub-settings-panel hidden" role="region" aria-label="Workspace settings">
+        <div id="hub-drift" class="hub-presence hidden"></div>
+        <div id="hub-goal" class="hub-goal"></div>
+        <div id="hub-lead" class="hub-lead"></div>
+        <label class="hub-settings-row" for="hub-done-filter">Show done tasks from
+          <select id="hub-done-filter" class="hub-select" aria-label="Done task visibility"></select>
+        </label>
+      </div>
     </header>
-    <div id="hub-settings-panel" class="hub-settings-panel hidden" role="region" aria-label="Workspace settings">
-      <div id="hub-drift" class="hub-presence hidden"></div>
-      <div id="hub-goal" class="hub-goal"></div>
-      <div id="hub-lead" class="hub-lead"></div>
-      <label class="hub-settings-row" for="hub-done-filter">Show done tasks from
-        <select id="hub-done-filter" class="hub-select" aria-label="Done task visibility"></select>
-      </label>
-    </div>
     <div id="hub-connection" class="conn-banner hidden" role="status" aria-live="polite"></div>
     <div class="hub-main" id="hub-main">
       <section id="hub-home" class="hub-home hidden">
@@ -1023,8 +1024,12 @@ async function main(): Promise<void> {
         );
         renderPresenceRegion();
       },
+      // The "+N" circle's names have to reach a touch screen, where a title
+      // attribute never shows. A toast is enough: it answers "who else".
+      onOverflow: (hiddenChips: PresenceChip[]) =>
+        showToast(`Also here: ${hiddenChips.map((c) => c.label).join(', ')}`),
     };
-    renderPresence(el('hub-people'), chips, state.followedKey, handlers, []);
+    renderPresence(el('hub-people'), chips, state.followedKey, handlers, [], true);
     const notices = [
       pluginDriftNotice(state.pluginRelease),
       clientDriftNotice(state.clientRelease, Date.now()),
@@ -1057,14 +1062,7 @@ async function main(): Promise<void> {
    */
   function renderMe(): void {
     const me = el('hub-me');
-    const initials = user.name
-      .split(/\s+/)
-      .filter((w) => w.length > 0)
-      .slice(0, 2)
-      .map((w) => [...w][0] ?? '')
-      .join('')
-      .toUpperCase();
-    me.textContent = initials || '?';
+    me.textContent = initialsOf(user.name);
     me.setAttribute('title', `Signed in as ${user.name}`);
     me.setAttribute('aria-label', `Signed in as ${user.name}`);
     if (user.color) me.style.background = user.color;
@@ -1533,6 +1531,15 @@ async function main(): Promise<void> {
     if (el('hub-settings-panel').contains(t) || el('hub-settings').contains(t)) return;
     state.settingsOpen = false;
     renderSettingsPanel();
+  });
+  // Escape closes it too — it floats over the board now, and a floating panel
+  // that ignores Escape reads as stuck. Focus goes back to the button that
+  // opened it, so a keyboard user is not dropped at the top of the document.
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Escape' || !state.settingsOpen) return;
+    state.settingsOpen = false;
+    renderSettingsPanel();
+    el('hub-settings').focus();
   });
   el('hub-share').addEventListener('click', () => {
     void navigator.clipboard?.writeText(location.href).then(
