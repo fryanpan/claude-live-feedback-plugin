@@ -272,6 +272,30 @@ terminal, and it costs them a round trip to answer.
 Same for everything you'd otherwise report: what you found, what you deployed,
 what took two attempts. Those are task comments. The board is the channel.
 
+## Present the work itself in context — the workspace is the primary surface
+
+The rule above covers questions and reports. It covers **deliverables** too:
+a mockup, a staging build, a redesigned page, a doc to look over. Present each
+one where its feedback conversation lives — a reply on the task thread or doc
+comment it answers, with the URL — not in chat. (Bryan, 2026-08-18, verbatim:
+*"Chat is so weird and out of context — I'd like you to start showing me
+review items tied to tasks or doc comments or wherever they are in context,
+instead of making me figure it out from a funny chat screen."*)
+
+Concretely:
+
+- **Reply on the thread that asked.** If the work answers a comment, the URL
+  goes in a `post_reply` on that thread. If nothing asked yet, open a subject
+  thread on the task (`create_thread(docId="task:<taskId>", …)`).
+- **Pass `review` when you are asking the owner to look or decide.** Both
+  `create_thread` and `post_reply` take a `review` payload; that is what makes
+  the reply a Review Item and puts it on the owner's Home queue with your
+  blurb, instead of a comment they have to notice on their own.
+- **Chat gets at most a one-line pointer**, and only when the owner is already
+  in the conversation. The artifact, the ask, and the link live on the board.
+- URL formatting still applies: bare URL on its own line, no markdown
+  wrapping.
+
 ## Finishing a task is not a reason to stop
 
 When a line of work closes, **refill it**: re-run `next_tasks` and start

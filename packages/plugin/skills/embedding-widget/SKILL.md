@@ -145,3 +145,8 @@ If Vite / webpack strips `<script>` tags in HTML, add the widget to
   each render. Initialize once, let it live for the page lifetime.
 - Don't use a different `docId` when you rebuild the mockup — comments
   are keyed to `docId`, so changing it orphans every prior comment.
+- Don't hand the mockup URL over in chat. Post it as a reply on the task
+  thread or doc comment the mockup answers (with a `review` payload when
+  you're asking someone to look), bare URL on its own line — see "Present
+  the work itself in context" in the
+  `claude-workspaces:working-a-workspace-board` skill.
