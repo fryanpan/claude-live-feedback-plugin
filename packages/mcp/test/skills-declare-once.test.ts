@@ -119,9 +119,22 @@ describe('the skills teach what declaring does NOT do', () => {
 
 describe('positive controls — guidance that must survive the edit', () => {
   it('the hub skill still requires a heartbeat while attached', () => {
-    // Declaring once does NOT retire the heartbeat: delivery still asks
-    // whether the lead's heartbeat is fresh, so an agent that reads "one call
-    // and you are done" as "and nothing after" goes away without knowing it.
+    // Declaring once does NOT retire the heartbeat. The old comment here
+    // justified that with "delivery still asks whether the lead's heartbeat is
+    // fresh" — which this commit's own code falsifies, and which is the same
+    // wrong claim the assertion above now guards against. The reason survives
+    // the correction, but it is a different reason: a heartbeat is the only
+    // signal a session can send when it has nothing else to say. Tool calls
+    // refresh the observed clock for free while you work THIS board, so the
+    // case that needs the explicit call is the quiet one — a long stretch of
+    // thinking, or a board you hold but are not currently touching.
+    //
+    // This assertion is a positive control and its job is unchanged: it pins
+    // "stay live" and the `heartbeat(workspaceId)` call surviving the edit.
+    // The realistic failure of a doc change is not a missing addition but a
+    // rewrite that quietly drops what was already there — and a correction
+    // that deleted the heartbeat instruction along with the wrong sentence
+    // about it would be exactly that.
     expect(HUB).toMatch(/heartbeat\(workspaceId\)/);
     expect(HUB.toLowerCase()).toMatch(/stay live/);
   });
