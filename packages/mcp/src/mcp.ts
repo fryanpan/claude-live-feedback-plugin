@@ -8,6 +8,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import { readRenamedEnv } from '../../core/src/env-names.ts';
 import { discoveryCandidates, resolveDiscoveryFile } from '../../core/src/machine-paths.ts';
 import { resolveAgentAuthor } from './author.ts';
+import { createFrameDedup } from './frame-dedup.ts';
 import { type ThreadCreateInput, threadCreateRequest } from './thread-create.ts';
 import { RETRIAGE_SKILL, TASK_REVIEW_SKILL, triageRequestLine } from './triage-line.ts';
 
@@ -80,7 +81,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.63';
+const PLUGIN_VERSION = '0.1.65';
 
 /**
  * What a good `evidence.commit` looks like, said at the one layer that reaches
@@ -3224,6 +3225,13 @@ function startSseLoop(label: string, path: string, controller: AbortController):
   });
 }
 
+/** Shared across every SSE loop in this process — the whole point is to catch
+ *  a frame arriving on the board stream that the grouping stream already
+ *  delivered, so a per-loop instance would see nothing. See frame-dedup.ts
+ *  for why the key is `${event}#${docId}#${seq}` and why anything it cannot
+ *  identify is forwarded rather than dropped. */
+const shouldForwardFrame = createFrameDedup();
+
 async function handleFrame(raw: string): Promise<void> {
   // Only forward data frames — ignore keepalive ':ok' comments.
   const lines = raw.split('\n');
@@ -3241,6 +3249,7 @@ async function handleFrame(raw: string): Promise<void> {
   } catch {
     return;
   }
+  if (!shouldForwardFrame(ev, payload)) return;
   await emitChannelMessage(ev, payload);
 }
 
