@@ -13788,6 +13788,37 @@ function resolveAgentAuthor(env) {
   return { name, color: hashToColor(name), id: agentIdForName(name), kind: "known" };
 }
 
+// packages/mcp/src/frame-dedup.ts
+var DEFAULT_LIMIT = 512;
+function createFrameDedup(limit = DEFAULT_LIMIT) {
+  const seen = new Set;
+  return function shouldForward(event, payload) {
+    const key = frameKey(event, payload);
+    if (key === undefined)
+      return true;
+    if (seen.has(key))
+      return false;
+    seen.add(key);
+    while (seen.size > limit) {
+      const oldest = seen.values().next();
+      if (oldest.done)
+        break;
+      seen.delete(oldest.value);
+    }
+    return true;
+  };
+}
+function frameKey(event, payload) {
+  if (typeof payload !== "object" || payload === null)
+    return;
+  const p = payload;
+  if (typeof p.seq !== "number" || !Number.isFinite(p.seq))
+    return;
+  if (typeof p.docId !== "string" || p.docId === "")
+    return;
+  return `${event}#${p.docId}#${p.seq}`;
+}
+
 // packages/mcp/src/thread-create.ts
 function threadCreateRequest(input, author) {
   const doc2 = encodeURIComponent(input.docId);
@@ -13892,7 +13923,7 @@ var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.63";
+var PLUGIN_VERSION = "0.1.65";
 var COMMIT_EVIDENCE_DESCRIPTION = 'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
 var server = new Server({
   name: "claude-workspaces",
@@ -16210,6 +16241,7 @@ function startSseLoop(label, path, controller) {
     });
   });
 }
+var shouldForwardFrame = createFrameDedup();
 async function handleFrame(raw) {
   const lines = raw.split(`
 `);
@@ -16232,6 +16264,8 @@ async function handleFrame(raw) {
   } catch {
     return;
   }
+  if (!shouldForwardFrame(ev, payload))
+    return;
   await emitChannelMessage(ev, payload);
 }
 var HUB_EVENT_RE = /^(task|decision|workspace|agent|triage|voice)\./;
