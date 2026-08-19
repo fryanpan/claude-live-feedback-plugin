@@ -127,8 +127,8 @@ client serving — stale beats down.
 
 ```bash
 git pull --ff-only origin main      # in the PRIMARY checkout — prod's deploy source
-launchctl kickstart -k gui/$(id -u)/com.fryanpan.live-feedback
-cat ~/.local/state/live-feedback/client/current/release.json
+launchctl kickstart -k gui/$(id -u)/com.fryanpan.claude-workspaces
+cat ~/.local/state/claude-workspaces/client/current/release.json
 ```
 
 The pull is first because **the restart deploys whatever the deploy source is

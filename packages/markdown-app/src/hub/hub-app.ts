@@ -8,7 +8,12 @@
  */
 import { type ReviewPayload, type User, connect, escapeHtml } from '@feedback/core';
 import type { StoredGoalSummary } from '@feedback/core/goal-summary';
-import { renderConnectionBanner, watchConnection } from '../connection-state.ts';
+import {
+  renderConnectionBanner,
+  renderLiveStaleNotice,
+  watchConnection,
+  watchLiveSync,
+} from '../connection-state.ts';
 import { ensureUserIdentity } from '../identity-prompt.ts';
 import { eventPath, typingInPath } from '../keyboard-target.ts';
 import { installStaleClientNotice } from '../stale-client.ts';
@@ -47,6 +52,7 @@ import {
   navFromPath,
   navPath,
   paneForNav,
+  panelAsks,
   parseQuickAdd,
   pluginDriftNotice,
   presenceChips,
@@ -767,10 +773,10 @@ async function main(): Promise<void> {
         },
         ...(state.detailThreadId ? { focusThreadId: state.detailThreadId } : {}),
         // This task's rows from the review queue the strip already reads, so
-        // the panel says the same thing the row that sent them here said. The
-        // filter is by taskId: a doc-thread item has none and never matches,
-        // which is correct — it belongs to a doc, not to this panel.
-        asks: task ? state.reviewItems.filter((i) => i.taskId === task.id) : [],
+        // the panel says the same thing the row that sent them here said.
+        // `panelAsks` owns which rows qualify — by taskId, and only the kinds
+        // whose answer path this panel actually implements.
+        asks: task ? panelAsks(state.reviewItems, task.id) : [],
         now: Date.now(),
       },
       task ? discussion : undefined,
@@ -1506,6 +1512,60 @@ async function main(): Promise<void> {
   }
   // A task going done takes its discussion out of the queue.
   es.addEventListener('task.transitioned', () => void loadReviewItems());
+
+  // ── Catching up after the stream could not reach us ────────────────────
+  //
+  // Reported 2026-08-19: a new Home queue item did not appear until the page
+  // was reloaded. Everything above is correct WHILE the stream is up — an
+  // item posted against a healthy staging build paints in about a second.
+  // The gap was the window where the stream is down: the server replays
+  // nothing (there is no `Last-Event-ID` handling anywhere), and until now
+  // every refetch after boot hung off one of these listeners — no error
+  // handler, no reopen handler, no visibility handler, no poll. `EventSource`
+  // reconnects by itself, so the page came back looking healthy and silently
+  // missing whatever was created while it was away. That window is a server
+  // restart (so, every deploy), a slept laptop, or a backgrounded phone.
+  const streamStatus = (cb: (s: 'open' | 'closed') => void) => {
+    es.addEventListener('open', () => cb('open'));
+    // EventSource reports both a retriable drop and a fatal one here; the
+    // difference does not change what the reader needs, which is a refetch
+    // when it comes back and the truth on screen while it has not.
+    es.addEventListener('error', () => cb('closed'));
+  };
+  const onVisible = (cb: () => void) => {
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) cb();
+    });
+    // A network that comes back without the tab ever being hidden — the
+    // phone that changed cells while its owner was reading.
+    window.addEventListener('online', () => cb());
+  };
+  watchLiveSync({
+    onStatus: streamStatus,
+    onVisible,
+    // Everything the listeners above keep fresh, refetched as one batch. The
+    // brief is included only while Home is showing, for the same reason the
+    // per-event path does it: a background tab must not queue model calls.
+    resync: () => {
+      void loadAgents();
+      void loadEvents();
+      void loadReviewItems();
+      if (state.pane === 'home') void loadHome();
+    },
+  });
+  // Its own line, under the reconnect banner rather than sharing it: that one
+  // is about the editing socket and tells you to keep the tab open, this one
+  // is about the queue being a stale read. A reader who is not told acts on
+  // the stale list — silence that looks like calm.
+  const staleNotice = document.createElement('div');
+  staleNotice.className = 'conn-banner conn-banner--stale hidden';
+  staleNotice.setAttribute('role', 'status');
+  staleNotice.setAttribute('aria-live', 'polite');
+  document.getElementById('hub-connection')?.after(staleNotice);
+  watchConnection({
+    onStatus: streamStatus,
+    onView: (view) => renderLiveStaleNotice(staleNotice, view),
+  });
 
   // Controls.
   // Home / Tasks / My Tasks / Activity — pushState every way, and the back

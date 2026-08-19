@@ -32,6 +32,7 @@ import {
   type TaskStoreEvent,
   tasksSidecarPath,
 } from '../src/tasks.ts';
+import { openWorkspaceStream } from './agent-stream.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'person' };
 const AGENT = { id: 'agent-relay', name: 'Relay', kind: 'agent' };
@@ -172,8 +173,17 @@ describe('setLeadAgent does not displace a LIVE lead without takeover', () => {
   beforeEach(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'ws-lead-held-'));
     // A 150ms freshness window makes "the incumbent went quiet" reachable in
-    // a test without faking the clock the production path reads.
-    store = new TaskStore({ dataDir, debounceMs: 5, heartbeatFreshMs: 150 });
+    // a test without faking the clock the production path reads. BOTH windows
+    // have to shrink: liveness is the OBSERVED clock — `max(lastHeartbeat,
+    // lastToolCallAt)` against `observedWorkFreshMs` — so shrinking only the
+    // heartbeat leaves the incumbent live for the 15-minute default and the
+    // "aged out" case never arrives.
+    store = new TaskStore({
+      dataDir,
+      debounceMs: 5,
+      heartbeatFreshMs: 150,
+      observedWorkFreshMs: 150,
+    });
     events = [];
     store.onEvent((e) => events.push(e));
   });
@@ -381,6 +391,12 @@ describe('lead agent routes + projection', () => {
       runtime: 'claude-code-local',
     });
     expect(((await attach.json()) as { lead: boolean }).lead).toBe(true); // positive control
+    // Attaching registers the incumbent; it does not make it REACHABLE. The
+    // guard only protects a live lead, and liveness now also asks whether
+    // anyone is on the channel a delivery would ride — so the incumbent has
+    // to hold the stream, exactly as the real MCP does after attaching.
+    // Without this the seat is unheld and the first claim below simply wins.
+    const incumbent = await openWorkspaceStream(base, wsId);
 
     const helper = { id: 'agent-helper', name: 'Helper', kind: 'agent' };
     const held = await put(`/api/workspaces/${wsId}/lead`, {
@@ -404,6 +420,7 @@ describe('lead agent routes + projection', () => {
     expect(tookBody.changed).toBe(true);
     expect(tookBody.previousLeadAgentId).toBe('agent-relay');
     expect((await workspaceOf(wsId)).leadAgentId).toBe(helper.id);
+    await incumbent.close();
   });
 
   it('the board room projects the lead — and drops the key when the seat is empty', async () => {

@@ -38,6 +38,7 @@ import {
   type TriageRequest,
   pendingRetriagePath,
 } from '../src/tasks.ts';
+import { openWorkspaceStream } from './agent-stream.ts';
 import { seedGoalsOverHttp } from './goal-seed.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'person' };
@@ -430,17 +431,23 @@ describe('re-triage routing, over HTTP', () => {
     const wsId = await makeHub('routed-hub', LEAD);
     const taskId = await addTask(wsId, 'draft the outline');
 
-    // POSITIVE CONTROL FIRST: the lead attaches, and the edit is delivered.
+    // POSITIVE CONTROL FIRST: the lead attaches, joins the workspace channel
+    // the way the MCP does, and the edit is delivered. Both halves matter —
+    // the request IS a broadcast on that channel, so an agent that attached
+    // without connecting is not a place a delivery can land.
     await post(`/api/workspaces/${wsId}/attachments`, {
       agentId: LEAD,
       runtime: 'claude-code-local',
     });
+    const stream = await openWorkspaceStream(baseUrl, wsId);
     const live = await editGoal(wsId, 'Delivered goal.');
     expect(live.retriage.requested).toBe(true);
     expect(live.retriage.queued).toBe(false);
 
     // Now the lead is gone and only a bystander is connected. A connected
-    // agent is not an addressee: the edit waits.
+    // agent is not an addressee: the edit waits. The channel stays open on
+    // purpose — reachability is a property of the CHANNEL, so this is the
+    // case where somebody IS listening and it still waits for the right one.
     await local(`/api/workspaces/${wsId}/attachments/${LEAD}`, { method: 'DELETE' });
     await post(`/api/workspaces/${wsId}/attachments`, {
       agentId: OTHER,
@@ -472,6 +479,7 @@ describe('re-triage routing, over HTTP', () => {
     // Drained: the board no longer shows it waiting.
     const after = await local(`/api/workspaces/${wsId}`);
     expect(((await after.json()) as { pendingRetriage?: unknown }).pendingRetriage).toBeUndefined();
+    await stream.close();
   });
 
   it('a goal edit with NO lead at all is pending work on the board, not a silent drop', async () => {

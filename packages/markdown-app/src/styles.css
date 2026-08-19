@@ -4750,6 +4750,17 @@ body.composer-open #editor .ProseMirror ::selection {
      sideways — the copy is a sentence, not a label. */
   overflow-wrap: anywhere;
 }
+/* "This list may be out of date" sits directly under the reconnect banner and
+   can be up at the same time — they report different things. Deliberately the
+   quieter of the two: a restart drops both at once, and two equally loud red
+   bars at 430px read as the app falling over rather than as one sentence
+   about the doc and one about the queue. */
+.conn-banner--stale {
+  border-bottom-color: rgba(180, 120, 10, 0.3);
+  background: rgba(214, 158, 46, 0.12);
+  color: #6b4708;
+  font-weight: 500;
+}
 
 /* ================= STALE CLIENT NOTICE =================
    Sits next to the toast because it is the same kind of thing: a
