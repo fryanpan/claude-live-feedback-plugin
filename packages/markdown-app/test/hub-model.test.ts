@@ -844,6 +844,28 @@ describe('reviewQueue', () => {
     expect(q.blocking).toBe(1);
     expect(q.total).toBe(2);
   });
+
+  /**
+   * The server's queue route now also ships TICKET-borne review items
+   * (`kind: 'task-review'`), which this queue does not render yet — the task
+   * detail panel is being rewritten on another branch and owns that half.
+   *
+   * A row this model cannot place must be SKIPPED, not half-built: a legacy
+   * decision already arrives here as a `decision` row derived from the board,
+   * so admitting the server's row too would list the same question twice, and
+   * a row with no `docId`/`threadId` would key as `task-review:undefined:
+   * undefined` and collide with every other one.
+   */
+  it('ignores a row of a kind it does not render, and keeps the ones it does', () => {
+    const unknown = {
+      ...threadItem({ threadId: 'th-ignored' }),
+      kind: 'task-review',
+      taskId: 'tk-1',
+    } as unknown as ReviewThreadItem;
+    const q = reviewQueue([], [unknown, threadItem({ threadId: 'th-kept' })], T0);
+    expect(q.items.map((i) => i.thread?.threadId)).toEqual(['th-kept']);
+    expect(q.total).toBe(1);
+  });
 });
 
 describe('reviewQueue — human-owned work that agent work is waiting on', () => {

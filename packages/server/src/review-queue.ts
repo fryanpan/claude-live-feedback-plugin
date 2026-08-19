@@ -8,17 +8,20 @@
  * surfaces, and splitting them across three places to look is what makes
  * coming back to the board mean scrolling a chat history instead.
  *
- * This module computes the two thread-shaped kinds. Decisions stay where they
- * are — the client already holds every task — and the ORDERING of the merged
- * queue is the client's (`reviewQueue` in hub-model), which is what keeps the
- * priority rule in one pure, testable place instead of split across the wire.
+ * This module computes the rows: the two thread-shaped kinds, and — since a
+ * ticket HAS review items rather than IS one — the rows hanging on tickets.
+ * `reviewItemRows` is the whole queue in one order. The client's `reviewQueue`
+ * (hub-model) still owns the PRIORITY rule that ranks a row against the board's
+ * own task rows, which is what keeps that judgement in one pure, testable place
+ * instead of split across the wire.
  *
  * The server owns this half for one reason: "is this comment an agent's" is
  * `classifyActor`'s judgement, and it must not be re-decided here. A second
  * notion of who counts as an agent is exactly the drift this codebase has
  * already been bitten by.
  */
-import type { Comment, ReviewPayload, Thread } from '@feedback/core';
+import type { Comment, ReviewPayload, TaskReviewItem, Thread } from '@feedback/core';
+import { isReviewItemOpen } from '@feedback/core';
 import { classifyActor } from './activity.ts';
 
 /** How much of the question rides along to the strip. Enough to recognise the
@@ -107,6 +110,38 @@ export interface ReviewThreadItem {
   askedAt?: number;
 }
 
+/**
+ * One review item hanging on a TICKET rather than on a comment.
+ *
+ * Same band, same fields, same meaning as a declared thread row — the point of
+ * the entity is that there is one spelling of "somebody needs you" — and it
+ * differs only in what an answer is written against: a thread row addresses
+ * `docId`/`threadId`/`commentId`, this one addresses `taskId`/`reviewItemId`.
+ *
+ * `band` is `declared` and `direct` is true by construction. Nothing infers a
+ * ticket review item out of prose; somebody wrote a headline to put it here,
+ * which is exactly what the declared band means.
+ */
+export interface ReviewTaskItem {
+  kind: 'task-review';
+  band: 'declared';
+  taskId: string;
+  /** Which row on the ticket — an answer is stamped back at this id. */
+  reviewItemId: string;
+  review: ReviewPayload;
+  /** What the reader is being asked about: the TICKET's title. The question
+   *  itself is `ask`, which is the item's own headline. */
+  title: string;
+  ask: string;
+  askedBy: string;
+  since: number;
+  direct: true;
+  askedAt: number;
+}
+
+/** A row of the queue, whatever it hangs on. */
+export type ReviewItemRow = ReviewThreadItem | ReviewTaskItem;
+
 export interface ReviewTaskRef {
   id: string;
   title: string;
@@ -114,6 +149,15 @@ export interface ReviewTaskRef {
   /** A finished task's discussion is not a queue item — answering it changes
    *  nothing, and the board's problem is too much competing for attention. */
   done?: boolean;
+  /**
+   * The ticket's review items, 0..n, as the store reads them back — INCLUDING
+   * the row derived from a legacy `needs: 'decision'` task.
+   *
+   * Passed in rather than read here on purpose: which rows a ticket has (and
+   * whether a legacy decision derives one) is the store's rule, and a second
+   * copy of it in the queue would be free to disagree about what is open.
+   */
+  reviews?: TaskReviewItem[];
 }
 
 export interface ReviewDocRef {
@@ -478,6 +522,81 @@ export function reviewThreadItems(args: {
   for (const doc of args.docs) collect('doc-thread', doc.docId, doc.title);
 
   return items.sort((a, b) => a.since - b.since || a.threadId.localeCompare(b.threadId));
+}
+
+/**
+ * Every OPEN review item hanging on a ticket, as queue rows.
+ *
+ * The cardinality is the change this exists for. A decision task used to BE a
+ * decision — one `needs: 'decision'` flag and one embedded `options` array — so
+ * the ticket title had to double as the question and a second open question had
+ * nowhere to go. Bryan, 2026-08-18: *"at any point in time there might be
+ * multiple open decisions for a ticket."* One ticket therefore contributes as
+ * many rows as it has open items, not at most one.
+ *
+ * OPEN is `isReviewItemOpen`, which is `answer === undefined` and nothing else.
+ * An info request is a question asked BACK — the item is still waiting on a
+ * person, so it stays. A second "handled" flag would be free to disagree with
+ * the answer that already states the fact.
+ *
+ * Done tickets are skipped for the same reason their discussions are: answering
+ * a finished ticket's question changes nothing, and the board's problem is too
+ * much competing for attention.
+ */
+export function taskReviewItems(tasks: ReviewTaskRef[]): ReviewTaskItem[] {
+  const rows: ReviewTaskItem[] = [];
+  for (const task of tasks) {
+    if (task.done) continue;
+    for (const item of task.reviews ?? []) {
+      if (!isReviewItemOpen(item)) continue;
+      rows.push({
+        kind: 'task-review',
+        band: 'declared',
+        taskId: task.id,
+        reviewItemId: item.id,
+        review: item.review,
+        title: task.title,
+        // The headline IS the row title, exactly as on a declared thread row —
+        // an authored line rather than a clip of prose. No `clip` call: the
+        // length was enforced at the door, so anything arriving over it is
+        // legacy and should be seen rather than silently cut.
+        ask: item.review.headline,
+        askedBy: item.createdBy,
+        since: item.createdAt,
+        direct: true,
+        askedAt: item.createdAt,
+      });
+    }
+  }
+  return rows;
+}
+
+/**
+ * The whole queue: thread-borne rows and ticket-borne rows, one order.
+ *
+ * ONE function rather than two lists a caller concatenates, because the
+ * ORDERING is the thing that must not be duplicated. The band sorts oldest-first
+ * precisely so the item at most risk of never being answered comes up first
+ * (see `since`), and a caller that merged two separately-sorted lists would
+ * silently get two queues stapled together instead.
+ *
+ * The tie-break is the row's own address, so it is total across kinds: a thread
+ * row breaks on `threadId` exactly as it always did — which is what keeps a
+ * thread-only workspace's output identical to `reviewThreadItems`' — and a
+ * ticket row breaks on `taskId:reviewItemId`, since the derived legacy id
+ * (`r-legacy`) is deliberately the same string on every legacy ticket.
+ */
+export function reviewItemRows(args: {
+  tasks: ReviewTaskRef[];
+  docs: ReviewDocRef[];
+  source: ThreadSource;
+}): ReviewItemRow[] {
+  const rows: ReviewItemRow[] = [...reviewThreadItems(args), ...taskReviewItems(args.tasks)];
+  return rows.sort((a, b) => a.since - b.since || rowKey(a).localeCompare(rowKey(b)));
+}
+
+function rowKey(row: ReviewItemRow): string {
+  return row.kind === 'task-review' ? `${row.taskId}:${row.reviewItemId}` : row.threadId;
 }
 
 /**
