@@ -2430,3 +2430,64 @@ Technical discoveries that should persist across sessions for this project.
   one's extracted ask was a row of fragments. The corpus is the regression
   test that unit fixtures cannot be, because nobody invents the input that
   breaks their own rule.
+
+## A squashed PR's message describes some commit in its history, not the tree it shipped
+
+- **#254 landed on main as one squashed commit whose message says
+  `homeQueueTotal` "loses its `needs === 'decision'` term". Main keeps that
+  term.** `packages/server/src/server.ts:806` reads `const decisions =
+  open.filter((t) => t.needs === 'decision' && !t.answer);`, and the line
+  directly under it reads `const rendered = items.filter((i) => i.kind !==
+  'task-review');`. The shipped shape counts decisions from the projection AND
+  drops ticket-borne rows from the queue half, so a decision is counted once —
+  which is what the surrounding comment says. The sentence in the commit
+  message was true of an intermediate commit in that PR and was never true of
+  the tree it merged.
+- **What this produces is a correct merge reported as a regression.** Reviewing
+  PR #255's merge of #254 on 2026-08-19, the brief drawn from that message said
+  to check the term was gone. It was present — which reads exactly like a
+  resolution that reverted main, on the one file where both branches had
+  changed the same function. The disproof took one command: `git show
+  origin/main:packages/server/src/server.ts | grep -n "needs === 'decision'"`
+  answers with the identical line, so main and the merge agreed byte-for-byte
+  and nothing had regressed.
+- **A commit message states intent at some moment in a PR's history; the tree
+  states the result.** A squash flattens N commits into one message, so any
+  sentence in it may describe a state a later commit in the same PR replaced,
+  and nothing marks which sentences those are. When the question is "what must
+  this merge preserve", read the tree — `git show <ref>:<path>` — and treat the
+  message as a lead, never as the specification.
+- Same family as "'X is impossible' measured AN absence, not THE absence": the
+  reading was accurate and the conclusion drawn from it was wrong.
+
+## A NUL byte makes grep silently blind, and the silence defeats the positive control too
+
+- **One raw NUL byte in a source file makes `grep` report no matches and exit
+  1 for a pattern that is plainly in the file — with no message of any kind.**
+  Measured 2026-08-19. `packages/server/src/voice.ts` at `8fb81f4` was 62,399
+  bytes and held exactly **1** NUL. `grep -c 'VoiceResource'` on that blob
+  printed nothing and exited 1; `grep -ac` on the same blob printed **6**. The
+  fix commit `51eef27` is 62,400 bytes with 0 NULs.
+- **The positive control has to be a separate FILE, not a separate pattern.**
+  A synthetic pair settles it: a file containing `SECRET_GATE` plus a NUL →
+  exit 1, silent; the byte-identical file without the NUL → exit 0, match
+  printed; `grep -a` on the first → exit 0, match printed. The trap is that the
+  usual control — "grep the same file for something I know is there" — runs
+  through the same blinded grep and fails too, so it CONFIRMS the false
+  negative instead of exposing it.
+- **The `grep` on this machine is ugrep 7.5.0, not BSD or GNU grep**, and it
+  emits nothing at all before exiting 1. Worth naming, because GNU grep's
+  documented behaviour here is to print `Binary file … matches` and exit 0 —
+  a loud wrong answer rather than a silent one. Do not carry an assumption
+  about which one you are talking to; `grep --version` is one line.
+- **The check that cannot be fooled reads bytes, not matches:**
+  `python3 -c "print(open(p,'rb').read().count(b'\x00'))"` — non-zero means
+  every plain grep of that file is lying to you. `grep -a` restores matching
+  once you know to reach for it.
+- **This is not hypothetical and it has already cost a public retraction.**
+  A security fix was reported as absent from a file that contained 31
+  instances of it, on the strength of a grep that had gone blind this way.
+  Treat "the thing isn't in this file" as unproven until either the byte count
+  is 0 or `grep -a` agrees.
+- Same family as "A negative probe needs a positive control", with the sting
+  that here the control is inside the blind spot with the probe.
