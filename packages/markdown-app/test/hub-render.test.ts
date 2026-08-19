@@ -23,6 +23,7 @@ import {
   type QuickAddHandlers,
   type TaskThread,
   discussionIsBusy,
+  flattenComments,
   renderActivity,
   renderBoard,
   renderGoalStrip,
@@ -2636,6 +2637,296 @@ describe('a repaint of the detail panel keeps what was typed', () => {
     expect(composer().value).toBe('and a comment mid-sentence');
     expect(document.activeElement).toBe(composer());
     expect(composer().selectionStart).toBe(9);
+  });
+});
+
+/**
+ * The reorganisation Bryan asked for: *"title prominent; key fields up top;
+ * review item / decision visible next so I can act above the fold; then
+ * description; then comments; Activity behind a second tab."*
+ */
+describe('renderTaskDetail — the reorganised panel', () => {
+  const handlers = (over: Record<string, unknown> = {}) => ({
+    onClose: vi.fn(),
+    onStatusSet: vi.fn(),
+    onTitleCommit: vi.fn(),
+    onAnswer: vi.fn(),
+    onAssign: vi.fn(),
+    ...over,
+  });
+
+  const keys = (): string[] =>
+    [...root.querySelectorAll('.hub-detail-fields dt')].map((dt) => dt.textContent ?? '');
+  const field = (key: string): string | null => {
+    const dts = [...root.querySelectorAll('.hub-detail-fields dt')];
+    const dds = [...root.querySelectorAll('.hub-detail-fields dd')];
+    const i = dts.findIndex((dt) => dt.textContent === key);
+    return i === -1 ? null : (dds[i]?.textContent ?? null);
+  };
+  /** Where a node sits in the panel, so ORDER can be asserted rather than
+   *  presence — the complaint was about arrangement, not about absence. */
+  const at = (sel: string): number => {
+    const panel = root.querySelector('.hub-detail-panel');
+    const all = panel ? [...panel.querySelectorAll('*')] : [];
+    const el = panel?.querySelector(sel);
+    return el ? all.indexOf(el) : -1;
+  };
+
+  it('puts the four key facts in one row under the title', () => {
+    renderTaskDetail(root, task({ assignee: 'Jordan', goal: 'g-pr' }), {
+      ...handlers(),
+      goalLabel: (id) => goalLabel(GOALS, id),
+    });
+    expect(keys()).toEqual(['Status', 'Assignee', 'Due', 'Goal']);
+    expect(field('Goal')).toBe('1. Get the PR out');
+    // The status chips are the control they always were, still live here.
+    expect(root.querySelector('.hub-detail-fields .hub-chip-current')?.textContent).toBe('To do');
+  });
+
+  /** `dueAt` is settable at create and by no route afterwards, so the field is
+   *  read-only — and an empty cell would read as a rendering fault. */
+  it('says so when there is no due date, and shows one when there is', () => {
+    renderTaskDetail(root, task(), handlers());
+    expect(field('Due')).toBe('No due date');
+
+    root.replaceChildren();
+    const due = Date.UTC(2026, 7, 20, 12);
+    renderTaskDetail(root, task({ dueAt: due }), handlers());
+    expect(field('Due')).toBe(new Date(due).toLocaleDateString());
+  });
+
+  /**
+   * The whole ticket in one assertion. Every one of these existed before; the
+   * complaint was the ORDER, so presence assertions alone would have passed
+   * against the panel being complained about.
+   */
+  it('orders the panel title → fields → what is waiting → description → tabs', () => {
+    const t = task({ needs: 'decision', options: [{ id: 'o-1', label: 'Ship it' }] });
+    renderTaskDetail(root, t, handlers(), { loading: false, threads: [] });
+    const order = [
+      at('.hub-detail-title'),
+      at('.hub-detail-fields'),
+      at('.hub-decide'),
+      at('.hub-detail-body-slot'),
+      at('.hub-detail-tabs'),
+    ];
+    expect(order).not.toContain(-1); // control: every region rendered
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+  });
+
+  /**
+   * The decision card's layout, which is the piece reported as janky on the
+   * Home queue: *"options crammed against their details, no spacing between
+   * the answer buttons, no spacing between buttons and comment text, nothing
+   * aligned."* The structure is what the stylesheet hangs off, so the grouping
+   * is asserted here and the gaps in `hub-decide-css.test.ts`.
+   */
+  it('groups a decision’s options, and separates them from the free-text box', () => {
+    const t = task({
+      needs: 'decision',
+      options: [
+        { id: 'o-1', label: 'Ship it blue', detail: 'Matches the rest of the nav' },
+        { id: 'o-2', label: 'Ship it green' },
+      ],
+    });
+    const h = handlers();
+    renderTaskDetail(root, t, h);
+    const card = root.querySelector('.hub-decide') as HTMLElement;
+    expect(card).toBeTruthy();
+    expect(card.querySelector('.hub-decide-kicker')?.textContent).toBe('Waiting on your decision');
+
+    // Every option is a child of ONE group — the gap between buttons is a
+    // property of that group, so options scattered among siblings cannot be
+    // spaced consistently however the stylesheet is written.
+    const group = card.querySelector('.hub-decide-options') as HTMLElement;
+    const opts = [...group.querySelectorAll('.hub-decide-option')];
+    expect(opts).toHaveLength(2);
+    expect(opts.every((o) => o.parentElement === group)).toBe(true);
+    // Label and detail are separate elements rather than one run of text, which
+    // is what "crammed against their details" describes.
+    expect(opts[0]?.querySelector('.hub-decide-option-label')?.textContent).toBe('Ship it blue');
+    expect(opts[0]?.querySelector('.hub-decide-option-detail')?.textContent).toBe(
+      'Matches the rest of the nav',
+    );
+    expect(opts[1]?.querySelector('.hub-decide-option-detail')).toBeNull();
+
+    // The box is an ALTERNATIVE to the options, and says so.
+    const form = card.querySelector('.hub-decide-form') as HTMLElement;
+    expect(form.querySelector('.hub-decide-form-hint')?.textContent).toBe(
+      'Or answer in your own words',
+    );
+    expect(group.compareDocumentPosition(form) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    (opts[0] as HTMLElement).click();
+    expect(h.onAnswer).toHaveBeenCalledWith(t, 'Ship it blue', 'o-1');
+  });
+
+  it('drops the "or" from the hint when there is nothing to choose between', () => {
+    renderTaskDetail(root, task({ needs: 'decision' }), handlers());
+    expect(root.querySelector('.hub-decide-options')).toBeNull();
+    expect(root.querySelector('.hub-decide-form-hint')?.textContent).toBe(
+      'Answer in your own words',
+    );
+  });
+
+  it('shows no decision card on a task nothing is waiting on', () => {
+    renderTaskDetail(root, task(), handlers());
+    expect(root.querySelector('.hub-decide')).toBeNull();
+    // Control: the panel rendered, so the null is about the card.
+    expect(root.querySelector('.hub-detail-fields')).toBeTruthy();
+  });
+
+  it('opens on Comments, with Activity present but hidden', () => {
+    renderTaskDetail(root, task({ transitions: [] }), handlers(), {
+      loading: false,
+      threads: [],
+    });
+    const comments = root.querySelector('.hub-detail-tabpanel-comments') as HTMLElement;
+    const activity = root.querySelector('.hub-detail-tabpanel-activity') as HTMLElement;
+    expect(comments.classList.contains('hidden')).toBe(false);
+    expect(activity.classList.contains('hidden')).toBe(true);
+    expect(root.querySelector('.hub-detail-tab-comments')?.getAttribute('aria-selected')).toBe(
+      'true',
+    );
+    // The record really is over there rather than nowhere.
+    expect(activity.querySelector('.hub-detail-body-link')).toBeTruthy();
+  });
+
+  /**
+   * The panel repaints on every ydoc change — a peer's comment, a status flip,
+   * the reader's own typing — so a tab choice that reset on the next repaint
+   * would be a tab nobody could use. Same mechanism as `priorTaskId`: read the
+   * state off the panel before the swap throws it away.
+   */
+  it('keeps the chosen tab across a repaint, and resets it on another task', () => {
+    const t = task();
+    renderTaskDetail(root, t, handlers(), { loading: false, threads: [] });
+    (root.querySelector('.hub-detail-tab-activity') as HTMLElement).click();
+    const activity = () => root.querySelector('.hub-detail-tabpanel-activity') as HTMLElement;
+    expect(activity().classList.contains('hidden')).toBe(false);
+
+    renderTaskDetail(root, { ...t, status: 'in-progress' }, handlers(), {
+      loading: false,
+      threads: [],
+    });
+    // Control: this really was a repaint, not a no-op.
+    expect(root.querySelector('.hub-chip-current')?.textContent).toBe('In progress');
+    expect(activity().classList.contains('hidden')).toBe(false);
+
+    // A different task is a fresh read, and it starts on the conversation.
+    renderTaskDetail(root, task(), handlers(), { loading: false, threads: [] });
+    expect(activity().classList.contains('hidden')).toBe(true);
+  });
+
+  it('offers a share link only when the board wired one up', () => {
+    renderTaskDetail(root, task(), handlers());
+    expect(root.querySelector('.hub-detail-share')).toBeNull();
+
+    root.replaceChildren();
+    const onCopyLink = vi.fn();
+    const t = task();
+    renderTaskDetail(root, t, handlers({ onCopyLink }));
+    const share = root.querySelector('.hub-detail-share') as HTMLElement;
+    expect(share).toBeTruthy();
+    share.click();
+    expect(onCopyLink).toHaveBeenCalledWith(t);
+  });
+
+  /**
+   * Full screen is a preference of the READER, so it lives on the container:
+   * the panel is rebuilt on every repaint, and a class held there would be
+   * dropped by the next comment that landed.
+   */
+  it('toggles full screen on the container, and keeps it across a repaint', () => {
+    const t = task();
+    renderTaskDetail(root, t, handlers());
+    const btn = () => root.querySelector('.hub-detail-expand') as HTMLElement;
+    expect(btn().textContent).toBe('Full screen');
+    expect(btn().getAttribute('aria-pressed')).toBe('false');
+
+    btn().click();
+    expect(root.classList.contains('hub-detail--full')).toBe(true);
+    expect(btn().textContent).toBe('Exit full screen');
+
+    renderTaskDetail(root, { ...t, status: 'done' }, handlers());
+    expect(root.querySelector('.hub-chip-current')?.textContent).toBe('Done'); // control
+    expect(root.classList.contains('hub-detail--full')).toBe(true);
+    expect(btn().getAttribute('aria-pressed')).toBe('true');
+
+    btn().click();
+    expect(root.classList.contains('hub-detail--full')).toBe(false);
+  });
+});
+
+/**
+ * *"Multi-threaded comments are too complicated — just a single sequence of
+ * comments with clearer separation, authorship and timing."*
+ *
+ * A change to the RENDERING and to nothing else: the threads this reads are
+ * the threads `create_thread` writes, and every row keeps the `threadId` a
+ * reply has to land in.
+ */
+describe('flattenComments', () => {
+  const c = (author: string, ts: number) => ({ author, text: `${author} at ${ts}`, ts });
+
+  /**
+   * Two conversations that INTERLEAVE. A fixture where each thread's comments
+   * are contiguous in time cannot tell "one sequence, oldest first" apart from
+   * "the old per-thread grouping, concatenated" — the two produce an identical
+   * order, so it would pass against the code being replaced.
+   */
+  it('reads every comment oldest first, across threads', () => {
+    const rows = flattenComments([
+      { id: 'th-a', status: 'open', comments: [c('Jordan', 10), c('Jordan', 40)] },
+      { id: 'th-b', status: 'open', comments: [c('Sam', 20), c('Sam', 30)] },
+    ]);
+    expect(rows.map((r) => r.comment.ts)).toEqual([10, 20, 30, 40]);
+    expect(rows.map((r) => r.threadId)).toEqual(['th-a', 'th-b', 'th-b', 'th-a']);
+  });
+
+  /** Which row carries the anchor, and which carries the badge and the Reply
+   *  button — one of each per conversation, wherever the sort puts them. */
+  it('marks the first and last comment of each thread, not of the stream', () => {
+    const rows = flattenComments([
+      { id: 'th-a', status: 'open', comments: [c('Jordan', 10), c('Jordan', 40)] },
+      { id: 'th-b', status: 'resolved', comments: [c('Sam', 20), c('Sam', 30)] },
+    ]);
+    expect(rows.map((r) => r.opensThread)).toEqual([true, true, false, false]);
+    expect(rows.map((r) => r.closesThread)).toEqual([false, false, true, true]);
+    expect(rows.map((r) => r.status)).toEqual(['open', 'resolved', 'resolved', 'open']);
+  });
+
+  it('carries the anchor text through, and omits it when a thread has none', () => {
+    const rows = flattenComments([
+      { id: 'th-a', status: 'open', anchorText: 'the second paragraph', comments: [c('Jo', 1)] },
+      { id: 'th-b', status: 'open', comments: [c('Sam', 2)] },
+    ]);
+    expect(rows[0]?.anchorText).toBe('the second paragraph');
+    expect(rows[1]?.anchorText).toBeUndefined();
+  });
+
+  /** Two comments written in the same millisecond are a fixture, not a race —
+   *  an unstable sort would repaint the panel into a different order for no
+   *  reason a reader could see. */
+  it('breaks a timestamp tie by declaration order, every time', () => {
+    const threads: TaskThread[] = [
+      { id: 'th-a', status: 'open', comments: [c('Jordan', 5)] },
+      { id: 'th-b', status: 'open', comments: [c('Sam', 5), c('Sam', 5)] },
+    ];
+    for (let i = 0; i < 5; i += 1) {
+      expect(flattenComments(threads).map((r) => r.comment.author)).toEqual([
+        'Jordan',
+        'Sam',
+        'Sam',
+      ]);
+    }
+  });
+
+  it('has nothing to say about a task with no threads', () => {
+    expect(flattenComments([])).toEqual([]);
+    // Control: the same call over one thread is not empty, so the line above
+    // is about the input rather than about a function that returns nothing.
+    expect(flattenComments([{ id: 'th', status: 'open', comments: [c('Jo', 1)] }])).toHaveLength(1);
   });
 });
 
