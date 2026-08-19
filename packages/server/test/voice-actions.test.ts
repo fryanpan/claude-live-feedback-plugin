@@ -32,6 +32,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { eventsLogPath, voiceQueuePath } from '../src/tasks.ts';
+import { type AgentStream, openWorkspaceStream } from './agent-stream.ts';
 
 /** A person: `classifyActor` reads `kind: 'known'` as `person`. */
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
@@ -67,6 +68,8 @@ const SAME_ORIGIN = /^\/[^/]/;
 
 describe('voice actions (§3.8): status and assignee, on the speaker’s authority', () => {
   let handle: ServerHandle;
+  /** The agent's event stream, held the way the MCP holds it after attaching. */
+  let agentStream: AgentStream | null = null;
   let dataDir: string;
   let base: string;
   let hubId: string;
@@ -234,6 +237,13 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
         })
       ).status,
     ).toBe(200);
+    // Live is the AND of "observed recently" and "on the channel", because a
+    // delivery is a BROADCAST on `ws~<id>` — so attaching alone describes a
+    // session that registered and never connected, and nothing could be
+    // handed to it. The MCP opens this immediately after attaching
+    // (`subscribe !== false`). `quietHubId` below deliberately gets neither,
+    // which is what keeps it an honest fixture for the queued fallback.
+    agentStream = await openWorkspaceStream(base, hubId);
 
     const quiet = await post('/api/workspaces', {
       name: 'billing-cleanup',
@@ -265,6 +275,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
   });
 
   afterAll(async () => {
+    await agentStream?.close();
     await handle.stop();
     rmSync(dataDir, { recursive: true, force: true });
   });

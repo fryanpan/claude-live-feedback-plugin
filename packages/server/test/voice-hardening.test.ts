@@ -43,6 +43,7 @@ import {
   promptSafe,
   resolveVoiceAction,
 } from '../src/voice.ts';
+import { type AgentStream, openWorkspaceStream } from './agent-stream.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
 const AGENT = { id: 'agent-search-revamp', name: 'Search Revamp', kind: 'known', color: '#888888' };
@@ -315,6 +316,8 @@ describe('handle(): every added call site degrades to the agent route', () => {
 describe('voice actions, hardened: end to end', () => {
   let handle: ServerHandle;
   let dataDir: string;
+  /** The agent's event stream, held the way the MCP holds it after attaching. */
+  let agentStream: AgentStream | null = null;
   let base: string;
   let hubId: string;
   let quietHubId: string;
@@ -438,6 +441,14 @@ describe('voice actions, hardened: end to end', () => {
         })
       ).status,
     ).toBe(200);
+    // Attaching is only half of arriving. Delivery is a BROADCAST on
+    // `ws~<id>`, and liveness is now the AND of a recent observation and
+    // somebody actually on that channel, so an agent that registered and
+    // never connected is unreachable however recently it attached. Every
+    // `route === 'agent'` assertion below is about voice DECLINING to act and
+    // handing over; it needs a handover target that exists. This is what the
+    // MCP does immediately after attaching (`subscribe !== false`).
+    agentStream = await openWorkspaceStream(base, hubId);
 
     injectedDocId = await newDoc('voice-hard-injected');
     await declare(injectedDocId, INJECTION);
@@ -462,6 +473,7 @@ describe('voice actions, hardened: end to end', () => {
   });
 
   afterAll(async () => {
+    await agentStream?.close();
     await handle.stop();
     rmSync(dataDir, { recursive: true, force: true });
   });
