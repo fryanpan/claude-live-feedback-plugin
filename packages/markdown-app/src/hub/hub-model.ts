@@ -1757,6 +1757,33 @@ export function clientDriftNotice(
   };
 }
 
+/** Two letters a small circle can carry: first letters of the first two
+ *  words. Splits on `-`/`_`/`.`/`/` as well as spaces so a multi-segment
+ *  agent id ("task-list-ux") reads as "TL" rather than "T", and drops
+ *  parenthesised tokens so "Ana (you)" is "A", not "A(". */
+export function initialsOf(name: string): string {
+  return (
+    name
+      .split(/[\s\-_./]+/)
+      .filter((w) => w.length > 0 && !w.startsWith('('))
+      .slice(0, 2)
+      .map((w) => [...w][0] ?? '')
+      .join('')
+      .toUpperCase() || '?'
+  );
+}
+
+/** Deterministic hue from a label, so the same person wears the same colour
+ *  on every paint and every viewer's screen without a stored palette. The
+ *  "(you)" suffix is stripped first — you and the person watching you must
+ *  agree on your colour. */
+export function presenceHue(label: string): number {
+  const base = label.replace(/\s*\(you\)$/, '');
+  let h = 0;
+  for (const ch of base) h = (h * 31 + (ch.codePointAt(0) ?? 0)) % 360;
+  return h;
+}
+
 /** One chip per person and agent (§2.7), people first. Person chips carry the
  *  surface they're on; agent chips carry the derived liveness state — real
  *  signals (heartbeat, last tool call), never guesses. */
