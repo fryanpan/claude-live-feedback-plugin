@@ -12,6 +12,7 @@
  * everything that talks to the server, because a CLI module runs its own
  * `main` on import and therefore cannot be driven by a test.
  */
+import { readRenamedEnv } from '@feedback/core/env-names';
 import {
   type MigrationPlan,
   fetchQueueRows,
@@ -33,9 +34,9 @@ interface Args {
 function parseArgs(argv: string[]): Args | string {
   const args: Args = {
     workspace: '',
-    base: process.env.FEEDBACK_BASE_URL ?? 'http://127.0.0.1:8787',
+    base: readRenamedEnv(process.env, 'CW_BASE_URL') ?? 'http://127.0.0.1:8787',
     apply: false,
-    author: process.env.FEEDBACK_AGENT_NAME ?? '',
+    author: readRenamedEnv(process.env, 'CW_AGENT_NAME') ?? '',
     json: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
@@ -53,7 +54,7 @@ function parseArgs(argv: string[]): Args | string {
   // lands in the thread's history as an actor, and "unknown" there is a
   // record nobody can follow up on.
   if (args.apply && args.author.trim() === '') {
-    return '--apply needs --author "<name>" (or FEEDBACK_AGENT_NAME) — a resolve is attributed';
+    return '--apply needs --author "<name>" (or CW_AGENT_NAME) — a resolve is attributed';
   }
   return args;
 }
