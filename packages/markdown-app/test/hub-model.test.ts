@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   type ActivityEvent,
@@ -24,6 +26,7 @@ import {
   goalRank,
   humanBlockerRows,
   initialsOf,
+  panelAsks,
   parseQuickAdd,
   pluginDriftNotice,
   presenceChips,
@@ -865,6 +868,46 @@ describe('reviewQueue', () => {
     const q = reviewQueue([], [unknown, threadItem({ threadId: 'th-kept' })], T0);
     expect(q.items.map((i) => i.thread?.threadId)).toEqual(['th-kept']);
     expect(q.total).toBe(1);
+  });
+
+  /**
+   * The SECOND consumer of the same array, which is where the guard above was
+   * missing.
+   *
+   * The task detail panel takes this task's rows and renders the lead one as
+   * "What we need from you" — with option buttons and a reply box that both
+   * post a COMMENT on `item.threadId`. A ticket-borne row has no `threadId`,
+   * so those controls file a stray discussion comment and record no answer;
+   * and because such a row is always `direct`, it always wins the lead and
+   * always renders on top. On a legacy decision that put a dead copy of the
+   * option buttons directly above the live ones.
+   *
+   * So the panel takes only the rows whose answer path it actually
+   * implements. The ticket-borne rows come back when the panel learns to
+   * answer them at `POST /api/tasks/:id/review-items/:rid/answer`.
+   */
+  it('hands the detail panel only the rows whose answer path it implements', () => {
+    const ticketRow = {
+      ...threadItem({ threadId: 'th-ignored' }),
+      kind: 'task-review',
+      taskId: 'tk-1',
+      threadId: undefined,
+      docId: undefined,
+    } as unknown as ReviewThreadItem;
+    const mine = threadItem({ threadId: 'th-mine', taskId: 'tk-1' });
+    const other = threadItem({ threadId: 'th-other', taskId: 'tk-2' });
+    const docRow = threadItem({ kind: 'doc-thread', threadId: 'th-doc', docId: 'doc-9' });
+    // biome-ignore lint/performance/noDelete: the row under test has no taskId at all.
+    delete (docRow as { taskId?: string }).taskId;
+
+    expect(panelAsks([ticketRow, mine, other, docRow], 'tk-1').map((i) => i.threadId)).toEqual([
+      'th-mine',
+    ]);
+    // POSITIVE CONTROL: the by-taskId filter is unchanged for the rows that
+    // were already reaching the panel — a doc row still never matches, and
+    // another ticket's row still never matches.
+    expect(panelAsks([mine, other, docRow], 'tk-2').map((i) => i.threadId)).toEqual(['th-other']);
+    expect(panelAsks([ticketRow], 'tk-1')).toEqual([]);
   });
 });
 
@@ -1830,5 +1873,28 @@ describe('unplacedNotice — the quiet bucket says how many and how long', () =>
     // The done task is the OLDER one, so a selection that leaked it would
     // show up in the age as well as the count.
     expect(n?.detail).toBe('waiting 1d');
+  });
+});
+
+/**
+ * The panel's ask rows come from `panelAsks`, not from an inline filter.
+ *
+ * A source-text assertion, because this is the ONE thing the unit test above
+ * cannot see: `panelAsks` can be perfectly correct while nothing calls it. The
+ * inline `state.reviewItems.filter((i) => i.taskId === task.id)` that used to
+ * sit here is what fed ticket-borne rows — which carry no `threadId` — into a
+ * panel whose option buttons answer by posting a comment on one.
+ *
+ * Paired with a positive control in the same read, so a mistyped path or an
+ * empty file cannot read as a clean result.
+ */
+describe('the detail panel takes its asks through panelAsks', () => {
+  const hubApp = readFileSync(resolve(import.meta.dirname, '../src/hub/hub-app.ts'), 'utf8');
+
+  it('calls panelAsks and no longer filters reviewItems by taskId inline', () => {
+    // Positive control: the read found the real file.
+    expect(hubApp).toContain('state.reviewItems');
+    expect(hubApp).toContain('panelAsks(state.reviewItems, task.id)');
+    expect(hubApp).not.toContain('state.reviewItems.filter');
   });
 });

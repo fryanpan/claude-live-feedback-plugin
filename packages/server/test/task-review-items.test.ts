@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ReviewPayload } from '@feedback/core';
+import type { ReviewPayload, TaskReviewItem } from '@feedback/core';
 import { TaskStore, type TaskStoreEvent } from '../src/tasks.ts';
 
 const PERSON = { id: 'known-reviewer', name: 'Reviewer', kind: 'known' };
@@ -137,7 +137,19 @@ describe('review items on a task', () => {
   // ── 0..n real rows ───────────────────────────────────────────────────────
 
   describe('addReviewItem puts several open items on one ticket', () => {
-    it('holds two open items at once and suppresses the derived row', () => {
+    /**
+     * The derived row is NOT suppressed by real ones.
+     *
+     * It was, briefly, on the reasoning that showing the ticket title back as
+     * a question duplicates work already done. That reasoning was wrong in the
+     * one direction that matters: the legacy decision is a SEPARATE open
+     * question from the rows somebody added later, and suppressing it made an
+     * unanswered decision drop out of `listReviewItems` — and therefore out of
+     * `GET /review-items` — the moment anybody filed a second question on the
+     * same ticket. An open question that disappears from the one route that
+     * answers "what is waiting on me" is the failure this entity exists to fix.
+     */
+    it('holds two open items at once BESIDE the still-open derived row', () => {
       const task = seedDecision([{ label: 'On by default' }, { label: 'Behind a flag' }]);
       const first = store.addReviewItem(task.id, payload({ headline: 'Which cache do we keep?' }), {
         actor: AGENT,
@@ -155,12 +167,69 @@ describe('review items on a task', () => {
       expect(first.item.createdBy).toBe('Scheduler Agent');
 
       const items = store.listReviewItems(task.id);
+      // The derived row is the OLDEST question on the ticket, so it leads.
       expect(items.map((i) => i.review.headline)).toEqual([
+        'Walkthrough rollout',
         'Which cache do we keep?',
         'Do we backfill the old rows?',
       ]);
-      expect(items.some((i) => i.id === 'r-legacy')).toBe(false);
+      expect(items.some((i) => i.id === 'r-legacy')).toBe(true);
       expect(items.every((i) => i.answer === undefined)).toBe(true);
+    });
+
+    /**
+     * …and the derived row goes away for the ONE reason it should: the legacy
+     * decision was answered. Keyed on the answer rather than on "does a stored
+     * row exist", because those two facts are about different questions.
+     */
+    it('drops the derived row once the legacy decision is answered, keeping the real ones', () => {
+      const task = seedDecision([{ label: 'On by default' }, { label: 'Behind a flag' }]);
+      const added = store.addReviewItem(task.id, payload(), { actor: AGENT });
+      if (!added.ok) throw new Error('add failed');
+      expect(store.listReviewItems(task.id).some((i) => i.id === 'r-legacy')).toBe(true);
+
+      store.answerDecision(task.id, 'Behind a flag', { actor: PERSON });
+      const items = store.listReviewItems(task.id);
+      // Still listed, now CLOSED — nothing is purged, the row just stops
+      // counting as open.
+      expect(items.find((i) => i.id === 'r-legacy')?.answer?.text).toBe('Behind a flag');
+      expect(items.find((i) => i.id === added.item.id)?.answer).toBeUndefined();
+    });
+
+    /**
+     * A ticket that was never a decision derives nothing, however many rows it
+     * holds. POSITIVE CONTROL for the un-suppression above: lifting the guard
+     * must not start inventing a question out of an ordinary ticket's title.
+     */
+    it('derives no row for a needs:action ticket that holds real review items', () => {
+      const ws = store.createWorkspace('ws');
+      const res = store.createTask(ws.id, { title: 'Sweep the cache dir', assignee: 'agent' });
+      if (!res.ok) throw new Error('create failed');
+      store.addReviewItem(res.task.id, payload(), { actor: AGENT });
+      expect(store.listReviewItems(res.task.id).some((i) => i.id === 'r-legacy')).toBe(false);
+      expect(store.listReviewItems(res.task.id)).toHaveLength(1);
+    });
+
+    /**
+     * A row that no longer reads — written by another version, or blanked by a
+     * hand edit or a half-written sidecar — drops out of the list, and takes
+     * NOTHING else with it. This used to be decided from the RAW array length
+     * while the list was built from the READABLE rows, so a ticket whose only
+     * stored row was corrupt answered with an empty list: the stored row and
+     * the still-open legacy decision both invisible at once.
+     */
+    it('hides only the unreadable row, never the legacy decision behind it', () => {
+      const task = seedDecision([{ label: 'On by default' }, { label: 'Behind a flag' }]);
+      const live = store.getTask(task.id);
+      if (!live) throw new Error('no task');
+      // Deliberately not through `addReviewItem` — the gate would refuse this,
+      // which is the point: it models a row that reached disk another way.
+      live.reviews = [{ id: 'r-corrupt' } as unknown as TaskReviewItem];
+
+      const items = store.listReviewItems(task.id);
+      expect(items.map((i) => i.id)).toEqual(['r-legacy']);
+      // Nothing was purged: the unreadable row is still on the task.
+      expect(store.getTask(task.id)?.reviews).toHaveLength(1);
     });
 
     it('answering the first leaves the second open', () => {
@@ -221,6 +290,49 @@ describe('review items on a task', () => {
   // ── answering a row ──────────────────────────────────────────────────────
 
   describe('answerTaskReview', () => {
+    /**
+     * Answering twice is legal — a person changes their mind, a retry lands,
+     * two people reach for the same row — and the earlier VERBATIM words are
+     * user content. Soft, not hard: the superseded answer moves to
+     * `priorAnswers` instead of being written over and lost with nothing
+     * anywhere reporting it.
+     */
+    it('keeps a superseded answer instead of overwriting it away', () => {
+      const task = seedDecision();
+      const added = store.addReviewItem(task.id, payload(), { actor: AGENT });
+      if (!added.ok) throw new Error('add failed');
+
+      store.answerTaskReview(task.id, added.item.id, 'Keep disk', {
+        actor: PERSON,
+        answeredWith: 'o-7f3a',
+      });
+      const second = store.answerTaskReview(task.id, added.item.id, 'Keep memory', {
+        actor: AGENT,
+        answeredWith: 'o-4b2e',
+      });
+      expect(second.ok, JSON.stringify(second)).toBe(true);
+
+      const item = store.listReviewItems(task.id).find((i) => i.id === added.item.id);
+      expect(item?.answer?.text).toBe('Keep memory');
+      expect(item?.answer?.answeredWith).toBe('o-4b2e');
+      expect(item?.priorAnswers?.map((a) => a.text)).toEqual(['Keep disk']);
+      expect(item?.priorAnswers?.[0]?.answeredWith).toBe('o-7f3a');
+      expect(item?.priorAnswers?.[0]?.by).toBe('Reviewer');
+    });
+
+    it('records no priorAnswers on a first answer', () => {
+      // POSITIVE CONTROL: the history is created by a SECOND answer, not by
+      // every answer — an always-present empty array would be noise on every
+      // row in the projection.
+      const task = seedDecision();
+      const added = store.addReviewItem(task.id, payload(), { actor: AGENT });
+      if (!added.ok) throw new Error('add failed');
+      store.answerTaskReview(task.id, added.item.id, 'Keep disk', { actor: PERSON });
+      expect(
+        store.listReviewItems(task.id).find((i) => i.id === added.item.id)?.priorAnswers,
+      ).toBeUndefined();
+    });
+
     it('refuses an unknown reviewItemId', () => {
       const task = seedDecision();
       store.addReviewItem(task.id, payload(), { actor: AGENT });
@@ -326,10 +438,27 @@ describe('review items on a task', () => {
       if (!res.ok) expect(res.error).toBe('unknown-option');
     });
 
-    it("stops resolving 'r-legacy' once real rows exist, since nothing lists it", () => {
+    /**
+     * Reader and writer agree because they share `legacyReviewItem`: while the
+     * reader still LISTS the derived row, the writer still ACCEPTS an answer
+     * at it. The inverse — a row nothing lists that still takes answers, or a
+     * listed row that 400s — is what sharing the rule prevents.
+     */
+    it("keeps resolving 'r-legacy' while the decision is open, even beside real rows", () => {
       const task = seedDecision();
       store.addReviewItem(task.id, payload(), { actor: AGENT });
-      const res = store.answerTaskReview(task.id, 'r-legacy', 'anything', { actor: PERSON });
+      const res = store.answerTaskReview(task.id, 'r-legacy', 'Behind a flag', { actor: PERSON });
+      expect(res.ok, JSON.stringify(res)).toBe(true);
+      expect(store.getTask(task.id)?.answer?.text).toBe('Behind a flag');
+    });
+
+    it("refuses 'r-legacy' on a ticket that is not a decision at all", () => {
+      const ws = store.createWorkspace('ws');
+      const created = store.createTask(ws.id, { title: 'Sweep the cache dir', assignee: 'agent' });
+      if (!created.ok) throw new Error('create failed');
+      const res = store.answerTaskReview(created.task.id, 'r-legacy', 'anything', {
+        actor: PERSON,
+      });
       expect(res.ok).toBe(false);
       if (!res.ok) expect(res.error).toBe('unknown-review-item');
     });
@@ -361,7 +490,7 @@ describe('review items on a task', () => {
       if (!added.ok) throw new Error('add failed');
       store.requestMoreInfoOnReview(task.id, added.item.id, 'first', { actor: PERSON });
       store.requestMoreInfoOnReview(task.id, added.item.id, 'second', { actor: PERSON });
-      const item = store.listReviewItems(task.id)[0];
+      const item = store.listReviewItems(task.id).find((i) => i.id === added.item.id);
       expect(item?.infoRequests?.map((r) => r.text)).toEqual(['first', 'second']);
     });
 
@@ -402,12 +531,17 @@ describe('review items on a task', () => {
     const reloaded = new TaskStore({ dataDir, debounceMs: 5 });
     try {
       const items = reloaded.listReviewItems(task.id);
-      expect(items.map((i) => i.id)).toEqual([added.item.id, open.item.id]);
-      expect(items[0]?.answer?.text).toBe('Keep the disk one');
-      expect(items[0]?.answer?.answeredWith).toBe('o-7f3a');
-      expect(items[1]?.answer).toBeUndefined();
-      expect(items[1]?.infoRequests?.map((r) => r.text)).toEqual(['which peak?']);
-      expect(items[1]?.review.options?.map((o) => o.id)).toEqual(['o-7f3a', 'o-4b2e']);
+      // The derived row leads (it is the ticket's oldest question) and the
+      // STORED rows follow in filing order — the part that had to survive the
+      // round-trip, since nothing writes them but `persist()` itself.
+      expect(items.map((i) => i.id)).toEqual(['r-legacy', added.item.id, open.item.id]);
+      const answered = items.find((i) => i.id === added.item.id);
+      const stillOpen = items.find((i) => i.id === open.item.id);
+      expect(answered?.answer?.text).toBe('Keep the disk one');
+      expect(answered?.answer?.answeredWith).toBe('o-7f3a');
+      expect(stillOpen?.answer).toBeUndefined();
+      expect(stillOpen?.infoRequests?.map((r) => r.text)).toEqual(['which peak?']);
+      expect(stillOpen?.review.options?.map((o) => o.id)).toEqual(['o-7f3a', 'o-4b2e']);
     } finally {
       reloaded.stop();
     }

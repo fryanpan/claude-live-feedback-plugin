@@ -752,17 +752,33 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     });
 
   /**
-   * How many items the Home queue holds right now: every OPEN review item —
-   * ticket-borne and comment-borne alike — plus person-owned blockers with
-   * open dependents. Feeds only the brief's closing "is anything waiting" line.
+   * How many items the Home queue holds right now. Feeds only the brief's
+   * closing "is anything waiting" line.
    *
-   * The old `needs === 'decision' && !answer` term is GONE, and its absence is
-   * the change rather than an omission. Every open decision now arrives on
-   * `items` as a ticket review item (the derived row is open exactly when the
-   * task is unanswered), so for a board of legacy decisions this returns the
-   * identical number — while a ticket holding three questions with one answered
-   * now counts 2, where the old term counted at most 1. Counting decisions here
-   * as well would double every one of them.
+   * The number is a promise about the LIST rendered under it, so it counts
+   * exactly what the browser's `reviewQueue` places and nothing else:
+   *
+   *  - person-owned blockers with open dependents,
+   *  - comment-borne review rows (`task-thread` / `doc-thread`),
+   *  - open decisions, which Home draws from the board projection as its own
+   *    `decision` rows.
+   *
+   * TICKET-borne rows (`kind: 'task-review'`) are shipped by the route and
+   * deliberately NOT counted here. No browser surface places one yet — the
+   * task detail panel owns that half and it is not in this change — so
+   * counting them prints "something needs you" above a list that shows
+   * nothing and offers no control to answer it. The route still carries them,
+   * which is where agents and the MCP verbs read them from.
+   *
+   * The open-decision term is counted from the TASKS rather than from `items`,
+   * even though `items` also carries a derived `r-legacy` row per open
+   * decision. Same reason: `decisionQueue` in the browser is what draws those
+   * rows, and it reads `needs`/`answer` off the projection. Counting the
+   * derived rows instead would tie this number to a row Home does not read.
+   * A decision is therefore counted once, never twice.
+   *
+   * When Home learns to place a ticket-borne row, the `kind` filter and this
+   * paragraph go together — not one without the other.
    */
   const homeQueueTotal = (workspace: HubWorkspace, items: ReviewItemRow[]): number => {
     const ownerKindOf = taskProjection.ownerKindReader(workspace.id);
@@ -773,7 +789,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         ownerKindOf(t) === 'person' &&
         open.some((o) => o.id !== t.id && o.after.includes(t.id)),
     );
-    return blockers.length + items.length;
+    const decisions = open.filter((t) => t.needs === 'decision' && !t.answer);
+    const rendered = items.filter((i) => i.kind !== 'task-review');
+    return blockers.length + rendered.length + decisions.length;
   };
 
   const homeBriefInput = (workspace: HubWorkspace, since: number): BriefInput => {
@@ -2412,6 +2430,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             taskStore.addReviewItem(res.task.id, parsed.review, {
               actor: authorFor(body?.author) ?? ANONYMOUS_ACTOR,
             });
+            // `createTask` already emitted `task.created` — and therefore
+            // already projected this ticket, a moment before it had any
+            // review items. `addReviewItem` emits nothing, so without this the
+            // board room carries the ticket with no `reviews` until some
+            // unrelated store event happens to touch the workspace, which on a
+            // quiet board is never. Same call the dedicated review-item route
+            // makes for the same reason.
+            taskProjection.ensureWorkspace(workspaceId);
           }
           // Dropped refs are reported, never swallowed: the caller finds out
           // what didn't survive without having to diff what it sent. Same
@@ -2483,6 +2509,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           /** Per row, because a burst files many tickets and "which one came
            *  out thin" is the only useful form of the answer. */
           const reviewAdvice: Array<{ taskId: string; advice: string }> = [];
+          /** Did any row attach a review item? The projection refresh those
+           *  need happens once after the loop; see below. */
+          let attachedReview = false;
           // Placement, collected per row and reported ONCE. Per-row it would
           // repeat the same band list a hundred times in a hundred-row burst;
           // the rows that need naming are the unplaced ones, so those are what
@@ -2554,6 +2583,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               taskStore.addReviewItem(res.task.id, parsed.review, {
                 actor: createdBy ?? ANONYMOUS_ACTOR,
               });
+              attachedReview = true;
             }
             if (parsed.reviewAdvice !== undefined) {
               reviewAdvice.push({ taskId: res.task.id, advice: parsed.reviewAdvice });
@@ -2569,6 +2599,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               shapeGaps.push({ taskId: res.task.id, gaps: res.shapeGaps });
             }
           }
+          // Once, after the loop rather than inside it — see the single-create
+          // door for why any of it is needed. The row that actually needs it
+          // is the LAST one carrying a review: every earlier one was projected
+          // incidentally by the NEXT row's `task.created`, which is why a
+          // one-row batch and the tail of an n-row batch were the only shapes
+          // that showed the miss.
+          if (attachedReview) taskProjection.ensureWorkspace(workspaceId);
           // Board order comes from the board, not from a second sort of our
           // own that happens to agree with it today.
           const tasks = taskStore.listTasks(workspaceId).filter((t) => createdIds.has(t.id));
