@@ -1,4 +1,5 @@
-import { listThreads, prose } from '@feedback/core';
+import { listThreads, prose, readTaskReviewItem } from '@feedback/core';
+import type { TaskReviewItem } from '@feedback/core';
 import * as Y from 'yjs';
 import type { Rooms } from './rooms.ts';
 import { type OwnerKind, attachedAgentTest, resolveOwnerKind } from './task-owner.ts';
@@ -110,6 +111,21 @@ function projectBody(body: string | undefined): {
   return { body: text.slice(0, BODY_PROJECTION_LIMIT), bodyTruncated: true };
 }
 
+/** The ticket's review items, normalized, or nothing at all. Absent rather
+ *  than empty: `refresh` deletes projected keys missing from the object, so an
+ *  empty array would be a key every board carries forever saying nothing. */
+function projectReviews(reviews: TaskReviewItem[] | undefined): {
+  reviews?: TaskReviewItem[];
+} {
+  if (!reviews || reviews.length === 0) return {};
+  const rows: TaskReviewItem[] = [];
+  for (const raw of reviews) {
+    const item = readTaskReviewItem(raw);
+    if (item) rows.push(item);
+  }
+  return rows.length > 0 ? { reviews: rows } : {};
+}
+
 /** The plain-JSON shape of one task inside the `tasks` Y.Map — the §3.3
  *  visitor-contract fields, stated here so it's a decision, not an
  *  accident. No actor ids (display names only); the body is the capped
@@ -151,6 +167,15 @@ export function projectTask(
     // construction. Everything in a workspace is available to everyone in it.
     ...(task.options !== undefined ? { options: task.options } : {}),
     ...(task.infoRequests !== undefined ? { infoRequests: task.infoRequests } : {}),
+    // The ticket's review items — 0..n, each with its own blurb above its own
+    // options. Beside `options`/`answer` rather than instead of them: nothing
+    // is replaced and nothing is purged, so every surface reading the legacy
+    // fields keeps reading them. Read through the loose reader so a row
+    // corrupted on disk drops out here instead of reaching a renderer that
+    // never touched this ticket. The DERIVED legacy row is deliberately absent
+    // — the browser already has `options`/`answer` on this same object, and
+    // projecting both spellings would list one decision twice.
+    ...projectReviews(task.reviews),
     goal: task.goal,
     order: task.order,
     after: task.after,

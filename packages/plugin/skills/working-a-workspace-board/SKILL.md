@@ -342,6 +342,13 @@ Concretely:
   `create_thread` and `post_reply` take a `review` payload; that is what makes
   the reply a Review Item and puts it on the owner's Home queue with your
   blurb, instead of a comment they have to notice on their own.
+- **A question about a TICKET hangs on the ticket**, with the same payload:
+  `add_review_item(taskId, review)` — or `review` on a `create_tasks` row when
+  you are filing both at once. A ticket carries **0..n review items and
+  several can be open at the same time**, so the blurb goes on the item and
+  never into the ticket title: the title names the work, `headline`/`why`
+  name the ask. Answer with `answer_review_item(taskId, reviewItemId, text)`,
+  ask back with `request_more_info`.
 - **Chat gets at most a one-line pointer**, and only when the owner is already
   in the conversation. The artifact, the ask, and the link live on the board.
 - URL formatting still applies: bare URL on its own line, no markdown
