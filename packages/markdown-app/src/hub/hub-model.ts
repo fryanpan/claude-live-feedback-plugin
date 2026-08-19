@@ -2160,3 +2160,30 @@ export function shouldPollHome(
   if (!payload?.generating) return false;
   return now - startedAt < HOME_POLL_CAP_MS;
 }
+
+/** The anchor sent with each spoken utterance (§3.8). */
+export interface VoiceHubContext {
+  surface: 'hub' | 'task';
+  taskId?: string;
+}
+
+/**
+ * Which resource the hub is showing the speaker.
+ *
+ * Two affordances mean "this ticket", not one: the open detail panel, and the
+ * keyboard row cursor (`j`/`k` focus a `.hub-task-row`). Keying on the panel
+ * alone made the ticket's own flow — highlight a row, hold the mic, "mark this
+ * done" — send `{surface:'hub'}`, and with no resource in view the server's
+ * guardrail correctly refused to act on anything.
+ *
+ * The panel wins when both are set, for the same reason the server prefers a
+ * task over a doc: it is the narrower thing in view, and "this" means the
+ * narrower one to whoever said it.
+ */
+export function voiceHubContext(
+  detailTaskId: string | null | undefined,
+  focusedRowTaskId: string | null | undefined,
+): VoiceHubContext {
+  const taskId = detailTaskId || focusedRowTaskId;
+  return taskId ? { surface: 'task', taskId } : { surface: 'hub' };
+}

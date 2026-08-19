@@ -1383,6 +1383,11 @@ export interface AgentHeartbeatEvent {
   ts: number;
 }
 
+/** Where an utterance ended up. Named rather than inlined because it is
+ *  written in three places (the event, the record call, the router's own
+ *  result) and a fourth value added to only two of them is a type hole. */
+export type VoiceRoute = 'fast-path' | 'fast-path-action' | 'agent' | 'agent-queued';
+
 /** §3.6: every voice utterance emits `voice.request` — transcript, chosen
  *  route, ack text — which is what makes "voice always answers" a checkable
  *  artifact rather than a promise (§2.4). */
@@ -1392,8 +1397,14 @@ export interface VoiceRequestEvent {
   /** The utterance VERBATIM. */
   transcript: string;
   /** Which route handled it. 'agent-queued' = no live attachment; the
-   *  request waits in the voice queue for the next attach. */
-  route: 'fast-path' | 'agent' | 'agent-queued';
+   *  request waits in the voice queue for the next attach.
+   *
+   *  'fast-path-action' is deliberately NOT 'fast-path': the latter means "a
+   *  lookup the server already answered", which readers downstream drop on
+   *  exactly that reading. An action CHANGED something on this board without
+   *  the agent doing it, so it is the one voice row an agent most needs to
+   *  see — folding it into the lookup value would make a board move silently. */
+  route: VoiceRoute;
   /** The explicit reply the speaker saw — names what was heard and which
    *  route handles it. */
   ack: string;
@@ -1430,6 +1441,17 @@ export interface QueuedVoiceRequest {
   transcript: string;
   context?: unknown;
   actor: TaskActor;
+  /**
+   * What the voice fast path ALREADY applied to the board for this utterance,
+   * as the speaker was told it — present only when it applied something.
+   *
+   * An utterance can carry more than the one verb voice handles ("mark this
+   * done and then draft the migration notes"), and with no agent live the
+   * queue is the only durable channel for the rest of it. Delivering the
+   * transcript alone would ask the agent to redo the half that already
+   * happened; this field is how the same row says "that part is done".
+   */
+  applied?: string;
   ts: number;
 }
 
@@ -1528,8 +1550,18 @@ export type SetLeadAgentResult =
   | {
       ok: true;
       workspace: HubWorkspace;
-      /** False when the named agent already held the seat. */
+      /** False when the named agent already held the seat, and false when the
+       *  seat was left alone because a live agent is in it (`declined`). */
       changed: boolean;
+      /** Who was in the seat before this call moved it. Absent when nothing
+       *  moved or the seat was empty. Reported so a takeover is something the
+       *  caller can SEE — `changed: true` alone is the identical answer for
+       *  claiming an empty seat and for displacing somebody. */
+      previousLeadAgentId?: string;
+      /** `lead-held` — a DIFFERENT agent holds the seat and its heartbeat is
+       *  fresh, and the caller was claiming the seat for itself without
+       *  `takeover`. The request succeeded; the seat did not move. */
+      declined?: 'lead-held';
     }
   | { ok: false; error: 'workspace-not-found' };
 
@@ -2428,13 +2460,42 @@ export class TaskStore {
   setLeadAgent(
     workspaceId: string,
     leadAgentId: string,
-    opts: { actor: { id: string; name: string; kind?: string } },
+    opts: { actor: { id: string; name: string; kind?: string }; takeover?: boolean },
   ): SetLeadAgentResult {
     const state = this.workspaces.get(workspaceId);
     if (!state) return { ok: false, error: 'workspace-not-found' };
     const workspace = state.workspace;
     const next = leadAgentId.trim();
     if (next === workspace.leadAgentId) return { ok: true, workspace, changed: false };
+    const previousLeadAgentId = workspace.leadAgentId;
+    /**
+     * DO NOT let an agent quietly take a seat somebody LIVE is sitting in.
+     *
+     * `attachAgent` refuses this on purpose — "an occupied seat is a standing
+     * decision and a second agent attaching is not a reassignment" — and
+     * `set_workspace_lead` had no such guard, which was survivable while it
+     * meant "hand the board to a named peer" and became a hazard the moment
+     * the skills started telling every session to declare itself at startup.
+     * The displaced lead keeps its watch and its attachment, is told nothing
+     * it acts on, and simply never receives the re-triage it was waiting for;
+     * the declaring agent cannot tell a takeover from an empty seat, because
+     * `changed: true` is the same answer for both.
+     *
+     * Narrow on purpose. It fires only when an agent is claiming the seat FOR
+     * ITSELF (a declaration) — naming a third party is a deliberate handover
+     * and keeps its old meaning exactly. And only against a LIVE incumbent: a
+     * dead session's seat is exactly what a new lead should be able to
+     * recover, which is most of why declaring works at all.
+     */
+    if (
+      previousLeadAgentId !== undefined &&
+      previousLeadAgentId !== next &&
+      next === opts.actor.id &&
+      opts.takeover !== true &&
+      this.hasLiveLeadAttachment(workspaceId)
+    ) {
+      return { ok: true, workspace, changed: false, previousLeadAgentId, declined: 'lead-held' };
+    }
     const actor: TaskActor = {
       id: opts.actor.id,
       name: opts.actor.name,
@@ -2506,7 +2567,12 @@ export class TaskStore {
         this.writePendingTaskReviews(state);
       }
     }
-    return { ok: true, workspace, changed: true };
+    return {
+      ok: true,
+      workspace,
+      changed: true,
+      ...(previousLeadAgentId !== undefined ? { previousLeadAgentId } : {}),
+    };
   }
 
   /** The seat change itself, shared by `setLeadAgent` and the attach-time
@@ -4980,7 +5046,7 @@ export class TaskStore {
     workspaceId: string,
     req: {
       transcript: string;
-      route: 'fast-path' | 'agent' | 'agent-queued';
+      route: VoiceRoute;
       ack: string;
       context?: unknown;
       actor: { id: string; name: string; kind?: string };
@@ -5017,6 +5083,7 @@ export class TaskStore {
       transcript: string;
       context?: unknown;
       actor: { id: string; name: string; kind?: string };
+      applied?: string;
     },
   ): boolean {
     if (!this.workspaces.has(workspaceId)) return false;
@@ -5024,6 +5091,7 @@ export class TaskStore {
       transcript: item.transcript,
       ...(item.context !== undefined ? { context: item.context } : {}),
       actor: { id: item.actor.id, name: item.actor.name, kind: classifyActor(item.actor) },
+      ...(item.applied !== undefined ? { applied: item.applied } : {}),
       ts: Date.now(),
     };
     const path = voiceQueuePath(this.dataDir, workspaceId);
@@ -5219,6 +5287,27 @@ export class TaskStore {
     if (!att) return false;
     // Same observed clock as `hasLiveAttachment` — fixing one and not the
     // other would leave board-wide requests queueing while ordinary ones flow.
+    return this.isDeliverable(workspaceId, att);
+  }
+
+  /**
+   * Is THIS named agent live on this board — the per-agent form of
+   * `hasLiveAttachment`.
+   *
+   * Exists because the coverage read ("which boards am I missing work on?")
+   * asks about one specific agent, and answering it from `attachmentState`
+   * measures the wrong thing. That state is heartbeat-only and feeds the
+   * displayed active/away label; delivery rides the observed clock. Between
+   * the two windows sits a real gap where an agent is shown `away` and is
+   * nonetheless handed every request — so a coverage row built on the label
+   * reports a problem the agent does not have, and prescribes a remedy
+   * (claiming a seat) whose whole hazard is that it can evict a working peer.
+   */
+  hasLiveAttachmentFor(workspaceId: string, agentId: string): boolean {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return false;
+    const att = state.attachments.get(agentId);
+    if (!att) return false;
     return this.isDeliverable(workspaceId, att);
   }
 

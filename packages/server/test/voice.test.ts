@@ -19,10 +19,34 @@ import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { KEYCHAIN_SERVICE, KEYCHAIN_SERVICE_LEGACY } from '../src/summarize.ts';
 import { TaskStore, type TaskStoreEvent, voiceQueuePath } from '../src/tasks.ts';
-import { VoiceRouter, haikuVoiceComplete, parseVoiceReply } from '../src/voice.ts';
+import {
+  PROMPT_DATA_END,
+  RESOURCE_MAX,
+  type VoiceContext,
+  type VoiceResource,
+  VoiceRouter,
+  haikuVoiceComplete,
+  parseVoiceReply,
+  resolveVoiceAction,
+} from '../src/voice.ts';
 import { type AgentStream, openWorkspaceStream } from './agent-stream.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
+const AGENT = { id: 'agent-search-revamp', name: 'Search Agent', kind: 'agent', color: '#7d2ed7' };
+
+/** Threads need an anchor; nothing here reads it back. */
+const ANCHOR = {
+  kind: 'element' as const,
+  fingerprint: {
+    tag: 'P',
+    stableAttrs: {},
+    classes: [],
+    text: 'Body.',
+    path: 'P[0] > BODY[0]',
+    dataAttrs: {},
+  },
+  snippet: { text: 'Body.' },
+};
 
 describe('voice routing (§3.8)', () => {
   let handle: ServerHandle;
@@ -31,6 +55,15 @@ describe('voice routing (§3.8)', () => {
   let hubId: string;
   let taskId: string;
   let docId: string;
+  /** A SECOND board, so "belongs to another workspace" is a real fixture and
+   *  not a made-up id the store would reject anyway. */
+  let otherHubId: string;
+  let otherTaskId: string;
+  let otherDocId: string;
+  /** Lives on the second board: its title alone blows the resource budget. */
+  let bigTaskId: string;
+  /** On `hubId`, carries links + an assignee — the resource block's payload. */
+  let linkedTaskId: string;
   /** Per-test fast-path behavior. null = "fast path unavailable". */
   let completeImpl: ((args: { system: string; user: string }) => Promise<string>) | null = null;
   /** What the last classification call received — proves the route forwards
@@ -40,6 +73,7 @@ describe('voice routing (§3.8)', () => {
   const lastPrompt: { value: { system: string; user: string } | null } = { value: null };
   /** Fresh read — sidesteps TS narrowing `.value` to null after a reset. */
   const promptUser = (): string => lastPrompt.value?.user ?? '';
+  const promptSystem = (): string => lastPrompt.value?.system ?? '';
 
   const local = (path: string, init: RequestInit = {}) =>
     fetch(`${base}${path}`, {
@@ -92,6 +126,62 @@ describe('voice routing (§3.8)', () => {
     writeFileSync(p, '# Expansion plan\n\nBody.\n');
     expect((await post('/api/docs', { docId, type: 'markdown', sourceUrl: p })).status).toBe(200);
     expect((await post(`/api/workspaces/${hubId}/docs`, { docId })).status).toBe(200);
+
+    // A task carrying links + an owner, so the resource block has something to
+    // render beyond a title.
+    const linked = await post(`/api/workspaces/${hubId}/tasks`, {
+      title: 'Fold the expansion plan into the results page',
+      assignee: 'Jordan',
+      assigneeKind: 'person',
+      needs: 'action',
+      links: [
+        { kind: 'doc', docId },
+        { kind: 'thread', docId, threadId: 'th-synthetic' },
+      ],
+      author: PERSON,
+    });
+    expect(linked.status).toBe(200);
+    linkedTaskId = ((await linked.json()) as { task: { id: string } }).task.id;
+
+    // ── The second board: everything here is FOREIGN to `hubId` ────────────
+    const other = await post('/api/workspaces', {
+      name: 'billing-cleanup',
+      goal: 'Retire the old invoicing path.',
+    });
+    expect(other.status).toBe(200);
+    otherHubId = ((await other.json()) as { workspace: { id: string } }).workspace.id;
+
+    const ot = await post(`/api/workspaces/${otherHubId}/tasks`, {
+      title: 'Drop the legacy invoice job',
+      author: PERSON,
+    });
+    expect(ot.status).toBe(200);
+    otherTaskId = ((await ot.json()) as { task: { id: string } }).task.id;
+
+    const big = await post(`/api/workspaces/${otherHubId}/tasks`, {
+      title: `Rewrite the invoicing narrative ${'and reconcile every ledger row '.repeat(60)}`,
+      // The bulk has to be in something PER-FIELD clamping cannot shrink: a
+      // long title is now cut at its own budget before the block budget is
+      // reached, so a link list is what proves the block-level cap still
+      // fires. Both bounds are real and they bound different things.
+      links: Array.from({ length: 40 }, (_, i) => ({
+        kind: 'doc',
+        docId: `ledger-reconciliation-appendix-${i}`,
+      })),
+      author: PERSON,
+    });
+    expect(big.status).toBe(200);
+    bigTaskId = ((await big.json()) as { task: { id: string } }).task.id;
+
+    otherDocId = 'invoice-runbook';
+    const op = join(dataDir, `${otherDocId}.md`);
+    writeFileSync(op, '# Invoice runbook\n\nBody.\n');
+    expect(
+      (await post('/api/docs', { docId: otherDocId, type: 'markdown', sourceUrl: op })).status,
+    ).toBe(200);
+    expect((await post(`/api/workspaces/${otherHubId}/docs`, { docId: otherDocId })).status).toBe(
+      200,
+    );
   });
 
   afterAll(async () => {
@@ -309,6 +399,364 @@ describe('voice routing (§3.8)', () => {
       expect(queued?.ack?.toLowerCase()).toContain('queued');
       const looked = voiceEvents.find((e) => e.transcript === 'take me to the results page task');
       expect(looked?.route).toBe('fast-path');
+    });
+  });
+
+  // The context arrives from the client and `parseVoiceContext` only clamps
+  // its LENGTH — so an id from another board would resolve through the global
+  // task index. Harmless while context ids never drive a write; the point of
+  // checking membership here is that it stops being harmless the moment they
+  // do. One predicate, the one the lookup validation already spells.
+  describe('the context is trusted only after a membership check', () => {
+    it('drops a taskId belonging to another workspace (control: this workspace renders)', async () => {
+      completeImpl = () => Promise.resolve(JSON.stringify({ kind: 'change' }));
+      lastPrompt.value = null;
+      await voice({
+        transcript: 'mark this done',
+        context: { surface: 'task', taskId: otherTaskId },
+        author: PERSON,
+      });
+      expect(promptUser()).not.toContain(otherTaskId);
+      expect(promptUser()).not.toContain('task=');
+      expect(promptUser()).not.toContain('Resource in view:');
+      expect(promptUser()).not.toContain('Drop the legacy invoice job');
+
+      // Positive control: the same shape with a task that IS on this board
+      // renders both the location id and the resource block.
+      lastPrompt.value = null;
+      await voice({
+        transcript: 'mark this done',
+        context: { surface: 'task', taskId },
+        author: PERSON,
+      });
+      expect(promptUser()).toContain(`task=${taskId}`);
+      expect(promptUser()).toContain('Resource in view:');
+      expect(promptUser()).toContain('Wire the results page');
+    });
+
+    it('drops a docId not attached to this workspace (control: an attached doc renders)', async () => {
+      completeImpl = () => Promise.resolve(JSON.stringify({ kind: 'change' }));
+      lastPrompt.value = null;
+      await voice({
+        transcript: 'summarize this',
+        context: { surface: 'doc', docId: otherDocId },
+        author: PERSON,
+      });
+      expect(promptUser()).not.toContain(otherDocId);
+      expect(promptUser()).not.toContain('doc=');
+      expect(promptUser()).not.toContain('Resource in view:');
+
+      lastPrompt.value = null;
+      await voice({
+        transcript: 'summarize this',
+        context: { surface: 'doc', docId },
+        author: PERSON,
+      });
+      expect(promptUser()).toContain(`doc=${docId}`);
+      expect(promptUser()).toContain('Resource in view:');
+    });
+  });
+
+  describe('the resource in view rides into the prompt', () => {
+    it('a task carries title, status, assignee and its links', async () => {
+      completeImpl = () => Promise.resolve(JSON.stringify({ kind: 'change' }));
+      lastPrompt.value = null;
+      await voice({
+        transcript: 'assign this to me',
+        context: { surface: 'task', taskId: linkedTaskId },
+        author: PERSON,
+      });
+      const prompt = promptUser();
+      expect(prompt).toContain(`Resource in view: task ${linkedTaskId}`);
+      expect(prompt).toContain('Fold the expansion plan into the results page');
+      expect(prompt).toContain('status: todo');
+      expect(prompt).toContain('assignee: Jordan');
+      expect(prompt).toContain('needs: action');
+      expect(prompt).toContain(`doc ${docId}`);
+      expect(prompt).toContain('th-synthetic');
+      // Control for the truncation test below: a normal task is not labelled.
+      expect(prompt).not.toContain('truncated');
+    });
+
+    it('a doc carries its title and the open review items scoped to it', async () => {
+      // An open thread whose newest comment is an agent's IS a review item.
+      const t = await post(`/api/docs/${docId}/threads`, {
+        author: AGENT,
+        text: 'Jordan, should the rollout wait for the crawler benchmark?',
+        anchor: ANCHOR,
+      });
+      expect(t.status).toBe(200);
+
+      completeImpl = () => Promise.resolve(JSON.stringify({ kind: 'change' }));
+      lastPrompt.value = null;
+      await voice({
+        transcript: 'reply to that review comment',
+        context: { surface: 'doc', docId },
+        author: PERSON,
+      });
+      const prompt = promptUser();
+      expect(prompt).toContain(`Resource in view: doc ${docId}`);
+      expect(prompt).toContain('crawler benchmark');
+    });
+
+    it('over-budget resource content is truncated and SAYS it was', async () => {
+      completeImpl = () => Promise.resolve(JSON.stringify({ kind: 'change' }));
+      lastPrompt.value = null;
+      const r = await post(`/api/workspaces/${otherHubId}/voice`, {
+        transcript: 'mark this done',
+        context: { surface: 'task', taskId: bigTaskId },
+        author: PERSON,
+      });
+      expect(r.status).toBe(200);
+      const prompt = promptUser();
+      const start = prompt.indexOf('Resource in view:');
+      expect(start).toBeGreaterThanOrEqual(0);
+      const block = prompt.slice(start, prompt.indexOf(`\n${PROMPT_DATA_END}`, start));
+      expect(block).toContain('truncated');
+      // The budget is the point: the block cannot grow with the content.
+      expect(new TextEncoder().encode(block).length).toBeLessThanOrEqual(RESOURCE_MAX + 200);
+    });
+  });
+
+  // A third classification. The guardrails ship BEFORE the writers do, so the
+  // rule that decides whether a spoken action may touch anything is reviewable
+  // on its own — and provably fails closed. Nothing here writes: an action
+  // still takes the agent route until the executors land.
+  describe('resolveVoiceAction — a target only ever comes from the validated context', () => {
+    const PERSON_ACTOR = { id: 'known-jordan', name: 'Jordan', kind: 'known' };
+    const TASK_CONTEXT: VoiceContext = { surface: 'task', taskId: 't-fixture' };
+    const taskResource = (over: Partial<Extract<VoiceResource, { kind: 'task' }>> = {}) =>
+      ({
+        kind: 'task',
+        id: 't-fixture',
+        title: 'Wire the results page',
+        status: 'todo',
+        assignee: '',
+        links: [],
+        ...over,
+      }) satisfies VoiceResource;
+
+    const resolve = (
+      raw: string,
+      over: {
+        actor?: { id: string; name: string; kind?: string };
+        context?: VoiceContext;
+        resource?: VoiceResource;
+        transcript?: string;
+      } = {},
+    ) =>
+      resolveVoiceAction({
+        classification: parseVoiceReply(raw),
+        actor: over.actor ?? PERSON_ACTOR,
+        transcript: over.transcript ?? 'mark this done',
+        ...(over.context !== undefined ? { context: over.context } : { context: TASK_CONTEXT }),
+        ...(over.resource !== undefined
+          ? { resource: over.resource }
+          : { resource: taskResource() }),
+      });
+
+    // The model must NAME the target now: an id-less action is refused, which
+    // is what makes the id check able to fire at all (it used to be both the
+    // compliant shape and the mis-targeted one).
+    const MARK_DONE = '{"kind":"action","action":"set-status","status":"done","id":"t-fixture"}';
+
+    it('POSITIVE CONTROL: a well-formed action over a validated task resolves', () => {
+      expect(resolve(MARK_DONE)).toEqual({
+        action: 'set-status',
+        taskId: 't-fixture',
+        status: 'done',
+        actor: PERSON_ACTOR,
+      });
+    });
+
+    it('an action verb outside the scoped set never parses, so it never resolves', () => {
+      // A verb voice has no case for is a CHANGE — the classifier answered,
+      // it just named something outside the scoped set. Reporting that as a
+      // parse failure told the speaker the fast path was down when it was not.
+      expect(parseVoiceReply('{"kind":"action","action":"delete-the-workspace"}')).toEqual({
+        kind: 'change',
+      });
+      expect(resolve('{"kind":"action","action":"delete-the-workspace"}')).toBeNull();
+      // A status the store has no word for is a different failure: the action
+      // parses, and resolves to nothing.
+      expect(
+        resolve('{"kind":"action","action":"set-status","status":"shipped","id":"t-fixture"}'),
+      ).toBeNull();
+      // And a classification that is not an action at all.
+      expect(resolve('{"kind":"change"}')).toBeNull();
+      expect(resolve('{"kind":"lookup","target":"task","id":"t-fixture"}')).toBeNull();
+    });
+
+    it('the deictic "mark this done" from the hub — no id in context — resolves to nothing', () => {
+      const noResource = { surface: 'hub' as const };
+      expect(
+        resolveVoiceAction({
+          classification: parseVoiceReply(MARK_DONE),
+          actor: PERSON_ACTOR,
+          transcript: 'mark this done',
+          context: noResource,
+        }),
+      ).toBeNull();
+      // A resource without the matching context id is the same hole from the
+      // other side: the resource must be the thing the context named.
+      expect(resolve(MARK_DONE, { context: { surface: 'task' } })).toBeNull();
+      expect(resolve(MARK_DONE, { context: { surface: 'task', taskId: 't-other' } })).toBeNull();
+    });
+
+    it('a model-named id that disagrees with the context is refused', () => {
+      expect(
+        resolve('{"kind":"action","action":"set-status","status":"done","id":"t-someone-elses"}'),
+      ).toBeNull();
+      // Naming the id it was TOLD to name is the compliant shape; what the
+      // rule refuses is a target the speaker never had in view.
+      expect(
+        resolve('{"kind":"action","action":"set-status","status":"done","id":"t-fixture"}'),
+      ).not.toBeNull();
+    });
+
+    it('an actor with no declared kind is refused (classifyActor would file it as an agent)', () => {
+      expect(resolve(MARK_DONE, { actor: { id: 'known-jordan', name: 'Jordan' } })).toBeNull();
+      expect(
+        resolve(MARK_DONE, { actor: { id: 'known-jordan', name: 'Jordan', kind: '' } }),
+      ).toBeNull();
+    });
+
+    it('set-assignee needs a name, and "me" is the speaker', () => {
+      expect(
+        resolve('{"kind":"action","action":"set-assignee","assignee":"me","id":"t-fixture"}', {
+          transcript: 'assign this to me',
+        }),
+      ).toEqual({
+        action: 'set-assignee',
+        taskId: 't-fixture',
+        assignee: 'Jordan',
+        actor: PERSON_ACTOR,
+      });
+      expect(resolve('{"kind":"action","action":"set-assignee","id":"t-fixture"}')).toBeNull();
+    });
+
+    it('a comment carries the transcript verbatim, on the task or the doc in view', () => {
+      expect(
+        resolve('{"kind":"action","action":"comment","id":"t-fixture"}', {
+          transcript: 'this needs a benchmark',
+        }),
+      ).toEqual({
+        action: 'comment',
+        target: { kind: 'task', taskId: 't-fixture' },
+        text: 'this needs a benchmark',
+        actor: PERSON_ACTOR,
+      });
+    });
+
+    it('answer-review resolves the thread from the doc, and refuses when it is ambiguous', () => {
+      const docContext: VoiceContext = { surface: 'doc', docId: 'expansion-plan' };
+      const withItems = (n: number): VoiceResource => ({
+        kind: 'doc',
+        id: 'expansion-plan',
+        reviewItems: Array.from({ length: n }, (_, i) => ({
+          threadId: `th-${i}`,
+          commentId: `c-${i}`,
+          // An agent-DECLARED item, so the answer is STAMPED onto it. A plain
+          // open question resolves the same way with `mode: 'reply'`; see
+          // voice-hardening.test.ts.
+          answerable: true,
+          ask: 'Should the rollout wait?',
+          askedBy: 'Search Agent',
+        })),
+      });
+      expect(
+        resolve('{"kind":"action","action":"answer-review","id":"expansion-plan"}', {
+          context: docContext,
+          resource: withItems(1),
+          transcript: 'yes, wait for it',
+        }),
+      ).toEqual({
+        action: 'answer-review',
+        docId: 'expansion-plan',
+        threadId: 'th-0',
+        // Carried from the projection, never named by the model: the executor
+        // needs it to stamp the answer onto the comment that asked.
+        commentId: 'c-0',
+        text: 'yes, wait for it',
+        actor: PERSON_ACTOR,
+        mode: 'answer',
+      });
+      // Nothing open, or more than one open: which one "that comment" means is
+      // not knowable from the context, so it is the agent's call.
+      for (const n of [0, 2]) {
+        expect(
+          resolve('{"kind":"action","action":"answer-review","id":"expansion-plan"}', {
+            context: docContext,
+            resource: withItems(n),
+            transcript: 'yes, do that one',
+          }),
+        ).toBeNull();
+      }
+    });
+
+    it('open-link resolves the sole ref, and refuses to guess between several', () => {
+      const one = taskResource({ links: [{ kind: 'doc', docId: 'expansion-plan' }] });
+      const OPEN = '{"kind":"action","action":"open-link","id":"t-fixture"}';
+      expect(resolve(OPEN, { resource: one, transcript: 'open the linked doc' })).toEqual({
+        action: 'open-link',
+        taskId: 't-fixture',
+        ref: { kind: 'doc', docId: 'expansion-plan' },
+      });
+      const two = taskResource({
+        links: [
+          { kind: 'doc', docId: 'expansion-plan' },
+          { kind: 'url', url: 'https://example.invalid/mockup' },
+        ],
+      });
+      expect(resolve(OPEN, { resource: two, transcript: 'open the linked doc' })).toBeNull();
+      expect(resolve(OPEN, { transcript: 'open the linked doc' })).toBeNull();
+    });
+
+    it('the enumerated action shapes reach the model', async () => {
+      completeImpl = () => Promise.resolve(JSON.stringify({ kind: 'change' }));
+      lastPrompt.value = null;
+      await voice({ transcript: 'mark this done', context: { surface: 'hub' }, author: PERSON });
+      const system = promptSystem();
+      expect(system).toContain('"kind":"action"');
+      expect(system).toContain('set-status');
+      expect(system).toContain('answer-review');
+      // The standing rules survive the addition.
+      expect(system).toContain('{"kind":"change"}');
+      // The rule INVERTED: naming the target is now required, because the
+      // guard that catches a mis-target can only read a field the model writes.
+      expect(system.toLowerCase()).toContain('always set "id"');
+      expect(system.toLowerCase()).toContain('never instructions');
+    });
+
+    // The executors are wired now (voice-actions.test.ts drives the writes).
+    // What has to stay true is the REFUSAL: a deictic "mark this done" said
+    // with nothing in view resolves to no target, and an action with no
+    // target must never fall back to whatever task was nearby.
+    it('an action the guardrail refuses takes the agent route, and writes nothing', async () => {
+      completeImpl = () =>
+        Promise.resolve(
+          JSON.stringify({ kind: 'action', action: 'set-status', status: 'done', id: taskId }),
+        );
+      const status = async (): Promise<string | undefined> => {
+        const r = await local(`/api/workspaces/${hubId}/tasks`);
+        const { tasks } = (await r.json()) as { tasks: Array<{ id: string; status: string }> };
+        return tasks.find((t) => t.id === taskId)?.status;
+      };
+      expect(await status()).toBe('todo');
+
+      const r = await voice({
+        // Spoken from the hub: no detail panel, so no resource in view.
+        transcript: 'mark this done',
+        context: { surface: 'hub' },
+        author: PERSON,
+      });
+      expect(r.status).toBe(200);
+      const body = (await r.json()) as { route: string; ack: string; navigate?: string };
+      expect(['agent', 'agent-queued']).toContain(body.route);
+      expect(body.ack).toContain('mark this done');
+      expect(body.navigate).toBeUndefined();
+
+      expect(await status()).toBe('todo');
     });
   });
 

@@ -34,6 +34,7 @@ import {
   eventsLogPath,
   publicAttachment,
 } from '../src/tasks.ts';
+import { type AgentStream, openWorkspaceStream } from './agent-stream.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'known' };
 
@@ -430,6 +431,8 @@ describe('attachment routes + triage bridge', () => {
     });
   const post = (path: string, body: unknown) =>
     local(path, { method: 'POST', body: JSON.stringify(body) });
+  const put = (path: string, body: unknown) =>
+    local(path, { method: 'PUT', body: JSON.stringify(body) });
 
   const makeWorkspace = async (name: string, leadAgentId?: string): Promise<string> => {
     const r = await post('/api/workspaces', {
@@ -441,10 +444,17 @@ describe('attachment routes + triage bridge', () => {
     return body.workspace.id;
   };
 
+  /** Streams `declareSelf` opened, hung up after each test. */
+  const declaredStreams: AgentStream[] = [];
+
   beforeAll(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'attach-routes-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+  });
+
+  afterEach(async () => {
+    for (const s of declaredStreams.splice(0)) await s.close();
   });
 
   afterAll(async () => {
@@ -642,5 +652,155 @@ describe('attachment routes + triage bridge', () => {
     expect(dump).not.toContain('relay-agent');
     expect(dump).not.toContain('lastHeartbeat');
     expect(dump).not.toContain('capabilities');
+  });
+
+  // ───────────────────────────────────────────────────────────────────────
+  // Declaring yourself lead: attach, then seat.
+  //
+  // The measured incident: a peer held six doc watches and believed it was
+  // listening. It had never attached. A voice note and a re-triage request
+  // queued SILENTLY — no error, no dropped-event warning — because every
+  // delivery gate here asks whether the lead is ATTACHED, and a doc watch is
+  // not an attachment. These tests pin the two halves of that gate to the
+  // sequence the MCP now performs in one call, and PC3 pins the half that
+  // must NOT change: naming an agent who is not there keeps queuing, because
+  // a queue is honest and a forged delivery is not.
+  // ───────────────────────────────────────────────────────────────────────
+
+  /**
+   * The declaration, as the MCP issues it: attach, open the workspace stream,
+   * then take the seat.
+   *
+   * The stream is not decoration. `attach_agent` subscribes right after it
+   * attaches, and a delivery is a BROADCAST — so an agent that only attached
+   * is registered and unreachable, and the gates below correctly refuse to
+   * call anything delivered to it. Modelling only the attach half described
+   * an agent that never connected.
+   */
+  const declareSelf = async (wsId: string, agentId: string) => {
+    await post(`/api/workspaces/${wsId}/attachments`, {
+      agentId,
+      runtime: 'claude-code-local',
+    });
+    declaredStreams.push(await openWorkspaceStream(base, wsId));
+    return put(`/api/workspaces/${wsId}/lead`, { leadAgentId: agentId, author: PERSON });
+  };
+
+  it('a self-declaration leaves the board holding a LIVE lead attachment', async () => {
+    // The seat starts with somebody else, so taking it is a real handover
+    // rather than the empty-seat claim attaching already does on its own.
+    const wsId = await makeWorkspace('declare-hub', 'agent-away');
+    const seat = await declareSelf(wsId, 'agent-self');
+    expect(seat.status).toBe(200);
+    const seatBody = (await seat.json()) as {
+      changed: boolean;
+      workspace: { leadAgentId: string };
+    };
+    expect(seatBody.changed).toBe(true);
+    expect(seatBody.workspace.leadAgentId).toBe('agent-self');
+
+    const list = (await (await local(`/api/workspaces/${wsId}/attachments`)).json()) as {
+      attachments: Array<AgentAttachment & { state: string }>;
+    };
+    const lead = list.attachments.find((a) => a.agentId === seatBody.workspace.leadAgentId);
+    // "Live lead attachment" is the conjunction the delivery gates read: an
+    // attachment record AND a fresh heartbeat AND it being the seat-holder.
+    expect(lead).toBeDefined();
+    expect(lead?.state).toBe('active');
+    // Positive control on the absent agent: holding the seat before this
+    // never created a record, and nothing here invented one for it.
+    expect(list.attachments.map((a) => a.agentId)).not.toContain('agent-away');
+  });
+
+  it('after declaring, a voice change-request routes to the agent instead of queuing', async () => {
+    const wsId = await makeWorkspace('voice-declare-hub', 'agent-away');
+    await declareSelf(wsId, 'agent-self');
+
+    const r = await post(`/api/workspaces/${wsId}/voice`, {
+      transcript: 'make cutting token usage the top goal',
+      author: PERSON,
+    });
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { route: string; ack: string };
+    expect(body.route).toBe('agent');
+    expect(body.ack).not.toContain('queued');
+  });
+
+  it('after declaring, a goal edit asks for re-triage instead of parking it', async () => {
+    const wsId = await makeWorkspace('goal-declare-hub', 'agent-away');
+    await post(`/api/workspaces/${wsId}/tasks`, { author: PERSON, title: 'An open row' });
+    await declareSelf(wsId, 'agent-self');
+
+    const sse = listen(await local(`/events/workspace/${wsId}`));
+    const r = await put(`/api/workspaces/${wsId}/goal`, {
+      goal: 'Cut token usage per session in half.',
+      author: PERSON,
+    });
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as {
+      retriage: { requested: boolean; queued: boolean; taskIds: string[] };
+    };
+    await settle();
+    sse.stop();
+    expect(body.retriage.requested).toBe(true);
+    expect(body.retriage.queued).toBe(false);
+    expect(body.retriage.taskIds).toHaveLength(1);
+    // The ask actually rode the channel a declared lead is now subscribed to
+    // — "requested" is only true because somebody could hear it.
+    expect(sse.events).toContain('triage.requested');
+  });
+
+  it('POSITIVE CONTROL — naming an ABSENT agent as lead still queues voice and re-triage', async () => {
+    // The asymmetry that keeps delivery honest. Handing the seat to an agent
+    // who is not there must NOT create an attachment for it: with one, the
+    // board would report a live lead, voice would route to 'agent', and the
+    // note would reach nobody at all — strictly worse than a queue, because
+    // nothing anywhere would say it had been missed.
+    const wsId = await makeWorkspace('third-party-hub');
+    await post(`/api/workspaces/${wsId}/tasks`, { author: PERSON, title: 'An open row' });
+    const seat = await put(`/api/workspaces/${wsId}/lead`, {
+      leadAgentId: 'agent-elsewhere',
+      author: PERSON,
+    });
+    expect(seat.status).toBe(200);
+
+    const list = (await (await local(`/api/workspaces/${wsId}/attachments`)).json()) as {
+      attachments: AgentAttachment[];
+    };
+    expect(list.attachments).toHaveLength(0);
+
+    const voice = (await (
+      await post(`/api/workspaces/${wsId}/voice`, {
+        transcript: 'make cutting token usage the top goal',
+        author: PERSON,
+      })
+    ).json()) as { route: string; ack: string };
+    expect(voice.route).toBe('agent-queued');
+    expect(voice.ack).toContain('queued');
+
+    const goal = (await (
+      await put(`/api/workspaces/${wsId}/goal`, {
+        goal: 'Cut token usage per session in half.',
+        author: PERSON,
+      })
+    ).json()) as { retriage: { requested: boolean; queued: boolean } };
+    expect(goal.retriage.requested).toBe(false);
+    expect(goal.retriage.queued).toBe(true);
+
+    // And the queued note is still there for whoever does show up — the
+    // whole point of refusing to fake the delivery.
+    const drain = (await (
+      await post(`/api/workspaces/${wsId}/attachments`, {
+        agentId: 'agent-elsewhere',
+        runtime: 'claude-code-local',
+      })
+    ).json()) as {
+      queuedVoice: Array<{ transcript: string }>;
+      pendingRetriage?: { taskIds: string[] };
+    };
+    expect(drain.queuedVoice.map((v) => v.transcript)).toEqual([
+      'make cutting token usage the top goal',
+    ]);
+    expect(drain.pendingRetriage?.taskIds).toHaveLength(1);
   });
 });

@@ -7,9 +7,19 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { readRenamedEnv } from '../../core/src/env-names.ts';
 import { discoveryCandidates, resolveDiscoveryFile } from '../../core/src/machine-paths.ts';
+import { createAttachmentKeepalive } from './attachment-keepalive.ts';
 import { resolveAgentAuthor } from './author.ts';
+import { declareWorkspaceLead } from './declare-lead.ts';
+import { createFrameDedup } from './frame-dedup.ts';
 import { type ThreadCreateInput, threadCreateRequest } from './thread-create.ts';
 import { RETRIAGE_SKILL, TASK_REVIEW_SKILL, triageRequestLine } from './triage-line.ts';
+import { voiceRequestLine } from './voice-line.ts';
+import {
+  type WatchCoverage,
+  boardsToReattach,
+  parseCoverage,
+  restoreNoticeContent,
+} from './watch-coverage.ts';
 
 /**
  * Thin MCP server that proxies tool calls to a running feedback server
@@ -929,7 +939,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'list_watched_docs',
       description:
-        "Return the docIds this session is currently subscribed to for channel events, WITH PROVENANCE: `restore.status` says whether this session re-wired its set from the server after a respawn ('restored'), never had a server set to restore ('restored' with an empty list), could not reach the server ('failed', with the error — retry by calling again), or has no stable identity so nothing survives a restart ('session-only'). An empty `watching` list therefore no longer means both 'never watched' and 'watched, then respawned' — read `restore` to tell them apart.",
+        "Return the docIds this session is currently subscribed to for channel events, WITH PROVENANCE: `restore.status` says whether this session re-wired its set from the server after a respawn ('restored'), never had a server set to restore ('restored' with an empty list), could not reach the server ('failed', with the error — retry by calling again), or has no stable identity so nothing survives a restart ('session-only'). An empty `watching` list therefore no longer means both 'never watched' and 'watched, then respawned' — read `restore` to tell them apart. Also answers the question that actually goes wrong — not 'what am I watching' but 'what am I MISSING'. `coverage.workspaces` resolves each `ws:<id>` key you hold (hub BOARD or review GROUPING; for a board, whether you are attached, whether your heartbeat is fresh, and whether you hold the lead seat), and `coverage.unattachedBoards` names boards you follow — through a watched doc OR through the board's own `ws:` key — where you have no LIVE attachment, each with what is queued for that board's lead (queuedVoice / pendingRetriage / pendingBucketReview / taskReviews) plus who holds the seat (`leadAgentId`, `leadLive`) and which clock lapsed on your own record (`attached: true, heartbeatFresh: false`). Watching a doc is not attaching, and an attachment the server has stopped OBSERVING is not attached either — a delivery gate asks for recent observed work, a heartbeat or a tool call whichever is later, plus an open channel; liveness is observed, never self-reported. A row there means real work is queuing that will never reach you. Note the two clocks differ: `heartbeatFresh` is the shorter displayed active/away label, `live` is the delivery gate, and a working session can be `heartbeatFresh: false` and still be reached — which is why rows are selected on `live`. The remedy depends on who is there: `set_workspace_lead(workspaceId)` when the seat is empty or its holder is gone, `heartbeat(workspaceId)` when the seat is already yours and you have simply gone quiet, and `attach_agent(workspaceId)` when a live peer leads it — taking that seat would evict them, and is refused. `coverage` is ABSENT rather than empty when the server did not answer (older server, no stable identity, unreachable); absent means unknown, never all-clear.",
       inputSchema: { type: 'object', properties: {} },
     },
     {
@@ -1042,14 +1052,23 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'set_workspace_lead',
       description:
-        "Hand the workspace's LEAD AGENT seat to another agent. The lead is who a goal edit's re-triage is addressed to — it is a standing assignment, not a session fact, so a goal change waits for the lead even while they are away rather than going to whoever happens to be connected. Use it when you are handing a board off, or to fill the seat on a board a person created.",
+        'DECLARE YOURSELF LEAD of a workspace — one call, and from then on you receive everything on this board: task and decision events, thread events on every doc filed here INCLUDING docs created later, voice notes, and re-triage asks. Call it with just `workspaceId` at session start; there is no per-surface subscribe to remember, and a respawn re-wires the subscription AND re-attaches you (both are persisted against your agent identity). STAYING LIVE IS NOT AUTOMATIC ON A QUIET SESSION: every lead-addressed delivery — voice notes, goal re-triage, bucket and task reviews — is gated on the server having OBSERVED you recently, which means a heartbeat or a tool call, whichever came last, plus an open channel. Work on the board refreshes it for you, so a busy session stays live on its own; a session that stops touching this server for a stretch goes quiet on every board it holds, including ones it is not actively working. Call heartbeat(workspaceId) then, and use `list_watched_docs` → `coverage` to check rather than assume. It replaces a pile of watch_doc calls, and it is what closes the gap those calls leave: a doc watch is not an attachment, so an agent watching six docs still misses every voice note and every goal-edit re-triage, silently — a queue nobody is draining looks exactly like a queue nobody filled. Because it attaches you, it also DRAINS whatever was waiting for the seat and hands it back on this same response, in attach_agent\'s own field names: `queuedVoice` (act on each transcript verbatim), `pendingRetriage`, `pendingBucketReview`, `taskReviews`, plus `gating` and `untriaged`. `subscribed` on the response is the answer to "am I actually listening?" — the question an agent otherwise cannot answer from the inside — and it is MEASURED, not asserted: it reports whether the event stream really opened, so `subscribed: false` with a `subscriptionWarning` is a real outcome to retry rather than a field you can skim past. `subscriptionPersisted: false` is the separate failure — the watch will not survive a respawn, usually because this session has no stable agent name. The lead is a STANDING assignment, not a session fact, so a goal change waits for you even while you are away rather than going to whoever happens to be connected. Pass `leadAgentId` ONLY to hand the board to somebody else: that is a pure handover — it moves the seat and nothing more, because attaching or subscribing on an absent agent\'s behalf would make the board report a live lead that is not there.',
       inputSchema: {
         type: 'object',
         properties: {
           workspaceId: { type: 'string', description: 'Hub workspace id from create_workspace.' },
-          leadAgentId: { type: 'string', description: 'The agent id taking responsibility.' },
+          leadAgentId: {
+            type: 'string',
+            description:
+              'The agent id taking responsibility. OMIT IT to declare yourself — that is the common case, and the only form that also attaches and subscribes you. Naming another agent hands the seat over and does nothing else; naming your own id is the same as omitting it, so callers built against the older required-field form keep their exact meaning.',
+          },
+          takeover: {
+            type: 'boolean',
+            description:
+              'Take the seat even though a DIFFERENT agent holds it and is live. Default false, and the default is the point: declaring yourself on a board a working peer leads would evict them silently, and every lead-addressed delivery would start routing to you while they keep working. Without this you get `declined: "lead-held"` and `previousLeadAgentId` naming the incumbent — you are still attached and subscribed, so nothing on the board is hidden from you; only the seat stays put. Coordinate with them first, and pass this when you mean it.',
+          },
         },
-        required: ['workspaceId', 'leadAgentId'],
+        required: ['workspaceId'],
       },
     },
     {
@@ -1645,7 +1664,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'attach_agent',
       description:
-        "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep — and sweeping one means SHAPING it, not only filing it: read the row's own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each with rewrite_task into a title and a story-shaped body, then set_task_goal. A capture arrives with a machine-clipped title and its raw utterance for a body, and this is the only step that turns it into work. Then queuedVoice — voice change-requests that arrived while no agent was live; act on each transcript verbatim — and, if you LEAD this workspace, pendingRetriage: a goal edit made while you were away, whose taskIds you re-place with set_task_goal (echo its batchId on each), plus pendingBucketReview: a goal BAND that appeared while you were away, with the unplaced tasks worth re-looking at against it — place the ones that now have a home, and leave the rest, since nothing has moved them — plus taskReviews: rows created, renamed, or rewritten while no lead was live, each waiting for the shape pass the `claude-workspaces:reviewing-task-shape` skill describes (judge the title and body; rewrite with rewrite_task or ask the filer on the task). All of these are drained by this call. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments with a fresh heartbeat, and after ~5 minutes of silence the hub shows you as away and requests queue.",
+        "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep — and sweeping one means SHAPING it, not only filing it: read the row's own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each with rewrite_task into a title and a story-shaped body, then set_task_goal. A capture arrives with a machine-clipped title and its raw utterance for a body, and this is the only step that turns it into work. Then queuedVoice — voice change-requests that arrived while no agent was live; act on each transcript verbatim, EXCEPT where the row carries `applied`: that names what the voice fast path already did to the board on the speaker's behalf, so pick up only whatever the utterance asked for beyond it rather than redoing it — and, if you LEAD this workspace, pendingRetriage: a goal edit made while you were away, whose taskIds you re-place with set_task_goal (echo its batchId on each), plus pendingBucketReview: a goal BAND that appeared while you were away, with the unplaced tasks worth re-looking at against it — place the ones that now have a home, and leave the rest, since nothing has moved them — plus taskReviews: rows created, renamed, or rewritten while no lead was live, each waiting for the shape pass the `claude-workspaces:reviewing-task-shape` skill describes (judge the title and body; rewrite with rewrite_task or ask the filer on the task). All of these are drained by this call. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments the server has observed recently (a heartbeat or a tool call, whichever is later), and after ~5 minutes of silence the hub shows you as away.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1669,7 +1688,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'heartbeat',
       description:
-        'Prove this attached agent is alive (and, implicitly, working — the call stamps lastToolCallAt now unless you pass an explicit earlier toolCallAt). Call every few minutes while attached to a workspace; a stale heartbeat (~5 min) marks you away and queues triage requests, and a fresh heartbeat with a 30-min-old toolCallAt renders as "process up, agent unresponsive".',
+        'Prove this attached agent is alive (and, implicitly, working — the call stamps lastToolCallAt now unless you pass an explicit earlier toolCallAt). Call every few minutes while attached to a workspace; a stale heartbeat (~5 min) marks you away, though what actually parks a triage request is the server not having observed you at all — no heartbeat AND no tool call — and a fresh heartbeat with a 30-min-old toolCallAt renders as "process up, agent unresponsive".',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1844,6 +1863,16 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     // the moment its watch set has to be back, and if the server was down at
     // initialize this is the retry. Never throws.
     await ensureWatchesRestored();
+    // A tool call is this session proving it is alive AND working, which is
+    // exactly what an attachment's heartbeat asserts. Without this, an agent
+    // that followed "declare yourself lead and you are done" drifts out of
+    // the observed window on every board it is not actively touching, at
+    // which point Bryan's next goal edit queues with no channel emit and the
+    // session hears the silence this whole ticket is about. Fire-and-forget:
+    // liveness is not worth failing a tool call over. See
+    // attachment-keepalive.ts for why this rides real calls rather than a
+    // timer.
+    void sendDueHeartbeats();
     await maybeAutoWatch(name, a);
     switch (name) {
       case 'list_docs': {
@@ -2350,6 +2379,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         });
       }
       case 'list_watched_docs': {
+        // `watching` answers "what am I subscribed to". `coverage` answers
+        // the question that actually goes wrong: what am I MISSING. Six live
+        // watches is a true answer to the first and an all-clear to nobody —
+        // the peer that measured this held exactly that while a voice note
+        // and a re-triage request queued for a board it had never attached
+        // to. Absent rather than empty when the server did not say.
+        const coverage = await refreshCoverage();
         return ok({
           watching: Array.from(watchers.keys()),
           persistence: {
@@ -2358,6 +2394,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             ...(IDENTITY_IS_SHARED ? { reason: SHARED_IDENTITY_REASON } : {}),
           },
           restore: restoreState,
+          ...(coverage ? { coverage } : {}),
           ...(lastPersistError ? { lastPersistError } : {}),
         });
       }
@@ -2463,16 +2500,30 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         });
       }
       case 'set_workspace_lead': {
-        const { workspaceId, leadAgentId } = a as { workspaceId: string; leadAgentId: string };
-        const res = (await http('PUT', `/api/workspaces/${encodeURIComponent(workspaceId)}/lead`, {
-          leadAgentId,
-          author: AUTHOR,
-        })) as { changed: boolean; workspace?: { leadAgentId?: string } };
-        return ok({
-          workspaceId,
-          changed: res.changed,
-          leadAgentId: res.workspace?.leadAgentId ?? leadAgentId,
-        });
+        const { workspaceId, leadAgentId, takeover } = a as {
+          workspaceId: string;
+          leadAgentId?: string;
+          takeover?: boolean;
+        };
+        // Declaring yourself is attach → subscribe → seat, and hands back the
+        // backlog the attach drained. Naming somebody else is the seat alone.
+        // See declare-lead.ts for why the order is load-bearing.
+        return ok(
+          await declareWorkspaceLead(
+            {
+              workspaceId,
+              ...(leadAgentId !== undefined ? { leadAgentId } : {}),
+              ...(takeover === true ? { takeover: true } : {}),
+            },
+            {
+              http,
+              watchWorkspace,
+              self: AUTHOR,
+              runtime: 'claude-code-local',
+              pluginVersion: PLUGIN_VERSION,
+            },
+          ),
+        );
       }
       case 'attach_doc': {
         const { workspaceId, docId } = a as { workspaceId: string; docId: string };
@@ -3046,7 +3097,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           attachment?: { agentId?: string };
           gating?: unknown;
           untriaged?: string[];
-          queuedVoice?: Array<{ transcript: string; ts: number }>;
+          queuedVoice?: Array<{ transcript: string; ts: number; applied?: string }>;
           lead?: boolean;
           pendingRetriage?: {
             batchId: string;
@@ -3066,6 +3117,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             ts: number;
           }>;
         };
+        // Only when this session attached as ITSELF: the keepalive proves
+        // THIS process is alive, and refreshing somebody else's attachment
+        // from here would assert liveness for an agent that may be gone.
+        if (agentId === undefined || agentId === AUTHOR.id) markAttached(workspaceId);
         if (subscribe !== false) await watchWorkspace(workspaceId);
         return ok({
           workspaceId,
@@ -3078,7 +3133,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           untriaged: res.untriaged ?? [],
           // Voice change-requests that arrived while no agent was live
           // ("agent away — queued"): this attach is their delivery. Act on
-          // each transcript, verbatim.
+          // each transcript, verbatim — EXCEPT for the part named by
+          // `applied`, which the voice fast path already did to the board on
+          // the speaker's behalf. Pick up only what the utterance asked for
+          // beyond it; redoing it posts the same words twice.
           queuedVoice: res.queuedVoice ?? [],
           // A goal edit made while you were away, waiting for you because
           // you lead this board. Walk its taskIds with set_task_goal against
@@ -3124,6 +3182,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           // too unless the caller reports an explicit (earlier) time.
           { toolCallAt: toolCallAt ?? Date.now() },
         )) as { attachment?: { state?: string } };
+        if (agentId === undefined || agentId === AUTHOR.id) markAttached(workspaceId);
         return ok({ workspaceId, agentId: agentId ?? AUTHOR.id, state: res.attachment?.state });
       }
       case 'request_plugin_refresh': {
@@ -3156,6 +3215,16 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 interface Watcher {
   controller: AbortController;
   docId: string;
+  /**
+   * Whether this watcher's stream is CURRENTLY connected — not whether a
+   * watcher object exists.
+   *
+   * The two used to be conflated, and that is how a tool could answer
+   * `subscribed: true` while its loop sat in backoff after a refused connect.
+   * The loop maintains this; a caller that needs to tell a live subscription
+   * from a registered intention reads it rather than the map's `has`.
+   */
+  open: boolean;
 }
 const watchers = new Map<string, Watcher>();
 
@@ -3198,6 +3267,10 @@ interface RestoreState {
   from: 'server' | 'session';
   /** Keys re-wired from the server's set on this process's restore. */
   restored: string[];
+  /** Boards this session was re-ATTACHED to on restore — the half a
+   *  re-wired watch key does not cover, since every delivery gate asks for a
+   *  live attachment and the old record comes back stale. */
+  reattached?: string[];
   /** Keys the server dropped as dead (their doc no longer exists). */
   pruned: string[];
   at?: string;
@@ -3213,6 +3286,63 @@ let restoreInFlight: Promise<void> | null = null;
  *  back off (capped at 30s), then try again on the next call after that. */
 let restoreRetryAt = 0;
 let lastPersistError: string | undefined;
+
+/**
+ * Which boards this session is attached to, and when it last proved it.
+ *
+ * An attachment is a claim that expires unless the server keeps observing
+ * this session, not a state — see attachment-keepalive.ts. Marked wherever
+ * this process attaches
+ * (`attach_agent`, declaring itself lead, the re-attach on restore) and
+ * refreshed off real tool calls.
+ */
+const keepalive = createAttachmentKeepalive();
+
+/** Record an attachment this session just made. */
+function markAttached(workspaceId: string): void {
+  keepalive.mark(workspaceId);
+}
+
+/** Prove liveness on any board whose heartbeat is due. Never throws: a
+ *  keepalive that could fail a tool call would be worse than the staleness it
+ *  prevents. */
+async function sendDueHeartbeats(): Promise<void> {
+  for (const workspaceId of keepalive.due()) {
+    try {
+      await http(
+        'POST',
+        `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments/${encodeURIComponent(AUTHOR.id)}/heartbeat`,
+        { toolCallAt: Date.now() },
+      );
+    } catch {
+      // The board will read this session as away, and `coverage` reports
+      // exactly that — which is the honest outcome of a server we cannot
+      // reach, and better than pretending here.
+    }
+  }
+}
+/**
+ * The server's last answer to "what am I MISSING?", or undefined for "not
+ * known" — an older server, the shared-identity refusal, an unreachable box.
+ * Deliberately not defaulted to an empty block: unknown rendered as empty
+ * reads as "nothing is missing", which is exactly the confident wrong answer
+ * this whole readout exists to replace.
+ */
+let lastCoverage: WatchCoverage | undefined;
+
+/** Ask the server for a fresh coverage read. Never throws and never
+ *  fabricates: an unreachable server leaves the previous answer alone rather
+ *  than manufacturing an all-clear out of a failed request. */
+async function refreshCoverage(): Promise<WatchCoverage | undefined> {
+  if (IDENTITY_IS_SHARED) return undefined;
+  try {
+    lastCoverage = parseCoverage(await http('GET', watchesPath())) ?? lastCoverage;
+  } catch {
+    // Leave `lastCoverage` as it was; `list_watched_docs` omits the field
+    // entirely when it is undefined.
+  }
+  return lastCoverage;
+}
 
 function watchPersistenceMode(): 'server' | 'session-only' {
   return IDENTITY_IS_SHARED ? 'session-only' : 'server';
@@ -3253,6 +3383,7 @@ async function ensureWatchesRestored(): Promise<void> {
         watches?: Array<{ key: string }>;
         pruned?: string[];
       };
+      lastCoverage = parseCoverage(res);
       const keys = (res.watches ?? []).map((w) => w.key);
       const restored: string[] = [];
       for (const key of keys) {
@@ -3261,17 +3392,51 @@ async function ensureWatchesRestored(): Promise<void> {
         else await watchDoc(key, false);
         restored.push(key);
       }
+      // Re-ATTACH, not just re-subscribe. Restoring the keys puts the events
+      // back on the wire; it does nothing about the attachment record, which
+      // hydrates with the heartbeat from before the restart and is therefore
+      // `away` the moment the session comes back. Every lead-addressed
+      // delivery — voice notes, goal re-triage, bucket and task reviews —
+      // asks for a LIVE attachment, so without this a respawned lead is
+      // subscribed and still invisible, which is the original incident with
+      // extra steps. Only boards it already led or was already attached to;
+      // see boardsToReattach.
+      const reattached: string[] = [];
+      for (const workspaceId of boardsToReattach(lastCoverage)) {
+        try {
+          await http('POST', `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`, {
+            agentId: AUTHOR.id,
+            runtime: 'claude-code-local',
+            pluginVersion: PLUGIN_VERSION,
+          });
+          markAttached(workspaceId);
+          reattached.push(workspaceId);
+        } catch {
+          // Best effort, exactly like the watch restore: the notice below
+          // reads the coverage AFTER this, so a failure shows up as a board
+          // still waiting rather than as a silent claim of success.
+        }
+      }
+      // Re-read, so the notice describes the state the session is actually
+      // in rather than the one it woke up in — otherwise a successful
+      // re-attach still prints an alarm about itself.
+      if (reattached.length > 0) await refreshCoverage();
       restoreState = {
         status: 'restored',
         from: 'server',
         restored,
+        reattached,
         pruned: res.pruned ?? [],
         at: new Date().toISOString(),
         attempts,
       };
-      if (restored.length > 0 || (res.pruned ?? []).length > 0) {
-        await emitRestoreNotice(restoreState).catch(() => {});
-      }
+      // Unconditional now — `emitRestoreNotice` decides whether there is
+      // anything to say. It speaks on an EMPTY restore when a board is
+      // waiting on this session, which is the incident's own shape: the
+      // watches were wired by hand this run, so there was nothing to restore
+      // and nothing was said, while four items sat queued for a seat nobody
+      // held.
+      await emitRestoreNotice(restoreState).catch(() => {});
     } catch (err) {
       restoreState = {
         ...restoreState,
@@ -3287,18 +3452,36 @@ async function ensureWatchesRestored(): Promise<void> {
   return restoreInFlight;
 }
 
-/** One line into the session saying the feedback loop came back intact —
- *  the thing a respawned peer otherwise has no way to know. */
+/**
+ * One line into the session saying the feedback loop came back intact — and
+ * naming any board that is waiting on this session but has no attachment from
+ * it. Silent when there is nothing of either kind to report.
+ *
+ * The second half is the one that matters: an agent that does not know the
+ * gap exists never runs the probe that would show it, so the report has to
+ * arrive unprompted or it may as well not exist.
+ */
 async function emitRestoreNotice(state: RestoreState): Promise<void> {
-  const n = state.restored.length;
-  const dropped = state.pruned.length > 0 ? `; ${state.pruned.length} dropped (doc gone)` : '';
+  const content = restoreNoticeContent({
+    restored: state.restored,
+    reattached: state.reattached ?? [],
+    pruned: state.pruned,
+    agentName: AUTHOR.name,
+    coverage: lastCoverage,
+  });
+  if (content === null) return;
   await server.notification({
     method: 'notifications/claude/channel',
     params: {
       source: 'claude-workspaces',
       sent_at: state.at ?? new Date().toISOString(),
-      content: `[watches restored] ${n} watch${n === 1 ? '' : 'es'} re-wired from the server for ${AUTHOR.name} after restart${dropped}: ${state.restored.join(', ')}`,
-      meta: { event: 'watches.restored', restored: state.restored, pruned: state.pruned },
+      content,
+      meta: {
+        event: 'watches.restored',
+        restored: state.restored,
+        pruned: state.pruned,
+        ...(lastCoverage ? { unattachedBoards: lastCoverage.unattachedBoards } : {}),
+      },
     },
   });
 }
@@ -3308,7 +3491,7 @@ async function emitRestoreNotice(state: RestoreState): Promise<void> {
 async function watchDoc(docId: string, persist = true): Promise<boolean> {
   if (!watchers.has(docId)) {
     const controller = new AbortController();
-    watchers.set(docId, { controller, docId });
+    watchers.set(docId, { controller, docId, open: false });
     await startSseLoop(docId, `/events/${encodeURIComponent(docId)}`, controller);
   }
   // Persist even when already locally watched: an earlier persist may have
@@ -3316,16 +3499,48 @@ async function watchDoc(docId: string, persist = true): Promise<boolean> {
   return persist ? persistWatchChange({ add: [docId] }) : false;
 }
 
-/** Watch a whole workspace/diff review on ONE stream — every thread event on
- *  any member doc arrives here (server double-broadcasts per workspace). */
-async function watchWorkspace(workspaceId: string, persist = true): Promise<boolean> {
+/**
+ * Watch a whole workspace on ONE stream. Two things wear that word, and this
+ * key covers both — but it did not always, and the comment here used to say
+ * "every thread event on any member doc arrives" without saying which sense
+ * it meant.
+ *
+ *  - A GROUPING (a diff review / folder bind): its member docs carry the
+ *    grouping tag and `rooms.ts` has always double-broadcast on it. True from
+ *    the start.
+ *  - A hub BOARD: it holds docs through `workspace.docIds`, which is NOT that
+ *    tag. Until the board fan-out landed in server.ts's `onDocRoomEvent`, a
+ *    doc filed on a board reached this stream never — and nothing said so,
+ *    which is the whole failure class here. Now it does, resolved at
+ *    broadcast time, so docs created LATER are covered with no second call.
+ *
+ * What this key still does NOT do is attach you. Watching is listening;
+ * attaching is being addressable. Every delivery gate asks the second
+ * question, so a session with this key and no attachment hears comments while
+ * voice notes and re-triage requests queue for a lead it is not. `coverage`
+ * on `list_watched_docs` is what reports that gap.
+ */
+async function watchWorkspace(
+  workspaceId: string,
+  persist = true,
+): Promise<{ open: boolean; persisted: boolean }> {
   const key = `ws:${workspaceId}`;
+  let open = watchers.get(key)?.open === true;
   if (!watchers.has(key)) {
     const controller = new AbortController();
-    watchers.set(key, { controller, docId: key });
-    await startSseLoop(key, `/events/workspace/${encodeURIComponent(workspaceId)}`, controller);
+    watchers.set(key, { controller, docId: key, open: false });
+    open = await startSseLoop(
+      key,
+      `/events/workspace/${encodeURIComponent(workspaceId)}`,
+      controller,
+    );
   }
-  return persist ? persistWatchChange({ add: [key] }) : false;
+  // Two failures, reported apart. A stream that did not open loses events NOW;
+  // a watch that did not persist loses them at the next respawn. Collapsing
+  // them into one boolean is how a caller ends up reassured about the half
+  // that worked.
+  const persisted = persist ? await persistWatchChange({ add: [key] }) : false;
+  return { open, persisted };
 }
 
 async function unwatchDoc(docId: string): Promise<boolean> {
@@ -3343,31 +3558,41 @@ async function runSseLoop(
   label: string,
   path: string,
   signal: AbortSignal,
-  onFirstAttempt?: () => void,
+  onFirstAttempt?: (open: boolean) => void,
 ): Promise<void> {
   // Tight reconnect loop — the server sends keepalive comments every
   // ~15s, so an abrupt close is almost always a transient network blip.
   //
   // `onFirstAttempt` fires once, after the first connect attempt has an
-  // outcome — headers back (the stream is live from here) or a throw. It is
+  // outcome, and is HANDED that outcome: `true` only when headers came back
+  // 200 with a body, so the stream is live from here. It is
   // what lets `watch_doc` return only once the stream is actually open, so a
   // reply posted the moment the tool answers is not lost in the gap between
   // "watcher registered" and "connection established". Not "on first
   // success": the auto-watch fires BEFORE the tool that creates the doc, so a
   // 404 on the first attempt is normal there and must not hold the tool call.
   let first = onFirstAttempt;
-  const settleFirst = () => {
+  const settleFirst = (open: boolean) => {
     if (!first) return;
     const f = first;
     first = undefined;
-    f();
+    f(open);
+  };
+  // The watcher record is the durable answer to "is this stream up right
+  // now", read by anything that must not claim a subscription it does not
+  // have. `settleFirst` only ever fires once; this keeps tracking.
+  const setOpen = (open: boolean) => {
+    const w = watchers.get(label);
+    if (w) w.open = open;
   };
   while (!signal.aborted) {
     try {
       const res = await fetch(`${resolveBaseUrl()}${path}`, {
         signal,
       });
-      settleFirst();
+      const live = res.ok && res.body !== null;
+      setOpen(live);
+      settleFirst(live);
       if (!res.ok || !res.body) throw new Error(`sse ${path} → ${res.status}`);
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -3386,33 +3611,63 @@ async function runSseLoop(
         }
       }
     } catch (err) {
-      settleFirst();
+      setOpen(false);
+      settleFirst(false);
       if (signal.aborted) return;
       console.error(`[claude-workspaces-mcp] ${label} sse error, retrying:`, err);
     }
+    // A clean end-of-stream lands here too, and it is just as much "not
+    // connected" as a throw is.
+    setOpen(false);
     // Backoff before reconnect
     await new Promise((r) => setTimeout(r, 1500));
+    // A reconnect is what a server restart looks like from in here, and a
+    // restart rebuilt every room with `seq` back at 0 — so every key the
+    // dedup is holding can now collide with a genuinely NEW event and
+    // silently swallow it. Drop the window: the cost is at most a duplicate
+    // of something in flight, and the cost of keeping it is a comment nobody
+    // ever hears about. (A current server also stamps a unique `eid`, which
+    // makes this belt-and-braces; the fallback key is what an un-restarted
+    // box still sends.)
+    shouldForwardFrame.reset();
   }
-  settleFirst();
+  setOpen(false);
+  settleFirst(false);
 }
 
-/** Start an SSE loop and resolve once its first connect attempt has an
- *  outcome (open or failed) — capped so a wedged connect never stalls a tool
- *  call. The loop itself keeps running for the life of the watcher. */
-function startSseLoop(label: string, path: string, controller: AbortController): Promise<void> {
-  return new Promise<void>((resolve) => {
-    const cap = setTimeout(resolve, 3_000);
-    void runSseLoop(label, path, controller.signal, () => {
+/**
+ * Start an SSE loop and resolve once its first connect attempt has an outcome
+ * — capped so a wedged connect never stalls a tool call. The loop itself keeps
+ * running for the life of the watcher.
+ *
+ * Resolves to whether the stream is actually OPEN. `false` covers all three
+ * ways it can fail to be: a throw, a non-200, and the 3s cap expiring with the
+ * connect still in flight. A caller that reports a subscription to an agent
+ * must branch on this rather than on the call having returned — "it returned"
+ * was the old signal, and it is true in every one of those cases.
+ */
+function startSseLoop(label: string, path: string, controller: AbortController): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const cap = setTimeout(() => resolve(false), 3_000);
+    void runSseLoop(label, path, controller.signal, (open) => {
       clearTimeout(cap);
-      resolve();
+      resolve(open);
     }).catch((err) => {
       console.error(`[claude-workspaces-mcp] watcher ${label} crashed:`, err);
       watchers.delete(label);
       clearTimeout(cap);
-      resolve();
+      resolve(false);
     });
   });
 }
+
+/** Shared across every SSE loop in this process — the whole point is to catch
+ *  a frame arriving on the board stream that the grouping stream already
+ *  delivered, so a per-loop instance would see nothing. See frame-dedup.ts
+ *  for what identifies an event (the server's `eid` first, `event#docId#seq`
+ *  for an older one), why the fallback needs a window, and why anything it
+ *  cannot identify is forwarded rather than dropped. */
+const shouldForwardFrame = createFrameDedup();
 
 async function handleFrame(raw: string): Promise<void> {
   // Only forward data frames — ignore keepalive ':ok' comments.
@@ -3431,6 +3686,7 @@ async function handleFrame(raw: string): Promise<void> {
   } catch {
     return;
   }
+  if (!shouldForwardFrame.shouldForward(ev, payload)) return;
   await emitChannelMessage(ev, payload);
 }
 
@@ -3574,16 +3830,13 @@ async function emitHubChannelMessage(event: string, rawPayload: unknown): Promis
     case 'agent.detached':
       body = `[${event}] ${p.agentId ?? '?'}`;
       break;
+    // Three routes, three different things to say — and one of them is "say
+    // nothing". An action the fast path already applied must NOT read as work
+    // to do; see voice-line.ts.
     case 'voice.request': {
-      // The speaker's words arrive VERBATIM (§3.8: changes carry the
-      // transcript verbatim); the context object says where they were.
-      if (p.route === 'fast-path') return; // a lookup the server already answered
-      const ctx = p.context
-        ? ` (at ${p.context.surface ?? '?'}${p.context.docId ? ` ${p.context.docId}` : ''}${
-            p.context.taskId ? ` ${p.context.taskId}` : ''
-          }${p.context.visibleHeading ? `, near "${p.context.visibleHeading}"` : ''})`
-        : '';
-      body = `[voice.request]${by}${ctx}: "${p.transcript ?? ''}" — act on it through the task/edit tools; the speaker was told: "${truncate(p.ack ?? '', 120)}"`;
+      const line = voiceRequestLine(p);
+      if (line === null) return;
+      body = line;
       break;
     }
     default:
