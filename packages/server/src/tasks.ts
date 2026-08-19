@@ -1383,6 +1383,11 @@ export interface AgentHeartbeatEvent {
   ts: number;
 }
 
+/** Where an utterance ended up. Named rather than inlined because it is
+ *  written in three places (the event, the record call, the router's own
+ *  result) and a fourth value added to only two of them is a type hole. */
+export type VoiceRoute = 'fast-path' | 'fast-path-action' | 'agent' | 'agent-queued';
+
 /** §3.6: every voice utterance emits `voice.request` — transcript, chosen
  *  route, ack text — which is what makes "voice always answers" a checkable
  *  artifact rather than a promise (§2.4). */
@@ -1392,8 +1397,14 @@ export interface VoiceRequestEvent {
   /** The utterance VERBATIM. */
   transcript: string;
   /** Which route handled it. 'agent-queued' = no live attachment; the
-   *  request waits in the voice queue for the next attach. */
-  route: 'fast-path' | 'agent' | 'agent-queued';
+   *  request waits in the voice queue for the next attach.
+   *
+   *  'fast-path-action' is deliberately NOT 'fast-path': the latter means "a
+   *  lookup the server already answered", which readers downstream drop on
+   *  exactly that reading. An action CHANGED something on this board without
+   *  the agent doing it, so it is the one voice row an agent most needs to
+   *  see — folding it into the lookup value would make a board move silently. */
+  route: VoiceRoute;
   /** The explicit reply the speaker saw — names what was heard and which
    *  route handles it. */
   ack: string;
@@ -1430,6 +1441,17 @@ export interface QueuedVoiceRequest {
   transcript: string;
   context?: unknown;
   actor: TaskActor;
+  /**
+   * What the voice fast path ALREADY applied to the board for this utterance,
+   * as the speaker was told it — present only when it applied something.
+   *
+   * An utterance can carry more than the one verb voice handles ("mark this
+   * done and then draft the migration notes"), and with no agent live the
+   * queue is the only durable channel for the rest of it. Delivering the
+   * transcript alone would ask the agent to redo the half that already
+   * happened; this field is how the same row says "that part is done".
+   */
+  applied?: string;
   ts: number;
 }
 
@@ -5024,7 +5046,7 @@ export class TaskStore {
     workspaceId: string,
     req: {
       transcript: string;
-      route: 'fast-path' | 'agent' | 'agent-queued';
+      route: VoiceRoute;
       ack: string;
       context?: unknown;
       actor: { id: string; name: string; kind?: string };
@@ -5061,6 +5083,7 @@ export class TaskStore {
       transcript: string;
       context?: unknown;
       actor: { id: string; name: string; kind?: string };
+      applied?: string;
     },
   ): boolean {
     if (!this.workspaces.has(workspaceId)) return false;
@@ -5068,6 +5091,7 @@ export class TaskStore {
       transcript: item.transcript,
       ...(item.context !== undefined ? { context: item.context } : {}),
       actor: { id: item.actor.id, name: item.actor.name, kind: classifyActor(item.actor) },
+      ...(item.applied !== undefined ? { applied: item.applied } : {}),
       ts: Date.now(),
     };
     const path = voiceQueuePath(this.dataDir, workspaceId);
