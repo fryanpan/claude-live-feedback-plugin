@@ -76,13 +76,18 @@ describe('TaskStore.addGoal', () => {
     const launch = ids.launch as string;
     const perf = ids.perf as string;
     const launchQa = ids.launchQa as string;
-    const res = store.createTask(ws.id, { title: 'draft the announcement', goal: launch, actor: AGENT });
+    const res = store.createTask(ws.id, {
+      title: 'draft the announcement',
+      goal: launch,
+      actor: AGENT,
+    });
     if (!res.ok) throw new Error(`fixture create failed: ${res.error}`);
     events.length = 0;
     return { wsId: ws.id, launch, perf, launchQa, task: res.task.id };
   }
 
-  const goalIds = (wsId: string): string[] => (store.getWorkspace(wsId)?.goals ?? []).map((g) => g.id);
+  const goalIds = (wsId: string): string[] =>
+    (store.getWorkspace(wsId)?.goals ?? []).map((g) => g.id);
 
   it('appends a band with a fresh id, leaving every other band and its tasks alone', () => {
     const { wsId, launch, perf, launchQa, task } = seed();
@@ -115,7 +120,11 @@ describe('TaskStore.addGoal', () => {
     // Appended, so far.
     expect(goalIds(wsId)).toEqual([launch, perf, first]);
 
-    const res2 = store.addGoal(wsId, { title: '1b. Draft the FAQ', after: launch }, { actor: PERSON });
+    const res2 = store.addGoal(
+      wsId,
+      { title: '1b. Draft the FAQ', after: launch },
+      { actor: PERSON },
+    );
     expect(res2.ok).toBe(true);
     if (!res2.ok) return;
     expect(goalIds(wsId)).toEqual([launch, res2.goal.id, perf, first]);
@@ -124,14 +133,22 @@ describe('TaskStore.addGoal', () => {
   it('refuses an `after` that names nothing on the list rather than silently appending', () => {
     const { wsId, launch, perf, launchQa } = seed();
     const before = goalIds(wsId);
-    const res = store.addGoal(wsId, { title: '3. Cut support load', after: 'g-nope' }, { actor: PERSON });
+    const res = store.addGoal(
+      wsId,
+      { title: '3. Cut support load', after: 'g-nope' },
+      { actor: PERSON },
+    );
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error).toBe('after-not-found');
     // A SUBGOAL id is the realistic near-miss, and it is refused for the same
     // reason: display flattens subgoals, but the list this splices is the
     // top-level one, so there is no position for it to mean.
-    const sub = store.addGoal(wsId, { title: '3. Cut support load', after: launchQa }, { actor: PERSON });
+    const sub = store.addGoal(
+      wsId,
+      { title: '3. Cut support load', after: launchQa },
+      { actor: PERSON },
+    );
     expect(sub.ok).toBe(false);
     // Neither refusal wrote anything.
     expect(goalIds(wsId)).toEqual(before);
@@ -187,7 +204,10 @@ describe('TaskStore.addGoal', () => {
 
   it('does not remove an EMPTY band a concurrent writer added — the case no guard catches', () => {
     const { wsId, launch, perf } = seed();
-    const stale = (store.getWorkspace(wsId)?.goals ?? []).map((g) => ({ id: g.id, title: g.title }));
+    const stale = (store.getWorkspace(wsId)?.goals ?? []).map((g) => ({
+      id: g.id,
+      title: g.title,
+    }));
 
     const other = store.addGoal(wsId, { title: '3. Support load' }, { actor: AGENT });
     expect(other.ok).toBe(true);
@@ -201,7 +221,9 @@ describe('TaskStore.addGoal', () => {
     // The control, and this is the arm with no guard behind it: an empty band
     // holds no tasks to strand, so the full replace the client would otherwise
     // have sent succeeds and the band is simply gone.
-    const replaced = store.setGoalList(wsId, [...stale, { title: '5. Another' }], { actor: PERSON });
+    const replaced = store.setGoalList(wsId, [...stale, { title: '5. Another' }], {
+      actor: PERSON,
+    });
     expect(replaced.ok).toBe(true);
     if (!replaced.ok) return;
     expect(goalIds(wsId)).not.toContain(other.goal.id);
@@ -265,9 +287,11 @@ describe('POST /api/workspaces/:id/goals/add', () => {
     return { wsId: workspace.id, launch: ids.launch as string, perf: ids.perf as string };
   }
 
-  const readGoals = async (wsId: string): Promise<Array<{ id: string; title: string }>> =>
+  const readGoals = async (
+    wsId: string,
+  ): Promise<Array<{ id: string; title: string; dueAt?: number }>> =>
     (
-      await jj<{ workspace: { goals: Array<{ id: string; title: string }> } }>(
+      await jj<{ workspace: { goals: Array<{ id: string; title: string; dueAt?: number }> } }>(
         await fetch(`${base}/api/workspaces/${wsId}`),
       )
     ).workspace.goals;
