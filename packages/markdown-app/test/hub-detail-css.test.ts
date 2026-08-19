@@ -199,6 +199,49 @@ describe('nothing fixed to the viewport can sit on the last control', () => {
   });
 });
 
+describe('the mic cannot cover a submit button at any scroll position', () => {
+  it('takes the phone submits out of the mic’s column, not just off its resting spot', () => {
+    // The tail reservation (asserted above) answers where the panel COMES TO
+    // REST. It says nothing about the positions a control passes through on
+    // the way there: measured at 430px with the reservation already in place,
+    // `#hub-mic` intersected "Record answer" over scrollTop 195–255 and
+    // "Comment" over 1545–1605, and `elementFromPoint` at the intersection
+    // centre returned the mic.
+    const mic = rule('.voice-mic');
+    // The premise, asserted rather than assumed: the mic is fixed, and it is
+    // in the LEFT column. A mic that had moved would leave the rest of this
+    // test describing a layout that no longer exists.
+    expect(mic).toMatch(/position:\s*fixed/);
+    const left = Number(/left:\s*(\d+)px/.exec(mic)?.[1]);
+    const width = Number(/width:\s*(\d+)px/.exec(mic)?.[1]);
+    expect(left + width).toBeLessThan(430 / 2);
+
+    // Both submits are pushed to the opposite edge, so no scroll position can
+    // put them under it. One grouped rule, so this reads the block whole.
+    const phone = media('(max-width: 900px)');
+    // Either quote style: biome normalises the attribute selector to double
+    // quotes on format, so a pattern that insisted on one would go red the
+    // first time someone ran the formatter.
+    const submit = String.raw`button\[type=['"]submit['"]\]`;
+    const grouped = new RegExp(
+      `((?:[^{}]*${submit}[^{}]*,\\s*)*[^{}]*${submit}\\s*)\\{([^}]*)\\}`,
+    ).exec(phone);
+    expect(grouped, 'no phone rule targets the submit buttons at all').not.toBeNull();
+    const [, selectors = '', body = ''] = grouped ?? [];
+    expect(selectors).toContain('.hub-decide-form');
+    expect(selectors).toContain('.hub-comment-form');
+    expect(body).toMatch(/align-self:\s*flex-end/);
+  });
+
+  it('keeps every control in the queue at the 36px floor', () => {
+    // design-mobile.md: "Minimum 36×36px for any interactive element." The
+    // queue's two chevrons were 32.
+    const step = rule('.hub-decide-step');
+    expect(Number(/min-width:\s*(\d+)px/.exec(step)?.[1])).toBeGreaterThanOrEqual(36);
+    expect(Number(/min-height:\s*(\d+)px/.exec(step)?.[1])).toBeGreaterThanOrEqual(36);
+  });
+});
+
 describe('the record block still says it opens', () => {
   it('keeps the summary a list-item, so Chrome draws its disclosure triangle', () => {
     // `display: flex` on a `<summary>` removes the `::marker` Chrome draws the

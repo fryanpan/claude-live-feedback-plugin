@@ -83,8 +83,11 @@ describe('the decision card has the spacing it was reported for missing', () => 
     const head = rule('.hub-decide-head');
     expect(head).toMatch(/display:\s*flex/);
     expect(head).toMatch(/justify-content:\s*space-between/);
-    // A step control is a tap target, and the count must not wrap mid-"2 of 3".
-    expect(rule('.hub-decide-step')).toMatch(/min-height:\s*32px/);
+    // A step control is a tap target — at design-mobile.md's 36px floor, not
+    // the 32 it shipped with — and the count must not wrap mid-"2 of 3".
+    expect(
+      Number(/min-height:\s*(\d+)px/.exec(rule('.hub-decide-step'))?.[1]),
+    ).toBeGreaterThanOrEqual(36);
     expect(rule('.hub-decide-count')).toMatch(/white-space:\s*nowrap/);
     // Only one card is on screen; the rest are hidden rather than unbuilt.
     expect(rule('.hub-decide-card.hidden')).toMatch(/display:\s*none/);

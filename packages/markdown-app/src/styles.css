@@ -2959,9 +2959,13 @@ a.hub-link-chip:hover {
   color: var(--fg-muted);
   white-space: nowrap;
 }
+/* 36, not 32: design-mobile.md sets 36×36 as the floor for anything
+   interactive, and these two are the control that walks a phone reader
+   through the queue. Measured at 430px on the staging build — they were the
+   only controls in the panel under the floor. */
 .hub-decide-step {
-  min-width: 32px;
-  min-height: 32px;
+  min-width: 36px;
+  min-height: 36px;
   padding: 0;
   display: inline-flex;
   align-items: center;
@@ -3696,6 +3700,25 @@ a.hub-link-chip:hover {
        Comment button (812–848) sat under the mic (814–858). 60px is the mic's
        own 16+44; 24px is the clearance. */
     padding-bottom: calc(24px + 60px + var(--hub-bottom-bar, 0px) + var(--safe-bottom, 0px));
+  }
+  /* …and the tail reservation is only half the answer, because the mic is
+     FIXED and the panel SCROLLS under it. The reservation guarantees a
+     resting position with nothing beneath the mic; it says nothing about the
+     positions a control passes through on the way there. Measured at 430px
+     2026-08-18, with the reservation already in place: `#hub-mic` intersected
+     "Record answer" over scrollTop 195–255 (20% of the button covered at the
+     worst point) and "Comment" over scrollTop 1545–1605 (45%), and
+     `elementFromPoint` at the intersection centre returned the mic — so the
+     tap went to the microphone rather than to the button under it.
+
+     The mic occupies one COLUMN, x 16–60. A submit aligned to the right edge
+     of a 430px panel starts around x 300, so it cannot intersect the mic at
+     ANY scroll position — the guarantee stops depending on where the reader
+     happens to have stopped. Right-aligned submits are also what every other
+     composer on a phone does, so this is not a concession. */
+  body.hub-body .hub-decide-form button[type="submit"],
+  body.hub-body .hub-comment-form button[type="submit"] {
+    align-self: flex-end;
   }
   /* The walkthrough is a phone-first surface — six answers in one sitting is
      a couch gesture. It is a PAGE in the Home column now rather than an
