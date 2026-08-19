@@ -13892,7 +13892,7 @@ var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.64";
+var PLUGIN_VERSION = "0.1.67";
 var COMMIT_EVIDENCE_DESCRIPTION = 'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
 var server = new Server({
   name: "claude-workspaces",
@@ -14074,7 +14074,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "post_reply",
-      description: "Post a reply to an existing thread (as the configured author). Pass `review` when this reply is asking a person to decide or look at something — that is what puts it on their Home queue as a Review Item. Without it the reply is an ordinary comment and does NOT enter the queue, which is correct for status notes and closing remarks.",
+      description: "Post a reply to an existing thread (as the configured author). Pass `review` when this reply is asking a person to decide or look at something — that is what puts it on their Home queue as a Review Item. Without it the reply is an ordinary comment and does NOT enter the queue, which is correct for status notes and closing remarks. On a task doc the response carries `url`, the absolute link that opens this task on its board — hand THAT to a peer instead of retyping the report into a chat message.",
       inputSchema: {
         type: "object",
         properties: {
@@ -14088,7 +14088,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "create_thread",
-      description: 'Open a new comment thread on a doc, seeded with an initial comment from the configured author. Use when the agent has editorial notes / suggestions that should land as durable threads (instead of one-shot chat messages) — e.g. running `/edit` on a blog draft and leaving anchored feedback at six different places. Pass `find` to anchor the thread to that text; disambiguation works the same as `find_and_replace` (`contextBefore`/`contextAfter` or `occurrence` if the text appears more than once). OMIT `find` to open a thread about the doc AS A WHOLE — this is how you discuss a hub task, whose body doc is `task:<taskId>` and is often still empty: `create_thread(docId="task:t-abc", text="...")`. A subject thread never orphans. Pass `review` when you are asking a person to decide or look at something — that is what puts the thread on their Home queue as a Review Item; leave it off for notes you are recording rather than asking about. Returns `{ thread }` with `thread.id` for follow-up `post_reply` calls, and fires the same `thread.created` event the editor uses, so watchers see it immediately.',
+      description: 'Open a new comment thread on a doc, seeded with an initial comment from the configured author. Use when the agent has editorial notes / suggestions that should land as durable threads (instead of one-shot chat messages) — e.g. running `/edit` on a blog draft and leaving anchored feedback at six different places. Pass `find` to anchor the thread to that text; disambiguation works the same as `find_and_replace` (`contextBefore`/`contextAfter` or `occurrence` if the text appears more than once). OMIT `find` to open a thread about the doc AS A WHOLE — this is how you discuss a hub task, whose body doc is `task:<taskId>` and is often still empty: `create_thread(docId="task:t-abc", text="...")`. A subject thread never orphans. Pass `review` when you are asking a person to decide or look at something — that is what puts the thread on their Home queue as a Review Item; leave it off for notes you are recording rather than asking about. Returns `{ thread }` with `thread.id` for follow-up `post_reply` calls, and fires the same `thread.created` event the editor uses, so watchers see it immediately. On a task doc it also returns `url` — the absolute link that opens this task on its board. That is what you hand a peer who asked you for a report: post the report here, send them the link, and skip the chat paste.',
       inputSchema: {
         type: "object",
         properties: {
