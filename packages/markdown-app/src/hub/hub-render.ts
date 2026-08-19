@@ -2489,23 +2489,19 @@ export interface TaskComment {
   review?: ReviewPayload;
 }
 
+/**
+ * A thread as the DISCUSSION model carries it: its identity and its words,
+ * nothing else. Status and anchor text live in storage exactly as
+ * `create_thread` wrote them (34 of 37 on the live board carry a text anchor,
+ * and `resolve_thread` still means "this point is handled") — but the panel
+ * renders every comment as a peer of every other, so carrying open/resolved
+ * or the anchored passage here was presentation residue feeding no render.
+ * The id is load-bearing: it is how a reply reaches the agent watching that
+ * conversation.
+ */
 export interface TaskThread {
   id: string;
-  status: 'open' | 'resolved';
   comments: TaskComment[];
-  /**
-   * The passage of the task's description this thread hangs off, when it has
-   * one. Absent for a subject-anchored thread, which is about the task as a
-   * whole.
-   *
-   * This is what makes a task's threads distinguishable, and the surface used
-   * to throw it away: on the live board 34 of 37 task threads carry one (they
-   * are agents' `create_thread(docId: 'task:…', find: …)` calls) and only 3 do
-   * not. Rendering author-and-text alone turned every one of them into an
-   * indistinguishable pile, which is the reason a reply needed a box of its
-   * own to be routable at all.
-   */
-  anchorText?: string;
 }
 
 /**
@@ -2669,18 +2665,14 @@ export function discussionIsBusy(root: ParentNode): boolean {
   return composers.some((ta) => ta.value.trim() !== '' || ta === ta.ownerDocument.activeElement);
 }
 
-/** One comment, in the single chronological sequence the panel shows, with the
- *  few thread facts its row still has to carry. */
+/** One comment, in the single chronological sequence the panel shows. The
+ *  `threadId` is the one thread fact a row still carries, as DATA rather than
+ *  presentation: it is how a reply lands in the conversation the agent is
+ *  watching. (opensThread/closesThread/status/anchorText are gone — they fed
+ *  the Reply button, badge and anchor quote this surface no longer has.) */
 export interface StreamComment {
   threadId: string;
   comment: TaskComment;
-  /** First comment of its thread — the row that says what the thread is about. */
-  opensThread: boolean;
-  /** Newest comment of its thread — the row that carries the thread's badge
-   *  and its Reply button, so one conversation offers one of each. */
-  closesThread: boolean;
-  status: 'open' | 'resolved';
-  anchorText?: string;
 }
 
 /**
@@ -2703,14 +2695,7 @@ export function flattenComments(threads: TaskThread[]): StreamComment[] {
   const rows = threads.flatMap((t, ti) =>
     t.comments.map((c, ci) => ({
       order: ti * 1000 + ci,
-      row: {
-        threadId: t.id,
-        comment: c,
-        opensThread: ci === 0,
-        closesThread: ci === t.comments.length - 1,
-        status: t.status,
-        ...(t.anchorText !== undefined ? { anchorText: t.anchorText } : {}),
-      } satisfies StreamComment,
+      row: { threadId: t.id, comment: c } satisfies StreamComment,
     })),
   );
   rows.sort((a, b) =>
@@ -3401,7 +3386,7 @@ function reviewQueueRegion(
   task: HubTask,
   handlers: DetailHandlers,
   now: number,
-  priorIndex: number,
+  prior: { index: number; itemId: string | null },
 ): HTMLElement | null {
   // What was decided, and the way back out of it.
   //
@@ -3421,14 +3406,20 @@ function reviewQueueRegion(
     only.append(answered);
     return only;
   }
-  // `priorIndex < 0` means "this is a fresh open, there is no position to
+  // `prior.index < 0` means "this is a fresh open, there is no position to
   // keep" — so a deep link into a thread opens the queue AT that thread's
   // item rather than at whatever happened to be first.
   const linked =
-    priorIndex < 0 && handlers.focusThreadId
+    prior.index < 0 && handlers.focusThreadId
       ? queue.findIndex((i) => i.threadId === handlers.focusThreadId)
       : -1;
-  const wanted = linked >= 0 ? linked : priorIndex;
+  // Position is the ITEM, not its number — this is what `PanelReviewItem.id`
+  // exists for. A repaint that inserts an item ahead (a peer's undo puts the
+  // task's own decision back at rank 0) must not swap which question is
+  // shown under the reader mid-thought; the numeric index is only the
+  // fallback for when the kept item itself left the queue.
+  const kept = prior.itemId !== null ? queue.findIndex((i) => i.id === prior.itemId) : -1;
+  const wanted = linked >= 0 ? linked : kept >= 0 ? kept : prior.index;
   let at = Math.min(Math.max(Number.isInteger(wanted) ? wanted : 0, 0), queue.length - 1);
 
   const region = document.createElement('section');
@@ -3472,6 +3463,9 @@ function reviewQueueRegion(
   const show = (i: number): void => {
     at = Math.min(Math.max(i, 0), queue.length - 1);
     region.dataset.reviewIndex = String(at);
+    // The shown item's identity, for the next repaint to restore by — the
+    // index alone names a different item the moment the queue moves.
+    region.dataset.reviewItemId = queue[at]?.id ?? '';
     cards.forEach((c, ci) => c.classList.toggle('hidden', ci !== at));
     const item = queue[at];
     // Three headings, and the third one is the honest half. Measured on the
@@ -3525,12 +3519,22 @@ function answeredNote(task: HubTask, handlers: DetailHandlers): HTMLElement {
   undo.title = 'Take this answer back — it reopens the decision and keeps a record';
   undo.setAttribute('aria-label', 'Undo this answer and reopen the decision');
   undo.addEventListener('click', () => {
-    // Disabled for the round trip, never re-enabled here: either the panel
-    // repaints without this note, or the app's own failure toast says why.
+    // Disabled for the round trip. On success the panel repaints without this
+    // note, so nothing here needs to happen. On FAILURE the handler resolves
+    // `false` — the app's `send()` never rejects, it reports fetch errors as
+    // `{ok: false}` — and the app returns before its `loadReviewItems()`, so
+    // no repaint rebuilds this button either. Re-enabling on that resolved
+    // `false` (same contract as `reviewItemCard`'s answer path) is the only
+    // thing that gives the reader a retry on a quiet board; the `.catch` alone
+    // could never fire.
     undo.disabled = true;
-    void Promise.resolve(handlers.onUndoAnswer?.(task)).catch(() => {
-      undo.disabled = false;
-    });
+    void Promise.resolve(handlers.onUndoAnswer?.(task))
+      .then((ok) => {
+        if (ok === false) undo.disabled = false;
+      })
+      .catch(() => {
+        undo.disabled = false;
+      });
   });
   wrap.append(undo);
   return wrap;
@@ -3737,10 +3741,13 @@ export function renderTaskDetail(
   const priorTab = prior?.dataset.tab === 'activity' ? 'activity' : 'comments';
   // And which review item the walkthrough was on, for the same reason: a
   // position that reset on a peer's comment would walk the reader back to the
-  // first question while they were answering the third.
-  const priorReviewIndex = Number(
-    prior?.querySelector<HTMLElement>('.hub-decide')?.dataset.reviewIndex ?? '0',
-  );
+  // first question while they were answering the third. The item's ID leads
+  // and the index is only its fallback — a queue that gained or lost an item
+  // ahead of this one renumbers every position, and restoring the number
+  // would swap which question is on screen mid-thought.
+  const priorDecide = prior?.querySelector<HTMLElement>('.hub-decide');
+  const priorReviewIndex = Number(priorDecide?.dataset.reviewIndex ?? '0');
+  const priorReviewItemId = priorDecide?.dataset.reviewItemId || null;
   if (!task) {
     container.replaceChildren();
     container.classList.add('hidden');
@@ -3876,7 +3883,9 @@ export function renderTaskDetail(
     task,
     handlers,
     handlers.now ?? Date.now(),
-    freshOpen ? -1 : priorReviewIndex,
+    freshOpen
+      ? { index: -1, itemId: null }
+      : { index: priorReviewIndex, itemId: priorReviewItemId },
   );
   if (decide) before.push(decide);
 

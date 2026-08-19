@@ -1845,7 +1845,6 @@ describe('renderTaskDetail — discussion', () => {
 
   const thread = (over: Partial<TaskThread> = {}): TaskThread => ({
     id: 'th-1',
-    status: 'open',
     comments: [{ author: 'Jordan', text: 'Is the index really first?', ts: NOW }],
     ...over,
   });
@@ -2269,16 +2268,14 @@ describe('renderTaskDetail — discussion', () => {
    * Nothing an agent posts may stop arriving. An agent's comment lands as a
    * thread on `task:<id>` — anchored or not, open or resolved — and every one
    * of them has to appear in the one stream, in time order, with no per-thread
-   * chrome telling them apart.
+   * chrome telling them apart. The discussion model now guarantees the last
+   * half structurally: `TaskThread` carries only id + comments, so there is
+   * no status or anchor left for a render to distinguish rows by.
    */
-  it('puts every thread’s comments in one stream, anchored or not, open or resolved', () => {
+  it('puts every thread’s comments in one stream, with nothing telling them apart', () => {
     renderTaskDetail(root, task(), detailHandlers(), {
       loading: false,
-      threads: [
-        thread({ id: 'th-open', anchorText: 'a line of the description' }),
-        thread({ id: 'th-subject' }),
-        thread({ id: 'th-done', status: 'resolved' }),
-      ],
+      threads: [thread({ id: 'th-open' }), thread({ id: 'th-subject' }), thread({ id: 'th-done' })],
     });
     const rows = [...root.querySelectorAll<HTMLElement>('.hub-comment')];
     expect(rows.map((r) => r.dataset.threadId)).toEqual(['th-open', 'th-subject', 'th-done']);
@@ -2339,13 +2336,14 @@ describe('renderTaskDetail — discussion', () => {
 
   // A resolved thread is still part of the argument. Hiding it here would
   // repeat the drawer bug where a reply existed in the store and no surface
-  // could reach it. What went away with threading is the STATUS chrome: a
-  // comment reads as a comment whatever the thread around it is marked, which
-  // is what "one sequence" means. `status` is untouched in storage.
+  // could reach it. What went away with threading is the STATUS chrome — and
+  // now the status itself never crosses the fetch boundary (`TaskThread`
+  // carries only id + comments), so a comment reads as a comment whatever
+  // the thread around it is marked. `status` is untouched in storage.
   it('keeps a resolved thread’s words in the stream, with no status chrome', () => {
     renderTaskDetail(root, task(), detailHandlers(), {
       loading: false,
-      threads: [thread({ id: 'th-r', status: 'resolved' })],
+      threads: [thread({ id: 'th-r' })],
     });
     const el = root.querySelector('.hub-comment') as HTMLElement;
     expect(el).toBeTruthy();
@@ -2473,7 +2471,6 @@ describe('a repaint of the detail panel keeps what was typed', () => {
 
   const thread = (id: string): TaskThread => ({
     id,
-    status: 'open',
     comments: [{ author: 'Jordan', text: `Question in ${id}?`, ts: NOW }],
   });
 
@@ -3172,6 +3169,57 @@ describe('the panel’s review queue', () => {
     expect(shown()?.dataset.reviewItemId).toBe('task:t-2');
   });
 
+  /** Position is the ITEM, not its number. A peer's undo re-enters the task's
+   *  own decision at rank 0 of this queue, and a kept numeric index would
+   *  silently swap which question the reader is on — the draft they were
+   *  typing stays keyed to a card that is no longer the visible one. */
+  it('keeps the SAME item shown when a repaint inserts one ahead of it', () => {
+    const asks = [
+      ask({ threadId: 'th-a', since: NOW - 7_200_000 }),
+      ask({ threadId: 'th-b', since: NOW - 3_600_000 }),
+    ];
+    renderTaskDetail(root, task({ id: 't-1' }), handlers({ asks }), {
+      loading: false,
+      threads: [],
+    });
+    expect(cards()).toEqual(['thread:th-a', 'thread:th-b']); // control
+    [...root.querySelectorAll<HTMLButtonElement>('.hub-decide-step')][1]?.click();
+    expect(shown()?.dataset.reviewItemId).toBe('thread:th-b');
+
+    // A peer undoes the task's answer: the task's own decision re-enters the
+    // queue AT THE FRONT, and the board change repaints the panel.
+    renderTaskDetail(root, task({ id: 't-1', needs: 'decision' }), handlers({ asks }), {
+      loading: false,
+      threads: [],
+    });
+    expect(cards()).toEqual(['task:t-1', 'thread:th-a', 'thread:th-b']);
+    expect(shown()?.dataset.reviewItemId).toBe('thread:th-b');
+    expect(root.querySelector('.hub-decide-count')?.textContent).toBe('3 of 3');
+  });
+
+  /** And when the kept item is GONE and the kept index runs past the shrunken
+   *  queue, the fallback clamps to the last item rather than blanking. */
+  it('clamps to the last item when a repaint shrinks the queue under the kept position', () => {
+    const t = task({ id: 't-1', needs: 'decision' });
+    const asks = [
+      ask({ threadId: 'th-a', since: NOW - 7_200_000 }),
+      ask({ threadId: 'th-b', since: NOW - 3_600_000 }),
+    ];
+    renderTaskDetail(root, t, handlers({ asks }), { loading: false, threads: [] });
+    const step = () => [...root.querySelectorAll<HTMLButtonElement>('.hub-decide-step')][1];
+    step()?.click();
+    step()?.click();
+    expect(shown()?.dataset.reviewItemId).toBe('thread:th-b'); // control: at index 2
+
+    // th-b's thread is resolved by its agent; the repaint has only two items.
+    renderTaskDetail(root, t, handlers({ asks: asks.slice(0, 1) }), {
+      loading: false,
+      threads: [],
+    });
+    expect(cards()).toEqual(['task:t-1', 'thread:th-a']);
+    expect(shown()?.dataset.reviewItemId).toBe('thread:th-a');
+  });
+
   /** A deep link names a thread. Opening the queue at whatever happened to be
    *  first would answer a different question than the one that summoned them. */
   it('opens at the item a deep link named, not at the top of the queue', () => {
@@ -3284,6 +3332,26 @@ describe('the panel’s review queue', () => {
     expect(onUndoAnswer).toHaveBeenCalledWith(expect.objectContaining({ id: 't-1' }));
     // Disabled for the round trip, so a double tap cannot withdraw twice.
     expect(undo?.disabled).toBe(true);
+  });
+
+  /** The app's undo handler REPORTS failure by resolving `false` — its own
+   *  `send()` never rejects, so a `.catch`-only re-enable can never fire. On a
+   *  quiet board nothing else repaints the panel, so a button left disabled
+   *  after a failed POST is a retry the reader simply cannot make. */
+  it('re-enables the undo when the withdrawal reports failure, so the reader can retry', async () => {
+    const onUndoAnswer = vi.fn().mockResolvedValue(false);
+    renderTaskDetail(
+      root,
+      task({ id: 't-1', needs: 'decision', answer: { by: 'Jordan', text: 'Thursday.', ts: NOW } }),
+      handlers({ onUndoAnswer, asks: [] }),
+      { loading: false, threads: [] },
+    );
+    const undo = root.querySelector<HTMLButtonElement>('.hub-detail-undo-answer');
+    undo?.click();
+    expect(undo?.disabled).toBe(true); // control: the round trip does disable
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(undo?.disabled).toBe(false);
   });
 
   it('renders no undo when the app offers none, rather than a dead button', () => {
@@ -3507,41 +3575,26 @@ describe('flattenComments', () => {
    */
   it('reads every comment oldest first, across threads', () => {
     const rows = flattenComments([
-      { id: 'th-a', status: 'open', comments: [c('Jordan', 10), c('Jordan', 40)] },
-      { id: 'th-b', status: 'open', comments: [c('Sam', 20), c('Sam', 30)] },
+      { id: 'th-a', comments: [c('Jordan', 10), c('Jordan', 40)] },
+      { id: 'th-b', comments: [c('Sam', 20), c('Sam', 30)] },
     ]);
     expect(rows.map((r) => r.comment.ts)).toEqual([10, 20, 30, 40]);
     expect(rows.map((r) => r.threadId)).toEqual(['th-a', 'th-b', 'th-b', 'th-a']);
   });
 
-  /** Which row carries the anchor, and which carries the badge and the Reply
-   *  button — one of each per conversation, wherever the sort puts them. */
-  it('marks the first and last comment of each thread, not of the stream', () => {
-    const rows = flattenComments([
-      { id: 'th-a', status: 'open', comments: [c('Jordan', 10), c('Jordan', 40)] },
-      { id: 'th-b', status: 'resolved', comments: [c('Sam', 20), c('Sam', 30)] },
-    ]);
-    expect(rows.map((r) => r.opensThread)).toEqual([true, true, false, false]);
-    expect(rows.map((r) => r.closesThread)).toEqual([false, false, true, true]);
-    expect(rows.map((r) => r.status)).toEqual(['open', 'resolved', 'resolved', 'open']);
-  });
-
-  it('carries the anchor text through, and omits it when a thread has none', () => {
-    const rows = flattenComments([
-      { id: 'th-a', status: 'open', anchorText: 'the second paragraph', comments: [c('Jo', 1)] },
-      { id: 'th-b', status: 'open', comments: [c('Sam', 2)] },
-    ]);
-    expect(rows[0]?.anchorText).toBe('the second paragraph');
-    expect(rows[1]?.anchorText).toBeUndefined();
-  });
+  // (The opensThread/closesThread/status/anchorText assertions that sat here
+  // are gone WITH the fields: they marked the rows that carried the thread
+  // badge, the Reply button and the anchor quote, and this branch removed
+  // that chrome. A row's only thread fact now is its routing `threadId`,
+  // asserted above.)
 
   /** Two comments written in the same millisecond are a fixture, not a race —
    *  an unstable sort would repaint the panel into a different order for no
    *  reason a reader could see. */
   it('breaks a timestamp tie by declaration order, every time', () => {
     const threads: TaskThread[] = [
-      { id: 'th-a', status: 'open', comments: [c('Jordan', 5)] },
-      { id: 'th-b', status: 'open', comments: [c('Sam', 5), c('Sam', 5)] },
+      { id: 'th-a', comments: [c('Jordan', 5)] },
+      { id: 'th-b', comments: [c('Sam', 5), c('Sam', 5)] },
     ];
     for (let i = 0; i < 5; i += 1) {
       expect(flattenComments(threads).map((r) => r.comment.author)).toEqual([
@@ -3556,7 +3609,7 @@ describe('flattenComments', () => {
     expect(flattenComments([])).toEqual([]);
     // Control: the same call over one thread is not empty, so the line above
     // is about the input rather than about a function that returns nothing.
-    expect(flattenComments([{ id: 'th', status: 'open', comments: [c('Jo', 1)] }])).toHaveLength(1);
+    expect(flattenComments([{ id: 'th', comments: [c('Jo', 1)] }])).toHaveLength(1);
   });
 });
 

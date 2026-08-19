@@ -14,6 +14,7 @@ import { eventPath, typingInPath } from '../keyboard-target.ts';
 import { installStaleClientNotice } from '../stale-client.ts';
 import { type VoiceAck, createVoiceCapture } from '../voice-capture.ts';
 import {
+  ACTIVITY_REFRESH_EVENTS,
   type ActivityEvent,
   type ActivityFilter,
   type BoardTab,
@@ -875,8 +876,6 @@ async function main(): Promise<void> {
     const payload = await fetchJson<{
       threads?: Array<{
         id: string;
-        status?: string;
-        anchor?: { kind?: string; snippet?: { text?: string } };
         comments?: Array<{
           author?: { name?: string };
           text?: string;
@@ -887,15 +886,12 @@ async function main(): Promise<void> {
     }>(`/api/docs/${encodeURIComponent(task.bodyDocId)}/threads`);
     // The reader may have moved on while this was in flight.
     if (state.discussionTaskId !== task.id) return;
+    // Only the id and the words. The payload also carries each thread's
+    // status and anchor, and the discussion model deliberately does not:
+    // the panel renders every comment as a peer of every other, so the
+    // fields fed nothing — see `TaskThread` in hub-render.
     const threads: TaskThread[] = (payload?.threads ?? []).map((t) => ({
       id: t.id,
-      status: t.status === 'resolved' ? 'resolved' : 'open',
-      // Only a text-range anchor names a passage. A subject anchor is the
-      // whole task, which the panel is already showing — quoting it would put
-      // the description above every one of its own threads.
-      ...(t.anchor?.kind === 'text-range' && t.anchor.snippet?.text
-        ? { anchorText: t.anchor.snippet.text }
-        : {}),
       comments: (t.comments ?? []).map((c) => ({
         author: c.author?.name ?? 'Someone',
         text: c.text ?? '',
@@ -1647,16 +1643,12 @@ async function main(): Promise<void> {
   for (const name of ['agent.attached', 'agent.detached', 'agent.heartbeat']) {
     es.addEventListener(name, () => void loadAgents());
   }
-  for (const name of [
-    'task.created',
-    'task.transitioned',
-    'task.evidence_amended',
-    'task.regrouped',
-    'decision.answered',
-    'decision.info_requested',
-    'workspace.goal_updated',
-    'workspace.goals_changed',
-  ]) {
+  // The list lives beside `describeEvent` in hub-model, because the two must
+  // move together — an event the trail renders but this loop never hears is
+  // an Activity tab that silently misses it, on the writer's own screen as
+  // much as a peer's (the server echoes local writes back over SSE, which is
+  // what puts a row under the due date you just set).
+  for (const name of ACTIVITY_REFRESH_EVENTS) {
     es.addEventListener(name, () => {
       void loadEvents();
       // The same board changes stale the Home brief. Refreshing only while

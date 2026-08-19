@@ -1472,6 +1472,37 @@ function taskTitle(ev: ActivityEvent, titleOf: (taskId: string) => string): stri
   return id ? titleOf(id) : 'a task';
 }
 
+/**
+ * The store events whose arrival stales the REST-fed activity trail — the SSE
+ * wiring in hub-app subscribes to exactly this list and calls `loadEvents` on
+ * each. It lives here, next to `describeEvent`, because the two must move
+ * together: an event the trail can RENDER but the list omits never refreshes
+ * the trail, for the writer's own tab as much as for a peer's (the server
+ * echoes local writes back over SSE, so this list is also how a due date you
+ * just set gets its Activity row). That was the measured failure for
+ * `task.due_set` and `decision.answer_withdrawn` — emitted, logged, rendered
+ * on the next full load, and invisible on the tab the reader was looking at.
+ *
+ * Deliberately NOT every `describeEvent` case: `agent.*` refreshes the
+ * presence strip through its own listeners, `server.started` and the retired
+ * `task.gate_refused` have no live emitter to hear, and `task.body_edited` /
+ * `workspace.retriaged` predate this list and are out of its scope.
+ */
+export const ACTIVITY_REFRESH_EVENTS = [
+  'task.created',
+  'task.transitioned',
+  'task.assigned',
+  'task.retitled',
+  'task.due_set',
+  'task.evidence_amended',
+  'task.regrouped',
+  'decision.answered',
+  'decision.answer_withdrawn',
+  'decision.info_requested',
+  'workspace.goal_updated',
+  'workspace.goals_changed',
+] as const;
+
 /** One human-readable line per audit row. Unknown event kinds fall back to
  *  the raw name — an exhaustive-table miss should be visible, not blank. */
 export function describeEvent(ev: ActivityEvent, titleOf: (taskId: string) => string): string {

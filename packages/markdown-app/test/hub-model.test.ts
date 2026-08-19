@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ACTIVITY_REFRESH_EVENTS,
   type ActivityEvent,
   type BoardFilters,
   CHORES_ID,
@@ -215,6 +216,33 @@ describe('activityRows (exactly two filters)', () => {
     expect(activityRows(events, 'all').some((e) => e.event === 'task.transitioned')).toBe(true);
     const rows = activityRows(events, 'decisions');
     expect(rows.map((e) => e.event)).toEqual(['task.regrouped', 'task.created']);
+  });
+});
+
+describe('ACTIVITY_REFRESH_EVENTS', () => {
+  it('covers every event this feature writes to the trail, not only the founding set', () => {
+    // The SSE wiring in hub-app iterates this list. An event the store emits
+    // and `describeEvent` renders, but the list omits, is a trail that never
+    // refreshes for it: the writer's own tab shows a due date it just set
+    // with no Activity row, and a peer's undo leaves both browsers stale —
+    // measured for `task.due_set` and `decision.answer_withdrawn` when the
+    // list was hand-kept in hub-app and this branch forgot to extend it.
+    for (const ev of [
+      'task.created',
+      'task.transitioned',
+      'task.assigned',
+      'task.retitled',
+      'task.due_set',
+      'task.evidence_amended',
+      'task.regrouped',
+      'decision.answered',
+      'decision.answer_withdrawn',
+      'decision.info_requested',
+      'workspace.goal_updated',
+      'workspace.goals_changed',
+    ]) {
+      expect(ACTIVITY_REFRESH_EVENTS, `${ev} would never refresh the trail`).toContain(ev);
+    }
   });
 });
 
