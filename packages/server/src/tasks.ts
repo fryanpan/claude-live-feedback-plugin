@@ -2501,7 +2501,9 @@ export class TaskStore {
       name: opts.actor.name,
       kind: classifyActor(opts.actor),
     };
-    this.assignLead(state, next, actor);
+    // Its own operation, so its own moment — nothing else in this call is
+    // stamped, and there is no sibling clock for it to disagree with.
+    this.assignLead(state, next, actor, Date.now());
     // A waiting request is addressed to the SEAT, not to the agent that was
     // sitting in it — so a handover has to re-ask the new occupant. Draining
     // happens on attach, and an agent that is ALREADY attached has no next
@@ -2576,11 +2578,28 @@ export class TaskStore {
   }
 
   /** The seat change itself, shared by `setLeadAgent` and the attach-time
-   *  claim so both persist and announce it identically. */
-  private assignLead(state: WorkspaceState, leadAgentId: string, actor: TaskActor): void {
+   *  claim so both persist and announce it identically.
+   *
+   *  `ts` is the CALLER's, and passing it is not a style choice. A seat claim
+   *  emits `workspace.lead_changed`, which is a non-`agent.*` row, so
+   *  `noteObservedWork` observes it and stamps the actor's work clock with
+   *  this exact `ts`. When the caller is `attachAgent`, that work clock and
+   *  the attachment's `lastHeartbeat` are the SAME fact — one operation, one
+   *  moment — and a `Date.now()` taken here instead landed a millisecond
+   *  later, pushing `lastToolCallAt` past `lastHeartbeat` and breaking the
+   *  "a new attachment's two clocks are equal" contract on ~1 run in 37.
+   *
+   *  So the parameter is required rather than defaulted: a future third
+   *  caller has to say which moment this seat change belongs to, and cannot
+   *  re-read the wall clock by omission. */
+  private assignLead(
+    state: WorkspaceState,
+    leadAgentId: string,
+    actor: TaskActor,
+    ts: number,
+  ): void {
     const workspace = state.workspace;
     const oldLeadAgentId = workspace.leadAgentId;
-    const ts = Date.now();
     workspace.leadAgentId = leadAgentId;
     workspace.leadAgentSince = ts;
     this.scheduleSave(workspace.id);
@@ -4988,11 +5007,16 @@ export class TaskStore {
     // occupied seat is a standing decision and a second agent attaching is
     // not a reassignment.
     if (state.workspace.leadAgentId === undefined) {
-      this.assignLead(state, opts.agentId, {
-        id: opts.agentId,
-        name: opts.agentId,
-        kind: 'agent',
-      });
+      // `now`, not a fresh read: the seat claim is part of THIS attach, and
+      // the `workspace.lead_changed` it emits is observed as this agent's
+      // work. Re-reading here would stamp the work clock a millisecond past
+      // the `lastHeartbeat` set four lines up.
+      this.assignLead(
+        state,
+        opts.agentId,
+        { id: opts.agentId, name: opts.agentId, kind: 'agent' },
+        now,
+      );
     }
     const lead = state.workspace.leadAgentId === opts.agentId;
     // Only the lead carries the waiting goal edit off. A bystander attaching
@@ -5169,6 +5193,15 @@ export class TaskStore {
    * claims an empty seat, and a fresh `Date.now()` there lands a millisecond
    * past the attach's own timestamp, breaking the "a new attachment's two
    * clocks are equal" contract about 1 run in 3.
+   *
+   * Passing the event's `ts` is only half of that, and the half this comment
+   * used to describe as the whole. It buys nothing unless the EVENT's `ts` is
+   * the operation's own — `assignLead` went on taking a `Date.now()` of its
+   * own for the row it emits, so the same millisecond still split the same
+   * two clocks, just one call deeper. Measured at 8 failures in 300 runs
+   * before `assignLead` was made to take its caller's `ts`. The rule the two
+   * fixes add up to: one operation, one clock read, threaded all the way
+   * down.
    *
    * Clamped to now and monotonic, the same guards `heartbeat` applies to a
    * claimed `toolCallAt`: a clock may not run ahead of the server's, and
