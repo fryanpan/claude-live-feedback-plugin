@@ -1,6 +1,6 @@
 ---
 name: running-a-workspace-hub
-description: Use when you need to stand up or drive a claude-workspaces workspace hub with the MCP tools — create_workspace, set_goal_list, create_tasks, set_task_goal, attach_agent, task_transition, answer_decision, link_refs. Covers the north-star goal, the ordered goal list, story-shaped task bodies, triage, the work loop, decisions, and the lead-agent seat.
+description: Use when you need to stand up or drive a claude-workspaces workspace hub with the MCP tools — create_workspace, set_goal_list, create_tasks, set_task_goal, attach_agent, task_transition, add_review_item, answer_review_item, answer_decision, link_refs. Covers the north-star goal, the ordered goal list, story-shaped task bodies, triage, the work loop, the review items a ticket carries, and the lead-agent seat.
 ---
 
 # Running a claude-workspaces workspace hub
@@ -8,7 +8,7 @@ description: Use when you need to stand up or drive a claude-workspaces workspac
 A hub workspace is a **north-star goal + an ordered task board + linked docs**,
 rendered at `/workspaces/<workspaceId>`. Everything on it is reachable from
 MCP tools: you can create the board, order its goals, file work as tasks a
-person can read, ask a human a decision and record their verbatim answer, and
+person can read, hang questions on a ticket and record verbatim answers, and
 hand the whole thing to the next agent with no chat handoff.
 
 **Do it all with the tools.** Two agents have reconstructed this API by reading
@@ -237,9 +237,76 @@ want the comment pinned to a specific line; an EMPTY `find` is an error rather
 than a shortcut to this, so a variable that came out blank can't quietly turn
 into a comment on the whole task.
 
-## Decisions
+## Asking a person something: review items on a ticket
 
-A decision is a task with `needs: 'decision'` and a human assignee.
+**A ticket HAS review items — it is not itself the question.** A ticket can
+carry more than one, and more than one can be open at the same time. The
+title names the WORK; each item carries its own blurb (`headline` + `why`)
+above its own options, and is answered on its own.
+
+```
+create_tasks(workspaceId, tasks: [
+  {
+    title: "Bryan can keep p95 flat under cold queries",
+    assignee: "human",
+    goal: "latency",
+    body: "The tokenizer cache is the last thing between us and a flat p95.",
+    review: {
+      shape: "decision",
+      headline: "Pick the tokenizer cache eviction policy",
+      why: "The latency work is blocked until this is answered",
+      lookFor: "Whether a 300ms cold-start stall is acceptable",
+      detail: "Memory is the constraint: one-per-index costs ~40MB steady "
+            + "state and never stalls; LRU holds ~8MB but can stall a cold "
+            + "query by 300ms.",
+      options: [
+        { id: "o-lru", label: "LRU", detail: "8MB steady, up to 300ms on a cold query" },
+        { id: "o-per-index", label: "One per index", detail: "40MB steady, no stall" },
+      ],
+    },
+  },
+])
+```
+
+A question that comes up **after** the ticket exists hangs on it the same way:
+
+```
+add_review_item(taskId, review: { shape, headline, why, lookFor?, detail?, options? })
+→ { taskId, reviewItemId, reviewAdvice? }
+```
+
+`headline` is one line ≤70 chars and `why` one line ≤90 — the two lines a
+phone shows. Over-long or multi-line is **refused** rather than clipped, since
+a clipped headline is the unreadable row this replaced. A missing `lookFor`
+is accepted and comes back as advisory `reviewAdvice`. `shape: 'decision'`
+needs 2–6 options with caller-supplied ids; `shape: 'review'` asks someone to
+read or look at something and answer in their own words, and refuses options.
+
+**Answer it verbatim**, naming which item:
+
+```
+answer_review_item(taskId, reviewItemId, text: "<their exact words>",
+                   answeredWith?: "<option id they picked>")
+→ { taskId, reviewItemId, recorded: true, links: [...] }
+
+request_more_info(taskId, reviewItemId, question: "<what they want to know>")
+```
+
+`request_more_info` is what keeps the options from being a closed set: the
+item stays open, stays counted, and you owe the context. Never paraphrase an
+answer — when they picked an option, pass its **label** as `text` and its id
+as `answeredWith`. The returned `links` are a ready-made propagation
+checklist: act on each, or create a task for it, and prioritize them right
+away. Neither verb transitions the ticket — close it with `task_transition`
+once the propagation is handled.
+
+### The older one-question-per-ticket decision
+
+A ticket with `needs: 'decision'` and a human assignee IS the decision: the
+title has to double as the question and a second open question has nowhere to
+go. It still works exactly as it did, and everything already filed this way
+keeps answering — a ticket with no review items of its own reads as one
+derived item, so it shows up on the same queue.
 
 ```
 create_tasks(workspaceId, tasks: [
@@ -288,7 +355,9 @@ Never paraphrase. When they picked an option, pass the option's **label** as
 `links` are a **ready-made propagation checklist**: act on each, or create a
 task for it, and prioritize them right away. `answer_decision` does **not**
 transition the task — close it with `task_transition` once the propagation is
-handled.
+handled. It also takes an optional `reviewItemId` for a ticket carrying
+several items; omit it — as every caller written before that field did — and
+the answer lands on the ticket's own decision exactly as it always has.
 
 **Say that a decision is blocking work**, or it reads as parked however loudly
 its body says otherwise:

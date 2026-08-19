@@ -724,7 +724,14 @@ export function humanBlockerRows(tasks: HubTask[]): BlockerRow[] {
  * `classifyActor`'s judgement and must not be re-decided in the browser.
  */
 export interface ReviewThreadItem {
-  kind: 'task-thread' | 'doc-thread';
+  /**
+   * `task-review` is a row hanging on a TICKET rather than on a comment — the
+   * server ships it on the same route, in the same band. This model does not
+   * place one yet (the task detail panel owns that half), and `reviewQueue`
+   * skips it rather than half-building a row; see the guard there for why
+   * admitting it would double-list a legacy decision.
+   */
+  kind: 'task-thread' | 'doc-thread' | 'task-review';
   /**
    * Which half of the queue this came from.
    *
@@ -953,6 +960,31 @@ function compareAsk(a: AskRank, b: AskRank): number {
  * order — every task then lands in one band and ranks by board order alone,
  * which is a degraded ordering rather than a wrong one.
  */
+/**
+ * This task's rows, as the DETAIL PANEL is allowed to use them.
+ *
+ * Two filters, and the second is the one that had to be written down. Rows are
+ * matched by `taskId` — a doc-thread row has none and correctly never matches.
+ * And `task-review` rows are held back, because the panel answers an ask by
+ * posting a comment on `item.threadId`, which a ticket-borne row does not
+ * have: its option buttons would file a stray discussion comment and record no
+ * answer, and since every ticket row is `direct` it would always win the lead
+ * and always render on top — putting a dead copy of the option buttons above
+ * the live ones on a legacy decision, and, on a ticket that is not a decision,
+ * being the ONLY answer control on screen while answering nothing.
+ *
+ * A function rather than an inline filter in the app so the rule has one home
+ * and a test can hold it. `reviewQueue` skips the same kind for its own
+ * reasons; those two guards being separate is exactly how one of them was
+ * added and the other forgotten.
+ *
+ * This comes back when the panel implements the ticket-borne answer path
+ * (`POST /api/tasks/:id/review-items/:reviewItemId/answer`).
+ */
+export function panelAsks(items: ReviewThreadItem[], taskId: string): ReviewThreadItem[] {
+  return items.filter((i) => i.kind !== 'task-review' && i.taskId === taskId);
+}
+
 export function reviewQueue(
   tasks: HubTask[],
   threadItems: ReviewThreadItem[],
@@ -1040,6 +1072,14 @@ export function reviewQueue(
   const inferred: Array<{ item: ReviewItem; rank: AskRank }> = [];
 
   for (const t of threadItems) {
+    // A row of a kind this queue does not place is SKIPPED, not half-built.
+    // The route also ships TICKET-borne review items (`task-review`) now, and
+    // this queue does not render them yet: a legacy decision already arrives
+    // here as a `decision` row derived from the board above, so admitting the
+    // server's row too would list one question twice — and a row with no
+    // `docId`/`threadId` would key as `…:undefined:undefined` and collide with
+    // every other one of its kind.
+    if (t.kind !== 'task-thread' && t.kind !== 'doc-thread') continue;
     const where = t.kind === 'task-thread' ? 'on this task' : 'on this doc';
     const declared = t.band === 'declared' && t.review !== undefined;
     const entry = {
