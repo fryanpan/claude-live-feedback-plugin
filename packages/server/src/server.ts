@@ -66,7 +66,7 @@ import {
 import type { PluginRefresher } from './plugin-refresh.ts';
 import { agentsBehind, checkableAttachments, readReleasedPluginVersion } from './plugin-release.ts';
 import { localHostnames, publicBaseUrl } from './public-host.ts';
-import { type ReviewThreadItem, reviewThreadItems } from './review-queue.ts';
+import { type ReviewItemRow, reviewItemRows } from './review-queue.ts';
 import { type FeedbackWs, Rooms, type WorkspaceDirNode, type WorkspaceFileNode } from './rooms.ts';
 import { isWithinRoot } from './safe-path.ts';
 import { CfApi } from './share/cf-api.ts';
@@ -717,16 +717,22 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    *  `generating`, and N polls must cost one call, not N. */
   const homeBriefInflight = new Set<string>();
 
-  /** The thread-shaped review items exactly as GET /review-items ships them.
+  /** The review items exactly as GET /review-items ships them.
    *  ONE builder for that route and for the brief's queue count, so the
    *  number the brief prints cannot drift from the queue rendered under it. */
-  const reviewItemsFor = (workspace: HubWorkspace): ReviewThreadItem[] =>
-    reviewThreadItems({
+  const reviewItemsFor = (workspace: HubWorkspace): ReviewItemRow[] =>
+    reviewItemRows({
       tasks: taskStore.listTasks(workspace.id).map((t) => ({
         id: t.id,
         title: t.title,
         bodyDocId: taskBodyDocId(t.id),
         done: t.status === 'done',
+        // The ticket's OWN review items — 0..n, and for a legacy decision task
+        // the one row `listReviewItems` derives from `needs`/`options`/`answer`
+        // without writing anything back. This is what lets a decision reach the
+        // one route that answers "what is waiting on me"; before it, a board of
+        // nothing but open decisions answered with an empty list.
+        reviews: taskStore.listReviewItems(t.id),
       })),
       docs: workspace.docIds.map((docId) => {
         const meta = rooms.get(docId)?.meta;
@@ -746,25 +752,28 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     });
 
   /**
-   * How many items the Home queue holds right now: open unanswered
-   * decisions, person-owned blockers with open dependents, and the thread
-   * items — the same three bands `reviewQueue` (hub-model) derives in the
-   * browser. Mirrored rather than shared because the queue logic lives
-   * client-side over the ydoc projection; this count feeds only the brief's
-   * closing denominator line.
+   * How many items the Home queue holds right now: every OPEN review item —
+   * ticket-borne and comment-borne alike — plus person-owned blockers with
+   * open dependents. Feeds only the brief's closing "is anything waiting" line.
+   *
+   * The old `needs === 'decision' && !answer` term is GONE, and its absence is
+   * the change rather than an omission. Every open decision now arrives on
+   * `items` as a ticket review item (the derived row is open exactly when the
+   * task is unanswered), so for a board of legacy decisions this returns the
+   * identical number — while a ticket holding three questions with one answered
+   * now counts 2, where the old term counted at most 1. Counting decisions here
+   * as well would double every one of them.
    */
-  const homeQueueTotal = (workspace: HubWorkspace, items: ReviewThreadItem[]): number => {
-    const tasks = taskStore.listTasks(workspace.id);
+  const homeQueueTotal = (workspace: HubWorkspace, items: ReviewItemRow[]): number => {
     const ownerKindOf = taskProjection.ownerKindReader(workspace.id);
-    const open = tasks.filter((t) => t.status !== 'done');
-    const decisions = open.filter((t) => t.needs === 'decision' && !t.answer);
+    const open = taskStore.listTasks(workspace.id).filter((t) => t.status !== 'done');
     const blockers = open.filter(
       (t) =>
         t.needs !== 'decision' &&
         ownerKindOf(t) === 'person' &&
         open.some((o) => o.id !== t.id && o.after.includes(t.id)),
     );
-    return decisions.length + blockers.length + items.length;
+    return blockers.length + items.length;
   };
 
   const homeBriefInput = (workspace: HubWorkspace, since: number): BriefInput => {

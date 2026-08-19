@@ -724,7 +724,14 @@ export function humanBlockerRows(tasks: HubTask[]): BlockerRow[] {
  * `classifyActor`'s judgement and must not be re-decided in the browser.
  */
 export interface ReviewThreadItem {
-  kind: 'task-thread' | 'doc-thread';
+  /**
+   * `task-review` is a row hanging on a TICKET rather than on a comment — the
+   * server ships it on the same route, in the same band. This model does not
+   * place one yet (the task detail panel owns that half), and `reviewQueue`
+   * skips it rather than half-building a row; see the guard there for why
+   * admitting it would double-list a legacy decision.
+   */
+  kind: 'task-thread' | 'doc-thread' | 'task-review';
   /**
    * Which half of the queue this came from.
    *
@@ -1040,6 +1047,14 @@ export function reviewQueue(
   const inferred: Array<{ item: ReviewItem; rank: AskRank }> = [];
 
   for (const t of threadItems) {
+    // A row of a kind this queue does not place is SKIPPED, not half-built.
+    // The route also ships TICKET-borne review items (`task-review`) now, and
+    // this queue does not render them yet: a legacy decision already arrives
+    // here as a `decision` row derived from the board above, so admitting the
+    // server's row too would list one question twice — and a row with no
+    // `docId`/`threadId` would key as `…:undefined:undefined` and collide with
+    // every other one of its kind.
+    if (t.kind !== 'task-thread' && t.kind !== 'doc-thread') continue;
     const where = t.kind === 'task-thread' ? 'on this task' : 'on this doc';
     const declared = t.band === 'declared' && t.review !== undefined;
     const entry = {
