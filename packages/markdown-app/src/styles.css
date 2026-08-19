@@ -1877,10 +1877,21 @@ body.hub-body {
      column, so a mic painted over that scrim still covers no page content,
      which is the promise docking was for.
 
-     This reaches only the widths where the nav is static (the rail and the
-     ≤1100px strip). A `position: fixed` bar is a stacking context whatever its
-     z-index, so at ≤900px no number here can escape it; there the overlay is
-     kept off the bar's row instead — see `.hub-detail` in the ≤900px block. */
+     This reaches only the RAIL. Measured 2026-08-19: in the ≤1100px band the
+     nav is a static top strip and the centred panel runs under it, so the same
+     z-index put the mic on top of the open task — at 905px it covered the
+     panel whole, clipped the title's first characters, and hit-testing over
+     the intersection resolved to the mic, so it took the click too. That is
+     the float era exactly, which is why the escape is dropped there rather
+     than narrowed: see `.hub-nav-dock` in the ≤1100px block.
+
+     Read the premise above literally — it is the whole justification. The
+     escape is earned only where nothing of the page is behind the dock's own
+     column, and only the rail is such a column.
+
+     A `position: fixed` bar is a stacking context whatever its z-index, so at
+     ≤900px no number here can escape it either; there the overlay is kept off
+     the bar's row instead — see `.hub-detail` in the ≤900px block. */
   z-index: 70;
   display: flex;
   align-items: center;
@@ -3854,6 +3865,17 @@ a.hub-link-chip:hover {
        dock — divider and all — out of line with the tabs beside it and over
        the bar's top border. */
     bottom: auto;
+    /* The rail's layer, undone — and this is the load-bearing line. The strip
+       is IN FLOW here, so it scrolls, and a z-index that lifts it over the
+       task overlay promises a column the panel can pass under at some scroll
+       positions and not others. That promise is the one docking was built to
+       retire. Under the scrim the mic is unreachable while a task is open in
+       this band; that is a real loss and it is the smaller one, because the
+       alternative measured as a control that paints over the task's title and
+       swallows clicks meant for it. The ≤900px band keeps the capability by
+       geometry instead — a FIXED bar the panel's box ends above — which is
+       available there and is not available to a strip that scrolls. */
+    z-index: auto;
     align-self: stretch;
     margin: 0;
     padding: 0 10px 0 0;

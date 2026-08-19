@@ -228,6 +228,24 @@ describe('the phone gets the mic in the bottom tab bar', () => {
     expect(rule('.hub-nav-dock', media('(max-width: 1100px)'))).toMatch(/bottom:\s*auto/);
   });
 
+  it('gives up the rail\u2019s layer, because the strip has page content behind it', () => {
+    // The rail earns `z-index: 70` on one premise: nothing of the page sits
+    // behind its column, so a mic painted over the task overlay covers
+    // nothing. In this band the nav is a top strip and the centred panel runs
+    // underneath it, so the premise is false and the same number reproduces
+    // the float. Measured 2026-08-19 at 905px: the mic covered the panel
+    // whole, clipped the first characters of the task title, and
+    // `elementFromPoint` over the intersection returned `BUTTON.voice-mic` —
+    // it took the click as well as the pixels.
+    const strip = rule('.hub-nav-dock', media('(max-width: 1100px)'));
+    expect(strip, 'the dock rule vanished from the strip block').not.toBe('');
+    expect(strip).toMatch(/z-index:\s*auto/);
+    // Positive control, and the point of the whole test: the number this
+    // overrides is really there on the rail. Without this line the assertion
+    // above passes just as happily against a dock that never had a layer.
+    expect(rule('.hub-nav-dock')).toMatch(/z-index:\s*70/);
+  });
+
   it('leaves the bar no higher than the full-screen overlays', () => {
     // The bar itself stays under the detail overlay: an overlay that covers
     // the board covers the pages you could navigate to instead of it. Equal
