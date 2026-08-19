@@ -752,6 +752,33 @@ Technical discoveries that should persist across sessions for this project.
   change — prod serves that directory per-request, so the "test build" is a
   deploy to the fleet.
 
+## The scrollbar's width in CSS px depends on browser ZOOM, so record `devicePixelRatio` with any measurement that touches it
+
+- **Same page, same tab, same harness, two different scrollbar widths across
+  runs — and the discriminator was zoom.** Measured 2026-08-19:
+  `devicePixelRatio 1.600` → scrollbar **19** CSS px; `devicePixelRatio 2.000`
+  → **15**. The scrollbar is a fixed number of DEVICE pixels, so the CSS-px
+  figure scales with the ratio: `15 × (2 / 1.6) = 18.75`, i.e. the 19. Six
+  consecutive runs at dpr 2 read 15 every time and a full seven-width sweep at
+  dpr 1.6 read 19 every time, so each reading was internally stable and neither
+  was noise.
+- **The first diagnosis was that off-screen or transform-scaled iframes are
+  unfaithful rulers. That was wrong** — correlation only: the scaled-iframe
+  runs happened to fall while the window sat at 80% zoom. Unscaled, on-screen
+  iframes reproduce both values. Worth stating plainly because the wrong
+  diagnosis sends the next person to go and fix their iframe when the thing to
+  check is the zoom.
+- **Re-read `devicePixelRatio` per RUN, not once per session.** This is a
+  shared browser and the zoom changed mid-session with nobody touching it
+  deliberately. A ratio captured at setup and reused describes a window that
+  may no longer exist.
+- **A layout assertion that moves with zoom is measuring the scrollbar, not the
+  layout.** The payoff of the two real ratios is that a fix could be checked at
+  two genuine scrollbar widths without synthesising either: the board pinned to
+  exactly **420px** at both, with the side panel absorbing the 4px difference
+  (988 vs 992). The previous build gave **422** at sb 15 and **418** at sb 19 —
+  it passed or failed depending on the zoom of whoever ran it.
+
 ## A prod restart reloads server code but NOT the served app bundle
 
 - **A feature can be fully merged, the server restarted, and every browser
@@ -2615,6 +2642,38 @@ Technical discoveries that should persist across sessions for this project.
 - Related: "Four gates, and each one is the only thing that catches its class".
   A gate that cannot load its subject has not run, whatever its exit code
   suggests.
+
+## An expected test-file count goes stale in the direction that reads as correct
+
+- **"Expect ~109 vitest files" was circulated as the guard against the entry
+  above — a green run that silently skipped files — and it was right when
+  derived and wrong two merges later.** Counted statically from the config
+  globs at each commit: `8ff9a81` **105**, `77ca4dd` **106**, `278de00`
+  **111**, `8e75e0e` **111**, `676f53b` **113**.
+- **A stale expectation sits BELOW the true count, which is the direction that
+  hides a skip.** A run that lost four files still clears a threshold set two
+  merges ago, and clearing it reads as the guard working. Three agents each
+  reported a different number — 109, 111, 113 — and **all three were correct
+  for the commit they were on**, so the disagreement looked like sloppiness
+  rather than the signal it was.
+- **Derive it per-commit from the artifact under test.** `vitest.config.ts`
+  excludes `packages/server/test/**`, so the two suites have separate counts
+  and neither number describes both:
+
+  ```bash
+  git ls-tree -r --name-only <ref> \
+    | awk '/^packages\/[^\/]+\/test\/.*\.test\.ts$/ || /^packages\/[^\/]+\/src\/.*\.test\.ts$/ || /^scripts\/.*\.test\.ts$/' \
+    | grep -v '^packages/server/test/' | wc -l
+  ```
+
+- **The general form: a threshold copied from another agent's run is a constant
+  with an expiry date nobody records.** Nothing marks the moment it stops being
+  true, and it keeps passing on the way out.
+- **The sharper half — repeating a run three times and getting agreement does
+  not detect a STABLE skip.** Only an independent derivation does. Same family
+  as "A positive control can silently become a duplicate of the thing it
+  controls": agreement between measurements that share a cause is not
+  corroboration.
 
 ## An assertion whose alternation can match either way pins nothing, and reads as coverage of exactly the thing it does not check
 
