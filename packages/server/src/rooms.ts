@@ -26,8 +26,8 @@ import {
   readDocMeta,
   postReply as schemaPostReply,
   replaceAnchor as schemaReplaceAnchor,
-  setCommentReview,
   setStatus as schemaSetStatus,
+  setCommentReview,
   setThreadSummary,
   suggestOps,
 } from '@feedback/core';

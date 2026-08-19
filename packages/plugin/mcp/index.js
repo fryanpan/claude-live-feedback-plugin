@@ -13978,7 +13978,10 @@ var REVIEW_ITEM_SCHEMA = {
       items: {
         type: "object",
         properties: {
-          id: { type: "string", description: "Stable id; the answer records which one was picked." },
+          id: {
+            type: "string",
+            description: "Stable id; the answer records which one was picked."
+          },
           label: { type: "string", description: "1-3 words, ≤28 chars. This is the button." },
           detail: { type: "string", description: "What choosing it costs or buys. ≤50 words." }
         },

@@ -220,7 +220,9 @@ function anchorSnippetText(anchor: Anchor): string | undefined {
  * Returns `undefined` for an absent declaration — an ordinary comment is
  * still an ordinary comment, and the overwhelming majority are.
  */
-function reviewFromBody(raw: unknown): { ok: true; review?: ReviewPayload } | { ok: false; error: string } {
+function reviewFromBody(
+  raw: unknown,
+): { ok: true; review?: ReviewPayload } | { ok: false; error: string } {
   if (raw === undefined || raw === null) return { ok: true };
   const check = checkReviewPayload(raw);
   if (!check.ok) return { ok: false, error: reviewPayloadMessage(check) };
