@@ -8,6 +8,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import { readRenamedEnv } from '../../core/src/env-names.ts';
 import { discoveryCandidates, resolveDiscoveryFile } from '../../core/src/machine-paths.ts';
 import { resolveAgentAuthor } from './author.ts';
+import { declareWorkspaceLead } from './declare-lead.ts';
 import { createFrameDedup } from './frame-dedup.ts';
 import { type ThreadCreateInput, threadCreateRequest } from './thread-create.ts';
 import { RETRIAGE_SKILL, TASK_REVIEW_SKILL, triageRequestLine } from './triage-line.ts';
@@ -1024,14 +1025,18 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'set_workspace_lead',
       description:
-        "Hand the workspace's LEAD AGENT seat to another agent. The lead is who a goal edit's re-triage is addressed to — it is a standing assignment, not a session fact, so a goal change waits for the lead even while they are away rather than going to whoever happens to be connected. Use it when you are handing a board off, or to fill the seat on a board a person created.",
+        'DECLARE YOURSELF LEAD of a workspace — one call, and from then on you receive everything on this board: task and decision events, thread events on every doc filed here INCLUDING docs created later, voice notes, and re-triage asks. Call it with just `workspaceId` at session start and you are done; there is no per-surface subscribe to remember and nothing to redo after a respawn (the subscription is persisted against your agent identity and re-wired when you come back). It replaces a pile of watch_doc calls, and it is what closes the gap those calls leave: a doc watch is not an attachment, so an agent watching six docs still misses every voice note and every goal-edit re-triage, silently — a queue nobody is draining looks exactly like a queue nobody filled. Because it attaches you, it also DRAINS whatever was waiting for the seat and hands it back on this same response, in attach_agent\'s own field names: `queuedVoice` (act on each transcript verbatim), `pendingRetriage`, `pendingBucketReview`, `taskReviews`, plus `gating` and `untriaged`. `subscribed: true` on the response is the answer to "am I actually listening?" — the question an agent otherwise cannot answer from the inside. The lead is a STANDING assignment, not a session fact, so a goal change waits for you even while you are away rather than going to whoever happens to be connected. Pass `leadAgentId` ONLY to hand the board to somebody else: that is a pure handover — it moves the seat and nothing more, because attaching or subscribing on an absent agent\'s behalf would make the board report a live lead that is not there.',
       inputSchema: {
         type: 'object',
         properties: {
           workspaceId: { type: 'string', description: 'Hub workspace id from create_workspace.' },
-          leadAgentId: { type: 'string', description: 'The agent id taking responsibility.' },
+          leadAgentId: {
+            type: 'string',
+            description:
+              'The agent id taking responsibility. OMIT IT to declare yourself — that is the common case, and the only form that also attaches and subscribes you. Naming another agent hands the seat over and does nothing else; naming your own id is the same as omitting it, so callers built against the older required-field form keep their exact meaning.',
+          },
         },
-        required: ['workspaceId', 'leadAgentId'],
+        required: ['workspaceId'],
       },
     },
     {
@@ -2343,16 +2348,22 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         });
       }
       case 'set_workspace_lead': {
-        const { workspaceId, leadAgentId } = a as { workspaceId: string; leadAgentId: string };
-        const res = (await http('PUT', `/api/workspaces/${encodeURIComponent(workspaceId)}/lead`, {
-          leadAgentId,
-          author: AUTHOR,
-        })) as { changed: boolean; workspace?: { leadAgentId?: string } };
-        return ok({
-          workspaceId,
-          changed: res.changed,
-          leadAgentId: res.workspace?.leadAgentId ?? leadAgentId,
-        });
+        const { workspaceId, leadAgentId } = a as { workspaceId: string; leadAgentId?: string };
+        // Declaring yourself is attach → subscribe → seat, and hands back the
+        // backlog the attach drained. Naming somebody else is the seat alone.
+        // See declare-lead.ts for why the order is load-bearing.
+        return ok(
+          await declareWorkspaceLead(
+            { workspaceId, ...(leadAgentId !== undefined ? { leadAgentId } : {}) },
+            {
+              http,
+              watchWorkspace,
+              self: AUTHOR,
+              runtime: 'claude-code-local',
+              pluginVersion: PLUGIN_VERSION,
+            },
+          ),
+        );
       }
       case 'attach_doc': {
         const { workspaceId, docId } = a as { workspaceId: string; docId: string };
