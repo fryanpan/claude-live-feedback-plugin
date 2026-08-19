@@ -718,8 +718,26 @@ async function main(): Promise<void> {
     }
   }
 
+  /**
+   * The element that opened the panel, so closing it puts the keyboard back
+   * where it was.
+   *
+   * The panel takes focus when it opens (see `renderTaskDetail` — that is what
+   * makes hold-Space work inside it), so without this, Escape would drop a
+   * keyboard reader at the top of the document and the j/k walk they were in
+   * the middle of would restart from row one.
+   */
+  let detailOpener: HTMLElement | null = null;
+  /** Which task the panel is CURRENTLY showing, so open and close are
+   *  distinguishable from a repaint. */
+  let renderedDetailId: string | null = null;
+
   function renderDetail(): void {
     const task = state.detailTaskId ? (state.tasks.get(state.detailTaskId) ?? null) : null;
+    if (task && renderedDetailId === null) {
+      const active = document.activeElement;
+      detailOpener = active instanceof HTMLElement && active !== document.body ? active : null;
+    }
     // Fetch here rather than at each of the four places that open the panel
     // (row tap, `o`, deep link, voice navigate) — one of them would be missed
     // otherwise, and the miss looks like a task with no discussion. Safe from
@@ -784,6 +802,11 @@ async function main(): Promise<void> {
       task ? { id: task.id, bodyDocId: task.bodyDocId } : null,
       el('hub-detail').querySelector<HTMLElement>('.hub-detail-body-slot'),
     );
+    if (!task && renderedDetailId !== null) {
+      if (detailOpener?.isConnected) detailOpener.focus();
+      detailOpener = null;
+    }
+    renderedDetailId = task?.id ?? null;
   }
 
   // ── Task discussion ─────────────────────────────────────────────────────

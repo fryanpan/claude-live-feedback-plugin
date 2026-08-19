@@ -176,6 +176,93 @@ describe('createVoiceCapture', () => {
     cap.destroy();
   });
 
+  /**
+   * The reported break: "the voice is broken in task detail view right now —
+   * holding space does nothing." The panel is opened by CLICKING a task row,
+   * which leaves focus on that row, and a row is not the page — so every
+   * press answered "not the page" for as long as the task was open. The panel
+   * takes focus and declares itself page-like; this is that pair, end to end.
+   */
+  it('a held Space inside a region marked page-like starts the mic', () => {
+    const cap = mount();
+    const panel = document.createElement('div');
+    panel.tabIndex = -1;
+    panel.setAttribute('data-space-hold', 'page');
+    const plain = document.createElement('div');
+    plain.tabIndex = -1;
+    document.body.append(panel, plain);
+
+    // Negative half first, so the positive one below is not a renderer that
+    // starts on everything: an unmarked focusable container still does not.
+    keydown(plain);
+    vi.advanceTimersByTime(10_000);
+    keyup(plain);
+    expect(rec.started).toBe(0);
+
+    keydown(panel);
+    vi.advanceTimersByTime(SPACE_HOLD_ARM_MS);
+    expect(rec.started).toBe(1);
+    keyup(panel);
+    cap.destroy();
+  });
+
+  /** The marker is read off the FOCUSED element, never an ancestor — a button
+   *  inside the panel keeps Space for itself, which is what Space means on a
+   *  button. */
+  it('does not start on a control inside a page-like region', () => {
+    const cap = mount();
+    const panel = document.createElement('div');
+    panel.tabIndex = -1;
+    panel.setAttribute('data-space-hold', 'page');
+    const inner = document.createElement('button');
+    panel.append(inner);
+    document.body.append(panel);
+
+    keydown(inner);
+    vi.advanceTimersByTime(10_000);
+    keyup(inner);
+    expect(rec.started).toBe(0);
+    // Positive control in the same pass: the container itself does start.
+    keydown(panel);
+    vi.advanceTimersByTime(SPACE_HOLD_ARM_MS);
+    expect(rec.started).toBe(1);
+    cap.destroy();
+  });
+
+  /** "After I make a voice request it should show a spinner/indicator that
+   *  it's working." The gap between release and the ack had nothing moving in
+   *  it, which is indistinguishable from a dead mic. */
+  it('marks the indicator busy while the request is in flight, and clears it on the ack', async () => {
+    let settle: ((ack: VoiceAck | null) => void) | undefined;
+    const cap = createVoiceCapture({
+      button,
+      indicator,
+      getContext: () => ({ surface: 'hub' }),
+      send: () =>
+        new Promise<VoiceAck | null>((resolve) => {
+          settle = resolve;
+        }),
+      createRecognition: () => rec,
+      readOrigin: secureOrigin,
+    });
+    holdSpace();
+    rec.emit([{ text: 'file a task about the mic', final: true }]);
+    keyup(document.body);
+    await flushTimers();
+    expect(indicator.textContent).toContain('Routing…');
+    expect(indicator.querySelector('.voice-spinner')).toBeTruthy();
+    expect(indicator.getAttribute('aria-busy')).toBe('true');
+
+    settle?.({ route: 'agent', ack: 'Heard: "file a task about the mic".' });
+    await flushTimers();
+    // The busy state is cleared by whatever REPLACES it, so a spinner can
+    // never outlive the request it was reporting on.
+    expect(indicator.querySelector('.voice-spinner')).toBeNull();
+    expect(indicator.getAttribute('aria-busy')).toBe('false');
+    expect(indicator.textContent).toContain('Heard:');
+    cap.destroy();
+  });
+
   it('auto-repeats while the hold is live are prevented, so the page does not scroll under a recording', () => {
     const cap = mount();
     holdSpace();

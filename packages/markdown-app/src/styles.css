@@ -3430,6 +3430,37 @@ a.hub-link-chip:hover {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
   word-break: break-word;
 }
+/* The in-flight state. The wait between releasing the key and the server's
+   ack had nothing moving in it, so a slow round trip and a dead mic looked
+   identical — on the one surface that promises every utterance an answer. */
+.voice-indicator--busy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.voice-spinner {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent, #2e7dd7);
+  border-radius: 50%;
+  animation: voice-spin 0.8s linear infinite;
+}
+@keyframes voice-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* Someone who has asked for less motion still needs to know it is working —
+   so the mark stays and only the rotation goes. */
+@media (prefers-reduced-motion: reduce) {
+  .voice-spinner {
+    animation: none;
+    border-top-color: var(--accent, #2e7dd7);
+    opacity: 0.8;
+  }
+}
 
 /* ================= FORMAT BAR ================= */
 

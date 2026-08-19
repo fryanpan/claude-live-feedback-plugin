@@ -17,6 +17,7 @@ import {
   goalDisplay,
 } from '@feedback/core/goal-summary';
 import { renderCommentMarkdown } from '../comment-markdown.ts';
+import { SPACE_HOLD_PAGE_ATTR } from '../voice-capture.ts';
 import {
   type ActivityEvent,
   type ActivityFilter,
@@ -3044,17 +3045,34 @@ export function renderTaskDetail(
   // ProseMirror view bound to a Yjs room. So drafts are SNAPSHOT and restored,
   // and the description slot is KEPT — see `keptBodySlot`.
   const keptDrafts = keepFields(container);
+  // Whether this call OPENS the panel on a task, as opposed to repainting the
+  // one already there. Read before the swap, because the swap is what makes
+  // the two indistinguishable.
+  const priorTaskId =
+    container.querySelector<HTMLElement>('.hub-detail-panel')?.dataset.taskId ?? null;
   if (!task) {
     container.replaceChildren();
     container.classList.add('hidden');
     return;
   }
+  const freshOpen = priorTaskId !== task.id;
   container.classList.remove('hidden');
   const keptSlot = keptBodySlot(container, task);
   const panel = keptSlot?.parentElement ?? document.createElement('div');
   panel.className = 'hub-detail-panel';
   panel.setAttribute('role', 'dialog');
   panel.setAttribute('aria-modal', 'true');
+  // Focusable as a container, and declared page-like for the Space hold.
+  //
+  // Both halves are one fix. A dialog that never takes focus leaves the
+  // keyboard behind the thing it opened; and because the board opens this
+  // panel from a CLICK on a task row, focus stayed on that row — where a held
+  // Space is not "the page", so hold-to-talk was dead for the entire time a
+  // task was open (reported as "voice does nothing in the task detail"). The
+  // panel is a scroll container with no Space behaviour of its own, so taking
+  // the focus is what makes the hold legible again. See `spaceHoldTargetsPage`.
+  panel.tabIndex = -1;
+  panel.setAttribute(SPACE_HOLD_PAGE_ATTR, 'page');
   panel.dataset.taskId = task.id;
   // Everything the panel shows, split around the description: `before` is
   // patched in above the slot and `after` below it, so the slot itself never
@@ -3334,6 +3352,11 @@ export function renderTaskDetail(
   if (focus && typeof focus.scrollIntoView === 'function') {
     focus.scrollIntoView({ block: 'center' });
   }
+
+  // Take the focus on OPEN only. A repaint that focused the panel would pull
+  // the caret out of the composer every time a peer's comment landed, which is
+  // the same class of bug `keptBodySlot` exists to prevent one element over.
+  if (freshOpen && typeof panel.focus === 'function') panel.focus({ preventScroll: true });
 
   // Last, after the thread-centring above: restoring focus scrolls the field
   // back into view, so the composer someone is typing in wins over a centred

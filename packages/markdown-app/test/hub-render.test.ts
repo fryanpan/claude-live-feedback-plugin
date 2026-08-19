@@ -1324,6 +1324,50 @@ describe('renderTaskDetail', () => {
     onAssign: vi.fn(),
   });
 
+  /**
+   * The voice half of the redesign. Opening a task from the board is a CLICK
+   * on a task row, so focus stayed on the row — and a row is not "the page",
+   * which is what `spaceHoldTargetsPage` requires. Hold-to-talk was therefore
+   * dead for as long as any task was open ("holding space does nothing").
+   */
+  it('takes focus on open and declares itself page-like for the Space hold', () => {
+    const opener = document.createElement('div');
+    opener.tabIndex = 0;
+    document.body.append(opener);
+    opener.focus();
+    expect(document.activeElement).toBe(opener);
+
+    renderTaskDetail(root, task({ id: 't-focus' }), detailHandlers());
+    const panel = root.querySelector<HTMLElement>('.hub-detail-panel');
+    expect(panel).toBeTruthy();
+    expect(panel?.getAttribute('data-space-hold')).toBe('page');
+    expect(document.activeElement).toBe(panel);
+  });
+
+  /** A repaint must not re-take it: the panel repaints on every board change,
+   *  and one that grabbed focus would pull the caret out of the composer
+   *  every time a peer's comment landed. */
+  it('does not re-take focus on a repaint of the same task', () => {
+    const t = task({ id: 't-repaint' });
+    const withComposer = () => ({ ...detailHandlers(), onComment: vi.fn() });
+    const discussion = { loading: false, threads: [] };
+    renderTaskDetail(root, t, withComposer(), discussion);
+    const ta = root.querySelector<HTMLTextAreaElement>('.hub-detail-panel textarea');
+    // Positive control: there IS something else focusable in the panel, so
+    // "focus went back to the composer" below is a decision rather than an
+    // empty panel with nowhere else for it to go.
+    expect(ta).toBeTruthy();
+    ta?.focus();
+    ta!.value = 'half a sentence';
+
+    renderTaskDetail(root, t, withComposer(), discussion);
+    const panel = root.querySelector('.hub-detail-panel');
+    const rebuilt = root.querySelector<HTMLTextAreaElement>('.hub-detail-panel textarea');
+    expect(document.activeElement).not.toBe(panel);
+    expect(document.activeElement).toBe(rebuilt);
+    expect(rebuilt?.value).toBe('half a sentence');
+  });
+
   const metaValue = (key: string): string | null => {
     const dts = [...root.querySelectorAll('.hub-detail-meta dt')];
     const dds = [...root.querySelectorAll('.hub-detail-meta dd')];
