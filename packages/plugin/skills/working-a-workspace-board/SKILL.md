@@ -306,10 +306,12 @@ Concretely:
 ## A report to a peer goes on the task too — the message is a link
 
 The two rules above are about the owner, and that is exactly how the largest
-source of noise slipped past them. Over one 38-hour window, **52,340 words —
-40% of every word in the owner's chat window — were agent-to-agent reports.**
+source of noise slipped past them. Measured on the board of the team that
+builds this plugin, over one 38-hour window in August 2026: **52,340 words —
+40% of every word in that owner's chat window — were agent-to-agent reports.**
 Ninety-nine of them. The two longest ran 3,079 and 4,392 words. **None was
-addressed to him.**
+addressed to him.** (Those are one team's numbers, not a benchmark for yours.
+The shape is what generalises.)
 
 Every one of those agents was following the rules as written and still did
 this, because a report to a peer doesn't look like either case above. You
@@ -328,23 +330,29 @@ link.**
 - Post it where the work is: `post_reply` on the thread that asked you, or
   `create_thread(docId="task:<taskId>", …)` when the ask arrived some other
   way.
-- **The response hands you the link back** — `url` on the `create_thread` /
-  `post_reply` result, absolute and ready to paste. You do not have to
-  assemble it, and you do not need to know the server's base URL. That field
-  exists so the honest path is the cheap one.
+- **The response hands you the link back** — `threadUrl` on the
+  `create_thread` / `post_reply` result, absolute and ready to paste. You do
+  not have to assemble it and you do not need to know the server's base URL.
+  It comes back for **either** surface: a task deep link when you posted on
+  `task:<taskId>`, the doc's review URL when you replied to a comment on a
+  markdown doc. That field exists so the honest path is the cheap one.
 - Then your message to the peer is one or two sentences and that link. The
   findings, the evidence, the gate output, the file list, the reasoning — all
   of it is already on the task, where the next agent to touch that task will
   find it. A report pasted into chat is read once and is gone.
 
-Two things are genuinely messages rather than reports, and both are short by
-nature: **a decision the peer must make before either of you can move**, and
-**a blocker you need them to clear**. Neither needs 3,000 words. Everything
-else — status, results, what you found, what you shipped, what took two
-attempts — is a task comment with a link to it.
+**A budget, because "be concise" has never once worked.** A message to another
+agent is **under 150 words**, and a report you are handing over is **two
+sentences and a link**. If you are writing a third paragraph, you are writing
+a task comment in the wrong window — stop, post it, send the link. Nothing you
+send an agent should ever run to a thousand words; the two worst offenders
+measured above were 3,079 and 4,392.
 
-The test, when you are unsure: if what you are about to send another agent
-runs longer than a short paragraph, it is a report. Post it, send the link.
+Two things are genuinely messages rather than reports, and both fit the budget
+without effort: **a decision the peer must make before either of you can
+move**, and **a blocker you need them to clear**. Everything else — status,
+results, what you found, what you shipped, what took two attempts — is a
+comment with a link to it.
 
 ## Finishing a task is not a reason to stop
 
