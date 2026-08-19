@@ -1905,12 +1905,12 @@ describe('renderTaskDetail — discussion', () => {
   /** "Answer without leaving the screen you landed on." A button that scrolls
    *  to a composer further down the page satisfies that on a desktop only. */
   it('replies to the asking thread from the review card itself', async () => {
-    const onComment = vi.fn().mockResolvedValue(true);
+    const onAnswerThread = vi.fn().mockResolvedValue(true);
     const t = task({ id: 't-1' });
     renderTaskDetail(
       root,
       t,
-      detailHandlers({ asks: [askItem({ threadId: 'th-9' })], now: NOW, onComment }),
+      detailHandlers({ asks: [askItem({ threadId: 'th-9' })], now: NOW, onAnswerThread }),
       { loading: false, threads: [thread({ id: 'th-9' })] },
     );
     const form = root.querySelector('.hub-decide-form') as HTMLFormElement;
@@ -1920,11 +1920,16 @@ describe('renderTaskDetail — discussion', () => {
     form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
     // Posts onto the thread that asked, not into a new one — a reply that
     // opens a fresh thread is how an answer stops being an answer.
-    expect(onComment).toHaveBeenCalledWith(
+    expect(onAnswerThread).toHaveBeenCalledWith(
       expect.objectContaining({ id: 't-1' }),
+      expect.objectContaining({ threadId: 'th-9' }),
       'Drop it, and prefix the 3 orphans.',
-      'th-9',
+      undefined,
     );
+    // The box is cleared as the answer goes, not after it lands: the write
+    // repaints the panel from inside its own await, and a clear that runs
+    // afterwards lands on a textarea that is no longer in the document.
+    expect(ta.value).toBe('');
   });
 
   /**
@@ -3141,12 +3146,12 @@ describe('the panel’s review queue', () => {
    *  one way would pass either half alone. */
   it('answers a thread item as a reply and the task’s decision as a decision', () => {
     const onAnswer = vi.fn();
-    const onComment = vi.fn();
+    const onAnswerThread = vi.fn().mockResolvedValue(true);
     const t = task({ id: 't-1', needs: 'decision' });
     renderTaskDetail(
       root,
       t,
-      handlers({ onAnswer, onComment, asks: [ask({ threadId: 'th-a' })] }),
+      handlers({ onAnswer, onAnswerThread, asks: [ask({ threadId: 'th-a' })] }),
       { loading: false, threads: [] },
     );
     const answerIn = (card: HTMLElement, text: string) => {
@@ -3161,14 +3166,125 @@ describe('the panel’s review queue', () => {
       'Thursday.',
       undefined,
     );
-    expect(onComment).not.toHaveBeenCalled();
+    expect(onAnswerThread).not.toHaveBeenCalled();
 
     answerIn(threadCard!, 'Rebuild it nightly.');
-    expect(onComment).toHaveBeenCalledWith(
+    expect(onAnswerThread).toHaveBeenCalledWith(
       expect.objectContaining({ id: 't-1' }),
+      expect.objectContaining({ threadId: 'th-a' }),
       'Rebuild it nightly.',
-      'th-a',
+      undefined,
     );
+  });
+
+  /**
+   * Critical, measured in the browser 2026-08-18: answering the task's own
+   * decision retired the ENTIRE region, including two thread items the server
+   * still reported as open. The reader was left with no queue and nothing
+   * saying two questions were still waiting on them.
+   */
+  it('keeps the queue for the items still open after one is answered', () => {
+    const answered = task({
+      id: 't-1',
+      needs: 'decision',
+      answer: { by: 'Jordan', text: 'Thursday.', ts: NOW },
+    });
+    renderTaskDetail(
+      root,
+      answered,
+      handlers({ asks: [ask({ threadId: 'th-a' }), ask({ threadId: 'th-b' })] }),
+      { loading: false, threads: [] },
+    );
+    // What was decided is still said…
+    expect(root.querySelector('.hub-detail-answer')?.textContent).toContain('Thursday.');
+    // …and the two items that are still open are still reachable, with the
+    // walkthrough chrome that says how many there are.
+    expect(cards()).toEqual(['thread:th-a', 'thread:th-b']);
+    expect(root.querySelector('.hub-decide-count')?.textContent).toBe('1 of 2');
+  });
+
+  it('renders the answer alone when nothing else is waiting', () => {
+    renderTaskDetail(
+      root,
+      task({ id: 't-1', needs: 'decision', answer: { by: 'Jordan', text: 'Thursday.', ts: NOW } }),
+      handlers({ asks: [] }),
+      { loading: false, threads: [] },
+    );
+    expect(root.querySelector('.hub-detail-answer')?.textContent).toContain('Thursday.');
+    expect(cards()).toEqual([]);
+  });
+
+  /** A single unconfirmed click committed an answer with no way back. The
+   *  recovery is a persistent undo rather than a confirm step or a timed
+   *  toast: it costs the deliberate 99% nothing and is still there when the
+   *  mistake is noticed a minute later. */
+  it('offers an undo beside the recorded answer, and calls it once', () => {
+    const onUndoAnswer = vi.fn().mockResolvedValue(true);
+    const t = task({
+      id: 't-1',
+      needs: 'decision',
+      answer: { by: 'Jordan', text: 'Thursday.', ts: NOW },
+    });
+    renderTaskDetail(root, t, handlers({ onUndoAnswer, asks: [] }), {
+      loading: false,
+      threads: [],
+    });
+    const undo = root.querySelector<HTMLButtonElement>('.hub-detail-undo-answer');
+    expect(undo).toBeTruthy();
+    undo?.click();
+    expect(onUndoAnswer).toHaveBeenCalledWith(expect.objectContaining({ id: 't-1' }));
+    // Disabled for the round trip, so a double tap cannot withdraw twice.
+    expect(undo?.disabled).toBe(true);
+  });
+
+  it('renders no undo when the app offers none, rather than a dead button', () => {
+    renderTaskDetail(
+      root,
+      task({ id: 't-1', needs: 'decision', answer: { by: 'Jordan', text: 'Thursday.', ts: NOW } }),
+      // The helper's spread does not remove a key, so this is how "no handler"
+      // is expressed — and the control above proves the button appears when
+      // there IS one.
+      { ...handlers({ asks: [] }), onUndoAnswer: undefined },
+      { loading: false, threads: [] },
+    );
+    expect(root.querySelector('.hub-detail-undo-answer')).toBeNull();
+    expect(root.querySelector('.hub-detail-answer')?.textContent).toContain('Thursday.');
+  });
+
+  it('says why an empty answer did nothing, instead of doing nothing silently', () => {
+    const onAnswer = vi.fn();
+    renderTaskDetail(root, task({ id: 't-1', needs: 'decision' }), handlers({ onAnswer }), {
+      loading: false,
+      threads: [],
+    });
+    const form = root.querySelector('.hub-decide-form') as HTMLFormElement;
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    expect(onAnswer).not.toHaveBeenCalled();
+    const note = form.querySelector('.hub-form-error');
+    expect(note?.textContent).toContain('Write an answer');
+    // …and it goes away the moment the reason does.
+    (form.querySelector('textarea') as HTMLTextAreaElement).dispatchEvent(
+      new Event('input', { bubbles: true }),
+    );
+    expect(form.querySelector('.hub-form-error')).toBeNull();
+  });
+
+  it('puts a refused answer back in the box', async () => {
+    const onAnswerThread = vi.fn().mockResolvedValue(false);
+    renderTaskDetail(
+      root,
+      task({ id: 't-1' }),
+      handlers({ onAnswerThread, asks: [ask({ threadId: 'th-a' })] }),
+      { loading: false, threads: [] },
+    );
+    const form = root.querySelector('.hub-decide-form') as HTMLFormElement;
+    const ta = form.querySelector('textarea') as HTMLTextAreaElement;
+    ta.value = 'Rebuild it nightly.';
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    expect(ta.value).toBe('');
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(ta.value).toBe('Rebuild it nightly.');
   });
 
   it('names the description, and separates it from the fields and the queue', () => {

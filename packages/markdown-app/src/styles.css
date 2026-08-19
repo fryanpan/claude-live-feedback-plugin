@@ -2840,9 +2840,15 @@ a.hub-link-chip:hover {
   /* A summary is a tap target on a phone; the default marker box is smaller
      than a finger, so the row itself carries the height. */
   min-height: 36px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  /* NOT `flex`. Chrome's disclosure triangle is drawn by the summary's
+     `::marker`, and a `display` other than `list-item` removes it — measured
+     2026-08-18: the row read as a heading with no sign it opened anything.
+     `list-item` keeps the marker AND lets the row carry its own height; the
+     alignment `flex` was here for is bought with `::marker` + padding, which
+     costs nothing a reader can see. */
+  display: list-item;
+  list-style-position: inside;
+  padding-block: 8px;
 }
 .hub-detail-quote {
   margin: 0;
@@ -2855,9 +2861,49 @@ a.hub-link-chip:hover {
    decision card and a separate "ask" panel — each showing one item and each
    blind to the other, so a task with both showed two competing headers. They
    are one `hub-decide` queue now.) */
+/* What was decided, and the way back out of it. The pair sits at the TOP of
+   the queue region rather than replacing it: answering the task's own decision
+   used to retire every thread item with it, open or not. */
+.hub-detail-answered {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 0 0 16px;
+}
 .hub-detail-answer {
   font-weight: 600;
-  margin: 0 0 16px;
+  margin: 0;
+  flex: 1 1 240px;
+  overflow-wrap: anywhere;
+}
+/* Quiet, and never smaller than a finger. Undo is the recovery path for a
+   single unconfirmed click, so it has to be reachable without being the thing
+   the eye lands on. */
+.hub-detail-undo-answer {
+  flex: none;
+  min-height: 44px;
+  padding-inline: 14px;
+}
+/* The queue region carrying nothing but the answer — no head, no cards, so the
+   16px gap under the answer would be trailing space. */
+.hub-decide--answered .hub-detail-answered {
+  margin-bottom: 0;
+}
+/* A refusal said next to the control that refused. `role="alert"`, so it is
+   announced rather than only drawn. */
+.hub-form-error {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--red);
+}
+/* A write is in flight. The controls are disabled in JS; this is the part the
+   reader can see, and it is what the card was missing when an answer took two
+   seconds and repainted nothing. */
+.hub-decide-card.is-busy {
+  opacity: 0.6;
+  cursor: progress;
 }
 /* --- the decision card: a question, the ways to answer it, and a box ---
 

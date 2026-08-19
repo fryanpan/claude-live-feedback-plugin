@@ -336,7 +336,9 @@ describe('decision routes', () => {
       // Positive control: the same route on the same task DOES work once
       // there is an answer to take back.
       await jj(await post(`/api/tasks/${task.id}/answer`, { text: 'ship', author: PERSON }));
-      expect((await post(`/api/tasks/${task.id}/answer/undo`, { author: PERSON })).status).toBe(200);
+      expect((await post(`/api/tasks/${task.id}/answer/undo`, { author: PERSON })).status).toBe(
+        200,
+      );
     });
   });
 

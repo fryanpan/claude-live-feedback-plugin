@@ -2358,9 +2358,36 @@ export interface DetailHandlers {
   onClose: () => void;
   onStatusSet: (task: HubTask, to: TaskStatus) => void;
   onTitleCommit: (task: HubTask, title: string) => void;
-  /** `optionId` is set only when the answer came from tapping a candidate;
-   *  `text` is the verbatim answer either way. */
-  onAnswer: (task: HubTask, text: string, optionId?: string) => void;
+  /**
+   * `optionId` is set only when the answer came from tapping a candidate;
+   * `text` is the verbatim answer either way.
+   *
+   * Resolving to `false` means the write was REFUSED, and the card puts the
+   * reader's words back in the box. Anything else — including a handler that
+   * returns nothing — is taken as landed, so a caller that does not report
+   * does not thereby claim a failure.
+   */
+  onAnswer: (task: HubTask, text: string, optionId?: string) => Promise<boolean> | undefined;
+  /**
+   * Answer an item that came from a THREAD rather than from the task's own
+   * decision: a reply on that thread, so the agent watching it hears the
+   * answer, and — on a declared item — recorded against the declaring comment
+   * so the queue drops it.
+   *
+   * Separate from `onComment` deliberately. Routing this through the plain
+   * comment handler is what the panel did before, and it lost the picked
+   * option (the comment route has nowhere to put one) and left the queue
+   * showing an item that had just been answered.
+   */
+  onAnswerThread?: (
+    task: HubTask,
+    item: PanelReviewItem,
+    text: string,
+    optionId?: string,
+  ) => Promise<boolean>;
+  /** Take back this task's recorded answer. Without it the answered banner
+   *  renders with no way out, which is the state this handler exists to end. */
+  onUndoAnswer?: (task: HubTask) => Promise<boolean> | undefined;
   onAssign: (task: HubTask, assignee: string) => void;
   /** The agents currently attached to this workspace — see `BoardHandlers`. */
   knownAgentIds?: string[];
@@ -2556,16 +2583,30 @@ function commentForm(
   form.addEventListener('submit', (ev) => {
     ev.preventDefault();
     const text = ta.value.trim();
-    if (!text) return;
+    if (!text) {
+      // An empty submit was a silent no-op: the button was enabled, the click
+      // registered, and nothing at all happened or was said.
+      requireText(ta, submit, 'Write something first');
+      return;
+    }
     ta.disabled = true;
     submit.disabled = true;
+    // Cleared HERE rather than in the `then`. Posting a comment reloads the
+    // discussion, which repaints the panel from inside this await — and
+    // `keepFields` snapshots this box on the way through. So the old clear ran
+    // on a detached textarea while the rebuilt one came back holding the
+    // comment that had just been posted, and the obvious second click posted
+    // it twice. Put back verbatim if the post is refused.
+    ta.value = '';
     // `Promise.resolve` rather than `await onSubmit(...)` so a handler that
     // returns nothing at all still settles here instead of throwing.
     void Promise.resolve(onSubmit(text))
       .then((ok) => {
-        if (ok) ta.value = '';
+        if (!ok) ta.value = text;
       })
-      .catch(() => {})
+      .catch(() => {
+        ta.value = text;
+      })
       .finally(() => {
         ta.disabled = false;
         submit.disabled = false;
@@ -3142,6 +3183,16 @@ export interface PanelReviewItem {
    *  agent watching that thread. Absent on the task's own decision, which is
    *  answered through `answer_decision`. */
   threadId?: string;
+  /** Which doc the thread lives in — a task's threads live in its body room,
+   *  but the item is carried verbatim rather than re-derived. */
+  docId?: string;
+  /** The comment carrying the declaration, so the answer is written against
+   *  the right one on a thread that declared twice. */
+  commentId?: string;
+  /** The item DECLARED what it wants (a `review` payload), which is what
+   *  makes the answer route legal for it. An inferred item answers by
+   *  replying and nothing else. */
+  declared?: boolean;
 }
 
 /**
@@ -3261,6 +3312,12 @@ export function panelReviewQueue(
       since: a.askedAt ?? a.since,
       ...(a.direct !== undefined ? { direct: a.direct } : {}),
       threadId: a.threadId,
+      docId: a.docId,
+      ...(a.commentId !== undefined ? { commentId: a.commentId } : {}),
+      // `declared` is the pair the answer route needs, not the payload alone:
+      // it records the answer against a COMMENT, so a declaration with no
+      // comment id has nothing to write on and answers by replying instead.
+      declared: r !== undefined && a.commentId !== undefined,
     });
   }
   const rank = (i: PanelReviewItem): number =>
@@ -3301,14 +3358,24 @@ function reviewQueueRegion(
   now: number,
   priorIndex: number,
 ): HTMLElement | null {
-  if (task.answer) {
-    const ans = document.createElement('p');
-    ans.className = 'hub-detail-answer';
-    ans.textContent = `Answered by ${task.answer.by}: “${task.answer.text}”`;
-    return ans;
-  }
+  // What was decided, and the way back out of it.
+  //
+  // This used to RETURN here, which retired the whole region the moment the
+  // task's own decision was answered — including thread items that were still
+  // open server-side. Measured in the browser 2026-08-18: answering the
+  // decision on a task with two open thread items left the reader with no
+  // queue at all and nothing saying two questions were still waiting. The
+  // answered line is now one part of the region, and the queue below it
+  // carries whatever is still open.
+  const answered = task.answer ? answeredNote(task, handlers) : null;
   const queue = panelReviewQueue(task, handlers.asks);
-  if (queue.length === 0) return null;
+  if (queue.length === 0) {
+    if (!answered) return null;
+    const only = document.createElement('section');
+    only.className = 'hub-decide hub-decide--answered';
+    only.append(answered);
+    return only;
+  }
   // `priorIndex < 0` means "this is a fresh open, there is no position to
   // keep" — so a deep link into a thread opens the queue AT that thread's
   // item rather than at whatever happened to be first.
@@ -3322,6 +3389,7 @@ function reviewQueueRegion(
   const region = document.createElement('section');
   region.className = 'hub-decide';
   region.dataset.reviewIndex = String(at);
+  if (answered) region.append(answered);
 
   const head = document.createElement('div');
   head.className = 'hub-decide-head';
@@ -3383,6 +3451,46 @@ function reviewQueueRegion(
   return region;
 }
 
+/**
+ * What was decided — and the way back out of it.
+ *
+ * Answering is a single click with no confirmation step, which is the right
+ * cost for the common case and unrecoverable for the stray one. The recovery
+ * chosen here is a persistent UNDO rather than a confirm dialog or a
+ * five-second toast, for three reasons: it does not tax the 99% of taps that
+ * are deliberate, it is still there when the reader notices the mistake a
+ * minute later, and it survives a reload because it is rendered from the
+ * stored answer rather than from a timer nobody can see. The write behind it
+ * is reversible too — the server moves the answer to `answerHistory` rather
+ * than dropping it.
+ */
+function answeredNote(task: HubTask, handlers: DetailHandlers): HTMLElement {
+  const wrap = document.createElement('div');
+  wrap.className = 'hub-detail-answered';
+  const ans = document.createElement('p');
+  ans.className = 'hub-detail-answer';
+  const answer = task.answer;
+  ans.textContent = answer ? `Answered by ${answer.by}: “${answer.text}”` : '';
+  wrap.append(ans);
+  if (!handlers.onUndoAnswer) return wrap;
+  const undo = document.createElement('button');
+  undo.type = 'button';
+  undo.className = 'hub-btn hub-detail-undo-answer';
+  undo.textContent = 'Undo';
+  undo.title = 'Take this answer back — it reopens the decision and keeps a record';
+  undo.setAttribute('aria-label', 'Undo this answer and reopen the decision');
+  undo.addEventListener('click', () => {
+    // Disabled for the round trip, never re-enabled here: either the panel
+    // repaints without this note, or the app's own failure toast says why.
+    undo.disabled = true;
+    void Promise.resolve(handlers.onUndoAnswer?.(task)).catch(() => {
+      undo.disabled = false;
+    });
+  });
+  wrap.append(undo);
+  return wrap;
+}
+
 /** One item's card: the blurb, then the ways to answer it. */
 function reviewItemCard(
   task: HubTask,
@@ -3430,9 +3538,30 @@ function reviewItemCard(
   // watching it hears the answer; answering the task's own decision goes
   // through `answer_decision`. Same card, two destinations — which is the
   // whole reason the item carries `threadId`.
-  const answer = (text: string, optionId?: string): void => {
-    if (item.threadId) void handlers.onComment?.(task, text, item.threadId);
-    else handlers.onAnswer(task, text, optionId);
+  //
+  // Every control on the card is disabled for the round trip. Without it the
+  // card sat unchanged while the write was in flight — measured 2026-08-18:
+  // a free-text answer on a thread item persisted server-side and repainted
+  // nothing for 2.5 seconds, so the natural retry posted the answer twice.
+  const controls: Array<HTMLButtonElement | HTMLTextAreaElement> = [];
+  const busy = (on: boolean): void => {
+    card.classList.toggle('is-busy', on);
+    for (const c of controls) c.disabled = on;
+  };
+  const answer = (text: string, optionId?: string, onFail?: () => void): void => {
+    busy(true);
+    const sent = item.threadId
+      ? handlers.onAnswerThread?.(task, item, text, optionId)
+      : handlers.onAnswer(task, text, optionId);
+    // Only an explicit `false` is a refusal. A handler that returns nothing
+    // has said nothing about success, and reading that as failure would put a
+    // "your words are still in the box" story over a write that landed.
+    void Promise.resolve(sent)
+      .then((ok) => {
+        if (ok === false) onFail?.();
+      })
+      .catch(() => onFail?.())
+      .finally(() => busy(false));
   };
 
   if (item.options && item.options.length > 0) {
@@ -3453,6 +3582,7 @@ function reviewItemCard(
         b.append(detail);
       }
       b.addEventListener('click', () => answer(o.label, o.id));
+      controls.push(b);
       opts.append(b);
     }
     card.append(opts);
@@ -3479,13 +3609,53 @@ function reviewItemCard(
   submit.className = 'hub-btn hub-btn-primary';
   submit.textContent = 'Record answer';
   form.append(hint, ta, submit);
+  controls.push(ta, submit);
   form.addEventListener('submit', (ev) => {
     ev.preventDefault();
     const text = ta.value.trim();
-    if (text) answer(text);
+    if (!text) {
+      // Not a silent no-op. An empty submit used to do literally nothing —
+      // enabled button, no message — which reads as a broken control rather
+      // than as a refusal.
+      requireText(ta, submit, 'Write an answer first');
+      return;
+    }
+    // Cleared BEFORE the round trip, not after it. Answering repaints the
+    // panel from inside the await, and `keepFields` snapshots this box on the
+    // way through — so a clear that runs after the write lands writes into a
+    // detached node while the rebuilt one is refilled with the words that
+    // were just sent. Restored verbatim if the write is refused.
+    ta.value = '';
+    answer(text, undefined, () => {
+      ta.value = text;
+    });
   });
   card.append(form);
   return card;
+}
+
+/**
+ * Say why a submit did nothing, next to the control that did nothing.
+ *
+ * A disabled button would be the tidier affordance and it is the wrong one
+ * here: these boxes are refilled by `restoreFields` after every repaint,
+ * which sets `.value` directly and fires no `input` event — so a button whose
+ * enabled state is driven by typing would sit disabled over a full box. This
+ * says the same thing at the moment it matters and needs no state to be kept
+ * in sync.
+ */
+function requireText(field: HTMLTextAreaElement, near: HTMLElement, message: string): void {
+  const form = near.closest('form');
+  const existing = form?.querySelector('.hub-form-error');
+  const note = existing instanceof HTMLElement ? existing : document.createElement('p');
+  note.className = 'hub-form-error';
+  note.textContent = message;
+  note.setAttribute('role', 'alert');
+  if (!existing) near.insertAdjacentElement('beforebegin', note);
+  field.focus();
+  // Clears itself the moment the reason goes away, so it never contradicts
+  // what the reader can see in the box.
+  field.addEventListener('input', () => note.remove(), { once: true });
 }
 
 /** The two tabs at the bottom of the panel, and which one is showing. */

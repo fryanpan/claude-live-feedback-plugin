@@ -199,6 +199,22 @@ describe('nothing fixed to the viewport can sit on the last control', () => {
   });
 });
 
+describe('the record block still says it opens', () => {
+  it('keeps the summary a list-item, so Chrome draws its disclosure triangle', () => {
+    // `display: flex` on a `<summary>` removes the `::marker` Chrome draws the
+    // triangle with — measured 2026-08-18: the row read as a heading, with
+    // nothing saying it opened anything. The flex was there for vertical
+    // alignment inside a 36px tap target, which `list-item` + padding buys
+    // without touching the marker.
+    const label = rule('.hub-detail-quote-label');
+    expect(label, 'the quote label lost its rule').not.toBe('');
+    expect(label).toMatch(/display:\s*list-item/);
+    expect(label).not.toMatch(/display:\s*flex/);
+    // The tap target it was sized for is still there.
+    expect(label).toMatch(/min-height:\s*36px/);
+  });
+});
+
 describe('the threading UI left no rules behind', () => {
   it('has no rule for a control the panel no longer renders', () => {
     // *"Stop supporting threaded comments and clean up all code related to

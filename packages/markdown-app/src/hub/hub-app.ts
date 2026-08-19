@@ -59,6 +59,7 @@ import {
   walkPosition,
 } from './hub-model.ts';
 import {
+  type PanelReviewItem,
   type TaskDiscussion,
   type TaskThread,
   type WalkProgress,
@@ -787,7 +788,9 @@ async function main(): Promise<void> {
         onCopyLink: (t) => void copyTaskLink(t),
         onStatusSet: (t, to) => void transitionTask(t, to),
         onTitleCommit: (t, title) => void renameTask(t, title),
-        onAnswer: (t, text) => void answerDecision(t, text),
+        onAnswer: (t, text, optionId) => answerTaskDecision(t, text, optionId),
+        onAnswerThread: (t, item, text, optionId) => answerPanelThreadItem(t, item, text, optionId),
+        onUndoAnswer: (t) => undoTaskAnswer(t),
         onAssign: (t, assignee) => void assignTask(t, assignee),
         knownAgentIds: knownAgentIds(),
         goalLabel: (id) => goalLabel(state.info?.goals ?? [], id),
@@ -1327,6 +1330,85 @@ async function main(): Promise<void> {
     return res.ok;
   }
 
+  /**
+   * The task panel's three answering doors, all of which owe the reader the
+   * same thing: the write, then a REPAINT of the panel they are looking at.
+   *
+   * The walkthrough got that for free — it re-derives its queue on every
+   * render — and the panel did not, because its queue is handed down from
+   * `state.reviewItems` and nothing re-rendered the panel when that list
+   * moved. Measured 2026-08-18: a free-text answer on a thread item persisted
+   * server-side and the card sat unchanged 2.5 seconds later, so the natural
+   * retry posted it twice.
+   */
+  async function answerTaskDecision(
+    task: HubTask,
+    text: string,
+    optionId?: string,
+  ): Promise<boolean> {
+    const ok = await answerDecision(task, text, optionId);
+    if (!ok) return false;
+    showToast('Answer recorded — Undo is on the ticket');
+    // The row itself arrives over the ydoc; this is what moves the panel's
+    // own queue on, since the review items are a REST-fed projection.
+    await loadReviewItems();
+    return true;
+  }
+
+  async function undoTaskAnswer(task: HubTask): Promise<boolean> {
+    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/answer/undo`, 'POST', {
+      author,
+    });
+    if (!res.ok) {
+      showToast('Taking the answer back failed');
+      return false;
+    }
+    showToast('Answer taken back — the decision is open again');
+    await loadReviewItems();
+    return true;
+  }
+
+  /**
+   * Answer an item the panel's queue got from a THREAD.
+   *
+   * Same two routes the walkthrough uses, for the same reason: a declared item
+   * records the answer against its declaring comment, an inferred one is
+   * answered by replying, and in both cases the REPLY is what takes the item
+   * out of the queue. The panel used to send this through the plain comment
+   * handler, which has nowhere to put the picked option and left the queue
+   * showing an item that had just been answered.
+   */
+  async function answerPanelThreadItem(
+    task: HubTask,
+    item: PanelReviewItem,
+    text: string,
+    optionId?: string,
+  ): Promise<boolean> {
+    const docId = item.docId ?? task.bodyDocId;
+    if (!item.threadId) return false;
+    const doc = encodeURIComponent(docId);
+    const thread = encodeURIComponent(item.threadId);
+    const res =
+      item.declared && item.commentId !== undefined
+        ? await send(`/api/docs/${doc}/threads/${thread}/answer`, 'POST', {
+            author,
+            text,
+            commentId: item.commentId,
+            ...(optionId !== undefined ? { optionId } : {}),
+          })
+        : await send(`/api/docs/${doc}/threads/${thread}/comments`, 'POST', { author, text });
+    if (!res.ok) {
+      showToast('Posting the answer failed — your text is still in the box');
+      return false;
+    }
+    showToast('Answer posted');
+    // Both, and in this order: the discussion so the reply appears in the
+    // stream below, the review items so the card it answered leaves the queue.
+    await loadDiscussion(task, true);
+    await loadReviewItems();
+    return true;
+  }
+
   /** "I can't answer this yet" — the decision stays open and unanswered. */
   async function requestMoreInfo(task: HubTask, question: string): Promise<boolean> {
     const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/more-info`, 'POST', {
@@ -1427,6 +1509,10 @@ async function main(): Promise<void> {
     );
     renderBoardRegion();
     renderHomeRegion();
+    // The task panel's review queue is handed down from this same list, so it
+    // is stale until this runs — which is why answering a card in the panel
+    // repainted nothing at all before it was here.
+    renderDetail();
   }
 
   async function loadAgents(): Promise<void> {
