@@ -662,22 +662,109 @@ describe('reviewThreadItems — declared review items vs the inferred band', () 
     expect(run([bare])[0].since).toBe(T0);
   });
 
-  // A person's reply ends the unanswered run, and a declaration inside a run
-  // that has ended is answered. This is the ONLY clearing mechanism, and it is
-  // the one that already existed — a second "handled" flag would immediately
-  // disagree with the first.
-  it('drops a declared item once a person has replied under it', () => {
+  /**
+   * The defect this band was built to make impossible, and it survived a
+   * release: a person typing ANYTHING into the task's one composer retired the
+   * question they had not answered.
+   *
+   * The composer's destination is derived (`composerTarget` in hub-render) as
+   * the thread of the newest comment — which, on a task an agent has just
+   * asked about, is the ask's own thread. So an ordinary remark landed there,
+   * ended the unanswered run, and the whole card — headline, why, every option
+   * button — disappeared and stayed gone across a reload, with the decision
+   * never answered.
+   *
+   * Adjacency is therefore not the clearing rule for a DECLARED item. An ask
+   * an agent wrote by hand is retired by being answered or by its thread being
+   * resolved, and by nothing else.
+   */
+  it('keeps a declared item when a person comments without answering it', () => {
+    const [item] = run([
+      thread({
+        id: 'th-chat',
+        comments: [
+          comment({ text: 'need you', review: declaration(), ts: T0 }),
+          comment({ kind: 'person', text: 'Reading this now, one sec.', ts: T0 + 10 }),
+        ],
+      }),
+    ]);
+    expect(item?.band).toBe('declared');
+    expect(item?.ask).toBe(declaration().headline);
+    // The options are what vanished on the screen, so they are what the
+    // assertion is about — the row alone would not have re-rendered the card.
+    expect(item?.review?.options).toHaveLength(2);
+  });
+
+  /**
+   * The positive control for the test above, in both directions.
+   *
+   * Without the first half a collector that simply never dropped a declared
+   * item would pass — and a queue nothing can leave is the opposite failure,
+   * every bit as bad. Without the second, a collector that kept EVERY thread
+   * alive past a person's reply would pass too, which would put every finished
+   * conversation on the board back on the strip.
+   */
+  it('drops a declared item once it is answered, and still drops a plain thread on a reply', () => {
+    // Answered by tapping an option: the declaration carries the stamp.
     expect(
       run([
         thread({
-          id: 'th-ans',
+          id: 'th-opt',
           comments: [
-            comment({ text: 'need you', review: declaration(), ts: T0 }),
-            comment({ kind: 'person', text: 'Keep them dimmed.', ts: T0 + 10 }),
+            comment({ text: 'need you', review: declaration({ answeredWith: 'dim' }), ts: T0 }),
+            comment({ kind: 'person', text: 'Keep dimmed', ts: T0 + 10 }),
           ],
         }),
       ]),
     ).toEqual([]);
+    // Answered in the reader's own words: no option id, so `answeredAt` is the
+    // only thing that records it. A typed answer is not a lesser answer.
+    expect(
+      run([
+        thread({
+          id: 'th-typed',
+          comments: [
+            comment({ text: 'need you', review: declaration({ answeredAt: T0 + 9 }), ts: T0 }),
+            comment({ kind: 'person', text: 'Neither — dim them on mobile only.', ts: T0 + 10 }),
+          ],
+        }),
+      ]),
+    ).toEqual([]);
+    // And the band that was never about declarations is untouched: an ordinary
+    // agent note a person has replied to is finished, exactly as before.
+    expect(
+      run([
+        thread({
+          id: 'th-plain',
+          comments: [
+            comment({ text: 'Done — merged in a1b2c3d.', ts: T0 }),
+            comment({ kind: 'person', text: 'Thanks.', ts: T0 + 10 }),
+          ],
+        }),
+      ]),
+    ).toEqual([]);
+  });
+
+  /**
+   * A re-declaration after an answer is a NEW question, and the newest
+   * declaration is the one that decides. Pinned because the rule is "the
+   * newest declaration, if it is unanswered" rather than "any unanswered
+   * declaration anywhere in the thread" — the latter would resurrect a
+   * question the agent itself had moved on from.
+   */
+  it('follows the newest declaration when an answered one is followed by another', () => {
+    const [item] = run([
+      thread({
+        id: 'th-again',
+        comments: [
+          comment({ text: 'first', review: declaration({ answeredAt: T0 + 1 }), ts: T0 }),
+          comment({ kind: 'person', text: 'Hide them.', ts: T0 + 2 }),
+          comment({ text: 'second', review: declaration({ headline: 'And on mobile?' }), ts: T0 + 3 }),
+          comment({ kind: 'person', text: 'looking', ts: T0 + 4 }),
+        ],
+      }),
+    ]);
+    expect(item?.ask).toBe('And on mobile?');
   });
 
   it('drops a declared item once the thread is resolved', () => {

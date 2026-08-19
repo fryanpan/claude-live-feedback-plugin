@@ -18,7 +18,7 @@
  * notion of who counts as an agent is exactly the drift this codebase has
  * already been bitten by.
  */
-import type { Comment, ReviewPayload, Thread } from '@feedback/core';
+import { type Comment, type ReviewPayload, reviewAnswered, type Thread } from '@feedback/core';
 import { classifyActor } from './activity.ts';
 
 /** How much of the question rides along to the strip. Enough to recognise the
@@ -164,6 +164,12 @@ export function awaitingPerson(thread: Thread): Comment | null {
  * equivalence is the safety property of this whole change — the set of threads
  * on the strip cannot move, so nothing that surfaces today can stop surfacing.
  * Only which comment is quoted, and which timestamp is called the wait, change.
+ *
+ * The equivalence is still exact and this function is unchanged. What changed
+ * later is that `reviewThreadItems` no longer uses it as its ONLY membership
+ * test: a declared item is admitted by `pendingDeclaration` as well, so the
+ * queue can hold something a person has already spoken under. That widens the
+ * queue and cannot narrow it — every thread this run admits is still admitted.
  */
 export function unansweredRun(thread: Thread): Comment[] {
   if (thread.status !== 'open') return [];
@@ -179,6 +185,42 @@ export function unansweredRun(thread: Thread): Comment[] {
     run.unshift(c);
   }
   return run;
+}
+
+/**
+ * The declaration on this thread that nobody has answered, or null.
+ *
+ * The NEWEST declaration decides, and only it: an agent that asks again has
+ * moved on from what it asked before, so an older unanswered payload buried
+ * under a newer answered one is history rather than a live question. This is
+ * the same "newest declaration wins" rule the row already used — it is only
+ * asked over the whole thread now instead of over the unanswered run.
+ *
+ * That widening is the fix for the defect this module made possible. The run
+ * ends the moment a person types anything, and the task panel's single
+ * composer aims at the newest comment's thread — which on a task an agent just
+ * asked about is the ask's own thread. So "one sec, reading it" retired a
+ * decision that had never been answered, permanently, with no surface anywhere
+ * reporting it. An authored ask is retired by an ANSWER (`reviewAnswered`) or
+ * by its thread being resolved, and by nothing else.
+ *
+ * Deliberately NOT extended to the inferred band. A thread whose newest
+ * comment is a status note has no author's claim that anything is being asked,
+ * and adjacency is the only signal there is; keeping those past a person's
+ * reply would put every finished conversation on the board back on the strip,
+ * which is the failure the declared band exists to undo.
+ */
+export function pendingDeclaration(thread: Thread): Comment | null {
+  if (thread.status !== 'open') return null;
+  // By time, for the reason `unansweredRun` sorts: array order is a CRDT's
+  // merge order, not a clock.
+  const byTime = [...(thread.comments ?? [])].sort((a, b) => a.ts - b.ts);
+  for (let i = byTime.length - 1; i >= 0; i -= 1) {
+    const c = byTime[i];
+    if (c?.review === undefined) continue;
+    return reviewAnswered(c.review) ? null : c;
+  }
+  return null;
 }
 
 /**
@@ -411,11 +453,13 @@ export function reviewThreadItems(args: {
   ) => {
     for (const thread of args.source.threadsOf(docId)) {
       const run = unansweredRun(thread);
-      if (run.length === 0) continue;
-
       // A DECLARATION beats every heuristic below it, and the newest one wins
       // for the same reason the newest ask does: it is the one still standing.
-      const declaring = [...run].reverse().find((c) => c.review !== undefined);
+      // Asked over the whole thread rather than over the run, so a person
+      // talking in the thread cannot retire a question nobody answered.
+      const declaring = pendingDeclaration(thread);
+      if (run.length === 0 && declaring === null) continue;
+
       if (declaring?.review) {
         items.push({
           kind,

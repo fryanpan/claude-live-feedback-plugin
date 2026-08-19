@@ -2011,8 +2011,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           });
         }
         // The human's queue, to the board's agent-side `next` below: every
-        // open thread across this workspace's tasks and docs whose newest
-        // comment is an agent's. Decisions are NOT here — the board already
+        // open thread across this workspace's tasks and docs that is waiting
+        // on a person — its newest comment is an agent's, OR it carries a
+        // declared item nobody has answered, which stays whatever else is
+        // said in the thread. Decisions are NOT here — the board already
         // holds every task, so shipping them again would put the priority
         // rule in two places; the client merges the two halves and orders
         // them (see `reviewQueue` in hub-model).

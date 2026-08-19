@@ -84,6 +84,35 @@ export interface ReviewPayload {
    * lesser answer.
    */
   answeredWith?: string;
+  /**
+   * When a person answered — stamped for EVERY answer, tapped or typed.
+   *
+   * This is what makes "answered" a fact about the item rather than a guess
+   * about the conversation around it. The queue used to infer it from
+   * adjacency ("a person spoke last"), which meant any remark in the thread
+   * retired an unanswered question: the task panel's single composer derives
+   * its destination as the newest comment's thread, so one line of "reading
+   * this now" into a task an agent had just asked about deleted the card,
+   * options and all, permanently and across a reload.
+   *
+   * `answeredWith` could not carry this on its own — it is absent on a typed
+   * answer, and a typed answer is not a lesser answer. Both are read as
+   * answered (see `reviewAnswered`), so an item answered by tapping before
+   * this field existed stays answered.
+   */
+  answeredAt?: number;
+}
+
+/**
+ * Has a person answered this item?
+ *
+ * One predicate, because the queue, the card and any future surface must not
+ * each decide it — and because the two stamps mean the same thing arriving by
+ * two routes: `answeredAt` on every answer since it existed, `answeredWith`
+ * alone on an option tapped before it did.
+ */
+export function reviewAnswered(review: ReviewPayload): boolean {
+  return review.answeredAt !== undefined || review.answeredWith !== undefined;
 }
 
 /** Every limit in one place, exported so a card can show a counter that
@@ -347,6 +376,12 @@ export function readReviewPayload(value: unknown): ReviewPayload | undefined {
   if (typeof value.lookFor === 'string' && value.lookFor.trim() !== '') out.lookFor = value.lookFor;
   if (typeof value.detail === 'string' && value.detail.trim() !== '') out.detail = value.detail;
   if (typeof value.answeredWith === 'string') out.answeredWith = value.answeredWith;
+  // Read back defensively like the rest: a peer could sync anything here, and
+  // an item whose answer stamp arrived as a string must not read as answered
+  // by accident — nor as unanswered, which would put it back on the queue.
+  if (typeof value.answeredAt === 'number' && Number.isFinite(value.answeredAt)) {
+    out.answeredAt = value.answeredAt;
+  }
 
   if (Array.isArray(value.options)) {
     const options: ReviewOption[] = [];
