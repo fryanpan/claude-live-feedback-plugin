@@ -1434,6 +1434,29 @@ function actorName(ev: ActivityEvent): string {
   return actor?.name ?? 'someone';
 }
 
+/**
+ * How an assignee id reads to a person.
+ *
+ * `human` is a reserved id meaning "a person, unspecified" — every other value
+ * is an agent's own name and reads fine as it is. Rendering the reserved word
+ * raw put the literal `human` in the dropdown and in its accessible name,
+ * which is an implementation detail presented as user-facing copy.
+ *
+ * "A person" rather than "Me" or a name: the id says a person owns this and
+ * says nothing about WHICH, and inventing the reader is how a shared board
+ * starts telling two people different things about the same row.
+ *
+ * It lives in the MODEL rather than beside the picker because the picker is
+ * not the only surface that renders an assignee: `task.assigned` in
+ * `describeEvent` renders the same id into the activity trail, and it read
+ * `Panel Reviewer → human` while the dropdown two inches above it said "A
+ * person". Two copies of "how does this id read" drift, and the drift lands in
+ * the feature's own subject.
+ */
+export function assigneeLabel(id: string): string {
+  return id === 'human' ? 'A person' : id;
+}
+
 /** A commit as a human reads it. Undefined stays undefined — a blank sha is
  *  not a short sha, and printing `commit ` with nothing after it is worse
  *  than saying "evidence". */
@@ -1462,7 +1485,7 @@ export function describeEvent(ev: ActivityEvent, titleOf: (taskId: string) => st
     case 'task.transitioned':
       return `${actorName(ev)} moved ${title()}: ${String(ev.from)} → ${String(ev.to)}`;
     case 'task.assigned':
-      return `${actorName(ev)} assigned ${title()}: ${String(ev.from)} → ${String(ev.to)}`;
+      return `${actorName(ev)} assigned ${title()}: ${assigneeLabel(String(ev.from))} → ${assigneeLabel(String(ev.to))}`;
     case 'task.regrouped':
       return `${actorName(ev)} regrouped ${title()}: ${String(ev.fromGoal)} → ${String(ev.toGoal)}`;
     case 'task.due_set': {

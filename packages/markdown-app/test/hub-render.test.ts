@@ -3402,6 +3402,16 @@ describe('the panel’s review queue', () => {
     // Newest first, and the stored transitions are still in the same list.
     expect(rows[0]).toContain('rewrote the description');
     expect(rows.some((r) => r.includes('→'))).toBe(true);
+    // The reserved id reads the same way here as it does in the picker two
+    // inches above it. Found in a browser once the tab HAD rows to read:
+    // the dropdown said "A person" while this line said `→ human`, because
+    // `assigneeLabel` lived beside the picker and `describeEvent` never saw
+    // it. The positive control is the other half of the same row — an agent
+    // id is not a reserved word and must still render verbatim.
+    const assigned = rows.find((r) => r.includes('assigned')) ?? '';
+    expect(assigned).toContain('A person');
+    expect(assigned).toContain('agent-index');
+    expect(assigned).not.toMatch(/\bhuman\b/);
   });
 
   it('names the description, and separates it from the fields and the queue', () => {

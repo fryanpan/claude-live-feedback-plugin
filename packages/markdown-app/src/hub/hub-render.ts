@@ -44,6 +44,7 @@ import {
   type UptimeReport,
   activityRows,
   appendDictation,
+  assigneeLabel,
   describeEvent,
   dropIndexFor,
   dropTarget,
@@ -386,22 +387,6 @@ export interface BoardHandlers {
  *  than somebody, so a task still carrying it is UNOWNED, not assigned —
  *  and the API refuses to hand a task to it. */
 const GENERIC_ASSIGNEE = 'agent';
-
-/**
- * How an assignee id reads to a person.
- *
- * `human` is a reserved id meaning "a person, unspecified" — every other value
- * is an agent's own name and reads fine as it is. Rendering the reserved word
- * raw put the literal `human` in the dropdown and in its accessible name,
- * which is an implementation detail presented as user-facing copy.
- *
- * "A person" rather than "Me" or a name: the id says a person owns this and
- * says nothing about WHICH, and inventing the reader is how a shared board
- * starts telling two people different things about the same row.
- */
-export function assigneeLabel(id: string): string {
-  return id === 'human' ? 'A person' : id;
-}
 
 /**
  * Who has this task, as a picker over everyone it could go to.
