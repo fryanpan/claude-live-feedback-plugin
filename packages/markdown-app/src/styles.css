@@ -568,19 +568,19 @@ body.hub-body {
   margin: 0 auto;
   padding: 0 14px calc(24px + var(--safe-bottom));
 }
-/* Four areas, and the order left-to-right is the order of importance: where
-   you are, what this workspace is, where you can go, who is here. Named areas
-   rather than bare columns because the ≤1100px band re-flows `nav` onto its
-   own row and nothing else moves — with positional columns that re-flow is a
-   rewrite of every child's placement. */
+/* Three areas, and the order left-to-right is the order of importance: where
+   you are, what this workspace is, who is here. The nav is NOT here — on wide
+   screens it is the left rail inside `.hub-main` (Bryan, 2026-08-18: "on
+   desktop and laptop screens, home, tasks, etc. should be in the side drawer,
+   not top"), a strip above the content at ≤1100px, and the fixed bottom bar
+   on a phone. */
 .hub-topbar {
   /* The settings popover anchors here: absolute against the header, so it
-     hangs off the header's bottom-right whatever row count the ≤1100px
-     re-flow gives the bar. */
+     hangs off the header's bottom-right. */
   position: relative;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
-  grid-template-areas: "back name nav cluster";
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: "back name cluster";
   align-items: center;
   gap: 10px;
   min-height: 48px;
@@ -998,7 +998,11 @@ body.hub-body {
    the horizontal-overflow bug the 3-column layout was already guarding. */
 .hub-main {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  /* First track is the nav rail (max-content so it hugs the rail's own
+     width, collapsed or not); second is the one content track. Exactly one
+     of #hub-home / .hub-board-col is display:none at a time, so the visible
+     one always lands in the content track. */
+  grid-template-columns: max-content minmax(0, 1fr);
   gap: 20px;
   align-items: start;
 }
@@ -1692,24 +1696,40 @@ body.hub-body {
    The per-workspace Home page (approved mockup a30a15d): the since-last-read
    brief first, then the review queue, on a reading column.
 
-   The nav was a left rail; it is a tab row in the topbar now (Bryan,
-   2026-08-18: Home / Tasks / Activity as a tab structure, with My Tasks a
-   top-level item beside Tasks rather than a filter buried in the board). The
-   rail's collapse affordance went with it — a row of four tabs has nothing to
-   collapse. It is still the fixed bottom bar on a phone; those rules live in
-   the ≤900px block and are unchanged by the move, because a `position: fixed`
-   element does not care which parent it hangs off. */
+   The nav is a left rail on wide screens (Bryan, 2026-08-18: "on desktop and
+   laptop screens, home, tasks, etc. should be in the side drawer, not top" —
+   reversing the brief topbar-tabs detour), collapsible to icons via the
+   button at its foot, with the choice persisted in localStorage. At ≤1100px
+   it becomes a horizontal strip above the content, and on a phone the fixed
+   bottom bar — those bands live in their media blocks below. */
 .hub-nav {
-  grid-area: nav;
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-self: stretch;
+  width: 170px;
   gap: 2px;
-  min-width: 0;
-  overflow-x: auto;
+  padding: 12px 8px;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+  transition: width 150ms ease;
+  overflow-x: hidden;
   scrollbar-width: none;
 }
 .hub-nav::-webkit-scrollbar {
   display: none;
+}
+.hub-nav--collapsed {
+  width: 58px;
+}
+.hub-nav--collapsed .hub-nav-label {
+  display: none;
+}
+/* The collapse toggle sits at the rail's foot, visually quieter than the
+   nav items above it. Hidden in the strip/bottom-bar bands — a row of tabs
+   has nothing to collapse. */
+.hub-nav-collapse {
+  margin-top: auto;
+  font-weight: 500;
 }
 .hub-nav-item {
   display: flex;
@@ -3080,30 +3100,36 @@ a.hub-link-chip:hover {
   display: none;
 }
 
-/* --- ≤1100px: the topbar breaks to two rows ---
+/* --- ≤1100px: the nav rail becomes a horizontal strip above the content ---
 
-   This band used to also stack the three-column layout, because the two side
-   rails and their gaps cost a flat 500px whatever the window was and starved
-   the board at the bottom of its own range (measured at a 901px viewport: a
-   373px board column, a 239px row title — worse than the same board on a
-   430px phone). Removing the rails removed that arithmetic entirely: the
-   board is one full-width track at every size now, so only the topbar rule
-   survives here.
+   A 170px rail plus its gap costs too much of the board's width at laptop-
+   window sizes, so the rail folds up into a tab strip on its own row. The
+   collapse affordance goes with it — a row of tabs has nothing to collapse.
 
    Everything else in this file keys off 900px — the full-screen detail panel,
    the full-screen walkthrough, the badge drops, the row padding — because
    those are about a phone-shaped screen rather than about column arithmetic. */
 @media (max-width: 1100px) {
-  /* The tabs drop to their own row under the name, so the workspace name and
-     the cluster stop competing with four labels for one 48px line. Only the
-     areas template changes — every child keeps the `grid-area` it was placed
-     by, which is why this is named areas and not columns. */
-  .hub-topbar {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    grid-template-areas:
-      "back name cluster"
-      "nav nav nav";
-    padding-bottom: 4px;
+  .hub-main {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+  /* Every rail declaration gets an explicit undo here — a media query adds
+     no specificity, so anything not reset keeps the rail value. */
+  .hub-nav {
+    flex-direction: row;
+    align-items: center;
+    align-self: auto;
+    width: auto;
+    padding: 6px 8px;
+    background: none;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    transition: none;
+    overflow-x: auto;
+  }
+  .hub-nav-collapse {
+    display: none;
   }
   .hub-home {
     padding-top: 4px;
@@ -3127,12 +3153,8 @@ a.hub-link-chip:hover {
     overflow-x: visible;
     background: var(--bg-panel);
     border-top: 1px solid var(--border);
-    padding-bottom: var(--safe-bottom);
-  }
-  /* The topbar's second row now holds nothing in flow, so it costs no height;
-     the tabs are the bar at the foot of the screen. */
-  .hub-topbar {
-    padding-bottom: 0;
+    border-bottom: none;
+    padding: 0 0 var(--safe-bottom);
   }
   .hub-nav-item {
     flex: 1;
