@@ -111,20 +111,41 @@ function pluginVersionOf(source: string, label: string): string {
   return v;
 }
 
-function marketplaceVersionOf(source: string, label: string): string {
-  const manifest = JSON.parse(source);
-  const entry = (manifest.plugins ?? []).find((p: { name?: string }) => p.name === 'live-feedback');
-  if (!entry) fail(`${label} has no plugins[] entry named "live-feedback".`);
-  if (typeof entry.version !== 'string') fail(`${label}'s live-feedback entry has no "version".`);
-  return entry.version;
+function pluginNameOf(source: string, label: string): string {
+  const name = JSON.parse(source).name;
+  if (typeof name !== 'string') fail(`${label} is missing a top-level "name" string.`);
+  return name;
+}
+
+/**
+ * The entry this repo's plugin manifest names. Matching on a hardcoded name is
+ * what the 2026-08-18 rename broke: the literal was `live-feedback`, so the
+ * gate would have failed to find an entry the same commit had just renamed —
+ * reporting a malformed marketplace rather than a version problem. Take the
+ * name from the plugin manifest, and fall back to the sole entry, since a
+ * one-plugin marketplace has no ambiguity to resolve.
+ */
+function marketplaceVersionOf(source: string, label: string, pluginName: string): string {
+  const plugins: { name?: string; version?: unknown }[] = JSON.parse(source).plugins ?? [];
+  const entry =
+    plugins.find((p) => p.name === pluginName) ?? (plugins.length === 1 ? plugins[0] : undefined);
+  if (!entry) {
+    fail(
+      `${label} has no plugins[] entry named "${pluginName}" (and is not a single-plugin file).`,
+    );
+  }
+  if (typeof entry.version !== 'string') fail(`${label}'s "${entry.name}" entry has no "version".`);
+  return entry.version as string;
 }
 
 // --- invariant 1: the manifests agree -------------------------------------
 
-const pluginVersion = pluginVersionOf(readFileSync(PLUGIN_MANIFEST, 'utf8'), PLUGIN_MANIFEST);
+const pluginManifestSource = readFileSync(PLUGIN_MANIFEST, 'utf8');
+const pluginVersion = pluginVersionOf(pluginManifestSource, PLUGIN_MANIFEST);
 const marketVersion = marketplaceVersionOf(
   readFileSync(MARKETPLACE_MANIFEST, 'utf8'),
   MARKETPLACE_MANIFEST,
+  pluginNameOf(pluginManifestSource, PLUGIN_MANIFEST),
 );
 const current = parseSemver(pluginVersion, PLUGIN_MANIFEST);
 parseSemver(marketVersion, MARKETPLACE_MANIFEST);

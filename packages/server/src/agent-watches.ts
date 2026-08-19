@@ -13,7 +13,7 @@
  *
  * This store keeps the SET, keyed on the agent's stable identity (the same
  * `AUTHOR.id` every other MCP call carries — `agent-<slug>` from
- * `FEEDBACK_AGENT_NAME`), so a respawned child can ask "what was I watching?"
+ * `CW_AGENT_NAME`), so a respawned child can ask "what was I watching?"
  * and re-wire it. The server never opens the streams itself: the subscription
  * still lives in the child, because the child is the only thing that can push
  * into the session. What the server owns is the memory of it.
@@ -39,7 +39,7 @@
  *   time a brand-new doc legitimately does not exist yet. A watch set is
  *   subscription state, not user content — pruning it is not a soft-delete
  *   concern (see CLAUDE.md, "the rule is about user content and history").
- * - **The shared identity is refused.** `FEEDBACK_AGENT_NAME` unset resolves
+ * - **The shared identity is refused.** `CW_AGENT_NAME` unset resolves
  *   every session to `known-agent`, and a set keyed on that would restore the
  *   union of every anonymous session's watches into each of them. Same rule
  *   the task owner check applies to the bare word "agent": a category is not
@@ -61,7 +61,7 @@ export const SHARED_AGENT_IDS = new Set(['known-agent', 'agent']);
 export const SHARED_IDENTITY_ERROR = 'shared-identity';
 export const SHARED_IDENTITY_MESSAGE =
   'This session has no stable identity — its watches cannot be kept across restarts. ' +
-  'Set FEEDBACK_AGENT_NAME in the launch environment (needs a session restart) so watches ' +
+  'Set CW_AGENT_NAME in the launch environment (needs a session restart) so watches ' +
   'key to a name rather than to the shared "agent" identity every anonymous session resolves to.';
 
 /** A watch key is a docId or `ws:<workspaceId>` — the MCP child's own map keys. */

@@ -1,11 +1,11 @@
 ---
 name: editing-review-docs
-description: Use whenever you're about to edit a markdown file that might be under live review via the live-feedback plugin. Every review doc is backed by a file on disk; edits must flow through the MCP tools so the plugin keeps the live editor and the file in sync.
+description: Use whenever you're about to edit a markdown file that might be under live review via the claude-workspaces plugin. Every review doc is backed by a file on disk; edits must flow through the MCP tools so the plugin keeps the live editor and the file in sync.
 ---
 
-# Editing files that are under live-feedback review
+# Editing files that are under claude-workspaces review
 
-The live-feedback plugin's mental model is one rule:
+The claude-workspaces plugin's mental model is one rule:
 **every markdown review doc is a file on disk.**
 
 When an agent calls `create_review_doc(docId, path)`, the server reads
@@ -30,7 +30,7 @@ land surgically and the reviewer sees the change appear in place.
    ends with) the path you're about to edit.
 2. If you find one — that file is under review. Edit through the MCP
    tools below.
-3. If you don't find one (or the live-feedback MCP isn't available),
+3. If you don't find one (or the claude-workspaces MCP isn't available),
    normal file edits are fine — the file isn't under review.
 
 ## Direct edits vs suggestions
@@ -140,7 +140,8 @@ Use a label like `"ux-finding"`, `"code-review"`, `"a11y"` in
 
 ## Signals the file is under review
 
-- The user said "review", "live feedback", or "the editor".
+- The user said "review", "workspace", "live feedback", or "the editor" — the
+  old name still reaches people, so it stays a trigger.
 - A message arrived as `<channel source="live-feedback" ...>`.
 - `list_docs` returns a doc whose `sourceUrl` matches your target
   path. **Sole-authoritative check** — the others are just hints.

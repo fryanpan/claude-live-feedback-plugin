@@ -300,7 +300,7 @@ export class VoiceRouter {
  * The real Haiku completer, or null when the operator hasn't opted in.
  *
  * Consent is the SAME dedicated keychain entry the summarizer uses
- * (`live-feedback-summary-api-key` / LIVE_FEEDBACK_SUMMARY_API_KEY): adding
+ * (`claude-workspaces-summary-api-key` / CW_SUMMARY_API_KEY): adding
  * it is the act of consenting to LF→api.anthropic.com traffic, and voice
  * transcripts are the speaker's own words sent by their own explicit action.
  * A generic ANTHROPIC_API_KEY in the environment is deliberately not

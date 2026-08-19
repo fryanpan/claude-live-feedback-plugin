@@ -1547,7 +1547,7 @@ const PLUGIN_DOMAIN =
  * session BACKWARDS a version in exactly this situation.
  */
 const PLUGIN_FIX =
-  'Run: command claude plugin update live-feedback@claude-live-feedback — then restart that session.';
+  'Run: command claude plugin update claude-workspaces@claude-workspaces — then restart that session.';
 
 /** `(2 checked)`, or nothing at all when the server did not send a count. */
 function checkedClause(checked: number | undefined): string {
