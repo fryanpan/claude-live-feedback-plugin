@@ -9,19 +9,19 @@
 #
 #     Connection failed (ENOENT): Executable not found in $PATH: "node"
 #
-# and from inside the session live-feedback was simply absent. Reconnecting
+# and from inside the session the workspace tools were simply absent. Reconnecting
 # doesn't help — it reuses the config the session already resolved.
 #
 # /bin/sh is the one interpreter guaranteed to be present, so it does the
 # resolution itself instead of trusting the inherited environment.
 #
-# Usage: /bin/sh live-feedback-mcp.sh <path-to-mcp/index.js> [args...]
+# Usage: /bin/sh claude-workspaces-mcp.sh <path-to-mcp/index.js> [args...]
 
 set -u
 
 bundle="${1:-}"
 if [ -z "$bundle" ]; then
-  echo "live-feedback-mcp: no bundle path given (expected mcp/index.js as \$1)" >&2
+  echo "claude-workspaces-mcp: no bundle path given (expected mcp/index.js as \$1)" >&2
   exit 64
 fi
 shift
@@ -81,7 +81,7 @@ find_node() {
 }
 
 node_bin=$(find_node) || {
-  echo "live-feedback-mcp: could not find a node binary." >&2
+  echo "claude-workspaces-mcp: could not find a node binary." >&2
   echo "  Looked on PATH, in \${NVM_DIR:-\$HOME/.nvm}/versions/node, and in" >&2
   echo "  /opt/homebrew/bin, /usr/local/bin, /usr/bin, /snap/bin." >&2
   echo "  Install node, or put it on the PATH the session is launched with." >&2
@@ -89,7 +89,7 @@ node_bin=$(find_node) || {
 }
 
 # A seam for the test: prove resolution works without starting a stdio server.
-if [ "${LF_MCP_PRINT_NODE:-}" = "1" ]; then
+if [ "${CW_MCP_PRINT_NODE:-${LF_MCP_PRINT_NODE:-}}" = "1" ]; then
   echo "$node_bin"
   exit 0
 fi

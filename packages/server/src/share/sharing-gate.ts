@@ -17,7 +17,7 @@
  *   - At runtime, persisted: `POST /api/share/enabled {enabled:false}` or the
  *     `set_sharing_enabled` MCP tool. Survives restarts, because a switch that
  *     silently flips back on after a crash is worse than no switch.
- *   - `LF_SHARING_DISABLED=1` in the environment: off AND LOCKED — the runtime
+ *   - `CW_SHARING_DISABLED=1` in the environment: off AND LOCKED — the runtime
  *     call refuses with `env_locked`. That is the one to use while a security
  *     review is in flight, because it cannot be undone by anything short of
  *     editing the service definition, including by this process's own API.
@@ -37,7 +37,7 @@ export type SetResult = { ok: true; enabled: boolean } | { ok: false; error: 'en
 
 export interface SharingGateOptions {
   dataDir: string;
-  /** True when LF_SHARING_DISABLED is set — off and not runtime-changeable. */
+  /** True when CW_SHARING_DISABLED is set — off and not runtime-changeable. */
   envLocked?: boolean;
 }
 
@@ -84,7 +84,7 @@ export class SharingGate {
 
   /**
    * Flip the switch and persist. Returns the resulting state, or `env_locked`
-   * when LF_SHARING_DISABLED is in force — a lock the process can talk itself
+   * when CW_SHARING_DISABLED is in force — a lock the process can talk itself
    * out of is not a lock.
    */
   setEnabled(enabled: boolean): SetResult {

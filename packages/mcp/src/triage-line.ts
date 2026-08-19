@@ -42,7 +42,7 @@ export interface TriageRequestPayload {
  * Exported so the same name reaches the OTHER delivery path (a queued edit
  * handed over on `attach_agent`), which is the one a lead who was away gets.
  */
-export const RETRIAGE_SKILL = 'live-feedback:handling-a-goal-change';
+export const RETRIAGE_SKILL = 'claude-workspaces:handling-a-goal-change';
 
 /**
  * What triaging ONE task asks for, spelled out in the request itself.
@@ -80,7 +80,7 @@ const SHAPE_THEN_PLACE =
  * for the same reason: the away lead gets the queued rows on `attach_agent`,
  * and both delivery paths must name the same contract.
  */
-export const TASK_REVIEW_SKILL = 'live-feedback:reviewing-task-shape';
+export const TASK_REVIEW_SKILL = 'claude-workspaces:reviewing-task-shape';
 
 /**
  * The part of the request that is the WORK — the exact ids to re-place, and

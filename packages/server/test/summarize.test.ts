@@ -14,7 +14,12 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import { summaryHash } from '@feedback/core';
 import { SUMMARY_PROMPT_VERSION, type StoredSummary } from '@feedback/core/summary-prompt';
 import type { Thread, User } from '@feedback/core/types';
-import { ThreadSummarizer } from '../src/summarize.ts';
+import {
+  KEYCHAIN_SERVICE,
+  KEYCHAIN_SERVICE_LEGACY,
+  ThreadSummarizer,
+  resolveKeyFrom,
+} from '../src/summarize.ts';
 
 const alice: User = { id: 'u1', name: 'Alice', kind: 'known', color: '#111111' };
 
@@ -148,7 +153,26 @@ describe('ThreadSummarizer.generate', () => {
     expect(await s2.generate(thread())).toBeNull();
   });
 
-  it('LF_SUMMARIES=0 switches it off even with a key present', async () => {
+  it('CW_SUMMARIES=0 switches it off even with a key present', async () => {
+    const { impl, calls } = fakeFetch();
+    process.env.CW_SUMMARIES = '0';
+    try {
+      const s = new ThreadSummarizer({ apiKey: 'k', fetchImpl: impl });
+      expect(s.enabled).toBe(false);
+      expect(await s.generate(thread())).toBeNull();
+      expect(calls).toHaveLength(0);
+    } finally {
+      Reflect.deleteProperty(process.env, 'CW_SUMMARIES');
+    }
+  });
+
+  // Kept on the PRE-RENAME spelling on purpose: this is the only thing that
+  // asserts an off-switch already set in a launchd plist or a shell profile
+  // still switches the feature off. A launch environment is the one input the
+  // rename cannot restart on somebody's behalf, and the failure would be a
+  // server that starts sending comment text off-machine for an operator who
+  // had turned that off.
+  it('the pre-rename LF_SUMMARIES=0 still switches it off', async () => {
     const { impl, calls } = fakeFetch();
     process.env.LF_SUMMARIES = '0';
     const s = new ThreadSummarizer({ apiKey: 'k', fetchImpl: impl });
@@ -695,5 +719,58 @@ describe('ThreadSummarizer.backfill', () => {
     expect(await drain).toEqual({ attempted: 1, stored: 1 });
     expect(Date.now() - t0).toBeLessThan(1_000);
     expect(calls).toHaveLength(1); // and no more went out after it
+  });
+});
+
+/**
+ * The keychain half of the rename. `scripts/migrate-rename.ts` deliberately
+ * does not move this entry — copying a keychain item means reading the secret
+ * out and writing it back — so the ONLY thing keeping summaries alive across
+ * the flag day is that the reader tries the old service name second. Nothing
+ * else asserts that, and its failure is silent: summaries simply stop, which
+ * reads as the feature having been switched off.
+ */
+describe('resolveKeyFrom — which keychain service the key comes from', () => {
+  /** Records every lookup, so the ORDER is observable and not just the result. */
+  function keychain(entries: Record<string, string>) {
+    const asked: string[] = [];
+    const read = (service: string): string | null => {
+      asked.push(service);
+      const hit = entries[service];
+      // `security` exits non-zero on a missing item, and `readKeychainPassword`
+      // throws — so the fake has to throw too, or the loop is never tested
+      // against the shape it actually meets.
+      if (hit === undefined) throw new Error(`no item for ${service}`);
+      return hit;
+    };
+    return { read, asked };
+  }
+
+  it('prefers the current service name', () => {
+    const k = keychain({ [KEYCHAIN_SERVICE]: 'new-key', [KEYCHAIN_SERVICE_LEGACY]: 'old-key' });
+    expect(resolveKeyFrom(undefined, k.read)).toBe('new-key');
+    // It stopped at the first hit rather than reading both and picking.
+    expect(k.asked).toEqual([KEYCHAIN_SERVICE]);
+  });
+
+  it('falls back to the pre-rename service when the current one is empty', () => {
+    const k = keychain({ [KEYCHAIN_SERVICE_LEGACY]: 'old-key' });
+    expect(resolveKeyFrom(undefined, k.read)).toBe('old-key');
+    expect(k.asked).toEqual([KEYCHAIN_SERVICE, KEYCHAIN_SERVICE_LEGACY]);
+  });
+
+  it('is null when neither name holds anything — the documented "off" state', () => {
+    const k = keychain({});
+    expect(resolveKeyFrom(undefined, k.read)).toBeNull();
+    // The positive controls above are what make this absence mean something:
+    // the same fake DOES return a key when one is planted.
+    expect(k.asked).toEqual([KEYCHAIN_SERVICE, KEYCHAIN_SERVICE_LEGACY]);
+  });
+
+  it('an explicit key short-circuits both lookups', () => {
+    const k = keychain({ [KEYCHAIN_SERVICE]: 'new-key' });
+    expect(resolveKeyFrom('given', k.read)).toBe('given');
+    expect(resolveKeyFrom(null, k.read)).toBeNull();
+    expect(k.asked).toEqual([]);
   });
 });

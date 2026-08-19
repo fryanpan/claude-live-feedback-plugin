@@ -1,4 +1,4 @@
-# live-feedback
+# claude-workspaces
 
 Point-and-comment real-time feedback for Claude Code agents, packaged as
 a Claude Code plugin. Ships MCP tools, `/feedback` slash commands, a
@@ -35,13 +35,13 @@ doc editor + injectable widget) as a single install.
 
 ```bash
 claude plugin marketplace add fryanpan/claude-workspaces-plugin
-claude plugin install live-feedback@claude-live-feedback
+claude plugin install claude-workspaces@claude-workspaces
 ```
 
 That's the entire client install. The plugin's `plugin.json`, `.mcp.json`,
 `hooks/hooks.json`, and `commands/*.md` wire themselves — you do **not**
 need to edit your project's `settings.json`. The MCP server is pulled
-from [npm](https://www.npmjs.com/package/@fryanpan/live-feedback-mcp)
+from [npm](https://www.npmjs.com/package/@fryanpan/claude-workspaces-mcp)
 via `npx` on first use.
 
 To run the **browser review surfaces** (markdown + widget), you still
@@ -74,20 +74,20 @@ hook to fire.
 ## Update
 
 ```bash
-claude plugin marketplace update claude-live-feedback
-claude plugin update live-feedback@claude-live-feedback
+claude plugin marketplace update claude-workspaces
+claude plugin update claude-workspaces@claude-workspaces
 ```
 
 Commands, hooks, and the MCP tool surface are pinned to the plugin's
 `version` in `.claude-plugin/plugin.json`. `npx` always fetches the
-matching `@fryanpan/live-feedback-mcp` from npm on demand, so you never
+matching `@fryanpan/claude-workspaces-mcp` from npm on demand, so you never
 have a stale MCP binary.
 
 ## Uninstall
 
 ```bash
-claude plugin uninstall live-feedback@claude-live-feedback
-claude plugin marketplace remove claude-live-feedback
+claude plugin uninstall claude-workspaces@claude-workspaces
+claude plugin marketplace remove claude-workspaces
 ```
 
 ## Versioning
@@ -97,7 +97,7 @@ claude plugin marketplace remove claude-live-feedback
 - SemVer: patch for bugfixes, minor for new commands/tools, major for
   breaking changes to the MCP surface or settings schema.
 - Claude Code pins each installed version in
-  `~/.claude/plugins/cache/claude-live-feedback/live-feedback/<version>/`
+  `~/.claude/plugins/cache/claude-workspaces/claude-workspaces/<version>/`
   and only upgrades on explicit `claude plugin update`.
 
 ## Running the feedback server

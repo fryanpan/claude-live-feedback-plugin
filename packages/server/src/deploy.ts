@@ -52,7 +52,7 @@ import {
 /** The launchd job this machine supervises the server with. Restarting it is
  *  what re-runs `scripts/serve.ts --no-watch`, which rebuilds the browser
  *  bundles and publishes them as the client release the fleet loads. */
-export const LAUNCHD_LABEL = 'com.fryanpan.live-feedback';
+export const LAUNCHD_LABEL = 'com.fryanpan.claude-workspaces';
 
 /** How long the restart waits after `deploy()` returns, so the HTTP response
  *  that says "restarting" reaches the caller before the process it came
