@@ -13717,6 +13717,31 @@ function resolveDiscoveryFile(home, exists) {
   return discoveryCandidates(home).find(exists);
 }
 
+// packages/mcp/src/attachment-keepalive.ts
+var DEFAULT_INTERVAL_MS = 120000;
+function createAttachmentKeepalive(opts) {
+  const intervalMs = opts?.intervalMs ?? DEFAULT_INTERVAL_MS;
+  const now = opts?.now ?? Date.now;
+  const lastSent = new Map;
+  return {
+    mark(workspaceId) {
+      lastSent.set(workspaceId, now());
+    },
+    due() {
+      const t = now();
+      const out = [];
+      for (const [workspaceId, at] of lastSent) {
+        if (t - at < intervalMs)
+          continue;
+        lastSent.set(workspaceId, t);
+        out.push(workspaceId);
+      }
+      return out;
+    },
+    boards: () => [...lastSent.keys()]
+  };
+}
+
 // packages/core/src/identity.ts
 var KNOWN_USERS = {
   bryan: { name: "Bryan", color: "#2e7dd7" },
@@ -13788,34 +13813,6 @@ function resolveAgentAuthor(env) {
   return { name, color: hashToColor(name), id: agentIdForName(name), kind: "known" };
 }
 
-// packages/mcp/src/thread-create.ts
-function threadCreateRequest(input, author) {
-  const doc2 = encodeURIComponent(input.docId);
-  if (input.find === undefined) {
-    return {
-      path: `/api/docs/${doc2}/threads`,
-      body: {
-        author,
-        text: input.text,
-        anchor: { kind: "subject" },
-        ...input.review !== undefined ? { review: input.review } : {}
-      }
-    };
-  }
-  return {
-    path: `/api/docs/${doc2}/threads/by_find`,
-    body: {
-      author,
-      text: input.text,
-      find: input.find,
-      ...input.contextBefore !== undefined ? { contextBefore: input.contextBefore } : {},
-      ...input.contextAfter !== undefined ? { contextAfter: input.contextAfter } : {},
-      ...input.occurrence !== undefined ? { occurrence: input.occurrence } : {},
-      ...input.review !== undefined ? { review: input.review } : {}
-    }
-  };
-}
-
 // packages/mcp/src/triage-line.ts
 var RETRIAGE_SKILL = "claude-workspaces:handling-a-goal-change";
 var SHAPE_THEN_PLACE = "read its own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each into a title and a story-shaped body with rewrite_task, then place with set_task_goal";
@@ -13873,6 +13870,208 @@ function triageRequestLine(p, selfAgentId) {
   return `[triage.requested] goal changed — re-triage ${count} open task(s) with set_task_goal${batch}. What you owe on a goal change: ${RETRIAGE_SKILL}${detail}`;
 }
 
+// packages/mcp/src/declare-lead.ts
+async function declareWorkspaceLead(args, deps) {
+  const { workspaceId } = args;
+  const named = typeof args.leadAgentId === "string" ? args.leadAgentId.trim() : "";
+  const declaring = named.length === 0 || named === deps.self.id;
+  const leadAgentId = declaring ? deps.self.id : named;
+  const path = `/api/workspaces/${encodeURIComponent(workspaceId)}`;
+  let attached;
+  let subscription = { open: false, persisted: false };
+  if (declaring) {
+    attached = await deps.http("POST", `${path}/attachments`, {
+      agentId: deps.self.id,
+      runtime: deps.runtime,
+      pluginVersion: deps.pluginVersion
+    });
+    subscription = await deps.watchWorkspace(workspaceId);
+  }
+  const res = await deps.http("PUT", `${path}/lead`, {
+    leadAgentId,
+    author: deps.self,
+    ...args.takeover === true ? { takeover: true } : {}
+  });
+  const settledLead = res.workspace?.leadAgentId ?? leadAgentId;
+  const seat = {
+    workspaceId,
+    changed: res.changed,
+    leadAgentId: settledLead,
+    ...res.previousLeadAgentId !== undefined ? { previousLeadAgentId: res.previousLeadAgentId } : {},
+    ...res.declined !== undefined ? { declined: res.declined } : {}
+  };
+  if (!declaring)
+    return seat;
+  const a = attached ?? {};
+  const warnings = [];
+  if (!subscription.open) {
+    warnings.push("the event stream did not confirm it was open before the seat changed, so anything the " + "server delivered in that window may not have arrived — call list_watched_docs to check " + "coverage, and re-run this if it still looks wrong");
+  }
+  if (!subscription.persisted) {
+    warnings.push("this subscription was NOT persisted against an agent identity, so it will not come back " + "after a respawn — set CW_AGENT_NAME in the launch environment");
+  }
+  return {
+    ...seat,
+    subscribed: subscription.open,
+    subscriptionPersisted: subscription.persisted,
+    ...warnings.length > 0 ? { subscriptionWarning: warnings.join("; ") } : {},
+    lead: settledLead === deps.self.id,
+    ...res.declined === "lead-held" ? {
+      note: `${settledLead} already leads this board and is live, so the seat was left alone — ` + "you are attached and subscribed, and everything on the board still reaches you. " + "Coordinate with them; pass takeover: true only if you mean to take the seat."
+    } : {},
+    gating: a.gating,
+    untriaged: a.untriaged ?? [],
+    queuedVoice: a.queuedVoice ?? [],
+    ...a.pendingRetriage ? { pendingRetriage: { ...a.pendingRetriage, contract: RETRIAGE_SKILL } } : {},
+    ...a.pendingBucketReview ? { pendingBucketReview: a.pendingBucketReview } : {},
+    ...a.taskReviews !== undefined && a.taskReviews.length > 0 ? { taskReviews: a.taskReviews, taskReviewContract: TASK_REVIEW_SKILL } : {}
+  };
+}
+
+// packages/mcp/src/frame-dedup.ts
+var DEFAULT_LIMIT = 512;
+var DEFAULT_TTL_MS = 30000;
+function createFrameDedup(opts) {
+  const limit = opts?.limit ?? DEFAULT_LIMIT;
+  const ttlMs = opts?.ttlMs ?? DEFAULT_TTL_MS;
+  const now = opts?.now ?? Date.now;
+  const seen = new Map;
+  function shouldForward(event, payload) {
+    const key = frameKey(event, payload);
+    if (key === undefined)
+      return true;
+    const t = now();
+    const at = seen.get(key);
+    if (at !== undefined && t - at < ttlMs)
+      return false;
+    seen.delete(key);
+    seen.set(key, t);
+    while (seen.size > limit) {
+      const oldest = seen.keys().next();
+      if (oldest.done)
+        break;
+      seen.delete(oldest.value);
+    }
+    return true;
+  }
+  return { shouldForward, reset: () => seen.clear() };
+}
+function frameKey(event, payload) {
+  if (typeof payload !== "object" || payload === null)
+    return;
+  const p = payload;
+  if (typeof p.eid === "string" && p.eid !== "")
+    return `eid#${p.eid}`;
+  if (typeof p.seq !== "number" || !Number.isFinite(p.seq))
+    return;
+  if (typeof p.docId !== "string" || p.docId === "")
+    return;
+  return `${event}#${p.docId}#${p.seq}`;
+}
+
+// packages/mcp/src/thread-create.ts
+function threadCreateRequest(input, author) {
+  const doc2 = encodeURIComponent(input.docId);
+  if (input.find === undefined) {
+    return {
+      path: `/api/docs/${doc2}/threads`,
+      body: {
+        author,
+        text: input.text,
+        anchor: { kind: "subject" },
+        ...input.review !== undefined ? { review: input.review } : {}
+      }
+    };
+  }
+  return {
+    path: `/api/docs/${doc2}/threads/by_find`,
+    body: {
+      author,
+      text: input.text,
+      find: input.find,
+      ...input.contextBefore !== undefined ? { contextBefore: input.contextBefore } : {},
+      ...input.contextAfter !== undefined ? { contextAfter: input.contextAfter } : {},
+      ...input.occurrence !== undefined ? { occurrence: input.occurrence } : {},
+      ...input.review !== undefined ? { review: input.review } : {}
+    }
+  };
+}
+
+// packages/mcp/src/watch-coverage.ts
+function parseCoverage(res) {
+  if (!res || typeof res !== "object")
+    return;
+  const raw = res.coverage;
+  if (!raw || typeof raw !== "object")
+    return;
+  const c = raw;
+  if (typeof c.agentId !== "string")
+    return;
+  if (!Array.isArray(c.workspaces) || !Array.isArray(c.unattachedBoards))
+    return;
+  return {
+    agentId: c.agentId,
+    workspaces: c.workspaces,
+    unattachedBoards: c.unattachedBoards
+  };
+}
+function boardsWaitingOnYou(coverage) {
+  return (coverage?.unattachedBoards ?? []).filter((b) => b.queuedTotal > 0);
+}
+var plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+function describeQueue(q) {
+  const parts = [];
+  if (q.queuedVoice > 0)
+    parts.push(plural(q.queuedVoice, "voice note"));
+  if (q.pendingRetriage > 0)
+    parts.push(plural(q.pendingRetriage, "re-triage request"));
+  if (q.pendingBucketReview > 0)
+    parts.push(plural(q.pendingBucketReview, "bucket review"));
+  if (q.taskReviews > 0)
+    parts.push(plural(q.taskReviews, "task review"));
+  return parts.join(", ");
+}
+function remedyFor(b, agentId) {
+  if (b.leadLive && b.leadAgentId !== undefined && b.leadAgentId !== agentId) {
+    return `${b.leadAgentId} holds the lead seat and is live, so the queue is addressed to them — ` + `ask them rather than taking it. attach_agent(workspaceId: "${b.workspaceId}") makes you ` + "addressable and subscribed without moving the seat.";
+  }
+  if (b.attached && !b.heartbeatFresh) {
+    return "your attachment is stale — the server has not seen a heartbeat OR a tool call from you " + "on this board inside the observed-work window, so deliveries for it are parking. " + `heartbeat(workspaceId: "${b.workspaceId}") now, and every few minutes while you work it.`;
+  }
+  return `set_workspace_lead(workspaceId: "${b.workspaceId}") attaches, subscribes and hands the ` + "backlog over in one call.";
+}
+function coverageAlertLine(coverage) {
+  const waiting = boardsWaitingOnYou(coverage);
+  if (waiting.length === 0)
+    return null;
+  const agentId = coverage?.agentId ?? "";
+  const described = waiting.map((b) => {
+    const via = b.watchedDocs.length > 0 ? `${plural(b.watchedDocs.length, "doc")} watched` : "this board watched directly";
+    return `"${b.name}" (${b.workspaceId}) — ${via}, ${b.queuedTotal} waiting ` + `(${describeQueue(b.queued)}); ${remedyFor(b, agentId)}`;
+  }).join(" ");
+  return `[not covered] ${plural(waiting.length, "board")} you follow ` + `${waiting.length === 1 ? "has" : "have"} work queued for a lead, and you are not live on ` + `${waiting.length === 1 ? "it" : "them"}. Watching is not attaching, and an attachment the ` + "server has stopped observing is not attached either — every delivery gate asks for recent " + `observed work, a heartbeat or a tool call, plus an open channel. ${described}`;
+}
+function boardsToReattach(coverage) {
+  return (coverage?.workspaces ?? []).filter((w) => w.kind === "board" && (w.lead === true || w.attached === true)).filter((w) => w.heartbeatFresh !== true).map((w) => w.workspaceId);
+}
+function restoreNoticeContent(opts) {
+  const lines = [];
+  const n = opts.restored.length;
+  const reattached = opts.reattached ?? [];
+  if (n > 0 || opts.pruned.length > 0) {
+    const dropped = opts.pruned.length > 0 ? `; ${opts.pruned.length} dropped (doc gone)` : "";
+    lines.push(`[watches restored] ${plural(n, "watch", "watches")} re-wired from the server for ` + `${opts.agentName} after restart${dropped}: ${opts.restored.join(", ")}`);
+  }
+  if (reattached.length > 0) {
+    lines.push(`[attachments restored] re-attached to ${plural(reattached.length, "board")} whose ` + "attachment came back stale, so lead-addressed work reaches this session again: " + `${reattached.join(", ")}`);
+  }
+  const alert = coverageAlertLine(opts.coverage);
+  if (alert)
+    lines.push(alert);
+  return lines.length > 0 ? lines.join(`
+`) : null;
+}
+
 // packages/mcp/src/mcp.ts
 function resolveBaseUrl() {
   const override = readRenamedEnv(process.env, "CW_BASE_URL");
@@ -13892,7 +14091,7 @@ var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.64";
+var PLUGIN_VERSION = "0.1.65";
 var COMMIT_EVIDENCE_DESCRIPTION = 'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
 var server = new Server({
   name: "claude-workspaces",
@@ -14628,7 +14827,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "list_watched_docs",
-      description: "Return the docIds this session is currently subscribed to for channel events, WITH PROVENANCE: `restore.status` says whether this session re-wired its set from the server after a respawn ('restored'), never had a server set to restore ('restored' with an empty list), could not reach the server ('failed', with the error — retry by calling again), or has no stable identity so nothing survives a restart ('session-only'). An empty `watching` list therefore no longer means both 'never watched' and 'watched, then respawned' — read `restore` to tell them apart.",
+      description: "Return the docIds this session is currently subscribed to for channel events, WITH PROVENANCE: `restore.status` says whether this session re-wired its set from the server after a respawn ('restored'), never had a server set to restore ('restored' with an empty list), could not reach the server ('failed', with the error — retry by calling again), or has no stable identity so nothing survives a restart ('session-only'). An empty `watching` list therefore no longer means both 'never watched' and 'watched, then respawned' — read `restore` to tell them apart. Also answers the question that actually goes wrong — not 'what am I watching' but 'what am I MISSING'. `coverage.workspaces` resolves each `ws:<id>` key you hold (hub BOARD or review GROUPING; for a board, whether you are attached, whether your heartbeat is fresh, and whether you hold the lead seat), and `coverage.unattachedBoards` names boards you follow — through a watched doc OR through the board's own `ws:` key — where you have no LIVE attachment, each with what is queued for that board's lead (queuedVoice / pendingRetriage / pendingBucketReview / taskReviews) plus who holds the seat (`leadAgentId`, `leadLive`) and which clock lapsed on your own record (`attached: true, heartbeatFresh: false`). Watching a doc is not attaching, and an attachment the server has stopped OBSERVING is not attached either — a delivery gate asks for recent observed work, a heartbeat or a tool call whichever is later, plus an open channel; liveness is observed, never self-reported. A row there means real work is queuing that will never reach you. Note the two clocks differ: `heartbeatFresh` is the shorter displayed active/away label, `live` is the delivery gate, and a working session can be `heartbeatFresh: false` and still be reached — which is why rows are selected on `live`. The remedy depends on who is there: `set_workspace_lead(workspaceId)` when the seat is empty or its holder is gone, `heartbeat(workspaceId)` when the seat is already yours and you have simply gone quiet, and `attach_agent(workspaceId)` when a live peer leads it — taking that seat would evict them, and is refused. `coverage` is ABSENT rather than empty when the server did not answer (older server, no stable identity, unreachable); absent means unknown, never all-clear.",
       inputSchema: { type: "object", properties: {} }
     },
     {
@@ -14731,14 +14930,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "set_workspace_lead",
-      description: "Hand the workspace's LEAD AGENT seat to another agent. The lead is who a goal edit's re-triage is addressed to — it is a standing assignment, not a session fact, so a goal change waits for the lead even while they are away rather than going to whoever happens to be connected. Use it when you are handing a board off, or to fill the seat on a board a person created.",
+      description: "DECLARE YOURSELF LEAD of a workspace — one call, and from then on you receive everything on this board: task and decision events, thread events on every doc filed here INCLUDING docs created later, voice notes, and re-triage asks. Call it with just `workspaceId` at session start; there is no per-surface subscribe to remember, and a respawn re-wires the subscription AND re-attaches you (both are persisted against your agent identity). STAYING LIVE IS NOT AUTOMATIC ON A QUIET SESSION: every lead-addressed delivery — voice notes, goal re-triage, bucket and task reviews — is gated on the server having OBSERVED you recently, which means a heartbeat or a tool call, whichever came last, plus an open channel. Work on the board refreshes it for you, so a busy session stays live on its own; a session that stops touching this server for a stretch goes quiet on every board it holds, including ones it is not actively working. Call heartbeat(workspaceId) then, and use `list_watched_docs` → `coverage` to check rather than assume. It replaces a pile of watch_doc calls, and it is what closes the gap those calls leave: a doc watch is not an attachment, so an agent watching six docs still misses every voice note and every goal-edit re-triage, silently — a queue nobody is draining looks exactly like a queue nobody filled. Because it attaches you, it also DRAINS whatever was waiting for the seat and hands it back on this same response, in attach_agent's own field names: `queuedVoice` (act on each transcript verbatim), `pendingRetriage`, `pendingBucketReview`, `taskReviews`, plus `gating` and `untriaged`. `subscribed` on the response is the answer to \"am I actually listening?\" — the question an agent otherwise cannot answer from the inside — and it is MEASURED, not asserted: it reports whether the event stream really opened, so `subscribed: false` with a `subscriptionWarning` is a real outcome to retry rather than a field you can skim past. `subscriptionPersisted: false` is the separate failure — the watch will not survive a respawn, usually because this session has no stable agent name. The lead is a STANDING assignment, not a session fact, so a goal change waits for you even while you are away rather than going to whoever happens to be connected. Pass `leadAgentId` ONLY to hand the board to somebody else: that is a pure handover — it moves the seat and nothing more, because attaching or subscribing on an absent agent's behalf would make the board report a live lead that is not there.",
       inputSchema: {
         type: "object",
         properties: {
           workspaceId: { type: "string", description: "Hub workspace id from create_workspace." },
-          leadAgentId: { type: "string", description: "The agent id taking responsibility." }
+          leadAgentId: {
+            type: "string",
+            description: "The agent id taking responsibility. OMIT IT to declare yourself — that is the common case, and the only form that also attaches and subscribes you. Naming another agent hands the seat over and does nothing else; naming your own id is the same as omitting it, so callers built against the older required-field form keep their exact meaning."
+          },
+          takeover: {
+            type: "boolean",
+            description: 'Take the seat even though a DIFFERENT agent holds it and is live. Default false, and the default is the point: declaring yourself on a board a working peer leads would evict them silently, and every lead-addressed delivery would start routing to you while they keep working. Without this you get `declined: "lead-held"` and `previousLeadAgentId` naming the incumbent — you are still attached and subscribed, so nothing on the board is hidden from you; only the seat stays put. Coordinate with them first, and pass this when you mean it.'
+          }
         },
-        required: ["workspaceId", "leadAgentId"]
+        required: ["workspaceId"]
       }
     },
     {
@@ -15265,7 +15471,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "attach_agent",
-      description: "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep — and sweeping one means SHAPING it, not only filing it: read the row's own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each with rewrite_task into a title and a story-shaped body, then set_task_goal. A capture arrives with a machine-clipped title and its raw utterance for a body, and this is the only step that turns it into work. Then queuedVoice — voice change-requests that arrived while no agent was live; act on each transcript verbatim — and, if you LEAD this workspace, pendingRetriage: a goal edit made while you were away, whose taskIds you re-place with set_task_goal (echo its batchId on each), plus pendingBucketReview: a goal BAND that appeared while you were away, with the unplaced tasks worth re-looking at against it — place the ones that now have a home, and leave the rest, since nothing has moved them — plus taskReviews: rows created, renamed, or rewritten while no lead was live, each waiting for the shape pass the `claude-workspaces:reviewing-task-shape` skill describes (judge the title and body; rewrite with rewrite_task or ask the filer on the task). All of these are drained by this call. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments with a fresh heartbeat, and after ~5 minutes of silence the hub shows you as away and requests queue.",
+      description: "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep — and sweeping one means SHAPING it, not only filing it: read the row's own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each with rewrite_task into a title and a story-shaped body, then set_task_goal. A capture arrives with a machine-clipped title and its raw utterance for a body, and this is the only step that turns it into work. Then queuedVoice — voice change-requests that arrived while no agent was live; act on each transcript verbatim — and, if you LEAD this workspace, pendingRetriage: a goal edit made while you were away, whose taskIds you re-place with set_task_goal (echo its batchId on each), plus pendingBucketReview: a goal BAND that appeared while you were away, with the unplaced tasks worth re-looking at against it — place the ones that now have a home, and leave the rest, since nothing has moved them — plus taskReviews: rows created, renamed, or rewritten while no lead was live, each waiting for the shape pass the `claude-workspaces:reviewing-task-shape` skill describes (judge the title and body; rewrite with rewrite_task or ask the filer on the task). All of these are drained by this call. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments the server has observed recently (a heartbeat or a tool call, whichever is later), and after ~5 minutes of silence the hub shows you as away.",
       inputSchema: {
         type: "object",
         properties: {
@@ -15288,7 +15494,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "heartbeat",
-      description: 'Prove this attached agent is alive (and, implicitly, working — the call stamps lastToolCallAt now unless you pass an explicit earlier toolCallAt). Call every few minutes while attached to a workspace; a stale heartbeat (~5 min) marks you away and queues triage requests, and a fresh heartbeat with a 30-min-old toolCallAt renders as "process up, agent unresponsive".',
+      description: 'Prove this attached agent is alive (and, implicitly, working — the call stamps lastToolCallAt now unless you pass an explicit earlier toolCallAt). Call every few minutes while attached to a workspace; a stale heartbeat (~5 min) marks you away, though what actually parks a triage request is the server not having observed you at all — no heartbeat AND no tool call — and a fresh heartbeat with a 30-min-old toolCallAt renders as "process up, agent unresponsive".',
       inputSchema: {
         type: "object",
         properties: {
@@ -15368,6 +15574,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   const { name, arguments: a = {} } = req.params;
   try {
     await ensureWatchesRestored();
+    sendDueHeartbeats();
     await maybeAutoWatch(name, a);
     switch (name) {
       case "list_docs": {
@@ -15687,6 +15894,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         });
       }
       case "list_watched_docs": {
+        const coverage = await refreshCoverage();
         return ok({
           watching: Array.from(watchers.keys()),
           persistence: {
@@ -15695,6 +15903,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             ...IDENTITY_IS_SHARED ? { reason: SHARED_IDENTITY_REASON } : {}
           },
           restore: restoreState,
+          ...coverage ? { coverage } : {},
           ...lastPersistError ? { lastPersistError } : {}
         });
       }
@@ -15773,16 +15982,18 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         });
       }
       case "set_workspace_lead": {
-        const { workspaceId, leadAgentId } = a;
-        const res = await http("PUT", `/api/workspaces/${encodeURIComponent(workspaceId)}/lead`, {
-          leadAgentId,
-          author: AUTHOR
-        });
-        return ok({
+        const { workspaceId, leadAgentId, takeover } = a;
+        return ok(await declareWorkspaceLead({
           workspaceId,
-          changed: res.changed,
-          leadAgentId: res.workspace?.leadAgentId ?? leadAgentId
-        });
+          ...leadAgentId !== undefined ? { leadAgentId } : {},
+          ...takeover === true ? { takeover: true } : {}
+        }, {
+          http,
+          watchWorkspace,
+          self: AUTHOR,
+          runtime: "claude-code-local",
+          pluginVersion: PLUGIN_VERSION
+        }));
       }
       case "attach_doc": {
         const { workspaceId, docId } = a;
@@ -16119,6 +16330,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...capabilities !== undefined ? { capabilities } : {},
           pluginVersion: PLUGIN_VERSION
         });
+        if (agentId === undefined || agentId === AUTHOR.id)
+          markAttached(workspaceId);
         if (subscribe !== false)
           await watchWorkspace(workspaceId);
         return ok({
@@ -16136,6 +16349,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       case "heartbeat": {
         const { workspaceId, agentId, toolCallAt } = a;
         const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments/${encodeURIComponent(agentId ?? AUTHOR.id)}/heartbeat`, { toolCallAt: toolCallAt ?? Date.now() });
+        if (agentId === undefined || agentId === AUTHOR.id)
+          markAttached(workspaceId);
         return ok({ workspaceId, agentId: agentId ?? AUTHOR.id, state: res.attachment?.state });
       }
       case "request_plugin_refresh": {
@@ -16160,6 +16375,26 @@ var restoreState = IDENTITY_IS_SHARED ? { status: "session-only", from: "session
 var restoreInFlight = null;
 var restoreRetryAt = 0;
 var lastPersistError;
+var keepalive = createAttachmentKeepalive();
+function markAttached(workspaceId) {
+  keepalive.mark(workspaceId);
+}
+async function sendDueHeartbeats() {
+  for (const workspaceId of keepalive.due()) {
+    try {
+      await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments/${encodeURIComponent(AUTHOR.id)}/heartbeat`, { toolCallAt: Date.now() });
+    } catch {}
+  }
+}
+var lastCoverage;
+async function refreshCoverage() {
+  if (IDENTITY_IS_SHARED)
+    return;
+  try {
+    lastCoverage = parseCoverage(await http("GET", watchesPath())) ?? lastCoverage;
+  } catch {}
+  return lastCoverage;
+}
 function watchPersistenceMode() {
   return IDENTITY_IS_SHARED ? "session-only" : "server";
 }
@@ -16188,6 +16423,7 @@ async function ensureWatchesRestored() {
     const attempts = restoreState.attempts + 1;
     try {
       const res = await http("GET", watchesPath());
+      lastCoverage = parseCoverage(res);
       const keys = (res.watches ?? []).map((w) => w.key);
       const restored = [];
       for (const key of keys) {
@@ -16199,17 +16435,30 @@ async function ensureWatchesRestored() {
           await watchDoc(key, false);
         restored.push(key);
       }
+      const reattached = [];
+      for (const workspaceId of boardsToReattach(lastCoverage)) {
+        try {
+          await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`, {
+            agentId: AUTHOR.id,
+            runtime: "claude-code-local",
+            pluginVersion: PLUGIN_VERSION
+          });
+          markAttached(workspaceId);
+          reattached.push(workspaceId);
+        } catch {}
+      }
+      if (reattached.length > 0)
+        await refreshCoverage();
       restoreState = {
         status: "restored",
         from: "server",
         restored,
+        reattached,
         pruned: res.pruned ?? [],
         at: new Date().toISOString(),
         attempts
       };
-      if (restored.length > 0 || (res.pruned ?? []).length > 0) {
-        await emitRestoreNotice(restoreState).catch(() => {});
-      }
+      await emitRestoreNotice(restoreState).catch(() => {});
     } catch (err) {
       restoreState = {
         ...restoreState,
@@ -16225,34 +16474,48 @@ async function ensureWatchesRestored() {
   return restoreInFlight;
 }
 async function emitRestoreNotice(state) {
-  const n = state.restored.length;
-  const dropped = state.pruned.length > 0 ? `; ${state.pruned.length} dropped (doc gone)` : "";
+  const content = restoreNoticeContent({
+    restored: state.restored,
+    reattached: state.reattached ?? [],
+    pruned: state.pruned,
+    agentName: AUTHOR.name,
+    coverage: lastCoverage
+  });
+  if (content === null)
+    return;
   await server.notification({
     method: "notifications/claude/channel",
     params: {
       source: "claude-workspaces",
       sent_at: state.at ?? new Date().toISOString(),
-      content: `[watches restored] ${n} watch${n === 1 ? "" : "es"} re-wired from the server for ${AUTHOR.name} after restart${dropped}: ${state.restored.join(", ")}`,
-      meta: { event: "watches.restored", restored: state.restored, pruned: state.pruned }
+      content,
+      meta: {
+        event: "watches.restored",
+        restored: state.restored,
+        pruned: state.pruned,
+        ...lastCoverage ? { unattachedBoards: lastCoverage.unattachedBoards } : {}
+      }
     }
   });
 }
 async function watchDoc(docId, persist = true) {
   if (!watchers.has(docId)) {
     const controller = new AbortController;
-    watchers.set(docId, { controller, docId });
+    watchers.set(docId, { controller, docId, open: false });
     await startSseLoop(docId, `/events/${encodeURIComponent(docId)}`, controller);
   }
   return persist ? persistWatchChange({ add: [docId] }) : false;
 }
 async function watchWorkspace(workspaceId, persist = true) {
   const key = `ws:${workspaceId}`;
+  let open = watchers.get(key)?.open === true;
   if (!watchers.has(key)) {
     const controller = new AbortController;
-    watchers.set(key, { controller, docId: key });
-    await startSseLoop(key, `/events/workspace/${encodeURIComponent(workspaceId)}`, controller);
+    watchers.set(key, { controller, docId: key, open: false });
+    open = await startSseLoop(key, `/events/workspace/${encodeURIComponent(workspaceId)}`, controller);
   }
-  return persist ? persistWatchChange({ add: [key] }) : false;
+  const persisted = persist ? await persistWatchChange({ add: [key] }) : false;
+  return { open, persisted };
 }
 async function unwatchDoc(docId) {
   const w = watchers.get(docId);
@@ -16264,19 +16527,26 @@ async function unwatchDoc(docId) {
 }
 async function runSseLoop(label, path, signal, onFirstAttempt) {
   let first = onFirstAttempt;
-  const settleFirst = () => {
+  const settleFirst = (open) => {
     if (!first)
       return;
     const f = first;
     first = undefined;
-    f();
+    f(open);
+  };
+  const setOpen = (open) => {
+    const w = watchers.get(label);
+    if (w)
+      w.open = open;
   };
   while (!signal.aborted) {
     try {
       const res = await fetch(`${resolveBaseUrl()}${path}`, {
         signal
       });
-      settleFirst();
+      const live = res.ok && res.body !== null;
+      setOpen(live);
+      settleFirst(live);
       if (!res.ok || !res.body)
         throw new Error(`sse ${path} → ${res.status}`);
       const reader = res.body.getReader();
@@ -16300,29 +16570,34 @@ async function runSseLoop(label, path, signal, onFirstAttempt) {
         }
       }
     } catch (err) {
-      settleFirst();
+      setOpen(false);
+      settleFirst(false);
       if (signal.aborted)
         return;
       console.error(`[claude-workspaces-mcp] ${label} sse error, retrying:`, err);
     }
+    setOpen(false);
     await new Promise((r) => setTimeout(r, 1500));
+    shouldForwardFrame.reset();
   }
-  settleFirst();
+  setOpen(false);
+  settleFirst(false);
 }
 function startSseLoop(label, path, controller) {
   return new Promise((resolve) => {
-    const cap = setTimeout(resolve, 3000);
-    runSseLoop(label, path, controller.signal, () => {
+    const cap = setTimeout(() => resolve(false), 3000);
+    runSseLoop(label, path, controller.signal, (open) => {
       clearTimeout(cap);
-      resolve();
+      resolve(open);
     }).catch((err) => {
       console.error(`[claude-workspaces-mcp] watcher ${label} crashed:`, err);
       watchers.delete(label);
       clearTimeout(cap);
-      resolve();
+      resolve(false);
     });
   });
 }
+var shouldForwardFrame = createFrameDedup();
 async function handleFrame(raw) {
   const lines = raw.split(`
 `);
@@ -16345,6 +16620,8 @@ async function handleFrame(raw) {
   } catch {
     return;
   }
+  if (!shouldForwardFrame.shouldForward(ev, payload))
+    return;
   await emitChannelMessage(ev, payload);
 }
 var HUB_EVENT_RE = /^(task|decision|workspace|agent|triage|voice)\./;
