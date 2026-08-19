@@ -66,7 +66,7 @@ import {
 import type { PluginRefresher } from './plugin-refresh.ts';
 import { agentsBehind, checkableAttachments, readReleasedPluginVersion } from './plugin-release.ts';
 import { localHostnames, publicBaseUrl } from './public-host.ts';
-import { type ReviewThreadItem, reviewThreadItems } from './review-queue.ts';
+import { type ReviewItemRow, reviewItemRows } from './review-queue.ts';
 import { type FeedbackWs, Rooms, type WorkspaceDirNode, type WorkspaceFileNode } from './rooms.ts';
 import { isWithinRoot } from './safe-path.ts';
 import { CfApi } from './share/cf-api.ts';
@@ -89,7 +89,7 @@ import { Shares } from './share/shares.ts';
 import { SharingGate } from './share/sharing-gate.ts';
 import type { ShareConfig } from './share/types.ts';
 import { sanitizeVisitorAuthor } from './share/visitor-identity.ts';
-import { SseHub, openSseStream } from './sse.ts';
+import { HTTP_IDLE_TIMEOUT_SEC, SseHub, openSseStream } from './sse.ts';
 import { KEYCHAIN_SERVICE, ThreadSummarizer } from './summarize.ts';
 import { indexBatchKeys, resolveRowRefs } from './task-batch-refs.ts';
 import {
@@ -687,6 +687,20 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     sse.broadcast(`ws~${req.workspaceId}`, { event: 'triage.requested', ...req });
     return true;
   });
+  // The second half of the liveness gate, and the half a time window cannot
+  // supply: a request is DELIVERED by broadcasting on `ws~<workspaceId>`, so
+  // if nobody holds that stream the delivery lands nowhere. An agent that
+  // died thirty seconds after its last write is still inside every freshness
+  // window and is already gone; only the open socket knows.
+  //
+  // This can only ever make the gate MORE conservative — the store ANDs it
+  // with observed freshness, so a subscriber alone never counts as live.
+  // That direction is deliberate and it is the safe one: browsers watch the
+  // same channel as agents, so a probe read as sufficient would let an open
+  // tab impersonate a working agent, and the utterance would be broadcast to
+  // a listener that cannot act on it and lost. Queued is late; delivered to
+  // nobody is gone.
+  taskStore.setDeliveryProbe((workspaceId) => sse.count(`ws~${workspaceId}`) > 0);
   // The ydoc projection (§3.3): ws:<workspaceId> board rooms the server
   // writes and defends (foreign writes reverted), plus task:<taskId> body
   // rooms. init() runs after both stores hydrated, so the sidecar is
@@ -717,16 +731,22 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    *  `generating`, and N polls must cost one call, not N. */
   const homeBriefInflight = new Set<string>();
 
-  /** The thread-shaped review items exactly as GET /review-items ships them.
+  /** The review items exactly as GET /review-items ships them.
    *  ONE builder for that route and for the brief's queue count, so the
    *  number the brief prints cannot drift from the queue rendered under it. */
-  const reviewItemsFor = (workspace: HubWorkspace): ReviewThreadItem[] =>
-    reviewThreadItems({
+  const reviewItemsFor = (workspace: HubWorkspace): ReviewItemRow[] =>
+    reviewItemRows({
       tasks: taskStore.listTasks(workspace.id).map((t) => ({
         id: t.id,
         title: t.title,
         bodyDocId: taskBodyDocId(t.id),
         done: t.status === 'done',
+        // The ticket's OWN review items — 0..n, and for a legacy decision task
+        // the one row `listReviewItems` derives from `needs`/`options`/`answer`
+        // without writing anything back. This is what lets a decision reach the
+        // one route that answers "what is waiting on me"; before it, a board of
+        // nothing but open decisions answered with an empty list.
+        reviews: taskStore.listReviewItems(t.id),
       })),
       docs: workspace.docIds.map((docId) => {
         const meta = rooms.get(docId)?.meta;
@@ -746,25 +766,46 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     });
 
   /**
-   * How many items the Home queue holds right now: open unanswered
-   * decisions, person-owned blockers with open dependents, and the thread
-   * items — the same three bands `reviewQueue` (hub-model) derives in the
-   * browser. Mirrored rather than shared because the queue logic lives
-   * client-side over the ydoc projection; this count feeds only the brief's
-   * closing denominator line.
+   * How many items the Home queue holds right now. Feeds only the brief's
+   * closing "is anything waiting" line.
+   *
+   * The number is a promise about the LIST rendered under it, so it counts
+   * exactly what the browser's `reviewQueue` places and nothing else:
+   *
+   *  - person-owned blockers with open dependents,
+   *  - comment-borne review rows (`task-thread` / `doc-thread`),
+   *  - open decisions, which Home draws from the board projection as its own
+   *    `decision` rows.
+   *
+   * TICKET-borne rows (`kind: 'task-review'`) are shipped by the route and
+   * deliberately NOT counted here. No browser surface places one yet — the
+   * task detail panel owns that half and it is not in this change — so
+   * counting them prints "something needs you" above a list that shows
+   * nothing and offers no control to answer it. The route still carries them,
+   * which is where agents and the MCP verbs read them from.
+   *
+   * The open-decision term is counted from the TASKS rather than from `items`,
+   * even though `items` also carries a derived `r-legacy` row per open
+   * decision. Same reason: `decisionQueue` in the browser is what draws those
+   * rows, and it reads `needs`/`answer` off the projection. Counting the
+   * derived rows instead would tie this number to a row Home does not read.
+   * A decision is therefore counted once, never twice.
+   *
+   * When Home learns to place a ticket-borne row, the `kind` filter and this
+   * paragraph go together — not one without the other.
    */
-  const homeQueueTotal = (workspace: HubWorkspace, items: ReviewThreadItem[]): number => {
-    const tasks = taskStore.listTasks(workspace.id);
+  const homeQueueTotal = (workspace: HubWorkspace, items: ReviewItemRow[]): number => {
     const ownerKindOf = taskProjection.ownerKindReader(workspace.id);
-    const open = tasks.filter((t) => t.status !== 'done');
-    const decisions = open.filter((t) => t.needs === 'decision' && !t.answer);
+    const open = taskStore.listTasks(workspace.id).filter((t) => t.status !== 'done');
     const blockers = open.filter(
       (t) =>
         t.needs !== 'decision' &&
         ownerKindOf(t) === 'person' &&
         open.some((o) => o.id !== t.id && o.after.includes(t.id)),
     );
-    return decisions.length + blockers.length + items.length;
+    const decisions = open.filter((t) => t.needs === 'decision' && !t.answer);
+    const rendered = items.filter((i) => i.kind !== 'task-review');
+    return blockers.length + rendered.length + decisions.length;
   };
 
   const homeBriefInput = (workspace: HubWorkspace, since: number): BriefInput => {
@@ -1203,6 +1244,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
 
   const server = Bun.serve<{ docId: string }>({
     port,
+    // Explicit because the DEFAULT is what broke the event streams: Bun's is
+    // 10 seconds, the SSE keepalive ran on 20, and so every stream idled out
+    // before its own guard could write. Paired with `SSE_KEEPALIVE_MS` and
+    // asserted against it in `sse-keepalive.test.ts` — the two numbers only
+    // mean anything together. Bun throws above 255.
+    //
+    // This governs HTTP connections. Websockets take `websocket.idleTimeout`
+    // (default 120s) and Bun pings them itself, which is why the `/y/*`
+    // editing sockets were never affected — measured idle-surviving 30s on
+    // the unfixed build, while SSE died at 9.7s.
+    idleTimeout: HTTP_IDLE_TIMEOUT_SEC,
     async fetch(req, server) {
       // `undefined` means the request became a websocket — nothing to decorate.
       const routed = await route(req, server);
@@ -2396,6 +2448,24 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           const res = taskStore.createTask(workspaceId, parsed.opts);
           if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
+          // The review item the body filed WITH the ticket, now that the
+          // ticket has an id. `parseTaskCreate` already put the payload
+          // through the same `checkReviewPayload` the store runs, so a
+          // refusal here is unreachable and the ticket cannot land holding a
+          // question the caller was told was rejected.
+          if (parsed.review !== undefined) {
+            taskStore.addReviewItem(res.task.id, parsed.review, {
+              actor: authorFor(body?.author) ?? ANONYMOUS_ACTOR,
+            });
+            // `createTask` already emitted `task.created` — and therefore
+            // already projected this ticket, a moment before it had any
+            // review items. `addReviewItem` emits nothing, so without this the
+            // board room carries the ticket with no `reviews` until some
+            // unrelated store event happens to touch the workspace, which on a
+            // quiet board is never. Same call the dedicated review-item route
+            // makes for the same reason.
+            taskProjection.ensureWorkspace(workspaceId);
+          }
           // Dropped refs are reported, never swallowed: the caller finds out
           // what didn't survive without having to diff what it sent. Same
           // reasoning for `shapeGaps` — the decision WAS created and the
@@ -2415,6 +2485,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             },
             ...(parsed.ignoredLinks.length > 0 ? { ignoredLinks: parsed.ignoredLinks } : {}),
             ...(res.shapeGaps !== undefined ? { shapeGaps: res.shapeGaps } : {}),
+            ...(parsed.reviewAdvice !== undefined ? { reviewAdvice: parsed.reviewAdvice } : {}),
           });
         }
         /**
@@ -2462,6 +2533,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }> = [];
           const ignoredLinks: Array<{ taskId: string; ignored: unknown[] }> = [];
           const shapeGaps: Array<{ taskId: string; gaps: unknown[] }> = [];
+          /** Per row, because a burst files many tickets and "which one came
+           *  out thin" is the only useful form of the answer. */
+          const reviewAdvice: Array<{ taskId: string; advice: string }> = [];
+          /** Did any row attach a review item? The projection refresh those
+           *  need happens once after the loop; see below. */
+          let attachedReview = false;
           // Placement, collected per row and reported ONCE. Per-row it would
           // repeat the same band list a hundred times in a hundred-row burst;
           // the rows that need naming are the unplaced ones, so those are what
@@ -2525,6 +2602,19 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               });
               continue;
             }
+            // Same as the single-create door, and NOT optional: both routes
+            // read one body through `parseTaskCreate`, so a `review` honoured
+            // by one and dropped by the other is the "accepted it, returned
+            // 200, discarded it" bug this file's header is about.
+            if (parsed.review !== undefined) {
+              taskStore.addReviewItem(res.task.id, parsed.review, {
+                actor: createdBy ?? ANONYMOUS_ACTOR,
+              });
+              attachedReview = true;
+            }
+            if (parsed.reviewAdvice !== undefined) {
+              reviewAdvice.push({ taskId: res.task.id, advice: parsed.reviewAdvice });
+            }
             createdIds.add(res.task.id);
             idByIndex.set(index, res.task.id);
             if (!res.placement.placed) unplaced.push(res.task.id);
@@ -2536,6 +2626,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               shapeGaps.push({ taskId: res.task.id, gaps: res.shapeGaps });
             }
           }
+          // Once, after the loop rather than inside it — see the single-create
+          // door for why any of it is needed. The row that actually needs it
+          // is the LAST one carrying a review: every earlier one was projected
+          // incidentally by the NEXT row's `task.created`, which is why a
+          // one-row batch and the tail of an n-row batch were the only shapes
+          // that showed the miss.
+          if (attachedReview) taskProjection.ensureWorkspace(workspaceId);
           // Board order comes from the board, not from a second sort of our
           // own that happens to agree with it today.
           const tasks = taskStore.listTasks(workspaceId).filter((t) => createdIds.has(t.id));
@@ -2556,6 +2653,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               : {}),
             ...(ignoredLinks.length > 0 ? { ignoredLinks } : {}),
             ...(shapeGaps.length > 0 ? { shapeGaps } : {}),
+            ...(reviewAdvice.length > 0 ? { reviewAdvice } : {}),
           });
         }
         // The single gate for status changes: attributed, evidence-stamped,
@@ -2758,6 +2856,93 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!author) return j(400, { error: 'author required' });
           const res = taskStore.requestMoreInfo(taskId, question, { actor: author });
           if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
+          return j(200, res);
+        }
+        // ── A ticket's review items: 0..n, several possibly open at once ────
+        //
+        // The two routes ABOVE are untouched and stay that way. They are the
+        // old doors, and a session running an old plugin bundle keeps calling
+        // them from a process we cannot restart — `answerTaskReview` on the
+        // derived `r-legacy` row delegates straight back into
+        // `answerDecision`, so there is exactly one implementation of
+        // "record a decision's answer" underneath both.
+        //
+        // What these add is the cardinality. A decision task used to BE a
+        // decision — one `needs` flag and one embedded `options` array — so
+        // the ticket title had to double as the question and a second open
+        // question had nowhere to go. Now the question is a row with its own
+        // headline and why, and `:reviewItemId` says which one an answer
+        // lands on.
+        const taskReviewAddMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/review-items$/);
+        if (taskReviewAddMatch && req.method === 'POST') {
+          const taskId = decodeURIComponent(taskReviewAddMatch[1] ?? '');
+          const body = await safeJson(req);
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          // Unvalidated on purpose: `addReviewItem` runs `checkReviewPayload`,
+          // and that IS the gate. A pre-check here would be a second copy of
+          // the limits, free to drift from the one the card renders against.
+          const res = taskStore.addReviewItem(taskId, body?.review, { actor: author });
+          if (!res.ok) {
+            return j(res.error === 'not-found' ? 404 : 400, {
+              error: res.error,
+              ...(res.message !== undefined ? { message: res.message } : {}),
+            });
+          }
+          taskProjection.ensureWorkspace(res.task.workspaceId);
+          // `reviewAdvice`, the same key a comment-borne declaration answers
+          // with. The divergent `shapeGaps` vocabulary stays exactly where it
+          // is for the callers that already read it — this is a new door, and
+          // a new door has no old callers to keep.
+          return j(200, {
+            task: res.task,
+            item: res.item,
+            ...(res.advice !== undefined ? { reviewAdvice: res.advice } : {}),
+          });
+        }
+        const taskReviewAnswerMatch = pathname.match(
+          /^\/api\/tasks\/([^/]+)\/review-items\/([^/]+)\/answer$/,
+        );
+        if (taskReviewAnswerMatch && req.method === 'POST') {
+          const taskId = decodeURIComponent(taskReviewAnswerMatch[1] ?? '');
+          const reviewItemId = decodeURIComponent(taskReviewAnswerMatch[2] ?? '');
+          const body = await safeJson(req);
+          const text = body?.text;
+          if (typeof text !== 'string' || text.length === 0) {
+            return j(400, { error: 'text required' });
+          }
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          // `answeredWith` is this entity's spelling of the legacy `optionId`:
+          // provenance for a tapped answer, never a substitute for the words.
+          const answeredWith = body?.answeredWith;
+          if (answeredWith !== undefined && typeof answeredWith !== 'string') {
+            return j(400, { error: 'answeredWith must be a string' });
+          }
+          const res = taskStore.answerTaskReview(taskId, reviewItemId, text, {
+            actor: author,
+            ...(answeredWith !== undefined ? { answeredWith } : {}),
+          });
+          if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
+          taskProjection.ensureWorkspace(res.task.workspaceId);
+          return j(200, res);
+        }
+        const taskReviewInfoMatch = pathname.match(
+          /^\/api\/tasks\/([^/]+)\/review-items\/([^/]+)\/more-info$/,
+        );
+        if (taskReviewInfoMatch && req.method === 'POST') {
+          const taskId = decodeURIComponent(taskReviewInfoMatch[1] ?? '');
+          const reviewItemId = decodeURIComponent(taskReviewInfoMatch[2] ?? '');
+          const body = await safeJson(req);
+          const question = typeof body?.question === 'string' ? body.question.trim() : '';
+          if (question.length === 0) return j(400, { error: 'question required' });
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const res = taskStore.requestMoreInfoOnReview(taskId, reviewItemId, question, {
+            actor: author,
+          });
+          if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
+          taskProjection.ensureWorkspace(res.task.workspaceId);
           return j(200, res);
         }
         // set_task_dependencies: edit `after` / `afterEnforce` on a task that

@@ -115,6 +115,96 @@ export function reviewAnswered(review: ReviewPayload): boolean {
   return review.answeredAt !== undefined || review.answeredWith !== undefined;
 }
 
+/** A question asked back AT a review item instead of answering it. The item
+ *  stays open and stays counted — that is the whole point of it being its own
+ *  thing rather than an answer carrying a flag. */
+export interface ReviewInfoRequest {
+  text: string;
+  /** Display name. No actor ids in projected state. */
+  by: string;
+  ts: number;
+}
+
+/**
+ * One review item ATTACHED to something — today a ticket.
+ *
+ * The cardinality is the change. A decision task used to BE a decision: one
+ * `needs: 'decision'` flag and one embedded `options` array, so the ticket
+ * title had to double as the question and a second open question had nowhere
+ * to go. Bryan, 2026-08-18: *"For decisions, the ticket title is not the
+ * decision. A decision is a part of a ticket, and there should be a decision
+ * blurb above the options. And over time, there may be more than one decision
+ * associated with a ticket. In fact, at any point in time there might be
+ * multiple open decisions for a ticket."*
+ *
+ * So a ticket HAS review items, 0..n, several possibly open at once, and each
+ * one carries its own blurb — `review.headline` and `review.why` — above its
+ * own `review.options`. The row is the entity; the ticket is what it hangs on.
+ *
+ * `review` is the same `ReviewPayload` a comment-borne declaration carries, on
+ * purpose: two spellings of one concept is what this replaces, and a second
+ * copy of the limits is how a card renders something the API swore it refused.
+ */
+/**
+ * The VERBATIM words of an answer, plus which option they came from.
+ *
+ * Named rather than inlined because a superseded answer is the SAME thing as
+ * the current one — it stopped being current, it did not stop being an answer
+ * somebody wrote — and two shapes for that would be free to disagree.
+ */
+export interface ReviewItemAnswer {
+  text: string;
+  /** Display name. No actor ids in projected state. */
+  by: string;
+  ts: number;
+  /** WHICH option the words came from, when one was tapped. Provenance, never
+   *  the answer itself, which is why a typed answer carries none. */
+  answeredWith?: string;
+}
+
+export interface TaskReviewItem {
+  /** Stable within the thing it hangs on. Minted by the writer. */
+  id: string;
+  /** The blurb and the options — the whole declaration, one spelling. */
+  review: ReviewPayload;
+  createdAt: number;
+  /** Display name of whoever raised it. */
+  createdBy: string;
+  /**
+   * The VERBATIM words of the answer. `answeredWith` records WHICH option the
+   * words came from when one was tapped — provenance, never the answer itself,
+   * which is why it is optional on an answer that was typed.
+   *
+   * Its presence is what closes the item; see `isReviewItemOpen`.
+   */
+  answer?: ReviewItemAnswer;
+  /**
+   * Answers this one SUPERSEDED, oldest first.
+   *
+   * Answering twice is legal — a person changes their mind, a retry lands, two
+   * people reach for the same row — but the words already recorded are user
+   * content, and this project does not hard-delete user content. Overwriting
+   * `answer` in place is a destructive edit nothing anywhere reports; moving
+   * the old one here makes the same act reversible. Absent while there are
+   * none, like every other optional field on this row.
+   */
+  priorAnswers?: ReviewItemAnswer[];
+  /** "Tell me more", in order. Absent rather than empty while there are none. */
+  infoRequests?: ReviewInfoRequest[];
+}
+
+/**
+ * Is this item still waiting on a person?
+ *
+ * Deliberately `answer === undefined` and nothing else. An info request is a
+ * question asked back, not an answer, so an item with three of them is still
+ * open — and a separate `status` field would be a second spelling of a fact
+ * the answer already states, free to disagree with it.
+ */
+export function isReviewItemOpen(item: TaskReviewItem): boolean {
+  return item.answer === undefined;
+}
+
 /** Every limit in one place, exported so a card can show a counter that
  *  cannot disagree with the gate. */
 export const REVIEW_LIMITS = {
@@ -394,5 +484,133 @@ export function readReviewPayload(value: unknown): ReviewPayload | undefined {
     }
     if (options.length > 0) out.options = options;
   }
+  return out;
+}
+
+/** A finite number, or the fallback. Metadata must not be able to drop a row:
+ *  an item with an unreadable timestamp still has to render. */
+function num(v: unknown, fallback: number): number {
+  return typeof v === 'number' && Number.isFinite(v) ? v : fallback;
+}
+
+function str(v: unknown, fallback: string): string {
+  return typeof v === 'string' ? v : fallback;
+}
+
+/**
+ * A `TaskReviewItem` read back out of the CRDT, or undefined.
+ *
+ * Loose on the way out for the same reason `readReviewPayload` is, and with
+ * the same line drawn in the same place: only what makes the row IDENTIFIABLE
+ * can drop it. A row needs an id (something has to address an answer at it)
+ * and a readable `review` (there is nothing to show without one). Everything
+ * else degrades — a missing `createdBy` reads as unattributed rather than
+ * making the item vanish from a queue somebody is waiting on.
+ *
+ * Never throws. This value is synced to every peer, no peer's write is
+ * authoritative, and a malformed object reaching a renderer is a crash on a
+ * page that never touched the doc.
+ */
+/** One answer record, read loosely. Shared by `answer` and `priorAnswers` so
+ *  a superseded answer can never read differently from a current one. */
+function readAnswer(value: unknown): ReviewItemAnswer | undefined {
+  if (!isPlainObject(value)) return undefined;
+  if (typeof value.text !== 'string' || value.text.trim() === '') return undefined;
+  const out: ReviewItemAnswer = { text: value.text, by: str(value.by, ''), ts: num(value.ts, 0) };
+  if (typeof value.answeredWith === 'string') out.answeredWith = value.answeredWith;
+  return out;
+}
+
+export function readTaskReviewItem(value: unknown): TaskReviewItem | undefined {
+  if (!isPlainObject(value)) return undefined;
+  const id = value.id;
+  if (typeof id !== 'string' || id.trim() === '') return undefined;
+  const review = readReviewPayload(value.review);
+  if (!review) return undefined;
+
+  const out: TaskReviewItem = {
+    id,
+    review,
+    createdAt: num(value.createdAt, 0),
+    createdBy: str(value.createdBy, ''),
+  };
+
+  // The words ARE the answer, so a record without them is not one — dropping
+  // it leaves the item open, which is the safe direction: an item wrongly read
+  // as answered disappears from the queue and nobody is told.
+  const answer = readAnswer(value.answer);
+  if (answer) out.answer = answer;
+
+  if (Array.isArray(value.priorAnswers)) {
+    const prior: ReviewItemAnswer[] = [];
+    for (const raw of value.priorAnswers) {
+      const read = readAnswer(raw);
+      if (read) prior.push(read);
+    }
+    if (prior.length > 0) out.priorAnswers = prior;
+  }
+
+  if (Array.isArray(value.infoRequests)) {
+    const reqs: ReviewInfoRequest[] = [];
+    for (const raw of value.infoRequests) {
+      if (!isPlainObject(raw)) continue;
+      if (typeof raw.text !== 'string' || raw.text.trim() === '') continue;
+      reqs.push({ text: raw.text, by: str(raw.by, ''), ts: num(raw.ts, 0) });
+    }
+    if (reqs.length > 0) out.infoRequests = reqs;
+  }
+  return out;
+}
+
+/**
+ * The shape of a legacy decision TASK, structurally — the parallel spelling.
+ *
+ * Declared structurally rather than imported so this module stays free of the
+ * server's task types: core is the lower layer, and both the browser and the
+ * REST route derive the same value from it.
+ */
+export interface DecisionTaskLike {
+  title: string;
+  body?: string;
+  options?: ReadonlyArray<{ id: string; label: string; detail?: string }>;
+  answer?: { optionId?: string };
+}
+
+/**
+ * The one legacy decision a task carried, expressed as a `ReviewPayload`.
+ *
+ * MECHANICAL, and every mapping in it is a copy rather than a judgement:
+ *
+ *  - `headline` is the task TITLE verbatim. A title is an authored string —
+ *    somebody wrote it to be a title — so this is not the clip-prose-into-a-
+ *    headline move `review-migration.ts` refuses to make. Nothing is generated.
+ *  - `why` is `''`. No legacy decision task ever authored one, and there is
+ *    nothing on the row to derive it from. Fabricating a sentence here would
+ *    manufacture exactly the row shape this feature exists to delete, so the
+ *    honest value is empty: `readReviewPayload` permits it (already-stored
+ *    items must keep rendering) while `checkReviewPayload` still refuses it
+ *    for new writes. That asymmetry is deliberate, not an oversight — the
+ *    derivation is NOT routed through the writer's gate.
+ *  - `detail` is the body verbatim, unbudgeted for the same reason: a limit
+ *    invented after the fact cannot retroactively make stored content invalid.
+ *  - `options` keep their SERVER-MINTED ids. `ReviewOption.id` only promises
+ *    to be stable within the payload, which a minted id satisfies, and
+ *    `answer.optionId` already points at these — re-minting would orphan every
+ *    answer already recorded.
+ *
+ * Pure: no store, no clock, no I/O, nothing minted. Read-side migration, so a
+ * caller can derive this on every read without ever rewriting stored data.
+ */
+export function reviewFromDecisionTask(task: DecisionTaskLike): ReviewPayload {
+  const out: ReviewPayload = { shape: 'decision', headline: task.title, why: '' };
+  if (typeof task.body === 'string' && task.body.trim() !== '') out.detail = task.body;
+  if (task.options && task.options.length > 0) {
+    out.options = task.options.map((o) => {
+      const opt: ReviewOption = { id: o.id, label: o.label };
+      if (o.detail !== undefined) opt.detail = o.detail;
+      return opt;
+    });
+  }
+  if (typeof task.answer?.optionId === 'string') out.answeredWith = task.answer.optionId;
   return out;
 }

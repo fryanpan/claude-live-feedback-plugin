@@ -2,9 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   REVIEW_LIMITS,
   type ReviewPayload,
+  type TaskReviewItem,
   checkReviewPayload,
+  isReviewItemOpen,
   readReviewPayload,
+  readTaskReviewItem,
   reviewAnswered,
+  reviewFromDecisionTask,
   reviewGapAdvice,
   reviewPayloadMessage,
 } from './review-item.ts';
@@ -291,5 +295,232 @@ describe('reviewAnswered', () => {
 
   it('is false for an item nobody has answered', () => {
     expect(reviewAnswered(payload())).toBe(false);
+  });
+});
+
+/** A legacy decision TASK, in the parallel spelling this module is absorbing.
+ *  Server-minted option ids, verbatim title, `optionId` on the answer. */
+function decisionTask(over: Record<string, unknown> = {}) {
+  return {
+    title: 'Which retention window for staged uploads?',
+    body: 'Staging fills with abandoned uploads. Nothing prunes them today.',
+    options: [
+      { id: 'o-7f3a', label: 'Seven days', detail: 'Cheapest. Loses a slow reviewer.' },
+      { id: 'o-91cc', label: 'Thirty days', detail: 'Covers a holiday. Costs storage.' },
+    ],
+    ...over,
+  };
+}
+
+describe('reviewFromDecisionTask — one spelling, derived mechanically from the old one', () => {
+  it('maps the title to the headline VERBATIM, never a clip of it', () => {
+    const t = decisionTask();
+    const p = reviewFromDecisionTask(t);
+    expect(p.shape).toBe('decision');
+    expect(p.headline).toBe(t.title);
+  });
+
+  it('maps the body to detail verbatim and the options 1:1 with their minted ids', () => {
+    const t = decisionTask();
+    const p = reviewFromDecisionTask(t);
+    expect(p.detail).toBe(t.body);
+    expect(p.options).toEqual(t.options);
+    // Option identity is the task's, not re-minted here: an answer already
+    // recorded against `o-7f3a` has to keep pointing at the same candidate.
+    expect(p.options?.map((o) => o.id)).toEqual(['o-7f3a', 'o-91cc']);
+  });
+
+  it('carries a recorded answer’s optionId across as answeredWith', () => {
+    const p = reviewFromDecisionTask(
+      decisionTask({ answer: { text: 'Thirty days', by: 'Reviewer', ts: 1, optionId: 'o-91cc' } }),
+    );
+    expect(p.answeredWith).toBe('o-91cc');
+  });
+
+  it('leaves answeredWith absent for a typed answer, which is not a lesser answer', () => {
+    const p = reviewFromDecisionTask(
+      decisionTask({ answer: { text: 'Neither — prune on read.', by: 'Reviewer', ts: 1 } }),
+    );
+    expect(p.answeredWith).toBeUndefined();
+  });
+
+  // THE asymmetry assertion. The derivation is deliberately NOT routed through
+  // checkReviewPayload: no legacy decision task ever authored a `why`, and
+  // inventing one would fabricate exactly the clipped-prose row this whole
+  // change deletes. So the output has to satisfy the READER and need not
+  // satisfy the WRITER's gate.
+  it('produces a payload the reader accepts even though the writer’s gate would refuse it', () => {
+    const p = reviewFromDecisionTask(decisionTask());
+    expect(p.why).toBe('');
+    expect(checkReviewPayload(p).ok).toBe(false);
+    expect(readReviewPayload(p)).toEqual(p);
+  });
+
+  it('does not re-litigate the body word budget a legacy task never had', () => {
+    const long = Array.from(
+      { length: REVIEW_LIMITS.detailWords.decision + 40 },
+      (_, i) => `w${i}`,
+    ).join(' ');
+    const p = reviewFromDecisionTask(decisionTask({ body: long }));
+    expect(p.detail).toBe(long);
+    expect(readReviewPayload(p)?.detail).toBe(long);
+  });
+
+  it('still derives a readable payload from a task with no options and no body', () => {
+    const p = reviewFromDecisionTask({ title: 'Ship it this week?' });
+    expect(p.detail).toBeUndefined();
+    expect(p.options).toBeUndefined();
+    expect(readReviewPayload(p)).toEqual(p);
+  });
+});
+
+describe('TaskReviewItem — a ticket HAS review items, 0..n, rather than IS one', () => {
+  function item(over: Record<string, unknown> = {}): unknown {
+    return {
+      id: 'ri-4b2e',
+      review: decision(),
+      createdAt: 1700000000000,
+      createdBy: 'Scheduler Agent',
+      ...over,
+    };
+  }
+
+  it('reads a well-formed row back whole', () => {
+    // Positive control for every drop assertion below: this reader DOES
+    // return rows, so an undefined further down is a judgement about that
+    // row rather than a reader that never returns anything.
+    const read = readTaskReviewItem(item());
+    expect(read?.id).toBe('ri-4b2e');
+    expect(read?.review.headline).toBe((decision() as ReviewPayload).headline);
+    expect(read?.createdBy).toBe('Scheduler Agent');
+  });
+
+  it('drops a row with a non-string id, returning undefined rather than throwing', () => {
+    expect(() => readTaskReviewItem(item({ id: 42 }))).not.toThrow();
+    expect(readTaskReviewItem(item({ id: 42 }))).toBeUndefined();
+    expect(readTaskReviewItem(item({ id: '   ' }))).toBeUndefined();
+  });
+
+  it('drops a row whose review is unreadable, since there is nothing left to show', () => {
+    expect(readTaskReviewItem(item({ review: { shape: 'decision' } }))).toBeUndefined();
+    expect(readTaskReviewItem(item({ review: undefined }))).toBeUndefined();
+  });
+
+  it('returns undefined for anything that is not a row at all', () => {
+    for (const v of [null, undefined, 'x', 7, [], {}]) {
+      expect(readTaskReviewItem(v)).toBeUndefined();
+    }
+  });
+
+  it('reads an answer and its provenance, and drops one with no words', () => {
+    const answered = readTaskReviewItem(
+      item({ answer: { text: 'Keep dimmed', by: 'Reviewer', ts: 12, answeredWith: 'dim' } }),
+    );
+    expect(answered?.answer).toEqual({
+      text: 'Keep dimmed',
+      by: 'Reviewer',
+      ts: 12,
+      answeredWith: 'dim',
+    });
+    expect(readTaskReviewItem(item({ answer: { by: 'Reviewer' } }))?.answer).toBeUndefined();
+  });
+
+  /**
+   * Answering twice is legal — a person changes their mind, or a retry lands —
+   * but the words already recorded are USER CONTENT, and this project does not
+   * hard-delete user content. So a superseded answer moves to `priorAnswers`
+   * rather than being overwritten out of existence, oldest first.
+   */
+  it('reads superseded answers back, oldest first, and drops only the wordless ones', () => {
+    const read = readTaskReviewItem(
+      item({
+        answer: { text: 'Keep memory', by: 'Reviewer', ts: 30 },
+        priorAnswers: [
+          { text: 'Keep disk', by: 'Reviewer', ts: 10, answeredWith: 'dim' },
+          { by: 'Reviewer', ts: 20 },
+          'not an object',
+        ],
+      }),
+    );
+    expect(read?.priorAnswers).toEqual([
+      { text: 'Keep disk', by: 'Reviewer', ts: 10, answeredWith: 'dim' },
+    ]);
+    // Absent rather than empty while there are none — the same rule the rest
+    // of this row follows, so a reader can ask one question.
+    expect(readTaskReviewItem(item())?.priorAnswers).toBeUndefined();
+    expect(readTaskReviewItem(item({ priorAnswers: ['junk'] }))?.priorAnswers).toBeUndefined();
+  });
+
+  it('keeps readable info requests and drops only the malformed ones', () => {
+    const read = readTaskReviewItem(
+      item({
+        infoRequests: [
+          { text: 'What does the slow reviewer actually do?', by: 'Reviewer', ts: 5 },
+          'not an object',
+          { by: 'Reviewer', ts: 6 },
+        ],
+      }),
+    );
+    expect(read?.infoRequests).toEqual([
+      { text: 'What does the slow reviewer actually do?', by: 'Reviewer', ts: 5 },
+    ]);
+    expect(readTaskReviewItem(item({ infoRequests: ['junk'] }))?.infoRequests).toBeUndefined();
+  });
+});
+
+describe('isReviewItemOpen — several can be open on one ticket at once', () => {
+  const base: TaskReviewItem = {
+    id: 'ri-1',
+    review: decision() as ReviewPayload,
+    createdAt: 1,
+    createdBy: 'Scheduler Agent',
+  };
+
+  it('is open until it is answered, and an info request does not answer it', () => {
+    expect(isReviewItemOpen(base)).toBe(true);
+    expect(
+      isReviewItemOpen({
+        ...base,
+        infoRequests: [{ text: 'Say more?', by: 'Reviewer', ts: 2 }],
+      }),
+    ).toBe(true);
+  });
+
+  it('is closed once an answer is recorded', () => {
+    expect(isReviewItemOpen({ ...base, answer: { text: 'Keep dimmed', by: 'R', ts: 3 } })).toBe(
+      false,
+    );
+  });
+
+  it('counts several open items on one ticket', () => {
+    const items: TaskReviewItem[] = [
+      base,
+      { ...base, id: 'ri-2' },
+      { ...base, id: 'ri-3', answer: { text: 'Hide them', by: 'R', ts: 4 } },
+    ];
+    expect(items.filter(isReviewItemOpen).map((i) => i.id)).toEqual(['ri-1', 'ri-2']);
+  });
+});
+
+describe('the writer’s gate is exactly as strict as it was', () => {
+  // Positive controls for the whole commit: adding a derivation path that
+  // bypasses checkReviewPayload must not have loosened checkReviewPayload.
+  it('still refuses a decision with a headline and no why', () => {
+    const c = checkReviewPayload({ shape: 'decision', headline: 'x' });
+    expect(c.ok).toBe(false);
+    expect(c.errors.join(' ')).toContain('review.why is required');
+  });
+
+  it('still refuses a one-option decision', () => {
+    const c = checkReviewPayload(decision({ options: [{ id: 'a', label: 'Only one' }] }));
+    expect(c.ok).toBe(false);
+    expect(c.errors.join(' ')).toContain('at least 2 options');
+  });
+
+  it('still only ADVISES about a missing lookFor', () => {
+    const c = checkReviewPayload(decision({ lookFor: undefined }));
+    expect(c.ok).toBe(true);
+    expect(c.errors).toEqual([]);
+    expect(c.gaps).toContain('lookFor');
   });
 });

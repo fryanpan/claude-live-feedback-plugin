@@ -497,4 +497,133 @@ describe('decision routes', () => {
       expect(((await self.json()) as { error: string }).error).toBe('self-dependency');
     });
   });
+
+  // ── the OLD doors, unchanged ────────────────────────────────────────────
+
+  /**
+   * The hard constraint of the review-item entity, stated as a test.
+   *
+   * A session running an old plugin bundle cannot be restarted by us — it
+   * resolved its bundle path at launch and keeps calling the routes it was
+   * built against. So a decision filed the old way, through either door that
+   * ever filed one, must still be filable and still be answerable with the
+   * old keys. Not one request below names `review` or `reviewItemId`, which
+   * is the whole point: the old vocabulary has to be sufficient on its own.
+   *
+   * These are DELIBERATELY the same shapes the cases above already exercise —
+   * the value here is not new coverage, it is that this block will be read by
+   * whoever next thinks about narrowing the old payload, and it says no.
+   */
+  describe('an old bundle can still file and answer a decision with the old keys only', () => {
+    it('through create_tasks: needs + options in, optionId out', async () => {
+      const wsId = await seedWorkspace();
+      const { task } = await jj<{ task: Task }>(
+        await post(`/api/workspaces/${wsId}/tasks`, {
+          title: 'ship now or wait?',
+          assignee: 'human',
+          needs: 'decision',
+          body: DECISION_BODY,
+          options: [{ label: 'Ship now', detail: 'stale results for a week' }, { label: 'Wait' }],
+        }),
+      );
+      const picked = task.options?.[1];
+      expect(picked).toBeDefined();
+      if (!picked) return;
+
+      const events: TaskStoreEvent[] = [];
+      const off = handle.tasks.onEvent((e) => events.push(e));
+      try {
+        const answered = await post(`/api/tasks/${task.id}/answer`, {
+          text: 'Wait',
+          optionId: picked.id,
+          author: PERSON,
+        });
+        expect(answered.status).toBe(200);
+      } finally {
+        off();
+      }
+      const stored = (await getTasks(wsId)).find((t) => t.id === task.id);
+      expect(stored?.answer?.text).toBe('Wait');
+      expect(stored?.answer?.optionId).toBe(picked.id);
+      const ev = events.find((e) => e.type === 'decision.answered');
+      expect(ev).toBeDefined();
+      if (ev?.type === 'decision.answered') expect(ev.optionId).toBe(picked.id);
+    });
+
+    it('through promote_to_task: the same keys on the other create door', async () => {
+      const wsId = await seedWorkspace();
+      const docId = 'legacy-promote-decision';
+      const file = join(dataDir, `${docId}.md`);
+      writeFileSync(file, '# Doc\n\nthe rollout clause\n');
+      await jj(await post('/api/docs', { docId, type: 'markdown', sourceUrl: file }));
+      const { thread } = await jj<{ thread: { id: string } }>(
+        await post(`/api/docs/${docId}/threads`, {
+          author: PERSON,
+          text: 'Should the rollout wait for the rebuild?',
+          anchor: {
+            kind: 'element',
+            fingerprint: { tag: 'P', classes: [], text: 'the rollout clause', index: 0 },
+            snippet: { text: 'the rollout clause' },
+          },
+        }),
+      );
+      const { task } = await jj<{ task: Task }>(
+        await post(`/api/docs/${docId}/threads/${thread.id}/promote`, {
+          workspaceId: wsId,
+          author: PERSON,
+          needs: 'decision',
+          body: DECISION_BODY,
+          options: [{ label: 'Ship now' }, { label: 'Wait' }],
+        }),
+      );
+      const picked = task.options?.[0];
+      expect(picked).toBeDefined();
+      if (!picked) return;
+
+      const events: TaskStoreEvent[] = [];
+      const off = handle.tasks.onEvent((e) => events.push(e));
+      try {
+        const answered = await post(`/api/tasks/${task.id}/answer`, {
+          text: 'Ship now',
+          optionId: picked.id,
+          author: PERSON,
+        });
+        expect(answered.status).toBe(200);
+      } finally {
+        off();
+      }
+      const stored = (await getTasks(wsId)).find((t) => t.id === task.id);
+      expect(stored?.answer?.optionId).toBe(picked.id);
+      const ev = events.find((e) => e.type === 'decision.answered');
+      expect(ev).toBeDefined();
+      if (ev?.type === 'decision.answered') expect(ev.optionId).toBe(picked.id);
+    });
+
+    // POSITIVE CONTROL: the old gates are exactly as strict as they were. If a
+    // later change routes an old-shaped create through the review-item gate,
+    // these are the two that notice — `checkReviewPayload` refuses labels the
+    // legacy path has always accepted, and knows nothing about `needs`.
+    it('still refuses options on a non-decision and a decision body with no question', async () => {
+      const wsId = await seedWorkspace();
+      const noQuestion = await post(`/api/workspaces/${wsId}/tasks`, {
+        title: 'Rollout note',
+        assignee: 'human',
+        needs: 'decision',
+        body: 'Round 5 delivered: 133 candidates ranked. Still open, still #3 on the status page.',
+      });
+      expect(noQuestion.status).toBe(400);
+      expect(((await noQuestion.json()) as { error: string }).error).toBe('decision-body-required');
+
+      const optionsWithoutDecision = await post(`/api/workspaces/${wsId}/tasks`, {
+        title: 'Rollout note',
+        assignee: 'human',
+        needs: 'action',
+        options: [{ label: 'Ship now' }, { label: 'Wait' }],
+      });
+      expect(optionsWithoutDecision.status).toBe(400);
+      expect(((await optionsWithoutDecision.json()) as { error: string }).error).toBe(
+        'options-need-decision',
+      );
+    });
+  });
 });

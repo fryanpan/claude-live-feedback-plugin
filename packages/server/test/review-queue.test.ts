@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'bun:test';
-import type { Comment, ReviewPayload, Thread } from '@feedback/core';
+import type { Comment, ReviewPayload, TaskReviewItem, Thread } from '@feedback/core';
 import {
   asksPerson,
   awaitingPerson,
+  reviewItemRows,
   reviewThreadItems,
+  taskReviewItems,
   unansweredRun,
 } from '../src/review-queue.ts';
 
@@ -781,5 +783,187 @@ describe('reviewThreadItems — declared review items vs the inferred band', () 
         }),
       ]),
     ).toEqual([]);
+  });
+});
+
+// ── Ticket-borne review items join the same declared band ───────────────────
+
+/**
+ * A decision task used to BE a decision, so the only way it reached a queue was
+ * as a task row the client derived separately. Now a ticket HAS review items —
+ * 0..n, several possibly open at once — and those rows have to reach the same
+ * queue, in the same band, under the same oldest-first rule, or the second open
+ * question on a ticket is invisible exactly as before.
+ *
+ * All fixtures synthetic: invented ids, invented copy.
+ */
+describe('taskReviewItems — a ticket contributes one row per OPEN review item', () => {
+  const payload = (over: Partial<ReviewPayload> = {}): ReviewPayload => ({
+    shape: 'decision',
+    headline: 'Which cache do we keep?',
+    why: 'Blocks the storage cleanup.',
+    options: [
+      { id: 'o-7f3a', label: 'Keep disk' },
+      { id: 'o-4b2e', label: 'Keep memory' },
+    ],
+    ...over,
+  });
+
+  const item = (over: Partial<TaskReviewItem> = {}): TaskReviewItem => ({
+    id: 'ri-4b2e',
+    review: payload(),
+    createdAt: T0 + 100,
+    createdBy: 'Scheduler Agent',
+    ...over,
+  });
+
+  it('emits a declared row carrying the taskId and the review item id', () => {
+    const [row] = taskReviewItems([
+      { id: 'tk-1', title: 'Storage cleanup', bodyDocId: 'task:tk-1', reviews: [item()] },
+    ]);
+    expect(row).toEqual({
+      kind: 'task-review',
+      band: 'declared',
+      taskId: 'tk-1',
+      reviewItemId: 'ri-4b2e',
+      review: payload(),
+      title: 'Storage cleanup',
+      ask: 'Which cache do we keep?',
+      askedBy: 'Scheduler Agent',
+      since: T0 + 100,
+      direct: true,
+      askedAt: T0 + 100,
+    });
+  });
+
+  // The cardinality IS the feature. Three open questions on one ticket used to
+  // collapse into at most one row, because a task could hold exactly one
+  // `options` array.
+  it('emits every open row and drops the answered one', () => {
+    const rows = taskReviewItems([
+      {
+        id: 'tk-1',
+        title: 'Storage cleanup',
+        bodyDocId: 'task:tk-1',
+        reviews: [
+          item({ id: 'ri-1', createdAt: T0 + 1 }),
+          item({
+            id: 'ri-2',
+            createdAt: T0 + 2,
+            answer: { text: 'Keep the disk one.', by: 'Reviewer', ts: T0 + 50 },
+          }),
+          item({ id: 'ri-3', createdAt: T0 + 3 }),
+        ],
+      },
+    ]);
+    expect(rows.map((r) => r.reviewItemId)).toEqual(['ri-1', 'ri-3']);
+  });
+
+  // An info request is a question asked BACK, not an answer — the item is still
+  // waiting on a person, so it must still be in the queue.
+  it('keeps an item that only has info requests', () => {
+    const rows = taskReviewItems([
+      {
+        id: 'tk-1',
+        title: 'Storage cleanup',
+        bodyDocId: 'task:tk-1',
+        reviews: [
+          item({ infoRequests: [{ text: 'What is on disk today?', by: 'Reviewer', ts: T0 }] }),
+        ],
+      },
+    ]);
+    expect(rows).toHaveLength(1);
+  });
+
+  // Same rule the thread half already follows: answering a finished task's
+  // question changes nothing, and the board's problem is competition for
+  // attention.
+  it('says nothing about a ticket that is done, or one with no items', () => {
+    expect(
+      taskReviewItems([
+        { id: 'tk-1', title: 'Old', bodyDocId: 'task:tk-1', done: true, reviews: [item()] },
+        { id: 'tk-2', title: 'Plain', bodyDocId: 'task:tk-2' },
+      ]),
+    ).toEqual([]);
+  });
+});
+
+describe('reviewItemRows — one queue, one order', () => {
+  const source = (map: Record<string, Thread[]>) => ({
+    threadsOf: (docId: string) => map[docId] ?? [],
+  });
+
+  const review: ReviewPayload = {
+    shape: 'decision',
+    headline: 'Which cache do we keep?',
+    why: 'Blocks the storage cleanup.',
+    options: [
+      { id: 'o-7f3a', label: 'Keep disk' },
+      { id: 'o-4b2e', label: 'Keep memory' },
+    ],
+  };
+
+  const tasks = (reviews?: TaskReviewItem[]) => [
+    {
+      id: 'tk-1',
+      title: 'Storage cleanup',
+      bodyDocId: 'task:tk-1',
+      ...(reviews ? { reviews } : {}),
+    },
+  ];
+  const threads = {
+    'task:tk-1': [
+      thread({ id: 'th-a', comments: [comment({ text: 'Green or blue?', ts: T0 + 300 })] }),
+    ],
+    'd-1': [thread({ id: 'th-b', comments: [comment({ text: 'Is this true?', ts: T0 + 100 })] })],
+  };
+  const docs = [{ docId: 'd-1', title: 'Launch plan' }];
+
+  /**
+   * The ordering rule is the band's, not the surface's: whatever has waited
+   * longest comes first, whether it came from a thread or from a ticket.
+   */
+  it('sorts oldest-first across thread-borne and ticket-borne rows alike', () => {
+    const rows = reviewItemRows({
+      tasks: tasks([
+        { id: 'ri-early', review, createdAt: T0 + 50, createdBy: 'Scheduler Agent' },
+        { id: 'ri-late', review, createdAt: T0 + 200, createdBy: 'Scheduler Agent' },
+      ]),
+      docs,
+      source: source(threads),
+    });
+    expect(rows.map((r) => r.since)).toEqual([T0 + 50, T0 + 100, T0 + 200, T0 + 300]);
+    expect(rows.map((r) => r.kind)).toEqual([
+      'task-review',
+      'doc-thread',
+      'task-review',
+      'task-thread',
+    ]);
+  });
+
+  /**
+   * THE POSITIVE CONTROL. A workspace with no ticket-borne items must emit
+   * exactly the rows it emitted before this existed — same objects, same
+   * order — or "nothing that surfaces today stops surfacing" is a claim rather
+   * than a property.
+   */
+  it('leaves a thread-only workspace byte-identical to reviewThreadItems', () => {
+    const args = { tasks: tasks(), docs, source: source(threads) };
+    expect(reviewItemRows(args)).toEqual(reviewThreadItems(args));
+    // …and non-vacuously: there really were rows to compare.
+    expect(reviewThreadItems(args)).toHaveLength(2);
+  });
+
+  // The same control from the other side: adding ticket rows must not disturb
+  // the thread rows themselves, only interleave with them.
+  it('leaves each thread row untouched when ticket rows join it', () => {
+    const args = { tasks: tasks(), docs, source: source(threads) };
+    const before = reviewThreadItems(args);
+    const after = reviewItemRows({
+      tasks: tasks([{ id: 'ri-1', review, createdAt: T0 + 50, createdBy: 'Scheduler Agent' }]),
+      docs,
+      source: source(threads),
+    }).filter((r) => r.kind !== 'task-review');
+    expect(after).toEqual(before);
   });
 });

@@ -80,7 +80,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.63';
+const PLUGIN_VERSION = '0.1.64';
 
 /**
  * What a good `evidence.commit` looks like, said at the one layer that reaches
@@ -273,6 +273,25 @@ const REVIEW_ITEM_SCHEMA = {
     },
   },
   required: ['shape', 'headline', 'why'],
+} as const;
+
+/**
+ * The SAME payload, hanging off a TICKET instead of a comment.
+ *
+ * One entity, one shape — the properties come from the schema above rather
+ * than from a second copy, because two spellings of one payload is precisely
+ * what this replaced: a ticket used to BE a decision (one `needs` flag, one
+ * embedded `options` array, its own answer path), so the two surfaces could
+ * drift on what a headline may contain and nothing would say so.
+ *
+ * Only the DESCRIPTION differs, and it has to: the comment version says "this
+ * comment", which is the wrong noun on a ticket row and would teach an agent
+ * that a ticket's question has to be a comment somewhere.
+ */
+const TASK_REVIEW_ITEM_SCHEMA = {
+  ...REVIEW_ITEM_SCHEMA,
+  description:
+    'A review item ON THIS TICKET — the question, with its own blurb above its own options. A ticket can carry SEVERAL, and more than one can be open at a time, so the blurb lives on the item and NOT the ticket title: the title names the work, `headline`/`why` name what is being asked. Same limits and the same refusals as a comment-borne declaration, because it is the same payload.',
 } as const;
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -1057,7 +1076,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           tasks: {
             type: 'array',
             description:
-              'The rows, at most 100 — an oversized batch is refused WHOLE rather than truncated, and a tracker that big belongs in import_tasks_markdown. Each row is {title, body?, key?, assignee?, assigneeKind?, needs?, options?, goal?, order?, after?, afterEnforce?, dueAt?, links?, quote?} — the per-field rules are on the row schema below, and they are the same rules the removed single-row create carried. `title` is the only required field — but write a `body` on every row you are not doing yourself within the hour: a bare title is not pickup-able by an agent that was not in the conversation. `key` is an optional label THIS batch uses to reference the row; it must be unique in the batch and must not be all digits or start with "#". Rows are created in the order given, so a row can only depend on a row ABOVE it — a forward reference is refused rather than silently dropped, and so is a reference to a row that failed (a task carrying a dependency that never blocks it is worse than a refusal). An entry with no "#" is still an existing task id, exactly as before.',
+              'The rows, at most 100 — an oversized batch is refused WHOLE rather than truncated, and a tracker that big belongs in import_tasks_markdown. Each row is {title, body?, key?, assignee?, assigneeKind?, needs?, options?, review?, goal?, order?, after?, afterEnforce?, dueAt?, links?, quote?} — the per-field rules are on the row schema below, and they are the same rules the removed single-row create carried. `title` is the only required field — but write a `body` on every row you are not doing yourself within the hour: a bare title is not pickup-able by an agent that was not in the conversation. `key` is an optional label THIS batch uses to reference the row; it must be unique in the batch and must not be all digits or start with "#". Rows are created in the order given, so a row can only depend on a row ABOVE it — a forward reference is refused rather than silently dropped, and so is a reference to a row that failed (a task carrying a dependency that never blocks it is worse than a refusal). An entry with no "#" is still an existing task id, exactly as before.',
             // The row contract used to live on the single-row create verb's
             // declaration, and `tasks` merely pointed at it. Removing that
             // tool would have removed every field description with it — the
@@ -1100,14 +1119,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                   type: 'string',
                   enum: ['action', 'decision'],
                   description:
-                    "Only meaningful when assignee is a human. 'decision' makes it a decision task (answer_decision records the verbatim answer). A decision REQUIRES a decision-shaped `body` — see that field.",
+                    "Only meaningful when assignee is a human. 'decision' makes the ticket ITSELF one decision (answer_decision records the verbatim answer), which is the older model: the title doubles as the question and a second open question has nowhere to go. A decision REQUIRES a decision-shaped `body` — see that field. Pass `review` instead when you can: a ticket carries 0..n review items, several of them possibly open at once, each with its own blurb.",
                 },
                 options: {
                   type: 'array',
                   description:
-                    'Candidate answers, decision rows only: [{label, detail?}]. `label` is the text recorded VERBATIM as the answer if it is picked; `detail` is what picking it costs. Supply them whenever you already have candidates in mind — that is the normal case, and without them the person deciding has to compose prose to say "the second one". They are a SHORTCUT, never a closed set: writing a different answer and asking for more information stay available next to them, so do not pad the list to look exhaustive. Two or more, or don\'t bother.',
+                    "Candidate answers for the row's ONE embedded decision: [{label, detail?}]. `label` is the text recorded VERBATIM as the answer if it is picked; `detail` is what picking it costs. They are a SHORTCUT, never a closed set: writing a different answer and asking for more information stay available next to them, so do not pad the list to look exhaustive. Two or more, or don't bother.\n\nPREFER `review` when you have a choice. This field hangs the question off the ticket itself, so the TITLE has to double as the question and a second open question has nowhere to go — a ticket can carry SEVERAL review items, and several of them can be open at once. It is kept because callers already send it and it still works exactly as it did.",
                   items: { type: 'object' },
                 },
+                review: TASK_REVIEW_ITEM_SCHEMA,
                 goal: {
                   type: 'string',
                   description:
@@ -1467,9 +1487,63 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'add_review_item',
+      description:
+        "Hang a question on an EXISTING ticket: its own headline and why, its own options, answered on its own. A ticket carries 0..n review items and SEVERAL can be open at once, which is the whole point — the ticket title names the WORK, and the item's `headline`/`why` name what is being asked, so a second question no longer needs a second ticket or a rewritten title. Use it whenever a question comes up mid-work on a row that already exists (file it with the ticket instead via `review` on a create_tasks row). It lands on the owner's Home queue exactly like a comment-borne declaration, and comes back with `reviewAdvice` naming any part of the shape that is thin. Answer it with answer_review_item, ask back with request_more_info.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          taskId: { type: 'string', description: 'The ticket the question hangs on.' },
+          review: TASK_REVIEW_ITEM_SCHEMA,
+        },
+        required: ['taskId', 'review'],
+      },
+    },
+    {
+      name: 'answer_review_item',
+      description:
+        "Record the VERBATIM answer to one of a ticket's review items on the human's behalf — use when they told you in chat/voice and you're writing it down; in the UI they answer directly. Pass their exact words as `text`, never a paraphrase. Naming `reviewItemId` is what makes several open questions on one ticket answerable independently. Returns the task's links — a ready-made propagation checklist: act on or create a task for each, and prioritize them right away. Does NOT transition the ticket; close it with task_transition once the propagation is handled.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          taskId: { type: 'string' },
+          reviewItemId: {
+            type: 'string',
+            description:
+              "Which item is being answered (from list_tasks / the ticket's `reviews`). OMIT it on a ticket that is itself an old-style decision (needs:'decision' with embedded `options` and no review items of its own) — the answer then lands on that decision, which is the same place the one derived item points.",
+          },
+          text: { type: 'string', description: "The human's verbatim answer." },
+          answeredWith: {
+            type: 'string',
+            description:
+              "The id of the option they picked, when they picked one. The answer is STILL `text` — pass the option's label as the text; this only records which candidate the words came from. Omit when they answered in their own words.",
+          },
+        },
+        required: ['taskId', 'text'],
+      },
+    },
+    {
+      name: 'request_more_info',
+      description:
+        "Ask a question BACK at a review item instead of answering it, on the human's behalf. The item stays open and stays counted on the queue, and the agent that raised it owes the context. This is what keeps a set of options from being a closed set — 'none of these, tell me X' is a real response to a decision.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          taskId: { type: 'string' },
+          reviewItemId: {
+            type: 'string',
+            description:
+              'Which item is being asked about. Omit on a ticket that is itself an old-style decision, same rule as answer_review_item.',
+          },
+          question: { type: 'string', description: 'What they want to know, verbatim.' },
+        },
+        required: ['taskId', 'question'],
+      },
+    },
+    {
       name: 'answer_decision',
       description:
-        "Record the VERBATIM answer to a decision task (needs:'decision') on the human's behalf — use when they told you their answer in chat/voice and you're writing it down; in the UI they answer directly. Pass their exact words as `text`, never a paraphrase. Emits decision.answered carrying the answer plus the task's links — a ready-made propagation checklist: act on or create a task for each item, and prioritize them right away. Does NOT transition the task — close it with task_transition once the propagation is handled.",
+        "Record the VERBATIM answer to a decision task (needs:'decision') on the human's behalf — use when they told you their answer in chat/voice and you're writing it down; in the UI they answer directly. Pass their exact words as `text`, never a paraphrase. Emits decision.answered carrying the answer plus the task's links — a ready-made propagation checklist: act on or create a task for each item, and prioritize them right away. Does NOT transition the task — close it with task_transition once the propagation is handled. This is the older, one-question-per-ticket verb and it keeps working unchanged; on a ticket carrying several review items, name the one being answered with `reviewItemId` or reach for answer_review_item.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1479,6 +1553,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'string',
             description:
               "The id of the option they picked, when they picked one (from list_tasks / the task's `options`). The answer is STILL `text` — pass the option's label as the text; this only records which candidate the words came from. Omit when they answered in their own words.",
+          },
+          reviewItemId: {
+            type: 'string',
+            description:
+              "Which of the ticket's review items is being answered. Omit — as every caller before this field existed does — and the answer lands on the ticket's own decision, exactly as it always has.",
           },
         },
         required: ['taskId', 'text'],
@@ -1692,6 +1771,48 @@ function taskCreatedSummary(
     // failure as a route that doesn't forward a param.
     ...(ignoredLinks !== undefined && ignoredLinks.length > 0 ? { ignoredLinks } : {}),
   };
+}
+
+/**
+ * ONE implementation of "record the answer to a question on a ticket",
+ * reached by two verbs.
+ *
+ * `answer_decision` is the older one and keeps its exact signature, because a
+ * peer's session resolved its bundle at launch and its prompts, skills and
+ * habits all name that verb; `answer_review_item` is the entity's. What must
+ * NOT happen is two hand-written copies of the routing rule, because that is
+ * how two implementations of one act start disagreeing about what was
+ * recorded — the same reason the store's `r-legacy` row delegates into
+ * `answerDecision` rather than stamping its own answer.
+ *
+ * No `reviewItemId` means the OLD door, byte for byte, carrying the legacy
+ * `optionId` key. That is not a fallback: on a ticket that is itself a
+ * decision, the derived review item and the embedded decision are the same
+ * question, and `/answer` is where it is answered.
+ */
+async function recordReviewAnswer(args: {
+  taskId: string;
+  text: string;
+  reviewItemId?: string;
+  answeredWith?: string;
+}): Promise<{ task: TaskPayload }> {
+  const { taskId, text, reviewItemId, answeredWith } = args;
+  if (reviewItemId === undefined) {
+    return (await http('POST', `/api/tasks/${encodeURIComponent(taskId)}/answer`, {
+      text,
+      ...(answeredWith !== undefined ? { optionId: answeredWith } : {}),
+      author: AUTHOR,
+    })) as { task: TaskPayload };
+  }
+  return (await http(
+    'POST',
+    `/api/tasks/${encodeURIComponent(taskId)}/review-items/${encodeURIComponent(reviewItemId)}/answer`,
+    {
+      text,
+      ...(answeredWith !== undefined ? { answeredWith } : {}),
+      author: AUTHOR,
+    },
+  )) as { task: TaskPayload };
 }
 
 /**
@@ -2371,10 +2492,17 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           failures: Array<{ index: number; title?: string; error: string; message?: string }>;
           ignoredLinks?: Array<{ taskId: string; ignored: unknown[] }>;
           shapeGaps?: Array<{ taskId: string; gaps: string[] }>;
+          reviewAdvice?: Array<{ taskId: string; advice: string }>;
           placement?: { unplaced: string[]; triageDelivered: string[]; goals: unknown[] };
         };
         const gapsFor = (taskId: string) =>
           res.shapeGaps?.find((g) => g.taskId === taskId)?.gaps ?? undefined;
+        // Two advice vocabularies on one response, each about its own half:
+        // `shapeGaps` describes a decision-shaped BODY, `reviewAdvice` a
+        // review item's payload. Renaming the older one would be a narrowing
+        // for callers nobody here can restart, so both are forwarded.
+        const adviceFor = (taskId: string) =>
+          res.reviewAdvice?.find((r) => r.taskId === taskId)?.advice ?? undefined;
         const droppedFor = (taskId: string) =>
           res.ignoredLinks?.find((l) => l.taskId === taskId)?.ignored ?? undefined;
         const unplaced = new Set(res.placement?.unplaced ?? []);
@@ -2385,6 +2513,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           created: res.tasks.map((t) => ({
             title: t.title,
             ...taskCreatedSummary(t, droppedFor(t.id), gapsFor(t.id), !unplaced.has(t.id)),
+            ...(adviceFor(t.id) !== undefined ? { reviewAdvice: adviceFor(t.id) } : {}),
           })),
           // Always present, even when empty: a caller that has to check for
           // the KEY before checking the count reads "no failures" as "the
@@ -2765,17 +2894,78 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           retriage: res.retriage ?? { requested: false, queued: false, taskIds: [] },
         });
       }
+      case 'add_review_item': {
+        const { taskId, review } = a as { taskId: string; review: unknown };
+        const res = (await http('POST', `/api/tasks/${encodeURIComponent(taskId)}/review-items`, {
+          review,
+          author: AUTHOR,
+        })) as { item?: { id?: string }; reviewAdvice?: string };
+        return ok({
+          taskId,
+          reviewItemId: res.item?.id,
+          // The gaps the server found in the shape. Dropping it here is the
+          // "one layer away from where it's consumed" failure: the server
+          // computed the advice, and the only party that can still act on it
+          // never hears it.
+          ...(res.reviewAdvice !== undefined ? { reviewAdvice: res.reviewAdvice } : {}),
+        });
+      }
+      case 'answer_review_item': {
+        const { taskId, reviewItemId, text, answeredWith } = a as {
+          taskId: string;
+          reviewItemId?: string;
+          text: string;
+          answeredWith?: string;
+        };
+        const res = await recordReviewAnswer({
+          taskId,
+          text,
+          ...(reviewItemId !== undefined ? { reviewItemId } : {}),
+          ...(answeredWith !== undefined ? { answeredWith } : {}),
+        });
+        return ok({
+          taskId,
+          ...(reviewItemId !== undefined ? { reviewItemId } : {}),
+          recorded: true,
+          links: res.task.links ?? [],
+        });
+      }
+      case 'request_more_info': {
+        const { taskId, reviewItemId, question } = a as {
+          taskId: string;
+          reviewItemId?: string;
+          question: string;
+        };
+        const path =
+          reviewItemId === undefined
+            ? `/api/tasks/${encodeURIComponent(taskId)}/more-info`
+            : `/api/tasks/${encodeURIComponent(taskId)}/review-items/${encodeURIComponent(reviewItemId)}/more-info`;
+        const res = (await http('POST', path, { question, author: AUTHOR })) as {
+          task: TaskPayload;
+        };
+        return ok({
+          taskId,
+          ...(reviewItemId !== undefined ? { reviewItemId } : {}),
+          asked: true,
+          links: res.task.links ?? [],
+        });
+      }
       case 'answer_decision': {
-        const { taskId, text, optionId } = a as {
+        const { taskId, text, optionId, reviewItemId } = a as {
           taskId: string;
           text: string;
           optionId?: string;
+          reviewItemId?: string;
         };
-        const res = (await http('POST', `/api/tasks/${encodeURIComponent(taskId)}/answer`, {
+        // `optionId` is the legacy spelling of `answeredWith`; one helper
+        // decides which door to knock on so the two verbs cannot drift into
+        // two answers of the same act.
+        const res = await recordReviewAnswer({
+          taskId,
           text,
-          ...(optionId !== undefined ? { optionId } : {}),
-          author: AUTHOR,
-        })) as { task: TaskPayload };
+          ...(reviewItemId !== undefined ? { reviewItemId } : {}),
+          ...(optionId !== undefined ? { answeredWith: optionId } : {}),
+        });
         return ok({ taskId, recorded: true, links: res.task.links ?? [] });
       }
       case 'set_task_dependencies': {

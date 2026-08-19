@@ -53,6 +53,7 @@ import {
   navFromPath,
   navPath,
   paneForNav,
+  panelAsks,
   parseQuickAdd,
   pluginDriftNotice,
   presenceChips,
@@ -821,10 +822,10 @@ async function main(): Promise<void> {
         onComment: (t, text, threadId) => postTaskComment(t, text, threadId),
         ...(state.detailThreadId ? { focusThreadId: state.detailThreadId } : {}),
         // This task's rows from the review queue the strip already reads, so
-        // the panel says the same thing the row that sent them here said. The
-        // filter is by taskId: a doc-thread item has none and never matches,
-        // which is correct — it belongs to a doc, not to this panel.
-        asks: task ? state.reviewItems.filter((i) => i.taskId === task.id) : [],
+        // the panel says the same thing the row that sent them here said.
+        // `panelAsks` owns which rows qualify — by taskId, and only the kinds
+        // whose answer path this panel actually implements.
+        asks: task ? panelAsks(state.reviewItems, task.id) : [],
         // The workspace's audit rows; the panel takes this task's out of them.
         // The same list the Activity view reads — one log, two surfaces.
         activity: state.events,

@@ -10,7 +10,18 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
-import { transitionUnproven } from '@feedback/core';
+import {
+  type ReviewPayload,
+  type TaskReviewItem,
+  agentIdCandidates,
+  checkReviewPayload,
+  readReviewPayload,
+  readTaskReviewItem,
+  reviewFromDecisionTask,
+  reviewGapAdvice,
+  reviewPayloadMessage,
+  transitionUnproven,
+} from '@feedback/core';
 import { type StoredGoalSummary, goalTextHash } from '@feedback/core/goal-summary';
 import { classifyActor } from './activity.ts';
 import {
@@ -386,6 +397,25 @@ export interface Task {
   /** "Tell me more" — questions asked back at the decision, in order. These
    *  deliberately do NOT answer it: the task stays open and stays counted. */
   infoRequests?: InfoRequest[];
+  /**
+   * The review items hanging on this ticket — 0..n, several possibly open at
+   * once. THE cardinality change (Bryan, 2026-08-18: *"a decision is a part of
+   * a ticket… at any point in time there might be multiple open decisions for
+   * a ticket"*): the three fields directly above spell ONE decision that the
+   * ticket IS, so its title had to double as the question and a second open
+   * question had nowhere to go.
+   *
+   * Those three fields are NOT replaced and NOT migrated. They keep being read
+   * and written exactly as before, and `listReviewItems` DERIVES a row from
+   * them at read time when this array is empty — read-side only, idempotent by
+   * construction, nothing rewritten on disk. Soft by default: a legacy
+   * decision cannot be damaged by a migration that ran twice or half-way,
+   * because no migration runs at all.
+   *
+   * Persisted with the rest of the task — the sidecar serializes the whole
+   * row, so this needs no writer of its own.
+   */
+  reviews?: TaskReviewItem[];
   /** Goal or subgoal id; `chores` is the catch-all. */
   goal: string;
   /** Fractional sort key — always room to insert between two tasks. */
@@ -861,12 +891,58 @@ export const HEARTBEAT_FRESH_MS = 5 * 60_000;
 /** §4: "no lastToolCallAt movement in 30+ minutes" is the outage signature. */
 export const TOOL_CALL_STALE_MS = 30 * 60_000;
 
+/**
+ * How recently the server must have OBSERVED an agent for a delivery to count
+ * as reaching it.
+ *
+ * Separate from `HEARTBEAT_FRESH_MS` because it answers a different question.
+ * That one asks "how recently did this agent SAY it was alive" and feeds the
+ * displayed state; this one asks "how recently did we SEE it do something",
+ * and it decides whether a request is handed over or parked.
+ *
+ * The distinction is the whole bug. `lastHeartbeat` moves only when a session
+ * calls the `heartbeat` tool, and nothing makes that happen — no timer, no
+ * hook, one line of prose in one skill. Measured on the live board
+ * 2026-08-19: 13 liveness events in 5.43 days against 215 task transitions,
+ * so the old gate could read live for **0.77%** of the time an agent was
+ * attached and plainly working. Voice paid for it directly — 6 of 10 recorded
+ * utterances routed to `agent-queued`, one of them "voice is not working".
+ *
+ * 15 minutes is measured rather than picked. On the same board the median gap
+ * between consecutive observable agent writes is 0.3 min and p90 is 11.2 min:
+ * a window at the old 5-minute figure would still read away across ~18% of
+ * ordinary working gaps, where 15 minutes sits just above p90. It is
+ * deliberately not hours — a false "live" is broadcast to nobody and lost,
+ * where a false "away" is merely deferred to the next attach.
+ */
+export const OBSERVED_LIVE_MS = 15 * 60_000;
+
 export type AttachmentState = 'active' | 'unresponsive' | 'away';
 
 export interface AttachmentThresholds {
   heartbeatFreshMs?: number;
   toolCallStaleMs?: number;
+  observedWorkFreshMs?: number;
 }
+
+/**
+ * Is anyone actually subscribed to the channel a request is about to ride?
+ *
+ * The half a time window cannot cover: a session that died since its last
+ * write is still inside the window and still gone. Wired to the SSE hub in
+ * `server.ts`; unwired it answers yes, so a store with no transport behaves
+ * exactly as it did before.
+ *
+ * It takes a workspaceId and not an agentId on purpose, and that is its
+ * honest limit: the channel is per-BOARD, so this can answer "is anyone
+ * there" and never "is THAT agent there". Which agent is live stays a
+ * question for the observed clock, and the gate is the AND of the two. So a
+ * browser tab open on a board makes the probe true while contributing no
+ * liveness of its own — which is why the probe may only ever narrow the
+ * answer, never widen it. Reading it as sufficient would let an open tab
+ * impersonate a working agent and lose the request it was handed.
+ */
+export type DeliveryProbe = (workspaceId: string) => boolean;
 
 /**
  * Derive the hub's attachment state (§4). "Active 2m ago" is shown because a
@@ -1209,6 +1285,16 @@ export interface DecisionAnsweredEvent {
   /** Which candidate the words came from, when one was tapped. Absent for
    *  free text — the answer is the text either way. */
   optionId?: string;
+  /**
+   * WHICH review item on the task was answered, when the answer came in
+   * through `answerTaskReview` on a real row.
+   *
+   * Absent for the legacy path, and that absence is load-bearing rather than
+   * incidental: `answerDecision` is untouched, so every existing listener sees
+   * byte-identical events, and a listener that wants the row can read this
+   * without having to guess when a ticket holds several.
+   */
+  reviewItemId?: string;
   actor: TaskActor;
   /** The decision task's links — a ready-made propagation checklist. */
   links: Ref[];
@@ -1253,6 +1339,10 @@ export interface DecisionInfoRequestedEvent {
   taskId: string;
   /** The VERBATIM question. */
   question: string;
+  /** WHICH review item was asked about, when it came in through
+   *  `requestMoreInfoOnReview` on a real row. Absent on the legacy path, for
+   *  the same reason as on `decision.answered`. */
+  reviewItemId?: string;
   actor: TaskActor;
   links: Ref[];
   ts: number;
@@ -1518,6 +1608,34 @@ export type RequestMoreInfoResult =
   | { ok: true; task: Task }
   | { ok: false; error: 'not-found' | 'not-a-decision' };
 
+export type AddReviewItemResult =
+  | {
+      ok: true;
+      task: Task;
+      item: TaskReviewItem;
+      /** The shared checker's GAPS, phrased as what to write. Advice on a
+       *  successful create, never a refusal — see `reviewGapAdvice`. */
+      advice?: string;
+    }
+  | {
+      ok: false;
+      error: 'not-found' | 'bad-review';
+      /** The gate's verbatim refusal, written to land in a retrying model's
+       *  context. Present exactly when `error` is 'bad-review'. */
+      message?: string;
+    };
+
+export type AnswerTaskReviewResult =
+  | { ok: true; task: Task; item: TaskReviewItem }
+  | {
+      ok: false;
+      error: 'not-found' | 'unknown-review-item' | 'unknown-option' | 'not-a-decision';
+    };
+
+export type RequestInfoOnReviewResult =
+  | { ok: true; task: Task; item: TaskReviewItem }
+  | { ok: false; error: 'not-found' | 'unknown-review-item' | 'not-a-decision' };
+
 export type SetDependenciesResult =
   | {
       ok: true;
@@ -1782,6 +1900,19 @@ function cryptoId(prefix: string): string {
 }
 
 /**
+ * The id of the review item DERIVED from a task's legacy decision fields.
+ *
+ * Fixed rather than minted, and that is what makes the derivation safe to run
+ * on every read: the same task always derives the same id, so an answer
+ * addressed at it lands on the same row no matter how many times anything
+ * re-derived it. A minted id would make a read a write.
+ *
+ * It cannot collide with a real one: `cryptoId('r')` emits `r-` plus twelve
+ * base64url characters, and this is six.
+ */
+export const LEGACY_REVIEW_ITEM_ID = 'r-legacy';
+
+/**
  * The id of a NEWLY CREATED goal. Opaque and server-generated, exactly like a
  * task id, and for the same reason: an identifier is the one thing that must
  * never move, so nothing about it may encode something that does.
@@ -1810,6 +1941,7 @@ export class TaskStore {
   private debounceMs: number;
   private attachmentThresholds: AttachmentThresholds;
   private triageDelivery: TriageDelivery | undefined;
+  private deliveryProbe: DeliveryProbe | undefined;
   private eventListeners = new Set<(event: TaskStoreEvent) => void>();
 
   constructor(opts: {
@@ -1819,12 +1951,16 @@ export class TaskStore {
      *  minutes (§6: delivery timings configurable). */
     heartbeatFreshMs?: number;
     toolCallStaleMs?: number;
+    observedWorkFreshMs?: number;
   }) {
     this.dataDir = opts.dataDir;
     this.debounceMs = opts.debounceMs ?? 200;
     this.attachmentThresholds = {
       ...(opts.heartbeatFreshMs !== undefined ? { heartbeatFreshMs: opts.heartbeatFreshMs } : {}),
       ...(opts.toolCallStaleMs !== undefined ? { toolCallStaleMs: opts.toolCallStaleMs } : {}),
+      ...(opts.observedWorkFreshMs !== undefined
+        ? { observedWorkFreshMs: opts.observedWorkFreshMs }
+        : {}),
     };
     this.hydrateFromDisk();
   }
@@ -1838,10 +1974,66 @@ export class TaskStore {
     return () => this.eventListeners.delete(listener);
   }
 
+  /**
+   * Wire (or clear) the check for "is anyone on the channel". `server.ts`
+   * installs the SSE-hub-backed one; left unwired the store answers yes and
+   * behaves exactly as it did before, which is what keeps every store-only
+   * test honest without teaching it about a transport.
+   */
+  setDeliveryProbe(probe: DeliveryProbe | undefined): void {
+    this.deliveryProbe = probe;
+  }
+
   /** Wire (or clear) the bridge that carries triage requests to a live
    *  attached agent. The attachment registry commit installs the real one. */
   setTriageDelivery(delivery: TriageDelivery | undefined): void {
     this.triageDelivery = delivery;
+  }
+
+  /**
+   * Every emitted board change is also EVIDENCE that its author was alive at
+   * that moment, so the work clock moves here rather than at ~20 call sites.
+   *
+   * The call-site version of this is what failed: `noteAgentToolCall` shipped
+   * with no caller at all and sat unused, because "remember to also record
+   * liveness" is exactly the kind of step that gets forgotten. At the choke
+   * point it cannot be — a new route that emits is observed for free.
+   *
+   * Two things it deliberately does NOT do:
+   *  - `agent.*` events never count. A heartbeat asserting work is what
+   *    collapsed the two clocks into one and made `unresponsive` unreachable;
+   *    `attachAgent` sets both clocks itself and needs no help here.
+   *  - A person's edit never moves an agent's clock. The actor is resolved
+   *    against the attachment roster, and a name that matches nothing is a
+   *    no-op.
+   */
+  private noteObservedWork(event: TaskStoreEvent): void {
+    if (event.type.startsWith('agent.')) return;
+    const { workspaceId } = event;
+    const attachments = this.workspaces.get(workspaceId)?.attachments;
+    if (!attachments || attachments.size === 0) return;
+    const actor = (event as { actor?: { id?: unknown; name?: unknown } }).actor;
+    if (!actor) return;
+    // Match on every spelling a roster could hold. The event's actor id and
+    // the attachment key demonstrably disagree in the field — `live-feedback`
+    // against `agent-live-feedback` on the same session — so matching one
+    // spelling matches roughly none of the fleet.
+    const candidates = new Set<string>();
+    for (const raw of [actor.id, actor.name]) {
+      if (typeof raw !== 'string') continue;
+      candidates.add(raw.trim().toLowerCase());
+      for (const c of agentIdCandidates(raw)) candidates.add(c);
+    }
+    if (candidates.size === 0) return;
+    for (const agentId of attachments.keys()) {
+      if (!candidates.has(agentId.trim().toLowerCase())) continue;
+      // Through the public method rather than touching the field, so there
+      // is exactly one definition of "the agent was observed working" — and
+      // so that method finally has the production caller whose absence is
+      // the whole reason the clock never moved.
+      this.noteAgentToolCall(workspaceId, agentId, event.ts);
+      return;
+    }
   }
 
   private emit(event: TaskStoreEvent): void {
@@ -1849,6 +2041,7 @@ export class TaskStore {
     // audit log has it" are the same fact by construction (§3.6), so the log
     // can never disagree with what subscribers saw.
     this.appendAudit(event);
+    this.noteObservedWork(event);
     for (const listener of this.eventListeners) {
       try {
         listener(event);
@@ -3041,6 +3234,284 @@ export class TaskStore {
       ts,
     });
     return { ok: true, task };
+  }
+
+  // ── Review items: 0..n per ticket ─────────────────────────────────────────
+
+  /**
+   * Attach a review item to a ticket.
+   *
+   * `review` arrives as `unknown` because every door into this is a route
+   * carrying parsed JSON, and it is gated by `checkReviewPayload` — THE
+   * checker, the same one comment-borne declarations pass through. Writing a
+   * second gate here is precisely the "two spellings of one concept" this
+   * whole change deletes: a second copy of a limit is how a card ends up
+   * rendering something the API swore it had refused.
+   *
+   * The stored payload is the one `readReviewPayload` normalizes out of the
+   * input, so caller-supplied junk keys never reach the sidecar. Option ids
+   * are the CALLER'S — `checkReviewPayload` already demands they exist and be
+   * unique within the item, and re-minting them would break an `answeredWith`
+   * a client had already put on screen. Only the item id is minted here,
+   * `r-<crypto>`, the way options mint `o-<crypto>`.
+   *
+   * `gaps` come back as `advice` on SUCCESS. They were computed and read by
+   * nobody in the first cut of this feature: the call returned 200, the card
+   * came out thinner than the author meant, and nothing connected the two.
+   */
+  addReviewItem(
+    taskId: string,
+    review: unknown,
+    opts: { actor: { id: string; name: string; kind?: string } },
+  ): AddReviewItemResult {
+    const task = this.getTask(taskId);
+    if (!task) return { ok: false, error: 'not-found' };
+
+    const check = checkReviewPayload(review);
+    if (!check.ok) {
+      return { ok: false, error: 'bad-review', message: reviewPayloadMessage(check) };
+    }
+    const payload = readReviewPayload(review);
+    // Unreachable for anything the gate passed — kept because "the checker said
+    // yes and the reader said no" must not become an undefined write.
+    if (!payload) {
+      return { ok: false, error: 'bad-review', message: reviewPayloadMessage(check) };
+    }
+
+    const ts = Date.now();
+    const actor: TaskActor = {
+      id: opts.actor.id,
+      name: opts.actor.name,
+      kind: classifyActor(opts.actor),
+    };
+    const item: TaskReviewItem = {
+      id: cryptoId('r'),
+      review: payload,
+      createdAt: ts,
+      // Display name, like every other projected `by` (§3.3 visitor contract).
+      createdBy: actor.name,
+    };
+    task.reviews = [...(task.reviews ?? []), item];
+    task.updatedAt = ts;
+    this.scheduleSave(task.workspaceId);
+
+    const advice = reviewGapAdvice(check.gaps);
+    return { ok: true, task, item, ...(advice !== undefined ? { advice } : {}) };
+  }
+
+  /**
+   * Every review item on a ticket, in order.
+   *
+   * When the ticket IS a legacy decision, one derived row leads the list with
+   * the fixed id `r-legacy`. The derivation happens at READ time and writes
+   * nothing: it is idempotent by construction and cannot double-apply across a
+   * restart, which is strictly safer than the lazy back-fill `hydrateFromDisk`
+   * does for `unplacedSince`. Nothing is purged either — `needs`, `options`,
+   * `answer` and `infoRequests` keep being read and written exactly as before.
+   *
+   * Real rows do NOT suppress the derived one, and that is a correction rather
+   * than a preference. Suppressing on "a stored row exists" keys the decision
+   * on the wrong fact: the legacy decision is a SEPARATE open question from
+   * whatever somebody filed later, so the moment a ticket gained its second
+   * question the first one silently left this list — and with it `GET
+   * /review-items`, which is the one route that answers "what is waiting on
+   * me". The derived row leaves for exactly one reason now: the decision was
+   * answered, at which point it is still LISTED and merely closed.
+   *
+   * It leads rather than trails because it is the oldest question on the
+   * ticket (`createdAt` is the task's own), and this queue is oldest-first.
+   *
+   * Rows are read through `readTaskReviewItem`, so a row corrupted on disk
+   * drops out of the list instead of throwing inside a renderer that never
+   * touched this ticket — and because the derived row no longer depends on how
+   * many raw rows there are, an unreadable one can no longer take the legacy
+   * decision down with it.
+   */
+  listReviewItems(taskId: string): TaskReviewItem[] {
+    const task = this.getTask(taskId);
+    if (!task) return [];
+    const out: TaskReviewItem[] = [];
+    const legacy = this.legacyReviewItem(task);
+    if (legacy) out.push(legacy);
+    for (const raw of task.reviews ?? []) {
+      const item = readTaskReviewItem(raw);
+      if (item) out.push(item);
+    }
+    return out;
+  }
+
+  /**
+   * The one legacy decision as a review item, or undefined when there is none.
+   *
+   * ONE rule, in ONE place, because three callers ask it — the reader above
+   * and both answer paths. If the answer paths resolved `r-legacy` under a
+   * different condition than the reader lists it under, a row nothing shows
+   * would still accept answers.
+   *
+   * The payload mapping is `reviewFromDecisionTask` in core (pure, mints
+   * nothing). What is added here is the ROW around it: the task's own clock,
+   * and — the part that matters — the legacy `answer` carried across, because
+   * an answered decision read as open is a queue that never empties.
+   *
+   * `createdBy` is deliberately empty. No legacy decision recorded who RAISED
+   * it; `assignee` is who has to answer it, which is a different person, and
+   * writing it here would attribute the question to the wrong one.
+   */
+  private legacyReviewItem(task: Task): TaskReviewItem | undefined {
+    // `needs === 'decision'` is the WHOLE condition. It used to also require
+    // that no stored row existed, which made an unanswered decision disappear
+    // from every reader as soon as somebody filed a second question on the
+    // same ticket — see `listReviewItems` for why that is the wrong key.
+    if (task.needs !== 'decision') return undefined;
+    const review: ReviewPayload = reviewFromDecisionTask(task);
+    const item: TaskReviewItem = {
+      id: LEGACY_REVIEW_ITEM_ID,
+      review,
+      createdAt: task.createdAt,
+      createdBy: '',
+    };
+    if (task.answer) {
+      item.answer = {
+        text: task.answer.text,
+        by: task.answer.by,
+        ts: task.answer.ts,
+        ...(task.answer.optionId !== undefined ? { answeredWith: task.answer.optionId } : {}),
+      };
+    }
+    if (task.infoRequests && task.infoRequests.length > 0) {
+      item.infoRequests = task.infoRequests.map((r) => ({ text: r.text, by: r.by, ts: r.ts }));
+    }
+    return item;
+  }
+
+  /**
+   * Answer ONE review item on a ticket, leaving its siblings open.
+   *
+   * `r-legacy` DELEGATES to `answerDecision`, untouched. That is the whole
+   * back-compat story in one line: `task.answer`, the `optionId` validation
+   * and the `decision.answered` payload stay byte-identical for every caller
+   * that never heard of review items, and there is no second implementation of
+   * "record a decision's answer" free to drift from the first.
+   */
+  answerTaskReview(
+    taskId: string,
+    reviewItemId: string,
+    text: string,
+    opts: { actor: { id: string; name: string; kind?: string }; answeredWith?: string },
+  ): AnswerTaskReviewResult {
+    const task = this.getTask(taskId);
+    if (!task) return { ok: false, error: 'not-found' };
+
+    if (reviewItemId === LEGACY_REVIEW_ITEM_ID && this.legacyReviewItem(task)) {
+      const res = this.answerDecision(taskId, text, {
+        actor: opts.actor,
+        ...(opts.answeredWith !== undefined ? { optionId: opts.answeredWith } : {}),
+      });
+      if (!res.ok) return res;
+      const item = this.legacyReviewItem(res.task);
+      // The row exists — it resolved a line above — so this only guards the
+      // type. An answer recorded is never reported as a failure.
+      if (!item) return { ok: false, error: 'unknown-review-item' };
+      return { ok: true, task: res.task, item };
+    }
+
+    const item = task.reviews?.find((r) => r.id === reviewItemId);
+    if (!item) return { ok: false, error: 'unknown-review-item' };
+    // An `answeredWith` that resolves to no option ON THIS ROW would record an
+    // answer whose provenance is a lie — and with several rows on one ticket,
+    // a neighbour's option id is the easy way to write that lie by accident.
+    if (
+      opts.answeredWith !== undefined &&
+      !item.review.options?.some((o) => o.id === opts.answeredWith)
+    ) {
+      return { ok: false, error: 'unknown-option' };
+    }
+
+    const ts = Date.now();
+    const actor: TaskActor = {
+      id: opts.actor.id,
+      name: opts.actor.name,
+      kind: classifyActor(opts.actor),
+    };
+    // Answering twice is legal — somebody changes their mind, a retry lands,
+    // two people reach for the same row — but the words already recorded are
+    // USER CONTENT and this project does not hard-delete user content. The
+    // superseded answer moves aside instead of being written over; nothing
+    // else anywhere would have reported that it was gone.
+    if (item.answer) item.priorAnswers = [...(item.priorAnswers ?? []), item.answer];
+    item.answer = {
+      text,
+      by: actor.name,
+      ts,
+      ...(opts.answeredWith !== undefined ? { answeredWith: opts.answeredWith } : {}),
+    };
+    task.updatedAt = ts;
+    this.scheduleSave(task.workspaceId);
+    this.emit({
+      type: 'decision.answered',
+      workspaceId: task.workspaceId,
+      taskId: task.id,
+      answer: text,
+      ...(opts.answeredWith !== undefined ? { optionId: opts.answeredWith } : {}),
+      reviewItemId,
+      actor,
+      links: task.links,
+      ts,
+    });
+    return { ok: true, task, item };
+  }
+
+  /**
+   * Ask ONE review item for more context instead of answering it.
+   *
+   * Carried over deliberately. "Tell me more" is a shipped first-class
+   * response with no counterpart in `ReviewPayload`, so unifying the two
+   * spellings without it would have quietly deleted a capability people use.
+   * The item stays open and stays counted — that is the point of it being its
+   * own thing rather than an answer carrying a flag.
+   *
+   * `r-legacy` delegates to the untouched `requestMoreInfo`, same as above.
+   */
+  requestMoreInfoOnReview(
+    taskId: string,
+    reviewItemId: string,
+    question: string,
+    opts: { actor: { id: string; name: string; kind?: string } },
+  ): RequestInfoOnReviewResult {
+    const task = this.getTask(taskId);
+    if (!task) return { ok: false, error: 'not-found' };
+
+    if (reviewItemId === LEGACY_REVIEW_ITEM_ID && this.legacyReviewItem(task)) {
+      const res = this.requestMoreInfo(taskId, question, { actor: opts.actor });
+      if (!res.ok) return res;
+      const item = this.legacyReviewItem(res.task);
+      if (!item) return { ok: false, error: 'unknown-review-item' };
+      return { ok: true, task: res.task, item };
+    }
+
+    const item = task.reviews?.find((r) => r.id === reviewItemId);
+    if (!item) return { ok: false, error: 'unknown-review-item' };
+
+    const ts = Date.now();
+    const actor: TaskActor = {
+      id: opts.actor.id,
+      name: opts.actor.name,
+      kind: classifyActor(opts.actor),
+    };
+    item.infoRequests = [...(item.infoRequests ?? []), { text: question, by: actor.name, ts }];
+    task.updatedAt = ts;
+    this.scheduleSave(task.workspaceId);
+    this.emit({
+      type: 'decision.info_requested',
+      workspaceId: task.workspaceId,
+      taskId: task.id,
+      question,
+      reviewItemId,
+      actor,
+      links: task.links,
+      ts,
+    });
+    return { ok: true, task, item };
   }
 
   /**
@@ -4789,12 +5260,27 @@ export class TaskStore {
     return { ok: true, attachment };
   }
 
-  /** Bump lastToolCallAt to now. No event — tool calls are not a §3.6 row;
-   *  the next heartbeat event carries the moved clock. */
-  noteAgentToolCall(workspaceId: string, agentId: string): boolean {
+  /**
+   * Bump lastToolCallAt. No event — tool calls are not a §3.6 row; the next
+   * heartbeat event carries the moved clock.
+   *
+   * `at` is when the work was observed, defaulting to now. Callers that are
+   * recording a specific event should pass that event's `ts` rather than
+   * re-reading the clock: attaching emits `workspace.lead_changed` when it
+   * claims an empty seat, and a fresh `Date.now()` there lands a millisecond
+   * past the attach's own timestamp, breaking the "a new attachment's two
+   * clocks are equal" contract about 1 run in 3.
+   *
+   * Clamped to now and monotonic, the same guards `heartbeat` applies to a
+   * claimed `toolCallAt`: a clock may not run ahead of the server's, and
+   * observing older work than we already knew about is not news.
+   */
+  noteAgentToolCall(workspaceId: string, agentId: string, at?: number): boolean {
     const attachment = this.workspaces.get(workspaceId)?.attachments.get(agentId);
     if (!attachment) return false;
-    attachment.lastToolCallAt = Date.now();
+    const observed = Math.min(at ?? Date.now(), Date.now());
+    if (observed <= attachment.lastToolCallAt) return true;
+    attachment.lastToolCallAt = observed;
     this.scheduleAttachmentsSave(workspaceId);
     return true;
   }
@@ -4843,19 +5329,43 @@ export class TaskStore {
   }
 
   /**
-   * Is any attachment's heartbeat fresh? This is what grounds the triage
-   * pending marker (§3.4): "emitted to a live attachment" means someone with
-   * a live process is subscribed to act — existence alone proves nothing
-   * (a record whose runtime died an hour ago is `away`, and promising it
-   * work would be the summaries-incident lie again).
+   * The newest moment the server OBSERVED this agent: a heartbeat it sent, or
+   * a write it made. Whichever is later — the two are independent evidence and
+   * taking the max means adding the observed clock never makes an agent look
+   * *less* alive than it did before.
+   */
+  private lastObserved(att: Pick<AgentAttachment, 'lastHeartbeat' | 'lastToolCallAt'>): number {
+    return Math.max(att.lastHeartbeat, att.lastToolCallAt);
+  }
+
+  /** Recent enough to hand work to, AND with the channel open to carry it. */
+  private isDeliverable(
+    workspaceId: string,
+    att: Pick<AgentAttachment, 'lastHeartbeat' | 'lastToolCallAt'>,
+  ): boolean {
+    const freshMs = this.attachmentThresholds.observedWorkFreshMs ?? OBSERVED_LIVE_MS;
+    if (Date.now() - this.lastObserved(att) >= freshMs) return false;
+    // Asked last and separately: the clock says the agent was here recently,
+    // this says somebody is on the wire to receive what we are about to send.
+    return this.deliveryProbe?.(workspaceId) ?? true;
+  }
+
+  /**
+   * Is any attached agent live enough to hand a request to? This is what
+   * grounds the triage pending marker (§3.4): "emitted to a live attachment"
+   * means someone is there to act — existence alone proves nothing, and
+   * promising work to a runtime that died an hour ago would be the
+   * summaries-incident lie again.
+   *
+   * Liveness is OBSERVED, never self-reported. It used to read `lastHeartbeat`
+   * alone, which measured whether a model remembered to announce itself — see
+   * `OBSERVED_LIVE_MS` for the measurement and what it cost.
    */
   hasLiveAttachment(workspaceId: string): boolean {
     const state = this.workspaces.get(workspaceId);
     if (!state) return false;
-    const now = Date.now();
-    const freshMs = this.attachmentThresholds.heartbeatFreshMs ?? HEARTBEAT_FRESH_MS;
     for (const att of state.attachments.values()) {
-      if (now - att.lastHeartbeat < freshMs) return true;
+      if (this.isDeliverable(workspaceId, att)) return true;
     }
     return false;
   }
@@ -4876,8 +5386,9 @@ export class TaskStore {
     if (!state || leadAgentId === undefined) return false;
     const att = state.attachments.get(leadAgentId);
     if (!att) return false;
-    const freshMs = this.attachmentThresholds.heartbeatFreshMs ?? HEARTBEAT_FRESH_MS;
-    return Date.now() - att.lastHeartbeat < freshMs;
+    // Same observed clock as `hasLiveAttachment` — fixing one and not the
+    // other would leave board-wide requests queueing while ordinary ones flow.
+    return this.isDeliverable(workspaceId, att);
   }
 
   /** Open decision tasks that gate open tasks via `after` edges, rolled into
