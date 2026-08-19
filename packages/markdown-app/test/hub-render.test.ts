@@ -146,17 +146,41 @@ describe('renderBoard', () => {
   // detail panel's discussion section.
   it('puts no discussion badge on a row, while other row badges still render', () => {
     const h = handlers();
-    const discussed = task({ goal: 'g-pr', commentCount: 3, after: ['t-a', 't-b'] });
+    const discussed = task({ goal: 'g-pr', commentCount: 3, dueAt: NOW + 86_400_000 });
     renderBoard(root, boardSections(GOALS, [discussed], filters), h);
     const row = root.querySelector(`.hub-task-row[data-task-id="${discussed.id}"]`);
     expect(row).not.toBeNull();
     // Control: the strip is alive and this row's other badge is in it. (It
-    // used to be the `decision` badge; that one is gone too — see below.)
-    expect(row?.querySelector('.hub-badge-after')).not.toBeNull();
+    // used to be the `decision` badge, then `after`; both are gone — see
+    // below. `due` is what is left that a row can still carry.)
+    expect(row?.querySelector('.hub-badge-due')).not.toBeNull();
     expect(row?.querySelector('.hub-badge-comments')).toBeNull();
     // …and no badge anywhere on the row spells the count either, which is what
     // a differently-classed replacement glyph would do.
     expect(row?.querySelector('.hub-task-badges')?.textContent ?? '').not.toContain('3');
+  });
+
+  // Bryan, 2026-08-19, on being shown what it meant: *"That's not helpful.
+  // Just don't show it any more."* The count was ambiguous by construction —
+  // it counted all of `after`, while only the `afterEnforce` subset actually
+  // hard-blocks — and what it was blocked ON was hover-only, so a touch screen
+  // could never reach it. Pinned as an absence with a positive control, and
+  // with the dependency itself asserted intact: this removes a row-level tell,
+  // not the feature.
+  it('puts no dependency count on a row, and still carries the dependency', () => {
+    const h = handlers();
+    const blocked = task({ goal: 'g-pr', after: ['t-a', 't-b'], dueAt: NOW + 86_400_000 });
+    renderBoard(root, boardSections(GOALS, [blocked], filters), h);
+    const row = root.querySelector(`.hub-task-row[data-task-id="${blocked.id}"]`);
+    expect(row).not.toBeNull();
+    expect(row?.querySelector('.hub-badge-due')).not.toBeNull(); // control: strip renders
+    expect(row?.querySelector('.hub-badge-after')).toBeNull();
+    // No differently-classed replacement spells the count or the blockers
+    // either — that is what a quieter substitute would do.
+    const badgeText = row?.querySelector('.hub-task-badges')?.textContent ?? '';
+    expect(badgeText).not.toContain('after');
+    expect(badgeText).not.toContain('2');
+    expect(row?.textContent ?? '').not.toContain('t-a');
   });
 
   // Same request, same day, same reasoning ("not useful and a waste of
@@ -166,11 +190,11 @@ describe('renderBoard', () => {
   // its other badges, so this is not "the strip stopped rendering".
   it('puts no decision/action identifier on a row', () => {
     const h = handlers();
-    const decide = task({ goal: 'g-pr', needs: 'decision', after: ['t-a'] });
+    const decide = task({ goal: 'g-pr', needs: 'decision', dueAt: NOW + 86_400_000 });
     const act = task({ goal: 'g-pr', needs: 'action' });
     renderBoard(root, boardSections(GOALS, [decide, act], filters), h);
     const row = root.querySelector(`.hub-task-row[data-task-id="${decide.id}"]`);
-    expect(row?.querySelector('.hub-badge-after')).not.toBeNull();
+    expect(row?.querySelector('.hub-badge-due')).not.toBeNull();
     expect(root.querySelector('.hub-badge-decision')).toBeNull();
     expect(root.querySelector('.hub-badge-action')).toBeNull();
     // And no differently-classed replacement spells the words either.
