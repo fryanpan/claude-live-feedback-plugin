@@ -249,13 +249,45 @@ describe('buildBriefPrompt', () => {
     const rows = user.split('\n').filter((l) => l.startsWith('- '));
     expect(rows).toHaveLength(3); // a multi-line answer must not split its row
     expect(rows[0]).toContain('answer: "First line says no. Then a very long justification');
-    expect(rows[0]).toContain('…"');
+    expect(rows[0]).toContain(' … ');
     const quoted = rows[0]?.match(/answer: "([^"]*)"/)?.[1] ?? '';
     expect(quoted.length).toBeLessThanOrEqual(140);
     // The positive control above proves the matcher sees answers; these two
     // absences are therefore non-vacuous.
     expect(rows[1]).not.toContain('answer:');
     expect(rows[2]).not.toContain('answer:');
+  });
+
+  it('a verdict at the END of a long answer survives the snippet cut', () => {
+    // Why: the considerate refusal leads with the hedge — "you've raised fair
+    // points … but no". A leading-only cut renders exactly the agreement half
+    // and drops the verdict, which is WORSE than no answer: the digest then
+    // looks like it carries evidence of consent. The snippet keeps both ends.
+    const hedge =
+      'You have raised entirely fair points about the acceptance criteria, and the sequencing ' +
+      'you laid out makes sense to me, and I appreciate the detailed writeup here, ';
+    const answer = `${hedge}but no — do not roll it out until those criteria are met.`;
+    expect(answer.length).toBeGreaterThan(140); // the cut must actually bite
+    const { user } = buildBriefPrompt(
+      input([ev('decision.answered', NOW + 1, { taskId: 't-2', answer })]),
+      'x',
+      uncapped(NOW),
+    );
+    const row = user.split('\n').find((l) => l.startsWith('- ')) ?? '';
+    expect(row).toContain('do not roll it out until those criteria are met.');
+    expect(row).toContain(' … '); // and the truncation is visible, not silent
+  });
+
+  it('the guardrail tells the model a truncated answer cannot be read past its visible text', () => {
+    // The two-ended snippet keeps most verdicts; this is the fail-safe for
+    // the ones that land in the elided middle. Degrading to "an answer was
+    // recorded" is correct there; guessing is the incident again.
+    const { system } = buildBriefPrompt(input([]), 'x', uncapped(NOW));
+    // The prompt wraps its sentences across '\n'-joined lines, so match on a
+    // flattened view — the model reads it flowed, not line by line.
+    const flowed = system.replace(/\n/g, ' ');
+    expect(flowed).toContain('" … " marks an elided middle');
+    expect(flowed).toContain('treat the polarity as undeterminable');
   });
 
   it('the guardrail says polarity lives in the answer text, not in titles or status', () => {
