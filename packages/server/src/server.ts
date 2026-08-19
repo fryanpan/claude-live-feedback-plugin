@@ -2403,6 +2403,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           const res = taskStore.createTask(workspaceId, parsed.opts);
           if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
+          // The review item the body filed WITH the ticket, now that the
+          // ticket has an id. `parseTaskCreate` already put the payload
+          // through the same `checkReviewPayload` the store runs, so a
+          // refusal here is unreachable and the ticket cannot land holding a
+          // question the caller was told was rejected.
+          if (parsed.review !== undefined) {
+            taskStore.addReviewItem(res.task.id, parsed.review, {
+              actor: authorFor(body?.author) ?? ANONYMOUS_ACTOR,
+            });
+          }
           // Dropped refs are reported, never swallowed: the caller finds out
           // what didn't survive without having to diff what it sent. Same
           // reasoning for `shapeGaps` — the decision WAS created and the
@@ -2422,6 +2432,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             },
             ...(parsed.ignoredLinks.length > 0 ? { ignoredLinks: parsed.ignoredLinks } : {}),
             ...(res.shapeGaps !== undefined ? { shapeGaps: res.shapeGaps } : {}),
+            ...(parsed.reviewAdvice !== undefined ? { reviewAdvice: parsed.reviewAdvice } : {}),
           });
         }
         /**
@@ -2469,6 +2480,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }> = [];
           const ignoredLinks: Array<{ taskId: string; ignored: unknown[] }> = [];
           const shapeGaps: Array<{ taskId: string; gaps: unknown[] }> = [];
+          /** Per row, because a burst files many tickets and "which one came
+           *  out thin" is the only useful form of the answer. */
+          const reviewAdvice: Array<{ taskId: string; advice: string }> = [];
           // Placement, collected per row and reported ONCE. Per-row it would
           // repeat the same band list a hundred times in a hundred-row burst;
           // the rows that need naming are the unplaced ones, so those are what
@@ -2532,6 +2546,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               });
               continue;
             }
+            // Same as the single-create door, and NOT optional: both routes
+            // read one body through `parseTaskCreate`, so a `review` honoured
+            // by one and dropped by the other is the "accepted it, returned
+            // 200, discarded it" bug this file's header is about.
+            if (parsed.review !== undefined) {
+              taskStore.addReviewItem(res.task.id, parsed.review, {
+                actor: createdBy ?? ANONYMOUS_ACTOR,
+              });
+            }
+            if (parsed.reviewAdvice !== undefined) {
+              reviewAdvice.push({ taskId: res.task.id, advice: parsed.reviewAdvice });
+            }
             createdIds.add(res.task.id);
             idByIndex.set(index, res.task.id);
             if (!res.placement.placed) unplaced.push(res.task.id);
@@ -2563,6 +2589,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               : {}),
             ...(ignoredLinks.length > 0 ? { ignoredLinks } : {}),
             ...(shapeGaps.length > 0 ? { shapeGaps } : {}),
+            ...(reviewAdvice.length > 0 ? { reviewAdvice } : {}),
           });
         }
         // The single gate for status changes: attributed, evidence-stamped,
@@ -2749,6 +2776,93 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!author) return j(400, { error: 'author required' });
           const res = taskStore.requestMoreInfo(taskId, question, { actor: author });
           if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
+          return j(200, res);
+        }
+        // ── A ticket's review items: 0..n, several possibly open at once ────
+        //
+        // The two routes ABOVE are untouched and stay that way. They are the
+        // old doors, and a session running an old plugin bundle keeps calling
+        // them from a process we cannot restart — `answerTaskReview` on the
+        // derived `r-legacy` row delegates straight back into
+        // `answerDecision`, so there is exactly one implementation of
+        // "record a decision's answer" underneath both.
+        //
+        // What these add is the cardinality. A decision task used to BE a
+        // decision — one `needs` flag and one embedded `options` array — so
+        // the ticket title had to double as the question and a second open
+        // question had nowhere to go. Now the question is a row with its own
+        // headline and why, and `:reviewItemId` says which one an answer
+        // lands on.
+        const taskReviewAddMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/review-items$/);
+        if (taskReviewAddMatch && req.method === 'POST') {
+          const taskId = decodeURIComponent(taskReviewAddMatch[1] ?? '');
+          const body = await safeJson(req);
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          // Unvalidated on purpose: `addReviewItem` runs `checkReviewPayload`,
+          // and that IS the gate. A pre-check here would be a second copy of
+          // the limits, free to drift from the one the card renders against.
+          const res = taskStore.addReviewItem(taskId, body?.review, { actor: author });
+          if (!res.ok) {
+            return j(res.error === 'not-found' ? 404 : 400, {
+              error: res.error,
+              ...(res.message !== undefined ? { message: res.message } : {}),
+            });
+          }
+          taskProjection.ensureWorkspace(res.task.workspaceId);
+          // `reviewAdvice`, the same key a comment-borne declaration answers
+          // with. The divergent `shapeGaps` vocabulary stays exactly where it
+          // is for the callers that already read it — this is a new door, and
+          // a new door has no old callers to keep.
+          return j(200, {
+            task: res.task,
+            item: res.item,
+            ...(res.advice !== undefined ? { reviewAdvice: res.advice } : {}),
+          });
+        }
+        const taskReviewAnswerMatch = pathname.match(
+          /^\/api\/tasks\/([^/]+)\/review-items\/([^/]+)\/answer$/,
+        );
+        if (taskReviewAnswerMatch && req.method === 'POST') {
+          const taskId = decodeURIComponent(taskReviewAnswerMatch[1] ?? '');
+          const reviewItemId = decodeURIComponent(taskReviewAnswerMatch[2] ?? '');
+          const body = await safeJson(req);
+          const text = body?.text;
+          if (typeof text !== 'string' || text.length === 0) {
+            return j(400, { error: 'text required' });
+          }
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          // `answeredWith` is this entity's spelling of the legacy `optionId`:
+          // provenance for a tapped answer, never a substitute for the words.
+          const answeredWith = body?.answeredWith;
+          if (answeredWith !== undefined && typeof answeredWith !== 'string') {
+            return j(400, { error: 'answeredWith must be a string' });
+          }
+          const res = taskStore.answerTaskReview(taskId, reviewItemId, text, {
+            actor: author,
+            ...(answeredWith !== undefined ? { answeredWith } : {}),
+          });
+          if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
+          taskProjection.ensureWorkspace(res.task.workspaceId);
+          return j(200, res);
+        }
+        const taskReviewInfoMatch = pathname.match(
+          /^\/api\/tasks\/([^/]+)\/review-items\/([^/]+)\/more-info$/,
+        );
+        if (taskReviewInfoMatch && req.method === 'POST') {
+          const taskId = decodeURIComponent(taskReviewInfoMatch[1] ?? '');
+          const reviewItemId = decodeURIComponent(taskReviewInfoMatch[2] ?? '');
+          const body = await safeJson(req);
+          const question = typeof body?.question === 'string' ? body.question.trim() : '';
+          if (question.length === 0) return j(400, { error: 'question required' });
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const res = taskStore.requestMoreInfoOnReview(taskId, reviewItemId, question, {
+            actor: author,
+          });
+          if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
+          taskProjection.ensureWorkspace(res.task.workspaceId);
           return j(200, res);
         }
         // set_task_dependencies: edit `after` / `afterEnforce` on a task that
