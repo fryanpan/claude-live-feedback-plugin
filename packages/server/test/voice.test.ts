@@ -595,6 +595,7 @@ describe('voice routing (§3.8)', () => {
         id: 'expansion-plan',
         reviewItems: Array.from({ length: n }, (_, i) => ({
           threadId: `th-${i}`,
+          commentId: `c-${i}`,
           ask: 'Should the rollout wait?',
           askedBy: 'Search Agent',
         })),
@@ -609,6 +610,9 @@ describe('voice routing (§3.8)', () => {
         action: 'answer-review',
         docId: 'expansion-plan',
         threadId: 'th-0',
+        // Carried from the projection, never named by the model: the executor
+        // needs it to stamp the answer onto the comment that asked.
+        commentId: 'c-0',
         text: 'yes, wait for it',
         actor: PERSON_ACTOR,
       });

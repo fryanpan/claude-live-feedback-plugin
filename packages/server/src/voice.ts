@@ -7,10 +7,14 @@
  *    names the target; the server validates the id and answers with a
  *    navigation. No full-agent round trip; works with no agent attached.
  *  - A small ACTION set applied to the RESOURCE IN VIEW runs here too, on the
- *    speaker's own authority: status and assignee go through the same store
- *    choke points the REST routes use, so a spoken move is attributed and
- *    audited exactly like a tapped one. `resolveVoiceAction` is the guardrail
- *    and it refuses far more than it allows.
+ *    speaker's own authority: status, assignee, a comment, an answer to the
+ *    one open review item, and opening a linked doc. Every one of them goes
+ *    through the same store choke point the REST routes use — `transition`,
+ *    `setAssignee`, `postComment`, `answerReviewItem` — so a spoken act is
+ *    attributed, audited and broadcast exactly like a tapped one, and this
+ *    file adds no write path and no audit surface of its own.
+ *    `resolveVoiceAction` is the guardrail and it refuses far more than it
+ *    allows.
  *  - Everything else — every other change, and any action the guardrail or
  *    the store declined — belongs to the ATTACHED WORKSPACE AGENT, carrying
  *    the transcript VERBATIM: the `voice.request` event rides the workspace
@@ -88,10 +92,15 @@ export type VoiceResource =
   | { kind: 'doc'; id: string; title?: string; reviewItems: VoiceReviewItem[] };
 
 /** One open review item on a doc, flattened to what a prompt can use. Kept to
- *  three fields on purpose: the review-item SHAPE is owned elsewhere and is
+ *  four fields on purpose: the review-item SHAPE is owned elsewhere and is
  *  being reworked, so voice reads a projection of it rather than its type. */
 export interface VoiceReviewItem {
   threadId: string;
+  /** The comment the item is ABOUT — what an answer is stamped back onto.
+   *  Never rendered into the prompt: the model must not learn ids it is
+   *  forbidden to name. It exists so the executor can call the existing
+   *  `answerReviewItem` without re-deriving which comment was the ask. */
+  commentId: string;
   ask: string;
   askedBy: string;
 }
@@ -103,6 +112,47 @@ export type VoiceDocResourceReader = (
   workspaceId: string,
   docId: string,
 ) => { title?: string; reviewItems: VoiceReviewItem[] } | undefined;
+
+/**
+ * The two room-side writes voice performs, and nothing else.
+ *
+ * Declared as a narrow structural interface rather than by importing the room
+ * store's type, for the same reason `VoiceReviewItem` is a projection: the
+ * review-item entity is being reshaped on another branch, and voice must meet
+ * it at a stable seam. `DocRooms` satisfies this as-is — these ARE its methods,
+ * called with the arguments they already take, not reimplemented and not
+ * restructured.
+ */
+export interface VoiceRooms {
+  postComment(
+    docId: string,
+    threadId: string | null,
+    author: VoiceActor,
+    text: string,
+    anchor?: { kind: 'subject' },
+    opts?: { generate?: boolean },
+  ): Promise<{ id: string } | null>;
+  answerReviewItem(
+    docId: string,
+    threadId: string,
+    commentId: string,
+    author: VoiceActor,
+    text: string,
+    optionId?: string,
+    opts?: { generate?: boolean },
+  ): Promise<{ ok: boolean }>;
+}
+
+/**
+ * A task's discussion room, CREATED if this process has not served it yet.
+ *
+ * Injected rather than derived from the task id, because `task:<id>` is only
+ * half the answer: body rooms are made lazily, so on a freshly restarted
+ * server the room for a task nobody has opened does not exist and a comment
+ * aimed straight at that docId is silently dropped. The one function that
+ * both ensures and names it lives in the projection, so voice asks for it.
+ */
+export type VoiceTaskCommentDoc = (taskId: string) => string | undefined;
 
 const encoder = new TextEncoder();
 const byteLength = (text: string): number => encoder.encode(text).length;
@@ -139,6 +189,40 @@ function describeRef(ref: Ref): string {
     case 'url':
       return `url ${ref.url}`;
   }
+}
+
+/**
+ * One leading slash, and the next character is not one.
+ *
+ * Every `navigate` this router returns is handed to `location.assign` by both
+ * clients, unconditionally and without inspection. `//evil.example/x` is a
+ * protocol-relative jump to another host and `https://…` is an open redirect,
+ * and both are ordinary-looking strings. The paths built below are all literal
+ * prefixes plus `encodeURIComponent`, so today nothing can fail this — which is
+ * exactly when the assertion is cheap to add and why it is added at the ONE
+ * place every navigation leaves through, rather than at each caller.
+ */
+const SAME_ORIGIN_PATH = /^\/[^/]/;
+
+/** The path, or nothing. A navigation this router cannot vouch for is not a
+ *  navigation it emits — the utterance falls back to the agent route. */
+function sameOriginPath(path: string): string | undefined {
+  return SAME_ORIGIN_PATH.test(path) ? path : undefined;
+}
+
+/**
+ * Where a task's link points, as an internal path — or nothing.
+ *
+ * `doc` and `thread` refs both open the reading surface, which is the one
+ * navigation this server can make on its own. A `url` ref is deliberately NOT
+ * one: it is an external address, and "open the linked mockup" over an
+ * off-origin URL is a decision about leaving this app, which belongs to the
+ * agent. `task` and `diff` refs have their own surfaces and are left to the
+ * agent too rather than guessed at here.
+ */
+function refNavigation(ref: Ref): string | undefined {
+  if (ref.kind !== 'doc' && ref.kind !== 'thread') return undefined;
+  return sameOriginPath(`/review/${encodeURIComponent(ref.docId)}`);
 }
 
 /** Render the `Resource in view:` block, clamped to `RESOURCE_MAX` bytes. */
@@ -242,6 +326,21 @@ const ACK_TRANSCRIPT_MAX = 90;
  * a model told nothing about the truncation will answer as if it saw the rest.
  */
 export const RESOURCE_MAX = 1200;
+
+/**
+ * A voice write never spends the summary API key.
+ *
+ * The comment routes pass `generate: !visitor` because a share visitor must
+ * not be able to run up a bill on a public tunnel URL. Voice states the same
+ * rule as a STANDING refusal instead of a live gate, because the router has no
+ * visitor flag to read and could only get one by threading request identity
+ * down here. Today it would always be `true` — `/api/workspaces/<id>/voice` is
+ * not on the share allowlist, so only a local speaker reaches it — and that is
+ * exactly the argument that would make this line safe to omit right up until
+ * the allowlist widened. The cost is the whole cost: a spoken comment gets no
+ * generated thread summary. One line of speech is not what a summary is for.
+ */
+const NO_GENERATE = { generate: false } as const;
 
 function heard(transcript: string): string {
   const t =
@@ -396,7 +495,14 @@ export type VoiceActionPlan =
       text: string;
       actor: VoiceActor;
     }
-  | { action: 'answer-review'; docId: string; threadId: string; text: string; actor: VoiceActor }
+  | {
+      action: 'answer-review';
+      docId: string;
+      threadId: string;
+      commentId: string;
+      text: string;
+      actor: VoiceActor;
+    }
   | { action: 'open-link'; taskId: string; ref: Ref };
 
 /** "assign this to me" — the speaker, not a person literally named "me". */
@@ -486,6 +592,7 @@ export function resolveVoiceAction(args: {
         action: 'answer-review',
         docId: resource.id,
         threadId: only.threadId,
+        commentId: only.commentId,
         text: transcript,
         actor,
       };
@@ -513,15 +620,23 @@ export class VoiceRouter {
   private tasks: TaskStore;
   private complete: VoiceComplete | undefined;
   private docResource: VoiceDocResourceReader | undefined;
+  private rooms: VoiceRooms | undefined;
+  private taskCommentDoc: VoiceTaskCommentDoc | undefined;
 
   constructor(opts: {
     tasks: TaskStore;
     complete?: VoiceComplete;
     docResource?: VoiceDocResourceReader;
+    /** Absent on a server built without a room store — the two text verbs then
+     *  defer, exactly as they did before their executors existed. */
+    rooms?: VoiceRooms;
+    taskCommentDoc?: VoiceTaskCommentDoc;
   }) {
     this.tasks = opts.tasks;
     this.complete = opts.complete;
     this.docResource = opts.docResource;
+    this.rooms = opts.rooms;
+    this.taskCommentDoc = opts.taskCommentDoc;
   }
 
   /**
@@ -617,11 +732,16 @@ export class VoiceRouter {
    * reach events.jsonl at the store's emit choke point before any listener
    * fires. A voice move and a tapped move are the same bytes in the log.
    *
-   * The verbs this commit does not execute (`comment`, `answer-review`,
-   * `open-link`) fall through to `defer`, so classifying one of them changes
-   * nothing a speaker can observe until their executors land.
+   * The two text verbs go through `rooms.postComment` — the ONE choke point
+   * every reply path in this server already funnels through — and through
+   * `rooms.answerReviewItem` called exactly as it stands. Neither is
+   * reimplemented here: a spoken comment and a typed one are the same write,
+   * fire the same events, and reach a watching agent identically.
+   *
+   * A verb added to `VOICE_ACTIONS` without a case here defers, which is the
+   * safe direction.
    */
-  private executeAction(transcript: string, plan: VoiceActionPlan): ActionOutcome {
+  private async executeAction(transcript: string, plan: VoiceActionPlan): Promise<ActionOutcome> {
     switch (plan.action) {
       case 'set-status': {
         // Read the status BEFORE the write: the ack has to name both ends of
@@ -688,9 +808,103 @@ export class VoiceRouter {
           },
         };
       }
+      case 'comment': {
+        if (!this.verbatim(transcript, plan.text) || !this.rooms) return { kind: 'defer' };
+        // A task discussion lives in the task's own body room, which may not
+        // exist yet; a doc's comments live on the doc itself.
+        const docId =
+          plan.target.kind === 'task'
+            ? this.taskCommentDoc?.(plan.target.taskId)
+            : plan.target.docId;
+        if (!docId) return { kind: 'defer' };
+        const label =
+          plan.target.kind === 'task'
+            ? (this.tasks.getTask(plan.target.taskId)?.title ?? plan.target.taskId)
+            : plan.target.docId;
+        // A NEW thread, anchored to the subject: a spoken comment points at
+        // the thing as a whole, and `VoiceContext` carries no text range for
+        // it to point into. A subject anchor also cannot break, so this
+        // comment can never orphan.
+        const thread = await this.rooms.postComment(
+          docId,
+          null,
+          plan.actor,
+          plan.text,
+          { kind: 'subject' },
+          NO_GENERATE,
+        );
+        if (!thread) return { kind: 'defer' };
+        return {
+          kind: 'answered',
+          result: {
+            route: 'fast-path-action',
+            ack: `${heard(transcript)} Commented on "${label}".`,
+          },
+        };
+      }
+      case 'answer-review': {
+        if (!this.verbatim(transcript, plan.text) || !this.rooms) return { kind: 'defer' };
+        // Called as it stands, including the `optionId` slot left empty: a
+        // spoken answer names no option, and `answerReviewItem` already
+        // treats a typed answer with no id as a full answer rather than a
+        // lesser one. Everything that makes an answer an answer — the reply,
+        // the reopen, the events a watching agent receives — is that
+        // function's, not this one's.
+        const res = await this.rooms.answerReviewItem(
+          plan.docId,
+          plan.threadId,
+          plan.commentId,
+          plan.actor,
+          plan.text,
+          undefined,
+          NO_GENERATE,
+        );
+        if (!res.ok) return { kind: 'defer' };
+        return {
+          kind: 'answered',
+          result: {
+            route: 'fast-path-action',
+            ack: `${heard(transcript)} Answered the open review item on ${plan.docId}.`,
+          },
+        };
+      }
+      case 'open-link': {
+        const navigate = refNavigation(plan.ref);
+        if (!navigate) return { kind: 'defer' };
+        return {
+          kind: 'answered',
+          result: {
+            // 'fast-path', NOT 'fast-path-action'. The board did not move, so
+            // there is nothing for the attached agent to be told about; this
+            // is precisely "a lookup the server already answered", which is
+            // the route the MCP suppresses. Sending it as an action would
+            // hand the agent an instruction to open a link already open.
+            route: 'fast-path',
+            ack: `${heard(transcript)} Opening the linked doc.`,
+            navigate,
+          },
+        };
+      }
       default:
         return { kind: 'defer' };
     }
+  }
+
+  /**
+   * The posted body IS the transcript, asserted at the write rather than
+   * trusted from the plan.
+   *
+   * `resolveVoiceAction` sets `text` from the transcript and nothing else
+   * writes a plan — so this can only fire on a future edit, which is the
+   * point. The failure it forecloses is specific and silent: `MAX_TOKENS`
+   * truncates a reply mid-sentence, and a design that ever let the model
+   * supply the words would post half a sentence to a thread under the
+   * speaker's name, indistinguishable from something they said.
+   */
+  private verbatim(transcript: string, text: string): boolean {
+    if (text === transcript) return true;
+    console.error('[voice] refusing to post text that is not the transcript');
+    return false;
   }
 
   /**
@@ -763,7 +977,7 @@ export class VoiceRouter {
         ...(resource !== undefined ? { resource } : {}),
       });
       if (plan) {
-        const outcome = this.executeAction(transcript, plan);
+        const outcome = await this.executeAction(transcript, plan);
         if (outcome.kind === 'answered') answered = outcome.result;
         else if (outcome.note) deferNote = ` ${outcome.note}`;
       }
@@ -819,20 +1033,31 @@ export class VoiceRouter {
   ): VoiceResult {
     if (c.target === 'task' && c.id) {
       const task = this.taskInWorkspace(workspaceId, c.id);
-      if (task) {
+      // Every navigation leaves through `sameOriginPath`, this one included:
+      // one assertion covering all three, rather than one that covers only
+      // the path added last.
+      const navigate = task
+        ? sameOriginPath(
+            `/workspaces/${encodeURIComponent(workspaceId)}?task=${encodeURIComponent(task.id)}`,
+          )
+        : undefined;
+      if (task && navigate) {
         return {
           route: 'fast-path',
           ack: `${heard(transcript)} Lookup — opening task "${task.title}".`,
-          navigate: `/workspaces/${encodeURIComponent(workspaceId)}?task=${encodeURIComponent(task.id)}`,
+          navigate,
         };
       }
     }
     if (c.target === 'doc' && c.id) {
-      if (this.docInWorkspace(workspaceId, c.id)) {
+      const navigate = this.docInWorkspace(workspaceId, c.id)
+        ? sameOriginPath(`/review/${encodeURIComponent(c.id)}`)
+        : undefined;
+      if (navigate) {
         return {
           route: 'fast-path',
           ack: `${heard(transcript)} Lookup — opening ${c.id}.`,
-          navigate: `/review/${encodeURIComponent(c.id)}`,
+          navigate,
         };
       }
     }
