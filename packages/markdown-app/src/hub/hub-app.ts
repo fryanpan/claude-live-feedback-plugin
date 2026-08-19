@@ -1042,10 +1042,13 @@ async function main(): Promise<void> {
       state.info?.pendingRetriage !== undefined ||
       state.info?.pendingBucketReview !== undefined;
     el('hub-settings-alarm').classList.toggle('hidden', !armed);
-    el('hub-settings').setAttribute(
-      'title',
-      armed ? 'Workspace settings — needs a look' : 'Workspace settings',
-    );
+    // Both attributes, because the dot itself is `aria-hidden`: a reader who
+    // never sees it would otherwise be told "Workspace settings" while the
+    // button is visibly asking to be opened. `title` alone is announced
+    // weakly or not at all depending on the reader.
+    const label = armed ? 'Workspace settings — needs a look' : 'Workspace settings';
+    el('hub-settings').setAttribute('title', label);
+    el('hub-settings').setAttribute('aria-label', label);
   }
 
   /**
