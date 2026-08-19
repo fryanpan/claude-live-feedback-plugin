@@ -1749,6 +1749,46 @@ export function panePath(workspaceId: string, pane: HubPane): string {
   return pane === 'home' ? `${base}/home` : base;
 }
 
+/**
+ * What the top-level nav offers. Four destinations, not two panes and a
+ * filter: "My Tasks" and the activity feed were both reachable only from
+ * controls INSIDE the board — a segmented tab and a button that swapped the
+ * board out — so neither had a URL, neither survived a reload, and the one
+ * that answers "what is mine" read as a filter on somebody else's list.
+ *
+ * `pane` and `tab` remain the state the render path is written against; this
+ * is the single thing the URL and the nav agree on, and both of those are
+ * derived from it. One source, so a deep link and a click cannot disagree.
+ */
+export type HubNav = 'home' | 'tasks' | 'mine' | 'activity';
+
+/** `/workspaces/<id>` stays Tasks, for the reason `paneFromPath` gives: every
+ *  link already in the field points there. The other three are suffixes. */
+export function navFromPath(pathname: string): HubNav {
+  const m = pathname.match(/^\/workspaces\/[^/?#]+\/([^/?#]+)\/?$/);
+  const suffix = m?.[1];
+  if (suffix === 'home') return 'home';
+  if (suffix === 'mine') return 'mine';
+  if (suffix === 'activity') return 'activity';
+  return 'tasks';
+}
+
+export function navPath(workspaceId: string, nav: HubNav): string {
+  const base = `/workspaces/${encodeURIComponent(workspaceId)}`;
+  return nav === 'tasks' ? base : `${base}/${nav}`;
+}
+
+export function paneForNav(nav: HubNav): HubPane {
+  return nav === 'home' ? 'home' : 'board';
+}
+
+/** Activity keeps whichever task filter was showing; it renders no rows of
+ *  its own, so answering `'all'` there would silently reset the filter on the
+ *  way back. */
+export function tabForNav(nav: HubNav): BoardTab | undefined {
+  return nav === 'mine' ? 'mine' : nav === 'tasks' ? 'all' : undefined;
+}
+
 /** The brief as `GET /api/workspaces/:id/home` ships it. */
 export interface HomeBriefView {
   markdown: string;
