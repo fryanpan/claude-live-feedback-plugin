@@ -2430,3 +2430,189 @@ Technical discoveries that should persist across sessions for this project.
   one's extracted ask was a row of fragments. The corpus is the regression
   test that unit fixtures cannot be, because nobody invents the input that
   breaks their own rule.
+
+## A squashed PR's message describes some commit in its history, not the tree it shipped
+
+- **#254 landed on main as one squashed commit whose message says
+  `homeQueueTotal` "loses its `needs === 'decision'` term". Main keeps that
+  term.** `packages/server/src/server.ts:806` reads `const decisions =
+  open.filter((t) => t.needs === 'decision' && !t.answer);`, and the line
+  directly under it reads `const rendered = items.filter((i) => i.kind !==
+  'task-review');`. The shipped shape counts decisions from the projection AND
+  drops ticket-borne rows from the queue half, so a decision is counted once —
+  which is what the surrounding comment says. The sentence in the commit
+  message was true of an intermediate commit in that PR and was never true of
+  the tree it merged.
+- **What this produces is a correct merge reported as a regression.** Reviewing
+  PR #255's merge of #254 on 2026-08-19, the brief drawn from that message said
+  to check the term was gone. It was present — which reads exactly like a
+  resolution that reverted main, on the one file where both branches had
+  changed the same function. The disproof took one command: `git show
+  origin/main:packages/server/src/server.ts | grep -n "needs === 'decision'"`
+  answers with the identical line, so main and the merge agreed byte-for-byte
+  and nothing had regressed.
+- **A commit message states intent at some moment in a PR's history; the tree
+  states the result.** A squash flattens N commits into one message, so any
+  sentence in it may describe a state a later commit in the same PR replaced,
+  and nothing marks which sentences those are. When the question is "what must
+  this merge preserve", read the tree — `git show <ref>:<path>` — and treat the
+  message as a lead, never as the specification.
+- Same family as "'X is impossible' measured AN absence, not THE absence": the
+  reading was accurate and the conclusion drawn from it was wrong.
+
+## A NUL byte makes grep silently blind, and the silence defeats the positive control too
+
+- **One raw NUL byte in a source file makes `grep` report no matches and exit
+  1 for a pattern that is plainly in the file — with no message of any kind.**
+  Measured 2026-08-19. `packages/server/src/voice.ts` at `8fb81f4` was 62,399
+  bytes and held exactly **1** NUL. `grep -c 'VoiceResource'` on that blob
+  printed nothing and exited 1; `grep -ac` on the same blob printed **6**. The
+  fix commit `51eef27` is 62,400 bytes with 0 NULs.
+- **The positive control has to be a separate FILE, not a separate pattern.**
+  A synthetic pair settles it: a file containing `SECRET_GATE` plus a NUL →
+  exit 1, silent; the byte-identical file without the NUL → exit 0, match
+  printed; `grep -a` on the first → exit 0, match printed. The trap is that the
+  usual control — "grep the same file for something I know is there" — runs
+  through the same blinded grep and fails too, so it CONFIRMS the false
+  negative instead of exposing it.
+- **The `grep` on this machine is ugrep 7.5.0, not BSD or GNU grep**, and it
+  emits nothing at all before exiting 1. Worth naming, because GNU grep's
+  documented behaviour here is to print `Binary file … matches` and exit 0 —
+  a loud wrong answer rather than a silent one. Do not carry an assumption
+  about which one you are talking to; `grep --version` is one line.
+- **The check that cannot be fooled reads bytes, not matches:**
+  `python3 -c "print(open(p,'rb').read().count(b'\x00'))"` — non-zero means
+  every plain grep of that file is lying to you. `grep -a` restores matching
+  once you know to reach for it.
+- **This is not hypothetical and it has already cost a public retraction.**
+  A security fix was reported as absent from a file that contained 31
+  instances of it, on the strength of a grep that had gone blind this way.
+  Treat "the thing isn't in this file" as unproven until either the byte count
+  is 0 or `grep -a` agrees.
+- Same family as "A negative probe needs a positive control", with the sting
+  that here the control is inside the blind spot with the probe.
+
+## Red gates on a diff that touches no code: count failed FILES against failed TESTS
+
+- **A docs-only branch — one `.md` file, +61 lines — took `bunx vitest run` and
+  `bun test packages/server/test` both to exit 1.** Measured 2026-08-19 in a
+  worktree created minutes earlier with `git worktree add … origin/main`. That
+  is the shape that gets waved through as flake, or read as "main is broken",
+  and it was neither.
+- **The tell is in the two counters, and they disagree.** vitest reported
+  `Test Files 56 failed | 50 passed (106)` next to `Tests 755 passed (755)` —
+  fifty-six files failed while **zero tests** did. A file that fails to LOAD
+  fails before any test in it runs, so it contributes no failing test; an
+  assertion failure contributes exactly the opposite. Fifty-six files down and
+  nothing red inside them cannot be a code regression, and a one-file docs diff
+  cannot break a file it does not appear in.
+- **The cause was the environment, and the error said so plainly:** `Failed to
+  resolve import "@feedback/core"` from vitest, `Cannot find module
+  '@feedback/core'` from the server suite. `git worktree add` creates the tree
+  but no `node_modules`, and this monorepo's workspace packages resolve through
+  it. `bun install` — 948 packages, 731ms — then all four gates exit 0, with
+  1702 and 1813 tests respectively. Nothing about the diff changed.
+- **So the first question on a red gate is not "which test broke" but "did the
+  test files load".** Read the failed-files and failed-tests counters together
+  before touching anything. They separate a missing install, a bad import path
+  and a genuine regression in one glance, and re-running the suite — the
+  reflex a red gate invites — tells you nothing, because it fails identically
+  every time.
+- Related: "Four gates, and each one is the only thing that catches its class".
+  A gate that cannot load its subject has not run, whatever its exit code
+  suggests.
+
+## An assertion whose alternation can match either way pins nothing, and reads as coverage of exactly the thing it does not check
+
+- **The assertion, `packages/mcp/test/skills-declare-once.test.ts:75-83`:**
+  ```js
+  expect(text.toLowerCase()).toMatch(/5[- ]minute|five minutes|goes quiet|stay live/);
+  ```
+  Its test name is *"says a declaration does not keep you live — the heartbeat
+  window still gates delivery"*, and its comment restates the claim it appears
+  to guard, verbatim. But `goes quiet` and `stay live` are generic enough to
+  match the WRONG text, the CORRECTED text, and a later reinstatement of the
+  wrong text. It passes in all three worlds. **An alternation is only as
+  strong as its weakest branch** — if any branch would match text that
+  violates the property, the assertion tests nothing about that property.
+- **The check is one question: what text would make this fail?** If you cannot
+  name a concrete string that turns it red, it is not an assertion, whatever
+  its name says. Worse than absent coverage, because it occupies the slot a
+  real test would take and tells the next reader the claim is pinned.
+- **Measured cost.** A shipped, fleet-wide MCP tool description stated the
+  wrong delivery rule — *"every delivery gate asks for a heartbeat inside the
+  ~5-minute window"* — and survived **four green CI runs and three independent
+  reviewers**. Post-#253 that is wrong twice over: `isDeliverable`
+  (`tasks.ts:5217`) reads `observedWorkFreshMs ?? OBSERVED_LIVE_MS`, which is
+  **15** minutes, off `max(lastHeartbeat, lastToolCallAt)` plus a wire probe.
+  The 5-minute figure is `HEARTBEAT_FRESH_MS`, which feeds the DISPLAYED state
+  and not delivery — a split `OBSERVED_LIVE_MS`'s own comment spells out.
+- **The other half of why it survived, and it is separately worth knowing: the
+  passage was internally HALF-RIGHT.** Every one of the sites also said "Tool
+  calls refresh it, so a working session is fine" — which is correct, and
+  post-#253 aware. So the text read as informed by someone who knew the
+  mechanism, and a careful reader had no snag to catch on. **A confidently
+  written passage that is 90% right is harder to catch than one that is wrong
+  throughout**, because the wrong 10% inherits the credibility of the rest.
+- **Scope, once anybody looked: SEVEN prose sites, not one** — four `mcp.ts`
+  tool descriptions (`watch_coverage`, `set_workspace_lead`, `attach_agent`,
+  `heartbeat`) and three skill passages. **Three of the seven were verified
+  present on `origin/main`**, so the claim had already been shipping; the
+  branch that got blocked for it merely added four more. It was found by
+  grepping the whole tree for one phrase AFTER a single instance surfaced —
+  not by reading the diff. The diff-scoped read is exactly what missed it
+  three times, because a wrong sentence that main already carries is not in
+  the diff to be reviewed.
+- **A sweep needs its own positive control, and this one nearly under-reported
+  by one.** A fixed-string `grep -F` for `gated on a heartbeat inside the
+  ~5-minute window` returned 0 against a file that says exactly that — the
+  phrase is **line-wrapped** in the markdown, so no single line contains it.
+  Re-running through `tr '\n' ' ' | tr -s ' '` found it. Prose wraps; a
+  literal multi-word probe against a wrapped file reports a clean absence.
+  The contrast is the actionable part. Measured on the same file at the same
+  commit:
+
+  ```
+  grep -F 'gated on a heartbeat inside the ~5-minute window'   → 0  (exit 1)
+  tr '\n' ' ' | tr -s ' ' | grep -F   (same phrase)            → 1
+  grep -c '5-minute'                                           → 1
+  ```
+
+  The long search missed it and a short token found it, and the file shows
+  why — the break lands mid-phrase, between `gated on a` and `heartbeat`,
+  while `5-minute` sits whole on one line. **The longer and more specific the
+  search string, the more line-breaks it has to survive**, so in prose the
+  distinctive short token is the more reliable probe and the full phrase is
+  what you use to *read* the hit once you have it, not to find it. Two people
+  sweeping the same tree came out at seven sites and six for exactly this
+  reason — not better judgement, a shorter needle.
+- **The mirror image: an assertion on wall-clock time measures the machine,
+  and reports on the box rather than the code.** Met during this same PR's
+  gates. `summarize.test.ts`, "paces itself across the window it was given",
+  drains 4 tasks over a 200ms pacing window and asserts `elapsed < 200` to
+  prove there is no trailing gap after the last call. It came in at **213ms**
+  while other suites were saturating the machine, and passes 3/3 in isolation
+  — on a docs-only diff that cannot reach the scheduler.
+  - The two bounds in that test are not equally sound, and the difference is
+    the rule. The lower bound (`elapsed >= 120`) says *the delay exists*; load
+    can only push elapsed UP, so noise never makes it pass wrongly. The upper
+    bound says *no trailing gap*, and load pushes elapsed up too — so the same
+    noise fails it. **A lower bound on elapsed time is robust and an upper
+    bound is not**, and it fails hardest exactly when the box is busiest, which
+    is when CI runs it. Assert the ceiling against a fake clock, or not at all.
+  - It belongs in this entry because it is the same defect seen from the other
+    side. The alternation reported success without looking at the thing it
+    named; this reports failure about something it never measured. In both, the
+    assertion's subject and what it actually tests have come apart — the
+    failure "the probe ran, it just measured something other than what it
+    claimed to" already recorded for the mobile-viewport verification.
+  - It also costs more than a re-run, because **the shape is
+    indistinguishable from a real regression until you look**, and the
+    cheapest-looking reading is "flake, re-run it". That reflex is right here
+    and catastrophic when it is not — which is why the neighbouring rule
+    stands: measure the baseline on unmodified HEAD before concluding either
+    way. Filed as its own ticket rather than fixed here; a learnings PR that
+    starts fixing tests stops being reviewable as docs.
+- Same family as "A negative probe needs a positive control", pointed at
+  assertions rather than searches: a check that reports success without having
+  looked at the thing it names.
