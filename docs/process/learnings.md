@@ -190,6 +190,36 @@ Technical discoveries that should persist across sessions for this project.
   positive control can silently become a duplicate of the thing it controls"
   (the control never entered the condition). This is the third — **the probe's
   answer does not depend on its subject at all.**
+- **Its exact mirror is the circular `--cc` control** in "`git show --cc` has
+  THREE outcomes, and the control for it must be `-c`": one control that always
+  passes, one that always fails to fail. Same bug from opposite ends, and both
+  were hit in the same session by the same person chasing the same byte.
+
+### The thesis, stated once for the whole family
+
+**Every failure in these entries had a check that ran, printed something, and
+meant nothing — and in each case the thing that would have caught it was one
+deliberate attempt to make the check fail.** Five distinct instances measured
+on 2026-08-19, different tools, one shape:
+
+1. a probe that always passed — an empty grep pattern (this entry);
+2. a probe blinded by a control byte — "A NUL byte makes grep silently blind";
+3. a control drawn from the same suppressed measurement it was checking —
+   "`git show --cc` has THREE outcomes";
+4. a log read as an inventory it never was — "`bun test`'s log cannot
+   enumerate its own run set";
+5. a grep for a string at a column the command never puts it in —
+   "`git merge-tree`'s three-arg form hides conflict markers behind a diff
+   prefix".
+
+**The sharper form of "a negative probe needs a positive control": agreement is
+not independence.** Three agents re-running the same runner is one derivation
+with three witnesses. A control has to come through a *different derivation* —
+a different tool, a different flag, a different computation — not merely a
+different invocation of the same one. The counterexample that proves it: the
+one test-file count that held up under scrutiny had **two** derivations, a
+static `git ls-tree` off the config globs *and* the runner's own enumeration.
+Every count that went wrong had one.
 
 ## A positive control must be a peer in TIME as well as in kind
 
@@ -2589,29 +2619,53 @@ Technical discoveries that should persist across sessions for this project.
   answers 'yes' is as vacuous as one that always answers 'no'", and both were
   hit in the same session by the same person looking for the same byte.
 
-## `git show --cc` on a single-parent commit shows everything, not nothing
+## `git show --cc` has THREE outcomes, and the control for it must be `-c`
 
-- **`--cc` silently degrades to an ordinary diff on a one-parent commit — it
-  does not go empty.** Measured 2026-08-19 on `278de00`, a squash merge with
-  exactly one parent: `git show --cc` emits **92** hunks, all `@@`, **zero**
-  `@@@`, and plain `git show` emits the same 92. Per file it is the same
-  story — `server.ts` is 8 hunks under `--cc` and 8 under plain. I asserted the
-  opposite twice, in two wordings, and used it to justify a per-file zero.
-- **On a squash merge a `--cc` reading is therefore not empty — it is complete
-  and unremarkable, which is worse, because it looks like it answered the
-  question.** An empty result invites a second look; a full ordinary diff reads
-  as "I checked the combined view and nothing in it was odd."
-- **`--cc` means something only on a genuine two-parent merge, and there it is
-  already the default.** `ecaf378` (two parents, a real hand resolution) emits
-  **7** combined `@@@` hunks for the whole commit under both `git show --cc`
-  and bare `git show` (git 2.54). Typing `--cc` never changes what you get; it
-  only changes what you believe you asked for.
-- **The control for any per-file zero is the whole-commit hunk count.**
-  `git show --cc ecaf378 -- packages/server/src/tasks.ts` is **0** combined
-  hunks against **7** for the commit — a real zero, and indistinguishable from
-  a vacuous one until you hold the denominator. Settle the parent count first:
-  `git rev-list --parents -n1 <sha> | wc -w` returning **2** means one parent,
-  and `--cc` is telling you nothing about a resolution.
+- **`--cc` is a filter, not a view, so a zero from it is one of three
+  different things and the number alone cannot say which.** All measured
+  2026-08-19 on this repo, git 2.54:
+
+  | commit | parents | `--cc` | `-c` | what the zero/number means |
+  |---|---|---|---|---|
+  | `278de00` | 1 | 92 `@@` | — | degraded to an ordinary diff |
+  | `db2fec2` | 2 | **4** | **73** | 4 hunks differ from BOTH parents |
+  | `b343693` | 2 | **0** | **76** | every conflict resolved by taking a side |
+
+- **Case 1 — single parent: `--cc` silently degrades to an ordinary diff and
+  shows everything.** `278de00` emits 92 hunks under `--cc`, all `@@`, zero
+  `@@@`, identical to plain `git show`; `server.ts` alone is 8 either way. A
+  reading here looks informative and answers nothing — not empty, but
+  *complete and unremarkable*, which is worse, because it reads as "I checked
+  the combined view and saw nothing odd."
+- **Case 2 — two parents, `--cc` non-zero: those hunks differ from BOTH
+  parents**, i.e. content typed by hand into a conflict region. That is the
+  thing worth reviewing on a merge, and `db2fec2`'s 4 is it.
+- **Case 3 — two parents, `--cc` zero: this is a POSITIVE finding, not an
+  absence.** `--cc` suppresses any hunk matching *one* parent, so zero means
+  no hunk differs from both — every conflict was resolved by taking one side
+  wholesale and nothing novel was authored. Clean by construction. `b343693`
+  = 0, and it was nearly reported as unverifiable on the strength of that
+  zero.
+- **The control I previously prescribed here was circular, and this entry used
+  to carry it.** It said to take the whole-commit `--cc` count as the control
+  before trusting a per-file `--cc` zero — but that is *the same suppressed
+  measurement*, so it collapses to zero in exactly the case it exists to
+  catch. It can never fail when it matters. **The control is `git show -c`**,
+  which counts every combined hunk without suppression: 73 and 76 above,
+  non-zero on both, which is what establishes the commits have combined hunks
+  at all. (`ecaf378`: `--cc` 7 against `-c` 113.)
+- **Settle the parent count first** — `git rev-list --parents -n1 <sha> | wc -w`
+  returning **2** means one parent, and `--cc` is telling you nothing about a
+  resolution. On a real two-parent merge `--cc` is already the default, so
+  typing it never changes the output, only what you believe you asked for.
+- **Generalised, and the reason this is an entry rather than a git footnote: a
+  positive control drawn from the same measurement as the thing it checks is
+  not a control.** It has to arrive by a different path — a different flag, a
+  different tool, a different derivation — or it agrees with the broken reading
+  by construction. Same failure as confirming a test-file count by re-running
+  the same runner; see "An expected test-file count goes stale in the direction
+  that reads as correct" and the thesis in "A probe that always answers 'yes'
+  is as vacuous as one that always answers 'no'".
 
 ## Red gates on a diff that touches no code: count failed FILES against failed TESTS
 
@@ -2673,7 +2727,68 @@ Technical discoveries that should persist across sessions for this project.
   not detect a STABLE skip.** Only an independent derivation does. Same family
   as "A positive control can silently become a duplicate of the thing it
   controls": agreement between measurements that share a cause is not
-  corroboration.
+  corroboration. The general statement is under "The thesis, stated once for
+  the whole family" in "A probe that always answers 'yes'…".
+- **Do not recover the count from the runner's LOG, which is the obvious next
+  move and is wrong** — see the entry directly below.
+
+## `bun test`'s log cannot enumerate its own run set, and reading it as one invents missing files
+
+- **The improvement was right and the probe was wrong.** Counts alone can hide
+  a skip plus a compensating inclusion, so the better check is to diff the
+  runner's actual file LIST against the tree. On the vitest side that works:
+  113 in tree, 113 in log, `comm` empty in both directions. On the server side
+  the same method appeared to show **79 of 144 files in the tree but never
+  run** — which reads exactly like a merge dropping most of a suite.
+- **It was the probe. `bun test`'s default reporter prints a `path.test.ts:`
+  header only for files that emit OUTPUT** — in this repo, files that produce
+  `[rooms] failed to persist` stderr noise. Everything that passes silently is
+  named nowhere in the log. Measured on two runs of the same suite: **65 of
+  144** files named in one, **63 of 144** in another — the count is not even
+  stable between runs, because it depends on which files happened to be noisy.
+- **The positive control settles it in one command.** Take an alleged skip and
+  run it standalone: `bun test packages/server/test/activity.test.ts` → 13
+  tests, 0 failures, and bun prints **no header for it**. So the enumeration
+  returned zero for a file that demonstrably runs.
+- **This one fails in the expensive direction — a false POSITIVE on a
+  regression.** Most probe failures in this archive are false clears; stopping
+  at this output would have blocked a correct merge and sent someone hunting a
+  merge bug that does not exist. A silent pass is invisible to a log-based
+  enumeration **by design**, so no amount of re-reading the log fixes it.
+- **What does work: derive the expected set from the artifact under test** (the
+  static `git ls-tree` off the config globs, in the entry above) and reconcile
+  it against bun's own summary line, `Ran N tests across M files` — a number
+  the runner computes, not a list it happens to print.
+- **The general form: a tool's human-readable output is not an inventory of
+  what it did. It reports what it found worth saying.** A sibling agent hit the
+  same shape in a different tool — a served-bundle freshness check that passed
+  because someone else's build happened to land inside the window, where the
+  artifact's own `dist/` mtime was the thing that actually answered it.
+
+## `git merge-tree`'s three-arg form hides conflict markers behind a diff prefix, so an anchored grep never matches
+
+- **`git merge-tree <base> <a> <b> | grep -c '^<<<<<<<'` returns 0 on every
+  input, conflicted or not.** Measured 2026-08-19 on git 2.54 against a pair
+  constructed to conflict: anchored `^<<<<<<<` → **0**; unanchored `<<<<<<<` →
+  **1**. The markers ARE emitted — but inside a diff hunk body, so the line
+  reads `+<<<<<<< .our` and the `^` anchor misses it by exactly one column.
+  The surrounding format is not a merge result at all: `changed in both` /
+  `base` / `our` / `their` headers followed by diff hunks.
+- **The cost was real: a zero from this probe was reported as evidence that
+  four in-flight branches merged cleanly, and offered as a bound on merge
+  risk.** It was not weak evidence — it was no evidence, printed as a number.
+- **Scope it precisely; the over-broad retraction is its own error.** It is the
+  *anchored marker grep on the three-arg form* that is blind, not `merge-tree`.
+  Two-arg `git merge-tree --write-tree A B` discriminates by exit code —
+  measured **1** on the conflicting pair and **0** on a non-conflicting
+  control — and `--write-tree --messages A B` is better still, printing
+  `CONFLICT (content): Merge conflict in f.txt`, one line per file, so it names
+  what conflicts instead of merely signalling that something does. Sending the
+  next person away from a working tool would cost more than the bad probe did.
+- The negative control matters as much as the positive one here: the probe
+  returns 0 on a clean pair *and* on a conflicting pair, which is what makes
+  the reading indistinguishable from a real all-clear. See "The thesis, stated
+  once for the whole family" under "A probe that always answers 'yes'…".
 
 ## An assertion whose alternation can match either way pins nothing, and reads as coverage of exactly the thing it does not check
 
