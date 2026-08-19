@@ -46,6 +46,7 @@ describe('the decision card has the spacing it was reported for missing', () => 
       '.hub-decide-kicker',
       '.hub-decide-headline',
       '.hub-decide-why',
+      '.hub-decide-detail',
       '.hub-decide-lookfor',
       '.hub-decide-meta',
       '.hub-decide-walk',

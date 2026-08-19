@@ -328,6 +328,11 @@ describe('the threading UI left no rules behind', () => {
       '.hub-detail-ask',
       '.hub-detail-ask-kicker',
       '.hub-detail-ask-form',
+      // Named here because it arrived on main AFTER the queue replaced this
+      // region: the declared item's "why" line. Its behaviour survives on
+      // `.hub-decide-why`, so the rule it was written against is dead CSS of
+      // exactly the kind this sweep exists to catch.
+      '.hub-detail-ask-why',
       // The status chip ROW went with the redesign too (replaced by the
       // status <select>), and it left these four rules behind: the chip base,
       // its two interaction states, and the -current variant only a row of

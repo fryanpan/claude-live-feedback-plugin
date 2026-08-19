@@ -3563,12 +3563,24 @@ function reviewItemCard(
   headline.className = 'hub-decide-headline';
   headline.textContent = item.headline;
   card.append(headline);
-  const whyText = [item.why, item.detail].filter((s) => s?.trim()).join(' ');
-  if (whyText) {
+  if (item.why?.trim()) {
     const why = document.createElement('p');
     why.className = 'hub-decide-why';
-    why.textContent = whyText;
+    why.textContent = item.why;
     card.append(why);
+  }
+  // The detail is its OWN block and it is markdown, not a second sentence
+  // glued onto the why. Both halves matter: the schema says markdown, and the
+  // links to the thing under review are the whole reason a declaration carries
+  // a detail — appended as text they rendered as bracket soup, which is the
+  // defect reported with a screenshot 2026-08-19 ("the review request up top
+  // is missing all of the necessary details"). `renderCommentMarkdown` escapes
+  // first and only re-adds known-safe tags, so this is inert markup.
+  if (item.detail?.trim()) {
+    const detail = document.createElement('div');
+    detail.className = 'hub-decide-detail';
+    detail.innerHTML = renderCommentMarkdown(item.detail);
+    card.append(detail);
   }
   if (item.lookFor) {
     const look = document.createElement('p');

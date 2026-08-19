@@ -2021,6 +2021,127 @@ describe('renderTaskDetail — discussion', () => {
     );
   });
 
+  /**
+   * Reported with a screenshot 2026-08-19: *"the review request up top is
+   * missing all of the necessary details -- please fix. I see they're in the
+   * review request at the bottom."*
+   *
+   * A declared item arrives with a `review` payload the agent WROTE for this
+   * card — why it matters, what to review for, and the detail that carries the
+   * links to the thing under review. The panel rendered the headline alone, so
+   * everything that made the headline actionable was reachable only by
+   * scrolling to the comment at the bottom. The card that fix landed on has
+   * since become the panel's review QUEUE; these assert the same payload
+   * survives the move, markdown detail included.
+   */
+  const declared = (over: Record<string, unknown> = {}) => ({
+    shape: 'review' as const,
+    headline: 'The rollup query is ready to look at',
+    why: 'It blocks the nightly job, which is paused until someone signs off.',
+    lookFor: 'Whether the join drops rows when a session has no events.',
+    detail: 'The change is in [the rollup PR](https://example.test/pr/12) — two files.',
+    ...over,
+  });
+
+  it('renders the declared review payload in the review queue, links and all', () => {
+    renderTaskDetail(
+      root,
+      task({ id: 't-1' }),
+      detailHandlers({
+        asks: [askItem({ review: declared(), ask: declared().headline })],
+        now: NOW,
+      }),
+      { loading: false, threads: [thread()] },
+    );
+    const card = root.querySelector('.hub-decide-card');
+    expect(card).toBeTruthy();
+    expect(card?.querySelector('.hub-decide-headline')?.textContent).toContain('rollup query');
+    // Why it matters — the second half of the two-line header, which the panel
+    // dropped entirely.
+    expect(card?.querySelector('.hub-decide-why')?.textContent).toContain('blocks the nightly job');
+    // What to review for.
+    expect(card?.querySelector('.hub-decide-lookfor')?.textContent).toContain(
+      'drops rows when a session has no events',
+    );
+    // The detail is markdown, so the link to the thing under review is a real
+    // link rather than bracket soup — the reason the detail exists at all, and
+    // the half that a plain-text `why + detail` join silently swallowed.
+    const link = card?.querySelector('.hub-decide-detail a') as HTMLAnchorElement | null;
+    expect(link).toBeTruthy();
+    expect(link?.getAttribute('href')).toBe('https://example.test/pr/12');
+    expect(link?.textContent).toBe('the rollup PR');
+  });
+
+  it('offers a declared item’s options as one-tap answers on its own thread', () => {
+    const onAnswerThread = vi.fn().mockResolvedValue(true);
+    const t = task({ id: 't-1' });
+    renderTaskDetail(
+      root,
+      t,
+      detailHandlers({
+        asks: [
+          askItem({
+            threadId: 'th-9',
+            review: declared({
+              shape: 'decision',
+              lookFor: undefined,
+              options: [
+                { id: 'keep', label: 'Keep threading', detail: 'Costs a migration.' },
+                { id: 'drop', label: 'Drop threading' },
+              ],
+            }),
+          }),
+        ],
+        now: NOW,
+        onAnswerThread,
+      }),
+      { loading: false, threads: [thread({ id: 'th-9' })] },
+    );
+    const opts = root.querySelectorAll('.hub-decide-card .hub-decide-option');
+    expect(opts).toHaveLength(2);
+    expect(opts[0]?.querySelector('.hub-decide-option-label')?.textContent).toBe('Keep threading');
+    expect(opts[0]?.querySelector('.hub-decide-option-detail')?.textContent).toBe(
+      'Costs a migration.',
+    );
+    // The second has no detail, so no detail element — not an empty one.
+    expect(opts[1]?.querySelector('.hub-decide-option-detail')).toBeNull();
+    // The LABEL is the verbatim answer, and it lands on the thread that ASKED
+    // rather than opening a new one.
+    (opts[1] as HTMLButtonElement).click();
+    expect(onAnswerThread).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 't-1' }),
+      expect.objectContaining({ threadId: 'th-9' }),
+      'Drop threading',
+      'drop',
+    );
+    // Tapping is a shortcut, never a closed set — the free-text box stays.
+    const form = root.querySelector('.hub-decide-form') as HTMLFormElement;
+    expect(form).toBeTruthy();
+    expect(form.querySelector('.hub-decide-form-hint')?.textContent).toContain('your own words');
+  });
+
+  /** Positive control: the declared payload is ADDITIVE. An item with no
+   *  declaration is the card as it was — the comment itself as the headline,
+   *  and nothing invented under it. */
+  it('leaves an undeclared ask exactly as it was', () => {
+    renderTaskDetail(root, task({ id: 't-1' }), detailHandlers({ asks: [askItem()], now: NOW }), {
+      loading: false,
+      threads: [thread()],
+    });
+    const card = root.querySelector('.hub-decide-card');
+    expect(card?.querySelector('.hub-decide-headline')?.textContent).toContain(
+      'should we drop threading',
+    );
+    expect(card?.querySelector('.hub-decide-why')).toBeNull();
+    expect(card?.querySelector('.hub-decide-detail')).toBeNull();
+    expect(card?.querySelector('.hub-decide-lookfor')).toBeNull();
+    expect(card?.querySelectorAll('.hub-decide-option')).toHaveLength(0);
+    const form = root.querySelector('.hub-decide-form') as HTMLFormElement;
+    expect(form.querySelector('.hub-decide-form-hint')?.textContent).toBe(
+      'Answer in your own words',
+    );
+  });
+
   it('shows no review queue on a task nothing is waiting on', () => {
     renderTaskDetail(root, task({ id: 't-1' }), detailHandlers({ asks: [], now: NOW }), {
       loading: false,
