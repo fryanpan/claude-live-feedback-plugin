@@ -1,0 +1,193 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { describe, expect, it } from 'vitest';
+
+/**
+ * The task panel's LAYOUT rules — the half of the redesign that no DOM test
+ * can see, because happy-dom resolves no layout and every one of these is a
+ * property of the stylesheet rather than of the tree.
+ *
+ * Four of Bryan's eight anchored comments on the 2026-08-18 staging build are
+ * pure CSS: the panel's width, the goal field's own line, the Description
+ * heading's separation, and the mic clearance at 430px. Each is asserted here
+ * by the number he gave, so a later edit that quietly halves one goes red
+ * rather than merely looking different.
+ *
+ * The rendered result is checked in a real browser at desktop and at 430px;
+ * that is what closes the criterion. What this file prevents is a rule being
+ * deleted or re-valued with nothing to notice.
+ */
+const CSS = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
+
+function declarationsOnly(css: string): string {
+  return css.replace(/\/\*[\s\S]*?\*\//g, '');
+}
+
+/** The body of one rule. `within` scopes the search to a media block's text,
+ *  which matters because the same selector is styled differently at each
+ *  breakpoint and a file-wide search would return whichever came first. */
+function rule(selector: string, within: string = declarationsOnly(CSS)): string {
+  const at = new RegExp(
+    `(^|\\n|\\{)\\s*${selector.replace(/[.+*[\]()]/g, '\\$&')}\\s*\\{([^}]*)\\}`,
+  ).exec(within);
+  return at?.[2] ?? '';
+}
+
+/** Every `@media` block matching this query, concatenated, braces balanced by
+ *  counting. ALL of them: this file carries five separate `max-width: 900px`
+ *  blocks, and taking the first one silently searched the wrong 400 lines. */
+function media(query: string): string {
+  const css = declarationsOnly(CSS);
+  const out: string[] = [];
+  let from = 0;
+  for (;;) {
+    const start = css.indexOf(`@media ${query}`, from);
+    if (start < 0) break;
+    let depth = 0;
+    for (let i = css.indexOf('{', start); i < css.length; i++) {
+      if (css[i] === '{') depth++;
+      else if (css[i] === '}' && --depth === 0) {
+        out.push(css.slice(start, i));
+        from = i;
+        break;
+      }
+    }
+    if (from <= start) break;
+  }
+  return out.join('\n');
+}
+
+describe('the task panel is as wide as it was asked to be', () => {
+  it('resolves its width from ONE expression, used by the panel and the board', () => {
+    // Positive control for every assertion below: if the token is not defined,
+    // both use sites resolve to nothing and the width assertions pass while
+    // measuring an empty string.
+    expect(rule(':root')).toMatch(/--hub-detail-w:/);
+    // 1100 by default, floored at 900 while the viewport can pay for it —
+    // *"default 1100px, at least 900px when space allows"*.
+    expect(rule(':root')).toMatch(/--hub-detail-w:\s*min\(1100px,\s*max\(900px,/);
+  });
+
+  it('uses that width in the modal AND in the split pane', () => {
+    expect(rule('.hub-detail-panel')).toMatch(/width:\s*min\(var\(--hub-detail-w\)/);
+    const split = media('(min-width: 1024px)');
+    expect(split, 'the split-pane block is missing').not.toBe('');
+    // The 52vw this replaced gave a 1512px laptop a 760px pane, which is the
+    // "cramped on bigger screens" report unfixed.
+    expect(rule('.hub-detail-panel', split)).toMatch(/width:\s*min\(var\(--hub-detail-w\)/);
+    expect(rule('.hub-detail-panel', split)).not.toMatch(/52vw/);
+  });
+
+  it('reflows the board out from under the panel instead of over-painting it', () => {
+    // The review banner and the quick-capture row ran under the panel's edge
+    // and were clipped by it. Reserving the panel's own width is the fix, and
+    // it must reserve THE SAME width — hence the shared token.
+    const split = media('(min-width: 1024px)');
+    expect(rule('body.hub-detail-open .hub-main', split)).toMatch(
+      /padding-right:\s*calc\(min\(var\(--hub-detail-w\)/,
+    );
+    // ...and give it back at full screen, where the panel covers the board.
+    expect(rule('body.hub-detail-open.hub-detail-full .hub-main', split)).toMatch(
+      /padding-right:\s*0/,
+    );
+  });
+});
+
+describe('the panel’s fields and headings', () => {
+  it('gives the goal its own line, because a goal title is free text', () => {
+    // *"Goal field: own line — the goal title can be longer than the column
+    // has room for."* Goal is the LAST field, which is why the selector moved
+    // off `:first-child` when the status chip row went away.
+    expect(rule('.hub-detail-field:last-child')).toMatch(/grid-column:\s*1 \/ -1/);
+    // Status is emphatically no longer the full-width one.
+    expect(rule('.hub-detail-field:first-child')).toBe('');
+  });
+
+  it('draws all four values as one kind of control at one height', () => {
+    const ctl = rule('.hub-detail-select,\n.hub-detail-input');
+    expect(ctl, 'the shared control rule is missing').not.toBe('');
+    expect(ctl).toMatch(/min-height:\s*36px/);
+    // A long goal title or agent id must not set the control's intrinsic width
+    // and push the panel past a 430px viewport.
+    expect(ctl).toMatch(/min-width:\s*0/);
+    expect(ctl).toMatch(/max-width:\s*100%/);
+    // The board's 44px assignee pill is brought down to the same row height —
+    // four boxes at two heights is the reported inconsistency in miniature.
+    expect(rule('.hub-detail-field-v .hub-assignee-btn')).toMatch(/min-height:\s*36px/);
+  });
+
+  it('puts the status mark and its dropdown on one line', () => {
+    // *"Show ONLY the current status, with the status icon used in the summary
+    // view, and a dropdown to change it."*
+    const ctl = rule('.hub-detail-statusctl');
+    expect(ctl).toMatch(/display:\s*flex/);
+    expect(ctl).toMatch(/align-items:\s*center/);
+    // The mark keeps its 18px; the select takes the rest and may shrink.
+    expect(rule('.hub-detail-statusctl .hub-status-mark')).toMatch(/flex:\s*none/);
+    expect(rule('.hub-detail-statusctl .hub-detail-status')).toMatch(/min-width:\s*0/);
+    // The chip row is GONE, not merely unused.
+    expect(rule('.hub-detail-statuses')).toBe('');
+  });
+
+  it('separates the Description heading from the fields above it', () => {
+    // *"Add a Description heading with proper spacing separating it from the
+    // fields/decision area above."* 24 is this panel's between-sections step;
+    // the slot below it collapses to 0 so the heading and its prose read as
+    // one block rather than as two.
+    expect(rule('.hub-detail-body-head')).toMatch(/margin:\s*24px 0 4px/);
+    expect(rule('.hub-detail-body-head + .hub-detail-body-slot')).toMatch(/margin-top:\s*0/);
+  });
+
+  it('keeps the live description on the panel’s spine, border included', () => {
+    // -9 and not -8: the box has a 1px border, so at -8 the prose sat one
+    // pixel right of the spine every other row in the panel shares.
+    expect(rule('.hub-detail-body-live')).toMatch(/margin:\s*0 -9px/);
+    expect(rule('.hub-detail-body-live')).toMatch(/padding:\s*8px/);
+  });
+});
+
+describe('nothing fixed to the viewport can sit on the last control', () => {
+  it('reserves the launchers’ height at the foot of the phone panel', () => {
+    // Reported CRITICAL at 430px: the hold-to-talk mic (fixed bottom-left,
+    // z-index above the panel) sat squarely on "Record answer". Reserving the
+    // tail is what guarantees every control can be SCROLLED clear of it —
+    // the same reservation `.hub-walk-card` already makes for the same two
+    // launchers.
+    const phone = media('(max-width: 900px)');
+    expect(rule('.hub-detail-panel', phone)).toMatch(/padding-bottom:\s*calc\(24px \+ 60px/);
+    // Positive control: the mic really is fixed and really is above the panel,
+    // so the reservation is answering a real overlap rather than decorating.
+    expect(rule('.voice-mic')).toMatch(/position:\s*fixed/);
+    expect(Number(/z-index:\s*(\d+)/.exec(rule('.voice-mic'))?.[1])).toBeGreaterThan(
+      Number(/z-index:\s*(\d+)/.exec(rule('.hub-detail'))?.[1]),
+    );
+  });
+});
+
+describe('the threading UI left no rules behind', () => {
+  it('has no rule for a control the panel no longer renders', () => {
+    // *"Stop supporting threaded comments and clean up all code related to
+    // this! Clean up the UX too."* Dead CSS is the half that outlives a
+    // render change silently, and it is what a later reader copies.
+    for (const sel of [
+      '.hub-comment-reply',
+      '.hub-comment-anchor',
+      '.hub-comment-status',
+      '.hub-comment-resolved',
+      '.hub-comment-needs-you',
+      '.hub-composer-target',
+      '.hub-composer-target-label',
+      '.hub-composer-switch',
+      '.hub-detail-ask',
+      '.hub-detail-ask-kicker',
+      '.hub-detail-ask-form',
+    ]) {
+      expect(rule(sel), `${sel} still has a rule`).toBe('');
+    }
+    // Positive control, in the same pass and on the same file: the stream the
+    // survivors belong to is still styled, so an extractor that matched
+    // nothing would not read as a clean sweep.
+    expect(rule('.hub-comment')).not.toBe('');
+    expect(rule('.hub-comment-focus::before')).not.toBe('');
+  });
+});

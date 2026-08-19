@@ -42,7 +42,15 @@ describe('the decision card has the spacing it was reported for missing', () => 
     // and by name.
     for (const sel of [
       '.hub-decide',
+      '.hub-decide-head',
       '.hub-decide-kicker',
+      '.hub-decide-headline',
+      '.hub-decide-why',
+      '.hub-decide-lookfor',
+      '.hub-decide-meta',
+      '.hub-decide-walk',
+      '.hub-decide-step',
+      '.hub-decide-count',
       '.hub-decide-options',
       '.hub-decide-option',
       '.hub-decide-option-label',
@@ -54,6 +62,34 @@ describe('the decision card has the spacing it was reported for missing', () => 
     }
   });
 
+  it('lets the blurb run to as many lines as it needs', () => {
+    // *"The blurb may run a few lines — design for that."* The failure this
+    // guards is a one-liner: any of these three turns a three-line question
+    // into a clipped one, and a clipped decision question is unanswerable.
+    for (const sel of ['.hub-decide-headline', '.hub-decide-why']) {
+      const r = rule(sel);
+      expect(r, `${sel} clamps its line count`).not.toMatch(/-webkit-line-clamp/);
+      expect(r, `${sel} hides its overflow`).not.toMatch(/overflow:\s*hidden/);
+      expect(r, `${sel} refuses to wrap`).not.toMatch(/white-space:\s*nowrap/);
+    }
+    // And it wraps a long unbroken token rather than widening the panel.
+    expect(rule('.hub-decide-headline')).toMatch(/overflow-wrap:\s*anywhere/);
+  });
+
+  it('puts the walkthrough beside the kicker without moving it', () => {
+    // With one item there is no walk at all, and the requirement is that the
+    // card then *"look like today's single card"* — which `space-between`
+    // gives for free, leaving the kicker exactly where it was.
+    const head = rule('.hub-decide-head');
+    expect(head).toMatch(/display:\s*flex/);
+    expect(head).toMatch(/justify-content:\s*space-between/);
+    // A step control is a tap target, and the count must not wrap mid-"2 of 3".
+    expect(rule('.hub-decide-step')).toMatch(/min-height:\s*32px/);
+    expect(rule('.hub-decide-count')).toMatch(/white-space:\s*nowrap/);
+    // Only one card is on screen; the rest are hidden rather than unbuilt.
+    expect(rule('.hub-decide-card.hidden')).toMatch(/display:\s*none/);
+  });
+
   it('puts real space between the answer buttons', () => {
     // "No spacing between the answer buttons." A column with a gap, so the
     // spacing is a property of the group rather than a margin every button has
@@ -62,7 +98,7 @@ describe('the decision card has the spacing it was reported for missing', () => 
     const opts = rule('.hub-decide-options');
     expect(opts).toMatch(/display:\s*flex/);
     expect(opts).toMatch(/flex-direction:\s*column/);
-    expect(opts).toMatch(/gap:\s*10px/);
+    expect(opts).toMatch(/gap:\s*8px/);
   });
 
   it('gives each option padding, and its detail its own line', () => {
@@ -70,7 +106,7 @@ describe('the decision card has the spacing it was reported for missing', () => 
     // separate elements; without a column and a gap they render as one run of
     // text with a space in it, which is what "crammed" describes.
     const opt = rule('.hub-decide-option');
-    expect(opt).toMatch(/padding:\s*12px 14px/);
+    expect(opt).toMatch(/padding:\s*12px/);
     expect(opt).toMatch(/flex-direction:\s*column/);
     expect(opt).toMatch(/gap:\s*4px/);
     // "Nothing aligned": a button's text centres by default, so a two-line

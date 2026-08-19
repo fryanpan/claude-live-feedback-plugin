@@ -9,6 +9,7 @@ import {
   type HubTask,
   type PresenceChip,
   type ReviewItem,
+  type ReviewThreadItem,
   type UptimeReport,
   boardSections,
   clientDriftNotice,
@@ -22,8 +23,10 @@ import {
   type BoardHandlers,
   type QuickAddHandlers,
   type TaskThread,
+  decisionBlurb,
   discussionIsBusy,
   flattenComments,
+  panelReviewQueue,
   renderActivity,
   renderBoard,
   renderGoalStrip,
@@ -1591,9 +1594,13 @@ describe('renderTaskDetail', () => {
     (root.querySelector('.hub-answer-form') as HTMLFormElement).dispatchEvent(
       new Event('submit', { bubbles: true, cancelable: true }),
     );
+    // The third argument is the option id, absent for free text. One `answer`
+    // path serves both the buttons and the box, which is why it is always
+    // passed rather than only when there is one.
     expect(onAnswer).toHaveBeenCalledWith(
       expect.objectContaining({ id: d.id }),
       'Go with option B, ship Thursday.',
+      undefined,
     );
   });
 
@@ -1843,7 +1850,7 @@ describe('renderTaskDetail — discussion', () => {
     return scrolled;
   };
 
-  it('does not scroll past the ask panel to the thread it already quotes', () => {
+  it('does not scroll past the review queue to the thread it already quotes', () => {
     const scrolled = withScrollSpy(() => {
       renderTaskDetail(
         root,
@@ -1855,13 +1862,13 @@ describe('renderTaskDetail — discussion', () => {
     // The panel is still aimed at that thread — this is about where the
     // viewport lands, not about losing the deep link.
     expect(root.querySelector('.hub-comment-focus')).toBeTruthy();
-    expect(root.querySelector('.hub-detail-ask')).toBeTruthy();
+    expect(root.querySelector('.hub-decide-card[data-review-thread-id="th-1"]')).toBeTruthy();
     expect(scrolled).toEqual([]);
   });
 
   /** Positive control: the spy CAN see a scroll, and centring is still right
-   *  when the focused thread is not the one the ask panel is quoting. */
-  it('still centres a focused thread the ask panel is not about', () => {
+   *  when the focused thread is not the one the queue is carrying. */
+  it('still centres a focused thread the review queue is not about', () => {
     const scrolled = withScrollSpy(() => {
       renderTaskDetail(
         root,
@@ -1879,9 +1886,11 @@ describe('renderTaskDetail — discussion', () => {
       loading: false,
       threads: [thread()],
     });
-    const ask = root.querySelector('.hub-detail-ask');
+    const ask = root.querySelector('.hub-decide');
     expect(ask).toBeTruthy();
-    expect(ask?.textContent).toContain('should we drop threading');
+    expect(ask?.querySelector('.hub-decide-headline')?.textContent).toContain(
+      'should we drop threading',
+    );
     // Above the description — the requirement is "without scrolling on a
     // 430px phone", and a panel that opens on nine rows of identical metadata
     // spends the first screen on facts that are the same for every task.
@@ -1889,13 +1898,13 @@ describe('renderTaskDetail — discussion', () => {
     expect(desc).toBeTruthy();
     expect(ask!.compareDocumentPosition(desc!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // …and it says who is waiting, and how long they have been.
-    expect(root.querySelector('.hub-detail-ask-meta')?.textContent).toContain('Live Feedback');
-    expect(root.querySelector('.hub-detail-ask-meta')?.textContent).toContain('1h ago');
+    expect(root.querySelector('.hub-decide-meta')?.textContent).toContain('Live Feedback');
+    expect(root.querySelector('.hub-decide-meta')?.textContent).toContain('1h ago');
   });
 
   /** "Answer without leaving the screen you landed on." A button that scrolls
    *  to a composer further down the page satisfies that on a desktop only. */
-  it('replies to the asking thread from the ask panel itself', async () => {
+  it('replies to the asking thread from the review card itself', async () => {
     const onComment = vi.fn().mockResolvedValue(true);
     const t = task({ id: 't-1' });
     renderTaskDetail(
@@ -1904,7 +1913,7 @@ describe('renderTaskDetail — discussion', () => {
       detailHandlers({ asks: [askItem({ threadId: 'th-9' })], now: NOW, onComment }),
       { loading: false, threads: [thread({ id: 'th-9' })] },
     );
-    const form = root.querySelector('.hub-detail-ask-form') as HTMLFormElement;
+    const form = root.querySelector('.hub-decide-form') as HTMLFormElement;
     expect(form).toBeTruthy();
     const ta = form.querySelector('textarea') as HTMLTextAreaElement;
     ta.value = 'Drop it, and prefix the 3 orphans.';
@@ -1935,16 +1944,15 @@ describe('renderTaskDetail — discussion', () => {
       }),
       { loading: false, threads: [thread()] },
     );
-    const kicker = root.querySelector('.hub-detail-ask-kicker')?.textContent ?? '';
-    expect(kicker).not.toContain('need');
+    const kicker = root.querySelector('.hub-decide-kicker')?.textContent ?? '';
+    expect(kicker).not.toContain('Waiting on your review');
     // Says what is TRUE of the flag — nobody is named — rather than the
     // stronger claim that no question is present, which `direct` cannot
     // support at 1-in-3 recall.
     expect(kicker).toContain('not addressed to you by name');
     expect(kicker).not.toContain('no question');
     // The words are still shown — labelled honestly, not withheld.
-    expect(root.querySelector('.hub-detail-ask-text')?.textContent).toContain('PR #154');
-    expect(root.querySelector('.hub-detail-ask--direct')).toBeNull();
+    expect(root.querySelector('.hub-decide-headline')?.textContent).toContain('PR #154');
   });
 
   /** The positive control for the case above: the same renderer DOES give a
@@ -1955,20 +1963,19 @@ describe('renderTaskDetail — discussion', () => {
       loading: false,
       threads: [thread()],
     });
-    expect(root.querySelector('.hub-detail-ask-kicker')?.textContent).toContain(
-      'What we need from you',
+    expect(root.querySelector('.hub-decide-kicker')?.textContent).toContain(
+      'Waiting on your review',
     );
-    expect(root.querySelector('.hub-detail-ask--direct')).toBeTruthy();
   });
 
-  it('shows no ask panel on a task nothing is waiting on', () => {
+  it('shows no review queue on a task nothing is waiting on', () => {
     renderTaskDetail(root, task({ id: 't-1' }), detailHandlers({ asks: [], now: NOW }), {
       loading: false,
       threads: [thread()],
     });
-    expect(root.querySelector('.hub-detail-ask')).toBeNull();
+    expect(root.querySelector('.hub-decide')).toBeNull();
     // Positive control: the panel rendered at all, so the null above is about
-    // the ask and not about an empty container.
+    // the queue and not about an empty container.
     expect(root.querySelector('.hub-comment')).toBeTruthy();
   });
 
@@ -1976,7 +1983,7 @@ describe('renderTaskDetail — discussion', () => {
    *  request for my input". The author was already there; the TIME was in a
    *  `title` attribute, which is a hover tooltip on a surface read on a
    *  phone, and the request marking did not exist at all. */
-  it('shows each comment author and time as text, and marks a thread that is waiting', () => {
+  it('shows each comment author and time as text, and leaves waiting to the queue', () => {
     renderTaskDetail(
       root,
       task({ id: 't-1' }),
@@ -1996,11 +2003,15 @@ describe('renderTaskDetail — discussion', () => {
     expect(waiting?.querySelector('.hub-comment-author')?.textContent).toBe('Live Feedback');
     // Text, not a tooltip.
     expect(waiting?.querySelector('.hub-comment-when')?.textContent).toBe('2h ago');
-    expect(waiting?.querySelector('.hub-comment-needs-you')).toBeTruthy();
-    // Only the thread the server named — a mark on every thread marks nothing.
-    expect(
-      root.querySelector('.hub-comment[data-thread-id="th-quiet"] .hub-comment-needs-you'),
-    ).toBeNull();
+    // "Needs your reply" was a THREAD badge, and threading left the surface with
+    // it. The signal did NOT leave: it renders once, in the queue at the top of
+    // the panel, naming that same thread and nothing else — which is above the
+    // fold rather than two hundred pixels down a comment stream.
+    expect(root.querySelectorAll('.hub-comment [class*="needs"]')).toHaveLength(0);
+    const carded = [...root.querySelectorAll<HTMLElement>('.hub-decide-card')].map(
+      (c) => c.dataset.reviewThreadId,
+    );
+    expect(carded).toEqual(['th-w']);
   });
 
   /** A declared comment is a request, and the thread it lives in is usually
@@ -2133,16 +2144,24 @@ describe('renderTaskDetail — discussion', () => {
     expect(root.querySelectorAll('.hub-comment')).toHaveLength(3);
   });
 
-  it('defaults to replying to the thread the composer sits under', () => {
+  /**
+   * The destination is DERIVED and never announced. Bryan, 2026-08-18: *"Stop
+   * supporting threaded comments and clean up all code related to this! Clean
+   * up the UX too."* So there is no Reply button, no "Replying to …" bar and no
+   * "New thread" control — but a comment still has to REACH the agent watching
+   * the conversation, which is what this asserts.
+   */
+  it('sends a comment to the newest conversation, with nothing on screen saying so', () => {
     const onComment = vi.fn();
     const t = task();
     renderTaskDetail(root, t, detailHandlers({ onComment }), {
       loading: false,
       threads: [thread({ id: 'th-1' }), thread({ id: 'th-77' })],
     });
-    expect((root.querySelector('.hub-composer-target') as HTMLElement).textContent).toContain(
-      'Replying to',
-    );
+    // Not merely "no reply buttons": no control anywhere names a thread.
+    expect(root.querySelector('.hub-comment-reply')).toBeNull();
+    expect(root.querySelector('.hub-composer-target')).toBeNull();
+    expect(root.querySelector('.hub-composer-switch')).toBeNull();
     const form = root.querySelector('.hub-comment-form') as HTMLFormElement;
     const ta = form.querySelector('textarea') as HTMLTextAreaElement;
     ta.value = 'Because it unblocks two others.';
@@ -2151,43 +2170,6 @@ describe('renderTaskDetail — discussion', () => {
       expect.objectContaining({ id: t.id }),
       'Because it unblocks two others.',
       'th-77',
-    );
-  });
-
-  it('a thread’s Reply button points the composer at THAT thread', () => {
-    const onReplyTarget = vi.fn();
-    renderTaskDetail(root, task(), detailHandlers({ onReplyTarget }), {
-      loading: false,
-      threads: [thread({ id: 'th-1' }), thread({ id: 'th-2' })],
-    });
-    const buttons = [...root.querySelectorAll<HTMLElement>('.hub-comment-reply')];
-    expect(buttons).toHaveLength(2);
-    buttons[0]?.click();
-    expect(onReplyTarget).toHaveBeenCalledWith('th-1');
-  });
-
-  it('switching to a new thread survives the next repaint', () => {
-    const onComment = vi.fn();
-    const t = task();
-    const threads = [thread({ id: 'th-1' })];
-    // An explicit null, which is what the "New thread" button sends. A repaint
-    // that re-applied the default would silently move the reader back onto a
-    // reply — and they would find out by reading their own words in the wrong
-    // conversation.
-    renderTaskDetail(root, t, detailHandlers({ onComment, replyThreadId: null }), {
-      loading: false,
-      threads,
-    });
-    expect((root.querySelector('.hub-composer-target') as HTMLElement).textContent).toContain(
-      'Starting a new thread',
-    );
-    const form = root.querySelector('.hub-comment-form') as HTMLFormElement;
-    (form.querySelector('textarea') as HTMLTextAreaElement).value = 'Separate point.';
-    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-    expect(onComment).toHaveBeenCalledWith(
-      expect.objectContaining({ id: t.id }),
-      'Separate point.',
-      undefined,
     );
   });
 
@@ -2203,61 +2185,40 @@ describe('renderTaskDetail — discussion', () => {
     expect(onComment).toHaveBeenLastCalledWith(expect.anything(), 'Yes, ship it.', 'th-1');
   });
 
-  it('a target that no longer resolves posts a new thread, not into nowhere', () => {
+  /** A deep link can outlive the thread it names. Falling back to the newest
+   *  live conversation keeps the comment reaching somebody; the alternative the
+   *  title warns about is a `threadId` the server cannot resolve. */
+  it('an aim that no longer resolves falls back to a live thread, not into nowhere', () => {
     const onComment = vi.fn();
-    renderTaskDetail(root, task(), detailHandlers({ onComment, replyThreadId: 'th-deleted' }), {
+    renderTaskDetail(root, task(), detailHandlers({ onComment, focusThreadId: 'th-deleted' }), {
       loading: false,
       threads: [thread({ id: 'th-1' })],
     });
     const form = root.querySelector('.hub-comment-form') as HTMLFormElement;
     (form.querySelector('textarea') as HTMLTextAreaElement).value = 'Still worth saying.';
     form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-    expect(onComment).toHaveBeenLastCalledWith(expect.anything(), 'Still worth saying.', undefined);
+    expect(onComment).toHaveBeenLastCalledWith(expect.anything(), 'Still worth saying.', 'th-1');
   });
 
-  /**
-   * The premise correction behind the whole change. Task threads are NOT
-   * arbitrary groupings: on the live board 34 of 37 carry a text-range anchor
-   * into the description (agents' `create_thread(… find: …)` calls) and 3 do
-   * not. The surface rendered none of them, which is what made two threads
-   * look like two indistinguishable piles.
-   */
-  it('shows what each thread is anchored to, and names it in the composer', () => {
-    renderTaskDetail(root, task(), detailHandlers(), {
-      loading: false,
-      threads: [
-        thread({ id: 'th-1' }),
-        thread({ id: 'th-2', anchorText: 'the mtime poll runs every 500ms' }),
-      ],
-    });
-    const anchors = [...root.querySelectorAll('.hub-comment-anchor')];
-    // One of the two, not both: a subject-anchored thread is about the task as
-    // a whole, and quoting the description above its own thread says nothing.
-    expect(anchors).toHaveLength(1);
-    expect(anchors[0]?.textContent).toContain('the mtime poll runs every 500ms');
-    expect((root.querySelector('.hub-composer-target') as HTMLElement).textContent).toContain(
-      'the mtime poll runs every 500ms',
-    );
-  });
-
-  it('names a subject-anchored thread by who opened it', () => {
-    renderTaskDetail(root, task(), detailHandlers(), {
-      loading: false,
-      threads: [thread({ id: 'th-1', comments: [{ author: 'Jordan', text: 'Why?', ts: NOW }] })],
-    });
-    expect((root.querySelector('.hub-composer-target') as HTMLElement).textContent).toContain(
-      'Jordan',
-    );
+  /** …and with nothing to fall back to it opens one, rather than sending an id
+   *  it made up. The pair is the point: neither answer is "no destination". */
+  it('opens a conversation when the task has none', () => {
+    const onComment = vi.fn();
+    renderTaskDetail(root, task(), detailHandlers({ onComment }), { loading: false, threads: [] });
+    const form = root.querySelector('.hub-comment-form') as HTMLFormElement;
+    (form.querySelector('textarea') as HTMLTextAreaElement).value = 'First word on this.';
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    expect(onComment).toHaveBeenLastCalledWith(expect.anything(), 'First word on this.', undefined);
   });
 
   /**
    * Nothing an agent posts may stop arriving. An agent's comment lands as a
-   * thread on `task:<id>` — anchored or not — and a person has to be able to
-   * answer it. Both shapes, in the same pass.
+   * thread on `task:<id>` — anchored or not, open or resolved — and every one
+   * of them has to appear in the one stream, in time order, with no per-thread
+   * chrome telling them apart.
    */
-  it('every thread stays replyable, anchored or not, open or resolved', () => {
-    const onReplyTarget = vi.fn();
-    renderTaskDetail(root, task(), detailHandlers({ onReplyTarget }), {
+  it('puts every thread’s comments in one stream, anchored or not, open or resolved', () => {
+    renderTaskDetail(root, task(), detailHandlers(), {
       loading: false,
       threads: [
         thread({ id: 'th-open', anchorText: 'a line of the description' }),
@@ -2267,12 +2228,13 @@ describe('renderTaskDetail — discussion', () => {
     });
     const rows = [...root.querySelectorAll<HTMLElement>('.hub-comment')];
     expect(rows.map((r) => r.dataset.threadId)).toEqual(['th-open', 'th-subject', 'th-done']);
-    for (const row of rows) {
-      const btn = row.querySelector<HTMLElement>('.hub-comment-reply');
-      expect(btn).toBeTruthy();
-      btn?.click();
-    }
-    expect(onReplyTarget.mock.calls.map((c) => c[0])).toEqual(['th-open', 'th-subject', 'th-done']);
+    // The anchor quote was the last place a thread showed through in the UX.
+    expect(root.querySelector('.hub-comment-anchor')).toBeNull();
+    // One box for all three, at the end of the stream.
+    const boxes = [...root.querySelectorAll('.hub-discussion textarea')];
+    expect(boxes).toHaveLength(1);
+    const form = root.querySelector('.hub-comment-form') as HTMLElement;
+    expect(rows[2]!.compareDocumentPosition(form) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   /**
@@ -2323,19 +2285,19 @@ describe('renderTaskDetail — discussion', () => {
 
   // A resolved thread is still part of the argument. Hiding it here would
   // repeat the drawer bug where a reply existed in the store and no surface
-  // could reach it.
-  it('keeps a resolved thread visible, marked as resolved', () => {
+  // could reach it. What went away with threading is the STATUS chrome: a
+  // comment reads as a comment whatever the thread around it is marked, which
+  // is what "one sequence" means. `status` is untouched in storage.
+  it('keeps a resolved thread’s words in the stream, with no status chrome', () => {
     renderTaskDetail(root, task(), detailHandlers(), {
       loading: false,
       threads: [thread({ id: 'th-r', status: 'resolved' })],
     });
     const el = root.querySelector('.hub-comment') as HTMLElement;
     expect(el).toBeTruthy();
-    expect(el.classList.contains('hub-comment-resolved')).toBe(true);
-    // Still replyable, and the badge says which state it is in — a resolved
-    // conversation that reads as a plain comment is worse than a hidden one.
-    expect(el.querySelector('.hub-comment-status')?.textContent).toBe('Resolved');
-    expect(el.querySelector('.hub-comment-reply')).toBeTruthy();
+    expect(el.textContent).toContain('Is the index really first?');
+    expect(el.classList.contains('hub-comment-resolved')).toBe(false);
+    expect(el.querySelector('.hub-comment-status')).toBeNull();
   });
 
   // Grounded in the fetch, not inferred from anything: the panel says
@@ -2500,10 +2462,12 @@ describe('a repaint of the detail panel keeps what was typed', () => {
     // The SSE-driven repaint: same task, new status.
     paint({ ...t, status: 'in-progress' });
 
-    // Positive control, two ways: the panel really was rebuilt (the chip
-    // moved, and the composer is a NEW node), so a pass below is a restore
-    // and not a repaint that never happened.
-    expect(root.querySelector('.hub-chip-current')?.textContent).toBe('In progress');
+    // Positive control, two ways: the panel really was rebuilt (the status
+    // control moved, and the composer is a NEW node), so a pass below is a
+    // restore and not a repaint that never happened.
+    expect((root.querySelector('.hub-detail-status') as HTMLSelectElement).value).toBe(
+      'in-progress',
+    );
     const after = composer();
     expect(after).not.toBe(before);
 
@@ -2545,14 +2509,14 @@ describe('a repaint of the detail panel keeps what was typed', () => {
 
   // The other text controls on the panel go through the same repaint and lose
   // the same way, so they ride the same fix.
-  it('the ask panel reply box survives too', () => {
+  it('the review card’s answer box survives too', () => {
     const t = task();
     paint(t, { asks: [ask(t.id, 'th-1')] });
-    const box = root.querySelector('.hub-detail-ask-form textarea') as HTMLTextAreaElement;
+    const box = root.querySelector('.hub-decide-form textarea') as HTMLTextAreaElement;
     expect(box).toBeTruthy();
     typeInto(box, 'Keep threading.', 4);
     paint({ ...t, status: 'in-progress' }, { asks: [ask(t.id, 'th-1')] });
-    const after = root.querySelector('.hub-detail-ask-form textarea') as HTMLTextAreaElement;
+    const after = root.querySelector('.hub-decide-form textarea') as HTMLTextAreaElement;
     expect(after).not.toBe(box);
     expect(after.value).toBe('Keep threading.');
     expect(document.activeElement).toBe(after);
@@ -2631,7 +2595,9 @@ describe('a repaint of the detail panel keeps what was typed', () => {
     paint({ ...t, status: 'in-progress' });
 
     // Positive control: the panel really was repainted around the slot.
-    expect(root.querySelector('.hub-chip-current')?.textContent).toBe('In progress');
+    expect((root.querySelector('.hub-detail-status') as HTMLSelectElement).value).toBe(
+      'in-progress',
+    );
     expect(root.querySelector('.hub-detail-body-slot')).toBe(slot);
     expect(slot.textContent).toBe('what the editor is showing');
     expect(composer().value).toBe('and a comment mid-sentence');
@@ -2657,11 +2623,19 @@ describe('renderTaskDetail — the reorganised panel', () => {
 
   const keys = (): string[] =>
     [...root.querySelectorAll('.hub-detail-fields dt')].map((dt) => dt.textContent ?? '');
-  const field = (key: string): string | null => {
+  /** The VALUE cell of a field. All four are controls now, so a caller reads
+   *  the control rather than the cell's text — `textContent` on a `<select>` is
+   *  every option concatenated, which reads as a pass while measuring nothing
+   *  about what is selected. */
+  const cell = (key: string): HTMLElement | null => {
     const dts = [...root.querySelectorAll('.hub-detail-fields dt')];
-    const dds = [...root.querySelectorAll('.hub-detail-fields dd')];
+    const dds = [...root.querySelectorAll<HTMLElement>('.hub-detail-fields dd')];
     const i = dts.findIndex((dt) => dt.textContent === key);
-    return i === -1 ? null : (dds[i]?.textContent ?? null);
+    return i === -1 ? null : (dds[i] ?? null);
+  };
+  const value = (key: string): string | null => {
+    const el = cell(key)?.querySelector<HTMLSelectElement | HTMLInputElement>('select, input');
+    return el?.value ?? null;
   };
   /** Where a node sits in the panel, so ORDER can be asserted rather than
    *  presence — the complaint was about arrangement, not about absence. */
@@ -2672,27 +2646,70 @@ describe('renderTaskDetail — the reorganised panel', () => {
     return el ? all.indexOf(el) : -1;
   };
 
-  it('puts the four key facts in one row under the title', () => {
+  it('puts the four key facts in one row under the title, all four editable', () => {
     renderTaskDetail(root, task({ assignee: 'Jordan', goal: 'g-pr' }), {
       ...handlers(),
       goalLabel: (id) => goalLabel(GOALS, id),
     });
     expect(keys()).toEqual(['Status', 'Assignee', 'Due', 'Goal']);
-    expect(field('Goal')).toBe('1. Get the PR out');
-    // The status chips are the control they always were, still live here.
-    expect(root.querySelector('.hub-detail-fields .hub-chip-current')?.textContent).toBe('To do');
+    expect(value('Goal')).toBe('g-pr');
+    expect(cell('Goal')?.querySelector('option[value="g-pr"]')?.textContent).toBe(
+      '1. Get the PR out',
+    );
   });
 
-  /** `dueAt` is settable at create and by no route afterwards, so the field is
-   *  read-only — and an empty cell would read as a rendering fault. */
-  it('says so when there is no due date, and shows one when there is', () => {
-    renderTaskDetail(root, task(), handlers());
-    expect(field('Due')).toBe('No due date');
+  /**
+   * *"Status should only show current status with a dropdown to change the
+   * status"* — one value and one control, not a row of chips with the current
+   * one rendered as a disabled unbordered word beside its pill siblings.
+   */
+  it('shows the current status once, as a dropdown beside the board’s own mark', () => {
+    const h = handlers();
+    renderTaskDetail(root, task({ status: 'in-progress' }), h);
+    const status = cell('Status') as HTMLElement;
+    // The chip row is gone — not hidden, not disabled, absent.
+    expect(status.querySelectorAll('.hub-chip')).toHaveLength(0);
+    expect(status.querySelectorAll('select')).toHaveLength(1);
+    const sel = status.querySelector('select') as HTMLSelectElement;
+    expect(sel.value).toBe('in-progress');
+    // The same round mark the board rows use, so the two surfaces cannot
+    // disagree about what "in progress" looks like.
+    expect(status.querySelector('.hub-status-mark-in-progress')).toBeTruthy();
+
+    sel.value = 'done';
+    sel.dispatchEvent(new Event('change'));
+    expect(h.onStatusSet).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'in-progress' }),
+      'done',
+    );
+  });
+
+  /** `dueAt` had no route after creation until this branch added
+   *  `POST /api/tasks/:id/due`, so the cell was prose. It is a date control
+   *  now, and the value is a LOCAL calendar day both ways — `toISOString`
+   *  shows yesterday to anyone west of UTC for an evening deadline. */
+  it('leaves the due control empty when nothing is due, and round-trips a local day', () => {
+    const onDueSet = vi.fn();
+    renderTaskDetail(root, task(), handlers({ onDueSet }));
+    expect(value('Due')).toBe('');
 
     root.replaceChildren();
-    const due = Date.UTC(2026, 7, 20, 12);
-    renderTaskDetail(root, task({ dueAt: due }), handlers());
-    expect(field('Due')).toBe(new Date(due).toLocaleDateString());
+    // Noon local on the 20th, built the way the reader's own calendar would.
+    const due = new Date(2026, 7, 20, 12).getTime();
+    renderTaskDetail(root, task({ dueAt: due }), handlers({ onDueSet }));
+    expect(value('Due')).toBe('2026-08-20');
+
+    const input = cell('Due')?.querySelector('input') as HTMLInputElement;
+    input.value = '2026-09-02';
+    input.dispatchEvent(new Event('change'));
+    const [, ts] = onDueSet.mock.calls[0] ?? [];
+    const back = new Date(ts as number);
+    expect([back.getFullYear(), back.getMonth(), back.getDate()]).toEqual([2026, 8, 2]);
+
+    // Clearing it is expressible, and is not the same as sending a bad date.
+    input.value = '';
+    input.dispatchEvent(new Event('change'));
+    expect(onDueSet).toHaveBeenLastCalledWith(expect.anything(), null);
   });
 
   /**
@@ -2810,7 +2827,7 @@ describe('renderTaskDetail — the reorganised panel', () => {
       threads: [],
     });
     // Control: this really was a repaint, not a no-op.
-    expect(root.querySelector('.hub-chip-current')?.textContent).toBe('In progress');
+    expect(value('Status')).toBe('in-progress');
     expect(activity().classList.contains('hidden')).toBe(false);
 
     // A different task is a fresh read, and it starts on the conversation.
@@ -2833,6 +2850,29 @@ describe('renderTaskDetail — the reorganised panel', () => {
   });
 
   /**
+   * *"Copy link and Full screen should be icons instead of text buttons,
+   * Asana-style."* An icon-only control that carries neither an `aria-label`
+   * nor a `title` is a control nobody can identify — a screen reader announces
+   * the glyph and a desktop hover says nothing — so the names are asserted here
+   * rather than left to the glyphs.
+   */
+  it('names every head action, because each one is a glyph and nothing else', () => {
+    renderTaskDetail(root, task(), handlers({ onCopyLink: vi.fn() }));
+    const named = [...root.querySelectorAll<HTMLElement>('.hub-detail-head-actions .hub-btn')].map(
+      (b) => [b.textContent ?? '', b.getAttribute('aria-label'), b.title],
+    );
+    expect(named).toEqual([
+      ['🔗', 'Copy a link to this task', 'Copy a link to this task'],
+      ['⤢', 'Full screen', 'Full screen'],
+      ['✕', 'Close task detail', 'Close task detail'],
+    ]);
+    // Positive control on the assertion above: every one of them is an icon
+    // button, so "the label is the only name" is a fact rather than an
+    // assumption about which of these carry words.
+    expect(named.every(([glyph]) => (glyph as string).length <= 2)).toBe(true);
+  });
+
+  /**
    * Full screen is a preference of the READER, so it lives on the container:
    * the panel is rebuilt on every repaint, and a class held there would be
    * dropped by the next comment that landed.
@@ -2841,20 +2881,344 @@ describe('renderTaskDetail — the reorganised panel', () => {
     const t = task();
     renderTaskDetail(root, t, handlers());
     const btn = () => root.querySelector('.hub-detail-expand') as HTMLElement;
-    expect(btn().textContent).toBe('Full screen');
+    expect(btn().getAttribute('aria-label')).toBe('Full screen');
     expect(btn().getAttribute('aria-pressed')).toBe('false');
 
     btn().click();
     expect(root.classList.contains('hub-detail--full')).toBe(true);
-    expect(btn().textContent).toBe('Exit full screen');
+    expect(btn().getAttribute('aria-label')).toBe('Exit full screen');
+    // The board stops reserving room once the panel covers it.
+    expect(document.body.classList.contains('hub-detail-full')).toBe(true);
 
     renderTaskDetail(root, { ...t, status: 'done' }, handlers());
-    expect(root.querySelector('.hub-chip-current')?.textContent).toBe('Done'); // control
+    expect(value('Status')).toBe('done'); // control
     expect(root.classList.contains('hub-detail--full')).toBe(true);
     expect(btn().getAttribute('aria-pressed')).toBe('true');
 
     btn().click();
     expect(root.classList.contains('hub-detail--full')).toBe(false);
+  });
+});
+
+/**
+ * The review region inside a ticket is a QUEUE.
+ *
+ * Bryan, 2026-08-18: *"For decisions, the ticket title is not the decision. A
+ * decision is a part of a ticket, and there should be a decision blurb above
+ * the options. And over time, there may be more than one decision associated
+ * with a ticket. In fact, at any point in time there might be multiple open
+ * decisions for a ticket. Please accommodate and have a similar review queue
+ * within a ticket details interface."*
+ *
+ * What that replaced: two independent regions, a decision card and an "ask"
+ * panel, each rendering one item and each blind to the other — so a task with
+ * both showed two competing headers, and a task with three thread items showed
+ * one and silently dropped two.
+ */
+describe('the panel’s review queue', () => {
+  let root: HTMLElement;
+  beforeEach(() => {
+    root = document.createElement('div');
+    document.body.replaceChildren(root);
+  });
+
+  const handlers = (over: Record<string, unknown> = {}) => ({
+    onClose: vi.fn(),
+    onStatusSet: vi.fn(),
+    onTitleCommit: vi.fn(),
+    onAnswer: vi.fn(),
+    onAssign: vi.fn(),
+    onComment: vi.fn(),
+    now: NOW,
+    ...over,
+  });
+
+  const ask = (over: Partial<ReviewThreadItem> = {}): ReviewThreadItem => ({
+    kind: 'task-thread',
+    docId: 'task:t-1',
+    threadId: 'th-1',
+    taskId: 't-1',
+    title: 'Some task',
+    ask: 'Which way on the index?',
+    askedBy: 'Index Rebuild',
+    since: NOW - 3_600_000,
+    ...over,
+  });
+
+  const cards = (): string[] =>
+    [...root.querySelectorAll<HTMLElement>('.hub-decide-card')].map(
+      (c) => c.dataset.reviewItemId ?? '',
+    );
+  const shown = (): HTMLElement | null =>
+    root.querySelector<HTMLElement>('.hub-decide-card:not(.hidden)');
+
+  describe('decisionBlurb', () => {
+    it('takes the question as the headline and the rest as the stakes', () => {
+      expect(
+        decisionBlurb('## Ship it Thursday?\n\nThe rework is blocked either way.\n\n- Yes\n- No'),
+      ).toEqual({
+        headline: 'Ship it Thursday?',
+        why: 'The rework is blocked either way.',
+      });
+    });
+
+    it('drops the option list rather than repeating it as prose', () => {
+      // The card renders the options as buttons; a copy of them in the blurb
+      // is the "crammed" complaint one layer up.
+      expect(decisionBlurb('Which one?\n1. Blue\n2. Green').why).toBe('');
+    });
+
+    it('says nothing rather than inventing a question from a body with none', () => {
+      expect(decisionBlurb('Just a note about the index.')).toEqual({
+        headline: '',
+        why: 'Just a note about the index.',
+      });
+      expect(decisionBlurb(undefined)).toEqual({ headline: '', why: '' });
+    });
+  });
+
+  describe('panelReviewQueue', () => {
+    it('merges the task’s own decision with every thread item, decision first', () => {
+      const t = task({ id: 't-1', needs: 'decision', body: 'Ship it Thursday?' });
+      const q = panelReviewQueue(t, [ask({ threadId: 'th-a' }), ask({ threadId: 'th-b' })]);
+      expect(q.map((i) => i.id)).toEqual(['task:t-1', 'thread:th-a', 'thread:th-b']);
+      // The blurb, not the ticket title: *"the ticket title is not the
+      // decision"*.
+      expect(q[0]?.headline).toBe('Ship it Thursday?');
+    });
+
+    it('falls back to the title only when the body says nothing', () => {
+      const t = task({ id: 't-1', title: 'Decide the index order', needs: 'decision', body: '' });
+      expect(panelReviewQueue(t, [])[0]?.headline).toBe('Decide the index order');
+    });
+
+    /**
+     * The keys DISAGREE here on purpose. `th-old` is the oldest and would win
+     * on age alone; `th-declared` carries a declaration and `th-direct` names a
+     * person, so a recency-only ranking — or a declaration-only one — produces
+     * a different order. A fixture where the keys agree proves only that the
+     * first key exists.
+     */
+    it('ranks declared over direct over merely old, when the three disagree', () => {
+      const t = task({ id: 't-1' });
+      const q = panelReviewQueue(t, [
+        ask({ threadId: 'th-old', since: NOW - 90_000_000 }),
+        ask({
+          threadId: 'th-direct',
+          direct: true,
+          since: NOW - 60_000_000,
+        }),
+        ask({
+          threadId: 'th-declared',
+          since: NOW - 10_000,
+          review: { shape: 'review', headline: 'Read the redline', why: 'It changes the API.' },
+        }),
+      ]);
+      expect(q.map((i) => i.id)).toEqual([
+        'thread:th-declared',
+        'thread:th-direct',
+        'thread:th-old',
+      ]);
+    });
+
+    it('is empty on an answered decision, and on a task with nothing waiting', () => {
+      expect(panelReviewQueue(task({ needs: 'decision' }), [])).toHaveLength(1); // control
+      expect(
+        panelReviewQueue(
+          task({ needs: 'decision', answer: { by: 'Jordan', text: 'Thursday.', ts: NOW } }),
+          [],
+        ),
+      ).toHaveLength(0);
+      expect(panelReviewQueue(task(), undefined)).toHaveLength(0);
+    });
+  });
+
+  it('walks several items one at a time, saying which one you are on', () => {
+    const t = task({ id: 't-1', needs: 'decision', body: 'Ship it Thursday?' });
+    renderTaskDetail(root, t, handlers({ asks: [ask({ threadId: 'th-a' })] }), {
+      loading: false,
+      threads: [],
+    });
+    expect(cards()).toEqual(['task:t-1', 'thread:th-a']);
+    // Built, not unbuilt: stepping must not tear down an answer box somebody is
+    // typing into, which is why the others are hidden rather than absent.
+    expect(shown()?.dataset.reviewItemId).toBe('task:t-1');
+    expect(root.querySelector('.hub-decide-count')?.textContent).toBe('1 of 2');
+
+    const [prev, next] = [...root.querySelectorAll<HTMLButtonElement>('.hub-decide-step')];
+    expect(prev?.disabled).toBe(true);
+    next?.click();
+    expect(shown()?.dataset.reviewItemId).toBe('thread:th-a');
+    expect(root.querySelector('.hub-decide-count')?.textContent).toBe('2 of 2');
+    expect(next?.disabled).toBe(true);
+    prev?.click();
+    expect(shown()?.dataset.reviewItemId).toBe('task:t-1');
+  });
+
+  /** *"With exactly one item it must look like today's single card."* A "1 of
+   *  1" counter and two dead arrows are furniture that says nothing. */
+  it('shows no walkthrough chrome at all when there is only one item', () => {
+    renderTaskDetail(root, task({ id: 't-1', needs: 'decision' }), handlers(), {
+      loading: false,
+      threads: [],
+    });
+    expect(root.querySelector('.hub-decide-card')).toBeTruthy(); // control
+    expect(root.querySelector('.hub-decide-walk')).toBeNull();
+    expect(root.querySelector('.hub-decide-step')).toBeNull();
+    expect(root.querySelector('.hub-decide-count')?.textContent ?? '').toBe('');
+  });
+
+  /** The panel repaints on every board change. A position that reset would
+   *  walk the reader back to the first question while they answered the third
+   *  — the same failure the tab and the description slot are guarded against. */
+  it('keeps the walkthrough position across a repaint, and resets it on another task', () => {
+    const t = task({ id: 't-1', needs: 'decision' });
+    const paint = (x = t) =>
+      renderTaskDetail(root, x, handlers({ asks: [ask({ threadId: 'th-a' })] }), {
+        loading: false,
+        threads: [],
+      });
+    paint();
+    [...root.querySelectorAll<HTMLButtonElement>('.hub-decide-step')][1]?.click();
+    expect(shown()?.dataset.reviewItemId).toBe('thread:th-a');
+
+    paint({ ...t, status: 'in-progress' });
+    expect(
+      (root.querySelector('.hub-detail-status') as HTMLSelectElement).value, // control
+    ).toBe('in-progress');
+    expect(shown()?.dataset.reviewItemId).toBe('thread:th-a');
+
+    renderTaskDetail(root, task({ id: 't-2', needs: 'decision' }), handlers({ asks: [] }), {
+      loading: false,
+      threads: [],
+    });
+    expect(shown()?.dataset.reviewItemId).toBe('task:t-2');
+  });
+
+  /** A deep link names a thread. Opening the queue at whatever happened to be
+   *  first would answer a different question than the one that summoned them. */
+  it('opens at the item a deep link named, not at the top of the queue', () => {
+    renderTaskDetail(
+      root,
+      task({ id: 't-1', needs: 'decision' }),
+      handlers({
+        asks: [ask({ threadId: 'th-a' }), ask({ threadId: 'th-b' })],
+        focusThreadId: 'th-b',
+      }),
+      { loading: false, threads: [] },
+    );
+    expect(cards()).toEqual(['task:t-1', 'thread:th-a', 'thread:th-b']);
+    expect(shown()?.dataset.reviewItemId).toBe('thread:th-b');
+    expect(root.querySelector('.hub-decide-count')?.textContent).toBe('3 of 3');
+  });
+
+  /** Two destinations, one card: a thread item is answered by REPLYING there,
+   *  so the agent watching hears it; the task's own decision goes through
+   *  `answer_decision`. Both in one pass, because a card that sent everything
+   *  one way would pass either half alone. */
+  it('answers a thread item as a reply and the task’s decision as a decision', () => {
+    const onAnswer = vi.fn();
+    const onComment = vi.fn();
+    const t = task({ id: 't-1', needs: 'decision' });
+    renderTaskDetail(
+      root,
+      t,
+      handlers({ onAnswer, onComment, asks: [ask({ threadId: 'th-a' })] }),
+      { loading: false, threads: [] },
+    );
+    const answerIn = (card: HTMLElement, text: string) => {
+      const form = card.querySelector('.hub-decide-form') as HTMLFormElement;
+      (form.querySelector('textarea') as HTMLTextAreaElement).value = text;
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    };
+    const [taskCard, threadCard] = [...root.querySelectorAll<HTMLElement>('.hub-decide-card')];
+    answerIn(taskCard!, 'Thursday.');
+    expect(onAnswer).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 't-1' }),
+      'Thursday.',
+      undefined,
+    );
+    expect(onComment).not.toHaveBeenCalled();
+
+    answerIn(threadCard!, 'Rebuild it nightly.');
+    expect(onComment).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 't-1' }),
+      'Rebuild it nightly.',
+      'th-a',
+    );
+  });
+
+  it('names the description, and separates it from the fields and the queue', () => {
+    // *"Add a Description heading with proper spacing separating it from the
+    // fields/decision area above."* The spacing is CSS (asserted in
+    // `hub-detail-css.test.ts`); what belongs here is that the heading exists,
+    // says the word, and sits between the queue and the prose rather than
+    // anywhere else in the panel.
+    renderTaskDetail(root, task({ id: 't-1', needs: 'decision' }), handlers(), {
+      loading: false,
+      threads: [],
+    });
+    const head = root.querySelector('.hub-detail-body-head') as HTMLElement;
+    expect(head.textContent).toBe('Description');
+    const decide = root.querySelector('.hub-decide') as HTMLElement;
+    const slot = root.querySelector(`.${BODY_LIVE_CLASS}, .hub-detail-body-slot`) as HTMLElement;
+    const precedes = (a: Element, b: Element) =>
+      Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(precedes(decide, head)).toBe(true);
+    expect(precedes(head, slot)).toBe(true);
+  });
+
+  /** The board reflows out from under the split pane, and the marker is a body
+   *  class rather than a `:has()` inference — the two live under different
+   *  subtrees, and a class is what a stylesheet and a test can both read. */
+  it('marks the body while the panel is open, and unmarks it on close', () => {
+    renderTaskDetail(root, task({ id: 't-1' }), handlers());
+    expect(document.body.classList.contains('hub-detail-open')).toBe(true);
+    renderTaskDetail(root, null, handlers());
+    expect(document.body.classList.contains('hub-detail-open')).toBe(false);
+    expect(root.querySelector('.hub-detail-panel')).toBeNull(); // control
+  });
+
+  it('offers the board’s goals, keeps the task’s own, and commits a move', () => {
+    const onGoalSet = vi.fn();
+    // The task sits on a goal the list does NOT carry — a stale or deleted
+    // band must not silently re-place the task on the next change event.
+    renderTaskDetail(
+      root,
+      task({ id: 't-1', goal: 'g-gone' }),
+      handlers({ goals: GOALS, onGoalSet, goalLabel: (id: string) => `Goal ${id}` }),
+    );
+    const sel = root.querySelector('.hub-detail-goal') as HTMLSelectElement;
+    expect([...sel.options].map((o) => o.value)).toEqual(['g-pr', 'g-sub', 'g-gone']);
+    expect(sel.value).toBe('g-gone');
+    expect([...sel.options].map((o) => o.textContent)).toEqual([
+      '1. Get the PR out',
+      '— 1.1 Tickets',
+      'Goal g-gone',
+    ]);
+    sel.value = 'g-sub';
+    sel.dispatchEvent(new Event('change'));
+    expect(onGoalSet).toHaveBeenCalledWith(expect.objectContaining({ id: 't-1' }), 'g-sub');
+    // Re-picking the goal it is already on is not a move.
+    onGoalSet.mockClear();
+    sel.value = 'g-gone';
+    sel.dispatchEvent(new Event('change'));
+    expect(onGoalSet).not.toHaveBeenCalled();
+  });
+
+  /** Each card keeps its OWN draft, keyed by item — walking to the next
+   *  question and back must not hand the reader words they wrote for another. */
+  it('keeps a separate answer draft per item', () => {
+    renderTaskDetail(
+      root,
+      task({ id: 't-1', needs: 'decision' }),
+      handlers({ asks: [ask({ threadId: 'th-a' })] }),
+      { loading: false, threads: [] },
+    );
+    const keys = [...root.querySelectorAll<HTMLTextAreaElement>('.hub-decide-form textarea')].map(
+      (ta) => ta.dataset.keep,
+    );
+    expect(keys).toEqual(['answer:t-1:task:t-1', 'answer:t-1:thread:th-a']);
   });
 });
 
