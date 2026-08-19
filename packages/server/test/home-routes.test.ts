@@ -188,6 +188,25 @@ describe('home routes — deterministic server (no summarizer)', () => {
     // A missing workspace still 404s crisply on the /home spelling.
     expect((await h.local('/workspaces/w-none/home')).status).toBe(404);
   });
+
+  it('serves the shell on every nav suffix, so a reload or a shared link works', async () => {
+    // `navPath` mints all four of these and `setNav` pushes them into history,
+    // so a suffix the server does not serve costs nothing until somebody
+    // reloads or pastes the URL — at which point the product's own link 404s.
+    // Measured that way: /home answered 200 while /tasks, /mine and /activity
+    // all 404'd.
+    for (const suffix of ['', '/home', '/tasks', '/mine', '/activity']) {
+      const page = await h.local(`/workspaces/${ws}${suffix}`);
+      expect({ suffix, status: page.status }).toEqual({ suffix, status: 200 });
+      expect(await page.text()).toContain('hub-root');
+    }
+    // Negative control, so the widening is a list and not a catch-all: an
+    // unknown suffix must still 404 rather than serving a board for a
+    // destination the client cannot route to.
+    expect((await h.local(`/workspaces/${ws}/not-a-destination`)).status).toBe(404);
+    // …and a real destination on a workspace that does not exist still 404s.
+    expect((await h.local('/workspaces/w-none/tasks')).status).toBe(404);
+  });
 });
 
 describe('home routes — generated brief (stub summarizer)', () => {

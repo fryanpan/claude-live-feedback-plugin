@@ -4083,11 +4083,22 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // The shell is server-rendered (like the landing page) so the route
         // works — and 404s crisply — whether or not the app bundle has been
         // built; the page's behavior all lives in /app/hub.js.
-        // `/home` serves the same shell: which pane renders is the client's
-        // routing (`paneFromPath` in hub-model), so Home is deep-linkable —
-        // the board banner's "Go to Home" and a phone bookmark both land on
-        // the pane, not on the board with a hint.
-        const hubPageMatch = pathname.match(/^\/workspaces\/([^/]+?)(?:\/home)?$/);
+        // Every nav suffix serves the same shell: which destination renders is
+        // the client's routing (`navFromPath` in hub-model), so all four are
+        // deep-linkable — the board banner's "Go to Home", a phone bookmark
+        // and a pasted link all land on the destination, not on the board with
+        // a hint.
+        //
+        // The list must stay in step with `HubNav`, and the cost of it not
+        // being is invisible from the client: `setNav` pushes these paths into
+        // history, so a suffix missing here costs nothing until somebody
+        // RELOADS or shares the URL, at which point they get a 404 on a link
+        // the product handed them. That is exactly what `/tasks`, `/mine` and
+        // `/activity` did between the nav landing and this line — measured on
+        // a staging build, 404 on all three while `/home` answered 200.
+        const hubPageMatch = pathname.match(
+          /^\/workspaces\/([^/]+?)(?:\/(?:home|tasks|mine|activity))?$/,
+        );
         if (hubPageMatch && req.method === 'GET') {
           const workspaceId = decodeURIComponent(hubPageMatch[1] ?? '');
           const workspace = taskStore.getWorkspace(workspaceId);
