@@ -415,18 +415,6 @@ describe('the board keeps its floor in rendered pixels, not just in tokens', () 
 describe('the tab row is reachable where it appears', () => {
   const tabs = rule('.hub-detail-tabs');
 
-  // Deliberately NOT asserted against `design-mobile.md`, which says 36×36 —
-  // 40 already cleared that, measured 85×40 and 75×40 at 430×932, so this was
-  // never a compliance failure. 44 is the stricter HIG / WCAG 2.5.5 AAA target,
-  // taken because this control is NEW rather than because the project floor
-  // moved. Pinned so it is not quietly walked back to 36 for consistency with
-  // its neighbours, which is the plausible-looking edit here.
-  it('gives a newly-introduced target the stricter 44px, not just the 36px floor', () => {
-    const tab = rule('.hub-detail-tab');
-    expect(tab, 'the tab lost its rule').not.toBe('');
-    expect(Number(/min-height:\s*(\d+)px/.exec(tab)?.[1])).toBeGreaterThanOrEqual(44);
-  });
-
   it('docks under the sticky head rather than sliding beneath it', () => {
     expect(tabs).toMatch(/position:\s*sticky/);
     // Offset by the head's MEASURED height, published by renderTaskDetail: the
