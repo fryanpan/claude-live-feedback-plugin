@@ -89,7 +89,7 @@ import { Shares } from './share/shares.ts';
 import { SharingGate } from './share/sharing-gate.ts';
 import type { ShareConfig } from './share/types.ts';
 import { sanitizeVisitorAuthor } from './share/visitor-identity.ts';
-import { SseHub, openSseStream } from './sse.ts';
+import { HTTP_IDLE_TIMEOUT_SEC, SseHub, openSseStream } from './sse.ts';
 import { KEYCHAIN_SERVICE, ThreadSummarizer } from './summarize.ts';
 import { indexBatchKeys, resolveRowRefs } from './task-batch-refs.ts';
 import {
@@ -1203,6 +1203,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
 
   const server = Bun.serve<{ docId: string }>({
     port,
+    // Explicit because the DEFAULT is what broke the event streams: Bun's is
+    // 10 seconds, the SSE keepalive ran on 20, and so every stream idled out
+    // before its own guard could write. Paired with `SSE_KEEPALIVE_MS` and
+    // asserted against it in `sse-keepalive.test.ts` — the two numbers only
+    // mean anything together. Bun throws above 255.
+    //
+    // This governs HTTP connections. Websockets take `websocket.idleTimeout`
+    // (default 120s) and Bun pings them itself, which is why the `/y/*`
+    // editing sockets were never affected — measured idle-surviving 30s on
+    // the unfixed build, while SSE died at 9.7s.
+    idleTimeout: HTTP_IDLE_TIMEOUT_SEC,
     async fetch(req, server) {
       // `undefined` means the request became a websocket — nothing to decorate.
       const routed = await route(req, server);
