@@ -66,7 +66,7 @@ import {
 import type { PluginRefresher } from './plugin-refresh.ts';
 import { agentsBehind, checkableAttachments, readReleasedPluginVersion } from './plugin-release.ts';
 import { localHostnames, publicBaseUrl } from './public-host.ts';
-import { type ReviewItemRow, reviewItemRows } from './review-queue.ts';
+import { type ReviewItemRow, type ReviewThreadItem, reviewItemRows } from './review-queue.ts';
 import { type FeedbackWs, Rooms, type WorkspaceDirNode, type WorkspaceFileNode } from './rooms.ts';
 import { isWithinRoot } from './safe-path.ts';
 import { CfApi } from './share/cf-api.ts';
@@ -1111,6 +1111,62 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const voiceRouter = new VoiceRouter({
     tasks: taskStore,
     ...(opts.voiceComplete ? { complete: opts.voiceComplete } : {}),
+    // What a doc in view HOLDS, read through the one review-item builder this
+    // server already has. Voice must not grow a second notion of "what is
+    // waiting on a person here": that shape is owned by review-queue.ts and
+    // is being reworked, and a private copy would drift the day it lands.
+    // The router only ever calls this for a docId it has already proved is
+    // attached to the workspace.
+    docResource: (workspaceId, docId) => {
+      const workspace = taskStore.getWorkspace(workspaceId);
+      if (!workspace) return undefined;
+      const meta = rooms.get(docId)?.meta;
+      // Title, else the file's BASENAME — never the path. Same rule, and the
+      // same reason, as the review-items route: a label is workspace content,
+      // a host path is not, and this text leaves the machine.
+      const title = meta?.title || meta?.relPath?.split('/').pop();
+      return {
+        ...(title ? { title } : {}),
+        reviewItems: reviewItemsFor(workspace)
+          // A queue row now hangs on EITHER a comment or a ticket (#254). Only
+          // the comment-shaped ones address a `docId`/`threadId`/`commentId`,
+          // and only those are things this DOC holds — a ticket review item is
+          // answered against `taskId`/`reviewItemId` and belongs to the task
+          // surface, not to a doc in view. Narrowed with a predicate rather
+          // than a bare `.filter`, because `.filter` alone leaves the union
+          // intact and the field reads below would not compile.
+          .filter(
+            (item): item is ReviewThreadItem => item.kind !== 'task-review' && item.docId === docId,
+          )
+          .map((item) => ({
+            threadId: item.threadId,
+            commentId: item.commentId,
+            // Whether `answerReviewItem` can stamp an answer onto it, which is
+            // true exactly when the comment carries the declaration. Read from
+            // the item rather than discovered from that function's error
+            // string: it decides which existing room write voice calls, and a
+            // plain open question (the `unreplied` band — most of the queue)
+            // gets a plain threaded reply instead of a silent deferral.
+            answerable: item.review !== undefined,
+            ask: item.ask,
+            askedBy: item.askedBy,
+          })),
+      };
+    },
+    // The room store itself, for the two text verbs. Voice calls
+    // `postComment` — the one choke point every reply path in this server
+    // already funnels through — and `answerReviewItem` exactly as it stands,
+    // so a spoken comment and a typed one are the same write, fire the same
+    // events, and reach a watching agent identically.
+    rooms,
+    // A task's discussion room, CREATED if this process has not served it
+    // yet. Body rooms are lazy, so on a freshly restarted server the room for
+    // a task nobody has opened does not exist and a comment aimed straight at
+    // `task:<id>` is dropped with a `null` the caller reads as "no such doc".
+    taskCommentDoc: (taskId) => {
+      const task = taskStore.getTask(taskId);
+      return task ? taskProjection.ensureBodyRoom(task) : undefined;
+    },
   });
 
   /**
