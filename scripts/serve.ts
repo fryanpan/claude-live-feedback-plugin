@@ -33,6 +33,8 @@ import { connect as netConnect, createServer as netServer } from 'node:net';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readRenamedEnv } from '../packages/core/src/env-names.ts';
+import { DISCOVERY_FILE, discoveryDir } from '../packages/core/src/machine-paths.ts';
 import {
   type PreparedClient,
   clientReleaseRoot,
@@ -189,7 +191,7 @@ if (noWatch) {
 // process serving a client release published above, which nothing can change
 // while it runs.
 const pluginRefreshMinutes = (() => {
-  const raw = Number(process.env.LF_PLUGIN_REFRESH_MINUTES ?? '30');
+  const raw = Number(readRenamedEnv(process.env, 'CW_PLUGIN_REFRESH_MINUTES') ?? '30');
   return Number.isFinite(raw) && raw >= 0 ? raw : 30;
 })();
 const pluginRefreshArgs =
@@ -210,7 +212,7 @@ const serverArgs = [
   // staging must NOT do this — they are copies of the deploy source, and a
   // `bun run staging` that quietly updated the fleet's plugin would be the
   // same class of accident as building bundles in the primary checkout.
-  // Override the cadence with LF_PLUGIN_REFRESH_MINUTES; 0 turns it off.
+  // Override the cadence with CW_PLUGIN_REFRESH_MINUTES; 0 turns it off.
   ...pluginRefreshArgs,
   // PROD only: let this server pull its own deploy source and restart
   // itself, so shipping stops needing a person with a shell in the primary
@@ -221,7 +223,7 @@ const serverArgs = [
   // Note what enabling this presumes and what it does not: the restart is a
   // `launchctl kickstart` of the supervised job, which re-reads the plist
   // launchd already has. It does not reinstall the plist, so the environment
-  // baked in at install time (LF_PUBLIC_BASE_URL) is carried across a deploy
+  // baked in at install time (CW_PUBLIC_BASE_URL) is carried across a deploy
   // untouched. Changing that is still `scripts/launchd/install.sh`.
   ...(noWatch ? ['--deploy'] : []),
 ];
@@ -241,10 +243,14 @@ const children = (): ChildProcess[] => (mdApp ? [server, mdApp] : [server]);
 
 // Publish the live port so the claude-workspaces MCP (and any other local
 // agent tooling) can discover whichever port `scripts/serve.ts` ended
-// up on. The MCP reads this file if $FEEDBACK_BASE_URL isn't set.
-const discoveryDir = join(homedir(), '.claude', 'live-feedback');
-const discoveryFile = join(discoveryDir, 'server.json');
-mkdirSync(discoveryDir, { recursive: true });
+// up on. The MCP reads this file if $CW_BASE_URL isn't set.
+//
+// Only ever the CURRENT name. Readers still fall back to the old directory
+// (see `resolveDiscoveryFile`) because the flag day does not order the server
+// restart against each session's respawn — but writing both would leave a
+// stale port behind for whichever reader checked the old one first.
+const discoveryFile = join(discoveryDir(homedir()), DISCOVERY_FILE);
+mkdirSync(discoveryDir(homedir()), { recursive: true });
 writeFileSync(
   discoveryFile,
   `${JSON.stringify({ port, pid: server.pid, startedAt: new Date().toISOString() }, null, 2)}\n`,

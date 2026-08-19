@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Stop and remove the live-feedback launchd service.
+# Stop and remove the claude-workspaces launchd service.
 
 set -euo pipefail
 
-LABEL="com.fryanpan.live-feedback"
+LABEL="com.fryanpan.claude-workspaces"
 DOMAIN="gui/$(id -u)"
 PLIST_DEST="${HOME}/Library/LaunchAgents/${LABEL}.plist"
 

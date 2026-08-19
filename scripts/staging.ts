@@ -23,7 +23,7 @@
  *    publishes nothing.
  *
  * Peers whose AGENT side needs staging relaunch with
- * `FEEDBACK_BASE_URL=http://<host>:<port>`; the MCP checks that override first.
+ * `CW_BASE_URL=http://<host>:<port>`; the MCP checks that override first.
  * It's read once at session launch, so it needs a restart with the env set.
  *
  * Throw the staging data dir away when you're done — nothing in it migrates to
@@ -109,7 +109,7 @@ console.log(
     `[staging] port:     ${port}   (prod stays on 8787)`,
     `[staging] data dir: ${dataDir}   (throwaway — nothing here migrates)`,
     '[staging] the MCP port file is untouched, so agents still point at prod.',
-    `[staging] for an agent on staging: FEEDBACK_BASE_URL=http://<host>:${port} (needs a session restart)`,
+    `[staging] for an agent on staging: CW_BASE_URL=http://<host>:${port} (needs a session restart)`,
     '',
   ].join('\n'),
 );
