@@ -1627,6 +1627,21 @@ export type RenameGoalResult =
     }
   | { ok: false; error: 'workspace-not-found' | 'goal-not-found' | 'reserved-goal-id' };
 
+export type AddGoalResult =
+  | {
+      ok: true;
+      workspace: HubWorkspace;
+      /** The band that now exists, with the id the server minted for it. */
+      goal: { id: string; title: string; dueAt?: number };
+    }
+  | { ok: false; error: 'workspace-not-found' | 'after-not-found' }
+  /** The delegated replace refused. Structurally unreachable — the entries are
+   *  rebuilt from the live list, so every id named exists, none is reserved or
+   *  duplicated, and nothing is dropped — but reported rather than asserted
+   *  away, because a silent cast here would turn a future change in
+   *  `setGoalList`'s refusal set into a lie about what happened. */
+  | { ok: false; error: 'rejected'; cause: string };
+
 export type ReorderGoalsResult =
   | {
       ok: true;
@@ -4012,6 +4027,82 @@ export class TaskStore {
         id: goalId,
         title: patch.title,
         ...(nextDueAt !== undefined ? { dueAt: nextDueAt } : {}),
+      },
+    };
+  }
+
+  /**
+   * Append ONE new top-level band, and nothing else. The other half of what
+   * inline goal editing on the board needs, beside `renameGoal`.
+   *
+   * The reason this is a verb rather than a client-side `setGoalList` call is
+   * the whole hazard `renameGoal`'s header describes, one gesture over. A
+   * board that adds a band by submitting the full list submits the list IT
+   * last read — and any band added by someone else in between is absent from
+   * that list, which the store reads as a removal and which sweeps that
+   * band's open tasks into Chores. Here the list is rebuilt from the LIVE
+   * `workspace.goals` at call time, so the only difference between what goes
+   * in and what was already there is the one entry being added. A concurrent
+   * writer can be raced on ORDER; it cannot be raced out of existence.
+   *
+   * The new entry carries no `id`, which is what tells `setGoalList` to mint
+   * one — so id generation, the bucket re-look (a new band IS a new
+   * destination, which is exactly the case `requestBucketReview` is keyed on)
+   * and the `workspace.goals_changed` emit are all inherited rather than
+   * re-implemented.
+   *
+   * Top-level only, deliberately. Display flattens subgoals, so there is no
+   * surface that could express "add under this parent", and adding one here
+   * would be a data shape nothing renders.
+   */
+  addGoal(
+    workspaceId: string,
+    patch: {
+      title: string;
+      dueAt?: number;
+      /** Insert directly after this band; omitted appends at the end. */
+      after?: string;
+    },
+    opts: { actor: { id: string; name: string; kind?: string } },
+  ): AddGoalResult {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return { ok: false, error: 'workspace-not-found' };
+
+    // Rebuilt from the live list, not from anything a caller sent: every id
+    // here necessarily exists, so the delegated replace can only add.
+    const entries: GoalListEntry[] = state.workspace.goals.map((g) => ({
+      id: g.id,
+      title: g.title,
+      ...(g.dueAt !== undefined ? { dueAt: g.dueAt } : {}),
+      ...(g.subgoals !== undefined ? { subgoals: g.subgoals.map((s) => ({ ...s })) } : {}),
+    }));
+    const fresh: GoalListEntry = {
+      title: patch.title,
+      ...(patch.dueAt !== undefined ? { dueAt: patch.dueAt } : {}),
+    };
+    if (patch.after === undefined) {
+      entries.push(fresh);
+    } else {
+      const at = entries.findIndex((g) => g.id === patch.after);
+      // A subgoal id, or a band that has since gone, lands here. Refused
+      // rather than silently appended: the caller asked for a POSITION, and
+      // quietly ignoring it is how a board's order stops matching what the
+      // person just did.
+      if (at < 0) return { ok: false, error: 'after-not-found' };
+      entries.splice(at + 1, 0, fresh);
+    }
+
+    const res = this.setGoalList(workspaceId, entries, { actor: opts.actor });
+    if (!res.ok) return { ok: false, error: 'rejected', cause: res.error };
+    const created = res.created[0];
+    if (created === undefined) return { ok: false, error: 'rejected', cause: 'no-goal-created' };
+    return {
+      ok: true,
+      workspace: res.workspace,
+      goal: {
+        id: created.id,
+        title: patch.title,
+        ...(patch.dueAt !== undefined ? { dueAt: patch.dueAt } : {}),
       },
     };
   }

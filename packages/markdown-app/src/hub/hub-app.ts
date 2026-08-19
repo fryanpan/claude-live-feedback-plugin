@@ -21,8 +21,10 @@ import {
   DEFAULT_DONE_WINDOW,
   DONE_WINDOWS,
   type DoneWindow,
+  type DriftNotice,
   type HomePayload,
   type HubGoal,
+  type HubNav,
   type HubPane,
   type HubTask,
   type HubWorkspaceInfo,
@@ -41,8 +43,9 @@ import {
   boardSections,
   clientDriftNotice,
   goalLabel,
-  paneFromPath,
-  panePath,
+  navFromPath,
+  navPath,
+  paneForNav,
   parseQuickAdd,
   pluginDriftNotice,
   presenceChips,
@@ -50,6 +53,7 @@ import {
   reviewQueue,
   reviewRow,
   shouldPollHome,
+  tabForNav,
   unplacedNotice,
   walkPosition,
 } from './hub-model.ts';
@@ -81,9 +85,15 @@ import { createTaskBodyEditorHost } from './task-body-editor.ts';
 interface HubState {
   info: HubWorkspaceInfo | null;
   tasks: Map<string, HubTask>;
-  /** Which page of the shell is showing — Home or the board. Follows the URL
-   *  (`/workspaces/<id>/home` vs `/workspaces/<id>`), pushState both ways. */
+  /** Which of the four nav destinations is showing. THE source: `pane`,
+   *  `tab` and `view` below are derived from it in `setNav` and never set
+   *  anywhere else, so a deep link and a click cannot disagree. */
+  nav: HubNav;
+  /** Which page of the shell is showing — Home or the board. Derived. */
   pane: HubPane;
+  /** The settings popover is open. App state rather than DOM state, so a
+   *  repaint cannot close it under someone mid-change. */
+  settingsOpen: boolean;
   /** The Home payload for THIS reader, or null before the first load. */
   home: HomePayload | null;
   /** The recipe editor is open. App state, not DOM state, so a repaint
@@ -199,18 +209,30 @@ function showToast(msg: string): void {
   toastTimer = setTimeout(() => el.classList.add('hidden'), 3500);
 }
 
-/** The rail's icons, taken from the approved mockup (home-pane-mockup-v1). */
+const SVG = 'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"';
+const SVG_ENDS = 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"';
+
+/** Icons. The four nav glyphs are the approved mockup's (home-pane-mockup-v1);
+ *  share and settings are new, for the top-right cluster. */
 const NAV_ICONS = {
-  home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M9.5 21v-6h5v6"/></svg>',
-  board:
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M15 4v16"/></svg>',
-  collapse:
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="14 6 8 12 14 18"/></svg>',
-  expand:
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="10 6 16 12 10 18"/></svg>',
+  home: `<svg ${SVG} ${SVG_ENDS}><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M9.5 21v-6h5v6"/></svg>`,
+  tasks: `<svg ${SVG} ${SVG_ENDS}><path d="M9 6h11M9 12h11M9 18h11"/><path d="M4 6h.01M4 12h.01M4 18h.01"/></svg>`,
+  mine: `<svg ${SVG} ${SVG_ENDS}><circle cx="12" cy="8" r="3.4"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></svg>`,
+  activity: `<svg ${SVG} ${SVG_ENDS}><path d="M3 12h4l3-7 4 14 3-7h4"/></svg>`,
+  share: `<svg ${SVG} ${SVG_ENDS}><circle cx="18" cy="5" r="2.6"/><circle cx="6" cy="12" r="2.6"/><circle cx="18" cy="19" r="2.6"/><path d="m8.3 10.8 7.4-4.3M8.3 13.2l7.4 4.3"/></svg>`,
+  settings: `<svg ${SVG} ${SVG_ENDS}><circle cx="12" cy="12" r="3"/><path d="M12 2.5v2.4M12 19.1v2.4M21.5 12h-2.4M4.9 12H2.5M18.7 5.3l-1.7 1.7M7 17l-1.7 1.7M18.7 18.7 17 17M7 7 5.3 5.3"/></svg>`,
 };
 
-const NAV_COLLAPSED_KEY = 'lf-hub-nav-collapsed';
+/** The nav, in the order it renders. `mine` sits beside `tasks` rather than
+ *  inside it: "what is mine" is a place a person navigates to, and as a
+ *  segmented filter on somebody else's list it had no URL and did not
+ *  survive a reload. */
+const NAV_ITEMS: ReadonlyArray<{ nav: HubNav; label: string; icon: string }> = [
+  { nav: 'home', label: 'Home', icon: NAV_ICONS.home },
+  { nav: 'tasks', label: 'Tasks', icon: NAV_ICONS.tasks },
+  { nav: 'mine', label: 'My Tasks', icon: NAV_ICONS.mine },
+  { nav: 'activity', label: 'Activity', icon: NAV_ICONS.activity },
+];
 
 /** Static shell — built once; regions re-render into their containers. */
 function buildShell(root: HTMLElement, name: string): void {
@@ -218,24 +240,32 @@ function buildShell(root: HTMLElement, name: string): void {
     <header class="hub-topbar">
       <a href="/" class="back-link" title="All workspaces" aria-label="Back">←</a>
       <span class="hub-ws-name">${escapeHtml(name)}</span>
-      <button type="button" id="hub-share" class="hub-btn">Share workspace</button>
-    </header>
-    <div id="hub-connection" class="conn-banner hidden" role="status" aria-live="polite"></div>
-    <div id="hub-presence" class="hub-presence hidden"></div>
-    <div id="hub-lead" class="hub-lead"></div>
-    <div id="hub-goal" class="hub-goal"></div>
-    <div class="hub-main" id="hub-main">
       <nav id="hub-nav" class="hub-nav" aria-label="Workspace pages">
-        <button type="button" class="hub-nav-item" data-pane="home" title="Home">
-          <span class="hub-nav-icon" aria-hidden="true">${NAV_ICONS.home}</span><span class="hub-nav-label">Home</span>
-        </button>
-        <button type="button" class="hub-nav-item" data-pane="board" title="Board">
-          <span class="hub-nav-icon" aria-hidden="true">${NAV_ICONS.board}</span><span class="hub-nav-label">Board</span>
-        </button>
-        <button type="button" id="hub-nav-collapse" class="hub-nav-item hub-nav-collapse" title="Collapse">
-          <span class="hub-nav-icon" aria-hidden="true">${NAV_ICONS.collapse}</span><span class="hub-nav-label">Collapse</span>
-        </button>
+        ${NAV_ITEMS.map(
+          (
+            n,
+          ) => `<button type="button" class="hub-nav-item" data-nav="${n.nav}" title="${escapeHtml(n.label)}">
+          <span class="hub-nav-icon" aria-hidden="true">${n.icon}</span><span class="hub-nav-label">${escapeHtml(n.label)}</span>
+        </button>`,
+        ).join('')}
       </nav>
+      <div class="hub-cluster">
+        <div id="hub-people" class="hub-presence hub-people hidden"></div>
+        <button type="button" id="hub-share" class="hub-icon-btn" title="Share workspace" aria-label="Share workspace">${NAV_ICONS.share}</button>
+        <button type="button" id="hub-settings" class="hub-icon-btn" title="Workspace settings" aria-label="Workspace settings" aria-expanded="false">${NAV_ICONS.settings}<span id="hub-settings-alarm" class="hub-alarm-dot hidden" aria-hidden="true"></span></button>
+        <span id="hub-me" class="hub-me" title="Signed in"></span>
+      </div>
+    </header>
+    <div id="hub-settings-panel" class="hub-settings-panel hidden" role="region" aria-label="Workspace settings">
+      <div id="hub-drift" class="hub-presence hidden"></div>
+      <div id="hub-goal" class="hub-goal"></div>
+      <div id="hub-lead" class="hub-lead"></div>
+      <label class="hub-settings-row" for="hub-done-filter">Show done tasks from
+        <select id="hub-done-filter" class="hub-select" aria-label="Done task visibility"></select>
+      </label>
+    </div>
+    <div id="hub-connection" class="conn-banner hidden" role="status" aria-live="polite"></div>
+    <div class="hub-main" id="hub-main">
       <section id="hub-home" class="hub-home hidden">
         <div id="hub-home-page">
           <div id="hub-home-brief"></div>
@@ -245,14 +275,6 @@ function buildShell(root: HTMLElement, name: string): void {
       </section>
       <aside id="hub-docs" class="hub-side hub-side-docs"></aside>
       <section class="hub-board-col">
-        <div class="hub-controls">
-          <div class="hub-tabs" role="tablist">
-            <button type="button" class="hub-tab" data-tab="all" role="tab">All</button>
-            <button type="button" class="hub-tab" data-tab="mine" role="tab">My Tasks</button>
-          </div>
-          <select id="hub-done-filter" class="hub-select" aria-label="Done task visibility"></select>
-          <button type="button" id="hub-view-toggle" class="hub-btn">Activity</button>
-        </div>
         <div id="hub-decisions" class="hub-decisions hidden"></div>
         <div id="hub-quick" class="hub-quick"></div>
         <div id="hub-unplaced" class="hub-unplaced hidden"></div>
@@ -301,17 +323,20 @@ async function main(): Promise<void> {
   });
   const author = { id: user.id, name: user.name, kind: user.kind, color: user.color };
 
+  const initialNav = navFromPath(location.pathname);
   const state: HubState = {
     info: null,
     tasks: new Map(),
-    pane: paneFromPath(location.pathname),
+    nav: initialNav,
+    pane: paneForNav(initialNav),
+    settingsOpen: false,
     home: null,
     homeEditingRecipe: false,
     homeSettled: new Map(),
     homePollStarted: 0,
-    tab: 'all',
+    tab: tabForNav(initialNav) ?? 'all',
     doneWindow: DEFAULT_DONE_WINDOW,
-    view: 'board',
+    view: initialNav === 'activity' ? 'activity' : 'board',
     activityFilter: 'all',
     events: [],
     uptime: null,
@@ -406,6 +431,7 @@ async function main(): Promise<void> {
   const boardHandlers = {
     onStatusSet: (task: HubTask, to: HubTask['status']) => void transitionTask(task, to),
     onGoalTitleCommit: (sectionId: string, title: string) => void retitleGoal(sectionId, title),
+    onGoalAdd: (title: string, after?: string) => void addGoal(title, after),
     onOpenTask: (task: HubTask) => {
       state.detailTaskId = task.id;
       // Opening the task any other way clears the queue's aim, so a mark left
@@ -539,13 +565,9 @@ async function main(): Promise<void> {
     // Home. Two surfaces both claiming to be the queue would drift the first
     // time only one of them learned something.
     renderReviewBanner(el('hub-decisions'), currentQueue(), {
-      onGoHome: () => setPane('home'),
+      onGoHome: () => setNav('home'),
     });
     renderWalkthrough();
-    for (const btn of document.querySelectorAll<HTMLButtonElement>('.hub-tabs .hub-tab')) {
-      btn.classList.toggle('hub-tab-active', btn.dataset.tab === state.tab);
-      btn.setAttribute('aria-selected', String(btn.dataset.tab === state.tab));
-    }
   }
 
   // ── The Home pane ───────────────────────────────────────────────────────
@@ -561,19 +583,18 @@ async function main(): Promise<void> {
   }
 
   function renderHomeRegion(): void {
-    // Nav active state, both panes.
+    // Nav active state, all four destinations.
     for (const btn of document.querySelectorAll<HTMLButtonElement>('.hub-nav-item')) {
-      const active = btn.dataset.pane === state.pane;
+      const active = btn.dataset.nav === state.nav;
       btn.classList.toggle('hub-nav-item-active', active);
       btn.setAttribute('aria-current', active ? 'page' : 'false');
     }
     const main = el('hub-main');
+    // Home is a clean frame: content only, none of the board's side columns.
+    // The pane-scoped `hub-root--home` class went with the board chrome it
+    // used to suppress — presence, lead and the goal banner live in the
+    // settings panel now, which is not a pane's to hide.
     main.classList.toggle('hub-main--home', state.pane === 'home');
-    // The mockup's Home is a clean frame: rail + content, none of the board's
-    // chrome (presence strip, lead row, goal banner, plugin-drift strip).
-    // Hidden by a root class rather than per-region, so a region's own
-    // re-render cannot resurrect itself onto the wrong pane.
-    document.getElementById('hub-root')?.classList.toggle('hub-root--home', state.pane === 'home');
     el('hub-home').classList.toggle('hidden', state.pane !== 'home');
     if (state.pane !== 'home') return;
     renderHomeBrief(el('hub-home-brief'), state.home, Date.now(), state.homeEditingRecipe, {
@@ -592,15 +613,29 @@ async function main(): Promise<void> {
     );
   }
 
-  function setPane(pane: HubPane, push = true): void {
-    if (state.pane === pane) {
-      if (pane === 'home') void loadHome();
-      return;
-    }
-    state.pane = pane;
-    if (push) history.pushState(null, '', panePath(workspaceId, pane));
+  /**
+   * The one writer of `nav`, `pane`, `tab` and `view`. Four destinations that
+   * used to be a pane switch, a segmented filter and a toggle button, each
+   * setting its own piece of state — so "My Tasks" had no URL and a reload
+   * dropped you back on All.
+   *
+   * `tab` is left alone for Home and Activity (`tabForNav` answers undefined):
+   * neither renders task rows, so resetting the filter there would silently
+   * undo the reader's choice on the way back.
+   */
+  function setNav(nav: HubNav, push = true): void {
+    const same = state.nav === nav;
+    state.nav = nav;
+    state.pane = paneForNav(nav);
+    state.view = nav === 'activity' ? 'activity' : 'board';
+    const tab = tabForNav(nav);
+    if (tab !== undefined) state.tab = tab;
+    if (push && !same) history.pushState(null, '', navPath(workspaceId, nav));
     renderHomeRegion();
-    if (pane === 'home') void loadHome();
+    renderBoardRegion();
+    renderActivityRegion();
+    if (nav === 'home') void loadHome();
+    if (nav === 'activity') void loadEvents();
   }
 
   let homePollTimer: ReturnType<typeof setTimeout> | null = null;
@@ -663,11 +698,15 @@ async function main(): Promise<void> {
   function renderActivityRegion(): void {
     const board = el('hub-board');
     const activity = el('hub-activity');
-    const toggle = el('hub-view-toggle');
+    // Everything the task list is made of hides with it. Activity used to be
+    // a button that swapped ONE div, so the capture box and the unplaced
+    // strip stayed on screen over a feed they have nothing to do with.
+    for (const id of ['hub-quick', 'hub-unplaced', 'hub-decisions']) {
+      el(id).classList.toggle('hub-hidden-by-view', state.view === 'activity');
+    }
     if (state.view === 'activity') {
       board.classList.add('hidden');
       activity.classList.remove('hidden');
-      toggle.textContent = 'Board';
       renderActivity(
         activity,
         state.events,
@@ -682,7 +721,6 @@ async function main(): Promise<void> {
     } else {
       board.classList.remove('hidden');
       activity.classList.add('hidden');
-      toggle.textContent = 'Activity';
     }
   }
 
@@ -959,28 +997,84 @@ async function main(): Promise<void> {
     return people;
   }
 
+  /**
+   * The presence strip renders in TWO places now, from one function called
+   * twice: who is here goes in the top-right cluster, and the drift notices
+   * go in the settings panel. Same renderer, so every existing assertion
+   * about how a notice looks still describes what ships — and `renderPresence`
+   * already handles chips-with-no-notices and notices-with-no-chips, which is
+   * what makes the split free.
+   *
+   * A notice in a closed panel is an alarm nobody sees, so the settings button
+   * carries a dot whenever something in there is asking for attention. The
+   * `coverage` notice deliberately does not arm it: it renders permanently by
+   * design, and an always-on dot is one nobody reads.
+   */
   function renderPresenceRegion(): void {
     const chips = presenceChips(peopleFromAwareness(), state.agents, Date.now());
-    renderPresence(
-      el('hub-presence'),
-      chips,
-      state.followedKey,
-      {
-        onTap: (chip: PresenceChip) => {
-          if (chip.docId) location.assign(`/review/${encodeURIComponent(chip.docId)}`);
-        },
-        onLongPress: (chip: PresenceChip) => {
-          state.followedKey = state.followedKey === chip.key ? null : chip.key;
-          showToast(
-            state.followedKey
-              ? `Following ${chip.label} — long-press again to stop`
-              : 'Stopped following',
-          );
-          renderPresenceRegion();
-        },
+    const handlers = {
+      onTap: (chip: PresenceChip) => {
+        if (chip.docId) location.assign(`/review/${encodeURIComponent(chip.docId)}`);
       },
-      [pluginDriftNotice(state.pluginRelease), clientDriftNotice(state.clientRelease, Date.now())],
-    );
+      onLongPress: (chip: PresenceChip) => {
+        state.followedKey = state.followedKey === chip.key ? null : chip.key;
+        showToast(
+          state.followedKey
+            ? `Following ${chip.label} — long-press again to stop`
+            : 'Stopped following',
+        );
+        renderPresenceRegion();
+      },
+    };
+    renderPresence(el('hub-people'), chips, state.followedKey, handlers, []);
+    const notices = [
+      pluginDriftNotice(state.pluginRelease),
+      clientDriftNotice(state.clientRelease, Date.now()),
+    ];
+    renderPresence(el('hub-drift'), [], null, handlers, notices);
+    renderSettingsAlarm(notices);
+  }
+
+  /** What in the settings panel is asking to be looked at. */
+  function renderSettingsAlarm(notices: Array<DriftNotice | null>): void {
+    const armed =
+      notices.some((n) => n !== null && n.kind !== 'coverage') ||
+      state.info?.pendingRetriage !== undefined ||
+      state.info?.pendingBucketReview !== undefined;
+    el('hub-settings-alarm').classList.toggle('hidden', !armed);
+    // Both attributes, because the dot itself is `aria-hidden`: a reader who
+    // never sees it would otherwise be told "Workspace settings" while the
+    // button is visibly asking to be opened. `title` alone is announced
+    // weakly or not at all depending on the reader.
+    const label = armed ? 'Workspace settings — needs a look' : 'Workspace settings';
+    el('hub-settings').setAttribute('title', label);
+    el('hub-settings').setAttribute('aria-label', label);
+  }
+
+  /**
+   * Who the board thinks you are. `ensureUserIdentity` has always decided
+   * this — it is what stamps every comment and what "My Tasks" matches on —
+   * and until now nothing rendered it, so a reader with the wrong name saved
+   * found out by seeing their own comment signed by somebody else.
+   */
+  function renderMe(): void {
+    const me = el('hub-me');
+    const initials = user.name
+      .split(/\s+/)
+      .filter((w) => w.length > 0)
+      .slice(0, 2)
+      .map((w) => [...w][0] ?? '')
+      .join('')
+      .toUpperCase();
+    me.textContent = initials || '?';
+    me.setAttribute('title', `Signed in as ${user.name}`);
+    me.setAttribute('aria-label', `Signed in as ${user.name}`);
+    if (user.color) me.style.background = user.color;
+  }
+
+  function renderSettingsPanel(): void {
+    el('hub-settings-panel').classList.toggle('hidden', !state.settingsOpen);
+    el('hub-settings').setAttribute('aria-expanded', String(state.settingsOpen));
   }
 
   function renderAll(): void {
@@ -1010,6 +1104,8 @@ async function main(): Promise<void> {
     });
     renderGoal();
     renderLead();
+    renderMe();
+    renderSettingsPanel();
     renderBoardRegion();
     renderActivityRegion();
     renderDetail();
@@ -1092,6 +1188,18 @@ async function main(): Promise<void> {
       { goal: sectionId, title, author },
     );
     if (!res.ok) showToast('Goal rename failed');
+  }
+
+  /** Add one band, for the same reason the rename above is its own route: a
+   *  client-built full list can only add by re-asserting everything it last
+   *  read, and what it did not read is what gets removed. */
+  async function addGoal(title: string, after?: string): Promise<void> {
+    const res = await send(`/api/workspaces/${encodeURIComponent(workspaceId)}/goals/add`, 'POST', {
+      title,
+      ...(after !== undefined ? { after } : {}),
+      author,
+    });
+    if (!res.ok) showToast('Could not add the goal');
   }
 
   async function saveGoal(goal: string, summary: string): Promise<void> {
@@ -1406,36 +1514,14 @@ async function main(): Promise<void> {
   es.addEventListener('task.transitioned', () => void loadReviewItems());
 
   // Controls.
-  // Home / Board nav — pushState both ways, and the back button honours it.
-  for (const btn of document.querySelectorAll<HTMLButtonElement>('.hub-nav-item[data-pane]')) {
-    btn.addEventListener('click', () => setPane((btn.dataset.pane as HubPane) ?? 'board'));
-  }
-  // The rail collapses to icons (mockup affordance), and the choice sticks.
-  {
-    const nav = el('hub-nav');
-    const collapse = document.getElementById('hub-nav-collapse');
-    const apply = (collapsed: boolean) => {
-      nav.classList.toggle('hub-nav--collapsed', collapsed);
-      const icon = collapse?.querySelector('.hub-nav-icon');
-      if (icon) icon.innerHTML = collapsed ? NAV_ICONS.expand : NAV_ICONS.collapse;
-      collapse?.setAttribute('title', collapsed ? 'Expand' : 'Collapse');
-    };
-    apply(localStorage.getItem(NAV_COLLAPSED_KEY) === '1');
-    collapse?.addEventListener('click', () => {
-      const next = !nav.classList.contains('hub-nav--collapsed');
-      localStorage.setItem(NAV_COLLAPSED_KEY, next ? '1' : '0');
-      apply(next);
-    });
+  // Home / Tasks / My Tasks / Activity — pushState every way, and the back
+  // button honours all four.
+  for (const btn of document.querySelectorAll<HTMLButtonElement>('.hub-nav-item[data-nav]')) {
+    btn.addEventListener('click', () => setNav((btn.dataset.nav as HubNav) ?? 'tasks'));
   }
   window.addEventListener('popstate', () => {
-    setPane(paneFromPath(location.pathname), false);
+    setNav(navFromPath(location.pathname), false);
   });
-  for (const btn of document.querySelectorAll<HTMLButtonElement>('.hub-tabs .hub-tab')) {
-    btn.addEventListener('click', () => {
-      state.tab = (btn.dataset.tab as BoardTab) ?? 'all';
-      renderBoardRegion();
-    });
-  }
   (document.getElementById('hub-done-filter') as HTMLSelectElement).addEventListener(
     'change',
     (ev) => {
@@ -1443,10 +1529,19 @@ async function main(): Promise<void> {
       renderBoardRegion();
     },
   );
-  el('hub-view-toggle').addEventListener('click', () => {
-    state.view = state.view === 'board' ? 'activity' : 'board';
-    if (state.view === 'activity') void loadEvents();
-    renderActivityRegion();
+  el('hub-settings').addEventListener('click', () => {
+    state.settingsOpen = !state.settingsOpen;
+    renderSettingsPanel();
+  });
+  // A popover that only closes by hitting the same small button again is one
+  // people leave open over the list they were trying to read.
+  document.addEventListener('click', (ev) => {
+    if (!state.settingsOpen) return;
+    const t = ev.target as Node | null;
+    if (!t) return;
+    if (el('hub-settings-panel').contains(t) || el('hub-settings').contains(t)) return;
+    state.settingsOpen = false;
+    renderSettingsPanel();
   });
   el('hub-share').addEventListener('click', () => {
     void navigator.clipboard?.writeText(location.href).then(
