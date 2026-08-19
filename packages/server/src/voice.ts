@@ -24,7 +24,7 @@
  */
 import { readKeychainPassword } from './share/keychain.ts';
 import { resolveKeyFrom } from './summarize.ts';
-import type { TaskStore } from './tasks.ts';
+import type { Ref, Task, TaskStore } from './tasks.ts';
 
 export type VoiceSurface = 'hub' | 'doc' | 'task';
 
@@ -55,6 +55,105 @@ export function parseVoiceContext(raw: unknown): VoiceContext | undefined {
   };
 }
 
+/**
+ * The thing the speaker is looking at, once it has been proved to belong to
+ * this workspace. Only ever built from a VALIDATED context — see
+ * `VoiceRouter.validateContext`.
+ */
+export type VoiceResource =
+  | {
+      kind: 'task';
+      id: string;
+      title: string;
+      status: string;
+      assignee: string;
+      needs?: string;
+      links: Ref[];
+    }
+  | { kind: 'doc'; id: string; title?: string; reviewItems: VoiceReviewItem[] };
+
+/** One open review item on a doc, flattened to what a prompt can use. Kept to
+ *  three fields on purpose: the review-item SHAPE is owned elsewhere and is
+ *  being reworked, so voice reads a projection of it rather than its type. */
+export interface VoiceReviewItem {
+  threadId: string;
+  ask: string;
+  askedBy: string;
+}
+
+/** How the router learns what a doc holds. Injected, because the answer needs
+ *  the room store and the review-item builder — neither of which voice owns,
+ *  and neither of which it should grow a second copy of. */
+export type VoiceDocResourceReader = (
+  workspaceId: string,
+  docId: string,
+) => { title?: string; reviewItems: VoiceReviewItem[] } | undefined;
+
+const encoder = new TextEncoder();
+const byteLength = (text: string): number => encoder.encode(text).length;
+
+/** Longest prefix of `text` that fits in `max` bytes, never splitting a
+ *  character. Binary search over code-unit offsets, then one step back off a
+ *  dangling high surrogate. */
+function truncateToBytes(text: string, max: number): string {
+  if (byteLength(text) <= max) return text;
+  let lo = 0;
+  let hi = text.length;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (byteLength(text.slice(0, mid)) <= max) lo = mid;
+    else hi = mid - 1;
+  }
+  const code = text.charCodeAt(lo - 1);
+  if (lo > 0 && code >= 0xd800 && code <= 0xdbff) lo -= 1;
+  return text.slice(0, lo);
+}
+
+/** A ref as one readable clause. Never an href: this text goes to a model, and
+ *  the only ids it may act on are the ones it can read back here. */
+function describeRef(ref: Ref): string {
+  switch (ref.kind) {
+    case 'doc':
+      return `doc ${ref.docId}`;
+    case 'thread':
+      return `thread ${ref.threadId} on doc ${ref.docId}`;
+    case 'task':
+      return `task ${ref.taskId}`;
+    case 'diff':
+      return `diff ${ref.workspaceId}`;
+    case 'url':
+      return `url ${ref.url}`;
+  }
+}
+
+/** Render the `Resource in view:` block, clamped to `RESOURCE_MAX` bytes. */
+export function renderResourceBlock(resource: VoiceResource): string {
+  const lines: string[] = [];
+  if (resource.kind === 'task') {
+    lines.push(`Resource in view: task ${resource.id}`);
+    lines.push(`  title: ${resource.title}`);
+    lines.push(`  status: ${resource.status}`);
+    lines.push(`  assignee: ${resource.assignee}`);
+    if (resource.needs) lines.push(`  needs: ${resource.needs}`);
+    if (resource.links.length > 0) {
+      lines.push('  links:');
+      for (const ref of resource.links) lines.push(`    - ${describeRef(ref)}`);
+    }
+  } else {
+    lines.push(`Resource in view: doc ${resource.id}`);
+    if (resource.title) lines.push(`  title: ${resource.title}`);
+    if (resource.reviewItems.length > 0) {
+      lines.push('  open review items:');
+      for (const item of resource.reviewItems) {
+        lines.push(`    - ${item.threadId} (${item.askedBy}): ${item.ask}`);
+      }
+    }
+  }
+  const full = lines.join('\n');
+  if (byteLength(full) <= RESOURCE_MAX) return full;
+  return `${truncateToBytes(full, RESOURCE_MAX)}\n  … (truncated at ${RESOURCE_MAX} bytes — this resource has more content than is shown)`;
+}
+
 /** One classification round trip: prompt in, raw reply text out. Injected in
  *  tests; the real one is `haikuVoiceComplete` below. */
 export type VoiceComplete = (args: { system: string; user: string }) => Promise<string>;
@@ -81,6 +180,18 @@ const MAX_TOKENS = 120;
 const TIMEOUT_MS = 10_000;
 /** Keep acks readable when a hold rambles. */
 const ACK_TRANSCRIPT_MAX = 90;
+/**
+ * How many BYTES of the `Resource in view:` block may ride into the prompt.
+ *
+ * Explicit because nothing upstream of here is bounded: the transcript is
+ * clamped by the route, but the prompt already grows with the task list, and
+ * this server has no rate limit anywhere. A task title, a link list, or a
+ * doc's open review items are all caller-authored and all unbounded, so
+ * without a budget one long-winded doc silently becomes the cost of every
+ * utterance spoken over it. Over budget the block is cut and SAYS it was cut —
+ * a model told nothing about the truncation will answer as if it saw the rest.
+ */
+export const RESOURCE_MAX = 1200;
 
 function heard(transcript: string): string {
   const t =
@@ -104,6 +215,7 @@ export function buildVoicePrompt(
   },
   transcript: string,
   context?: VoiceContext,
+  resource?: VoiceResource,
 ): { system: string; user: string } {
   const system = [
     'You route voice requests for a task workspace. Decide: does the utterance',
@@ -138,6 +250,10 @@ export function buildVoicePrompt(
         (context.visibleHeading ? ` visibleHeading="${context.visibleHeading}"` : ''),
     );
   }
+  // What the speaker is actually looking at. Present only for a context id
+  // the router has proved is a member of THIS workspace, so a model reading
+  // this block cannot be shown another board's content by a crafted request.
+  if (resource) lines.push(renderResourceBlock(resource));
   lines.push(`Utterance: "${transcript}"`);
   return { system, user: lines.join('\n') };
 }
@@ -172,10 +288,99 @@ export function parseVoiceReply(raw: string): VoiceClassification | null {
 export class VoiceRouter {
   private tasks: TaskStore;
   private complete: VoiceComplete | undefined;
+  private docResource: VoiceDocResourceReader | undefined;
 
-  constructor(opts: { tasks: TaskStore; complete?: VoiceComplete }) {
+  constructor(opts: {
+    tasks: TaskStore;
+    complete?: VoiceComplete;
+    docResource?: VoiceDocResourceReader;
+  }) {
     this.tasks = opts.tasks;
     this.complete = opts.complete;
+    this.docResource = opts.docResource;
+  }
+
+  /**
+   * THE membership predicate for a task id — one rule, used by the context
+   * check and by the lookup validation below.
+   *
+   * They agree today, which is exactly when two copies are cheapest to write
+   * and most expensive later: one gets a fix and the other keeps the hole.
+   * `getTask` is a GLOBAL index, so without this an id from any board on this
+   * server resolves.
+   */
+  private taskInWorkspace(workspaceId: string, taskId: string): Task | undefined {
+    const task = this.tasks.getTask(taskId);
+    return task && task.workspaceId === workspaceId ? task : undefined;
+  }
+
+  /** The same rule for a doc: attached to THIS workspace, or not present. */
+  private docInWorkspace(workspaceId: string, docId: string): boolean {
+    return this.tasks.getWorkspace(workspaceId)?.docIds.includes(docId) ?? false;
+  }
+
+  /**
+   * The client's context, with any id that is not a member of this workspace
+   * DROPPED — never trusted, never quietly passed along.
+   *
+   * `parseVoiceContext` only clamps lengths, so up to here a `taskId` is an
+   * arbitrary client string. Dropping happens before the context is used for
+   * ANYTHING — prompt, queue, audit record — rather than only at the point of
+   * a write: a foreign id in the queue is a foreign id the next reader has to
+   * re-check, and one of them eventually won't.
+   */
+  private validateContext(workspaceId: string, context?: VoiceContext): VoiceContext | undefined {
+    if (!context) return undefined;
+    const taskId =
+      context.taskId !== undefined && this.taskInWorkspace(workspaceId, context.taskId)
+        ? context.taskId
+        : undefined;
+    const docId =
+      context.docId !== undefined && this.docInWorkspace(workspaceId, context.docId)
+        ? context.docId
+        : undefined;
+    return {
+      surface: context.surface,
+      ...(docId !== undefined ? { docId } : {}),
+      ...(taskId !== undefined ? { taskId } : {}),
+      ...(context.visibleHeading !== undefined ? { visibleHeading: context.visibleHeading } : {}),
+    };
+  }
+
+  /**
+   * The resource the speaker is looking at, for the prompt. Takes an ALREADY
+   * VALIDATED context — the ids here are members by construction.
+   *
+   * A task wins over a doc when both are set: the task is the narrower thing
+   * in view (a task opened over a doc surface), and "this" means the narrower
+   * one to whoever said it.
+   */
+  private resourceInView(workspaceId: string, context?: VoiceContext): VoiceResource | undefined {
+    if (!context) return undefined;
+    if (context.taskId !== undefined) {
+      const task = this.taskInWorkspace(workspaceId, context.taskId);
+      if (task) {
+        return {
+          kind: 'task',
+          id: task.id,
+          title: task.title,
+          status: task.status,
+          assignee: task.assignee,
+          ...(task.needs !== undefined ? { needs: task.needs } : {}),
+          links: task.links,
+        };
+      }
+    }
+    if (context.docId !== undefined) {
+      const doc = this.docResource?.(workspaceId, context.docId);
+      return {
+        kind: 'doc',
+        id: context.docId,
+        ...(doc?.title ? { title: doc.title } : {}),
+        reviewItems: doc?.reviewItems ?? [],
+      };
+    }
+    return undefined;
   }
 
   /**
@@ -193,7 +398,9 @@ export class VoiceRouter {
   ): Promise<VoiceHandleResult> {
     const workspace = this.tasks.getWorkspace(workspaceId);
     if (!workspace) return { ok: false, error: 'workspace-not-found' };
-    const { transcript, context, actor } = req;
+    const { transcript, actor } = req;
+    // Everything below reads `context`, and nothing below re-checks it.
+    const context = this.validateContext(workspaceId, req.context);
 
     let classification: VoiceClassification | null = null;
     let fastPathDown = false;
@@ -212,8 +419,9 @@ export class VoiceRouter {
         })),
         docIds: workspace.docIds,
       };
+      const resource = this.resourceInView(workspaceId, context);
       try {
-        const reply = await this.complete(buildVoicePrompt(index, transcript, context));
+        const reply = await this.complete(buildVoicePrompt(index, transcript, context, resource));
         classification = parseVoiceReply(reply);
         if (!classification) fastPathDown = true;
       } catch (err) {
@@ -270,8 +478,8 @@ export class VoiceRouter {
     c: { target?: 'task' | 'doc'; id?: string },
   ): VoiceResult {
     if (c.target === 'task' && c.id) {
-      const task = this.tasks.getTask(c.id);
-      if (task && task.workspaceId === workspaceId) {
+      const task = this.taskInWorkspace(workspaceId, c.id);
+      if (task) {
         return {
           route: 'fast-path',
           ack: `${heard(transcript)} Lookup — opening task "${task.title}".`,
@@ -280,8 +488,7 @@ export class VoiceRouter {
       }
     }
     if (c.target === 'doc' && c.id) {
-      const workspace = this.tasks.getWorkspace(workspaceId);
-      if (workspace?.docIds.includes(c.id)) {
+      if (this.docInWorkspace(workspaceId, c.id)) {
         return {
           route: 'fast-path',
           ack: `${heard(transcript)} Lookup — opening ${c.id}.`,
