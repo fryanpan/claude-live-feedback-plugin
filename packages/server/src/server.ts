@@ -400,6 +400,62 @@ const CT: Record<string, string> = {
   '.ico': 'image/x-icon',
 };
 
+/**
+ * ── Watch coverage: the answer to "what am I MISSING?" ──────────────────────
+ *
+ * `list_watched_docs` answers "what am I watching", and the measured incident
+ * is that the true answer to that question — six docs, all live — reads as an
+ * all-clear while a voice note and a re-triage request queue silently for a
+ * board the agent never attached to. An agent cannot tell deafness from
+ * silence, so it never thinks to ask.
+ *
+ * These types are what the watches route reports back so it can. Additive:
+ * every field is new, so a bundle that predates them ignores an unknown key
+ * and keeps working exactly as before.
+ */
+export interface CoverageQueue {
+  queuedVoice: number;
+  /** 0 or 1 — the pending re-triage is a single coalesced ask. */
+  pendingRetriage: number;
+  /** 0 or 1 — likewise. */
+  pendingBucketReview: number;
+  taskReviews: number;
+}
+
+/** One `ws:<id>` key in the agent's watch set, resolved. */
+export interface CoverageWorkspaceRow {
+  key: string;
+  workspaceId: string;
+  /** `board` — a hub workspace with tasks, a lead seat and attachments.
+   *  `grouping` — a diff review / folder bind, which has none of those. */
+  kind: 'board' | 'grouping';
+  /** Board only. Attachment / lead / heartbeat are hub-board facts; printing
+   *  `attached: false` for a grouping would read as a gap that cannot exist. */
+  name?: string;
+  attached?: boolean;
+  heartbeatFresh?: boolean;
+  lead?: boolean;
+  queued?: CoverageQueue;
+  queuedTotal?: number;
+}
+
+/** A board holding docs this agent watches, where it has NO attachment —
+ *  the incident, rendered as a row. */
+export interface CoverageUnattachedBoard {
+  workspaceId: string;
+  name: string;
+  /** The watched docs that put this board on the list. */
+  watchedDocs: string[];
+  queued: CoverageQueue;
+  queuedTotal: number;
+}
+
+export interface WatchCoverage {
+  agentId: string;
+  workspaces: CoverageWorkspaceRow[];
+  unattachedBoards: CoverageUnattachedBoard[];
+}
+
 export interface ServerHandle {
   port: number;
   rooms: Rooms;
@@ -729,9 +785,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // `shareWorkspacesOf` spells out, so what an agent HEARS about a review
     // and what a share visitor may OPEN in it cannot drift apart.
     const grouping = rooms.get(docId)?.meta.workspaceId;
-    const boards = new Set(hubWorkspacesHolding(docId));
-    if (grouping) for (const board of hubWorkspacesHolding(grouping)) boards.add(board);
-    for (const board of boards) {
+    for (const board of hubBoardsForDoc(docId)) {
       // rooms.ts already broadcast on the grouping's own channel; a second
       // send here would deliver the same comment twice to one listener.
       if (board === grouping) continue;
@@ -1021,6 +1075,122 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       .filter((w) => w.docIds.includes(attachmentId))
       .map((w) => w.id);
   }
+
+  /**
+   * Every hub board a DOC's discussion actually reaches — the boards holding
+   * the doc itself, plus the one grouping→board hop a diff review / folder
+   * bind needs (its members carry the grouping tag, and the grouping is what
+   * sits on the board as one row).
+   *
+   * Written once and used twice on purpose: `onDocRoomEvent` fans events out
+   * over exactly this set, and the coverage readout reports gaps against
+   * exactly this set. Two copies would agree today and drift later, and the
+   * drift would be invisible in the worst direction — a probe that says
+   * "covered" about a board the events never reach is the failure this
+   * ticket exists to end, restated as a reassuring answer.
+   */
+  function hubBoardsForDoc(docId: string): Set<string> {
+    const boards = new Set(hubWorkspacesHolding(docId));
+    const grouping = rooms.get(docId)?.meta.workspaceId;
+    if (grouping) for (const board of hubWorkspacesHolding(grouping)) boards.add(board);
+    return boards;
+  }
+
+  /**
+   * What is waiting for this board's lead, COUNTED WITHOUT DRAINING.
+   *
+   * Every reader here is the non-destructive one: `listQueuedVoice` (not
+   * `drainVoiceQueue`), and the three `getPending*` reads, which prune rows
+   * whose task has gone away but never hand anything over or clear it. That
+   * is not incidental. A probe that delivered while reporting would be right
+   * exactly once and would then have consumed the items the attach it was
+   * warning about was supposed to receive — this ticket's own silent-loss
+   * bug, wearing the costume of the fix.
+   */
+  const queuedForLead = (workspaceId: string): CoverageQueue => ({
+    queuedVoice: taskStore.listQueuedVoice(workspaceId).length,
+    pendingRetriage: taskStore.getPendingRetriage(workspaceId) ? 1 : 0,
+    pendingBucketReview: taskStore.getPendingBucketReview(workspaceId) ? 1 : 0,
+    taskReviews: taskStore.getPendingTaskReviews(workspaceId)?.length ?? 0,
+  });
+  const queueTotal = (q: CoverageQueue): number =>
+    q.queuedVoice + q.pendingRetriage + q.pendingBucketReview + q.taskReviews;
+
+  /**
+   * The coverage readout for one agent's watch set.
+   *
+   * Two halves, answering two different questions:
+   *
+   *  - `workspaces` resolves each `ws:<id>` key the agent holds. A key can
+   *    name a hub BOARD or a review GROUPING, and today nothing tells the
+   *    agent which — so nothing tells it that a board key without an
+   *    attachment hears the events but is invisible to every delivery gate.
+   *  - `unattachedBoards` is the measured incident: boards holding docs this
+   *    agent watches where it has no attachment at all, each with the count
+   *    of items queued for that board's lead. Six docs watched, zero
+   *    attachments, four items waiting.
+   *
+   * Deliberately built from DOC keys only. A `ws:<grouping>` key resolves to
+   * the board the review sits on, but the agent asked about the review, not
+   * about somebody else's seat — a row there would be an alarm about a board
+   * it never claimed to cover, and an alarm that fires on the innocent case
+   * is how a real one stops being read.
+   */
+  const watchCoverageFor = (agentId: string, keys: string[]): WatchCoverage => {
+    const workspaces: CoverageWorkspaceRow[] = [];
+    for (const key of keys) {
+      if (!key.startsWith('ws:')) continue;
+      const workspaceId = key.slice('ws:'.length);
+      const board = taskStore.getWorkspace(workspaceId);
+      if (!board) {
+        // Not a hub board. The key survived the liveness prune, so some doc
+        // room still carries this grouping tag.
+        workspaces.push({ key, workspaceId, kind: 'grouping' });
+        continue;
+      }
+      const attachment = taskStore.listAttachments(workspaceId).find((a) => a.agentId === agentId);
+      const queued = queuedForLead(workspaceId);
+      workspaces.push({
+        key,
+        workspaceId,
+        kind: 'board',
+        name: board.name,
+        attached: attachment !== undefined,
+        // `away` is precisely "no heartbeat inside the freshness window",
+        // which is the condition every delivery gate actually tests.
+        heartbeatFresh: attachment !== undefined && attachment.state !== 'away',
+        lead: board.leadAgentId === agentId,
+        queued,
+        queuedTotal: queueTotal(queued),
+      });
+    }
+
+    const docsByBoard = new Map<string, string[]>();
+    for (const key of keys) {
+      if (key.startsWith('ws:')) continue;
+      for (const boardId of hubBoardsForDoc(key)) {
+        docsByBoard.set(boardId, [...(docsByBoard.get(boardId) ?? []), key]);
+      }
+    }
+    const unattachedBoards: CoverageUnattachedBoard[] = [];
+    for (const [workspaceId, watchedDocs] of docsByBoard) {
+      const board = taskStore.getWorkspace(workspaceId);
+      if (!board) continue;
+      if (taskStore.listAttachments(workspaceId).some((a) => a.agentId === agentId)) continue;
+      const queued = queuedForLead(workspaceId);
+      unattachedBoards.push({
+        workspaceId,
+        name: board.name,
+        watchedDocs: [...watchedDocs].sort(),
+        queued,
+        queuedTotal: queueTotal(queued),
+      });
+    }
+    // Loudest first: a board with items actually waiting is the one a reader
+    // must not scroll past.
+    unattachedBoards.sort((a, b) => b.queuedTotal - a.queuedTotal || a.name.localeCompare(b.name));
+    return { agentId, workspaces, unattachedBoards };
+  };
 
   /**
    * ── Two things wear the word "workspace". Read this before touching any
@@ -3252,7 +3422,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             );
           };
           if (req.method === 'GET') {
-            return j(200, agentWatches.list(agentId, watchKeyExists));
+            const listed = agentWatches.list(agentId, watchKeyExists);
+            // ADDITIVE. `coverage` is a new key on an existing 200 body, so a
+            // bundle built before it ignores it and behaves exactly as it did
+            // — which matters here specifically because this is the restore
+            // path every respawned child calls before it can do anything else.
+            return j(200, {
+              ...listed,
+              coverage: watchCoverageFor(
+                agentId,
+                listed.watches.map((w) => w.key),
+              ),
+            });
           }
           if (req.method === 'POST') {
             const body = await safeJson(req);

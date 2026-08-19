@@ -13945,6 +13945,62 @@ function threadCreateRequest(input, author) {
   };
 }
 
+// packages/mcp/src/watch-coverage.ts
+function parseCoverage(res) {
+  if (!res || typeof res !== "object")
+    return;
+  const raw = res.coverage;
+  if (!raw || typeof raw !== "object")
+    return;
+  const c = raw;
+  if (typeof c.agentId !== "string")
+    return;
+  if (!Array.isArray(c.workspaces) || !Array.isArray(c.unattachedBoards))
+    return;
+  return {
+    agentId: c.agentId,
+    workspaces: c.workspaces,
+    unattachedBoards: c.unattachedBoards
+  };
+}
+function boardsWaitingOnYou(coverage) {
+  return (coverage?.unattachedBoards ?? []).filter((b) => b.queuedTotal > 0);
+}
+var plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+function describeQueue(q) {
+  const parts = [];
+  if (q.queuedVoice > 0)
+    parts.push(plural(q.queuedVoice, "voice note"));
+  if (q.pendingRetriage > 0)
+    parts.push(plural(q.pendingRetriage, "re-triage request"));
+  if (q.pendingBucketReview > 0)
+    parts.push(plural(q.pendingBucketReview, "bucket review"));
+  if (q.taskReviews > 0)
+    parts.push(plural(q.taskReviews, "task review"));
+  return parts.join(", ");
+}
+function coverageAlertLine(coverage) {
+  const waiting = boardsWaitingOnYou(coverage);
+  if (waiting.length === 0)
+    return null;
+  const described = waiting.map((b) => `"${b.name}" (${b.workspaceId}) — ${plural(b.watchedDocs.length, "doc")} watched, ` + `${b.queuedTotal} waiting (${describeQueue(b.queued)})`).join("; ");
+  const first = waiting[0];
+  return `[not attached] you watch docs on ${plural(waiting.length, "board")} where you have no ` + `attachment, and ${waiting.length === 1 ? "it has" : "they have"} work queued for a lead: ` + `${described}. Watching a doc is not attaching — every delivery gate asks whether the ` + "lead is ATTACHED, so none of that reaches you until you are. " + `set_workspace_lead(workspaceId: "${first.workspaceId}") attaches, subscribes and hands ` + "the backlog over in one call.";
+}
+function restoreNoticeContent(opts) {
+  const lines = [];
+  const n = opts.restored.length;
+  if (n > 0 || opts.pruned.length > 0) {
+    const dropped = opts.pruned.length > 0 ? `; ${opts.pruned.length} dropped (doc gone)` : "";
+    lines.push(`[watches restored] ${plural(n, "watch", "watches")} re-wired from the server for ` + `${opts.agentName} after restart${dropped}: ${opts.restored.join(", ")}`);
+  }
+  const alert = coverageAlertLine(opts.coverage);
+  if (alert)
+    lines.push(alert);
+  return lines.length > 0 ? lines.join(`
+`) : null;
+}
+
 // packages/mcp/src/mcp.ts
 function resolveBaseUrl() {
   const override = readRenamedEnv(process.env, "CW_BASE_URL");
@@ -14696,7 +14752,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "list_watched_docs",
-      description: "Return the docIds this session is currently subscribed to for channel events, WITH PROVENANCE: `restore.status` says whether this session re-wired its set from the server after a respawn ('restored'), never had a server set to restore ('restored' with an empty list), could not reach the server ('failed', with the error — retry by calling again), or has no stable identity so nothing survives a restart ('session-only'). An empty `watching` list therefore no longer means both 'never watched' and 'watched, then respawned' — read `restore` to tell them apart.",
+      description: "Return the docIds this session is currently subscribed to for channel events, WITH PROVENANCE: `restore.status` says whether this session re-wired its set from the server after a respawn ('restored'), never had a server set to restore ('restored' with an empty list), could not reach the server ('failed', with the error — retry by calling again), or has no stable identity so nothing survives a restart ('session-only'). An empty `watching` list therefore no longer means both 'never watched' and 'watched, then respawned' — read `restore` to tell them apart. Also answers the question that actually goes wrong — not 'what am I watching' but 'what am I MISSING'. `coverage.workspaces` resolves each `ws:<id>` key you hold (hub BOARD or review GROUPING; for a board, whether you are attached, whether your heartbeat is fresh, and whether you hold the lead seat), and `coverage.unattachedBoards` names boards that hold docs you watch but where you have NO attachment, each with what is queued for that board's lead (queuedVoice / pendingRetriage / pendingBucketReview / taskReviews). Watching a doc is not attaching: every delivery gate asks whether the lead is ATTACHED, so a row there means real work is queuing that will never reach you — `set_workspace_lead(workspaceId)` attaches, subscribes and drains it in one call. `coverage` is ABSENT rather than empty when the server did not answer (older server, no stable identity, unreachable); absent means unknown, never all-clear.",
       inputSchema: { type: "object", properties: {} }
     },
     {
@@ -15690,6 +15746,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         });
       }
       case "list_watched_docs": {
+        const coverage = await refreshCoverage();
         return ok({
           watching: Array.from(watchers.keys()),
           persistence: {
@@ -15698,6 +15755,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             ...IDENTITY_IS_SHARED ? { reason: SHARED_IDENTITY_REASON } : {}
           },
           restore: restoreState,
+          ...coverage ? { coverage } : {},
           ...lastPersistError ? { lastPersistError } : {}
         });
       }
@@ -16120,6 +16178,15 @@ var restoreState = IDENTITY_IS_SHARED ? { status: "session-only", from: "session
 var restoreInFlight = null;
 var restoreRetryAt = 0;
 var lastPersistError;
+var lastCoverage;
+async function refreshCoverage() {
+  if (IDENTITY_IS_SHARED)
+    return;
+  try {
+    lastCoverage = parseCoverage(await http("GET", watchesPath())) ?? lastCoverage;
+  } catch {}
+  return lastCoverage;
+}
 function watchPersistenceMode() {
   return IDENTITY_IS_SHARED ? "session-only" : "server";
 }
@@ -16148,6 +16215,7 @@ async function ensureWatchesRestored() {
     const attempts = restoreState.attempts + 1;
     try {
       const res = await http("GET", watchesPath());
+      lastCoverage = parseCoverage(res);
       const keys = (res.watches ?? []).map((w) => w.key);
       const restored = [];
       for (const key of keys) {
@@ -16167,9 +16235,7 @@ async function ensureWatchesRestored() {
         at: new Date().toISOString(),
         attempts
       };
-      if (restored.length > 0 || (res.pruned ?? []).length > 0) {
-        await emitRestoreNotice(restoreState).catch(() => {});
-      }
+      await emitRestoreNotice(restoreState).catch(() => {});
     } catch (err) {
       restoreState = {
         ...restoreState,
@@ -16185,15 +16251,26 @@ async function ensureWatchesRestored() {
   return restoreInFlight;
 }
 async function emitRestoreNotice(state) {
-  const n = state.restored.length;
-  const dropped = state.pruned.length > 0 ? `; ${state.pruned.length} dropped (doc gone)` : "";
+  const content = restoreNoticeContent({
+    restored: state.restored,
+    pruned: state.pruned,
+    agentName: AUTHOR.name,
+    coverage: lastCoverage
+  });
+  if (content === null)
+    return;
   await server.notification({
     method: "notifications/claude/channel",
     params: {
       source: "claude-workspaces",
       sent_at: state.at ?? new Date().toISOString(),
-      content: `[watches restored] ${n} watch${n === 1 ? "" : "es"} re-wired from the server for ${AUTHOR.name} after restart${dropped}: ${state.restored.join(", ")}`,
-      meta: { event: "watches.restored", restored: state.restored, pruned: state.pruned }
+      content,
+      meta: {
+        event: "watches.restored",
+        restored: state.restored,
+        pruned: state.pruned,
+        ...lastCoverage ? { unattachedBoards: lastCoverage.unattachedBoards } : {}
+      }
     }
   });
 }
