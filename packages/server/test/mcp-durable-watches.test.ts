@@ -333,4 +333,292 @@ describe('watches survive an MCP child respawn (through the real bundle)', () =>
     expect(handle.agentWatches.list(AGENT_ID, () => true).watches.length).toBeGreaterThan(0);
     anon.kill();
   }, 30_000);
+
+  // ───────────────────────────────────────────────────────────────────────
+  // Coverage: can the session tell DEAFNESS from SILENCE?
+  //
+  // Everything above proves a restored watch delivers. None of it would have
+  // caught the measured incident, because there the watches were fine: six
+  // docs, all live, all delivering. What was missing was an ATTACHMENT on the
+  // board those docs sit on, and every delivery gate asks about that rather
+  // than about watches — so a voice note and a re-triage request queued in
+  // silence while every probe the agent could run answered "all good".
+  //
+  // These two cases run the same shape end to end through the real bundle:
+  // one session that is missing an attachment and must be told, and one that
+  // is not and must be left alone.
+  // ───────────────────────────────────────────────────────────────────────
+
+  /** A board with something waiting for a lead nobody is filling, plus a doc
+   *  on it — the fixture the incident was made of. */
+  const boardWithBacklog = async (
+    name: string,
+    docId: string,
+  ): Promise<{ workspaceId: string }> => {
+    const ws = (await (
+      await rest('/api/workspaces', 'POST', {
+        name,
+        goal: 'Ship the index.',
+      })
+    ).json()) as { workspace: { id: string } };
+    const workspaceId = ws.workspace.id;
+    const path = join(dataDir, `${docId}.md`);
+    writeFileSync(path, `# ${docId}\n\nA paragraph to anchor a thread on.\n`);
+    expect(
+      (await rest('/api/docs', 'POST', { docId, sourceUrl: path, hubWorkspaceId: workspaceId }))
+        .status,
+    ).toBe(200);
+    // `goal` on create is what routes a new row to the lead for a shape
+    // review; with no live lead it queues instead.
+    expect(
+      (
+        await rest(`/api/workspaces/${workspaceId}/tasks`, 'POST', {
+          author: { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' },
+          title: 'An open row',
+          goal: 'chores',
+        })
+      ).status,
+    ).toBe(200);
+    return { workspaceId };
+  };
+
+  it('a session watching docs on a board it never attached to is TOLD, on both surfaces', async () => {
+    const NAME2 = 'Coverage Watch Tester';
+    const AGENT2 = 'agent-coverage-watch-tester';
+    const { workspaceId } = await boardWithBacklog('cov-board', 'cov-doc');
+
+    const first = await spawnChild({ CW_AGENT_NAME: NAME2 });
+    await first.tool('watch_doc', { docId: 'cov-doc' });
+    // The probe an agent already knows to run, in the state the incident was
+    // in: watching, never attached.
+    const live = (await first.tool('list_watched_docs')) as {
+      watching: string[];
+      coverage?: {
+        agentId: string;
+        unattachedBoards: Array<{
+          workspaceId: string;
+          name: string;
+          watchedDocs: string[];
+          queuedTotal: number;
+          queued: { taskReviews: number };
+        }>;
+      };
+    };
+    expect(live.watching).toContain('cov-doc');
+    expect(live.coverage?.agentId).toBe(AGENT2);
+    const row = live.coverage?.unattachedBoards.find((b) => b.workspaceId === workspaceId);
+    expect(row).toBeDefined();
+    expect(row?.name).toBe('cov-board');
+    expect(row?.watchedDocs).toEqual(['cov-doc']);
+    expect(row?.queued.taskReviews).toBe(1);
+    expect(row?.queuedTotal).toBeGreaterThan(0);
+
+    // And the unprompted half: an agent that does not know the gap exists
+    // never runs the probe, so the respawn has to say it without being asked.
+    first.kill();
+    const second = await spawnChild({ CW_AGENT_NAME: NAME2 });
+    const notice = await second.waitForChannel((n) =>
+      (n.params?.content ?? '').includes('[not covered]'),
+    );
+    expect(notice.params?.content).toContain('cov-board');
+    expect(notice.params?.content).toContain('set_workspace_lead');
+    // The restore line still rides the same message — the alert is added, not
+    // substituted for what the session was already told.
+    expect(notice.params?.content).toContain('[watches restored]');
+    second.kill();
+  }, 40_000);
+
+  it('POSITIVE CONTROL: a session that IS attached to the board hears the restore line and no alarm', async () => {
+    const NAME3 = 'Seated Watch Tester';
+    const { workspaceId } = await boardWithBacklog('seated-board', 'seated-doc');
+
+    const first = await spawnChild({ CW_AGENT_NAME: NAME3 });
+    await first.tool('watch_doc', { docId: 'seated-doc' });
+    // The one difference from the case above — and it goes through the TOOL
+    // rather than a REST POST on purpose. Being seated is two things: a
+    // record, and a channel open to receive what the record makes you the
+    // addressee for. `attach_agent` does both; posting the record from
+    // outside describes a session that registered and never connected, which
+    // is precisely the state the alarm exists to report.
+    expect(await first.tool('attach_agent', { workspaceId })).toBeDefined();
+    const live = (await first.tool('list_watched_docs')) as {
+      coverage?: { unattachedBoards: Array<{ workspaceId: string }> };
+    };
+    // The block is PRESENT and says nothing is missing — which is a different
+    // answer from the block being absent, and the whole reason coverage is
+    // omitted rather than emptied when the server cannot say.
+    expect(live.coverage).toBeDefined();
+    expect(live.coverage?.unattachedBoards.map((b) => b.workspaceId)).not.toContain(workspaceId);
+
+    first.kill();
+    const second = await spawnChild({ CW_AGENT_NAME: NAME3 });
+    const notice = await second.waitForChannel((n) =>
+      (n.params?.content ?? '').startsWith('[watches restored]'),
+    );
+    // Same message the alarmed session got, minus the alarm. Asserted on the
+    // notice that DID arrive rather than on a timeout, so the absence is an
+    // answer about this session and not about a notice that never fired.
+    expect(notice.params?.content).toContain('seated-doc');
+    expect(notice.params?.content).not.toContain('[not covered]');
+    second.kill();
+  }, 40_000);
+});
+
+/**
+ * A DECLARED LEAD SURVIVES ITS OWN RESPAWN — the ticket's second DONE-WHEN,
+ * and the half that was missing.
+ *
+ * `set_workspace_lead` gives the session one `ws:<id>` key and one attachment.
+ * The restore path re-wired the key and stopped there: the attachment record
+ * hydrates with the heartbeat from BEFORE the restart, so the board reads the
+ * returning lead as `away` and every lead-addressed delivery keeps queuing.
+ * Subscribed, seated, and invisible — with a restore notice that said
+ * "watches restored" and nothing else.
+ *
+ * Driven through the shipped BUNDLE, because that is what a peer loads. Its
+ * own server with a one-second freshness window, so "went away" is reachable
+ * inside a test instead of five minutes later; sharing the suite's server
+ * would age every other session in the file too.
+ */
+describe('a declared lead comes back live after a respawn', () => {
+  const NAME = 'Declared Lead Tester';
+  const AGENT_ID = 'agent-declared-lead-tester';
+  const PERSON = { id: 'known-reviewer', name: 'Reviewer', kind: 'known', color: '#2e7dd7' };
+  let handle: ServerHandle;
+  let dataDir: string;
+  let base: string;
+  const live: McpChild[] = [];
+
+  const rest = (path: string, method: string, body?: unknown) =>
+    fetch(`${base}${path}`, {
+      method,
+      headers: {
+        host: `localhost:${handle.port}`,
+        ...(body ? { 'content-type': 'application/json' } : {}),
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+
+  beforeAll(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'mcp-declared-lead-'));
+    handle = createServer({ port: 0, dataDir, heartbeatFreshMs: 1_000 });
+    base = `http://localhost:${handle.port}`;
+  });
+
+  afterAll(async () => {
+    for (const c of live) c.kill();
+    await handle.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  const spawnChild = async (env: Record<string, string | undefined>): Promise<McpChild> => {
+    const c = new McpChild(base, env);
+    live.push(c);
+    await c.init();
+    return c;
+  };
+
+  const stateOf = async (workspaceId: string): Promise<string | undefined> => {
+    const res = (await (
+      await rest(`/api/workspaces/${workspaceId}/attachments`, 'GET')
+    ).json()) as {
+      attachments: Array<{ agentId: string; state: string }>;
+    };
+    return res.attachments.find((a) => a.agentId === AGENT_ID)?.state;
+  };
+
+  it('is re-ATTACHED, not merely re-subscribed, and its goal edits arrive', async () => {
+    const w = await rest('/api/workspaces', 'POST', {
+      name: 'declared-board',
+      goal: 'Ship the index.',
+    });
+    const workspaceId = ((await w.json()) as { workspace: { id: string } }).workspace.id;
+    // A goal edit re-triages the board's OPEN ROWS, so an empty board has
+    // nothing to ask about and reports `requested: false` for a reason that
+    // has nothing to do with attachment. One row makes the later assertion
+    // about liveness rather than about emptiness.
+    expect(
+      (
+        await rest(`/api/workspaces/${workspaceId}/tasks`, 'POST', {
+          author: PERSON,
+          title: 'An open row',
+        })
+      ).status,
+    ).toBe(200);
+
+    const first = await spawnChild({ CW_AGENT_NAME: NAME });
+    const declared = (await first.tool('set_workspace_lead', { workspaceId })) as {
+      leadAgentId: string;
+      subscribed: boolean;
+    };
+    expect(declared.leadAgentId).toBe(AGENT_ID);
+    first.kill();
+
+    // The respawn gap, which a real one produces simply by taking a moment.
+    await new Promise((r) => setTimeout(r, 1_200));
+    // The precondition, asserted rather than assumed: the session really is
+    // away here, so what follows is a repair and not a no-op.
+    expect(await stateOf(workspaceId)).toBe('away');
+
+    const second = await spawnChild({ CW_AGENT_NAME: NAME });
+    // Any tool call drives the restore; this is one an agent would run.
+    await second.tool('list_watched_docs');
+    expect(await stateOf(workspaceId)).not.toBe('away');
+
+    // The end-to-end consequence, and the only assertion that would have
+    // caught this: a goal edit is DELIVERED rather than stored for a lead the
+    // server cannot see. `queued: true` here is the incident.
+    const goal = await rest(`/api/workspaces/${workspaceId}/goal`, 'PUT', {
+      goal: 'Cut token usage per session in half.',
+      author: PERSON,
+    });
+    const retriage = ((await goal.json()) as { retriage: { requested: boolean; queued: boolean } })
+      .retriage;
+    expect(retriage.requested).toBe(true);
+    expect(retriage.queued).toBe(false);
+    second.kill();
+  }, 40_000);
+
+  /**
+   * POSITIVE CONTROL on the re-attach: a session that only WATCHES a doc on
+   * somebody else's board must not be re-attached to it. `attachAgent` claims
+   * an empty seat, so a restore that attached to every board a watched doc
+   * touches would have respawns quietly taking seats nobody gave them.
+   */
+  it('POSITIVE CONTROL: does not attach a respawn to a board it only watches', async () => {
+    const OTHER = 'Bystander Tester';
+    const OTHER_ID = 'agent-bystander-tester';
+    const w = await rest('/api/workspaces', 'POST', {
+      name: 'someone-elses-board',
+      goal: 'Ship the index.',
+    });
+    const workspaceId = ((await w.json()) as { workspace: { id: string } }).workspace.id;
+    const path = join(dataDir, 'bystander-doc.md');
+    writeFileSync(path, '# bystander-doc\n\nBody.\n');
+    await rest('/api/docs', 'POST', {
+      docId: 'bystander-doc',
+      sourceUrl: path,
+      title: 'bystander-doc',
+      hubWorkspaceId: workspaceId,
+    });
+
+    const first = await spawnChild({ CW_AGENT_NAME: OTHER });
+    await first.tool('watch_doc', { docId: 'bystander-doc' });
+    first.kill();
+    const second = await spawnChild({ CW_AGENT_NAME: OTHER });
+    await second.tool('list_watched_docs');
+
+    const res = (await (
+      await rest(`/api/workspaces/${workspaceId}/attachments`, 'GET')
+    ).json()) as {
+      attachments: Array<{ agentId: string }>;
+    };
+    expect(res.attachments.map((a) => a.agentId)).not.toContain(OTHER_ID);
+    // …and the seat is still empty, rather than quietly taken by a bystander.
+    const board = (await (await rest(`/api/workspaces/${workspaceId}`, 'GET')).json()) as {
+      workspace: { leadAgentId?: string };
+    };
+    expect(board.workspace.leadAgentId).toBeUndefined();
+    second.kill();
+  }, 40_000);
 });

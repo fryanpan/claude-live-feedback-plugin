@@ -62,6 +62,7 @@ import {
   refreshWorkspace as refreshWorkspaceImpl,
   setWorkspaceGroups as setWorkspaceGroupsImpl,
 } from './binds.ts';
+import { newEventId } from './event-id.ts';
 import { scanFolderPaths } from './fs-scan.ts';
 import { showFile } from './git-diff.ts';
 import { gitConflictHint } from './git-provenance.ts';
@@ -2950,9 +2951,27 @@ export class Rooms {
   /** Shared SSE + workspace + webhook fan-out behind fireEvent /
    *  fireSuggestionEvent. Caller stamps `event`/`seq`/`doc` into payload. */
   private broadcastToRoom(room: DocRoom, payload: WebhookPayload): void {
+    // ONE id per broadcast, stamped before the fan-out so every channel below
+    // carries the same string. That is what lets a subscriber holding two of
+    // these channels collapse the copies without having to guess from `seq`,
+    // which is per-room AND per-server-epoch and therefore repeats after any
+    // restart — a guess whose wrong answer is a comment silently swallowed.
+    // See event-id.ts.
+    payload.eid = newEventId();
     this.cfg.sse.broadcast(room.docId, payload);
-    // Workspace members double-broadcast on a per-workspace channel so an
-    // agent can watch ONE stream per review/folder instead of one per file.
+    // Double-broadcast on the GROUPING's channel — `meta.workspaceId` is the
+    // tag a diff review or folder bind sets — so an agent can watch ONE
+    // stream per review/folder instead of one per file.
+    //
+    // GROUPING, and only the grouping. This comment used to say "workspace"
+    // flat, which reads as covering the other thing that wears that word: a
+    // hub BOARD, which holds docs through `workspace.docIds` and never
+    // through this tag. A doc filed on a board but carrying no grouping tag
+    // reached the board's channel from here NEVER, and an agent watching
+    // `ws:<board>` had no way to notice — silence from a subscription you
+    // never made is indistinguishable from nobody having commented. The
+    // board fan-out lives in server.ts's `onDocRoomEvent`, which resolves
+    // `workspace.docIds` at broadcast time; rooms.ts has no view of boards.
     if (room.meta.workspaceId) {
       this.cfg.sse.broadcast(`ws~${room.meta.workspaceId}`, payload);
     }

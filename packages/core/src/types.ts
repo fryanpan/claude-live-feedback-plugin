@@ -342,8 +342,14 @@ export interface ThreadWebhookPayload {
   doc: DocMeta;
   /** the comment that triggered the event (undefined for resolve/reopen). */
   comment?: Comment;
-  /** monotonically-increasing sequence within a doc. */
+  /** monotonically-increasing sequence within a doc. NOT unique across a
+   *  server restart — the counter lives on the in-memory room and starts at 0
+   *  again on every start. Use `eid` to identify an event. */
   seq: number;
+  /** Globally unique id for this broadcast, identical on every channel that
+   *  carries it and never repeated (see server `event-id.ts`). Optional
+   *  because a server older than the stamp does not send one. */
+  eid?: string;
 }
 
 /**
@@ -359,7 +365,10 @@ export interface SuggestionWebhookPayload {
   sid: string;
   suggestion?: unknown;
   doc: DocMeta;
+  /** Per-room and per-epoch; see ThreadWebhookPayload.seq. */
   seq: number;
+  /** See ThreadWebhookPayload.eid. */
+  eid?: string;
 }
 
 /** Payload POSTed to a host integration webhook. */
