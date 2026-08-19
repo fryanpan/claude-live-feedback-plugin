@@ -484,9 +484,10 @@ seat accumulated — same fields, same meaning as `attach_agent` below, and
   not an attachment. That gap is silent by construction — a queue nobody is
   draining looks exactly like a queue nobody filled.
 - **Declaring once is not staying live.** The declaration attaches you; it
-  cannot keep you attached. Delivery is gated on a heartbeat inside the
-  ~5-minute window, so a session that goes quiet for minutes stops receiving
-  lead-addressed work while every surface still says it is subscribed. Tool
+  cannot keep you attached. Delivery is gated on the server having observed
+  you recently — a heartbeat or a tool call, whichever is later — so a session
+  that goes quiet stops receiving lead-addressed work while every surface
+  still says it is subscribed. Tool
   calls refresh it, so a working session is fine; a thinking one is not. See
   "Stay live" below.
 - **When the board feels quiet, don't assume it is.** Call
@@ -539,8 +540,9 @@ Defaults: `agentId` = this agent's MCP identity, `runtime` =
 **All of these are drained by this call.** Nothing offers them again.
 
 **Stay live.** `heartbeat(workspaceId)` every few minutes. After ~5 minutes of
-silence the hub shows you as **away and triage requests queue** rather than
-reaching you. A fresh heartbeat with a stale `toolCallAt` renders as "process
+silence the hub shows you as **away**; what actually parks a triage request is
+the server having observed nothing from you at all — no heartbeat and no tool
+call. A fresh heartbeat with a stale `toolCallAt` renders as "process
 up, agent unresponsive" — which is why the call stamps the work clock too
 unless you pass an explicit earlier `toolCallAt`. `list_attachments(workspaceId)`
 shows who is where and whether anyone is wedged.
