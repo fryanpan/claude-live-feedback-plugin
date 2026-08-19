@@ -2941,8 +2941,19 @@ export class Rooms {
    *  fireSuggestionEvent. Caller stamps `event`/`seq`/`doc` into payload. */
   private broadcastToRoom(room: DocRoom, payload: WebhookPayload): void {
     this.cfg.sse.broadcast(room.docId, payload);
-    // Workspace members double-broadcast on a per-workspace channel so an
-    // agent can watch ONE stream per review/folder instead of one per file.
+    // Double-broadcast on the GROUPING's channel — `meta.workspaceId` is the
+    // tag a diff review or folder bind sets — so an agent can watch ONE
+    // stream per review/folder instead of one per file.
+    //
+    // GROUPING, and only the grouping. This comment used to say "workspace"
+    // flat, which reads as covering the other thing that wears that word: a
+    // hub BOARD, which holds docs through `workspace.docIds` and never
+    // through this tag. A doc filed on a board but carrying no grouping tag
+    // reached the board's channel from here NEVER, and an agent watching
+    // `ws:<board>` had no way to notice — silence from a subscription you
+    // never made is indistinguishable from nobody having commented. The
+    // board fan-out lives in server.ts's `onDocRoomEvent`, which resolves
+    // `workspace.docIds` at broadcast time; rooms.ts has no view of boards.
     if (room.meta.workspaceId) {
       this.cfg.sse.broadcast(`ws~${room.meta.workspaceId}`, payload);
     }

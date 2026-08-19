@@ -12,6 +12,7 @@ import { declareWorkspaceLead } from './declare-lead.ts';
 import { createFrameDedup } from './frame-dedup.ts';
 import { type ThreadCreateInput, threadCreateRequest } from './thread-create.ts';
 import { RETRIAGE_SKILL, TASK_REVIEW_SKILL, triageRequestLine } from './triage-line.ts';
+import { type WatchCoverage, parseCoverage, restoreNoticeContent } from './watch-coverage.ts';
 
 /**
  * Thin MCP server that proxies tool calls to a running feedback server
@@ -912,7 +913,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'list_watched_docs',
       description:
-        "Return the docIds this session is currently subscribed to for channel events, WITH PROVENANCE: `restore.status` says whether this session re-wired its set from the server after a respawn ('restored'), never had a server set to restore ('restored' with an empty list), could not reach the server ('failed', with the error — retry by calling again), or has no stable identity so nothing survives a restart ('session-only'). An empty `watching` list therefore no longer means both 'never watched' and 'watched, then respawned' — read `restore` to tell them apart.",
+        "Return the docIds this session is currently subscribed to for channel events, WITH PROVENANCE: `restore.status` says whether this session re-wired its set from the server after a respawn ('restored'), never had a server set to restore ('restored' with an empty list), could not reach the server ('failed', with the error — retry by calling again), or has no stable identity so nothing survives a restart ('session-only'). An empty `watching` list therefore no longer means both 'never watched' and 'watched, then respawned' — read `restore` to tell them apart. Also answers the question that actually goes wrong — not 'what am I watching' but 'what am I MISSING'. `coverage.workspaces` resolves each `ws:<id>` key you hold (hub BOARD or review GROUPING; for a board, whether you are attached, whether your heartbeat is fresh, and whether you hold the lead seat), and `coverage.unattachedBoards` names boards that hold docs you watch but where you have NO attachment, each with what is queued for that board's lead (queuedVoice / pendingRetriage / pendingBucketReview / taskReviews). Watching a doc is not attaching: every delivery gate asks whether the lead is ATTACHED, so a row there means real work is queuing that will never reach you — `set_workspace_lead(workspaceId)` attaches, subscribes and drains it in one call. `coverage` is ABSENT rather than empty when the server did not answer (older server, no stable identity, unreachable); absent means unknown, never all-clear.",
       inputSchema: { type: 'object', properties: {} },
     },
     {
@@ -2235,6 +2236,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         });
       }
       case 'list_watched_docs': {
+        // `watching` answers "what am I subscribed to". `coverage` answers
+        // the question that actually goes wrong: what am I MISSING. Six live
+        // watches is a true answer to the first and an all-clear to nobody —
+        // the peer that measured this held exactly that while a voice note
+        // and a re-triage request queued for a board it had never attached
+        // to. Absent rather than empty when the server did not say.
+        const coverage = await refreshCoverage();
         return ok({
           watching: Array.from(watchers.keys()),
           persistence: {
@@ -2243,6 +2251,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             ...(IDENTITY_IS_SHARED ? { reason: SHARED_IDENTITY_REASON } : {}),
           },
           restore: restoreState,
+          ...(coverage ? { coverage } : {}),
           ...(lastPersistError ? { lastPersistError } : {}),
         });
       }
@@ -3035,6 +3044,28 @@ let restoreInFlight: Promise<void> | null = null;
  *  back off (capped at 30s), then try again on the next call after that. */
 let restoreRetryAt = 0;
 let lastPersistError: string | undefined;
+/**
+ * The server's last answer to "what am I MISSING?", or undefined for "not
+ * known" — an older server, the shared-identity refusal, an unreachable box.
+ * Deliberately not defaulted to an empty block: unknown rendered as empty
+ * reads as "nothing is missing", which is exactly the confident wrong answer
+ * this whole readout exists to replace.
+ */
+let lastCoverage: WatchCoverage | undefined;
+
+/** Ask the server for a fresh coverage read. Never throws and never
+ *  fabricates: an unreachable server leaves the previous answer alone rather
+ *  than manufacturing an all-clear out of a failed request. */
+async function refreshCoverage(): Promise<WatchCoverage | undefined> {
+  if (IDENTITY_IS_SHARED) return undefined;
+  try {
+    lastCoverage = parseCoverage(await http('GET', watchesPath())) ?? lastCoverage;
+  } catch {
+    // Leave `lastCoverage` as it was; `list_watched_docs` omits the field
+    // entirely when it is undefined.
+  }
+  return lastCoverage;
+}
 
 function watchPersistenceMode(): 'server' | 'session-only' {
   return IDENTITY_IS_SHARED ? 'session-only' : 'server';
@@ -3075,6 +3106,7 @@ async function ensureWatchesRestored(): Promise<void> {
         watches?: Array<{ key: string }>;
         pruned?: string[];
       };
+      lastCoverage = parseCoverage(res);
       const keys = (res.watches ?? []).map((w) => w.key);
       const restored: string[] = [];
       for (const key of keys) {
@@ -3091,9 +3123,13 @@ async function ensureWatchesRestored(): Promise<void> {
         at: new Date().toISOString(),
         attempts,
       };
-      if (restored.length > 0 || (res.pruned ?? []).length > 0) {
-        await emitRestoreNotice(restoreState).catch(() => {});
-      }
+      // Unconditional now — `emitRestoreNotice` decides whether there is
+      // anything to say. It speaks on an EMPTY restore when a board is
+      // waiting on this session, which is the incident's own shape: the
+      // watches were wired by hand this run, so there was nothing to restore
+      // and nothing was said, while four items sat queued for a seat nobody
+      // held.
+      await emitRestoreNotice(restoreState).catch(() => {});
     } catch (err) {
       restoreState = {
         ...restoreState,
@@ -3109,18 +3145,35 @@ async function ensureWatchesRestored(): Promise<void> {
   return restoreInFlight;
 }
 
-/** One line into the session saying the feedback loop came back intact —
- *  the thing a respawned peer otherwise has no way to know. */
+/**
+ * One line into the session saying the feedback loop came back intact — and
+ * naming any board that is waiting on this session but has no attachment from
+ * it. Silent when there is nothing of either kind to report.
+ *
+ * The second half is the one that matters: an agent that does not know the
+ * gap exists never runs the probe that would show it, so the report has to
+ * arrive unprompted or it may as well not exist.
+ */
 async function emitRestoreNotice(state: RestoreState): Promise<void> {
-  const n = state.restored.length;
-  const dropped = state.pruned.length > 0 ? `; ${state.pruned.length} dropped (doc gone)` : '';
+  const content = restoreNoticeContent({
+    restored: state.restored,
+    pruned: state.pruned,
+    agentName: AUTHOR.name,
+    coverage: lastCoverage,
+  });
+  if (content === null) return;
   await server.notification({
     method: 'notifications/claude/channel',
     params: {
       source: 'claude-workspaces',
       sent_at: state.at ?? new Date().toISOString(),
-      content: `[watches restored] ${n} watch${n === 1 ? '' : 'es'} re-wired from the server for ${AUTHOR.name} after restart${dropped}: ${state.restored.join(', ')}`,
-      meta: { event: 'watches.restored', restored: state.restored, pruned: state.pruned },
+      content,
+      meta: {
+        event: 'watches.restored',
+        restored: state.restored,
+        pruned: state.pruned,
+        ...(lastCoverage ? { unattachedBoards: lastCoverage.unattachedBoards } : {}),
+      },
     },
   });
 }
@@ -3138,8 +3191,27 @@ async function watchDoc(docId: string, persist = true): Promise<boolean> {
   return persist ? persistWatchChange({ add: [docId] }) : false;
 }
 
-/** Watch a whole workspace/diff review on ONE stream — every thread event on
- *  any member doc arrives here (server double-broadcasts per workspace). */
+/**
+ * Watch a whole workspace on ONE stream. Two things wear that word, and this
+ * key covers both — but it did not always, and the comment here used to say
+ * "every thread event on any member doc arrives" without saying which sense
+ * it meant.
+ *
+ *  - A GROUPING (a diff review / folder bind): its member docs carry the
+ *    grouping tag and `rooms.ts` has always double-broadcast on it. True from
+ *    the start.
+ *  - A hub BOARD: it holds docs through `workspace.docIds`, which is NOT that
+ *    tag. Until the board fan-out landed in server.ts's `onDocRoomEvent`, a
+ *    doc filed on a board reached this stream never — and nothing said so,
+ *    which is the whole failure class here. Now it does, resolved at
+ *    broadcast time, so docs created LATER are covered with no second call.
+ *
+ * What this key still does NOT do is attach you. Watching is listening;
+ * attaching is being addressable. Every delivery gate asks the second
+ * question, so a session with this key and no attachment hears comments while
+ * voice notes and re-triage requests queue for a lead it is not. `coverage`
+ * on `list_watched_docs` is what reports that gap.
+ */
 async function watchWorkspace(workspaceId: string, persist = true): Promise<boolean> {
   const key = `ws:${workspaceId}`;
   if (!watchers.has(key)) {

@@ -333,4 +333,136 @@ describe('watches survive an MCP child respawn (through the real bundle)', () =>
     expect(handle.agentWatches.list(AGENT_ID, () => true).watches.length).toBeGreaterThan(0);
     anon.kill();
   }, 30_000);
+
+  // ───────────────────────────────────────────────────────────────────────
+  // Coverage: can the session tell DEAFNESS from SILENCE?
+  //
+  // Everything above proves a restored watch delivers. None of it would have
+  // caught the measured incident, because there the watches were fine: six
+  // docs, all live, all delivering. What was missing was an ATTACHMENT on the
+  // board those docs sit on, and every delivery gate asks about that rather
+  // than about watches — so a voice note and a re-triage request queued in
+  // silence while every probe the agent could run answered "all good".
+  //
+  // These two cases run the same shape end to end through the real bundle:
+  // one session that is missing an attachment and must be told, and one that
+  // is not and must be left alone.
+  // ───────────────────────────────────────────────────────────────────────
+
+  /** A board with something waiting for a lead nobody is filling, plus a doc
+   *  on it — the fixture the incident was made of. */
+  const boardWithBacklog = async (
+    name: string,
+    docId: string,
+  ): Promise<{ workspaceId: string }> => {
+    const ws = (await (
+      await rest('/api/workspaces', 'POST', {
+        name,
+        goal: 'Ship the index.',
+      })
+    ).json()) as { workspace: { id: string } };
+    const workspaceId = ws.workspace.id;
+    const path = join(dataDir, `${docId}.md`);
+    writeFileSync(path, `# ${docId}\n\nA paragraph to anchor a thread on.\n`);
+    expect(
+      (await rest('/api/docs', 'POST', { docId, sourceUrl: path, hubWorkspaceId: workspaceId }))
+        .status,
+    ).toBe(200);
+    // `goal` on create is what routes a new row to the lead for a shape
+    // review; with no live lead it queues instead.
+    expect(
+      (
+        await rest(`/api/workspaces/${workspaceId}/tasks`, 'POST', {
+          author: { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' },
+          title: 'An open row',
+          goal: 'chores',
+        })
+      ).status,
+    ).toBe(200);
+    return { workspaceId };
+  };
+
+  it('a session watching docs on a board it never attached to is TOLD, on both surfaces', async () => {
+    const NAME2 = 'Coverage Watch Tester';
+    const AGENT2 = 'agent-coverage-watch-tester';
+    const { workspaceId } = await boardWithBacklog('cov-board', 'cov-doc');
+
+    const first = await spawnChild({ CW_AGENT_NAME: NAME2 });
+    await first.tool('watch_doc', { docId: 'cov-doc' });
+    // The probe an agent already knows to run, in the state the incident was
+    // in: watching, never attached.
+    const live = (await first.tool('list_watched_docs')) as {
+      watching: string[];
+      coverage?: {
+        agentId: string;
+        unattachedBoards: Array<{
+          workspaceId: string;
+          name: string;
+          watchedDocs: string[];
+          queuedTotal: number;
+          queued: { taskReviews: number };
+        }>;
+      };
+    };
+    expect(live.watching).toContain('cov-doc');
+    expect(live.coverage?.agentId).toBe(AGENT2);
+    const row = live.coverage?.unattachedBoards.find((b) => b.workspaceId === workspaceId);
+    expect(row).toBeDefined();
+    expect(row?.name).toBe('cov-board');
+    expect(row?.watchedDocs).toEqual(['cov-doc']);
+    expect(row?.queued.taskReviews).toBe(1);
+    expect(row?.queuedTotal).toBeGreaterThan(0);
+
+    // And the unprompted half: an agent that does not know the gap exists
+    // never runs the probe, so the respawn has to say it without being asked.
+    first.kill();
+    const second = await spawnChild({ CW_AGENT_NAME: NAME2 });
+    const notice = await second.waitForChannel((n) =>
+      (n.params?.content ?? '').includes('[not attached]'),
+    );
+    expect(notice.params?.content).toContain('cov-board');
+    expect(notice.params?.content).toContain('set_workspace_lead');
+    // The restore line still rides the same message — the alert is added, not
+    // substituted for what the session was already told.
+    expect(notice.params?.content).toContain('[watches restored]');
+    second.kill();
+  }, 40_000);
+
+  it('POSITIVE CONTROL: a session that IS attached to the board hears the restore line and no alarm', async () => {
+    const NAME3 = 'Seated Watch Tester';
+    const AGENT3 = 'agent-seated-watch-tester';
+    const { workspaceId } = await boardWithBacklog('seated-board', 'seated-doc');
+    // The one difference from the case above.
+    expect(
+      (
+        await rest(`/api/workspaces/${workspaceId}/attachments`, 'POST', {
+          agentId: AGENT3,
+          runtime: 'claude-code-local',
+        })
+      ).status,
+    ).toBe(200);
+
+    const first = await spawnChild({ CW_AGENT_NAME: NAME3 });
+    await first.tool('watch_doc', { docId: 'seated-doc' });
+    const live = (await first.tool('list_watched_docs')) as {
+      coverage?: { unattachedBoards: Array<{ workspaceId: string }> };
+    };
+    // The block is PRESENT and says nothing is missing — which is a different
+    // answer from the block being absent, and the whole reason coverage is
+    // omitted rather than emptied when the server cannot say.
+    expect(live.coverage).toBeDefined();
+    expect(live.coverage?.unattachedBoards.map((b) => b.workspaceId)).not.toContain(workspaceId);
+
+    first.kill();
+    const second = await spawnChild({ CW_AGENT_NAME: NAME3 });
+    const notice = await second.waitForChannel((n) =>
+      (n.params?.content ?? '').startsWith('[watches restored]'),
+    );
+    // Same message the alarmed session got, minus the alarm. Asserted on the
+    // notice that DID arrive rather than on a timeout, so the absence is an
+    // answer about this session and not about a notice that never fired.
+    expect(notice.params?.content).toContain('seated-doc');
+    expect(notice.params?.content).not.toContain('[not attached]');
+    second.kill();
+  }, 40_000);
 });
