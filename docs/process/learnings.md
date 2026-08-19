@@ -2489,6 +2489,26 @@ Technical discoveries that should persist across sessions for this project.
   instances of it, on the strength of a grep that had gone blind this way.
   Treat "the thing isn't in this file" as unproven until either the byte count
   is 0 or `grep -a` agrees.
+- **`grep -a` belongs on every probe against a DIFF too, not only against a
+  build artifact.** This entry originally scoped the habit to bundles, which
+  reads as "binaries are the risk" — but source diffs carry NUL whenever any
+  file in range does. Measured 2026-08-19 on #255: the first semantic sweep
+  reported **0 hits and was wrong**, because the diff included `voice.ts` and
+  its one NUL blinded the whole range. `grep -c` returned *empty* while
+  `grep -ac` returned **1280** on the same input, and the hit it hid was the
+  single call the entire semantic question turned on.
+  - **The empty string was the only tell, and a bare `0` would have read as a
+    clean answer.** That is the difference worth internalising: this failure
+    does not look like an error, it looks like a negative result. If a count
+    comes back empty rather than `0`, you are not looking at "none" — you are
+    looking at a grep that refused to answer.
+- **A whole battery of probes can go blind together, which is what defeats the
+  usual sense of safety in numbers.** Six independent bundle probes over one
+  NUL-bearing file would all print nothing and all exit 1 — six clean
+  negatives, agreeing with each other, every one of them vacuous. So the
+  safeguard is not "run a positive control" in the abstract but **run one
+  through the same code path as the probe**: same flags, same file, same
+  invocation. A control that differs anywhere is testing a different question.
 - Same family as "A negative probe needs a positive control", with the sting
   that here the control is inside the blind spot with the probe.
 
@@ -2616,3 +2636,40 @@ Technical discoveries that should persist across sessions for this project.
 - Same family as "A negative probe needs a positive control", pointed at
   assertions rather than searches: a check that reports success without having
   looked at the thing it names.
+
+## A merge's blast radius includes every sentence that describes the changed behaviour, and only the code half is self-reporting
+
+- **The incident.** #253 split one liveness clock into two: `HEARTBEAT_FRESH_MS`
+  (~5 min) kept driving the DISPLAYED active/away label, while delivery moved to
+  `isDeliverable` — `OBSERVED_LIVE_MS` (15 min) over
+  `max(lastHeartbeat, lastToolCallAt)`, plus an open-channel probe. #256 merged
+  main in, got a **clean auto-merge**, and three fixtures went red. They were
+  fixed, the suites went green, and the merge was reported resolved.
+- **The three fixtures were the only part of the blast radius that could
+  announce itself.** The same semantic change had also falsified four tool
+  descriptions, two shipped skills, a test's NAME, two of its comments, and one
+  of its assertions. None of those can fail. The search stopped at three because
+  **the thing that tells you to keep looking is a failing check**, and prose has
+  none.
+- **The rule: after a merge that changes what a value MEANS rather than what it
+  is, grep the tree for the old concept in prose** — comments, tool
+  descriptions, skills, test names, PR-facing docs. The compiler and the suite
+  between them cover none of those surfaces. Scope the grep to the tree, not the
+  diff: a wrong sentence main already carries is not in the diff to be reviewed,
+  which is how three of the seven sites had been shipping for weeks.
+- **A clean auto-merge is not evidence** when the semantic change lives in a
+  function body neither side's diff touched. Git resolved the text correctly and
+  had nothing to say about meaning; the absence of conflicts measured only that
+  the two edits did not overlap.
+- **Two properties made this worse than a plain miss, and both are in the
+  neighbouring entry** ("An assertion whose alternation can match either way
+  pins nothing"): the guard was written **in the same PR** and passed on the
+  wrong text, and its explanatory comment restated the false claim as the
+  justification. So the guard, its name, and its rationale all encoded the bug —
+  **checking the docs against the docs would have confirmed the error.** Read
+  that entry for the alternation mechanics and the seven-site sweep; this one is
+  about why nobody went looking in the first place.
+- The archive already holds several entries about checks that report success
+  without having looked. This is the neighbouring case and the reason it is
+  filed separately: **there was no check at all, and its absence looked the same
+  as a passing one.**
