@@ -1,6 +1,6 @@
 ---
 name: running-a-workspace-hub
-description: Use when you need to stand up or drive a claude-workspaces workspace hub with the MCP tools — create_workspace, set_goal_list, create_tasks, set_task_goal, attach_agent, task_transition, add_review_item, answer_review_item, answer_decision, link_refs. Covers the north-star goal, the ordered goal list, story-shaped task bodies, triage, the work loop, the review items a ticket carries, and the lead-agent seat.
+description: Use when you need to stand up or drive a claude-workspaces workspace hub with the MCP tools — create_workspace, set_goal_list, create_tasks, set_task_goal, set_workspace_lead, attach_agent, task_transition, add_review_item, answer_review_item, answer_decision, link_refs. Covers the north-star goal, the ordered goal list, story-shaped task bodies, triage, the work loop, the review items a ticket carries, the lead-agent seat, and declaring yourself lead once so every surface on the board — including ones created later — reaches you without a per-doc subscribe.
 ---
 
 # Running a claude-workspaces workspace hub
@@ -51,11 +51,15 @@ create_workspace(
   `set_workspace_goal`.
 - **You become the board's lead agent** unless you pass `leadAgentId`. The lead
   is the addressee for goal-edit re-triage (see the last section). Hand the
-  seat over later with `set_workspace_lead(workspaceId, leadAgentId)`.
+  seat over later with `set_workspace_lead(workspaceId, leadAgentId)` — naming
+  somebody else is a pure handover and moves nothing but the seat.
 - The call auto-subscribes this session to the workspace event channel
   (`task.*`, `decision.answered`, `triage.requested`, `workspace.goal_updated`,
   …), which arrives on the same channel as thread events. Pass
   `subscribe: false` to skip.
+- **If you did not create the board, declare yourself on it** with
+  `set_workspace_lead(workspaceId)` — see "Declare yourself once" below. That
+  is the whole of your session-start setup.
 
 Then give it sections:
 
@@ -214,9 +218,10 @@ Same goal semantics: omit `goal` to route through triage.
 
 A task's description is backed by a real markdown room with
 `docId = "task:<taskId>"` (`packages/server/src/task-projection.ts`). So the
-normal doc tools work on it: `watch_doc("task:t-abc123")` to receive comment
-events, `create_thread` / `post_reply` to have the conversation next to the
-work, `get_doc` to read it. Edits snapshot back into the task body. This is how
+normal doc tools work on it: `create_thread` / `post_reply` to have the
+conversation next to the work, `get_doc` to read it. (You do **not** need
+`watch_doc("task:t-abc123")` to hear its comments — declaring yourself on the
+board covers every doc filed there, this one included.) Edits snapshot back into the task body. This is how
 "ask for feedback on the task, not in chat" is actually done from an agent —
 there is no `comment_on_task` tool.
 
@@ -424,7 +429,88 @@ set_task_goal(taskId, goal: "latency", position: 2.5, batchId?)
 
 ## The work loop
 
-**Attach, and read the briefing.**
+### Declare yourself once, and stop subscribing to things
+
+```
+set_workspace_lead(workspaceId)          // no second argument
+→ { workspaceId, changed, leadAgentId, previousLeadAgentId?, declined?,
+    subscribed, subscriptionPersisted, subscriptionWarning?,
+    lead, gating, untriaged, queuedVoice,
+    pendingRetriage?, pendingBucketReview?, taskReviews? }
+```
+
+**One call at session start, and everything on this board reaches you** — task
+and decision events, thread events on every doc filed here, voice notes,
+re-triage asks. Including **docs created later**: coverage is resolved when an
+event fires, against what the board holds at that moment, so a doc filed on
+the board an hour from now is covered by the declaration you already made.
+There is no per-surface subscribe to remember and nothing to redo.
+
+**It survives a respawn.** The subscription is persisted against your agent
+identity (`CW_AGENT_NAME`) and re-wired when your session comes back, so the
+next context does not spend its opening turns rebuilding a watch list. The
+restore now **re-attaches** you too, on boards you already led or were attached
+to whose heartbeat came back stale — re-wiring the key puts events back on the
+wire, and only the attachment makes you *addressable*, so the two repairs
+failing separately is how a respawned lead came back subscribed and invisible.
+Check with `list_watched_docs`, whose `restore.status` says whether the re-wire
+happened, failed, or was never possible (no stable identity).
+
+Because it also attaches you, the same response carries the **backlog** the
+seat accumulated — same fields, same meaning as `attach_agent` below, and
+**drained by this call**, so read them here or lose them.
+
+- **Read `subscribed`, don't assume it.** It reports whether the event stream
+  actually opened, so `false` is a real outcome: something reached the server
+  but the listening half did not come up, and a `subscriptionWarning` says
+  which. Call again. `subscriptionPersisted: false` is the *other* failure —
+  today works, the next respawn does not, usually because this session has no
+  `CW_AGENT_NAME`. They fail independently, which is why they are two fields.
+- **Declaring does not evict a live peer.** If a different agent already leads
+  the board and is live, the seat stays with them and you get
+  `declined: "lead-held"` plus `previousLeadAgentId`. You are still attached
+  and subscribed — nothing on the board is hidden from you, only the seat did
+  not move. Coordinate with them; pass `takeover: true` when you genuinely
+  mean to take it. (A seat whose holder has gone quiet is *not* protected —
+  recovering an abandoned board is exactly what declaring is for.)
+- **Use the bare one-argument form to declare yourself.** Passing
+  `leadAgentId` is a *handover* to somebody else: it moves the seat and does
+  nothing else, because attaching on an absent agent's behalf would make the
+  board report a live lead that is not there.
+- **`watch_doc` is for docs OUTSIDE your board** — a peer's review you want to
+  observe, a doc nobody filed here. It is no longer how you cover your own
+  board, and a pile of `watch_doc` calls is not a substitute for declaring:
+  every delivery gate asks whether the lead is **attached**, and a doc watch is
+  not an attachment. That gap is silent by construction — a queue nobody is
+  draining looks exactly like a queue nobody filled.
+- **Declaring once is not staying live.** The declaration attaches you; it
+  cannot keep you attached. Delivery is gated on the server having observed
+  you recently — a heartbeat or a tool call, whichever is later — so a session
+  that goes quiet stops receiving lead-addressed work while every surface
+  still says it is subscribed. Tool
+  calls refresh it, so a working session is fine; a thinking one is not. See
+  "Stay live" below.
+- **When the board feels quiet, don't assume it is.** Call
+  `list_watched_docs` and read `coverage.unattachedBoards`: each row is a board
+  you follow — through a watched doc **or through the board's own `ws:` key** —
+  where you are not **live**, with what is queued for its lead. "Not live"
+  covers two different states and the row says which: no attachment at all, or
+  `attached: true, heartbeatFresh: false` (a record exists, the window lapsed,
+  and every gate reads the window). The remedy differs, and each row carries
+  the right one:
+  - seat empty or its holder gone → `set_workspace_lead(workspaceId)`
+  - the seat is already yours, only the heartbeat lapsed → `heartbeat(workspaceId)`
+  - a **live peer** leads it (`leadLive: true`) → `attach_agent(workspaceId)`,
+    which makes you addressable without evicting them. The queue there is
+    addressed to *them*; ask rather than take.
+
+  An **absent** `coverage` means the server did not answer — unknown, never
+  all-clear.
+
+### Attach and read the briefing, if you are not the lead
+
+A peer picking up one task, or a subagent handed a workspaceId, uses this door
+instead: it subscribes and briefs you, but it does not take the seat.
 
 ```
 attach_agent(workspaceId)
@@ -454,8 +540,9 @@ Defaults: `agentId` = this agent's MCP identity, `runtime` =
 **All of these are drained by this call.** Nothing offers them again.
 
 **Stay live.** `heartbeat(workspaceId)` every few minutes. After ~5 minutes of
-silence the hub shows you as **away and triage requests queue** rather than
-reaching you. A fresh heartbeat with a stale `toolCallAt` renders as "process
+silence the hub shows you as **away**; what actually parks a triage request is
+the server having observed nothing from you at all — no heartbeat and no tool
+call. A fresh heartbeat with a stale `toolCallAt` renders as "process
 up, agent unresponsive" — which is why the call stamps the work clock too
 unless you pass an explicit earlier `toolCallAt`. `list_attachments(workspaceId)`
 shows who is where and whether anyone is wedged.

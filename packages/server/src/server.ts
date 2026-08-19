@@ -255,6 +255,23 @@ export interface ServerOptions {
   port?: number;
   dataDir?: string;
   /**
+   * How long an attachment stays `live` without a heartbeat (default five
+   * minutes, `HEARTBEAT_FRESH_MS`). A test seam: the whole away-lead half of
+   * this server is unreachable otherwise, since a test cannot sleep five
+   * minutes and asserting on `attachmentState` in isolation does not exercise
+   * the routes that read it.
+   */
+  heartbeatFreshMs?: number;
+  /**
+   * How recently the server must have OBSERVED an agent for a delivery to
+   * count as reaching it (default `OBSERVED_LIVE_MS`, fifteen minutes). The
+   * separate seam matters: this is the window the coverage read and every
+   * delivery gate actually test, and it is three times the heartbeat one, so
+   * a test that shrinks only `heartbeatFreshMs` never leaves the live window
+   * at all.
+   */
+  observedWorkFreshMs?: number;
+  /**
    * Runs `claude plugin update` on this machine when a peer asks. Absent by
    * default and constructed in ONE place (bin.ts), so nothing that merely
    * spins a server up — every test, every embedded use — can mutate this
@@ -399,6 +416,95 @@ const CT: Record<string, string> = {
   '.png': 'image/png',
   '.ico': 'image/x-icon',
 };
+
+/**
+ * ── Watch coverage: the answer to "what am I MISSING?" ──────────────────────
+ *
+ * `list_watched_docs` answers "what am I watching", and the measured incident
+ * is that the true answer to that question — six docs, all live — reads as an
+ * all-clear while a voice note and a re-triage request queue silently for a
+ * board the agent never attached to. An agent cannot tell deafness from
+ * silence, so it never thinks to ask.
+ *
+ * These types are what the watches route reports back so it can. Additive:
+ * every field is new, so a bundle that predates them ignores an unknown key
+ * and keeps working exactly as before.
+ */
+export interface CoverageQueue {
+  queuedVoice: number;
+  /** 0 or 1 — the pending re-triage is a single coalesced ask. */
+  pendingRetriage: number;
+  /** 0 or 1 — likewise. */
+  pendingBucketReview: number;
+  taskReviews: number;
+}
+
+/** One `ws:<id>` key in the agent's watch set, resolved. */
+export interface CoverageWorkspaceRow {
+  key: string;
+  workspaceId: string;
+  /** `board` — a hub workspace with tasks, a lead seat and attachments.
+   *  `grouping` — a diff review / folder bind, which has none of those. */
+  kind: 'board' | 'grouping';
+  /** Board only. Attachment / lead / heartbeat are hub-board facts; printing
+   *  `attached: false` for a grouping would read as a gap that cannot exist. */
+  name?: string;
+  attached?: boolean;
+  /** The displayed active/away label: a heartbeat inside the heartbeat
+   *  window. NOT the delivery gate — see `live`. */
+  heartbeatFresh?: boolean;
+  /** Whether work actually reaches this agent here: recent observed work
+   *  (heartbeat or tool call, whichever is later) plus an open channel. This
+   *  is the one that answers "am I covered". */
+  live?: boolean;
+  lead?: boolean;
+  queued?: CoverageQueue;
+  queuedTotal?: number;
+}
+
+/**
+ * A board this agent covers on paper but not in fact — the incident,
+ * rendered as a row.
+ *
+ * "Not in fact" is deliberately wider than "has no attachment record". Every
+ * delivery gate asks `hasLiveAttachment` / `hasLiveLeadAttachment`, i.e. is
+ * there a heartbeat inside the freshness window — so an hour-old attachment
+ * satisfies "attached" while the board's whole queue routes to nobody. The
+ * first version of this readout tested for the record and was therefore
+ * confidently wrong in the one state that matters: a declared lead whose
+ * session went quiet, with work visibly piling up.
+ */
+export interface CoverageUnattachedBoard {
+  workspaceId: string;
+  name: string;
+  /** The watched docs that put this board on the list. Empty when the agent
+   *  reached it by holding the board's own `ws:<id>` key — which is what a
+   *  declared lead holds, and holds instead of any doc key. */
+  watchedDocs: string[];
+  queued: CoverageQueue;
+  queuedTotal: number;
+  /** An attachment RECORD exists for this agent. Not the same as covered. */
+  attached: boolean;
+  /** …and its heartbeat is inside the heartbeat window, i.e. the board does
+   *  not show it as away. Reported because it names which of the two things
+   *  lapsed; it is NOT what admitted this row — rows are selected on the
+   *  delivery gate, so `attached: true, heartbeatFresh: false` here means
+   *  BOTH clocks ran out, not merely the heartbeat one. */
+  heartbeatFresh: boolean;
+  /** Who holds the lead seat, when anyone does. */
+  leadAgentId?: string;
+  /** Whether THAT agent is live by the same predicate `setLeadAgent`'s guard
+   *  uses. False means the queue has no live addressee; true means somebody
+   *  else is already draining it and taking the seat would evict a working
+   *  peer — and would be refused. */
+  leadLive: boolean;
+}
+
+export interface WatchCoverage {
+  agentId: string;
+  workspaces: CoverageWorkspaceRow[];
+  unattachedBoards: CoverageUnattachedBoard[];
+}
 
 export interface ServerHandle {
   port: number;
@@ -615,13 +721,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // Late-bound because Rooms is constructed before the task store and the
   // projection it needs. Nothing can fire through it until a room exists,
   // which is after both.
-  let onTaskBodyEvent: ((docId: string, payload: WebhookPayload) => void) | null = null;
+  let onDocRoomEvent: ((docId: string, payload: WebhookPayload) => void) | null = null;
   const rooms = new Rooms({
     dataDir,
     sse,
     webhooks,
     decorateDocMeta: withReviewUrl,
-    onRoomEvent: (docId, payload) => onTaskBodyEvent?.(docId, payload),
+    onRoomEvent: (docId, payload) => onDocRoomEvent?.(docId, payload),
     ...(summarizer ? { summarizer } : {}),
   });
   // Materialize the shared hub-feedback doc at startup rather than letting
@@ -635,7 +741,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   });
   // The hub task store (plan §3.2/§3.3): server-owned workspaces + tasks,
   // persisted as per-workspace sidecars under <dataDir>/workspaces/.
-  const taskStore = new TaskStore({ dataDir });
+  const taskStore = new TaskStore({
+    dataDir,
+    ...(opts.heartbeatFreshMs !== undefined ? { heartbeatFreshMs: opts.heartbeatFreshMs } : {}),
+    ...(opts.observedWorkFreshMs !== undefined
+      ? { observedWorkFreshMs: opts.observedWorkFreshMs }
+      : {}),
+  });
   // Which docs each agent identity is watching — the durable memory behind
   // the MCP child's session-scoped SSE subscriptions, so a respawned session
   // can re-wire them instead of silently starting from `[]`. See
@@ -712,13 +824,43 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // only fans out on the doc's own stream reaches nobody who is working. The
   // same event also moves the row's comment count, which nothing else would
   // refresh (the store never changes, so no task.* event fires).
-  onTaskBodyEvent = (docId, payload) => {
+  //
+  // EVERY other doc room needs the same bridge, for the same reason and with
+  // one extra hop. `rooms.broadcastToRoom` fans out on `ws~<meta.workspaceId>`
+  // — the GROUPING tag a diff review or folder bind sets — and a board link is
+  // not that tag, so a plain review doc filed on a board reached that board's
+  // agent never. Measured: a session with six docs under `watch_doc` and a
+  // seat on the board heard nothing from any of them on the board channel, and
+  // silence from a subscription you never made is indistinguishable from
+  // nobody having commented.
+  //
+  // Resolution happens HERE, at BROADCAST time, against `workspace.docIds` —
+  // nothing is registered when a doc is created. That is what makes "and
+  // anything created later" true with no new call, no new field and no
+  // migration: `fileUnderHubWorkspace` already files every doc onto some
+  // board, defaulting to Unfiled, so a doc that exists is a doc some board
+  // holds.
+  onDocRoomEvent = (docId, payload) => {
     const taskId = taskIdOfBodyDoc(docId);
-    if (!taskId) return;
-    const workspaceId = taskStore.getTask(taskId)?.workspaceId;
-    if (!workspaceId) return;
-    sse.broadcast(`ws~${workspaceId}`, payload);
-    taskProjection.refresh(workspaceId);
+    if (taskId) {
+      const workspaceId = taskStore.getTask(taskId)?.workspaceId;
+      if (!workspaceId) return;
+      sse.broadcast(`ws~${workspaceId}`, payload);
+      // Task path only: a plain doc thread moves no row, so refreshing the
+      // projection for it would be a board-wide rewrite that changes nothing.
+      taskProjection.refresh(workspaceId);
+      return;
+    }
+    // Exactly one hop from grouping to board — the same non-transitive rule
+    // `shareWorkspacesOf` spells out, so what an agent HEARS about a review
+    // and what a share visitor may OPEN in it cannot drift apart.
+    const grouping = rooms.get(docId)?.meta.workspaceId;
+    for (const board of hubBoardsForDoc(docId)) {
+      // rooms.ts already broadcast on the grouping's own channel; a second
+      // send here would deliver the same comment twice to one listener.
+      if (board === grouping) continue;
+      sse.broadcast(`ws~${board}`, payload);
+    }
   };
 
   // ── Home pane: per-person read markers + the "What's New?" brief ─────────
@@ -1086,6 +1228,177 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       .filter((w) => w.docIds.includes(attachmentId))
       .map((w) => w.id);
   }
+
+  /**
+   * Every hub board a DOC's discussion actually reaches — the boards holding
+   * the doc itself, plus the one grouping→board hop a diff review / folder
+   * bind needs (its members carry the grouping tag, and the grouping is what
+   * sits on the board as one row).
+   *
+   * Written once and used twice on purpose: `onDocRoomEvent` fans events out
+   * over exactly this set, and the coverage readout reports gaps against
+   * exactly this set. Two copies would agree today and drift later, and the
+   * drift would be invisible in the worst direction — a probe that says
+   * "covered" about a board the events never reach is the failure this
+   * ticket exists to end, restated as a reassuring answer.
+   */
+  function hubBoardsForDoc(docId: string): Set<string> {
+    const boards = new Set(hubWorkspacesHolding(docId));
+    const grouping = rooms.get(docId)?.meta.workspaceId;
+    if (grouping) for (const board of hubWorkspacesHolding(grouping)) boards.add(board);
+    return boards;
+  }
+
+  /**
+   * What is waiting for this board's lead, COUNTED WITHOUT DRAINING.
+   *
+   * Every reader here is the non-destructive one: `listQueuedVoice` (not
+   * `drainVoiceQueue`), and the three `getPending*` reads, which prune rows
+   * whose task has gone away but never hand anything over or clear it. That
+   * is not incidental. A probe that delivered while reporting would be right
+   * exactly once and would then have consumed the items the attach it was
+   * warning about was supposed to receive — this ticket's own silent-loss
+   * bug, wearing the costume of the fix.
+   */
+  const queuedForLead = (workspaceId: string): CoverageQueue => ({
+    queuedVoice: taskStore.listQueuedVoice(workspaceId).length,
+    pendingRetriage: taskStore.getPendingRetriage(workspaceId) ? 1 : 0,
+    pendingBucketReview: taskStore.getPendingBucketReview(workspaceId) ? 1 : 0,
+    taskReviews: taskStore.getPendingTaskReviews(workspaceId)?.length ?? 0,
+  });
+  const queueTotal = (q: CoverageQueue): number =>
+    q.queuedVoice + q.pendingRetriage + q.pendingBucketReview + q.taskReviews;
+
+  /**
+   * The coverage readout for one agent's watch set.
+   *
+   * Two halves, answering two different questions:
+   *
+   *  - `workspaces` resolves each `ws:<id>` key the agent holds. A key can
+   *    name a hub BOARD or a review GROUPING, and today nothing tells the
+   *    agent which — so nothing tells it that a board key without an
+   *    attachment hears the events but is invisible to every delivery gate.
+   *  - `unattachedBoards` is the measured incident: boards this agent covers
+   *    on paper but not in fact, each with the count of items queued for that
+   *    board's lead. Six docs watched, zero attachments, four items waiting.
+   *
+   * TWO THINGS PUT A BOARD ON THAT LIST, and the second was missing while
+   * this feature's whole point was to create agents of exactly that shape:
+   *
+   *  - a DOC key the agent holds that resolves to the board, and
+   *  - the board's OWN `ws:<id>` key — which is all a declared lead holds. It
+   *    holds no doc keys at all, so building the list from doc keys alone
+   *    made the one agent this branch teaches the fleet to be the one agent
+   *    the probe could not see.
+   *
+   * A `ws:<grouping>` key still raises nothing. It resolves to the board the
+   * review sits on, but the agent asked about the review, not about somebody
+   * else's seat — and an alarm that fires on the innocent case is how a real
+   * one stops being read.
+   *
+   * "Not in fact" means no LIVE attachment: no record, or a record whose
+   * heartbeat has aged out. The gates ask the second question, so this must
+   * too, or it reports covered about a board whose every gate answers away.
+   */
+  const watchCoverageFor = (agentId: string, keys: string[]): WatchCoverage => {
+    /**
+     * Attachment facts for one agent on one board.
+     *
+     * Two DIFFERENT questions, deliberately kept apart. `heartbeatFresh` is
+     * the displayed active/away label: did this agent SAY it was alive inside
+     * the heartbeat window. `live` is the delivery gate: has the server SEEN
+     * it recently — heartbeat or tool call, whichever is later — and is the
+     * channel open to carry anything.
+     *
+     * They were one field, and it read the label. The label's window is a
+     * third of the delivery one, so an agent that had simply not called
+     * `heartbeat` for a few minutes was reported as uncovered while every
+     * request was reaching it perfectly — and the remedy it was then handed
+     * is seat-claiming, whose entire hazard is evicting a working peer.
+     */
+    const liveness = (workspaceId: string, who: string) => {
+      const att = taskStore.listAttachments(workspaceId).find((a) => a.agentId === who);
+      return {
+        attached: att !== undefined,
+        heartbeatFresh: att !== undefined && att.state !== 'away',
+        live: taskStore.hasLiveAttachmentFor(workspaceId, who),
+      };
+    };
+
+    const workspaces: CoverageWorkspaceRow[] = [];
+    /** boardId → the watched doc keys that put it there (empty for a board
+     *  reached through its own `ws:` key). */
+    const boardsInScope = new Map<string, string[]>();
+    for (const key of keys) {
+      if (!key.startsWith('ws:')) continue;
+      const workspaceId = key.slice('ws:'.length);
+      const board = taskStore.getWorkspace(workspaceId);
+      if (!board) {
+        // Not a hub board. The key survived the liveness prune, so some doc
+        // room still carries this grouping tag.
+        workspaces.push({ key, workspaceId, kind: 'grouping' });
+        continue;
+      }
+      const { attached, heartbeatFresh, live } = liveness(workspaceId, agentId);
+      const queued = queuedForLead(workspaceId);
+      workspaces.push({
+        key,
+        workspaceId,
+        kind: 'board',
+        name: board.name,
+        attached,
+        heartbeatFresh,
+        live,
+        lead: board.leadAgentId === agentId,
+        queued,
+        queuedTotal: queueTotal(queued),
+      });
+      if (!boardsInScope.has(workspaceId)) boardsInScope.set(workspaceId, []);
+    }
+
+    for (const key of keys) {
+      if (key.startsWith('ws:')) continue;
+      for (const boardId of hubBoardsForDoc(key)) {
+        boardsInScope.set(boardId, [...(boardsInScope.get(boardId) ?? []), key]);
+      }
+    }
+    const unattachedBoards: CoverageUnattachedBoard[] = [];
+    for (const [workspaceId, watchedDocs] of boardsInScope) {
+      const board = taskStore.getWorkspace(workspaceId);
+      if (!board) continue;
+      const mine = liveness(workspaceId, agentId);
+      // A LIVE attachment is coverage; a record alone is not. Read the
+      // DELIVERY predicate, not the displayed label — this row's whole claim
+      // is "work is queuing that will not reach you", and an agent inside the
+      // observed window is being reached.
+      if (mine.live) continue;
+      const queued = queuedForLead(workspaceId);
+      const lead = board.leadAgentId;
+      unattachedBoards.push({
+        workspaceId,
+        name: board.name,
+        watchedDocs: [...watchedDocs].sort(),
+        queued,
+        queuedTotal: queueTotal(queued),
+        attached: mine.attached,
+        heartbeatFresh: mine.heartbeatFresh,
+        ...(lead !== undefined ? { leadAgentId: lead } : {}),
+        // Naming the incumbent is what stops the remedy being "take the
+        // seat" on a board somebody else is actively working. This asks the
+        // same predicate `setLeadAgent`'s own lead-held guard asks, which is
+        // the point: read the heartbeat LABEL here and a working lead reports
+        // as gone, so the advice says "take the seat" while the server's
+        // guard refuses it — the reader is told to do a thing that then
+        // silently does not happen.
+        leadLive:
+          lead !== undefined && lead !== agentId && taskStore.hasLiveLeadAttachment(workspaceId),
+      });
+    }
+    // Loudest first: a board with items actually waiting is the one a reader
+    // must not scroll past.
+    unattachedBoards.sort((a, b) => b.queuedTotal - a.queuedTotal || a.name.localeCompare(b.name));
+    return { agentId, workspaces, unattachedBoards };
+  };
 
   /**
    * ── Two things wear the word "workspace". Read this before touching any
@@ -2324,7 +2637,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           const author = authorFor(body?.author);
           if (!author) return j(400, { error: 'author required' });
-          const res = taskStore.setLeadAgent(workspaceId, leadAgentId, { actor: author });
+          // `takeover` is how a caller says it MEANS to displace a live lead.
+          // Absent it, claiming a seat a live agent already holds is refused
+          // (`declined: 'lead-held'`) rather than silently granted — an
+          // eviction nobody was told about routes every lead-addressed
+          // delivery to a session that has stopped expecting it. Old bundles
+          // never send the field, and they get the refusal, which is the safe
+          // side of the change.
+          const takeover = body?.takeover === true;
+          const res = taskStore.setLeadAgent(workspaceId, leadAgentId, {
+            actor: author,
+            ...(takeover ? { takeover: true } : {}),
+          });
           if (!res.ok) return j(404, res);
           return j(200, res);
         }
@@ -3461,7 +3785,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             );
           };
           if (req.method === 'GET') {
-            return j(200, agentWatches.list(agentId, watchKeyExists));
+            const listed = agentWatches.list(agentId, watchKeyExists);
+            // ADDITIVE. `coverage` is a new key on an existing 200 body, so a
+            // bundle built before it ignores it and behaves exactly as it did
+            // — which matters here specifically because this is the restore
+            // path every respawned child calls before it can do anything else.
+            return j(200, {
+              ...listed,
+              coverage: watchCoverageFor(
+                agentId,
+                listed.watches.map((w) => w.key),
+              ),
+            });
           }
           if (req.method === 'POST') {
             const body = await safeJson(req);
