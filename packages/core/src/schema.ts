@@ -250,10 +250,11 @@ export function postReply(
 /**
  * Replace the review payload on an existing comment.
  *
- * The one mutation a review item takes after it is written: stamping
- * `answeredWith` when a person answers by tapping an option. Written as a
- * whole-value `set` on the same ydoc the browsers hold, so the card the
- * person just tapped updates from the sync rather than from a refetch.
+ * The one mutation a review item takes after it is written: stamping the
+ * answer — `answeredAt` on every answer, plus `answeredWith` when the words
+ * came from tapping an option. Written as a whole-value `set` on the same
+ * ydoc the browsers hold, so the card the person just answered updates from
+ * the sync rather than from a refetch.
  *
  * Returns false when the comment has gone, which is a normal race rather
  * than an error.

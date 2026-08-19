@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  ACTIVITY_REFRESH_EVENTS,
   type ActivityEvent,
   type BoardFilters,
   CHORES_ID,
@@ -221,6 +222,33 @@ describe('activityRows (exactly two filters)', () => {
   });
 });
 
+describe('ACTIVITY_REFRESH_EVENTS', () => {
+  it('covers every event this feature writes to the trail, not only the founding set', () => {
+    // The SSE wiring in hub-app iterates this list. An event the store emits
+    // and `describeEvent` renders, but the list omits, is a trail that never
+    // refreshes for it: the writer's own tab shows a due date it just set
+    // with no Activity row, and a peer's undo leaves both browsers stale —
+    // measured for `task.due_set` and `decision.answer_withdrawn` when the
+    // list was hand-kept in hub-app and this branch forgot to extend it.
+    for (const ev of [
+      'task.created',
+      'task.transitioned',
+      'task.assigned',
+      'task.retitled',
+      'task.due_set',
+      'task.evidence_amended',
+      'task.regrouped',
+      'decision.answered',
+      'decision.answer_withdrawn',
+      'decision.info_requested',
+      'workspace.goal_updated',
+      'workspace.goals_changed',
+    ]) {
+      expect(ACTIVITY_REFRESH_EVENTS, `${ev} would never refresh the trail`).toContain(ev);
+    }
+  });
+});
+
 describe('describeEvent', () => {
   const titleOf = (id: string) => (id === 't-1' ? 'Fix ranking' : id);
 
@@ -258,6 +286,44 @@ describe('describeEvent', () => {
     expect(s).toContain('Search Revamp');
     expect(s).toContain('Fix ranking');
     expect(s).not.toContain('task.body_edited');
+  });
+
+  it('reads a due date three ways — set, moved and cleared', () => {
+    // `task.due_set` is new, so without a case here the feed prints the slug
+    // with no actor and no title, the way `task.body_edited` did. Three
+    // sentences because they read differently to whoever is scanning the trail
+    // for what slipped: a date arriving, a date moving, a date going away.
+    const due = (over: Record<string, unknown>) =>
+      describeEvent(
+        {
+          event: 'task.due_set',
+          ts: NOW,
+          taskId: 't-1',
+          actor: { id: 'known-jordan', name: 'Jordan', kind: 'person' },
+          ...over,
+        },
+        titleOf,
+      );
+    // Local noon, so the rendered day is the same one in every timezone.
+    const day = (y: number, m: number, d: number) => new Date(y, m - 1, d, 12).getTime();
+    const shown = (t: number) => new Date(t).toLocaleDateString();
+
+    const set = due({ from: null, to: day(2026, 9, 2) });
+    expect(set).toContain('Jordan');
+    expect(set).toContain('Fix ranking');
+    expect(set).toContain(shown(day(2026, 9, 2)));
+    expect(set).not.toContain('task.due_set');
+
+    const moved = due({ from: day(2026, 9, 2), to: day(2026, 9, 9) });
+    expect(moved).toContain(shown(day(2026, 9, 2)));
+    expect(moved).toContain(shown(day(2026, 9, 9)));
+
+    const cleared = due({ from: day(2026, 9, 9), to: null });
+    expect(cleared).toContain('cleared');
+    expect(cleared).toContain('Fix ranking');
+    // A cleared date must not print the one it used to have as though it were
+    // still set — "cleared … 9/9/2026" reads as a date somebody just chose.
+    expect(cleared).not.toContain(shown(day(2026, 9, 9)));
   });
 
   it('names BOTH titles when a rewrite reshaped the row', () => {

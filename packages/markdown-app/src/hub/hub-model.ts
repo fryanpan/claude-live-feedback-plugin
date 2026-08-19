@@ -1393,6 +1393,30 @@ export function activityRows(events: ActivityEvent[], filter: ActivityFilter): A
   return kept.sort((a, b) => b.ts - a.ts);
 }
 
+/**
+ * One task's audit rows, newest first — what the panel's Activity tab shows
+ * beside the stored transition list.
+ *
+ * `task.transitioned` is dropped because the panel renders those from
+ * `task.transitions`, which carries the evidence and the unproven mark that
+ * the log row does not. Everything else a task can have done TO it —
+ * renamed, rewritten, reassigned, re-dated, answered, taken back — reached
+ * the workspace feed and no surface on the ticket. Measured 2026-08-18: the
+ * tab logged status changes and nothing else, so a rename left no trace on
+ * the ticket it renamed.
+ */
+export function taskActivity(events: ActivityEvent[] | undefined, taskId: string): ActivityEvent[] {
+  return (events ?? [])
+    .filter(
+      (e) =>
+        e.taskId === taskId &&
+        e.event !== 'task.transitioned' &&
+        e.event !== 'agent.heartbeat' &&
+        e.event !== 'server.tick',
+    )
+    .sort((a, b) => b.ts - a.ts);
+}
+
 // ── Uptime (deploy readiness — §3.12 commit 11) ────────────────────────────
 
 /** Mirror of the server's UptimeReport (packages/server/src/uptime.ts) —
@@ -1450,6 +1474,29 @@ function actorName(ev: ActivityEvent): string {
   return actor?.name ?? 'someone';
 }
 
+/**
+ * How an assignee id reads to a person.
+ *
+ * `human` is a reserved id meaning "a person, unspecified" — every other value
+ * is an agent's own name and reads fine as it is. Rendering the reserved word
+ * raw put the literal `human` in the dropdown and in its accessible name,
+ * which is an implementation detail presented as user-facing copy.
+ *
+ * "A person" rather than "Me" or a name: the id says a person owns this and
+ * says nothing about WHICH, and inventing the reader is how a shared board
+ * starts telling two people different things about the same row.
+ *
+ * It lives in the MODEL rather than beside the picker because the picker is
+ * not the only surface that renders an assignee: `task.assigned` in
+ * `describeEvent` renders the same id into the activity trail, and it read
+ * `Panel Reviewer → human` while the dropdown two inches above it said "A
+ * person". Two copies of "how does this id read" drift, and the drift lands in
+ * the feature's own subject.
+ */
+export function assigneeLabel(id: string): string {
+  return id === 'human' ? 'A person' : id;
+}
+
 /** A commit as a human reads it. Undefined stays undefined — a blank sha is
  *  not a short sha, and printing `commit ` with nothing after it is worse
  *  than saying "evidence". */
@@ -1465,6 +1512,37 @@ function taskTitle(ev: ActivityEvent, titleOf: (taskId: string) => string): stri
   return id ? titleOf(id) : 'a task';
 }
 
+/**
+ * The store events whose arrival stales the REST-fed activity trail — the SSE
+ * wiring in hub-app subscribes to exactly this list and calls `loadEvents` on
+ * each. It lives here, next to `describeEvent`, because the two must move
+ * together: an event the trail can RENDER but the list omits never refreshes
+ * the trail, for the writer's own tab as much as for a peer's (the server
+ * echoes local writes back over SSE, so this list is also how a due date you
+ * just set gets its Activity row). That was the measured failure for
+ * `task.due_set` and `decision.answer_withdrawn` — emitted, logged, rendered
+ * on the next full load, and invisible on the tab the reader was looking at.
+ *
+ * Deliberately NOT every `describeEvent` case: `agent.*` refreshes the
+ * presence strip through its own listeners, `server.started` and the retired
+ * `task.gate_refused` have no live emitter to hear, and `task.body_edited` /
+ * `workspace.retriaged` predate this list and are out of its scope.
+ */
+export const ACTIVITY_REFRESH_EVENTS = [
+  'task.created',
+  'task.transitioned',
+  'task.assigned',
+  'task.retitled',
+  'task.due_set',
+  'task.evidence_amended',
+  'task.regrouped',
+  'decision.answered',
+  'decision.answer_withdrawn',
+  'decision.info_requested',
+  'workspace.goal_updated',
+  'workspace.goals_changed',
+] as const;
+
 /** One human-readable line per audit row. Unknown event kinds fall back to
  *  the raw name — an exhaustive-table miss should be visible, not blank. */
 export function describeEvent(ev: ActivityEvent, titleOf: (taskId: string) => string): string {
@@ -1478,9 +1556,20 @@ export function describeEvent(ev: ActivityEvent, titleOf: (taskId: string) => st
     case 'task.transitioned':
       return `${actorName(ev)} moved ${title()}: ${String(ev.from)} → ${String(ev.to)}`;
     case 'task.assigned':
-      return `${actorName(ev)} assigned ${title()}: ${String(ev.from)} → ${String(ev.to)}`;
+      return `${actorName(ev)} assigned ${title()}: ${assigneeLabel(String(ev.from))} → ${assigneeLabel(String(ev.to))}`;
     case 'task.regrouped':
       return `${actorName(ev)} regrouped ${title()}: ${String(ev.fromGoal)} → ${String(ev.toGoal)}`;
+    case 'task.due_set': {
+      // Three sentences, because clearing a date and setting one read
+      // differently to whoever is scanning the trail for what slipped.
+      const when = (v: unknown): string =>
+        typeof v === 'number' ? new Date(v).toLocaleDateString() : '';
+      const to = when(ev.to);
+      const from = when(ev.from);
+      if (!to) return `${actorName(ev)} cleared the due date on ${title()}`;
+      if (from) return `${actorName(ev)} moved ${title()} from ${from} to ${to}`;
+      return `${actorName(ev)} set ${title()} due ${to}`;
+    }
     case 'task.body_edited': {
       // Typing in a task body is deliberately NOT activity (the snapshot
       // fires no event at all). This row is the other thing: a wholesale
@@ -1540,6 +1629,13 @@ export function describeEvent(ev: ActivityEvent, titleOf: (taskId: string) => st
           ? ev.answer
           : (ev.answer as { text?: string } | undefined)?.text;
       return `${actorName(ev)} answered ${title()}${answer ? `: “${answer}”` : ''}`;
+    }
+    case 'decision.answer_withdrawn': {
+      // The withdrawn words are IN the line, not implied by it. Whoever reads
+      // this trail is usually reading it because an agent acted on an answer
+      // that has since been taken back, and "which answer" is the question.
+      const answer = typeof ev.answer === 'string' ? ev.answer : '';
+      return `${actorName(ev)} took back the answer on ${title()}${answer ? `: “${answer}”` : ''} — it is open again`;
     }
     case 'workspace.retriaged': {
       const n = (ev.taskIds as string[] | undefined)?.length ?? 0;

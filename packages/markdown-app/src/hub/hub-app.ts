@@ -19,6 +19,7 @@ import { eventPath, typingInPath } from '../keyboard-target.ts';
 import { installStaleClientNotice } from '../stale-client.ts';
 import { type VoiceAck, createVoiceCapture } from '../voice-capture.ts';
 import {
+  ACTIVITY_REFRESH_EVENTS,
   type ActivityEvent,
   type ActivityFilter,
   type BoardTab,
@@ -66,6 +67,7 @@ import {
   walkPosition,
 } from './hub-model.ts';
 import {
+  type PanelReviewItem,
   type TaskDiscussion,
   type TaskThread,
   type WalkProgress,
@@ -136,11 +138,6 @@ interface HubState {
    */
   discussion: TaskDiscussion;
   discussionTaskId: string | null;
-  /** Which conversation the discussion's one composer is pointed at: a thread
-   *  id, `null` for a new thread, `undefined` for "nobody has chosen yet, take
-   *  the default". Reset when the panel moves to another task — a target is
-   *  about a discussion, not about the reader. */
-  replyThreadId: string | null | undefined;
   /**
    * The thread-shaped half of "what needs you" — task discussions and doc
    * comments whose newest word is an agent's. Server-computed, because
@@ -165,6 +162,35 @@ interface HubState {
 function workspaceIdFromPath(): string {
   const m = location.pathname.match(/\/workspaces\/([^/?#]+)/);
   return m?.[1] ? decodeURIComponent(m[1]) : '';
+}
+
+/**
+ * The shareable address of one task. It is the board's own URL plus `?task=`,
+ * which is the deep link the app already reads at start-up — so the link a
+ * person pastes into a message opens the workspace AND the task, and says
+ * which workspace it belongs to on its face rather than being an opaque id.
+ */
+function taskUrl(taskId: string): string {
+  const url = new URL(location.href);
+  url.hash = '';
+  url.search = `?task=${encodeURIComponent(taskId)}`;
+  return url.toString();
+}
+
+/**
+ * Keep the address bar pointing at whatever the panel is showing, so a reload,
+ * a bookmark, or a copy of the browser's own URL all land back on this task.
+ * `replaceState` rather than `pushState`: opening a task from a row is not a
+ * navigation the Back button should have to unwind — Escape closes the panel,
+ * and Back should still leave the board.
+ */
+function syncTaskParam(taskId: string | null): void {
+  const params = new URLSearchParams(location.search);
+  if ((params.get('task') ?? null) === taskId) return;
+  if (taskId) params.set('task', taskId);
+  else params.delete('task');
+  const q = params.toString();
+  history.replaceState(null, '', `${location.pathname}${q ? `?${q}` : ''}${location.hash}`);
 }
 
 function wsUrl(docId: string, type: string): string {
@@ -271,6 +297,10 @@ function buildShell(root: HTMLElement, name: string): void {
         <button type="button" id="hub-nav-collapse" class="hub-nav-item hub-nav-collapse" title="Collapse">
           <span class="hub-nav-icon" aria-hidden="true">${NAV_ICONS.collapse}</span><span class="hub-nav-label">Collapse</span>
         </button>
+        <div class="hub-nav-dock" role="group" aria-label="Voice">
+          <button type="button" id="hub-mic" class="voice-mic" title="Hold to talk (or hold Space)" aria-label="Hold to talk">🎙</button>
+          <div id="hub-voice" class="voice-indicator hidden" aria-live="polite"></div>
+        </div>
       </nav>
       <section id="hub-home" class="hub-home hidden">
         <div id="hub-home-page">
@@ -303,9 +333,7 @@ function buildShell(root: HTMLElement, name: string): void {
         </dl>
       </div>
     </div>
-    <div id="hub-toast" class="hub-toast hidden"></div>
-    <button type="button" id="hub-mic" class="voice-mic" title="Hold to talk (or hold Space)" aria-label="Hold to talk">🎙</button>
-    <div id="hub-voice" class="voice-indicator hidden" aria-live="polite"></div>`;
+    <div id="hub-toast" class="hub-toast hidden"></div>`;
   const doneSelect = document.getElementById('hub-done-filter') as HTMLSelectElement;
   for (const w of DONE_WINDOWS) {
     const opt = document.createElement('option');
@@ -351,7 +379,6 @@ async function main(): Promise<void> {
     detailThreadId: null,
     discussion: { loading: false, threads: [] },
     discussionTaskId: null,
-    replyThreadId: undefined,
     reviewItems: [],
     walkIndex: -1,
     walkKey: null,
@@ -725,21 +752,47 @@ async function main(): Promise<void> {
     }
   }
 
+  /**
+   * The element that opened the panel, so closing it puts the keyboard back
+   * where it was.
+   *
+   * The panel takes focus when it opens (see `renderTaskDetail` — that is what
+   * makes hold-Space work inside it), so without this, Escape would drop a
+   * keyboard reader at the top of the document and the j/k walk they were in
+   * the middle of would restart from row one.
+   */
+  let detailOpener: HTMLElement | null = null;
+  /** Which task the panel is CURRENTLY showing, so open and close are
+   *  distinguishable from a repaint. */
+  let renderedDetailId: string | null = null;
+  /** Which task the panel has already fetched audit rows for — one fetch per
+   *  open, and the guard that keeps the fetch's own re-render from looping. */
+  let detailEventsFor: string | null = null;
+
   function renderDetail(): void {
     const task = state.detailTaskId ? (state.tasks.get(state.detailTaskId) ?? null) : null;
+    if (task && renderedDetailId === null) {
+      const active = document.activeElement;
+      detailOpener = active instanceof HTMLElement && active !== document.body ? active : null;
+    }
     // Fetch here rather than at each of the four places that open the panel
     // (row tap, `o`, deep link, voice navigate) — one of them would be missed
     // otherwise, and the miss looks like a task with no discussion. Safe from
     // recursion: loadDiscussion claims the id before it re-renders.
     if (task && state.discussionTaskId !== task.id) {
-      // Here rather than at each of the four places that open the panel, for
-      // the same reason the fetch is: a composer target belongs to a
-      // discussion, not to the reader, and carrying one across would point
-      // this task's box at another task's thread.
-      state.replyThreadId = undefined;
       void loadDiscussion(task);
     }
     if (!task) state.discussionTaskId = null;
+    // The audit rows the Activity tab renders. Fetched on open rather than at
+    // boot: a reader who never opens a ticket never needs them, and the
+    // workspace Activity VIEW has always fetched them the same lazy way.
+    // Guarded by task id, which is also what stops `loadEvents`'s own
+    // re-render from coming back round here.
+    if (task && detailEventsFor !== task.id) {
+      detailEventsFor = task.id;
+      void loadEvents();
+    }
+    if (!task) detailEventsFor = null;
     // Only pass a discussion that belongs to the task on screen. An in-flight
     // load for a task the reader has left must not paint under this one.
     const discussion =
@@ -755,29 +808,28 @@ async function main(): Promise<void> {
           state.detailThreadId = null;
           renderDetail();
         },
+        onCopyLink: (t) => void copyTaskLink(t),
         onStatusSet: (t, to) => void transitionTask(t, to),
         onTitleCommit: (t, title) => void renameTask(t, title),
-        onAnswer: (t, text) => void answerDecision(t, text),
+        onAnswer: (t, text, optionId) => answerTaskDecision(t, text, optionId),
+        onAnswerThread: (t, item, text, optionId) => answerPanelThreadItem(t, item, text, optionId),
+        onUndoAnswer: (t) => undoTaskAnswer(t),
         onAssign: (t, assignee) => void assignTask(t, assignee),
         knownAgentIds: knownAgentIds(),
         goalLabel: (id) => goalLabel(state.info?.goals ?? [], id),
+        goals: state.info?.goals ?? [],
+        onGoalSet: (t, goalId) => void setTaskGoal(t, goalId),
+        onDueSet: (t, dueAt) => void setTaskDue(t, dueAt),
         onComment: (t, text, threadId) => postTaskComment(t, text, threadId),
-        replyThreadId: state.replyThreadId,
-        onReplyTarget: (threadId) => {
-          state.replyThreadId = threadId;
-          renderDetail();
-          // Re-render first, then take the caret: the panel is rebuilt, so the
-          // textarea this focuses is the one the new render made. Focusing
-          // before would put the caret in a node about to be thrown away, and
-          // the tap would look like it did nothing.
-          document.querySelector<HTMLTextAreaElement>('.hub-comment-form textarea')?.focus();
-        },
         ...(state.detailThreadId ? { focusThreadId: state.detailThreadId } : {}),
         // This task's rows from the review queue the strip already reads, so
         // the panel says the same thing the row that sent them here said.
         // `panelAsks` owns which rows qualify — by taskId, and only the kinds
         // whose answer path this panel actually implements.
         asks: task ? panelAsks(state.reviewItems, task.id) : [],
+        // The workspace's audit rows; the panel takes this task's out of them.
+        // The same list the Activity view reads — one log, two surfaces.
+        activity: state.events,
         now: Date.now(),
       },
       task ? discussion : undefined,
@@ -791,6 +843,28 @@ async function main(): Promise<void> {
       task ? { id: task.id, bodyDocId: task.bodyDocId } : null,
       el('hub-detail').querySelector<HTMLElement>('.hub-detail-body-slot'),
     );
+    if (!task && renderedDetailId !== null) {
+      if (detailOpener?.isConnected) detailOpener.focus();
+      detailOpener = null;
+    }
+    syncTaskParam(task?.id ?? null);
+    renderedDetailId = task?.id ?? null;
+  }
+
+  /**
+   * Clipboard write, with a fallback that is a real fallback: `writeText`
+   * rejects on an insecure origin and in a few embedded webviews, and a "Copied"
+   * toast over an empty clipboard is worse than no button. When it fails the
+   * toast carries the URL itself, which is at least selectable.
+   */
+  async function copyTaskLink(task: HubTask): Promise<void> {
+    const url = taskUrl(task.id);
+    try {
+      await navigator.clipboard.writeText(url);
+      showToast('Link copied');
+    } catch {
+      showToast(url);
+    }
   }
 
   // ── Task discussion ─────────────────────────────────────────────────────
@@ -811,8 +885,6 @@ async function main(): Promise<void> {
     const payload = await fetchJson<{
       threads?: Array<{
         id: string;
-        status?: string;
-        anchor?: { kind?: string; snippet?: { text?: string } };
         comments?: Array<{
           author?: { name?: string };
           text?: string;
@@ -823,15 +895,12 @@ async function main(): Promise<void> {
     }>(`/api/docs/${encodeURIComponent(task.bodyDocId)}/threads`);
     // The reader may have moved on while this was in flight.
     if (state.discussionTaskId !== task.id) return;
+    // Only the id and the words. The payload also carries each thread's
+    // status and anchor, and the discussion model deliberately does not:
+    // the panel renders every comment as a peer of every other, so the
+    // fields fed nothing — see `TaskThread` in hub-render.
     const threads: TaskThread[] = (payload?.threads ?? []).map((t) => ({
       id: t.id,
-      status: t.status === 'resolved' ? 'resolved' : 'open',
-      // Only a text-range anchor names a passage. A subject anchor is the
-      // whole task, which the panel is already showing — quoting it would put
-      // the description above every one of its own threads.
-      ...(t.anchor?.kind === 'text-range' && t.anchor.snippet?.text
-        ? { anchorText: t.anchor.snippet.text }
-        : {}),
       comments: (t.comments ?? []).map((c) => ({
         author: c.author?.name ?? 'Someone',
         text: c.text ?? '',
@@ -867,12 +936,6 @@ async function main(): Promise<void> {
       showToast('Posting the comment failed — your text is still in the box');
       return false;
     }
-    // Stay where the comment went. A reply keeps its thread; a NEW thread goes
-    // back to the default, which is the last thread on screen — and after the
-    // reload that is the one just created. Either way the next thing typed
-    // lands in the conversation the reader just joined, rather than starting
-    // another one beside it.
-    state.replyThreadId = threadId;
     await loadDiscussion(task);
     return true;
   }
@@ -1150,6 +1213,31 @@ async function main(): Promise<void> {
   }
 
   /**
+   * The panel's Goal field. Sends the same `set_task_goal` write a drag does
+   * and an agent does — no `after`, because picking a band is not a placement
+   * within it, and inventing one would move the task to the end of the new
+   * band for no reason the reader gave.
+   */
+  async function setTaskGoal(task: HubTask, goal: string): Promise<void> {
+    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/goal`, 'POST', {
+      goal,
+      author,
+    });
+    if (!res.ok) showToast('Moving to that goal failed');
+  }
+
+  /** The panel's Due field. `null` clears — the route reads it as the explicit
+   *  clear it is, rather than as a missing value. */
+  async function setTaskDue(task: HubTask, dueAt: number | null): Promise<void> {
+    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/due`, 'POST', {
+      dueAt,
+      author,
+    });
+    if (!res.ok)
+      showToast(dueAt === null ? 'Clearing the due date failed' : 'Setting the due date failed');
+  }
+
+  /**
    * A drag or an arrow-key move, sent as the placement it already is — the
    * same `set_task_goal` write an agent performs, so there is deliberately no
    * reordering API of its own, and a cross-goal drop is this call with a
@@ -1263,6 +1351,85 @@ async function main(): Promise<void> {
     return res.ok;
   }
 
+  /**
+   * The task panel's three answering doors, all of which owe the reader the
+   * same thing: the write, then a REPAINT of the panel they are looking at.
+   *
+   * The walkthrough got that for free — it re-derives its queue on every
+   * render — and the panel did not, because its queue is handed down from
+   * `state.reviewItems` and nothing re-rendered the panel when that list
+   * moved. Measured 2026-08-18: a free-text answer on a thread item persisted
+   * server-side and the card sat unchanged 2.5 seconds later, so the natural
+   * retry posted it twice.
+   */
+  async function answerTaskDecision(
+    task: HubTask,
+    text: string,
+    optionId?: string,
+  ): Promise<boolean> {
+    const ok = await answerDecision(task, text, optionId);
+    if (!ok) return false;
+    showToast('Answer recorded — Undo is on the ticket');
+    // The row itself arrives over the ydoc; this is what moves the panel's
+    // own queue on, since the review items are a REST-fed projection.
+    await loadReviewItems();
+    return true;
+  }
+
+  async function undoTaskAnswer(task: HubTask): Promise<boolean> {
+    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/answer/undo`, 'POST', {
+      author,
+    });
+    if (!res.ok) {
+      showToast('Taking the answer back failed');
+      return false;
+    }
+    showToast('Answer taken back — the decision is open again');
+    await loadReviewItems();
+    return true;
+  }
+
+  /**
+   * Answer an item the panel's queue got from a THREAD.
+   *
+   * Same two routes the walkthrough uses, for the same reason: a declared item
+   * records the answer against its declaring comment, an inferred one is
+   * answered by replying, and in both cases the REPLY is what takes the item
+   * out of the queue. The panel used to send this through the plain comment
+   * handler, which has nowhere to put the picked option and left the queue
+   * showing an item that had just been answered.
+   */
+  async function answerPanelThreadItem(
+    task: HubTask,
+    item: PanelReviewItem,
+    text: string,
+    optionId?: string,
+  ): Promise<boolean> {
+    const docId = item.docId ?? task.bodyDocId;
+    if (!item.threadId) return false;
+    const doc = encodeURIComponent(docId);
+    const thread = encodeURIComponent(item.threadId);
+    const res =
+      item.declared && item.commentId !== undefined
+        ? await send(`/api/docs/${doc}/threads/${thread}/answer`, 'POST', {
+            author,
+            text,
+            commentId: item.commentId,
+            ...(optionId !== undefined ? { optionId } : {}),
+          })
+        : await send(`/api/docs/${doc}/threads/${thread}/comments`, 'POST', { author, text });
+    if (!res.ok) {
+      showToast('Posting the answer failed — your text is still in the box');
+      return false;
+    }
+    showToast('Answer posted');
+    // Both, and in this order: the discussion so the reply appears in the
+    // stream below, the review items so the card it answered leaves the queue.
+    await loadDiscussion(task, true);
+    await loadReviewItems();
+    return true;
+  }
+
   /** "I can't answer this yet" — the decision stays open and unanswered. */
   async function requestMoreInfo(task: HubTask, question: string): Promise<boolean> {
     const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/more-info`, 'POST', {
@@ -1363,6 +1530,10 @@ async function main(): Promise<void> {
     );
     renderBoardRegion();
     renderHomeRegion();
+    // The task panel's review queue is handed down from this same list, so it
+    // is stale until this runs — which is why answering a card in the panel
+    // repainted nothing at all before it was here.
+    renderDetail();
   }
 
   async function loadAgents(): Promise<void> {
@@ -1421,6 +1592,10 @@ async function main(): Promise<void> {
     state.events = applyRefresh(state.events, res, (r) => r.events ?? []);
     state.uptime = applyRefresh(state.uptime, res, (r) => r.uptime ?? null);
     if (state.view === 'activity') renderActivityRegion();
+    // The ticket's own Activity tab reads the same rows, so a refresh that
+    // repainted only the workspace view left an open panel showing the
+    // history as it stood when it opened.
+    if (state.detailTaskId) renderDetail();
   }
 
   // ── Wiring ──────────────────────────────────────────────────────────────
@@ -1477,16 +1652,12 @@ async function main(): Promise<void> {
   for (const name of ['agent.attached', 'agent.detached', 'agent.heartbeat']) {
     es.addEventListener(name, () => void loadAgents());
   }
-  for (const name of [
-    'task.created',
-    'task.transitioned',
-    'task.evidence_amended',
-    'task.regrouped',
-    'decision.answered',
-    'decision.info_requested',
-    'workspace.goal_updated',
-    'workspace.goals_changed',
-  ]) {
+  // The list lives beside `describeEvent` in hub-model, because the two must
+  // move together — an event the trail renders but this loop never hears is
+  // an Activity tab that silently misses it, on the writer's own screen as
+  // much as a peer's (the server echoes local writes back over SSE, which is
+  // what puts a row under the due date you just set).
+  for (const name of ACTIVITY_REFRESH_EVENTS) {
     es.addEventListener(name, () => {
       void loadEvents();
       // The same board changes stale the Home brief. Refreshing only while

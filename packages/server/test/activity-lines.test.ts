@@ -102,6 +102,30 @@ describe('the activity view renders the rows the server really wrote', () => {
     expect(line).toContain('Ship Friday, not Thursday.');
   });
 
+  it('says an answer was taken back, in the words that were taken back', async () => {
+    // Runs after the test above, which answered this decision — the undo has
+    // to have something to undo.
+    const r = await post(`/api/tasks/${decisionId}/answer/undo`, { author: PERSON });
+    expect(r.status).toBe(200);
+
+    const row = rowsOf('decision.answer_withdrawn').at(-1);
+    // A row that never reached the log renders nothing, which would make the
+    // assertions below vacuous.
+    expect(row).toBeDefined();
+    const line = describeEvent(row as ActivityEvent, () => 'Ship Thursday or Friday?');
+    expect(line).toContain('Jordan');
+    expect(line).toContain('Ship Thursday or Friday?');
+    expect(line).toContain('Ship Friday, not Thursday.');
+    // Not the bare slug a missing switch case falls through to.
+    expect(line).not.toContain('decision.answer_withdrawn');
+
+    // Re-answer, so the tests after this one see the state they expect.
+    await post(`/api/tasks/${decisionId}/answer`, {
+      text: 'Ship Friday, not Thursday.',
+      author: PERSON,
+    });
+  });
+
   it('attributes task.created, so an author can be told from a stranger', async () => {
     const r = await post(`/api/workspaces/${wsId}/tasks`, {
       title: 'Wire the index',
@@ -141,6 +165,45 @@ describe('the activity view renders the rows the server really wrote', () => {
     expect(line).toContain('Search Revamp');
     expect(line).toContain('Tune the ranking');
     expect(line).not.toContain('task.body_edited');
+  });
+
+  it('renders a due date from the row the /due route wrote, and names the day', async () => {
+    // `task.due_set` is emitted by a route that did not exist until this
+    // change, and the client case reads `from` / `to` by name. The unit test
+    // proves the case exists; only this proves the emitted row carries the
+    // keys it reads — and that the ROUTE forwarded the date at all, which is
+    // the layer nothing type-checks.
+    const created = await post(`/api/workspaces/${wsId}/tasks`, {
+      title: 'Cut the release note',
+      author: AGENT,
+    });
+    expect(created.status).toBe(200);
+    const taskId = ((await created.json()) as { task: Task }).task.id;
+    // Local noon, so the rendered day is the same in every timezone.
+    const due = new Date(2026, 8, 2, 12).getTime();
+
+    expect((await post(`/api/tasks/${taskId}/due`, { dueAt: due, author: PERSON })).status).toBe(
+      200,
+    );
+    const set = rowsOf('task.due_set').at(-1);
+    expect(set).toBeDefined();
+    const line = describeEvent(set as ActivityEvent, () => 'Cut the release note');
+    expect(line).toContain('Jordan');
+    expect(line).toContain('Cut the release note');
+    expect(line).toContain(new Date(due).toLocaleDateString());
+    expect(line).not.toContain('task.due_set');
+
+    // And the clear, which is a different sentence — a row that read "set due"
+    // with no date would be worse than the slug.
+    expect((await post(`/api/tasks/${taskId}/due`, { dueAt: null, author: PERSON })).status).toBe(
+      200,
+    );
+    const cleared = describeEvent(
+      rowsOf('task.due_set').at(-1) as ActivityEvent,
+      () => 'Cut the release note',
+    );
+    expect(cleared).toContain('cleared');
+    expect(cleared).not.toContain(new Date(due).toLocaleDateString());
   });
 
   it('renders a SHAPING with both titles, from the row the route wrote', async () => {

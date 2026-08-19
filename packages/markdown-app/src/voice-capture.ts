@@ -243,6 +243,13 @@ export function recognitionErrorMessage(code: string): string {
  *  bug as the board's hotkeys; same shared guard. */
 
 /**
+ * The attribute a surface stamps on a container to say "a Space held here is
+ * the page's, not mine" — see `spaceHoldTargetsPage`. One spelling, shared by
+ * the predicate and by whoever marks the region.
+ */
+export const SPACE_HOLD_PAGE_ATTR = 'data-space-hold';
+
+/**
  * Where a document-level Space hold may begin: on the page itself, and
  * nowhere else. A keydown's target is whatever has focus, and Space MEANS
  * something on almost any focused element — it activates a button, toggles a
@@ -255,6 +262,16 @@ export function recognitionErrorMessage(code: string): string {
  * Deliberately one-directional: everything this suppresses still has the mic
  * button, so a false "not the page" costs a click; the old false "not typing"
  * cost a corrupted sentence and a surprise recording.
+ *
+ * **The one widening**, and the reason it is safe: a surface that takes focus
+ * onto a non-interactive CONTAINER — a dialog that must be readable and
+ * dismissable from the keyboard — leaves the reader in exactly the state body
+ * describes, with focus somewhere the browser assigns no meaning to Space.
+ * The task detail panel is that case, and until it was covered, opening a task
+ * from the board killed hold-to-talk outright: the click left focus on the
+ * task row, so every press answered "not the page" and the mic never armed.
+ * The marker is read off the FOCUSED element only, never an ancestor, so a
+ * button or a select inside such a container keeps Space for itself.
  */
 export function spaceHoldTargetsPage(path: readonly (EventTarget | undefined)[]): boolean {
   const inner = path[0];
@@ -262,7 +279,8 @@ export function spaceHoldTargetsPage(path: readonly (EventTarget | undefined)[])
   if (inner instanceof Document) return true;
   if (!(inner instanceof Element)) return false;
   const doc = inner.ownerDocument;
-  return inner === doc.body || inner === doc.documentElement;
+  if (inner === doc.body || inner === doc.documentElement) return true;
+  return inner.getAttribute(SPACE_HOLD_PAGE_ATTR) === 'page';
 }
 
 export function createVoiceCapture(opts: VoiceCaptureOpts): VoiceCapture {
@@ -278,12 +296,33 @@ export function createVoiceCapture(opts: VoiceCaptureOpts): VoiceCapture {
   let watchdog: ReturnType<typeof setTimeout> | null = null;
   let lastError: string | null = null;
 
-  const show = (text: string, opts2?: { linger?: boolean }): void => {
+  /**
+   * `busy` is the "we are working on it" state, and it is grounded in the
+   * work rather than inferred: it is set at the one point a request is
+   * IN FLIGHT and cleared by whatever replaces it — the ack, or the failure.
+   * Without it the gap between releasing the key and the ack landing was a
+   * static line of text with nothing moving in it, which reads as a dead mic
+   * on the surface whose whole promise is that every utterance gets an answer.
+   */
+  const show = (text: string, opts2?: { linger?: boolean; busy?: boolean }): void => {
     if (clearTimer) {
       clearTimeout(clearTimer);
       clearTimer = null;
     }
-    indicator.textContent = text;
+    const busy = opts2?.busy === true;
+    indicator.replaceChildren();
+    if (busy) {
+      const spinner = document.createElement('span');
+      spinner.className = 'voice-spinner';
+      spinner.setAttribute('aria-hidden', 'true');
+      indicator.append(spinner);
+    }
+    const label = document.createElement('span');
+    label.className = 'voice-indicator-text';
+    label.textContent = text;
+    indicator.append(label);
+    indicator.classList.toggle('voice-indicator--busy', busy);
+    indicator.setAttribute('aria-busy', busy ? 'true' : 'false');
     indicator.classList.remove('hidden');
     if (opts2?.linger) {
       clearTimer = setTimeout(() => {
@@ -385,7 +424,7 @@ export function createVoiceCapture(opts: VoiceCaptureOpts): VoiceCapture {
     }
     lastError = null;
     const context = opts.getContext();
-    show('Routing…');
+    show('Routing…', { busy: true });
     void opts.send(text, context).then((ack) => {
       if (!ack) {
         show('Voice request failed — try again.', { linger: true });
