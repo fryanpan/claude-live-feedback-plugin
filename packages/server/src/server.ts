@@ -687,6 +687,20 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     sse.broadcast(`ws~${req.workspaceId}`, { event: 'triage.requested', ...req });
     return true;
   });
+  // The second half of the liveness gate, and the half a time window cannot
+  // supply: a request is DELIVERED by broadcasting on `ws~<workspaceId>`, so
+  // if nobody holds that stream the delivery lands nowhere. An agent that
+  // died thirty seconds after its last write is still inside every freshness
+  // window and is already gone; only the open socket knows.
+  //
+  // This can only ever make the gate MORE conservative — the store ANDs it
+  // with observed freshness, so a subscriber alone never counts as live.
+  // That direction is deliberate and it is the safe one: browsers watch the
+  // same channel as agents, so a probe read as sufficient would let an open
+  // tab impersonate a working agent, and the utterance would be broadcast to
+  // a listener that cannot act on it and lost. Queued is late; delivered to
+  // nobody is gone.
+  taskStore.setDeliveryProbe((workspaceId) => sse.count(`ws~${workspaceId}`) > 0);
   // The ydoc projection (§3.3): ws:<workspaceId> board rooms the server
   // writes and defends (foreign writes reverted), plus task:<taskId> body
   // rooms. init() runs after both stores hydrated, so the sidecar is
