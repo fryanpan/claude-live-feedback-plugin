@@ -654,18 +654,24 @@ describe('voice routing (§3.8)', () => {
       expect(system.toLowerCase()).toContain('never name an id');
     });
 
-    it('an action classification still takes the agent route, and writes nothing', async () => {
+    // The executors are wired now (voice-actions.test.ts drives the writes).
+    // What has to stay true is the REFUSAL: a deictic "mark this done" said
+    // with nothing in view resolves to no target, and an action with no
+    // target must never fall back to whatever task was nearby.
+    it('an action the guardrail refuses takes the agent route, and writes nothing', async () => {
       completeImpl = () =>
         Promise.resolve(JSON.stringify({ kind: 'action', action: 'set-status', status: 'done' }));
-      const before = await local(`/api/workspaces/${hubId}/tasks`);
-      const beforeTask = (
-        (await before.json()) as { tasks: Array<{ id: string; status: string }> }
-      ).tasks.find((t) => t.id === taskId);
-      expect(beforeTask?.status).toBe('todo');
+      const status = async (): Promise<string | undefined> => {
+        const r = await local(`/api/workspaces/${hubId}/tasks`);
+        const { tasks } = (await r.json()) as { tasks: Array<{ id: string; status: string }> };
+        return tasks.find((t) => t.id === taskId)?.status;
+      };
+      expect(await status()).toBe('todo');
 
       const r = await voice({
+        // Spoken from the hub: no detail panel, so no resource in view.
         transcript: 'mark this done',
-        context: { surface: 'task', taskId },
+        context: { surface: 'hub' },
         author: PERSON,
       });
       expect(r.status).toBe(200);
@@ -674,11 +680,7 @@ describe('voice routing (§3.8)', () => {
       expect(body.ack).toContain('mark this done');
       expect(body.navigate).toBeUndefined();
 
-      const after = await local(`/api/workspaces/${hubId}/tasks`);
-      const afterTask = (
-        (await after.json()) as { tasks: Array<{ id: string; status: string }> }
-      ).tasks.find((t) => t.id === taskId);
-      expect(afterTask?.status).toBe('todo');
+      expect(await status()).toBe('todo');
     });
   });
 

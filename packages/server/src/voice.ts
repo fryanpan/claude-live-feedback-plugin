@@ -6,10 +6,16 @@
  *    carries a compact workspace index (tasks, docs, goals) and the model
  *    names the target; the server validates the id and answers with a
  *    navigation. No full-agent round trip; works with no agent attached.
- *  - Changes belong to the ATTACHED WORKSPACE AGENT, carrying the transcript
- *    VERBATIM: the `voice.request` event rides the workspace channel the MCP
- *    watch already formats. With no live attachment the request is queued on
- *    disk and delivered in the next attach result.
+ *  - A small ACTION set applied to the RESOURCE IN VIEW runs here too, on the
+ *    speaker's own authority: status and assignee go through the same store
+ *    choke points the REST routes use, so a spoken move is attributed and
+ *    audited exactly like a tapped one. `resolveVoiceAction` is the guardrail
+ *    and it refuses far more than it allows.
+ *  - Everything else — every other change, and any action the guardrail or
+ *    the store declined — belongs to the ATTACHED WORKSPACE AGENT, carrying
+ *    the transcript VERBATIM: the `voice.request` event rides the workspace
+ *    channel the MCP watch already formats. With no live attachment the
+ *    request is queued on disk and delivered in the next attach result.
  *
  * **Voice always answers.** Every path out of `handle()` produces an ack that
  * names what was heard and which route handles it — including "agent away —
@@ -24,7 +30,8 @@
  */
 import { readKeychainPassword } from './share/keychain.ts';
 import { resolveKeyFrom } from './summarize.ts';
-import type { Ref, Task, TaskStatus, TaskStore } from './tasks.ts';
+import { resolveAssignee } from './task-owner.ts';
+import type { Ref, Task, TaskStatus, TaskStore, VoiceRoute } from './tasks.ts';
 
 export type VoiceSurface = 'hub' | 'doc' | 'task';
 
@@ -199,7 +206,7 @@ export type VoiceClassification =
     };
 
 export interface VoiceResult {
-  route: 'fast-path' | 'agent' | 'agent-queued';
+  route: VoiceRoute;
   /** The explicit reply: what was heard, and which route handles it. */
   ack: string;
   /** Where the client should take the speaker (fast-path lookup hits only). */
@@ -421,9 +428,7 @@ const SELF_WORDS = new Set(['me', 'myself', 'i', 'mine']);
  * that writes.
  *
  * Any failure returns null and the utterance takes the agent route exactly as
- * it does today. Deliberately NOT wired into `handle()` yet — the executors
- * land next, and separating them keeps the rule reviewable without a writer
- * behind it.
+ * it does today.
  */
 export function resolveVoiceAction(args: {
   classification: VoiceClassification | null;
@@ -493,6 +498,16 @@ export function resolveVoiceAction(args: {
     }
   }
 }
+
+/**
+ * What running a plan produced.
+ *
+ * `defer` is the important half: an executor that cannot finish the job hands
+ * the utterance back to the agent route UNCHANGED, and may attach one clause
+ * saying why. It is not an error path — the speaker still gets an answer, and
+ * the work still gets done, just by somebody with more room to think.
+ */
+type ActionOutcome = { kind: 'answered'; result: VoiceResult } | { kind: 'defer'; note?: string };
 
 export class VoiceRouter {
   private tasks: TaskStore;
@@ -593,6 +608,92 @@ export class VoiceRouter {
   }
 
   /**
+   * Run a resolved plan against the store — or decline it.
+   *
+   * Both writers go through the SAME choke points the REST routes use
+   * (`transition` / `setAssignee`), which is what makes this commit add no
+   * new write path and no new audit surface: `by: {…, kind: classifyActor}`
+   * lands on the transition row, and `task.transitioned` / `task.assigned`
+   * reach events.jsonl at the store's emit choke point before any listener
+   * fires. A voice move and a tapped move are the same bytes in the log.
+   *
+   * The verbs this commit does not execute (`comment`, `answer-review`,
+   * `open-link`) fall through to `defer`, so classifying one of them changes
+   * nothing a speaker can observe until their executors land.
+   */
+  private executeAction(transcript: string, plan: VoiceActionPlan): ActionOutcome {
+    switch (plan.action) {
+      case 'set-status': {
+        // Read the status BEFORE the write: the ack has to name both ends of
+        // the move, and after `transition` the task carries only the new one.
+        const from = this.tasks.getTask(plan.taskId)?.status;
+        const res = this.tasks.transition(plan.taskId, plan.status, { actor: plan.actor });
+        if (res.ok) {
+          return {
+            kind: 'answered',
+            result: {
+              route: 'fast-path-action',
+              ack: `${heard(transcript)} Moved "${res.task.title}" from ${from} to ${plan.status}.`,
+            },
+          };
+        }
+        // ALREADY THERE IS SUCCESS. A voice retry after a dropped response is
+        // the likeliest retry there is — the speaker heard nothing and said
+        // it again — and answering "that failed" about a board which already
+        // says exactly what they asked for is the worst available answer: it
+        // invites a third attempt and teaches them the feature is unreliable.
+        if (res.error === 'same-status') {
+          const task = this.tasks.getTask(plan.taskId);
+          return {
+            kind: 'answered',
+            result: {
+              route: 'fast-path-action',
+              ack: `${heard(transcript)} "${task?.title ?? plan.taskId}" is already ${plan.status}.`,
+            },
+          };
+        }
+        // Blocked is a JUDGEMENT, not a failure: an open dependency refused
+        // the move, and deciding what to do about that is the agent's work.
+        // Name the blockers anyway — "sent to the agent" with no reason reads
+        // as the fast path having simply not fired.
+        if (res.error === 'blocked') {
+          const names = (res.blockers ?? [])
+            .filter((b) => b.enforce)
+            .map((b) => `"${b.title}"`)
+            .join(', ');
+          return names.length > 0
+            ? { kind: 'defer', note: `Blocked by ${names}.` }
+            : { kind: 'defer' };
+        }
+        return { kind: 'defer' };
+      }
+      case 'set-assignee': {
+        // The same gate the hand-over route applies, via the same function:
+        // a board must not be walked back to the generic owner one utterance
+        // at a time, and "agent" is a category rather than somebody. No
+        // author fallback here either — `resolveVoiceAction` has already
+        // turned "me" into the speaker's name, which is a deliberate
+        // resolution and not a guess about who a blank assignee meant.
+        const assignee = resolveAssignee(plan.assignee, undefined);
+        if (!assignee) return { kind: 'defer' };
+        const res = this.tasks.setAssignee(plan.taskId, assignee, { actor: plan.actor });
+        if (!res.ok) return { kind: 'defer' };
+        // `changed: false` is acked as success for the same reason
+        // same-status is: the board already says what was asked for.
+        return {
+          kind: 'answered',
+          result: {
+            route: 'fast-path-action',
+            ack: `${heard(transcript)} Assigned "${res.task.title}" to ${assignee}.`,
+          },
+        };
+      }
+      default:
+        return { kind: 'defer' };
+    }
+  }
+
+  /**
    * Route one utterance. Never throws for a live workspace: every failure
    * mode degrades to the agent route with an honest ack, because the one
    * unacceptable outcome is an utterance that gets no answer (§2.4).
@@ -613,6 +714,10 @@ export class VoiceRouter {
 
     let classification: VoiceClassification | null = null;
     let fastPathDown = false;
+    // Hoisted: an action is resolved against the SAME projection the model
+    // was shown, so the guardrail cannot be arguing about a different read of
+    // the store than the one that produced the classification.
+    let resource: VoiceResource | undefined;
     if (this.complete) {
       const index = {
         goal: workspace.goal,
@@ -628,7 +733,7 @@ export class VoiceRouter {
         })),
         docIds: workspace.docIds,
       };
-      const resource = this.resourceInView(workspaceId, context);
+      resource = this.resourceInView(workspaceId, context);
       try {
         const reply = await this.complete(buildVoicePrompt(index, transcript, context, resource));
         classification = parseVoiceReply(reply);
@@ -641,20 +746,43 @@ export class VoiceRouter {
       fastPathDown = true;
     }
 
+    // An action the router ran itself, if the guardrail let it and the store
+    // agreed. Anything short of that is `undefined` and falls to the agent
+    // route below — deliberately the SAME branch a change takes, so a
+    // declined action is indistinguishable from an utterance voice never
+    // claimed to handle.
+    let answered: VoiceResult | undefined;
+    /** One clause explaining why an action went to the agent after all. */
+    let deferNote = '';
+    if (classification?.kind === 'action') {
+      const plan = resolveVoiceAction({
+        classification,
+        actor,
+        transcript,
+        ...(context !== undefined ? { context } : {}),
+        ...(resource !== undefined ? { resource } : {}),
+      });
+      if (plan) {
+        const outcome = this.executeAction(transcript, plan);
+        if (outcome.kind === 'answered') answered = outcome.result;
+        else if (outcome.note) deferNote = ` ${outcome.note}`;
+      }
+    }
+
     let result: VoiceResult;
-    if (classification?.kind === 'lookup') {
+    if (answered) {
+      result = answered;
+    } else if (classification?.kind === 'lookup') {
       result = this.lookupResult(workspaceId, transcript, classification);
     } else {
-      // A change — or an unclassifiable utterance, which only the agent's
-      // judgment can handle. Both take the agent route, and so does an
-      // ACTION for now: `resolveVoiceAction` exists and is tested, but the
-      // executors behind it land in the next commits, so classifying an
-      // utterance as an action changes nothing a speaker can observe yet.
+      // A change — or an unclassifiable utterance, or an action the guardrail
+      // or the store declined. All of them need judgment this call does not
+      // have, which is what the agent is for.
       const note = fastPathDown ? ' (Fast path unavailable.)' : '';
       if (this.tasks.hasLiveAttachment(workspaceId)) {
         result = {
           route: 'agent',
-          ack: `${heard(transcript)} Sent to the workspace agent.${note}`,
+          ack: `${heard(transcript)} Sent to the workspace agent.${deferNote}${note}`,
         };
       } else {
         this.tasks.queueVoiceRequest(workspaceId, {
@@ -664,7 +792,7 @@ export class VoiceRouter {
         });
         result = {
           route: 'agent-queued',
-          ack: `${heard(transcript)} Agent away — queued for its next attach.${note}`,
+          ack: `${heard(transcript)} Agent away — queued for its next attach.${deferNote}${note}`,
         };
       }
     }
