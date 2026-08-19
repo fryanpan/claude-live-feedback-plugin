@@ -99,6 +99,18 @@ The feedback widget that ships Linear tickets in `~/dev/health-tool` and `~/dev/
   for it, because its scarce axis is HEIGHT (~750px usable, about half a
   monitor) rather than width. That is why a 36px header row was worth a
   complaint there and invisible everywhere else.
+  - **Three tiers, and a MacBook is in the middle one with the iPad**
+    (Bryan, 2026-08-19): mobile ≤1100, **tablet/laptop 1101–1920**, 4K above.
+    The middle tier is not a compromise between the other two — it is where
+    almost every screen lands, iPad and laptop alike, and *"anything below
+    1920px"* gets the space-conserving layout.
+  - **Width cannot tell you which device it is, because page zoom moves it.**
+    A 1366px iPad at 85% zoom reports 1607px — wider than a MacBook. A gate
+    aimed above "every iPad" therefore also excludes real laptops, and a
+    reviewer changes tier by pinching. Anything that must be true per-device
+    belongs in a stored preference, not a media query; width picks defaults
+    and nothing more. Learned by shipping the 1367px gate and watching it
+    fail the same day.
 
 ## When to open a PR
 
