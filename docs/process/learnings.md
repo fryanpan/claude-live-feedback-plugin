@@ -2569,6 +2569,23 @@ Technical discoveries that should persist across sessions for this project.
   phrase is **line-wrapped** in the markdown, so no single line contains it.
   Re-running through `tr '\n' ' ' | tr -s ' '` found it. Prose wraps; a
   literal multi-word probe against a wrapped file reports a clean absence.
+  The contrast is the actionable part. Measured on the same file at the same
+  commit:
+
+  ```
+  grep -F 'gated on a heartbeat inside the ~5-minute window'   → 0  (exit 1)
+  tr '\n' ' ' | tr -s ' ' | grep -F   (same phrase)            → 1
+  grep -c '5-minute'                                           → 1
+  ```
+
+  The long search missed it and a short token found it, and the file shows
+  why — the break lands mid-phrase, between `gated on a` and `heartbeat`,
+  while `5-minute` sits whole on one line. **The longer and more specific the
+  search string, the more line-breaks it has to survive**, so in prose the
+  distinctive short token is the more reliable probe and the full phrase is
+  what you use to *read* the hit once you have it, not to find it. Two people
+  sweeping the same tree came out at seven sites and six for exactly this
+  reason — not better judgement, a shorter needle.
 - Same family as "A negative probe needs a positive control", pointed at
   assertions rather than searches: a check that reports success without having
   looked at the thing it names.
