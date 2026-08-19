@@ -27,6 +27,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { TaskStore } from '../src/tasks.ts';
+import { openWorkspaceStream } from './agent-stream.ts';
 import { type GoalIds, seedGoals, seedGoalsOverHttp } from './goal-seed.ts';
 
 const AGENT = { id: 'agent-search-revamp', name: 'Search Revamp', kind: 'known', color: '#888888' };
@@ -241,10 +242,15 @@ describe('the create ROUTES carry placement to the caller', () => {
       author: AGENT,
     });
     expect(attached.status).toBe(200);
+    // …and reachable. The MCP opens this stream immediately after attaching,
+    // and the request is delivered by broadcasting on it, so an agent that
+    // registered without connecting is not somewhere a delivery can land.
+    const stream = await openWorkspaceStream(base, wsId);
 
     const live = await jj<{ placement: SinglePlacement }>(
       await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, title: 'Filed while live' }),
     );
     expect(live.placement.triageDelivered).toBe(true);
+    await stream.close();
   });
 });
