@@ -266,7 +266,9 @@ describe('readReviewPayload — loose on the way out, so nothing already stored 
     // or as NaN must not read as an answer — that would silently retire a
     // question — so it is dropped and the item stays on the queue.
     for (const junk of ['1700000000000', Number.NaN, null, {}]) {
-      expect(readReviewPayload(decision({ answeredAt: junk as never }))?.answeredAt).toBeUndefined();
+      expect(
+        readReviewPayload(decision({ answeredAt: junk as never }))?.answeredAt,
+      ).toBeUndefined();
     }
   });
 });

@@ -18,7 +18,7 @@
  * notion of who counts as an agent is exactly the drift this codebase has
  * already been bitten by.
  */
-import { type Comment, type ReviewPayload, reviewAnswered, type Thread } from '@feedback/core';
+import { type Comment, type ReviewPayload, type Thread, reviewAnswered } from '@feedback/core';
 import { classifyActor } from './activity.ts';
 
 /** How much of the question rides along to the strip. Enough to recognise the

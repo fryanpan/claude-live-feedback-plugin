@@ -759,7 +759,11 @@ describe('reviewThreadItems — declared review items vs the inferred band', () 
         comments: [
           comment({ text: 'first', review: declaration({ answeredAt: T0 + 1 }), ts: T0 }),
           comment({ kind: 'person', text: 'Hide them.', ts: T0 + 2 }),
-          comment({ text: 'second', review: declaration({ headline: 'And on mobile?' }), ts: T0 + 3 }),
+          comment({
+            text: 'second',
+            review: declaration({ headline: 'And on mobile?' }),
+            ts: T0 + 3,
+          }),
           comment({ kind: 'person', text: 'looking', ts: T0 + 4 }),
         ],
       }),

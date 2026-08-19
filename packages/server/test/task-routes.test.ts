@@ -1217,9 +1217,9 @@ describe('hub workspace + task routes', () => {
       });
       expect(chat.status).toBe(200);
 
-      const still = (await (
-        await local(`/api/workspaces/${wsId}/review-items`)
-      ).json()) as { items: Array<{ band: string; review?: { options?: unknown[] } }> };
+      const still = (await (await local(`/api/workspaces/${wsId}/review-items`)).json()) as {
+        items: Array<{ band: string; review?: { options?: unknown[] } }>;
+      };
       expect(still.items).toHaveLength(1);
       expect(still.items[0]?.band).toBe('declared');
       // The options are what vanished on the screen, so they are what is
