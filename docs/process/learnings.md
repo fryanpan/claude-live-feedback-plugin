@@ -84,6 +84,11 @@ Technical discoveries that should persist across sessions for this project.
   `noControlCharactersInRegex` trip earlier. Use plain ASCII sentinels
   (`__unserializable_block_${i}__`); if grep starts reporting "Binary file
   matches" on a source file you just edited, that's what happened.
+- **What it costs once written is a separate entry, and it is worse than a
+  failed review** — see "A NUL byte makes grep silently blind, and the silence
+  defeats the positive control too". The grep on this machine says nothing at
+  all, so the file goes invisible to every literal check over it and over any
+  diff containing it. This has now happened in three different source files.
 
 ## The route layer silently drops params unit tests can't see
 
@@ -157,6 +162,64 @@ Technical discoveries that should persist across sessions for this project.
   0/100 in the same pass, from a harness that claimed to treat both the same
   way, is a contradiction on its face. Re-run per-subject and the 40-character
   case loses its characters too.
+
+## A probe that always answers "yes" is as vacuous as one that always answers "no"
+
+- **`grep -qa $'\0' FILE` reports the NUL as present for every file on earth,
+  including one containing only `hello world`.** A NUL cannot survive `argv`,
+  which is NUL-terminated, so however the shell holds it the pattern reaches
+  `grep` as the **empty string** — and the empty pattern matches everything.
+  Measured 2026-08-19: zsh's `${#p}` for `p=$'\0'` is `1`, so the shell is not
+  the culprit and bash behaves identically. On that reading I stated in several
+  messages and in a written summary that the built bundles contained NUL bytes.
+  None of them ever did.
+- **The rule: a probe that always answers "yes" is as worthless as one that
+  always answers "no", and it is harder to notice** — a positive reading feels
+  like a finding, while a negative reading feels like an absence you already
+  distrust. Nothing about the output looks wrong; it looks like a hit.
+- **The control is the same one line pointed the other way: run the probe
+  against something that cannot possibly contain the thing.**
+  `printf 'hello world' > /tmp/control.txt` and re-run it. One command, and it
+  ends the claim.
+- **A working form, directional and testable:**
+  `perl -0777 -ne 'exit(index($_,"\0")>=0?0:1)' FILE` — exit 0 on
+  `hello\0world`, exit 1 on `hello world`. The byte count in the NUL entry
+  below is the other honest form.
+- The archive already holds the neighbouring corners: "A negative test needs a
+  positive control or it proves nothing" (the probe can see nothing) and "A
+  positive control can silently become a duplicate of the thing it controls"
+  (the control never entered the condition). This is the third — **the probe's
+  answer does not depend on its subject at all.**
+- **Its exact mirror is the circular `--cc` control** in "`git show --cc` has
+  THREE outcomes, and the control for it must be `-c`": one control that always
+  passes, one that always fails to fail. Same bug from opposite ends, and both
+  were hit in the same session by the same person chasing the same byte.
+
+### The thesis, stated once for the whole family
+
+**Every failure in these entries had a check that ran, printed something, and
+meant nothing — and in each case the thing that would have caught it was one
+deliberate attempt to make the check fail.** Five distinct instances measured
+on 2026-08-19, different tools, one shape:
+
+1. a probe that always passed — an empty grep pattern (this entry);
+2. a probe blinded by a control byte — "A NUL byte makes grep silently blind";
+3. a control drawn from the same suppressed measurement it was checking —
+   "`git show --cc` has THREE outcomes";
+4. a log read as an inventory it never was — "`bun test`'s log cannot
+   enumerate its own run set";
+5. a grep for a string at a column the command never puts it in —
+   "`git merge-tree`'s three-arg form hides conflict markers behind a diff
+   prefix".
+
+**The sharper form of "a negative probe needs a positive control": agreement is
+not independence.** Three agents re-running the same runner is one derivation
+with three witnesses. A control has to come through a *different derivation* —
+a different tool, a different flag, a different computation — not merely a
+different invocation of the same one. The counterexample that proves it: the
+one test-file count that held up under scrutiny had **two** derivations, a
+static `git ls-tree` off the config globs *and* the runner's own enumeration.
+Every count that went wrong had one.
 
 ## A positive control must be a peer in TIME as well as in kind
 
@@ -718,6 +781,33 @@ Technical discoveries that should persist across sessions for this project.
   `packages/markdown-app/dist` in the primary checkout to test an unmerged
   change — prod serves that directory per-request, so the "test build" is a
   deploy to the fleet.
+
+## The scrollbar's width in CSS px depends on browser ZOOM, so record `devicePixelRatio` with any measurement that touches it
+
+- **Same page, same tab, same harness, two different scrollbar widths across
+  runs — and the discriminator was zoom.** Measured 2026-08-19:
+  `devicePixelRatio 1.600` → scrollbar **19** CSS px; `devicePixelRatio 2.000`
+  → **15**. The scrollbar is a fixed number of DEVICE pixels, so the CSS-px
+  figure scales with the ratio: `15 × (2 / 1.6) = 18.75`, i.e. the 19. Six
+  consecutive runs at dpr 2 read 15 every time and a full seven-width sweep at
+  dpr 1.6 read 19 every time, so each reading was internally stable and neither
+  was noise.
+- **The first diagnosis was that off-screen or transform-scaled iframes are
+  unfaithful rulers. That was wrong** — correlation only: the scaled-iframe
+  runs happened to fall while the window sat at 80% zoom. Unscaled, on-screen
+  iframes reproduce both values. Worth stating plainly because the wrong
+  diagnosis sends the next person to go and fix their iframe when the thing to
+  check is the zoom.
+- **Re-read `devicePixelRatio` per RUN, not once per session.** This is a
+  shared browser and the zoom changed mid-session with nobody touching it
+  deliberately. A ratio captured at setup and reused describes a window that
+  may no longer exist.
+- **A layout assertion that moves with zoom is measuring the scrollbar, not the
+  layout.** The payoff of the two real ratios is that a fix could be checked at
+  two genuine scrollbar widths without synthesising either: the board pinned to
+  exactly **420px** at both, with the side panel absorbing the 4px difference
+  (988 vs 992). The previous build gave **422** at sb 15 and **418** at sb 19 —
+  it passed or failed depending on the zoom of whoever ran it.
 
 ## A prod restart reloads server code but NOT the served app bundle
 
@@ -2509,8 +2599,73 @@ Technical discoveries that should persist across sessions for this project.
   safeguard is not "run a positive control" in the abstract but **run one
   through the same code path as the probe**: same flags, same file, same
   invocation. A control that differs anywhere is testing a different question.
+- **A second file carried one for days on `main`, so this recurs and the fix
+  has to be a gate rather than a habit.**
+  `packages/server/src/review-migration.ts` held exactly 1 NUL — a sentinel
+  written as a literal `\0` where the escape was intended — from `aec4cf0`
+  (2026-08-18) through `8e75e0e`. Measured on that blob: `grep -c 'export'`
+  printed **nothing** and exited 1; `grep -ac 'export'` on the same bytes
+  printed **12**. #255 removed it incidentally (14,148 bytes, 0 NULs), so
+  `main` is clean as of `676f53b` — by luck, not by a check. A CI guard is
+  filed as its own ticket; until it lands, `grep -a` on every literal check is
+  the whole mitigation.
+- **Counting the `prose.ts` case, that is three source files in this repo.**
+  The write side is the entry at the top of this file, "Don't let the editor
+  tools write raw control bytes into source"; this is the read side, and the
+  two keep meeting because nothing between them fails.
 - Same family as "A negative probe needs a positive control", with the sting
-  that here the control is inside the blind spot with the probe.
+  that here the control is inside the blind spot with the probe. The inverse —
+  a probe that answers "yes" whatever you point it at — is "A probe that always
+  answers 'yes' is as vacuous as one that always answers 'no'", and both were
+  hit in the same session by the same person looking for the same byte.
+
+## `git show --cc` has THREE outcomes, and the control for it must be `-c`
+
+- **`--cc` is a filter, not a view, so a zero from it is one of three
+  different things and the number alone cannot say which.** All measured
+  2026-08-19 on this repo, git 2.54:
+
+  | commit | parents | `--cc` | `-c` | what the zero/number means |
+  |---|---|---|---|---|
+  | `278de00` | 1 | 92 `@@` | — | degraded to an ordinary diff |
+  | `db2fec2` | 2 | **4** | **73** | 4 hunks differ from BOTH parents |
+  | `b343693` | 2 | **0** | **76** | every conflict resolved by taking a side |
+
+- **Case 1 — single parent: `--cc` silently degrades to an ordinary diff and
+  shows everything.** `278de00` emits 92 hunks under `--cc`, all `@@`, zero
+  `@@@`, identical to plain `git show`; `server.ts` alone is 8 either way. A
+  reading here looks informative and answers nothing — not empty, but
+  *complete and unremarkable*, which is worse, because it reads as "I checked
+  the combined view and saw nothing odd."
+- **Case 2 — two parents, `--cc` non-zero: those hunks differ from BOTH
+  parents**, i.e. content typed by hand into a conflict region. That is the
+  thing worth reviewing on a merge, and `db2fec2`'s 4 is it.
+- **Case 3 — two parents, `--cc` zero: this is a POSITIVE finding, not an
+  absence.** `--cc` suppresses any hunk matching *one* parent, so zero means
+  no hunk differs from both — every conflict was resolved by taking one side
+  wholesale and nothing novel was authored. Clean by construction. `b343693`
+  = 0, and it was nearly reported as unverifiable on the strength of that
+  zero.
+- **The control I previously prescribed here was circular, and this entry used
+  to carry it.** It said to take the whole-commit `--cc` count as the control
+  before trusting a per-file `--cc` zero — but that is *the same suppressed
+  measurement*, so it collapses to zero in exactly the case it exists to
+  catch. It can never fail when it matters. **The control is `git show -c`**,
+  which counts every combined hunk without suppression: 73 and 76 above,
+  non-zero on both, which is what establishes the commits have combined hunks
+  at all. (`ecaf378`: `--cc` 7 against `-c` 113.)
+- **Settle the parent count first** — `git rev-list --parents -n1 <sha> | wc -w`
+  returning **2** means one parent, and `--cc` is telling you nothing about a
+  resolution. On a real two-parent merge `--cc` is already the default, so
+  typing it never changes the output, only what you believe you asked for.
+- **Generalised, and the reason this is an entry rather than a git footnote: a
+  positive control drawn from the same measurement as the thing it checks is
+  not a control.** It has to arrive by a different path — a different flag, a
+  different tool, a different derivation — or it agrees with the broken reading
+  by construction. Same failure as confirming a test-file count by re-running
+  the same runner; see "An expected test-file count goes stale in the direction
+  that reads as correct" and the thesis in "A probe that always answers 'yes'
+  is as vacuous as one that always answers 'no'".
 
 ## Red gates on a diff that touches no code: count failed FILES against failed TESTS
 
@@ -2541,6 +2696,99 @@ Technical discoveries that should persist across sessions for this project.
 - Related: "Four gates, and each one is the only thing that catches its class".
   A gate that cannot load its subject has not run, whatever its exit code
   suggests.
+
+## An expected test-file count goes stale in the direction that reads as correct
+
+- **"Expect ~109 vitest files" was circulated as the guard against the entry
+  above — a green run that silently skipped files — and it was right when
+  derived and wrong two merges later.** Counted statically from the config
+  globs at each commit: `8ff9a81` **105**, `77ca4dd` **106**, `278de00`
+  **111**, `8e75e0e` **111**, `676f53b` **113**.
+- **A stale expectation sits BELOW the true count, which is the direction that
+  hides a skip.** A run that lost four files still clears a threshold set two
+  merges ago, and clearing it reads as the guard working. Three agents each
+  reported a different number — 109, 111, 113 — and **all three were correct
+  for the commit they were on**, so the disagreement looked like sloppiness
+  rather than the signal it was.
+- **Derive it per-commit from the artifact under test.** `vitest.config.ts`
+  excludes `packages/server/test/**`, so the two suites have separate counts
+  and neither number describes both:
+
+  ```bash
+  git ls-tree -r --name-only <ref> \
+    | awk '/^packages\/[^\/]+\/test\/.*\.test\.ts$/ || /^packages\/[^\/]+\/src\/.*\.test\.ts$/ || /^scripts\/.*\.test\.ts$/' \
+    | grep -v '^packages/server/test/' | wc -l
+  ```
+
+- **The general form: a threshold copied from another agent's run is a constant
+  with an expiry date nobody records.** Nothing marks the moment it stops being
+  true, and it keeps passing on the way out.
+- **The sharper half — repeating a run three times and getting agreement does
+  not detect a STABLE skip.** Only an independent derivation does. Same family
+  as "A positive control can silently become a duplicate of the thing it
+  controls": agreement between measurements that share a cause is not
+  corroboration. The general statement is under "The thesis, stated once for
+  the whole family" in "A probe that always answers 'yes'…".
+- **Do not recover the count from the runner's LOG, which is the obvious next
+  move and is wrong** — see the entry directly below.
+
+## `bun test`'s log cannot enumerate its own run set, and reading it as one invents missing files
+
+- **The improvement was right and the probe was wrong.** Counts alone can hide
+  a skip plus a compensating inclusion, so the better check is to diff the
+  runner's actual file LIST against the tree. On the vitest side that works:
+  113 in tree, 113 in log, `comm` empty in both directions. On the server side
+  the same method appeared to show **79 of 144 files in the tree but never
+  run** — which reads exactly like a merge dropping most of a suite.
+- **It was the probe. `bun test`'s default reporter prints a `path.test.ts:`
+  header only for files that emit OUTPUT** — in this repo, files that produce
+  `[rooms] failed to persist` stderr noise. Everything that passes silently is
+  named nowhere in the log. Measured on two runs of the same suite: **65 of
+  144** files named in one, **63 of 144** in another — the count is not even
+  stable between runs, because it depends on which files happened to be noisy.
+- **The positive control settles it in one command.** Take an alleged skip and
+  run it standalone: `bun test packages/server/test/activity.test.ts` → 13
+  tests, 0 failures, and bun prints **no header for it**. So the enumeration
+  returned zero for a file that demonstrably runs.
+- **This one fails in the expensive direction — a false POSITIVE on a
+  regression.** Most probe failures in this archive are false clears; stopping
+  at this output would have blocked a correct merge and sent someone hunting a
+  merge bug that does not exist. A silent pass is invisible to a log-based
+  enumeration **by design**, so no amount of re-reading the log fixes it.
+- **What does work: derive the expected set from the artifact under test** (the
+  static `git ls-tree` off the config globs, in the entry above) and reconcile
+  it against bun's own summary line, `Ran N tests across M files` — a number
+  the runner computes, not a list it happens to print.
+- **The general form: a tool's human-readable output is not an inventory of
+  what it did. It reports what it found worth saying.** A sibling agent hit the
+  same shape in a different tool — a served-bundle freshness check that passed
+  because someone else's build happened to land inside the window, where the
+  artifact's own `dist/` mtime was the thing that actually answered it.
+
+## `git merge-tree`'s three-arg form hides conflict markers behind a diff prefix, so an anchored grep never matches
+
+- **`git merge-tree <base> <a> <b> | grep -c '^<<<<<<<'` returns 0 on every
+  input, conflicted or not.** Measured 2026-08-19 on git 2.54 against a pair
+  constructed to conflict: anchored `^<<<<<<<` → **0**; unanchored `<<<<<<<` →
+  **1**. The markers ARE emitted — but inside a diff hunk body, so the line
+  reads `+<<<<<<< .our` and the `^` anchor misses it by exactly one column.
+  The surrounding format is not a merge result at all: `changed in both` /
+  `base` / `our` / `their` headers followed by diff hunks.
+- **The cost was real: a zero from this probe was reported as evidence that
+  four in-flight branches merged cleanly, and offered as a bound on merge
+  risk.** It was not weak evidence — it was no evidence, printed as a number.
+- **Scope it precisely; the over-broad retraction is its own error.** It is the
+  *anchored marker grep on the three-arg form* that is blind, not `merge-tree`.
+  Two-arg `git merge-tree --write-tree A B` discriminates by exit code —
+  measured **1** on the conflicting pair and **0** on a non-conflicting
+  control — and `--write-tree --messages A B` is better still, printing
+  `CONFLICT (content): Merge conflict in f.txt`, one line per file, so it names
+  what conflicts instead of merely signalling that something does. Sending the
+  next person away from a working tool would cost more than the bad probe did.
+- The negative control matters as much as the positive one here: the probe
+  returns 0 on a clean pair *and* on a conflicting pair, which is what makes
+  the reading indistinguishable from a real all-clear. See "The thesis, stated
+  once for the whole family" under "A probe that always answers 'yes'…".
 
 ## An assertion whose alternation can match either way pins nothing, and reads as coverage of exactly the thing it does not check
 
