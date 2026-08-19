@@ -160,6 +160,35 @@ function workspaceIdFromPath(): string {
   return m?.[1] ? decodeURIComponent(m[1]) : '';
 }
 
+/**
+ * The shareable address of one task. It is the board's own URL plus `?task=`,
+ * which is the deep link the app already reads at start-up — so the link a
+ * person pastes into a message opens the workspace AND the task, and says
+ * which workspace it belongs to on its face rather than being an opaque id.
+ */
+function taskUrl(taskId: string): string {
+  const url = new URL(location.href);
+  url.hash = '';
+  url.search = `?task=${encodeURIComponent(taskId)}`;
+  return url.toString();
+}
+
+/**
+ * Keep the address bar pointing at whatever the panel is showing, so a reload,
+ * a bookmark, or a copy of the browser's own URL all land back on this task.
+ * `replaceState` rather than `pushState`: opening a task from a row is not a
+ * navigation the Back button should have to unwind — Escape closes the panel,
+ * and Back should still leave the board.
+ */
+function syncTaskParam(taskId: string | null): void {
+  const params = new URLSearchParams(location.search);
+  if ((params.get('task') ?? null) === taskId) return;
+  if (taskId) params.set('task', taskId);
+  else params.delete('task');
+  const q = params.toString();
+  history.replaceState(null, '', `${location.pathname}${q ? `?${q}` : ''}${location.hash}`);
+}
+
 function wsUrl(docId: string, type: string): string {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   return `${proto}://${location.host}/y/${encodeURIComponent(docId)}?type=${encodeURIComponent(type)}`;
@@ -766,6 +795,7 @@ async function main(): Promise<void> {
           state.detailThreadId = null;
           renderDetail();
         },
+        onCopyLink: (t) => void copyTaskLink(t),
         onStatusSet: (t, to) => void transitionTask(t, to),
         onTitleCommit: (t, title) => void renameTask(t, title),
         onAnswer: (t, text) => void answerDecision(t, text),
@@ -806,7 +836,24 @@ async function main(): Promise<void> {
       if (detailOpener?.isConnected) detailOpener.focus();
       detailOpener = null;
     }
+    syncTaskParam(task?.id ?? null);
     renderedDetailId = task?.id ?? null;
+  }
+
+  /**
+   * Clipboard write, with a fallback that is a real fallback: `writeText`
+   * rejects on an insecure origin and in a few embedded webviews, and a "Copied"
+   * toast over an empty clipboard is worse than no button. When it fails the
+   * toast carries the URL itself, which is at least selectable.
+   */
+  async function copyTaskLink(task: HubTask): Promise<void> {
+    const url = taskUrl(task.id);
+    try {
+      await navigator.clipboard.writeText(url);
+      showToast('Link copied');
+    } catch {
+      showToast(url);
+    }
   }
 
   // ── Task discussion ─────────────────────────────────────────────────────

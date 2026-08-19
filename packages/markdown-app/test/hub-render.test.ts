@@ -445,8 +445,8 @@ describe('renderBoard', () => {
       onAnswer: vi.fn(),
       onAssign: vi.fn(),
     });
-    // Control: the panel really did render its meta list.
-    expect(panel.querySelectorAll('.hub-detail-meta dt').length).toBeGreaterThan(0);
+    // Control: the panel really did render its key-fields row.
+    expect(panel.querySelectorAll('.hub-detail-fields dt').length).toBeGreaterThan(0);
     expect(panel.textContent).not.toContain('Risk');
   });
 
@@ -1368,9 +1368,11 @@ describe('renderTaskDetail', () => {
     expect(rebuilt?.value).toBe('half a sentence');
   });
 
+  // Goal moved out of the reference list at the bottom and into the key-fields
+  // row under the title, so this reads the row it now lives in.
   const metaValue = (key: string): string | null => {
-    const dts = [...root.querySelectorAll('.hub-detail-meta dt')];
-    const dds = [...root.querySelectorAll('.hub-detail-meta dd')];
+    const dts = [...root.querySelectorAll('.hub-detail-fields dt')];
+    const dds = [...root.querySelectorAll('.hub-detail-fields dd')];
     const i = dts.findIndex((dt) => dt.textContent === key);
     return i === -1 ? null : (dds[i]?.textContent ?? null);
   };
@@ -1851,7 +1853,7 @@ describe('renderTaskDetail — discussion', () => {
     });
     // The panel is still aimed at that thread — this is about where the
     // viewport lands, not about losing the deep link.
-    expect(root.querySelector('.hub-thread-focus')).toBeTruthy();
+    expect(root.querySelector('.hub-comment-focus')).toBeTruthy();
     expect(root.querySelector('.hub-detail-ask')).toBeTruthy();
     expect(scrolled).toEqual([]);
   });
@@ -1966,7 +1968,7 @@ describe('renderTaskDetail — discussion', () => {
     expect(root.querySelector('.hub-detail-ask')).toBeNull();
     // Positive control: the panel rendered at all, so the null above is about
     // the ask and not about an empty container.
-    expect(root.querySelector('.hub-thread')).toBeTruthy();
+    expect(root.querySelector('.hub-comment')).toBeTruthy();
   });
 
   /** Reported as "comments do not say who they are from, or whether they are a
@@ -1989,14 +1991,14 @@ describe('renderTaskDetail — discussion', () => {
         ],
       },
     );
-    const waiting = root.querySelector('.hub-thread[data-thread-id="th-w"]');
+    const waiting = root.querySelector('.hub-comment[data-thread-id="th-w"]');
     expect(waiting?.querySelector('.hub-comment-author')?.textContent).toBe('Live Feedback');
     // Text, not a tooltip.
     expect(waiting?.querySelector('.hub-comment-when')?.textContent).toBe('2h ago');
-    expect(waiting?.querySelector('.hub-thread-needs-you')).toBeTruthy();
+    expect(waiting?.querySelector('.hub-comment-needs-you')).toBeTruthy();
     // Only the thread the server named — a mark on every thread marks nothing.
     expect(
-      root.querySelector('.hub-thread[data-thread-id="th-quiet"] .hub-thread-needs-you'),
+      root.querySelector('.hub-comment[data-thread-id="th-quiet"] .hub-comment-needs-you'),
     ).toBeNull();
   });
 
@@ -2053,10 +2055,10 @@ describe('renderTaskDetail — discussion', () => {
       loading: false,
       threads: [thread({ id: 'th-1' }), thread({ id: 'th-2' }), thread({ id: 'th-3' })],
     });
-    const marked = [...root.querySelectorAll('.hub-thread-focus')];
+    const marked = [...root.querySelectorAll('.hub-comment-focus')];
     // Positive control: all three rendered, so "only one marked" means
     // something. Then: it is the RIGHT one.
-    expect(root.querySelectorAll('.hub-thread')).toHaveLength(3);
+    expect(root.querySelectorAll('.hub-comment')).toHaveLength(3);
     expect(marked).toHaveLength(1);
     expect((marked[0] as HTMLElement).dataset.threadId).toBe('th-2');
   });
@@ -2066,8 +2068,8 @@ describe('renderTaskDetail — discussion', () => {
       loading: false,
       threads: [thread({ id: 'th-1' }), thread({ id: 'th-2' })],
     });
-    expect(root.querySelectorAll('.hub-thread')).toHaveLength(2);
-    expect(root.querySelectorAll('.hub-thread-focus')).toHaveLength(0);
+    expect(root.querySelectorAll('.hub-comment')).toHaveLength(2);
+    expect(root.querySelectorAll('.hub-comment-focus')).toHaveLength(0);
   });
 
   it('shows each comment with who said it', () => {
@@ -2127,7 +2129,7 @@ describe('renderTaskDetail — discussion', () => {
     }
     // Positive control: the last pass really did render three threads, so the
     // count above is one composer over three conversations, not an empty panel.
-    expect(root.querySelectorAll('.hub-thread')).toHaveLength(3);
+    expect(root.querySelectorAll('.hub-comment')).toHaveLength(3);
   });
 
   it('defaults to replying to the thread the composer sits under', () => {
@@ -2157,7 +2159,7 @@ describe('renderTaskDetail — discussion', () => {
       loading: false,
       threads: [thread({ id: 'th-1' }), thread({ id: 'th-2' })],
     });
-    const buttons = [...root.querySelectorAll<HTMLElement>('.hub-thread-reply')];
+    const buttons = [...root.querySelectorAll<HTMLElement>('.hub-comment-reply')];
     expect(buttons).toHaveLength(2);
     buttons[0]?.click();
     expect(onReplyTarget).toHaveBeenCalledWith('th-1');
@@ -2227,7 +2229,7 @@ describe('renderTaskDetail — discussion', () => {
         thread({ id: 'th-2', anchorText: 'the mtime poll runs every 500ms' }),
       ],
     });
-    const anchors = [...root.querySelectorAll('.hub-thread-anchor')];
+    const anchors = [...root.querySelectorAll('.hub-comment-anchor')];
     // One of the two, not both: a subject-anchored thread is about the task as
     // a whole, and quoting the description above its own thread says nothing.
     expect(anchors).toHaveLength(1);
@@ -2262,10 +2264,10 @@ describe('renderTaskDetail — discussion', () => {
         thread({ id: 'th-done', status: 'resolved' }),
       ],
     });
-    const rows = [...root.querySelectorAll<HTMLElement>('.hub-thread')];
+    const rows = [...root.querySelectorAll<HTMLElement>('.hub-comment')];
     expect(rows.map((r) => r.dataset.threadId)).toEqual(['th-open', 'th-subject', 'th-done']);
     for (const row of rows) {
-      const btn = row.querySelector<HTMLElement>('.hub-thread-reply');
+      const btn = row.querySelector<HTMLElement>('.hub-comment-reply');
       expect(btn).toBeTruthy();
       btn?.click();
     }
@@ -2326,9 +2328,13 @@ describe('renderTaskDetail — discussion', () => {
       loading: false,
       threads: [thread({ id: 'th-r', status: 'resolved' })],
     });
-    const el = root.querySelector('.hub-thread') as HTMLElement;
+    const el = root.querySelector('.hub-comment') as HTMLElement;
     expect(el).toBeTruthy();
-    expect(el.classList.contains('resolved')).toBe(true);
+    expect(el.classList.contains('hub-comment-resolved')).toBe(true);
+    // Still replyable, and the badge says which state it is in — a resolved
+    // conversation that reads as a plain comment is worse than a hidden one.
+    expect(el.querySelector('.hub-comment-status')?.textContent).toBe('Resolved');
+    expect(el.querySelector('.hub-comment-reply')).toBeTruthy();
   });
 
   // Grounded in the fetch, not inferred from anything: the panel says
