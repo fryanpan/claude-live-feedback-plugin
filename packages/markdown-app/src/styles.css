@@ -568,15 +568,22 @@ body.hub-body {
   margin: 0 auto;
   padding: 0 14px calc(24px + var(--safe-bottom));
 }
+/* Four areas, and the order left-to-right is the order of importance: where
+   you are, what this workspace is, where you can go, who is here. Named areas
+   rather than bare columns because the ≤1100px band re-flows `nav` onto its
+   own row and nothing else moves — with positional columns that re-flow is a
+   rewrite of every child's placement. */
 .hub-topbar {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-areas: "back name nav cluster";
   align-items: center;
   gap: 10px;
   min-height: 48px;
   border-bottom: 1px solid var(--border);
 }
 .hub-topbar .back-link {
+  grid-area: back;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -587,11 +594,127 @@ body.hub-body {
   font-size: 18px;
 }
 .hub-ws-name {
+  grid-area: name;
   font-weight: 650;
   font-size: 17px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* --- top-right cluster: who is here, share, settings, me ---
+   Everything that is ABOUT the workspace rather than IN it (Bryan, 2026-08-18:
+   the header block above the task list should shrink drastically). Each of
+   these had its own full-width strip before and between them they pushed the
+   first task row most of a screen down. */
+.hub-cluster {
+  grid-area: cluster;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+/* The presence strip, re-fitted for a 36px-tall slot: one line, no wrap, and
+   a hard cap so a busy board cannot squeeze the workspace name to nothing.
+   Two classes, so these beat the base `.hub-presence` wherever it sits in the
+   file — a later equal-specificity rule would otherwise win. */
+.hub-presence.hub-people {
+  flex-wrap: nowrap;
+  gap: 4px;
+  padding: 0;
+  max-width: 300px;
+  overflow: hidden;
+}
+.hub-people .hub-presence-chip {
+  min-height: 30px;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+/* Where a peer is sits in the chip's title attribute and in the Activity tab;
+   in a 36px slot it is the first thing to cost more than it tells anyone. */
+.hub-people .hub-presence-where {
+  display: none;
+}
+.hub-icon-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.hub-icon-btn:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+.hub-icon-btn svg {
+  display: block;
+  width: 18px;
+  height: 18px;
+}
+/* An alarm inside a closed popover is an alarm nobody sees. The dot is the
+   only part of the drift/retriage notices that survives the move into
+   settings, so it has to be legible at a glance from the button itself. */
+.hub-alarm-dot {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--yellow);
+  border: 1.5px solid var(--bg-panel);
+}
+/* The signed-in identity had NO surface anywhere before this — the hub knew
+   who you were and never said so. Initials rather than a name: the cluster is
+   competing with the workspace title for the same row. */
+.hub-me {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--bg-hover);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  user-select: none;
+}
+
+/* --- settings panel: the surfaces that are not the task list ---
+   In flow rather than floating. A popover over a phone-width board is a modal
+   in everything but name, and the panel holds a textarea and two selects; the
+   disclosure pushes the board down and gives all of them room. */
+.hub-settings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  max-width: 560px;
+  margin: 8px 0 0 auto;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+}
+.hub-settings-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0 0;
+  font-size: 13px;
+  color: var(--fg-muted);
 }
 .hub-btn {
   min-height: 36px;
@@ -831,10 +954,10 @@ body.hub-body {
    than the viewport. */
 .hub-main {
   display: grid;
-  /* First track is the Home/Board nav rail (see the HOME PANE banner below);
-     the three content tracks are unchanged. `max-content` so the rail costs
-     exactly its labels and nothing when collapsed by a media query. */
-  grid-template-columns: max-content 200px minmax(0, 1fr) 260px;
+  /* Three content tracks. The nav used to hold a fourth `max-content` rail
+     track here; it is a row of tabs in the topbar now, so the board starts at
+     the left edge of the page again. */
+  grid-template-columns: 200px minmax(0, 1fr) 260px;
   gap: 20px;
   align-items: start;
 }
@@ -842,14 +965,20 @@ body.hub-body {
    the Home section takes the one remaining content track. Hiding rather than
    unmounting — the board keeps its realtime projection warm underneath. */
 .hub-main--home {
-  grid-template-columns: max-content minmax(0, 1fr);
-  /* The rail should reach the foot of the viewport like the mockup's, even
-     when the Home column is short. 64px ≈ the topbar + page padding. */
+  grid-template-columns: minmax(0, 1fr);
   min-height: calc(100vh - 64px);
 }
 .hub-main--home .hub-side,
 .hub-main--home .hub-board-col {
   display: none;
+}
+/* Activity showing: quick capture, the unplaced strip and the review strip
+   step aside for the feed. A separate class from `.hidden` because those
+   regions each own their `.hidden` for their own reasons (empty, not loaded),
+   and one flag serving two questions is how a region comes back visible on a
+   view it was never meant to render in. */
+.hub-hidden-by-view {
+  display: none !important;
 }
 .hub-side {
   min-width: 0;
@@ -883,21 +1012,11 @@ body.hub-body {
   background: var(--bg-hover);
 }
 
-/* --- board controls (inside the board column — §3.9) --- */
-.hub-controls {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 0;
-}
-.hub-tabs {
-  display: inline-flex;
-  gap: 2px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 2px;
-}
+/* --- board controls (inside the board column — §3.9) ---
+   The `.hub-controls` row (All / My Tasks tabs, the board/activity toggle, the
+   Done-window select) is gone: the tabs are top-level nav, the toggle is the
+   Activity tab, and the select moved into settings. `.hub-tab` survives it —
+   the Activity view's own All / Decisions filter still uses it. */
 .hub-tab {
   min-height: 32px;
   padding: 2px 12px;
@@ -1534,33 +1653,35 @@ body.hub-body {
   color: var(--fg);
 }
 
-/* --- HOME PANE (What's New brief + For Your Review) + Home/Board nav ---
+/* --- HOME PANE (What's New brief + For Your Review) + workspace nav ---
    The per-workspace Home page (approved mockup a30a15d): the since-last-read
-   brief first, then the review queue, on a reading column. The nav is a left
-   rail on desktop and a bottom bar on a phone (rules in the ≤900px block). */
+   brief first, then the review queue, on a reading column.
+
+   The nav was a left rail; it is a tab row in the topbar now (Bryan,
+   2026-08-18: Home / Tasks / Activity as a tab structure, with My Tasks a
+   top-level item beside Tasks rather than a filter buried in the board). The
+   rail's collapse affordance went with it — a row of four tabs has nothing to
+   collapse. It is still the fixed bottom bar on a phone; those rules live in
+   the ≤900px block and are unchanged by the move, because a `position: fixed`
+   element does not care which parent it hangs off. */
 .hub-nav {
+  grid-area: nav;
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 2px;
-  align-self: stretch;
-  width: 170px;
-  padding: 10px 8px;
-  background: var(--bg-panel);
-  border-right: 1px solid var(--border);
-  transition: width 150ms ease;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
-.hub-nav--collapsed {
-  width: 58px;
-}
-.hub-nav--collapsed .hub-nav-label {
+.hub-nav::-webkit-scrollbar {
   display: none;
 }
 .hub-nav-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-height: 38px;
-  padding: 8px 10px;
+  gap: 7px;
+  min-height: 36px;
+  padding: 6px 10px;
   border: none;
   border-radius: 8px;
   background: none;
@@ -1579,29 +1700,15 @@ body.hub-body {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   color: var(--accent);
 }
-/* The Collapse affordance sits at the FOOT of the rail (mockup). */
-.hub-nav-collapse {
-  margin-top: auto;
-  font-weight: 500;
-}
 .hub-nav-icon {
   flex: none;
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
 }
 .hub-nav-icon svg {
   display: block;
   width: 100%;
   height: 100%;
-}
-/* Home is a clean frame: rail + content only. The board chrome — presence
-   strip (which carries the plugin-drift notices), lead row, goal banner —
-   belongs to the board pane and does not render here (rejected review,
-   2026-08-18: the mockup's frame wins). */
-.hub-root--home .hub-presence,
-.hub-root--home .hub-lead,
-.hub-root--home .hub-goal {
-  display: none;
 }
 /* A reading column, not the full stage — the brief is prose and a full-width
    line is unreadable. The phone already has this width and needs no case. */
@@ -1809,9 +1916,10 @@ body.hub-body {
 .hub-section {
   margin-bottom: 18px;
 }
-.hub-section.hub-subgoal {
-  margin-left: 18px;
-}
+/* `.hub-subgoal` is deliberately absent. Subgoals render FLAT (Bryan,
+   2026-08-18) — `boardSections` still reports an honest `depth` and the goal
+   tree in the store is untouched, but nothing indents any more, so a section
+   is a section wherever it came from. */
 .hub-section-title {
   display: flex;
   align-items: baseline;
@@ -1829,6 +1937,42 @@ body.hub-body {
   color: var(--fg-muted);
   font-size: 13px;
   margin: 2px 0 0;
+}
+/* --- adding a goal from the list itself ---
+   The free-text goals block above the board is gone; goals live only as the
+   board's sections, so the list needs its own way to grow one. Quiet until
+   used, like the quick-capture row it sits below. */
+.hub-goal-add {
+  margin: 4px 0 18px;
+}
+.hub-goal-add-btn {
+  min-height: 36px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.hub-goal-add-btn:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+.hub-goal-add-input {
+  width: 100%;
+  max-width: 420px;
+  min-height: 36px;
+  padding: 4px 8px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  color: var(--fg);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
 }
 /* A task list is read by SKIMMING down a column, not by reading each row.
    So the row is a grid with fixed tracks — handle, open zone, status, title,
@@ -2883,23 +3027,16 @@ a.hub-link-chip:hover {
   .hub-main {
     grid-template-columns: minmax(0, 1fr);
   }
-  /* The nav rail becomes a horizontal strip above the stack. Below 900px
-     the phone block turns it into the fixed bottom bar instead. The base
-     rule's rail styling (width, panel bg, right border) is undone here —
-     a media query adds no specificity, so every base declaration that must
-     not apply needs an explicit override. */
-  .hub-nav {
-    flex-direction: row;
-    order: -1;
-    width: auto;
-    align-self: auto;
-    padding: 6px 8px;
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-  }
-  /* No rail to collapse when the nav is a strip or a bar. */
-  .hub-nav-collapse {
-    display: none;
+  /* The tabs drop to their own row under the name, so the workspace name and
+     the cluster stop competing with four labels for one 48px line. Only the
+     areas template changes — every child keeps the `grid-area` it was placed
+     by, which is why this is named areas and not columns. */
+  .hub-topbar {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "back name cluster"
+      "nav nav nav";
+    padding-bottom: 4px;
   }
   .hub-home {
     padding-top: 4px;
@@ -2928,18 +3065,16 @@ a.hub-link-chip:hover {
     top: auto;
     bottom: 0;
     z-index: 60;
-    flex-direction: row;
     gap: 0;
-    width: auto;
-    align-self: auto;
-    padding: 0;
+    overflow-x: visible;
     background: var(--bg-panel);
-    border-right: none;
     border-top: 1px solid var(--border);
     padding-bottom: var(--safe-bottom);
   }
-  .hub-nav-collapse {
-    display: none;
+  /* The topbar's second row now holds nothing in flow, so it costs no height;
+     the tabs are the bar at the foot of the screen. */
+  .hub-topbar {
+    padding-bottom: 0;
   }
   .hub-nav-item {
     flex: 1;
@@ -2966,9 +3101,6 @@ a.hub-link-chip:hover {
   }
   body.hub-body .voice-indicator {
     bottom: calc(68px + 58px + var(--kb-bottom, 0px) + var(--safe-bottom, 0px));
-  }
-  .hub-section.hub-subgoal {
-    margin-left: 10px;
   }
   /* Deliberately NOT re-wrapping. The row stays a single grid line at every
      width: wrapping is what put the status marks at four x-positions and
@@ -3139,6 +3271,14 @@ a.hub-link-chip:hover {
    ellipsis anywhere near it; breaking it keeps the clamp's ellipsis as the
    only way a title ever ends. */
 @media (max-width: 560px) {
+  /* Four things share a 430px line with the workspace name, and the presence
+     chips are the one whose absence costs least: who is here is a
+     collaboration cue, where share/settings/me are each the only door to
+     something. They come back at 561px — this is a fit, not a removal, and
+     nothing else in the cluster is dropped at any width. */
+  .hub-presence.hub-people {
+    display: none;
+  }
   .hub-task-title {
     display: -webkit-box;
     -webkit-box-orient: vertical;

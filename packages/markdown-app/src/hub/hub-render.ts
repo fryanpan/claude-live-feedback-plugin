@@ -328,6 +328,10 @@ export interface BoardHandlers {
    *  along a cycle. Same shape as the detail panel's, deliberately. */
   onStatusSet: (task: HubTask, to: TaskStatus) => void;
   onGoalTitleCommit: (sectionId: string, title: string) => void;
+  /** A new band, typed into the row at the foot of the list. `after` is the
+   *  band it should follow, omitted to append. Absent → no add affordance,
+   *  which is what every existing caller (and every test) gets. */
+  onGoalAdd?: (title: string, after?: string) => void;
   onOpenTask: (task: HubTask) => void;
   /** A drag or an arrow-key move resolved to a `set_task_goal` call. */
   onReorder: (task: HubTask, target: ReorderTarget) => void;
@@ -519,8 +523,20 @@ function taskBadges(task: HubTask): HTMLElement {
     if (title) b.title = title;
     badges.append(b);
   };
-  if (task.needs === 'decision') add('hub-badge-decision', 'decision');
-  else if (task.needs === 'action') add('hub-badge-action', 'action');
+  // REMOVED 2026-08-18, same request and same reasoning as the comment count
+  // below ("not useful and a waste of space"). `decision` / `action` badges
+  // used to sit here, one per row, on a list whose job is to answer what to
+  // work on next — and `needs` is a classification of the WHOLE board's
+  // shape, so on a well-triaged board it is nearly constant and says nothing
+  // about any particular row.
+  //
+  // The field is not gone and neither is the surface that uses it: `needs`
+  // still drives the review queue on Home and the review strip's ranking,
+  // which is where "this one wants a decision from you" belongs — a place
+  // that lists only the rows it applies to, instead of labelling all of them.
+  // If the board ever needs to distinguish a decision row again, that is a
+  // filter or an ordering, not a badge on every line.
+
   // The assignee is its own cell at the end of the row now (§ row anatomy).
   // As a badge it appeared only when it wasn't the default 'agent', so most
   // rows showed no owner at all.
@@ -891,7 +907,14 @@ export function renderBoard(
   container.replaceChildren();
   for (const section of sections) {
     const sec = document.createElement('section');
-    sec.className = `hub-section${section.depth === 1 ? ' hub-subgoal' : ''}${section.isChores ? ' hub-chores' : ''}`;
+    // FLAT. `section.depth` is still an honest fact about the goal list —
+    // `boardSections`, `goalRank` and `goalLabel` all agree on it, and the
+    // stored shape is untouched — but the list renders one level, because a
+    // subgoal indented under a parent reads as a smaller thing rather than as
+    // work with the same claim on the day. Nothing here destroys nesting: a
+    // board that already has subgoals shows them as top-level sections in
+    // board order, and the data migration is a separate, deliberate step.
+    sec.className = `hub-section${section.isChores ? ' hub-chores' : ''}`;
     sec.dataset.goalId = section.id;
     const head = document.createElement('h3');
     head.className = 'hub-section-title';
@@ -924,9 +947,73 @@ export function renderBoard(
     }
     container.append(sec);
   }
+  if (handlers.onGoalAdd) container.append(goalAddRow(sections, handlers.onGoalAdd));
   // After the rows exist: the drag/keyboard wiring needs the whole board (a
   // drop can cross into another goal's section), so it can't live on the row.
   wireBoardReorder(container, sections, handlers);
+}
+
+/**
+ * "New goal" at the foot of the list — the other half of inline goal editing,
+ * beside the tap-to-rename the section titles already have.
+ *
+ * It appends after the last REAL band rather than at the very end, because
+ * Chores is a fixed catch-all that always renders last: a band added after it
+ * would be the only thing below the bucket for work that has no band.
+ *
+ * Enter files it, Escape abandons it, and blurring an empty box closes it —
+ * the same three endings `wireInPlaceTitle` gives a rename, so the two
+ * gestures on this list behave the same way.
+ */
+function goalAddRow(
+  sections: BoardSection[],
+  onGoalAdd: (title: string, after?: string) => void,
+): HTMLElement {
+  const last = [...sections].reverse().find((s) => !s.isChores);
+  const wrap = document.createElement('div');
+  wrap.className = 'hub-goal-add';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'hub-goal-add-btn';
+  btn.textContent = '+ New goal';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'hub-goal-add-input hidden';
+  input.placeholder = 'Goal title';
+  input.setAttribute('aria-label', 'New goal title');
+
+  const close = (): void => {
+    input.value = '';
+    input.classList.add('hidden');
+    btn.classList.remove('hidden');
+  };
+  btn.addEventListener('click', () => {
+    btn.classList.add('hidden');
+    input.classList.remove('hidden');
+    input.focus();
+  });
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') {
+      const title = input.value.trim();
+      ev.preventDefault();
+      if (title.length === 0) {
+        close();
+        return;
+      }
+      onGoalAdd(title, last?.id);
+      close();
+    } else if (ev.key === 'Escape') {
+      ev.preventDefault();
+      close();
+    }
+  });
+  // Only an EMPTY box closes on blur. Closing over typed-but-uncommitted text
+  // is how a half-written title disappears when a repaint moves focus.
+  input.addEventListener('blur', () => {
+    if (input.value.trim().length === 0) close();
+  });
+  wrap.append(btn, input);
+  return wrap;
 }
 
 export interface UnplacedStripHandlers {
