@@ -291,7 +291,7 @@ export async function fetchQueueRows(
     if (docId === undefined || threadId === undefined) continue;
     // One thread can back more than one queue row. Triage is per THREAD, so a
     // duplicate would double-count it in the table and send two resolves.
-    const key = `${docId} ${threadId}`;
+    const key = `${docId}\0${threadId}`;
     if (seen.has(key)) continue;
     seen.add(key);
     rows.push({ docId, threadId });
