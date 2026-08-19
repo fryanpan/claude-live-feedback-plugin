@@ -19,9 +19,24 @@ import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { KEYCHAIN_SERVICE, KEYCHAIN_SERVICE_LEGACY } from '../src/summarize.ts';
 import { TaskStore, type TaskStoreEvent, voiceQueuePath } from '../src/tasks.ts';
-import { VoiceRouter, haikuVoiceComplete, parseVoiceReply } from '../src/voice.ts';
+import { RESOURCE_MAX, VoiceRouter, haikuVoiceComplete, parseVoiceReply } from '../src/voice.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
+const AGENT = { id: 'agent-search-revamp', name: 'Search Agent', kind: 'agent', color: '#7d2ed7' };
+
+/** Threads need an anchor; nothing here reads it back. */
+const ANCHOR = {
+  kind: 'element' as const,
+  fingerprint: {
+    tag: 'P',
+    stableAttrs: {},
+    classes: [],
+    text: 'Body.',
+    path: 'P[0] > BODY[0]',
+    dataAttrs: {},
+  },
+  snippet: { text: 'Body.' },
+};
 
 describe('voice routing (§3.8)', () => {
   let handle: ServerHandle;
@@ -30,6 +45,15 @@ describe('voice routing (§3.8)', () => {
   let hubId: string;
   let taskId: string;
   let docId: string;
+  /** A SECOND board, so "belongs to another workspace" is a real fixture and
+   *  not a made-up id the store would reject anyway. */
+  let otherHubId: string;
+  let otherTaskId: string;
+  let otherDocId: string;
+  /** Lives on the second board: its title alone blows the resource budget. */
+  let bigTaskId: string;
+  /** On `hubId`, carries links + an assignee — the resource block's payload. */
+  let linkedTaskId: string;
   /** Per-test fast-path behavior. null = "fast path unavailable". */
   let completeImpl: ((args: { system: string; user: string }) => Promise<string>) | null = null;
   /** What the last classification call received — proves the route forwards
@@ -91,6 +115,54 @@ describe('voice routing (§3.8)', () => {
     writeFileSync(p, '# Expansion plan\n\nBody.\n');
     expect((await post('/api/docs', { docId, type: 'markdown', sourceUrl: p })).status).toBe(200);
     expect((await post(`/api/workspaces/${hubId}/docs`, { docId })).status).toBe(200);
+
+    // A task carrying links + an owner, so the resource block has something to
+    // render beyond a title.
+    const linked = await post(`/api/workspaces/${hubId}/tasks`, {
+      title: 'Fold the expansion plan into the results page',
+      assignee: 'Jordan',
+      assigneeKind: 'person',
+      needs: 'action',
+      links: [
+        { kind: 'doc', docId },
+        { kind: 'thread', docId, threadId: 'th-synthetic' },
+      ],
+      author: PERSON,
+    });
+    expect(linked.status).toBe(200);
+    linkedTaskId = ((await linked.json()) as { task: { id: string } }).task.id;
+
+    // ── The second board: everything here is FOREIGN to `hubId` ────────────
+    const other = await post('/api/workspaces', {
+      name: 'billing-cleanup',
+      goal: 'Retire the old invoicing path.',
+    });
+    expect(other.status).toBe(200);
+    otherHubId = ((await other.json()) as { workspace: { id: string } }).workspace.id;
+
+    const ot = await post(`/api/workspaces/${otherHubId}/tasks`, {
+      title: 'Drop the legacy invoice job',
+      author: PERSON,
+    });
+    expect(ot.status).toBe(200);
+    otherTaskId = ((await ot.json()) as { task: { id: string } }).task.id;
+
+    const big = await post(`/api/workspaces/${otherHubId}/tasks`, {
+      title: `Rewrite the invoicing narrative ${'and reconcile every ledger row '.repeat(60)}`,
+      author: PERSON,
+    });
+    expect(big.status).toBe(200);
+    bigTaskId = ((await big.json()) as { task: { id: string } }).task.id;
+
+    otherDocId = 'invoice-runbook';
+    const op = join(dataDir, `${otherDocId}.md`);
+    writeFileSync(op, '# Invoice runbook\n\nBody.\n');
+    expect(
+      (await post('/api/docs', { docId: otherDocId, type: 'markdown', sourceUrl: op })).status,
+    ).toBe(200);
+    expect((await post(`/api/workspaces/${otherHubId}/docs`, { docId: otherDocId })).status).toBe(
+      200,
+    );
   });
 
   afterAll(async () => {
@@ -275,6 +347,122 @@ describe('voice routing (§3.8)', () => {
       expect(queued?.ack?.toLowerCase()).toContain('queued');
       const looked = voiceEvents.find((e) => e.transcript === 'take me to the results page task');
       expect(looked?.route).toBe('fast-path');
+    });
+  });
+
+  // The context arrives from the client and `parseVoiceContext` only clamps
+  // its LENGTH — so an id from another board would resolve through the global
+  // task index. Harmless while context ids never drive a write; the point of
+  // checking membership here is that it stops being harmless the moment they
+  // do. One predicate, the one the lookup validation already spells.
+  describe('the context is trusted only after a membership check', () => {
+    it('drops a taskId belonging to another workspace (control: this workspace renders)', async () => {
+      completeImpl = () => Promise.resolve(JSON.stringify({ kind: 'change' }));
+      lastPrompt.value = null;
+      await voice({
+        transcript: 'mark this done',
+        context: { surface: 'task', taskId: otherTaskId },
+        author: PERSON,
+      });
+      expect(promptUser()).not.toContain(otherTaskId);
+      expect(promptUser()).not.toContain('task=');
+      expect(promptUser()).not.toContain('Resource in view:');
+      expect(promptUser()).not.toContain('Drop the legacy invoice job');
+
+      // Positive control: the same shape with a task that IS on this board
+      // renders both the location id and the resource block.
+      lastPrompt.value = null;
+      await voice({
+        transcript: 'mark this done',
+        context: { surface: 'task', taskId },
+        author: PERSON,
+      });
+      expect(promptUser()).toContain(`task=${taskId}`);
+      expect(promptUser()).toContain('Resource in view:');
+      expect(promptUser()).toContain('Wire the results page');
+    });
+
+    it('drops a docId not attached to this workspace (control: an attached doc renders)', async () => {
+      completeImpl = () => Promise.resolve(JSON.stringify({ kind: 'change' }));
+      lastPrompt.value = null;
+      await voice({
+        transcript: 'summarize this',
+        context: { surface: 'doc', docId: otherDocId },
+        author: PERSON,
+      });
+      expect(promptUser()).not.toContain(otherDocId);
+      expect(promptUser()).not.toContain('doc=');
+      expect(promptUser()).not.toContain('Resource in view:');
+
+      lastPrompt.value = null;
+      await voice({
+        transcript: 'summarize this',
+        context: { surface: 'doc', docId },
+        author: PERSON,
+      });
+      expect(promptUser()).toContain(`doc=${docId}`);
+      expect(promptUser()).toContain('Resource in view:');
+    });
+  });
+
+  describe('the resource in view rides into the prompt', () => {
+    it('a task carries title, status, assignee and its links', async () => {
+      completeImpl = () => Promise.resolve(JSON.stringify({ kind: 'change' }));
+      lastPrompt.value = null;
+      await voice({
+        transcript: 'assign this to me',
+        context: { surface: 'task', taskId: linkedTaskId },
+        author: PERSON,
+      });
+      const prompt = promptUser();
+      expect(prompt).toContain(`Resource in view: task ${linkedTaskId}`);
+      expect(prompt).toContain('Fold the expansion plan into the results page');
+      expect(prompt).toContain('status: todo');
+      expect(prompt).toContain('assignee: Jordan');
+      expect(prompt).toContain('needs: action');
+      expect(prompt).toContain(`doc ${docId}`);
+      expect(prompt).toContain('th-synthetic');
+      // Control for the truncation test below: a normal task is not labelled.
+      expect(prompt).not.toContain('truncated');
+    });
+
+    it('a doc carries its title and the open review items scoped to it', async () => {
+      // An open thread whose newest comment is an agent's IS a review item.
+      const t = await post(`/api/docs/${docId}/threads`, {
+        author: AGENT,
+        text: 'Jordan, should the rollout wait for the crawler benchmark?',
+        anchor: ANCHOR,
+      });
+      expect(t.status).toBe(200);
+
+      completeImpl = () => Promise.resolve(JSON.stringify({ kind: 'change' }));
+      lastPrompt.value = null;
+      await voice({
+        transcript: 'reply to that review comment',
+        context: { surface: 'doc', docId },
+        author: PERSON,
+      });
+      const prompt = promptUser();
+      expect(prompt).toContain(`Resource in view: doc ${docId}`);
+      expect(prompt).toContain('crawler benchmark');
+    });
+
+    it('over-budget resource content is truncated and SAYS it was', async () => {
+      completeImpl = () => Promise.resolve(JSON.stringify({ kind: 'change' }));
+      lastPrompt.value = null;
+      const r = await post(`/api/workspaces/${otherHubId}/voice`, {
+        transcript: 'mark this done',
+        context: { surface: 'task', taskId: bigTaskId },
+        author: PERSON,
+      });
+      expect(r.status).toBe(200);
+      const prompt = promptUser();
+      const start = prompt.indexOf('Resource in view:');
+      expect(start).toBeGreaterThanOrEqual(0);
+      const block = prompt.slice(start, prompt.indexOf('\nUtterance:', start));
+      expect(block).toContain('truncated');
+      // The budget is the point: the block cannot grow with the content.
+      expect(new TextEncoder().encode(block).length).toBeLessThanOrEqual(RESOURCE_MAX + 200);
     });
   });
 

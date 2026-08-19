@@ -928,6 +928,27 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const voiceRouter = new VoiceRouter({
     tasks: taskStore,
     ...(opts.voiceComplete ? { complete: opts.voiceComplete } : {}),
+    // What a doc in view HOLDS, read through the one review-item builder this
+    // server already has. Voice must not grow a second notion of "what is
+    // waiting on a person here": that shape is owned by review-queue.ts and
+    // is being reworked, and a private copy would drift the day it lands.
+    // The router only ever calls this for a docId it has already proved is
+    // attached to the workspace.
+    docResource: (workspaceId, docId) => {
+      const workspace = taskStore.getWorkspace(workspaceId);
+      if (!workspace) return undefined;
+      const meta = rooms.get(docId)?.meta;
+      // Title, else the file's BASENAME — never the path. Same rule, and the
+      // same reason, as the review-items route: a label is workspace content,
+      // a host path is not, and this text leaves the machine.
+      const title = meta?.title || meta?.relPath?.split('/').pop();
+      return {
+        ...(title ? { title } : {}),
+        reviewItems: reviewItemsFor(workspace)
+          .filter((item) => item.docId === docId)
+          .map((item) => ({ threadId: item.threadId, ask: item.ask, askedBy: item.askedBy })),
+      };
+    },
   });
 
   /**
