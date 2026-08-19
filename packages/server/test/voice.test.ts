@@ -17,8 +17,9 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { KEYCHAIN_SERVICE, KEYCHAIN_SERVICE_LEGACY } from '../src/summarize.ts';
 import { TaskStore, type TaskStoreEvent, voiceQueuePath } from '../src/tasks.ts';
-import { VoiceRouter, parseVoiceReply } from '../src/voice.ts';
+import { VoiceRouter, haikuVoiceComplete, parseVoiceReply } from '../src/voice.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
 
@@ -311,6 +312,50 @@ describe('voice routing (§3.8)', () => {
       expect(parseVoiceReply('{"kind":"lookup"}')).toEqual({ kind: 'lookup' });
       expect(parseVoiceReply('no json here')).toBeNull();
       expect(parseVoiceReply('{"kind":"weird"}')).toBeNull();
+    });
+  });
+
+  // The summarizer already falls back to the pre-rename keychain entry
+  // (resolveKeyFrom); the voice completer must resolve its key the same way,
+  // or a machine holding only the legacy entry has working summaries and a
+  // silently dead voice fast path — which is exactly how it shipped.
+  describe('haikuVoiceComplete — which keychain service the key comes from', () => {
+    const fakeKeychain = (entries: Record<string, string>) => {
+      const asked: string[] = [];
+      const readKey = (service: string): string => {
+        asked.push(service);
+        const value = entries[service];
+        if (!value) throw new Error(`no entry for ${service}`);
+        return value;
+      };
+      return { asked, readKey };
+    };
+
+    it('resolves through the injected reader, new name first', () => {
+      const k = fakeKeychain({ [KEYCHAIN_SERVICE]: 'new-key' });
+      const complete = haikuVoiceComplete({ readKey: k.readKey });
+      expect(complete).not.toBeNull();
+      expect(k.asked).toEqual([KEYCHAIN_SERVICE]);
+    });
+
+    it('falls back to the legacy service when only the old entry exists', () => {
+      const k = fakeKeychain({ [KEYCHAIN_SERVICE_LEGACY]: 'old-key' });
+      const complete = haikuVoiceComplete({ readKey: k.readKey });
+      expect(complete).not.toBeNull();
+      expect(k.asked).toEqual([KEYCHAIN_SERVICE, KEYCHAIN_SERVICE_LEGACY]);
+    });
+
+    it('returns null when neither entry exists', () => {
+      const k = fakeKeychain({});
+      expect(haikuVoiceComplete({ readKey: k.readKey })).toBeNull();
+      expect(k.asked).toEqual([KEYCHAIN_SERVICE, KEYCHAIN_SERVICE_LEGACY]);
+    });
+
+    it('an explicit apiKey wins and the keychain is never consulted', () => {
+      const k = fakeKeychain({ [KEYCHAIN_SERVICE]: 'ignored' });
+      expect(haikuVoiceComplete({ apiKey: 'explicit', readKey: k.readKey })).not.toBeNull();
+      expect(haikuVoiceComplete({ apiKey: null, readKey: k.readKey })).toBeNull();
+      expect(k.asked).toEqual([]);
     });
   });
 });
