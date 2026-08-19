@@ -381,8 +381,14 @@ export function briefCoverage(events: BriefEventRow[], since: number): BriefCove
 }
 
 /** A digest line must stay one line, and a whole essay of an answer is not
- *  what the model needs — the polarity lives in the first sentence or two. */
+ *  what the model needs. */
 const ANSWER_SNIPPET_MAX = 140;
+/** How the bound is split when it bites. Both ends survive because the
+ *  considerate refusal puts its verdict LAST — "you've raised fair points
+ *  … but no" — so a leading-only cut quotes exactly the agreement half and
+ *  drops the verdict, which reads as consent with evidence attached. */
+const ANSWER_SNIPPET_HEAD = 88;
+const ANSWER_SNIPPET_TAIL = ANSWER_SNIPPET_MAX - ANSWER_SNIPPET_HEAD - 3; // 3 = " … "
 
 /** The recorded answer, flattened and bounded, as a digest-line fragment.
  *  Empty for rows written before answers were captured, and for any
@@ -392,7 +398,10 @@ function answerFragment(value: unknown): string {
   if (typeof value !== 'string') return '';
   const flat = value.replace(/\s+/g, ' ').trim();
   if (flat === '') return '';
-  const cut = flat.length > ANSWER_SNIPPET_MAX ? `${flat.slice(0, ANSWER_SNIPPET_MAX - 1)}…` : flat;
+  const cut =
+    flat.length > ANSWER_SNIPPET_MAX
+      ? `${flat.slice(0, ANSWER_SNIPPET_HEAD)} … ${flat.slice(-ANSWER_SNIPPET_TAIL)}`
+      : flat;
   return ` · answer: "${cut}"`;
 }
 
@@ -439,7 +448,9 @@ export function buildBriefPrompt(
     'A task title states a goal, not an outcome. A decision.answered event means only that an answer',
     'was recorded — only the quoted answer text says which way it went, and it may be a refusal that',
     'resolves the request. Never present a decision as approved, agreed, or locked unless the answer',
-    'text itself approves; a done transition on the task does not.',
+    'text itself approves; a done transition on the task does not. In a quoted answer, " … " marks an',
+    'elided middle: state only what the visible text itself says, and if the visible text does not',
+    'state the outcome, treat the polarity as undeterminable and say only that an answer was recorded.',
     '',
     "The reader's standing instructions for this brief:",
     instructions,
