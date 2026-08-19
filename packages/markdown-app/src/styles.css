@@ -2625,8 +2625,14 @@ body.hub-body {
   display: grid;
   /* Wraps to one field per line on a phone and sits in a row from about a
      tablet up; `auto-fit` rather than a media query because what decides it is
-     the PANEL's width, which the split pane and full screen both change. */
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+     the PANEL's width, which the split pane and full screen both change.
+     The 200px floor is not cosmetic and was measured in the browser at 430px:
+     a 170px floor buys TWO columns on a phone, and because GOAL below takes
+     the whole line, that leaves DUE alone in a half-width cell with an empty
+     cell beside it — the "elements not aligned" complaint in miniature. At
+     200px a 430px phone gets one column and all four fields share a left and a
+     right edge, while the 874px split pane still fits four across. */
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 16px;
   margin: 16px 0 0;
   padding-bottom: 16px;
@@ -2690,6 +2696,12 @@ body.hub-body {
   gap: 8px;
   min-width: 0;
   max-width: 100%;
+  /* Fills its cell. `.hub-detail-field-v` is itself a flex container, so
+     without this the mark-plus-dropdown shrink-wraps to its content — measured
+     at 137px in a 383px cell — and STATUS is the one field of four whose box
+     stops short of the shared right edge. That ragged edge is exactly the
+     "inconsistent" reading; the select below takes whatever the mark leaves. */
+  flex: 1 1 auto;
 }
 .hub-detail-statusctl .hub-status-mark {
   flex: none;
@@ -3563,15 +3575,21 @@ a.hub-link-chip:hover {
   }
   /* Everything bottom-docked has to clear the 54px bar: the page's own tail,
      and the hold-to-talk mic + its indicator, which are fixed bottom-left at
-     the same corner the bar now owns. */
+     the same corner the bar now owns.
+
+     The height is a VARIABLE rather than three copies of `58px`, because a
+     fourth reader appeared and read the wrong number. The detail panel
+     reserves the mic's height at its foot so the last control can be scrolled
+     clear — and it reserved it against a mic sitting at `bottom: 16px`, which
+     is where the mic is on every page EXCEPT the one the panel opens over.
+     Measured at 430px on 2026-08-18: the mic lands at 814–858 and the
+     composer's Comment button at 812–848, i.e. directly underneath it. One
+     declaration, inherited, so the lift and every reservation move together. */
+  body.hub-body {
+    --hub-bottom-bar: 58px;
+  }
   #hub-root {
-    padding-bottom: calc(24px + 58px + var(--safe-bottom));
-  }
-  body.hub-body .voice-mic {
-    bottom: calc(16px + 58px + var(--kb-bottom, 0px) + var(--safe-bottom, 0px));
-  }
-  body.hub-body .voice-indicator {
-    bottom: calc(68px + 58px + var(--kb-bottom, 0px) + var(--safe-bottom, 0px));
+    padding-bottom: calc(24px + var(--hub-bottom-bar, 0px) + var(--safe-bottom));
   }
   /* Deliberately NOT re-wrapping. The row stays a single grid line at every
      width: wrapping is what put the status marks at four x-positions and
@@ -3626,8 +3644,12 @@ a.hub-link-chip:hover {
        at 430px — the mic sat squarely on "Record answer", which is the one
        control the review queue exists to deliver. Reserving the tail is what
        guarantees every control can be SCROLLED clear of them; moving the mic
-       instead would only trade which surface it covers. */
-    padding-bottom: calc(24px + 60px + var(--safe-bottom, 0px));
+       instead would only trade which surface it covers.
+       `--hub-bottom-bar` is in the sum because the mic is LIFTED by the phone
+       nav on exactly this page: measured at 430px without it, the composer's
+       Comment button (812–848) sat under the mic (814–858). 60px is the mic's
+       own 16+44; 24px is the clearance. */
+    padding-bottom: calc(24px + 60px + var(--hub-bottom-bar, 0px) + var(--safe-bottom, 0px));
   }
   /* The walkthrough is a phone-first surface — six answers in one sitting is
      a couch gesture. It is a PAGE in the Home column now rather than an
@@ -3775,7 +3797,11 @@ a.hub-link-chip:hover {
 
 .voice-mic {
   position: fixed;
-  bottom: calc(16px + var(--kb-bottom, 0px) + var(--safe-bottom, 0px));
+  /* `--hub-bottom-bar` is 0 everywhere except a hub page at phone width, where
+     a fixed nav owns this corner — so this one declaration is the mic's
+     position on every surface, and the panel's tail reservation reads the same
+     variable rather than a copy of the number. */
+  bottom: calc(16px + var(--hub-bottom-bar, 0px) + var(--kb-bottom, 0px) + var(--safe-bottom, 0px));
   left: 16px;
   z-index: 70;
   width: 44px;
@@ -3815,7 +3841,8 @@ a.hub-link-chip:hover {
 }
 .voice-indicator {
   position: fixed;
-  bottom: calc(68px + var(--kb-bottom, 0px) + var(--safe-bottom, 0px));
+  /* Rides directly above the mic, so it reads the same bar height. */
+  bottom: calc(68px + var(--hub-bottom-bar, 0px) + var(--kb-bottom, 0px) + var(--safe-bottom, 0px));
   left: 16px;
   z-index: 70;
   max-width: min(80vw, 420px);

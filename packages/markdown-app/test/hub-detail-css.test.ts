@@ -103,6 +103,22 @@ describe('the panel’s fields and headings', () => {
     expect(rule('.hub-detail-field:first-child')).toBe('');
   });
 
+  it('stacks the fields on a phone rather than orphaning one beside a gap', () => {
+    // Measured in the browser at 430px, not reasoned from the file: the panel's
+    // content box there is ~384px, so a column floor of 170 fits TWO columns —
+    // and since GOAL takes the whole line, DUE ends up alone in a half cell
+    // with an empty one beside it. The floor has to exceed half the phone's
+    // content width for the grid to give up and stack.
+    const grid = rule('.hub-detail-fields');
+    const floor = /minmax\((\d+)px, 1fr\)/.exec(grid)?.[1];
+    expect(floor, 'the field grid lost its auto-fit floor').toBeDefined();
+    expect(Number(floor)).toBeGreaterThan(384 / 2);
+    // …and the positive control, so this cannot be satisfied by a floor so
+    // large that the split pane stacks too: four across must still fit the
+    // 874px pane, i.e. 4 columns plus three 16px gaps.
+    expect(Number(floor) * 4 + 16 * 3).toBeLessThanOrEqual(874);
+  });
+
   it('draws all four values as one kind of control at one height', () => {
     const ctl = rule('.hub-detail-select,\n.hub-detail-input');
     expect(ctl, 'the shared control rule is missing').not.toBe('');
@@ -122,6 +138,10 @@ describe('the panel’s fields and headings', () => {
     const ctl = rule('.hub-detail-statusctl');
     expect(ctl).toMatch(/display:\s*flex/);
     expect(ctl).toMatch(/align-items:\s*center/);
+    // …and it fills its cell, so STATUS ends on the same right edge as the
+    // other three. Its parent is a flex container, so the default `0 1 auto`
+    // shrink-wraps it — measured at 137px inside a 383px cell at 430px.
+    expect(ctl).toMatch(/flex:\s*1 1 auto/);
     // The mark keeps its 18px; the select takes the rest and may shrink.
     expect(rule('.hub-detail-statusctl .hub-status-mark')).toMatch(/flex:\s*none/);
     expect(rule('.hub-detail-statusctl .hub-detail-status')).toMatch(/min-width:\s*0/);
@@ -154,7 +174,22 @@ describe('nothing fixed to the viewport can sit on the last control', () => {
     // the same reservation `.hub-walk-card` already makes for the same two
     // launchers.
     const phone = media('(max-width: 900px)');
-    expect(rule('.hub-detail-panel', phone)).toMatch(/padding-bottom:\s*calc\(24px \+ 60px/);
+    const tail = rule('.hub-detail-panel', phone);
+    expect(tail).toMatch(/padding-bottom:\s*calc\(24px \+ 60px/);
+    // The mic is LIFTED by the phone's bottom nav on this very page, so the
+    // reservation has to include the bar or it clears where the mic isn't.
+    // Measured at 430px before this term existed: mic 814–858, the composer's
+    // Comment button 812–848 — underneath it.
+    expect(tail).toMatch(/var\(--hub-bottom-bar/);
+    expect(rule('.voice-mic')).toMatch(/var\(--hub-bottom-bar/);
+    // One declaration of the height, so the lift and the reservation cannot
+    // drift; and it is scoped to hub pages, since no other surface has the bar.
+    expect(rule('body.hub-body', phone)).toMatch(/--hub-bottom-bar:\s*58px/);
+    // …and only there: above the breakpoint the bar is not fixed, so the
+    // fallback 0 has to be what applies. The base `body.hub-body` rule exists
+    // and styles other things — the assertion is that it does not set this.
+    expect(rule('body.hub-body'), 'the base body rule vanished').not.toBe('');
+    expect(rule('body.hub-body')).not.toMatch(/--hub-bottom-bar/);
     // Positive control: the mic really is fixed and really is above the panel,
     // so the reservation is answering a real overlap rather than decorating.
     expect(rule('.voice-mic')).toMatch(/position:\s*fixed/);

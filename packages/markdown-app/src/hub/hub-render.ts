@@ -3178,10 +3178,25 @@ export function decisionBlurb(body: string | undefined): { headline: string; why
       .replace(/^\s{0,3}([-*+]|\d+[.)])\s+/, '')
       .replace(/\*\*/g, '')
       .trim();
+  // A line that introduces the list we are about to drop — `Options:` — is
+  // dropped with it. Measured in the browser 2026-08-18: keeping it welded the
+  // orphaned label onto the sentence after the list ("…not shipping it.
+  // Options: Blocked until answered: …"), which reads as a typo rather than as
+  // prose. The test is deliberately narrow — a trailing colon AND a list item
+  // as the next non-blank line — so a sentence that merely ends in a colon and
+  // introduces nothing keeps its place.
+  const introducesList = (i: number) => {
+    if (isListItem(rows[i] ?? '') || !plain(rows[i] ?? '').endsWith(':')) return false;
+    for (let j = i + 1; j < rows.length; j += 1) {
+      if (plain(rows[j] ?? '') === '') continue;
+      return isListItem(rows[j] ?? '');
+    }
+    return false;
+  };
   const questionAt = rows.findIndex((l) => l.includes('?'));
   const headline = questionAt >= 0 ? plain(rows[questionAt] ?? '') : '';
   const why = rows
-    .filter((l, i) => i !== questionAt && !isListItem(l) && plain(l) !== '')
+    .filter((l, i) => i !== questionAt && !isListItem(l) && plain(l) !== '' && !introducesList(i))
     .map(plain)
     .join(' ')
     .trim();

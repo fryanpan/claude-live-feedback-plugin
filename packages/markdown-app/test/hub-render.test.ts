@@ -2968,6 +2968,29 @@ describe('the panel’s review queue', () => {
       expect(decisionBlurb('Which one?\n1. Blue\n2. Green').why).toBe('');
     });
 
+    it('drops the label that introduced the dropped list, and keeps other colons', () => {
+      // Found in the browser, not in a fixture: with `Options:` kept, the
+      // orphaned label welds onto the sentence AFTER the list. The positive
+      // control is in the same assertion — a colon that introduces prose
+      // rather than a list survives, so this is a narrowing and not a rule
+      // against colons.
+      const body = [
+        'Where should it live?',
+        '',
+        'Both screens are built.',
+        '',
+        'Options:',
+        '',
+        '- Top of the screen',
+        '- In the settings row',
+        '',
+        'Blocked until answered: the rework cannot merge.',
+      ].join('\n');
+      expect(decisionBlurb(body).why).toBe(
+        'Both screens are built. Blocked until answered: the rework cannot merge.',
+      );
+    });
+
     it('says nothing rather than inventing a question from a body with none', () => {
       expect(decisionBlurb('Just a note about the index.')).toEqual({
         headline: '',
