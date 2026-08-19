@@ -84,6 +84,11 @@ Technical discoveries that should persist across sessions for this project.
   `noControlCharactersInRegex` trip earlier. Use plain ASCII sentinels
   (`__unserializable_block_${i}__`); if grep starts reporting "Binary file
   matches" on a source file you just edited, that's what happened.
+- **What it costs once written is a separate entry, and it is worse than a
+  failed review** — see "A NUL byte makes grep silently blind, and the silence
+  defeats the positive control too". The grep on this machine says nothing at
+  all, so the file goes invisible to every literal check over it and over any
+  diff containing it. This has now happened in three different source files.
 
 ## The route layer silently drops params unit tests can't see
 
@@ -157,6 +162,34 @@ Technical discoveries that should persist across sessions for this project.
   0/100 in the same pass, from a harness that claimed to treat both the same
   way, is a contradiction on its face. Re-run per-subject and the 40-character
   case loses its characters too.
+
+## A probe that always answers "yes" is as vacuous as one that always answers "no"
+
+- **`grep -qa $'\0' FILE` reports the NUL as present for every file on earth,
+  including one containing only `hello world`.** A NUL cannot survive `argv`,
+  which is NUL-terminated, so however the shell holds it the pattern reaches
+  `grep` as the **empty string** — and the empty pattern matches everything.
+  Measured 2026-08-19: zsh's `${#p}` for `p=$'\0'` is `1`, so the shell is not
+  the culprit and bash behaves identically. On that reading I stated in several
+  messages and in a written summary that the built bundles contained NUL bytes.
+  None of them ever did.
+- **The rule: a probe that always answers "yes" is as worthless as one that
+  always answers "no", and it is harder to notice** — a positive reading feels
+  like a finding, while a negative reading feels like an absence you already
+  distrust. Nothing about the output looks wrong; it looks like a hit.
+- **The control is the same one line pointed the other way: run the probe
+  against something that cannot possibly contain the thing.**
+  `printf 'hello world' > /tmp/control.txt` and re-run it. One command, and it
+  ends the claim.
+- **A working form, directional and testable:**
+  `perl -0777 -ne 'exit(index($_,"\0")>=0?0:1)' FILE` — exit 0 on
+  `hello\0world`, exit 1 on `hello world`. The byte count in the NUL entry
+  below is the other honest form.
+- The archive already holds the neighbouring corners: "A negative test needs a
+  positive control or it proves nothing" (the probe can see nothing) and "A
+  positive control can silently become a duplicate of the thing it controls"
+  (the control never entered the condition). This is the third — **the probe's
+  answer does not depend on its subject at all.**
 
 ## A positive control must be a peer in TIME as well as in kind
 
@@ -2509,8 +2542,49 @@ Technical discoveries that should persist across sessions for this project.
   safeguard is not "run a positive control" in the abstract but **run one
   through the same code path as the probe**: same flags, same file, same
   invocation. A control that differs anywhere is testing a different question.
+- **A second file carried one for days on `main`, so this recurs and the fix
+  has to be a gate rather than a habit.**
+  `packages/server/src/review-migration.ts` held exactly 1 NUL — a sentinel
+  written as a literal `\0` where the escape was intended — from `aec4cf0`
+  (2026-08-18) through `8e75e0e`. Measured on that blob: `grep -c 'export'`
+  printed **nothing** and exited 1; `grep -ac 'export'` on the same bytes
+  printed **12**. #255 removed it incidentally (14,148 bytes, 0 NULs), so
+  `main` is clean as of `676f53b` — by luck, not by a check. A CI guard is
+  filed as its own ticket; until it lands, `grep -a` on every literal check is
+  the whole mitigation.
+- **Counting the `prose.ts` case, that is three source files in this repo.**
+  The write side is the entry at the top of this file, "Don't let the editor
+  tools write raw control bytes into source"; this is the read side, and the
+  two keep meeting because nothing between them fails.
 - Same family as "A negative probe needs a positive control", with the sting
-  that here the control is inside the blind spot with the probe.
+  that here the control is inside the blind spot with the probe. The inverse —
+  a probe that answers "yes" whatever you point it at — is "A probe that always
+  answers 'yes' is as vacuous as one that always answers 'no'", and both were
+  hit in the same session by the same person looking for the same byte.
+
+## `git show --cc` on a single-parent commit shows everything, not nothing
+
+- **`--cc` silently degrades to an ordinary diff on a one-parent commit — it
+  does not go empty.** Measured 2026-08-19 on `278de00`, a squash merge with
+  exactly one parent: `git show --cc` emits **92** hunks, all `@@`, **zero**
+  `@@@`, and plain `git show` emits the same 92. Per file it is the same
+  story — `server.ts` is 8 hunks under `--cc` and 8 under plain. I asserted the
+  opposite twice, in two wordings, and used it to justify a per-file zero.
+- **On a squash merge a `--cc` reading is therefore not empty — it is complete
+  and unremarkable, which is worse, because it looks like it answered the
+  question.** An empty result invites a second look; a full ordinary diff reads
+  as "I checked the combined view and nothing in it was odd."
+- **`--cc` means something only on a genuine two-parent merge, and there it is
+  already the default.** `ecaf378` (two parents, a real hand resolution) emits
+  **7** combined `@@@` hunks for the whole commit under both `git show --cc`
+  and bare `git show` (git 2.54). Typing `--cc` never changes what you get; it
+  only changes what you believe you asked for.
+- **The control for any per-file zero is the whole-commit hunk count.**
+  `git show --cc ecaf378 -- packages/server/src/tasks.ts` is **0** combined
+  hunks against **7** for the commit — a real zero, and indistinguishable from
+  a vacuous one until you hold the denominator. Settle the parent count first:
+  `git rev-list --parents -n1 <sha> | wc -w` returning **2** means one parent,
+  and `--cc` is telling you nothing about a resolution.
 
 ## Red gates on a diff that touches no code: count failed FILES against failed TESTS
 
