@@ -1857,6 +1857,49 @@ describe('renderTaskDetail — discussion', () => {
     ).toBeNull();
   });
 
+  /** A declared comment is a request, and the thread it lives in is usually
+   *  fourteen status notes with one of these somewhere in the middle. Without
+   *  its own chrome the request is the same grey block as the notes. */
+  it('sets a declared comment apart, with its header above the words', () => {
+    renderTaskDetail(root, task({ id: 't-1' }), detailHandlers({ now: NOW }), {
+      loading: false,
+      threads: [
+        thread({
+          id: 'th-d',
+          comments: [
+            { author: 'Onboarding Rework', text: 'Pushed the first pass.', ts: NOW - 7_200_000 },
+            {
+              author: 'Onboarding Rework',
+              text: 'Both screens are built; details in the PR.',
+              ts: NOW - 3_600_000,
+              review: {
+                shape: 'decision',
+                headline: 'Where should the trial banner live?',
+                why: 'Blocks the rework; both screens are built either way.',
+              },
+            },
+          ],
+        }),
+      ],
+    });
+    const comments = [...root.querySelectorAll('.hub-comment')];
+    // The declaration rides the comment that made it, so the status note
+    // above it stays a status note.
+    expect(comments.map((c) => c.className.includes('hub-comment-review'))).toEqual([false, true]);
+    const declared = comments[1] as HTMLElement;
+    expect(declared.querySelector('.hub-comment-review-k')?.textContent).toBe('Decision');
+    expect(declared.querySelector('.hub-comment-review-headline')?.textContent).toBe(
+      'Where should the trial banner live?',
+    );
+    expect(declared.querySelector('.hub-comment-review-why')?.textContent).toBe(
+      'Blocks the rework; both screens are built either way.',
+    );
+    // Above the words, not instead of them — the text is what the agent said.
+    expect(declared.querySelector('.hub-comment-body')?.textContent).toContain(
+      'Both screens are built',
+    );
+  });
+
   /**
    * "Each item goes exactly to the place where I need to review" is the
    * strip's whole claim. On a task with several discussions, opening the task
