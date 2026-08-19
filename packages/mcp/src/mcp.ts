@@ -1567,7 +1567,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'attach_agent',
       description:
-        "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep — and sweeping one means SHAPING it, not only filing it: read the row's own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each with rewrite_task into a title and a story-shaped body, then set_task_goal. A capture arrives with a machine-clipped title and its raw utterance for a body, and this is the only step that turns it into work. Then queuedVoice — voice change-requests that arrived while no agent was live; act on each transcript verbatim — and, if you LEAD this workspace, pendingRetriage: a goal edit made while you were away, whose taskIds you re-place with set_task_goal (echo its batchId on each), plus pendingBucketReview: a goal BAND that appeared while you were away, with the unplaced tasks worth re-looking at against it — place the ones that now have a home, and leave the rest, since nothing has moved them — plus taskReviews: rows created, renamed, or rewritten while no lead was live, each waiting for the shape pass the `claude-workspaces:reviewing-task-shape` skill describes (judge the title and body; rewrite with rewrite_task or ask the filer on the task). All of these are drained by this call. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments with a fresh heartbeat, and after ~5 minutes of silence the hub shows you as away and requests queue.",
+        "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep — and sweeping one means SHAPING it, not only filing it: read the row's own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each with rewrite_task into a title and a story-shaped body, then set_task_goal. A capture arrives with a machine-clipped title and its raw utterance for a body, and this is the only step that turns it into work. Then queuedVoice — voice change-requests that arrived while no agent was live; act on each transcript verbatim, EXCEPT where the row carries `applied`: that names what the voice fast path already did to the board on the speaker's behalf, so pick up only whatever the utterance asked for beyond it rather than redoing it — and, if you LEAD this workspace, pendingRetriage: a goal edit made while you were away, whose taskIds you re-place with set_task_goal (echo its batchId on each), plus pendingBucketReview: a goal BAND that appeared while you were away, with the unplaced tasks worth re-looking at against it — place the ones that now have a home, and leave the rest, since nothing has moved them — plus taskReviews: rows created, renamed, or rewritten while no lead was live, each waiting for the shape pass the `claude-workspaces:reviewing-task-shape` skill describes (judge the title and body; rewrite with rewrite_task or ask the filer on the task). All of these are drained by this call. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments with a fresh heartbeat, and after ~5 minutes of silence the hub shows you as away and requests queue.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -2857,7 +2857,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           attachment?: { agentId?: string };
           gating?: unknown;
           untriaged?: string[];
-          queuedVoice?: Array<{ transcript: string; ts: number }>;
+          queuedVoice?: Array<{ transcript: string; ts: number; applied?: string }>;
           lead?: boolean;
           pendingRetriage?: {
             batchId: string;
@@ -2889,7 +2889,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           untriaged: res.untriaged ?? [],
           // Voice change-requests that arrived while no agent was live
           // ("agent away — queued"): this attach is their delivery. Act on
-          // each transcript, verbatim.
+          // each transcript, verbatim — EXCEPT for the part named by
+          // `applied`, which the voice fast path already did to the board on
+          // the speaker's behalf. Pick up only what the utterance asked for
+          // beyond it; redoing it posts the same words twice.
           queuedVoice: res.queuedVoice ?? [],
           // A goal edit made while you were away, waiting for you because
           // you lead this board. Walk its taskIds with set_task_goal against

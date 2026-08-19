@@ -1351,6 +1351,17 @@ export interface QueuedVoiceRequest {
   transcript: string;
   context?: unknown;
   actor: TaskActor;
+  /**
+   * What the voice fast path ALREADY applied to the board for this utterance,
+   * as the speaker was told it — present only when it applied something.
+   *
+   * An utterance can carry more than the one verb voice handles ("mark this
+   * done and then draft the migration notes"), and with no agent live the
+   * queue is the only durable channel for the rest of it. Delivering the
+   * transcript alone would ask the agent to redo the half that already
+   * happened; this field is how the same row says "that part is done".
+   */
+  applied?: string;
   ts: number;
 }
 
@@ -4557,6 +4568,7 @@ export class TaskStore {
       transcript: string;
       context?: unknown;
       actor: { id: string; name: string; kind?: string };
+      applied?: string;
     },
   ): boolean {
     if (!this.workspaces.has(workspaceId)) return false;
@@ -4564,6 +4576,7 @@ export class TaskStore {
       transcript: item.transcript,
       ...(item.context !== undefined ? { context: item.context } : {}),
       actor: { id: item.actor.id, name: item.actor.name, kind: classifyActor(item.actor) },
+      ...(item.applied !== undefined ? { applied: item.applied } : {}),
       ts: Date.now(),
     };
     const path = voiceQueuePath(this.dataDir, workspaceId);
