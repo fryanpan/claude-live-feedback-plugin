@@ -6,20 +6,41 @@ How any UI in this repo (markdown editor, widget, landing page) should behave on
 
 ## Breakpoints
 
-| Width | Profile | What changes |
-|---|---|---|
-| **≥1367px** | Desktop, full layout | Set-list sidebar shown if has-set; threads pane fixed at right |
-| **901–1366px** | **iPad landscape** (1180 Air, 1194 Pro 11", 1366 Pro 12.9") + small desktop | Set-list sidebar hidden, dropdown-only nav; threads pane still fixed |
-| **721–900px** | Tablet portrait | Threads pane drawer-ifies (overlay, not fixed column) |
-| **≤720px** | Phone | All mobile rules below |
+Three tiers (Bryan, 2026-08-19: *"have a mobile breakpoint, a tablet/laptop
+breakpoint for anything up to 1920 and then 4k monitor"*):
 
-The sidebar line moved from 1100 to 1366 on 2026-08-19 (PR #267). Bryan: *"at
-iPad resolution, please also hide it and keep it in the dropdown like for
-mobile"* — a flat list of sibling doc links was not worth a column on a screen
-whose scarce axis is height, and the dropdown already carried the same list at
-every narrower width. **Three CSS rules share that number** — the `#set-pane`
-show gate, `body.has-set #main`'s grid, and `.set-resize`'s hide — and moving
-one alone leaves an empty 320px column. A test asserts they agree.
+| Width | Tier | What changes |
+|---|---|---|
+| **≥1921px** | **Large / 4K monitor** — Bryan's desktop | Doc-list sidebar defaults OPEN; everything else as below |
+| **1101–1920px** | **Tablet / laptop** — iPad landscape (1180 Air, 1194 Pro 11", 1366 Pro 12.9"), every MacBook (1470–1728), and small desktop windows | Doc-list sidebar defaults CLOSED, topbar toggle offered; threads pane fixed at right |
+| **≤1100px** | **Mobile** | Sidebar unavailable, topbar dropdown is the whole nav; comment cards go inline |
+
+Two sub-boundaries live inside the mobile tier and predate this split:
+
+| Width | What changes |
+|---|---|
+| **721–900px** | Threads pane drawer-ifies (overlay, not a fixed column) |
+| **≤720px** | All phone rules below — the canonical `@media (max-width: 720px)` |
+
+**A MacBook is in the same tier as an iPad here, deliberately.** Bryan:
+*"MacBook also shouldn't have the sidebar for diff reviews — it's too much
+space."* The tier boundary is not asking what hardware this is; it is asking
+whether a 320px column costs the prose anything. Below 1921px it does.
+
+### Width cannot identify a device — page zoom moves it
+
+This is why the tiers are about available room and not about devices at all.
+**Page zoom scales the layout viewport**: a 1366px iPad Pro at 85% zoom reports
+**1607px** to CSS. So any gate set high enough to exclude that iPad also
+excludes a 1512px MacBook, and a reviewer who pinches lands in a different tier
+without changing device.
+
+Measured, not theorised: PR #267 hid the sidebar below 1367px specifically to
+exclude iPads, and Bryan defeated it the same day by zooming out — *"I actually
+zoom out a bit and the panel is back on my iPad."* Anything that must be true
+per-device cannot be expressed as a width. The doc-list sidebar stopped trying:
+visibility is now a stored per-reviewer choice (`lf:set-pane`), width only picks
+the default and decides whether the toggle is offered at all.
 
 The sidebar only ever appears for a review SET (diff review or folder bind).
 An individual doc has no `setId`/`workspaceId`, so it has never shown one at
@@ -72,7 +93,7 @@ This is a recurring footgun. Search this repo for `1fr` before adding new grid l
 
 ## Navigation patterns
 
-- **Sidebars are desktop-only.** On mobile, a sidebar takes the whole screen above the content (vertical stack in a single-column grid). The dropdown in the topbar replaces it.
+- **Sidebars are opt-in above the mobile tier, and unavailable inside it.** On mobile a sidebar would take the whole screen above the content (vertical stack in a single-column grid), so the topbar dropdown replaces it outright. Above 1100px the sidebar is offered as a toggle and defaults closed below 4K — the reviewer's choice is stored, not re-derived from the viewport on every load.
 - **Auto-open the dropdown on first paint when there's something to discover.** If the doc has a `setId` and the user is on mobile, open the set dropdown by default — don't make them discover the tap target.
 - **Dropdown auto-closes on scroll.** Reaching the content is the strongest "done with the nav" signal — don't make the user tap-to-dismiss before reading. Listen on both `#editor` scroll and window scroll, passive.
 - **Outside-click and Escape also close.** Standard expectations.
@@ -84,6 +105,8 @@ Minimum 36×36px for any interactive element. The format-bar buttons drop to ico
 ## Verifying mobile changes
 
 **Check both viewports. They fail differently and neither substitutes for the other** — a change can be clean at 430px (where the element is not rendered at all) and cost real estate at 1180×820.
+
+**Add a third check at ≥1921px whenever the change behaves differently per tier** (anything gated on the 4K boundary, like the doc-list sidebar's default). A tier with no verification step is a tier where the default is whatever the code happened to do.
 
 ### iPad landscape — 1180×820 (and 1366×1024 on a 12.9" Pro), the primary device
 

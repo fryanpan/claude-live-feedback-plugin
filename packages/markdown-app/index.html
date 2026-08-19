@@ -14,6 +14,21 @@
       <header id="topbar">
         <div class="doc-crumb">
           <a href="/" class="back-link" title="All review docs" aria-label="Back to all review docs">←</a>
+          <!-- Opens the persistent doc list beside the prose. Collapsed by
+               default so the prose gets the width; the choice is remembered
+               per browser. Only rendered ≥1101px and only when the doc is
+               part of a review set — below that the topbar dropdown is the
+               whole nav. -->
+          <button
+            type="button"
+            id="toggle-set-pane"
+            class="icon-btn"
+            title="Show doc list"
+            aria-pressed="false"
+            aria-label="Show the list of docs in this review"
+          >
+            ▤
+          </button>
           <span class="doc-label">Editing:</span>
           <button
             type="button"
