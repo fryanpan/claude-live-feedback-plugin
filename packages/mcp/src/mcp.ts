@@ -90,7 +90,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.68';
+const PLUGIN_VERSION = '0.1.69';
 
 /**
  * What a good `evidence.commit` looks like, said at the one layer that reaches
@@ -3722,6 +3722,11 @@ const HUB_EVENT_RE = /^(task|decision|workspace|agent|triage|voice)\./;
 
 interface HubEventPayload {
   workspaceId?: string;
+  /** On `voice.request`: the durable queue row this frame came from. Sending
+   *  it back is what takes the row off the queue. Absent from a server older
+   *  than the durable queue, in which case the frame is all there is and
+   *  there is nothing to acknowledge. */
+  queueId?: string;
   taskId?: string;
   taskIds?: string[];
   task?: { title?: string };
@@ -3866,6 +3871,27 @@ async function emitHubChannelMessage(event: string, rawPayload: unknown): Promis
       },
     },
   });
+
+  // The frame is now in this session's hands, so tell the server it can stop
+  // holding the row. Deliberately AFTER the notification and not before: an
+  // ack sent first would clear the durable copy on the strength of an intent,
+  // which is the same fire-and-forget the queue exists to replace.
+  //
+  // Never throws and never blocks the frame. A failed ack leaves the row on
+  // the queue, so the cost is that the utterance is offered again once the
+  // grace window lapses — late and duplicated beats silently dropped, and
+  // that asymmetry is the whole reason the receipt is on this side.
+  if (event === 'voice.request' && typeof p.queueId === 'string' && p.workspaceId) {
+    try {
+      await http(
+        'POST',
+        `/api/workspaces/${encodeURIComponent(p.workspaceId)}/voice-queue/${encodeURIComponent(p.queueId)}/ack`,
+        {},
+      );
+    } catch {
+      // Left on the queue on purpose — see above.
+    }
+  }
 }
 
 async function emitChannelMessage(event: string, rawPayload: unknown): Promise<void> {

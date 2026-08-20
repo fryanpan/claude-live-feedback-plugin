@@ -4081,6 +4081,23 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!res.ok) return j(404, res);
           return j(200, res);
         }
+        // The receipt that makes a live voice delivery durable. The server
+        // knows what it wrote to a socket and nothing more, so a row stays on
+        // the queue until the receiving process says it has it. Idempotent: a
+        // replayed receipt for a row already cleared answers 200 with
+        // cleared:false rather than an error, because a retrying client
+        // should not have to distinguish "gone because I acked it" from
+        // "gone because someone else drained it".
+        const wsVoiceAckMatch = pathname.match(
+          /^\/api\/workspaces\/([^/]+)\/voice-queue\/([^/]+)\/ack$/,
+        );
+        if (wsVoiceAckMatch && req.method === 'POST') {
+          if (visitor) return j(403, { error: 'not available to share visitors' });
+          const workspaceId = decodeURIComponent(wsVoiceAckMatch[1] ?? '');
+          const entryId = decodeURIComponent(wsVoiceAckMatch[2] ?? '');
+          const cleared = taskStore.ackVoiceRequest(workspaceId, entryId);
+          return j(200, { ok: true, cleared });
+        }
         const wsAgentDetachMatch = pathname.match(
           /^\/api\/workspaces\/([^/]+)\/attachments\/([^/]+)$/,
         );
