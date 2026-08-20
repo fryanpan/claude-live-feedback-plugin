@@ -1317,6 +1317,9 @@ export class VoiceRouter {
     }
 
     let result: VoiceResult;
+    /** The queue entry this utterance was written to, so the emit can name it
+     *  and the receiving agent can acknowledge exactly one row. */
+    let queueId: string | false = false;
     if (answered) {
       result = answered;
       // The utterance can carry MORE than the verb ("mark this done and then
@@ -1341,17 +1344,21 @@ export class VoiceRouter {
       // or the store declined. All of them need judgment this call does not
       // have, which is what the agent is for.
       const note = fastPathDown ? ' (Fast path unavailable.)' : '';
+      // Written down FIRST, and whether or not anyone is listening. The queue
+      // is the record; the emit below is an optimisation on top of it. It used
+      // to be the other way round — the live branch kept nothing — which made
+      // being live strictly worse for a message's odds than being away.
+      queueId = this.tasks.queueVoiceRequest(workspaceId, {
+        transcript,
+        ...(context !== undefined ? { context } : {}),
+        actor,
+      });
       if (this.tasks.hasLiveAttachment(workspaceId)) {
         result = {
           route: 'agent',
           ack: `${heard(transcript)} Sent to the workspace agent.${deferNote}${note}`,
         };
       } else {
-        this.tasks.queueVoiceRequest(workspaceId, {
-          transcript,
-          ...(context !== undefined ? { context } : {}),
-          actor,
-        });
         result = {
           route: 'agent-queued',
           ack: `${heard(transcript)} Agent away — queued for its next attach.${deferNote}${note}`,
@@ -1360,15 +1367,22 @@ export class VoiceRouter {
     }
 
     // Every utterance is audited, whatever happened to it (§3.6). For the
-    // 'agent' route this emit IS the delivery: the event rides the workspace
-    // channel the attached agent's MCP watch formats.
+    // 'agent' route the emit is the fast path to a listening agent — it rides
+    // the workspace channel the attached agent's MCP watch formats — but it is
+    // no longer the only record, so losing it costs latency rather than the
+    // request. `queueId` travels with it: that is what the receiver
+    // acknowledges, and an unacknowledged entry comes back.
     this.tasks.recordVoiceRequest(workspaceId, {
       transcript,
       route: result.route,
       ack: result.ack,
       ...(context !== undefined ? { context } : {}),
+      ...(queueId !== false ? { queueId } : {}),
       actor,
     });
+    if (queueId !== false && result.route === 'agent') {
+      this.tasks.markVoiceEmitted(workspaceId, queueId);
+    }
     return { ok: true, ...result };
   }
 

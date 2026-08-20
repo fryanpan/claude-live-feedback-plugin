@@ -917,6 +917,18 @@ export const TOOL_CALL_STALE_MS = 30 * 60_000;
  */
 export const OBSERVED_LIVE_MS = 15 * 60_000;
 
+/**
+ * How long an emitted utterance is left alone before the queue offers it again.
+ *
+ * The floor is "how long can a busy agent reasonably take to acknowledge a
+ * channel frame" — a frame lands at a turn boundary, so it waits out whatever
+ * tool call is in progress. The ceiling is Bryan noticing nothing happened. 90
+ * seconds sits between: past it, an unacked entry is far more likely lost than
+ * pending, and re-offering costs at worst one duplicated instruction where NOT
+ * re-offering costs the whole request.
+ */
+export const VOICE_ACK_GRACE_MS = 90_000;
+
 export type AttachmentState = 'active' | 'unresponsive' | 'away';
 
 export interface AttachmentThresholds {
@@ -1493,6 +1505,16 @@ export interface VoiceRequestEvent {
   ack: string;
   /** The per-surface anchor the utterance carried (§3.8). */
   context?: unknown;
+  /**
+   * The queue row this utterance was written to, present on every row routed
+   * to an agent.
+   *
+   * The receiving agent POSTs it back to acknowledge, and that receipt — not
+   * the socket write — is what takes the row off the queue. Absent on rows a
+   * server older than the durable queue emitted, and absent on `fast-path`
+   * rows, which were answered rather than handed to anyone.
+   */
+  queueId?: string;
   actor: TaskActor;
   ts: number;
 }
@@ -1523,6 +1545,19 @@ export type TaskStoreEvent =
  *  queued"). Persisted synchronously — "queued" is a promise, and a promise
  *  that lives only in memory dies with the process (grounded-pending). */
 export interface QueuedVoiceRequest {
+  /** Names this entry so a receipt can clear exactly one. Absent on rows
+   *  written before the queue became the record rather than the fallback —
+   *  those still drain, they just cannot be acked individually. */
+  id?: string;
+  /**
+   * When the server last put this on the wire, or absent if it never has.
+   *
+   * An emitted-and-unacked entry and a lost one look identical from here, so
+   * this is what the grace window is measured from: long enough that a working
+   * agent has had its chance to acknowledge, short enough that a genuinely
+   * lost utterance comes back quickly.
+   */
+  emittedAt?: number;
   transcript: string;
   context?: unknown;
   actor: TaskActor;
@@ -1996,6 +2031,7 @@ export class TaskStore {
   private attachmentThresholds: AttachmentThresholds;
   private triageDelivery: TriageDelivery | undefined;
   private deliveryProbe: DeliveryProbe | undefined;
+  private readonly voiceAckGraceMs: number;
   private agentStreamProbe: AgentStreamProbe | undefined;
   private eventListeners = new Set<(event: TaskStoreEvent) => void>();
 
@@ -2007,9 +2043,13 @@ export class TaskStore {
     heartbeatFreshMs?: number;
     toolCallStaleMs?: number;
     observedWorkFreshMs?: number;
+    /** How long an emitted voice entry is left alone before it is offered
+     *  again. Overridable so tests never burn real minutes. */
+    voiceAckGraceMs?: number;
   }) {
     this.dataDir = opts.dataDir;
     this.debounceMs = opts.debounceMs ?? 200;
+    this.voiceAckGraceMs = opts.voiceAckGraceMs ?? VOICE_ACK_GRACE_MS;
     this.attachmentThresholds = {
       ...(opts.heartbeatFreshMs !== undefined ? { heartbeatFreshMs: opts.heartbeatFreshMs } : {}),
       ...(opts.toolCallStaleMs !== undefined ? { toolCallStaleMs: opts.toolCallStaleMs } : {}),
@@ -5246,7 +5286,7 @@ export class TaskStore {
       attachment,
       gating: this.gatingSummary(workspaceId),
       untriaged: this.listUntriaged(workspaceId).map((t) => t.id),
-      queuedVoice: this.drainVoiceQueue(workspaceId),
+      queuedVoice: this.drainVoiceQueue(workspaceId, { freshProcess: true }),
       ...(pendingRetriage ? { pendingRetriage } : {}),
       ...(pendingBucketReview ? { pendingBucketReview } : {}),
       ...(taskReviews !== undefined && taskReviews.length > 0 ? { taskReviews } : {}),
@@ -5269,6 +5309,9 @@ export class TaskStore {
       route: VoiceRoute;
       ack: string;
       context?: unknown;
+      /** The queue row this utterance was written to. The receiving agent
+       *  acknowledges it, which is what takes the row off the queue. */
+      queueId?: string;
       actor: { id: string; name: string; kind?: string };
     },
   ): boolean {
@@ -5279,6 +5322,7 @@ export class TaskStore {
       transcript: req.transcript,
       route: req.route,
       ack: req.ack,
+      ...(req.queueId !== undefined ? { queueId: req.queueId } : {}),
       ...(req.context !== undefined ? { context: req.context } : {}),
       actor: {
         id: req.actor.id,
@@ -5305,9 +5349,11 @@ export class TaskStore {
       actor: { id: string; name: string; kind?: string };
       applied?: string;
     },
-  ): boolean {
+  ): string | false {
     if (!this.workspaces.has(workspaceId)) return false;
+    const id = cryptoId('vq');
     const queued: QueuedVoiceRequest = {
+      id,
       transcript: item.transcript,
       ...(item.context !== undefined ? { context: item.context } : {}),
       actor: { id: item.actor.id, name: item.actor.name, kind: classifyActor(item.actor) },
@@ -5320,7 +5366,7 @@ export class TaskStore {
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
       const existing = this.listQueuedVoice(workspaceId);
       writeFileSync(path, `${JSON.stringify({ queue: [...existing, queued] }, null, 2)}\n`);
-      return true;
+      return id;
     } catch (err) {
       console.error(`[tasks] failed to queue voice request for ${workspaceId}:`, err);
       return false;
@@ -5342,14 +5388,76 @@ export class TaskStore {
     }
   }
 
-  /** Hand the queue over and clear it — called by attachAgent, whose result
-   *  is the delivery. */
-  private drainVoiceQueue(workspaceId: string): QueuedVoiceRequest[] {
-    const queued = this.listQueuedVoice(workspaceId);
+  /** Replace the queue file, removing it when nothing is left — same
+   *  synchronous write as `queueVoiceRequest`, and for the same reason. */
+  private writeVoiceQueue(workspaceId: string, queue: QueuedVoiceRequest[]): void {
+    const path = voiceQueuePath(this.dataDir, workspaceId);
     try {
-      rmSync(voiceQueuePath(this.dataDir, workspaceId), { force: true });
-    } catch {}
-    return queued;
+      if (queue.length === 0) {
+        rmSync(path, { force: true });
+        return;
+      }
+      writeFileSync(path, `${JSON.stringify({ queue }, null, 2)}\n`);
+    } catch (err) {
+      console.error(`[tasks] failed to rewrite voice queue for ${workspaceId}:`, err);
+    }
+  }
+
+  /**
+   * Record that this entry has gone out on the wire.
+   *
+   * Not the same as delivered, and the difference is the whole point: the
+   * server knows what it wrote to a socket and nothing more. Until an ack
+   * comes back the entry stays on the books.
+   */
+  markVoiceEmitted(workspaceId: string, id: string): boolean {
+    const queue = this.listQueuedVoice(workspaceId);
+    const entry = queue.find((q) => q.id === id);
+    if (!entry) return false;
+    entry.emittedAt = Date.now();
+    this.writeVoiceQueue(workspaceId, queue);
+    return true;
+  }
+
+  /**
+   * The receiving process confirms it has the utterance. THIS is what makes a
+   * live delivery durable — before it, the route's only record that a message
+   * had been sent was a socket write that nothing checked.
+   *
+   * Returns false for an id that is not on the queue, rather than treating a
+   * stale or replayed receipt as licence to clear anything.
+   */
+  ackVoiceRequest(workspaceId: string, id: string): boolean {
+    const queue = this.listQueuedVoice(workspaceId);
+    const next = queue.filter((q) => q.id !== id);
+    if (next.length === queue.length) return false;
+    this.writeVoiceQueue(workspaceId, next);
+    return true;
+  }
+
+  /**
+   * Hand over what this agent should act on, and keep what might still be in
+   * flight.
+   *
+   * `freshProcess` is the attach case. A session that just attached cannot be
+   * holding anything: whatever was emitted went to the process that is gone,
+   * so the grace window protects nobody and only delays the redelivery.
+   */
+  private drainVoiceQueue(
+    workspaceId: string,
+    opts?: { freshProcess?: boolean },
+  ): QueuedVoiceRequest[] {
+    const queue = this.listQueuedVoice(workspaceId);
+    if (queue.length === 0) return [];
+    const now = Date.now();
+    const inFlight = (q: QueuedVoiceRequest): boolean =>
+      !opts?.freshProcess && q.emittedAt !== undefined && now - q.emittedAt < this.voiceAckGraceMs;
+    const handOver = queue.filter((q) => !inFlight(q));
+    this.writeVoiceQueue(
+      workspaceId,
+      queue.filter((q) => inFlight(q)),
+    );
+    return handOver;
   }
 
   /**
