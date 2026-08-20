@@ -215,12 +215,14 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
 
     // Two sidecars that only exist when the board has been used a certain
     // way — and so are exactly the ones a delete forgets.
+    // Returns the new row's id now that the queue is the durable record, so
+    // the caller can name the entry it just wrote; false still means refused.
     expect(
       handle?.tasks.queueVoiceRequest(wsId, {
         transcript: 'move the tracing work to next week',
         actor: AGENT,
       }),
-    ).toBe(true);
+    ).toBeTypeOf('string');
     const goal = await fetch(`${base}/api/workspaces/${wsId}/goal`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
