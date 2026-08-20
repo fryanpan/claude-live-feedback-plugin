@@ -945,6 +945,28 @@ export interface AttachmentThresholds {
 export type DeliveryProbe = (workspaceId: string) => boolean;
 
 /**
+ * Is THIS agent's own event stream open right now?
+ *
+ * The delivery channel is an SSE connection the agent's MCP child holds for
+ * the life of the session. That socket is the strongest evidence this server
+ * can have that a frame will arrive — better than any clock, because it is
+ * the actual wire and it is observed rather than self-reported.
+ *
+ * It is a separate type from `DeliveryProbe` because it answers a stronger
+ * question and therefore earns a stronger permission. `DeliveryProbe` counts
+ * subscribers and cannot tell an agent from a browser tab, so it may only
+ * narrow a delivery decision; this one is keyed by agentId and only the
+ * agent's own child sends one, so it may widen it.
+ *
+ * What it deliberately does NOT do is move the DISPLAYED attachment state. An
+ * open socket promises the frame lands in the process, not that the model is
+ * working — `attachmentState` keeps deriving "process up, agent unresponsive"
+ * from the heartbeat and tool-call clocks, which is the distinction
+ * `attachment-keepalive.ts` refuses a timer in order to protect.
+ */
+export type AgentStreamProbe = (workspaceId: string, agentId: string) => boolean;
+
+/**
  * Derive the hub's attachment state (§4). "Active 2m ago" is shown because a
  * heartbeat actually arrived — we never guess from the absence of activity —
  * and fresh-heartbeat-but-stale-tool-calls is rendered as "process up, agent
@@ -1070,7 +1092,7 @@ export type AttachAgentResult =
   | { ok: false; error: 'workspace-not-found' };
 
 export type HeartbeatResult =
-  | { ok: true; attachment: AgentAttachment }
+  | { ok: true; attachment: AgentAttachment; queuedVoice?: QueuedVoiceRequest[] }
   | { ok: false; error: 'not-found' };
 
 /** Where a workspace's attachment records persist — their own sidecar, so
@@ -1974,6 +1996,7 @@ export class TaskStore {
   private attachmentThresholds: AttachmentThresholds;
   private triageDelivery: TriageDelivery | undefined;
   private deliveryProbe: DeliveryProbe | undefined;
+  private agentStreamProbe: AgentStreamProbe | undefined;
   private eventListeners = new Set<(event: TaskStoreEvent) => void>();
 
   constructor(opts: {
@@ -2012,6 +2035,10 @@ export class TaskStore {
    * behaves exactly as it did before, which is what keeps every store-only
    * test honest without teaching it about a transport.
    */
+  setAgentStreamProbe(probe: AgentStreamProbe | undefined): void {
+    this.agentStreamProbe = probe;
+  }
+
   setDeliveryProbe(probe: DeliveryProbe | undefined): void {
     this.deliveryProbe = probe;
   }
@@ -5349,7 +5376,31 @@ export class TaskStore {
       attachment: publicAttachment(attachment, now, this.attachmentThresholds),
       ts: now,
     });
-    return { ok: true, attachment };
+    // A heartbeat is an observation, and every observation is a chance to hand
+    // back what was parked. Before this the queue drained ONLY from
+    // `attachAgent`, which a long-running session calls once at startup — so a
+    // request queued at 16:41 waited for a process restart, and the ack that
+    // said "queued for its next attach" was describing a wait with no end in
+    // sight rather than a short one.
+    const queuedVoice = this.drainVoiceQueue(workspaceId);
+    // The emit IS the delivery, exactly as it is on the live `agent` route:
+    // the event rides `ws~<workspaceId>`, which this agent's MCP watch turns
+    // into a channel frame. Returning it in the response would not do — the
+    // heartbeat that carries most of these is sent by the keepalive, which
+    // piggybacks a real tool call and discards the body, so a queued
+    // utterance handed back only in the result would be handed to nobody.
+    for (const q of queuedVoice) {
+      this.recordVoiceRequest(workspaceId, {
+        transcript: q.transcript,
+        route: 'agent',
+        ack: q.applied
+          ? `Delivered from the queue. Already applied: ${q.applied}`
+          : 'Delivered from the queue.',
+        ...(q.context !== undefined ? { context: q.context } : {}),
+        actor: q.actor,
+      });
+    }
+    return { ok: true, attachment, ...(queuedVoice.length > 0 ? { queuedVoice } : {}) };
   }
 
   /**
@@ -5442,8 +5493,15 @@ export class TaskStore {
   /** Recent enough to hand work to, AND with the channel open to carry it. */
   private isDeliverable(
     workspaceId: string,
-    att: Pick<AgentAttachment, 'lastHeartbeat' | 'lastToolCallAt'>,
+    att: Pick<AgentAttachment, 'lastHeartbeat' | 'lastToolCallAt'> & { agentId?: string },
   ): boolean {
+    // The socket outranks the clock. An agent doing local work — grep, file
+    // reads, a test run — makes no call this server can see, so the observed
+    // window expires under a session that never went anywhere. Measured
+    // 2026-08-19: a 19.1-minute working gap against a 15-minute window, with
+    // the agent's stream open for every second of it. Asked first because
+    // when it says yes there is nothing the clock could add.
+    if (att.agentId && this.agentStreamProbe?.(workspaceId, att.agentId)) return true;
     const freshMs = this.attachmentThresholds.observedWorkFreshMs ?? OBSERVED_LIVE_MS;
     if (Date.now() - this.lastObserved(att) >= freshMs) return false;
     // Asked last and separately: the clock says the agent was here recently,

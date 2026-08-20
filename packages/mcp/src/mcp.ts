@@ -90,7 +90,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.67';
+const PLUGIN_VERSION = '0.1.68';
 
 /**
  * What a good `evidence.commit` looks like, said at the one layer that reaches
@@ -3529,9 +3529,18 @@ async function watchWorkspace(
   if (!watchers.has(key)) {
     const controller = new AbortController();
     watchers.set(key, { controller, docId: key, open: false });
+    // Name ourselves on the stream. This socket is held for the life of the
+    // session, so it is the most reliable evidence the server can have that a
+    // delivery to this agent will land — but only if the server can tell WHICH
+    // agent is on it. Without the id it is one more anonymous subscriber,
+    // indistinguishable from a browser tab, and the server falls back to
+    // asking how recently the model happened to call a tool. That clock
+    // expires under an agent doing local work: measured 2026-08-19 at a
+    // 19.1-minute grep-and-read gap against a 15-minute window, with this
+    // stream open throughout and a voice note queued instead of delivered.
     open = await startSseLoop(
       key,
-      `/events/workspace/${encodeURIComponent(workspaceId)}`,
+      `/events/workspace/${encodeURIComponent(workspaceId)}?agentId=${encodeURIComponent(AUTHOR.id)}`,
       controller,
     );
   }
