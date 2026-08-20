@@ -22,13 +22,18 @@ export interface AgentStream {
   close(): Promise<void>;
 }
 
+/** `agentId` names the agent whose own MCP child holds this stream — what a
+ *  real session sends, and what lets the server report it reachable while it
+ *  works off-server. Omit it to model a browser tab. */
 export async function openWorkspaceStream(
   base: string,
   workspaceId: string,
   init: RequestInit = {},
+  agentId?: string,
 ): Promise<AgentStream> {
   const controller = new AbortController();
-  const res = await fetch(`${base}/events/workspace/${encodeURIComponent(workspaceId)}`, {
+  const query = agentId ? `?agentId=${encodeURIComponent(agentId)}` : '';
+  const res = await fetch(`${base}/events/workspace/${encodeURIComponent(workspaceId)}${query}`, {
     ...init,
     signal: controller.signal,
     headers: { accept: 'text/event-stream', ...((init.headers as Record<string, string>) ?? {}) },

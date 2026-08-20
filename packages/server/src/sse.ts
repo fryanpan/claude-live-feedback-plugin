@@ -40,23 +40,33 @@ type Sink = {
 
 export class SseHub {
   /**
-   * docId → (sink → the share that authorized it, if any).
+   * docId → (sink → who opened it).
    *
-   * The shareId is what makes revocation reach this layer. An SSE stream has
+   * `shareId` is what makes revocation reach this layer. An SSE stream has
    * the same shape of problem as a websocket — authorized once at open, then
    * long-lived — so pulling a visitor's access has to hang up their stream as
    * well, or they keep receiving every new comment on a review they can no
    * longer load. Owner streams carry no shareId and are never swept.
+   *
+   * `agentId` is present only on the workspace stream an agent's MCP child
+   * opens for itself, and it is what lets `agentsOn` answer "is THAT agent
+   * reachable" rather than merely "is anybody subscribed". A browser tab sets
+   * it on nothing, so a tab can never make an absent agent look present —
+   * which is the property that allows this signal to widen a delivery
+   * decision where a bare subscriber count may only narrow one.
    */
-  private byDoc = new Map<string, Map<Sink, string | undefined>>();
+  private byDoc = new Map<string, Map<Sink, { shareId?: string; agentId?: string }>>();
 
-  add(docId: string, sink: Sink, shareId?: string): () => void {
+  add(docId: string, sink: Sink, shareId?: string, agentId?: string): () => void {
     let set = this.byDoc.get(docId);
     if (!set) {
       set = new Map();
       this.byDoc.set(docId, set);
     }
-    set.set(sink, shareId);
+    set.set(sink, {
+      ...(shareId !== undefined ? { shareId } : {}),
+      ...(agentId !== undefined ? { agentId } : {}),
+    });
     return () => this.remove(docId, sink);
   }
 
@@ -83,12 +93,27 @@ export class SseHub {
     return this.byDoc.get(docId)?.size ?? 0;
   }
 
+  /**
+   * Which agents are holding a stream open on this channel right now.
+   *
+   * Distinct from `count` in the way that matters: this is an identity, so a
+   * caller can ask about the agent it actually means to reach. Anonymous
+   * streams — every browser tab — contribute nothing.
+   */
+  agentsOn(docId: string): Set<string> {
+    const out = new Set<string>();
+    for (const who of this.byDoc.get(docId)?.values() ?? []) {
+      if (who.agentId) out.add(who.agentId);
+    }
+    return out;
+  }
+
   /** Close every stream a given share opened. Returns how many. */
   closeForShare(shareId: string): number {
     let closed = 0;
     for (const [docId, set] of this.byDoc) {
-      for (const [sink, id] of set) {
-        if (id !== shareId) continue;
+      for (const [sink, who] of set) {
+        if (who.shareId !== shareId) continue;
         try {
           sink.close();
         } catch {
@@ -106,8 +131,8 @@ export class SseHub {
   closeForDeadShares(isLive: (shareId: string) => boolean): string[] {
     const dead = new Set<string>();
     for (const set of this.byDoc.values()) {
-      for (const id of set.values()) {
-        if (id && !isLive(id)) dead.add(id);
+      for (const who of set.values()) {
+        if (who.shareId && !isLive(who.shareId)) dead.add(who.shareId);
       }
     }
     for (const id of dead) this.closeForShare(id);
@@ -126,6 +151,7 @@ export function openSseStream(
   docId: string,
   shareId?: string,
   transform?: (payload: SsePayload & Record<string, unknown>) => SsePayload,
+  agentId?: string,
 ): Response {
   let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
   const encoder = new TextEncoder();
@@ -151,7 +177,7 @@ export function openSseStream(
       };
       // initial comment so proxies flush headers
       c.enqueue(encoder.encode(':ok\n\n'));
-      remove = hub.add(docId, sink, shareId);
+      remove = hub.add(docId, sink, shareId, agentId);
       // periodic keepalive
       const keepalive = setInterval(() => {
         try {
