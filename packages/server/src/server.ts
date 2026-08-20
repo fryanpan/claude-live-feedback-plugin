@@ -814,6 +814,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // a listener that cannot act on it and lost. Queued is late; delivered to
   // nobody is gone.
   taskStore.setDeliveryProbe((workspaceId) => sse.count(`ws~${workspaceId}`) > 0);
+  // …and the stronger, agent-specific form of the same question. `count`
+  // cannot tell an agent from a browser tab, so it may only ever narrow a
+  // delivery decision; this one is keyed by the agentId the agent's own MCP
+  // child puts on its stream, so it may widen one.
+  taskStore.setAgentStreamProbe((workspaceId, agentId) =>
+    sse.agentsOn(`ws~${workspaceId}`).has(agentId),
+  );
   // The ydoc projection (§3.3): ws:<workspaceId> board rooms the server
   // writes and defends (foreign writes reverted), plus task:<taskId> body
   // rooms. init() runs after both stores hydrated, so the sidecar is
@@ -2154,11 +2161,19 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // of every hub event (display names, projected tasks) — the SSE
           // feed is the second door next to the ws room, and redacting one
           // transport but not the other is how the DocMeta leak shipped.
+          // An agent's MCP child names itself here; a browser tab does not.
+          // A visitor never counts as one — their stream is authorized by a
+          // share, and letting a share-bearer claim an agentId would let an
+          // outside tab impersonate the agent whose work it can see.
+          const streamAgentId = visitor
+            ? undefined
+            : (url.searchParams.get('agentId') ?? undefined);
           return openSseStream(
             sse,
             `ws~${workspaceId}`,
             visitorShareId ?? undefined,
             visitor ? redactHubEventForVisitor : undefined,
+            streamAgentId,
           );
         }
         // --- SSE ---
