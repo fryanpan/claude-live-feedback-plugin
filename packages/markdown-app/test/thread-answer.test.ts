@@ -59,7 +59,9 @@ function mountPanel(over: Partial<ThreadPanelOpts> = {}) {
     container,
     currentUser: alice,
     onThreadClick: () => {},
-    onReply: (id, text, answersCommentId) => replies.push([id, text, answersCommentId]),
+    onReply: (id, text, answersCommentId) => {
+      replies.push([id, text, answersCommentId]);
+    },
     onResolve: () => {},
     onReopen: () => {},
     onReanchor: () => {},
@@ -195,8 +197,9 @@ describe('the full item interface in the carrying thread', () => {
     const declaring = comment(bot, 'Which way?', decision());
     const all: Array<[string, string, string | undefined, string | undefined]> = [];
     const { panel, container } = mountPanel({
-      onReply: (id, text, answersCommentId, optionId) =>
-        all.push([id, text, answersCommentId, optionId]),
+      onReply: (id, text, answersCommentId, optionId) => {
+        all.push([id, text, answersCommentId, optionId]);
+      },
     });
     panel.setThreads([makeThread([declaring])]);
     panel.setActive('t1');
@@ -210,8 +213,9 @@ describe('the full item interface in the carrying thread', () => {
     const declaring = comment(bot, 'Which way?', decision());
     const all: Array<[string, string, string | undefined, string | undefined]> = [];
     const { panel, container } = mountPanel({
-      onReply: (id, text, answersCommentId, optionId) =>
-        all.push([id, text, answersCommentId, optionId]),
+      onReply: (id, text, answersCommentId, optionId) => {
+        all.push([id, text, answersCommentId, optionId]);
+      },
     });
     panel.setThreads([makeThread([declaring])]);
     panel.setActive('t1');
@@ -270,6 +274,45 @@ describe('the reply composer is a markdown field', () => {
     ta.dispatchEvent(new Event('input', { bubbles: true }));
     expect(preview.hidden).toBe(false);
     expect(preview.innerHTML).toContain('<strong>two hops</strong>');
+  });
+
+  it('a refused send puts the words back — a retry must not mean retyping', async () => {
+    // Every hub composer restores the text verbatim when the server refuses;
+    // this box was the one composer that cleared first and toasted 'try
+    // again' over an empty textarea.
+    const { panel, container } = mountPanel({ onReply: () => Promise.resolve(false) });
+    panel.setThreads([makeThread([comment(bot, 'Which way?', ask())])]);
+    panel.setActive('t1');
+    const ta = container.querySelector('.thread-reply textarea') as HTMLTextAreaElement;
+    replyWith(container, 'Alphabetical, **final**.');
+    // Cleared optimistically on send…
+    expect(ta.value).toBe('');
+    // …and restored once the post comes back refused.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(ta.value).toBe('Alphabetical, **final**.');
+    const preview = container.querySelector('.thread-reply .md-preview') as HTMLElement;
+    expect(preview.hidden).toBe(false);
+  });
+
+  it('leaves fresh words alone when the refusal lands after more typing', async () => {
+    let refuse: (v: boolean) => void = () => {};
+    const { panel, container } = mountPanel({
+      onReply: () =>
+        new Promise<boolean>((r) => {
+          refuse = r;
+        }),
+    });
+    panel.setThreads([makeThread([comment(bot, 'Which way?', ask())])]);
+    panel.setActive('t1');
+    const ta = container.querySelector('.thread-reply textarea') as HTMLTextAreaElement;
+    replyWith(container, 'First attempt.');
+    ta.value = 'Second attempt, mid-typing.';
+    refuse(false);
+    await Promise.resolve();
+    await Promise.resolve();
+    // Restoring would stomp what the person is typing NOW.
+    expect(ta.value).toBe('Second attempt, mid-typing.');
   });
 
   it('a send empties the preview with the box', () => {

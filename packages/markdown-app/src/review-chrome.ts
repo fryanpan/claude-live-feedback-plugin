@@ -537,23 +537,31 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
       // words, and stay queued — which is exactly what happened four times on
       // `board-review-2026-08-19`.
       const base = `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}`;
-      const res = await fetch(answersCommentId ? `${base}/answer` : `${base}/comments`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          author: user,
-          text,
-          ...(answersCommentId ? { commentId: answersCommentId } : {}),
-          // Provenance for a tapped option — records WHICH offered candidate
-          // the verbatim words came from. Typed answers send none.
-          ...(answersCommentId && optionId ? { optionId } : {}),
-        }),
-      });
-      // A failed answer must not read as a posted one: the reply is already
-      // out of the box by the time this resolves, so silence would lose it.
+      let res: Response;
+      try {
+        res = await fetch(answersCommentId ? `${base}/answer` : `${base}/comments`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            author: user,
+            text,
+            ...(answersCommentId ? { commentId: answersCommentId } : {}),
+            // Provenance for a tapped option — records WHICH offered candidate
+            // the verbatim words came from. Typed answers send none.
+            ...(answersCommentId && optionId ? { optionId } : {}),
+          }),
+        });
+      } catch {
+        if (answersCommentId) showToast('Answer failed to post — try again');
+        return false;
+      }
+      // A failed answer must not read as a posted one: the toast says try
+      // again, and the returned `false` is what makes trying again possible —
+      // the panel puts the typed words back in the box.
       if (!res.ok && answersCommentId) {
         showToast('Answer failed to post — try again');
       }
+      return res.ok;
     },
     onUndoAnswer: async (id, commentId) => {
       // Soft delete on the server: the stamps move into `answerHistory` and

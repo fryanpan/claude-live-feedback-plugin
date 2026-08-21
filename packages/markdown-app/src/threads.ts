@@ -45,8 +45,20 @@ export interface ThreadPanelOpts {
    * decision's offered options — provenance only, same contract as the hub:
    * the answer is always the verbatim `text`, and a typed answer sending no
    * id is not answering any less.
+   *
+   * The return value says whether the post LANDED: resolve `false` and the
+   * panel puts the typed words back in the box (every hub composer restores
+   * verbatim on refusal; this one used to clear first and toast 'try again'
+   * over an empty textarea). Anything else — `true`, `undefined`, a
+   * fire-and-forget handler — means posted. Typed `unknown` rather than a
+   * union with `void`, so existing handlers that return nothing stay valid.
    */
-  onReply: (threadId: string, text: string, answersCommentId?: string, optionId?: string) => void;
+  onReply: (
+    threadId: string,
+    text: string,
+    answersCommentId?: string,
+    optionId?: string,
+  ) => unknown;
   /**
    * Take a recorded answer back. `commentId` names the declaring comment the
    * stamps live on; the chrome routes it through `/answer/undo`, which moves
@@ -531,9 +543,20 @@ export class ThreadPanel {
     const submitReply = () => {
       const text = ta.value.trim();
       if (!text) return;
-      this.opts.onReply(t.id, text, answering);
+      const posted = this.opts.onReply(t.id, text, answering);
       ta.value = '';
       refreshPreview();
+      // A refused post hands the words back — the chrome's 'try again' toast
+      // must never point at an empty box. Only while the box is still empty,
+      // though: restoring over words typed since would stomp them.
+      void Promise.resolve(posted)
+        .catch(() => false)
+        .then((ok) => {
+          if (ok === false && ta.value === '') {
+            ta.value = text;
+            refreshPreview();
+          }
+        });
     };
     ta.addEventListener('keydown', (ev) => {
       if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) {
