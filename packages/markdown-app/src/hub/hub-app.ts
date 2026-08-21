@@ -15,7 +15,6 @@ import {
   watchLiveSync,
 } from '../connection-state.ts';
 import { ensureUserIdentity } from '../identity-prompt.ts';
-import { eventPath, typingInPath } from '../keyboard-target.ts';
 import { installStaleClientNotice } from '../stale-client.ts';
 import { type VoiceAck, createVoiceCapture } from '../voice-capture.ts';
 import {
@@ -85,6 +84,7 @@ import {
   renderTaskDetail,
   renderUnplacedStrip,
 } from './hub-render.ts';
+import { hubShortcutKeydown } from './hub-shortcuts.ts';
 import { createTaskBodyEditorHost } from './task-body-editor.ts';
 
 interface HubState {
@@ -1843,64 +1843,24 @@ async function main(): Promise<void> {
     },
   });
 
-  // Gmail-style shortcuts (§3.9): j/k walk rows, o/Enter opens, s opens the
-  // status dropdown, ? shows help. Never while typing — including while typing
-  // inside an embedded component's shadow root, which `ev.target` cannot see
-  // (see hotkeysBlocked).
-  document.addEventListener('keydown', (ev) => {
-    if (typingInPath(eventPath(ev))) return;
-    if (ev.key === '?') {
-      el('hub-help').classList.toggle('hidden');
-      return;
-    }
-    // Gmail's compose key. Before the row shortcuts, and before the
-    // rows-are-empty bail below it — capture has to work on a board with
-    // nothing on it, which is exactly when it is needed most.
-    if (ev.key === 'c') {
-      const box = document.querySelector<HTMLTextAreaElement>('.hub-quick-input');
-      if (box) {
-        box.focus();
-        ev.preventDefault();
-      }
-      return;
-    }
-    if (ev.key === 'Escape') {
-      el('hub-help').classList.add('hidden');
-      if (state.detailTaskId) {
+  // Gmail-style row shortcuts — the handler lives in hub-shortcuts.ts so it
+  // can be tested (this module runs main() on import, which nothing in a
+  // test can satisfy).
+  document.addEventListener(
+    'keydown',
+    hubShortcutKeydown({
+      state,
+      helpEl: () => el('hub-help'),
+      openDetail: (taskId) => {
+        state.detailTaskId = taskId;
+        renderDetail();
+      },
+      closeDetail: () => {
         state.detailTaskId = null;
         renderDetail();
-      }
-      return;
-    }
-    const rows = Array.from(document.querySelectorAll<HTMLElement>('.hub-task-row'));
-    if (rows.length === 0) return;
-    const focusedIdx = rows.findIndex((r) => r === document.activeElement);
-    if (ev.key === 'j' || ev.key === 'k') {
-      const next =
-        ev.key === 'j' ? Math.min(rows.length - 1, focusedIdx + 1) : Math.max(0, focusedIdx - 1);
-      rows[next]?.focus();
-      ev.preventDefault();
-    } else if ((ev.key === 'o' || ev.key === 's' || ev.key === 'a') && focusedIdx >= 0) {
-      const taskId = rows[focusedIdx]?.dataset.taskId;
-      const task = taskId ? state.tasks.get(taskId) : undefined;
-      if (!task) return;
-      if (ev.key === 'o') {
-        state.detailTaskId = task.id;
-        renderDetail();
-      } else if (ev.key === 'a') {
-        // Focus the picker rather than choosing for them — for the same
-        // reason `s` does below, and because there is no longer an "other
-        // end" to flip to: a workspace can hold any number of agents.
-        rows[focusedIdx]?.querySelector<HTMLSelectElement>('.hub-row-assignee')?.focus();
-      } else {
-        // Focus the row's dropdown rather than picking a status for them —
-        // the keyboard path must not re-introduce the linear assumption the
-        // dropdown exists to remove.
-        rows[focusedIdx]?.querySelector<HTMLSelectElement>('.hub-status-select')?.focus();
-      }
-      ev.preventDefault();
-    }
-  });
+      },
+    }),
+  );
 
   // Deep link: /workspaces/<id>?task=<taskId> opens the detail on load —
   // this is also how the voice fast path lands a task lookup from another
