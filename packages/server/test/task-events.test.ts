@@ -5,7 +5,7 @@
  *
  *  - Every store mutation that changes accountable state emits exactly one
  *    typed event (task.created, task.transitioned, task.regrouped,
- *    decision.answered, workspace.goal_updated, workspace.goals_changed) —
+ *    decision.answered, workspace.goals_changed) —
  *    and refused mutations emit NOTHING, each such absence proven next to a
  *    presence (a negative test needs a positive control).
  *  - Every emitted event is appended to `<dataDir>/workspaces/<id>.events.jsonl`

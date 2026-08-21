@@ -108,7 +108,7 @@ describe('deterministicBrief', () => {
           ev('task.transitioned', NOW + 2, { taskId: 't-2', to: 'in-progress' }),
           ev('task.created', NOW + 3, { taskId: 't-3' }),
           ev('decision.answered', NOW + 4, { taskId: 't-2' }),
-          ev('workspace.goal_updated', NOW + 5),
+          ev('workspace.goals_changed', NOW + 5),
         ],
         2,
       ),
@@ -186,7 +186,7 @@ describe('buildBriefPrompt', () => {
     const { user } = buildBriefPrompt(
       input([
         ev('task.created', NOW + 1, { taskId: 't-2', actor: 'Beacon' }),
-        ev('workspace.goal_updated', NOW + 2, { actor: 'Beacon' }),
+        ev('workspace.goals_changed', NOW + 2, { actor: 'Beacon' }),
       ]),
       'x',
       uncapped(NOW),
@@ -195,7 +195,7 @@ describe('buildBriefPrompt', () => {
     expect(rows).toHaveLength(2);
     expect(rows[0]).toContain('[Rewrite the retry helper](/workspaces/ws-1?task=t-2)');
     expect(rows[0]).toContain(taskDeepLink('ws-1', 't-2'));
-    expect(rows[1]).toContain('workspace.goal_updated');
+    expect(rows[1]).toContain('workspace.goals_changed');
     expect(rows[1]).not.toContain('](');
   });
 

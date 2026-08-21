@@ -106,12 +106,6 @@ describe('declareWorkspaceLead — declaring yourself', () => {
         gating: { summary: 'no open gating decisions' },
         untriaged: ['t-7'],
         queuedVoice: [{ transcript: 'make the second goal the top one', ts: 11 }],
-        pendingRetriage: {
-          batchId: 'b-1',
-          oldGoal: 'old',
-          newGoal: 'new',
-          taskIds: ['t-1', 't-2'],
-        },
         pendingBucketReview: {
           batchId: 'b-2',
           newBands: [{ id: 'g-9', title: 'Reliability' }],

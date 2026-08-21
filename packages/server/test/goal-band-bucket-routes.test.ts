@@ -179,7 +179,6 @@ describe('a new goal band asks the bucket to be re-looked-at, over HTTP', () => 
     expect(queued.bucketReview?.queued).toBe(true);
 
     type BoardRead = {
-      pendingRetriage?: unknown;
       pendingBucketReview?: { batchId: string; taskIds: string[]; newBands: Array<{ id: string }> };
     };
     const read = async () => (await (await local(`/api/workspaces/${wsId}`)).json()) as BoardRead;
@@ -187,11 +186,6 @@ describe('a new goal band asks the bucket to be re-looked-at, over HTTP', () => 
     const board = await read();
     expect(board.pendingBucketReview?.taskIds).toEqual([first]);
     expect(board.pendingBucketReview?.newBands.map((b) => b.id)).toEqual([queued.ids.g1]);
-    // It is its OWN field: a goal-list edit does not touch the north star, so
-    // reporting it under pendingRetriage would make that record's goal text
-    // lie about what changed.
-    expect(board.pendingRetriage).toBeUndefined();
-
     // And in the board ROOM, which is what the hub client actually renders
     // off — it reads the ydoc workspace map, not this REST payload, so a
     // field on the payload alone still leaves the chip unrenderable.
