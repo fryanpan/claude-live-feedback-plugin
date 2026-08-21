@@ -241,6 +241,29 @@ describe('the full item interface in the carrying thread', () => {
     expect(undos).toEqual([['t1', settled.id]]);
   });
 
+  it('a hostile answerText reaches the record as inert text, never as markup', () => {
+    // The record's quoted words go through an innerHTML sink
+    // (renderCommentMarkdownInline). The renderer's own battery pins the
+    // escape; this pins the SINK — the wiring a refactor could reroute.
+    const settled = comment(
+      bot,
+      'Which way?',
+      decision({
+        answeredAt: ts,
+        answeredBy: 'Alice',
+        answerText: '<img src=x onerror=alert(1)> but *emphatic*',
+      }),
+    );
+    const { panel, container } = mountPanel();
+    panel.setThreads([makeThread([settled])]);
+    panel.setActive('t1');
+    const words = container.querySelector('.thread-answer-words') as HTMLElement;
+    expect(words.querySelector('img')).toBeNull();
+    expect(words.textContent).toContain('<img src=x onerror=alert(1)>');
+    // Positive control: the same sink still renders the markdown it should.
+    expect(words.querySelector('em')?.textContent).toBe('emphatic');
+  });
+
   it('renders the record without an Undo when nothing is wired to take the answer back', () => {
     const settled = comment(
       bot,
