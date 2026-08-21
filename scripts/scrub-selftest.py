@@ -47,6 +47,10 @@ DENY_TOKEN = "quokkaburra"
 # is what lets a case say WHICH of the two the gate reacted to.
 PUBLIC_TOKEN = "wibblethorpe"
 NEW_TOKEN = "grimsbyfoyle"
+# An email in FILE CONTENT, as opposed to git's own Author / Co-authored-by
+# metadata. The gate must keep seeing the former after it learns to ignore
+# the latter — a redaction that also swallowed content emails would be a miss.
+LEAK_EMAIL = "finchwhistle@example.invalid"
 
 REGISTRY = f"""\
 projects:
@@ -364,6 +368,38 @@ def check_push_rev_args() -> None:
                f"got {got!r}, wanted {want!r}")
 
 
+def check_identity_redaction() -> None:
+    """Metadata identity redaction stays narrow: git's own lines, known identities.
+
+    Measured on PR #198: the Haiku layer flagged the commit author trailer —
+    the identity on every commit already public on origin/main — across 11
+    file/line pairs and blocked the push, forcing SCRUB_SKIP_HAIKU=1. A gate
+    that fires on the normal path trains everyone to bypass it. The fix must
+    redact ONLY git's own commit metadata for identities the remote already
+    has; an email introduced in file content is exactly what the layer exists
+    to catch, so anything wider turns the fix into a miss.
+    """
+    known = {"Scrub Selftest <selftest@example.invalid>"}
+    ph = scrub_git.IDENTITY_PLACEHOLDER
+    cases = [
+        ("Author: Scrub Selftest <selftest@example.invalid>",
+         f"Author: {ph}", "an Author header for a known identity is redacted"),
+        ("    Co-Authored-By: Scrub Selftest <selftest@example.invalid>",
+         f"    Co-Authored-By: {ph}", "a commit-message co-author trailer is redacted"),
+        ("Author: Someone Else <else@example.invalid>",
+         None, "an identity the remote has never seen is left alone"),
+        ("+Author: Scrub Selftest <selftest@example.invalid>",
+         None, "an ADDED file-content line is never redacted, whatever it claims to be"),
+        (f"+contact: {LEAK_EMAIL}",
+         None, "an added email in file content is untouched"),
+    ]
+    for line, want, label in cases:
+        got = scrub_git.redact_public_identities(line, known)
+        expected = want if want is not None else line
+        expect(f"identity redaction: {label}", 0 if got == expected else 1, 0,
+               f"got {got!r}, wanted {expected!r}")
+
+
 def check_push_range(registry: str, denylist: str) -> None:
     """The merge false positive, and the three ways it must not become a miss.
 
@@ -439,11 +475,43 @@ def check_push_range(registry: str, denylist: str) -> None:
         expect("a first push of a new branch still scans its own commits",
                r.returncode, 1, r.stderr)
 
+        # --- 5. the author trailer (PR #198) -------------------------------
+        # Every commit in this fixture is authored by an identity origin/main
+        # already carries, so its Author lines publish nothing new. They must
+        # not reach Haiku as scannable identities — that is the finding that
+        # blocked PR #198 eleven times over and forced SCRUB_SKIP_HAIKU=1.
+        repo5 = os.path.join(tmp, "author-trailer")
+        shas5 = build_merge_fixture(repo5, branch_token=NEW_TOKEN)
+        patch5 = push_patch_in(repo5, shas5["tip"], shas5["pushed"])
+        expect("an already-public author identity is absent from the Haiku input",
+               0 if "selftest@example.invalid" not in patch5 else 1, 0,
+               "the commit-metadata identity still reaches Haiku")
+        # Positive control: the redaction visibly fired. Without this, an
+        # empty patch — or a git that stopped printing Author lines — would
+        # pass the absence check while proving nothing.
+        expect("...and the placeholder marks where it fired",
+               0 if scrub_git.IDENTITY_PLACEHOLDER in patch5 else 1, 0,
+               "no placeholder in the patch: nothing was actually redacted")
+
+        # --- 6. an email genuinely ADDED in file content -------------------
+        # The other half of the same fix, and the reason it must stay narrow:
+        # a content email is exactly what the Haiku layer exists to catch.
+        repo6 = os.path.join(tmp, "content-email")
+        shas6 = build_merge_fixture(repo6, branch_token=f"write to {LEAK_EMAIL} about this")
+        patch6 = push_patch_in(repo6, shas6["tip"], shas6["pushed"])
+        expect("an email added in file content still reaches the Haiku input",
+               0 if LEAK_EMAIL in patch6 else 1, 0,
+               "the content email was stripped — the redaction is too wide")
+        expect("...while the same push's author metadata stays redacted",
+               0 if "selftest@example.invalid" not in patch6 else 1, 0,
+               "the metadata identity leaked back in alongside the content email")
+
 
 def main() -> int:
     check_git_env_isolation()
     check_decision_table()
     check_push_rev_args()
+    check_identity_redaction()
     with tempfile.TemporaryDirectory() as tmp:
         registry = os.path.join(tmp, "registry.yaml")
         denylist = os.path.join(tmp, "denylist.txt")
