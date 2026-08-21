@@ -113,9 +113,10 @@ describe('expired shares lose their sockets', () => {
         },
       });
 
-    // A workspace is the unit of sharing, so the doc is filed on one and the
-    // share covers that. `shared` is its only member, which keeps the socket
-    // under test — /y/shared — exactly the one the share authorized.
+    // A BOARD is the unit of sharing, so the doc is filed on a grouping, the
+    // grouping is filed on a board, and the share covers the board. `shared`
+    // is the grouping's only member, which keeps the socket under test —
+    // /y/shared — exactly the one the share authorized.
     await local('/api/docs', {
       method: 'POST',
       body: JSON.stringify({
@@ -125,10 +126,22 @@ describe('expired shares lose their sockets', () => {
         workspaceId: 'ws-shared',
       }),
     });
+    const board = await local('/api/workspaces', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Expiry board' }),
+    });
+    expect(board.status).toBe(200);
+    const boardId = ((await board.json()) as { workspace: { id: string } }).workspace.id;
+    const filed = await local(`/api/workspaces/${encodeURIComponent(boardId)}/docs`, {
+      method: 'POST',
+      body: JSON.stringify({ docId: 'ws-shared' }),
+    });
+    expect(filed.status).toBe(200);
     const mint = await local('/api/share/link', {
       method: 'POST',
-      body: JSON.stringify({ workspaceId: 'ws-shared' }),
+      body: JSON.stringify({ workspaceId: boardId }),
     });
+    expect(mint.status).toBe(200);
     const { share } = (await mint.json()) as { share: { slug: string; shareId: string } };
     const redeemed = await fetch(`${base}/s/${share.slug}`, {
       redirect: 'manual',

@@ -81,10 +81,11 @@ describe('a revoked share loses its event stream', () => {
         },
       });
 
-    // A workspace is the unit of sharing: the doc is filed on `ws-shared` and
-    // the link covers that workspace. `shared` is its only member, so the
-    // stream under test — /events/shared — is still exactly the one this
-    // share authorized, which is what revocation has to reach.
+    // A BOARD is the unit of sharing: the doc is filed on the grouping
+    // `ws-shared`, that grouping is filed on a board, and the link covers the
+    // board. `shared` is the grouping's only member, so the stream under test
+    // — /events/shared — is still exactly the one this share authorized, which
+    // is what revocation has to reach.
     await local('/api/docs', {
       method: 'POST',
       body: JSON.stringify({
@@ -94,10 +95,22 @@ describe('a revoked share loses its event stream', () => {
         workspaceId: 'ws-shared',
       }),
     });
+    const board = await local('/api/workspaces', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Revocation board' }),
+    });
+    expect(board.status).toBe(200);
+    const boardId = ((await board.json()) as { workspace: { id: string } }).workspace.id;
+    const filed = await local(`/api/workspaces/${encodeURIComponent(boardId)}/docs`, {
+      method: 'POST',
+      body: JSON.stringify({ docId: 'ws-shared' }),
+    });
+    expect(filed.status).toBe(200);
     const mint = await local('/api/share/link', {
       method: 'POST',
-      body: JSON.stringify({ workspaceId: 'ws-shared' }),
+      body: JSON.stringify({ workspaceId: boardId }),
     });
+    expect(mint.status).toBe(200);
     const { share } = (await mint.json()) as { share: { slug: string; shareId: string } };
     const redeemed = await fetch(`${base}/s/${share.slug}`, {
       redirect: 'manual',

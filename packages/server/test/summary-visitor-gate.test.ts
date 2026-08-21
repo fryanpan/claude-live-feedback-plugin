@@ -102,20 +102,34 @@ describe('share visitors never spend the summary API key', () => {
 
     const file = join(dataDir, `${DOC}.md`);
     writeFileSync(file, `# Doc\n\n${SNIPPET}\n\nA second paragraph to find.\n`);
-    // A workspace is the unit of sharing: the doc is filed on `ws-gate` and
-    // the link covers that. The visitor's reach is unchanged — `gate-doc` is
-    // the only member — so every route exercised below is still one a real
-    // visitor can call, which is the premise the whole suite rests on.
+    // A BOARD is the unit of sharing: the doc is filed on the grouping
+    // `ws-gate`, that grouping is filed on a board, and the link covers the
+    // board. The visitor's reach is unchanged — `gate-doc` is the grouping's
+    // only member — so every route exercised below is still one a real visitor
+    // can call, which is the premise the whole suite rests on.
     await local('/api/docs', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: DOC, type: 'markdown', sourceUrl: file, workspaceId: WS }),
     });
+    const board = await local('/api/workspaces', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Summary gate board' }),
+    });
+    expect(board.status).toBe(200);
+    const boardId = ((await board.json()) as { workspace: { id: string } }).workspace.id;
+    const filed = await local(`/api/workspaces/${encodeURIComponent(boardId)}/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId: WS }),
+    });
+    expect(filed.status).toBe(200);
 
     const mk = await local('/api/share/link', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ workspaceId: WS, label: 'external review' }),
+      body: JSON.stringify({ workspaceId: boardId, label: 'external review' }),
     });
     expect(mk.status).toBe(200);
     const { share } = (await mk.json()) as { share: { slug: string } };

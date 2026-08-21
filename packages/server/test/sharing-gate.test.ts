@@ -122,9 +122,19 @@ describe('sharing gate over HTTP', () => {
     });
     base = `http://localhost:${handle.port}`;
 
+    // A board is the unit of sharing, so the bind is filed on one and the
+    // share below covers that board. The bind's own id is a GROUPING and can
+    // no longer be shared on its own.
+    const board = await local('/api/workspaces', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Gate board' }),
+    }).then((r) => r.json());
+    const boardId = board.workspace.id as string;
+    expect(boardId).toBeTruthy();
+
     const bind = await local('/api/workspaces', {
       method: 'POST',
-      body: JSON.stringify({ folderPath: folder }),
+      body: JSON.stringify({ folderPath: folder, hubWorkspaceId: boardId }),
     });
     expect(bind.status).toBe(200);
     const bound = (await bind.json()) as {
@@ -137,7 +147,7 @@ describe('sharing gate over HTTP', () => {
 
     const share = await local('/api/share/link', {
       method: 'POST',
-      body: JSON.stringify({ workspaceId: bound.workspaceId }),
+      body: JSON.stringify({ workspaceId: boardId }),
     }).then((r) => r.json());
     slug = share.share.slug;
     expect(slug).toBeTruthy();

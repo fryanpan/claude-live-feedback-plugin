@@ -1,5 +1,5 @@
 ---
-description: Publish a workspace behind Cloudflare Access for an external team. A workspace is the unit of sharing; dev-server / mockup surfaces coming next.
+description: Publish a board behind Cloudflare Access for an external team. A board is the unit of sharing; dev-server / mockup surfaces coming next.
 ---
 
 You're being asked to share a claude-workspaces review surface publicly so an
@@ -7,16 +7,24 @@ external team can review it for a bounded window (default 72 hours).
 
 ## What this does
 
-Wraps a **workspace** — a hub board, or a folder bind / diff review grouping —
-in a Cloudflare Access-gated public URL. Reviewers hit the URL → email-OTP
-login → only allowed email domains can complete login → arrive at the review.
+Wraps a **board** in a Cloudflare Access-gated public URL. Reviewers hit the
+URL → email-OTP login → only allowed email domains can complete login →
+arrive at the board, and navigate to everything filed on it.
 
-**A workspace is the unit of sharing** (Bryan, 2026-08-17). There is no
-per-doc share: `share_doc` is gone, and `share_link` no longer takes a
-`docId`. To share one document, file it on a workspace first. Everything in a
-workspace is available to everyone in it — that is the default and the point
-(see `.claude/rules/workspace-board.md`), so decide what belongs in the
-workspace before you share it, not afterwards.
+**A board is the unit of sharing** (Bryan, 2026-08-17: "Workspace only — a
+review must be filed on a board before it can be shared"). Two smaller grants
+used to exist and both are gone:
+
+- **Per-doc** — `share_doc` is gone and `share_link` no longer takes a
+  `docId`. A doc with a `docId` in the body gets `410 per_doc_sharing_removed`.
+- **Per-grouping** — a folder bind or diff review cannot be shared on its
+  own. Passing a grouping / review id gets `410 grouping_sharing_removed`.
+
+So the id you share is always a hub board id: the one `create_workspace`
+returned, or the `hubWorkspaceId` that `bind_folder` / `create_diff_review`
+reports. Everything on that board is available to everyone the share reaches
+— that is the default and the point (see `.claude/rules/workspace-board.md`)
+— so decide what belongs on the board before you share it, not afterwards.
 
 ## Steps
 
@@ -25,21 +33,32 @@ workspace before you share it, not afterwards.
    value. If absent, **ask the user which domain(s) to allow**. Never default
    to "anyone."
 
-2. **Find or create the workspace.** If the thing to review is a loose doc
-   bound via `create_review_doc`, file it on a workspace with `attach_doc`
-   (or bind the folder it lives in with `bind_folder`). `list_docs` shows
+2. **Find or create the BOARD.** If the thing to review is a loose doc bound
+   via `create_review_doc`, file it on a board with `attach_doc`. A folder
+   bind or diff review is already filed on one — `bind_folder` and
+   `create_diff_review` return it as `hubWorkspaceId`. `list_docs` shows
    which workspace a doc already belongs to.
 
-3. **Check what else is in that workspace before you share it.** The visitor
-   gets every member doc, the file tree, and the navigation endpoints. For a
-   DIFF review the workspace root is the whole repo, so `files` /
-   `context-file` reach every file in it — share a folder bind instead when
-   the reviewer should be confined to a directory.
+3. **Check what else is on that board before you share it — the share is
+   board-wide.** The visitor gets every doc filed on it, each grouping's file
+   tree, and the navigation endpoints. Two consequences worth pausing on:
 
-4. **Call `share_workspace`** with `{ workspaceId, allowDomains, ttlSeconds? }`.
-   Default ttl is 72h; override only if the user requests a different window.
-   For a link share with no sign-in, call `share_link({ workspaceId })`
-   instead — the slug IS the credential, so keep the TTL short.
+   - For a DIFF review the grouping's root is the whole repo, so `files` /
+     `context-file` reach every file in that repo.
+   - A bind or review created without an explicit `hubWorkspaceId` lands on
+     the default **"Unfiled"** board, which collects everything anyone bound
+     without naming a board. Sharing Unfiled shares all of it.
+
+   When the reviewer should see this review and nothing else, give it its own
+   board: `create_workspace` takes about a second, and `create_diff_review`
+   accepts the new board's id as `hubWorkspaceId` in the same call.
+
+4. **Call `share_workspace`** with `{ workspaceId, allowDomains, ttlSeconds? }`,
+   where `workspaceId` is the BOARD id. Default ttl is 72h; override only if
+   the user requests a different window. For a link share with no sign-in,
+   call `share_link({ workspaceId })` instead — the slug IS the credential,
+   so keep the TTL short. Either call answers `410 grouping_sharing_removed`
+   if you hand it a review id by mistake.
 
 5. **Share the resulting URL** with the user along with a brief instruction
    the user can forward to reviewers:

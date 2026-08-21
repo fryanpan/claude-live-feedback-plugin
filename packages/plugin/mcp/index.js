@@ -14229,7 +14229,7 @@ var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.80";
+var PLUGIN_VERSION = "0.1.81";
 var PROCESS_ID = randomUUID();
 var COMMIT_EVIDENCE_DESCRIPTION = 'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
 var server = new Server({
@@ -15007,19 +15007,18 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "share_workspace",
-      description: "Publish a WHOLE workspace behind a Cloudflare Access gate, so external reviewers can browse the set — file tree, every member doc, cross-doc links, and per-file comment threads. A WORKSPACE IS THE UNIT OF SHARING: there is no per-doc share, so to share one document, file it on a workspace (attach_doc, or bind_folder / create_diff_review) and share that. Everything in the workspace is then available to everyone in it. Returns { share: {...}, memberCount }. Read .claude/claude-workspaces.json's `share.defaultAllowDomains` first; if a repo has no config, ASK THE USER which domain(s) to allow before calling — never default to 'anyone'. Default ttlSeconds is 72h. Visitors can read, comment on, and co-edit members through the live editor — but cannot delete docs, replace a doc wholesale, reparse from disk, list other workspaces or docs, open files outside the workspace root, or manage shares.",
+      description: "Publish a BOARD behind a Cloudflare Access gate, so external reviewers can browse everything filed on it — file tree, every member doc, cross-doc links, and per-file comment threads. A BOARD IS THE UNIT OF SHARING: neither a single doc nor a folder bind / diff review grouping can be shared on its own, so file the thing on a board (attach_doc, or the hubWorkspaceId that bind_folder / create_diff_review returns) and share that board id — a grouping id is refused with 410 grouping_sharing_removed. Everything on the board is then available to everyone the share reaches, so check what else is filed there BEFORE sharing; a board created by create_workspace for this one review is the tight scope. Returns { share: {...} }. Read .claude/claude-workspaces.json's `share.defaultAllowDomains` first; if a repo has no config, ASK THE USER which domain(s) to allow before calling — never default to 'anyone'. Default ttlSeconds is 72h. Visitors can read, comment on, and co-edit members through the live editor — but cannot delete docs, replace a doc wholesale, reparse from disk, list other workspaces or docs, open files outside the workspace root, or manage shares.",
       inputSchema: {
         type: "object",
         properties: {
-          workspaceId: { type: "string" },
+          workspaceId: {
+            type: "string",
+            description: "The BOARD to share — the id create_workspace returned, or the hubWorkspaceId bind_folder / create_diff_review reported. NOT a grouping/review id."
+          },
           allowDomains: {
             type: "array",
             items: { type: "string" },
             description: "Email domains, e.g. ['@partner-org.example']"
-          },
-          entryDocId: {
-            type: "string",
-            description: "Doc the share URL opens. Defaults to the first member."
           },
           ttlSeconds: { type: "number" },
           name: { type: "string", description: "Optional slug override for the subdomain" }
@@ -15029,17 +15028,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "share_link",
-      description: "Publish a WORKSPACE as an UNGUESSABLE LINK — no sign-in, no Cloudflare Access, no email allow-list. Anyone holding the URL can read, comment, and co-edit until it expires; the scope is identical to an Access share (that workspace only — no doc enumeration, no deleting, no wholesale rewrite, no share administration). This is the default way to share with someone outside the tailnet. A WORKSPACE IS THE UNIT OF SHARING: there is no docId argument, so to share one document, file it on a workspace (attach_doc, or bind_folder / create_diff_review) and pass that workspaceId. Default TTL is one week; pass ttlSeconds to change it, or set_share_ttl later. Returns { share: { shareId, url, slug, expiresAt, ... } } — give the human the bare `url` on its own line. Because the link IS the credential, treat it like a password: don't post it anywhere durable, and prefer a short ttlSeconds for anything sensitive. Use share_workspace instead when you need verified identities, per-person revocation, or attribution.",
+      description: "Publish a BOARD as an UNGUESSABLE LINK — no sign-in, no Cloudflare Access, no email allow-list. Anyone holding the URL can read, comment, and co-edit until it expires; the scope is identical to an Access share (that board and what is filed on it — no doc enumeration, no deleting, no wholesale rewrite, no share administration). This is the default way to share with someone outside the tailnet. A BOARD IS THE UNIT OF SHARING: there is no docId argument and no entry doc, and a folder bind / diff review GROUPING id is refused with 410 grouping_sharing_removed. File the review on a board and pass the board id — create_diff_review and bind_folder already return it as hubWorkspaceId, and create_workspace makes a fresh empty one in about a second when this review deserves its own. The link opens the board itself (/workspaces/<id>). Default TTL is one week; pass ttlSeconds to change it, or set_share_ttl later. Returns { share: { shareId, url, slug, expiresAt, ... } } — give the human the bare `url` on its own line. Because the link IS the credential, treat it like a password: don't post it anywhere durable, and prefer a short ttlSeconds for anything sensitive. Use share_workspace instead when you need verified identities, per-person revocation, or attribution.",
       inputSchema: {
         type: "object",
         properties: {
           workspaceId: {
             type: "string",
-            description: "The workspace to share — a hub board, or a folder bind / diff review grouping."
-          },
-          entryDocId: {
-            type: "string",
-            description: "Doc the link opens. Defaults to the first member; omit for a hub board."
+            description: "The BOARD to share — the id create_workspace returned, or the hubWorkspaceId bind_folder / create_diff_review reported. NOT a grouping/review id."
           },
           ttlSeconds: { type: "number", description: "Defaults to one week (604800)." },
           label: { type: "string", description: "Human label shown in list_shares." }
@@ -16100,24 +16095,21 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const {
           workspaceId,
           allowDomains,
-          entryDocId,
           ttlSeconds,
           name: slug
         } = a;
         const res = await http("POST", "/api/share/workspace", {
           workspaceId,
           allowDomains,
-          entryDocId,
           ttlSeconds,
           name: slug
         });
         return ok(res);
       }
       case "share_link": {
-        const { workspaceId, entryDocId, ttlSeconds, label } = a;
+        const { workspaceId, ttlSeconds, label } = a;
         const res = await http("POST", "/api/share/link", {
           workspaceId,
-          entryDocId,
           ttlSeconds,
           label
         });
