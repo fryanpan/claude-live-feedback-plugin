@@ -252,6 +252,57 @@ export function summaryKey(t: Thread): string {
   return [s.topic, s.discussion, s.discussionKind, who].join('\u0001');
 }
 
+/**
+ * The whole fingerprint of a rendered thread card — id, display status, how
+ * much conversation, and everything the summary block and the review item
+ * make it show.
+ *
+ * ONE key for every surface that memoizes a card, because the drawer panel and
+ * the balloon margin each grew their own copy of the same five terms and both
+ * copies were missing the same sixth. Taking an answer back un-stamps the
+ * declaration and touches nothing else: no comment is added, no timestamp
+ * moves, no summary line changes — so both keys came out identical either side
+ * of an undo and neither card repainted. The reader had just pressed Undo and
+ * the card went on saying "Answered by you: …" until a reload.
+ *
+ * `orphan` is a DISPLAY status rather than a stored one (a text-range anchor
+ * that no longer resolves), and the panel derives it the same way; it is in
+ * here so a thread that orphans mid-session repaints into the re-anchor state.
+ */
+export function threadRenderKey(t: Thread): string {
+  const status = t.anchor.kind === 'orphan' ? 'orphan' : t.status;
+  return [t.id, status, t.commentCount, t.lastActivity, reviewStateKey(t), summaryKey(t)].join(
+    '\u0001',
+  );
+}
+
+/**
+ * What the review items in a thread make its card display: which comments
+ * declared, what they asked, and whether — and with what words — each has been
+ * answered. A declaration can be STAMPED onto a comment that already exists
+ * (`add_review_item`, `/answer`, `/answer/undo` all do exactly that), so none
+ * of it moves any count or clock the rest of the key is built from.
+ */
+function reviewStateKey(t: Thread): string {
+  const parts: string[] = [];
+  for (const c of t.comments) {
+    const r = c.review;
+    if (!r) continue;
+    parts.push(
+      [
+        c.id,
+        r.shape,
+        r.headline,
+        r.answeredAt ?? '',
+        r.answeredBy ?? '',
+        r.answerText ?? '',
+        r.answeredWith ?? '',
+      ].join('\u0002'),
+    );
+  }
+  return parts.join('\u0003');
+}
+
 function deriveTopic(t: Thread): string {
   // Anchors arrive as opaque JSON out of the ydoc and are never validated on
   // the way in. Every constructor we own writes a snippet, so this is belt

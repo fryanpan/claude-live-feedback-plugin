@@ -5,6 +5,7 @@ import {
   type TaskReviewItem,
   checkReviewPayload,
   isReviewItemOpen,
+  pendingDeclaration,
   readReviewPayload,
   readTaskReviewItem,
   reviewAnswered,
@@ -275,6 +276,67 @@ describe('readReviewPayload — loose on the way out, so nothing already stored 
       ).toBeUndefined();
     }
   });
+
+  it('carries the answer record — answeredBy and answerText — through', () => {
+    // The record's face: "Answered by you: Move below" has to survive a
+    // reload, so the words and the name live on the declaration itself.
+    const p = readReviewPayload(
+      decision({ answeredAt: 1_700_000_000_000, answeredBy: 'Jordan', answerText: 'Move below' }),
+    );
+    expect(p?.answeredBy).toBe('Jordan');
+    expect(p?.answerText).toBe('Move below');
+  });
+
+  it('drops an answeredBy or answerText that is not a string', () => {
+    for (const junk of [7, null, {}, ['Jordan']]) {
+      const p = readReviewPayload(
+        decision({ answeredBy: junk as never, answerText: junk as never }),
+      );
+      expect(p?.answeredBy).toBeUndefined();
+      expect(p?.answerText).toBeUndefined();
+    }
+  });
+
+  it('round-trips answerHistory, dropping malformed entries instead of throwing', () => {
+    const kept = {
+      answeredAt: 1_700_000_000_000,
+      answeredBy: 'Jordan',
+      answerText: 'Move below',
+      answeredWith: 'dim',
+      undoneAt: 1_700_000_100_000,
+      undoneBy: 'Jordan',
+    };
+    const p = readReviewPayload(
+      decision({
+        answerHistory: [
+          kept,
+          'not an object',
+          // No undoneAt: a history row IS an undo record; without the stamp
+          // there is nothing it records.
+          { answeredAt: 1, undoneBy: 'Jordan' },
+          // undoneBy arrived as a number — a peer can sync anything here.
+          { answeredAt: 1, undoneAt: 2, undoneBy: 7 },
+        ] as never,
+      }),
+    );
+    expect(p?.answerHistory).toEqual([kept]);
+  });
+
+  it('keeps a minimal history entry — the optional fields degrade, the record stays', () => {
+    const p = readReviewPayload(
+      decision({ answerHistory: [{ answeredAt: 1, undoneAt: 2, undoneBy: 'Jordan' }] as never }),
+    );
+    expect(p?.answerHistory).toEqual([{ answeredAt: 1, undoneAt: 2, undoneBy: 'Jordan' }]);
+  });
+
+  it('drops the answerHistory key entirely when none survive', () => {
+    expect(
+      readReviewPayload(decision({ answerHistory: ['junk'] as never }))?.answerHistory,
+    ).toBeUndefined();
+    expect(
+      readReviewPayload(decision({ answerHistory: 'junk' as never }))?.answerHistory,
+    ).toBeUndefined();
+  });
 });
 
 /**
@@ -522,5 +584,122 @@ describe('the writer’s gate is exactly as strict as it was', () => {
     expect(c.ok).toBe(true);
     expect(c.errors).toEqual([]);
     expect(c.gaps).toContain('lookFor');
+  });
+});
+
+/**
+ * The doc surface's answer target.
+ *
+ * A person meets a review item three ways — on Home, on the task, and in the
+ * doc thread that carries it — and until now only the first two could answer
+ * one. The doc panel posted every reply to `/comments`, so a thread could
+ * render the declaration, take his words, and leave the item in the queue
+ * exactly as it was. Four declared items on `board-review-2026-08-19` have a
+ * human reply each and zero `answeredAt` stamps.
+ *
+ * `/answer` needs to be told WHICH comment it is answering, so the predicate
+ * that picks it is the whole of the doc surface's new logic.
+ */
+describe('pendingDeclaration', () => {
+  const ask = (over: Partial<ReviewPayload> = {}): ReviewPayload => ({
+    shape: 'review',
+    headline: 'Read the stall rota before Thursday',
+    why: 'The rota goes out Thursday and nobody has checked it',
+    ...over,
+  });
+  const open = (comments: Array<{ id: string; ts: number; review?: ReviewPayload }>) => ({
+    status: 'open' as const,
+    comments,
+  });
+
+  it('is null when nothing in the thread declared anything', () => {
+    expect(
+      pendingDeclaration(
+        open([
+          { id: 'c1', ts: 1 },
+          { id: 'c2', ts: 2 },
+        ]),
+      ),
+    ).toBeNull();
+  });
+
+  it('names the declaring comment when one is unanswered', () => {
+    expect(
+      pendingDeclaration(
+        open([
+          { id: 'c1', ts: 1, review: ask() },
+          { id: 'c2', ts: 2 },
+        ]),
+      )?.id,
+    ).toBe('c1');
+  });
+
+  it('is null once that item has been answered', () => {
+    const answered = ask({ answeredAt: 1_700_000_000_000 });
+    expect(pendingDeclaration(open([{ id: 'c1', ts: 1, review: answered }]))).toBeNull();
+  });
+
+  it('reads an option tapped before answeredAt existed as answered too', () => {
+    const tapped = ask({ shape: 'decision', answeredWith: 'goal' });
+    expect(pendingDeclaration(open([{ id: 'c1', ts: 1, review: tapped }]))).toBeNull();
+  });
+
+  it('takes the LATEST unanswered ask, not the first', () => {
+    expect(
+      pendingDeclaration(
+        open([
+          { id: 'c1', ts: 1, review: ask({ answeredAt: 1 }) },
+          { id: 'c2', ts: 2, review: ask({ headline: 'And now the feed order' }) },
+          { id: 'c3', ts: 3 },
+        ]),
+      )?.id,
+    ).toBe('c2');
+  });
+
+  // The rule the doc panel used to disagree with Home about: the NEWEST
+  // declaration decides, and only it. An agent that asks again has moved on
+  // from what it asked before, so an older unanswered payload buried under a
+  // newer answered one is history — Home stopped offering it, and a doc
+  // panel that still rendered an Answer composer for it was stamping a
+  // comment no queue was showing.
+  it('an answered newer declaration retires the whole thread, buried asks included', () => {
+    expect(
+      pendingDeclaration(
+        open([
+          { id: 'c1', ts: 1, review: ask() },
+          { id: 'c2', ts: 2, review: ask({ answeredAt: 2 }) },
+        ]),
+      ),
+    ).toBeNull();
+  });
+
+  it('a non-open thread has nothing pending, whatever its comments say', () => {
+    expect(
+      pendingDeclaration({
+        status: 'resolved',
+        comments: [{ id: 'c1', ts: 1, review: ask() }],
+      }),
+    ).toBeNull();
+  });
+
+  it('orders by ts, not by array position — CRDT merge order is not a clock', () => {
+    expect(
+      pendingDeclaration(
+        open([
+          // Array order says the answered one is newest; the clock disagrees.
+          { id: 'c-late-answered', ts: 5, review: ask({ answeredAt: 6 }) },
+          { id: 'c-later-still', ts: 9, review: ask({ headline: 'Newer by clock' }) },
+        ]),
+      )?.id,
+    ).toBe('c-later-still');
+    const reversed = [
+      { id: 'c-answered-new', ts: 8, review: ask({ answeredAt: 9 }) },
+      { id: 'c-unanswered-old', ts: 2, review: ask() },
+    ];
+    expect(pendingDeclaration(open(reversed))).toBeNull();
+  });
+
+  it('tolerates a thread with no comments array at all', () => {
+    expect(pendingDeclaration({ status: 'open' })).toBeNull();
   });
 });

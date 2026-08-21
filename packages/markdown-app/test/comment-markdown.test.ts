@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { renderCommentMarkdown } from '../src/comment-markdown.ts';
+import { renderCommentMarkdown, renderCommentMarkdownInline } from '../src/comment-markdown.ts';
 
 describe('renderCommentMarkdown', () => {
   it('escapes HTML — no XSS passthrough', () => {
@@ -120,6 +120,64 @@ describe('renderCommentMarkdown — XSS payload battery', () => {
   it('still renders the markup it is supposed to', () => {
     // The cheapest way to pass the battery would be to emit nothing at all.
     const out = renderCommentMarkdown('**hi** [a](https://example.com) `c`');
+    expect(out).toContain('<strong>hi</strong>');
+    expect(out).toContain('href="https://example.com/"');
+    expect(out).toContain('<code>c</code>');
+  });
+});
+
+/**
+ * The INLINE renderer feeds innerHTML sinks for USER-SUPPLIED text — the
+ * answered record's quoted words in the doc panel (threads.ts) and on the hub
+ * (hub-render.ts). It is escape-first by construction, but that property was
+ * unpinned: only the block renderer had a battery, so a refactor that
+ * reordered or dropped the escape would have gone green.
+ */
+describe('renderCommentMarkdownInline — untrusted input', () => {
+  const ALLOWED = new Set(['code', 'strong', 'em', 'del', 'a']);
+
+  function findings(out: string): string[] {
+    const bad: string[] = [];
+    for (const m of out.matchAll(/<(\/?)([a-zA-Z][^\s/>]*)([^>]*)>/g)) {
+      const tag = (m[2] ?? '').toLowerCase();
+      if (!ALLOWED.has(tag)) bad.push(`tag <${tag}>`);
+      if (/\son[a-z]+\s*=/i.test(m[3] ?? '')) bad.push(`handler <${tag}${m[3]}>`);
+    }
+    for (const m of out.matchAll(/href="([^"]*)"/g)) {
+      const v = (m[1] ?? '').toLowerCase().trim();
+      if (!/^(https?:|mailto:)/.test(v)) bad.push(`href ${m[1]}`);
+    }
+    return bad;
+  }
+
+  it('escapes a hostile answer to inert text, yielding no element at all', () => {
+    const out = renderCommentMarkdownInline('<img src=x onerror=alert(1)>');
+    expect(out).toContain('&lt;img');
+    // DOM-level: what an innerHTML sink would actually instantiate.
+    const holder = document.createElement('span');
+    holder.innerHTML = out;
+    expect(holder.querySelector('*')).toBeNull();
+    expect(holder.textContent).toBe('<img src=x onerror=alert(1)>');
+  });
+
+  const PAYLOADS = [
+    '<script>alert(1)</script>',
+    '<svg/onload=alert(1)>',
+    "<a href='javascript:alert(1)'>x</a>",
+    '[click](javascript:alert(1))',
+    '**<img src=x onerror=alert(1)>**',
+    '`<script>alert(1)</script>`',
+    '[x](http://a" onmouseover="alert(1))',
+  ];
+  for (const payload of PAYLOADS) {
+    it(`neutralises ${JSON.stringify(payload)}`, () => {
+      expect(findings(renderCommentMarkdownInline(payload))).toEqual([]);
+    });
+  }
+
+  it('still renders the inline markup it is supposed to', () => {
+    // The cheapest way to pass the battery is to emit nothing at all.
+    const out = renderCommentMarkdownInline('**hi** [a](https://example.com) `c`');
     expect(out).toContain('<strong>hi</strong>');
     expect(out).toContain('href="https://example.com/"');
     expect(out).toContain('<code>c</code>');

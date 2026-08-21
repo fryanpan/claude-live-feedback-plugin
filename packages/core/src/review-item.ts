@@ -101,6 +101,38 @@ export interface ReviewPayload {
    * this field existed stays answered.
    */
   answeredAt?: number;
+  /**
+   * Display name of who answered — the record's face. "Answered by you: …"
+   * has to survive a reload, and the reply comment alone cannot carry it:
+   * the reply is one comment among many, and nothing marks it as THE answer
+   * once a follow-up lands under it. No actor ids in projected state, so
+   * this is the name, same as every other `by` in this module.
+   */
+  answeredBy?: string;
+  /** The verbatim words of the answer, duplicated from the reply comment so
+   *  the record renders without re-deriving which reply was the answer. */
+  answerText?: string;
+  /**
+   * Answers that were UNDONE (or displaced by a later answer), oldest first —
+   * the soft-delete half of the stamps above, mirroring the task decision's
+   * `answerHistory`. An undo moves the four answer fields here rather than
+   * dropping them: the words are user content, and this project does not
+   * hard-delete user content. Nothing reads this to decide anything —
+   * `reviewAnswered` still reads only the live stamps — which is what keeps
+   * the record cheap to keep.
+   */
+  answerHistory?: ReviewAnswerUndone[];
+}
+
+/** One undone answer: the stamps as they stood, plus who took them back and
+ *  when. `answeredAt` is 0 for a legacy tap that predates the stamp. */
+export interface ReviewAnswerUndone {
+  answeredAt: number;
+  answeredBy?: string;
+  answerText?: string;
+  answeredWith?: string;
+  undoneAt: number;
+  undoneBy: string;
 }
 
 /**
@@ -113,6 +145,75 @@ export interface ReviewPayload {
  */
 export function reviewAnswered(review: ReviewPayload): boolean {
   return review.answeredAt !== undefined || review.answeredWith !== undefined;
+}
+
+/**
+ * The item's ONE body, as markdown: why, then lookFor, then detail, blank-line
+ * separated, empty parts omitted.
+ *
+ * The card used to render these as labelled sub-sections ("What to review
+ * for", a provenance block, a clamped why line), and the approved design
+ * (review-flow-mock-v1) collapses all of it into a single markdown body under
+ * the head row. Composed here rather than in each renderer because THREE
+ * surfaces show the same item — Home's walkthrough, the task panel, the doc
+ * thread — and a second copy of the join is how one of them ends up rendering
+ * a part the others dropped. The stored payload keeps its three fields; this
+ * is presentation, not schema.
+ */
+export function reviewItemBodyMarkdown(
+  review: Pick<ReviewPayload, 'why' | 'lookFor' | 'detail'>,
+): string {
+  return [review.why, review.lookFor, review.detail]
+    .map((part) => part?.trim() ?? '')
+    .filter((part) => part !== '')
+    .join('\n\n');
+}
+
+/**
+ * The declaration on this thread that nobody has answered, or null.
+ *
+ * ONE rule, read by every surface. The server's queue (review-queue.ts) and
+ * the doc panel's reply box (threads.ts) each need to answer "which item is
+ * pending on this thread", and for one release they answered it differently —
+ * the doc panel scanned raw array order, skipped answered declarations to
+ * find buried ones, and ignored thread status, so it could render a full
+ * Answer composer for an item Home had already retired. Answering it stamped
+ * a comment no queue was offering. Both halves import this now; a second
+ * copy of the rule is how they drift again.
+ *
+ * The rule itself, unchanged from the server's:
+ *
+ * - The NEWEST declaration decides, and only it. An agent that asks again
+ *   has moved on from what it asked before, so an older unanswered payload
+ *   buried under a newer answered one is history rather than a live question.
+ * - By time, not by array position. Comment order in a Yjs array is a CRDT's
+ *   merge order, not a clock — "the last element" answers a question about
+ *   array layout, not about who spoke last.
+ * - A non-open thread has nothing pending: an authored ask is retired by an
+ *   ANSWER (`reviewAnswered`) or by its thread being resolved, and by
+ *   nothing else.
+ *
+ * `null` means "nothing here to answer" — an ordinary thread, a retired one,
+ * or one whose newest ask is settled — and the caller posts a plain comment.
+ * That is the honest fallback rather than a default target: inventing one
+ * would let a remark stamp an answer nobody gave.
+ *
+ * Generic over the comment shape (rather than importing `Comment`) so this
+ * module stays pure and dependency-free — the MCP tool, the REST route and
+ * the browser all check the same rule.
+ */
+export function pendingDeclaration<C extends { ts: number; review?: ReviewPayload }>(thread: {
+  status: string;
+  comments?: ReadonlyArray<C>;
+}): C | null {
+  if (thread.status !== 'open') return null;
+  const byTime = [...(thread.comments ?? [])].sort((a, b) => a.ts - b.ts);
+  for (let i = byTime.length - 1; i >= 0; i -= 1) {
+    const c = byTime[i];
+    if (c?.review === undefined) continue;
+    return reviewAnswered(c.review) ? null : c;
+  }
+  return null;
 }
 
 /** A question asked back AT a review item instead of answering it. The item
@@ -488,6 +589,34 @@ export function readReviewPayload(value: unknown): ReviewPayload | undefined {
   // by accident — nor as unanswered, which would put it back on the queue.
   if (typeof value.answeredAt === 'number' && Number.isFinite(value.answeredAt)) {
     out.answeredAt = value.answeredAt;
+  }
+  // The answer record's face. Loose like everything here: a junk-typed value
+  // is dropped rather than thrown, and the item still reads as answered (or
+  // not) from the stamps above — these two only decorate the record.
+  if (typeof value.answeredBy === 'string') out.answeredBy = value.answeredBy;
+  if (typeof value.answerText === 'string') out.answerText = value.answerText;
+
+  if (Array.isArray(value.answerHistory)) {
+    const history: ReviewAnswerUndone[] = [];
+    for (const raw of value.answerHistory) {
+      if (!isPlainObject(raw)) continue;
+      // The undo stamps are what a history row IS — without them it records
+      // nothing — so they are the only fields that can drop a row. The
+      // answer-side fields degrade like they do on the live payload.
+      if (typeof raw.undoneAt !== 'number' || !Number.isFinite(raw.undoneAt)) continue;
+      if (typeof raw.undoneBy !== 'string') continue;
+      if (typeof raw.answeredAt !== 'number' || !Number.isFinite(raw.answeredAt)) continue;
+      const entry: ReviewAnswerUndone = {
+        answeredAt: raw.answeredAt,
+        undoneAt: raw.undoneAt,
+        undoneBy: raw.undoneBy,
+      };
+      if (typeof raw.answeredBy === 'string') entry.answeredBy = raw.answeredBy;
+      if (typeof raw.answerText === 'string') entry.answerText = raw.answerText;
+      if (typeof raw.answeredWith === 'string') entry.answeredWith = raw.answeredWith;
+      history.push(entry);
+    }
+    if (history.length > 0) out.answerHistory = history;
   }
 
   if (Array.isArray(value.options)) {

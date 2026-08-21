@@ -1049,7 +1049,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * The number is a promise about the LIST rendered under it, so it counts
    * exactly what the browser's `reviewQueue` places and nothing else:
    *
-   *  - person-owned blockers with open dependents,
    *  - comment-borne review rows (`task-thread` / `doc-thread`) — ALL of
    *    them, which is true again since 2026-08-21: membership moved into
    *    `reviewThreadItems` (a row is a declared item or a surviving direct
@@ -1059,6 +1058,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    *    list that showed nothing,
    *  - open decisions, which Home draws from the board projection as its own
    *    `decision` rows.
+   *
+   * Person-owned blockers are deliberately NOT a term. A blocker is task
+   * state, not a review item — the browser's `reviewQueue` stopped placing
+   * blocker rows when the task panel's blocked note took them over, so a
+   * count that still included them pointed the brief ("queued below") at a
+   * queue that renders nothing.
    *
    * TICKET-borne rows (`kind: 'task-review'`) are shipped by the route and
    * deliberately NOT counted here. No browser surface places one yet — the
@@ -1078,17 +1083,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * paragraph go together — not one without the other.
    */
   const homeQueueTotal = (workspace: HubWorkspace, items: ReviewItemRow[]): number => {
-    const ownerKindOf = taskProjection.ownerKindReader(workspace.id);
     const open = taskStore.listTasks(workspace.id).filter((t) => t.status !== 'done');
-    const blockers = open.filter(
-      (t) =>
-        t.needs !== 'decision' &&
-        ownerKindOf(t) === 'person' &&
-        open.some((o) => o.id !== t.id && o.after.includes(t.id)),
-    );
     const decisions = open.filter((t) => t.needs === 'decision' && !t.answer);
     const rendered = items.filter((i) => i.kind !== 'task-review');
-    return blockers.length + rendered.length + decisions.length;
+    return rendered.length + decisions.length;
   };
 
   const homeBriefInput = (workspace: HubWorkspace, since: number): BriefInput => {
@@ -4596,6 +4594,26 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                 typeof body?.optionId === 'string' ? body.optionId : undefined,
                 { generate: !visitor },
               );
+              if (!res.ok) {
+                return j(res.error === 'no-doc' ? 404 : 400, { error: res.error });
+              }
+              return j(200, { thread: res.thread });
+            }
+            // Taking an answer back. The stamps move into the declaration's
+            // `answerHistory` (soft delete — the words are user content) and
+            // the reply comment stays in the thread. Un-stamping is what
+            // re-offers the item on every surface: each queue derives
+            // "waiting on you" from the stamps, so there is no second state
+            // to sync. Same visitor gating as /answer — a share visitor's
+            // click must not spend the API key.
+            if (threadRest === '/answer/undo' && req.method === 'POST') {
+              const body = await safeJson(req);
+              const user = authorFor(body?.author);
+              const commentId = body?.commentId as string | undefined;
+              if (!user || !commentId) return j(400, { error: 'author + commentId required' });
+              const res = rooms.undoReviewItemAnswer(docId, threadId, commentId, user, {
+                generate: !visitor,
+              });
               if (!res.ok) {
                 return j(res.error === 'no-doc' ? 404 : 400, { error: res.error });
               }

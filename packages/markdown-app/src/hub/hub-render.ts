@@ -8,6 +8,8 @@ import {
   type ReviewPayload,
   escapeHtml,
   evidenceSuperseded,
+  reviewAnswered,
+  reviewItemBodyMarkdown,
   transitionUnproven,
 } from '@feedback/core';
 import type { ReviewShape } from '@feedback/core';
@@ -17,11 +19,13 @@ import {
   clipGoal,
   goalDisplay,
 } from '@feedback/core/goal-summary';
-import { renderCommentMarkdown } from '../comment-markdown.ts';
+import { renderCommentMarkdown, renderCommentMarkdownInline } from '../comment-markdown.ts';
+import { attachMarkdownField } from '../md-field.ts';
 import { SPACE_HOLD_PAGE_ATTR } from '../voice-capture.ts';
 import {
   type ActivityEvent,
   type ActivityFilter,
+  type BlockerRow,
   type BoardSection,
   type DriftNotice,
   type HomePayload,
@@ -44,7 +48,10 @@ import {
   type UptimeReport,
   activityRows,
   appendDictation,
+  askedMeta,
+  askedMetaLine,
   assigneeLabel,
+  blockedNoteLine,
   describeEvent,
   dropIndexFor,
   dropTarget,
@@ -55,7 +62,6 @@ import {
   quoteAfterCapture,
   quoteAfterEdit,
   quoteForCapture,
-  reviewAskedLine,
   reviewBannerText,
   reviewCardHeadline,
   reviewHeadline,
@@ -66,8 +72,6 @@ import {
   taskActivity,
   timeAgo,
   uptimeSummary,
-  waitShort,
-  waitingLabel,
 } from './hub-model.ts';
 
 const STATUS_LABEL: Record<TaskStatus, string> = {
@@ -619,8 +623,8 @@ function taskBadges(task: HubTask): HTMLElement {
   // reach at all.
   //
   // The dependencies themselves are untouched: `after` / `afterEnforce` still
-  // gate transitions, still drive the blocker rows on Home, and still show in
-  // the detail panel. This removes a row-level TELL, not a feature. If the
+  // gate transitions, still drive the detail panel's blocked note, and still
+  // show in the panel. This removes a row-level TELL, not a feature. If the
   // board needs one again, it should distinguish enforced from soft and name
   // what is blocking without a hover.
   if (task.dueAt !== undefined) {
@@ -1359,7 +1363,6 @@ function clip(text: string, max = 60): string {
  *  longer wording a tooltip can afford. */
 const REVIEW_KIND_LABEL: Record<ReviewKind, string> = {
   decision: 'Decision',
-  blocker: 'Your task, blocking',
   'task-thread': 'Task comment',
   'doc-thread': 'Doc comment',
 };
@@ -1447,20 +1450,12 @@ export function renderHomeReview(
     title.textContent = reviewRowTitle(item);
     const sub = document.createElement('span');
     sub.className = 'hub-review-row-sub';
-    sub.textContent = waitingLabel(item.since, now);
-    row.append(title);
-    // The declaration's second line, on the row rather than only on the card
-    // it opens. A header whose "why it matters" half is one tap away is not a
-    // header — the queue is the surface being SCANNED, and deciding what to
-    // open next is exactly the judgement that line exists to serve. This is
-    // the whole reason the API refuses a `why` longer than one line.
-    if (item.review) {
-      const why = document.createElement('span');
-      why.className = 'hub-review-row-why';
-      why.textContent = item.review.why;
-      row.append(why);
-    }
-    row.append(sub);
+    // The asked-by meta, in the same spelling the card head uses — one clock,
+    // one sentence, so the row and the card it opens can never disagree. The
+    // declared why moved into the card's one markdown body (approved design);
+    // the row is title + meta and nothing else.
+    sub.textContent = askedMeta(item, now);
+    row.append(title, sub);
     row.title = `${REVIEW_KIND_LABEL[item.kind]}: ${item.title}${item.ask ? ` — ${item.ask}` : ''} · ${item.why}`;
     row.addEventListener('click', () => handlers.onOpen(item));
     container.append(row);
@@ -1486,7 +1481,7 @@ function appendSettledRows(
     title.textContent = reviewRowTitle(item);
     const sub = document.createElement('span');
     sub.className = 'hub-review-row-sub';
-    sub.textContent = `${waitingLabel(item.since, now)} · answered this sitting`;
+    sub.textContent = `${askedMeta(item, now)} · answered this sitting`;
     row.append(title, sub);
     row.title = `Done this sitting: ${item.title}`;
     // Still a way back to the thing that was just answered — the row is the
@@ -1670,8 +1665,7 @@ export interface WalkthroughHandlers {
   contextLabel?: (item: ReviewItem) => string | null;
 }
 
-/** The task's own description, or an honest line saying there isn't one.
- *  Shared by the decision and blocker cards — both are a task. */
+/** The task's own description, or an honest line saying there isn't one. */
 function walkBody(task: HubTask): HTMLElement {
   const body = document.createElement('div');
   // `renderCommentMarkdown` escapes first and only adds known-safe tags, so a
@@ -1716,6 +1710,9 @@ function promptForm(
   submit.className = submitClass;
   submit.textContent = submitLabel;
   form.append(ta, submit);
+  // Every composer speaks markdown (design point 4); the returned refresh
+  // covers the programmatic clears below, which fire no `input` event.
+  const refreshPreview = attachMarkdownField(ta);
   // A flag, not just the disabled attributes: disabling the CONTROLS stops a
   // second tap, and a form can still be submitted around them (Enter in the
   // field, a programmatic submit). The guard has to be on the handler.
@@ -1732,7 +1729,10 @@ function promptForm(
         // Cleared only on an acknowledged write. A handler that answers
         // nothing at all keeps the text, which is the safe direction: the
         // usual outcome there is that the card is replaced anyway.
-        if (ok === true) ta.value = '';
+        if (ok === true) {
+          ta.value = '';
+          refreshPreview();
+        }
       })
       .catch(() => {})
       .finally(() => {
@@ -1813,57 +1813,28 @@ function walkCardHead(item: ReviewItem, handlers: WalkthroughHandlers, now: numb
 
   const wait = document.createElement('span');
   wait.className = 'hub-walk-wait';
-  wait.textContent = waitShort(item.since, now);
+  // The head's top-right meta is the card's ONE provenance line — who asked
+  // and how long ago — replacing both the bare wait chip and the old
+  // left-bordered context block (approved design, review-flow-mock-v1).
+  wait.textContent = askedMeta(item, now);
   head.append(wait);
   return head;
 }
 
 /**
- * The authored middle of a declared review item's card: what to review for,
- * then the detail.
- *
- * Both are optional in the schema and neither gets a placeholder — an absent
- * `lookFor` means the author had nothing to add past the two-line header, and
- * printing "no guidance given" would be the card inventing a gap. The header
- * itself (headline + why) is not here: it is required, so it renders against
- * the card head rather than in a block that can be empty.
+ * A declared item's ONE body: why + lookFor + detail, composed in core and
+ * rendered as markdown. The labelled sub-sections this replaces ("What to
+ * review for", the separate detail block) are the anatomy the approved design
+ * collapsed — every part is still here, in the author's order, unlabelled.
+ * `renderCommentMarkdown` escapes first and only re-adds known-safe tags.
  */
-function walkReviewBlocks(review: NonNullable<ReviewItem['review']>): HTMLElement[] {
-  const out: HTMLElement[] = [];
-  if (review.lookFor?.trim()) {
-    const box = document.createElement('div');
-    box.className = 'hub-walk-askbox hub-walk-lookfor';
-    const head = document.createElement('h4');
-    head.className = 'hub-walk-ask-head';
-    head.textContent = 'What to review for';
-    const body = document.createElement('p');
-    body.className = 'hub-walk-lookfor-text';
-    body.textContent = review.lookFor;
-    box.append(head, body);
-    out.push(box);
-  }
-  if (review.detail?.trim()) {
-    const detail = document.createElement('div');
-    detail.className = 'hub-walk-body hub-walk-review-detail';
-    // Markdown, because the schema says markdown — links to the thing under
-    // review are the whole point of the links shape. `renderCommentMarkdown`
-    // escapes first and only re-adds known-safe tags.
-    detail.innerHTML = renderCommentMarkdown(review.detail);
-    out.push(detail);
-  }
-  return out;
-}
-
-/** The mockup's left-bordered context block: who asked, when, and what is
- *  standing behind it. */
-function walkCtx(item: ReviewItem, now: number): HTMLElement {
-  const ctx = document.createElement('div');
-  ctx.className = 'hub-walk-ctx';
-  const line = document.createElement('div');
-  line.className = 'hub-walk-asked-line';
-  line.textContent = reviewAskedLine(item, now);
-  ctx.append(line);
-  return ctx;
+function walkReviewBody(review: NonNullable<ReviewItem['review']>): HTMLElement | null {
+  const markdown = reviewItemBodyMarkdown(review);
+  if (markdown === '') return null;
+  const body = document.createElement('div');
+  body.className = 'hub-walk-body';
+  body.innerHTML = renderCommentMarkdown(markdown);
+  return body;
 }
 
 /** The one pointer up and out of the card: the task or doc this came from.
@@ -1877,8 +1848,8 @@ function walkWhere(item: ReviewItem, handlers: WalkthroughHandlers): HTMLElement
   label.textContent = item.kind === 'doc-thread' ? 'Doc:' : 'Task:';
   const open = document.createElement('button');
   open.type = 'button';
-  // Its own class, NOT `hub-walk-open`: that one is the blocker card's primary
-  // button, and styling both through one selector turned the button into bare
+  // Its own class, kept distinct from every button class the cards use:
+  // sharing a selector with a primary button once turned this link into bare
   // blue text — measured on staging at 430px.
   open.className = 'hub-walk-where-link';
   open.textContent = `${item.title} ↗`;
@@ -1997,9 +1968,9 @@ export function renderReviewWalkthrough(
   panel.append(topline);
 
   const item = queue.items[index];
-  // Only a decision gets the answer furniture. A blocker carries the same row
-  // shape but was never a question, so writing an `answer` onto it would be a
-  // lie about what happened.
+  // Only a decision gets the answer furniture — the thread kinds below get a
+  // reply path instead. (A blocker never reaches this queue at all: it is
+  // task state, surfaced as the detail panel's blocked note.)
   const row = item?.decision;
   if (!item) {
     const done = document.createElement('div');
@@ -2066,36 +2037,11 @@ export function renderReviewWalkthrough(
   const banner = advancedBanner(progress, handlers);
   if (banner) card.append(banner);
 
+  // ONE anatomy (approved design): head row — kind badge, headline, goal
+  // chip, asked-by meta — then one markdown body. The separate why line and
+  // the left-bordered provenance block are gone; the why leads the body, and
+  // the who/when lives in the head's meta.
   card.append(walkCardHead(item, handlers, now));
-  // The second half of the enforced two-line header: what needs review, then
-  // why it matters. It sits against the head rather than in the body because
-  // the pair is what has to be readable in two lines on a phone before any
-  // scrolling — the reason a declaration is refused when either half is
-  // missing or over budget.
-  if (item.review) {
-    const why = document.createElement('p');
-    why.className = 'hub-walk-why';
-    why.textContent = item.review.why;
-    card.append(why);
-  }
-  card.append(walkCtx(item, now));
-
-  // ── A blocker: your own task, and the work standing behind it. There is
-  // nothing to answer and nothing to reply to — the only move is to go and do
-  // it — so the card says what is waiting and hands you the task.
-  const blocker = item.blocker;
-  if (blocker) {
-    card.append(walkBody(blocker.task));
-    const open = document.createElement('button');
-    open.type = 'button';
-    open.className = 'hub-btn hub-btn-primary hub-walk-open';
-    open.textContent = 'Open the task';
-    open.addEventListener('click', () => handlers.onOpenItem(item));
-    card.append(open, walkActions(index, handlers));
-    panel.append(card);
-    container.append(panel);
-    return;
-  }
 
   // ── A thread: the question, a reply box, and the way out to the surface it
   // lives on. Answering here is the point — going through the queue must not
@@ -2109,7 +2055,8 @@ export function renderReviewWalkthrough(
       // A DECLARED review item. Everything below was written by the agent for
       // this card, so none of it is derived, clipped or guessed at — which is
       // the whole reason declaring exists.
-      card.append(...walkReviewBlocks(review));
+      const body = walkReviewBody(review);
+      if (body) card.append(body);
       if (review.options && review.options.length > 0) {
         const opts = document.createElement('div');
         opts.className = 'hub-walk-options';
@@ -2498,6 +2445,20 @@ export interface DetailHandlers {
   /** Take back this task's recorded answer. Without it the answered banner
    *  renders with no way out, which is the state this handler exists to end. */
   onUndoAnswer?: (task: HubTask) => Promise<boolean> | undefined;
+  /**
+   * Take back an answer recorded on a THREAD-borne item — the persistent Undo
+   * on the in-place answered record. Goes through
+   * `POST /api/docs/:docId/threads/:threadId/answer/undo` with the declaring
+   * comment's id, which moves the stamps into `answerHistory` and re-offers
+   * the item on every queue's next read.
+   */
+  onUndoThreadAnswer?: (task: HubTask, item: PanelReviewItem) => Promise<boolean> | undefined;
+  /**
+   * The reader's own display name, so the record can say "Answered by you"
+   * for their answer and the name for anyone else's. Optional — without it
+   * every record names the answerer, which is true, just less familiar.
+   */
+  selfName?: string;
   onAssign: (task: HubTask, assignee: string) => void;
   /** The agents currently attached to this workspace — see `BoardHandlers`. */
   knownAgentIds?: string[];
@@ -2546,6 +2507,14 @@ export interface DetailHandlers {
    * nothing is worse than its absence.
    */
   onCopyLink?: (task: HubTask) => void;
+  /**
+   * Set when the open task is a human-owned open task other work waits on —
+   * the row `humanBlockerRows` derives for it, handed down by the app. The
+   * panel renders it as the amber blocked note under the key fields: a
+   * blocker is task STATE (design point 5), so this is the one surface that
+   * says it, and the board row and the Home queue deliberately do not.
+   */
+  blocked?: BlockerRow;
   /** Clock for the "asked 3h ago" lines. Injected so a test can pin it. */
   now?: number;
   /**
@@ -2561,6 +2530,13 @@ export interface DetailHandlers {
 }
 
 export interface TaskComment {
+  /**
+   * The comment's own id, as the thread API names it. Optional because a
+   * payload from a server older than the field still renders — but without it
+   * an answered declaration has nothing for `/answer/undo` to name, so the
+   * record renders with no Undo rather than one that 400s.
+   */
+  id?: string;
   author: string;
   text: string;
   ts: number;
@@ -2696,6 +2672,9 @@ function commentForm(
   submit.className = 'hub-btn';
   submit.textContent = submitLabel;
   form.append(ta, submit);
+  // Every composer speaks markdown (design point 4); refresh covers the
+  // programmatic clear and restore below, which fire no `input` event.
+  const refreshPreview = attachMarkdownField(ta);
   form.addEventListener('submit', (ev) => {
     ev.preventDefault();
     const text = ta.value.trim();
@@ -2714,14 +2693,19 @@ function commentForm(
     // comment that had just been posted, and the obvious second click posted
     // it twice. Put back verbatim if the post is refused.
     ta.value = '';
+    refreshPreview();
     // `Promise.resolve` rather than `await onSubmit(...)` so a handler that
     // returns nothing at all still settles here instead of throwing.
     void Promise.resolve(onSubmit(text))
       .then((ok) => {
-        if (!ok) ta.value = text;
+        if (!ok) {
+          ta.value = text;
+          refreshPreview();
+        }
       })
       .catch(() => {
         ta.value = text;
+        refreshPreview();
       })
       .finally(() => {
         ta.disabled = false;
@@ -2925,17 +2909,16 @@ function renderDiscussion(
     li.append(head);
 
     if (c.review) {
-      // The declared header, in the author's words and in the order the API
-      // enforces. It goes ABOVE the comment text rather than replacing it:
-      // the text is what the agent said, the declaration is what it is
-      // asking for, and the two are not the same sentence.
+      // The declared headline, in the author's words. It goes ABOVE the
+      // comment text rather than replacing it: the text is what the agent
+      // said, the declaration is what it is asking for, and the two are not
+      // the same sentence. The why paragraph is gone from here — it leads the
+      // item card's markdown body at the top of the panel, and a second copy
+      // in the stream was the duplication the one-card anatomy removes.
       const headline = document.createElement('p');
       headline.className = 'hub-comment-review-headline';
       headline.textContent = c.review.headline;
-      const why = document.createElement('p');
-      why.className = 'hub-comment-review-why';
-      why.textContent = c.review.why;
-      li.append(headline, why);
+      li.append(headline);
     }
 
     const body = document.createElement('div');
@@ -3310,6 +3293,22 @@ export interface PanelReviewItem {
    *  makes the answer route legal for it. An inferred item answers by
    *  replying and nothing else. */
   declared?: boolean;
+  /**
+   * Whether the head meta may say "Asked by". True for the task's own
+   * decision and for every declaration — a declaration IS an ask — and for an
+   * inferred item only when `direct` measured a named question. Same rule as
+   * `askedMeta`, carried as data because this row shape has no `ReviewItem`
+   * to derive it from at render time.
+   */
+  asked?: boolean;
+  /**
+   * A declared item somebody already ANSWERED — the record the card renders
+   * in place ("Answered by you: …" with a persistent Undo) instead of the
+   * composer. Read off the declaring comment's own stamps, which is the only
+   * place the record survives a reload; `text` falls back to the tapped
+   * option's label on a legacy answer that stamped `answeredWith` alone.
+   */
+  answered?: { by?: string; text?: string; at: number };
 }
 
 /**
@@ -3394,6 +3393,7 @@ export function decisionBlurb(body: string | undefined): { headline: string; why
 export function panelReviewQueue(
   task: HubTask,
   asks: ReviewThreadItem[] | undefined,
+  discussion?: TaskDiscussion,
 ): PanelReviewItem[] {
   const items: PanelReviewItem[] = [];
   if (!task.answer && task.needs === 'decision') {
@@ -3409,6 +3409,7 @@ export function panelReviewQueue(
       why: blurb.why,
       ...(task.options ? { options: task.options } : {}),
       since: task.createdAt,
+      asked: true,
     });
   }
   for (const a of asks ?? []) {
@@ -3435,16 +3436,64 @@ export function panelReviewQueue(
       // it records the answer against a COMMENT, so a declaration with no
       // comment id has nothing to write on and answers by replying instead.
       declared: r !== undefined && a.commentId !== undefined,
+      // A declaration is an ask; an inferred item only measured one.
+      asked: r !== undefined || a.direct === true,
     });
   }
+  // ANSWERED declared items stay in the panel as the record (approved
+  // design): the "Answered by …" line with its persistent Undo renders where
+  // the item card stood, not on some other surface. They come from the
+  // DISCUSSION rather than from `asks`, because the review-items route only
+  // ships what is still waiting — the stamps on the declaring comment are the
+  // record that survives a reload. An unanswered declaration is skipped here:
+  // its row already arrived through `asks`, and admitting it twice would put
+  // a dead copy of the card above the live one.
+  for (const t of discussion?.threads ?? []) {
+    for (const c of t.comments) {
+      const r = c.review;
+      if (!r || !reviewAnswered(r)) continue;
+      items.push({
+        id: `answered:${t.id}:${c.id ?? c.ts}`,
+        source: 'thread',
+        shape: r.shape,
+        headline: r.headline,
+        why: r.why,
+        ...(r.detail !== undefined ? { detail: r.detail } : {}),
+        ...(r.lookFor !== undefined ? { lookFor: r.lookFor } : {}),
+        askedBy: c.author,
+        since: c.ts,
+        threadId: t.id,
+        docId: task.bodyDocId,
+        ...(c.id !== undefined ? { commentId: c.id } : {}),
+        declared: c.id !== undefined,
+        asked: true,
+        answered: {
+          ...(r.answeredBy !== undefined ? { by: r.answeredBy } : {}),
+          // A legacy tap stamped `answeredWith` alone; the option's label is
+          // the verbatim words that tap recorded.
+          ...((r.answerText ?? optionLabel(r, r.answeredWith)) !== undefined
+            ? { text: r.answerText ?? optionLabel(r, r.answeredWith) }
+            : {}),
+          at: r.answeredAt ?? 0,
+        },
+      });
+    }
+  }
   const rank = (i: PanelReviewItem): number =>
-    i.source === 'task' ? 0 : i.shape === 'decision' || i.why !== '' ? 1 : 2;
+    i.answered ? 3 : i.source === 'task' ? 0 : i.shape === 'decision' || i.why !== '' ? 1 : 2;
   return items.sort((a, b) => {
     const r = rank(a) - rank(b);
     if (r !== 0) return r;
     const d = Number(b.direct ?? false) - Number(a.direct ?? false);
     return d !== 0 ? d : a.since - b.since;
   });
+}
+
+/** The verbatim words a tapped option recorded, when the payload still holds
+ *  the candidate list. Undefined otherwise — the record never invents words. */
+function optionLabel(r: ReviewPayload, optionId: string | undefined): string | undefined {
+  if (optionId === undefined) return undefined;
+  return r.options?.find((o) => o.id === optionId)?.label;
 }
 
 /**
@@ -3474,6 +3523,7 @@ function reviewQueueRegion(
   handlers: DetailHandlers,
   now: number,
   prior: { index: number; itemId: string | null },
+  discussion?: TaskDiscussion,
 ): HTMLElement | null {
   // What was decided, and the way back out of it.
   //
@@ -3485,7 +3535,7 @@ function reviewQueueRegion(
   // answered line is now one part of the region, and the queue below it
   // carries whatever is still open.
   const answered = task.answer ? answeredNote(task, handlers) : null;
-  const queue = panelReviewQueue(task, handlers.asks);
+  const queue = panelReviewQueue(task, handlers.asks, discussion);
   if (queue.length === 0) {
     if (!answered) return null;
     const only = document.createElement('section');
@@ -3555,18 +3605,21 @@ function reviewQueueRegion(
     region.dataset.reviewItemId = queue[at]?.id ?? '';
     cards.forEach((c, ci) => c.classList.toggle('hidden', ci !== at));
     const item = queue[at];
-    // Three headings, and the third one is the honest half. Measured on the
-    // live board 2026-08-17: 23 review items, ZERO of them `direct` — every one
-    // an ellipsis-clipped status note ("Done in PR #154 — …") presented under a
-    // heading that read as a question. `direct` runs at about 1-in-3 recall, so
-    // this says what is TRUE of the flag (nobody is named) rather than the
-    // stronger claim that no question is present.
+    // Two headings. There was a third — "Flagged for you — not addressed to
+    // you by name" over an item whose `direct` flag came back false — and it
+    // is gone per the mock direction. It was written when an undeclared status
+    // note could reach this queue (measured 2026-08-17: 23 items, ZERO of them
+    // `direct`), and it hedged the heading because the row underneath might
+    // not be a question at all. Membership is decided server-side now — a row
+    // here is a declared item or a surviving direct ask — so the hedge
+    // apologises for a row that no longer arrives, in the reader's most
+    // prominent line.
     kicker.textContent =
-      item?.shape === 'decision'
-        ? 'Waiting on your decision'
-        : item?.direct === false
-          ? 'Flagged for you — not addressed to you by name'
-          : 'Waiting on your review';
+      item?.shape === 'decision' ? 'Waiting on your decision' : 'Waiting on your review';
+    // A settled item is none of the above: the card below it is the RECORD,
+    // and the kicker says so. An override rather than a fourth ternary arm so
+    // the three waiting headings above stay exactly as written.
+    if (item?.answered !== undefined) kicker.textContent = 'Answered';
     count.textContent = `${at + 1} of ${queue.length}`;
     prev.disabled = at === 0;
     next.disabled = at === queue.length - 1;
@@ -3627,7 +3680,65 @@ function answeredNote(task: HubTask, handlers: DetailHandlers): HTMLElement {
   return wrap;
 }
 
-/** One item's card: the blurb, then the ways to answer it. */
+/**
+ * The answered RECORD for a thread-borne item, in place: the same anatomy as
+ * the task decision's `answeredNote` — "Answered by …" and a persistent Undo
+ * — because a typed answer and a tapped option produce the identical record
+ * (approved design). "you" when the reader is the one who answered; the
+ * answer's words render markdown-inline, since they are a comment's words.
+ * The Undo goes through the thread-answer undo route, which moves the stamps
+ * into `answerHistory` rather than dropping them.
+ */
+function threadAnsweredNote(
+  task: HubTask,
+  item: PanelReviewItem,
+  answered: NonNullable<PanelReviewItem['answered']>,
+  handlers: DetailHandlers,
+): HTMLElement {
+  const wrap = document.createElement('div');
+  wrap.className = 'hub-detail-answered';
+  const ans = document.createElement('p');
+  ans.className = 'hub-detail-answer';
+  const label =
+    answered.by !== undefined &&
+    handlers.selfName !== undefined &&
+    answered.by === handlers.selfName
+      ? 'you'
+      : answered.by;
+  ans.append(document.createTextNode(label ? `Answered by ${label}: “` : 'Answered: “'));
+  const words = document.createElement('span');
+  words.className = 'hub-answer-words';
+  words.innerHTML = renderCommentMarkdownInline(answered.text ?? '');
+  ans.append(words, document.createTextNode('”'));
+  wrap.append(ans);
+  // No comment id means the undo route has nothing to name — the record still
+  // renders, without a button that could only 400.
+  if (!handlers.onUndoThreadAnswer || item.commentId === undefined) return wrap;
+  const undo = document.createElement('button');
+  undo.type = 'button';
+  undo.className = 'hub-btn hub-detail-undo-answer';
+  undo.textContent = 'Undo';
+  undo.title = 'Take this answer back — it reopens the item and keeps a record';
+  undo.setAttribute('aria-label', 'Undo this answer and reopen the review item');
+  undo.addEventListener('click', () => {
+    // Same contract as `answeredNote`'s Undo: disabled for the round trip,
+    // re-enabled only on a resolved `false` so a quiet board still offers a
+    // retry (the app's `send()` never rejects).
+    undo.disabled = true;
+    void Promise.resolve(handlers.onUndoThreadAnswer?.(task, item))
+      .then((ok) => {
+        if (ok === false) undo.disabled = false;
+      })
+      .catch(() => {
+        undo.disabled = false;
+      });
+  });
+  wrap.append(undo);
+  return wrap;
+}
+
+/** One item's card: the head row and body, then the ways to answer it — or
+ *  the answered record, once somebody has. */
 function reviewItemCard(
   task: HubTask,
   item: PanelReviewItem,
@@ -3641,45 +3752,61 @@ function reviewItemCard(
   // whether the thread a deep link named is already hoisted to the top.
   if (item.threadId) card.dataset.reviewThreadId = item.threadId;
 
-  // The blurb, above the options — what is being decided, then what is at
-  // stake. Without it the card leans on the ticket title, and Bryan's words
-  // are that "the ticket title is not the decision". It is deliberately
-  // free-flowing prose rather than a clipped line: a decision blurb *"may run
-  // a few lines"*, so nothing here truncates it.
-  const headline = document.createElement('p');
-  headline.className = 'hub-decide-headline';
-  headline.textContent = item.headline;
-  card.append(headline);
-  if (item.why?.trim()) {
-    const why = document.createElement('p');
-    why.className = 'hub-decide-why';
-    why.textContent = item.why;
-    card.append(why);
+  // ONE anatomy (approved design, review-flow-mock-v1): a head row — kind
+  // badge, the headline, the asked-by meta top-right — then one markdown
+  // body composed of why + lookFor + detail. The separate why/detail/lookFor
+  // paragraphs and the trailing meta line this replaces were four blocks
+  // saying what the mock says in two.
+  const head = document.createElement('div');
+  head.className = 'hub-decide-card-head';
+  const badge = document.createElement('span');
+  // New UI text says Question; the class token stays `review` (stored
+  // vocabulary and tone classes are unchanged by the rename in flight).
+  badge.className = `hub-decide-k hub-decide-k-${item.shape === 'decision' ? 'decision' : 'review'}`;
+  badge.textContent = item.shape === 'decision' ? 'Decision' : 'Question';
+  head.append(badge);
+  // The one body, markdown-rendered — the links to the thing under review are
+  // the whole reason a declaration carries a detail, and appended as text
+  // they rendered as bracket soup (reported with a screenshot 2026-08-19).
+  // `renderCommentMarkdown` escapes first and only re-adds known-safe tags.
+  const bodyMarkdown = reviewItemBodyMarkdown(item);
+  // The headline is free-flowing prose rather than a clipped line: a decision
+  // blurb *"may run a few lines"*, so nothing here truncates it. Without it
+  // the card leans on the ticket title, and "the ticket title is not the
+  // decision".
+  //
+  // Which is why it is DROPPED when it came out as the ticket title anyway:
+  // `panelReviewQueue` falls back to `task.title` for a decision whose body
+  // yields no blurb, and this card renders directly under the panel's own
+  // `.hub-detail-title`, so the reader gets the same words twice in a row.
+  // Only when the body below still says something, though — the fallback
+  // exists so an unreadable body yields the title rather than a card that
+  // says nothing at all, and that remains the better of the two.
+  const echoesTitle = item.headline.trim() === task.title.trim();
+  if (!(echoesTitle && bodyMarkdown !== '')) {
+    const headline = document.createElement('p');
+    headline.className = 'hub-decide-headline';
+    headline.textContent = item.headline;
+    head.append(headline);
   }
-  // The detail is its OWN block and it is markdown, not a second sentence
-  // glued onto the why. Both halves matter: the schema says markdown, and the
-  // links to the thing under review are the whole reason a declaration carries
-  // a detail — appended as text they rendered as bracket soup, which is the
-  // defect reported with a screenshot 2026-08-19 ("the review request up top
-  // is missing all of the necessary details"). `renderCommentMarkdown` escapes
-  // first and only re-adds known-safe tags, so this is inert markup.
-  if (item.detail?.trim()) {
-    const detail = document.createElement('div');
-    detail.className = 'hub-decide-detail';
-    detail.innerHTML = renderCommentMarkdown(item.detail);
-    card.append(detail);
+  const meta = document.createElement('p');
+  meta.className = 'hub-decide-meta';
+  meta.textContent = askedMetaLine(item.askedBy, item.asked ?? true, item.since, now);
+  head.append(meta);
+  card.append(head);
+  if (bodyMarkdown !== '') {
+    const body = document.createElement('div');
+    body.className = 'hub-decide-body';
+    body.innerHTML = renderCommentMarkdown(bodyMarkdown);
+    card.append(body);
   }
-  if (item.lookFor) {
-    const look = document.createElement('p');
-    look.className = 'hub-decide-lookfor';
-    look.textContent = `Look for: ${item.lookFor}`;
-    card.append(look);
-  }
-  if (item.askedBy) {
-    const meta = document.createElement('p');
-    meta.className = 'hub-decide-meta';
-    meta.textContent = `${item.askedBy} · ${timeAgo(item.since, now)}`;
-    card.append(meta);
+
+  // A settled item renders the RECORD in place of the ways to answer: the
+  // same "Answered by …" + persistent Undo the task's own decision gets, so a
+  // typed answer and a tapped option read identically wherever they landed.
+  if (item.answered) {
+    card.append(threadAnsweredNote(task, item, item.answered, handlers));
+    return card;
   }
 
   // Answering a thread-borne item is a REPLY on its thread, so the agent
@@ -3758,6 +3885,9 @@ function reviewItemCard(
   submit.textContent = 'Record answer';
   form.append(hint, ta, submit);
   controls.push(ta, submit);
+  // Every composer speaks markdown (design point 4); refresh covers the
+  // programmatic clear and restore below, which fire no `input` event.
+  const refreshPreview = attachMarkdownField(ta);
   form.addEventListener('submit', (ev) => {
     ev.preventDefault();
     const text = ta.value.trim();
@@ -3774,8 +3904,10 @@ function reviewItemCard(
     // detached node while the rebuilt one is refilled with the words that
     // were just sent. Restored verbatim if the write is refused.
     ta.value = '';
+    refreshPreview();
     answer(text, undefined, () => {
       ta.value = text;
+      refreshPreview();
     });
   });
   card.append(form);
@@ -3980,6 +4112,28 @@ export function renderTaskDetail(
   // came to answer.
   before.push(detailFields(task, handlers));
 
+  // The blocked note (design point 5): this task is a person's own open work
+  // that other tasks wait on, and this panel is the ONE surface that says so
+  // — a blocker is task state, never a review item, so it appears in no
+  // queue, no walkthrough, and no row badge. The chip keeps the card-head
+  // pill shape (`.hub-decide-k`) so "what kind of thing is this" reads in one
+  // vocabulary across the panel.
+  if (handlers.blocked) {
+    const note = document.createElement('div');
+    note.className = 'hub-blocked-note';
+    const k = document.createElement('span');
+    k.className = 'hub-decide-k hub-blocked-k';
+    // "Blocking", because this task IS the blocker: `handlers.blocked` is a
+    // humanBlockerRow — the reader's own open task other work waits on — and
+    // the line beside the chip says so ("Blocking 2 tasks: …"). "Blocked"
+    // here asserted the opposite dependency direction, on the same card.
+    k.textContent = 'Blocking';
+    const line = document.createElement('p');
+    line.textContent = blockedNoteLine(handlers.blocked);
+    note.append(k, line);
+    before.push(note);
+  }
+
   // Everything waiting on the reader, as ONE queue — the task's own decision
   // and every declared or unanswered item on its threads, ranked together.
   // There used to be two regions here, a decision card and an "ask" panel,
@@ -3993,6 +4147,9 @@ export function renderTaskDetail(
     freshOpen
       ? { index: -1, itemId: null }
       : { index: priorReviewIndex, itemId: priorReviewItemId },
+    // The discussion rides along so ANSWERED declared items keep their card —
+    // the in-place record — after the review-items route stops shipping them.
+    discussion,
   );
   if (decide) before.push(decide);
 

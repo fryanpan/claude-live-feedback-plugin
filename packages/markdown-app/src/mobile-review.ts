@@ -1,4 +1,4 @@
-import { type Thread, summaryKey } from '@feedback/core';
+import { type Thread, threadRenderKey } from '@feedback/core';
 import type { InlineThreadCard, ReviewSurface } from './review-surface.ts';
 import { prefersReducedMotion, sizeThreadSlots } from './thread-morph.ts';
 
@@ -108,12 +108,14 @@ export interface MobileReview {
  * What a card DISPLAYS. Rebuild only on a change to this — never on expansion,
  * because a freshly built node mounts at its final height and cannot morph.
  *
- * The topic line comes from the anchor snippet, which moves whenever the doc
- * is edited, independently of every other term here. Leave it out and an
- * edited anchor keeps a stale topic until some unrelated change repaints.
+ * The inline card is the SAME card the drawer and the margin balloon build
+ * (`ThreadPanel.renderThread`), so it memoizes off the same key: the terms
+ * that move without touching a count or a clock — a summary landing, an
+ * answer being stamped or taken back — are exactly the ones each of the three
+ * hand-written copies of this key was missing.
  */
 function cardKey(t: Thread): string {
-  return `${t.status}|${t.commentCount}|${t.lastActivity}|${summaryKey(t)}`;
+  return threadRenderKey(t);
 }
 
 /**
