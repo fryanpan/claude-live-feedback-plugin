@@ -86,6 +86,54 @@ describe('the modal is sized for the tablet tier', () => {
   });
 });
 
+/**
+ * Evaluate the small subset of CSS length arithmetic these two rules use —
+ * `min(<a>px, calc(100vw - <b>px))` and `min(<a>vh, <b>px)` — against a given
+ * viewport. Nothing here resolves layout; it resolves the DECLARATION, which
+ * is the half a stylesheet assertion can actually be honest about. Whether the
+ * result looks right on the glass is a browser check.
+ */
+function evalLength(value: string, vw: number, vh: number): number {
+  const terms = (/min\(([^)]*\)?[^)]*)\)\s*$/.exec(value.trim())?.[1] ?? value)
+    .split(/,(?![^(]*\))/)
+    .map((t) => t.trim());
+  const one = (t: string): number => {
+    const calc = /calc\(\s*100vw\s*-\s*(\d+(?:\.\d+)?)px\s*\)/.exec(t);
+    if (calc) return vw - Number(calc[1]);
+    if (t.endsWith('vh')) return (Number(t.slice(0, -2)) / 100) * vh;
+    if (t.endsWith('vw')) return (Number(t.slice(0, -2)) / 100) * vw;
+    return Number(t.replace('px', ''));
+  };
+  return Math.min(...terms.map(one));
+}
+
+describe('the numbers, worked out for the two viewports that matter', () => {
+  const width = (vw: number, vh: number) => evalLength(decl('.thread-modal', 'width'), vw, vh);
+  const height = (vw: number, vh: number) =>
+    evalLength(decl('.thread-modal', 'max-height'), vw, vh);
+
+  it('sanity-checks its own arithmetic before trusting it', () => {
+    expect(evalLength('min(760px, calc(100vw - 64px))', 1180, 820)).toBe(760);
+    expect(evalLength('min(760px, calc(100vw - 64px))', 430, 930)).toBe(366);
+    expect(evalLength('min(84vh, 720px)', 1180, 820)).toBeCloseTo(688.8, 1);
+  });
+
+  it('iPad landscape, 1180x820: real width, and clear of the ~750px usable', () => {
+    expect(width(1180, 820)).toBeGreaterThanOrEqual(700);
+    expect(width(1180, 820)).toBeLessThanOrEqual(1180 - 48);
+    // Roughly 750px is usable once browser chrome is taken off an 820px
+    // viewport. The dialog has to finish inside that, with its own scroll.
+    expect(height(1180, 820)).toBeLessThan(750);
+  });
+
+  it('a phone at 430px would still fit — the caller is not the only guard', () => {
+    // The chrome refuses to open this below 1100px, but a rule whose only
+    // protection is a caller is a rule one refactor away from overflowing.
+    expect(width(430, 930)).toBeLessThanOrEqual(430);
+    expect(height(430, 930)).toBeLessThan(930);
+  });
+});
+
 describe('the modal hides the way the rest of the app hides', () => {
   it('is not on the list of elements that override display:none', () => {
     // `.hidden` is `display: none !important`; a handful of animated surfaces
