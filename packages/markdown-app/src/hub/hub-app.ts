@@ -814,6 +814,10 @@ async function main(): Promise<void> {
         onAnswer: (t, text, optionId) => answerTaskDecision(t, text, optionId),
         onAnswerThread: (t, item, text, optionId) => answerPanelThreadItem(t, item, text, optionId),
         onUndoAnswer: (t) => undoTaskAnswer(t),
+        onUndoThreadAnswer: (t, item) => undoThreadAnswer(t, item),
+        // So the answered record can say "Answered by you" for the reader's
+        // own answer — the record compares display names, same as answer.by.
+        selfName: author.name,
         onAssign: (t, assignee) => void assignTask(t, assignee),
         knownAgentIds: knownAgentIds(),
         goalLabel: (id) => goalLabel(state.info?.goals ?? [], id),
@@ -886,6 +890,7 @@ async function main(): Promise<void> {
       threads?: Array<{
         id: string;
         comments?: Array<{
+          id?: string;
           author?: { name?: string };
           text?: string;
           ts?: number;
@@ -902,6 +907,10 @@ async function main(): Promise<void> {
     const threads: TaskThread[] = (payload?.threads ?? []).map((t) => ({
       id: t.id,
       comments: (t.comments ?? []).map((c) => ({
+        // The id is what the answered record's Undo names on the undo route;
+        // absent from an older server's payload, and the record then renders
+        // without the button rather than with one that could only fail.
+        ...(c.id !== undefined ? { id: c.id } : {}),
         author: c.author?.name ?? 'Someone',
         text: c.text ?? '',
         ts: c.ts ?? Date.now(),
@@ -1372,6 +1381,39 @@ async function main(): Promise<void> {
     showToast('Answer recorded — Undo is on the ticket');
     // The row itself arrives over the ydoc; this is what moves the panel's
     // own queue on, since the review items are a REST-fed projection.
+    await loadReviewItems();
+    return true;
+  }
+
+  /**
+   * Take back an answer recorded on a THREAD-borne item — the in-place
+   * record's persistent Undo. The server moves the stamps into
+   * `answerHistory` (soft, like every delete here) and the reply stays in the
+   * thread; every queue re-offers the item on its next read, so the repaint
+   * below is the whole client-side story. A 400 usually means somebody else
+   * undid it first — the refresh shows the reopened item either way.
+   */
+  async function undoThreadAnswer(task: HubTask, item: PanelReviewItem): Promise<boolean> {
+    if (!item.threadId || item.commentId === undefined) return false;
+    const doc = encodeURIComponent(item.docId ?? task.bodyDocId);
+    const thread = encodeURIComponent(item.threadId);
+    const res = await send(`/api/docs/${doc}/threads/${thread}/answer/undo`, 'POST', {
+      author,
+      commentId: item.commentId,
+    });
+    if (!res.ok) {
+      showToast('Taking the answer back failed');
+      // Repaint anyway: the likeliest refusal is that a peer already undid
+      // it, and a fresh read shows the reopened item rather than a stale
+      // record with a dead button.
+      await loadDiscussion(task, true);
+      await loadReviewItems();
+      return false;
+    }
+    showToast('Answer taken back — the item is open again');
+    // Both, and in this order: the discussion so the record leaves the card,
+    // the review items so the reopened item comes back to every queue.
+    await loadDiscussion(task, true);
     await loadReviewItems();
     return true;
   }

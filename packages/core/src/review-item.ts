@@ -148,6 +148,28 @@ export function reviewAnswered(review: ReviewPayload): boolean {
 }
 
 /**
+ * The item's ONE body, as markdown: why, then lookFor, then detail, blank-line
+ * separated, empty parts omitted.
+ *
+ * The card used to render these as labelled sub-sections ("What to review
+ * for", a provenance block, a clamped why line), and the approved design
+ * (review-flow-mock-v1) collapses all of it into a single markdown body under
+ * the head row. Composed here rather than in each renderer because THREE
+ * surfaces show the same item — Home's walkthrough, the task panel, the doc
+ * thread — and a second copy of the join is how one of them ends up rendering
+ * a part the others dropped. The stored payload keeps its three fields; this
+ * is presentation, not schema.
+ */
+export function reviewItemBodyMarkdown(
+  review: Pick<ReviewPayload, 'why' | 'lookFor' | 'detail'>,
+): string {
+  return [review.why, review.lookFor, review.detail]
+    .map((part) => part?.trim() ?? '')
+    .filter((part) => part !== '')
+    .join('\n\n');
+}
+
+/**
  * Which comment in a thread is the one a person's next reply ANSWERS.
  *
  * Three surfaces show the same review item — Home, the task, and the doc
