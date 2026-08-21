@@ -1,14 +1,18 @@
 import {
   type Comment,
   type Participants,
+  type ReviewPayload,
   type Thread,
   type User,
   formatTime,
   pendingReviewCommentId,
+  reviewAnswered,
+  reviewItemBodyMarkdown,
   summaryKey,
   threadSummary,
 } from '@feedback/core';
-import { renderCommentMarkdown } from './comment-markdown.ts';
+import { renderCommentMarkdown, renderCommentMarkdownInline } from './comment-markdown.ts';
+import { askedMetaLine } from './hub/hub-model.ts';
 import {
   isFoldingTap,
   morphThread,
@@ -35,8 +39,21 @@ export interface ThreadPanelOpts {
    * The chrome routes those through `/answer` so the item leaves the queue;
    * without an id it posts a plain comment, which is what a thread with
    * nothing outstanding should do.
+   *
+   * `optionId` rides along when the answer came from TAPPING one of a
+   * decision's offered options — provenance only, same contract as the hub:
+   * the answer is always the verbatim `text`, and a typed answer sending no
+   * id is not answering any less.
    */
-  onReply: (threadId: string, text: string, answersCommentId?: string) => void;
+  onReply: (threadId: string, text: string, answersCommentId?: string, optionId?: string) => void;
+  /**
+   * Take a recorded answer back. `commentId` names the declaring comment the
+   * stamps live on; the chrome routes it through `/answer/undo`, which moves
+   * them into `answerHistory` (soft delete) and re-offers the item on every
+   * queue. Optional because read-only surfaces render the record without
+   * offering a button that could only fail.
+   */
+  onUndoAnswer?: (threadId: string, commentId: string) => void;
   onResolve: (threadId: string) => void;
   onReopen: (threadId: string) => void;
   onReanchor: (threadId: string) => void;
@@ -488,6 +505,13 @@ export class ThreadPanel {
     // because the panel is the only half that holds the conversation — the
     // chrome sees an id and a string and cannot work it out for itself.
     const answering = pendingReviewCommentId(t.comments);
+    // The item this thread CARRIES, pending or settled: the outstanding ask
+    // when there is one, else the latest declaration (whose answered record
+    // is what the reader should meet). A thread nobody declared anything on
+    // has neither, and renders exactly as it always did.
+    const itemComment = answering
+      ? t.comments.find((c) => c.id === answering)
+      : latestDeclaredComment(t.comments);
     if (answering) reply.classList.add('answering');
     const ta = document.createElement('textarea');
     ta.rows = 2;
@@ -518,7 +542,133 @@ export class ThreadPanel {
     }
     reply.appendChild(actions);
 
-    return slot('slot-b', summaryFace, [comments, reply]);
+    // A thread that carries a review item IS the review item (approved
+    // design, review-flow-mock-v1; Bryan verbatim: "if I open a comment that
+    // has one or more review items in it, I should get the full review item
+    // interface, with the comment history secondary"). The full item card
+    // renders FIRST, the conversation drops below an "Earlier in this
+    // thread" label, and while the item is pending the one composer is the
+    // card's answer box. Once settled the card holds the answered record and
+    // the composer returns to its usual place as a plain Reply.
+    const detailFace: Node[] = [];
+    if (itemComment?.review) {
+      const card = this.itemCard(t, itemComment, itemComment.review);
+      if (answering) card.append(reply);
+      detailFace.push(card);
+      if (t.comments.length > 1) {
+        const label = div('thread-history-label');
+        label.textContent = 'Earlier in this thread';
+        detailFace.push(label);
+      }
+      detailFace.push(comments);
+      if (!answering) detailFace.push(reply);
+    } else {
+      detailFace.push(comments, reply);
+    }
+    return slot('slot-b', summaryFace, detailFace);
+  }
+
+  /**
+   * The FULL review-item interface, in the thread that carries it: the same
+   * one-card anatomy as the hub's walkthrough and task panel — head row (kind
+   * badge, headline, asked-by meta), one markdown body — then the ways to
+   * answer, or the answered record once somebody has. Thread-scoped class
+   * names, hub anatomy: the vocabulary must read as one component wherever an
+   * item is met.
+   */
+  private itemCard(t: Thread, c: Comment, review: ReviewPayload): HTMLElement {
+    const card = div('thread-item-card');
+    const head = div('thread-item-head');
+    // New UI text says Question; the class token stays `review` (stored
+    // vocabulary and tone classes are unchanged by the rename in flight).
+    const decision = review.shape === 'decision';
+    const kind = span(`thread-item-k thread-item-k-${decision ? 'decision' : 'review'}`);
+    kind.textContent = decision ? 'Decision' : 'Question';
+    head.append(kind);
+    const headline = document.createElement('p');
+    headline.className = 'thread-item-headline';
+    // Plain text, never HTML: the headline is agent-supplied and the API
+    // takes it as a single-line string, not markdown.
+    headline.textContent = review.headline;
+    head.append(headline);
+    const meta = document.createElement('p');
+    meta.className = 'thread-item-meta';
+    // A declaration IS an ask, so this always reads "Asked" — same judgment
+    // the hub's `askedMeta` records for declared items. The clock is the
+    // declaring comment's, which is when the question was put.
+    meta.textContent = askedMetaLine(c.author.name, true, c.ts, Date.now());
+    head.append(meta);
+    card.append(head);
+
+    // ONE body: why + lookFor + detail composed as markdown, same join as
+    // every other surface (`reviewItemBodyMarkdown`).
+    const bodyMarkdown = reviewItemBodyMarkdown(review);
+    if (bodyMarkdown !== '') {
+      const body = div('thread-item-body');
+      // Agent-supplied, untrusted; renderCommentMarkdown escapes first and
+      // only re-adds a fixed safe tag set.
+      body.innerHTML = renderCommentMarkdown(bodyMarkdown);
+      card.append(body);
+    }
+
+    if (reviewAnswered(review)) {
+      card.append(this.answeredRecord(t, c, review));
+      return card;
+    }
+
+    if (review.options && review.options.length > 0) {
+      const opts = div('thread-item-options');
+      for (const o of review.options) {
+        const b = btn('', 'thread-item-option', () =>
+          // The tap answers with the option's VERBATIM label — the id is
+          // provenance the chrome forwards to `/answer`, never the answer.
+          this.opts.onReply(t.id, o.label, c.id, o.id),
+        );
+        const label = span('thread-item-option-label');
+        label.textContent = o.label;
+        b.append(label);
+        if (o.detail) {
+          const detail = span('thread-item-option-detail');
+          detail.textContent = o.detail;
+          b.append(detail);
+        }
+        opts.append(b);
+      }
+      card.append(opts);
+    }
+    return card;
+  }
+
+  /**
+   * The answered RECORD, directly below the item it answers: the same shape a
+   * tapped option and a typed answer produce everywhere — "Answered by you:
+   * …" and a persistent Undo. "you" when the reader answered; the words
+   * render markdown-inline because they are a comment's words. Undo is the
+   * recovery path for a single unconfirmed tap, so it persists rather than
+   * expiring with a toast.
+   */
+  private answeredRecord(t: Thread, c: Comment, review: ReviewPayload): HTMLElement {
+    const wrap = div('thread-answered');
+    const line = document.createElement('p');
+    line.className = 'thread-answered-line';
+    const by = review.answeredBy;
+    const who = by !== undefined && by === this.opts.currentUser.name ? 'you' : by;
+    line.append(document.createTextNode(who ? `Answered by ${who}: “` : 'Answered: “'));
+    const words = span('thread-answer-words');
+    // A legacy tapped answer may predate `answerText`; the tapped option's
+    // label is the verbatim words it recorded.
+    const answerText =
+      review.answerText ?? review.options?.find((o) => o.id === review.answeredWith)?.label ?? '';
+    words.innerHTML = renderCommentMarkdownInline(answerText);
+    line.append(words, document.createTextNode('”'));
+    wrap.append(line);
+    if (this.opts.onUndoAnswer) {
+      const undo = btn('Undo', 'thread-answer-undo', () => this.opts.onUndoAnswer?.(t.id, c.id));
+      undo.title = 'Take this answer back — it reopens the item and keeps a record';
+      undo.setAttribute('aria-label', 'Undo this answer and reopen the review item');
+      wrap.append(undo);
+    }
+    return wrap;
   }
 
   /** Row 4: how much conversation there is, and the one resolve control. */
@@ -646,6 +796,19 @@ function btn(label: string, cls: string, on: () => void): HTMLButtonElement {
   b.textContent = label;
   b.addEventListener('click', on);
   return b;
+}
+
+/**
+ * The newest declared comment in the thread, answered or not — the one whose
+ * card (and, once settled, whose record) the reader should meet. Scanned from
+ * the end for the same reason `pendingReviewCommentId` is: a later ask
+ * supersedes an earlier one.
+ */
+function latestDeclaredComment(comments: ReadonlyArray<Comment>): Comment | undefined {
+  for (let i = comments.length - 1; i >= 0; i -= 1) {
+    if (comments[i]?.review) return comments[i];
+  }
+  return undefined;
 }
 
 function sortByActivity(ts: Thread[]): Thread[] {

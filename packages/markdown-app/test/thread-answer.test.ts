@@ -124,3 +124,75 @@ describe('answering a review item from the doc thread', () => {
     expect(replies[0]?.[2]).toBe(second.id);
   });
 });
+
+describe('the full item interface in the carrying thread', () => {
+  const decision = (over: Partial<ReviewPayload> = {}): ReviewPayload => ({
+    shape: 'decision',
+    headline: 'Pick the rota order',
+    why: 'The rota goes out Thursday.',
+    options: [
+      { id: 'o1', label: 'Alphabetical', detail: 'By stall name.' },
+      { id: 'o2', label: 'By arrival', detail: 'First come, first listed.' },
+    ],
+    ...over,
+  });
+
+  it('a tapped option answers with the label, the declaring comment id AND the option id', () => {
+    const declaring = comment(bot, 'Which way?', decision());
+    const all: Array<[string, string, string | undefined, string | undefined]> = [];
+    const { panel, container } = mountPanel({
+      onReply: (id, text, answersCommentId, optionId) =>
+        all.push([id, text, answersCommentId, optionId]),
+    });
+    panel.setThreads([makeThread([declaring])]);
+    panel.setActive('t1');
+    const option = container.querySelector<HTMLButtonElement>('.thread-item-option');
+    if (!option) throw new Error('no option button rendered');
+    option.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    expect(all).toEqual([['t1', 'Alphabetical', declaring.id, 'o1']]);
+  });
+
+  it('a typed answer carries no option id — typed is not a lesser answer', () => {
+    const declaring = comment(bot, 'Which way?', decision());
+    const all: Array<[string, string, string | undefined, string | undefined]> = [];
+    const { panel, container } = mountPanel({
+      onReply: (id, text, answersCommentId, optionId) =>
+        all.push([id, text, answersCommentId, optionId]),
+    });
+    panel.setThreads([makeThread([declaring])]);
+    panel.setActive('t1');
+    replyWith(container, 'Neither — group by aisle.');
+    expect(all).toEqual([['t1', 'Neither — group by aisle.', declaring.id, undefined]]);
+  });
+
+  it('Undo on the answered record hands back the thread and the declaring comment', () => {
+    const settled = comment(
+      bot,
+      'Which way?',
+      decision({ answeredAt: ts, answeredBy: 'Alice', answerText: 'Alphabetical.' }),
+    );
+    const undos: Array<[string, string]> = [];
+    const { panel, container } = mountPanel({
+      onUndoAnswer: (threadId, commentId) => undos.push([threadId, commentId]),
+    });
+    panel.setThreads([makeThread([settled, comment(alice, 'Alphabetical.')])]);
+    panel.setActive('t1');
+    const undo = container.querySelector<HTMLButtonElement>('.thread-answer-undo');
+    if (!undo) throw new Error('no Undo rendered on the answered record');
+    undo.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    expect(undos).toEqual([['t1', settled.id]]);
+  });
+
+  it('renders the record without an Undo when nothing is wired to take the answer back', () => {
+    const settled = comment(
+      bot,
+      'Which way?',
+      decision({ answeredAt: ts, answeredBy: 'Alice', answerText: 'Alphabetical.' }),
+    );
+    const { panel, container } = mountPanel();
+    panel.setThreads([makeThread([settled])]);
+    panel.setActive('t1');
+    expect(container.querySelector('.thread-answered')).not.toBeNull();
+    expect(container.querySelector('.thread-answer-undo')).toBeNull();
+  });
+});
