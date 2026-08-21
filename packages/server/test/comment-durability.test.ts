@@ -3,7 +3,7 @@
  *
  * The measured gap this pins: a comment was ONE `sse.broadcast` on the board
  * channel — no queue, no ack, no replay. `attach_agent` drained queuedVoice /
- * pendingRetriage / pendingBucketReview / taskReviews; there was NO comment
+ * queuedVoice / pendingBucketReview / taskReviews; there was NO comment
  * queue to drain. And nothing reported the loss: an agent's 'active' label
  * derives from heartbeat + last-tool-call clocks, never from whether its
  * stream is open, so the label stayed green through a session hearing nothing.

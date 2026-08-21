@@ -122,7 +122,7 @@ describe('an utterance routed to an agent is written down either way', () => {
 
   it('a NON-LEAD attach leaves the queue intact for the lead', () => {
     // The queue is addressed to the seat, not to whoever shows up first — the
-    // same contract as pendingRetriage / pendingBucketReview / taskReviews.
+    // same contract as pendingBucketReview / taskReviews.
     // Before this test, any attach drained it, so a bystander attaching to a
     // board swallowed the notes into a payload it has no contract to act on.
     const s = store();

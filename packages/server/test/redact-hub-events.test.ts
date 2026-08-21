@@ -120,13 +120,12 @@ describe('redactHubEventForVisitor', () => {
     expect(out.context).toBeUndefined();
   });
 
-  it('redacts the goal-retriage actor on triage.requested', () => {
+  it('redacts the bucket-review actor on triage.requested', () => {
     const out = redactHubEventForVisitor({
       event: 'triage.requested',
-      kind: 'goal-retriage',
+      kind: 'bucket-review',
       workspaceId: 'w-1',
-      oldGoal: 'a',
-      newGoal: 'b',
+      newBands: [{ id: 'g-1', title: 'Ship it' }],
       taskIds: ['t-1'],
       actor: { id: 'known-bryan', name: 'Bryan', kind: 'person' },
       ts: 9,

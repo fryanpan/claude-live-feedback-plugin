@@ -1284,7 +1284,7 @@ export interface TaskRegroupedEvent {
   actor: TaskActor;
   /** Set when this move is one member of a batch — it references the parent
    *  `workspace.goals_changed` (goal-list edit, server-side) or
-   *  `workspace.retriaged` (goal edit, placed by the agent) batchId. */
+   *  `workspace.goals_changed` (goal-list edit, placed by the agent) batchId. */
   partOf?: string;
   ts: number;
 }
@@ -3852,7 +3852,7 @@ export class TaskStore {
        *  restart; the field stays in the signature so those calls type and
        *  succeed rather than 400. */
       riskTier?: 'green' | 'yellow' | 'red';
-      /** The `workspace.retriaged` batch this placement fulfils, echoed from
+      /** The `workspace.goals_changed` batch this placement fulfils, echoed from
        *  the triage request. Stamped on `task.regrouped` as `partOf` so the
        *  activity view reads N moves as one goal edit. */
       batchId?: string;
