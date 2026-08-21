@@ -185,7 +185,7 @@ text is a task you missed.
 
 A new goal usually changes which band should be worked first. Order **is**
 priority, so say it in the order — with `reorder_goals`, whose argument shape
-and `reorderable` scoping rule are in `tool-reference.md`.
+and `reorderable` scoping rule are in the hub skill's `tool-reference.md`.
 
 The reason the verb matters *here* specifically: `set_goal_list` is a full
 **replace** keyed by ID, so any band id you leave out is removed and its open
