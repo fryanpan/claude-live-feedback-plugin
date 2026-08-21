@@ -94,7 +94,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.79';
+const PLUGIN_VERSION = '0.1.80';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -284,7 +284,7 @@ const REVIEW_ITEM_SCHEMA = {
     detail: {
       type: 'string',
       description:
-        'The body, markdown, inline links welcome. ≤50 words for a decision, ≤150 for a question.',
+        'The body, markdown, inline links welcome. Send the context you actually have — the card renders ALL of it, so never park the real ask in the thread and a compressed copy here. Aim for ~50 words on a decision, ~150 on a question; only an absurd length (>2000 words — a pasted document) is refused.',
     },
     options: {
       type: 'array',
