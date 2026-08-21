@@ -11,6 +11,7 @@ import {
   anchors,
   checkReviewPayload,
   contentKind,
+  readReviewPayload,
   reviewGapAdvice,
   reviewPayloadMessage,
   suggestOps,
@@ -234,7 +235,11 @@ function reviewFromBody(
   const check = checkReviewPayload(raw);
   if (!check.ok) return { ok: false, error: reviewPayloadMessage(check) };
   const advice = reviewGapAdvice(check.gaps);
-  return { ok: true, review: raw as ReviewPayload, ...(advice ? { advice } : {}) };
+  // Stored via the reader so the agent-facing spellings (`review_type`,
+  // 'question') land in the stored vocabulary and junk keys never persist.
+  const review = readReviewPayload(raw);
+  if (!review) return { ok: false, error: reviewPayloadMessage(check) };
+  return { ok: true, review, ...(advice ? { advice } : {}) };
 }
 
 /** Attribution for a write that arrived with no author at all. Deliberately

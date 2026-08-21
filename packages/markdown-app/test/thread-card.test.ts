@@ -501,7 +501,7 @@ describe('thread card — a declared Review Item', () => {
     panel.setThreads([t]);
     const slotA = cardFor(t).querySelector('.thread-slot.slot-a') as HTMLElement;
     const header = slotA.querySelector('.comment-review') as HTMLElement;
-    expect(text(header.querySelector('.comment-review-k'))).toBe('Review');
+    expect(text(header.querySelector('.comment-review-k'))).toBe('Question');
     expect(text(header.querySelector('.comment-review-headline'))).toBe(
       'Read the new onboarding copy',
     );
