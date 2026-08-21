@@ -56,7 +56,9 @@ function mountPanel(over: Partial<ThreadPanelOpts> = {}) {
     container,
     currentUser: alice,
     onThreadClick: (id) => calls.click.push(id),
-    onReply: (id, text) => calls.reply.push([id, text]),
+    onReply: (id, text) => {
+      calls.reply.push([id, text]);
+    },
     onResolve: (id) => calls.resolve.push(id),
     onReopen: (id) => calls.reopen.push(id),
     onReanchor: (id) => calls.reanchor.push(id),
