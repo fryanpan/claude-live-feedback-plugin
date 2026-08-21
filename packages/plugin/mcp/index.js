@@ -14229,7 +14229,7 @@ var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.76";
+var PLUGIN_VERSION = "0.1.77";
 var PROCESS_ID = randomUUID();
 var COMMIT_EVIDENCE_DESCRIPTION = 'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
 var server = new Server({
@@ -14388,8 +14388,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
       name: "list_docs",
-      description: "List review docs currently registered on the server.",
-      inputSchema: { type: "object", properties: {} }
+      description: "List review docs currently registered on the server. Pass workspaceId to scope the list to one workspace (hub board or grouping id) — omit it to list every doc on the server.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          workspaceId: {
+            type: "string",
+            description: "Only docs in this workspace. Matches hub-board membership and the grouping workspaceId folder binds / diff reviews stamp on their members. An unknown id returns an empty list."
+          }
+        }
+      }
     },
     {
       name: "list_threads",
@@ -15750,7 +15758,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     await maybeAutoWatch(name, a);
     switch (name) {
       case "list_docs": {
-        const res = await http("GET", "/api/docs");
+        const { workspaceId } = a;
+        const qs = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : "";
+        const res = await http("GET", `/api/docs${qs}`);
         return ok(res);
       }
       case "list_threads": {
