@@ -91,20 +91,15 @@ function wireInPlaceTitle(
   current: () => string,
   commit: (v: string) => void,
   keepKey?: string,
-): void {
-  el.addEventListener('keydown', (ev) => {
-    // Only a key pressed on the element ITSELF starts an edit. "Is there an
-    // input here" was the whole guard, and it is a fact that can change
-    // between the key being handled and this handler seeing it bubble.
-    if (ev.target !== el) return;
-    if (el.querySelector('input')) return; // the input owns its own keys
-    if (ev.key !== 'Enter' && ev.key !== 'F2') return;
-    ev.preventDefault();
-    ev.stopPropagation();
-    el.click();
-  });
-  el.addEventListener('click', (ev) => {
-    ev.stopPropagation();
+  opts?: {
+    /** `false` detaches the edit from the element's own click/Enter — the
+     *  caller owns the entry gesture and calls the returned starter. The task
+     *  row uses this so a single click on the title can mean "open" while an
+     *  explicit pencil button carries the rename (t-uUQLoTLVNdB9). */
+    selfStart?: boolean;
+  },
+): () => void {
+  const begin = (): void => {
     if (el.querySelector('input')) return;
     const original = current();
     const input = document.createElement('input');
@@ -150,7 +145,25 @@ function wireInPlaceTitle(
       if (el.contains(input)) restore();
     });
     input.addEventListener('click', (ce) => ce.stopPropagation());
-  });
+  };
+  if (opts?.selfStart !== false) {
+    el.addEventListener('keydown', (ev) => {
+      // Only a key pressed on the element ITSELF starts an edit. "Is there an
+      // input here" was the whole guard, and it is a fact that can change
+      // between the key being handled and this handler seeing it bubble.
+      if (ev.target !== el) return;
+      if (el.querySelector('input')) return; // the input owns its own keys
+      if (ev.key !== 'Enter' && ev.key !== 'F2') return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      begin();
+    });
+    el.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      begin();
+    });
+  }
+  return begin;
 }
 
 // ── Goal strip ─────────────────────────────────────────────────────────────
@@ -746,46 +759,51 @@ export function renderTaskRow(task: HubTask, handlers: BoardHandlers): HTMLEleme
   }
   handle.addEventListener('click', (ev) => ev.stopPropagation());
 
-  // ── Then the open zone: space whose only job is opening the task. It is
-  // what makes restoring inline title editing safe — with the title claiming
-  // taps for a rename, the row needs a target that can only ever mean "open".
-  const openZone = document.createElement('button');
-  openZone.type = 'button';
-  openZone.className = 'hub-open-zone';
-  openZone.textContent = '›';
-  openZone.setAttribute('aria-label', `Open ${task.title}`);
-  openZone.title = 'Open this task';
-  openZone.addEventListener('click', (ev) => {
-    ev.stopPropagation();
-    handlers.onOpenTask(task);
-  });
+  // ── Then the rename zone — the slot that used to be a 16px "open" sliver.
+  // Inverted deliberately (t-uUQLoTLVNdB9): on a desktop row the title spans
+  // most of ~1282px and its click used to stop propagation into a rename, so
+  // the row's biggest target was the one click that could NOT open the task,
+  // and the only open affordance was this sliver. Now a single click on the
+  // title (or anywhere on the row) opens, and this explicit pencil carries
+  // the deliberate gesture — renaming. As a real <button> it is also the
+  // keyboard path to a rename, which used to live on the title's Enter.
+  const editZone = document.createElement('button');
+  editZone.type = 'button';
+  editZone.className = 'hub-title-edit';
+  editZone.textContent = '✎';
 
   const title = document.createElement('span');
   title.className = 'hub-task-title';
   title.textContent = task.title;
-  // Inline editing, restored — but only for a pointer that can hover and aim.
-  //
-  // It was removed an hour before this shipped because the title spans most
-  // of the row and its click handler stopped propagation to enter edit mode,
-  // so on a phone tapping a task could only ever rename it ("I can't open a
-  // task to see what's inside"). The open zone is the structural half of the
-  // fix; `finePointer()` is the other half, and it is deliberately NOT a
-  // width breakpoint: a narrow gap is not a real tap target at 430px, so
-  // rather than dedicate ~44px of a 430px row to whitespace, the phone keeps
-  // the gesture it already had — the whole row, title included, opens the
-  // task, and renaming happens in the detail panel one tap away, where the
-  // title is a full-width target.
+  // Inline editing stays fine-pointer-only. On a phone the title tap has
+  // always meant "open" ("I can't open a task to see what's inside" is the
+  // bug that removed tap-to-rename an hour before it first shipped), and
+  // renaming lives in the detail panel one tap away, where the title is a
+  // full-width target. `finePointer()` is NOT a width breakpoint — see it.
+  // On a fine pointer the title now opens too; only the pencil renames.
   const editable = (handlers.inlineTitleEdit ?? finePointer)();
   if (editable) {
-    title.tabIndex = 0;
-    title.title = 'Click or press Enter to rename';
-    wireInPlaceTitle(
+    title.title = 'Click to open · ✎ renames';
+    editZone.setAttribute('aria-label', `Rename ${task.title}`);
+    editZone.title = 'Rename this task';
+    const beginRename = wireInPlaceTitle(
       title,
       () => task.title,
       (v) => handlers.onTitleCommit(task, v),
+      undefined,
+      { selfStart: false },
     );
+    editZone.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      beginRename();
+    });
   } else {
     title.title = 'Tap to open';
+    // Inert, never absent: auto-placement fills consecutive grid tracks, so
+    // dropping the child would slide every later cell one track left — the
+    // same rule the done row's drag handle follows.
+    editZone.disabled = true;
+    editZone.setAttribute('aria-hidden', 'true');
   }
 
   // ── Far right: who has it, and the gesture that hands it over — the same
@@ -805,8 +823,14 @@ export function renderTaskRow(task: HubTask, handlers: BoardHandlers): HTMLEleme
   avatar.setAttribute('aria-hidden', 'true');
   ownerCtl.append(avatar, assignee);
 
-  row.append(handle, openZone, statusCtl, title, taskBadges(task), ownerCtl);
-  row.addEventListener('click', () => handlers.onOpenTask(task));
+  row.append(handle, editZone, statusCtl, title, taskBadges(task), ownerCtl);
+  row.addEventListener('click', () => {
+    // A click that ends a drag-select fires like any other; opening the panel
+    // then would destroy the selection the reader just made to copy a title.
+    const sel = typeof document.getSelection === 'function' ? document.getSelection() : null;
+    if (sel && !sel.isCollapsed && sel.anchorNode && row.contains(sel.anchorNode)) return;
+    handlers.onOpenTask(task);
+  });
   row.addEventListener('keydown', (ev) => {
     if (ev.key === 'Enter' && !(ev.target as HTMLElement).closest('input')) {
       handlers.onOpenTask(task);
