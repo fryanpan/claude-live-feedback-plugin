@@ -416,7 +416,7 @@ export function shareScopeAllows(
  */
 function docSubrouteAllowed(sub: string, method: string): boolean {
   if (sub === '') return method === 'GET'; // meta; DELETE refused
-  if (sub === 'diff' || sub === 'content') return method === 'GET';
+  if (sub === 'diff' || sub === 'content' || sub === 'status') return method === 'GET';
   if (sub === 'tasks') return method === 'GET'; // task chips, visitor-safe shape
   if (sub === 'activity') return method === 'POST'; // reading tracker
   if (sub === 'threads' || sub.startsWith('threads/')) {
