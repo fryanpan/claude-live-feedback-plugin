@@ -7,18 +7,36 @@ then have their access expire automatically.
 
 ## Mental model
 
-**A workspace is the unit of sharing** (Bryan, 2026-08-17). There is no
-per-doc share: `share_doc` is gone and `share_link` no longer takes a
-`docId`. You bind docs the way you always did — `create_review_doc`,
-`bind_folder`, `create_diff_review` — and then you share the WORKSPACE they
-are filed on. To publish a single document, file it on a workspace first
-(`attach_doc`).
+**A board is the unit of sharing** (Bryan, 2026-08-17: "Workspace only — a
+review must be filed on a board before it can be shared"). You bind docs the
+way you always did — `create_review_doc`, `bind_folder`, `create_diff_review`
+— and then you share the BOARD they are filed on.
 
-That is a deliberate narrowing rather than a missing feature. Everything in a
-workspace is available to everyone in it (`.claude/rules/workspace-board.md`),
-so the workspace is the boundary a person can actually reason about; a share
-per doc made the real audience of a review impossible to see. Decide what
-belongs in the workspace *before* you share it.
+Two smaller grants used to exist, and both are gone:
+
+| What you had | What it minted | What you get now |
+|---|---|---|
+| `share_doc`, or `share_link({docId})` | a share scoped to one doc | `410 per_doc_sharing_removed` |
+| `share_link` / `share_workspace` with a folder-bind or diff-review id | a share scoped to that grouping | `410 grouping_sharing_removed` |
+
+So the id you pass is always a hub board id — the one `create_workspace`
+returned, or the `hubWorkspaceId` that `bind_folder` / `create_diff_review`
+reports back.
+
+That is a deliberate narrowing rather than a missing feature. Everything on a
+board is available to everyone in it (`.claude/rules/workspace-board.md`), so
+the board is the boundary a person can actually reason about; a share per doc,
+or per review, made the real audience of a review impossible to see. Decide
+what belongs on the board *before* you share it.
+
+The narrowing does move a cost onto you, and it is worth naming: the tight
+scope used to be "share just this folder bind". Now the tight scope is "give
+this review its own board". `create_workspace` makes an empty one in about a
+second and `create_diff_review` accepts it as `hubWorkspaceId` in the same
+call, so the flow is still two calls — but the *default* is no longer tight.
+A bind or review created without an explicit `hubWorkspaceId` lands on the
+shared **"Unfiled"** board along with everything else nobody filed, and
+sharing Unfiled shares all of it.
 
 Beyond that, sharing is **purely additive**: same comment threads, same agent
 watching, just a different audience.
@@ -110,16 +128,16 @@ Tell the agent something like:
 
 The agent will:
 
-1. Confirm the docs are filed on a workspace — binding the folder
+1. Confirm the docs are filed on a board — binding the folder
    (`bind_folder`), creating the diff review, or `attach_doc`-ing a loose
    doc onto a board.
-2. Check what else that workspace contains, because the visitor gets all of
-   it. For a diff review the workspace root is the whole repo, so `files` /
-   `context-file` reach every file in it; a folder bind confines them to a
-   directory.
+2. Check what else that board holds, because the visitor gets all of it. For
+   a diff review the grouping's root is the whole repo, so `files` /
+   `context-file` reach every file in it. If the review should travel alone,
+   the agent gives it a fresh board rather than the shared "Unfiled" one.
 3. Read `share.defaultAllowDomains` from `.claude/live-feedback.json`.
-4. Call the `share_workspace` MCP tool with that allow-list.
-5. Hand you a URL like `https://share-2026-05-07-a3f.tunnel.example.com/review/<entryDocId>`.
+4. Call the `share_workspace` MCP tool with the BOARD id and that allow-list.
+5. Hand you a URL like `https://share-2026-05-07-a3f.tunnel.example.com/workspaces/<boardId>`.
 6. Watch the docs so external comments arrive on the same channel as
    yours.
 
