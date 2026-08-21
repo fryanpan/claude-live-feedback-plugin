@@ -525,7 +525,7 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
       // place (and the inline one underneath it) rather than launching a
       // third, separate full-screen view of the same conversation.
     },
-    onReply: async (id, text, answersCommentId) => {
+    onReply: async (id, text, answersCommentId, optionId) => {
       // Two routes, one reply. `/answer` posts the SAME comment and
       // additionally stamps `answeredAt` on the declaring comment, which is
       // what takes the item off the Home queue. The panel decides which by
@@ -544,12 +544,36 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
           author: user,
           text,
           ...(answersCommentId ? { commentId: answersCommentId } : {}),
+          // Provenance for a tapped option — records WHICH offered candidate
+          // the verbatim words came from. Typed answers send none.
+          ...(answersCommentId && optionId ? { optionId } : {}),
         }),
       });
       // A failed answer must not read as a posted one: the reply is already
       // out of the box by the time this resolves, so silence would lose it.
       if (!res.ok && answersCommentId) {
         showToast('Answer failed to post — try again');
+      }
+    },
+    onUndoAnswer: async (id, commentId) => {
+      // Soft delete on the server: the stamps move into `answerHistory` and
+      // the reply comment stays. The doc's own websocket repaint is what
+      // re-renders the thread as pending again, so success needs no client
+      // state here.
+      const res = await fetch(
+        `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/answer/undo`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ author: user, commentId }),
+        },
+      );
+      if (!res.ok) {
+        // "not-answered" means somebody else took it back first — the live
+        // repaint is already showing that, and a failure toast over an
+        // already-done undo would read as a broken button.
+        const err = (await res.json().catch(() => undefined)) as { error?: string } | undefined;
+        if (err?.error !== 'not-answered') showToast('Undo failed — try again');
       }
     },
     onResolve: async (id) => {

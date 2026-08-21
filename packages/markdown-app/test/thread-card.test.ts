@@ -542,3 +542,180 @@ describe('thread card — a declared Review Item', () => {
     expect(text(card.querySelector('.face-detail .thread-message'))).toBe('Just a note.');
   });
 });
+
+describe('thread card — a thread that carries a review item IS the review item', () => {
+  const asked = (over: Partial<NonNullable<Comment['review']>> = {}): Comment['review'] => ({
+    shape: 'review',
+    headline: 'Read the stall rota',
+    why: 'It goes out **Thursday**.',
+    lookFor: 'Ordering and missing stalls.',
+    detail: 'Draft at [the doc](https://example.test/rota).',
+    ...over,
+  });
+  const declaredComment = (review: Comment['review']): Comment => ({
+    ...comment(bob, 'Posted the rota draft.'),
+    review,
+  });
+
+  it('renders the full item card first, then the history label, then the earlier comments', () => {
+    const t = makeThread({
+      comments: [declaredComment(asked()), comment(alice, 'Looking now.')],
+    });
+    const { panel, cardFor } = mountPanel();
+    panel.setThreads([t]);
+    panel.setActive(t.id);
+
+    const face = cardFor(t).querySelector('.slot-b .face-detail') as HTMLElement;
+    const kids = Array.from(face.children).map((el) => el.className.split(' ')[0]);
+    expect(kids).toEqual(['thread-item-card', 'thread-history-label', 'comments']);
+    expect(text(face.querySelector('.thread-history-label'))).toBe('Earlier in this thread');
+    // The answer composer is part of the item interface, inside the card.
+    expect(face.querySelector('.thread-item-card .thread-reply textarea')).not.toBeNull();
+  });
+
+  it('spells the head row: kind chip, headline, asked-by meta — and one markdown body', () => {
+    const t = makeThread({ comments: [declaredComment(asked())] });
+    const { panel, cardFor } = mountPanel();
+    panel.setThreads([t]);
+    panel.setActive(t.id);
+
+    const card = cardFor(t).querySelector('.thread-item-card') as HTMLElement;
+    // New UI text says Question; the class token stays `review` (stored
+    // vocabulary is unchanged by the rename in flight).
+    const chip = card.querySelector('.thread-item-k') as HTMLElement;
+    expect(text(chip)).toBe('Question');
+    expect(chip.classList.contains('thread-item-k-review')).toBe(true);
+    expect(text(card.querySelector('.thread-item-headline'))).toBe('Read the stall rota');
+    expect(text(card.querySelector('.thread-item-meta'))).toMatch(/^Asked by Bob .+ ago$/);
+    // why + lookFor + detail, composed into ONE body, rendered as markdown.
+    const body = card.querySelector('.thread-item-body') as HTMLElement;
+    expect(text(body)).toContain('Ordering and missing stalls.');
+    expect(body.querySelector('strong')?.textContent).toBe('Thursday');
+    expect(body.querySelector('a')?.getAttribute('href')).toBe('https://example.test/rota');
+  });
+
+  it('says Decision on a decision and offers its options as whole-row buttons', () => {
+    const t = makeThread({
+      comments: [
+        declaredComment(
+          asked({
+            shape: 'decision',
+            options: [
+              { id: 'o1', label: 'Ship it', detail: 'As drafted.' },
+              { id: 'o2', label: 'Hold' },
+            ],
+          }),
+        ),
+      ],
+    });
+    const { panel, cardFor } = mountPanel();
+    panel.setThreads([t]);
+    panel.setActive(t.id);
+
+    const card = cardFor(t).querySelector('.thread-item-card') as HTMLElement;
+    expect(text(card.querySelector('.thread-item-k'))).toBe('Decision');
+    const options = Array.from(card.querySelectorAll<HTMLButtonElement>('.thread-item-option'));
+    expect(options).toHaveLength(2);
+    expect(text(options[0]?.querySelector('.thread-item-option-label') ?? null)).toBe('Ship it');
+    expect(text(options[0]?.querySelector('.thread-item-option-detail') ?? null)).toBe(
+      'As drafted.',
+    );
+    expect(options[1]?.querySelector('.thread-item-option-detail')).toBeNull();
+  });
+
+  it('renders the answered record in place once settled, and a plain Reply after the history', () => {
+    const t = makeThread({
+      comments: [
+        declaredComment(
+          asked({ answeredAt: ts, answeredBy: 'Alice', answerText: 'Order is *fine*.' }),
+        ),
+        comment(alice, 'Order is fine.'),
+      ],
+    });
+    const { panel, cardFor } = mountPanel(); // currentUser is Alice
+    panel.setThreads([t]);
+    panel.setActive(t.id);
+
+    const face = cardFor(t).querySelector('.slot-b .face-detail') as HTMLElement;
+    const kids = Array.from(face.children).map((el) => el.className.split(' ')[0]);
+    expect(kids).toEqual(['thread-item-card', 'thread-history-label', 'comments', 'thread-reply']);
+
+    const record = face.querySelector('.thread-item-card .thread-answered') as HTMLElement;
+    expect(text(record)).toContain('Answered by you:');
+    expect(record.querySelector('.thread-answer-words em')?.textContent).toBe('fine');
+    // Settled: no options, no composer inside the card — the plain Reply
+    // outside it is the one way to keep talking.
+    expect(face.querySelectorAll('.thread-item-option')).toHaveLength(0);
+    expect(face.querySelector('.thread-item-card textarea')).toBeNull();
+    const send = face.querySelector('.thread-reply .thread-actions button') as HTMLElement;
+    expect(text(send)).toBe('Reply');
+  });
+
+  it('names the answerer when it was somebody else, and falls back to the tapped option label', () => {
+    const t = makeThread({
+      comments: [
+        declaredComment(
+          asked({
+            shape: 'decision',
+            options: [
+              { id: 'o1', label: 'Ship it' },
+              { id: 'o2', label: 'Hold' },
+            ],
+            answeredAt: ts,
+            answeredBy: 'Cara',
+            answeredWith: 'o2',
+          }),
+        ),
+      ],
+    });
+    const { panel, cardFor } = mountPanel();
+    panel.setThreads([t]);
+    panel.setActive(t.id);
+    const record = cardFor(t).querySelector('.thread-answered') as HTMLElement;
+    expect(text(record)).toContain('Answered by Cara:');
+    expect(text(record.querySelector('.thread-answer-words'))).toBe('Hold');
+  });
+
+  it('skips the history label when the declaring comment is the whole thread', () => {
+    const t = makeThread({ comments: [declaredComment(asked())] });
+    const { panel, cardFor } = mountPanel();
+    panel.setThreads([t]);
+    panel.setActive(t.id);
+    expect(cardFor(t).querySelector('.thread-history-label')).toBeNull();
+    expect(cardFor(t).querySelector('.thread-item-card')).not.toBeNull();
+  });
+
+  it('leaves a thread with no declaration exactly as it was — comments, then the reply box', () => {
+    const t = makeThread({ comments: [comment(alice, 'A note.'), comment(bob, 'Ack.')] });
+    const { panel, cardFor } = mountPanel();
+    panel.setThreads([t]);
+    panel.setActive(t.id);
+    const face = cardFor(t).querySelector('.slot-b .face-detail') as HTMLElement;
+    const kids = Array.from(face.children).map((el) => el.className.split(' ')[0]);
+    expect(kids).toEqual(['comments', 'thread-reply']);
+    expect(face.querySelector('.thread-item-card')).toBeNull();
+    expect(face.querySelector('.thread-history-label')).toBeNull();
+  });
+
+  it('keeps the collapsed faces as they were — the item card lives only in the detail face', () => {
+    const t = makeThread({
+      comments: [declaredComment(asked()), comment(alice, 'Looking now.')],
+    });
+    const { panel, cardFor } = mountPanel();
+    panel.setThreads([t]);
+    const card = cardFor(t); // collapsed
+
+    // Slot A's summary face is still just the topic line, and the two-line
+    // declared header still reads from the collapsed card as before.
+    const slotASummary = card.querySelector('.slot-a .face-summary') as HTMLElement;
+    expect(Array.from(slotASummary.children).map((el) => el.className.split(' ')[0])).toEqual([
+      'thread-topic',
+    ]);
+    expect(card.querySelector('.slot-a .comment-review')).not.toBeNull();
+    // Slot B's summary face carries no card either — the sidebar and mobile
+    // inline reads are unchanged.
+    expect(card.querySelector('.face-summary .thread-item-card')).toBeNull();
+    expect(card.querySelectorAll('.thread-item-card')).toHaveLength(1);
+    expect(card.querySelector('.thread-item-card')?.closest('.face-detail')).not.toBeNull();
+  });
+});
